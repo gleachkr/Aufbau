@@ -80,10 +80,12 @@ pub const RuleInferenceContext = struct {
 
 pub const InferenceContext = struct {
     allocator: std.mem.Allocator,
+    env: *const GlobalEnv,
     theorem: *const TheoremContext,
     // Heap prefix `0..rule.args.len` stores inferred theorem arguments.
     // These slots start as either an explicit binding or `null` if omitted.
-    // Any entries appended later by `UTermSave` are concrete by construction.
+    // Any entries appended later by `UTermSave` are concrete by construction
+    // (or meta wildcards when the expected line is a Stage 4 open hint).
     uheap: std.ArrayListUnmanaged(?ExprId) = .{},
     ustack: std.ArrayListUnmanaged(ExprId) = .{},
     hyps: []const ExprId,
@@ -91,6 +93,7 @@ pub const InferenceContext = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        env: *const GlobalEnv,
         theorem: *const TheoremContext,
         partial_bindings: []const ?ExprId,
         hyps: []const ExprId,
@@ -98,6 +101,7 @@ pub const InferenceContext = struct {
     ) !InferenceContext {
         var ctx = InferenceContext{
             .allocator = allocator,
+            .env = env,
             .theorem = theorem,
             .hyps = hyps,
             .next_hyp = hyps.len,
@@ -112,11 +116,53 @@ pub const InferenceContext = struct {
         self.ustack.deinit(self.allocator);
     }
 
+    /// True when `expr_id` contains a meta-class placeholder leaf — a Stage 4
+    /// open-target hole lifted into an implicit conclusion hint. Such a leaf
+    /// is a wildcard: it matches anything and must bind nothing (the witness
+    /// is solved by the open path's match-back, never by hint inference).
+    /// Ordinary compiles never intern meta-class placeholders, so this is
+    /// always false outside open backward search.
+    fn exprContainsMetaWildcard(
+        self: *const InferenceContext,
+        expr_id: ExprId,
+    ) bool {
+        if (!self.theorem.hasMetaPlaceholders()) return false;
+        return self.exprContainsMetaWildcardWalk(expr_id);
+    }
+
+    fn exprContainsMetaWildcardWalk(
+        self: *const InferenceContext,
+        expr_id: ExprId,
+    ) bool {
+        return switch (self.theorem.interner.node(expr_id).*) {
+            .variable => false,
+            .placeholder => |pid| self.theorem.placeholderClass(pid) == .meta,
+            .app => |app| blk: {
+                for (app.args) |arg| {
+                    if (self.exprContainsMetaWildcardWalk(arg)) break :blk true;
+                }
+                break :blk false;
+            },
+        };
+    }
+
     pub fn uopRef(self: *InferenceContext, heap_id: u32) !void {
         if (self.ustack.items.len == 0) return error.UStackUnderflow;
         const expr_id = self.ustack.pop().?;
         if (heap_id >= self.uheap.items.len) return error.UHeapOutOfBounds;
+        // A meta wildcard in the expected line constrains nothing: do not
+        // solve a binder with it (a later concrete occurrence may still
+        // solve the same binder) and do not report a mismatch against an
+        // already-solved binder.
+        if (self.exprContainsMetaWildcard(expr_id)) return;
         if (self.uheap.items[heap_id]) |expected| {
+            if (expr_id != expected and
+                self.exprContainsMetaWildcard(expected))
+            {
+                // The saved entry (a `UTermSave` subtree) straddles a meta
+                // wildcard; identity cannot be required against it.
+                return;
+            }
             if (expr_id != expected) return error.UnifyMismatch;
         } else {
             // This is the one semantic difference from verifier-style unify:
@@ -138,7 +184,24 @@ pub const InferenceContext = struct {
         const app = switch (node.*) {
             .app => |value| value,
             .variable => return error.ExpectedTermApp,
-            .placeholder => return error.ExpectedTermApp,
+            .placeholder => |pid| {
+                if (self.theorem.placeholderClass(pid) == .meta and
+                    term_id < self.env.terms.items.len)
+                {
+                    // Meta wildcard vs. a rigid term: it matches, and each
+                    // argument position is in turn a wildcard — push the same
+                    // leaf once per argument.
+                    if (save) {
+                        try self.uheap.append(self.allocator, expr_id);
+                    }
+                    const arity = self.env.terms.items[term_id].args.len;
+                    for (0..arity) |_| {
+                        try self.ustack.append(self.allocator, expr_id);
+                    }
+                    return;
+                }
+                return error.ExpectedTermApp;
+            },
         };
         if (app.term_id != term_id) return error.TermMismatch;
         if (save) try self.uheap.append(self.allocator, expr_id);

@@ -1,0 +1,11 @@
+delimiter $ ( ) $;
+provable sort wff;
+term P: wff;
+term Q: wff;
+term R: wff;
+term S: wff;
+axiom p: $ P $;
+axiom pq: $ P $ > $ Q $;
+axiom qr: $ Q $ > $ R $;
+axiom rs: $ R $ > $ S $;
+theorem t: $ S $;

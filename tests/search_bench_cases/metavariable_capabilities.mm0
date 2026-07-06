@@ -1,0 +1,111 @@
+-- Bench-only toy theory for Metavariable search capability fixtures. Each theorem
+-- below is intentionally beyond current concrete `auto?`: solving it requires
+-- a branch-local unknown that can be constrained by generated hypotheses,
+-- sibling hypotheses, or an explicit @vars-backed bound choice.
+delimiter $ ( ) $;
+provable sort wff;
+
+--| @vars X Y
+sort obj;
+
+term K: obj;
+term J: obj;
+term P (x: obj): wff;
+prefix P: $P$ prec 40;
+term M (x: obj): wff;
+prefix M: $M$ prec 40;
+term N (x: obj): wff;
+prefix N: $N$ prec 40;
+term L (x: obj): wff;
+prefix L: $L$ prec 40;
+term R (x: obj): wff;
+prefix R: $R$ prec 40;
+term U (x: obj): wff;
+prefix U: $U$ prec 40;
+term V (x: obj): wff;
+prefix V: $V$ prec 40;
+term H: wff;
+term C: wff;
+term D: wff;
+term B: wff;
+term G: wff;
+term B2: wff;
+term RcvOut: wff;
+
+-- Existential-like regular witness that appears only in a hypothesis. The
+-- target `P x` is open, so current generation cannot decide to use `P K`.
+axiom pred_K: $ P K $;
+--| @auto backward
+axiom hyp_only_use (x: obj): $ P x $ > $ H $;
+theorem hyp_only_witness: $ H $;
+
+-- A generated child would pin the parent's open binder: trying `parent x`
+-- creates target `N x`; trying `child x` creates target `M x`, which `M K`
+-- could solve and thereby force x := K. Current search never keeps that open
+-- parent/child constraint chain.
+axiom mark_K: $ M K $;
+--| @auto backward
+axiom child_from_mark (x: obj): $ M x $ > $ N x $;
+--| @auto backward
+axiom generated_child_parent (x: obj): $ N x $ > $ C $;
+theorem generated_child_pins_parent: $ C $;
+
+-- Same unknown in two generated siblings. A future meta store should force both
+-- sibling hypotheses to choose the same witness K; current search sees two open
+-- generated targets and rejects before either can bind x.
+axiom left_K: $ L K $;
+axiom right_K: $ R K $;
+--| @auto backward
+axiom repeated_unknown_use (x: obj): $ L x $ > $ R x $ > $ D $;
+theorem repeated_unknown: $ D $;
+
+-- Bound witness requiring an @vars-backed theorem-local choice. The parent has
+-- no surface occurrence of its bound x; a future bound_choice should draw X/Y
+-- from the obj pool, then generate `P X` via `pred_any`.
+axiom pred_any {x: obj}: $ P x $;
+--| @auto backward
+axiom bound_choice_use {x: obj}: $ P x $ > $ B $;
+theorem bound_vars_choice: $ B $;
+
+-- Inconsistent repeated unknown: one sibling would solve x := K while the
+-- other can only be solved at J, so the branch must reject rather than
+-- treating the two open targets as independent guesses.
+axiom bad_left_K: $ U K $;
+axiom bad_right_J: $ V J $;
+--| @auto backward
+axiom inconsistent_repeated_use (x: obj): $ U x $ > $ V x $ > $ G $;
+theorem inconsistent_repeated_unknown: $ G $;
+
+-- A bound witness with no matching @vars pool entry must fail cleanly.
+sort obj2;
+term P2 (x: obj2): wff;
+prefix P2: $P2$ prec 40;
+axiom pred2_any {x: obj2}: $ P2 x $;
+--| @auto backward
+axiom bound_missing_use {x: obj2}: $ P2 x $ > $ B2 $;
+theorem missing_bound_vars_choice: $ B2 $;
+
+-- Stage 4 negative controls.
+term E: wff;
+term F: wff;
+
+-- Unannotated twin of hyp_only_use: without @auto backward the open
+-- backward path must never fire, so this stays a clean no-result.
+axiom plain_only_use (x: obj): $ P x $ > $ E $;
+theorem plain_hyp_only: $ E $;
+
+-- Annotated, but the deferred hypothesis is a bare meta (`?p`): rejected by
+-- the rigid-root (absorber) guard, so this also stays a clean no-result.
+--| @auto backward
+axiom bare_meta_use (p: wff): $ p $ > $ F $;
+theorem bare_meta_target: $ F $;
+
+-- View/recover negative control: the recover law owns q and t, but its
+-- pattern/hole binders are not pinned by the conclusion. The open path must
+-- fail the branch instead of falling back to generic deferral for q.
+--| @view (t: obj) (q p: wff) (x: obj): $ q $ > $ RcvOut $
+--| @recover t q p x
+--| @auto backward
+axiom recover_cannot_fire (t: obj) (q p: wff) (x: obj):
+  $ q $ > $ RcvOut $;
+theorem recover_owned_no_fallback: $ RcvOut $;

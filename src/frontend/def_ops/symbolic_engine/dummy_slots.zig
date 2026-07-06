@@ -23,11 +23,10 @@ pub fn slotForWitness(
         return slot;
     }
 
-    const slot = state.symbolic_dummy_infos.items.len;
-    try state.symbolic_dummy_infos.append(self.shared.allocator, info);
+    const slot = try state.addDummyInfo(self.shared.allocator, info);
     try witness_slots.put(self.shared.allocator, witness, slot);
-    try state.witnesses.put(self.shared.allocator, slot, witness);
-    try state.provisional_witness_infos.put(
+    try state.putWitness(self.shared.allocator, slot, witness);
+    try state.putProvisionalWitnessInfo(
         self.shared.allocator,
         witness,
         info,
@@ -65,7 +64,7 @@ pub fn putWitnessForDummySlot(
     state: *MatchSession,
 ) anyerror!void {
     const root = try resolveDummySlot(slot, state);
-    try state.witnesses.put(self.shared.allocator, root, actual);
+    try state.putWitness(self.shared.allocator, root, actual);
     invalidateRepresentativeCaches(state);
 }
 
@@ -110,29 +109,29 @@ pub fn alignDummySlots(
         if (state.witnesses.get(winner)) |winner_existing| {
             if (winner_existing != existing) return false;
         } else {
-            try state.witnesses.put(self.shared.allocator, winner, existing);
+            try state.putWitness(self.shared.allocator, winner, existing);
         }
-        _ = state.witnesses.remove(loser);
+        try state.removeWitness(self.shared.allocator, loser);
     }
     if (state.materialized_witnesses.get(loser)) |existing| {
         if (state.materialized_witnesses.get(winner)) |winner_existing| {
             if (winner_existing != existing) return false;
         } else {
-            try state.materialized_witnesses.put(
+            try state.putMaterializedWitness(
                 self.shared.allocator,
                 winner,
                 existing,
             );
-            try state.materialized_witness_slots.put(
+            try state.putMaterializedWitnessSlot(
                 self.shared.allocator,
                 existing,
                 winner,
             );
         }
-        _ = state.materialized_witnesses.remove(loser);
+        try state.removeMaterializedWitness(self.shared.allocator, loser);
     }
 
-    try state.dummy_aliases.put(self.shared.allocator, loser, winner);
+    try state.putDummyAlias(self.shared.allocator, loser, winner);
     invalidateRepresentativeCaches(state);
     return true;
 }

@@ -33,6 +33,10 @@ pub fn finish(
         &checked,
         scratch,
     );
+    // The normalization memo is per-call scratch (NormalizeResult is a flat
+    // value; the interned results live in the mirror theorem). It was leaked on
+    // every match — free it here.
+    defer normalizer.cache.deinit();
     const expected_mark = scratch.mark();
     const normalized_expected =
         normalizer.normalize(comparison.expected_expr) catch |err| {
@@ -52,6 +56,10 @@ pub fn finish(
         registry,
         env,
     );
+    // The canonicalization memo is per-call scratch; the results interned into
+    // the mirror theorem outlive it, but the cache map itself was previously
+    // leaked on every match. Free it here.
+    defer canonicalizer.cache.deinit();
     const canonical_expected = try canonicalizer.canonicalize(
         normalized_expected.result_expr,
     );

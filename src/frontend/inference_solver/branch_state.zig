@@ -1,4 +1,8 @@
+const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
+const DefOps = @import("../def_ops.zig");
+const DefOpsTypes = @import("../def_ops/types.zig");
+const Containers = @import("../containers.zig");
 const types = @import("./types.zig");
 const BinderSpace = types.BinderSpace;
 const BranchState = types.BranchState;
@@ -24,6 +28,10 @@ pub fn initState(
         }
         break :blk result;
     } else null;
+    const view_match_state = if (view_bindings) |bindings|
+        try matchSeedStateFromBindings(self.allocator, bindings)
+    else
+        null;
     const view_structural_intervals = if (self.view) |view| blk: {
         const result = try self.allocator.alloc(
             ?StructuralInterval,
@@ -41,6 +49,7 @@ pub fn initState(
     return .{
         .rule_bindings = rule_bindings,
         .view_bindings = view_bindings,
+        .view_match_state = view_match_state,
         .rule_structural_intervals = rule_structural_intervals,
         .view_structural_intervals = view_structural_intervals,
         .rule_structural_obligations = rule_structural_obligations,
@@ -99,6 +108,10 @@ pub fn cloneState(
             try self.allocator.dupe(?ExprId, bindings)
         else
             null,
+        .view_match_state = if (state.view_match_state) |*match_state|
+            try cloneMatchSeedState(self.allocator, match_state)
+        else
+            null,
         .rule_structural_intervals = try self.allocator.dupe(
             ?StructuralInterval,
             state.rule_structural_intervals,
@@ -139,4 +152,77 @@ pub fn cloneStructuralObligations(
         };
     }
     return result;
+}
+
+pub fn matchSeedStateFromBindings(
+    allocator: std.mem.Allocator,
+    bindings: []const ?ExprId,
+) !DefOps.MatchSeedState {
+    const seeds = try allocator.alloc(DefOps.BindingSeed, bindings.len);
+    for (bindings, 0..) |binding, idx| {
+        seeds[idx] = if (binding) |expr_id|
+            .{ .exact = expr_id }
+        else
+            .none;
+    }
+    return .{
+        .bindings = seeds,
+        .symbolic_dummy_infos = try allocator.alloc(
+            DefOpsTypes.SymbolicDummyInfo,
+            0,
+        ),
+    };
+}
+
+pub fn cloneMatchSeedState(
+    allocator: std.mem.Allocator,
+    state: *const DefOps.MatchSeedState,
+) !DefOps.MatchSeedState {
+    const bindings = try allocator.alloc(DefOps.BindingSeed, state.bindings.len);
+    errdefer allocator.free(bindings);
+    for (state.bindings, 0..) |seed, idx| {
+        bindings[idx] = try cloneBindingSeed(allocator, seed);
+    }
+    return .{
+        .bindings = bindings,
+        .symbolic_dummy_infos = try allocator.dupe(
+            DefOpsTypes.SymbolicDummyInfo,
+            state.symbolic_dummy_infos,
+        ),
+        .witnesses = try Containers.cloneMap(allocator, state.witnesses),
+        .materialized_witnesses = try Containers.cloneMap(
+            allocator,
+            state.materialized_witnesses,
+        ),
+        .materialized_witness_slots = try Containers.cloneMap(
+            allocator,
+            state.materialized_witness_slots,
+        ),
+        .dummy_aliases = try Containers.cloneMap(
+            allocator,
+            state.dummy_aliases,
+        ),
+        .provisional_witness_infos = try Containers.cloneMap(
+            allocator,
+            state.provisional_witness_infos,
+        ),
+        .materialized_witness_infos = try Containers.cloneMap(
+            allocator,
+            state.materialized_witness_infos,
+        ),
+    };
+}
+
+fn cloneBindingSeed(
+    allocator: std.mem.Allocator,
+    seed: DefOps.BindingSeed,
+) !DefOps.BindingSeed {
+    return switch (seed) {
+        .bound => |bound| .{
+            .bound = try DefOpsTypes.cloneBoundValue(allocator, bound),
+        },
+        .none => .none,
+        .exact => |expr_id| .{ .exact = expr_id },
+        .semantic => |semantic| .{ .semantic = semantic },
+    };
 }

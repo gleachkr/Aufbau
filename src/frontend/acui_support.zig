@@ -24,6 +24,42 @@ pub const Context = struct {
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
+    /// Lazily created def_ops context reused by every def-eq query made
+    /// through this support context (the whole common-target recursion and
+    /// the same-side coverage loops used to build one per leaf pair, cold
+    /// caches each time). Created only via a stable `*Context`, so the
+    /// by-value copies of a *fresh* support context (helpers returning one)
+    /// are safe: the field is still null at that point. Holders must call
+    /// `deinit` (and must not copy a context after first use).
+    def_ops_ctx: ?DefOps.Context = null,
+    /// Lazily computed: does the environment declare any concrete def
+    /// (`is_def` with a body) at all? Whole theories commonly declare none,
+    /// and `isDefBearing` (hence every def-unfolding probe it gates) then
+    /// short-circuits to false in O(1) instead of walking exprs and probing
+    /// the def caches for answers that cannot be anything but null. Safe to
+    /// snapshot per context: the term table only changes between statements,
+    /// and no support context outlives the statement that created it.
+    env_has_concrete_defs: ?bool = null,
+    /// Per-context memos for the registry's structural-combiner resolution,
+    /// including the NEGATIVE answer. The registry itself must not cache
+    /// negatives (a combiner unresolved only because its assoc/unit rules
+    /// aren't declared yet can resolve after a later statement), but within
+    /// one statement the answer is a constant — and every semantic-compare
+    /// pair otherwise re-runs the registry probes (for the sort fallback, a
+    /// linear scan over all combiners) to re-learn it. Same statement-scoped
+    /// lifetime argument as `env_has_concrete_defs`; sort keys are env-owned
+    /// stable strings. The by-term memo is a dense term-id-indexed array —
+    /// this sits under every semantic-compare node visit, where even a hash
+    /// probe costs about as much as the registry lookup it replaces.
+    combiner_by_term: std.ArrayListUnmanaged(CombinerMemoSlot) = .empty,
+    combiner_by_sort: std.StringHashMapUnmanaged(
+        ?ResolvedStructuralCombiner,
+    ) = .empty,
+
+    const CombinerMemoSlot = union(enum) {
+        unknown,
+        resolved: ?ResolvedStructuralCombiner,
+    };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -37,6 +73,24 @@ pub const Context = struct {
             .env = env,
             .registry = registry,
         };
+    }
+
+    pub fn deinit(self: *Context) void {
+        if (self.def_ops_ctx) |*ctx| ctx.deinit();
+        self.combiner_by_term.deinit(self.allocator);
+        self.combiner_by_sort.deinit(self.allocator);
+    }
+
+    fn defOps(self: *Context) *DefOps.Context {
+        if (self.def_ops_ctx == null) {
+            self.def_ops_ctx = DefOps.Context.initWithRegistry(
+                self.allocator,
+                self.theorem,
+                self.env,
+                self.registry,
+            );
+        }
+        return &self.def_ops_ctx.?;
     }
 
     pub fn getExprSort(self: *const Context, expr_id: ExprId) ?[]const u8 {
@@ -57,8 +111,7 @@ pub const Context = struct {
     ) anyerror!?ResolvedStructuralCombiner {
         const lhs_node = self.theorem.interner.node(lhs);
         switch (lhs_node.*) {
-            .app => |app| if (try self.registry.resolveStructuralCombiner(
-                self.env,
+            .app => |app| if (try self.resolveCombinerForTerm(
                 app.term_id,
             )) |acui| {
                 if (self.exprMatchesCombinerSort(rhs, acui)) return acui;
@@ -68,8 +121,7 @@ pub const Context = struct {
         }
         const rhs_node = self.theorem.interner.node(rhs);
         switch (rhs_node.*) {
-            .app => |app| if (try self.registry.resolveStructuralCombiner(
-                self.env,
+            .app => |app| if (try self.resolveCombinerForTerm(
                 app.term_id,
             )) |acui| {
                 if (self.exprMatchesCombinerSort(lhs, acui)) return acui;
@@ -80,10 +132,48 @@ pub const Context = struct {
         const lhs_sort = self.getExprSort(lhs) orelse return null;
         const rhs_sort = self.getExprSort(rhs) orelse return null;
         if (!std.mem.eql(u8, lhs_sort, rhs_sort)) return null;
-        return try self.registry.resolveStructuralCombinerForSort(
+        return try self.resolveCombinerForSort(lhs_sort);
+    }
+
+    fn resolveCombinerForTerm(
+        self: *Context,
+        term_id: u32,
+    ) anyerror!?ResolvedStructuralCombiner {
+        if (term_id < self.combiner_by_term.items.len) {
+            switch (self.combiner_by_term.items[term_id]) {
+                .resolved => |hit| return hit,
+                .unknown => {},
+            }
+        }
+        const resolved = try self.registry.resolveStructuralCombiner(
             self.env,
-            lhs_sort,
+            term_id,
         );
+        // Memo-or-forget on OOM.
+        memo: {
+            while (self.combiner_by_term.items.len <= term_id) {
+                self.combiner_by_term.append(
+                    self.allocator,
+                    .unknown,
+                ) catch break :memo;
+            }
+            self.combiner_by_term.items[term_id] = .{ .resolved = resolved };
+        }
+        return resolved;
+    }
+
+    fn resolveCombinerForSort(
+        self: *Context,
+        sort_name: []const u8,
+    ) anyerror!?ResolvedStructuralCombiner {
+        if (self.combiner_by_sort.get(sort_name)) |hit| return hit;
+        const resolved = try self.registry.resolveStructuralCombinerForSort(
+            self.env,
+            sort_name,
+        );
+        // Memo-or-forget on OOM.
+        self.combiner_by_sort.put(self.allocator, sort_name, resolved) catch {};
+        return resolved;
     }
 
     pub fn exprMatchesCombinerSort(
@@ -288,19 +378,53 @@ pub const Context = struct {
     }
 
     pub fn isDefBearing(self: *Context, expr_id: ExprId) bool {
+        if (!self.envHasConcreteDefs()) return false;
+        // The per-expr verdicts share the theorem's def-cache fixed-env
+        // invariant (one env per theorem context).
+        self.theorem.assertDefOpsCacheIdentity(@intFromPtr(self.env), 0);
+        return self.isDefBearingMemo(expr_id);
+    }
+
+    fn envHasConcreteDefs(self: *Context) bool {
+        if (self.env_has_concrete_defs == null) {
+            self.env_has_concrete_defs = for (self.env.terms.items) |*term| {
+                if (term.is_def and term.body != null) break true;
+            } else false;
+        }
+        return self.env_has_concrete_defs.?;
+    }
+
+    fn isDefBearingMemo(self: *Context, expr_id: ExprId) bool {
         const node = self.theorem.interner.node(expr_id);
         const app = switch (node.*) {
             .app => |value| value,
             .variable => return false,
             .placeholder => return false,
         };
-        if (app.term_id >= self.env.terms.items.len) return false;
-        const term = &self.env.terms.items[app.term_id];
-        if (term.is_def and term.body != null) return true;
-        for (app.args) |arg| {
-            if (self.isDefBearing(arg)) return true;
+        if (self.theorem.def_bearing_cache.get(expr_id)) |cached| {
+            return cached;
         }
-        return false;
+        var result = false;
+        if (app.term_id < self.env.terms.items.len) {
+            const term = &self.env.terms.items[app.term_id];
+            result = term.is_def and term.body != null;
+        }
+        if (!result) {
+            for (app.args) |arg| {
+                if (self.isDefBearingMemo(arg)) {
+                    result = true;
+                    break;
+                }
+            }
+        }
+        // Memo-or-forget on OOM: the verdict is still correct without the
+        // cache entry.
+        self.theorem.def_bearing_cache.put(
+            self.theorem.allocator,
+            expr_id,
+            result,
+        ) catch {};
+        return result;
     }
 
     pub fn buildCommonTarget(
@@ -309,11 +433,21 @@ pub const Context = struct {
         rhs: ExprId,
     ) anyerror!?ExprId {
         if (lhs == rhs) return lhs;
-        if (try self.buildDirectTransparentCommonTarget(lhs, rhs)) |direct| {
-            return direct;
-        }
-        if (try self.buildSemanticDefCommonTarget(lhs, rhs)) |semantic| {
-            return semantic;
+        // The two def-unfolding steps can only make progress through a
+        // concrete def: `compareTransparent` on distinct interned exprs
+        // needs `planDefToTarget` (a def-headed subterm) to get past a
+        // structural mismatch, and `instantiateDefTowardExpr` bails unless
+        // its expr is def-headed. Hash-consing makes "distinct ids, no def
+        // anywhere" a proof that both return null, so skip their per-pair
+        // cache probes entirely — semantic dedup calls this for every
+        // candidate item pair, and def-free leaves are the common case.
+        if (self.isDefBearing(lhs) or self.isDefBearing(rhs)) {
+            if (try self.buildDirectTransparentCommonTarget(lhs, rhs)) |direct| {
+                return direct;
+            }
+            if (try self.buildSemanticDefCommonTarget(lhs, rhs)) |semantic| {
+                return semantic;
+            }
         }
         if (try self.buildAcuiCommonTarget(lhs, rhs)) |acui| {
             return acui;
@@ -326,13 +460,7 @@ pub const Context = struct {
         lhs: ExprId,
         rhs: ExprId,
     ) anyerror!?ExprId {
-        var def_ops = DefOps.Context.initWithRegistry(
-            self.allocator,
-            self.theorem,
-            self.env,
-            self.registry,
-        );
-        defer def_ops.deinit();
+        const def_ops = self.defOps();
 
         if ((try def_ops.compareTransparent(lhs, rhs)) != null) {
             return rhs;
@@ -359,13 +487,7 @@ pub const Context = struct {
         def_expr: ExprId,
         other_expr: ExprId,
     ) anyerror!?ExprId {
-        var def_ops = DefOps.Context.initWithRegistry(
-            self.allocator,
-            self.theorem,
-            self.env,
-            self.registry,
-        );
-        defer def_ops.deinit();
+        const def_ops = self.defOps();
 
         const witness = try def_ops.instantiateDefTowardExpr(
             def_expr,
@@ -621,13 +743,7 @@ pub const Context = struct {
             return true;
         }
 
-        var def_ops = DefOps.Context.initWithRegistry(
-            self.allocator,
-            self.theorem,
-            self.env,
-            self.registry,
-        );
-        defer def_ops.deinit();
+        const def_ops = self.defOps();
 
         const witness = try def_ops.instantiateDefTowardAcuiItem(
             def_expr,

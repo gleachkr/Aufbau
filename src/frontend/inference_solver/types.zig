@@ -1,5 +1,6 @@
 const ExprId = @import("../expr.zig").ExprId;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
+const DefOps = @import("../def_ops.zig");
 const ResolvedStructuralCombiner =
     @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
 
@@ -91,6 +92,7 @@ pub const StructuralInterval = struct {
 pub const BranchState = struct {
     rule_bindings: []?ExprId,
     view_bindings: ?[]?ExprId,
+    view_match_state: ?DefOps.MatchSeedState,
     rule_structural_intervals: []?StructuralInterval,
     view_structural_intervals: ?[]?StructuralInterval,
     rule_structural_obligations: []StructuralJointObligation,

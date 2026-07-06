@@ -1,0 +1,3 @@
+nd_sep_intro_imp
+----------------
+l1: $ _ ⊢ a ∈ A → ([x/a] p → a ∈ {x ∈ A | p}) $ by auto?

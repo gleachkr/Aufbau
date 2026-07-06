@@ -1,0 +1,15 @@
+t
+----
+l00: $ nd G P0 $ by have_P0
+l01: $ nd G P1 $ by have_P1
+l02: $ nd G P2 $ by have_P2
+l03: $ nd G P3 $ by have_P3
+l04: $ nd G P4 $ by have_P4
+l05: $ nd G P5 $ by have_P5
+l06: $ nd G P6 $ by have_P6
+l07: $ nd G P7 $ by have_P7
+l08: $ nd G P8 $ by have_P8
+l09: $ nd G P9 $ by have_P9
+l10: $ nd G P10 $ by have_P10
+l11: $ nd G P11 $ by have_P11
+l12: $ nd G Target $ by exact?

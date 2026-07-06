@@ -182,6 +182,7 @@ pub const Canonicalizer = struct {
             return expr_id;
         }
         var support = self.acuiSupport();
+        defer support.deinit();
         return try support.canonicalizeAcui(expr_id, acui);
     }
 };

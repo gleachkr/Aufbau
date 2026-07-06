@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
 const ViewTrace = @import("../view_trace.zig");
+const text_util = @import("../text_util.zig");
 const DebugTrace = @import("../debug.zig");
 const SemanticCompare = @import("./semantic_compare.zig");
 const StructuralItems = @import("./items.zig");
@@ -29,9 +30,17 @@ pub fn pickUniqueSolution(
     var distinct_idxs = std.ArrayListUnmanaged(usize){};
     defer distinct_idxs.deinit(self.allocator);
 
+    var saw_incomplete = false;
     for (states, 0..) |state, idx| {
         for (state.rule_bindings) |binding| {
-            if (binding == null) return error.MissingBinderAssignment;
+            if (binding == null) {
+                saw_incomplete = true;
+                break;
+            }
+        }
+        if (saw_incomplete) {
+            saw_incomplete = false;
+            continue;
         }
 
         var already_seen = false;
@@ -49,6 +58,8 @@ pub fn pickUniqueSolution(
             try distinct_idxs.append(self.allocator, idx);
         }
     }
+
+    if (distinct_idxs.items.len == 0) return error.MissingBinderAssignment;
 
     const chosen_distinct_idx = try chooseDistinctSolution(
         self,
@@ -279,6 +290,6 @@ fn appendTruncatedText(
         try out.appendSlice(allocator, text[0..limit]);
         return;
     }
-    try out.appendSlice(allocator, text[0 .. limit - 1]);
+    try out.appendSlice(allocator, text_util.truncateUtf8(text, limit - 1));
     try out.appendSlice(allocator, "...");
 }

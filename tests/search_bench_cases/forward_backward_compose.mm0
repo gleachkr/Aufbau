@@ -1,0 +1,122 @@
+-- Bench-only Hilbert-style theory for the forward/backward composition probe
+-- (META.md Stages 4+7/8): a universal fact is instantiated *forward* into the
+-- family fact `P ?t → Q ?t` (universal meta), and a plain modus ponens opens
+-- its major premise *backward* as `?a → Q K` (existential meta). The derived
+-- family fact discharges the open subgoal: the goal-vs-shape walk solves
+-- ?t := K from the concrete overlap (`Q K` vs `Q ?t`), the recipe materializes
+-- the concrete `P K → Q K`, and the match-back pins ?a := P K. The two meta
+-- kinds never bind to each other — universal solved first from concrete
+-- structure, existential bound to a concrete term after.
+--
+-- The substitution/rewrite skeleton is the same as all_elim_forward.mm0 (the
+-- Stage 7 worked example), specialized to unary predicates P, Q.
+delimiter $ ( ) [ / ] $;
+provable sort wff;
+sort obj;
+
+term imp (a b: wff): wff;
+infixr imp: $→$ prec 25;
+term iff (a b: wff): wff;
+infixr iff: $↔$ prec 20;
+term all {x: obj} (p: wff x): wff;
+prefix all: $∀$ prec 41;
+term eq (a b: obj): wff;
+infixl eq: $=$ prec 35;
+
+term P (x: obj): wff;
+prefix P: $P$ prec 40;
+term Q (x: obj): wff;
+prefix Q: $Q$ prec 40;
+term K: obj;
+
+term sb_t {x: obj} (t: obj x) (a: obj x): obj;
+notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
+  ($subst$:41) x ($/$:0) t a;
+term sb_f {x: obj} (t: obj x) (p: wff x): wff;
+notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a ↔ a $;
+axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation obj eq eq_refl eq_trans eq_sym _
+axiom eq_refl (a: obj): $ a = a $;
+axiom eq_trans (a b c: obj): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_sym (a b: obj): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom imp_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+
+--| @congr
+axiom all_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+
+--| @congr
+axiom P_congr (a b: obj): $ a = b $ > $ P a ↔ P b $;
+
+--| @congr
+axiom Q_congr (a b: obj): $ a = b $ > $ Q a ↔ Q b $;
+
+--| @rewrite
+axiom sb_t_var {x: obj} (t: obj x): $ subst x / t x = t $;
+
+--| @rewrite
+axiom sb_t_other {x y: obj} (t: obj x): $ subst x / t y = y $;
+
+--| @rewrite
+axiom sb_t_irrel {x: obj} (t: obj x) (a: obj): $ subst x / t a = a $;
+
+--| @rewrite
+axiom sb_f_imp {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+
+--| @rewrite
+axiom sb_f_all {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y ([x/t] p) $;
+
+--| @rewrite
+axiom sb_f_P {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (P a) ↔ P (subst x / t a) $;
+
+--| @rewrite
+axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
+
+-- Universal elimination, the @auto forward rule. Raw conclusion `[x/t] p` is
+-- the substitution term; @view advertises the applied surface `q` and
+-- @recover extracts the witness `t` by structural correspondence.
+--| @view {x: obj} (t: obj x) (p: wff x) (q: wff): $ ∀ x p $ > $ q $
+--| @recover t q p x
+--| @auto forward
+axiom all_elim {x: obj} (t: obj x) (p: wff x):
+  $ ∀ x p $ > $ [x/t] p $;
+
+-- Plain modus ponens, enrolled in open backward generation: its major
+-- premise may open as `?a → <goal>` when nothing pins `a` first.
+--| @auto backward
+axiom mp (a b: wff): $ a → b $ > $ a $ > $ b $;
+
+-- Minor-premise fact for the generated variant below.
+axiom P_K: $ P K $;
+
+-- Composition, minor premise in the ref pool (the user-facing shape):
+-- hypotheses `∀ x (P x → Q x)` and `P K`, goal `Q K`.
+theorem fwd_bwd_minor_in_pool {x: obj}:
+  $ ∀ x (P x → Q x) $ > $ P K $ > $ Q K $;
+
+-- Composition, minor premise NOT in the pool: the major slot must go open
+-- (`?a → Q K`), be discharged by the derived family fact `P ?t → Q ?t`, and
+-- the match-back (?a := P K) makes the minor slot a concrete generated
+-- child closed by `P_K []`.
+theorem fwd_bwd_minor_generated {x: obj}:
+  $ ∀ x (P x → Q x) $ > $ Q K $;
+
+-- Forward-only boundary guard: the derived family fact closes this goal
+-- directly (no backward mp involved). Declared LAST so it cannot serve as a
+-- lemma for the composition theorems above (statement-order lockstep).
+theorem fwd_direct_probe {x: obj}:
+  $ ∀ x (P x → Q x) $ > $ P K → Q K $;

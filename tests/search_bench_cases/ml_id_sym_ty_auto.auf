@@ -1,0 +1,12 @@
+id_sym_ty
+---------
+
+l1: $ g , x : A , y : A ⊢ y : A $ by var
+l2: $ g , x : A ⊢ x : A $ by var
+l3: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by weaken [l1]
+l4: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by weaken2 [l2]
+l5: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $
+  by Id_form [l3, l4]
+l6: $ g , x : A ⊢ refl A x : Id A x x $ by refl_intro [l2]
+l7: $ g ⊢ J x y q A (Id A y x) (refl A x) s t p :
+  [x/s] [y/t] [q/p] (Id A y x) $ by auto?

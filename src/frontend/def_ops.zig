@@ -413,6 +413,15 @@ pub const Testing = struct {
     pub const MatchSession = MatchState.MatchSession;
     pub const SymbolicExpr = Types.SymbolicExpr;
 
+    pub fn expandConcreteDef(
+        ctx: *Context,
+        expr_id: ExprId,
+        state: *MatchState.MatchSession,
+    ) anyerror!?*const Types.SymbolicExpr {
+        var symbolic_engine = ctx.symbolicEngine();
+        return try symbolic_engine.expandConcreteDef(expr_id, state);
+    }
+
     pub fn collectSemanticStepCandidatesExpr(
         ctx: *Context,
         expr_id: ExprId,

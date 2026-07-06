@@ -61,6 +61,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_chained_fallback", .outcome = .pass },
     .{ .stem = "pass_chained_metadata", .outcome = .pass },
     .{ .stem = "pass_chained_normalize", .outcome = .pass },
+    .{ .stem = "pass_nested_additive_inline", .outcome = .pass },
     .{
         .stem = "fail_chained_bare_rule_label",
         .outcome = .{ .fail = error.UnknownLabel },
@@ -235,6 +236,11 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_prawitz_holes", .outcome = .pass },
     .{ .stem = "pass_prawitz_holes_hard", .outcome = .pass },
     .{ .stem = "pass_prawitz_chained", .outcome = .pass },
+    // Unannotated multiplicative `or_elim` whose generated minors carry a
+    // conclusion-only disjunct — validated only via the context-holey inline
+    // hint (`fillHoleyInlineHints`). Compile-path round-trip of the `nd_or_comm`
+    // auto? suggestion. See docs/design_notes/nd_or_comm_validation_gap.
+    .{ .stem = "pass_holey_or_elim", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },
@@ -396,6 +402,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "martin_lof", .outcome = .pass },
     .{ .stem = "peano", .outcome = .pass },
     .{ .stem = "euclid", .outcome = .pass },
+    .{ .stem = "tait", .outcome = .pass },
     .{
         .stem = "fail_missing_binding",
         .outcome = .{ .fail = error.MissingBinderAssignment },

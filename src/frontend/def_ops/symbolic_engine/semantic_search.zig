@@ -783,6 +783,7 @@ fn applyAcuiToExpr(
         self.shared.env,
         registry,
     );
+    defer support.deinit();
     const canonical = try support.canonicalizeAcui(expr_id, acui);
     if (canonical == expr_id) return null;
     return try self.allocSymbolic(.{ .fixed = canonical });
@@ -883,177 +884,105 @@ fn noteSemanticSearchState(
 }
 
 fn hashExprForSearch(expr_id: ExprId) u64 {
-    var hasher = std.hash.Wyhash.init(0x7419ef6a1fd348d1);
-    const tag: u8 = 1;
-    hasher.update(std.mem.asBytes(&tag));
-    hasher.update(std.mem.asBytes(&expr_id));
-    return hasher.final();
+    return Types.mixHash(Types.mixHash(0x7419ef6a1fd348d1, 1), expr_id);
 }
 
-fn hashSymbolicForSearch(
+pub fn hashSymbolicForSearch(
     self: anytype,
     symbolic: *const SymbolicExpr,
 ) u64 {
-    var hasher = std.hash.Wyhash.init(0x4fd443d41d41de49);
-    hashSymbolicExprForSearch(self, symbolic, &hasher);
-    return hasher.final();
+    _ = self;
+    // O(1): app nodes carry a cached structural hash (see `allocSymbolic`), so
+    // this is a single read instead of a tree walk. This used to be ~50% of the
+    // runtime on def-unfold-heavy theories (church, martin_lof).
+    return Types.symbolicHash(symbolic);
 }
 
-fn hashSymbolicExprForSearch(
-    self: anytype,
-    symbolic: *const SymbolicExpr,
-    hasher: *std.hash.Wyhash,
-) void {
-    switch (symbolic.*) {
-        .binder => |idx| {
-            const tag: u8 = 2;
-            hasher.update(std.mem.asBytes(&tag));
-            hasher.update(std.mem.asBytes(&idx));
-        },
-        .fixed => |expr_id| {
-            const tag: u8 = 3;
-            hasher.update(std.mem.asBytes(&tag));
-            hasher.update(std.mem.asBytes(&expr_id));
-        },
-        .dummy => |slot| {
-            const tag: u8 = 4;
-            hasher.update(std.mem.asBytes(&tag));
-            hasher.update(std.mem.asBytes(&slot));
-        },
-        .app => |app| {
-            const tag: u8 = 5;
-            hasher.update(std.mem.asBytes(&tag));
-            hasher.update(std.mem.asBytes(&app.term_id));
-            hasher.update(std.mem.asBytes(&app.args.len));
-            for (app.args) |arg| {
-                hashSymbolicExprForSearch(self, arg, hasher);
-            }
-        },
-    }
-}
-
-fn hashMatchSessionForSearch(
+pub fn hashMatchSessionForSearch(
     self: anytype,
     state: *const MatchSession,
 ) anyerror!u64 {
-    var hasher = std.hash.Wyhash.init(0x9ff6116d7c0ed8a3);
+    // Cheap inline integer mixing (`Types.mixHash`) instead of a streaming
+    // Wyhash: this runs once per `matchSymbolicToSymbolicState` memo probe (the
+    // hottest path on def-unfold-heavy theories), and every field it folds is an
+    // integer or short byte string. Coverage is identical to the prior Wyhash
+    // version (same fields, same order-independent map accumulation); only the
+    // mixer changed, so the memo key stays a deterministic function of state.
+    _ = self;
+    var h: u64 = 0x9ff6116d7c0ed8a3;
 
-    hasher.update(std.mem.asBytes(&state.bindings.len));
+    h = Types.mixHash(h, state.bindings.len);
     for (state.bindings) |binding_opt| {
-        const present: u8 = if (binding_opt == null) 0 else 1;
-        hasher.update(std.mem.asBytes(&present));
         if (binding_opt) |binding| {
-            try hashBoundValueForSearch(self, binding, &hasher);
+            h = Types.mixHash(h, 1);
+            h = Types.mixHash(h, hashBoundValueForSearch(binding));
+        } else {
+            h = Types.mixHash(h, 0);
         }
     }
 
-    hasher.update(std.mem.asBytes(&state.symbolic_dummy_infos.items.len));
+    h = Types.mixHash(h, state.symbolic_dummy_infos.items.len);
     for (state.symbolic_dummy_infos.items) |info| {
-        hasher.update(info.sort_name);
-        hasher.update(std.mem.asBytes(&info.bound));
+        h = Types.mixHashBytes(h, info.sort_name);
+        h = Types.mixHash(h, @intFromBool(info.bound));
     }
 
-    hashWitnessMapForSearch(state.witnesses, &hasher);
-    hashWitnessMapForSearch(state.materialized_witnesses, &hasher);
-    hashWitnessSlotMapForSearch(state.materialized_witness_slots, &hasher);
-    hashDummyAliasMapForSearch(state.dummy_aliases, &hasher);
-    return hasher.final();
+    h = hashWitnessMapForSearch(h, state.witnesses);
+    h = hashWitnessMapForSearch(h, state.materialized_witnesses);
+    h = hashWitnessSlotMapForSearch(h, state.materialized_witness_slots);
+    h = hashDummyAliasMapForSearch(h, state.dummy_aliases);
+    return h;
 }
 
-fn hashBoundValueForSearch(
-    self: anytype,
-    bound: BoundValue,
-    hasher: *std.hash.Wyhash,
-) anyerror!void {
-    switch (bound) {
-        .concrete => |concrete| {
-            const tag: u8 = 6;
-            const mode = @intFromEnum(concrete.mode);
-            hasher.update(std.mem.asBytes(&tag));
-            hasher.update(std.mem.asBytes(&concrete.raw));
-            hasher.update(std.mem.asBytes(&mode));
-            hashSymbolicExprForSearch(self, concrete.repr, hasher);
+fn hashBoundValueForSearch(bound: BoundValue) u64 {
+    return switch (bound) {
+        .concrete => |concrete| blk: {
+            var h = Types.mixHash(0x6a09e667f3bcc908, 6);
+            h = Types.mixHash(h, concrete.raw);
+            h = Types.mixHash(h, @intFromEnum(concrete.mode));
+            h = Types.mixHash(h, Types.symbolicHash(concrete.repr));
+            break :blk h;
         },
-        .symbolic => |symbolic| {
-            const tag: u8 = 7;
-            const mode = @intFromEnum(symbolic.mode);
-            hasher.update(std.mem.asBytes(&tag));
-            hasher.update(std.mem.asBytes(&mode));
-            hashSymbolicExprForSearch(self, symbolic.expr, hasher);
+        .symbolic => |symbolic| blk: {
+            var h = Types.mixHash(0x6a09e667f3bcc908, 7);
+            h = Types.mixHash(h, @intFromEnum(symbolic.mode));
+            h = Types.mixHash(h, Types.symbolicHash(symbolic.expr));
+            break :blk h;
         },
-    }
+    };
 }
 
-fn hashWitnessMapForSearch(
-    map: WitnessMap,
-    hasher: *std.hash.Wyhash,
-) void {
-    var count: usize = 0;
+/// Fold a map's entries into `h` order-independently (xor + wrapping sum of
+/// per-entry hashes, plus the count), so the result does not depend on
+/// iteration order. `tag` disambiguates the four maps.
+fn hashIntMap(h: u64, comptime tag: u64, map: anytype) u64 {
+    var count: u64 = 0;
     var xor_acc: u64 = 0;
     var sum_acc: u64 = 0;
     var it = map.iterator();
     while (it.next()) |entry| {
-        var entry_hasher = std.hash.Wyhash.init(0x0d48ab295c1ee8d7);
-        entry_hasher.update(std.mem.asBytes(entry.key_ptr));
-        entry_hasher.update(std.mem.asBytes(entry.value_ptr));
-        const entry_hash = entry_hasher.final();
+        const kh = Types.mixHash(0x243f6a8885a308d3, @intCast(entry.key_ptr.*));
+        const eh = Types.mixHash(kh, @intCast(entry.value_ptr.*));
         count += 1;
-        xor_acc ^= entry_hash;
-        sum_acc +%= entry_hash;
+        xor_acc ^= eh;
+        sum_acc +%= eh;
     }
-    const tag: u8 = 8;
-    hasher.update(std.mem.asBytes(&tag));
-    hasher.update(std.mem.asBytes(&count));
-    hasher.update(std.mem.asBytes(&xor_acc));
-    hasher.update(std.mem.asBytes(&sum_acc));
+    var out = Types.mixHash(h, tag);
+    out = Types.mixHash(out, count);
+    out = Types.mixHash(out, xor_acc);
+    return Types.mixHash(out, sum_acc);
 }
 
-fn hashWitnessSlotMapForSearch(
-    map: WitnessSlotMap,
-    hasher: *std.hash.Wyhash,
-) void {
-    var count: usize = 0;
-    var xor_acc: u64 = 0;
-    var sum_acc: u64 = 0;
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        var entry_hasher = std.hash.Wyhash.init(0x8c64a0f5a76d9f19);
-        entry_hasher.update(std.mem.asBytes(entry.key_ptr));
-        entry_hasher.update(std.mem.asBytes(entry.value_ptr));
-        const entry_hash = entry_hasher.final();
-        count += 1;
-        xor_acc ^= entry_hash;
-        sum_acc +%= entry_hash;
-    }
-    const tag: u8 = 9;
-    hasher.update(std.mem.asBytes(&tag));
-    hasher.update(std.mem.asBytes(&count));
-    hasher.update(std.mem.asBytes(&xor_acc));
-    hasher.update(std.mem.asBytes(&sum_acc));
+fn hashWitnessMapForSearch(h: u64, map: WitnessMap) u64 {
+    return hashIntMap(h, 8, map);
 }
 
-fn hashDummyAliasMapForSearch(
-    map: DummyAliasMap,
-    hasher: *std.hash.Wyhash,
-) void {
-    var count: usize = 0;
-    var xor_acc: u64 = 0;
-    var sum_acc: u64 = 0;
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        var entry_hasher = std.hash.Wyhash.init(0x3f4bb85ca84d2b13);
-        entry_hasher.update(std.mem.asBytes(entry.key_ptr));
-        entry_hasher.update(std.mem.asBytes(entry.value_ptr));
-        const entry_hash = entry_hasher.final();
-        count += 1;
-        xor_acc ^= entry_hash;
-        sum_acc +%= entry_hash;
-    }
-    const tag: u8 = 10;
-    hasher.update(std.mem.asBytes(&tag));
-    hasher.update(std.mem.asBytes(&count));
-    hasher.update(std.mem.asBytes(&xor_acc));
-    hasher.update(std.mem.asBytes(&sum_acc));
+fn hashWitnessSlotMapForSearch(h: u64, map: WitnessSlotMap) u64 {
+    return hashIntMap(h, 9, map);
+}
+
+fn hashDummyAliasMapForSearch(h: u64, map: DummyAliasMap) u64 {
+    return hashIntMap(h, 10, map);
 }
 
 pub fn matchTemplateSemantic(
@@ -1069,7 +998,7 @@ pub fn matchTemplateSemantic(
     var witness_slots: std.AutoHashMapUnmanaged(ExprId, usize) = .empty;
     defer witness_slots.deinit(self.shared.allocator);
     for (bindings, 0..) |binding, idx| {
-        state.bindings[idx] = if (binding) |expr_id|
+        state.seedBinding(idx, if (binding) |expr_id|
             try WitnessState.rebuildBoundValue(
                 self,
                 expr_id,
@@ -1078,7 +1007,7 @@ pub fn matchTemplateSemantic(
                 .exact,
             )
         else
-            null;
+            null);
     }
 
     if (!try matchTemplateSemanticState(

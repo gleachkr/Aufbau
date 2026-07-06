@@ -242,39 +242,38 @@ button:focus-visible {
   white-space: nowrap;
 }
 
-.diagnostic-nav {
-  display: inline-flex;
-  align-items: stretch;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel-strong);
+.cm-code-action-menu {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 12rem;
+  max-width: min(34rem, calc(100vw - 1rem));
+  padding: 0.3rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.7rem;
+  background: var(--panel);
+  box-shadow: var(--hud-shadow);
+  backdrop-filter: blur(18px);
 }
 
-.diagnostic-nav button {
-  min-width: 2rem;
+.cm-code-action-item {
   border: 0;
-  border-radius: 0;
+  border-radius: 0.45rem;
   background: transparent;
-  padding-inline: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
 }
 
-.diagnostic-nav button + button {
-  border-left: 1px solid var(--line);
-}
-
-.diagnostic-nav button:hover:not(:disabled) {
-  background: rgb(255 255 255 / 0.08);
-}
-
-.diagnostic-nav button:disabled {
-  cursor: default;
-  color: var(--muted);
-  opacity: 0.65;
-}
-
-#diagnostic-nav[hidden] {
-  display: none;
+.cm-code-action-item:hover,
+.cm-code-action-item:focus-visible {
+  background: var(--panel-strong);
+  outline: none;
 }
 
 @media (max-width: 980px) {

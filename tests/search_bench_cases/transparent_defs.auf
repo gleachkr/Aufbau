@@ -1,0 +1,4 @@
+t
+----
+l1: $ P $ by have_P
+l2: $ Goal $ by exact?

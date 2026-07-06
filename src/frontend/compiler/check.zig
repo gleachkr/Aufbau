@@ -8,10 +8,11 @@ const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
 const ExprModule = @import("../../trusted/expressions.zig");
 const Expr = ExprModule.Expr;
 const SourceSpan = ExprModule.SourceSpan;
-const ProofLine = @import("../proof_script.zig").ProofLine;
-const Ref = @import("../proof_script.zig").Ref;
-const RuleApplication = @import("../proof_script.zig").RuleApplication;
-const Span = @import("../proof_script.zig").Span;
+const ProofScript = @import("../proof_script.zig");
+const ProofLine = ProofScript.ProofLine;
+const Ref = ProofScript.Ref;
+const RuleApplication = ProofScript.RuleApplication;
+const Span = ProofScript.Span;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const TheoremBlock = @import("../proof_script.zig").TheoremBlock;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
@@ -40,9 +41,10 @@ const CompilerVars = @import("./vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("./holes.zig");
 const Idents = @import("./idents.zig");
+const OpenTerms = @import("./inference/open_terms.zig");
 
-const NameExprMap = std.StringHashMap(*const Expr);
-const LabelIndexMap = std.StringHashMap(usize);
+pub const NameExprMap = std.StringHashMap(*const Expr);
+pub const LabelIndexMap = std.StringHashMap(usize);
 
 const addFallbackFailureNote = DiagNotes.addFallbackFailureNote;
 const concreteMatchFailureSpan = DiagNotes.concreteMatchFailureSpan;
@@ -54,13 +56,49 @@ const addBoundaryAttemptNotes = DiagNotes.addBoundaryAttemptNotes;
 const applyFreshenedRuleLine = FreshenRetry.applyFreshenedRuleLine;
 const findRuleArgIndex = Idents.findRuleArgIndex;
 
-const SuccessfulLineAttempt = struct {
+pub const SuccessfulLineAttempt = struct {
     line_idx: usize,
     theorem: TheoremContext,
     theorem_vars: NameExprMap,
 };
 
-const LineAssertion = union(enum) {
+pub const UnresolvedHypothesis = struct {
+    index: usize,
+    expected: ?ExprId,
+};
+
+pub const ConclusionProbe = struct {
+    allocator: std.mem.Allocator,
+    rule_id: u32,
+    rule_name: []const u8,
+    bindings: []const ?ExprId,
+    raw_conclusion: ExprId,
+    displayed_conclusion: ExprId,
+    unresolved_hyps: []const UnresolvedHypothesis,
+
+    pub fn deinit(self: *ConclusionProbe) void {
+        self.allocator.free(self.bindings);
+        self.allocator.free(self.unresolved_hyps);
+        self.* = undefined;
+    }
+};
+
+pub const RefExpectationProbe = struct {
+    allocator: std.mem.Allocator,
+    rule_id: u32,
+    bindings: []const ?ExprId,
+    contextual_bindings: []const ?ExprId,
+    expected_refs: []const ?ExprId,
+
+    pub fn deinit(self: *RefExpectationProbe) void {
+        self.allocator.free(self.bindings);
+        self.allocator.free(self.contextual_bindings);
+        self.allocator.free(self.expected_refs);
+        self.* = undefined;
+    }
+};
+
+pub const LineAssertion = union(enum) {
     concrete: ExprId,
     holey: *const Expr,
     implicit_whole_conclusion,
@@ -79,7 +117,7 @@ const CandidateElaboration = struct {
     displayed_conclusion: ExprId,
 };
 
-const ApplicationDiagnosticContext = struct {
+pub const ApplicationDiagnosticContext = struct {
     theorem_name: []const u8,
     line_label: ?[]const u8,
     span: ?Span,
@@ -93,7 +131,7 @@ const ApplicationDiagnosticContext = struct {
     }
 };
 
-const ApplicationLine = struct {
+pub const ApplicationLine = struct {
     label: []const u8,
     application: RuleApplication,
     assertion_span: Span,
@@ -127,7 +165,7 @@ const ApplicationLine = struct {
     }
 };
 
-const RuleApplyContext = struct {
+pub const RuleApplyContext = struct {
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
     env: *const GlobalEnv,
@@ -177,6 +215,12 @@ pub fn checkTheoremBlock(
     var last_span: ?Span = null;
 
     for (block.lines) |line| {
+        if (ProofScript.applicationHasSearchPlaceholder(line.application)) {
+            if (self.allow_search_placeholders) {
+                return try checked.toOwnedSlice(allocator);
+            }
+        }
+
         if (labels.contains(line.label)) {
             self.setProof(CompilerDiag.withPhase(.{
                 .kind = .duplicate_label,
@@ -351,7 +395,7 @@ fn parseProofLineAssertion(
     };
 }
 
-fn applyRuleApplication(
+pub fn applyRuleApplication(
     self: *CompilerContext,
     context: *const RuleApplyContext,
     application: RuleApplication,
@@ -461,6 +505,13 @@ fn applyRuleApplication(
                 return err;
             };
 
+            // Materialize the COW clone before it replaces (and frees) its base.
+            attempt.theorem.flatten() catch |err| {
+                CheckedIr.rollbackToMark(allocator, context.checked, checked_mark);
+                attempt.theorem_vars.deinit();
+                attempt.theorem.deinit();
+                return err;
+            };
             var old_theorem = theorem.*;
             theorem.* = attempt.theorem;
             old_theorem.deinit();
@@ -501,17 +552,124 @@ fn applyRuleApplication(
     }
 }
 
-fn tryApplyRuleApplicationWithCandidate(
+pub fn probeRuleConclusion(
     self: *CompilerContext,
     context: *const RuleApplyContext,
     application: RuleApplication,
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
+    diag_context: ApplicationDiagnosticContext,
     line: ApplicationLine,
     rule_id: u32,
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
-) anyerror!SuccessfulLineAttempt {
+) anyerror!ConclusionProbe {
+    const checked_mark = context.checked.items.len;
+    defer CheckedIr.rollbackToMark(
+        context.allocator,
+        context.checked,
+        checked_mark,
+    );
+
+    const result = try applyRuleCandidateCore(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        diag_context,
+        line,
+        rule_id,
+        theorem,
+        theorem_vars,
+        .conclusion_probe,
+    );
+    return result.conclusion_probe;
+}
+
+pub fn probeExpectedRefsForApplication(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    diag_context: ApplicationDiagnosticContext,
+    line: ApplicationLine,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+) anyerror!RefExpectationProbe {
+    const allocator = context.allocator;
+    const rule_id = try lookupRuleApplicationId(
+        self,
+        context.env,
+        context.rule_catalog,
+        diag_context,
+        application,
+    );
+    const rule = &context.env.rules.items[rule_id];
+    const partial_bindings = try parseBindings(
+        self,
+        allocator,
+        context.parser,
+        theorem,
+        theorem_vars,
+        context.sort_vars,
+        context.assertion.name,
+        rule,
+        application,
+        line,
+    );
+    defer allocator.free(partial_bindings);
+    const bindings = try allocator.dupe(?ExprId, partial_bindings);
+    errdefer allocator.free(bindings);
+    const probe = try inferExpectedRefsForInlineApplicationProbe(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        line,
+        rule_id,
+        rule,
+        theorem,
+        theorem_vars,
+        partial_bindings,
+        .strict,
+    );
+    errdefer allocator.free(probe.contextual_bindings);
+    errdefer allocator.free(probe.expected_refs);
+    return .{
+        .allocator = allocator,
+        .rule_id = rule_id,
+        .bindings = bindings,
+        .contextual_bindings = probe.contextual_bindings,
+        .expected_refs = probe.expected_refs,
+    };
+}
+
+const CandidateApplyKind = enum {
+    full_application,
+    conclusion_probe,
+};
+
+const CandidateApplyResult = union(CandidateApplyKind) {
+    full_application: SuccessfulLineAttempt,
+    conclusion_probe: ConclusionProbe,
+};
+
+fn applyRuleCandidateCore(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    diag_context: ApplicationDiagnosticContext,
+    line: ApplicationLine,
+    rule_id: u32,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    kind: CandidateApplyKind,
+) anyerror!CandidateApplyResult {
     const allocator = context.allocator;
     const parser = context.parser;
     const env = context.env;
@@ -520,13 +678,23 @@ fn tryApplyRuleApplicationWithCandidate(
     const checked = context.checked;
     const diag_scratch = context.diag_scratch;
     const rule = &env.rules.items[rule_id];
-    const diag_line = line;
-    if (application.refs.len != rule.hyps.len) {
+    var conclusion_rule = rule.*;
+    if (kind == .conclusion_probe) conclusion_rule.hyps = &.{};
+    const inference_rule = if (kind == .conclusion_probe)
+        &conclusion_rule
+    else
+        rule;
+    const expected_ref_count = switch (kind) {
+        .full_application => rule.hyps.len,
+        .conclusion_probe => 0,
+    };
+
+    if (application.refs.len != expected_ref_count) {
         self.setProof(CompilerDiag.withPhase(.{
             .kind = .ref_count_mismatch,
             .err = error.RefCountMismatch,
-            .theorem_name = assertion.name,
-            .line_label = diag_line.label,
+            .theorem_name = diag_context.theorem_name,
+            .line_label = diag_context.line_label,
             .rule_name = application.rule_name,
             .span = application.refsOrRuleSpan(),
         }, .theorem_application));
@@ -543,44 +711,57 @@ fn tryApplyRuleApplicationWithCandidate(
         assertion.name,
         rule,
         application,
-        diag_line,
+        line,
     );
     defer allocator.free(partial_bindings);
 
-    const expected_refs = try inferExpectedRefsForInlineApplications(
-        allocator,
-        theorem,
-        rule,
-        line_assertion,
-        expected_conclusion_hint,
-        partial_bindings,
-    );
-    defer allocator.free(expected_refs);
+    var expected_refs: []?ExprId = &.{};
+    if (kind == .full_application) {
+        expected_refs = try inferExpectedRefsForInlineApplications(
+            allocator,
+            theorem,
+            rule,
+            line_assertion,
+            expected_conclusion_hint,
+            partial_bindings,
+        );
+        try fillHoleyInlineHints(
+            self,
+            context,
+            application,
+            line_assertion,
+            expected_conclusion_hint,
+            line,
+            rule_id,
+            rule,
+            theorem,
+            theorem_vars,
+            partial_bindings,
+            expected_refs,
+        );
+    }
+    defer if (kind == .full_application) allocator.free(expected_refs);
 
-    // Ownership of `refs` transfers to a CheckedLine on the normal path. Until
-    // that happens, errors should free it locally. Late errors after transfer
-    // leave ownership with `checked`, whose rollback/final teardown frees it.
-    const refs = try allocator.alloc(CheckedRef, application.refs.len);
+    const refs = try allocator.alloc(CheckedRef, expected_ref_count);
     var refs_owned = true;
     errdefer if (refs_owned) allocator.free(refs);
-    const ref_exprs = try allocator.alloc(ExprId, application.refs.len);
+    const ref_exprs = try allocator.alloc(ExprId, expected_ref_count);
     defer allocator.free(ref_exprs);
-    try elaborateRefs(
-        self,
-        context,
-        diag_line,
-        theorem,
-        theorem_vars,
-        application.refs,
-        expected_refs,
-        refs,
-        ref_exprs,
-    );
 
-    // Keep the user's explicit bindings separate from @fresh selections.
-    // applyFreshBindings mutates partial_bindings in-place, and later
-    // hole-filled validation must still know which @fresh targets were
-    // generated automatically rather than written by the user.
+    if (kind == .full_application) {
+        try elaborateRefs(
+            self,
+            context,
+            line,
+            theorem,
+            theorem_vars,
+            application.refs,
+            expected_refs,
+            refs,
+            ref_exprs,
+        );
+    }
+
     const explicit_bindings = try allocator.dupe(?ExprId, partial_bindings);
     defer allocator.free(explicit_bindings);
 
@@ -594,7 +775,7 @@ fn tryApplyRuleApplicationWithCandidate(
             context.sort_vars,
             assertion.name,
             rule,
-            diag_line,
+            line,
             try lineAssertionKnownDeps(
                 env,
                 theorem,
@@ -607,26 +788,24 @@ fn tryApplyRuleApplicationWithCandidate(
             rule_fresh,
         );
     }
-    const maybe_view = context.views.get(rule_id);
+
+    var maybe_view = context.views.get(rule_id);
+    if (kind == .conclusion_probe) {
+        if (maybe_view) |*view| view.hyps = &.{};
+    }
     const had_omitted = Inference.hasOmittedBindings(partial_bindings);
     const has_omitted_structural = had_omitted and
         try Inference.hasOmittedStructuralBindings(
             env,
             registry,
-            rule,
+            inference_rule,
             partial_bindings,
         );
-    // When an omitted structural remainder and a fixed item share a
-    // structural subtree, several ACUI-compatible decompositions may exist.
-    // A strict replay success is still accepted as the fast exact answer.
-    // If exact inference cannot settle the application, prefer the structural
-    // solver over greedy transparent/session fallback so remaining choices
-    // are ranked by minimal residual context.
     const prefer_structural_solver = had_omitted and
         try Inference.shouldPreferStructuralSolver(
             env,
             registry,
-            rule,
+            inference_rule,
             partial_bindings,
         );
     const rule_has_advanced_inference =
@@ -656,9 +835,9 @@ fn tryApplyRuleApplicationWithCandidate(
                             .kind = .generic,
                             .err = err,
                             .theorem_name = assertion.name,
-                            .line_label = diag_line.label,
-                            .rule_name = diag_line.application.rule_name,
-                            .span = diag_line.ruleApplicationSpan(),
+                            .line_label = line.label,
+                            .rule_name = line.application.rule_name,
+                            .span = line.ruleApplicationSpan(),
                         }, .theorem_application));
                         return err;
                     };
@@ -673,7 +852,6 @@ fn tryApplyRuleApplicationWithCandidate(
         .theorem_vars = theorem_vars,
         .sort_vars = context.sort_vars,
     };
-
     const inference_context: Inference.RuleInferenceContext = .{
         .allocator = allocator,
         .env = env,
@@ -682,13 +860,152 @@ fn tryApplyRuleApplicationWithCandidate(
         .theorem = theorem,
         .assertion = assertion,
         .rule_id = rule_id,
-        .rule = rule,
-        .rule_unify_cache = context.rule_unify_cache,
+        .rule = inference_rule,
+        .rule_unify_cache = if (kind == .conclusion_probe)
+            null
+        else
+            context.rule_unify_cache,
     };
+
+    if (kind == .conclusion_probe) {
+        const optional_bindings = try inferCandidateOptionalBindings(
+            self,
+            &inference_context,
+            line,
+            line_assertion,
+            partial_bindings,
+            ref_exprs,
+            expected_conclusion_hint,
+            fresh_context,
+            maybe_view,
+            had_omitted,
+            rule_has_advanced_inference,
+            use_advanced_inference,
+            has_omitted_structural,
+            prefer_structural_solver,
+        );
+        defer allocator.free(optional_bindings);
+
+        try validateOptionalBindingsForProbe(
+            self,
+            env,
+            theorem,
+            assertion,
+            line,
+            rule,
+            optional_bindings,
+        );
+        restoreDiagnostic(self, null);
+
+        const filled_bindings = try OpenTerms.fillOptionalBindingsForProbe(
+            theorem,
+            rule,
+            optional_bindings,
+        );
+        var filled_bindings_owned = true;
+        errdefer if (filled_bindings_owned) allocator.free(filled_bindings);
+
+        const candidate = try elaborateCandidateLine(
+            self,
+            allocator,
+            parser,
+            theorem,
+            env,
+            registry,
+            diag_scratch,
+            assertion,
+            line,
+            rule,
+            line_assertion,
+            filled_bindings,
+        );
+
+        if (context.fresh_bindings.get(rule_id)) |rule_fresh| {
+            try validateFreshBindingsAgainstLine(
+                self,
+                allocator,
+                env,
+                theorem,
+                assertion.name,
+                rule,
+                line,
+                candidate.displayed_conclusion,
+                ref_exprs,
+                explicit_bindings,
+                filled_bindings,
+                rule_fresh,
+            );
+        }
+
+        const conclusion_mark = checked.items.len;
+        const line_idx = (Matching.tryBuildConclusionLine(
+            allocator,
+            theorem,
+            registry,
+            env,
+            checked,
+            diag_scratch,
+            self.debug,
+            candidate.displayed_conclusion,
+            candidate.raw_conclusion,
+            rule_id,
+            filled_bindings,
+            refs,
+        ) catch |err| {
+            if (checkedRangeOwnsRefs(checked.items[conclusion_mark..], refs)) {
+                refs_owned = false;
+            }
+            if (checkedRangeOwnsBindings(
+                checked.items[conclusion_mark..],
+                filled_bindings,
+            )) {
+                filled_bindings_owned = false;
+            }
+            CheckedIr.rollbackToMark(allocator, checked, conclusion_mark);
+            return err;
+        }) orelse {
+            CheckedIr.rollbackToMark(allocator, checked, conclusion_mark);
+            return error.ConclusionMismatch;
+        };
+        _ = line_idx;
+        refs_owned = false;
+        filled_bindings_owned = false;
+
+        const owned_bindings = try allocator.dupe(?ExprId, optional_bindings);
+        errdefer allocator.free(owned_bindings);
+        const unresolved = try allocator.alloc(
+            UnresolvedHypothesis,
+            rule.hyps.len,
+        );
+        errdefer allocator.free(unresolved);
+        for (rule.hyps, 0..) |hyp, idx| {
+            unresolved[idx] = .{
+                .index = idx,
+                .expected = if (OpenTerms.templateHasUnresolvedBinder(
+                    hyp,
+                    owned_bindings,
+                ))
+                    null
+                else
+                    try theorem.instantiateTemplate(hyp, filled_bindings),
+            };
+        }
+
+        return .{ .conclusion_probe = .{
+            .allocator = allocator,
+            .rule_id = rule_id,
+            .rule_name = rule.name,
+            .bindings = owned_bindings,
+            .raw_conclusion = candidate.raw_conclusion,
+            .displayed_conclusion = candidate.displayed_conclusion,
+            .unresolved_hyps = unresolved,
+        } };
+    }
+
     const bindings = try inferCandidateBindings(
         self,
         &inference_context,
-        diag_line,
+        line,
         line_assertion,
         partial_bindings,
         ref_exprs,
@@ -710,12 +1027,13 @@ fn tryApplyRuleApplicationWithCandidate(
         env,
         theorem,
         assertion,
-        diag_line,
+        line,
         rule,
         resolved_bindings,
     ) catch |err| {
         if (err != error.DepViolation) return err;
-        const rule_freshen = context.freshen_bindings.get(rule_id) orelse return err;
+        const rule_freshen = context.freshen_bindings.get(rule_id) orelse
+            return err;
         const dep_detail = (try Inference.firstDepViolation(
             env,
             theorem,
@@ -743,7 +1061,7 @@ fn tryApplyRuleApplicationWithCandidate(
                 registry,
                 diag_scratch,
                 assertion,
-                diag_line,
+                line,
                 rule,
                 line_assertion,
                 resolved_bindings,
@@ -761,7 +1079,7 @@ fn tryApplyRuleApplicationWithCandidate(
                 .kind = .generic,
                 .err = fresh_err,
                 .theorem_name = assertion.name,
-                .line_label = diag_line.label,
+                .line_label = line.label,
                 .rule_name = application.rule_name,
                 .span = application.ruleApplicationSpan(),
                 .detail = .{ .dep_violation = dep_detail },
@@ -783,7 +1101,7 @@ fn tryApplyRuleApplicationWithCandidate(
                 .kind = .generic,
                 .err = error.AlphaRewriteSearchFailed,
                 .theorem_name = assertion.name,
-                .line_label = diag_line.label,
+                .line_label = line.label,
                 .rule_name = application.rule_name,
                 .span = application.ruleApplicationSpan(),
                 .detail = .{ .dep_violation = remaining_dep_detail },
@@ -799,7 +1117,7 @@ fn tryApplyRuleApplicationWithCandidate(
             env,
             theorem,
             assertion,
-            diag_line,
+            line,
             rule,
             resolved_bindings,
         );
@@ -815,7 +1133,7 @@ fn tryApplyRuleApplicationWithCandidate(
                 theorem,
                 assertion.name,
                 rule,
-                diag_line,
+                line,
                 try resolveLineAssertionForBindings(
                     self,
                     allocator,
@@ -825,7 +1143,7 @@ fn tryApplyRuleApplicationWithCandidate(
                     registry,
                     diag_scratch,
                     assertion,
-                    diag_line,
+                    line,
                     rule,
                     line_assertion,
                     bindings,
@@ -852,7 +1170,7 @@ fn tryApplyRuleApplicationWithCandidate(
                 registry,
                 diag_scratch,
                 assertion,
-                diag_line,
+                line,
                 rule,
                 line_assertion,
                 bindings,
@@ -868,19 +1186,19 @@ fn tryApplyRuleApplicationWithCandidate(
                 .kind = .generic,
                 .err = err,
                 .theorem_name = assertion.name,
-                .line_label = diag_line.label,
-                .rule_name = diag_line.application.rule_name,
-                .span = diag_line.ruleApplicationSpan(),
+                .line_label = line.label,
+                .rule_name = line.application.rule_name,
+                .span = line.ruleApplicationSpan(),
             }, .theorem_application));
             return err;
         };
         allocator.free(refs);
         refs_owned = false;
-        return .{
+        return .{ .full_application = .{
             .line_idx = line_idx,
             .theorem = theorem.*,
             .theorem_vars = theorem_vars.*,
-        };
+        } };
     }
 
     for (ref_exprs, application.refs, 0..) |actual, ref, idx| {
@@ -910,7 +1228,7 @@ fn tryApplyRuleApplicationWithCandidate(
                 .generic,
                 err,
                 assertion.name,
-                diag_line.label,
+                line.label,
                 application.rule_name,
                 refSpan(application.refs[idx]),
             )) {
@@ -934,8 +1252,8 @@ fn tryApplyRuleApplicationWithCandidate(
                 .kind = .hypothesis_mismatch,
                 .err = error.HypothesisMismatch,
                 .theorem_name = assertion.name,
-                .line_label = diag_line.label,
-                .rule_name = diag_line.application.rule_name,
+                .line_label = line.label,
+                .rule_name = line.application.rule_name,
                 .span = span,
                 .detail = .{
                     .hypothesis_ref = .{
@@ -947,8 +1265,8 @@ fn tryApplyRuleApplicationWithCandidate(
                 .kind = .hypothesis_mismatch,
                 .err = error.HypothesisMismatch,
                 .theorem_name = assertion.name,
-                .line_label = diag_line.label,
-                .rule_name = diag_line.application.rule_name,
+                .line_label = line.label,
+                .rule_name = line.application.rule_name,
                 .name = label.label,
                 .span = span,
             }, .theorem_application),
@@ -956,8 +1274,8 @@ fn tryApplyRuleApplicationWithCandidate(
                 .kind = .hypothesis_mismatch,
                 .err = error.HypothesisMismatch,
                 .theorem_name = assertion.name,
-                .line_label = diag_line.label,
-                .rule_name = diag_line.application.rule_name,
+                .line_label = line.label,
+                .rule_name = line.application.rule_name,
                 .name = inline_app.rule_name,
                 .span = span,
             }, .theorem_application),
@@ -967,6 +1285,8 @@ fn tryApplyRuleApplicationWithCandidate(
             &diag,
             theorem,
             env,
+            parser,
+            theorem_vars,
             registry,
             diag_scratch,
             expected,
@@ -986,7 +1306,7 @@ fn tryApplyRuleApplicationWithCandidate(
         registry,
         diag_scratch,
         assertion,
-        diag_line,
+        line,
         rule,
         line_assertion,
         resolved_bindings,
@@ -1000,7 +1320,7 @@ fn tryApplyRuleApplicationWithCandidate(
             theorem,
             assertion.name,
             rule,
-            diag_line,
+            line,
             candidate.displayed_conclusion,
             ref_exprs,
             explicit_bindings,
@@ -1036,9 +1356,9 @@ fn tryApplyRuleApplicationWithCandidate(
             .generic,
             err,
             assertion.name,
-            diag_line.label,
-            diag_line.application.rule_name,
-            diag_line.assertion_span,
+            line.label,
+            line.application.rule_name,
+            line.assertion_span,
         )) {
             return err;
         }
@@ -1050,15 +1370,17 @@ fn tryApplyRuleApplicationWithCandidate(
             .kind = .conclusion_mismatch,
             .err = error.ConclusionMismatch,
             .theorem_name = assertion.name,
-            .line_label = diag_line.label,
-            .rule_name = diag_line.application.rule_name,
-            .span = diag_line.assertion_span,
+            .line_label = line.label,
+            .rule_name = line.application.rule_name,
+            .span = line.assertion_span,
         }, .theorem_application);
         try addComparisonSnapshotNotes(
             allocator,
             &diag,
             theorem,
             env,
+            parser,
+            theorem_vars,
             registry,
             diag_scratch,
             candidate.raw_conclusion,
@@ -1071,11 +1393,42 @@ fn tryApplyRuleApplicationWithCandidate(
     refs_owned = false;
     diag_scratch.discard(concl_mark);
 
-    return .{
+    return .{ .full_application = .{
         .line_idx = line_idx,
         .theorem = theorem.*,
         .theorem_vars = theorem_vars.*,
-    };
+    } };
+}
+
+fn tryApplyRuleApplicationWithCandidate(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+) anyerror!SuccessfulLineAttempt {
+    const result = try applyRuleCandidateCore(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        .{
+            .theorem_name = context.assertion.name,
+            .line_label = line.label,
+            .span = line.assertion_span,
+        },
+        line,
+        rule_id,
+        theorem,
+        theorem_vars,
+        .full_application,
+    );
+    return result.full_application;
 }
 
 fn checkedRangeOwnsRefs(
@@ -1087,6 +1440,25 @@ fn checkedRangeOwnsRefs(
             .rule => |rule| {
                 if (rule.refs.ptr == refs.ptr and
                     rule.refs.len == refs.len)
+                {
+                    return true;
+                }
+            },
+            .transport => {},
+        }
+    }
+    return false;
+}
+
+fn checkedRangeOwnsBindings(
+    lines: []const CheckedLine,
+    bindings: []const ExprId,
+) bool {
+    for (lines) |checked_line| {
+        switch (checked_line.data) {
+            .rule => |rule| {
+                if (rule.bindings.ptr == bindings.ptr and
+                    rule.bindings.len == bindings.len)
                 {
                     return true;
                 }
@@ -1168,6 +1540,223 @@ fn requireConcreteBindingsWithDiagnostic(
         return error.MissingBinderAssignment;
     }
     return try Inference.requireConcreteBindings(allocator, partial_bindings);
+}
+
+fn concreteBindingsToOptional(
+    allocator: std.mem.Allocator,
+    bindings: []const ExprId,
+) ![]const ?ExprId {
+    const optional = try allocator.alloc(?ExprId, bindings.len);
+    for (bindings, 0..) |binding, idx| {
+        optional[idx] = binding;
+    }
+    return optional;
+}
+
+fn inferCandidateOptionalBindings(
+    self: *CompilerContext,
+    context: *const Inference.RuleInferenceContext,
+    line: ApplicationLine,
+    line_assertion: LineAssertion,
+    partial_bindings: []const ?ExprId,
+    base_ref_exprs: []const ExprId,
+    expected_conclusion_hint: ?ExprId,
+    fresh_context: Inference.HiddenWitnessFreshContext,
+    maybe_view: ?ViewDecl,
+    had_omitted: bool,
+    rule_has_advanced_inference: bool,
+    use_advanced_inference: bool,
+    has_omitted_structural: bool,
+    prefer_structural_solver: bool,
+) ![]const ?ExprId {
+    const allocator = context.allocator;
+    switch (line_assertion) {
+        .concrete => |line_expr| {
+            if (had_omitted) {
+                return try Inference.inferOptionalBindingsAllowUnresolved(
+                    self,
+                    context,
+                    line,
+                    partial_bindings,
+                    base_ref_exprs,
+                    line_expr,
+                    fresh_context,
+                    maybe_view,
+                    use_advanced_inference,
+                    prefer_structural_solver,
+                );
+            }
+        },
+        .holey => |holey| {
+            if (had_omitted) {
+                return try inferHoleyOptionalBindingsForProbe(
+                    context,
+                    partial_bindings,
+                    base_ref_exprs,
+                    maybe_view,
+                    holey,
+                );
+            }
+        },
+        .implicit_whole_conclusion => {},
+    }
+
+    const concrete = try inferCandidateBindings(
+        self,
+        context,
+        line,
+        line_assertion,
+        partial_bindings,
+        base_ref_exprs,
+        expected_conclusion_hint,
+        fresh_context,
+        maybe_view,
+        had_omitted,
+        rule_has_advanced_inference,
+        use_advanced_inference,
+        has_omitted_structural,
+        prefer_structural_solver,
+    );
+    defer allocator.free(concrete);
+    return try concreteBindingsToOptional(allocator, concrete);
+}
+
+fn inferHoleyOptionalBindingsForProbe(
+    context: *const Inference.RuleInferenceContext,
+    partial_bindings: []const ?ExprId,
+    base_ref_exprs: []const ExprId,
+    maybe_view: ?ViewDecl,
+    holey: *const Expr,
+) ![]const ?ExprId {
+    const allocator = context.allocator;
+    const theorem = context.theorem;
+    const rule = context.rule;
+    const optional = try allocator.dupe(?ExprId, partial_bindings);
+    errdefer allocator.free(optional);
+
+    for (rule.hyps, base_ref_exprs) |hyp, ref_expr| {
+        if (!theorem.matchTemplate(hyp, ref_expr, optional)) {
+            return error.UnifyMismatch;
+        }
+    }
+
+    if (maybe_view) |view| {
+        CompilerViews.applyViewBindingsSurfaceConclusion(
+            allocator,
+            theorem,
+            context.env,
+            context.registry,
+            &view,
+            holey,
+            base_ref_exprs,
+            optional,
+            null,
+            null,
+            false,
+        ) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            try matchRawTemplateToHoleyConclusion(theorem, rule, optional, holey);
+        };
+    } else {
+        try matchRawTemplateToHoleyConclusion(theorem, rule, optional, holey);
+    }
+
+    return optional;
+}
+
+fn matchRawTemplateToHoleyConclusion(
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    bindings: []?ExprId,
+    holey: *const Expr,
+) !void {
+    var report = Holes.InferenceReport{};
+    if (!try Holes.matchTemplateToSurfaceDetailed(
+        theorem,
+        rule.concl,
+        holey,
+        bindings,
+        &report,
+    )) {
+        return error.HoleyInferenceMismatch;
+    }
+}
+
+fn validateOptionalBindingsForProbe(
+    self: *CompilerContext,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    assertion: AssertionStmt,
+    line: ApplicationLine,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+) !void {
+    var all_resolved = true;
+    for (bindings, 0..) |binding, idx| {
+        const expr = binding orelse {
+            all_resolved = false;
+            continue;
+        };
+        Inference.validateBindingExpr(
+            env,
+            theorem,
+            assertion.args,
+            rule.args[idx],
+            expr,
+        ) catch |err| {
+            self.setProof(CompilerDiag.withPhase(.{
+                .kind = .generic,
+                .err = err,
+                .theorem_name = assertion.name,
+                .line_label = line.label,
+                .rule_name = line.application.rule_name,
+                .name = rule.arg_names[idx],
+                .span = CompilerDiag.proofBindingDiagnosticSpan(
+                    line,
+                    rule.arg_names[idx],
+                ),
+            }, .inference));
+            return err;
+        };
+    }
+    if (!all_resolved) {
+        if (try Inference.firstPartialDepViolation(
+            env,
+            theorem,
+            assertion.args,
+            rule.args,
+            rule.arg_names,
+            bindings,
+        )) |detail| {
+            self.setProof(CompilerDiag.withPhase(.{
+                .kind = .generic,
+                .err = error.DepViolation,
+                .theorem_name = assertion.name,
+                .line_label = line.label,
+                .rule_name = line.application.rule_name,
+                .span = line.ruleApplicationSpan(),
+                .detail = .{ .dep_violation = detail },
+            }, .theorem_application));
+            return error.DepViolation;
+        }
+        return;
+    }
+
+    const concrete = try Inference.requireConcreteBindings(
+        theorem.allocator,
+        bindings,
+    );
+    defer theorem.allocator.free(concrete);
+    try Inference.validateResolvedBindingsWithDebug(
+        self,
+        self.debug,
+        env,
+        theorem,
+        assertion,
+        line,
+        rule,
+        concrete,
+    );
 }
 
 fn inferCandidateBindings(
@@ -1627,7 +2216,7 @@ fn holeyAssertionMatchesCandidate(
 fn ensureConcreteCheckedIrRange(
     self: *CompilerContext,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     theorem_name: []const u8,
     lines: []const CheckedLine,
     line_label: ?[]const u8,
@@ -1636,7 +2225,7 @@ fn ensureConcreteCheckedIrRange(
 ) !void {
     if (lines.len == 0) return;
 
-    CheckedIr.validateLines(theorem, lines) catch |err| {
+    CheckedIr.validateLinesCached(theorem, lines) catch |err| {
         self.setProof(CompilerDiag.withPhase(.{
             .kind = .generic,
             .err = err,
@@ -1646,7 +2235,7 @@ fn ensureConcreteCheckedIrRange(
         }, phase));
         return err;
     };
-    if (try CheckedIr.firstDepViolation(env, theorem, lines)) |failure| {
+    if (try CheckedIr.firstDepViolationCached(env, theorem, lines)) |failure| {
         self.setProof(CompilerDiag.withPhase(.{
             .kind = .generic,
             .err = error.DepViolation,
@@ -1669,7 +2258,7 @@ fn ensureConcreteCheckedIrRange(
 fn validateAttemptCheckedIrRange(
     self: *CompilerContext,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     theorem_name: []const u8,
     lines: []const CheckedLine,
     line_label: ?[]const u8,
@@ -1808,6 +2397,26 @@ fn inferExpectedRefsForInlineApplications(
     expected_conclusion_hint: ?ExprId,
     partial_bindings: []const ?ExprId,
 ) ![]?ExprId {
+    const contextual = try allocator.dupe(?ExprId, partial_bindings);
+    defer allocator.free(contextual);
+    return inferExpectedRefsForInlineApplicationsWithContext(
+        allocator,
+        theorem,
+        rule,
+        line_assertion,
+        expected_conclusion_hint,
+        contextual,
+    );
+}
+
+fn inferExpectedRefsForInlineApplicationsWithContext(
+    allocator: std.mem.Allocator,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    contextual: []?ExprId,
+) ![]?ExprId {
     const expected_refs = try allocator.alloc(?ExprId, rule.hyps.len);
     @memset(expected_refs, null);
 
@@ -1816,48 +2425,559 @@ fn inferExpectedRefsForInlineApplications(
         .holey, .implicit_whole_conclusion => return expected_refs,
     };
 
-    const contextual = try allocator.dupe(?ExprId, partial_bindings);
-    defer allocator.free(contextual);
+    const snapshot = try allocator.dupe(?ExprId, contextual);
+    defer allocator.free(snapshot);
     if (!theorem.matchTemplate(rule.concl, line_expr, contextual)) {
-        return expected_refs;
+        @memcpy(contextual, snapshot);
     }
 
-    for (rule.hyps, 0..) |hyp, idx| {
-        expected_refs[idx] = try instantiateTemplatePartial(
-            theorem,
-            hyp,
-            contextual,
-        );
-    }
+    try instantiateExpectedRefs(theorem, rule, contextual, expected_refs);
     return expected_refs;
 }
 
-fn instantiateTemplatePartial(
+const ExpectedRefsProbe = struct {
+    contextual_bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+};
+
+/// Controls how a residual *open* binder is rendered when instantiating an
+/// inline minor's expected-conclusion hint.
+///
+/// - `.strict` bails the whole hint to `null` if any binder is unresolved (the
+///   historical behavior; used on the search-side probe).
+/// - `.holey` substitutes a sort-typed placeholder for each open binder so the
+///   surrounding *concrete* structure can still serve as a hint. This recovers
+///   the `nd_or_comm` pattern where an ACUI-underdetermined context binder
+///   (`H ∈ {emp, p∨q}`) would otherwise null out a hint whose wff part is
+///   concrete and sufficient. See `docs/design_notes/nd_or_comm_validation_gap`.
+const InlineHintMode = enum { strict, holey };
+
+fn inferExpectedRefsForInlineApplicationProbe(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    rule: *const RuleDecl,
     theorem: *TheoremContext,
-    template: TemplateExpr,
-    binders: []const ?ExprId,
-) !?ExprId {
-    return switch (template) {
-        .binder => |idx| blk: {
-            if (idx >= binders.len) return error.TemplateBinderOutOfRange;
-            break :blk binders[idx];
-        },
-        .app => |app| blk: {
-            const args = try theorem.allocator.alloc(ExprId, app.args.len);
-            errdefer theorem.allocator.free(args);
-            for (app.args, 0..) |arg, idx| {
-                args[idx] = (try instantiateTemplatePartial(
-                    theorem,
-                    arg,
-                    binders,
-                )) orelse {
-                    theorem.allocator.free(args);
-                    break :blk null;
-                };
-            }
-            break :blk try theorem.interner.internAppOwned(app.term_id, args);
+    theorem_vars: *NameExprMap,
+    partial_bindings: []const ?ExprId,
+    mode: InlineHintMode,
+) !ExpectedRefsProbe {
+    const allocator = context.allocator;
+    const contextual = try semanticExpectationBindings(
+        self,
+        context,
+        rule_id,
+        rule,
+        line,
+        line_assertion,
+        expected_conclusion_hint,
+        theorem,
+        theorem_vars,
+        partial_bindings,
+        &.{},
+    );
+    errdefer allocator.free(contextual);
+
+    const expected_refs = try allocator.alloc(?ExprId, rule.hyps.len);
+    errdefer allocator.free(expected_refs);
+    @memset(expected_refs, null);
+    try instantiateExpectedRefs(theorem, rule, contextual, expected_refs);
+
+    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
+        .concrete => |expr| expr,
+        .holey, .implicit_whole_conclusion => return .{
+            .contextual_bindings = contextual,
+            .expected_refs = expected_refs,
         },
     };
+
+    for (rule.hyps, 0..) |_, child_idx| {
+        const child_bindings = try semanticBindingsForChildExpectation(
+            self,
+            context,
+            application,
+            line,
+            rule_id,
+            rule,
+            line_expr,
+            theorem,
+            theorem_vars,
+            contextual,
+            child_idx,
+        ) orelse continue;
+        defer allocator.free(child_bindings);
+        expected_refs[child_idx] = switch (mode) {
+            .strict => try OpenTerms.instantiateTemplatePartial(
+                theorem,
+                rule.hyps[child_idx],
+                child_bindings,
+            ),
+            .holey => try OpenTerms.instantiateTemplateHoley(
+                theorem,
+                context.env,
+                context.registry,
+                rule,
+                rule.hyps[child_idx],
+                child_bindings,
+                .{},
+            ),
+        };
+    }
+
+    return .{
+        .contextual_bindings = contextual,
+        .expected_refs = expected_refs,
+    };
+}
+
+fn templateMentionsBinder(template: TemplateExpr, idx: usize) bool {
+    return switch (template) {
+        .binder => |i| i == idx,
+        .app => |app| blk: {
+            for (app.args) |arg| {
+                if (templateMentionsBinder(arg, idx)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+/// True when the rule has a binder that appears in its conclusion but in none of
+/// its hypotheses (e.g. `or_intro_r`'s free left disjunct `a` in `g ⊢ a ∨ b`
+/// where the only hyp is `g ⊢ b`). Such a binder cannot be recovered from the
+/// minor's own refs, so it is exactly the binder a parent's expected-conclusion
+/// hint is needed to pin.
+fn applicationBindsArg(app: RuleApplication, name: ?[]const u8) bool {
+    const arg_name = name orelse return false;
+    for (app.arg_bindings) |binding| {
+        if (std.mem.eql(u8, binding.name, arg_name)) return true;
+    }
+    return false;
+}
+
+/// True when the minor `app` (using `rule`) has a binder that (a) appears in the
+/// conclusion but in no hypothesis and (b) is not explicitly annotated on the
+/// application. Such a binder cannot be recovered from the minor's own refs and
+/// has no user-supplied value, so it is exactly what a parent's expected-
+/// conclusion hint is needed to pin (e.g. the generated `or_intro_r [l2]` whose
+/// free left disjunct `a` is conclusion-only and unannotated).
+///
+/// Rules with no conclusion-only binder (`not_elim`, `and_intro`, …) are fully
+/// determined by their refs, and minors that *do* have one but annotate it
+/// (prawitz `or_comm`'s `or_intro_r (a := b) [l2]`) are already pinned. Both must
+/// be left untouched: handing them a hint only perturbs an already-deterministic
+/// choice (and would surface spurious ACUI-context ambiguity diagnostics).
+fn minorHasUnboundConclusionOnlyBinder(
+    rule: *const RuleDecl,
+    app: RuleApplication,
+) bool {
+    var idx: usize = 0;
+    while (idx < rule.args.len) : (idx += 1) {
+        if (!templateMentionsBinder(rule.concl, idx)) continue;
+        var in_hyp = false;
+        for (rule.hyps) |hyp| {
+            if (templateMentionsBinder(hyp, idx)) {
+                in_hyp = true;
+                break;
+            }
+        }
+        if (in_hyp) continue;
+        const arg_name = if (idx < rule.arg_names.len)
+            rule.arg_names[idx]
+        else
+            null;
+        if (!applicationBindsArg(app, arg_name)) return true;
+    }
+    return false;
+}
+
+/// True when `ref` is an inline application that a context-holey hint can help.
+/// Two shapes qualify, both leaving a binder the strict structural pre-pass
+/// cannot pin and that the application does not annotate:
+///   1. a conclusion-only binder (`minorHasUnboundConclusionOnlyBinder`, e.g.
+///      `or_intro_r`'s free left disjunct, or any 0-hyp `ax`);
+///   2. an additive ACUI "rest" binder (`minorHasAcuiRestBinder`, e.g. `lan`'s
+///      `g`, `rim`'s `d`) — needed so nested additive inline chains can infer.
+fn inlineMinorWantsHoleyHint(
+    env: *const GlobalEnv,
+    registry: *const RewriteRegistry,
+    ref: Ref,
+) bool {
+    return switch (ref) {
+        .application => |app| blk: {
+            const rule_id = env.getRuleId(app.rule_name) orelse break :blk false;
+            if (rule_id >= env.rules.items.len) break :blk false;
+            const rule = &env.rules.items[rule_id];
+            if (minorHasUnboundConclusionOnlyBinder(rule, app)) break :blk true;
+            // Additive ACUI rules: a bare "rest" binder sharing an ACUI-combiner
+            // region with a structured principal (e.g. `lan`'s `g` in `g , (a∧b)`,
+            // `rim`'s `d` in `(a→b) , d`) is left null by the strict structural
+            // conclusion match — `matchTemplate` bails at the combiner head — even
+            // though that binder also occurs in a hypothesis. The minor then has no
+            // expected conclusion to pass to *its* own inline children, so a nested
+            // additive chain (`rim [lan [ran [ax [], ax []]]]`) fails to infer.
+            // Offer the same holey, ACUI-aware hint that already recovers a 0-hyp
+            // `ax` minor, extended to these intermediate additive minors.
+            break :blk minorHasAcuiRestBinder(registry, rule, app);
+        },
+        else => false,
+    };
+}
+
+/// True when `rule`'s conclusion has an ACUI-combiner region holding both a
+/// structured (principal) summand and a bare, unannotated "rest" binder — the
+/// additive shape whose rest the strict structural conclusion match cannot pin.
+/// Requiring a structured sibling keeps this off pure multiplicative split rules
+/// (`or_elim`'s `G , H , K`, all bare binders), which the search side splits and
+/// the existing conclusion-only-binder gate already covers where needed.
+fn minorHasAcuiRestBinder(
+    registry: *const RewriteRegistry,
+    rule: *const RuleDecl,
+    app: RuleApplication,
+) bool {
+    return acuiRestBinderWalk(registry, rule.concl, rule, app);
+}
+
+fn acuiRestBinderWalk(
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+    rule: *const RuleDecl,
+    app: RuleApplication,
+) bool {
+    switch (template) {
+        .binder => return false,
+        .app => |a| {
+            if (registry.hasStructuralCombiner(a.term_id)) {
+                var has_structured = false;
+                var unbound_bare = false;
+                scanAcuiSpine(
+                    a.term_id,
+                    template,
+                    rule,
+                    app,
+                    &has_structured,
+                    &unbound_bare,
+                );
+                if (has_structured and unbound_bare) return true;
+            }
+            for (a.args) |arg| {
+                if (acuiRestBinderWalk(registry, arg, rule, app)) return true;
+            }
+            return false;
+        },
+    }
+}
+
+fn scanAcuiSpine(
+    head_id: u32,
+    template: TemplateExpr,
+    rule: *const RuleDecl,
+    app: RuleApplication,
+    has_structured: *bool,
+    unbound_bare: *bool,
+) void {
+    switch (template) {
+        .binder => |idx| {
+            const arg_name = if (idx < rule.arg_names.len)
+                rule.arg_names[idx]
+            else
+                null;
+            if (!applicationBindsArg(app, arg_name)) unbound_bare.* = true;
+        },
+        .app => |a| {
+            if (a.term_id == head_id) {
+                for (a.args) |arg| {
+                    scanAcuiSpine(head_id, arg, rule, app, has_structured, unbound_bare);
+                }
+            } else {
+                has_structured.* = true;
+            }
+        },
+    }
+}
+
+/// Backfill expected-conclusion hints for inline-application minors that the
+/// strict conclusion-match pre-pass left as `null`.
+///
+/// The strict `inferExpectedRefsForInlineApplications` matches only the rule
+/// conclusion with a single `matchTemplate`. For an ACUI-context rule like
+/// `or_elim` (`G,H,K ⊢ r`) that concat-spine cannot strict-match a single-member
+/// goal context, so every minor's hint comes back `null` — and a conclusion-only
+/// disjunct in a generated minor (`or_intro_r`'s left arm) then has nothing to
+/// pin it. This reuses the sibling- and ACUI-aware probe (which folds in the
+/// known sibling refs to recover `p,q,r`) and renders the residual open context
+/// binder as a whole-context placeholder, yielding a self-validating hint like
+/// `‹hole› ⊢ q∨p`.
+///
+/// The single load-bearing gate is `inlineMinorWantsHoleyHint`: a minor is
+/// helped only if its own rule has a conclusion-only binder that the application
+/// leaves unannotated — exactly the binder no ref can reach. That keeps the probe
+/// off already-determined chained inference (it never fires for `not_elim`,
+/// `and_intro`, annotated minors, or non-ACUI proofs like church beta) and off
+/// any hint the strict pre-pass already produced. No speculative ACUI context
+/// splitting happens here: the open context becomes a wildcard placeholder, not
+/// an enumeration of candidate members (that lives only in search-side
+/// `backward/split.zig`).
+fn fillHoleyInlineHints(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    partial_bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+) !void {
+    if (application.refs.len != rule.hyps.len) return;
+    if (expected_refs.len != application.refs.len) return;
+
+    var needs_fallback = false;
+    for (application.refs, expected_refs) |ref, hint| {
+        if (hint == null and
+            inlineMinorWantsHoleyHint(context.env, context.registry, ref))
+        {
+            needs_fallback = true;
+            break;
+        }
+    }
+    if (!needs_fallback) return;
+
+    const allocator = context.allocator;
+    const probe = try inferExpectedRefsForInlineApplicationProbe(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        line,
+        rule_id,
+        rule,
+        theorem,
+        theorem_vars,
+        partial_bindings,
+        .holey,
+    );
+    defer allocator.free(probe.contextual_bindings);
+    defer allocator.free(probe.expected_refs);
+
+    for (application.refs, expected_refs, probe.expected_refs) |ref, *hint, holey| {
+        if (hint.* == null and
+            inlineMinorWantsHoleyHint(context.env, context.registry, ref))
+        {
+            hint.* = holey;
+        }
+    }
+}
+
+fn instantiateExpectedRefs(
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+) !void {
+    for (rule.hyps, 0..) |hyp, idx| {
+        expected_refs[idx] = try OpenTerms.instantiateTemplatePartial(
+            theorem,
+            hyp,
+            bindings,
+        );
+    }
+}
+
+fn semanticBindingsForChildExpectation(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line: ApplicationLine,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    line_expr: ExprId,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    base_bindings: []const ?ExprId,
+    child_idx: usize,
+) !?[]const ?ExprId {
+    const allocator = context.allocator;
+    if (application.refs.len != rule.hyps.len) return null;
+
+    var sibling_hyps = std.ArrayListUnmanaged(TemplateExpr){};
+    defer sibling_hyps.deinit(allocator);
+    var sibling_exprs = std.ArrayListUnmanaged(ExprId){};
+    defer sibling_exprs.deinit(allocator);
+
+    for (application.refs, 0..) |ref, idx| {
+        if (idx == child_idx) continue;
+        const expr = knownInlineSiblingRefExpr(
+            context,
+            theorem,
+            ref,
+        ) orelse continue;
+        try sibling_hyps.append(allocator, rule.hyps[idx]);
+        try sibling_exprs.append(allocator, expr);
+    }
+    if (sibling_exprs.items.len == 0) return null;
+
+    var sibling_rule = rule.*;
+    sibling_rule.hyps = sibling_hyps.items;
+    return try semanticExpectationBindingsForLineExpr(
+        self,
+        context,
+        rule_id,
+        &sibling_rule,
+        line,
+        line_expr,
+        theorem,
+        theorem_vars,
+        base_bindings,
+        sibling_exprs.items,
+        null,
+    );
+}
+
+fn knownInlineSiblingRefExpr(
+    context: *const RuleApplyContext,
+    theorem: *const TheoremContext,
+    ref: Ref,
+) ?ExprId {
+    return switch (ref) {
+        .hyp => |hyp| blk: {
+            if (hyp.index == 0 or
+                hyp.index > theorem.theorem_hyps.items.len)
+            {
+                break :blk null;
+            }
+            break :blk theorem.theorem_hyps.items[hyp.index - 1];
+        },
+        .line => |label| blk: {
+            const line_idx = context.labels.get(label.label) orelse {
+                break :blk null;
+            };
+            if (line_idx >= context.checked.items.len) break :blk null;
+            break :blk context.checked.items[line_idx].expr;
+        },
+        .application => null,
+    };
+}
+
+fn semanticExpectationBindings(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    line: ApplicationLine,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+) ![]const ?ExprId {
+    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
+        .concrete => |expr| expr,
+        .holey, .implicit_whole_conclusion => {
+            return try context.allocator.dupe(?ExprId, partial_bindings);
+        },
+    };
+    var conclusion_rule = rule.*;
+    var maybe_view = context.views.get(rule_id);
+    if (ref_exprs.len == 0) {
+        conclusion_rule.hyps = &.{};
+        if (maybe_view) |*view| view.hyps = &.{};
+    }
+    return semanticExpectationBindingsForLineExpr(
+        self,
+        context,
+        rule_id,
+        &conclusion_rule,
+        line,
+        line_expr,
+        theorem,
+        theorem_vars,
+        partial_bindings,
+        ref_exprs,
+        maybe_view,
+    );
+}
+
+fn semanticExpectationBindingsForLineExpr(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    line: ApplicationLine,
+    line_expr: ExprId,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    maybe_view: ?ViewDecl,
+) ![]const ?ExprId {
+    const allocator = context.allocator;
+    if (rule.hyps.len != ref_exprs.len) {
+        return try allocator.dupe(?ExprId, partial_bindings);
+    }
+    const saved_diag = getDiagnostic(self);
+    const had_omitted = Inference.hasOmittedBindings(partial_bindings);
+    const has_omitted_structural = had_omitted and
+        try Inference.hasOmittedStructuralBindings(
+            context.env,
+            context.registry,
+            rule,
+            partial_bindings,
+        );
+    const prefer_structural_solver = had_omitted and
+        try Inference.shouldPreferStructuralSolver(
+            context.env,
+            context.registry,
+            rule,
+            partial_bindings,
+        );
+    const use_advanced_inference = had_omitted and
+        (maybe_view != null or has_omitted_structural);
+    const fresh_context: Inference.HiddenWitnessFreshContext = .{
+        .parser = context.parser,
+        .theorem_vars = theorem_vars,
+        .sort_vars = context.sort_vars,
+    };
+    const inference_context: Inference.RuleInferenceContext = .{
+        .allocator = allocator,
+        .env = context.env,
+        .registry = context.registry,
+        .scratch = context.diag_scratch,
+        .theorem = theorem,
+        .assertion = context.assertion,
+        .rule_id = rule_id,
+        .rule = rule,
+        .rule_unify_cache = null,
+    };
+    const inferred = Inference.inferOptionalBindingsAllowUnresolved(
+        self,
+        &inference_context,
+        line,
+        partial_bindings,
+        ref_exprs,
+        line_expr,
+        fresh_context,
+        maybe_view,
+        use_advanced_inference,
+        prefer_structural_solver,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => blk: {
+            restoreDiagnostic(self, saved_diag);
+            break :blk try allocator.dupe(?ExprId, partial_bindings);
+        },
+    };
+    restoreDiagnostic(self, saved_diag);
+    return inferred;
 }
 
 fn elaborateRefs(
@@ -1933,7 +3053,7 @@ fn elaborateRefs(
     }
 }
 
-fn buildTheoremVarMap(
+pub fn buildTheoremVarMap(
     allocator: std.mem.Allocator,
     assertion: AssertionStmt,
 ) !NameExprMap {
@@ -1946,7 +3066,7 @@ fn buildTheoremVarMap(
     return vars;
 }
 
-fn cloneNameExprMap(
+pub fn cloneNameExprMap(
     allocator: std.mem.Allocator,
     src: *const NameExprMap,
 ) !NameExprMap {

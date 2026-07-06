@@ -3,6 +3,7 @@ const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RuleDecl = @import("../../env.zig").RuleDecl;
+const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const DefOps = @import("../../def_ops.zig");
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const UnifyReplay = @import("../../../trusted/unify_replay.zig");
@@ -106,6 +107,7 @@ fn inferBindingsNoView(
         ref_exprs,
         line_expr,
         cached_unify,
+        fresh_context,
     );
     switch (strict_result) {
         .complete => |bindings| return bindings,
@@ -242,6 +244,91 @@ fn inferBindingsNoView(
     }
 }
 
+fn concreteBindingsToOptional(
+    allocator: std.mem.Allocator,
+    bindings: []const ExprId,
+) ![]const ?ExprId {
+    const optional = try allocator.alloc(?ExprId, bindings.len);
+    for (bindings, 0..) |binding, idx| {
+        optional[idx] = binding;
+    }
+    return optional;
+}
+
+fn templateHasMissingBinding(
+    template: TemplateExpr,
+    bindings: []const ?ExprId,
+) bool {
+    return switch (template) {
+        .binder => |idx| idx >= bindings.len or bindings[idx] == null,
+        .app => |app| blk: {
+            for (app.args) |arg| {
+                if (templateHasMissingBinding(arg, bindings)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn inferOptionalBindingsFromViewSeed(
+    self: *CompilerContext,
+    context: *const RuleInferenceContext,
+    line_expr: ExprId,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
+    view: ViewDecl,
+) !?[]const ?ExprId {
+    const allocator = context.allocator;
+    var view_seed_overrides: ?[]DefOps.BindingSeed = null;
+    defer if (view_seed_overrides) |seeds| allocator.free(seeds);
+
+    if (fresh_context) |fresh| {
+        view_seed_overrides =
+            try FreshSelect.seedRecoverHolesFromVarsPool(
+                allocator,
+                fresh.parser,
+                context.env,
+                context.theorem,
+                fresh.theorem_vars,
+                fresh.sort_vars,
+                line_expr,
+                ref_exprs,
+                partial_bindings,
+                view.num_binders,
+                view.binder_map,
+                view.arg_infos,
+                view.concl,
+                view.derived_bindings,
+            );
+    }
+
+    var seed_setup = switch (try buildViewSeedSetup(
+        self,
+        allocator,
+        context.env,
+        context.registry,
+        context.theorem,
+        context.rule,
+        view,
+        .{ .concrete = line_expr },
+        ref_exprs,
+        partial_bindings,
+        view_seed_overrides,
+    )) {
+        .concrete => |bindings| {
+            defer allocator.free(bindings);
+            return try concreteBindingsToOptional(allocator, bindings);
+        },
+        .setup => |setup| setup,
+    };
+    defer seed_setup.deinit(allocator);
+
+    const seeded = seed_setup.seeded_bindings orelse return null;
+    if (templateHasMissingBinding(context.rule.concl, seeded)) return null;
+    return try allocator.dupe(?ExprId, seeded);
+}
+
 pub fn inferBindings(
     self: *CompilerContext,
     context: *const RuleInferenceContext,
@@ -297,6 +384,7 @@ pub fn inferBindings(
                     view.num_binders,
                     view.binder_map,
                     view.arg_infos,
+                    view.concl,
                     view.derived_bindings,
                 );
         }
@@ -504,6 +592,7 @@ pub fn inferBindings(
         ref_exprs,
         line_expr,
         cached_unify,
+        fresh_context,
     );
     switch (strict_result) {
         .complete => |bindings| return bindings,
@@ -541,6 +630,7 @@ fn strictInferBindingsDetailed(
     ref_exprs: []const ExprId,
     line_expr: ExprId,
     cached_unify: ?[]const u8,
+    fresh_context: ?HiddenWitnessFreshContext,
 ) !StrictReplayResult {
     const unify = cached_unify orelse
         try Emit.buildRuleUnifyStream(allocator, rule);
@@ -548,6 +638,7 @@ fn strictInferBindingsDetailed(
 
     var inference = try InferenceContext.init(
         allocator,
+        env,
         theorem,
         partial_bindings,
         ref_exprs,
@@ -648,6 +739,7 @@ fn strictInferBindingsDetailed(
                 .strict_replay,
                 partial_bindings,
                 snapshot,
+                fresh_context,
             );
             self.maybeSetProof(diag);
             return .{ .failed = .{
@@ -663,6 +755,85 @@ fn strictInferBindingsDetailed(
     // validation before they are rejected.
     allocator.free(snapshot);
     return .{ .complete = bindings };
+}
+
+pub fn inferOptionalBindingsAllowUnresolved(
+    self: *CompilerContext,
+    context: *const RuleInferenceContext,
+    line: anytype,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
+    maybe_view: ?ViewDecl,
+    use_advanced_inference: bool,
+    prefer_structural_solver: bool,
+) ![]const ?ExprId {
+    const allocator = context.allocator;
+    if (inferBindings(
+        self,
+        context,
+        line,
+        partial_bindings,
+        ref_exprs,
+        line_expr,
+        fresh_context,
+        maybe_view,
+        use_advanced_inference,
+        prefer_structural_solver,
+    )) |bindings| {
+        defer allocator.free(bindings);
+        return try concreteBindingsToOptional(allocator, bindings);
+    } else |err| {
+        if (err != error.MissingBinderAssignment) return err;
+        self.restoreDiagnostic(null);
+    }
+
+    if (maybe_view) |view| {
+        if (try inferOptionalBindingsFromViewSeed(
+            self,
+            context,
+            line_expr,
+            partial_bindings,
+            ref_exprs,
+            fresh_context,
+            view,
+        )) |bindings| {
+            return bindings;
+        }
+        self.restoreDiagnostic(null);
+    }
+
+    const cached_unify = try context.cachedUnify();
+    const strict_result = try strictInferBindingsDetailed(
+        self,
+        allocator,
+        context.env,
+        context.theorem,
+        context.assertion,
+        context.rule,
+        line,
+        partial_bindings,
+        ref_exprs,
+        line_expr,
+        cached_unify,
+        fresh_context,
+    );
+    return switch (strict_result) {
+        .complete => |bindings| blk: {
+            defer allocator.free(bindings);
+            break :blk try concreteBindingsToOptional(allocator, bindings);
+        },
+        .failed => |failure| blk: {
+            errdefer allocator.free(failure.partial_bindings);
+            if (failure.err != error.MissingBinderAssignment) {
+                // errdefer frees partial_bindings on this error return.
+                return failure.err;
+            }
+            self.restoreDiagnostic(null);
+            break :blk failure.partial_bindings;
+        },
+    };
 }
 
 pub fn strictInferBindings(
@@ -688,6 +859,7 @@ pub fn strictInferBindings(
         partial_bindings,
         ref_exprs,
         line_expr,
+        null,
         null,
     );
     return switch (result) {

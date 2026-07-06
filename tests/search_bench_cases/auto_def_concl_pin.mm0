@@ -1,0 +1,18 @@
+delimiter $ ( ) $;
+provable sort wff;
+term K: wff;
+term need (a: wff): wff;
+prefix need: $N$ prec 40;
+term prov (a: wff): wff;
+prefix prov: $P$ prec 41;
+axiom pk: $ P K $;
+-- First-order transparent def: the goal `W K` is `N K` after one unfold.
+def wrap (a: wff): wff = $ N a $;
+prefix wrap: $W$ prec 42;
+-- The rule's conclusion is `N a`; against the folded goal `W K` the binder `a`
+-- can only be pinned if the conclusion-side seed unfolds the first-order def in
+-- the goal head. Once `a := K` is pinned, the hyp `P a` becomes concrete `P K`
+-- and is generated via `pk`. This gates conclusion-side def-unfold pinning for
+-- the generator path (Lever C, non-view first-order case).
+axiom r (a: wff): $ P a $ > $ N a $;
+theorem t: $ W K $;

@@ -270,7 +270,7 @@ test "normalized comparison maps symbolic-slot placeholders back to source" {
     var session = try ctx.beginRuleMatch(fixture.rule_args[0..1], &.{.none});
     defer session.deinit();
 
-    try session.state.symbolic_dummy_infos.append(
+    _ = try session.state.addDummyInfo(
         fixture.arena.allocator(),
         .{ .sort_name = "mor", .bound = true },
     );
@@ -278,10 +278,10 @@ test "normalized comparison maps symbolic-slot placeholders back to source" {
         &ctx,
         .{ .dummy = 0 },
     );
-    session.state.bindings[0] = .{ .symbolic = .{
+    session.state.seedBinding(0, .{ .symbolic = .{
         .expr = symbolic_dummy,
         .mode = .normalized,
-    } };
+    } });
 
     const actual = try fixture.theorem.addPlaceholderResolved("mor");
     const start_dummy_id = fixture.theorem.next_dummy_id;
@@ -508,7 +508,7 @@ test "collectUnresolvedFinalizationRoots reports canonical roots" {
         try std.testing.expect(root.bound);
     }
 
-    try session.state.dummy_aliases.put(
+    try session.state.putDummyAlias(
         fixture.arena.allocator(),
         roots[1].root_slot,
         roots[0].root_slot,

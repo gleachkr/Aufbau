@@ -68,7 +68,10 @@ pub const ExprProofEmitter = struct {
                     try self.expr_slots.put(self.allocator, expr_id, slot);
                 },
             },
-            .placeholder => return error.PlaceholderLeakage,
+            .placeholder => |id| return CheckedIr.leakageError(
+                self.theorem,
+                id,
+            ),
             .app => |app| {
                 for (app.args) |arg| {
                     try self.emitExpr(arg);
@@ -125,7 +128,10 @@ pub const UnifyEmitter = struct {
         }
         switch (self.theorem.interner.node(expr_id).*) {
             .variable => {},
-            .placeholder => return error.PlaceholderLeakage,
+            .placeholder => |id| return CheckedIr.leakageError(
+                self.theorem,
+                id,
+            ),
             .app => |app| {
                 for (app.args) |arg| {
                     try self.noteExprUse(arg);
@@ -173,7 +179,10 @@ pub const UnifyEmitter = struct {
                     }
                 },
             },
-            .placeholder => return error.PlaceholderLeakage,
+            .placeholder => |id| return CheckedIr.leakageError(
+                self.theorem,
+                id,
+            ),
             .app => |app| {
                 try MmbWriter.appendCmd(
                     &self.bytes,
@@ -413,7 +422,10 @@ pub const TheoremProofEmitter = struct {
                     try self.expr_slots.put(self.allocator, expr_id, slot);
                 },
             },
-            .placeholder => return error.PlaceholderLeakage,
+            .placeholder => |id| return CheckedIr.leakageError(
+                self.theorem,
+                id,
+            ),
             .app => |app| {
                 for (app.args) |arg| {
                     try self.emitExpr(arg);
@@ -671,6 +683,17 @@ pub fn hypText(
     index: usize,
 ) ![]const u8 {
     return try std.fmt.allocPrint(allocator, "#{d}", .{index});
+}
+
+test "buildAxiomProofBody reports unsolved metas distinctly" {
+    var theorem = TheoremContext.init(std.testing.allocator);
+    defer theorem.deinit();
+
+    const meta = try theorem.addMetaPlaceholderResolved("obj");
+    try std.testing.expectError(
+        error.UnsolvedMetaLeakage,
+        buildAxiomProofBody(std.testing.allocator, &theorem, meta),
+    );
 }
 
 test "buildAxiomProofBody rejects placeholders" {

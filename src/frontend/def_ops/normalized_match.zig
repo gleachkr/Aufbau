@@ -28,6 +28,19 @@ const MaterializedDummyAssignment =
 const MatchSession = MatchState.MatchSession;
 const default_semantic_match_budget: usize = 8;
 
+pub const OptionalBindingSnapshot = struct {
+    bindings: []?ExprId,
+    seed_state: MatchSeedState,
+
+    pub fn deinit(
+        self: *OptionalBindingSnapshot,
+        allocator: std.mem.Allocator,
+    ) void {
+        allocator.free(self.bindings);
+        self.seed_state.deinit(allocator);
+    }
+};
+
 const NormalizedPlaceholderTarget = union(enum) {
     binder: usize,
     symbolic_slot: usize,
@@ -87,6 +100,14 @@ const NormalizedView = struct {
         );
     }
 
+    /// Construction only: allocates the mirror context and the binder
+    /// arrays. Binder seeding (`seedMirrorBinders`) is deliberately NOT done
+    /// here: it can fail with ordinary match errors, and a fallible step
+    /// after the component errdefers would run both the component cleanups
+    /// AND the caller's `view.deinit` on aliased by-value copies — a
+    /// double-deinit (freed interner nodes re-walked in `deinit`'s switch).
+    /// Callers must arm a single `errdefer view.deinit(...)` and then call
+    /// `seedMirrorBinders`.
     fn init(session: *RuleMatchSession) !NormalizedView {
         var mirror = try MirroredTheoremContext.init(
             session.shared.allocator,
@@ -108,23 +129,29 @@ const NormalizedView = struct {
             ?ExprId,
             session.state.symbolic_dummy_infos.items.len,
         );
-        errdefer session.shared.allocator.free(symbolic_slot_values);
 
         @memset(binder_status, 0);
         @memset(symbolic_slot_values, null);
 
-        var view = NormalizedView{
+        return NormalizedView{
             .mirror = mirror,
             .mirror_binders = mirror_binders,
             .binder_status = binder_status,
             .symbolic_slot_values = symbolic_slot_values,
         };
-        errdefer view.deinit(session.shared.allocator);
+    }
 
+    /// Seed every rule binder into the mirror. Fallible (e.g.
+    /// `error.MissingRepresentative` on an unresolvable concrete binding —
+    /// an ordinary match reject); the caller's `errdefer view.deinit` is the
+    /// single owner of cleanup at this point.
+    fn seedMirrorBinders(
+        self: *NormalizedView,
+        session: *RuleMatchSession,
+    ) !void {
         for (0..session.state.bindings.len) |idx| {
-            _ = try view.ensureMirrorBinder(session, idx);
+            _ = try self.ensureMirrorBinder(session, idx);
         }
-        return view;
     }
 
     fn deinit(
@@ -367,11 +394,11 @@ pub const RuleMatchSession = struct {
         }
 
         for (seeds, 0..) |seed, idx| {
-            state.bindings[idx] = try symbolic_engine.boundValueFromSeed(
+            state.seedBinding(idx, try symbolic_engine.boundValueFromSeed(
                 seed,
                 &state,
                 &witness_slots,
-            );
+            ));
         }
 
         return .{
@@ -450,6 +477,7 @@ pub const RuleMatchSession = struct {
     ) anyerror!NormalizedComparison {
         var view = try NormalizedView.init(self);
         errdefer view.deinit(self.shared.allocator);
+        try view.seedMirrorBinders(self);
 
         const expected_expr = try view.mirror.theorem.instantiateTemplate(
             template,
@@ -475,6 +503,7 @@ pub const RuleMatchSession = struct {
     ) anyerror!NormalizedComparison {
         var view = try NormalizedView.init(self);
         errdefer view.deinit(self.shared.allocator);
+        try view.seedMirrorBinders(self);
 
         const expected_expr = try view.mirror.theorem.instantiateTemplate(
             template,
@@ -636,10 +665,41 @@ pub const RuleMatchSession = struct {
         return seeds;
     }
 
+    pub fn exportOptionalBindingSnapshot(
+        self: *RuleMatchSession,
+    ) !OptionalBindingSnapshot {
+        const bindings = try self.materializeOptionalBindings();
+        errdefer self.shared.allocator.free(bindings);
+
+        const seeds = try self.resolveBindingSeeds();
+        errdefer self.shared.allocator.free(seeds);
+
+        return .{
+            .bindings = bindings,
+            .seed_state = try self.exportMatchSeedState(seeds),
+        };
+    }
+
     pub fn exportMatchSeedState(
         self: *RuleMatchSession,
         bindings: []BindingSeed,
     ) !MatchSeedState {
+        // Take ownership of `bindings`: any `.bound` seed still points into
+        // this session's scratch arena, which dies with the def_ops context,
+        // while the exported state may outlive it (e.g. a view's seed state
+        // replayed by a later rule-match session). Deep-clone those trees
+        // with the caller-owned allocator; `MatchSeedState.deinit` frees them.
+        for (bindings) |*seed| {
+            switch (seed.*) {
+                .bound => |bound| {
+                    seed.* = .{ .bound = try Types.cloneBoundValue(
+                        self.shared.allocator,
+                        bound,
+                    ) };
+                },
+                .none, .exact, .semantic => {},
+            }
+        }
         return .{
             .bindings = bindings,
             .symbolic_dummy_infos = try self.shared.allocator.dupe(
@@ -742,17 +802,17 @@ pub const RuleMatchSession = struct {
                         info.sort_name,
                     )) return error.UnifyMismatch;
             }
-            try self.state.materialized_witnesses.put(
+            try self.state.putMaterializedWitness(
                 self.shared.allocator,
                 root,
                 assignment.expr_id,
             );
-            try self.state.materialized_witness_slots.put(
+            try self.state.putMaterializedWitnessSlot(
                 self.shared.allocator,
                 assignment.expr_id,
                 root,
             );
-            try self.state.materialized_witness_infos.put(
+            try self.state.putMaterializedWitnessInfo(
                 self.shared.allocator,
                 assignment.expr_id,
                 info,

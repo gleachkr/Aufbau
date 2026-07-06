@@ -70,6 +70,57 @@ pub const TemplateExpr = union(enum) {
     }
 };
 
+/// Bitset of binder indices a template references, plus an overflow flag for
+/// any index >= 64. Shared by the search slot-ordering (`backward/plan.zig`) and
+/// the `@auto eager` annotation validation (`rewrite_registry.zig`).
+pub const TemplateBinderMask = struct { mask: u64 = 0, overflow: bool = false };
+
+pub fn templateBinderMask(template: TemplateExpr) TemplateBinderMask {
+    var result = TemplateBinderMask{};
+    collectTemplateBinderMask(template, &result);
+    return result;
+}
+
+fn collectTemplateBinderMask(
+    template: TemplateExpr,
+    out: *TemplateBinderMask,
+) void {
+    switch (template) {
+        .binder => |idx| {
+            if (idx >= 64) {
+                out.overflow = true;
+            } else {
+                out.mask |= @as(u64, 1) << @intCast(idx);
+            }
+        },
+        .app => |app| {
+            for (app.args) |arg| collectTemplateBinderMask(arg, out);
+        },
+    }
+}
+
+/// True when some hypothesis references a binder the conclusion does not — a
+/// binder a backward application must defer as an existential witness. This is
+/// the invertibility predicate shared by `@auto eager` validation
+/// (`rewrite_registry.zig`, which rejects such rules) and the witness-class
+/// scheduler (`search/backward/backtrack.zig`, which demotes them to class 2), so the two
+/// can never drift. Overflowed masks (>= 64 binders) conservatively report
+/// false (the conclusion-determined / class-1 side).
+pub fn hypBinderDeferredByConcl(
+    concl: TemplateExpr,
+    hyps: []const TemplateExpr,
+) bool {
+    const concl_mask = templateBinderMask(concl);
+    if (concl_mask.overflow) return false;
+    var hyps_mask: u64 = 0;
+    for (hyps) |hyp| {
+        const m = templateBinderMask(hyp);
+        if (m.overflow) return false;
+        hyps_mask |= m.mask;
+    }
+    return (hyps_mask & ~concl_mask.mask) != 0;
+}
+
 fn binderIndex(
     binders: []const *const Expr,
     needle: *const Expr,

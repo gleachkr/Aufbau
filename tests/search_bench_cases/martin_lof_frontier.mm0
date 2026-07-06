@@ -1,0 +1,1050 @@
+-- This is a small dependently typed calculus with an identity type
+--
+-- For readability, the intended user-facing notation is:
+--   * `g ≋ h` for raw context equality
+--   * `A ~ B` for raw type equality
+--   * `s ≈ t` for raw term equality
+--   * `A ≡ B` for typed type equality
+--   * `≡[A] s = t` for typed term equality
+--
+-- Split left and right delimiters so tokens like `≡[` stay intact while
+-- bracketed substitution syntax like `[x/u]` still tokenizes correctly.
+delimiter $ ( [ / $ $ / . : , ) ] ~ $;
+strict provable sort jdg;
+sort ctx;
+sort ty;
+--| @vars x y z u v w m n k ih p q
+sort tm;
+
+-- ==================================================================
+-- SECTION 1: Core judgments and notation
+-- ==================================================================
+--
+-- Section 1 only fixes the shared language of judgments and equalities.
+-- The constructor-specific rule packages come later, in the sections that
+-- introduce the corresponding syntax.
+
+term jiff (J K: jdg): jdg;
+infixr jiff: $<=>$ prec 20;
+
+--| @relation jdg jiff jiff_refl jiff_trans jiff_sym jiff_mp
+axiom jiff_refl (J: jdg): $ J <=> J $;
+axiom jiff_trans (J K L: jdg):
+  $ J <=> K $ > $ K <=> L $ > $ J <=> L $;
+axiom jiff_sym (J K: jdg): $ J <=> K $ > $ K <=> J $;
+--| @auto forward
+axiom jiff_mp (J K: jdg): $ J <=> K $ > $ J $ > $ K $;
+
+--| @congr
+axiom jiff_congr (J1 J2 K1 K2: jdg):
+  $ J1 <=> J2 $ > $ K1 <=> K2 $ > $ (J1 <=> K1) <=> (J2 <=> K2) $;
+
+-- `eq_raw_*` is the syntax-level equality layer. These relations are the
+-- frontend's notion of intersubstitutability for each non-provable sort.
+-- They power rewriting, normalization, and substitution plumbing.
+term eq_raw_ctx (g h: ctx): jdg;
+infixl eq_raw_ctx: $≋$ prec 15;
+term eq_raw_ty (A B: ty): jdg;
+infixl eq_raw_ty: $~$ prec 15;
+term eq_raw_tm (s t: tm): jdg;
+infixl eq_raw_tm: $≈$ prec 15;
+
+--| @relation ctx eq_raw_ctx eq_raw_ctx_refl eq_raw_ctx_trans eq_raw_ctx_sym _
+axiom eq_raw_ctx_refl (g: ctx): $ g ≋ g $;
+axiom eq_raw_ctx_trans (g h i: ctx):
+  $ g ≋ h $ > $ h ≋ i $ > $ g ≋ i $;
+axiom eq_raw_ctx_sym (g h: ctx): $ g ≋ h $ > $ h ≋ g $;
+
+--| @relation ty eq_raw_ty eq_raw_ty_refl eq_raw_ty_trans eq_raw_ty_sym _
+axiom eq_raw_ty_refl (A: ty): $ A ~ A $;
+axiom eq_raw_ty_trans (A B C: ty):
+  $ A ~ B $ > $ B ~ C $ > $ A ~ C $;
+axiom eq_raw_ty_sym (A B: ty): $ A ~ B $ > $ B ~ A $;
+
+--| @relation tm eq_raw_tm eq_raw_tm_refl eq_raw_tm_trans eq_raw_tm_sym _
+axiom eq_raw_tm_refl (s: tm): $ s ≈ s $;
+axiom eq_raw_tm_trans (s t u: tm):
+  $ s ≈ t $ > $ t ≈ u $ > $ s ≈ u $;
+axiom eq_raw_tm_sym (s t: tm): $ s ≈ t $ > $ t ≈ s $;
+
+--| @congr
+axiom eq_raw_ctx_congr (g1 g2 h1 h2: ctx):
+  $ g1 ≋ g2 $ > $ h1 ≋ h2 $ > $ (g1 ≋ h1) <=> (g2 ≋ h2) $;
+
+--| @congr
+axiom eq_raw_ty_congr (A1 A2 B1 B2: ty):
+  $ A1 ~ A2 $ > $ B1 ~ B2 $ > $ (A1 ~ B1) <=> (A2 ~ B2) $;
+
+--| @congr
+axiom eq_raw_tm_congr (s1 s2 t1 t2: tm):
+  $ s1 ≈ s2 $ > $ t1 ≈ t2 $ > $ (s1 ≈ t1) <=> (s2 ≈ t2) $;
+
+-- The core judgments are declared here so later sections can use stable
+-- notation from the start, even though most of their rules come later.
+term is_ty (A: ty): jdg;
+prefix is_ty: $Ty$ prec 60;
+term has_ty (t: tm) (A: ty): jdg;
+infixl has_ty: $:$ prec 40;
+term nd (g: ctx) (J: jdg): jdg;
+infixl nd: $⊢$ prec 0;
+
+-- `eq_ty` and `eq_tm` are typed judgemental equalities. Their laws belong
+-- to the typed equality section below; here we only reserve the notation.
+term eq_ty (A B: ty): jdg;
+infixl eq_ty: $≡$ prec 15;
+infixl eq_ty: $==$ prec 15;
+term eq_tm (A: ty) (s t: tm): jdg;
+notation eq_tm (A: ty) (s t: tm): jdg =
+  ($≡[$:50) A ($]$:0) s ($=$:50) t;
+notation eq_tm (A: ty) (s t: tm): jdg =
+  ($==[$:50) A ($]$:0) s ($=$:50) t;
+
+-- Even before the typed equality laws are introduced, the judgment forms
+-- need congruence metadata so normalization can lift raw equalities through
+-- them.
+--| @congr
+axiom is_ty_congr (A B: ty): $ A ~ B $ > $ Ty A <=> Ty B $;
+
+--| @congr
+axiom has_ty_congr (s t: tm) (A B: ty):
+  $ s ≈ t $ > $ A ~ B $ > $ (s : A) <=> (t : B) $;
+
+-- Regularity keeps the derived development from carrying premises that can
+-- be recovered from typing judgements.
+axiom has_ty_regular (g: ctx) (t: tm) (A: ty):
+  $ g ⊢ t : A $
+  > $ g ⊢ Ty A $;
+
+--| @congr
+axiom eq_ty_congr (A1 A2 B1 B2: ty):
+  $ A1 ~ A2 $ > $ B1 ~ B2 $ > $ (A1 ≡ B1) <=> (A2 ≡ B2) $;
+
+--| @congr
+axiom eq_tm_congr (A B: ty) (s1 s2 t1 t2: tm):
+  $ A ~ B $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ ≡[A] s1 = t1 <=> ≡[B] s2 = t2 $;
+
+-- Checklist for every constructor introduced below:
+--   * add nice notation if it is user-facing
+--   * add all intro/elim/comp axioms together
+--   * add `eq_raw_*` congruence axioms
+--   * add `sb_ty_*` and/or `sb_tm_*` rewrite axioms
+--
+-- ==================================================================
+-- SECTION 2: Context structure and structural rules
+-- ==================================================================
+--
+-- Contexts are built from an empty context, a binary join, and singleton
+-- hypotheses. 
+term emp: ctx;
+--| @acui eq_raw_ctx_assoc _ emp _
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (J: jdg): ctx;
+coercion hyp: jdg > ctx;
+
+axiom eq_raw_ctx_assoc (g h i: ctx):
+  $ ((g , h) , i) ≋ (g , (h , i)) $;
+axiom eq_raw_ctx_unit (g: ctx): $ (emp , g) ≋ g $;
+
+--| @congr
+axiom hyp_congr (J K: jdg):
+  $ J <=> K $ > $ hyp J ≋ hyp K $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ g1 ≋ g2 $ > $ h1 ≋ h2 $ > $ (g1 , h1) ≋ (g2 , h2) $;
+
+--| @congr
+axiom nd_congr (g h: ctx) (J K: jdg):
+  $ g ≋ h $ > $ J <=> K $ > $ (g ⊢ J) <=> (h ⊢ K) $;
+
+-- The structural core lives here so later sections can focus on the
+-- constructors they introduce rather than reopening context management.
+axiom weaken (g: ctx) {x: tm} (T: ty) (J: jdg):
+  $ g ⊢ J $
+  > $ g , x : T ⊢ J $;
+
+theorem weaken2 (g: ctx) {x y: tm} (T1: ty) (T2: ty x) (J: jdg):
+  $ g ⊢ J $
+  > $ g , x : T1 , y : T2 ⊢ J $;
+
+theorem weaken3 (g: ctx) {x y z: tm} (T1: ty) (T2: ty x)
+  (T3: ty x y) (J: jdg):
+  $ g ⊢ J $
+  > $ g , x : T1 , y : T2 , z : T3 ⊢ J $;
+
+axiom var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
+
+axiom exchange (g: ctx) {x y: tm} (A: ty) (B: ty y) (d: ctx x y)
+  (J: jdg x y):
+  $ g , x : A , y : B , d ⊢ J $
+  > $ g , y : B , x : A , d ⊢ J $;
+
+-- ==================================================================
+-- SECTION 3: Π-types and substitution primitives
+-- ==================================================================
+--
+term sb_ty {x: tm} (u: tm) (B: ty x): ty;
+notation sb_ty {x: tm} (u: tm) (B: ty x): ty =
+  ($[$:41) x ($/$:0) u ($]$:0) B;
+term sb_tm {x: tm} (u: tm) (t: tm x): tm;
+notation sb_tm {x: tm} (u: tm) (t: tm x): tm =
+  ($⟦$:41) x ($/$:0) u ($⟧$:0) t;
+
+--| @congr
+axiom sb_ty_congr {x: tm} (u1 u2: tm) (A B: ty x):
+  $ u1 ≈ u2 $ > $ A ~ B $ > $ [x/u1] A ~ [x/u2] B $;
+
+--| @congr
+axiom sb_tm_congr {x: tm} (u1 u2 t1 t2: tm x):
+  $ u1 ≈ u2 $
+  > $ t1 ≈ t2 $
+  > $ (⟦ x / u1 ⟧ t1) ≈ (⟦ x / u2 ⟧ t2) $;
+
+--| @rewrite
+axiom sb_ty_id {x: tm} (A: ty x): $ [x/x] A ~ A $;
+
+--| @rewrite
+axiom sb_ty_swap {x y: tm} (A: ty y): $ [x/y] [y/x] A ~ A $;
+
+--| @rewrite
+axiom sb_ty_var_comp {x y: tm} (u: tm) (A: ty x):
+  $ [y/u] [x/y] A ~ [x/u] A $;
+
+--| @rewrite
+axiom sb_ty_shadow {x: tm} (u v: tm) (A: ty x):
+  $ [x/u] [x/v] A ~ [x/v] A $;
+
+--| @rewrite
+axiom sb_ty_other {x y: tm} (u: tm x) (A: ty y): $ [x/u] A ~ A $;
+
+--| @rewrite
+axiom sb_ty_free {x: tm} (u: tm x) (A: ty): $ [x/u] A ~ A $;
+
+--| @rewrite
+axiom sb_tm_var {x: tm} (u: tm x): $ (⟦ x / u ⟧ x) ≈ u $;
+
+--| @rewrite
+axiom sb_tm_other {x y: tm} (u: tm x): $ (⟦ x / u ⟧ y) ≈ y $;
+
+--| @rewrite
+axiom sb_tm_free {x: tm} (u: tm x) (t: tm): $ (⟦ x / u ⟧ t) ≈ t $;
+
+-- Explicit substitution has typing rules as well as raw rewrite rules.
+axiom sb_ty_form (g: ctx) (A: ty) {x: tm} (B: ty x) (u: tm):
+  $ g , x : A ⊢ Ty B $
+  > $ g ⊢ u : A $
+  > $ g ⊢ Ty ([x/u] B) $;
+
+axiom sb_ty_var_form (g: ctx) (A: ty) {x y: tm} (B: ty x)
+  (d: ctx x y):
+  $ g , x : A ⊢ Ty B $
+  > $ g , x : A , y : A , d ⊢ Ty ([x/y] B) $;
+
+term Pi (A: ty) {x: tm} (B: ty x): ty;
+notation Pi (A: ty) {x: tm} (B: ty x): ty =
+  ($Π$:20) x ($:$:40) A ($.$:0) B;
+def arr (A B: ty) {.x: tm}: ty = $ Π x : A. B $;
+infixr arr: $→$ prec 25;
+term lam (A: ty) {x: tm} (t: tm x): tm;
+notation lam (A: ty) {x: tm} (t: tm x): tm =
+  ($λ$:20) x ($:$:40) A ($.$:0) t;
+term app (f u: tm): tm;
+infixl app: $·$ prec 70;
+
+--| @congr
+axiom pi_congr (A B: ty) {x: tm} (C D: ty x):
+  $ A ~ B $ > $ C ~ D $ > $ (Π x : A. C) ~ (Π x : B. D) $;
+
+--| @congr
+axiom arr_congr (A1 A2 B1 B2: ty):
+  $ A1 ~ A2 $ > $ B1 ~ B2 $ > $ (A1 → B1) ~ (A2 → B2) $;
+
+--| @congr
+axiom lam_congr (A B: ty) {x: tm} (t u: tm x):
+  $ A ~ B $ > $ t ≈ u $ > $ (λ x : A. t) ≈ (λ x : B. u) $;
+
+--| @congr
+axiom app_congr (f g u v: tm):
+  $ f ≈ g $ > $ u ≈ v $ > $ (f · u) ≈ (g · v) $;
+
+--| @rewrite
+axiom sb_ty_arr {x: tm} (u: tm x) (A B: ty x):
+  $ [x/u] (A → B) ~ ([x/u] A → [x/u] B) $;
+
+--| @rewrite
+axiom sb_ty_pi {x y: tm} (u: tm x) (A: ty x) (B: ty x y):
+  $ [x/u] (Π y : A. B) ~ (Π y : [x/u] A. [x/u] B) $;
+
+--| @rewrite
+axiom sb_tm_lam {x y: tm} (u: tm x) (A: ty x) (t: tm x y):
+  $ (⟦ x / u ⟧ (λ y : A. t)) ≈ (λ y : [x/u] A. ⟦ x / u ⟧ t) $;
+
+--| @rewrite
+axiom sb_tm_app {x: tm} (u: tm x) (f t: tm x):
+  $ (⟦ x / u ⟧ (f · t)) ≈ ((⟦ x / u ⟧ f) · (⟦ x / u ⟧ t)) $;
+
+axiom pi_const_alpha (A B: ty) {x y: tm}: $ (Π x : A. B) ~ (Π y : A. B) $;
+
+--| @alpha x y
+axiom pi_alpha (A: ty) {x y: tm} (B: ty x):
+  $ (Π x : A. B) ~ (Π y : A. [x/y] B) $;
+
+--| @alpha x y
+axiom lam_alpha {x y: tm} (A: ty) (t: tm x y):
+  $ (λ x : A. t) ≈ (λ y : A. ⟦ x / y ⟧ t) $;
+
+-- Π, λ, and application are grouped with their formation, introduction,
+-- elimination, and computation rules. This is the pattern later sections
+-- should follow for every constructor family.
+--| @auto backward
+axiom pi_form (g: ctx) (A: ty) {x: tm} (B: ty x):
+  $ g ⊢ Ty A $
+  > $ g , x : A ⊢ Ty B $
+  > $ g ⊢ Ty (Π x : A. B) $;
+
+--| @auto backward
+axiom lam_intro (g: ctx) (A: ty) {x: tm} (B: ty x) (t: tm x):
+  $ g ⊢ Ty A $
+  > $ g , x : A ⊢ Ty B $
+  > $ g , x : A ⊢ t : B $
+  > $ g ⊢ (λ x : A. t) : (Π x : A. B) $;
+
+--| @view (g: ctx) (A: ty) {x: tm} (B: ty x) (f u: tm) (q: ty): $ g ⊢ f : (Π x : A. B) $ > $ g ⊢ u : A $ > $ g ⊢ f · u : q $
+--| @auto forward
+axiom app_elim (g: ctx) (A: ty) {x: tm} (B: ty x) (f u: tm):
+  $ g ⊢ f : (Π x : A. B) $
+  > $ g ⊢ u : A $
+  > $ g ⊢ f · u : [x/u] B $;
+
+-- β-reduction lands in typed equality, but its normalization depends on the
+-- raw substitution rewrites above.
+--| @view (g: ctx) (A: ty) {x: tm} (B: ty x) (a b t u v: tm) (q: ty): $ g ⊢ (λ x : A. t) : (Π x : A. B) $ > $ g ⊢ u : A $ > $ g ⊢ ≡[q] a = b $
+axiom app_beta (g: ctx) (A: ty) {x: tm} (B: ty x) (t: tm x) (u: tm):
+  $ g ⊢ (λ x : A. t) : (Π x : A. B) $
+  > $ g ⊢ u : A $
+  > $ g ⊢ ≡[[x/u] B] ((λ x : A. t) · u) = (⟦ x / u ⟧ t) $;
+
+theorem id_ty (g: ctx) (A: ty) {x: tm}:
+  $ g ⊢ Ty A $
+  > $ g ⊢ (λ x : A. x) : (Π x : A. A) $;
+
+theorem app_id_beta (g: ctx) (A: ty) {x: tm} (u: tm):
+  $ g ⊢ u : A $
+  > $ g ⊢ ≡[A] ((λ x : A. x) · u) = u $;
+
+-- The generic identity theorem stays here as the smallest possible Π example;
+-- later Nat examples show the same machinery doing computation.
+--
+-- ==================================================================
+-- SECTION 4: Bool
+-- ==================================================================
+--
+-- Bool is the first closed datatype in this example. We keep its rules small
+-- and direct: one eliminator, two computation rules, and one user-facing
+-- helper def for negation.
+term Bool: ty;
+term true: tm;
+term false: tm;
+term bool_rec (A: ty) (t f b: tm): tm;
+
+def bool_not (b: tm): tm = $ bool_rec Bool false true b $;
+notation bool_not (b: tm): tm = ($¬$:65) b;
+
+--| @congr
+axiom bool_not_congr (b c: tm): $ b ≈ c $ > $ ¬ b ≈ ¬ c $;
+
+--| @congr
+axiom bool_rec_congr (A B: ty) (t1 t2 f1 f2 b1 b2: tm):
+  $ A ~ B $
+  > $ t1 ≈ t2 $
+  > $ f1 ≈ f2 $
+  > $ b1 ≈ b2 $
+  > $ bool_rec A t1 f1 b1 ≈ bool_rec B t2 f2 b2 $;
+
+--| @rewrite
+axiom sb_ty_bool {x: tm} (u: tm x): $ [x/u] Bool ~ Bool $;
+
+--| @rewrite
+axiom sb_tm_true {x: tm} (u: tm x): $ (⟦ x / u ⟧ true) ≈ true $;
+
+--| @rewrite
+axiom sb_tm_false {x: tm} (u: tm x): $ (⟦ x / u ⟧ false) ≈ false $;
+
+--| @rewrite
+axiom sb_tm_bool_rec {x: tm} (u: tm x) (A: ty x) (t f b: tm x):
+  $ (⟦ x / u ⟧ (bool_rec A t f b))
+      ≈ (bool_rec ([x/u] A) (⟦ x / u ⟧ t) (⟦ x / u ⟧ f)
+          (⟦ x / u ⟧ b)) $;
+
+--| @rewrite
+axiom sb_tm_bool_not {x: tm} (u: tm x) (b: tm x):
+  $ (⟦ x / u ⟧ (¬ b)) ≈ (¬ (⟦ x / u ⟧ b)) $;
+
+axiom bool_form (g: ctx): $ g ⊢ Ty Bool $;
+axiom true_intro (g: ctx): $ g ⊢ true : Bool $;
+axiom false_intro (g: ctx): $ g ⊢ false : Bool $;
+
+axiom bool_elim (g: ctx) (A: ty) (t f b: tm):
+  $ g ⊢ t : A $
+  > $ g ⊢ f : A $
+  > $ g ⊢ b : Bool $
+  > $ g ⊢ bool_rec A t f b : A $;
+
+axiom bool_beta_true (g: ctx) (A: ty) (t f: tm):
+  $ g ⊢ t : A $
+  > $ g ⊢ f : A $
+  > $ g ⊢ ≡[A] (bool_rec A t f true) = t $;
+
+axiom bool_beta_false (g: ctx) (A: ty) (t f: tm):
+  $ g ⊢ t : A $
+  > $ g ⊢ f : A $
+  > $ g ⊢ ≡[A] (bool_rec A t f false) = f $;
+
+theorem bool_not_ty (g: ctx) (b: tm):
+  $ g ⊢ b : Bool $
+  > $ g ⊢ ¬ b : Bool $;
+
+theorem bool_not_true (g: ctx):
+  $ g ⊢ ≡[Bool] (¬ true) = false $;
+
+theorem bool_not_false (g: ctx):
+  $ g ⊢ ≡[Bool] (¬ false) = true $;
+
+-- ==================================================================
+-- SECTION 5: Nat
+-- ==================================================================
+--
+-- Put dependent induction at the ground floor, then derive ordinary
+-- recursion from it by instantiating the family with a constant type.
+term Nat: ty;
+term zero: tm;
+term suc (n: tm): tm;
+term const_ty (n: tm) (A: ty): ty;
+
+-- `nat_ind` is a dependent eliminator, so its family and step case are
+-- open expressions. Morally, the eliminator is applied as
+--
+--   nat_ind (λ k. C) z (λ k ih. s) n
+--
+-- but MM0 is first-order: it does not pass λ-abstractions as meta-level
+-- arguments. Instead, the variables in curly binders are local names bound
+-- by the constructor. Thus `C: ty k` may mention `k`, and `s: tm k ih` may
+-- mention both `k` and the induction hypothesis `ih`. Since the return sort
+-- of `nat_ind` is plain `tm`, these local names do not escape as
+-- dependencies of the constructed term. The typing side conditions for the
+-- family and step are stated in `nat_ind_elim`, rather than encoded as
+-- elaborate function types for the raw syntax arguments.
+term nat_ind {k ih: tm} (C: ty k) (z: tm) (s: tm k ih) (n: tm): tm;
+
+def nat_rec (A: ty) (z s n: tm) {.k .ih: tm}: tm =
+  $ nat_ind k ih (const_ty k A) z (s · ih) n $;
+
+--| @congr
+axiom nat_rec_congr (A B: ty) (z1 z2 s1 s2 n1 n2: tm):
+  $ A ~ B $
+  > $ z1 ≈ z2 $
+  > $ s1 ≈ s2 $
+  > $ n1 ≈ n2 $
+  > $ nat_rec A z1 s1 n1 ≈ nat_rec B z2 s2 n2 $;
+
+--| @congr
+axiom suc_congr (m n: tm):
+  $ m ≈ n $ > $ suc m ≈ suc n $;
+
+--| @congr
+axiom const_ty_congr (m n: tm) (A B: ty):
+  $ m ≈ n $ > $ A ~ B $ > $ const_ty m A ~ const_ty n B $;
+
+--| @congr
+axiom nat_ind_congr {k ih: tm} (C D: ty k) (z1 z2: tm)
+  (s1 s2: tm k ih) (n1 n2: tm):
+  $ C ~ D $
+  > $ z1 ≈ z2 $
+  > $ s1 ≈ s2 $
+  > $ n1 ≈ n2 $
+  > $ nat_ind k ih C z1 s1 n1 ≈ nat_ind k ih D z2 s2 n2 $;
+
+--| @rewrite
+axiom sb_ty_nat {x: tm} (u: tm x): $ [x/u] Nat ~ Nat $;
+
+--| @rewrite
+axiom sb_ty_const {x: tm} (u n: tm x) (A: ty x):
+  $ [x/u] (const_ty n A) ~ const_ty (⟦ x / u ⟧ n) ([x/u] A) $;
+
+--| @rewrite
+axiom const_ty_eval (n: tm) (A: ty): $ const_ty n A ~ A $;
+
+--| @rewrite
+axiom sb_tm_zero {x: tm} (u: tm x): $ (⟦ x / u ⟧ zero) ≈ zero $;
+
+--| @rewrite
+axiom sb_tm_suc {x: tm} (u: tm x) (n: tm x):
+  $ (⟦ x / u ⟧ (suc n)) ≈ (suc (⟦ x / u ⟧ n)) $;
+
+--| @rewrite
+axiom sb_tm_nat_ind {x k ih: tm} (u: tm x) (C: ty x k) (z: tm x)
+  (s: tm x k ih) (n: tm x):
+  $ (⟦ x / u ⟧ (nat_ind k ih C z s n))
+      ≈ (nat_ind k ih ([x/u] C) (⟦ x / u ⟧ z) (⟦ x / u ⟧ s)
+          (⟦ x / u ⟧ n)) $;
+
+--| @rewrite
+axiom sb_tm_nat_rec {x: tm} (u: tm x) (A: ty x) (z s n: tm x):
+  $ (⟦ x / u ⟧ (nat_rec A z s n))
+      ≈ (nat_rec ([x/u] A) (⟦ x / u ⟧ z) (⟦ x / u ⟧ s)
+          (⟦ x / u ⟧ n)) $;
+
+axiom nat_form (g: ctx): $ g ⊢ Ty Nat $;
+axiom zero_intro (g: ctx): $ g ⊢ zero : Nat $;
+--| @auto backward
+axiom suc_intro (g: ctx) (n: tm):
+  $ g ⊢ n : Nat $
+  > $ g ⊢ suc n : Nat $;
+
+axiom nat_ind_elim (g: ctx) {k ih: tm} (C: ty k) (z: tm) (s: tm k ih)
+  (n: tm):
+  $ g , k : Nat ⊢ Ty C $
+  > $ g ⊢ z : [k/zero] C $
+  > $ g , k : Nat , ih : C ⊢ s : [k/suc k] C $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ nat_ind k ih C z s n : [k/n] C $;
+
+axiom nat_ind_zero (g: ctx) {k ih: tm} (C: ty k) (z: tm) (s: tm k ih):
+  $ g , k : Nat ⊢ Ty C $
+  > $ g ⊢ z : [k/zero] C $
+  > $ g , k : Nat , ih : C ⊢ s : [k/suc k] C $
+  > $ g ⊢ ≡[[k/zero] C] (nat_ind k ih C z s zero) = z $;
+
+axiom nat_ind_suc (g: ctx) {k ih: tm} (C: ty k) (z: tm) (s: tm k ih)
+  (n: tm):
+  $ g , k : Nat ⊢ Ty C $
+  > $ g ⊢ z : [k/zero] C $
+  > $ g , k : Nat , ih : C ⊢ s : [k/suc k] C $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ ≡[[k/suc n] C] (nat_ind k ih C z s (suc n)) =
+      (⟦ ih / nat_ind k ih C z s n ⟧ (⟦ k / n ⟧ s)) $;
+
+-- The first user-facing Nat theorems show that ordinary recursion really is
+-- available as a transparent def over induction.
+theorem one_ty (g: ctx):
+  $ g ⊢ suc zero : Nat $;
+
+theorem nat_rec_ty (g: ctx) (A: ty) (z s n: tm):
+  $ g ⊢ z : A $
+  > $ g ⊢ s : (A → A) $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ nat_rec A z s n : A $;
+
+theorem nat_rec_zero (g: ctx) (A: ty) (z s: tm):
+  $ g ⊢ z : A $
+  > $ g ⊢ s : (A → A) $
+  > $ g ⊢ ≡[A] (nat_rec A z s zero) = z $;
+
+theorem nat_rec_suc (g: ctx) (A: ty) (z s n: tm):
+  $ g ⊢ z : A $
+  > $ g ⊢ s : (A → A) $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ ≡[A] (nat_rec A z s (suc n)) = (s · (nat_rec A z s n)) $;
+
+-- The identity-type and arithmetic sections below use Nat induction at
+-- genuinely dependent families.
+--
+-- ==================================================================
+-- SECTION 6: Typed equality layer
+-- ==================================================================
+
+
+axiom eq_ty_refl (g: ctx) (A: ty):
+  $ g ⊢ Ty A $
+  > $ g ⊢ A ≡ A $;
+
+axiom eq_ty_sym (g: ctx) (A B: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ B ≡ A $;
+
+axiom eq_ty_trans (g: ctx) (A B C: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ B ≡ C $
+  > $ g ⊢ A ≡ C $;
+
+axiom eq_tm_refl (g: ctx) (A: ty) (t: tm):
+  $ g ⊢ t : A $
+  > $ g ⊢ ≡[A] t = t $;
+
+axiom eq_tm_sym (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ ≡[A] t = s $;
+
+axiom eq_tm_trans (g: ctx) (A: ty) (s t u: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ ≡[A] t = u $
+  > $ g ⊢ ≡[A] s = u $;
+
+axiom eq_ty_left (g: ctx) (A B: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ Ty A $;
+
+axiom eq_ty_right (g: ctx) (A B: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ Ty B $;
+
+axiom eq_tm_left (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ s : A $;
+
+axiom eq_tm_right (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ t : A $;
+
+-- Function type inversion recovers closed domain and codomain regularity.
+axiom arr_dom_regular (g: ctx) (A B: ty) (f: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ Ty A $;
+
+axiom arr_cod_regular (g: ctx) (A B: ty) (f: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ Ty B $;
+
+axiom app_eq_right (g: ctx) (A B: ty) (f s t: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ ≡[B] (f · s) = (f · t) $;
+
+axiom app_eq_left (g: ctx) (A B: ty) (f h u: tm):
+  $ g ⊢ ≡[(A → B)] f = h $
+  > $ g ⊢ u : A $
+  > $ g ⊢ ≡[B] (f · u) = (h · u) $;
+
+axiom suc_eq (g: ctx) (m n: tm):
+  $ g ⊢ ≡[Nat] m = n $
+  > $ g ⊢ ≡[Nat] suc m = suc n $;
+
+--| @auto forward
+axiom ty_conv (g: ctx) (t: tm) (A B: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ t : A $
+  > $ g ⊢ t : B $;
+
+-- One small Nat computation here is enough to verify that typed equality is
+-- usable for chaining and for rewriting under application.
+theorem double_step_ty (g: ctx) {k: tm}:
+  $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $;
+
+theorem nat_rec_two_step_one (g: ctx) {k: tm}:
+  $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
+      (suc zero)) = (suc (suc zero)) $;
+--
+-- ==================================================================
+-- SECTION 7: Identity type
+-- ==================================================================
+--
+-- The internal identity type is distinct from typed judgemental equality.
+-- Here we add just enough structure to expose path induction and a first
+-- user-facing helper.
+term Id (A: ty) (s t: tm): ty;
+term refl (A: ty) (t: tm): tm;
+
+-- `J` is the dependent eliminator for identity types. It is not an
+-- object-language binder like `λ`, but it does bind the local names used by
+-- the motive and reflexivity case. Morally, the eliminator is applied as
+--
+--   J A (λ x y q. C) (λ x. r) s t p
+--
+-- where `C` is the motive in context `x : A, y : A, q : Id A x y`, and `r`
+-- is the reflexivity branch in context `x : A`. MM0 represents those
+-- abstractions first-order by making `x`, `y`, and `q` curly-bound
+-- arguments of the constructor. Thus `C: ty x y q` may mention all three
+-- local names, and `r: tm x` may mention `x`. Since the return sort is
+-- plain `tm`, those local names are removed from the dependencies of the
+-- constructed term; only the ordinary arguments `A`, `s`, `t`, and `p`, and
+-- any outer variables in `C` and `r`, can remain free. The typing side
+-- conditions for the motive and branch are stated in `J_elim` and `J_beta`,
+-- rather than encoded as higher-order function types for `C` and `r`.
+term J {x y q: tm} (A: ty) (C: ty x y q) (r: tm x) (s t p: tm): tm;
+
+--| @congr
+axiom Id_congr (A B: ty) (s1 s2 t1 t2: tm):
+  $ A ~ B $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ Id A s1 t1 ~ Id B s2 t2 $;
+
+--| @congr
+axiom refl_congr (A B: ty) (s t: tm):
+  $ A ~ B $
+  > $ s ≈ t $
+  > $ refl A s ≈ refl B t $;
+
+--| @congr
+axiom J_congr {x y q: tm} (A B: ty) (C D: ty x y q) (r1 r2: tm x)
+  (s1 s2 t1 t2 p1 p2: tm):
+  $ A ~ B $
+  > $ C ~ D $
+  > $ r1 ≈ r2 $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ p1 ≈ p2 $
+  > $ J x y q A C r1 s1 t1 p1 ≈ J x y q B D r2 s2 t2 p2 $;
+
+--| @rewrite
+axiom sb_ty_Id {x: tm} (u: tm x) (A: ty x) (s t: tm x):
+  $ [x/u] (Id A s t) ~ Id ([x/u] A) (⟦ x / u ⟧ s) (⟦ x / u ⟧ t) $;
+
+--| @rewrite
+axiom sb_tm_refl {x: tm} (u: tm x) (A: ty x) (s: tm x):
+  $ (⟦ x / u ⟧ (refl A s)) ≈ refl ([x/u] A) (⟦ x / u ⟧ s) $;
+
+--| @rewrite
+axiom sb_tm_J {w x y q: tm} (u: tm w) (A: ty w) (C: ty w x y q)
+  (r: tm w x) (s t p: tm w):
+  $ (⟦ w / u ⟧ (J x y q A C r s t p))
+      ≈ J x y q ([w/u] A) ([w/u] C) (⟦ w / u ⟧ r)
+          (⟦ w / u ⟧ s) (⟦ w / u ⟧ t) (⟦ w / u ⟧ p) $;
+
+--| @auto backward
+axiom Id_form (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ s : A $
+  > $ g ⊢ t : A $
+  > $ g ⊢ Ty (Id A s t) $;
+
+--| @auto backward
+axiom refl_intro (g: ctx) (A: ty) (s: tm):
+  $ g ⊢ s : A $
+  > $ g ⊢ refl A s : Id A s s $;
+
+axiom Id_ty_regular (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ Ty A $;
+
+axiom Id_left_regular (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ s : A $;
+
+axiom Id_right_regular (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ t : A $;
+
+-- Judgemental equality gives an identity path. This is the bridge that lets
+-- definitional computation feed later propositional arithmetic proofs.
+axiom eq_tm_to_Id (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ refl A s : Id A s t $;
+
+axiom J_elim (g: ctx) {x y q: tm} (A: ty) (C: ty x y q) (r: tm x)
+  (s t p: tm):
+  $ g , x : A , y : A , q : Id A x y ⊢ Ty C $
+  > $ g , x : A ⊢ r : [y/x] [q/refl A x] C $
+  > $ g ⊢ p : Id A s t $
+  > $ g ⊢ J x y q A C r s t p : [x/s] [y/t] [q/p] C $;
+
+axiom J_beta (g: ctx) {x y q: tm} (A: ty) (C: ty x y q) (r: tm x)
+  (s: tm):
+  $ g , x : A , y : A , q : Id A x y ⊢ Ty C $
+  > $ g , x : A ⊢ r : [y/x] [q/refl A x] C $
+  > $ g ⊢ s : A $
+  > $ g ⊢ ≡[[x/s] [y/s] [q/refl A s] C]
+      (J x y q A C r s s (refl A s)) = (⟦ x / s ⟧ r) $;
+
+def id_sym (A: ty) (s t p: tm) {.x .y .q: tm}: tm =
+  $ J x y q A (Id A y x) (refl A x) s t p $;
+
+--| @congr
+axiom id_sym_congr (A B: ty) (s1 s2 t1 t2 p1 p2: tm):
+  $ A ~ B $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ p1 ≈ p2 $
+  > $ id_sym A s1 t1 p1 ≈ id_sym B s2 t2 p2 $;
+
+--| @rewrite
+axiom sb_tm_id_sym {x: tm} (u: tm x) (A: ty x) (s t p: tm x):
+  $ (⟦ x / u ⟧ (id_sym A s t p))
+      ≈ id_sym ([x/u] A) (⟦ x / u ⟧ s) (⟦ x / u ⟧ t)
+          (⟦ x / u ⟧ p) $;
+
+theorem id_sym_ty (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ id_sym A s t p : Id A t s $;
+
+theorem id_sym_refl (g: ctx) (A: ty) (s: tm):
+  $ g ⊢ s : A $
+  > $ g ⊢ ≡[Id A s s] (id_sym A s s (refl A s)) = refl A s $;
+
+def id_trans (A: ty) (s t u p q: tm) {.x .y .z .w: tm}: tm =
+  $ (J x y z A (Id A y u → Id A x u) (λ w : Id A x u. w)
+      s t p) · q $;
+
+--| @congr
+axiom id_trans_congr (A B: ty) (s1 s2 t1 t2 u1 u2 p1 p2 q1 q2: tm):
+  $ A ~ B $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ u1 ≈ u2 $
+  > $ p1 ≈ p2 $
+  > $ q1 ≈ q2 $
+  > $ id_trans A s1 t1 u1 p1 q1 ≈ id_trans B s2 t2 u2 p2 q2 $;
+
+--| @rewrite
+axiom sb_tm_id_trans {x: tm} (a: tm x) (A: ty x)
+  (s t u p q: tm x):
+  $ (⟦ x / a ⟧ (id_trans A s t u p q))
+      ≈ id_trans ([x/a] A) (⟦ x / a ⟧ s) (⟦ x / a ⟧ t)
+          (⟦ x / a ⟧ u) (⟦ x / a ⟧ p) (⟦ x / a ⟧ q) $;
+
+theorem id_trans_ty (g: ctx) (A: ty) (s t u p q: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ q : Id A t u $
+  > $ g ⊢ id_trans A s t u p q : Id A s u $;
+
+theorem id_trans_refl_left (g: ctx) (A: ty) (s u q: tm):
+  $ g ⊢ q : Id A s u $
+  > $ g ⊢ ≡[Id A s u] (id_trans A s s u (refl A s) q) = q $;
+
+def ap (A B: ty) (f s t p: tm) {.x .y .q: tm}: tm =
+  $ J x y q A (Id B (f · x) (f · y)) (refl B (f · x)) s t p $;
+
+--| @congr
+axiom ap_congr (A1 A2 B1 B2: ty) (f1 f2 s1 s2 t1 t2 p1 p2: tm):
+  $ A1 ~ A2 $
+  > $ B1 ~ B2 $
+  > $ f1 ≈ f2 $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ p1 ≈ p2 $
+  > $ ap A1 B1 f1 s1 t1 p1 ≈ ap A2 B2 f2 s2 t2 p2 $;
+
+--| @rewrite
+axiom sb_tm_ap {x: tm} (u: tm x) (A B: ty x) (f s t p: tm x):
+  $ (⟦ x / u ⟧ (ap A B f s t p))
+      ≈ ap ([x/u] A) ([x/u] B) (⟦ x / u ⟧ f) (⟦ x / u ⟧ s)
+          (⟦ x / u ⟧ t) (⟦ x / u ⟧ p) $;
+
+theorem ap_ty (g: ctx) (A B: ty) (f s t p: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ p : Id A s t $
+  > $ g ⊢ ap A B f s t p : Id B (f · s) (f · t) $;
+
+theorem ap_refl (g: ctx) (A B: ty) (f s: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ s : A $
+  > $ g ⊢ ≡[Id B (f · s) (f · s)]
+      (ap A B f s s (refl A s)) = refl B (f · s) $;
+
+-- A specialized action of successor on identity paths. This is deliberately
+-- direct rather than going through `ap` at a λ-term, because typed β-equality
+-- is not a raw rewrite for arbitrary application.
+def ap_suc (s t p: tm) {.x .y .q: tm}: tm =
+  $ J x y q Nat (Id Nat (suc x) (suc y)) (refl Nat (suc x)) s t p $;
+
+--| @congr
+axiom ap_suc_congr (s1 s2 t1 t2 p1 p2: tm):
+  $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ p1 ≈ p2 $
+  > $ ap_suc s1 t1 p1 ≈ ap_suc s2 t2 p2 $;
+
+--| @rewrite
+axiom sb_tm_ap_suc {x: tm} (u: tm x) (s t p: tm x):
+  $ (⟦ x / u ⟧ (ap_suc s t p))
+      ≈ ap_suc (⟦ x / u ⟧ s) (⟦ x / u ⟧ t) (⟦ x / u ⟧ p) $;
+
+theorem ap_suc_ty (g: ctx) (s t p: tm):
+  $ g ⊢ p : Id Nat s t $
+  > $ g ⊢ ap_suc s t p : Id Nat (suc s) (suc t) $;
+
+theorem ap_suc_refl (g: ctx) (s: tm):
+  $ g ⊢ s : Nat $
+  > $ g ⊢ ≡[Id Nat (suc s) (suc s)]
+      (ap_suc s s (refl Nat s)) = refl Nat (suc s) $;
+
+-- `transport` packages path induction for a dependent family.
+def transport (A: ty) {x: tm} (B: ty x) (s t p u: tm)
+  {.y .q .w: tm}: tm =
+  $ (J x y q A (B → [x/y] B) (λ w : B. w) s t p) · u $;
+
+--| @congr
+axiom transport_congr (A C: ty) {x: tm} (B D: ty x)
+  (s1 s2 t1 t2 p1 p2 u1 u2: tm):
+  $ A ~ C $
+  > $ B ~ D $
+  > $ s1 ≈ s2 $
+  > $ t1 ≈ t2 $
+  > $ p1 ≈ p2 $
+  > $ u1 ≈ u2 $
+  > $ transport A x B s1 t1 p1 u1
+      ≈ transport C x D s2 t2 p2 u2 $;
+
+--| @rewrite
+axiom sb_tm_transport {x y: tm} (a: tm x) (A: ty x) (B: ty x y)
+  (s t p u: tm x):
+  $ (⟦ x / a ⟧ (transport A y B s t p u))
+      ≈ transport ([x/a] A) y ([x/a] B) (⟦ x / a ⟧ s)
+          (⟦ x / a ⟧ t) (⟦ x / a ⟧ p) (⟦ x / a ⟧ u) $;
+
+theorem transport_ty (g: ctx) (A: ty) {x: tm} (B: ty x)
+  (s t p u: tm):
+  $ g , x : A ⊢ Ty B $
+  > $ g ⊢ p : Id A s t $
+  > $ g ⊢ u : [x/s] B $
+  > $ g ⊢ transport A x B s t p u : [x/t] B $;
+
+theorem transport_refl (g: ctx) (A: ty) {x: tm} (B: ty x) (s u: tm):
+  $ g , x : A ⊢ Ty B $
+  > $ g ⊢ s : A $
+  > $ g ⊢ u : [x/s] B $
+  > $ g ⊢ ≡[[x/s] B] (transport A x B s s (refl A s) u) = u $;
+
+--
+-- ==================================================================
+-- SECTION 8: Arithmetic library
+-- ==================================================================
+--
+-- Addition is a transparent program over `nat_rec`. It recurses on the left
+-- argument, so the left zero and successor equations are judgemental
+-- computation lemmas. The right-sided laws are propositional arithmetic and
+-- are stated with the internal identity type.
+def suc_fn {.k: tm}: tm = $ λ k : Nat. suc k $;
+def add (m n: tm): tm = $ nat_rec Nat n suc_fn m $;
+infixl add: $+$ prec 55;
+
+--| @rewrite
+axiom sb_tm_suc_fn {x: tm} (u: tm x): $ (⟦ x / u ⟧ suc_fn) ≈ suc_fn $;
+
+--| @congr
+axiom add_congr (m1 m2 n1 n2: tm):
+  $ m1 ≈ m2 $
+  > $ n1 ≈ n2 $
+  > $ (m1 + n1) ≈ (m2 + n2) $;
+
+--| @rewrite
+axiom sb_tm_add {x: tm} (u: tm x) (m n: tm x):
+  $ (⟦ x / u ⟧ (m + n)) ≈ ((⟦ x / u ⟧ m) + (⟦ x / u ⟧ n)) $;
+
+axiom add_eq_congr (g: ctx) (m1 m2 n1 n2: tm):
+  $ g ⊢ ≡[Nat] m1 = m2 $
+  > $ g ⊢ ≡[Nat] n1 = n2 $
+  > $ g ⊢ ≡[Nat] (m1 + n1) = (m2 + n2) $;
+
+theorem suc_fn_ty (g: ctx):
+  $ g ⊢ suc_fn : (Nat → Nat) $;
+
+theorem add_ty (g: ctx) (m n: tm):
+  $ g ⊢ m : Nat $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ m + n : Nat $;
+
+theorem add_zero_left (g: ctx) (n: tm):
+  $ g ⊢ n : Nat $
+  > $ g ⊢ ≡[Nat] (zero + n) = n $;
+
+theorem add_suc_left (g: ctx) (m n: tm):
+  $ g ⊢ m : Nat $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ ≡[Nat] ((suc m) + n) = suc (m + n) $;
+
+theorem one_plus_one (g: ctx):
+  $ g ⊢ ≡[Nat] ((suc zero) + (suc zero)) = (suc (suc zero)) $;
+
+-- The remaining arithmetic laws are propositional. Their proof terms are
+-- named so theorem statements stay readable in the demo.
+def add_zero_right_p (m: tm) {.k .ih: tm}: tm =
+  $ nat_ind k ih (Id Nat (k + zero) k) (refl Nat (zero + zero))
+      (id_trans Nat ((suc k) + zero) (suc (k + zero)) (suc k)
+        (refl Nat ((suc k) + zero)) (ap_suc (k + zero) k ih)) m $;
+
+def add_suc_right_p (m n: tm) {.k .ih: tm}: tm =
+  $ nat_ind k ih (Id Nat (k + suc n) (suc (k + n)))
+      (id_trans Nat (zero + suc n) (suc n) (suc (zero + n))
+        (refl Nat (zero + suc n))
+        (id_sym Nat (suc (zero + n)) (suc n)
+          (refl Nat (suc (zero + n)))))
+      (id_trans Nat ((suc k) + suc n) (suc (k + suc n))
+        (suc ((suc k) + n))
+        (refl Nat ((suc k) + suc n))
+        (id_trans Nat (suc (k + suc n)) (suc (suc (k + n)))
+          (suc ((suc k) + n)) (ap_suc (k + suc n) (suc (k + n)) ih)
+          (id_sym Nat (suc ((suc k) + n)) (suc (suc (k + n)))
+            (ap_suc ((suc k) + n) (suc (k + n))
+              (refl Nat ((suc k) + n)))))) m $;
+
+def add_comm_p (m n: tm) {.k .ih: tm}: tm =
+  $ nat_ind k ih (Id Nat (k + n) (n + k))
+      (id_trans Nat (zero + n) n (n + zero)
+        (refl Nat (zero + n))
+        (id_sym Nat (n + zero) n (add_zero_right_p n)))
+      (id_trans Nat ((suc k) + n) (suc (k + n)) (n + suc k)
+        (refl Nat ((suc k) + n))
+        (id_trans Nat (suc (k + n)) (suc (n + k)) (n + suc k)
+          (ap_suc (k + n) (n + k) ih)
+          (id_sym Nat (n + suc k) (suc (n + k))
+            (add_suc_right_p n k)))) m $;
+
+--| @congr
+axiom add_zero_right_p_congr (m1 m2: tm):
+  $ m1 ≈ m2 $ > $ add_zero_right_p m1 ≈ add_zero_right_p m2 $;
+
+--| @rewrite
+axiom sb_tm_add_zero_right_p {x: tm} (u: tm x) (m: tm x):
+  $ (⟦ x / u ⟧ (add_zero_right_p m))
+      ≈ add_zero_right_p (⟦ x / u ⟧ m) $;
+
+--| @congr
+axiom add_suc_right_p_congr (m1 m2 n1 n2: tm):
+  $ m1 ≈ m2 $
+  > $ n1 ≈ n2 $
+  > $ add_suc_right_p m1 n1 ≈ add_suc_right_p m2 n2 $;
+
+--| @rewrite
+axiom sb_tm_add_suc_right_p {x: tm} (u: tm x) (m n: tm x):
+  $ (⟦ x / u ⟧ (add_suc_right_p m n))
+      ≈ add_suc_right_p (⟦ x / u ⟧ m) (⟦ x / u ⟧ n) $;
+
+--| @congr
+axiom add_comm_p_congr (m1 m2 n1 n2: tm):
+  $ m1 ≈ m2 $
+  > $ n1 ≈ n2 $
+  > $ add_comm_p m1 n1 ≈ add_comm_p m2 n2 $;
+
+--| @rewrite
+axiom sb_tm_add_comm_p {x: tm} (u: tm x) (m n: tm x):
+  $ (⟦ x / u ⟧ (add_comm_p m n))
+      ≈ add_comm_p (⟦ x / u ⟧ m) (⟦ x / u ⟧ n) $;
+
+theorem add_zero_right (g: ctx) (m: tm):
+  $ g ⊢ m : Nat $
+  > $ g ⊢ add_zero_right_p m : Id Nat (m + zero) m $;
+
+theorem add_suc_right (g: ctx) (m n: tm):
+  $ g ⊢ m : Nat $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ add_suc_right_p m n : Id Nat (m + suc n) (suc (m + n)) $;
+
+theorem add_comm (g: ctx) (m n: tm):
+  $ g ⊢ m : Nat $
+  > $ g ⊢ n : Nat $
+  > $ g ⊢ add_comm_p m n : Id Nat (m + n) (n + m) $;
+--
+-- ==================================================================
+-- SECTION 9: Demo shape and maintenance notes
+-- ==================================================================
+--
+-- The visible theorem progression is now:
+--   1. a Π warmup (`id_ty`, `app_id_beta`)
+--   2. Bool formation and computation (`bool_not_*`)
+--   3. Nat recursion and judgemental equality chaining
+--   4. an Id toolkit built from path induction
+--   5. addition typing, computation, and propositional arithmetic
+--   6. the capstone: commutativity of addition
+--
+-- The file is intentionally more explicit than a minimal proof of the final
+-- theorem. Raw congruence and substitution metadata are included for
+-- user-facing terms and defs so nearby experiments normalize in the same
+-- style as the curated proof.
+--
+-- When extending the demo, prefer adding one small, named helper theorem over
+-- hiding a large term in a final theorem. The goal is for the proof script to
+-- explain the construction, not merely to pass verification.

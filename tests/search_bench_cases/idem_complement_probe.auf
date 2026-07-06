@@ -1,0 +1,11 @@
+-- Reference proof for idem_complement_probe.mm0.  The lan step at l2 binds the
+-- rest-binder g = A ∧ B (a NON-minimal ACUI complement): the premise l1 keeps a
+-- copy of the principal A ∧ B alongside its decomposition A , B, which is what
+-- `finish` needs.  Minimal-complement pinning (g = ∅, premise A , B |- C) hits a
+-- dead end (finish cannot fire without A ∧ B present).
+
+idem_complement_probe
+---------------------
+
+l1: $ A /\ B , A , B |- C $ by finish []
+l2: $ A /\ B |- C $ by lan [l1]

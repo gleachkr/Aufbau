@@ -8,7 +8,7 @@ pub fn commonStructuralTarget(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?ExprId {
-    var support = self.structuralSupport();
+    const support = self.structuralSupportShared();
     return try support.buildCommonTarget(lhs, rhs);
 }
 
@@ -32,7 +32,7 @@ fn structuralCongruenceCompatible(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!bool {
-    var support = self.structuralSupport();
+    const support = self.structuralSupportShared();
     const combiner = try support.sharedStructuralCombiner(lhs, rhs) orelse {
         return false;
     };

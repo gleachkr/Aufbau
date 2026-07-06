@@ -291,7 +291,8 @@ pub fn buildViewSeedSetup(
         for (concrete_seeds, 0..) |seed, idx| {
             switch (seed) {
                 .none => {},
-                else => seed_state.bindings[idx] = seed,
+                // replaceSeed frees any owned `.bound` tree being displaced.
+                else => seed_state.replaceSeed(allocator, idx, seed),
             }
         }
         allocator.free(concrete_seeds);

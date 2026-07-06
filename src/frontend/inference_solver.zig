@@ -13,12 +13,14 @@ const DerivedBinding = @import("./compiler/views.zig").DerivedBinding;
 const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
 const AcuiSupport = @import("./acui_support.zig");
 const DerivedBindings = @import("./compiler/derived_bindings.zig");
+const DefOps = @import("./def_ops.zig");
 const DebugConfig = @import("./debug.zig").DebugConfig;
 const BranchStateOps = @import("./inference_solver/branch_state.zig");
 const SemanticCompare = @import("./inference_solver/semantic_compare.zig");
 const StructuralIntervals =
     @import("./inference_solver/intervals.zig");
 const StructuralMatcher = @import("./inference_solver/matcher.zig");
+const ViewState = @import("./inference_solver/view_state.zig");
 const StructuralObligationSolver =
     @import("./inference_solver/obligation_solver.zig");
 const StructuralStateUpdates =
@@ -39,7 +41,18 @@ const ConclusionConstraint = union(enum) {
 };
 
 pub const Solver = struct {
+    // During `solveWithConclusion`, `allocator` is repointed at `state_arena`
+    // so the throwaway BranchState generations (each solve fans out into many
+    // short-lived generations that were never individually freed) are reclaimed
+    // in one shot when the Solver is torn down. `real_allocator` is the caller's
+    // allocator — which is also the theorem interner's allocator — and is used
+    // for everything that must outlive the arena churn: the returned bindings,
+    // the ambiguity report, and every def_ops context (whose `internAppOwned`
+    // frees interned args with the interner allocator, so its `SharedContext`
+    // allocator MUST equal the interner allocator).
     allocator: std.mem.Allocator,
+    real_allocator: std.mem.Allocator,
+    state_arena: std.heap.ArenaAllocator,
     env: *const GlobalEnv,
     theorem: *TheoremContext,
     registry: *RewriteRegistry,
@@ -51,6 +64,21 @@ pub const Solver = struct {
     debug: DebugConfig,
     ambiguity_warning: bool = false,
     ambiguity_report: AmbiguityReport = .{},
+    // Reusable def_ops contexts, created lazily and torn down in `deinit`.
+    // One solve fans out into many short-lived match attempts that each used
+    // to build a fresh context — discarding the symbolic hash-cons table and
+    // the whole-template expansion memo between attempts. Sharing one context
+    // per solve is sound because theorem/env/registry are fixed for the
+    // Solver's lifetime and the context-level caches key only structure that
+    // is stable under theorem-interner growth (see `SharedContext`). Both use
+    // `real_allocator` (the interner allocator) like the per-call contexts did.
+    def_ops_ctx: ?DefOps.Context = null,
+    def_ops_ctx_plain: ?DefOps.Context = null,
+    /// Solve-lifetime ACUI structural-support context for the semantic-compare
+    /// paths (`bindingCompatible` / `commonStructuralTarget`), which used to
+    /// build a fresh context — and therefore a cold def_ops context — per
+    /// comparison. Same soundness argument as the def_ops contexts above.
+    acui_support_ctx: ?AcuiSupport.Context = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -65,6 +93,8 @@ pub const Solver = struct {
     ) Solver {
         return .{
             .allocator = allocator,
+            .real_allocator = allocator,
+            .state_arena = std.heap.ArenaAllocator.init(allocator),
             .env = env,
             .theorem = theorem,
             .registry = registry,
@@ -92,13 +122,48 @@ pub const Solver = struct {
     }
 
     pub fn deinit(self: *Solver) void {
+        // The ambiguity summaries are built by `pickUniqueSolution` after
+        // `allocator` has been restored to `real_allocator`, so free them there
+        // regardless of what `allocator` currently points at.
         if (self.ambiguity_report.chosen_bindings) |summary| {
-            self.allocator.free(summary);
+            self.real_allocator.free(summary);
         }
         if (self.ambiguity_report.alternative_bindings) |summary| {
-            self.allocator.free(summary);
+            self.real_allocator.free(summary);
         }
         self.canonicalizer.cache.deinit();
+        if (self.def_ops_ctx) |*ctx| ctx.deinit();
+        if (self.def_ops_ctx_plain) |*ctx| ctx.deinit();
+        if (self.acui_support_ctx) |*ctx| ctx.deinit();
+        self.state_arena.deinit();
+    }
+
+    /// The solve-lifetime def_ops context (with registry). Lazily created on
+    /// first use via a stable `*Solver`, so the by-value construction copies
+    /// inside `DefOps.Context.init*` settle before any self-referential state
+    /// (arena, caches) exists.
+    pub fn defOpsContext(self: *Solver) *DefOps.Context {
+        if (self.def_ops_ctx == null) {
+            self.def_ops_ctx = DefOps.Context.initWithRegistry(
+                self.real_allocator,
+                self.theorem,
+                self.env,
+                self.registry,
+            );
+        }
+        return &self.def_ops_ctx.?;
+    }
+
+    /// Registry-free variant (transparent-only matching sites).
+    pub fn defOpsContextPlain(self: *Solver) *DefOps.Context {
+        if (self.def_ops_ctx_plain == null) {
+            self.def_ops_ctx_plain = DefOps.Context.init(
+                self.real_allocator,
+                self.theorem,
+                self.env,
+            );
+        }
+        return &self.def_ops_ctx_plain.?;
     }
 
     pub fn hadAmbiguityWarning(self: *const Solver) bool {
@@ -111,12 +176,26 @@ pub const Solver = struct {
     }
 
     pub fn structuralSupport(self: *Solver) AcuiSupport.Context {
+        // AcuiSupport builds def_ops contexts internally, whose `internAppOwned`
+        // frees interned args with the theorem interner allocator, so it must run
+        // on the real allocator, not the per-solve arena.
         return AcuiSupport.Context.init(
-            self.allocator,
+            self.real_allocator,
             self.theorem,
             self.env,
             self.registry,
         );
+    }
+
+    /// Solve-lifetime shared variant of `structuralSupport`. Callers must not
+    /// deinit (or copy) the result; the Solver owns it. Lazily created via a
+    /// stable `*Solver`, so the by-value construction copy settles while the
+    /// context's lazy def_ops field is still null (the documented-safe window).
+    pub fn structuralSupportShared(self: *Solver) *AcuiSupport.Context {
+        if (self.acui_support_ctx == null) {
+            self.acui_support_ctx = self.structuralSupport();
+        }
+        return &self.acui_support_ctx.?;
     }
 
     // This entry point is supposed to infer omitted structural binders for
@@ -156,6 +235,17 @@ pub const Solver = struct {
         ref_exprs: []const ExprId,
         conclusion: ConclusionConstraint,
     ) anyerror![]const ExprId {
+        // Route the throwaway BranchState generations through the per-solve
+        // arena; def_ops contexts are pinned to `real_allocator` separately so
+        // the interner contract still holds. Restore before we build the result.
+        // Reset first so a Solver reused across solves (e.g. the holey→plain
+        // fallback) reclaims the previous solve's generations rather than
+        // accumulating them until teardown. Nothing outside the arena references
+        // it between solves (the result and ambiguity report are on real).
+        _ = self.state_arena.reset(.retain_capacity);
+        self.allocator = self.state_arena.allocator();
+        errdefer self.allocator = self.real_allocator;
+
         var states = try self.initialStates(partial_bindings);
 
         if (self.view) |view| {
@@ -188,6 +278,10 @@ pub const Solver = struct {
             states = try self.finalizeStructuralStates(states.items, .rule);
         }
 
+        // The result and ambiguity report must outlive the arena, so build them
+        // on the real allocator. The arena-backed `states` stay valid (the arena
+        // is not reclaimed until the Solver is torn down).
+        self.allocator = self.real_allocator;
         return try Ambiguity.pickUniqueSolution(
             self,
             states.items,
@@ -213,8 +307,10 @@ pub const Solver = struct {
         view: *const ViewDecl,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
         var next = try self.finalizeStructuralStates(states, .view);
+        next = try self.materializeViewMatchStates(next.items);
         next = try self.applyDerivedBindings(next.items, view.derived_bindings);
         next = try self.finalizeStructuralStates(next.items, .view);
+        next = try self.materializeViewMatchStates(next.items);
         try self.propagateViewBindings(next.items, view);
         next = try self.finalizeStructuralStates(next.items, .rule);
         return next;
@@ -286,6 +382,20 @@ pub const Solver = struct {
                     state,
                 );
                 try next.appendSlice(self.allocator, matches);
+                const may_need_symbolic_view = space == .view and
+                    !try self.templateContainsStructuralCombiner(
+                        constraint.template,
+                    );
+                if ((matches.len == 0 or may_need_symbolic_view) and
+                    space == .view)
+                {
+                    if (try self.matchViewConstraintSymbolically(
+                        state,
+                        constraint,
+                    )) |new_state| {
+                        try next.append(self.allocator, new_state);
+                    }
+                }
             }
             if (next.items.len == 0) return error.UnifyMismatch;
             current = next;
@@ -379,6 +489,92 @@ pub const Solver = struct {
         };
     }
 
+    fn templateContainsStructuralCombiner(
+        self: *Solver,
+        template: TemplateExpr,
+    ) anyerror!bool {
+        return switch (template) {
+            .binder => false,
+            .app => |app| blk: {
+                if ((try self.registry.resolveStructuralCombiner(
+                    self.env,
+                    app.term_id,
+                )) != null) {
+                    break :blk true;
+                }
+                for (app.args) |arg| {
+                    if (try self.templateContainsStructuralCombiner(arg)) {
+                        break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+        };
+    }
+
+    fn matchViewConstraintSymbolically(
+        self: *Solver,
+        state: BranchState,
+        constraint: MatchConstraint,
+    ) anyerror!?BranchState {
+        const seed_state = state.view_match_state orelse return null;
+        const view = self.view orelse return null;
+
+        const def_ops = self.defOpsContext();
+
+        var session = try def_ops.beginRuleMatchFromSeedState(
+            view.arg_infos,
+            &seed_state,
+        );
+        defer session.deinit();
+
+        if (!try session.matchTransparentOrSemantic(
+            constraint.template,
+            constraint.actual,
+        )) {
+            return null;
+        }
+
+        var new_state = try BranchStateOps.cloneState(self, state);
+        try ViewState.syncFromSession(self.allocator, &new_state, &session);
+        return new_state;
+    }
+
+    fn materializeViewMatchStates(
+        self: *Solver,
+        states: []const BranchState,
+    ) anyerror!std.ArrayListUnmanaged(BranchState) {
+        var next = std.ArrayListUnmanaged(BranchState){};
+        for (states) |state| {
+            var new_state = try BranchStateOps.cloneState(self, state);
+            ViewState.syncConcreteBindingsIntoSeedState(
+                self.allocator,
+                &new_state,
+            );
+            try self.materializeViewMatchState(&new_state);
+            try next.append(self.allocator, new_state);
+        }
+        return next;
+    }
+
+    fn materializeViewMatchState(
+        self: *Solver,
+        state: *BranchState,
+    ) anyerror!void {
+        const seed_state = state.view_match_state orelse return;
+        const view = self.view orelse return;
+
+        const def_ops = self.defOpsContext();
+
+        var session = try def_ops.beginRuleMatchFromSeedState(
+            view.arg_infos,
+            &seed_state,
+        );
+        defer session.deinit();
+
+        try ViewState.syncFromSession(self.allocator, state, &session);
+    }
+
     fn applyDerivedBindings(
         self: *Solver,
         states: []const BranchState,
@@ -387,27 +583,82 @@ pub const Solver = struct {
         var next = std.ArrayListUnmanaged(BranchState){};
         var first_err: ?anyerror = null;
         for (states) |state| {
-            const new_state = try BranchStateOps.cloneState(self, state);
-            const view_bindings = new_state.view_bindings orelse {
+            var new_state = try BranchStateOps.cloneState(self, state);
+            if (new_state.view_bindings == null) {
                 try next.append(self.allocator, new_state);
                 continue;
-            };
-            DerivedBindings.applyDerivedBindings(
-                self.theorem,
-                self.env,
-                self.registry,
-                .{ .view_bindings = view_bindings },
-                derived_bindings,
-                self.view.?.arg_names,
-                false,
-            ) catch |err| {
-                if (first_err == null) first_err = err;
-                continue;
-            };
+            }
+            {
+                var snapshot = try self.derivedBindingSnapshot(&new_state);
+                // `dummy_witnesses` was materialized on the def_ops session's
+                // real allocator, so it must be freed there, not on the arena.
+                defer snapshot.deinit(self.real_allocator);
+
+                DerivedBindings.applyDerivedBindings(
+                    self.theorem,
+                    self.env,
+                    self.registry,
+                    snapshot.value,
+                    derived_bindings,
+                    self.view.?.arg_names,
+                    false,
+                ) catch |err| {
+                    if (first_err == null) first_err = err;
+                    continue;
+                };
+            }
+            ViewState.syncConcreteBindingsIntoSeedState(
+                self.allocator,
+                &new_state,
+            );
             try next.append(self.allocator, new_state);
         }
         if (next.items.len == 0) return first_err orelse error.UnifyMismatch;
         return next;
+    }
+
+    const DerivedBindingSnapshot = struct {
+        value: DerivedBindings.MatchSnapshot,
+
+        pub fn deinit(
+            self: *DerivedBindingSnapshot,
+            allocator: std.mem.Allocator,
+        ) void {
+            if (self.value.dummy_witnesses) |witnesses| {
+                allocator.free(witnesses);
+            }
+        }
+    };
+
+    fn derivedBindingSnapshot(
+        self: *Solver,
+        state: *BranchState,
+    ) anyerror!DerivedBindingSnapshot {
+        const view_bindings = state.view_bindings.?;
+        const seed_state = if (state.view_match_state) |*match_state|
+            match_state
+        else
+            return .{ .value = .{ .view_bindings = view_bindings } };
+        const view = self.view orelse {
+            return .{ .value = .{ .view_bindings = view_bindings } };
+        };
+
+        const def_ops = self.defOpsContext();
+
+        var session = try def_ops.beginRuleMatchFromSeedState(
+            view.arg_infos,
+            seed_state,
+        );
+        defer session.deinit();
+
+        const dummy_witnesses = try session.materializeDummyWitnesses();
+        errdefer self.real_allocator.free(dummy_witnesses);
+
+        return .{ .value = .{
+            .view_bindings = view_bindings,
+            .view_seeds = seed_state.bindings,
+            .dummy_witnesses = dummy_witnesses,
+        } };
     }
 
     fn finalizeStructuralStates(

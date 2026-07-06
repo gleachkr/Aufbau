@@ -1,0 +1,26 @@
+-- Stage 8 saturation-loop stress (META.md). Two `@auto forward` rules feed
+-- on their own output: `step` makes one new fact per source per layer and
+-- `join` makes one per source PAIR, so the derived pool grows without bound
+-- until the fact budget stops it. The goal `R` is unprovable, so this is a
+-- heavy no-result probe: it must stay bounded (budget exhaustion reported,
+-- no suggestion invented) and cheap on the backward side.
+delimiter $ ( ) $;
+provable sort wff;
+sort obj;
+
+term P (x: obj): wff;
+term f (x: obj): obj;
+term g (x y: obj): obj;
+term R: wff;
+term K1: obj;
+term K2: obj;
+term K3: obj;
+term K4: obj;
+
+--| @auto forward
+axiom step (x: obj): $ P x $ > $ P (f x) $;
+
+--| @auto forward
+axiom join (x y: obj): $ P x $ > $ P y $ > $ P (g x y) $;
+
+theorem stress: $ P K1 $ > $ P K2 $ > $ P K3 $ > $ P K4 $ > $ R $;

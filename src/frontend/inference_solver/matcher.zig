@@ -1,6 +1,7 @@
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
+const DefOps = @import("../def_ops.zig");
 const BranchStateOps = @import("./branch_state.zig");
 const SemanticCompare = @import("./semantic_compare.zig");
 const StructuralFragmentMatcher =
@@ -8,6 +9,7 @@ const StructuralFragmentMatcher =
 const StructuralIntervals = @import("./intervals.zig");
 const StructuralTransparentMatcher =
     @import("./transparent_matcher.zig");
+const ViewState = @import("./view_state.zig");
 const types = @import("./types.zig");
 const BinderSpace = types.BinderSpace;
 const BranchState = types.BranchState;
@@ -32,6 +34,19 @@ pub fn matchExpr(
 
     return switch (template) {
         .binder => |idx| blk: {
+            if (space == .view) {
+                if (try matchViewBinderSymbolically(
+                    self,
+                    idx,
+                    actual,
+                    state,
+                )) |new_state| {
+                    const out = try self.allocator.alloc(BranchState, 1);
+                    out[0] = new_state;
+                    break :blk out;
+                }
+            }
+
             var new_state = try BranchStateOps.cloneState(self, state);
             const bindings = BranchStateOps.getBindings(&new_state, space);
             if (idx >= bindings.len) break :blk &.{};
@@ -119,4 +134,31 @@ pub fn matchExpr(
             break :blk try states.toOwnedSlice(self.allocator);
         },
     };
+}
+
+fn matchViewBinderSymbolically(
+    self: anytype,
+    idx: usize,
+    actual: ExprId,
+    state: BranchState,
+) anyerror!?BranchState {
+    const seed_state = state.view_match_state orelse return null;
+    const view = self.view orelse return null;
+    if (idx >= view.arg_infos.len) return null;
+
+    const def_ops = self.defOpsContext();
+
+    var session = try def_ops.beginRuleMatchFromSeedState(
+        view.arg_infos,
+        &seed_state,
+    );
+    defer session.deinit();
+
+    if (!try session.matchTransparentOrSemantic(.{ .binder = idx }, actual)) {
+        return null;
+    }
+
+    var new_state = try BranchStateOps.cloneState(self, state);
+    try ViewState.syncFromSession(self.allocator, &new_state, &session);
+    return new_state;
 }

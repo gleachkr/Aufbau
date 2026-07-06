@@ -6,7 +6,8 @@ const FrontendExpr = @import("../../expr.zig");
 const BindingMode = @import("../types.zig").BindingMode;
 const Expr = @import("../../../trusted/expressions.zig").Expr;
 const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
-const allocNoneSeeds = @import("./fixtures.zig").allocNoneSeeds;
+const Fixtures = @import("./fixtures.zig");
+const allocNoneSeeds = Fixtures.allocNoneSeeds;
 const Testing = DefOps.Testing;
 const MatchSession = Testing.MatchSession;
 
@@ -1301,4 +1302,57 @@ test "resolveBindingSeeds preserves symbolic state through view reuse" {
         dummies_before,
         theorem.theorem_dummies.items.len,
     );
+}
+
+// The expansion memo's load-bearing property: its key must include the subst
+// pointers (which carry the minted dummy slots), so a session whose slot base
+// differs gets a fresh build, never another session's body with the wrong
+// slots baked in. See `SharedContext.TemplateSubstMemoKey`.
+test "def expansion memo discriminates dummy slot bases across sessions" {
+    var fixture = try Fixtures.SessionWitnessFixture.init();
+    defer fixture.deinit();
+
+    var ctx = DefOps.Context.init(
+        fixture.arena.allocator(),
+        &fixture.theorem,
+        &fixture.env,
+    );
+    defer ctx.deinit();
+
+    // First expansion of `mono f` builds the def body and memoizes it.
+    var first_state = try MatchSession.init(fixture.arena.allocator(), 0);
+    defer first_state.deinit(fixture.arena.allocator());
+    const first = (try Testing.expandConcreteDef(
+        &ctx,
+        fixture.actual,
+        &first_state,
+    )) orelse return error.ExpectedExpansion;
+    try std.testing.expect(ctx.shared.template_subst_memo.count() > 0);
+
+    // A fresh session mints the same dummy slots (0, 1) — the slot recurrence
+    // that gives the memo its hit rate — so the expansion is pointer-identical.
+    var second_state = try MatchSession.init(fixture.arena.allocator(), 0);
+    defer second_state.deinit(fixture.arena.allocator());
+    const second = (try Testing.expandConcreteDef(
+        &ctx,
+        fixture.actual,
+        &second_state,
+    )) orelse return error.ExpectedExpansion;
+    try std.testing.expectEqual(first, second);
+
+    // A session with a shifted slot base embeds different `.dummy` leaves in
+    // the subst; the memo must miss and rebuild rather than return the
+    // slot-0/1 body (the false hit a subst-blind key would produce).
+    var shifted_state = try MatchSession.init(fixture.arena.allocator(), 0);
+    defer shifted_state.deinit(fixture.arena.allocator());
+    _ = try shifted_state.addDummyInfo(
+        fixture.arena.allocator(),
+        .{ .sort_name = "mor", .bound = true },
+    );
+    const shifted = (try Testing.expandConcreteDef(
+        &ctx,
+        fixture.actual,
+        &shifted_state,
+    )) orelse return error.ExpectedExpansion;
+    try std.testing.expect(shifted != first);
 }

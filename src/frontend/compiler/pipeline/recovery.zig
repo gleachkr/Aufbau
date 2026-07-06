@@ -151,6 +151,22 @@ fn cloneRewriteRegistry(
             &src.congr_by_head,
         ),
         .fallbacks = try cloneManagedMap(allocator, &src.fallbacks),
+        .auto_forward_rules = try cloneManagedMap(
+            allocator,
+            &src.auto_forward_rules,
+        ),
+        .auto_backward_rules = try cloneManagedMap(
+            allocator,
+            &src.auto_backward_rules,
+        ),
+        .auto_eager_rules = try cloneManagedMap(
+            allocator,
+            &src.auto_eager_rules,
+        ),
         .acui_by_head = try cloneManagedMap(allocator, &src.acui_by_head),
+        .trigger_by_rule = try cloneManagedMap(
+            allocator,
+            &src.trigger_by_rule,
+        ),
     };
 }

@@ -9,6 +9,7 @@ const DerivedBinding =
 const DefOps = @import("../frontend/def_ops.zig");
 const Expr = @import("../trusted/expressions.zig").Expr;
 const ArgInfo = @import("../frontend/parse_recovery.zig").ArgInfo;
+const TemplateExpr = @import("../frontend/rules.zig").TemplateExpr;
 const AssertionStmt = @import("../frontend/parse_recovery.zig").AssertionStmt;
 const MM0Parser = @import("../frontend/parse_recovery.zig").MM0Parser;
 
@@ -341,6 +342,7 @@ test "recover-hole seeding allocates distinct vars per omitted hole" {
             .{ .sort_name = "wff", .bound = false, .deps = 0 },
             .{ .sort_name = "obj", .bound = true, .deps = 2 },
         },
+        .{ .app = .{ .term_id = 0, .args = &.{} } },
         &[_]DerivedBinding{
             .{ .recover = .{
                 .target_view_idx = 0,
@@ -362,6 +364,57 @@ test "recover-hole seeding allocates distinct vars per omitted hole" {
     try expectExactSeed(seeds[3], try fixture.exprIdForToken("y"));
     try expectSeedNone(seeds[0]);
     try expectSeedNone(seeds[2]);
+}
+
+test "recover-hole seeding skips holes visible in the conclusion" {
+    const src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\--| @vars x y
+        \\sort obj;
+        \\term hold (a: obj): wff;
+        \\theorem fresh_target (a: obj): $ hold a $;
+    ;
+
+    var fixture = try buildFreshFixture(src);
+    defer fixture.deinit();
+
+    const line_expr = try fixture.internFormula(" hold a ");
+    const hold_id = fixture.env.term_names.get("hold") orelse {
+        return error.MissingTerm;
+    };
+    const seeds = try FreshSelect.seedRecoverHolesFromVarsPool(
+        std.testing.allocator,
+        &fixture.parser,
+        &fixture.env,
+        &fixture.theorem,
+        &fixture.theorem_vars,
+        &fixture.sort_vars,
+        line_expr,
+        &[_]FrontendExpr.ExprId{},
+        &[_]?FrontendExpr.ExprId{null},
+        2,
+        &[_]?usize{ null, 0 },
+        &[_]ArgInfo{
+            .{ .sort_name = "wff", .bound = false, .deps = 0 },
+            .{ .sort_name = "obj", .bound = true, .deps = 0 },
+        },
+        .{ .app = .{
+            .term_id = hold_id,
+            .args = &[_]TemplateExpr{.{ .binder = 1 }},
+        } },
+        &[_]DerivedBinding{.{ .recover = .{
+            .target_view_idx = 0,
+            .source_view_idx = 0,
+            .pattern_view_idx = 0,
+            .hole_view_idx = 1,
+        } }},
+    );
+    defer std.testing.allocator.free(seeds);
+
+    try expectSeedNone(seeds[0]);
+    try expectSeedNone(seeds[1]);
+    try std.testing.expect(fixture.theorem_vars.get("x") == null);
 }
 
 test "recover-hole seeding skips non-bound holes" {
@@ -394,6 +447,7 @@ test "recover-hole seeding skips non-bound holes" {
             .{ .sort_name = "wff", .bound = false, .deps = 0 },
             .{ .sort_name = "obj", .bound = false, .deps = 0 },
         },
+        .{ .app = .{ .term_id = 0, .args = &.{} } },
         &[_]DerivedBinding{.{ .recover = .{
             .target_view_idx = 0,
             .source_view_idx = 0,

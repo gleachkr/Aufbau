@@ -1,0 +1,17 @@
+delimiter $ ( ) $;
+provable sort wff;
+term K: wff;
+term G: wff;
+term link (a: wff): wff;
+prefix link: $L$ prec 40;
+term need (a: wff): wff;
+prefix need: $N$ prec 40;
+axiom lk: $ L K $;
+axiom nk: $ N K $;
+-- Two-hyp rule whose binder `a` appears only in the hypotheses (the conclusion
+-- `G` pins nothing). Hyp `L a` is fillable from the ref pool (pins `a`); hyp
+-- `N a` has no matching ref, so it must be generated — and generation only
+-- works once `a` is pinned by the sibling. This is the binder-pinning case the
+-- generator slot ordering must get right.
+axiom r (a: wff): $ L a $ > $ N a $ > $ G $;
+theorem t: $ G $;

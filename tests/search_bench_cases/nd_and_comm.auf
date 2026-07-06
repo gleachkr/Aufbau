@@ -1,0 +1,3 @@
+nd_and_comm
+-----------
+l1: $ emp ⊢ (p ∧ q) → (q ∧ p) $ by auto?

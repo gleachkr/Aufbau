@@ -1,0 +1,11 @@
+delimiter $ ( ) $;
+provable sort wff;
+term P: wff;
+term Goal: wff;
+def d0: wff = $ P $;
+def d1: wff = $ d0 $;
+def d2: wff = $ d1 $;
+def d3: wff = $ d2 $;
+axiom have_P: $ P $;
+axiom use_d3: $ d3 $ > $ Goal $;
+theorem t: $ Goal $;

@@ -1,0 +1,3 @@
+ex_intro_open_witness
+---------------------
+l1: $ emp ⊢ ∃ n (n = 0) $ by auto?

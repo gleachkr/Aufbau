@@ -247,6 +247,7 @@ fn buildAcuiLeafFold(
     user: ExprId,
 ) !?ExprId {
     var support = AcuiSupport.Context.init(allocator, theorem, env, registry);
+    defer support.deinit();
     const acui = try support.sharedStructuralCombiner(raw, user) orelse {
         return null;
     };

@@ -1,0 +1,551 @@
+-- Hand proofs of the tait.mm0 theorems, by pure backward one-sided search.
+-- A two-sided `Γ ⊢ Δ` proof reads here as `⊢ ¬Γ, Δ`: antecedent formulas move
+-- to the succedent negated, the De Morgan rules (`rdm_*`) drive each negation
+-- to the atoms, and `ax` closes a complementary literal pair.
+
+imp_refl
+--------
+l1: $ ⊢ ¬ P C , P C $ by ax
+l2: $ ⊢ P C → P C $ by rim [l1]
+
+and_comm
+--------
+l1: $ ⊢ ¬ P C , ¬ Q C , Q C $ by ax
+l2: $ ⊢ (¬ P C ∨ ¬ Q C) , Q C $ by ror [l1]
+l3: $ ⊢ ¬ P C , ¬ Q C , P C $ by ax
+l4: $ ⊢ (¬ P C ∨ ¬ Q C) , P C $ by ror [l3]
+l5: $ ⊢ (¬ P C ∨ ¬ Q C) , (Q C ∧ P C) $ by rand [l2, l4]
+l6: $ ⊢ ¬ (P C ∧ Q C) , (Q C ∧ P C) $ by rdm_an [l5]
+l7: $ ⊢ (P C ∧ Q C) → (Q C ∧ P C) $ by rim [l6]
+
+or_comm
+-------
+l1: $ ⊢ ¬ P C , Q C , P C $ by ax
+l2: $ ⊢ ¬ Q C , Q C , P C $ by ax
+l3: $ ⊢ (¬ P C ∧ ¬ Q C) , Q C , P C $ by rand [l1, l2]
+l4: $ ⊢ (¬ P C ∧ ¬ Q C) , (Q C ∨ P C) $ by ror [l3]
+l5: $ ⊢ ¬ (P C ∨ Q C) , (Q C ∨ P C) $ by rdm_or [l4]
+l6: $ ⊢ (P C ∨ Q C) → (Q C ∨ P C) $ by rim [l5]
+
+imp_trans
+---------
+l1: $ ⊢ P C , (P D ∧ ¬ P E) , ¬ P C , P E $ by ax
+l2: $ ⊢ ¬ P D , P D , ¬ P C , P E $ by ax
+l3: $ ⊢ ¬ P D , ¬ P E , ¬ P C , P E $ by ax
+l4: $ ⊢ ¬ P D , (P D ∧ ¬ P E) , ¬ P C , P E $ by rand [l2, l3]
+l5: $ ⊢ (P C ∧ ¬ P D) , (P D ∧ ¬ P E) , ¬ P C , P E $ by rand [l1, l4]
+l6: $ ⊢ (P C ∧ ¬ P D) , (P D ∧ ¬ P E) , (P C → P E) $ by rim [l5]
+l7: $ ⊢ (P C ∧ ¬ P D) , ¬ (P D → P E) , (P C → P E) $ by rdm_im [l6]
+l8: $ ⊢ (P C ∧ ¬ P D) , ((P D → P E) → (P C → P E)) $ by rim [l7]
+l9: $ ⊢ ¬ (P C → P D) , ((P D → P E) → (P C → P E)) $ by rdm_im [l8]
+l10: $ ⊢ (P C → P D) → (P D → P E) → (P C → P E) $ by rim [l9]
+
+excluded_middle
+---------------
+l1: $ ⊢ P C , ¬ P C $ by ax
+l2: $ ⊢ P C ∨ ¬ P C $ by ror [l1]
+
+peirce
+------
+l1: $ ⊢ ¬ P C , Q C , P C $ by ax
+l2: $ ⊢ (P C → Q C) , P C $ by rim [l1]
+l3: $ ⊢ ¬ P C , P C $ by ax
+l4: $ ⊢ ((P C → Q C) ∧ ¬ P C) , P C $ by rand [l2, l3]
+l5: $ ⊢ ¬ ((P C → Q C) → P C) , P C $ by rdm_im [l4]
+l6: $ ⊢ ((P C → Q C) → P C) → P C $ by rim [l5]
+
+de_morgan
+---------
+l1: $ ⊢ P C , ¬ P C , ¬ P D $ by ax
+l2: $ ⊢ P D , ¬ P C , ¬ P D $ by ax
+l3: $ ⊢ (P C ∧ P D) , ¬ P C , ¬ P D $ by rand [l1, l2]
+l4: $ ⊢ (P C ∧ P D) , (¬ P C ∨ ¬ P D) $ by ror [l3]
+l5: $ ⊢ ¬ ¬ (P C ∧ P D) , (¬ P C ∨ ¬ P D) $ by rdm_not [l4]
+l6: $ ⊢ ¬ (P C ∧ P D) → (¬ P C ∨ ¬ P D) $ by rim [l5]
+
+contra_classical
+----------------
+l1: $ ⊢ ¬ P D , ¬ P C , P D $ by ax
+l2: $ ⊢ P C , ¬ P C , P D $ by ax
+l3: $ ⊢ ¬ ¬ P C , ¬ P C , P D $ by rdm_not [l2]
+l4: $ ⊢ (¬ P D ∧ ¬ ¬ P C) , ¬ P C , P D $ by rand [l1, l3]
+l5: $ ⊢ (¬ P D ∧ ¬ ¬ P C) , (P C → P D) $ by rim [l4]
+l6: $ ⊢ ¬ (¬ P D → ¬ P C) , (P C → P D) $ by rdm_im [l5]
+l7: $ ⊢ (¬ P D → ¬ P C) → (P C → P D) $ by rim [l6]
+
+resolution
+----------
+l1: $ ⊢ ¬ P C , P C , P D , P E $ by ax
+l2: $ ⊢ ¬ P C , ¬ ¬ P C , P D , P E $ by rdm_not [l1]
+l3: $ ⊢ ¬ P C , ¬ P E , P D , P E $ by ax
+l4: $ ⊢ ¬ P C , (¬ ¬ P C ∧ ¬ P E) , P D , P E $ by rand [l2, l3]
+l5: $ ⊢ ¬ P D , ¬ ¬ P C , P D , P E $ by ax
+l6: $ ⊢ ¬ P D , ¬ P E , P D , P E $ by ax (a := $ P D $)
+l7: $ ⊢ ¬ P D , (¬ ¬ P C ∧ ¬ P E) , P D , P E $ by rand [l5, l6]
+l8: $ ⊢ (¬ P C ∧ ¬ P D) , (¬ ¬ P C ∧ ¬ P E) , P D , P E $ by rand [l4, l7]
+l9: $ ⊢ (¬ P C ∧ ¬ P D) , ¬ (¬ P C ∨ P E) , P D , P E $ by rdm_or [l8]
+l10: $ ⊢ ¬ (P C ∨ P D) , ¬ (¬ P C ∨ P E) , P D , P E $ by rdm_or [l9]
+l11: $ ⊢ (¬ (P C ∨ P D) ∨ ¬ (¬ P C ∨ P E)) , P D , P E $ by ror [l10]
+l12: $ ⊢ (¬ (P C ∨ P D) ∨ ¬ (¬ P C ∨ P E)) , (P D ∨ P E) $ by ror [l11]
+l13: $ ⊢ ¬ ((P C ∨ P D) ∧ (¬ P C ∨ P E)) , (P D ∨ P E) $ by rdm_an [l12]
+l14: $ ⊢ ((P C ∨ P D) ∧ (¬ P C ∨ P E)) → (P D ∨ P E) $ by rim [l13]
+
+iff_comm
+--------
+l1: $ ⊢ ¬ P C , ¬ Q C , Q C $ by ax
+l2: $ ⊢ (¬ P C ∨ ¬ Q C) , Q C $ by ror [l1]
+l3: $ ⊢ ¬ P C , ¬ Q C , P C $ by ax
+l4: $ ⊢ (¬ P C ∨ ¬ Q C) , P C $ by ror [l3]
+l5: $ ⊢ (¬ P C ∨ ¬ Q C) , (Q C ∧ P C) $ by rand [l2, l4]
+l6: $ ⊢ ¬ (P C ∧ Q C) , (Q C ∧ P C) $ by rdm_an [l5]
+l7: $ ⊢ (P C ∧ Q C) → (Q C ∧ P C) $ by rim [l6]
+l8: $ ⊢ ¬ Q C , ¬ P C , P C $ by ax
+l9: $ ⊢ (¬ Q C ∨ ¬ P C) , P C $ by ror [l8]
+l10: $ ⊢ ¬ Q C , ¬ P C , Q C $ by ax
+l11: $ ⊢ (¬ Q C ∨ ¬ P C) , Q C $ by ror [l10]
+l12: $ ⊢ (¬ Q C ∨ ¬ P C) , (P C ∧ Q C) $ by rand [l9, l11]
+l13: $ ⊢ ¬ (Q C ∧ P C) , (P C ∧ Q C) $ by rdm_an [l12]
+l14: $ ⊢ (Q C ∧ P C) → (P C ∧ Q C) $ by rim [l13]
+l15: $ ⊢ (P C ∧ Q C) ↔ (Q C ∧ P C) $ by rbi [l7, l14]
+
+all_inst
+--------
+l1: $ ⊢ ¬ P C , (∃ x (¬ P x)) , P C $ by ax
+l2: $ ⊢ (∃ x (¬ P x)) , P C $ by rex [l1]
+l3: $ ⊢ ¬ (∀ x P x) , P C $ by rdm_all [l2]
+l4: $ ⊢ (∀ x P x) → P C $ by rim [l3]
+
+ex_intro
+--------
+l1: $ ⊢ P C , (∃ x P x) , ¬ P C $ by ax
+l2: $ ⊢ ¬ P C , (∃ x P x) $ by rex [l1]
+l3: $ ⊢ P C → ∃ x P x $ by rim [l2]
+
+all_swap
+--------
+l1: $ ⊢ ¬ R w z , (∃ y (¬ R w y)) , (∃ x (¬ ∀ y R x y)) , R w z $ by ax
+l2: $ ⊢ (∃ y (¬ R w y)) , (∃ x (¬ ∀ y R x y)) , R w z $ by rex [l1]
+l3: $ ⊢ ¬ (∀ y R w y) , (∃ x (¬ ∀ y R x y)) , R w z $ by rdm_all [l2]
+l4: $ ⊢ (∃ x (¬ ∀ y R x y)) , R w z $ by rex [l3]
+l5: $ ⊢ (∃ x (¬ ∀ y R x y)) , (∀ w R w z) $ by rall [l4]
+l6: $ ⊢ (∃ x (¬ ∀ y R x y)) , (∀ z ∀ w R w z) $ by rall [l5]
+l7: $ ⊢ ¬ (∀ x ∀ y R x y) , (∀ z ∀ w R w z) $ by rdm_all [l6]
+l8: $ ⊢ (∀ x ∀ y R x y) → (∀ z ∀ w R w z) $ by rim [l7]
+
+ex_swap
+-------
+l1: $ ⊢ R x y , (∃ w R w y) , (∃ z ∃ w R w z) , ¬ R x y $ by ax
+l2: $ ⊢ (∃ w R w y) , (∃ z ∃ w R w z) , ¬ R x y $ by rex [l1]
+l3: $ ⊢ (∃ z ∃ w R w z) , ¬ R x y $ by rex [l2]
+l4: $ ⊢ (∃ z ∃ w R w z) , (∀ y (¬ R x y)) $ by rall [l3]
+l5: $ ⊢ (∃ z ∃ w R w z) , ¬ (∃ y R x y) $ by rdm_ex [l4]
+l6: $ ⊢ (∃ z ∃ w R w z) , (∀ x (¬ ∃ y R x y)) $ by rall [l5]
+l7: $ ⊢ (∃ z ∃ w R w z) , ¬ (∃ x ∃ y R x y) $ by rdm_ex [l6]
+l8: $ ⊢ (∃ x ∃ y R x y) → (∃ z ∃ w R w z) $ by rim [l7]
+
+ex_all_to_all_ex
+----------------
+l1: $ ⊢ ¬ R z y , (∃ x (¬ R x y)) , R z y , (∃ w R z w) $ by ax
+l2: $ ⊢ (∃ x (¬ R x y)) , R z y , (∃ w R z w) $ by rex [l1]
+l3: $ ⊢ (∃ x (¬ R x y)) , (∃ w R z w) $ by rex [l2]
+l4: $ ⊢ ¬ (∀ x R x y) , (∃ w R z w) $ by rdm_all [l3]
+l5: $ ⊢ (∀ y (¬ ∀ x R x y)) , (∃ w R z w) $ by rall [l4]
+l6: $ ⊢ (∀ y (¬ ∀ x R x y)) , (∀ z ∃ w R z w) $ by rall [l5]
+l7: $ ⊢ ¬ (∃ y ∀ x R x y) , (∀ z ∃ w R z w) $ by rdm_ex [l6]
+l8: $ ⊢ (∃ y ∀ x R x y) → (∀ z ∃ w R z w) $ by rim [l7]
+
+forall_mono
+-----------
+l1: $ ⊢ P z , (∃ x (¬ (P x → Q x))) , ¬ P z , (∃ y (¬ P y)) , Q z $ by ax
+l2: $ ⊢ P z , (∃ x (¬ (P x → Q x))) , (∃ y (¬ P y)) , Q z $ by rex [l1]
+l3: $ ⊢ ¬ Q z , (∃ x (¬ (P x → Q x))) , (∃ y (¬ P y)) , Q z $ by ax
+l4: $ ⊢ (P z ∧ ¬ Q z) , (∃ x (¬ (P x → Q x))) , (∃ y (¬ P y)) , Q z $ by rand [l2, l3]
+l5: $ ⊢ ¬ (P z → Q z) , (∃ x (¬ (P x → Q x))) , (∃ y (¬ P y)) , Q z $ by rdm_im [l4]
+l6: $ ⊢ (∃ x (¬ (P x → Q x))) , (∃ y (¬ P y)) , Q z $ by rex [l5]
+l7: $ ⊢ (∃ x (¬ (P x → Q x))) , (∃ y (¬ P y)) , (∀ z Q z) $ by rall [l6]
+l8: $ ⊢ (∃ x (¬ (P x → Q x))) , ¬ (∀ y P y) , (∀ z Q z) $ by rdm_all [l7]
+l9: $ ⊢ (∃ x (¬ (P x → Q x))) , ((∀ y P y) → (∀ z Q z)) $ by rim [l8]
+l10: $ ⊢ ¬ (∀ x (P x → Q x)) , ((∀ y P y) → (∀ z Q z)) $ by rdm_all [l9]
+l11: $ ⊢ (∀ x (P x → Q x)) → ((∀ y P y) → (∀ z Q z)) $ by rim [l10]
+
+not_all_to_ex_not
+-----------------
+l1: $ ⊢ ¬ P x , P x , (∃ y (¬ P y)) $ by ax
+l2: $ ⊢ P x , (∃ y (¬ P y)) $ by rex [l1]
+l3: $ ⊢ (∀ x P x) , (∃ y (¬ P y)) $ by rall [l2]
+l4: $ ⊢ ¬ ¬ (∀ x P x) , (∃ y (¬ P y)) $ by rdm_not [l3]
+l5: $ ⊢ (¬ ∀ x P x) → ∃ y (¬ P y) $ by rim [l4]
+
+not_ex_to_all_not
+-----------------
+l1: $ ⊢ P y , (∃ x P x) , ¬ P y $ by ax
+l2: $ ⊢ (∃ x P x) , ¬ P y $ by rex [l1]
+l3: $ ⊢ (∃ x P x) , (∀ y (¬ P y)) $ by rall [l2]
+l4: $ ⊢ ¬ ¬ (∃ x P x) , (∀ y (¬ P y)) $ by rdm_not [l3]
+l5: $ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $ by rim [l4]
+
+all_an_dist_fwd
+---------------
+l1: $ ⊢ ¬ P y , ¬ Q y , (∃ x (¬ (P x ∧ Q x))) , P y $ by ax
+l2: $ ⊢ (¬ P y ∨ ¬ Q y) , (∃ x (¬ (P x ∧ Q x))) , P y $ by ror [l1]
+l3: $ ⊢ ¬ (P y ∧ Q y) , (∃ x (¬ (P x ∧ Q x))) , P y $ by rdm_an [l2]
+l4: $ ⊢ (∃ x (¬ (P x ∧ Q x))) , P y $ by rex [l3]
+l5: $ ⊢ (∃ x (¬ (P x ∧ Q x))) , (∀ y P y) $ by rall [l4]
+l6: $ ⊢ ¬ P z , ¬ Q z , (∃ x (¬ (P x ∧ Q x))) , Q z $ by ax
+l7: $ ⊢ (¬ P z ∨ ¬ Q z) , (∃ x (¬ (P x ∧ Q x))) , Q z $ by ror [l6]
+l8: $ ⊢ ¬ (P z ∧ Q z) , (∃ x (¬ (P x ∧ Q x))) , Q z $ by rdm_an [l7]
+l9: $ ⊢ (∃ x (¬ (P x ∧ Q x))) , Q z $ by rex [l8]
+l10: $ ⊢ (∃ x (¬ (P x ∧ Q x))) , (∀ z Q z) $ by rall [l9]
+l11: $ ⊢ (∃ x (¬ (P x ∧ Q x))) , ((∀ y P y) ∧ (∀ z Q z)) $ by rand [l5, l10]
+l12: $ ⊢ ¬ (∀ x (P x ∧ Q x)) , ((∀ y P y) ∧ (∀ z Q z)) $ by rdm_all [l11]
+l13: $ ⊢ (∀ x (P x ∧ Q x)) → (∀ y P y ∧ ∀ z Q z) $ by rim [l12]
+
+drinker
+-------
+l1: $ ⊢ ¬ P C , ¬ P y , P y , (∀ y P y) , (∃ x (P x → ∀ y P y)) $ by ax
+l2: $ ⊢ ¬ P C , P y , (P y → ∀ y P y) , (∃ x (P x → ∀ y P y)) $ by rim [l1]
+l3: $ ⊢ ¬ P C , P y , (∃ x (P x → ∀ y P y)) $ by rex [l2]
+l4: $ ⊢ ¬ P C , (∀ y P y) , (∃ x (P x → ∀ y P y)) $ by rall [l3]
+l5: $ ⊢ (P C → ∀ y P y) , (∃ x (P x → ∀ y P y)) $ by rim [l4]
+l6: $ ⊢ ∃ x (P x → ∀ y P y) $ by rex [l5]
+
+-- ============================================================
+-- Extended battery ported from additive_fol (see tait.mm0)
+-- ============================================================
+
+dne
+---
+l1: $ ⊢ ¬ P C , P C $ by ax
+l2: $ ⊢ ¬ ¬ ¬ P C , P C $ by rdm_not [l1]
+l3: $ ⊢ ¬ ¬ P C → P C $ by rim [l2]
+
+weakening
+---------
+l1: $ ⊢ ¬ P C , ¬ P D , P C $ by ax
+l2: $ ⊢ ¬ P C , (P D → P C) $ by rim [l1]
+l3: $ ⊢ P C → (P D → P C) $ by rim [l2]
+
+mp_internal
+-----------
+l1: $ ⊢ P C , ¬ P C , P D $ by ax
+l2: $ ⊢ ¬ P D , ¬ P C , P D $ by ax
+l3: $ ⊢ (P C ∧ ¬ P D) , ¬ P C , P D $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C → P D) , ¬ P C , P D $ by rdm_im [l3]
+l5: $ ⊢ ¬ P C , ((P C → P D) → P D) $ by rim [l4]
+l6: $ ⊢ P C → ((P C → P D) → P D) $ by rim [l5]
+
+modus_tollens
+-------------
+l1: $ ⊢ P C , ¬ ¬ P D , ¬ P C $ by ax
+l2: $ ⊢ ¬ P D , ¬ ¬ P D , ¬ P C $ by ax (a := $ ¬ P D $)
+l3: $ ⊢ (P C ∧ ¬ P D) , ¬ ¬ P D , ¬ P C $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C → P D) , ¬ ¬ P D , ¬ P C $ by rdm_im [l3]
+l5: $ ⊢ (¬ (P C → P D) ∨ ¬ ¬ P D) , ¬ P C $ by ror [l4]
+l6: $ ⊢ ¬ ((P C → P D) ∧ ¬ P D) , ¬ P C $ by rdm_an [l5]
+l7: $ ⊢ ((P C → P D) ∧ ¬ P D) → ¬ P C $ by rim [l6]
+
+disj_syllogism
+--------------
+l1: $ ⊢ ¬ P C , ¬ ¬ P C , P D $ by ax (a := $ ¬ P C $)
+l2: $ ⊢ ¬ P D , ¬ ¬ P C , P D $ by ax
+l3: $ ⊢ (¬ P C ∧ ¬ P D) , ¬ ¬ P C , P D $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C ∨ P D) , ¬ ¬ P C , P D $ by rdm_or [l3]
+l5: $ ⊢ (¬ (P C ∨ P D) ∨ ¬ ¬ P C) , P D $ by ror [l4]
+l6: $ ⊢ ¬ ((P C ∨ P D) ∧ ¬ P C) , P D $ by rdm_an [l5]
+l7: $ ⊢ ((P C ∨ P D) ∧ ¬ P C) → P D $ by rim [l6]
+
+cases_classical
+---------------
+l1: $ ⊢ P C , ¬ P C , P D $ by ax
+l2: $ ⊢ P C , ¬ P D , P D $ by ax
+l3: $ ⊢ P C , (¬ P C ∧ ¬ P D) , P D $ by rand [l1, l2]
+l4: $ ⊢ P C , ¬ (¬ P C → P D) , P D $ by rdm_im [l3]
+l5: $ ⊢ ¬ P D , ¬ (¬ P C → P D) , P D $ by ax
+l6: $ ⊢ (P C ∧ ¬ P D) , ¬ (¬ P C → P D) , P D $ by rand [l4, l5]
+l7: $ ⊢ ¬ (P C → P D) , ¬ (¬ P C → P D) , P D $ by rdm_im [l6]
+l8: $ ⊢ (¬ (P C → P D) ∨ ¬ (¬ P C → P D)) , P D $ by ror [l7]
+l9: $ ⊢ ¬ ((P C → P D) ∧ (¬ P C → P D)) , P D $ by rdm_an [l8]
+l10: $ ⊢ ((P C → P D) ∧ (¬ P C → P D)) → P D $ by rim [l9]
+
+mat_imp_fwd
+-----------
+l1: $ ⊢ P C , ¬ P C , P D $ by ax
+l2: $ ⊢ ¬ P D , ¬ P C , P D $ by ax
+l3: $ ⊢ (P C ∧ ¬ P D) , ¬ P C , P D $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C → P D) , ¬ P C , P D $ by rdm_im [l3]
+l5: $ ⊢ ¬ (P C → P D) , (¬ P C ∨ P D) $ by ror [l4]
+l6: $ ⊢ (P C → P D) → (¬ P C ∨ P D) $ by rim [l5]
+
+contrapos_fwd
+-------------
+l1: $ ⊢ P C , ¬ ¬ P D , ¬ P C $ by ax
+l2: $ ⊢ ¬ P D , ¬ ¬ P D , ¬ P C $ by ax (a := $ ¬ P D $)
+l3: $ ⊢ (P C ∧ ¬ P D) , ¬ ¬ P D , ¬ P C $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C → P D) , ¬ ¬ P D , ¬ P C $ by rdm_im [l3]
+l5: $ ⊢ ¬ (P C → P D) , (¬ P D → ¬ P C) $ by rim [l4]
+l6: $ ⊢ (P C → P D) → (¬ P D → ¬ P C) $ by rim [l5]
+
+triple_neg
+----------
+l1: $ ⊢ P C , ¬ P C $ by ax
+l2: $ ⊢ ¬ ¬ P C , ¬ P C $ by rdm_not [l1]
+l3: $ ⊢ ¬ ¬ ¬ ¬ P C , ¬ P C $ by rdm_not [l2]
+l4: $ ⊢ ¬ ¬ ¬ P C → ¬ P C $ by rim [l3]
+
+and_assoc_fwd
+-------------
+l1: $ ⊢ ¬ P C , ¬ P D , ¬ P E , P C $ by ax
+l2: $ ⊢ ¬ P C , ¬ P D , ¬ P E , P D $ by ax
+l3: $ ⊢ ¬ P C , ¬ P D , ¬ P E , P E $ by ax
+l4: $ ⊢ ¬ P C , ¬ P D , ¬ P E , (P D ∧ P E) $ by rand [l2, l3]
+l5: $ ⊢ ¬ P C , ¬ P D , ¬ P E , (P C ∧ (P D ∧ P E)) $ by rand [l1, l4]
+l6: $ ⊢ (¬ P C ∨ ¬ P D) , ¬ P E , (P C ∧ (P D ∧ P E)) $ by ror [l5]
+l7: $ ⊢ ¬ (P C ∧ P D) , ¬ P E , (P C ∧ (P D ∧ P E)) $ by rdm_an [l6]
+l8: $ ⊢ (¬ (P C ∧ P D) ∨ ¬ P E) , (P C ∧ (P D ∧ P E)) $ by ror [l7]
+l9: $ ⊢ ¬ ((P C ∧ P D) ∧ P E) , (P C ∧ (P D ∧ P E)) $ by rdm_an [l8]
+l10: $ ⊢ ((P C ∧ P D) ∧ P E) → (P C ∧ (P D ∧ P E)) $ by rim [l9]
+
+s_comb
+------
+l1: $ ⊢ P C , ¬ (P C → P D) , ¬ P C , P E $ by ax
+l2: $ ⊢ P D , P C , ¬ P C , P E $ by ax
+l3: $ ⊢ P D , ¬ P D , ¬ P C , P E $ by ax
+l4: $ ⊢ P D , (P C ∧ ¬ P D) , ¬ P C , P E $ by rand [l2, l3]
+l5: $ ⊢ P D , ¬ (P C → P D) , ¬ P C , P E $ by rdm_im [l4]
+l6: $ ⊢ ¬ P E , ¬ (P C → P D) , ¬ P C , P E $ by ax
+l7: $ ⊢ (P D ∧ ¬ P E) , ¬ (P C → P D) , ¬ P C , P E $ by rand [l5, l6]
+l8: $ ⊢ ¬ (P D → P E) , ¬ (P C → P D) , ¬ P C , P E $ by rdm_im [l7]
+l9: $ ⊢ (P C ∧ ¬ (P D → P E)) , ¬ (P C → P D) , ¬ P C , P E $ by rand [l1, l8]
+l10: $ ⊢ ¬ (P C → (P D → P E)) , ¬ (P C → P D) , ¬ P C , P E $ by rdm_im [l9]
+l11: $ ⊢ ¬ (P C → (P D → P E)) , ¬ (P C → P D) , (P C → P E) $ by rim [l10]
+l12: $ ⊢ ¬ (P C → (P D → P E)) , ((P C → P D) → (P C → P E)) $ by rim [l11]
+l13: $ ⊢ (P C → (P D → P E)) → ((P C → P D) → (P C → P E)) $ by rim [l12]
+
+dummett
+-------
+l1: $ ⊢ ¬ P C , P D , ¬ P D , P C $ by ax
+l2: $ ⊢ ¬ P C , P D , (P D → P C) $ by rim [l1]
+l3: $ ⊢ (P C → P D) , (P D → P C) $ by rim [l2]
+l4: $ ⊢ (P C → P D) ∨ (P D → P C) $ by ror [l3]
+
+all_ex_inst
+-----------
+l1: $ ⊢ P C , ¬ P C , (∃ x (¬ P x)) , (∃ y P y) $ by ax
+l2: $ ⊢ P C , (∃ x (¬ P x)) , (∃ y P y) $ by rex [l1]
+l3: $ ⊢ (∃ x (¬ P x)) , (∃ y P y) $ by rex [l2]
+l4: $ ⊢ ¬ (∀ x P x) , (∃ y P y) $ by rdm_all [l3]
+l5: $ ⊢ (∀ x P x) → (∃ y P y) $ by rim [l4]
+
+exists_mono
+-----------
+l1: $ ⊢ P y , (∃ x (¬ (P x → Q x))) , ¬ P y , (∃ z Q z) $ by ax
+l2: $ ⊢ Q y , ¬ Q y , (∃ x (¬ (P x → Q x))) , ¬ P y , (∃ z Q z) $ by ax
+l3: $ ⊢ ¬ Q y , (∃ x (¬ (P x → Q x))) , ¬ P y , (∃ z Q z) $ by rex [l2]
+l4: $ ⊢ (P y ∧ ¬ Q y) , (∃ x (¬ (P x → Q x))) , ¬ P y , (∃ z Q z) $ by rand [l1, l3]
+l5: $ ⊢ ¬ (P y → Q y) , (∃ x (¬ (P x → Q x))) , ¬ P y , (∃ z Q z) $ by rdm_im [l4]
+l6: $ ⊢ (∃ x (¬ (P x → Q x))) , ¬ P y , (∃ z Q z) $ by rex [l5]
+l7: $ ⊢ (∃ x (¬ (P x → Q x))) , (∀ y (¬ P y)) , (∃ z Q z) $ by rall [l6]
+l8: $ ⊢ (∃ x (¬ (P x → Q x))) , ¬ (∃ y P y) , (∃ z Q z) $ by rdm_ex [l7]
+l9: $ ⊢ ¬ (∀ x (P x → Q x)) , ¬ (∃ y P y) , (∃ z Q z) $ by rdm_all [l8]
+l10: $ ⊢ ¬ (∀ x (P x → Q x)) , ((∃ y P y) → (∃ z Q z)) $ by rim [l9]
+l11: $ ⊢ (∀ x (P x → Q x)) → ((∃ y P y) → (∃ z Q z)) $ by rim [l10]
+
+-- ---- Extended battery, second port ----
+
+b_comb
+------
+l1: $ ⊢ P D , P C , ¬ P C , P E $ by ax
+l2: $ ⊢ P D , ¬ P D , ¬ P C , P E $ by ax
+l3: $ ⊢ P D , (P C ∧ ¬ P D) , ¬ P C , P E $ by rand [l1, l2]
+l4: $ ⊢ P D , ¬ (P C → P D) , ¬ P C , P E $ by rdm_im [l3]
+l5: $ ⊢ ¬ P E , ¬ (P C → P D) , ¬ P C , P E $ by ax
+l6: $ ⊢ (P D ∧ ¬ P E) , ¬ (P C → P D) , ¬ P C , P E $ by rand [l4, l5]
+l7: $ ⊢ ¬ (P D → P E) , ¬ (P C → P D) , ¬ P C , P E $ by rdm_im [l6]
+l8: $ ⊢ ¬ (P D → P E) , ¬ (P C → P D) , (P C → P E) $ by rim [l7]
+l9: $ ⊢ ¬ (P D → P E) , ((P C → P D) → (P C → P E)) $ by rim [l8]
+l10: $ ⊢ (P D → P E) → ((P C → P D) → (P C → P E)) $ by rim [l9]
+
+c_comb
+------
+l1: $ ⊢ P C , ¬ P D , ¬ P C , P E $ by ax
+l2: $ ⊢ P D , ¬ P D , ¬ P C , P E $ by ax
+l3: $ ⊢ ¬ P E , ¬ P D , ¬ P C , P E $ by ax
+l4: $ ⊢ (P D ∧ ¬ P E) , ¬ P D , ¬ P C , P E $ by rand [l2, l3]
+l5: $ ⊢ ¬ (P D → P E) , ¬ P D , ¬ P C , P E $ by rdm_im [l4]
+l6: $ ⊢ (P C ∧ ¬ (P D → P E)) , ¬ P D , ¬ P C , P E $ by rand [l1, l5]
+l7: $ ⊢ ¬ (P C → (P D → P E)) , ¬ P D , ¬ P C , P E $ by rdm_im [l6]
+l8: $ ⊢ ¬ (P C → (P D → P E)) , ¬ P D , (P C → P E) $ by rim [l7]
+l9: $ ⊢ ¬ (P C → (P D → P E)) , (P D → (P C → P E)) $ by rim [l8]
+l10: $ ⊢ (P C → (P D → P E)) → (P D → (P C → P E)) $ by rim [l9]
+
+w_comb
+------
+l1: $ ⊢ P C , ¬ P C , P D $ by ax
+l2: $ ⊢ ¬ P D , ¬ P C , P D $ by ax
+l3: $ ⊢ (P C ∧ ¬ P D) , ¬ P C , P D $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C → P D) , ¬ P C , P D $ by rdm_im [l3]
+l5: $ ⊢ (P C ∧ ¬ (P C → P D)) , ¬ P C , P D $ by rand [l1, l4]
+l6: $ ⊢ ¬ (P C → (P C → P D)) , ¬ P C , P D $ by rdm_im [l5]
+l7: $ ⊢ ¬ (P C → (P C → P D)) , (P C → P D) $ by rim [l6]
+l8: $ ⊢ (P C → (P C → P D)) → (P C → P D) $ by rim [l7]
+
+clavius
+-------
+l1: $ ⊢ ¬ P C , P C $ by ax
+l2: $ ⊢ (¬ P C ∧ ¬ P C) , P C $ by rand [l1, l1]
+l3: $ ⊢ ¬ (¬ P C → P C) , P C $ by rdm_im [l2]
+l4: $ ⊢ (¬ P C → P C) → P C $ by rim [l3]
+
+mat_cases
+---------
+l1: $ ⊢ P C , ¬ P C , P D , P E $ by ax
+l2: $ ⊢ P C , ¬ P E , P D , P E $ by ax
+l3: $ ⊢ P C , (¬ P C ∧ ¬ P E) , P D , P E $ by rand [l1, l2]
+l4: $ ⊢ P C , ¬ (¬ P C → P E) , P D , P E $ by rdm_im [l3]
+l5: $ ⊢ ¬ P D , ¬ (¬ P C → P E) , P D , P E $ by ax
+l6: $ ⊢ (P C ∧ ¬ P D) , ¬ (¬ P C → P E) , P D , P E $ by rand [l4, l5]
+l7: $ ⊢ ¬ (P C → P D) , ¬ (¬ P C → P E) , P D , P E $ by rdm_im [l6]
+l8: $ ⊢ (¬ (P C → P D) ∨ ¬ (¬ P C → P E)) , P D , P E $ by ror [l7]
+l9: $ ⊢ ¬ ((P C → P D) ∧ (¬ P C → P E)) , P D , P E $ by rdm_an [l8]
+l10: $ ⊢ ¬ ((P C → P D) ∧ (¬ P C → P E)) , (P D ∨ P E) $ by ror [l9]
+l11: $ ⊢ ((P C → P D) ∧ (¬ P C → P E)) → (P D ∨ P E) $ by rim [l10]
+
+mat_imp_bwd
+-----------
+l1: $ ⊢ ¬ ¬ P C , ¬ P C , P D $ by ax (a := $ ¬ P C $)
+l2: $ ⊢ ¬ P D , ¬ P C , P D $ by ax
+l3: $ ⊢ (¬ ¬ P C ∧ ¬ P D) , ¬ P C , P D $ by rand [l1, l2]
+l4: $ ⊢ ¬ (¬ P C ∨ P D) , ¬ P C , P D $ by rdm_or [l3]
+l5: $ ⊢ ¬ (¬ P C ∨ P D) , (P C → P D) $ by rim [l4]
+l6: $ ⊢ (¬ P C ∨ P D) → (P C → P D) $ by rim [l5]
+
+de_morgan_conj_bwd
+------------------
+l1: $ ⊢ ¬ ¬ P C , ¬ P C , ¬ P D $ by ax (a := $ ¬ P C $)
+l2: $ ⊢ ¬ ¬ P D , ¬ P C , ¬ P D $ by ax (a := $ ¬ P D $)
+l3: $ ⊢ (¬ ¬ P C ∧ ¬ ¬ P D) , ¬ P C , ¬ P D $ by rand [l1, l2]
+l4: $ ⊢ (¬ ¬ P C ∧ ¬ ¬ P D) , (¬ P C ∨ ¬ P D) $ by ror [l3]
+l5: $ ⊢ (¬ ¬ P C ∧ ¬ ¬ P D) , ¬ (P C ∧ P D) $ by rdm_an [l4]
+l6: $ ⊢ ¬ (¬ P C ∨ ¬ P D) , ¬ (P C ∧ P D) $ by rdm_or [l5]
+l7: $ ⊢ (¬ P C ∨ ¬ P D) → ¬ (P C ∧ P D) $ by rim [l6]
+
+de_morgan_disj_fwd
+------------------
+l1: $ ⊢ P C , P D , ¬ P C $ by ax
+l2: $ ⊢ P C , P D , ¬ P D $ by ax
+l3: $ ⊢ P C , P D , (¬ P C ∧ ¬ P D) $ by rand [l1, l2]
+l4: $ ⊢ (P C ∨ P D) , (¬ P C ∧ ¬ P D) $ by ror [l3]
+l5: $ ⊢ ¬ ¬ (P C ∨ P D) , (¬ P C ∧ ¬ P D) $ by rdm_not [l4]
+l6: $ ⊢ ¬ (P C ∨ P D) → (¬ P C ∧ ¬ P D) $ by rim [l5]
+
+de_morgan_disj_bwd
+------------------
+l1: $ ⊢ ¬ ¬ P C , ¬ ¬ P D , ¬ P C $ by ax (a := $ ¬ P C $)
+l2: $ ⊢ ¬ ¬ P C , ¬ ¬ P D , ¬ P D $ by ax (a := $ ¬ P D $)
+l3: $ ⊢ ¬ ¬ P C , ¬ ¬ P D , (¬ P C ∧ ¬ P D) $ by rand [l1, l2]
+l4: $ ⊢ ¬ ¬ P C , ¬ ¬ P D , ¬ (P C ∨ P D) $ by rdm_or [l3]
+l5: $ ⊢ (¬ ¬ P C ∨ ¬ ¬ P D) , ¬ (P C ∨ P D) $ by ror [l4]
+l6: $ ⊢ ¬ (¬ P C ∧ ¬ P D) , ¬ (P C ∨ P D) $ by rdm_an [l5]
+l7: $ ⊢ (¬ P C ∧ ¬ P D) → ¬ (P C ∨ P D) $ by rim [l6]
+
+exportation_fwd
+---------------
+l1: $ ⊢ P C , ¬ P C , ¬ P D , P E $ by ax
+l2: $ ⊢ P D , ¬ P C , ¬ P D , P E $ by ax
+l3: $ ⊢ (P C ∧ P D) , ¬ P C , ¬ P D , P E $ by rand [l1, l2]
+l4: $ ⊢ ¬ P E , ¬ P C , ¬ P D , P E $ by ax
+l5: $ ⊢ ((P C ∧ P D) ∧ ¬ P E) , ¬ P C , ¬ P D , P E $ by rand [l3, l4]
+l6: $ ⊢ ¬ ((P C ∧ P D) → P E) , ¬ P C , ¬ P D , P E $ by rdm_im [l5]
+l7: $ ⊢ ¬ ((P C ∧ P D) → P E) , ¬ P C , (P D → P E) $ by rim [l6]
+l8: $ ⊢ ¬ ((P C ∧ P D) → P E) , (P C → (P D → P E)) $ by rim [l7]
+l9: $ ⊢ ((P C ∧ P D) → P E) → (P C → (P D → P E)) $ by rim [l8]
+
+exportation_bwd
+---------------
+l1: $ ⊢ P C , ¬ P C , ¬ P D , P E $ by ax
+l2: $ ⊢ P D , ¬ P C , ¬ P D , P E $ by ax
+l3: $ ⊢ ¬ P E , ¬ P C , ¬ P D , P E $ by ax
+l4: $ ⊢ (P D ∧ ¬ P E) , ¬ P C , ¬ P D , P E $ by rand [l2, l3]
+l5: $ ⊢ ¬ (P D → P E) , ¬ P C , ¬ P D , P E $ by rdm_im [l4]
+l6: $ ⊢ (P C ∧ ¬ (P D → P E)) , ¬ P C , ¬ P D , P E $ by rand [l1, l5]
+l7: $ ⊢ ¬ (P C → (P D → P E)) , ¬ P C , ¬ P D , P E $ by rdm_im [l6]
+l8: $ ⊢ ¬ (P C → (P D → P E)) , (¬ P C ∨ ¬ P D) , P E $ by ror [l7]
+l9: $ ⊢ ¬ (P C → (P D → P E)) , ¬ (P C ∧ P D) , P E $ by rdm_an [l8]
+l10: $ ⊢ ¬ (P C → (P D → P E)) , ((P C ∧ P D) → P E) $ by rim [l9]
+l11: $ ⊢ (P C → (P D → P E)) → ((P C ∧ P D) → P E) $ by rim [l10]
+
+dist_or_an_fwd
+--------------
+l1: $ ⊢ ¬ P C , P C , P D $ by ax
+l2: $ ⊢ ¬ P D , ¬ P E , P C , P D $ by ax
+l3: $ ⊢ (¬ P D ∨ ¬ P E) , P C , P D $ by ror [l2]
+l4: $ ⊢ ¬ (P D ∧ P E) , P C , P D $ by rdm_an [l3]
+l5: $ ⊢ (¬ P C ∧ ¬ (P D ∧ P E)) , P C , P D $ by rand [l1, l4]
+l6: $ ⊢ (¬ P C ∧ ¬ (P D ∧ P E)) , (P C ∨ P D) $ by ror [l5]
+l7: $ ⊢ ¬ P C , P C , P E $ by ax
+l8: $ ⊢ ¬ P D , ¬ P E , P C , P E $ by ax
+l9: $ ⊢ (¬ P D ∨ ¬ P E) , P C , P E $ by ror [l8]
+l10: $ ⊢ ¬ (P D ∧ P E) , P C , P E $ by rdm_an [l9]
+l11: $ ⊢ (¬ P C ∧ ¬ (P D ∧ P E)) , P C , P E $ by rand [l7, l10]
+l12: $ ⊢ (¬ P C ∧ ¬ (P D ∧ P E)) , (P C ∨ P E) $ by ror [l11]
+l13: $ ⊢ (¬ P C ∧ ¬ (P D ∧ P E)) , ((P C ∨ P D) ∧ (P C ∨ P E)) $ by rand [l6, l12]
+l14: $ ⊢ ¬ (P C ∨ (P D ∧ P E)) , ((P C ∨ P D) ∧ (P C ∨ P E)) $ by rdm_or [l13]
+l15: $ ⊢ (P C ∨ (P D ∧ P E)) → ((P C ∨ P D) ∧ (P C ∨ P E)) $ by rim [l14]
+
+absorb_an_fwd
+-------------
+l1: $ ⊢ ¬ P C , ¬ (P C ∨ P D) , P C $ by ax
+l2: $ ⊢ (¬ P C ∨ ¬ (P C ∨ P D)) , P C $ by ror [l1]
+l3: $ ⊢ ¬ (P C ∧ (P C ∨ P D)) , P C $ by rdm_an [l2]
+l4: $ ⊢ (P C ∧ (P C ∨ P D)) → P C $ by rim [l3]
+
+or_assoc_fwd
+------------
+l1: $ ⊢ ¬ P C , P C , P D , P E $ by ax
+l2: $ ⊢ ¬ P D , P C , P D , P E $ by ax
+l3: $ ⊢ (¬ P C ∧ ¬ P D) , P C , P D , P E $ by rand [l1, l2]
+l4: $ ⊢ ¬ (P C ∨ P D) , P C , P D , P E $ by rdm_or [l3]
+l5: $ ⊢ ¬ P E , P C , P D , P E $ by ax
+l6: $ ⊢ (¬ (P C ∨ P D) ∧ ¬ P E) , P C , P D , P E $ by rand [l4, l5]
+l7: $ ⊢ (¬ (P C ∨ P D) ∧ ¬ P E) , P C , (P D ∨ P E) $ by ror [l6]
+l8: $ ⊢ (¬ (P C ∨ P D) ∧ ¬ P E) , (P C ∨ (P D ∨ P E)) $ by ror [l7]
+l9: $ ⊢ ¬ ((P C ∨ P D) ∨ P E) , (P C ∨ (P D ∨ P E)) $ by rdm_or [l8]
+l10: $ ⊢ ((P C ∨ P D) ∨ P E) → (P C ∨ (P D ∨ P E)) $ by rim [l9]
+
+ex_not_to_not_all
+-----------------
+l1: $ ⊢ ¬ P x , (∃ y (¬ P y)) , ¬ ¬ P x $ by ax (a := $ ¬ P x $)
+l2: $ ⊢ (∃ y (¬ P y)) , ¬ ¬ P x $ by rex [l1]
+l3: $ ⊢ (∀ x (¬ ¬ P x)) , (∃ y (¬ P y)) $ by rall [l2]
+l4: $ ⊢ ¬ (∃ x (¬ P x)) , (∃ y (¬ P y)) $ by rdm_ex [l3]
+l5: $ ⊢ ¬ (∃ x (¬ P x)) , ¬ (∀ y P y) $ by rdm_all [l4]
+l6: $ ⊢ (∃ x (¬ P x)) → ¬ ∀ y P y $ by rim [l5]
+
+all_not_to_not_ex
+-----------------
+l1: $ ⊢ ¬ ¬ P y , (∃ x (¬ ¬ P x)) , ¬ P y $ by ax (a := $ ¬ P y $)
+l2: $ ⊢ (∃ x (¬ ¬ P x)) , ¬ P y $ by rex [l1]
+l3: $ ⊢ (∃ x (¬ ¬ P x)) , (∀ y (¬ P y)) $ by rall [l2]
+l4: $ ⊢ (∃ x (¬ ¬ P x)) , ¬ (∃ y P y) $ by rdm_ex [l3]
+l5: $ ⊢ ¬ (∀ x (¬ P x)) , ¬ (∃ y P y) $ by rdm_all [l4]
+l6: $ ⊢ (∀ x (¬ P x)) → ¬ ∃ y P y $ by rim [l5]
+
+ex_conj_weak
+------------
+l1: $ ⊢ P x , (∃ y P y) , ¬ P x , ¬ Q x $ by ax
+l2: $ ⊢ P x , (∃ y P y) , (¬ P x ∨ ¬ Q x) $ by ror [l1]
+l3: $ ⊢ P x , (∃ y P y) , ¬ (P x ∧ Q x) $ by rdm_an [l2]
+l4: $ ⊢ (∃ y P y) , ¬ (P x ∧ Q x) $ by rex [l3]
+l5: $ ⊢ (∀ x (¬ (P x ∧ Q x))) , (∃ y P y) $ by rall [l4]
+l6: $ ⊢ ¬ (∃ x (P x ∧ Q x)) , (∃ y P y) $ by rdm_ex [l5]
+l7: $ ⊢ (∃ x (P x ∧ Q x)) → (∃ y P y) $ by rim [l6]
+
+ex_witness_conj
+---------------
+l1: $ ⊢ P C , (∃ x (P x ∧ Q x)) , ¬ P C , ¬ Q C $ by ax
+l2: $ ⊢ Q C , (∃ x (P x ∧ Q x)) , ¬ P C , ¬ Q C $ by ax
+l3: $ ⊢ (P C ∧ Q C) , (∃ x (P x ∧ Q x)) , ¬ P C , ¬ Q C $ by rand [l1, l2]
+l4: $ ⊢ (∃ x (P x ∧ Q x)) , ¬ P C , ¬ Q C $ by rex [l3]
+l5: $ ⊢ (¬ P C ∨ ¬ Q C) , (∃ x (P x ∧ Q x)) $ by ror [l4]
+l6: $ ⊢ ¬ (P C ∧ Q C) , (∃ x (P x ∧ Q x)) $ by rdm_an [l5]
+l7: $ ⊢ (P C ∧ Q C) → (∃ x (P x ∧ Q x)) $ by rim [l6]

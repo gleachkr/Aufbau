@@ -404,7 +404,11 @@ pub const Parser = struct {
     fn parseRuleApplication(self: *Parser) anyerror!RuleApplication {
         self.skipProofWhitespace();
         const rule_start = self.pos;
-        const rule_name = try self.parseIdentifier();
+        var rule_name = try self.parseIdentifier();
+        if (isSearchPlaceholderBase(rule_name) and self.peek() == '?') {
+            self.pos += 1;
+            rule_name = self.src[rule_start..self.pos];
+        }
         return try self.parseRuleApplicationAfterName(rule_start, rule_name);
     }
 
@@ -522,7 +526,17 @@ pub const Parser = struct {
                 },
             } };
         }
-        const label = try self.parseIdentifier();
+        var label = try self.parseIdentifier();
+        if (isSearchPlaceholderBase(label) and self.peek() == '?') {
+            self.pos += 1;
+            label = self.src[start..self.pos];
+            return .{
+                .application = try self.parseRuleApplicationAfterName(
+                    start,
+                    label,
+                ),
+            };
+        }
         const label_end = self.pos;
         if (self.nextProofTokenIsApplicationDelimiter()) {
             return .{
@@ -1103,4 +1117,29 @@ fn isIdentStart(ch: u8) bool {
 
 fn isIdentChar(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_';
+}
+
+fn isSearchPlaceholderBase(name: []const u8) bool {
+    return std.mem.eql(u8, name, "exact") or
+        std.mem.eql(u8, name, "apply") or
+        std.mem.eql(u8, name, "auto");
+}
+
+pub fn isSearchPlaceholderRuleName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "exact?") or
+        std.mem.eql(u8, name, "apply?") or
+        std.mem.eql(u8, name, "auto?");
+}
+
+pub fn applicationHasSearchPlaceholder(application: RuleApplication) bool {
+    if (isSearchPlaceholderRuleName(application.rule_name)) return true;
+    for (application.refs) |ref| {
+        switch (ref) {
+            .application => |child| {
+                if (applicationHasSearchPlaceholder(child)) return true;
+            },
+            .hyp, .line => {},
+        }
+    }
+    return false;
 }

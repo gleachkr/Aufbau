@@ -1,0 +1,8 @@
+delimiter $ ( ) $;
+provable sort wff;
+term P: wff;
+term Q: wff;
+term imp (p q: wff): wff;
+infixr imp: $->$ prec 25;
+axiom mp (p q: wff): $ p $ > $ p -> q $ > $ q $;
+theorem t: $ Q $;

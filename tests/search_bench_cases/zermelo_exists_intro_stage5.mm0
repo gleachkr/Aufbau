@@ -1,0 +1,164 @@
+-- Minimal Zermelo-flavored fixture for the Stage 5 existential-witness probe.
+--
+-- Stage 4 can build the open `ex_intro` child target
+-- `A ∈ A ⊢ ?t ∈ A`, but `ax []` cannot close it until search enumerates ACUI
+-- context members as witness candidates.
+
+delimiter $ ( ) { } [ / ] , | $;
+
+strict provable sort wff;
+--| @vars x y A
+sort set;
+sort ctx;
+
+term im (p q: wff): wff;
+infixr im: $→$ prec 25;
+infixr im: $->$ prec 25;
+
+term ex {x: set} (p: wff x): wff;
+prefix ex: $∃$ prec 41;
+prefix ex: $E.$ prec 41;
+
+term sb_f {x: set} (t: set x) (p: wff x): wff;
+notation sb_f {x: set} (t: set x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+
+term sb_s {x: set} (t: set x) (s: set x): set;
+notation sb_s {x: set} (t: set x) (s: set x): set =
+  ($⟦$:41) x ($/$:0) t ($⟧$:0) s;
+
+term set_eq (a b: set): wff;
+infixl set_eq: $=$ prec 50;
+
+term mem (x A: set): wff;
+infixl mem: $∈$ prec 50;
+infixl mem: $e.$ prec 50;
+
+term tag (D: ctx) (p: wff): wff;
+
+term ctx_eq (G H: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (G H: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+
+term nd (G: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+term bi (p q: wff): wff;
+infixr bi: $↔$ prec 20;
+infixr bi: $<->$ prec 20;
+
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (p: wff): $ p ↔ p $;
+axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation set set_eq setid settr setsym _
+axiom setid (a: set): $ a = a $;
+axiom settr (a b c: set): $ a = b $ > $ b = c $ > $ a = c $;
+axiom setsym (a b: set): $ a = b $ > $ b = a $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+axiom ctx_trans (G H K: ctx):
+  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+axiom ctx_assoc (G H K: ctx):
+  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
+
+--| @congr
+axiom join_congr (G1 G2 H1 H2: ctx):
+  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+  $ ctx_eq (G1 , H1) (G2 , H2) $;
+
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+
+--| @congr
+axiom nd_congr (G H: ctx) (p q: wff):
+  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+
+--| @congr
+axiom im_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p → r) ↔ (q → s) $;
+
+--| @congr
+axiom ex_congr {x: set} (p q: wff x):
+  $ p ↔ q $ > $ ∃ x p ↔ ∃ x q $;
+
+--| @congr
+axiom mem_congr (x y A B: set):
+  $ x = y $ > $ A = B $ > $ (x ∈ A) ↔ (y ∈ B) $;
+
+--| @congr
+axiom tag_congr (D E: ctx) (p q: wff):
+  $ ctx_eq D E $ > $ p ↔ q $ > $ tag D p ↔ tag E q $;
+
+axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+
+axiom tag_member (D: ctx) (p: wff): $ D , p ⊢ tag D p $;
+
+axiom imp_intro (G: ctx) (p q: wff):
+  $ G , p ⊢ q $ > $ G ⊢ p → q $;
+
+--| @view {x:set}(G:ctx)(t:set x)(p:wff x)(q:wff): $ G ⊢ q $ > $ G ⊢ ∃ x p $
+--| @recover t q p x
+--| @freshen G x
+--| @auto backward
+axiom ex_intro {x: set} (G: ctx) (t: set x) (p: wff x):
+  $ G ⊢ [x/t] p $ > $ G ⊢ ∃ x p $;
+
+--| @rewrite
+axiom sb_s_var {x: set} (t: set x): $ (⟦ x / t ⟧ x) = t $;
+
+--| @rewrite
+axiom sb_s_irrel {x: set} (t: set x) (s: set): $ (⟦ x / t ⟧ s) = s $;
+
+--| @rewrite
+axiom sb_f_mem {x: set} (t a A: set x):
+  $ [x/t] (a ∈ A) ↔ (⟦ x / t ⟧ a) ∈ (⟦ x / t ⟧ A) $;
+
+--| @rewrite
+axiom sb_f_tag {x: set} (t: set x) (D: ctx) (p: wff x):
+  $ [x/t] tag D p ↔ tag D ([x/t] p) $;
+
+theorem nd_exists_intro_mem (A: set) {x: set}:
+  $ emp ⊢ A ∈ A → ∃ x (x ∈ A) $;
+
+-- --------------------------------------------------------------------------
+-- Stage 5 toy theorems (ACUI finite-domain witness enumeration).
+-- --------------------------------------------------------------------------
+
+-- Repeated existential meta solved from the same ACUI member: the recover
+-- target is `A ∈ A ⊢ ?t ∈ ?t` — one hash-consed meta leaf at two positions,
+-- so the member match must solve both consistently.
+theorem nd_exists_intro_self (A: set) {x: set}:
+  $ emp ⊢ A ∈ A → ∃ x (x ∈ x) $;
+
+-- No valid member: the fragment `?t ∈ B` matches nothing in the context
+-- `A ∈ A`, so enumeration proposes no witness and the result stays clean.
+theorem nd_exists_intro_no_member (A B: set) {x: set}:
+  $ emp ⊢ A ∈ A → ∃ x (x ∈ B) $;
+
+-- Ambiguous member choices: the tagged predicate carries a finite domain
+-- with two concrete ACUI members, and both fill the repeated fragment
+-- `?t ∈ ?t`. The open child hint is too broad to return a concrete
+-- conclusion, so Stage 5 enumeration must propose both witnesses.
+theorem nd_exists_intro_ambiguous (A B: set) {x: set}:
+  $ A ∈ A , B ∈ B ⊢
+    ∃ x (tag (A ∈ A , B ∈ B) (x ∈ x)) $;
+
+-- ACUI unit: the empty context is the combiner's unit, never a domain
+-- member, so the open witness has no finite domain and the result is clean.
+theorem nd_exists_intro_unit (A: set) {x: set}:
+  $ emp ⊢ ∃ x (x ∈ A) $;

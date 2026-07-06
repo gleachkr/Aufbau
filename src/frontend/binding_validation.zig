@@ -61,6 +61,66 @@ pub fn currentExprInfo(
     return try exprInfo(env, theorem, theorem.arg_infos, expr_id);
 }
 
+/// Memoized twin of `currentExprInfo` for the hot per-candidate validation
+/// path. `exprInfo` re-walks hash-consed shared subtrees once per occurrence
+/// (ACUI rule bindings share whole contexts). Only the deps mask needs the
+/// recursion; it is memoized per app node in
+/// `TheoremContext.expr_deps_cache`, which is only valid for the CURRENT
+/// `arg_infos` — hence no caller-supplied-args variant. Leaf info is
+/// mint-immutable, so entries never go stale. Errors (unknown term/leaf) are
+/// raised before any caching, identically to the plain walk.
+pub fn currentExprInfoCached(
+    env: *const GlobalEnv,
+    theorem: *TheoremContext,
+    expr_id: ExprId,
+) !ExprInfo {
+    if (try theorem.leafInfoWithArgs(theorem.arg_infos, expr_id)) |leaf| {
+        return .{
+            .sort_name = leaf.sort_name,
+            .bound = leaf.bound,
+            .deps = leaf.deps,
+        };
+    }
+
+    const app = switch (theorem.interner.node(expr_id).*) {
+        .app => |value| value,
+        .variable, .placeholder => unreachable,
+    };
+    if (app.term_id >= env.terms.items.len) return error.UnknownTerm;
+
+    return .{
+        .sort_name = env.terms.items[app.term_id].ret_sort_name,
+        .bound = false,
+        .deps = try currentExprDepsCached(env, theorem, expr_id),
+    };
+}
+
+fn currentExprDepsCached(
+    env: *const GlobalEnv,
+    theorem: *TheoremContext,
+    expr_id: ExprId,
+) !u55 {
+    if (try theorem.leafInfoWithArgs(theorem.arg_infos, expr_id)) |leaf| {
+        return leaf.deps;
+    }
+
+    const app = switch (theorem.interner.node(expr_id).*) {
+        .app => |value| value,
+        .variable, .placeholder => unreachable,
+    };
+    if (app.term_id >= env.terms.items.len) return error.UnknownTerm;
+
+    if (theorem.expr_deps_cache.get(expr_id)) |cached| return cached;
+
+    var deps: u55 = 0;
+    for (app.args) |arg_id| {
+        deps |= try currentExprDepsCached(env, theorem, arg_id);
+    }
+    // Memo-or-forget on OOM.
+    theorem.expr_deps_cache.put(theorem.allocator, expr_id, deps) catch {};
+    return deps;
+}
+
 pub fn defExprInfo(
     env: *const GlobalEnv,
     theorem: *const TheoremContext,

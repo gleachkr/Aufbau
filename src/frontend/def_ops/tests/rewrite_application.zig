@@ -100,11 +100,11 @@ test "rewrite application keeps hidden dummies symbolic" {
 
     var state = try MatchSession.init(fixture.arena.allocator(), 0);
     defer state.deinit(fixture.arena.allocator());
-    try state.symbolic_dummy_infos.append(
+    _ = try state.addDummyInfo(
         fixture.arena.allocator(),
         .{ .sort_name = "mor", .bound = false },
     );
-    try state.symbolic_dummy_infos.append(
+    _ = try state.addDummyInfo(
         fixture.arena.allocator(),
         .{ .sort_name = "mor", .bound = false },
     );

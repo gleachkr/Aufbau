@@ -6,6 +6,9 @@ const RuleDecl = @import("../../env.zig").RuleDecl;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const CompilerDiag = @import("../diag.zig");
 const ViewTrace = @import("../../view_trace.zig");
+const text_util = @import("../../text_util.zig");
+const HiddenWitnessFreshContext =
+    @import("context.zig").HiddenWitnessFreshContext;
 const DebugConfig = @import("../../debug.zig").DebugConfig;
 const DebugTrace = @import("../../debug.zig");
 
@@ -50,6 +53,9 @@ pub fn buildInferenceFailureDiagnostic(
         path,
         explicit_bindings,
         current_bindings,
+        // These builder paths have no notation provider in scope; the strict
+        // replay path supplies one. Fall back to internal-coordinate rendering.
+        null,
     );
     return diag;
 }
@@ -89,6 +95,7 @@ pub fn buildMissingBinderDiagnostic(
         path,
         explicit_bindings,
         current_bindings,
+        null,
     );
     return diag;
 }
@@ -102,6 +109,7 @@ pub fn addInferenceNotes(
     path: InferencePath,
     explicit_bindings: []const ?ExprId,
     current_bindings: []const ?ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
 ) !void {
     try addFormattedInferenceNote(
         allocator,
@@ -109,6 +117,22 @@ pub fn addInferenceNotes(
         "inference path: {s}",
         .{CompilerDiag.inferencePathName(path)},
     );
+
+    // Render binding values with declared notation and real binder names when a
+    // notation provider + binder map are available; otherwise fall back to the
+    // internal prefix/coordinate form inside `buildBindingSummary`.
+    var names: ?ViewTrace.DiagNames = if (fresh_context) |fresh|
+        try ViewTrace.DiagNames.build(
+            allocator,
+            theorem,
+            fresh.parser,
+            fresh.theorem_vars,
+        )
+    else
+        null;
+    defer if (names) |*n| n.deinit(allocator);
+    const names_ptr: ?*const ViewTrace.DiagNames =
+        if (names) |*n| n else null;
 
     const explicit_summary = try buildBindingSummary(
         allocator,
@@ -118,6 +142,7 @@ pub fn addInferenceNotes(
         explicit_bindings,
         current_bindings,
         .explicit,
+        names_ptr,
     );
     defer allocator.free(explicit_summary);
     try addFormattedInferenceNote(
@@ -135,6 +160,7 @@ pub fn addInferenceNotes(
         explicit_bindings,
         current_bindings,
         .inferred,
+        names_ptr,
     );
     defer allocator.free(inferred_summary);
     try addFormattedInferenceNote(
@@ -271,6 +297,7 @@ fn traceInferenceBindingSummaries(
         explicit_bindings,
         current_bindings,
         .explicit,
+        null,
     );
     defer allocator.free(explicit_summary);
     DebugTrace.traceInference(
@@ -287,6 +314,7 @@ fn traceInferenceBindingSummaries(
         explicit_bindings,
         current_bindings,
         .inferred,
+        null,
     );
     defer allocator.free(inferred_summary);
     DebugTrace.traceInference(
@@ -312,6 +340,7 @@ fn buildBindingSummary(
     explicit_bindings: []const ?ExprId,
     current_bindings: []const ?ExprId,
     mode: BindingSummaryMode,
+    names: ?*const ViewTrace.DiagNames,
 ) ![]const u8 {
     var out = std.ArrayListUnmanaged(u8){};
     errdefer out.deinit(allocator);
@@ -342,6 +371,7 @@ fn buildBindingSummary(
             rule,
             idx,
             binding,
+            names,
         );
         emitted += 1;
     }
@@ -365,16 +395,21 @@ fn appendBindingEntry(
     rule: *const RuleDecl,
     idx: usize,
     binding: ?ExprId,
+    names: ?*const ViewTrace.DiagNames,
 ) !void {
     try out.appendSlice(allocator, binderLabel(rule, idx));
     try out.appendSlice(allocator, " = ");
     if (binding) |expr_id| {
-        const text = try ViewTrace.formatExpr(
-            allocator,
-            theorem,
-            env,
-            expr_id,
-        );
+        const text = if (names) |names_ptr|
+            try ViewTrace.formatExprNamed(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                expr_id,
+            )
+        else
+            try ViewTrace.formatExpr(allocator, theorem, env, expr_id);
         defer allocator.free(text);
         try appendInferenceTruncatedText(out, allocator, text, 48);
         return;
@@ -396,7 +431,7 @@ fn appendInferenceTruncatedText(
         try out.appendSlice(allocator, text[0..limit]);
         return;
     }
-    try out.appendSlice(allocator, text[0 .. limit - 1]);
+    try out.appendSlice(allocator, text_util.truncateUtf8(text, limit - 1));
     try out.appendSlice(allocator, "...");
 }
 

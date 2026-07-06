@@ -1,0 +1,6 @@
+nd_eq_subst_mem
+---------------
+l1: $ a = b ⊢ a = b $ by ax
+l2: $ a ∈ a ⊢ a ∈ a $ by ax
+l3: $ a = b , a ∈ a ⊢ b ∈ a $ by eq_replace [l1, l2]
+l5: $ _ ⊢ a = b → (a ∈ a → b ∈ a) $ by auto?

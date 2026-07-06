@@ -1,0 +1,3 @@
+nested_additive
+---------------
+l1: $ ∅ ⊢ (P ∧ Q) → (Q ∧ P) $ by rim [lan [ran [ax [], ax []]]]

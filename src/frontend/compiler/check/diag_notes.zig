@@ -16,6 +16,7 @@ const Normalize = @import("../normalize.zig");
 const Holes = @import("../holes.zig");
 const TheoremBoundary = @import("../theorem_boundary.zig");
 const ViewTrace = @import("../../view_trace.zig");
+const text_util = @import("../../text_util.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 
 pub fn addFallbackFailureNote(
@@ -199,16 +200,27 @@ pub fn addComparisonSnapshotNotes(
     diag: *Diagnostic,
     theorem: *const TheoremContext,
     env: *const GlobalEnv,
+    parser: anytype,
+    theorem_vars: *const std.StringHashMap(*const Expr),
     registry: *RewriteRegistry,
     scratch: *CompilerDiag.Scratch,
     expected: ExprId,
     actual: ExprId,
     attempted_normalized: bool,
 ) !void {
-    const expected_text = try ViewTrace.formatExpr(
+    var names = try ViewTrace.DiagNames.build(
+        allocator,
+        theorem,
+        parser,
+        theorem_vars,
+    );
+    defer names.deinit(allocator);
+
+    const expected_text = try ViewTrace.formatExprNamed(
         allocator,
         theorem,
         env,
+        &names,
         expected,
     );
     defer allocator.free(expected_text);
@@ -219,10 +231,11 @@ pub fn addComparisonSnapshotNotes(
         .{truncateSnapshot(expected_text)},
     );
 
-    const actual_text = try ViewTrace.formatExpr(
+    const actual_text = try ViewTrace.formatExprNamed(
         allocator,
         theorem,
         env,
+        &names,
         actual,
     );
     defer allocator.free(actual_text);
@@ -253,10 +266,11 @@ pub fn addComparisonSnapshotNotes(
 
     addStaticProofNote(diag, "attempted normalized comparison");
     if (snapshot.normalized_expected) |normalized_expected| {
-        const normalized_expected_text = try ViewTrace.formatExpr(
+        const normalized_expected_text = try ViewTrace.formatExprNamed(
             allocator,
             theorem,
             env,
+            &names,
             normalized_expected,
         );
         defer allocator.free(normalized_expected_text);
@@ -268,10 +282,11 @@ pub fn addComparisonSnapshotNotes(
         );
     }
     if (snapshot.normalized_actual) |normalized_actual| {
-        const normalized_actual_text = try ViewTrace.formatExpr(
+        const normalized_actual_text = try ViewTrace.formatExprNamed(
             allocator,
             theorem,
             env,
+            &names,
             normalized_actual,
         );
         defer allocator.free(normalized_actual_text);
@@ -285,9 +300,7 @@ pub fn addComparisonSnapshotNotes(
 }
 
 fn truncateSnapshot(text: []const u8) []const u8 {
-    const limit = 64;
-    if (text.len <= limit) return text;
-    return text[0..limit];
+    return text_util.truncateUtf8(text, 64);
 }
 
 pub fn addFreshenAttemptNotes(

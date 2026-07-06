@@ -1,9 +1,12 @@
 const std = @import("std");
 const TermDecl = @import("../../env.zig").TermDecl;
 const ExprId = @import("../../expr.zig").ExprId;
+const AcuiCacheKey = @import("../../expr.zig").AcuiCacheKey;
+const DefCacheKey = @import("../../expr.zig").DefCacheKey;
 const ExprApp = @import("../../expr.zig").ExprNode.App;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const AcuiSupport = @import("../../acui_support.zig");
+const SharedContextMod = @import("../shared_context.zig");
 const Types = @import("../types.zig");
 const MatchState = @import("../match_state.zig");
 const WitnessState = @import("./witness_state.zig");
@@ -13,6 +16,17 @@ const SymbolicExpr = Types.SymbolicExpr;
 const BindingMode = Types.BindingMode;
 const MatchSession = MatchState.MatchSession;
 const semantic_match_budget: usize = 8;
+
+fn assertCacheIdentity(self: anytype) void {
+    const registry_addr: usize = if (self.shared.registry) |registry|
+        @intFromPtr(registry)
+    else
+        0;
+    self.shared.theorem.assertDefOpsCacheIdentity(
+        @intFromPtr(self.shared.env),
+        registry_addr,
+    );
+}
 
 pub fn defCoversItem(
     self: anytype,
@@ -31,6 +45,39 @@ pub fn planDefCoversItem(
 }
 
 pub fn instantiateDefTowardAcuiItem(
+    self: anytype,
+    def_expr: ExprId,
+    item_expr: ExprId,
+    head_term_id: u32,
+) anyerror!?ExprId {
+    // Pure in (def_expr, item_expr, head_term_id) under the fixed env/registry
+    // invariant asserted here. This uses a fresh session per call, and
+    // transient def_ops contexts re-issue it for every ACUI leaf-pair.
+    assertCacheIdentity(self);
+    const key = AcuiCacheKey{
+        .def_expr = def_expr,
+        .item_expr = item_expr,
+        .head_term_id = head_term_id,
+        .has_registry = self.shared.registry != null,
+    };
+    if (self.shared.theorem.instantiate_acui_cache.get(key)) |cached| {
+        return cached;
+    }
+    const result = try instantiateDefTowardAcuiItemUncached(
+        self,
+        def_expr,
+        item_expr,
+        head_term_id,
+    );
+    try self.shared.theorem.instantiate_acui_cache.put(
+        self.shared.theorem.allocator,
+        key,
+        result,
+    );
+    return result;
+}
+
+fn instantiateDefTowardAcuiItemUncached(
     self: anytype,
     def_expr: ExprId,
     item_expr: ExprId,
@@ -103,6 +150,39 @@ pub fn compareTransparent(
         return try allocPlan(self, .refl);
     }
 
+    // Negative memo: doomed `tryCandidate`s exhaust the bidirectional
+    // def/ACUI search to prove two exprs are *not* def-equal, re-deriving the
+    // same incomparable pair millions of times. The verdict is pure in
+    // `(lhs, rhs)` under the fixed env/registry invariant asserted here.
+    // Positive plans are NOT cached (they are request-arena pointers); they
+    // are cheap relative to the doomed search.
+    assertCacheIdentity(self);
+    const key = DefCacheKey{
+        .def_expr = lhs,
+        .target_expr = rhs,
+        .has_registry = self.shared.registry != null,
+    };
+    if (self.shared.theorem.compare_transparent_neg.contains(key)) {
+        return null;
+    }
+
+    if (try compareTransparentUncached(self, lhs, rhs)) |plan| {
+        return plan;
+    }
+
+    try self.shared.theorem.compare_transparent_neg.put(
+        self.shared.theorem.allocator,
+        key,
+        {},
+    );
+    return null;
+}
+
+fn compareTransparentUncached(
+    self: anytype,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?*const ConversionPlan {
     const lhs_node = self.shared.theorem.interner.node(lhs);
     const rhs_node = self.shared.theorem.interner.node(rhs);
     if (lhs_node.* == .app and rhs_node.* == .app) {
@@ -149,7 +229,7 @@ pub fn matchTemplateTransparent(
     var witness_slots: std.AutoHashMapUnmanaged(ExprId, usize) = .empty;
     defer witness_slots.deinit(self.shared.allocator);
     for (bindings, 0..) |binding, idx| {
-        state.bindings[idx] = if (binding) |expr_id|
+        state.seedBinding(idx, if (binding) |expr_id|
             try WitnessState.rebuildBoundValue(
                 self,
                 expr_id,
@@ -158,7 +238,7 @@ pub fn matchTemplateTransparent(
                 .exact,
             )
         else
-            null;
+            null);
     }
 
     if (!try matchTemplateRecState(self, template, actual, &state)) {
@@ -169,6 +249,40 @@ pub fn matchTemplateTransparent(
 }
 
 pub fn instantiateDefTowardExpr(
+    self: anytype,
+    def_expr: ExprId,
+    target_expr: ExprId,
+) anyerror!?ExprId {
+    // Pure memo: this query depends only on `(def_expr, target_expr)` under
+    // the fixed env/registry invariant asserted here. It builds a fresh empty
+    // session per attempt and takes no caller state. The transient ACUI def_ops
+    // contexts re-issue the same query millions of times, so cache on the
+    // shared, per-theorem interner context.
+    assertCacheIdentity(self);
+    const key = DefCacheKey{
+        .def_expr = def_expr,
+        .target_expr = target_expr,
+        .has_registry = self.shared.registry != null,
+    };
+    if (self.shared.theorem.instantiate_def_cache.get(key)) |cached| {
+        return cached;
+    }
+
+    const result = try instantiateDefTowardExprUncached(
+        self,
+        def_expr,
+        target_expr,
+    );
+
+    try self.shared.theorem.instantiate_def_cache.put(
+        self.shared.theorem.allocator,
+        key,
+        result,
+    );
+    return result;
+}
+
+fn instantiateDefTowardExprUncached(
     self: anytype,
     def_expr: ExprId,
     target_expr: ExprId,
@@ -346,6 +460,7 @@ pub fn guideSymbolicWitnessesFromAcuiTarget(
         self.shared.env,
         registry,
     );
+    defer support.deinit();
     if (!support.exprMatchesCombinerSort(target_expr, acui)) return false;
 
     var items = std.ArrayListUnmanaged(ExprId){};
@@ -710,7 +825,46 @@ pub fn matchExprToSymbolic(
     };
 }
 
+const SemanticSearch = @import("./semantic_search.zig");
+
 pub fn matchSymbolicToSymbolicState(
+    self: anytype,
+    lhs: *const SymbolicExpr,
+    rhs: *const SymbolicExpr,
+    state: *MatchSession,
+) anyerror!bool {
+    // Negative memo: this inner matcher does an unbudgeted bidirectional
+    // def-unfold and is invoked at every node of the outer semantic search,
+    // so it re-explores structurally-identical (lhs, rhs) pairs under the same
+    // state exponentially. The verdict is pure in (lhs, rhs, state); we cache
+    // only failures (success mutates `state` and cannot be replayed from a
+    // key). Rollback-safe because the key includes the state hash.
+    //
+    // Consulted at every depth. The per-call key cost is two structural
+    // hashes (lhs, rhs) plus a state hash; structural hashing dominates for the
+    // large, shallow exprs near the recursion root (e.g. church), where the
+    // memo rarely fires — a measured ~10-25% per-fixture tax there. That tax is
+    // the thing `SymbolicExpr` interning would erase (O(1) keys), at which point
+    // the structural hashes become id lookups; the memo logic is unchanged.
+    const key = blk: {
+        const lh = SemanticSearch.hashSymbolicForSearch(self, lhs);
+        const rh = SemanticSearch.hashSymbolicForSearch(self, rhs);
+        const sh = try SemanticSearch.hashMatchSessionForSearch(self, state);
+        var h = Types.mixHash(0xa1b2c3d4e5f60718, lh);
+        h = Types.mixHash(h, rh);
+        break :blk Types.mixHash(h, sh);
+    };
+    if (state.sym_match_neg.contains(key)) {
+        return false;
+    }
+    const result = try matchSymbolicToSymbolicStateInner(self, lhs, rhs, state);
+    if (!result) {
+        try state.sym_match_neg.put(self.shared.allocator, key, {});
+    }
+    return result;
+}
+
+fn matchSymbolicToSymbolicStateInner(
     self: anytype,
     lhs: *const SymbolicExpr,
     rhs: *const SymbolicExpr,
@@ -880,7 +1034,10 @@ pub fn expandTemplateApp(
     const term = getOpenableTerm(self, app.term_id) orelse return null;
     const body = term.body orelse return null;
 
-    const subst = try self.shared.allocator.alloc(
+    // Throwaway expansion scaffolding: scratch, like the `SymbolicExpr`
+    // nodes it feeds (`allocSymbolic`). Anything that outlives the context
+    // is deep-cloned at export (`cloneSymbolicExpr`).
+    const subst = try self.shared.scratch().alloc(
         *const SymbolicExpr,
         term.args.len + term.dummy_args.len,
     );
@@ -888,8 +1045,7 @@ pub fn expandTemplateApp(
         subst[idx] = try symbolicFromTemplate(self, arg);
     }
     for (term.dummy_args, 0..) |dummy_arg, idx| {
-        const slot = state.symbolic_dummy_infos.items.len;
-        try state.symbolic_dummy_infos.append(self.shared.allocator, .{
+        const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
         });
@@ -897,7 +1053,7 @@ pub fn expandTemplateApp(
             .{ .dummy = slot },
         );
     }
-    return try symbolicFromTemplateSubst(self, body, subst);
+    return try symbolicFromStableTemplateSubst(self, body, subst);
 }
 
 pub fn expandConcreteDef(
@@ -907,7 +1063,7 @@ pub fn expandConcreteDef(
 ) anyerror!?*const SymbolicExpr {
     const def = getConcreteDef(self, expr_id) orelse return null;
 
-    const subst = try self.shared.allocator.alloc(
+    const subst = try self.shared.scratch().alloc(
         *const SymbolicExpr,
         def.term.args.len + def.term.dummy_args.len,
     );
@@ -915,8 +1071,7 @@ pub fn expandConcreteDef(
         subst[idx] = try self.allocSymbolic(.{ .fixed = arg });
     }
     for (def.term.dummy_args, 0..) |dummy_arg, idx| {
-        const slot = state.symbolic_dummy_infos.items.len;
-        try state.symbolic_dummy_infos.append(self.shared.allocator, .{
+        const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
         });
@@ -924,7 +1079,7 @@ pub fn expandConcreteDef(
             .{ .dummy = slot },
         );
     }
-    return try symbolicFromTemplateSubst(self, def.body, subst);
+    return try symbolicFromStableTemplateSubst(self, def.body, subst);
 }
 
 pub fn expandSymbolicApp(
@@ -935,14 +1090,13 @@ pub fn expandSymbolicApp(
     const term = getOpenableTerm(self, app.term_id) orelse return null;
     const body = term.body orelse return null;
 
-    const subst = try self.shared.allocator.alloc(
+    const subst = try self.shared.scratch().alloc(
         *const SymbolicExpr,
         term.args.len + term.dummy_args.len,
     );
     @memcpy(subst[0..term.args.len], app.args);
     for (term.dummy_args, 0..) |dummy_arg, idx| {
-        const slot = state.symbolic_dummy_infos.items.len;
-        try state.symbolic_dummy_infos.append(self.shared.allocator, .{
+        const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
         });
@@ -950,14 +1104,53 @@ pub fn expandSymbolicApp(
             .{ .dummy = slot },
         );
     }
-    return try symbolicFromTemplateSubst(self, body, subst);
+    return try symbolicFromStableTemplateSubst(self, body, subst);
 }
 
 pub fn symbolicFromTemplate(
     self: anytype,
     template: TemplateExpr,
 ) anyerror!*const SymbolicExpr {
-    return try symbolicFromTemplateSubst(self, template, null);
+    return try symbolicFromStableTemplateSubst(self, template, null);
+}
+
+/// Memoized `symbolicFromTemplateSubst` for STABLE templates — templates
+/// living in env/registry/view storage for the whole def_ops context (term
+/// and def bodies, rewrite-rule sides, view templates). Every `TemplateExpr`
+/// in the program today qualifies (`TemplateExpr.fromExpr` is only called
+/// while building env rules and view decls); a future TRANSIENT template must
+/// use the plain `symbolicFromTemplateSubst`, or its recycled args-pointer
+/// could alias a stale memo key. The memo is exact, not heuristic: the callee
+/// is a pure function of (template structure, subst pointers) and returns the
+/// canonical interned node, so a hit is pointer-identical to a rebuild. This
+/// skips the whole rebuild-and-reprobe walk that dominates def-unfold-heavy
+/// matching (martin_lof/church, task #43).
+pub fn symbolicFromStableTemplateSubst(
+    self: anytype,
+    template: TemplateExpr,
+    subst: ?[]const *const SymbolicExpr,
+) anyerror!*const SymbolicExpr {
+    const app = switch (template) {
+        // A bare binder is a subst lookup / leaf intern — cheaper than the
+        // memo probe itself.
+        .binder => return try symbolicFromTemplateSubst(self, template, subst),
+        .app => |app| app,
+    };
+    // A zero-arity app's result depends only on term_id; the intern probe it
+    // does is already as cheap as a memo probe.
+    if (app.args.len == 0) {
+        return try symbolicFromTemplateSubst(self, template, subst);
+    }
+    const key = SharedContextMod.TemplateSubstMemoKey{
+        .template_args_ptr = @intFromPtr(app.args.ptr),
+        .template_args_len = app.args.len,
+        .term_id = app.term_id,
+        .subst = subst orelse &.{},
+    };
+    if (self.shared.templateSubstMemoGet(key)) |hit| return hit;
+    const result = try symbolicFromTemplateSubst(self, template, subst);
+    try self.shared.templateSubstMemoPut(key, result);
+    return result;
 }
 
 pub fn symbolicFromTemplateSubst(
@@ -974,7 +1167,24 @@ pub fn symbolicFromTemplateSubst(
             return try self.allocSymbolic(.{ .binder = idx });
         },
         .app => |app| {
-            const args = try self.shared.allocator.alloc(
+            // Build children into a per-frame stack buffer (recursion gives
+            // each level its own frame, so buffers never clobber) and let
+            // `internSymbolicApp` copy into the arena only on a miss — this is
+            // the hottest node builder on def-unfold-heavy theories, and the
+            // pre-allocated-scratch-args form leaked one array per intern hit.
+            // Arities above the inline capacity fall back to the arena path.
+            const inline_cap = 16;
+            if (app.args.len <= inline_cap) {
+                var buf: [inline_cap]*const SymbolicExpr = undefined;
+                for (app.args, 0..) |arg, idx| {
+                    buf[idx] = try symbolicFromTemplateSubst(self, arg, subst);
+                }
+                return try self.shared.internSymbolicApp(
+                    app.term_id,
+                    buf[0..app.args.len],
+                );
+            }
+            const args = try self.shared.scratch().alloc(
                 *const SymbolicExpr,
                 app.args.len,
             );

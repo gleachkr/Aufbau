@@ -975,6 +975,105 @@ test "template instantiation shares repeated substitutions" {
     }
 }
 
+test "expr interner clone snapshot hides later base nodes" {
+    var base = FrontendExpr.ExprInterner.init(std.testing.allocator);
+    defer base.deinit();
+
+    const v0 = try base.internVar(.{ .theorem_var = 0 });
+    try std.testing.expectEqual(@as(FrontendExpr.ExprId, 0), v0);
+
+    var clone = try base.clone();
+    defer clone.deinit();
+
+    _ = try base.internVar(.{ .theorem_var = 1 });
+    try std.testing.expectEqual(@as(usize, 2), base.count());
+    try std.testing.expectEqual(@as(usize, 1), clone.count());
+
+    const overlay_before = clone.nodes.items.len;
+    const clone_v1 = try clone.internVar(.{ .theorem_var = 1 });
+    try std.testing.expectEqual(@as(FrontendExpr.ExprId, 1), clone_v1);
+    try std.testing.expectEqual(overlay_before + 1, clone.nodes.items.len);
+}
+
+test "expr interner flatten survives deinit of former base" {
+    var base = FrontendExpr.ExprInterner.init(std.testing.allocator);
+    var base_owned = true;
+    defer if (base_owned) base.deinit();
+
+    const v0 = try base.internVar(.{ .theorem_var = 0 });
+    const app0 = try base.internApp(10, &.{v0});
+
+    var clone = try base.clone();
+    defer clone.deinit();
+
+    const v1 = try clone.internVar(.{ .theorem_var = 1 });
+    const app1 = try clone.internApp(11, &.{ app0, v1 });
+
+    try clone.flatten();
+    try std.testing.expect(clone.base == null);
+    base.deinit();
+    base_owned = false;
+
+    try std.testing.expectEqual(@as(usize, 4), clone.count());
+    try std.testing.expectEqual(app0, try clone.internApp(10, &.{v0}));
+    try std.testing.expectEqual(app1, try clone.internApp(11, &.{ app0, v1 }));
+
+    switch (clone.node(app1).*) {
+        .app => |app| {
+            try std.testing.expectEqual(@as(u32, 11), app.term_id);
+            try std.testing.expectEqual(@as(usize, 2), app.args.len);
+            try std.testing.expectEqual(app0, app.args[0]);
+            try std.testing.expectEqual(v1, app.args[1]);
+        },
+        else => return error.UnexpectedExprNode,
+    }
+}
+
+test "expr interner supports clone chains" {
+    var base = FrontendExpr.ExprInterner.init(std.testing.allocator);
+    var base_owned = true;
+    defer if (base_owned) base.deinit();
+
+    const v0 = try base.internVar(.{ .theorem_var = 0 });
+
+    var clone1 = try base.clone();
+    var clone1_owned = true;
+    defer if (clone1_owned) clone1.deinit();
+
+    const v1 = try clone1.internVar(.{ .theorem_var = 1 });
+    const app1 = try clone1.internApp(10, &.{ v0, v1 });
+
+    var clone2 = try clone1.clone();
+    defer clone2.deinit();
+
+    const found_app1 = try clone2.internApp(10, &.{ v0, v1 });
+    try std.testing.expectEqual(app1, found_app1);
+    try std.testing.expectEqual(@as(usize, 0), clone2.nodes.items.len);
+
+    const v2 = try clone2.internVar(.{ .theorem_var = 2 });
+    const app2 = try clone2.internApp(11, &.{ app1, v2 });
+
+    try clone2.flatten();
+    clone1.deinit();
+    clone1_owned = false;
+    base.deinit();
+    base_owned = false;
+
+    try std.testing.expectEqual(@as(usize, 5), clone2.count());
+    try std.testing.expectEqual(app1, try clone2.internApp(10, &.{ v0, v1 }));
+    try std.testing.expectEqual(app2, try clone2.internApp(11, &.{ app1, v2 }));
+
+    switch (clone2.node(app2).*) {
+        .app => |app| {
+            try std.testing.expectEqual(@as(u32, 11), app.term_id);
+            try std.testing.expectEqual(@as(usize, 2), app.args.len);
+            try std.testing.expectEqual(app1, app.args[0]);
+            try std.testing.expectEqual(v2, app.args[1]);
+        },
+        else => return error.UnexpectedExprNode,
+    }
+}
+
 test "explicit source dummy allocation is allowed and tracks dependency slots" {
     // Explicit user/source dummies (seedTerm, applyDummyBindings) are
     // legitimate and must keep working. This test verifies the low-level
@@ -1055,6 +1154,34 @@ test "placeholder deps share the global u55 mask budget" {
         ctx.addPlaceholderResolved("wff"),
     );
     try std.testing.expectEqual(@as(usize, 1), ctx.theorem_placeholders.items.len);
+}
+
+test "dummy allocation respects placeholder dep reservations" {
+    var ctx = FrontendExpr.TheoremContext.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const limit = FrontendExpr.tracked_bound_dep_limit;
+    const placeholder = try ctx.addPlaceholderResolved("wff");
+    _ = placeholder;
+
+    for (0..limit - 1) |_| {
+        _ = try ctx.addDummyVarResolved("wff", 0);
+    }
+
+    try std.testing.expectEqual(limit - 1, ctx.next_dummy_dep);
+    try std.testing.expectError(
+        error.DependencySlotExhausted,
+        ctx.addDummyVarResolved("wff", 0),
+    );
+    try std.testing.expectEqual(
+        @as(usize, limit - 1),
+        ctx.theorem_dummies.items.len,
+    );
+    for (ctx.theorem_dummies.items) |dummy| {
+        try std.testing.expect(
+            dummy.deps & ctx.theorem_placeholders.items[0].deps == 0,
+        );
+    }
 }
 
 test "placeholder info lookup reports placeholder-specific errors" {

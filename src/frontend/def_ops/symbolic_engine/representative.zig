@@ -36,9 +36,28 @@ pub fn chooseRepresentative(
         &state,
         mode,
     );
+    if (try materializeRepresentativeSymbolic(self, symbolic, &state)) |m| {
+        return m;
+    }
+    // Def compression is only a compactness pass. It can fold an otherwise
+    // concrete representative back into a def that has hidden binders. For
+    // example, the forced separation motive `in_all_subsets S u` can compress
+    // to the `in_all_subsets` def, whose hidden `.X` binder has no witness in
+    // this fresh representative session. That compressed form is not
+    // materializable here even though the pre-compression concrete expression
+    // is a valid representative. If compression produced such an escaping
+    // hidden binder, retry the rebuild+canonicalize prefix and leave the
+    // original `MissingRepresentative` behavior in place if that also cannot
+    // be materialized.
+    const uncompressed = try rebuildCanonicalRepresentative(
+        self,
+        expr_id,
+        &state,
+        mode,
+    );
     return (try materializeRepresentativeSymbolic(
         self,
-        symbolic,
+        uncompressed,
         &state,
     )) orelse error.MissingRepresentative;
 }
@@ -66,13 +85,43 @@ pub fn chooseRepresentativeSymbolic(
 
     const cache = representativeCacheForMode(state, mode);
     if (cache.get(expr_id)) |cached| return cached;
+    // Session-independent fast path: a placeholder-free input with a plain
+    // representative computes to the same `.fixed` node in every session
+    // (see `SharedContext.pure_transparent_reprs`), and `allocSymbolic`
+    // re-interns to the identical pointer the original computation returned.
+    if (self.shared.pureRepresentativeGet(mode, expr_id)) |plain| {
+        return try self.allocSymbolic(.{ .fixed = plain });
+    }
 
-    var current = try rebuildExprRepresentativeSymbolic(
-        self,
-        expr_id,
-        state,
-        mode,
-    );
+    var current = try rebuildCanonicalRepresentative(self, expr_id, state, mode);
+    while (try compressRepresentativeToDef(self, current, state)) |compressed| {
+        if (symbolicExprEql(self, current, compressed)) break;
+        current = compressed;
+    }
+    try cache.put(self.shared.allocator, expr_id, current);
+    if (current.* == .fixed) {
+        if (try self.shared.exprIsPlaceholderFree(expr_id)) {
+            try self.shared.pureRepresentativePut(
+                mode,
+                expr_id,
+                current.fixed,
+            );
+        }
+    }
+    return current;
+}
+
+// The rebuild + canonicalize prefix of `chooseRepresentativeSymbolic`, without
+// the def-compression chain. This is the materializable, less-compact form;
+// `chooseRepresentative` falls back to it when def compression produced a form
+// that cannot be materialized against a fresh session.
+fn rebuildCanonicalRepresentative(
+    self: anytype,
+    expr_id: ExprId,
+    state: *MatchSession,
+    mode: BindingMode,
+) anyerror!*const SymbolicExpr {
+    var current = try rebuildExprRepresentativeSymbolic(self, expr_id, state, mode);
     if (self.shared.registry) |registry| {
         if (try symbolicToConcreteIfPlain(self, current, state)) |plain| {
             var canonicalizer = Canonicalizer.init(
@@ -85,11 +134,6 @@ pub fn chooseRepresentativeSymbolic(
             current = try self.allocSymbolic(.{ .fixed = canonical });
         }
     }
-    while (try compressRepresentativeToDef(self, current, state)) |compressed| {
-        if (symbolicExprEql(self, current, compressed)) break;
-        current = compressed;
-    }
-    try cache.put(self.shared.allocator, expr_id, current);
     return current;
 }
 
@@ -194,9 +238,22 @@ pub fn compressRepresentativeToDef(
         return null;
     };
 
-    term_loop: for (self.shared.env.terms.items, 0..) |term, term_id| {
-        if (!term.is_def or term.body == null) continue;
-        if (!std.mem.eql(u8, term.ret_sort_name, sort_name)) continue;
+    // Loop-invariant: depends only on (symbolic, state), which no failed
+    // candidate attempt mutates (matching runs against the per-candidate
+    // temp clone; `state` is `*const` throughout).
+    const plain_symbolic = try symbolicToConcreteIfPlain(
+        self,
+        symbolic,
+        state,
+    );
+    const match_kind: CompressionMatchKind = if (plain_symbolic != null)
+        .concrete
+    else
+        .symbolic;
+
+    const candidates = try self.shared.defCompressionCandidates(sort_name);
+    term_loop: for (candidates) |term_id| {
+        const term = self.shared.env.terms.items[term_id];
 
         var temp = try cloneRepresentativeState(
             self,
@@ -209,15 +266,6 @@ pub fn compressRepresentativeToDef(
             self,
             term.body.?,
         );
-        const plain_symbolic = try symbolicToConcreteIfPlain(
-            self,
-            symbolic,
-            state,
-        );
-        const match_kind: CompressionMatchKind = if (plain_symbolic != null)
-            .concrete
-        else
-            .symbolic;
         const matched = if (plain_symbolic) |plain|
             try TransparentMatch.matchExprToSymbolic(
                 self,

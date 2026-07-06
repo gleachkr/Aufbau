@@ -1,0 +1,534 @@
+-- Additive two-sided classical sequent calculus for first-order logic (G3c).
+--
+-- This is the "backward search really works" stress theory of META_STRESS.md
+-- workstream 3.  The design goal is to give `auto?` a theory in which a pure
+-- backward (root-first) proof search is a *complete* procedure for classical
+-- first-order logic, up to the search depth limit.
+--
+-- The defining property is that the calculus is **additive**: every rule
+-- copies the *whole* context to all of its premises.  No rule ever splits a
+-- context between two premises.  Contexts are ACUI sets (associative,
+-- commutative, idempotent, with unit `∅`), so weakening, contraction, and
+-- exchange are admissible and never appear as explicit search steps.  The
+-- engine still does ACUI *membership* (picking the principal formula out of a
+-- context) — the cheap, well-supported case — but it never has to *partition*
+-- a context, which is the combinatorial pain that the multiplicative ND
+-- theories (euclid `ex_elim`, `eq_replace`) entangle.
+--
+-- Sequents are `Γ ⊢ Δ` with both Γ (antecedent) and Δ (succedent) ACUI sets.
+-- The multi-succedent form is what makes the calculus *classical*: e.g.
+-- Peirce's law and excluded middle are provable.
+--
+-- The ND core (connectives, congruences, substitution battery) is the usual
+-- euclid.mm0 subset, kept self-contained per the bench fixture convention.
+delimiter $ ( ) [ / ] $;
+
+provable sort wff;
+sort ctx;
+
+--| @vars x y z u v w
+sort obj;
+
+-- ============================================================
+-- First-order formula language
+-- ============================================================
+
+term im (a b: wff): wff;
+infixr im: $→$ prec 25;
+term an (a b: wff): wff;
+infixr an: $∧$ prec 35;
+term or (a b: wff): wff;
+infixr or: $∨$ prec 30;
+term not (a: wff): wff;
+prefix not: $¬$ prec 40;
+term fal: wff;
+notation fal: wff = ($⊥$:max);
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+
+term all {x: obj} (p: wff x): wff;
+prefix all: $∀$ prec 41;
+term ex {x: obj} (p: wff x): wff;
+prefix ex: $∃$ prec 41;
+
+-- Object-level substitution `[x/t] p` and `subst x / t a`, the machinery the
+-- quantifier rules normalize through.
+term sb_f {x: obj} (t: obj x) (p: wff x): wff;
+notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_t {x: obj} (t: obj x) (a: obj x): obj;
+notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
+  ($subst$:41) x ($/$:0) t a;
+
+-- A small signature of predicate and constant symbols so concrete goals can
+-- be written.  The calculus is schematic in them; nothing depends on this
+-- particular choice.
+term P (a: obj): wff;
+prefix P: $P$ prec 45;
+term Q (a: obj): wff;
+prefix Q: $Q$ prec 45;
+term R (a b: obj): wff;
+term cc: obj;
+notation cc: obj = ($C$:max);
+term dd: obj;
+notation dd: obj = ($D$:max);
+term ee: obj;
+notation ee: obj = ($E$:max);
+
+-- ============================================================
+-- Contexts: ACUI sets of formulas
+-- ============================================================
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($∅$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+
+-- The sequent.  Both sides are contexts; this is the sole provable shape.
+term seq (g d: ctx): wff;
+infixl seq: $⊢$ prec 1;
+
+term eq (a b: obj): wff;
+infixl eq: $=$ prec 50;
+
+-- ============================================================
+-- Relation / congruence batteries (for ACUI + substitution normalization)
+-- ============================================================
+
+-- The bi-conditional is the rewrite relation on wff.
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ a ↔ a $;
+axiom bitr (a b c: wff):
+  $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+-- ACUI equality on contexts.
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @relation obj eq eq_refl eq_trans eq_sym _
+axiom eq_refl (a: obj): $ a = a $;
+axiom eq_trans (a b c: obj):
+  $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_sym (a b: obj): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom seq_congr (g h e f: ctx):
+  $ ctx_eq g h $ > $ ctx_eq e f $ > $ (g ⊢ e) ↔ (h ⊢ f) $;
+
+--| @congr
+axiom im_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+--| @congr
+axiom an_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a ∧ c) ↔ (b ∧ d) $;
+--| @congr
+axiom or_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a ∨ c) ↔ (b ∨ d) $;
+--| @congr
+axiom not_congr (a b: wff): $ a ↔ b $ > $ ¬ a ↔ ¬ b $;
+--| @congr
+axiom all_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+--| @congr
+axiom ex_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∃ x p ↔ ∃ x q $;
+--| @congr
+axiom P_congr (a b: obj): $ a = b $ > $ P a ↔ P b $;
+--| @congr
+axiom Q_congr (a b: obj): $ a = b $ > $ Q a ↔ Q b $;
+--| @congr
+axiom R_congr (a b c d: obj):
+  $ a = b $ > $ c = d $ > $ R a c ↔ R b d $;
+
+-- Alpha-renaming rules used by @freshen when a context contains the same
+-- bound variable a quantifier rule is trying to bind.
+--| @alpha x y
+axiom all_alpha {x y: obj} (p: wff x y):
+  $ ∀ x p ↔ ∀ y ([x/y] p) $;
+--| @alpha x y
+axiom ex_alpha {x y: obj} (p: wff x y):
+  $ ∃ x p ↔ ∃ y ([x/y] p) $;
+
+-- Substitution pushed through the syntactic operators, so the @rewrite
+-- automation can normalize the `[x/t] p` instances the quantifier rules emit.
+--| @rewrite
+axiom sb_t_var {x: obj} (t: obj x): $ (subst x / t x) = t $;
+--| @rewrite
+axiom sb_t_other {x y: obj} (t: obj x): $ (subst x / t y) = y $;
+--| @rewrite
+axiom sb_t_irrel {x: obj} (t: obj x) (a: obj): $ (subst x / t a) = a $;
+--| @rewrite
+axiom sb_f_irrel {x: obj} (t: obj x) (p: wff): $ [x/t] p ↔ p $;
+--| @rewrite
+axiom sb_f_im {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+--| @rewrite
+axiom sb_f_an {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p ∧ q) ↔ ([x/t] p ∧ [x/t] q) $;
+--| @rewrite
+axiom sb_f_or {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p ∨ q) ↔ ([x/t] p ∨ [x/t] q) $;
+--| @rewrite
+axiom sb_f_not {x: obj} (t: obj x) (p: wff x):
+  $ [x/t] (¬ p) ↔ ¬ [x/t] p $;
+--| @rewrite
+axiom sb_f_all {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y ([x/t] p) $;
+--| @rewrite
+axiom sb_f_ex {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∃ y p) ↔ ∃ y ([x/t] p) $;
+--| @rewrite
+axiom sb_f_P {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (P a) ↔ P (subst x / t a) $;
+--| @rewrite
+axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
+--| @rewrite
+axiom sb_f_R {x: obj} (t: obj x) (a b: obj x):
+  $ [x/t] (R a b) ↔ R (subst x / t a) (subst x / t b) $;
+
+-- ============================================================
+-- The additive G3c rule set
+-- ============================================================
+--
+-- Convention: the principal formula is written as the singleton joined onto
+-- a context, e.g. `g , a` (antecedent) or `a , d` (succedent).  Because join
+-- is ACUI, `g , a` matches any context containing `a`, and `g` absorbs the
+-- rest — additive sharing with no partition.
+
+-- Initial sequent: a formula on both sides closes the branch.  Stated for an
+-- arbitrary formula `a` (the atomic restriction is admissible and only
+-- matters for cut-elimination, not soundness or completeness of search).
+axiom ax (g d: ctx) (a: wff): $ g , a ⊢ a , d $;
+
+-- Falsum on the left closes the branch.
+axiom lfal (g d: ctx): $ g , ⊥ ⊢ d $;
+
+-- Negation.
+--| @auto backward
+axiom lnot (g d: ctx) (a: wff):
+  $ g ⊢ a , d $ > $ g , (¬ a) ⊢ d $;
+--| @auto backward
+axiom rnot (g d: ctx) (a: wff):
+  $ g , a ⊢ d $ > $ g ⊢ (¬ a) , d $;
+
+-- Implication.
+--| @auto backward
+axiom lim (g d: ctx) (a b: wff):
+  $ g ⊢ a , d $ > $ g , b ⊢ d $ > $ g , (a → b) ⊢ d $;
+--| @auto backward
+axiom rim (g d: ctx) (a b: wff):
+  $ g , a ⊢ b , d $ > $ g ⊢ (a → b) , d $;
+
+-- Conjunction.
+--| @auto backward
+axiom lan (g d: ctx) (a b: wff):
+  $ g , a , b ⊢ d $ > $ g , (a ∧ b) ⊢ d $;
+--| @auto backward
+axiom ran (g d: ctx) (a b: wff):
+  $ g ⊢ a , d $ > $ g ⊢ b , d $ > $ g ⊢ (a ∧ b) , d $;
+
+-- Disjunction.
+--| @auto backward
+axiom lor (g d: ctx) (a b: wff):
+  $ g , a ⊢ d $ > $ g , b ⊢ d $ > $ g , (a ∨ b) ⊢ d $;
+--| @auto backward
+axiom ror (g d: ctx) (a b: wff):
+  $ g ⊢ a , b , d $ > $ g ⊢ (a ∨ b) , d $;
+
+-- Universal.
+--   R∀: eigenvariable `x` is the fresh rule binder; `g`, `d` are `ctx` and so
+--       cannot depend on it — that *is* the eigenvariable side condition.
+--       @freshen repairs harmless alpha-collisions where the context already
+--       binds the same name.
+--| @freshen g x
+--| @freshen d x
+axiom rall (g d: ctx) {x: obj} (p: wff x):
+  $ g ⊢ p , d $ > $ g ⊢ (∀ x p) , d $;
+--   L∀: instantiation.  The principal `∀ x p` is *kept* (needed for
+--       completeness), and a fresh instance `[x/t] p` is added.  The witness
+--       `t` appears only in the generated premise, buried inside the
+--       substituted instance `[x/t] p`, so — exactly like `rex`/euclid's
+--       `ex_intro` — a `@view` exposes the instance as a surface formula `q`
+--       and `@recover` reconstructs `t` from it.  This is the open-backward-
+--       generation (Stage 4/5) path: `t` is a meta-placeholder resolved when
+--       the instance is consumed (typically by `ax` against a succedent
+--       formula), with the witness recovered from `q` via the view.
+--       @freshen handles the dual hazard: because the principal `∀ x p` is
+--       kept, an instance `[x/t] p` that reintroduces a quantifier (as in
+--       `all_swap`) shares a bound name with the kept principal, and MM0's
+--       dependency check — which counts *all* occurrences, even bound ones —
+--       would reject the application.  Alpha-renaming the offending context
+--       repairs it, exactly as `gentzen`'s `all_left` does.
+--| @view {x: obj} (g d: ctx x) (t: obj x) (p: wff x) (q: wff): $ g , (∀ x p) , q ⊢ d $ > $ g , (∀ x p) ⊢ d $
+--| @recover t q p x
+--| @freshen g x
+--| @freshen d x
+--| @auto backward
+axiom lall (g d: ctx) {x: obj} (p: wff x) (t: obj):
+  $ g , (∀ x p) , [x/t] p ⊢ d $ > $ g , (∀ x p) ⊢ d $;
+
+-- Existential (dual of the above).
+--   L∃: eigenvariable `x` fresh; `g`, `d` cannot depend on it.
+--| @freshen g x
+--| @freshen d x
+axiom lex (g d: ctx) {x: obj} (p: wff x):
+  $ g , p ⊢ d $ > $ g , (∃ x p) ⊢ d $;
+--   R∃: witness `t` in the generated premise; principal `∃ x p` kept.  The
+--       witness sits inside the substituted instance `[x/t] p`, so — exactly
+--       like euclid's `ex_intro` — a `@view` exposes the instance as a surface
+--       formula `q` and `@recover` reconstructs `t` from it.
+--| @view {x: obj} (g d: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q , (∃ x p) , d $ > $ g ⊢ (∃ x p) , d $
+--| @recover t q p x
+--| @freshen g x
+--| @freshen d x
+--| @auto backward
+axiom rex (g d: ctx) {x: obj} (p: wff x) (t: obj):
+  $ g ⊢ [x/t] p , (∃ x p) , d $ > $ g ⊢ (∃ x p) , d $;
+
+-- ============================================================
+-- Theorems (proofs in additive_fol.auf)
+-- ============================================================
+
+-- Propositional, classical.
+theorem imp_refl: $ ∅ ⊢ P C → P C $;
+theorem and_comm: $ ∅ ⊢ (P C ∧ Q C) → (Q C ∧ P C) $;
+theorem or_comm: $ ∅ ⊢ (P C ∨ Q C) → (Q C ∨ P C) $;
+theorem imp_trans: $ ∅ ⊢ (P C → P D) → (P D → P E) → (P C → P E) $;
+theorem excluded_middle: $ ∅ ⊢ P C ∨ ¬ P C $;
+theorem peirce: $ ∅ ⊢ ((P C → Q C) → P C) → P C $;
+theorem de_morgan: $ ∅ ⊢ ¬ (P C ∧ P D) → (¬ P C ∨ ¬ P D) $;
+
+-- First-order: witness rules (lall / rex) only.
+theorem all_inst {x: obj}: $ ∅ ⊢ (∀ x P x) → P C $;
+theorem ex_intro {x: obj}: $ ∅ ⊢ P C → ∃ x P x $;
+theorem all_ex_inst {x y: obj}: $ ∅ ⊢ (∀ x P x) → (∃ y P y) $;
+
+-- First-order: eigenvariable rules (rall / lex) and quantifier alternation.
+-- These are the cases the witness-only theorems above never reach: the
+-- eigenvariable side condition is carried by the `g D: ctx` (vs `wff x`)
+-- dependency typing, and a *complete* backward search must invent the fresh
+-- variable and discharge `rall`/`lex` against it.  Every quantifier occurrence
+-- gets a distinct bound name so the dependency analysis never aliases a context
+-- formula with a rule's eigenvariable.
+theorem all_swap {x y z w: obj}:
+  $ ∅ ⊢ (∀ x ∀ y R x y) → (∀ z ∀ w R w z) $;
+theorem ex_swap {x y z w: obj}:
+  $ ∅ ⊢ (∃ x ∃ y R x y) → (∃ z ∃ w R w z) $;
+-- The valid direction of the ∃∀/∀∃ alternation (the converse is invalid).
+theorem ex_all_to_all_ex {x y z w: obj}:
+  $ ∅ ⊢ (∃ y ∀ x R x y) → (∀ z ∃ w R z w) $;
+
+-- Quantifier / connective interplay (monotonicity and scope shift): each mixes
+-- an eigenvariable rule with a witness rule in the same branch.
+theorem forall_mono {x y z: obj}:
+  $ ∅ ⊢ (∀ x (P x → Q x)) → ((∀ y P y) → (∀ z Q z)) $;
+theorem exists_mono {x y z: obj}:
+  $ ∅ ⊢ (∀ x (P x → Q x)) → ((∃ y P y) → (∃ z Q z)) $;
+theorem all_imp_shift {x y: obj}:
+  $ ∅ ⊢ (∀ x (P C → Q x)) → (P C → ∀ y Q y) $;
+
+-- Quantifier distribution over the connectives (both directions where valid).
+theorem all_an_dist_fwd {x y z: obj}:
+  $ ∅ ⊢ (∀ x (P x ∧ Q x)) → (∀ y P y ∧ ∀ z Q z) $;
+theorem all_an_dist_bwd {x y z: obj}:
+  $ ∅ ⊢ (∀ x P x ∧ ∀ y Q y) → ∀ z (P z ∧ Q z) $;
+theorem ex_or_dist_fwd {x y z: obj}:
+  $ ∅ ⊢ (∃ x (P x ∨ Q x)) → (∃ y P y ∨ ∃ z Q z) $;
+theorem ex_or_dist_bwd {x y z: obj}:
+  $ ∅ ⊢ (∃ x P x ∨ ∃ y Q y) → ∃ z (P z ∨ Q z) $;
+
+-- Classical quantifier de Morgan: each direction needs the multi-succedent
+-- form (the `not_*_to_*` directions that cross ¬ are the classical ones).
+theorem not_all_to_ex_not {x y: obj}:
+  $ ∅ ⊢ (¬ ∀ x P x) → ∃ y (¬ P y) $;
+theorem not_ex_to_all_not {x y: obj}:
+  $ ∅ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $;
+theorem ex_not_to_not_all {x y: obj}:
+  $ ∅ ⊢ (∃ x (¬ P x)) → ¬ ∀ y P y $;
+theorem all_not_to_not_ex {x y: obj}:
+  $ ∅ ⊢ (∀ x (¬ P x)) → ¬ ∃ y P y $;
+
+-- The drinker paradox: the canonical hard classical theorem.  Cut-free it needs
+-- `rex` applied twice on the *same* principal (contraction on ∃) with two
+-- different witnesses (a constant, then the eigenvariable introduced by `rall`).
+theorem drinker {x y: obj}:
+  $ ∅ ⊢ ∃ x (P x → ∀ y P y) $;
+
+-- ============================================================
+-- Propositional benchmark battery
+-- ============================================================
+--
+-- A broad corpus of classical propositional tautologies, drawn from the
+-- standard combinator / argument-form / Boolean-identity catalogue, used to
+-- stress backward-search completeness.  Atoms are encoded as distinct closed
+-- predicate formulas: A=P C, B=P D, C=P E, D=Q C, E=Q D, F=Q E, G=R C D (and
+-- further R atoms when more are needed).  Biconditionals are stated as a
+-- conjunction of the two implications (the calculus has no primitive ↔ rule).
+--
+-- Frontier status (see META_STRESS.md): the *breadth* frontier is 100% (every
+-- proof line is recovered by `auto?` from its pool — per-step completeness).
+-- The *depth* frontier (whole-proof regeneration from the bare goal) is now
+-- 100% FULL for the whole fixture at `--max-depth=10` (every theorem here,
+-- including the deep composites below).  At the default `max_depth=6` the
+-- deeper composites stay partial (but always found, `unfound@0 = 0`); their
+-- from-scratch critical path is deeper than 6 (many `lan` peels over a
+-- right-nested `∧` antecedent, and/or an un-cued classical case split):
+-- `destructive_dilemma`, `branch_converge`, `diamond`, `diamond_join`,
+-- `case_irrel`, `resolution_chain`, `fan_in`, `nested_branch`.  The earlier
+-- depth>=7 generation blowup was resolved by the success-transposition memo
+-- (`search/generate.zig` `Driver.concrete_ok`, ACUI-canonical keyed): the
+-- convergent (DAG-shaped) proofs whose shared subgoals it collapses —
+-- `branch_converge` and `fan_in` — are pinned FULL by depth-frontier guards in
+-- `build.zig` (their budgets sit just above the measured floor; see that file).
+-- The global default `max_depth` stays 6 because raising it 10×'s corpus
+-- wall-clock on doomed generic searches for zero found-ness gain.
+
+-- Combinators / structural implication tautologies.
+theorem weakening: $ ∅ ⊢ P C → (P D → P C) $;
+theorem mp_internal: $ ∅ ⊢ P C → ((P C → P D) → P D) $;
+theorem b_comb: $ ∅ ⊢ (P D → P E) → ((P C → P D) → (P C → P E)) $;
+theorem c_comb: $ ∅ ⊢ (P C → (P D → P E)) → (P D → (P C → P E)) $;
+theorem w_comb: $ ∅ ⊢ (P C → (P C → P D)) → (P C → P D) $;
+theorem s_comb: $ ∅ ⊢ (P C → (P D → P E)) → ((P C → P D) → (P C → P E)) $;
+
+-- Compact classical principles.
+theorem dne: $ ∅ ⊢ ¬ ¬ P C → P C $;
+theorem clavius: $ ∅ ⊢ (¬ P C → P C) → P C $;
+theorem modus_tollens: $ ∅ ⊢ ((P C → P D) ∧ ¬ P D) → ¬ P C $;
+theorem disj_syllogism: $ ∅ ⊢ ((P C ∨ P D) ∧ ¬ P C) → P D $;
+theorem resolution: $ ∅ ⊢ ((P C ∨ P D) ∧ (¬ P C ∨ P E)) → (P D ∨ P E) $;
+theorem contra_classical: $ ∅ ⊢ (¬ P D → ¬ P C) → (P C → P D) $;
+theorem cases_classical: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P D)) → P D $;
+theorem mat_cases: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P E)) → (P D ∨ P E) $;
+theorem mat_imp_fwd: $ ∅ ⊢ (P C → P D) → (¬ P C ∨ P D) $;
+theorem mat_imp_bwd: $ ∅ ⊢ (¬ P C ∨ P D) → (P C → P D) $;
+theorem pbc: $ ∅ ⊢ (¬ P C → ⊥) → P C $;
+theorem dummett: $ ∅ ⊢ (P C → P D) ∨ (P D → P C) $;
+theorem contradiction: $ ∅ ⊢ (P C ∧ ¬ P C) → ⊥ $;
+
+-- Structural correspondences (biconditionals, each direction a theorem).
+theorem exportation_fwd: $ ∅ ⊢ ((P C ∧ P D) → P E) → (P C → (P D → P E)) $;
+theorem exportation_bwd: $ ∅ ⊢ (P C → (P D → P E)) → ((P C ∧ P D) → P E) $;
+theorem conj_consequent_fwd:
+  $ ∅ ⊢ (P C → (P D ∧ P E)) → ((P C → P D) ∧ (P C → P E)) $;
+theorem conj_consequent_bwd:
+  $ ∅ ⊢ ((P C → P D) ∧ (P C → P E)) → (P C → (P D ∧ P E)) $;
+theorem disj_antecedent_fwd:
+  $ ∅ ⊢ ((P C ∨ P D) → P E) → ((P C → P E) ∧ (P D → P E)) $;
+theorem disj_antecedent_bwd:
+  $ ∅ ⊢ ((P C → P E) ∧ (P D → P E)) → ((P C ∨ P D) → P E) $;
+
+-- De Morgan (the ¬(A∧B)→(¬A∨¬B) direction is `de_morgan` above).
+theorem de_morgan_conj_bwd: $ ∅ ⊢ (¬ P C ∨ ¬ P D) → ¬ (P C ∧ P D) $;
+theorem de_morgan_disj_fwd: $ ∅ ⊢ ¬ (P C ∨ P D) → (¬ P C ∧ ¬ P D) $;
+theorem de_morgan_disj_bwd: $ ∅ ⊢ (¬ P C ∧ ¬ P D) → ¬ (P C ∨ P D) $;
+
+-- Distributivity.
+theorem dist_an_or_fwd:
+  $ ∅ ⊢ (P C ∧ (P D ∨ P E)) → ((P C ∧ P D) ∨ (P C ∧ P E)) $;
+theorem dist_an_or_bwd:
+  $ ∅ ⊢ ((P C ∧ P D) ∨ (P C ∧ P E)) → (P C ∧ (P D ∨ P E)) $;
+theorem dist_or_an_fwd:
+  $ ∅ ⊢ (P C ∨ (P D ∧ P E)) → ((P C ∨ P D) ∧ (P C ∨ P E)) $;
+theorem dist_or_an_bwd:
+  $ ∅ ⊢ ((P C ∨ P D) ∧ (P C ∨ P E)) → (P C ∨ (P D ∧ P E)) $;
+
+-- Absorption.
+theorem absorb_or_fwd: $ ∅ ⊢ (P C ∨ (P C ∧ P D)) → P C $;
+theorem absorb_or_bwd: $ ∅ ⊢ P C → (P C ∨ (P C ∧ P D)) $;
+theorem absorb_an_fwd: $ ∅ ⊢ (P C ∧ (P C ∨ P D)) → P C $;
+theorem absorb_an_bwd: $ ∅ ⊢ P C → (P C ∧ (P C ∨ P D)) $;
+
+-- Idempotence.
+theorem idem_or_fwd: $ ∅ ⊢ (P C ∨ P C) → P C $;
+theorem idem_or_bwd: $ ∅ ⊢ P C → (P C ∨ P C) $;
+theorem idem_an_fwd: $ ∅ ⊢ (P C ∧ P C) → P C $;
+theorem idem_an_bwd: $ ∅ ⊢ P C → (P C ∧ P C) $;
+
+-- Argument forms and composite microbenchmarks.  Conjoined antecedents are
+-- right-nested; backward search peels them with `lan` and forward-chains the
+-- implications with `lim`.
+theorem constructive_dilemma:
+  $ ∅ ⊢ ((P C → P D) ∧ ((P E → Q C) ∧ (P C ∨ P E))) → (P D ∨ Q C) $;
+theorem destructive_dilemma:
+  $ ∅ ⊢ ((P C → P D) ∧ ((P E → Q C) ∧ (¬ P D ∨ ¬ Q C))) → (¬ P C ∨ ¬ P E) $;
+theorem branch_converge:
+  $ ∅ ⊢ ((P C → P D) ∧ ((¬ P C → P E) ∧ ((P D → Q C) ∧ (P E → Q C)))) → Q C $;
+theorem shared_subgoal:
+  $ ∅ ⊢ ((P C → P E) ∧ ((P D → P E) ∧ (P C ∨ P D))) → P E $;
+theorem diamond:
+  $ ∅ ⊢ (P C ∧ ((P C → P D) ∧ ((P C → P E) ∧ ((P D → Q C) ∧ (P E → Q C)))))
+      → Q C $;
+theorem diamond_join:
+  $ ∅ ⊢ (P C ∧ ((P C → P D) ∧ ((P C → P E) ∧ ((P D ∧ P E) → Q C)))) → Q C $;
+
+-- Łukasiewicz's single axiom for classical implicational logic.
+theorem lukasiewicz:
+  $ ∅ ⊢ ((P C → P D) → P E) → ((P E → P C) → (Q C → P C)) $;
+-- Once A is known, either value of B yields C.
+theorem case_irrel:
+  $ ∅ ⊢ (((P C ∧ P D) → P E) ∧ ((P C ∧ ¬ P D) → P E)) → (P C → P E) $;
+-- Forward-friendly resolution chain.
+theorem resolution_chain:
+  $ ∅ ⊢ ((P C ∨ P D) ∧ ((¬ P C ∨ P E) ∧ ((¬ P E ∨ Q C) ∧ ¬ Q C))) → P D $;
+-- Derivable producer hidden among non-firing distractor implications.
+theorem hidden_branch:
+  $ ∅ ⊢ (P C ∧ ((P C → P D) ∧ ((P D → P E)
+        ∧ ((Q C → P E) ∧ ((Q D → P E) ∧ (Q E → P E)))))) → P E $;
+-- Two independent branches joined by a conjunctive premise.
+theorem fan_in:
+  $ ∅ ⊢ (P C ∧ ((P C → P D) ∧ ((P C → P E) ∧ ((P D → Q C)
+        ∧ ((P E → Q D) ∧ ((Q C ∧ Q D) → Q E)))))) → Q E $;
+-- Nested classical case analysis.
+theorem nested_branch:
+  $ ∅ ⊢ ((P C → ((P D → P E) ∧ (¬ P D → P E))) ∧ (¬ P C → P E)) → P E $;
+
+-- ============================================================
+-- Generalization probe theorems (added 2026-06-24)
+-- ============================================================
+-- Medium-difficulty derivations added as an overfit check on the
+-- search tuning: structurally distinct from the battery above, and all
+-- regenerated FULL from the bare goal at the default budget (md=6).
+-- The two existentials drive the open-backward witness machinery
+-- (`rex` @view/@recover) on fresh shapes, incl. a compound instance.
+
+-- Associativity of the binary connectives (right-nesting peels).
+theorem and_assoc_fwd: $ ∅ ⊢ ((P C ∧ P D) ∧ P E) → (P C ∧ (P D ∧ P E)) $;
+theorem or_assoc_fwd:  $ ∅ ⊢ ((P C ∨ P D) ∨ P E) → (P C ∨ (P D ∨ P E)) $;
+
+-- Contraposition (forward direction) and an odd negation tower.
+theorem contrapos_fwd: $ ∅ ⊢ (P C → P D) → (¬ P D → ¬ P C) $;
+theorem triple_neg:    $ ∅ ⊢ ¬ ¬ ¬ P C → ¬ P C $;
+
+-- Constructive dilemma in nested-implication (uncurried) form.
+theorem hilbert_dilemma:
+  $ ∅ ⊢ (P C ∨ P D) → ((P C → P E) → ((P D → P E) → P E)) $;
+
+-- First-order: existential weakening (eigenvariable + witness) and
+-- existential introduction with a compound instance.
+theorem ex_conj_weak {x y: obj}:
+  $ ∅ ⊢ (∃ x (P x ∧ Q x)) → (∃ y P y) $;
+theorem ex_witness_conj {x: obj}:
+  $ ∅ ⊢ (P C ∧ Q C) → (∃ x (P x ∧ Q x)) $;

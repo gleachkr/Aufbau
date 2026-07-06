@@ -1,0 +1,87 @@
+-- Adversarial probe for the ACUI minimal-complement pinning concern.
+--
+-- Wired as a depth-frontier regression guard in build.zig (test-frontier-smoke):
+-- `auto?` must regenerate the whole proof from the bare goal (frontier FULL),
+-- which exercises the phase-4 principal-retention pass
+-- (`GenerationHook.allow_retain_principal`, `exact_split.buildEnumerator`). It is
+-- the only automated check of that pass — breadth finds the line through the pool
+-- ref and never reaches the split enumerator's retention path.
+--
+-- The worry: matching a rule conclusion `g , (a ∧ b) ⊢ c` against a concrete
+-- goal `a∧b ⊢ c` is an ACUI match with idempotency, so the rest-binder `g` has
+-- multiple solutions — the minimal complement (`g = ∅`, premise `a , b ⊢ c`)
+-- AND non-minimal ones that KEEP a copy of the principal (`g = a∧b`, premise
+-- `a∧b , a , b ⊢ c`). The search pins the minimal complement.
+--
+-- In a calculus with invertible rules + a `ran` to rebuild conjunctions, the
+-- minimal complement is provably complete (the redundant copy is never needed).
+-- This theory deliberately BREAKS that: there is no `ran`, and `finish` needs
+-- the WHOLE `A ∧ B` present *alongside* its parts. So the goal `A∧B ⊢ C` is
+-- provable ONLY by keeping `A∧B` in `lan`'s premise — i.e. only via a
+-- non-minimal complement. If `auto?` pins the minimal complement and never
+-- explores the non-minimal one, it misses this proof.
+
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term an (a b: wff): wff;
+infixl an: $/\$ prec 35;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term seq (g: ctx) (a: wff): wff;
+infixl seq: $|-$ prec 1;
+
+term A: wff;
+term B: wff;
+term C: wff;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom an_congr (a b c d: wff):
+  $ a <-> b $ > $ c <-> d $ > $ (a /\ c) <-> (b /\ d) $;
+--| @congr
+axiom seq_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ (g |- a) <-> (h |- b) $;
+
+-- Initial sequent.
+axiom ax (g: ctx) (a: wff): $ g , a |- a $;
+
+-- Left-and that DROPS the principal in its premise (standard G3 shape).
+--| @auto backward
+axiom lan (g: ctx) (a b c: wff):
+  $ g , a , b |- c $ > $ g , (a /\ b) |- c $;
+
+-- The closing rule needs BOTH the decomposed `A` and the whole `A ∧ B`.
+-- There is no `ran`, so once `A ∧ B` is dropped it cannot be rebuilt.
+axiom finish (g: ctx): $ g , A , (A /\ B) |- C $;
+
+-- Provable ONLY by keeping `A ∧ B` in lan's premise (non-minimal complement).
+theorem idem_complement_probe: $ A /\ B |- C $;

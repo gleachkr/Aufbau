@@ -1,0 +1,14 @@
+nd_mp_inner
+-----------
+l1: $ p → q ⊢ p → q $ by ax
+l2: $ p ⊢ p $ by ax
+l3: $ p → q , p ⊢ q $ by imp_elim [l1, l2]
+
+nd_or_comm_min
+--------------
+l1: $ p ∨ q ⊢ p ∨ q $ by ax
+l2: $ p ⊢ p $ by ax
+l3: $ p ⊢ q ∨ p $ by or_intro_r [l2]
+l4: $ q ⊢ q $ by ax
+l5: $ q ⊢ q ∨ p $ by or_intro_l [l4]
+l6: $ p ∨ q ⊢ q ∨ p $ by or_elim [l1, l3, l5]

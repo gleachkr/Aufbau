@@ -290,12 +290,417 @@ test "compiler pinpoints unknown fallback rules" {
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
     try std.testing.expectError(error.UnknownFallbackRule, compiler.check());
 
-    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
     try std.testing.expectEqual(error.UnknownFallbackRule, diag.err);
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
     try std.testing.expectEqualStrings("top_i", diag.name.?);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
-    try std.testing.expectEqualStrings("@fallback missing_rule", mm0_src[span.start..span.end]);
+    try std.testing.expectEqualStrings(
+        "@fallback missing_rule",
+        mm0_src[span.start..span.end],
+    );
+}
+
+test "compiler stores auto forward annotations" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @auto forward
+        \\axiom top_i: $ top $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("top_i") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expect(metadata.registry.isAutoForwardRule(rule_id));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        metadata.registry.autoForwardRuleCount(),
+    );
+}
+
+test "compiler stores auto backward annotations" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @auto backward
+        \\axiom top_i: $ top $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("top_i") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        metadata.registry.autoBackwardRuleCount(),
+    );
+    // forward and backward are independent enrollments.
+    try std.testing.expect(!metadata.registry.isAutoForwardRule(rule_id));
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        metadata.registry.autoForwardRuleCount(),
+    );
+}
+
+test "compiler stores auto eager annotations (default priority, implies backward)" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term and (p q: wff): wff;
+        \\--| @auto eager
+        \\axiom and_i (a b: wff) (h1: $ a $) (h2: $ b $): $ and a b $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("and_i") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expectEqual(
+        @as(?u8, 1),
+        metadata.registry.eagerPriority(rule_id),
+    );
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        metadata.registry.autoEagerRuleCount(),
+    );
+    // Eager implies backward enrollment.
+    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+}
+
+test "compiler stores auto eager annotations with explicit priority" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term and (p q: wff): wff;
+        \\--| @auto eager 3
+        \\axiom and_i (a b: wff) (h1: $ a $) (h2: $ b $): $ and a b $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("and_i") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expectEqual(
+        @as(?u8, 3),
+        metadata.registry.eagerPriority(rule_id),
+    );
+}
+
+test "compiler rejects auto eager priority zero and trailing junk" {
+    const zero_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @auto eager 0
+        \\axiom top_i: $ top $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.InvalidAutoAnnotation,
+        processAnnotatedMetadata(arena.allocator(), zero_src),
+    );
+
+    const junk_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @auto eager 2 junk
+        \\axiom top_i: $ top $;
+    ;
+    try std.testing.expectError(
+        error.InvalidAutoAnnotation,
+        processAnnotatedMetadata(arena.allocator(), junk_src),
+    );
+}
+
+test "compiler rejects auto eager on a witness-deferring rule" {
+    // `mp`'s antecedent `a` appears only in the hypotheses: a backward
+    // application must defer it as an existential witness, so a depth-free
+    // eager step would be a self-feeding cascade — annotation error.
+    const mm0_src =
+        \\provable sort wff;
+        \\term im (p q: wff): wff;
+        \\--| @auto eager
+        \\axiom mp (a b: wff) (h1: $ im a b $) (h2: $ a $): $ b $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.EagerRuleDefersWitness,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler accepts tab-separated auto forward annotations" {
+    const mm0_src =
+        "provable sort wff;\n" ++
+        "term top: wff;\n" ++
+        "--| @auto\tforward\n" ++
+        "axiom top_i: $ top $;\n";
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("top_i") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expect(metadata.registry.isAutoForwardRule(rule_id));
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        metadata.registry.autoForwardRuleCount(),
+    );
+}
+
+test "compiler rejects malformed auto annotations" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @auto sideways
+        \\axiom top_i: $ top $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(error.InvalidAutoAnnotation, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.InvalidAutoAnnotation, diag.err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
+    try std.testing.expectEqualStrings("top_i", diag.name.?);
+    try std.testing.expectEqualStrings(
+        "@auto expects one mode: forward, backward, " ++
+            "eager [PRIORITY >= 1], or trigger PATTERN",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(
+        "@auto sideways",
+        mm0_src[span.start..span.end],
+    );
+}
+
+test "compiler rejects extra tab-separated auto annotation tokens" {
+    const mm0_src =
+        "provable sort wff;\n" ++
+        "term top: wff;\n" ++
+        "--| @auto\tforward junk\n" ++
+        "axiom top_i: $ top $;\n";
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(error.InvalidAutoAnnotation, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.InvalidAutoAnnotation, diag.err);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(
+        "@auto\tforward junk",
+        mm0_src[span.start..span.end],
+    );
+}
+
+// Shared prelude for the `@auto trigger` annotation tests: enough context
+// machinery that `ax`'s unnamed `G` binder can default to the ACUI unit.
+const trigger_mm0_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term im (p q: wff): wff;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc ctx_comm emp
+    \\term join (G H: ctx): ctx;
+    \\term hyp (p: wff): ctx;
+    \\term nd (G: ctx) (p: wff): wff;
+    \\
+;
+
+test "compiler parses auto trigger annotations" {
+    const mm0_src = trigger_mm0_prelude ++
+        \\--| @auto trigger (hyp p)
+        \\--| @auto trigger (im p _)
+        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("ax") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        metadata.registry.triggerRuleCount(),
+    );
+    const patterns = metadata.registry.trigger_by_rule.get(rule_id) orelse {
+        return error.MissingTriggerPatterns;
+    };
+    try std.testing.expectEqual(@as(usize, 2), patterns.items.len);
+    // `(hyp p)`: unary app capturing binder 1 (`p`).
+    const hyp_pattern = patterns.items[0];
+    try std.testing.expect(hyp_pattern == .app);
+    try std.testing.expectEqual(@as(usize, 1), hyp_pattern.app.args.len);
+    try std.testing.expectEqual(
+        mm0.RewriteRegistry.TriggerPattern{ .binder = 1 },
+        hyp_pattern.app.args[0],
+    );
+    // `(im p _)`: binary app, capture then wildcard.
+    const im_pattern = patterns.items[1];
+    try std.testing.expect(im_pattern == .app);
+    try std.testing.expectEqual(@as(usize, 2), im_pattern.app.args.len);
+    try std.testing.expectEqual(
+        mm0.RewriteRegistry.TriggerPattern{ .binder = 1 },
+        im_pattern.app.args[0],
+    );
+    try std.testing.expect(im_pattern.app.args[1] == .wildcard);
+}
+
+test "compiler rejects auto trigger on a rule with hypotheses" {
+    const mm0_src = trigger_mm0_prelude ++
+        \\--| @auto trigger (hyp p)
+        \\axiom weak (G: ctx) (p q: wff):
+        \\  $ nd G p $ > $ nd (join G (hyp q)) p $;
+    ;
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.TriggerRuleHasHypotheses,
+        compiler.check(),
+    );
+}
+
+test "compiler rejects auto trigger leaving a non-context binder unnamed" {
+    // `(hyp _)` names neither `p` (wff — no ACUI combiner sort) nor `G`;
+    // only `G` can default to a unit, so the seed would not be ground.
+    const mm0_src = trigger_mm0_prelude ++
+        \\--| @auto trigger (hyp _)
+        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
+    ;
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.TriggerBinderNotGround,
+        compiler.check(),
+    );
+}
+
+test "compiler rejects auto trigger with a wrong-sort capture" {
+    // `join`'s argument positions are ctx-sorted; `p` is a wff binder.
+    const mm0_src = trigger_mm0_prelude ++
+        \\--| @auto trigger (join p _)
+        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
+    ;
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.TriggerSortMismatch,
+        compiler.check(),
+    );
+}
+
+test "compiler rejects auto trigger with unbalanced pattern" {
+    const mm0_src = trigger_mm0_prelude ++
+        \\--| @auto trigger (hyp p
+        \\axiom ax (G: ctx) (p: wff): $ nd (join G (hyp p)) p $;
+    ;
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.InvalidTriggerAnnotation,
+        compiler.check(),
+    );
+}
+
+test "auto forward annotation is unavailable before its rule" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom early: $ top $;
+        \\--| @auto forward
+        \\axiom late: $ top $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var parser = MM0Parser.init(mm0_src, allocator);
+    var env = FrontendEnv.GlobalEnv.init(allocator);
+    var registry = RewriteRegistry.init(allocator);
+    var fresh_bindings = std.AutoHashMap(
+        u32,
+        []const CompilerMetadata.FreshDecl,
+    ).init(allocator);
+    var freshen_bindings = std.AutoHashMap(
+        u32,
+        []const CompilerMetadata.FreshenDecl,
+    ).init(allocator);
+    var views = std.AutoHashMap(
+        u32,
+        CompilerMetadata.ViewDecl,
+    ).init(allocator);
+    var sort_vars = CompilerMetadata.SortVarRegistry.init(allocator);
+
+    while (try parser.next()) |stmt| {
+        try env.addStmt(stmt);
+        switch (stmt) {
+            .sort => |sort_stmt| {
+                try CompilerMetadata.processSortMetadata(
+                    &parser,
+                    sort_stmt,
+                    parser.last_annotations,
+                    &sort_vars,
+                );
+            },
+            .term => |term_stmt| {
+                try CompilerMetadata.processTermMetadata(
+                    &env,
+                    &registry,
+                    term_stmt,
+                    parser.last_annotations,
+                );
+            },
+            .assertion => |assertion| {
+                try CompilerMetadata.processAssertionMetadata(
+                    allocator,
+                    &parser,
+                    &env,
+                    &registry,
+                    &fresh_bindings,
+                    &freshen_bindings,
+                    &views,
+                    assertion,
+                    parser.last_annotations,
+                );
+                if (std.mem.eql(u8, assertion.name, "early")) {
+                    const early = env.getRuleId("early") orelse {
+                        return error.MissingRule;
+                    };
+                    try std.testing.expect(!registry.isAutoForwardRule(early));
+                    try std.testing.expect(env.getRuleId("late") == null);
+                    try std.testing.expectEqual(
+                        @as(usize, 0),
+                        registry.autoForwardRuleCount(),
+                    );
+                }
+            },
+        }
+    }
+
+    const late = env.getRuleId("late") orelse return error.MissingRule;
+    try std.testing.expect(registry.isAutoForwardRule(late));
 }
 
 test "compiler pinpoints unknown terms in notation statements" {
@@ -1228,6 +1633,54 @@ test "nested transparent view proof case keeps binders omitted" {
         "by sep_elim",
     ));
     try std.testing.expect(!std.mem.containsAtLeast(u8, line, 1, ":="));
+}
+
+test "euclid ex_elim infers symbolic view witness" {
+    const allocator = std.testing.allocator;
+    const mm0_src = try readProofCaseFile(allocator, "euclid", "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(allocator, "euclid", "auf");
+    defer allocator.free(proof_src);
+
+    const witness_free_application = "by ex_elim [#1, l2]";
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        proof_src,
+        1,
+        witness_free_application,
+    ));
+    try std.testing.expect(!std.mem.containsAtLeast(
+        u8,
+        proof_src,
+        1,
+        "by ex_elim (x := $ k $) [#1, l2]",
+    ));
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+}
+
+// This proof needs the structural solver to keep symbolic view seeds
+// available while @recover derives the rule-side witness.
+// A view-bindings-only snapshot loses the hidden hole inside `P x`.
+//
+// The full integration suite also covers this case, but keeping it here makes
+// the symbolic @recover requirement visible next to the binder-inference
+// regression test.
+test "structural view recover uses symbolic snapshot" {
+    const allocator = std.testing.allocator;
+    const stem = "pass_view_acui_joint_cover";
+    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    defer allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
 }
 
 test "compiler does not treat hidden applications as proof labels" {
@@ -3683,11 +4136,11 @@ test "compiler reports normalized comparison snapshots on mismatch" {
     );
     try std.testing.expectEqual(@as(usize, 5), diag.noteSlice().len);
     try std.testing.expectEqualStrings(
-        "expected: sb(Q, im(P, P))",
+        "expected: sb Q (P -> P)",
         diag.noteSlice()[0].message,
     );
     try std.testing.expectEqualStrings(
-        "actual: im(R, R)",
+        "actual: R -> R",
         diag.noteSlice()[1].message,
     );
     try std.testing.expectEqualStrings(
@@ -3695,11 +4148,11 @@ test "compiler reports normalized comparison snapshots on mismatch" {
         diag.noteSlice()[2].message,
     );
     try std.testing.expectEqualStrings(
-        "normalized expected: im(Q, Q)",
+        "normalized expected: Q -> Q",
         diag.noteSlice()[3].message,
     );
     try std.testing.expectEqualStrings(
-        "normalized actual: im(R, R)",
+        "normalized actual: R -> R",
         diag.noteSlice()[4].message,
     );
 }

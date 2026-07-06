@@ -63,6 +63,12 @@ Most project-specific docs now live under `docs/`:
 - `docs/fresh_binders.md` for `@vars`, `@fresh`, and `@freshen`
 - `docs/holes.md` for proof-side holes (`@hole`)
 
+Subsystem-level architecture notes live next to their code:
+
+- `src/frontend/compiler/search/ARCHITECTURE.md` for the `exact?` / `apply?` /
+  `auto?` proof-search subsystem (pipeline, ACUI principal-matching mechanisms,
+  COW-interner invariant, verification contract)
+
 The language / binary specs remain under `specs/`:
 
 - `specs/mm0.md`

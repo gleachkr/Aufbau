@@ -1,0 +1,3 @@
+nd_eq_symm
+----------
+l1: $ emp ⊢ a = b → b = a $ by auto?

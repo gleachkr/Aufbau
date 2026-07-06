@@ -1,0 +1,3 @@
+nd_exists_intro_unit
+--------------------
+l1: $ _ ⊢ ∃ x (x ∈ A) $ by auto?

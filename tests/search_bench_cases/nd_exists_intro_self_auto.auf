@@ -1,0 +1,3 @@
+nd_exists_intro_self
+--------------------
+l1: $ _ ⊢ A ∈ A → ∃ x (x ∈ x) $ by auto?

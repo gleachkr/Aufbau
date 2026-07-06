@@ -1,0 +1,3 @@
+nd_union_intro_imp
+------------------
+l5: $ x ∈ y , y ∈ A ⊢ x ∈ union A $ by auto?

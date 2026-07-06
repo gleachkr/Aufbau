@@ -157,6 +157,7 @@ pub fn collectAcuiLeaves(
     out: *std.ArrayListUnmanaged(AcuiLeaf),
 ) anyerror!void {
     var support = Support.acuiSupport(self);
+    defer support.deinit();
     var infos = std.ArrayListUnmanaged(AcuiSupport.LeafInfo){};
     defer infos.deinit(self.allocator);
     try support.collectLeafInfos(expr_id, head_term_id, &infos);
@@ -188,6 +189,7 @@ pub fn applySameSideAbsorption(
     }
 
     var support = Support.acuiSupport(self);
+    defer support.deinit();
     const targets = try support.computeSameSideTargets(infos, unit_expr, acui);
     defer self.allocator.free(targets);
 

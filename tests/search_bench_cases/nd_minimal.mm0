@@ -1,0 +1,107 @@
+-- Minimal propositional natural-deduction theory for the `@auto trigger`
+-- seeding guards (docs/design_notes/trigger_seeding.md).
+--
+-- This is the pure repro of the elimination-major "left rule" gap: from an
+-- EMPTY ref pool, backward search cannot pin an elim rule's premise-only
+-- binder (imp_elim's `p`, or_elim's disjuncts), so `p → q , p ⊢ q` is a MISS
+-- at any budget. The `@auto trigger` annotations on `ax` seed ground
+-- identity axioms over the goal's subterms (context members and implication
+-- antecedents — the analytic leaf set), and the seeds ARE the missing refs.
+
+delimiter $ ( ) { } , $;
+
+strict provable sort wff;
+sort ctx;
+
+term im (p q: wff): wff;
+infixr im: $→$ prec 25;
+infixr im: $->$ prec 25;
+
+term or (p q: wff): wff;
+infixr or: $∨$ prec 28;
+infixr or: $\/$ prec 28;
+
+term bi (p q: wff): wff;
+infixr bi: $↔$ prec 20;
+infixr bi: $<->$ prec 20;
+
+-- Context syntax for natural deduction (the zermelo_frontier prelude,
+-- trimmed to the propositional fragment).
+
+term ctx_eq (G H: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (G H: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+
+term nd (G: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (p: wff): $ p ↔ p $;
+axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+axiom ctx_trans (G H K: ctx):
+  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+axiom ctx_assoc (G H K: ctx):
+  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
+
+--| @congr
+axiom join_congr (G1 G2 H1 H2: ctx):
+  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+  $ ctx_eq (G1 , H1) (G2 , H2) $;
+
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+
+--| @congr
+axiom nd_congr (G H: ctx) (p q: wff):
+  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+
+-- Primitive rules. Triggers on `ax`: seed `φ ⊢ φ` for every context member
+-- (`hyp φ` subterm — the left-rule reading), for every implication
+-- antecedent (what `imp_intro` will move into context), and for every
+-- disjunct (what `or_elim` will move into its minors' contexts).
+
+--| @auto trigger (hyp p)
+--| @auto trigger (im p _)
+--| @auto trigger (or p _)
+--| @auto trigger (or _ p)
+axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+
+--| @auto backward
+axiom imp_intro (G: ctx) (p q: wff):
+  $ G , p ⊢ q $ > $ G ⊢ p → q $;
+
+--| @auto forward
+axiom imp_elim (G H: ctx) (p q: wff):
+  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+
+--| @auto backward
+axiom or_intro_l (G: ctx) (p q: wff):
+  $ G ⊢ p $ > $ G ⊢ p ∨ q $;
+
+--| @auto backward
+axiom or_intro_r (G: ctx) (p q: wff):
+  $ G ⊢ q $ > $ G ⊢ p ∨ q $;
+
+--| @auto forward
+axiom or_elim (G H K: ctx) (p q r: wff):
+  $ G ⊢ p ∨ q $ > $ H , p ⊢ r $ > $ K , q ⊢ r $ >
+  $ G , H , K ⊢ r $;
+
+theorem nd_mp_inner (p q: wff): $ p → q , p ⊢ q $;
+theorem nd_or_comm_min (p q: wff): $ p ∨ q ⊢ q ∨ p $;

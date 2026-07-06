@@ -1,0 +1,143 @@
+-- Bench-only natural-deduction twin of forward_backward_compose.mm0 (META.md
+-- Stages 4+7/8 composition probe): sequents with ACUI hypothesis contexts,
+-- forward universal instantiation deriving the family fact
+-- `emp ⊢ P ?t → Q ?t`, and an `@auto backward` imp_elim whose major premise
+-- opens as `emp ⊢ ?a → Q K`. The ND core (contexts, congruences, substitution
+-- battery) is a minimal subset of euclid.mm0, kept self-contained per the
+-- bench fixture convention.
+delimiter $ ( ) [ / ] $;
+
+provable sort wff;
+sort ctx;
+sort obj;
+
+term im (a b: wff): wff;
+infixr im: $→$ prec 25;
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+
+term all {x: obj} (p: wff x): wff;
+prefix all: $∀$ prec 41;
+
+term sb_f {x: obj} (t: obj x) (p: wff x): wff;
+notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_t {x: obj} (t: obj x) (a: obj x): obj;
+notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
+  ($subst$:41) x ($/$:0) t a;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+term eq (a b: obj): wff;
+infixl eq: $=$ prec 50;
+
+term P (x: obj): wff;
+prefix P: $P$ prec 40;
+term Q (x: obj): wff;
+prefix Q: $Q$ prec 40;
+term K: obj;
+
+-- The bi-conditional is the rewrite relation on wff.
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ a ↔ a $;
+axiom bitr (a b c: wff):
+  $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+-- ACUI equality on contexts.
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @relation obj eq eq_refl eq_trans eq_sym _
+axiom eq_refl (a: obj): $ a = a $;
+axiom eq_trans (a b c: obj):
+  $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_sym (a b: obj): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ↔ (h ⊢ b) $;
+--| @congr
+axiom im_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+--| @congr
+axiom all_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+--| @congr
+axiom P_congr (a b: obj): $ a = b $ > $ P a ↔ P b $;
+--| @congr
+axiom Q_congr (a b: obj): $ a = b $ > $ Q a ↔ Q b $;
+
+--| @rewrite
+axiom sb_t_var {x: obj} (t: obj x): $ (subst x / t x) = t $;
+--| @rewrite
+axiom sb_t_other {x y: obj} (t: obj x): $ (subst x / t y) = y $;
+--| @rewrite
+axiom sb_t_irrel {x: obj} (t: obj x) (a: obj): $ (subst x / t a) = a $;
+--| @rewrite
+axiom sb_f_im {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+--| @rewrite
+axiom sb_f_all {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y ([x/t] p) $;
+--| @rewrite
+axiom sb_f_P {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (P a) ↔ P (subst x / t a) $;
+--| @rewrite
+axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
+
+-- ND structural rules.
+axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+
+-- Implication elimination, enrolled in open backward generation.
+--| @auto backward
+axiom imp_elim (g h: ctx) (a b: wff):
+  $ g ⊢ a → b $ > $ h ⊢ a $ > $ g , h ⊢ b $;
+
+-- Sequent-form universal elimination, the @auto forward rule.
+--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ ∀ x p $ > $ g ⊢ q $
+--| @recover t q p x
+--| @auto forward
+axiom all_elim {x: obj} (g: ctx x) (t: obj x) (p: wff x):
+  $ g ⊢ ∀ x p $ > $ g ⊢ [x/t] p $;
+
+-- Minor-premise fact for the generated variant below.
+axiom P_K_nd: $ emp ⊢ P K $;
+
+-- Composition, minor premise in the ref pool: sequent hypotheses
+-- `emp ⊢ ∀ x (P x → Q x)` and `emp ⊢ P K`, goal `emp ⊢ Q K`.
+theorem nd_fwd_bwd_minor_in_pool {x: obj}:
+  $ emp ⊢ ∀ x (P x → Q x) $ > $ emp ⊢ P K $ > $ emp ⊢ Q K $;
+
+-- Composition, minor premise NOT in the pool: the major slot opens as
+-- `emp ⊢ ?a → Q K`, the derived family fact `emp ⊢ P ?t → Q ?t` discharges
+-- it, and the pinned minor `emp ⊢ P K` is generated from `P_K_nd []`.
+theorem nd_fwd_bwd_minor_generated {x: obj}:
+  $ emp ⊢ ∀ x (P x → Q x) $ > $ emp ⊢ Q K $;

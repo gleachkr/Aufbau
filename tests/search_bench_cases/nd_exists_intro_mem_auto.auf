@@ -1,0 +1,5 @@
+nd_exists_intro_mem
+-------------------
+-- l1: $ A ∈ A ⊢ A ∈ A $ by ax
+-- l2: $ A ∈ A ⊢ ∃ x (x ∈ A) $ by ex_intro [l1]
+l3: $ _ ⊢ A ∈ A → ∃ x (x ∈ A) $ by auto?

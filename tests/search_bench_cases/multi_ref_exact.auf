@@ -1,0 +1,23 @@
+t
+----
+l00: $ A0 $ by have_A0
+l01: $ A1 $ by have_A1
+l02: $ A2 $ by have_A2
+l03: $ A3 $ by have_A3
+l04: $ A4 $ by have_A4
+l05: $ A5 $ by have_A5
+l06: $ A6 $ by have_A6
+l07: $ A7 $ by have_A7
+l08: $ A8 $ by have_A8
+l09: $ A9 $ by have_A9
+l10: $ A10 $ by have_A10
+l11: $ A11 $ by have_A11
+l12: $ A12 $ by have_A12
+l13: $ A13 $ by have_A13
+l14: $ A14 $ by have_A14
+l15: $ A15 $ by have_A15
+l16: $ A16 $ by have_A16
+l17: $ A17 $ by have_A17
+l18: $ A18 $ by have_A18
+l19: $ A19 $ by have_A19
+l20: $ Goal $ by exact?

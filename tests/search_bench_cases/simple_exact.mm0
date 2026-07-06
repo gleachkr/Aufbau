@@ -1,0 +1,6 @@
+delimiter $ ( ) $;
+provable sort wff;
+term P: wff;
+axiom p: $ P $;
+axiom id (p: wff): $ p $ > $ p $;
+theorem t: $ P $;

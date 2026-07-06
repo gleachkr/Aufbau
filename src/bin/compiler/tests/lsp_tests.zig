@@ -6,6 +6,9 @@ const lsp_server = @import("../lsp.zig");
 const lsp_diagnostics = @import("lsp_diagnostics");
 
 const types = lsp.types;
+const CodeActionResult = lsp.ResultType("textDocument/codeAction");
+const CodeActionItems = @typeInfo(CodeActionResult).optional.child;
+const CodeActionItem = @typeInfo(CodeActionItems).pointer.child;
 const Handler = lsp_server.Handler;
 const DocumentKind = lsp_server.DocumentKind;
 const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
@@ -22,11 +25,33 @@ const documentKind = lsp_server.documentKind;
 
 const TestTransport = struct {
     transport: lsp.Transport = .{ .vtable = &vtable },
+    messages: [64][]const u8 = undefined,
+    message_count: usize = 0,
+    // Backs the copies made in `writeJsonMessage`: the caller's `message`
+    // buffer is transient (freed once the write returns), so storing the slice
+    // directly would leave `messages` dangling by the time a test asserts on
+    // it. Deliberately page_allocator-backed and never freed — test-lifetime
+    // storage outside the testing allocator's leak accounting.
+    storage: std.heap.ArenaAllocator =
+        std.heap.ArenaAllocator.init(std.heap.page_allocator),
 
     const vtable: lsp.Transport.VTable = .{
         .readJsonMessage = readJsonMessage,
         .writeJsonMessage = writeJsonMessage,
     };
+
+    fn clearMessages(self: *TestTransport) void {
+        self.message_count = 0;
+    }
+
+    fn containsMessage(self: *const TestTransport, needle: []const u8) bool {
+        for (self.messages[0..self.message_count]) |message| {
+            if (std.mem.containsAtLeast(u8, message, 1, needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     fn readJsonMessage(
         _: *lsp.Transport,
@@ -36,9 +61,19 @@ const TestTransport = struct {
     }
 
     fn writeJsonMessage(
-        _: *lsp.Transport,
-        _: []const u8,
-    ) lsp.Transport.WriteError!void {}
+        transport: *lsp.Transport,
+        message: []const u8,
+    ) lsp.Transport.WriteError!void {
+        const self: *TestTransport = @fieldParentPtr(
+            "transport",
+            transport,
+        );
+        if (self.message_count >= self.messages.len) unreachable;
+        const copy = self.storage.allocator().dupe(u8, message) catch
+            unreachable;
+        self.messages[self.message_count] = copy;
+        self.message_count += 1;
+    }
 };
 
 fn testPosition(text: []const u8, needle: []const u8) !types.Position {
@@ -135,6 +170,88 @@ fn expectCompletionEditText(
     try std.testing.expectEqualStrings(expected_new, text_edit.newText);
 }
 
+fn expectCodeActionItems(
+    result: CodeActionResult,
+) ![]const CodeActionItem {
+    return result orelse error.ExpectedCodeActions;
+}
+
+fn codeActionSingleEdit(
+    action: types.CodeAction,
+    uri: []const u8,
+) ?types.TextEdit {
+    const workspace_edit = action.edit orelse return null;
+    const changes = workspace_edit.changes orelse return null;
+    const edits = changes.map.get(uri) orelse return null;
+    if (edits.len != 1) return null;
+    return edits[0];
+}
+
+fn firstCodeAction(items: []const CodeActionItem) ?types.CodeAction {
+    for (items) |item| switch (item) {
+        .CodeAction => |action| return action,
+        .Command => {},
+    };
+    return null;
+}
+
+fn codeActionWithReplacement(
+    items: []const CodeActionItem,
+    uri: []const u8,
+    expected_new: []const u8,
+) ?types.CodeAction {
+    for (items) |item| switch (item) {
+        .CodeAction => |action| {
+            const edit = codeActionSingleEdit(action, uri) orelse continue;
+            if (std.mem.eql(u8, edit.newText, expected_new)) {
+                return action;
+            }
+        },
+        .Command => {},
+    };
+    return null;
+}
+
+// Verify the (uncapped) search API offers `expected_replacement` at `marker`.
+// Used where the LSP code action caps results below the rank of the suggestion
+// under test (e.g. a local lemma outranked by an axiom), so the indexing must be
+// checked at the search layer rather than the capped action list.
+fn expectSearchOffers(
+    allocator: std.mem.Allocator,
+    proof_text: []const u8,
+    marker: []const u8,
+    expected_replacement: []const u8,
+) !void {
+    const Search = mm0.CompilerSupport.Search;
+    const offset = std.mem.indexOf(u8, proof_text, marker) orelse
+        return error.MissingMarker;
+    var suggestions = try Search.suggestionsAtSourceOffset(
+        allocator,
+        lsp_search_mm0_text,
+        proof_text,
+        offset,
+        .{},
+    );
+    defer suggestions.deinit();
+    for (suggestions.items) |item| {
+        if (std.mem.eql(u8, item.replacement, expected_replacement)) return;
+    }
+    return error.SearchDidNotOfferExpected;
+}
+
+fn codeActionParamsAt(
+    uri: []const u8,
+    text: []const u8,
+    needle: []const u8,
+) !types.CodeActionParams {
+    const position = try testPosition(text, needle);
+    return .{
+        .textDocument = .{ .uri = uri },
+        .range = .{ .start = position, .end = position },
+        .context = .{ .diagnostics = &.{} },
+    };
+}
+
 const lsp_navigation_mm0_text =
     \\provable sort wff;
     \\term top: wff;
@@ -158,6 +275,26 @@ fn putLspNavigationDocuments(
     try handler.putDocument(mm0_uri, lsp_navigation_mm0_text, 1);
     try handler.putDocument(proof_uri, lsp_navigation_proof_text, 1);
 }
+
+const lsp_search_mm0_text =
+    \\provable sort wff;
+    \\term top: wff;
+    \\axiom top_i: $ top $;
+    \\axiom keep: $ top $ > $ top $;
+    \\theorem main: $ top $ > $ top $;
+;
+
+const lsp_search_exact_proof_text =
+    \\main
+    \\----
+    \\l1: $ top $ by exact?
+;
+
+const lsp_search_apply_proof_text =
+    \\main
+    \\----
+    \\l1: $ top $ by apply?
+;
 
 test "LSP initialize advertises navigation capabilities" {
     var transport_state: TestTransport = .{};
@@ -214,6 +351,14 @@ test "LSP initialize advertises navigation capabilities" {
     };
     try std.testing.expectEqual(false, completion.resolveProvider.?);
 
+    const code_action = result.capabilities.codeActionProvider orelse {
+        return error.ExpectedCodeActionProvider;
+    };
+    switch (code_action) {
+        .bool => |enabled| try std.testing.expect(enabled),
+        else => return error.ExpectedBooleanCodeActionProvider,
+    }
+
     const document_symbol = result.capabilities.documentSymbolProvider orelse {
         return error.ExpectedDocumentSymbolProvider;
     };
@@ -236,6 +381,759 @@ test "LSP initialize omits document symbols for non-hierarchical clients" {
     });
 
     try std.testing.expect(result.capabilities.documentSymbolProvider == null);
+}
+
+test "LSP code action replaces exact placeholder" {
+    const mm0_uri = "file:///tmp/lsp-code-action-exact.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-exact.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, lsp_search_exact_proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(
+                proof_uri,
+                lsp_search_exact_proof_text,
+                "exact?",
+            ),
+        ),
+    );
+    const action = codeActionWithReplacement(actions, proof_uri, "top_i") orelse {
+        return error.MissingExactCodeAction;
+    };
+    try std.testing.expectEqual(types.CodeActionKind.quickfix, action.kind.?);
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(lsp_search_exact_proof_text, edit.range, "exact?");
+}
+
+test "LSP code action caches search results across identical requests" {
+    const mm0_uri = "file:///tmp/lsp-code-action-cache.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-cache.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, lsp_search_exact_proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const first = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(
+                proof_uri,
+                lsp_search_exact_proof_text,
+                "exact?",
+            ),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), handler.search_cache.count());
+    const cached_ptr = handler.search_cache.getPtr(proof_uri).?.suggestions.ptr;
+    const first_action =
+        codeActionWithReplacement(first, proof_uri, "top_i") orelse
+        return error.MissingExactCodeAction;
+
+    // A second identical request must reuse the cached entry (same backing
+    // suggestions, no eviction/recompute) rather than re-running the search.
+    const second = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(
+                proof_uri,
+                lsp_search_exact_proof_text,
+                "exact?",
+            ),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), handler.search_cache.count());
+    try std.testing.expectEqual(
+        cached_ptr,
+        handler.search_cache.getPtr(proof_uri).?.suggestions.ptr,
+    );
+    const second_action =
+        codeActionWithReplacement(second, proof_uri, "top_i") orelse
+        return error.MissingExactCodeAction;
+
+    const first_edit =
+        codeActionSingleEdit(first_action, proof_uri).?;
+    const second_edit =
+        codeActionSingleEdit(second_action, proof_uri).?;
+    try std.testing.expectEqualStrings(
+        first_edit.newText,
+        second_edit.newText,
+    );
+}
+
+test "LSP code action cache hits across different offsets on the same step" {
+    const mm0_uri = "file:///tmp/lsp-code-action-cache-offset.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-cache-offset.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, lsp_search_exact_proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    // First request lands inside the goal text `$ top $`...
+    _ = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, lsp_search_exact_proof_text, "top"),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), handler.search_cache.count());
+    const cached_ptr = handler.search_cache.getPtr(proof_uri).?.suggestions.ptr;
+
+    // ...a second request at a different column of the SAME proof step (the
+    // `exact?` keyword) must reuse the cached result via its placeholder span,
+    // not re-run the search and evict.
+    const second = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, lsp_search_exact_proof_text, "exact?"),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), handler.search_cache.count());
+    try std.testing.expectEqual(
+        cached_ptr,
+        handler.search_cache.getPtr(proof_uri).?.suggestions.ptr,
+    );
+    try std.testing.expect(
+        codeActionWithReplacement(second, proof_uri, "top_i") != null,
+    );
+}
+
+test "LSP code action search cache is freed when the document closes" {
+    const mm0_uri = "file:///tmp/lsp-code-action-cache-close.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-cache-close.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, lsp_search_exact_proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    _ = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(
+                proof_uri,
+                lsp_search_exact_proof_text,
+                "exact?",
+            ),
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), handler.search_cache.count());
+
+    try handler.@"textDocument/didClose"(
+        arena_state.allocator(),
+        .{ .textDocument = .{ .uri = proof_uri } },
+    );
+    try std.testing.expectEqual(@as(usize, 0), handler.search_cache.count());
+}
+
+test "LSP code action replaces entire placeholder application" {
+    const mm0_uri = "file:///tmp/lsp-code-action-stale-ref.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-stale-ref.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by exact? [#1]
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    const action = codeActionWithReplacement(actions, proof_uri, "top_i") orelse {
+        return error.MissingWholeApplicationCodeAction;
+    };
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "exact? [#1]");
+}
+
+test "LSP code action completes inline exact placeholder" {
+    const mm0_uri = "file:///tmp/lsp-code-action-inline-exact.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-inline-exact.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by keep [exact?]
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    const action = codeActionWithReplacement(actions, proof_uri, "#1") orelse {
+        return error.MissingInlineExactCodeAction;
+    };
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "exact?");
+}
+
+test "LSP diagnostics ignore inline search placeholders" {
+    const mm0_uri = "file:///tmp/lsp-inline-placeholder-diag.mm0";
+    const proof_uri = "file:///tmp/lsp-inline-placeholder-diag.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by keep [exact?]
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = mm0_uri,
+            .languageId = "mm0",
+            .version = 1,
+            .text = lsp_search_mm0_text,
+        },
+    });
+    transport_state.clearMessages();
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "auf",
+            .version = 1,
+            .text = proof_text,
+        },
+    });
+
+    try std.testing.expect(transport_state.message_count > 0);
+    try std.testing.expect(!transport_state.containsMessage("unknown rule"));
+}
+
+test "LSP placeholder status diagnostics upgrade after code action search" {
+    const mm0_uri = "file:///tmp/lsp-status-diag.mm0";
+    const proof_uri = "file:///tmp/lsp-status-diag.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = mm0_uri,
+            .languageId = "mm0",
+            .version = 1,
+            .text = lsp_search_mm0_text,
+        },
+    });
+    transport_state.clearMessages();
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "auf",
+            .version = 1,
+            .text = lsp_search_exact_proof_text,
+        },
+    });
+
+    // An unsearched placeholder publishes a warning (severity 2).
+    try std.testing.expect(
+        transport_state.containsMessage("search not yet run"),
+    );
+    try std.testing.expect(transport_state.containsMessage("\"severity\":2"));
+
+    // Running the search via code actions records the outcome and re-publishes
+    // the placeholder diagnostic as info (severity 3) with the found proof.
+    transport_state.clearMessages();
+    _ = try handler.@"textDocument/codeAction"(
+        arena,
+        try codeActionParamsAt(
+            proof_uri,
+            lsp_search_exact_proof_text,
+            "exact?",
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 1), handler.search_status.count());
+    try std.testing.expectEqual(
+        mm0.CompilerSupport.Search.SearchStatus.found,
+        handler.search_status.getPtr(proof_uri).?.statuses.items[0].status,
+    );
+    try std.testing.expect(
+        transport_state.containsMessage("exact? search succeeded: top_i"),
+    );
+    try std.testing.expect(transport_state.containsMessage("\"severity\":3"));
+    try std.testing.expect(
+        !transport_state.containsMessage("search not yet run"),
+    );
+
+    // A cache-hit code action publishes nothing new (the outcome is already
+    // recorded and published).
+    transport_state.clearMessages();
+    _ = try handler.@"textDocument/codeAction"(
+        arena,
+        try codeActionParamsAt(
+            proof_uri,
+            lsp_search_exact_proof_text,
+            "exact?",
+        ),
+    );
+    try std.testing.expectEqual(@as(usize, 0), transport_state.message_count);
+
+    // An edit drops the recorded outcome: the placeholder returns to the
+    // "not yet searched" warning.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = proof_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .literal_1 = .{ .text = lsp_search_exact_proof_text } },
+        },
+    });
+    try std.testing.expectEqual(@as(usize, 0), handler.search_status.count());
+    try std.testing.expect(
+        transport_state.containsMessage("search not yet run"),
+    );
+    try std.testing.expect(
+        !transport_state.containsMessage("search succeeded"),
+    );
+}
+
+test "LSP placeholder status diagnostics report a search miss as error" {
+    const mm0_uri = "file:///tmp/lsp-status-miss.mm0";
+    const proof_uri = "file:///tmp/lsp-status-miss.auf";
+    // `bot` has no proof rule, so the placeholder search runs to completion
+    // without a result.
+    const miss_mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term bot: wff;
+        \\axiom top_i: $ top $;
+        \\theorem main: $ top $;
+    ;
+    const miss_proof_text =
+        \\main
+        \\----
+        \\l1: $ bot $ by exact?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = mm0_uri,
+            .languageId = "mm0",
+            .version = 1,
+            .text = miss_mm0_text,
+        },
+    });
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "auf",
+            .version = 1,
+            .text = miss_proof_text,
+        },
+    });
+
+    transport_state.clearMessages();
+    _ = try handler.@"textDocument/codeAction"(
+        arena,
+        try codeActionParamsAt(proof_uri, miss_proof_text, "exact?"),
+    );
+    try std.testing.expect(
+        transport_state.containsMessage("exact? search failed: no proof found"),
+    );
+    try std.testing.expect(transport_state.containsMessage("\"severity\":1"));
+}
+
+test "LSP code action replaces apply placeholder with plain refs" {
+    const mm0_uri = "file:///tmp/lsp-code-action-apply.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-apply.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, lsp_search_apply_proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(
+                proof_uri,
+                lsp_search_apply_proof_text,
+                "apply?",
+            ),
+        ),
+    );
+    const action = codeActionWithReplacement(
+        actions,
+        proof_uri,
+        "keep [ref1]",
+    ) orelse return error.MissingApplyCodeAction;
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(lsp_search_apply_proof_text, edit.range, "apply?");
+}
+
+test "LSP code action uses UTF-16 ranges after non-ASCII text" {
+    const mm0_uri = "file:///tmp/lsp-code-action-utf16.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-utf16.auf";
+    const proof_text =
+        \\-- 💡
+        \\main
+        \\----
+        \\l1: $ top $ by exact?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    const action = codeActionWithReplacement(actions, proof_uri, "top_i") orelse {
+        return error.MissingUtf16CodeAction;
+    };
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "exact?");
+}
+
+test "LSP code action is absent outside search placeholders" {
+    const mm0_uri = "file:///tmp/lsp-code-action-none.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-none.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try putLspNavigationDocuments(&handler, mm0_uri, proof_uri);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const result = try handler.@"textDocument/codeAction"(
+        arena_state.allocator(),
+        try codeActionParamsAt(proof_uri, lsp_navigation_proof_text, "top_i"),
+    );
+    try std.testing.expect(result == null);
+}
+
+test "LSP code action is absent for invalid search contexts" {
+    const mm0_uri = "file:///tmp/lsp-code-action-invalid.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-invalid.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ unknown_token $ by exact?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const result = try handler.@"textDocument/codeAction"(
+        arena_state.allocator(),
+        try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+    );
+    try std.testing.expect(result == null);
+}
+
+test "LSP code action is absent without sibling mm0" {
+    const proof_uri = "file:///tmp/lsp-code-action-missing-sibling.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(proof_uri, lsp_search_exact_proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const result = try handler.@"textDocument/codeAction"(
+        arena_state.allocator(),
+        try codeActionParamsAt(
+            proof_uri,
+            lsp_search_exact_proof_text,
+            "exact?",
+        ),
+    );
+    try std.testing.expect(result == null);
+}
+
+test "LSP code action uses prior local lemma in theorem search" {
+    const mm0_uri = "file:///tmp/lsp-code-action-local-theorem.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-local-theorem.auf";
+    const proof_text =
+        \\lemma local_top: $ top $
+        \\---------
+        \\h1: $ top $ by top_i
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by exact?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    // Local-lemma *indexing* is a search-layer property; verify it with the
+    // uncapped search API. The LSP code action caps `exact?` at one best result,
+    // where the `top_i` axiom outranks the local lemma, so the capped action list
+    // need not contain `local_top` — but the search must still find it.
+    try expectSearchOffers(arena_state.allocator(), proof_text, "exact?", "local_top");
+    const action = firstCodeAction(actions) orelse return error.ExpectedCodeAction;
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "exact?");
+}
+
+test "LSP code action works inside local lemma blocks" {
+    const mm0_uri = "file:///tmp/lsp-code-action-local-target.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-local-target.auf";
+    const proof_text =
+        \\lemma local_top: $ top $
+        \\---------
+        \\h1: $ top $ by top_i
+        \\
+        \\lemma use_local: $ top $
+        \\---------
+        \\u1: $ top $ by exact?
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by top_i
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    // See the prior test: local-lemma indexing is verified at the (uncapped)
+    // search layer; the capped LSP action need not surface the outranked lemma.
+    try expectSearchOffers(arena_state.allocator(), proof_text, "exact?", "local_top");
+    const action = firstCodeAction(actions) orelse return error.ExpectedCodeAction;
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "exact?");
+}
+
+test "LSP code action excludes future local lemmas" {
+    const mm0_uri = "file:///tmp/lsp-code-action-local-future.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-local-future.auf";
+    const proof_text =
+        \\lemma use_future: $ top $
+        \\---------
+        \\u1: $ top $ by exact?
+        \\
+        \\lemma future_top: $ top $
+        \\---------
+        \\f1: $ top $ by top_i
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by top_i
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    try std.testing.expect(
+        codeActionWithReplacement(actions, proof_uri, "future_top") == null,
+    );
+}
+
+test "LSP code action uses open unsaved mm0 and proof documents" {
+    const mm0_uri = "file:///tmp/lsp-code-action-unsaved.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-unsaved.auf";
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom unsaved_i: $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by exact?
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "exact?"),
+        ),
+    );
+    const action = codeActionWithReplacement(
+        actions,
+        proof_uri,
+        "unsaved_i",
+    ) orelse return error.MissingUnsavedCodeAction;
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "exact?");
 }
 
 test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
@@ -779,7 +1677,6 @@ test "LSP proof unknown rule has hover but no definition" {
     });
     try std.testing.expect(definition == null);
 }
-
 
 test "uri path roundtrip" {
     const allocator = std.testing.allocator;

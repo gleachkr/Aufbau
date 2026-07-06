@@ -182,6 +182,7 @@ axiom all_intro (G: ctx) {x: set} (p: wff x):
 
 --| @view {x:set}(G:ctx x)(t:set x)(p:wff x)(q:wff): $ G ⊢ ∀ x p $ > $ G ⊢ q $
 --| @recover t q p x
+--| @auto forward
 axiom all_elim {x: set} (G: ctx x) (t: set x) (p: wff x):
   $ G ⊢ ∀ x p $ > $ G ⊢ [x/t] p $;
 
@@ -535,6 +536,10 @@ axiom all_alpha {x y: set} (p: wff x y):
 axiom ex_alpha {x y: set} (p: wff x y):
   $ ∃ x p ↔ ∃ y ([x/y] p) $;
 
+--| @congr
+axiom sb_f_congr {x: set} (t u: set x) (p q: wff x):
+  $ t = u $ > $ p ↔ q $ > $ [x/t] p ↔ [x/u] q $;
+
 -- --------------------------------------------------------------------------
 -- Zermelo primitive natural-deduction rules
 -- --------------------------------------------------------------------------
@@ -553,6 +558,7 @@ axiom pairset_intro_right (G: ctx) (x y: set):
 axiom pairset_elim (G: ctx) (x y z: set):
   $ G ⊢ x ∈ pairset y z $ > $ G ⊢ x = y ∨ x = z $;
 
+--| @auto backward
 axiom union_intro (G H: ctx) (x y A: set):
   $ G ⊢ x ∈ y $ > $ H ⊢ y ∈ A $ > $ G , H ⊢ x ∈ union A $;
 

@@ -680,6 +680,7 @@ const annotation_directives = [_]AnnotationDirective{
     .{ .label = "@abstract", .detail = "abstract theorem", .sort_text = "09 07" },
     .{ .label = "@fresh", .detail = "freshness theorem", .sort_text = "09 08" },
     .{ .label = "@hole", .detail = "proof hole", .sort_text = "09 09" },
+    .{ .label = "@auto", .detail = "search automation", .sort_text = "09 10" },
 };
 
 const CompletionItemSeed = struct {

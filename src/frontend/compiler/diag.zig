@@ -589,6 +589,8 @@ fn annotationDiagnosticSpan(
         error.InvalidFallbackAnnotation,
         error.DuplicateFallbackAnnotation,
         error.UnknownFallbackRule,
+        error.InvalidAutoAnnotation,
+        error.EagerRuleDefersWitness,
         error.UnknownFreshBinder,
         error.UnknownFreshenBinder,
         error.UnknownAlphaBinder,
@@ -696,6 +698,7 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.HypCountMismatch,
         => "could not infer omitted rule arguments from the line and refs",
         error.HoleTokenNameCollision => "name conflicts with a proof hole token",
+        error.BinderTokenCollision => "binder name conflicts with a declared notation token",
         error.HoleyInferenceMismatch => "could not infer omitted rule arguments from the holey assertion",
         error.HoleConclusionMismatch => "holey assertion does not match the candidate conclusion",
         // Legacy public error name. The repaired structural solver uses
@@ -738,6 +741,19 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.InvalidFallbackAnnotation => "@fallback expects exactly one rule name",
         error.DuplicateFallbackAnnotation => "multiple @fallback annotations were attached to one rule",
         error.UnknownFallbackRule => "@fallback refers to a rule that is not available here",
+        error.InvalidAutoAnnotation => "@auto expects one mode: forward, backward, " ++
+            "eager [PRIORITY >= 1], or trigger PATTERN",
+        error.EagerRuleDefersWitness => "@auto eager rule must not defer a witness: " ++
+            "every hypothesis binder must appear in the conclusion",
+        error.InvalidTriggerAnnotation => "@auto trigger expects one parenthesized prefix " ++
+            "pattern: (term binder-or-_ ...)",
+        error.UnknownTriggerTerm => "@auto trigger names a term that is not available here",
+        error.UnknownTriggerBinder => "@auto trigger refers to a binder that is not on the rule",
+        error.TriggerRuleHasHypotheses => "@auto trigger rule must not have hypotheses",
+        error.TriggerBinderNotGround => "@auto trigger must name every rule binder that cannot " ++
+            "default to an ACUI unit",
+        error.TriggerSortMismatch => "@auto trigger pattern position has the wrong sort",
+        error.TriggerBoundPosition => "@auto trigger bound argument positions admit only _",
         error.FallbackCycle => "@fallback chain contains a cycle",
         error.UnknownFreshBinder => "@fresh target must be a real rule binder",
         error.UnknownFreshenBinder => "@freshen refers to a binder that is not on the rule",

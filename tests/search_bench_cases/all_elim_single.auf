@@ -1,0 +1,3 @@
+all_elim_single_inst
+--------------------
+l1: $ pair f u = pair u f $ by auto?

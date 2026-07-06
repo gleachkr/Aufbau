@@ -1,0 +1,22 @@
+cb_bijection_functional_from_injections
+---------------------------------------
+l0: $ maps (cb_bijection A B f g) x y ∧
+       maps (cb_bijection A B f g) x z ⊢
+       maps (cb_bijection A B f g) x y ∧
+       maps (cb_bijection A B f g) x z $ by ax
+l1: $ maps (cb_bijection A B f g) x y ∧
+      maps (cb_bijection A B f g) x z ⊢
+      maps (cb_bijection A B f g) x y $ by and_elim_l [l0]
+l2: $ maps (cb_bijection A B f g) x y ∧
+      maps (cb_bijection A B f g) x z ⊢
+      maps (cb_bijection A B f g) x z $ by and_elim_r [l0]
+l3: $ F , G , maps (cb_bijection A B f g) x y ∧
+      maps (cb_bijection A B f g) x z ⊢ y = z $
+  by cb_bijection_maps_functional [#1, #2, l1, l2]
+l4: $ F , G ⊢
+      (maps (cb_bijection A B f g) x y ∧
+       maps (cb_bijection A B f g) x z) → y = z $ by imp_intro [l3]
+l5: $ F , G ⊢ ∀ x ∀ y ∀ z
+      ((maps (cb_bijection A B f g) x y ∧
+        maps (cb_bijection A B f g) x z) → y = z) $
+  by auto?

@@ -94,6 +94,7 @@ pub fn makeSymbolicBoundValue(
 pub fn invalidateRepresentativeCaches(state: *MatchSession) void {
     state.transparent_representatives.clearRetainingCapacity();
     state.normalized_representatives.clearRetainingCapacity();
+    state.cache_generation +%= 1;
 }
 
 pub fn assignBinderFromExpr(
@@ -117,22 +118,30 @@ pub fn assignBinderFromExpr(
                 // witness-preserving form over keeping the symbolic
                 // placeholder. This avoids needlessly finalizing hidden
                 // binders back into fresh theorem dummies.
-                state.bindings[idx] = try rebuildBoundValueFromState(
-                    self,
-                    actual,
-                    state,
-                    mode,
+                try state.setBinding(
+                    self.shared.allocator,
+                    idx,
+                    try rebuildBoundValueFromState(
+                        self,
+                        actual,
+                        state,
+                        mode,
+                    ),
                 );
                 invalidateRepresentativeCaches(state);
             },
         }
         return true;
     }
-    state.bindings[idx] = try rebuildBoundValueFromState(
-        self,
-        actual,
-        state,
-        mode,
+    try state.setBinding(
+        self.shared.allocator,
+        idx,
+        try rebuildBoundValueFromState(
+            self,
+            actual,
+            state,
+            mode,
+        ),
     );
     invalidateRepresentativeCaches(state);
     return true;
@@ -154,7 +163,11 @@ pub fn assignBinderFromSymbolic(
             state,
         );
     }
-    state.bindings[idx] = makeSymbolicBoundValue(symbolic, mode);
+    try state.setBinding(
+        self.shared.allocator,
+        idx,
+        makeSymbolicBoundValue(symbolic, mode),
+    );
     invalidateRepresentativeCaches(state);
     return true;
 }
@@ -189,7 +202,7 @@ pub fn assignBinderValue(
             ),
         };
     }
-    state.bindings[idx] = value;
+    try state.setBinding(self.shared.allocator, idx, value);
     invalidateRepresentativeCaches(state);
     return true;
 }
@@ -216,6 +229,10 @@ pub fn boundValueFromSeed(
             witness_slots,
             semantic.mode,
         ),
-        .bound => |bv| bv,
+        // The seed's BoundValue is owned by a MatchSeedState (or another
+        // session) that may be freed while this session is still live.
+        // Clone the symbolic trees into this session's scratch arena so the
+        // session never aliases seed-state memory.
+        .bound => |bv| try Types.cloneBoundValue(self.shared.scratch(), bv),
     };
 }

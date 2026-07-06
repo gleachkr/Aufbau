@@ -1,0 +1,78 @@
+-- Regression: a nested inline-application proof through additive sequent rules.
+-- The intermediate minors (`lan`, `ran`) carry an ACUI context "rest" binder
+-- (`g`/`d`) that the strict structural conclusion match cannot pin, so before
+-- the `minorHasAcuiRestBinder` holey-hint fix the inner `ax` minors never
+-- received an expected conclusion and the proof failed `MissingBinderAssignment`.
+delimiter $ ( ) $;
+
+provable sort wff;
+sort ctx;
+
+term an (a b: wff): wff;
+infixl an: $∧$ prec 35;
+term im (a b: wff): wff;
+infixr im: $→$ prec 25;
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+term P: wff;
+term Q: wff;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($∅$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term seq (g d: ctx): wff;
+infixl seq: $⊢$ prec 1;
+
+-- Rewrite/relation machinery so the checker can normalize ACUI contexts when
+-- comparing a minor's inferred conclusion against the expected hypothesis.
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ a ↔ a $;
+axiom bitr (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom seq_congr (g h e f: ctx):
+  $ ctx_eq g h $ > $ ctx_eq e f $ > $ (g ⊢ e) ↔ (h ⊢ f) $;
+--| @congr
+axiom an_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a ∧ c) ↔ (b ∧ d) $;
+--| @congr
+axiom im_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+
+axiom ax (g d: ctx) (a: wff): $ g , a ⊢ a , d $;
+axiom ran (g d: ctx) (a b: wff):
+  $ g ⊢ a , d $ > $ g ⊢ b , d $ > $ g ⊢ (a ∧ b) , d $;
+axiom lan (g d: ctx) (a b: wff):
+  $ g , a , b ⊢ d $ > $ g , (a ∧ b) ⊢ d $;
+-- Right-implication: its antecedent `g` is the *whole* goal context (a bare
+-- binder, unambiguous), so the outermost application infers cleanly; the
+-- additive ambiguity lives only in the nested `lan`/`ran` minors below.
+axiom rim (g d: ctx) (a b: wff):
+  $ g , a ⊢ b , d $ > $ g ⊢ (a → b) , d $;
+
+theorem nested_additive: $ ∅ ⊢ (P ∧ Q) → (Q ∧ P) $;

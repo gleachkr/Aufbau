@@ -3,8 +3,14 @@ const Arg = @import("../trusted/args.zig").Arg;
 const Expr = @import("../trusted/expressions.zig").Expr;
 const Sort = @import("../trusted/sorts.zig").Sort;
 
-const MAX_PRECEDENCE = std.math.maxInt(u16);
-const APP_PRECEDENCE: u16 = 1024;
+/// Highest parsing precedence. Atoms (variables, parenthesized groups) bind at
+/// this level; exposed so a notation-aware pretty-printer can decide when a
+/// subexpression needs parentheses.
+pub const MAX_PRECEDENCE = std.math.maxInt(u16);
+/// Precedence of bare function application (`f a b`). Exposed alongside
+/// `MAX_PRECEDENCE` so the pretty-printer parenthesizes application operands the
+/// same way the parser would.
+pub const APP_PRECEDENCE: u16 = 1024;
 const MAX_SORTS: usize = 128;
 const PROV_COERCION_IDX: usize = MAX_SORTS;
 
@@ -88,12 +94,12 @@ const CoercionRoute = struct {
     data: u32 = 0,
 };
 
-const PrefixLit = union(enum) {
+pub const PrefixLit = union(enum) {
     constant: []const u8,
     variable: PrefixVar,
 };
 
-const PrefixVar = struct {
+pub const PrefixVar = struct {
     arg_index: usize,
     prec: u16,
 };
@@ -108,6 +114,26 @@ const InfixEnv = struct {
     term_id: u32,
     prec: u16,
     right_assoc: bool,
+};
+
+/// Read-only view of the notation declared for a term, indexed by term id (see
+/// `notationForTerm`). Carries the leading/operator token explicitly because
+/// the parser's forward maps key on the token and do not store it in the entry.
+/// When a term has several notations declared, this holds the last one in source
+/// order (the preferred notation for printing).
+pub const Notation = union(enum) {
+    /// `prefix`/`notation` declaration: emit `token`, then `lits` in order.
+    prefix: struct {
+        token: []const u8,
+        prec: u16,
+        lits: []const PrefixLit,
+    },
+    /// `infixl`/`infixr` declaration: emit `lhs token rhs`.
+    infix: struct {
+        token: []const u8,
+        prec: u16,
+        right_assoc: bool,
+    },
 };
 
 const BinderKind = enum { term, assertion };
@@ -236,6 +262,11 @@ pub const MM0Parser = struct {
     terms: std.ArrayListUnmanaged(TermEnv),
     prefix_notations: std.StringHashMap(PrefixEnv),
     infix_notations: std.StringHashMap(InfixEnv),
+    // Reverse index term_id -> preferred (last lexable) notation, plus the set
+    // of coercion term ids. Built alongside the forward notation maps; read back
+    // by `notationForTerm`/`isCoercionTerm` for pretty-printing.
+    term_notations: std.AutoHashMap(u32, Notation),
+    coercion_terms: std.AutoHashMap(u32, void),
     formula_markers: std.StringHashMap(void),
     // Global notation checks tracked as declarations are parsed.
     token_precs: std.StringHashMap(u16),
@@ -266,6 +297,8 @@ pub const MM0Parser = struct {
             .terms = .{},
             .prefix_notations = std.StringHashMap(PrefixEnv).init(allocator),
             .infix_notations = std.StringHashMap(InfixEnv).init(allocator),
+            .term_notations = std.AutoHashMap(u32, Notation).init(allocator),
+            .coercion_terms = std.AutoHashMap(u32, void).init(allocator),
             .formula_markers = std.StringHashMap(void).init(allocator),
             .token_precs = std.StringHashMap(u16).init(allocator),
             .infix_assoc = std.AutoHashMap(u16, bool).init(allocator),
@@ -800,6 +833,15 @@ pub const MM0Parser = struct {
                     self.last_error_span = ident_info.span;
                     return error.HoleTokenNameCollision;
                 }
+                // A binder whose name is also a declared math token is
+                // ambiguous: inside a math string that token is lexed as the
+                // constant/operator, so the binder becomes unreferenceable and
+                // the file is non-portable (mm0-c resolves it to the constant
+                // and rejects). Reject the collision here with a clear span.
+                if (self.token_precs.contains(ident_info.text)) {
+                    self.last_error_span = ident_info.span;
+                    return error.BinderTokenCollision;
+                }
                 try names.append(self.allocator, ident_info.text);
                 try is_dummy_buf.append(self.allocator, is_dummy);
             }
@@ -984,11 +1026,8 @@ pub const MM0Parser = struct {
                         } });
                     }
                 }
-                try self.prefix_notations.put(token, .{
-                    .term_id = term_id,
-                    .prec = prec,
-                    .lits = try lits.toOwnedSlice(self.allocator),
-                });
+                const lit_slice = try lits.toOwnedSlice(self.allocator);
+                try self.registerPrefixNotation(term_id, token, prec, lit_slice);
             },
             .infixl, .infixr => {
                 try self.registerInfixyToken(token);
@@ -997,11 +1036,7 @@ pub const MM0Parser = struct {
                     return error.InfixPrecOutOfRange;
                 }
                 try self.registerInfixAssoc(prec, kind == .infixr);
-                try self.infix_notations.put(token, .{
-                    .term_id = term_id,
-                    .prec = prec,
-                    .right_assoc = kind == .infixr,
-                });
+                try self.registerInfixNotation(term_id, token, prec, kind == .infixr);
             },
         }
     }
@@ -1141,11 +1176,8 @@ pub const MM0Parser = struct {
         }
 
         try self.expect(';');
-        try self.prefix_notations.put(first.token, .{
-            .term_id = term_id,
-            .prec = first.prec,
-            .lits = try lits.toOwnedSlice(self.allocator),
-        });
+        const lit_slice = try lits.toOwnedSlice(self.allocator);
+        try self.registerPrefixNotation(term_id, first.token, first.prec, lit_slice);
     }
 
     fn parseCoercionStmt(self: *MM0Parser) !void {
@@ -1170,6 +1202,109 @@ pub const MM0Parser = struct {
         try self.expect(';');
 
         try self.registerCoercion(src, dst, term_id);
+        // Coercions are inserted implicitly and never written in source, so the
+        // pretty-printer elides them (prints the argument transparently).
+        try self.coercion_terms.put(term_id, {});
+    }
+
+    /// Preferred notation for `term_id` (the last lexable one declared in source
+    /// order), or null if the term has no usable notation. Read-only view for
+    /// pretty-printing.
+    pub fn notationForTerm(self: *const MM0Parser, term_id: u32) ?Notation {
+        return self.term_notations.get(term_id);
+    }
+
+    /// Whether `term_id` is a declared coercion (printed transparently).
+    pub fn isCoercionTerm(self: *const MM0Parser, term_id: u32) bool {
+        return self.coercion_terms.contains(term_id);
+    }
+
+    /// Whether `token` re-tokenizes to itself under the current delimiter set.
+    /// A notation declared with a token that does not (e.g. an ASCII `\/` while
+    /// `/` is a delimiter) cannot be re-parsed, so the pretty-printer must not
+    /// use it.
+    fn tokenIsLexable(self: *const MM0Parser, token: []const u8) bool {
+        if (token.len == 0) return false;
+        var cursor = MathCursor{
+            .src = token,
+            .left_delims = self.left_delims,
+            .right_delims = self.right_delims,
+        };
+        const first = cursor.readToken() orelse return false;
+        if (!std.mem.eql(u8, first.text, token)) return false;
+        return cursor.readToken() == null;
+    }
+
+    /// Whether every literal token of `notation` re-tokenizes to itself, so
+    /// printing with it produces re-parseable output.
+    fn notationIsLexable(self: *const MM0Parser, notation: Notation) bool {
+        switch (notation) {
+            .infix => |ix| return self.tokenIsLexable(ix.token),
+            .prefix => |px| {
+                if (!self.tokenIsLexable(px.token)) return false;
+                for (px.lits) |lit| switch (lit) {
+                    .constant => |tok| if (!self.tokenIsLexable(tok)) return false,
+                    .variable => {},
+                };
+                return true;
+            },
+        }
+    }
+
+    /// Record `notation` as the preferred notation for `term_id`, but only when
+    /// it is lexable. Later declarations overwrite earlier ones, so this keeps
+    /// the last *usable* notation in source order; a non-lexable later
+    /// declaration leaves an earlier lexable one in place.
+    fn recordTermNotation(
+        self: *MM0Parser,
+        term_id: u32,
+        notation: Notation,
+    ) !void {
+        if (self.notationIsLexable(notation)) {
+            try self.term_notations.put(term_id, notation);
+        }
+    }
+
+    /// Register a prefix/general notation: populate the token-keyed forward map
+    /// and the term-keyed reverse index in one place.
+    fn registerPrefixNotation(
+        self: *MM0Parser,
+        term_id: u32,
+        token: []const u8,
+        prec: u16,
+        lits: []const PrefixLit,
+    ) !void {
+        try self.prefix_notations.put(token, .{
+            .term_id = term_id,
+            .prec = prec,
+            .lits = lits,
+        });
+        try self.recordTermNotation(term_id, .{ .prefix = .{
+            .token = token,
+            .prec = prec,
+            .lits = lits,
+        } });
+    }
+
+    /// Register an infix notation: populate the token-keyed forward map and the
+    /// term-keyed reverse index in one place.
+    fn registerInfixNotation(
+        self: *MM0Parser,
+        term_id: u32,
+        token: []const u8,
+        prec: u16,
+        right_assoc: bool,
+    ) !void {
+        try self.infix_notations.put(token, .{
+            .term_id = term_id,
+            .prec = prec,
+            .right_assoc = right_assoc,
+        });
+        try self.recordTermNotation(term_id, .{ .infix = .{
+            .token = token,
+            .prec = prec,
+            .right_assoc = right_assoc,
+        } });
     }
 
     pub fn parseAssertionText(

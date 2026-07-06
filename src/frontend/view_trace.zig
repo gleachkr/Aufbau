@@ -2,11 +2,17 @@ const builtin = @import("builtin");
 const std = @import("std");
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const ExprId = @import("./expr.zig").ExprId;
+const VarId = @import("./expr.zig").VarId;
+const PlaceholderId = @import("./expr.zig").PlaceholderId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
+const Expr = @import("../trusted/expressions.zig").Expr;
+const MM0Parser = @import("./parse_recovery.zig").MM0Parser;
 const BindingMode = @import("./def_ops.zig").BindingMode;
 const BindingSeed = @import("./def_ops.zig").BindingSeed;
 const BoundValue = @import("./def_ops/types.zig").BoundValue;
 const SymbolicExpr = @import("./def_ops/types.zig").SymbolicExpr;
+const pretty_print = @import("./pretty_print.zig");
+const interner_view = @import("./interner_view.zig");
 
 pub fn printViewBindings(
     allocator: std.mem.Allocator,
@@ -135,6 +141,104 @@ pub fn formatExpr(
     try appendExpr(&out, allocator, theorem, env, expr_id);
     return try out.toOwnedSlice(allocator);
 }
+
+/// Maps theorem-local variable nodes to their user-facing source names for
+/// diagnostics, and carries the notation provider used to render them. Built by
+/// inverting the checker's `NameExprMap` through the theorem's `parser_vars`
+/// (see `interner_view.invertNameMap`). Variables without a recorded name
+/// (anonymous dummies, search placeholders) fall back to internal coordinates.
+pub const DiagNames = struct {
+    map: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
+    parser: *const MM0Parser,
+
+    pub fn build(
+        allocator: std.mem.Allocator,
+        theorem: *const TheoremContext,
+        parser: *const MM0Parser,
+        name_exprs: *const std.StringHashMap(*const Expr),
+    ) !DiagNames {
+        var self = DiagNames{ .parser = parser };
+        errdefer self.deinit(allocator);
+        try interner_view.invertNameMap(
+            allocator,
+            theorem,
+            name_exprs,
+            &self.map,
+        );
+        return self;
+    }
+
+    pub fn deinit(self: *DiagNames, allocator: std.mem.Allocator) void {
+        self.map.deinit(allocator);
+    }
+
+    fn lookup(self: *const DiagNames, var_id: VarId) ?[]const u8 {
+        return self.map.get(var_id.hashKey());
+    }
+};
+
+/// Render `expr_id` for a user-facing diagnostic using the declared notation
+/// (the provider carried by `names`) and real binder names. Falls back to the
+/// internal prefix/coordinate form (`formatExpr`) if the notation render cannot
+/// complete. Caller owns the returned slice.
+pub fn formatExprNamed(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names: *const DiagNames,
+    expr_id: ExprId,
+) ![]const u8 {
+    var coord_buf: [24]u8 = undefined;
+    const view = interner_view.View(DiagResolver){
+        .resolver = .{ .names = names, .coord_buf = &coord_buf },
+        .theorem = theorem,
+        .env = env,
+    };
+    if (try pretty_print.render(allocator, names.parser, view, expr_id)) |text| {
+        return text;
+    }
+    return try formatExpr(allocator, theorem, env, expr_id);
+}
+
+/// Name resolver for the diagnostic `interner_view.View`. Resolves real source
+/// names through `DiagNames`, and synthesizes an internal coordinate (`v#`,
+/// `.d#`, `.p#`) for any variable/placeholder without one — so a diagnostic
+/// render never fails on naming. The shared `coord_buf` is safe because the
+/// printer copies each `nodeInfo` atom before the next call.
+const DiagResolver = struct {
+    names: *const DiagNames,
+    coord_buf: *[24]u8,
+
+    pub fn variableAtom(
+        self: DiagResolver,
+        var_id: VarId,
+    ) pretty_print.NodeInfo(ExprId) {
+        if (self.names.lookup(var_id)) |name| return .{ .atom = name };
+        return .{ .atom = switch (var_id) {
+            .theorem_var => |idx| std.fmt.bufPrint(
+                self.coord_buf,
+                "v{d}",
+                .{idx},
+            ) catch unreachable,
+            .dummy_var => |idx| std.fmt.bufPrint(
+                self.coord_buf,
+                ".d{d}",
+                .{idx},
+            ) catch unreachable,
+        } };
+    }
+
+    pub fn placeholderAtom(
+        self: DiagResolver,
+        pid: PlaceholderId,
+    ) pretty_print.NodeInfo(ExprId) {
+        return .{ .atom = std.fmt.bufPrint(
+            self.coord_buf,
+            ".p{d}",
+            .{pid},
+        ) catch unreachable };
+    }
+};
 
 pub fn formatBindingSeed(
     allocator: std.mem.Allocator,

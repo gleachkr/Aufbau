@@ -1,0 +1,18 @@
+or_comm
+-------
+
+-- Unannotated multiplicative `or_elim`: the two generated minors each carry a
+-- conclusion-only disjunct (`or_intro_r`'s left arm, `or_intro_l`'s right arm)
+-- with no explicit binder annotation. They validate only because the parent
+-- `or_elim` hands each minor a context-holey expected-conclusion hint
+-- (`‹hole› ⊢ b ∨ a`) that pins the free disjunct from the concrete wff. This is
+-- the compile-path round-trip of the `nd_or_comm` auto? suggestion.
+l1: $ (a ∨ b) ⊢ a ∨ b $ by ax []
+l2: $ a ⊢ a $ by ax []
+l3: $ b ⊢ b $ by ax []
+l4: $ _ ⊢ (a ∨ b) → (b ∨ a) $
+  by imp_intro
+  [or_elim
+    [l1,
+     or_intro_r [l2],
+     or_intro_l [l3]]]

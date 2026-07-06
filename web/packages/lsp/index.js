@@ -2,6 +2,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export const defaultWasmUrl = new URL("./lsp.wasm", import.meta.url);
+export const defaultWorkerUrl = new URL("./worker.js", import.meta.url);
 
 export class LspServer {
   constructor(instance) {
@@ -58,6 +59,84 @@ export class LspServer {
 export async function loadLspServer(options = {}) {
   const instance = await instantiateWasm(options, defaultWasmUrl);
   return new LspServer(instance);
+}
+
+// A drop-in `Transport` (send/subscribe/unsubscribe) for `@codemirror/lsp-client`
+// that runs the wasm server in a Web Worker. Identical wire behavior to
+// `LspServer`, but `send` posts to the worker and server output arrives
+// asynchronously as messages — so a long proof search never blocks the caller's
+// thread. Note this does not make an in-flight search *interruptible*: the worker
+// processes messages one at a time and runs each synchronously, so a
+// `$/cancelRequest` only takes effect once the current search returns (bounded by
+// the search's own budget). The win is that the page stays responsive meanwhile.
+export class WorkerLspServer {
+  constructor(worker) {
+    this.worker = worker;
+    this.subscribers = new Set();
+    this.readyError = null;
+    let resolveReady;
+    let rejectReady;
+    this.ready = new Promise((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+
+    worker.addEventListener("message", (event) => {
+      const data = event.data;
+      if (!data) return;
+      if (data.type === "message") {
+        this.emit(data.message);
+      } else if (data.type === "ready") {
+        resolveReady(this);
+      } else if (data.type === "error") {
+        this.readyError = new Error(data.error);
+        rejectReady(this.readyError);
+      }
+    });
+    worker.addEventListener("error", (event) => {
+      this.readyError = new Error(event.message || "LSP worker failed");
+      rejectReady(this.readyError);
+    });
+  }
+
+  send(message) {
+    const text = typeof message === "string" ? message : JSON.stringify(message);
+    this.worker.postMessage({ type: "send", message: text });
+  }
+
+  subscribe(handler) {
+    this.subscribers.add(handler);
+  }
+
+  unsubscribe(handler) {
+    this.subscribers.delete(handler);
+  }
+
+  reset() {
+    this.worker.postMessage({ type: "reset" });
+  }
+
+  emit(message) {
+    for (const handler of this.subscribers) {
+      handler(message);
+    }
+  }
+
+  terminate() {
+    this.worker.terminate();
+  }
+}
+
+// Spawn the worker-hosted LSP server and resolve once its wasm is instantiated
+// (so a load failure surfaces as a rejection rather than a silently dead
+// transport). Pass `options.worker` to supply a preconstructed worker, or
+// `options.workerUrl` to override where it is loaded from.
+export async function loadLspServerWorker(options = {}) {
+  const worker = options.worker
+    ?? new Worker(options.workerUrl ?? defaultWorkerUrl, { type: "module" });
+  const server = new WorkerLspServer(worker);
+  await server.ready;
+  return server;
 }
 
 async function instantiateWasm(options, fallbackUrl) {

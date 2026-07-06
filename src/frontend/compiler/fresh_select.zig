@@ -9,6 +9,7 @@ const CompilerVars = @import("./vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const DefOps = @import("../def_ops.zig");
 const DerivedBinding = @import("./derived_bindings.zig").DerivedBinding;
+const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
 const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
@@ -296,6 +297,7 @@ pub fn seedRecoverHolesFromVarsPool(
     num_binders: usize,
     binder_map: []const ?usize,
     arg_infos: []const ArgInfo,
+    conclusion: TemplateExpr,
     derived_bindings: []const DerivedBinding,
 ) ![]DefOps.BindingSeed {
     const seeds = try allocator.alloc(DefOps.BindingSeed, num_binders);
@@ -315,6 +317,16 @@ pub fn seedRecoverHolesFromVarsPool(
     defer allocator.free(seeded_holes);
     @memset(seeded_holes, false);
 
+    const visible_conclusion_binders = try allocator.alloc(bool, num_binders);
+    defer allocator.free(visible_conclusion_binders);
+    @memset(visible_conclusion_binders, false);
+    markVisibleTemplateBinders(
+        conclusion,
+        line_expr,
+        theorem,
+        visible_conclusion_binders,
+    );
+
     for (derived_bindings) |binding| {
         const recover = switch (binding) {
             .recover => |recover| recover,
@@ -322,6 +334,7 @@ pub fn seedRecoverHolesFromVarsPool(
         };
         const hole_view_idx = recover.hole_view_idx;
         if (seeded_holes[hole_view_idx]) continue;
+        if (visible_conclusion_binders[hole_view_idx]) continue;
         const rule_idx = binder_map[hole_view_idx] orelse continue;
         if (partial_bindings[rule_idx] != null) continue;
         if (!arg_infos[hole_view_idx].bound) continue;
@@ -343,6 +356,36 @@ pub fn seedRecoverHolesFromVarsPool(
         seeded_holes[hole_view_idx] = true;
     }
     return seeds;
+}
+
+// Marks each conclusion binder that is *positionally reachable* in `expr_id`
+// (the goal), as a proxy for "the conclusion matcher will determine it." This
+// is reachability, not determinability: under an ACUI/commutative head the args
+// can align positionally without the match actually pinning the binder. That is
+// safe here because we only ever *skip* seeding — deferring to the real matcher
+// can at worst fail inference, never over-commit a wrong seed.
+fn markVisibleTemplateBinders(
+    template: TemplateExpr,
+    expr_id: ExprId,
+    theorem: *const TheoremContext,
+    out: []bool,
+) void {
+    switch (template) {
+        .binder => |idx| {
+            if (idx < out.len) out[idx] = true;
+        },
+        .app => |template_app| {
+            const expr_app = switch (theorem.interner.node(expr_id).*) {
+                .app => |app| app,
+                .variable, .placeholder => return,
+            };
+            if (template_app.term_id != expr_app.term_id) return;
+            if (template_app.args.len != expr_app.args.len) return;
+            for (template_app.args, expr_app.args) |arg, expr_arg| {
+                markVisibleTemplateBinders(arg, expr_arg, theorem, out);
+            }
+        },
+    }
 }
 
 fn parseFreshAnnotation(

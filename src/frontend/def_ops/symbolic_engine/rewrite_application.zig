@@ -413,5 +413,5 @@ fn instantiateRewriteRuleRhs(
         const binding = binding_opt orelse return null;
         subst[idx] = try WitnessState.boundValueRepresentative(self, binding);
     }
-    return try TransparentMatch.symbolicFromTemplateSubst(self, rule.rhs, subst);
+    return try TransparentMatch.symbolicFromStableTemplateSubst(self, rule.rhs, subst);
 }

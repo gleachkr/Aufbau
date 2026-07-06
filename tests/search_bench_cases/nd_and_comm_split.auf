@@ -1,0 +1,4 @@
+nd_and_comm
+-----------
+l1: $ p ∧ q ⊢ p ∧ q $ by ax
+l3: $ p ∧ q ⊢ q ∧ p $ by auto?

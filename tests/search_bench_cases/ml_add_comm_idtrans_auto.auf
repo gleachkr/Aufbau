@@ -1,0 +1,55 @@
+add_comm
+--------
+
+l1: $ g , k : Nat ⊢ k : Nat $ by var
+l2: $ g , k : Nat ⊢ n : Nat $ by weaken [#2]
+l3: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l1, l2]
+l4: $ g , k : Nat ⊢ n + k : Nat $ by add_ty [l2, l1]
+l5: $ g , k : Nat ⊢ Ty (Id Nat (k + n) (n + k)) $
+  by Id_form [l3, l4]
+l6: $ g ⊢ ≡[Nat] (zero + n) = n $ by add_zero_left [#2]
+l7: $ g ⊢ refl Nat (zero + n) : Id Nat (zero + n) n $
+  by eq_tm_to_Id [l6]
+l8: $ g ⊢ add_zero_right_p n : Id Nat (n + zero) n $
+  by add_zero_right [#2]
+l9: $ g ⊢ id_sym Nat (n + zero) n (add_zero_right_p n) :
+  Id Nat n (n + zero) $ by id_sym_ty [l8]
+l10: $ g ⊢ id_trans Nat (zero + n) n (n + zero)
+  (refl Nat (zero + n)) (id_sym Nat (n + zero) n (add_zero_right_p n)) :
+  Id Nat (zero + n) (n + zero) $
+  by id_trans_ty [l7, l9]
+l11: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ k : Nat $
+  by weaken [l1]
+l12: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ n : Nat $
+  by weaken [l2]
+l13: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  ≡[Nat] ((suc k) + n) = suc (k + n) $ by add_suc_left [l11, l12]
+l14: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  refl Nat ((suc k) + n) : Id Nat ((suc k) + n) (suc (k + n)) $
+  by eq_tm_to_Id [l13]
+l15: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  ih : Id Nat (k + n) (n + k) $ by var
+l16: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  ap_suc (k + n) (n + k) ih : Id Nat (suc (k + n)) (suc (n + k)) $
+  by ap_suc_ty [l15]
+l17: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  add_suc_right_p n k : Id Nat (n + suc k) (suc (n + k)) $
+  by add_suc_right [l12, l11]
+l18: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k) :
+  Id Nat (suc (n + k)) (n + suc k) $
+  by id_sym_ty [l17]
+l19: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  id_trans Nat (suc (k + n)) (suc (n + k)) (n + suc k)
+    (ap_suc (k + n) (n + k) ih)
+    (id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k)) :
+  Id Nat (suc (k + n)) (n + suc k) $
+  by id_trans_ty [l16, l18]
+l20: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  id_trans Nat ((suc k) + n) (suc (k + n)) (n + suc k)
+    (refl Nat ((suc k) + n))
+    (id_trans Nat (suc (k + n)) (suc (n + k)) (n + suc k)
+      (ap_suc (k + n) (n + k) ih)
+      (id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k))) :
+  Id Nat ((suc k) + n) (n + suc k) $
+  by auto?

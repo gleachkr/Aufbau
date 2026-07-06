@@ -1,0 +1,6 @@
+nd_exists_elim_const
+--------------------
+l1: $ ∃ x p ⊢ ∃ x p $ by ax
+l2: $ p → q ⊢ p → q $ by ax
+l3: $ p ⊢ p $ by ax
+l6: $ ∃ x p ⊢ (p → q) → q $ by auto?

@@ -1,0 +1,131 @@
+free_instance_ex
+----------------
+l1: $ P c $ by all_elim [#1]
+l2: $ ∃ y (P y) $ by ex_intro [l1]
+
+compound_free_ex
+----------------
+l1: $ P (f c) $ by all_elim [#1]
+l2: $ ∃ y (P (f y)) $ by ex_intro [l1]
+
+chain_ex
+--------
+l1: $ P c → Q c $ by all_elim [#1]
+l2: $ Q c $ by mp [l1, #3]
+l3: $ Q c → S c $ by all_elim [#2]
+l4: $ S c $ by mp [l3, l2]
+l5: $ ∃ y (S y) $ by ex_intro [l4]
+
+all_imp_ex
+----------
+l1: $ P c → Q c $ by all_elim [#1]
+l2: $ Q c $ by mp [l1, #2]
+l3: $ ∃ y (Q y) $ by ex_intro [l2]
+
+all_imp_ex_compound
+-------------------
+l1: $ P c → Q (f c) $ by all_elim [#1]
+l2: $ Q (f c) $ by mp [l1, #2]
+l3: $ ∃ y (Q y) $ by ex_intro [l2]
+
+step_ex
+-------
+l1: $ P c → P (f c) $ by all_elim [#1]
+l2: $ P (f c) $ by mp [l1, #2]
+l3: $ ∃ y (P y) $ by ex_intro [l2]
+
+all_rel_ex
+----------
+l1: $ P d → R c d $ by all_elim [#1]
+l2: $ R c d $ by mp [l1, #2]
+l3: $ ∃ y (R c y) $ by ex_intro [l2]
+
+deep_compound_ex
+----------------
+l1: $ P c → P (f c) $ by all_elim [#1]
+l2: $ P (f c) $ by mp [l1, #2]
+l3: $ P (f c) → P (f (f c)) $ by all_elim [#1]
+l4: $ P (f (f c)) $ by mp [l3, l2]
+l5: $ ∃ y (P (f (f y))) $ by ex_intro [l4]
+
+triple_compound_ex
+------------------
+l1: $ P c → P (f c) $ by all_elim [#1]
+l2: $ P (f c) $ by mp [l1, #2]
+l3: $ P (f c) → P (f (f c)) $ by all_elim [#1]
+l4: $ P (f (f c)) $ by mp [l3, l2]
+l5: $ P (f (f c)) → P (f (f (f c))) $ by all_elim [#1]
+l6: $ P (f (f (f c))) $ by mp [l5, l4]
+l7: $ ∃ y (P (f (f (f y)))) $ by ex_intro [l6]
+
+diag_ex
+-------
+l1: $ P c → R c c $ by all_elim [#1]
+l2: $ R c c $ by mp [l1, #2]
+l3: $ ∃ y (R y y) $ by ex_intro [l2]
+
+diag_compound_ex
+----------------
+l1: $ P c → R (f c) (f c) $ by all_elim [#1]
+l2: $ R (f c) (f c) $ by mp [l1, #2]
+l3: $ ∃ y (R y y) $ by ex_intro [l2]
+
+nested_rel_ex
+-------------
+l1: $ ∀ y (P c → R c y) $ by all_elim [#1]
+l2: $ P c → R c d $ by all_elim [l1]
+l3: $ R c d $ by mp [l2, #2]
+l4: $ ∃ v (R c v) $ by ex_intro [l3]
+
+ambiguous_anchor_ex
+-------------------
+l1: $ P c → S c $ by all_elim [#1]
+l2: $ S c $ by mp [l1, #2]
+l3: $ ∃ y (S y) $ by ex_intro [l2]
+
+forward_nested_ex
+-----------------
+l1: $ P d → R c d $ by all_elim [#1]
+l2: $ R c d $ by mp [l1, #2]
+l3: $ ∃ v (R c v) $ by ex_intro [l2]
+l4: $ ∃ u ∃ v (R u v) $ by ex_intro [l3]
+
+nested_concrete_ex
+------------------
+l1: $ ∃ u ∃ v (R u v) $ by ex_intro (t := $ c $) [ex_intro [#1]]
+
+double_all_ex
+-------------
+l1: $ ∀ y (R c y) $ by all_elim [#1]
+l2: $ R c d $ by all_elim [l1]
+l3: $ ∃ v (R c v) $ by ex_intro [l2]
+l4: $ ∃ u ∃ v (R u v) $ by ex_intro [l3]
+
+direct_instance_ex
+------------------
+l1: $ ∃ y (Q y) $ by ex_intro [#1]
+
+rel_instance_ex
+---------------
+l1: $ ∃ y (R c y) $ by ex_intro [#1]
+
+compound_instance_ex
+--------------------
+l1: $ ∃ y (Q y) $ by ex_intro [#1]
+
+compound_instance_ex2
+---------------------
+l1: $ ∃ y (Q y) $ by ex_intro [#1]
+
+nested_compound_outer_ex
+------------------------
+l1: $ ∃ u ∃ v (R u v) $ by ex_intro (t := $ f c $) [ex_intro [#1]]
+
+nested_compound_inner_ex
+------------------------
+l1: $ ∃ u ∃ v (R u v) $ by ex_intro (t := $ c $) [ex_intro [#1]]
+
+nested_compound_ex
+------------------
+l1: $ ∃ v (R (f c) v) $ by ex_intro [#1]
+l2: $ ∃ u ∃ v (R u v) $ by ex_intro [l1]

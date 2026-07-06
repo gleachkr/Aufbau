@@ -322,7 +322,12 @@ pub fn materializeRepresentativeSymbolic(
                     self,
                     arg,
                     state,
-                )) orelse break :blk null;
+                )) orelse {
+                    // null break is not an error, so the errdefer above does
+                    // not fire; free the not-yet-interned args here.
+                    self.shared.allocator.free(args);
+                    break :blk null;
+                };
             }
             break :blk try self.shared.theorem.interner.internAppOwned(
                 app.term_id,
@@ -373,7 +378,12 @@ pub fn materializeResolvedSymbolic(
                     self,
                     arg,
                     state,
-                )) orelse break :blk null;
+                )) orelse {
+                    // null break is not an error, so the errdefer above does
+                    // not fire; free the not-yet-interned args here.
+                    self.shared.allocator.free(args);
+                    break :blk null;
+                };
             }
             break :blk try self.shared.theorem.interner.internAppOwned(
                 app.term_id,

@@ -7,7 +7,9 @@ const RewriteApplication =
     @import("./symbolic_engine/rewrite_application.zig");
 const WitnessState = @import("./symbolic_engine/witness_state.zig");
 
-const SymbolicExpr = @import("./types.zig").SymbolicExpr;
+const Types = @import("./types.zig");
+const SymbolicExpr = Types.SymbolicExpr;
+const expr_mod = @import("../expr.zig");
 
 pub const SemanticStepCandidate = SemanticSearch.SemanticStepCandidate;
 
@@ -24,6 +26,7 @@ pub const SymbolicEngine = struct {
         TransparentMatch.matchTemplateTransparent;
     pub const instantiateDefTowardExpr =
         TransparentMatch.instantiateDefTowardExpr;
+    pub const expandConcreteDef = TransparentMatch.expandConcreteDef;
     pub const matchTemplateRecState =
         TransparentMatch.matchTemplateRecState;
     pub const tryMatchTemplateStateDirect =
@@ -83,8 +86,25 @@ pub const SymbolicEngine = struct {
         self: *SymbolicEngine,
         symbolic: SymbolicExpr,
     ) anyerror!*const SymbolicExpr {
-        const node = try self.shared.allocator.create(SymbolicExpr);
-        node.* = symbolic;
-        return node;
+        // Symbolic node creation is the def-eq engine's work chokepoint, the
+        // way intern attempts are the concrete side's; count it toward the
+        // per-call cost budget (see `expr.zig` `work_ticks_sym`).
+        expr_mod.work_ticks_sym +%= 1;
+        // Populate the cached structural hash once, so search-memo keys and the
+        // intern probe read it in O(1) instead of re-walking the subtree
+        // (children are already cached, so this is O(arity)).
+        var value = symbolic;
+        switch (value) {
+            .app => |*app| app.hash = Types.computeAppHash(app.term_id, app.args),
+            else => {},
+        }
+        // Hash-cons: structurally identical nodes share one scratch-arena
+        // allocation, collapsing the exponential re-expansion of def-unfold
+        // (church/martin_lof) that otherwise churns the allocator and defeats
+        // memo dedup by producing distinct pointers for equal subtrees. Nodes
+        // still live in the per-context scratch arena (reclaimed at
+        // `SharedContext.deinit`); they never escape and are never individually
+        // freed. See `SharedContext.internSymbolic` for the soundness argument.
+        return self.shared.internSymbolic(value);
     }
 };

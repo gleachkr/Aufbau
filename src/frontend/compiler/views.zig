@@ -646,7 +646,20 @@ fn matchViewAgainstConclusion(
             actual_conclusion,
             surface_bindings,
         );
-        if (!matched) return error.ViewConclusionMismatch;
+        if (!matched) {
+            const state = initial_state orelse {
+                return error.ViewConclusionMismatch;
+            };
+            try session.restoreFromSeedState(&state);
+            if (try matchViewHypsBeforeConclusion(
+                env,
+                session,
+                view,
+                actual_conclusion,
+                ref_exprs,
+            )) return;
+            return error.ViewConclusionMismatch;
+        }
     }
     matchViewHypsAgainstConcreteExprs(session, view, ref_exprs) catch |err| {
         if (err != error.ViewHypothesisMismatch) return err;
@@ -736,6 +749,37 @@ fn matchViewAgainstConclusionDebug(
             actual_conclusion,
             surface_bindings,
         )) {
+            const state = initial_state orelse {
+                return error.ViewConclusionMismatch;
+            };
+            ViewTrace.printMessage(
+                "conclusion match failed; retrying hypotheses first",
+                .{},
+            );
+            try session.restoreFromSeedState(&state);
+            matchViewHypsAgainstConcreteExprsDebug(
+                allocator,
+                theorem,
+                env,
+                session,
+                view,
+                ref_exprs,
+                "hypothesis-first retry",
+            ) catch |err| {
+                if (err == error.ViewHypothesisMismatch) {
+                    return error.ViewConclusionMismatch;
+                }
+                return err;
+            };
+            if (try matchViewConclusionDebug(
+                allocator,
+                theorem,
+                env,
+                session,
+                view,
+                actual_conclusion,
+                null,
+            )) return;
             return error.ViewConclusionMismatch;
         }
     } else {

@@ -1,0 +1,18 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort set;
+term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
+term pred (t: set): wff; prefix pred: $P$ prec 50;
+term sub (t: set): wff;
+term u: set;
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff):
+  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+--| @rewrite
+axiom sub_pred (t: set): $ sub t <-> P t $;
+--| @view (t: set): $ P t $
+axiom ax_subst (t: set): $ sub t $;
+theorem t: $ P u $;

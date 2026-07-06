@@ -1,0 +1,3 @@
+nd_exists_intro_ambiguous
+-------------------------
+l1: $ A ∈ A , B ∈ B ⊢ ∃ x (tag (A ∈ A , B ∈ B) (x ∈ x)) $ by auto?

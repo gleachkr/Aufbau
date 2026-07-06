@@ -1,0 +1,94 @@
+-- Horn-clause / transitive-closure forward-saturation stress (META_STRESS.md
+-- workstream 3). The headline *positive* forward theory (contrast
+-- `forward_stress`, a bounded *no-result* probe): `auto?` must FORWARD-SATURATE
+-- the transitive closure of an `edge` relation, layer by layer, to close a real
+-- goal. `trans` combines path×path, so a chain's full closure is the O(n^2) set
+-- of all sub-paths (heavy fact growth + dedupe), reachable in log-depth layers.
+-- Backward search alone cannot do it: applying `trans` backward to `path a z`
+-- needs an open middle vertex `?y` (an existential subgoal), which is the
+-- @auto-backward / open-meta path, not enabled here. So forward saturation is
+-- the load-bearing mechanism.
+--
+-- Depth-frontier behaviour at the DEFAULT forward bounds (layers=3, facts=64,
+-- attempts=1024, tuples=2048): reach2..reach16 regenerate FULL from edges
+-- alone; longer chains hit a *budget* floor (NOT incompleteness — every chain
+-- reaches FULL given enough budget). The bounds bind in order
+-- attempts -> facts -> tuples -> layers; use the bench's --fwd-* overrides to
+-- separate the two. See META_STRESS.md.
+delimiter $ ( ) $;
+provable sort wff;
+sort obj;
+
+term v0: obj;
+term v1: obj;
+term v2: obj;
+term v3: obj;
+term v4: obj;
+term v5: obj;
+term v6: obj;
+term v7: obj;
+term v8: obj;
+term v9: obj;
+term v10: obj;
+term v11: obj;
+term v12: obj;
+term v13: obj;
+term v14: obj;
+term v15: obj;
+term v16: obj;
+term v17: obj;
+term v18: obj;
+term v19: obj;
+term v20: obj;
+term v21: obj;
+term v22: obj;
+term v23: obj;
+term v24: obj;
+term v25: obj;
+term v26: obj;
+term v27: obj;
+term v28: obj;
+term v29: obj;
+term v30: obj;
+term v31: obj;
+term v32: obj;
+
+term edge (x y: obj): wff;
+term path (x y: obj): wff;
+
+--| @auto forward
+axiom base (x y: obj): $ edge x y $ > $ path x y $;
+
+--| @auto forward
+axiom trans (x y z: obj): $ path x y $ > $ path y z $ > $ path x z $;
+
+theorem reach2:
+  $ edge v0 v1 $ > $ edge v1 v2 $ >
+  $ path v0 v2 $;
+
+theorem reach4:
+  $ edge v0 v1 $ > $ edge v1 v2 $ > $ edge v2 v3 $ > $ edge v3 v4 $ >
+  $ path v0 v4 $;
+
+theorem reach8:
+  $ edge v0 v1 $ > $ edge v1 v2 $ > $ edge v2 v3 $ > $ edge v3 v4 $ > $ edge v4 v5 $ > $ edge v5 v6 $ > $ edge v6 v7 $ > $ edge v7 v8 $ >
+  $ path v0 v8 $;
+
+theorem reach16:
+  $ edge v0 v1 $ > $ edge v1 v2 $ > $ edge v2 v3 $ > $ edge v3 v4 $ > $ edge v4 v5 $ > $ edge v5 v6 $ > $ edge v6 v7 $ > $ edge v7 v8 $ > $ edge v8 v9 $ > $ edge v9 v10 $ > $ edge v10 v11 $ > $ edge v11 v12 $ > $ edge v12 v13 $ > $ edge v13 v14 $ > $ edge v14 v15 $ > $ edge v15 v16 $ >
+  $ path v0 v16 $;
+
+theorem reach24:
+  $ edge v0 v1 $ > $ edge v1 v2 $ > $ edge v2 v3 $ > $ edge v3 v4 $ > $ edge v4 v5 $ > $ edge v5 v6 $ > $ edge v6 v7 $ > $ edge v7 v8 $ > $ edge v8 v9 $ > $ edge v9 v10 $ > $ edge v10 v11 $ > $ edge v11 v12 $ > $ edge v12 v13 $ > $ edge v13 v14 $ > $ edge v14 v15 $ > $ edge v15 v16 $ > $ edge v16 v17 $ > $ edge v17 v18 $ > $ edge v18 v19 $ > $ edge v19 v20 $ > $ edge v20 v21 $ > $ edge v21 v22 $ > $ edge v22 v23 $ > $ edge v23 v24 $ >
+  $ path v0 v24 $;
+
+theorem reach32:
+  $ edge v0 v1 $ > $ edge v1 v2 $ > $ edge v2 v3 $ > $ edge v3 v4 $ > $ edge v4 v5 $ > $ edge v5 v6 $ > $ edge v6 v7 $ > $ edge v7 v8 $ > $ edge v8 v9 $ > $ edge v9 v10 $ > $ edge v10 v11 $ > $ edge v11 v12 $ > $ edge v12 v13 $ > $ edge v13 v14 $ > $ edge v14 v15 $ > $ edge v15 v16 $ > $ edge v16 v17 $ > $ edge v17 v18 $ > $ edge v18 v19 $ > $ edge v19 v20 $ > $ edge v20 v21 $ > $ edge v21 v22 $ > $ edge v22 v23 $ > $ edge v23 v24 $ > $ edge v24 v25 $ > $ edge v25 v26 $ > $ edge v26 v27 $ > $ edge v27 v28 $ > $ edge v28 v29 $ > $ edge v29 v30 $ > $ edge v30 v31 $ > $ edge v31 v32 $ >
+  $ path v0 v32 $;
+
+-- Multi-route dedupe stress: a 'skip ladder' with both +1 and +2 edges,
+-- so v0->v8 has Fibonacci-many routes sharing subpaths (no shortcut edge).
+theorem skip_ladder:
+  $ edge v0 v1 $ > $ edge v1 v2 $ > $ edge v2 v3 $ > $ edge v3 v4 $ > $ edge v4 v5 $ > $ edge v5 v6 $ > $ edge v6 v7 $ > $ edge v7 v8 $ > $ edge v0 v2 $ > $ edge v1 v3 $ > $ edge v2 v4 $ > $ edge v3 v5 $ > $ edge v4 v6 $ > $ edge v5 v7 $ > $ edge v6 v8 $ >
+  $ path v0 v8 $;
+

@@ -1,0 +1,57 @@
+-- Adversarial saturation stress (META_STRESS theory #5). Forward `@auto`
+-- rules that regenerate each other's output under genuine pressure, written to
+-- exercise the two saturation guards independently: the *recipe* dedupe key
+-- (rule + source tuple) and the *canonical surface shape* key (metas numbered
+-- by first occurrence). Every probe goal `R` is unprovable, so each theorem is
+-- a no-result probe: the saturation must stay bounded, report exhaustion
+-- honestly, and never invent a suggestion.
+--
+-- The predicate families are disjoint so each loop class fires in isolation
+-- (`comm` only sees `P`, `ping`/`pong` only `S`/`T`, `viaA`/`viaB` only
+-- `A`/`B`), letting the per-probe derived-ref counts pin down dedupe behavior.
+delimiter $ ( ) $;
+provable sort wff;
+sort obj;
+
+term P (x: obj): wff;
+term S (x: obj): wff;
+term T (x: obj): wff;
+term A (x: obj): wff;
+term B (x: obj): wff;
+term C (x: obj): wff;
+
+term g (x y: obj): obj;
+term h (x: obj): obj;
+term K1: obj;
+term K2: obj;
+term R: wff;
+
+-- Commutativity loop: swapping the arguments regenerates from the rule's own
+-- output. `P (g K1 K2)` derives `P (g K2 K1)` (a NEW surface shape, so it is
+-- kept), but re-firing on that derived fact yields `P (g K1 K2)` again, whose
+-- shape is already seen and dropped. The recipe key keeps the rule from
+-- re-firing on a source it already consumed. Together they must close the loop
+-- at a fixpoint (exhausted = false), NOT spin to the layer/fact budget.
+--| @auto forward
+axiom comm (x y: obj): $ P (g x y) $ > $ P (g y x) $;
+
+-- Mutual regeneration: `ping`/`pong` build an ever-deeper `h`-tower
+-- (`S K1` -> `T (h K1)` -> `S (h (h K1))` -> ...). Genuinely unbounded, so the
+-- frontier stays productive at every layer and the run must stop on the budget
+-- with exhaustion reported (exhausted = true).
+--| @auto forward
+axiom ping (x: obj): $ S x $ > $ T (h x) $;
+--| @auto forward
+axiom pong (x: obj): $ T x $ > $ S (h x) $;
+
+-- Confluence: two distinct recipes derive the identical fact `C K1`. The
+-- recipe keys differ (different rule + source), so the surface shape key is
+-- what must collapse them to a single derived ref.
+--| @auto forward
+axiom viaA (x: obj): $ A x $ > $ C x $;
+--| @auto forward
+axiom viaB (x: obj): $ B x $ > $ C x $;
+
+theorem comm_loop: $ P (g K1 K2) $ > $ R $;
+theorem mutual_regen: $ S K1 $ > $ R $;
+theorem confluence: $ A K1 $ > $ B K1 $ > $ R $;

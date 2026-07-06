@@ -12,6 +12,7 @@ pub const PublicStmtHeader = core.PublicStmtHeader;
 pub const PublicStmtHeaderKind = core.PublicStmtHeaderKind;
 pub const SortStmt = core.SortStmt;
 pub const TermStmt = core.TermStmt;
+pub const Notation = core.Notation;
 
 pub const MM0Parser = struct {
     core: core.MM0Parser,
@@ -52,6 +53,16 @@ pub const MM0Parser = struct {
 
     pub fn peekNextPublicStmtHeader(self: *const MM0Parser) ?PublicStmtHeader {
         return self.core.peekNextPublicStmtHeader();
+    }
+
+    /// Preferred (last-declared) notation for `term_id`, for pretty-printing.
+    pub fn notationForTerm(self: *const MM0Parser, term_id: u32) ?Notation {
+        return self.core.notationForTerm(term_id);
+    }
+
+    /// Whether `term_id` is a declared coercion (printed transparently).
+    pub fn isCoercionTerm(self: *const MM0Parser, term_id: u32) bool {
+        return self.core.isCoercionTerm(term_id);
     }
 
     pub fn recoverToStatementBoundary(self: *MM0Parser) !void {

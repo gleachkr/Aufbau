@@ -141,6 +141,7 @@ pub fn sharedStructuralCombiner(
     rhs: ExprId,
 ) anyerror!?ResolvedStructuralCombiner {
     var support = Support.acuiSupport(self);
+    defer support.deinit();
     return try support.sharedStructuralCombiner(lhs, rhs);
 }
 
@@ -150,6 +151,7 @@ pub fn buildCanonicalAcuiFromItems(
     acui: ResolvedStructuralCombiner,
 ) anyerror!ExprId {
     var support = Support.acuiSupport(self);
+    defer support.deinit();
     return try support.buildCanonicalAcuiFromItems(items, acui);
 }
 
@@ -160,6 +162,7 @@ pub fn rebuildAcuiTree(
     unit_term_id: u32,
 ) anyerror!ExprId {
     var support = Support.acuiSupport(self);
+    defer support.deinit();
     return try support.rebuildAcuiTree(items, head_term_id, unit_term_id);
 }
 

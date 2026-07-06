@@ -1,0 +1,3 @@
+all_elim_forward_inst3
+----------------------
+l1: $ (pair (pair g u) v = pair v w) → (u = w) $ by auto?

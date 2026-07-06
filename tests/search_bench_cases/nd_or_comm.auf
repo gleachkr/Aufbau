@@ -1,0 +1,6 @@
+nd_or_comm
+----------
+l1: $ p ∨ q ⊢ p ∨ q $ by ax
+l2: $ p ⊢ p $ by ax
+l4: $ q ⊢ q $ by ax
+l6: $ p ∨ q ⊢ q ∨ p $ by auto?
