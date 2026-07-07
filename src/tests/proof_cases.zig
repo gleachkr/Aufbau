@@ -403,6 +403,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "peano", .outcome = .pass },
     .{ .stem = "euclid", .outcome = .pass },
     .{ .stem = "tait", .outcome = .pass },
+    .{ .stem = "pratt", .outcome = .pass },
     .{
         .stem = "fail_missing_binding",
         .outcome = .{ .fail = error.MissingBinderAssignment },

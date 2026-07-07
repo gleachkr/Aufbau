@@ -1,0 +1,191 @@
+-- Proofs for pratt.mm0 — PDL with Hoare logic derived inside it.
+--
+-- Reading guide: `u`, `v`, `s` are fresh states (worlds).  A derivation
+-- of `⊨ x` always ends with `valid_intro` at a state the context knows
+-- nothing about.  The `at_mp [_, red_*_sym []]` lines fold a computed
+-- verification condition back into its boxed program form, using the
+-- reversed reduction lemmas below.
+
+lemma red_seq_sym (a b: prog) (p: form):
+  $ ([ a ] ([ b ] p)) ≃ ([ a ⨟ b ] p) $
+---------------------------------------
+l1: $ ([ a ] ([ b ] p)) ≃ ([ a ⨟ b ] p) $ by feq_sym [red_seq []]
+
+lemma red_un_sym (a b: prog) (p: form):
+  $ (([ a ] p) ∧ ([ b ] p)) ≃ ([ a ∪ b ] p) $
+--------------------------------------------
+l1: $ (([ a ] p) ∧ ([ b ] p)) ≃ ([ a ∪ b ] p) $ by feq_sym [red_un []]
+
+lemma red_test_sym (q p: form):
+  $ (q → p) ≃ ([ ? q ] p) $
+---------------------------
+l1: $ (q → p) ≃ ([ ? q ] p) $ by feq_sym [red_test []]
+
+valid_mp
+--------
+
+l1: $ ∅ ⊢ u : (p → q) $ by valid_elim [#1]
+l2: $ ∅ ⊢ u : p $ by valid_elim [#2]
+l3: $ ∅ ⊢ u : q $ by imp_elim [l1, l2]
+l4: $ ⊨ q $ by valid_intro [l3]
+
+valid_nec
+---------
+
+l1: $ step u a v ⊢ v : p $ by valid_elim [#1]
+l2: $ ∅ ⊢ u : ([ a ] p) $ by box_intro [l1]
+l3: $ ⊨ ([ a ] p) $ by valid_intro [l2]
+
+box_k
+-----
+
+l1: $ u : ([ a ] (p → q)) , u : ([ a ] p) , step u a v ⊢ u : ([ a ] (p → q)) $ by ax []
+l2: $ u : ([ a ] (p → q)) , u : ([ a ] p) , step u a v ⊢ u : ([ a ] p) $ by ax []
+l3: $ u : ([ a ] (p → q)) , u : ([ a ] p) , step u a v ⊢ step u a v $ by ax []
+l4: $ u : ([ a ] (p → q)) , u : ([ a ] p) , step u a v ⊢ v : (p → q) $ by box_elim [l1, l3]
+l5: $ u : ([ a ] (p → q)) , u : ([ a ] p) , step u a v ⊢ v : p $ by box_elim [l2, l3]
+l6: $ u : ([ a ] (p → q)) , u : ([ a ] p) , step u a v ⊢ v : q $ by imp_elim [l4, l5]
+l7: $ u : ([ a ] (p → q)) , u : ([ a ] p) ⊢ u : ([ a ] q) $ by box_intro [l6]
+l8: $ u : ([ a ] (p → q)) ⊢ u : (([ a ] p) → ([ a ] q)) $ by imp_intro [l7]
+l9: $ ∅ ⊢ u : (([ a ] (p → q)) → (([ a ] p) → ([ a ] q))) $ by imp_intro [l8]
+l10: $ ⊨ (([ a ] (p → q)) → (([ a ] p) → ([ a ] q))) $ by valid_intro [l9]
+
+box_mono
+--------
+
+l1: $ ⊨ ([ a ] (p → q)) $ by valid_nec [#1]
+l2: $ ⊨ (([ a ] p) → ([ a ] q)) $ by valid_mp [box_k [], l1]
+
+star_out
+--------
+
+l1: $ u : ([ ⋆ a ] p) ⊢ u : ([ ⋆ a ] p) $ by ax []
+l2: $ u : ([ ⋆ a ] p) ⊢ u : (p ∧ ([ a ] ([ ⋆ a ] p))) $ by at_mp [l1, star_fix []]
+l3: $ u : ([ ⋆ a ] p) ⊢ u : p $ by an_elim_l [l2]
+l4: $ ∅ ⊢ u : (([ ⋆ a ] p) → p) $ by imp_intro [l3]
+l5: $ ⊨ (([ ⋆ a ] p) → p) $ by valid_intro [l4]
+
+star_step
+---------
+
+l1: $ u : ([ ⋆ a ] p) ⊢ u : ([ ⋆ a ] p) $ by ax []
+l2: $ u : ([ ⋆ a ] p) ⊢ u : (p ∧ ([ a ] ([ ⋆ a ] p))) $ by at_mp [l1, star_fix []]
+l3: $ u : ([ ⋆ a ] p) ⊢ u : ([ a ] ([ ⋆ a ] p)) $ by an_elim_r [l2]
+l4: $ ∅ ⊢ u : (([ ⋆ a ] p) → ([ a ] ([ ⋆ a ] p))) $ by imp_intro [l3]
+l5: $ ⊨ (([ ⋆ a ] p) → ([ a ] ([ ⋆ a ] p))) $ by valid_intro [l4]
+
+star_star
+---------
+
+-- Star induction with the invariant `[ ⋆ a ] p` itself: it holds now, and
+-- `star_step` (boxed by necessitation) says every a-step preserves it.
+l1: $ u : ([ ⋆ a ] p) ⊢ u : ([ ⋆ a ] p) $ by ax []
+l2: $ u : ([ ⋆ a ] p) ⊢ u : ([ ⋆ a ] (([ ⋆ a ] p) → ([ a ] ([ ⋆ a ] p)))) $
+  by valid_elim [valid_nec [star_step []]]
+l3: $ u : ([ ⋆ a ] p) ⊢ u : ([ ⋆ a ] ([ ⋆ a ] p)) $ by star_ind [l1, l2]
+l4: $ ∅ ⊢ u : (([ ⋆ a ] p) → ([ ⋆ a ] ([ ⋆ a ] p))) $ by imp_intro [l3]
+l5: $ ⊨ (([ ⋆ a ] p) → ([ ⋆ a ] ([ ⋆ a ] p))) $ by valid_intro [l4]
+
+hoare_skip
+----------
+
+l1: $ u : p , u : ⊤ ⊢ u : p $ by ax []
+l2: $ u : p ⊢ u : (⊤ → p) $ by imp_intro [l1]
+l3: $ u : p ⊢ u : ([ ? ⊤ ] p) $ by at_mp [l2, red_test_sym []]
+l4: $ ∅ ⊢ u : (p → ([ ? ⊤ ] p)) $ by imp_intro [l3]
+l5: $ ⊨ (p → ([ ? ⊤ ] p)) $ by valid_intro [l4]
+l6: $ ⦃ p ⦄ skip ⟦ p ⟧ $ by ht_intro [l5]
+
+hoare_conseq
+------------
+
+l1: $ u : p2 ⊢ u : p2 $ by ax []
+l2: $ u : p2 ⊢ u : p $ by imp_elim [valid_elim [#1], l1]
+l3: $ u : p2 ⊢ u : ([ a ] q) $ by imp_elim [valid_elim [ht_elim [#2]], l2]
+l4: $ u : p2 ⊢ u : ([ a ] q2) $ by imp_elim [valid_elim [box_mono [#3]], l3]
+l5: $ ∅ ⊢ u : (p2 → ([ a ] q2)) $ by imp_intro [l4]
+l6: $ ⊨ (p2 → ([ a ] q2)) $ by valid_intro [l5]
+l7: $ ⦃ p2 ⦄ a ⟦ q2 ⟧ $ by ht_intro [l6]
+
+hoare_seq
+---------
+
+l1: $ u : p ⊢ u : p $ by ax []
+l2: $ u : p ⊢ u : ([ a ] q) $ by imp_elim [valid_elim [ht_elim [#1]], l1]
+l3: $ u : p ⊢ u : ([ a ] ([ b ] r)) $
+  by imp_elim [valid_elim [box_mono [ht_elim [#2]]], l2]
+l4: $ u : p ⊢ u : ([ a ⨟ b ] r) $ by at_mp [l3, red_seq_sym []]
+l5: $ ∅ ⊢ u : (p → ([ a ⨟ b ] r)) $ by imp_intro [l4]
+l6: $ ⊨ (p → ([ a ⨟ b ] r)) $ by valid_intro [l5]
+l7: $ ⦃ p ⦄ (a ⨟ b) ⟦ r ⟧ $ by ht_intro [l6]
+
+hoare_choice
+------------
+
+l1: $ u : p ⊢ u : p $ by ax []
+l2: $ u : p ⊢ u : ([ a ] q) $ by imp_elim [valid_elim [ht_elim [#1]], l1]
+l3: $ u : p ⊢ u : ([ b ] q) $ by imp_elim [valid_elim [ht_elim [#2]], l1]
+l4: $ u : p ⊢ u : (([ a ] q) ∧ ([ b ] q)) $ by an_intro [l2, l3]
+l5: $ u : p ⊢ u : ([ a ∪ b ] q) $ by at_mp [l4, red_un_sym []]
+l6: $ ∅ ⊢ u : (p → ([ a ∪ b ] q)) $ by imp_intro [l5]
+l7: $ ⊨ (p → ([ a ∪ b ] q)) $ by valid_intro [l6]
+l8: $ ⦃ p ⦄ (a ∪ b) ⟦ q ⟧ $ by ht_intro [l7]
+
+hoare_if
+--------
+
+-- Branch 1: entering with the guard true runs `a`.
+l1: $ u : p , u : b ⊢ u : (p ∧ b) $ by an_intro [ax [], ax []]
+l2: $ u : p , u : b ⊢ u : ([ a ] q) $ by imp_elim [valid_elim (g := $ ∅ $, w := $ u $) [ht_elim [#1]], l1]
+l3: $ u : p ⊢ u : (b → ([ a ] q)) $ by imp_intro [l2]
+l4: $ u : p ⊢ u : ([ ? b ] ([ a ] q)) $ by at_mp [l3, red_test_sym []]
+l5: $ u : p ⊢ u : ([ ? b ⨟ a ] q) $ by at_mp [l4, red_seq_sym []]
+-- Branch 2: entering with the guard false runs `c`.
+l6: $ u : p , u : (¬ b) ⊢ u : (p ∧ (¬ b)) $ by an_intro [ax [], ax []]
+l7: $ u : p , u : (¬ b) ⊢ u : ([ c ] q) $ by imp_elim [valid_elim (g := $ ∅ $, w := $ u $) [ht_elim [#2]], l6]
+l8: $ u : p ⊢ u : ((¬ b) → ([ c ] q)) $ by imp_intro [l7]
+l9: $ u : p ⊢ u : ([ ? (¬ b) ] ([ c ] q)) $ by at_mp [l8, red_test_sym []]
+l10: $ u : p ⊢ u : ([ ? (¬ b) ⨟ c ] q) $ by at_mp [l9, red_seq_sym []]
+-- A nondeterministic choice satisfies a box iff both branches do.
+l11: $ u : p ⊢ u : (([ ? b ⨟ a ] q) ∧ ([ ? (¬ b) ⨟ c ] q)) $ by an_intro [l5, l10]
+l12: $ u : p ⊢ u : ([ (? b ⨟ a) ∪ (? (¬ b) ⨟ c) ] q) $ by at_mp [l11, red_un_sym []]
+l13: $ ∅ ⊢ u : (p → ([ (? b ⨟ a) ∪ (? (¬ b) ⨟ c) ] q)) $ by imp_intro [l12]
+l14: $ ⊨ (p → ([ (? b ⨟ a) ∪ (? (¬ b) ⨟ c) ] q)) $ by valid_intro [l13]
+l15: $ ⦃ p ⦄ ifp b a c ⟦ q ⟧ $ by ht_intro [l14]
+
+hoare_while
+-----------
+
+-- Step 1: the loop body preserves the invariant, packaged as one guarded
+-- iteration `? b ⨟ a`.
+l1: $ u : p , u : b ⊢ u : (p ∧ b) $ by an_intro [ax [], ax []]
+l2: $ u : p , u : b ⊢ u : ([ a ] p) $ by imp_elim [valid_elim (g := $ ∅ $, w := $ u $) [ht_elim [#1]], l1]
+l3: $ u : p ⊢ u : (b → ([ a ] p)) $ by imp_intro [l2]
+l4: $ u : p ⊢ u : ([ ? b ] ([ a ] p)) $ by at_mp [l3, red_test_sym []]
+l5: $ u : p ⊢ u : ([ ? b ⨟ a ] p) $ by at_mp [l4, red_seq_sym []]
+l6: $ ∅ ⊢ u : (p → ([ ? b ⨟ a ] p)) $ by imp_intro [l5]
+l7: $ ⊨ (p → ([ ? b ⨟ a ] p)) $ by valid_intro [l6]
+-- Step 2: leaving the loop with the guard false gives the postcondition.
+l8: $ v : p , v : (¬ b) ⊢ v : (p ∧ (¬ b)) $ by an_intro [ax [], ax []]
+l9: $ v : p ⊢ v : ((¬ b) → (p ∧ (¬ b))) $ by imp_intro [l8]
+l10: $ v : p ⊢ v : ([ ? (¬ b) ] (p ∧ (¬ b))) $ by at_mp [l9, red_test_sym []]
+l11: $ ∅ ⊢ v : (p → ([ ? (¬ b) ] (p ∧ (¬ b)))) $ by imp_intro [l10]
+l12: $ ⊨ (p → ([ ? (¬ b) ] (p ∧ (¬ b)))) $ by valid_intro [l11]
+-- Step 3: star induction carries the invariant through every iteration,
+-- then monotonicity attaches the exit test.
+l13: $ s : p ⊢ s : p $ by ax []
+l14: $ s : p ⊢ s : ([ ⋆ (? b ⨟ a) ] (p → ([ ? b ⨟ a ] p))) $
+  by valid_elim [valid_nec [l7]]
+l15: $ s : p ⊢ s : ([ ⋆ (? b ⨟ a) ] p) $ by star_ind [l13, l14]
+l16: $ s : p ⊢ s : (([ ⋆ (? b ⨟ a) ] p) → ([ ⋆ (? b ⨟ a) ] ([ ? (¬ b) ] (p ∧ (¬ b))))) $
+  by valid_elim [box_mono [l12]]
+l17: $ s : p ⊢ s : ([ ⋆ (? b ⨟ a) ] ([ ? (¬ b) ] (p ∧ (¬ b)))) $ by imp_elim [l16, l15]
+l18: $ s : p ⊢ s : ([ ⋆ (? b ⨟ a) ⨟ ? (¬ b) ] (p ∧ (¬ b))) $ by at_mp [l17, red_seq_sym []]
+l19: $ ∅ ⊢ s : (p → ([ ⋆ (? b ⨟ a) ⨟ ? (¬ b) ] (p ∧ (¬ b)))) $ by imp_intro [l18]
+l20: $ ⊨ (p → ([ ⋆ (? b ⨟ a) ⨟ ? (¬ b) ] (p ∧ (¬ b)))) $ by valid_intro [l19]
+l21: $ ⦃ p ⦄ while b a ⟦ p ∧ (¬ b) ⟧ $ by ht_intro [l20]
+
+example_compose
+---------------
+
+l1: $ ⦃ p ⦄ ((while b a) ⨟ skip) ⟦ p ∧ (¬ b) ⟧ $ by hoare_seq [hoare_while [#1], hoare_skip (p := $ p ∧ (¬ b) $)]

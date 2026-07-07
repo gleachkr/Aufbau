@@ -129,6 +129,11 @@ const examples = {
     mm0: "./fixtures/tait.mm0",
     proof: "./fixtures/tait.auf",
   },
+  pratt: {
+    label: "pratt",
+    mm0: "./fixtures/pratt.mm0",
+    proof: "./fixtures/pratt.auf",
+  },
 };
 
 const editorTheme = EditorView.theme({

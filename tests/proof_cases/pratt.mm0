@@ -1,0 +1,379 @@
+-- Propositional dynamic logic (PDL), with Hoare logic derived inside it.
+--
+-- Programs are first-class: `a ⨟ b` (sequence), `a ∪ b` (nondeterministic
+-- choice), `⋆ a` (iteration), and `? p` (test).  `[ a ] p` says "after every
+-- terminating run of program `a`, formula `p` holds".  A Hoare triple is
+-- nothing but a valid box formula:
+--
+--   ⦃ p ⦄ a ⟦ q ⟧   :=   ⊨ (p → [ a ] q)
+--
+-- so the classical Hoare proof rules (skip, sequence, choice, conditional,
+-- while, consequence) are *theorems* here, derived from the PDL axioms, and
+-- the structured commands are *definitions*:
+--
+--   skip        := ? ⊤
+--   ifp b a c   := (? b ⨟ a) ∪ (? (¬ b) ⨟ c)
+--   while b a   := ⋆ (? b ⨟ a) ⨟ ? (¬ b)
+--
+-- The encoding is the labelled Kripke style of the `barcan` fixture: a
+-- sequent `g ⊢ w : p` reads "under assumptions g, formula p holds at world
+-- w", and `step w a v` says "program a can move the machine from state w to
+-- state v".  `box_intro`/`box_elim` give K and necessitation uniformly for
+-- every program, including compound ones.
+--
+-- Program structure is handled by the *rewrite system*: the Segerberg
+-- reduction axioms
+--
+--   [ a ⨟ b ] p ≃ [ a ] [ b ] p      (red_seq)
+--   [ a ∪ b ] p ≃ [ a ] p ∧ [ b ] p  (red_un)
+--   [ ? q ] p   ≃ q → p              (red_test)
+--
+-- are registered `@rewrite`, so the normalizer computes verification
+-- conditions: a goal about `ifp b a c` decomposes into the two guarded
+-- branch conditions mechanically.  They terminate because each strictly
+-- shrinks the program under the box.  Iteration cannot be a rewrite (its
+-- unfolding `[ ⋆ a ] p ≃ p ∧ [ a ] [ ⋆ a ] p` loops), so `⋆` is governed by
+-- the fixpoint axiom `star_fix` plus the induction rule `star_ind` — the
+-- proof-theoretic heart of the theory, from which the Hoare while rule is
+-- derived.
+--
+-- Validity `⊨ p` ("p holds at every state") is what makes the Hoare rules
+-- derivable *as rules*: a triple hypothesis must be usable at whichever
+-- intermediate world a run reaches, and `valid_elim` provides exactly that.
+-- `valid_intro`'s bound binder `{w}` is the usual eigenvariable discipline:
+-- to conclude `⊨ p`, prove `p` at a state you know nothing about.
+delimiter $ ( ) [ ] $;
+
+provable sort wff;
+sort ctx;
+--| @vars u v s
+sort world;
+sort form;
+sort prog;
+
+-- ============================================================
+-- Formulas
+-- ============================================================
+
+term imp (p q: form): form;
+infixr imp: $→$ prec 25;
+term an (p q: form): form;
+infixr an: $∧$ prec 35;
+term neg (p: form): form;
+prefix neg: $¬$ prec 40;
+term tt: form;
+notation tt: form = ($⊤$:max);
+term bot: form;
+notation bot: form = ($⊥$:max);
+
+-- ============================================================
+-- Programs
+-- ============================================================
+
+term sq (a b: prog): prog;
+infixr sq: $⨟$ prec 32;
+term un (a b: prog): prog;
+infixr un: $∪$ prec 30;
+term star (a: prog): prog;
+prefix star: $⋆$ prec 45;
+term test (p: form): prog;
+prefix test: $?$ prec 45;
+
+-- The box modality, indexed by a program.
+term box (a: prog) (p: form): form;
+notation box (a: prog) (p: form): form = ($[$:41) a ($]$:0) p;
+
+-- ============================================================
+-- Judgments
+-- ============================================================
+
+term iff (a b: wff): wff;
+infixr iff: $↔$ prec 20;
+term feq (p q: form): wff;
+infixr feq: $≃$ prec 20;
+term peq (a b: prog): wff;
+infixr peq: $≡$ prec 20;
+term weq (w v: world): wff;
+infixl weq: $≈$ prec 50;
+
+-- "p holds at world w" and "program a steps from w to v".
+term at (w: world) (p: form): wff;
+infixl at: $:$ prec 24;
+term step (w: world) (a: prog) (v: world): wff;
+notation step (w: world) (a: prog) (v: world): wff = ($step$:35) w a v;
+
+-- Contexts: ACUI sets of labelled facts.
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($∅$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+-- Validity: p holds at every state.
+term valid (p: form): wff;
+prefix valid: $⊨$ prec 3;
+
+-- The Hoare triple, sugar for a valid box formula (see ht_intro/ht_elim).
+term ht (p: form) (a: prog) (q: form): wff;
+notation ht (p: form) (a: prog) (q: form): wff =
+  ($⦃$:35) p ($⦄$:0) a ($⟦$:35) q ($⟧$:0);
+
+-- ============================================================
+-- Relation / congruence batteries
+-- ============================================================
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a ↔ a $;
+axiom iff_trans (a b c: wff):
+  $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+-- Formula equivalence is the rewrite relation on form.
+--| @relation form feq feq_refl feq_trans feq_sym _
+axiom feq_refl (p: form): $ p ≃ p $;
+axiom feq_trans (p q r: form):
+  $ p ≃ q $ > $ q ≃ r $ > $ p ≃ r $;
+axiom feq_sym (p q: form): $ p ≃ q $ > $ q ≃ p $;
+
+--| @relation prog peq peq_refl peq_trans peq_sym _
+axiom peq_refl (a: prog): $ a ≡ a $;
+axiom peq_trans (a b c: prog):
+  $ a ≡ b $ > $ b ≡ c $ > $ a ≡ c $;
+axiom peq_sym (a b: prog): $ a ≡ b $ > $ b ≡ a $;
+
+--| @relation world weq weq_refl weq_trans weq_sym _
+axiom weq_refl (w: world): $ w ≈ w $;
+axiom weq_trans (w v u: world):
+  $ w ≈ v $ > $ v ≈ u $ > $ w ≈ u $;
+axiom weq_sym (w v: world): $ w ≈ v $ > $ v ≈ w $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (∅ , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ↔ (h ⊢ b) $;
+
+--| @congr
+axiom imp_congr (p1 p2 q1 q2: form):
+  $ p1 ≃ p2 $ > $ q1 ≃ q2 $ > $ (p1 → q1) ≃ (p2 → q2) $;
+--| @congr
+axiom an_congr (p1 p2 q1 q2: form):
+  $ p1 ≃ p2 $ > $ q1 ≃ q2 $ > $ (p1 ∧ q1) ≃ (p2 ∧ q2) $;
+--| @congr
+axiom neg_congr (p q: form): $ p ≃ q $ > $ ¬ p ≃ ¬ q $;
+--| @congr
+axiom box_congr (a1 a2: prog) (p q: form):
+  $ a1 ≡ a2 $ > $ p ≃ q $ > $ [ a1 ] p ≃ [ a2 ] q $;
+
+--| @congr
+axiom sq_congr (a1 a2 b1 b2: prog):
+  $ a1 ≡ a2 $ > $ b1 ≡ b2 $ > $ (a1 ⨟ b1) ≡ (a2 ⨟ b2) $;
+--| @congr
+axiom un_congr (a1 a2 b1 b2: prog):
+  $ a1 ≡ a2 $ > $ b1 ≡ b2 $ > $ (a1 ∪ b1) ≡ (a2 ∪ b2) $;
+--| @congr
+axiom star_congr (a b: prog): $ a ≡ b $ > $ ⋆ a ≡ ⋆ b $;
+--| @congr
+axiom test_congr (p q: form): $ p ≃ q $ > $ ? p ≡ ? q $;
+
+--| @congr
+axiom at_congr (w1 w2: world) (p q: form):
+  $ w1 ≈ w2 $ > $ p ≃ q $ > $ (w1 : p) ↔ (w2 : q) $;
+--| @congr
+axiom step_congr (w1 w2: world) (a1 a2: prog) (v1 v2: world):
+  $ w1 ≈ w2 $ > $ a1 ≡ a2 $ > $ v1 ≈ v2 $ >
+  $ (step w1 a1 v1) ↔ (step w2 a2 v2) $;
+--| @congr
+axiom valid_congr (p q: form): $ p ≃ q $ > $ (⊨ p) ↔ (⊨ q) $;
+--| @congr
+axiom ht_congr (p1 p2: form) (a1 a2: prog) (q1 q2: form):
+  $ p1 ≃ p2 $ > $ a1 ≡ a2 $ > $ q1 ≃ q2 $ >
+  $ (⦃ p1 ⦄ a1 ⟦ q1 ⟧) ↔ (⦃ p2 ⦄ a2 ⟦ q2 ⟧) $;
+
+-- ============================================================
+-- Labelled natural deduction: propositional core
+-- ============================================================
+
+axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+
+--| @auto eager
+axiom imp_intro (g: ctx) (w: world) (p q: form):
+  $ g , w : p ⊢ w : q $ > $ g ⊢ w : (p → q) $;
+--| @auto forward
+axiom imp_elim (g h: ctx) (w: world) (p q: form):
+  $ g ⊢ w : (p → q) $ > $ h ⊢ w : p $ > $ g , h ⊢ w : q $;
+
+--| @auto eager 2
+axiom an_intro (g: ctx) (w: world) (p q: form):
+  $ g ⊢ w : p $ > $ g ⊢ w : q $ > $ g ⊢ w : (p ∧ q) $;
+--| @auto forward
+axiom an_elim_l (g: ctx) (w: world) (p q: form):
+  $ g ⊢ w : (p ∧ q) $ > $ g ⊢ w : p $;
+--| @auto forward
+axiom an_elim_r (g: ctx) (w: world) (p q: form):
+  $ g ⊢ w : (p ∧ q) $ > $ g ⊢ w : q $;
+
+--| @auto eager
+axiom neg_intro (g: ctx) (w: world) (p: form):
+  $ g , w : p ⊢ w : ⊥ $ > $ g ⊢ w : (¬ p) $;
+--| @auto forward
+axiom neg_elim (g h: ctx) (w: world) (p: form):
+  $ g ⊢ w : (¬ p) $ > $ h ⊢ w : p $ > $ g , h ⊢ w : ⊥ $;
+axiom bot_elim (g: ctx) (w v: world) (p: form):
+  $ g ⊢ w : ⊥ $ > $ g ⊢ v : p $;
+axiom tt_intro (g: ctx) (w: world): $ g ⊢ w : ⊤ $;
+
+-- Classical base logic: proof by contradiction.
+axiom pbc (g: ctx) (w: world) (p: form):
+  $ g , w : (¬ p) ⊢ w : ⊥ $ > $ g ⊢ w : p $;
+
+-- Formula equivalence transports along `:` (the ≃-to-⊢ bridge).  The
+-- sequent premise comes first so that a cited line pins `p` before the
+-- equivalence premise is elaborated — that lets nested inline proofs of
+-- the equivalence (feq_sym [red_* []]) infer all their binders from the
+-- expected hypothesis.
+axiom at_mp (g: ctx) (w: world) (p q: form):
+  $ g ⊢ w : p $ > $ p ≃ q $ > $ g ⊢ w : q $;
+
+-- ============================================================
+-- The modality: K and necessitation for every program at once
+-- ============================================================
+
+-- Eigenworld rule: to show `[ a ] p` at w, show p at a fresh a-successor.
+axiom box_intro (g: ctx) (w: world) {v: world} (a: prog) (p: form):
+  $ g , step w a v ⊢ v : p $ > $ g ⊢ w : ([ a ] p) $;
+--| @auto forward
+axiom box_elim (g h: ctx) (w v: world) (a: prog) (p: form):
+  $ g ⊢ w : ([ a ] p) $ > $ h ⊢ step w a v $ > $ g , h ⊢ v : p $;
+
+-- ============================================================
+-- Program structure: the Segerberg reduction axioms
+-- ============================================================
+
+--| @rewrite
+axiom red_seq (a b: prog) (p: form):
+  $ [ a ⨟ b ] p ≃ [ a ] ([ b ] p) $;
+--| @rewrite
+axiom red_un (a b: prog) (p: form):
+  $ [ a ∪ b ] p ≃ (([ a ] p) ∧ ([ b ] p)) $;
+--| @rewrite
+axiom red_test (q p: form):
+  $ [ ? q ] p ≃ (q → p) $;
+
+-- Iteration: fixpoint unfolding (not a rewrite — it would loop) and the
+-- induction rule.  `star_ind` reads: if p holds now, and after any number
+-- of a-steps p is still preserved by one more a-step, then p holds after
+-- any number of a-steps.
+axiom star_fix (a: prog) (p: form):
+  $ [ ⋆ a ] p ≃ (p ∧ ([ a ] ([ ⋆ a ] p))) $;
+axiom star_ind (g: ctx) (w: world) (a: prog) (p: form):
+  $ g ⊢ w : p $ >
+  $ g ⊢ w : ([ ⋆ a ] (p → ([ a ] p))) $ >
+  $ g ⊢ w : ([ ⋆ a ] p) $;
+
+-- ============================================================
+-- Validity and Hoare triples
+-- ============================================================
+
+-- Eigenworld again: valid means "at a state you know nothing about".
+axiom valid_intro {w: world} (p: form):
+  $ ∅ ⊢ w : p $ > $ ⊨ p $;
+--| @auto backward
+axiom valid_elim (g: ctx) (w: world) (p: form):
+  $ ⊨ p $ > $ g ⊢ w : p $;
+
+--| @auto eager
+axiom ht_intro (p q: form) (a: prog):
+  $ ⊨ (p → ([ a ] q)) $ > $ ⦃ p ⦄ a ⟦ q ⟧ $;
+--| @auto forward
+axiom ht_elim (p q: form) (a: prog):
+  $ ⦃ p ⦄ a ⟦ q ⟧ $ > $ ⊨ (p → ([ a ] q)) $;
+
+-- ============================================================
+-- Structured commands are definitions, not primitives
+-- ============================================================
+
+def skip: prog = $ ? ⊤ $;
+def ifp (b: form) (a c: prog): prog = $ (? b ⨟ a) ∪ (? (¬ b) ⨟ c) $;
+def while (b: form) (a: prog): prog = $ ⋆ (? b ⨟ a) ⨟ ? (¬ b) $;
+
+-- ============================================================
+-- The modal toolkit (proofs in pratt.auf)
+-- ============================================================
+
+-- Modus ponens and necessitation at the validity level.
+theorem valid_mp (p q: form): $ ⊨ (p → q) $ > $ ⊨ p $ > $ ⊨ q $;
+theorem valid_nec (a: prog) (p: form): $ ⊨ p $ > $ ⊨ ([ a ] p) $;
+
+-- Distribution (axiom K), and monotonicity derived from it in one line.
+theorem box_k (a: prog) (p q: form):
+  $ ⊨ (([ a ] (p → q)) → (([ a ] p) → ([ a ] q))) $;
+theorem box_mono (a: prog) (p q: form):
+  $ ⊨ (p → q) $ > $ ⊨ (([ a ] p) → ([ a ] q)) $;
+
+-- Iteration warm-ups: both halves of the fixpoint, then transitivity of
+-- iteration by star induction.
+theorem star_out (a: prog) (p: form): $ ⊨ (([ ⋆ a ] p) → p) $;
+theorem star_step (a: prog) (p: form):
+  $ ⊨ (([ ⋆ a ] p) → ([ a ] ([ ⋆ a ] p))) $;
+theorem star_star (a: prog) (p: form):
+  $ ⊨ (([ ⋆ a ] p) → ([ ⋆ a ] ([ ⋆ a ] p))) $;
+
+-- ============================================================
+-- Hoare logic, derived
+-- ============================================================
+
+theorem hoare_skip (p: form): $ ⦃ p ⦄ skip ⟦ p ⟧ $;
+
+theorem hoare_conseq (a: prog) (p p2 q q2: form):
+  $ ⊨ (p2 → p) $ >
+  $ ⦃ p ⦄ a ⟦ q ⟧ $ >
+  $ ⊨ (q → q2) $ >
+  $ ⦃ p2 ⦄ a ⟦ q2 ⟧ $;
+
+theorem hoare_seq (a b: prog) (p q r: form):
+  $ ⦃ p ⦄ a ⟦ q ⟧ $ >
+  $ ⦃ q ⦄ b ⟦ r ⟧ $ >
+  $ ⦃ p ⦄ (a ⨟ b) ⟦ r ⟧ $;
+
+theorem hoare_choice (a b: prog) (p q: form):
+  $ ⦃ p ⦄ a ⟦ q ⟧ $ >
+  $ ⦃ p ⦄ b ⟦ q ⟧ $ >
+  $ ⦃ p ⦄ (a ∪ b) ⟦ q ⟧ $;
+
+theorem hoare_if (a c: prog) (b p q: form):
+  $ ⦃ p ∧ b ⦄ a ⟦ q ⟧ $ >
+  $ ⦃ p ∧ (¬ b) ⦄ c ⟦ q ⟧ $ >
+  $ ⦃ p ⦄ ifp b a c ⟦ q ⟧ $;
+
+-- The crown jewel: the while rule from star induction.
+theorem hoare_while (a: prog) (b p: form):
+  $ ⦃ p ∧ b ⦄ a ⟦ p ⟧ $ >
+  $ ⦃ p ⦄ while b a ⟦ p ∧ (¬ b) ⟧ $;
+
+-- Derived rules compose like primitives: one line, three Hoare rules.
+theorem example_compose (a: prog) (b p: form):
+  $ ⦃ p ∧ b ⦄ a ⟦ p ⟧ $ >
+  $ ⦃ p ⦄ ((while b a) ⨟ skip) ⟦ p ∧ (¬ b) ⟧ $;
