@@ -1,0 +1,17 @@
+delimiter $ ( ) $;
+strict provable sort wff;
+term im (p q: wff): wff; infixr im: $->$ prec 25;
+term eq (p q: wff): wff; infixl eq: $==$ prec 50;
+
+axiom eq_sym (p q: wff): $ p == q $ > $ q == p $;
+-- A two-binder axiom whose conclusion only unifies once both sides are known.
+axiom red (q p: wff): $ (q -> p) == p $;
+-- Transport: sequent premise FIRST (the pratt at_mp shape).
+axiom mp_eq (p q: wff): $ p $ > $ p == q $ > $ q $;
+-- Reversed-equation variant (one-level sibling flow, no grandchild).
+axiom mp_eq2 (p q: wff): $ p $ > $ q == p $ > $ q $;
+
+-- One-level: ref #1 must pin p before slot 2's hint is usable.
+theorem sib (a b: wff): $ a $ > $ b -> a $;
+-- Two-level: slot 2's refined hint must ALSO reach red under eq_sym.
+theorem grand (a b: wff): $ a $ > $ b -> a $;

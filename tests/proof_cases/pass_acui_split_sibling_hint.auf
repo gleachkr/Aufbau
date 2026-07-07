@@ -1,0 +1,14 @@
+one
+---
+l1: $ u : p |- u : p $ by ax []
+l2: $ u : p |- u : q $ by imp_elim [valid_elim [#1], l1]
+
+two
+---
+l1: $ u : p , u : (p -> b) |- u : (p -> b) $ by ax []
+l2: $ u : p , u : (p -> b) |- u : q $ by imp_elim [valid_elim [#1], l1]
+
+two_explicit
+------------
+l1: $ u : p , u : (p -> b) |- u : (p -> b) $ by ax []
+l2: $ u : p , u : (p -> b) |- u : q $ by imp_elim [valid_elim (g := $ E $) [#1], l1]

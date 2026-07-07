@@ -2494,33 +2494,25 @@ test "compiler records inference diagnostics for omitted arguments" {
         mm0_src,
         proof_src,
     );
-    try std.testing.expectError(error.UnifyMismatch, compiler.compileMmb(
+    // All binders are solvable from the stated conclusion (a := b, b := a),
+    // so inference completes and defers the bad reference to theorem
+    // application, which reports the mismatched hypothesis directly instead
+    // of a generic inference failure.
+    try std.testing.expectError(error.HypothesisMismatch, compiler.compileMmb(
         std.testing.allocator,
     ));
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
-    try std.testing.expectEqual(error.UnifyMismatch, diag.err);
+    try std.testing.expectEqual(error.HypothesisMismatch, diag.err);
     try std.testing.expectEqualStrings(
-        "could not infer omitted rule arguments from the line and refs",
+        "rule reference does not match the expected hypothesis",
         mm0.compilerDiagnosticSummary(diag),
     );
     try std.testing.expectEqualStrings("keep_bad", diag.theorem_name.?);
     try std.testing.expectEqualStrings("l1", diag.line_label.?);
     try std.testing.expectEqualStrings("ax_keep", diag.rule_name.?);
-    switch (diag.detail) {
-        .inference_failure => |detail| {
-            try std.testing.expectEqual(.transparent_fallback, detail.path);
-            try std.testing.expect(detail.first_unsolved_binder_name == null);
-        },
-        else => return error.ExpectedInferenceFailureDetail,
-    }
-    try std.testing.expectEqual(@as(usize, 3), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
-        "inference path: transparent fallback",
-        diag.noteSlice()[0].message,
-    );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings(
-        "ax_keep",
+        "#1",
         proof_src[span.start..span.end],
     );
 }

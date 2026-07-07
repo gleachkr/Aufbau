@@ -41,6 +41,7 @@ const WEB_DEMO_FIXTURES = [_][]const u8{
     "zermelo",
     "tait",
     "pratt",
+    "hoare",
 };
 
 fn installWebPackageSet(

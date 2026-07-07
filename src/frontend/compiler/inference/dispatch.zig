@@ -11,6 +11,7 @@ const InferenceSolver = @import("../../inference_solver.zig").Solver;
 const CompilerViews = @import("../views.zig");
 const ViewDecl = CompilerViews.ViewDecl;
 const CompilerDiag = @import("../diag.zig");
+const CheckedIr = @import("../checked_ir.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const FreshSelect = @import("../fresh_select.zig");
 const Emit = @import("../emit.zig");
@@ -203,6 +204,46 @@ fn inferBindingsNoView(
                     ref_exprs,
                     line_expr,
                 );
+            }
+
+            // Strict replay may fail on a hypothesis-vs-ref or conclusion
+            // mismatch that theorem-application validation can still bridge
+            // (normalized or transparent conversion — e.g. a rule hypothesis
+            // containing a substitution redex cited with the already-reduced
+            // instance).  Inference's job is solving binders: when the failure
+            // snapshot has already solved every binder, defer the mismatch to
+            // validation instead of rejecting the application here.
+            if (failure.partial_bindings.len == rule.args.len) complete: {
+                for (failure.partial_bindings) |binding| {
+                    if (binding == null) break :complete;
+                }
+                const bindings = try allocator.alloc(ExprId, rule.args.len);
+                for (failure.partial_bindings, 0..) |binding, idx| {
+                    // A binding that captured a holey-hint placeholder is not
+                    // actually solved: deferring it would bypass the fallback
+                    // paths that treat hint placeholders as wildcards and
+                    // re-derive the binder from the refs.
+                    CheckedIr.validateNoPlaceholderExpr(
+                        theorem,
+                        binding.?,
+                    ) catch {
+                        allocator.free(bindings);
+                        break :complete;
+                    };
+                    validateBindingExpr(
+                        env,
+                        theorem,
+                        assertion.args,
+                        rule.args[idx],
+                        binding.?,
+                    ) catch {
+                        allocator.free(bindings);
+                        break :complete;
+                    };
+                    bindings[idx] = binding.?;
+                }
+                self.restoreDiagnostic(null);
+                return bindings;
             }
 
             if (failure.err == error.MissingBinderAssignment) {

@@ -241,6 +241,19 @@ const proof_cases = [_]ProofCase{
     // hint (`fillHoleyInlineHints`). Compile-path round-trip of the `nd_or_comm`
     // auto? suggestion. See docs/design_notes/nd_or_comm_validation_gap.
     .{ .stem = "pass_holey_or_elim", .outcome = .pass },
+    // Nested relay minor (`eq_sym [red []]`): the relay has no
+    // underdetermined binder of its own, but its child is pinnable only
+    // through a hint the relay must receive and hand down (the recursive
+    // `inlineMinorWantsHoleyHint` gate — the pratt `at_mp [l, feq_sym
+    // [red_test []]]` shape).
+    .{ .stem = "pass_hint_grandchild_relay", .outcome = .pass },
+    // Multi-member ACUI context split under a sibling-forced rest binder
+    // (`imp_elim [valid_elim [#1], l1]` over a 2-member context): the probe
+    // must not commit a positional `(g , h)` spine match — the sibling pins
+    // `h` to the whole bag and the residual `g` collapses to the unit. Also
+    // locks the partial-explicit variant (`valid_elim (g := E) [...]`), which
+    // used to conflict with the poisoned hint.
+    .{ .stem = "pass_acui_split_sibling_hint", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },
@@ -404,6 +417,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "euclid", .outcome = .pass },
     .{ .stem = "tait", .outcome = .pass },
     .{ .stem = "pratt", .outcome = .pass },
+    .{ .stem = "hoare", .outcome = .pass },
     .{
         .stem = "fail_missing_binding",
         .outcome = .{ .fail = error.MissingBinderAssignment },
@@ -448,7 +462,10 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_def_hidden_dummy_ax", .outcome = .pass },
     .{
         .stem = "fail_infer_mismatch",
-        .outcome = .{ .fail = error.UnifyMismatch },
+        // All binders infer from the stated conclusion (a := b, b := a), so
+        // inference completes and theorem application reports the bad
+        // reference as a hypothesis mismatch rather than an inference error.
+        .outcome = .{ .fail = error.HypothesisMismatch },
     },
     .{
         .stem = "fail_hyp_mismatch",

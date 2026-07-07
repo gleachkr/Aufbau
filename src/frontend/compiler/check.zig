@@ -2596,12 +2596,17 @@ fn minorHasUnboundConclusionOnlyBinder(
 }
 
 /// True when `ref` is an inline application that a context-holey hint can help.
-/// Two shapes qualify, both leaving a binder the strict structural pre-pass
+/// Three shapes qualify, each leaving a binder the strict structural pre-pass
 /// cannot pin and that the application does not annotate:
 ///   1. a conclusion-only binder (`minorHasUnboundConclusionOnlyBinder`, e.g.
 ///      `or_intro_r`'s free left disjunct, or any 0-hyp `ax`);
 ///   2. an additive ACUI "rest" binder (`minorHasAcuiRestBinder`, e.g. `lan`'s
 ///      `g`, `rim`'s `d`) — needed so nested additive inline chains can infer.
+///   3. an inline-application *descendant* that qualifies (recursively): a relay
+///      minor like `feq_sym [red_test []]` has no underdetermined binder of its
+///      own — every binder is shared between hypothesis and conclusion — but its
+///      child can only be pinned through a hint the relay must receive and pass
+///      down. Without the hint the whole subtree deadlocks at the leaf.
 fn inlineMinorWantsHoleyHint(
     env: *const GlobalEnv,
     registry: *const RewriteRegistry,
@@ -2622,7 +2627,14 @@ fn inlineMinorWantsHoleyHint(
             // additive chain (`rim [lan [ran [ax [], ax []]]]`) fails to infer.
             // Offer the same holey, ACUI-aware hint that already recovers a 0-hyp
             // `ax` minor, extended to these intermediate additive minors.
-            break :blk minorHasAcuiRestBinder(registry, rule, app);
+            if (minorHasAcuiRestBinder(registry, rule, app)) break :blk true;
+            for (app.refs) |child| {
+                if (child != .application) continue;
+                if (inlineMinorWantsHoleyHint(env, registry, child)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
         },
         else => false,
     };
@@ -2977,7 +2989,85 @@ fn semanticExpectationBindingsForLineExpr(
         },
     };
     restoreDiagnostic(self, saved_diag);
+    demoteSpeculativeAcuiSpineBindings(
+        context.registry,
+        rule,
+        partial_bindings,
+        @constCast(inferred),
+    );
     return inferred;
+}
+
+/// Strip ACUI-spine positional commitments from an *incomplete* probe result.
+///
+/// When `inferOptionalBindingsAllowUnresolved` falls back to a failed strict
+/// replay's snapshot, any binder that sits directly in a structural-combiner
+/// region (`g`/`h` in `g , h ⊢ …`) holds just one of possibly many
+/// ACUI-equivalent assignments — a 2-member context positionally matched as
+/// `g:=m1, h:=m2` even when a sibling hypothesis forces `h` to the whole bag.
+/// Downstream probe stages treat these bindings as established (they suppress
+/// the structural solver and poison sibling folds), so an unforced spine pick
+/// must be left unresolved instead. Complete results are untouched: those come
+/// from a solver run that validated every obligation.
+fn demoteSpeculativeAcuiSpineBindings(
+    registry: *const RewriteRegistry,
+    rule: *const RuleDecl,
+    partial_bindings: []const ?ExprId,
+    inferred: []?ExprId,
+) void {
+    var complete = true;
+    for (inferred) |binding| {
+        if (binding == null) {
+            complete = false;
+            break;
+        }
+    }
+    if (complete) return;
+    for (rule.hyps) |hyp| {
+        demoteAcuiSpineBindingsInTemplate(
+            registry,
+            hyp,
+            false,
+            partial_bindings,
+            inferred,
+        );
+    }
+    demoteAcuiSpineBindingsInTemplate(
+        registry,
+        rule.concl,
+        false,
+        partial_bindings,
+        inferred,
+    );
+}
+
+fn demoteAcuiSpineBindingsInTemplate(
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+    in_spine: bool,
+    partial_bindings: []const ?ExprId,
+    inferred: []?ExprId,
+) void {
+    switch (template) {
+        .binder => |idx| {
+            if (!in_spine or idx >= inferred.len) return;
+            const explicitly_bound =
+                idx < partial_bindings.len and partial_bindings[idx] != null;
+            if (!explicitly_bound) inferred[idx] = null;
+        },
+        .app => |app| {
+            const spine = registry.hasStructuralCombiner(app.term_id);
+            for (app.args) |arg| {
+                demoteAcuiSpineBindingsInTemplate(
+                    registry,
+                    arg,
+                    spine,
+                    partial_bindings,
+                    inferred,
+                );
+            }
+        },
+    }
 }
 
 fn elaborateRefs(

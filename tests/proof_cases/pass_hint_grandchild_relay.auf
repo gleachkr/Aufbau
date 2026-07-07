@@ -1,0 +1,7 @@
+sib
+---
+l1: $ b -> a $ by mp_eq2 [#1, red []]
+
+grand
+-----
+l1: $ b -> a $ by mp_eq [#1, eq_sym [red []]]

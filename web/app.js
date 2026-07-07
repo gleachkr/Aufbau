@@ -134,6 +134,11 @@ const examples = {
     mm0: "./fixtures/pratt.mm0",
     proof: "./fixtures/pratt.auf",
   },
+  hoare: {
+    label: "hoare",
+    mm0: "./fixtures/hoare.mm0",
+    proof: "./fixtures/hoare.auf",
+  },
 };
 
 const editorTheme = EditorView.theme({
