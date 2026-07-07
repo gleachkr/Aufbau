@@ -169,6 +169,47 @@ const Driver = struct {
     ///
     /// NOT cleared per depth: a success is valid in every later pass.
     concrete_ok: std.AutoHashMapUnmanaged(u64, OkMemo) = .{},
+    /// Ladder phase index (0-based) of the currently running cell. Set by
+    /// `runPhaseLadder` next to the capability flags; keys the persisted
+    /// failure memos below by the capability set they were recorded under.
+    phase_index: usize = 0,
+    /// Cross-cell persisted failure memos (`GenerateOptions.
+    /// persist_negative`, default on). Unlike the per-cell memos above,
+    /// these survive the whole retry ladder: a genuinely-exhaustive
+    /// failure at (target, depth d, phase p) is a pure semantic fact —
+    /// "no proof of gen-depth ≤ d under phase-p capabilities and this
+    /// pool" — because the phase capability flags are cumulative, linearly
+    /// ordered, and purely additive (each only ADDS candidate branches),
+    /// and the exhaustiveness guards (`budget_trips`/`path_prunes`)
+    /// already exclude truncated verdicts. So a recorded failure soundly
+    /// covers any later re-solve at depth ≤ d under phase ≤ p — which the
+    /// depth-major core re-encounters constantly (phases 1–2 re-run at
+    /// every depth after phase 3 already failed the same targets) — and,
+    /// because depth-0 solves carry no hook at all, ANY recorded failure
+    /// covers depth-0 re-solves at every phase. `concrete_ok` growth
+    /// cannot contradict a covered verdict (a replayed proof of gen-depth
+    /// g ≤ d under covered flags would contradict the recorded
+    /// exhaustiveness), but the ok-replay is still checked FIRST in
+    /// `solveProof`: an ok entry found under STRONGER flags than a
+    /// recorded fail is consistent with it and must win on re-encounter.
+    /// Keys are scope-stable canonical content (the `contentKey` hash /
+    /// the canonical open key bytes), values per-phase failure depths
+    /// (max depth for concrete, depth bitset for open). Cleared at the
+    /// two ladder-rerun boundaries where the verdict inputs genuinely
+    /// change (phase-6 seeded pool, eager-cut valve). Open verdicts are
+    /// recorded only when the child enumeration was NOT truncated by
+    /// `open_child_max_results` — a truncated fail ("the first N
+    /// candidates didn't match back") is not a pure semantic fact and was
+    /// observed to flip on re-solve; truncated open fails keep their
+    /// per-cell lifetime in `open_fail` above. When `persist_negative` is
+    /// off nothing is recorded here, so lookups degrade to the per-cell
+    /// maps and behavior is bit-identical to the per-cell-only scheme.
+    /// Corpus-validated by shadow instrumentation before the real
+    /// implementation: zero contradicted verdicts across ~550k would-skip
+    /// re-solves; ~17-21% of generation ticks had been re-deriving
+    /// already-known failures.
+    persist_concrete_fail: std.AutoHashMapUnmanaged(u64, [5]u8) = .{},
+    persist_open_fail: std.StringHashMapUnmanaged([5]u16) = .{},
     /// True when the theory registers at least one ACUI combiner. Gates the
     /// canonicalization walk in `canonicalKey` so non-ACUI theories pay nothing.
     has_acui: bool = false,
@@ -387,6 +428,12 @@ pub fn generateTopLevel(
     }
     defer driver.concrete_fail.deinit(driver.scratch);
     defer driver.concrete_ok.deinit(driver.scratch);
+    defer driver.persist_concrete_fail.deinit(driver.scratch);
+    defer {
+        var key_iter = driver.persist_open_fail.keyIterator();
+        while (key_iter.next()) |key| driver.scratch.free(key.*);
+        driver.persist_open_fail.deinit(driver.scratch);
+    }
 
     var applications = std.ArrayListUnmanaged(RuleApplication){};
     var budget_exhausted = try runPhaseLadder(
@@ -447,6 +494,9 @@ pub fn generateTopLevel(
             };
             try buildDerivedIndex(session, &work_theorem, &seeded_pool.?);
             driver.derived = &seeded_pool.?;
+            // The seeded pool changes every failure verdict's inputs; the
+            // persisted memos must not carry across.
+            clearPersistedFails(&driver);
             budget_exhausted = try runPhaseLadder(
                 &driver,
                 goal_expr,
@@ -469,6 +519,11 @@ pub fn generateTopLevel(
         session.context.registry.autoEagerRuleCount() > 0)
     {
         driver.hook.honor_eager_cut = false;
+        // Disabling the cut widens exploration relative to every verdict
+        // recorded with it honored; cut-honoring failures do not cover
+        // cut-free re-solves. (Depth-0 verdicts would survive — no hook at
+        // depth 0 — but clear conservatively.)
+        clearPersistedFails(&driver);
         budget_exhausted = try runPhaseLadder(
             &driver,
             goal_expr,
@@ -641,6 +696,7 @@ fn runPhaseLadder(
             driver.hook.allow_invent_witness = phase >= 2 and has_vars_pool;
             driver.hook.allow_retain_principal = false;
             driver.hook.allow_constrained_mp = false;
+            driver.phase_index = phase;
             driver.fuel = .{
                 .remaining = phase_fuel[phase],
                 .global = budget_ptr,
@@ -682,6 +738,7 @@ fn runPhaseLadder(
         driver.hook.allow_invent_witness = has_vars_pool;
         driver.hook.allow_retain_principal = phase >= 3 and has_idem;
         driver.hook.allow_constrained_mp = phase >= 4;
+        driver.phase_index = phase;
         driver.fuel = .{
             .remaining = phase_fuel[phase],
             .global = budget_ptr,
@@ -721,9 +778,13 @@ fn hasIdempotentCombiner(context: *const Context) bool {
 /// currently configured phase flags and fuel — one (depth, phase) ladder
 /// cell — appending generation-using assemblies to `applications`. Returns
 /// true if a budget floor was hit. The per-cell `nodes` counter and the
-/// failure memos reset here; failures cannot cross cells (a deeper pass can
-/// succeed where a shallow one failed, and a later phase can succeed where
-/// an earlier one failed at the same depth).
+/// per-cell failure memos reset here (a deeper pass can succeed where a
+/// shallow one failed, and a later phase can succeed where an earlier one
+/// failed at the same depth — the raw (target, depth) verdicts don't carry).
+/// The `persist_*_fail` maps do NOT reset: they tag each verdict with the
+/// phase it was recorded under and replay it only at covering
+/// (depth ≤, phase ≤) re-encounters, which stays sound across cells (see
+/// the field doc).
 fn runDepthPass(
     driver: *Driver,
     goal_expr: ExprId,
@@ -856,10 +917,18 @@ fn hookSolveOpen(
         @as(u16, 1) << @intCast(driver.current_depth)
     else
         0;
-    // Cheap O(1) skips (DFS path guard + within-pass failure memo) are charged
-    // no node budget: the budget bounds real exploration work, and counting a
+    // Cheap O(1) skips (DFS path guard + failure memos) are charged no node
+    // budget: the budget bounds real exploration work, and counting a
     // memoized skip would defeat the memo (the dist proofs have ~70% repeat
     // open targets, so charging skips burns the whole budget on dedup hits).
+    // The persisted map holds only untruncated cross-cell verdicts (empty
+    // when `persist_negative` is off); the per-cell map keeps the truncated
+    // ones.
+    if (persistOpenCovered(driver, key, driver.current_depth)) {
+        if (driver.counters) |c| c.persist_open_skips += 1;
+        driver.scratch.free(key);
+        return null;
+    }
     const memo_hit = if (driver.open_fail.get(key)) |bits|
         (depth_bit != 0 and (bits & depth_bit) != 0)
     else
@@ -1107,6 +1176,19 @@ fn hookSolveOpen(
         driver.path_prunes == path_prunes_at_entry and
         depth_bit != 0)
     {
+        // Persist only untruncated verdicts: a fail with a full candidate
+        // list means "the first `open_child_max_results` child candidates
+        // didn't match back", not "no candidate matches back" —
+        // `concrete_ok` growth between cells can change which candidates
+        // surface, so a truncated verdict is not a pure semantic fact
+        // (observed flipping on euclid dvd_add). Truncated fails keep
+        // their per-cell lifetime in `open_fail` below.
+        if (driver.options.persist_negative and
+            results.candidates.len < open_child_max_results)
+        {
+            persistOpenRecord(driver, key, depth_bit);
+            return null;
+        }
         const gop = driver.open_fail.getOrPut(driver.scratch, key) catch
             return null;
         if (gop.found_existing) {
@@ -1274,6 +1356,101 @@ fn stringLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
     return std.mem.lessThan(u8, lhs, rhs);
 }
 
+// ---------------------------------------------------------------------------
+// Cross-cell persisted failure memos (see the `persist_concrete_fail` /
+// `persist_open_fail` field doc). Two covering rules:
+//   - phase closure: a genuinely-exhaustive fail at (target, depth d,
+//     phase p) covers re-solves at depth ≤ d under phase ≤ p (capability
+//     flags are cumulative and purely additive along the phase order);
+//   - depth-0 universality: depth-0 solves run generator=null (no hook),
+//     so ANY recorded fail covers a depth-0 re-solve at every phase.
+
+const persist_no_depth: u8 = 0xff;
+
+fn clearPersistedFails(driver: *Driver) void {
+    driver.persist_concrete_fail.clearRetainingCapacity();
+    var key_iter = driver.persist_open_fail.keyIterator();
+    while (key_iter.next()) |key| driver.scratch.free(key.*);
+    driver.persist_open_fail.clearRetainingCapacity();
+}
+
+fn persistConcreteCovered(
+    driver: *const Driver,
+    target: u64,
+    depth: usize,
+) bool {
+    const entry = driver.persist_concrete_fail.get(target) orelse return false;
+    var p: usize = driver.phase_index;
+    while (p < entry.len) : (p += 1) {
+        if (entry[p] != persist_no_depth and @as(usize, entry[p]) >= depth)
+            return true;
+    }
+    if (depth == 0) {
+        p = 0;
+        while (p < driver.phase_index) : (p += 1) {
+            if (entry[p] != persist_no_depth) return true;
+        }
+    }
+    return false;
+}
+
+fn persistConcreteRecord(driver: *Driver, target: u64, depth: usize) void {
+    // Clamping only loses coverage (a fail at a deeper budget covers the
+    // clamped depth's ≤-cone too), never overstates it. Best-effort: an
+    // OOM just forgoes the memo, like the per-cell maps.
+    const d: u8 = @intCast(@min(depth, persist_no_depth - 1));
+    const gop = driver.persist_concrete_fail.getOrPut(
+        driver.scratch,
+        target,
+    ) catch return;
+    if (!gop.found_existing) gop.value_ptr.* = @splat(persist_no_depth);
+    const cur = &gop.value_ptr.*[driver.phase_index];
+    if (cur.* == persist_no_depth or d > cur.*) cur.* = d;
+}
+
+fn persistOpenCovered(
+    driver: *const Driver,
+    key: []const u8,
+    depth: usize,
+) bool {
+    if (depth >= 16) return false;
+    const entry = driver.persist_open_fail.get(key) orelse return false;
+    // A fail recorded at depth d covers re-solves at depth ≤ d: any set
+    // bit at position ≥ depth is a covering verdict.
+    const mask_ge: u16 = @as(u16, 0xffff) << @intCast(depth);
+    var p: usize = driver.phase_index;
+    while (p < entry.len) : (p += 1) {
+        if (entry[p] & mask_ge != 0) return true;
+    }
+    if (depth == 0) {
+        p = 0;
+        while (p < driver.phase_index) : (p += 1) {
+            if (entry[p] != 0) return true;
+        }
+    }
+    return false;
+}
+
+fn persistOpenRecord(driver: *Driver, key: []const u8, depth_bit: u16) void {
+    const gop = driver.persist_open_fail.getOrPut(
+        driver.scratch,
+        key,
+    ) catch return;
+    if (gop.found_existing) {
+        gop.value_ptr.*[driver.phase_index] |= depth_bit;
+        return;
+    }
+    // Own a copy of the key (the caller's is freed on solve exit). On dup
+    // failure, drop the entry rather than alias.
+    const owned = driver.scratch.dupe(u8, key) catch {
+        _ = driver.persist_open_fail.remove(key);
+        return;
+    };
+    gop.key_ptr.* = owned;
+    gop.value_ptr.* = @splat(0);
+    gop.value_ptr.*[driver.phase_index] = depth_bit;
+}
+
 /// Produce one proof of `target` (already in `work_theorem`) at the given depth,
 /// as an arena-owned `GeneratedProof`, or null. At depth 0 the sub-search is
 /// pool-refs-only (a leaf); deeper, it carries the hook so its own open hyps can
@@ -1292,15 +1469,19 @@ fn solveProof(
     // non-ACUI theory via the `has_acui` gate — plus one content-hash walk).
     const ok_key = contentKey(driver, target);
     const fail_key = ConcreteFailKey{ .target = ok_key, .depth = depth };
-    // Cheap O(1) skips (DFS path guard + within-pass failure memo) are charged
-    // no node budget, mirroring `hookSolveOpen`.
-    if (driver.concrete_fail.contains(fail_key)) return null;
     // Transposition hit: this `target` was already proved in a sibling subtree
     // (or an earlier pass) at a generation depth the current budget admits.
     // Replay the cached proof (a fresh arena clone so the spliced copy never
     // aliases the memo entry). Charged no node budget, like the failure-memo /
     // path-guard skips. Safe even when `target` is on the DFS path: the cached
     // proof is a complete acyclic tree.
+    //
+    // Checked BEFORE the failure memos: a persisted failure recorded under
+    // weaker phase flags is consistent with a proof found later under
+    // stronger ones (the ok entry), and the proof must win on re-encounter.
+    // (Within one cell the two cannot conflict — an exhaustive fail at
+    // (target, d) rules out any same-flags proof of gen-depth ≤ d — so this
+    // ordering is only load-bearing for the persisted memo.)
     if (driver.concrete_ok.get(ok_key)) |memo| {
         if (depth >= memo.gen_depth) {
             // Relabel the cached proof to the caller's *exact* target. When the
@@ -1318,6 +1499,15 @@ fn solveProof(
             };
         }
     }
+    // Cheap O(1) skips (failure memos + DFS path guard) are charged no node
+    // budget, mirroring `hookSolveOpen`. The persisted map is empty when
+    // `persist_negative` is off (nothing records into it), so the check
+    // degrades to the per-cell memo alone.
+    if (persistConcreteCovered(driver, ok_key, depth)) {
+        if (driver.counters) |c| c.persist_concrete_skips += 1;
+        return null;
+    }
+    if (driver.concrete_fail.contains(fail_key)) return null;
     if (driver.visited.contains(target)) {
         driver.path_prunes += 1;
         return null;
@@ -1385,8 +1575,12 @@ fn solveProof(
         if (driver.budget_trips == trips_at_entry and
             driver.path_prunes == path_prunes_at_entry)
         {
-            // Best-effort: an OOM just forgoes the memo.
-            driver.concrete_fail.put(driver.scratch, fail_key, {}) catch {};
+            if (driver.options.persist_negative) {
+                persistConcreteRecord(driver, ok_key, depth);
+            } else {
+                // Best-effort: an OOM just forgoes the memo.
+                driver.concrete_fail.put(driver.scratch, fail_key, {}) catch {};
+            }
         }
         return null;
     }

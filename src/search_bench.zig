@@ -92,6 +92,9 @@ const BenchOptions = struct {
     /// Lever E: deep-unfold ACUI member prune (default on, matches production).
     /// `--no-deep-member-prune` turns it off to measure its effect.
     deep_member_prune: bool = true,
+    /// `--no-persist-negative` turns off cross-cell persisted failure memos
+    /// to measure their effect.
+    persist_negative: bool = true,
     /// Content-keyed query-shape cache (Lever M-content); `--no-shape-cache`
     /// turns it off to measure its effect.
     shape_cache: bool = true,
@@ -1368,6 +1371,10 @@ fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
             options.deep_member_prune = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--no-persist-negative")) {
+            options.persist_negative = false;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--counters")) {
             options.counters = true;
             continue;
@@ -1400,6 +1407,7 @@ fn printUsage() !void {
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--no-search-memo] [--no-deep-member-prune]\n" ++
+            "       [--no-persist-negative]\n" ++
             "       [--no-shape-cache]\n" ++
             "       [--gen-nodes=N] [--gen-fuel=N] [--global-budget=TICKS]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++
@@ -1852,6 +1860,7 @@ fn frontierGenerateOptions(options: BenchOptions) Search.GenerateOptions {
         gen.search_memo = options.search_memo;
         gen.deep_member_prune = options.deep_member_prune;
         gen.shape_cache = options.shape_cache;
+        gen.persist_negative = options.persist_negative;
         if (options.gen_nodes != 0) gen.max_nodes = options.gen_nodes;
         if (options.gen_fuel != 0) gen.fuel = options.gen_fuel;
         if (options.phase5_fuel != 0) gen.phase5_fuel = options.phase5_fuel;
@@ -2306,6 +2315,13 @@ fn printRunCounters(writer: anytype, counters: *const Search.SearchCounters) !vo
             counters.deep_member_prunes,
             counters.deep_cache_hits,
             counters.deep_cache_misses,
+        },
+    );
+    try writer.print(
+        "  persist_skips: conc={} open={}",
+        .{
+            counters.persist_concrete_skips,
+            counters.persist_open_skips,
         },
     );
     try writer.writeAll("\n");

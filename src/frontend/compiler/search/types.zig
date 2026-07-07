@@ -585,6 +585,12 @@ pub const SearchCounters = struct {
     /// `@auto trigger` seeds minted for the phase-6 seeding retry (zero when
     /// phase 6 never ran or the harvest matched nothing).
     trigger_seed_count: usize = 0,
+    /// Sub-solves skipped by the cross-cell persisted failure memos
+    /// (`GenerateOptions.persist_negative`): re-solves whose target was
+    /// already exhaustively failed at a covering (depth, phase) in an
+    /// earlier ladder cell.
+    persist_concrete_skips: usize = 0,
+    persist_open_skips: usize = 0,
     forward_rule_attempts: usize = 0,
     forward_match_tuples: usize = 0,
     forward_layers_run: usize = 0,
@@ -1187,19 +1193,41 @@ pub const GenerateOptions = struct {
     /// construction — see `ref_index.ShapeCache`). Default on; the bench A/Bs
     /// it via `--no-shape-cache`.
     shape_cache: bool = true,
+    /// Persist sub-solve failure verdicts across the retry ladder's
+    /// (depth, phase) cells instead of clearing them per cell. Sound because
+    /// a genuinely-exhaustive failure at (target, depth d, phase p) is a
+    /// pure semantic fact — "no proof of gen-depth ≤ d under phase-p
+    /// capabilities and this pool" — the phase capability flags are
+    /// cumulative and purely additive, and depth-0 solves carry no hook at
+    /// all (so any recorded failure covers depth-0 re-solves at every
+    /// phase). Corpus-validated by shadow instrumentation: zero
+    /// contradicted verdicts across ~550k would-skip re-solves; ~17-21% of
+    /// generation ticks were being spent re-deriving already-known
+    /// failures. Open-target verdicts persist only when the child
+    /// enumeration was NOT truncated by `open_child_max_results` (a
+    /// truncated fail is "the first N candidates didn't match back", which
+    /// `concrete_ok` growth between cells can invalidate — observed on
+    /// euclid dvd_add). Default on; the bench A/Bs it via
+    /// `--no-persist-negative`.
+    persist_negative: bool = true,
     /// Cost-weighted per-call latency cap: total weighted work ticks one
     /// `auto?` generation call may consume across ALL retry phases (see
-    /// `GlobalBudget`; units ≈ ns of calibrated wall, so 3.85e9 ≈ 3.5s).
+    /// `GlobalBudget`; units ≈ ns of calibrated wall, so 6.3e9 ≈ 6s —
+    /// though with `persist_negative` the observed wall per tick on
+    /// miss-heavy workloads is well below the calibration).
     /// Exhaustion truncates the un-tried candidate tail exactly like
     /// per-phase fuel exhaustion, and the tick counts are deterministic, so
     /// capped results are machine-independent. Default sized 1.15x above the
     /// most expensive FOUND search in the depth corpus (surj_wit_maps k=1 at
-    /// 3.34e9 after the solveProof interner scope inflated the intern-probe
-    /// tick population — one COW base-chain hop per generation level; it was
-    /// 2.91e9 after the pure-representative memo, 4.33e9 pre-memo), so every
-    /// known proof clears it while doomed misses stop near the found
-    /// ceiling: zero frontier loss. Null disables the cap.
-    global_budget: ?u64 = 3_850_000_000,
+    /// 5.48e9 after `persist_negative` freed per-phase fuel to explore more
+    /// distinct candidates per cell — the memo skips spend no fuel; it was
+    /// 3.34e9 after the solveProof interner scope, 2.91e9 after the
+    /// pure-representative memo, 4.33e9 pre-memo), so every known proof
+    /// clears it while doomed misses stop near the found ceiling: zero
+    /// frontier loss. The wall cost of the higher tick cap is offset by
+    /// persistence cutting wall-per-tick on miss-heavy workloads (fail-max
+    /// dropped despite the raise). Null disables the cap.
+    global_budget: ?u64 = 6_300_000_000,
 };
 
 pub const SourceSuggestionOptions = struct {

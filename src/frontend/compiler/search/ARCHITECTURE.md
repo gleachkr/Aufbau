@@ -228,7 +228,7 @@ phase keeps the previous phases' flags on (cumulative), so e.g. phase 3 is
 
 Per-phase fuel counts `tryCandidate`s, but per-candidate cost varies ~100x, so
 fuel alone cannot bound wall-clock latency; a doomed miss used to burn up to
-~12s across the five phases. `GenerateOptions.global_budget` (default 3.85e9,
+~12s across the five phases. `GenerateOptions.global_budget` (default 6.3e9,
 null = off) caps the **whole call** — forward saturation plus all five phases
 — in *weighted work ticks*: deterministic, machine-independent op counts
 (`expr.zig` threadlocals) taken at four chokepoints with wall-calibrated
@@ -249,14 +249,18 @@ interner-scope extension adds one COW base-chain hop — the x600 tick
 population — per intern inside a scope. After the `hookSolveOpen` scope the
 ceiling was `add_suc_right` k=1 at 3.06e9 (~1.09x margin under 3.35e9); after
 the `solveProof` scope (one hop per *generation level*, so every generation
-path pays) it is `surj_wit_maps` k=1 at **3.34e9** — which would have left the
-old default at 1.002x, so the default was widened to **3.85e9** to restore the
-~1.15x margin (wall-clock was flat-to-faster; the inflation is a tick-model
-artifact — chain hops over near-empty overlay maps cost far less than x600).
-A further profile shift that raises the ceiling past the default would
-silently drop budget-marginal FOUND searches, so **re-measure this anchor and
-widen the cap (or refit weights) before shipping any change that deepens
-scope chains.**
+path pays) it was `surj_wit_maps` k=1 at **3.34e9**, widening the default to
+**3.85e9**; after `persist_negative` (the cross-cell failure memos spend no
+per-phase fuel on skips, so each cell tries more distinct candidates and the
+ladder burns more ticks before the finding cell) it is `surj_wit_maps` k=1 at
+**5.48e9**, so the default is now **6.3e9** (~1.15x). The wall cost of each
+raise has been flat-to-negative: the same profile shifts that inflate ticks
+cut wall-per-tick (scope hops are near-free; memo skips avoid whole doomed
+subtrees), so fail-max *dropped* at each wider cap. A further profile shift
+that raises the ceiling past the default would silently drop budget-marginal
+FOUND searches, so **re-measure this anchor and widen the cap (or refit
+weights) before shipping any change that deepens scope chains or frees
+fuel.**
 Calibrate with
 `bench-search --frontier=depth --verbose --global-budget=0` (per-run
 `t=…M (i=… s=… sh=… tc=…)` columns) and refit the weights if the engine's
@@ -743,7 +747,7 @@ Notes:
 - Metrics: breadth reports `found` / `miss` / `top1` (rank of the oracle
   suggestion); depth reports per-theorem frontier `k` / `FULL`.
 - Defaults: `max_depth=6`, gen-nodes (`max_nodes`)=256, gen-fuel=4096,
-  global-budget=3.85e9 weighted ticks (`--global-budget=0` disables for
+  global-budget=6.3e9 weighted ticks (`--global-budget=0` disables for
   uncapped calibration runs).
 - Determinism is required: candidate/fan-out ordering is observable through
   `top1` and the byte-identical suggestions, so preserve enumeration order
@@ -824,7 +828,34 @@ it is the identity, gated by `has_acui` so those theories pay nothing.
   `budget_trips`/`path_prunes` unchanged across the subtree), and cleared each
   iterative-deepening pass. An exhausted failure for one ACUI variant skips them
   all. It reuses `concrete_ok`'s already-computed canonical key, so it costs
-  nothing beyond the success memo.
+  nothing beyond the success memo. Legacy path: only written when
+  `persist_negative` is off.
+- `persist_concrete_fail` / `persist_open_fail` — **cross-cell persisted**
+  failure memos (`GenerateOptions.persist_negative`, default on). Same
+  exhaustiveness guards, but each verdict is tagged with the phase it was
+  recorded under (values: per-phase max failed depth / per-phase depth
+  bitset) and survives the whole retry ladder. Sound because a
+  genuinely-exhaustive fail at (target, depth d, phase p) is a pure semantic
+  fact — no proof of gen-depth ≤ d exists under phase-p capabilities and
+  this pool — and the phase flags are cumulative, linearly ordered, and
+  purely additive: the verdict covers any re-encounter at (depth ≤ d,
+  phase ≤ p), which the depth-major core hits constantly (phases 1–2 re-run
+  at every new depth after phase 3 already failed the same targets at the
+  previous one). Depth-0 solves carry no hook, so ANY recorded fail covers
+  depth-0 re-encounters at every phase. Open verdicts persist only when the
+  child enumeration was NOT truncated by `open_child_max_results` (a
+  truncated fail can flip when `concrete_ok` growth changes which child
+  candidates surface — observed on euclid `dvd_add`); truncated open fails
+  keep their per-cell lifetime in `open_fail`. Both maps clear at the two
+  ladder-rerun boundaries whose inputs genuinely change (phase-6 seeded
+  pool, eager-cut valve). `concrete_ok` replay is checked BEFORE the
+  persisted fail (an ok entry found under stronger flags is consistent with
+  a persisted weaker-phase fail and must win). Shadow-validated before
+  landing: zero contradicted verdicts across ~550k would-skip re-solves;
+  ~17-21% of generation ticks had been re-deriving already-known failures.
+  Skips spend no per-phase fuel, so cells explore more distinct candidates —
+  this raised the found-ticks ceiling and re-anchored `global_budget` (see
+  the budget section).
 - `concrete_ok` — **success transposition table**. A found proof is a complete
   valid tree whose validity is depth-independent, so it is not keyed on depth;
   instead each entry stores the proof's actual generation depth (`genDepth`, the
