@@ -188,4 +188,4 @@ l21: $ ⦃ p ⦄ while b a ⟦ p ∧ (¬ b) ⟧ $ by ht_intro [l20]
 example_compose
 ---------------
 
-l1: $ ⦃ p ⦄ ((while b a) ⨟ skip) ⟦ p ∧ (¬ b) ⟧ $ by hoare_seq [hoare_while [#1], hoare_skip (p := $ p ∧ (¬ b) $)]
+l1: $ ⦃ p ⦄ ((while b a) ⨟ skip) ⟦ p ∧ (¬ b) ⟧ $ by hoare_seq [hoare_while [#1], hoare_skip []]

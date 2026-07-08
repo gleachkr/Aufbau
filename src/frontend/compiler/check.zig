@@ -755,6 +755,10 @@ fn applyRuleCandidateCore(
             line,
             theorem,
             theorem_vars,
+            rule,
+            partial_bindings,
+            line_assertion,
+            expected_conclusion_hint,
             application.refs,
             expected_refs,
             refs,
@@ -3076,6 +3080,10 @@ fn elaborateRefs(
     line: ApplicationLine,
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
+    rule: *const RuleDecl,
+    partial_bindings: []const ?ExprId,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
     source_refs: []const Ref,
     expected_ref_exprs: []const ?ExprId,
     refs: []CheckedRef,
@@ -3121,12 +3129,23 @@ fn elaborateRefs(
                 break :blk context.checked.items[line_idx].expr;
             },
             .application => |inline_app| blk: {
+                const hint = try refinedInlineHint(
+                    context,
+                    theorem,
+                    rule,
+                    partial_bindings,
+                    line_assertion,
+                    expected_conclusion_hint,
+                    expected_ref_exprs[idx],
+                    ref_exprs,
+                    idx,
+                );
                 const attempt = try applyRuleApplication(
                     self,
                     context,
                     inline_app,
                     .implicit_whole_conclusion,
-                    expected_ref_exprs[idx],
+                    hint,
                     .{
                         .theorem_name = assertion.name,
                         .line_label = line.label,
@@ -3141,6 +3160,106 @@ fn elaborateRefs(
             },
         };
     }
+}
+
+/// Sharpen an inline minor's expected-conclusion hint using the concrete
+/// conclusions of the siblings already elaborated to its left.
+///
+/// The up-front hint passes (`inferExpectedRefsForInlineApplications` +
+/// `fillHoleyInlineHints`) run before any ref is elaborated, so a
+/// hypothesis-only binder shared between two hypotheses — `hoare_seq`'s `q` in
+/// `⦃p⦄a⟦q⟧ > ⦃q⦄b⟦r⟧ > ⦃p⦄(a⨟b)⟦r⟧` — is left open: no ref expression is known
+/// yet. By the time `elaborateRefs` reaches ref `idx`, every earlier sibling has
+/// a concrete conclusion (`ref_exprs[0..idx]`). Folding those conclusions back
+/// through the rule's hypothesis templates pins `q`, so the minor's hint sharpens
+/// from a hole (`⦃‹hole›⦄ skip ⟦p∧¬b⟧`) to the fully concrete
+/// `⦃p∧¬b⦄ skip ⟦p∧¬b⟧`. Without it the minor demands an explicit binding
+/// (`hoare_skip (p := p∧¬b)`), which strict replay cannot infer because
+/// `hoare_skip`'s single binder `p` occupies both a holey pre and a concrete post
+/// (bind `p := ‹hole›`, then mismatch on the post).
+///
+/// Conservative by construction:
+///   - only a *null or holey* existing hint is ever replaced — a concrete hint
+///     from the strict pre-pass is authoritative and returned unchanged;
+///   - the fold accepts only *exact structural* matches (`matchTemplate`, restored
+///     on failure), so nothing speculative is committed;
+///   - bare ACUI-combiner-spine binders are demoted before instantiation, so a
+///     positional context split (`g,h ⊢ …` matched member-wise) declines to
+///     refine rather than emit a wrong-but-concrete hint;
+///   - instantiation is strict (`instantiateTemplatePartial`): a still-open binder
+///     yields null and the original hint is kept.
+fn refinedInlineHint(
+    context: *const RuleApplyContext,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    partial_bindings: []const ?ExprId,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    existing_hint: ?ExprId,
+    ref_exprs: []const ExprId,
+    idx: usize,
+) !?ExprId {
+    if (rule.hyps.len != ref_exprs.len) return existing_hint;
+    if (idx >= rule.hyps.len) return existing_hint;
+
+    // A concrete existing hint is authoritative; only null/holey ones are eligible.
+    if (existing_hint) |hint| {
+        const holey = blk: {
+            CheckedIr.validateNoPlaceholderExpr(theorem, hint) catch break :blk true;
+            break :blk false;
+        };
+        if (!holey) return existing_hint;
+    }
+
+    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
+        .concrete => |expr| expr,
+        .holey, .implicit_whole_conclusion => return existing_hint,
+    };
+
+    const allocator = context.allocator;
+    const bindings = try allocator.dupe(?ExprId, partial_bindings);
+    defer allocator.free(bindings);
+    const snap = try allocator.alloc(?ExprId, partial_bindings.len);
+    defer allocator.free(snap);
+
+    // Fold the line conclusion, then every already-elaborated sibling's
+    // conclusion through its hypothesis template. Each fold is all-or-nothing.
+    @memcpy(snap, bindings);
+    if (!theorem.matchTemplate(rule.concl, line_expr, bindings)) {
+        @memcpy(bindings, snap);
+    }
+    for (0..idx) |j| {
+        @memcpy(snap, bindings);
+        if (!theorem.matchTemplate(rule.hyps[j], ref_exprs[j], bindings)) {
+            @memcpy(bindings, snap);
+        }
+    }
+
+    // Drop any positional ACUI-spine commitment so a context split cannot leak a
+    // wrong-but-concrete hint (the fold declines rather than guesses a member).
+    demoteAcuiSpineBindingsInTemplate(
+        context.registry,
+        rule.concl,
+        false,
+        partial_bindings,
+        bindings,
+    );
+    for (rule.hyps) |hyp| {
+        demoteAcuiSpineBindingsInTemplate(
+            context.registry,
+            hyp,
+            false,
+            partial_bindings,
+            bindings,
+        );
+    }
+
+    const refined = try OpenTerms.instantiateTemplatePartial(
+        theorem,
+        rule.hyps[idx],
+        bindings,
+    );
+    return refined orelse existing_hint;
 }
 
 pub fn buildTheoremVarMap(

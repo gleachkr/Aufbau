@@ -1,0 +1,4 @@
+compose
+-------
+
+l1: $ tri p (a ;; sk) (p /\ p) $ by r_seq [r_step [#1], r_skip []]

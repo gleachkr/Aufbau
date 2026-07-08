@@ -254,6 +254,13 @@ const proof_cases = [_]ProofCase{
     // locks the partial-explicit variant (`valid_elim (g := E) [...]`), which
     // used to conflict with the poisoned hint.
     .{ .stem = "pass_acui_split_sibling_hint", .outcome = .pass },
+    // Sibling-conclusion hint refinement (`r_seq [r_step [#1], r_skip []]`, the
+    // pratt `example_compose` shape): `r_seq`'s hypothesis-only binder `q` is
+    // pinned by ref 0's *elaborated* conclusion, so the inline `r_skip []` gets a
+    // fully concrete hint instead of a hole it cannot consume (`r_skip` reuses its
+    // single binder in both the pre and the post). Lets the proof drop the
+    // otherwise-required `r_skip (p := ...)` / `hoare_skip (p := ...)` binding.
+    .{ .stem = "pass_sibling_conclusion_hint", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },

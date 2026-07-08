@@ -1,0 +1,33 @@
+delimiter $ ( ) $;
+strict provable sort wff;
+sort prog;
+
+term conj (p q: wff): wff; infixl conj: $/\$ prec 35;
+term seqp (a b: prog): prog; infixl seqp: $;;$ prec 20;
+term sk: prog;
+term pre (p: wff) (a: prog): wff;
+-- A Hoare-triple carrier: ⦃p⦄ a ⟦q⟧ modelled as `tri p a q`.
+term tri (p: wff) (a: prog) (q: wff): wff;
+
+-- `skip` reuses its single binder `p` in BOTH the pre and the post — the shape
+-- that makes a holey pre-hint unconsumable (bind p := ‹hole›, mismatch on post).
+axiom r_skip (p: wff): $ tri p sk p $;
+-- Sequential composition: `q` is hypothesis-only (absent from the conclusion),
+-- so it is pinned only by ref 0's elaborated conclusion, not the goal.
+axiom r_seq (a b: prog) (p q r: wff):
+  $ tri p a q $ >
+  $ tri q b r $ >
+  $ tri p (a ;; b) r $;
+-- A step whose post is structured (`p /\ p`), standing in for `hoare_while`
+-- delivering a concrete non-trivial postcondition that becomes `q`. Its binders
+-- are pinned by its own hypothesis (`#1`), like `hoare_while [#1]`.
+axiom r_step (a: prog) (p: wff):
+  $ pre p a $ >
+  $ tri p a (p /\ p) $;
+
+-- The payload: the inline `r_skip []` needs `q := p /\ p` (pinned by the sibling
+-- `r_step [#1]`'s conclusion) to get a fully concrete hint. Without sibling-
+-- conclusion hint refinement it would demand `r_skip (p := $ p /\ p $)`.
+theorem compose (a: prog) (p: wff):
+  $ pre p a $ >
+  $ tri p (a ;; sk) (p /\ p) $;
