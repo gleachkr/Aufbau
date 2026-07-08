@@ -170,7 +170,7 @@ pub fn addInferenceNotes(
         .{inferred_summary},
     );
 
-    if (firstUnsolvedBinderLabel(rule, current_bindings)) |label| {
+    if (firstUnsolvedNamedBinder(rule, current_bindings)) |label| {
         try addFormattedInferenceNote(
             allocator,
             diag,
@@ -323,7 +323,7 @@ fn traceInferenceBindingSummaries(
         .{inferred_summary},
     );
 
-    if (firstUnsolvedBinderLabel(rule, current_bindings)) |label| {
+    if (firstUnsolvedNamedBinder(rule, current_bindings)) |label| {
         DebugTrace.traceInference(
             config,
             "  first unsolved binder: {s}",
@@ -447,13 +447,6 @@ pub fn firstUnsolvedNamedBinder(
         return null;
     }
     return null;
-}
-
-fn firstUnsolvedBinderLabel(
-    rule: *const RuleDecl,
-    bindings: []const ?ExprId,
-) ?[]const u8 {
-    return firstUnsolvedNamedBinder(rule, bindings);
 }
 
 fn binderLabel(rule: *const RuleDecl, idx: usize) []const u8 {

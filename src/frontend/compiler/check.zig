@@ -2413,6 +2413,24 @@ fn inferExpectedRefsForInlineApplications(
     );
 }
 
+/// All-or-nothing structural fold: match `expr` against `template`, committing
+/// the newly bound binders into `bindings` only if the whole match succeeds;
+/// on any mismatch `bindings` is rolled back from `snap`. `snap` is caller-owned
+/// scratch at least `bindings.len` long. This is the load-bearing "commit only
+/// on a full match" step the inline-hint machinery relies on.
+fn foldTemplateOrRestore(
+    theorem: *TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+    bindings: []?ExprId,
+    snap: []?ExprId,
+) void {
+    @memcpy(snap, bindings);
+    if (!theorem.matchTemplate(template, expr, bindings)) {
+        @memcpy(bindings, snap);
+    }
+}
+
 fn inferExpectedRefsForInlineApplicationsWithContext(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
@@ -2431,9 +2449,7 @@ fn inferExpectedRefsForInlineApplicationsWithContext(
 
     const snapshot = try allocator.dupe(?ExprId, contextual);
     defer allocator.free(snapshot);
-    if (!theorem.matchTemplate(rule.concl, line_expr, contextual)) {
-        @memcpy(contextual, snapshot);
-    }
+    foldTemplateOrRestore(theorem, rule.concl, line_expr, contextual, snapshot);
 
     try instantiateExpectedRefs(theorem, rule, contextual, expected_refs);
     return expected_refs;
@@ -3027,22 +3043,23 @@ fn demoteSpeculativeAcuiSpineBindings(
         }
     }
     if (complete) return;
+    demoteAcuiSpineBindingsForRule(registry, rule, partial_bindings, inferred);
+}
+
+/// Demote every bare ACUI structural-combiner spine binder (that is not
+/// explicitly bound in `partial_bindings`) across the rule's hypotheses and
+/// conclusion back to unresolved. Demotion only ever clears a binding and is
+/// idempotent, so the hyps/concl visit order does not affect the result.
+fn demoteAcuiSpineBindingsForRule(
+    registry: *const RewriteRegistry,
+    rule: *const RuleDecl,
+    partial_bindings: []const ?ExprId,
+    inferred: []?ExprId,
+) void {
     for (rule.hyps) |hyp| {
-        demoteAcuiSpineBindingsInTemplate(
-            registry,
-            hyp,
-            false,
-            partial_bindings,
-            inferred,
-        );
+        demoteAcuiSpineBindingsInTemplate(registry, hyp, false, partial_bindings, inferred);
     }
-    demoteAcuiSpineBindingsInTemplate(
-        registry,
-        rule.concl,
-        false,
-        partial_bindings,
-        inferred,
-    );
+    demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, partial_bindings, inferred);
 }
 
 fn demoteAcuiSpineBindingsInTemplate(
@@ -3224,35 +3241,14 @@ fn refinedInlineHint(
 
     // Fold the line conclusion, then every already-elaborated sibling's
     // conclusion through its hypothesis template. Each fold is all-or-nothing.
-    @memcpy(snap, bindings);
-    if (!theorem.matchTemplate(rule.concl, line_expr, bindings)) {
-        @memcpy(bindings, snap);
-    }
+    foldTemplateOrRestore(theorem, rule.concl, line_expr, bindings, snap);
     for (0..idx) |j| {
-        @memcpy(snap, bindings);
-        if (!theorem.matchTemplate(rule.hyps[j], ref_exprs[j], bindings)) {
-            @memcpy(bindings, snap);
-        }
+        foldTemplateOrRestore(theorem, rule.hyps[j], ref_exprs[j], bindings, snap);
     }
 
     // Drop any positional ACUI-spine commitment so a context split cannot leak a
     // wrong-but-concrete hint (the fold declines rather than guesses a member).
-    demoteAcuiSpineBindingsInTemplate(
-        context.registry,
-        rule.concl,
-        false,
-        partial_bindings,
-        bindings,
-    );
-    for (rule.hyps) |hyp| {
-        demoteAcuiSpineBindingsInTemplate(
-            context.registry,
-            hyp,
-            false,
-            partial_bindings,
-            bindings,
-        );
-    }
+    demoteAcuiSpineBindingsForRule(context.registry, rule, partial_bindings, bindings);
 
     const refined = try OpenTerms.instantiateTemplatePartial(
         theorem,

@@ -189,7 +189,7 @@ fn detectPrincipalFanout(
     // search-space win — exactly the spurious overhead that tips the
     // budget-edge `drinker` case. Restrict to where the explosion lives.
     if (rule.hyps.len < 2) return null;
-    const goal_expr = goalConcreteExpr(goal) orelse return null;
+    const goal_expr = goal.concreteOrHint() orelse return null;
     return walkForFanout(
         allocator,
         context,
@@ -311,7 +311,7 @@ fn makeViewConclSeed(
     rule_id: u32,
 ) !?[]const ?ExprId {
     const view = context.views.get(rule_id) orelse return null;
-    const goal_expr = goalConcreteExpr(goal) orelse return null;
+    const goal_expr = goal.concreteOrHint() orelse return null;
     const seed = try allocator.alloc(?ExprId, view.num_binders);
     errdefer allocator.free(seed);
     @memset(seed, null);
@@ -585,7 +585,7 @@ pub fn conclusionMembersPlausible(
     goal: Goal,
 ) bool {
     if (context.views.contains(candidate.rule_id)) return true;
-    const goal_expr = goalConcreteExpr(goal) orelse return true;
+    const goal_expr = goal.concreteOrHint() orelse return true;
     const rule = &context.env.rules.items[@intCast(candidate.rule_id)];
     if (conclusionRepeatedBinderConflict(
         context,
@@ -687,7 +687,7 @@ fn seedBindingsFromTemplateGoal(
     goal: Goal,
     bindings: []?ExprId,
 ) !void {
-    const goal_expr = goalConcreteExpr(goal) orelse return;
+    const goal_expr = goal.concreteOrHint() orelse return;
     const scratch = try allocator.dupe(?ExprId, bindings);
     defer allocator.free(scratch);
     // Walk template against goal extracting whatever bindings line up
@@ -987,7 +987,7 @@ fn seedBindingsFromViewGoal(
     goal: Goal,
     bindings: []?ExprId,
 ) !void {
-    const goal_expr = goalConcreteExpr(goal) orelse return;
+    const goal_expr = goal.concreteOrHint() orelse return;
     const view_bindings = try allocator.alloc(?ExprId, view.num_binders);
     defer allocator.free(view_bindings);
     @memset(view_bindings, null);
@@ -1058,10 +1058,3 @@ fn mergeOptionalBindings(dst: []?ExprId, src: []const ?ExprId) bool {
     return true;
 }
 
-fn goalConcreteExpr(goal: Goal) ?ExprId {
-    return switch (goal) {
-        .concrete => |expr| expr,
-        .implicit_whole_conclusion => |maybe_hint| maybe_hint,
-        .holey => null,
-    };
-}

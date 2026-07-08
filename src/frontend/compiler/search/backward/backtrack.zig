@@ -30,7 +30,7 @@ const RuleApplication = ProofScript.RuleApplication;
 const CompilerContext = @import("../../context.zig").CompilerContext;
 const Check = @import("../../check.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
-const Canonicalizer = @import("../../../canonicalizer.zig").Canonicalizer;
+const Redex = @import("./redex.zig");
 const MetaStoreMod = @import("../../inference/meta_store.zig");
 const MetaStore = MetaStoreMod.MetaStore;
 const Goal = types.Goal;
@@ -702,11 +702,7 @@ fn backtrackRefs(
                 fill_len += 1;
             }
             const fills = fill_buf[0..fill_len];
-            const goal_expr: ?ExprId = switch (goal) {
-                .concrete => |e| e,
-                .implicit_whole_conclusion => |maybe| maybe,
-                .holey => null,
-            };
+            const goal_expr: ?ExprId = goal.concreteOrHint();
             if (abstract_view) |view| {
                 if (abstract_prune.abstractInfeasible(
                     &candidate.theorem,
@@ -868,11 +864,7 @@ fn tryDerivedSlots(
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) anyerror!void {
-    const goal_expr: ?ExprId = switch (goal) {
-        .concrete => |expr| expr,
-        .implicit_whole_conclusion => |hint| hint,
-        .holey => null,
-    };
+    const goal_expr: ?ExprId = goal.concreteOrHint();
     // `derived_lookup` is the derived-index half of the slot's dual shape
     // lookup (binding-pinned, so it narrows as siblings pin binders); the
     // caller already skipped this call entirely when the cached unbound
@@ -1192,109 +1184,6 @@ fn tryGenerateSlot(
     );
 }
 
-/// Reduce only the substitution/rewrite redexes in `expr_id`, leaving the ACUI
-/// context structure byte-identical to the pool refs.
-///
-/// A generation target built by instantiating a rule whose conclusion type is a
-/// substitution redex (`[k/n] C` = `sb_ty …`, a `registry.rewrites_by_head`
-/// head) must be reduced to its computed form (`Id Nat …`) for the emitted line:
-/// the upstream ref/rule concludes the reduced form, not the redex, so without
-/// this the generated slot is neither identity-equal to nor matchable against the
-/// pool. A *full* `Canonicalizer.canonicalize` would also ACUI-re-associate the
-/// context `join` (`@acui eq_raw_ctx_assoc _ emp _`, left-assoc parse) away from
-/// the raw pool refs and break the positional `solveCorrespondence` readback. So
-/// we recurse the structure (`nd`/`has_ty`/`join`/…) and invoke the canonicalizer
-/// *only* on a subtree whose head is a rewrite head — reducing the redex without
-/// disturbing the surrounding ACUI association.
-///
-/// The `containsRewriteRedex` pre-walk short-circuits the common case (no redex
-/// present — e.g. the rewrite-free generation targets that dominate euclid)
-/// before allocating a `Canonicalizer`, so this is a single cheap walk on every
-/// non-substitution target and the canonicalizer cost is paid only when a redex
-/// is actually present.
-fn reduceRedexOnly(
-    context: *const Context,
-    theorem: *TheoremContext,
-    expr_id: ExprId,
-) anyerror!ExprId {
-    // Whole-theory short-circuit: a theory with no `@rewrite` rules can never
-    // hold a redex, so skip the structural walk entirely (O(1) for euclid etc.).
-    if (context.registry.rewrites_by_head.count() == 0) return expr_id;
-    if (!containsRewriteRedex(context, theorem, expr_id)) return expr_id;
-    var canon = Canonicalizer.init(
-        theorem.allocator,
-        theorem,
-        context.registry,
-        context.env,
-    );
-    defer canon.cache.deinit();
-    return reduceRedexOnlyInner(context, theorem, &canon, expr_id);
-}
-
-fn containsRewriteRedex(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    return theorem.exprAny(expr_id, context, rewriteRedexHeadPred);
-}
-
-fn rewriteRedexHeadPred(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    return switch (theorem.interner.node(expr_id).*) {
-        .app => |app| context.registry.rewrites_by_head.contains(app.term_id),
-        else => false,
-    };
-}
-
-fn reduceRedexOnlyInner(
-    context: *const Context,
-    theorem: *TheoremContext,
-    canon: *Canonicalizer,
-    expr_id: ExprId,
-) anyerror!ExprId {
-    var term_id: u32 = undefined;
-    var arg_count: usize = 0;
-    switch (theorem.interner.node(expr_id).*) {
-        .app => |a| {
-            term_id = a.term_id;
-            arg_count = a.args.len;
-        },
-        else => return expr_id,
-    }
-    // A rewrite-rooted subtree (e.g. `sb_ty …`) is the redex: reduce it to its
-    // computed form. The canonicalizer reduces to fixpoint within this subtree
-    // only; the surrounding context structure is left untouched.
-    //
-    // INVARIANT: a rewrite-rooted subtree must not itself contain an ACUI
-    // structural combiner (`join`), or `canon.canonicalize` would re-associate it
-    // and defeat the byte-identical-to-pool-refs contract this function exists to
-    // protect. This holds by sort discipline in the current theories — the
-    // rewrite heads are the substitution terms `sb_ty`/`sb_tm` (sorts `ty`/`tm`)
-    // and the only ACUI combiner `join` is sort `ctx`; the `ty`/`tm` sub-grammar
-    // takes no `ctx` argument, so no `join` can nest inside an `sb_*` redex. A
-    // future commutative `@acui` operator over `ty`/`tm` appearing as an `sb_*`
-    // argument would break this and must reduce structurally instead.
-    if (context.registry.rewrites_by_head.contains(term_id)) {
-        return canon.canonicalize(expr_id);
-    }
-    if (arg_count == 0) return expr_id;
-    const args = try theorem.allocator.alloc(ExprId, arg_count);
-    defer theorem.allocator.free(args);
-    @memcpy(args, theorem.interner.node(expr_id).app.args);
-    var changed = false;
-    for (args) |*a| {
-        const reduced = try reduceRedexOnlyInner(context, theorem, canon, a.*);
-        if (reduced != a.*) changed = true;
-        a.* = reduced;
-    }
-    if (!changed) return expr_id;
-    return theorem.interner.internApp(term_id, args);
-}
-
 /// Emit a single generated slot: canonicalize ACUI units out of the (now
 /// concrete) sub-target, ask the hook to prove it, and recurse with the slot
 /// filled. Canonicalizing the unit (`emp`) lets the sub-target match unit-free
@@ -1326,7 +1215,7 @@ fn emitGeneratedSlot(
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
     raw_target: ExprId,
 ) anyerror!void {
-    const reduced = try reduceRedexOnly(context, &candidate.theorem, raw_target);
+    const reduced = try Redex.reduceRedexOnly(context, &candidate.theorem, raw_target);
     const target = try normalizeAcuiUnits(context, &candidate.theorem, reduced);
     // The application matched the goal and is launching a subgoal solve —
     // the signal that arms the `@auto eager` set-commit cut (consulted only
@@ -1402,11 +1291,7 @@ fn trySplitGenerate(
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) anyerror!void {
     if (!hook.allow_split) return; // first (non-splitting) generation pass
-    const goal_expr = switch (goal) {
-        .concrete => |expr| expr,
-        .implicit_whole_conclusion => |hint| hint orelse return,
-        .holey => return,
-    };
+    const goal_expr = goal.concreteOrHint() orelse return;
     const hyp_template = rule.hyps[hyp_index];
     const binders = templateBinderMask(hyp_template);
     if (binders.overflow) return;
@@ -1574,11 +1459,7 @@ fn tryPrincipalEnumerate(
 ) anyerror!void {
     if (!hook.allow_split) return;
     if (!context.registry.isAutoBackwardRule(candidate.rule_id)) return;
-    const goal_expr = switch (goal) {
-        .concrete => |expr| expr,
-        .implicit_whole_conclusion => |hint| hint orelse return,
-        .holey => return,
-    };
+    const goal_expr = goal.concreteOrHint() orelse return;
     const hyp_template = rule.hyps[hyp_index];
     const hyp_binders = templateBinderMask(hyp_template);
     if (hyp_binders.overflow) return;
@@ -1997,7 +1878,7 @@ fn emitOpenTarget(
     // align the ACUI members to bind the carried ancestor witness. Meta leaves
     // survive normalization unchanged, so the open binders stay intact. The
     // concrete generated path already normalizes (see `tryGenerateSlot`).
-    const reduced_target = try reduceRedexOnly(slot.context, theorem, raw_target_in);
+    const reduced_target = try Redex.reduceRedexOnly(slot.context, theorem, raw_target_in);
     const raw_target = try normalizeAcuiUnits(slot.context, theorem, reduced_target);
     if (slot.store.isFullySolved(theorem, raw_target)) {
         // Bound-witness enumeration closed every open binder: this is an
@@ -2225,8 +2106,6 @@ fn continueOpenTargetSolved(
     // Same incremental prune as the pool-ref loop: a fill whose pinned
     // binders contradict the conclusion-vs-goal correspondence dooms every
     // tuple under it.
-    if (solve_failed) {
-    }
     if (!finalConclusionPlausible(slot.context, slot.candidate, slot.goal, slot.bindings, slot.counters)) {
         if (slot.counters) |c| c.final_conclusion_prunes += 1;
         return;

@@ -18,6 +18,61 @@ const CheckedRef = CheckedIr.CheckedRef;
 
 const ExprSlotMap = std.AutoHashMapUnmanaged(ExprId, u32);
 
+/// Post-order emit of an expression's proof-stream construction, memoizing each
+/// sub-expression to its heap slot in `expr_slots`. Shared verbatim by
+/// `ExprProofEmitter` and `TheoremProofEmitter`, which differ only in the extra
+/// state they carry around this emission core.
+fn emitProofExpr(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    bytes: *std.ArrayListUnmanaged(u8),
+    expr_slots: *ExprSlotMap,
+    heap_len: *u32,
+    expr_id: ExprId,
+) !void {
+    if (expr_slots.get(expr_id)) |slot| {
+        try MmbWriter.appendCmd(bytes, allocator, ProofCmd.Ref, slot);
+        return;
+    }
+
+    const node = theorem.interner.node(expr_id);
+    switch (node.*) {
+        .variable => |var_id| switch (var_id) {
+            .theorem_var => return error.UnboundExprVariable,
+            .dummy_var => |dummy_id| {
+                const info = try theorem.requireDummyInfo(dummy_id);
+                try MmbWriter.appendCmd(
+                    bytes,
+                    allocator,
+                    ProofCmd.Dummy,
+                    info.sort_id,
+                );
+                const slot = heap_len.*;
+                heap_len.* = try std.math.add(u32, heap_len.*, 1);
+                try expr_slots.put(allocator, expr_id, slot);
+            },
+        },
+        .placeholder => |id| return CheckedIr.leakageError(
+            theorem,
+            id,
+        ),
+        .app => |app| {
+            for (app.args) |arg| {
+                try emitProofExpr(allocator, theorem, bytes, expr_slots, heap_len, arg);
+            }
+            try MmbWriter.appendCmd(
+                bytes,
+                allocator,
+                ProofCmd.TermSave,
+                app.term_id,
+            );
+            const slot = heap_len.*;
+            heap_len.* = try std.math.add(u32, heap_len.*, 1);
+            try expr_slots.put(allocator, expr_id, slot);
+        },
+    }
+}
+
 pub const ExprProofEmitter = struct {
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
@@ -46,47 +101,14 @@ pub const ExprProofEmitter = struct {
     }
 
     pub fn emitExpr(self: *ExprProofEmitter, expr_id: ExprId) !void {
-        if (self.expr_slots.get(expr_id)) |slot| {
-            try MmbWriter.appendCmd(&self.bytes, self.allocator, ProofCmd.Ref, slot);
-            return;
-        }
-
-        const node = self.theorem.interner.node(expr_id);
-        switch (node.*) {
-            .variable => |var_id| switch (var_id) {
-                .theorem_var => return error.UnboundExprVariable,
-                .dummy_var => |dummy_id| {
-                    const info = try self.theorem.requireDummyInfo(dummy_id);
-                    try MmbWriter.appendCmd(
-                        &self.bytes,
-                        self.allocator,
-                        ProofCmd.Dummy,
-                        info.sort_id,
-                    );
-                    const slot = self.heap_len;
-                    self.heap_len = try std.math.add(u32, self.heap_len, 1);
-                    try self.expr_slots.put(self.allocator, expr_id, slot);
-                },
-            },
-            .placeholder => |id| return CheckedIr.leakageError(
-                self.theorem,
-                id,
-            ),
-            .app => |app| {
-                for (app.args) |arg| {
-                    try self.emitExpr(arg);
-                }
-                try MmbWriter.appendCmd(
-                    &self.bytes,
-                    self.allocator,
-                    ProofCmd.TermSave,
-                    app.term_id,
-                );
-                const slot = self.heap_len;
-                self.heap_len = try std.math.add(u32, self.heap_len, 1);
-                try self.expr_slots.put(self.allocator, expr_id, slot);
-            },
-        }
+        return emitProofExpr(
+            self.allocator,
+            self.theorem,
+            &self.bytes,
+            &self.expr_slots,
+            &self.heap_len,
+            expr_id,
+        );
     }
 };
 
@@ -400,47 +422,14 @@ pub const TheoremProofEmitter = struct {
     }
 
     pub fn emitExpr(self: *TheoremProofEmitter, expr_id: ExprId) !void {
-        if (self.expr_slots.get(expr_id)) |slot| {
-            try MmbWriter.appendCmd(&self.bytes, self.allocator, ProofCmd.Ref, slot);
-            return;
-        }
-
-        const node = self.theorem.interner.node(expr_id);
-        switch (node.*) {
-            .variable => |var_id| switch (var_id) {
-                .theorem_var => return error.UnboundExprVariable,
-                .dummy_var => |dummy_id| {
-                    const info = try self.theorem.requireDummyInfo(dummy_id);
-                    try MmbWriter.appendCmd(
-                        &self.bytes,
-                        self.allocator,
-                        ProofCmd.Dummy,
-                        info.sort_id,
-                    );
-                    const slot = self.heap_len;
-                    self.heap_len = try std.math.add(u32, self.heap_len, 1);
-                    try self.expr_slots.put(self.allocator, expr_id, slot);
-                },
-            },
-            .placeholder => |id| return CheckedIr.leakageError(
-                self.theorem,
-                id,
-            ),
-            .app => |app| {
-                for (app.args) |arg| {
-                    try self.emitExpr(arg);
-                }
-                try MmbWriter.appendCmd(
-                    &self.bytes,
-                    self.allocator,
-                    ProofCmd.TermSave,
-                    app.term_id,
-                );
-                const slot = self.heap_len;
-                self.heap_len = try std.math.add(u32, self.heap_len, 1);
-                try self.expr_slots.put(self.allocator, expr_id, slot);
-            },
-        }
+        return emitProofExpr(
+            self.allocator,
+            self.theorem,
+            &self.bytes,
+            &self.expr_slots,
+            &self.heap_len,
+            expr_id,
+        );
     }
 };
 

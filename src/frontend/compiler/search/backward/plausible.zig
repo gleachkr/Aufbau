@@ -35,8 +35,13 @@ pub const SplitMemberList = struct {
     items: [max_split_guard_members]ExprId = undefined,
     len: usize = 0,
 
+    /// The populated prefix of `items` (the only valid range to iterate).
+    pub fn slice(self: *const SplitMemberList) []const ExprId {
+        return self.items[0..self.len];
+    }
+
     fn appendDistinct(self: *SplitMemberList, expr: ExprId) bool {
-        for (self.items[0..self.len]) |existing| {
+        for (self.slice()) |existing| {
             if (existing == expr) return true;
         }
         if (self.len >= self.items.len) return false;
@@ -74,7 +79,7 @@ pub fn splitSiteBindingsPlausible(
             bindings[binder_idx].?,
             site.head_id,
         ) orelse return true;
-        for (value_members.items[0..value_members.len]) |member| {
+        for (value_members.slice()) |member| {
             if (!bound_members.appendDistinct(member)) return true;
         }
     }
@@ -88,7 +93,7 @@ pub fn splitSiteBindingsPlausible(
             continue;
         }
         any_bound = true;
-        for (goal_members.items[0..goal_members.len]) |gm| {
+        for (goal_members.slice()) |gm| {
             if (acui.templateMatchesExprReadOnly(theorem, ftmpl, gm, bindings)) {
                 if (!bound_members.appendDistinct(gm)) return true;
             }
@@ -97,12 +102,12 @@ pub fn splitSiteBindingsPlausible(
     if (!any_bound) return true;
     if (!all_bound) return true;
 
-    for (bound_members.items[0..bound_members.len]) |member| {
+    for (bound_members.slice()) |member| {
         if (!memberPossiblyInList(context, theorem, member, goal_members)) {
             return false;
         }
     }
-    for (goal_members.items[0..goal_members.len]) |member| {
+    for (goal_members.slice()) |member| {
         if (!memberPossiblyInList(context, theorem, member, bound_members)) {
             return false;
         }
@@ -174,7 +179,7 @@ fn memberPossiblyInList(
     member: ExprId,
     list: SplitMemberList,
 ) bool {
-    for (list.items[0..list.len]) |candidate| {
+    for (list.slice()) |candidate| {
         if (!prune.rigidExprMismatch(
             context,
             theorem,
@@ -192,11 +197,7 @@ pub fn finalConclusionPlausible(
     bindings: []const ?ExprId,
     counters: ?*SearchCounters,
 ) bool {
-    const goal_expr = switch (goal) {
-        .concrete => |expr| expr,
-        .implicit_whole_conclusion => |maybe_expr| maybe_expr orelse return true,
-        .holey => return true,
-    };
+    const goal_expr = goal.concreteOrHint() orelse return true;
     // View rules match their VIEW conclusion, not `rule.concl`, so refuting
     // against the raw conclusion would falsely reject (e.g. `ax_inst`'s raw
     // `A.x p -> sb t x p` vs a line matching the view `A.x p -> q`). Run the base
@@ -555,12 +556,12 @@ fn acuiMemberListsMismatch(
         goal_expr,
         head_id,
     ) orelse return false;
-    for (candidate_members.items[0..candidate_members.len]) |member| {
+    for (candidate_members.slice()) |member| {
         if (!memberPossiblyInList(context, theorem, member, goal_members)) {
             return true;
         }
     }
-    for (goal_members.items[0..goal_members.len]) |member| {
+    for (goal_members.slice()) |member| {
         if (!memberPossiblyInList(context, theorem, member, candidate_members)) {
             return true;
         }
@@ -630,7 +631,7 @@ fn repeatedBinderMemberMismatch(
     }
     const seed_member = seed orelse return false;
 
-    for (goal_members.items[0..goal_members.len]) |g0| {
+    for (goal_members.slice()) |g0| {
         var s0: [max_repeated_binder_binders]?ExprId = undefined;
         @memcpy(s0[0..bindings.len], bindings);
         if (!theorem.matchTemplate(seed_member, g0, s0[0..bindings.len])) continue;
@@ -640,7 +641,7 @@ fn repeatedBinderMemberMismatch(
         for (members[0..member_len]) |m| {
             if (!templateMentionsBinder(m, b)) continue;
             var found = false;
-            for (goal_members.items[0..goal_members.len]) |gm| {
+            for (goal_members.slice()) |gm| {
                 var sm: [max_repeated_binder_binders]?ExprId = undefined;
                 @memcpy(sm[0..bindings.len], bindings);
                 sm[b] = bval;
@@ -894,7 +895,7 @@ fn hypRefDfs(
     const item = items[idx];
     const gms = &state.goal_members[item.region];
     var scratch: [max_repeated_binder_binders]?ExprId = undefined;
-    for (gms.items[0..gms.len]) |gm| {
+    for (gms.slice()) |gm| {
         if (state.leaves == 0) return .abstain;
         @memcpy(scratch[0..merged.len], merged);
         if (!state.theorem.matchTemplate(item.member, gm, scratch[0..merged.len])) continue;
@@ -929,7 +930,7 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                 v,
                 r.app.term_id,
             ) orelse return .abstain;
-            for (vm.items[0..vm.len]) |vmm| {
+            for (vm.slice()) |vmm| {
                 if (!consumed_vals[ridx].appendDistinct(vmm)) return .abstain;
             }
         }
@@ -975,7 +976,7 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                                 v,
                                 hr.app.term_id,
                             ) orelse return .abstain;
-                            for (vm.items[0..vm.len]) |vmm| {
+                            for (vm.slice()) |vmm| {
                                 if (!inst.appendDistinct(vmm)) return .abstain;
                             }
                         } else if (state.rest_region[bi]) |ridx| {
@@ -1009,7 +1010,7 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                             v,
                             hr.app.term_id,
                         ) orelse return .abstain;
-                        for (vm.items[0..vm.len]) |vmm| {
+                        for (vm.slice()) |vmm| {
                             if (!inst.appendDistinct(vmm)) return .abstain;
                         }
                     },
@@ -1017,14 +1018,14 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
             }
             // Direction 1: every determined hypothesis member must possibly
             // appear in the ref's conclusion.
-            for (inst.items[0..inst.len]) |v| {
+            for (inst.slice()) |v| {
                 if (!memberPossiblyInList(context, theorem, v, ref_members)) {
                     return .fail;
                 }
             }
             // Direction 2: every ref member must be accounted for by a
             // determined member or by a rest binder's goal-member pool.
-            for (ref_members.items[0..ref_members.len]) |r| {
+            for (ref_members.slice()) |r| {
                 var ok = memberPossiblyInList(context, theorem, r, inst);
                 if (!ok and has_rest) {
                     for (rest_mask, 0..) |used, ridx| {
@@ -1050,7 +1051,7 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                 if (!used) continue;
                 if (hyp_rest_count[ridx] != state.rest_count[ridx]) continue;
                 const gms = &state.goal_members[ridx];
-                for (gms.items[0..gms.len]) |gm| {
+                for (gms.slice()) |gm| {
                     if (memberPossiblyInList(
                         context,
                         theorem,

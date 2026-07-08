@@ -2,6 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const types = @import("./types.zig");
 const source = @import("./source.zig");
+const fixture_mod = @import("./fixture.zig");
 const apply_mod = @import("./apply.zig");
 const backtrack = @import("./backward/backtrack.zig");
 const prune = @import("./backward/prune.zig");
@@ -37,11 +38,11 @@ const apply = apply_mod.apply;
 const applyWithSession = apply_mod.applyWithSession;
 const exact = backtrack.exact;
 const tryCandidate = candidate_mod.tryCandidate;
-const fixtureFor = source.fixtureFor;
-const fixtureForFullEnv = source.fixtureForFullEnv;
-const parseGoal = source.parseGoal;
-const runSearchLine = source.runSearchLine;
-const readProofCase = source.readProofCase;
+const fixtureFor = fixture_mod.fixtureFor;
+const fixtureForFullEnv = fixture_mod.fixtureForFullEnv;
+const parseGoal = fixture_mod.parseGoal;
+const runSearchLine = fixture_mod.runSearchLine;
+const readProofCase = fixture_mod.readProofCase;
 
 fn expectTimingCounter(value: u64) !void {
     if (build_options.enable_search_timers) {
@@ -80,7 +81,7 @@ const ContextHarness = struct {
         self.cache.deinit();
     }
 
-    fn context(self: *ContextHarness, fixture: *source.Fixture) Context {
+    fn context(self: *ContextHarness, fixture: *fixture_mod.Fixture) Context {
         return .{
             .allocator = self.allocator,
             .parser = &fixture.parser,
@@ -3653,7 +3654,7 @@ const fanout_seq_prefix =
 // Everything allocates through `allocator` (an arena), so the caller's arena
 // owns all of it; `holder.*` must outlive the candidates' use.
 const FanoutHolder = struct {
-    fixture: source.Fixture = undefined,
+    fixture: fixture_mod.Fixture = undefined,
     theorem: TheoremContext = undefined,
     harness: ContextHarness = undefined,
 };

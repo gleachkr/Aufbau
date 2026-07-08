@@ -94,38 +94,13 @@ pub fn unionStructuralExprs(
     head_term_id: u32,
     unit_term_id: u32,
 ) anyerror!ExprId {
-    const profile = try StructuralItems.structuralProfileFor(
-        self,
-        head_term_id,
-        unit_term_id,
-    );
-    if (profile.fragment != .acui) return error.UnifyMismatch;
-
-    var lhs_items = std.ArrayListUnmanaged(ExprId){};
-    defer lhs_items.deinit(self.allocator);
-    var rhs_items = std.ArrayListUnmanaged(ExprId){};
-    defer rhs_items.deinit(self.allocator);
-    try StructuralItems.collectCanonicalStructuralItems(
+    return mergeStructuralExprs(
         self,
         lhs_expr,
-        profile,
-        &lhs_items,
-    );
-    try StructuralItems.collectCanonicalStructuralItems(
-        self,
         rhs_expr,
-        profile,
-        &rhs_items,
-    );
-
-    var merged = std.ArrayListUnmanaged(ExprId){};
-    defer merged.deinit(self.allocator);
-    try appendExprSetUnion(self, &merged, lhs_items.items, rhs_items.items);
-    return try StructuralItems.rebuildStructuralExpr(
-        self,
-        merged.items,
         head_term_id,
         unit_term_id,
+        appendExprSetUnion,
     );
 }
 
@@ -135,6 +110,28 @@ pub fn intersectStructuralExprs(
     rhs_expr: ExprId,
     head_term_id: u32,
     unit_term_id: u32,
+) anyerror!ExprId {
+    return mergeStructuralExprs(
+        self,
+        lhs_expr,
+        rhs_expr,
+        head_term_id,
+        unit_term_id,
+        appendExprSetIntersection,
+    );
+}
+
+/// Canonicalize both operands into ACUI item lists, combine them with `mergeFn`
+/// (`appendExprSetUnion` / `appendExprSetIntersection`), and rebuild the
+/// structural expr. The only difference between union and intersection is the
+/// merge callback.
+fn mergeStructuralExprs(
+    self: anytype,
+    lhs_expr: ExprId,
+    rhs_expr: ExprId,
+    head_term_id: u32,
+    unit_term_id: u32,
+    comptime mergeFn: anytype,
 ) anyerror!ExprId {
     const profile = try StructuralItems.structuralProfileFor(
         self,
@@ -162,7 +159,7 @@ pub fn intersectStructuralExprs(
 
     var merged = std.ArrayListUnmanaged(ExprId){};
     defer merged.deinit(self.allocator);
-    try appendExprSetIntersection(self, &merged, lhs_items.items, rhs_items.items);
+    try mergeFn(self, &merged, lhs_items.items, rhs_items.items);
     return try StructuralItems.rebuildStructuralExpr(
         self,
         merged.items,

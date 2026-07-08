@@ -49,6 +49,17 @@ pub const Goal = union(enum) {
             else => null,
         };
     }
+
+    /// The concrete goal expression, or the whole-conclusion hint when the goal
+    /// is implicit. Null for a holey goal or a hintless implicit goal. Callers
+    /// that must bail on those cases spell it `goal.concreteOrHint() orelse ...`.
+    pub fn concreteOrHint(self: Goal) ?ExprId {
+        return switch (self) {
+            .concrete => |expr| expr,
+            .implicit_whole_conclusion => |hint| hint,
+            .holey => null,
+        };
+    }
 };
 
 pub const Context = struct {
@@ -67,6 +78,34 @@ pub const Context = struct {
     diag_scratch: *CompilerDiag.Scratch,
     rule_unify_cache: *Inference.RuleUnifyCache,
     available_rule_count: usize,
+
+    /// Build the trusted checker's `RuleApplyContext` from this search context.
+    /// `allocator` and `checked` vary per caller (probes run against a scratch
+    /// checked-line buffer); every other field forwards verbatim. Keeping the
+    /// mapping here means a new `RuleApplyContext` field is a one-line change,
+    /// not a silent three-way drift across the search call sites.
+    pub fn ruleApplyContext(
+        self: *const Context,
+        allocator: std.mem.Allocator,
+        checked: *std.ArrayListUnmanaged(CheckedLine),
+    ) Check.RuleApplyContext {
+        return .{
+            .allocator = allocator,
+            .parser = self.parser,
+            .env = self.env,
+            .registry = self.registry,
+            .rule_catalog = self.rule_catalog,
+            .fresh_bindings = self.fresh_bindings,
+            .freshen_bindings = self.freshen_bindings,
+            .views = self.views,
+            .sort_vars = self.sort_vars,
+            .assertion = self.assertion,
+            .labels = self.labels,
+            .checked = checked,
+            .diag_scratch = self.diag_scratch,
+            .rule_unify_cache = self.rule_unify_cache,
+        };
+    }
 };
 
 pub const AttemptResultOwnership = enum {

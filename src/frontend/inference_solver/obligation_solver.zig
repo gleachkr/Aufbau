@@ -271,10 +271,8 @@ fn solveAcuiStructuralObligation(
     for (
         binder_lowers,
         binder_uppers,
-        binder_items,
         obligation.binder_idxs,
-    ) |*lower, *upper, *items, binder_idx| {
-        _ = items;
+    ) |*lower, *upper, binder_idx| {
         try collectAcuiBinderBounds(
             self,
             &state,

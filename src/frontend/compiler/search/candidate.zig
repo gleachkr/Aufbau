@@ -116,22 +116,7 @@ pub fn tryCandidate(
     try scratch_checked.appendSlice(allocator, context.checked.items);
     const checked_mark = scratch_checked.items.len;
 
-    var attempt_context = Check.RuleApplyContext{
-        .allocator = allocator,
-        .parser = context.parser,
-        .env = context.env,
-        .registry = context.registry,
-        .rule_catalog = context.rule_catalog,
-        .fresh_bindings = context.fresh_bindings,
-        .freshen_bindings = context.freshen_bindings,
-        .views = context.views,
-        .sort_vars = context.sort_vars,
-        .assertion = context.assertion,
-        .labels = context.labels,
-        .checked = &scratch_checked,
-        .diag_scratch = context.diag_scratch,
-        .rule_unify_cache = context.rule_unify_cache,
-    };
+    var attempt_context = context.ruleApplyContext(allocator, &scratch_checked);
     const line = Check.ApplicationLine{
         .label = options.line_label,
         .application = application,

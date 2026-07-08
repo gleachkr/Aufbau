@@ -174,40 +174,7 @@ pub fn firstDepViolation(
     theorem: *const TheoremContext,
     lines: []const CheckedLine,
 ) !?DepViolation {
-    for (lines, 0..) |line, line_idx| {
-        const rule = switch (line.data) {
-            .rule => |rule| rule,
-            .transport => continue,
-        };
-        if (rule.rule_id >= env.rules.items.len) return error.UnknownRule;
-
-        const rule_decl = &env.rules.items[rule.rule_id];
-        var infos: [56]BindingValidation.ExprInfo = undefined;
-        std.debug.assert(rule.bindings.len <= infos.len);
-        for (rule.bindings, 0..) |binding, idx| {
-            infos[idx] = try BindingValidation.currentExprInfo(
-                env,
-                theorem,
-                binding,
-            );
-        }
-        const violation = BindingValidation.firstDepViolation(
-            rule_decl.args,
-            infos[0..rule.bindings.len],
-        ) orelse continue;
-        return .{
-            .line_idx = line_idx,
-            .rule_id = rule.rule_id,
-            .detail = depViolationDetail(
-                rule_decl.arg_names,
-                violation.first_idx,
-                infos[violation.first_idx],
-                violation.second_idx,
-                infos[violation.second_idx],
-            ),
-        };
-    }
-    return null;
+    return firstDepViolationImpl(false, env, theorem, lines);
 }
 
 /// Memoized twin of `firstDepViolation` (deps via
@@ -215,6 +182,19 @@ pub fn firstDepViolation(
 pub fn firstDepViolationCached(
     env: *const GlobalEnv,
     theorem: *TheoremContext,
+    lines: []const CheckedLine,
+) !?DepViolation {
+    return firstDepViolationImpl(true, env, theorem, lines);
+}
+
+/// Shared body for the plain/memoized `firstDepViolation` twins. The only
+/// difference is which `currentExprInfo` variant computes each binding's deps
+/// (the cached one mutates `theorem`, hence the mutable pointer when `cached`);
+/// both produce identical verdicts, so keeping one body makes that structural.
+fn firstDepViolationImpl(
+    comptime cached: bool,
+    env: *const GlobalEnv,
+    theorem: if (cached) *TheoremContext else *const TheoremContext,
     lines: []const CheckedLine,
 ) !?DepViolation {
     for (lines, 0..) |line, line_idx| {
@@ -228,11 +208,10 @@ pub fn firstDepViolationCached(
         var infos: [56]BindingValidation.ExprInfo = undefined;
         std.debug.assert(rule.bindings.len <= infos.len);
         for (rule.bindings, 0..) |binding, idx| {
-            infos[idx] = try BindingValidation.currentExprInfoCached(
-                env,
-                theorem,
-                binding,
-            );
+            infos[idx] = if (cached)
+                try BindingValidation.currentExprInfoCached(env, theorem, binding)
+            else
+                try BindingValidation.currentExprInfo(env, theorem, binding);
         }
         const violation = BindingValidation.firstDepViolation(
             rule_decl.args,

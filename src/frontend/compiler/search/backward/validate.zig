@@ -47,11 +47,7 @@ pub fn appendDerivedDirectCandidates(
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) !void {
-    const goal_expr = switch (goal) {
-        .concrete => |expr| expr,
-        .implicit_whole_conclusion => |hint| hint orelse return,
-        .holey => return,
-    };
+    const goal_expr = goal.concreteOrHint() orelse return;
     // Same pre-filter as `tryDerivedSlots`: only derived shapes the index
     // says could match the goal get the full correspondence solve. A failed
     // goal lookup (not OOM) falls back to scanning everything.

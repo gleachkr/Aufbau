@@ -102,22 +102,7 @@ pub fn applyWithSession(
             .span = null,
         };
 
-        const apply_context = Check.RuleApplyContext{
-            .allocator = allocator,
-            .parser = context.parser,
-            .env = context.env,
-            .registry = context.registry,
-            .rule_catalog = context.rule_catalog,
-            .fresh_bindings = context.fresh_bindings,
-            .freshen_bindings = context.freshen_bindings,
-            .views = context.views,
-            .sort_vars = context.sort_vars,
-            .assertion = context.assertion,
-            .labels = context.labels,
-            .checked = context.checked,
-            .diag_scratch = context.diag_scratch,
-            .rule_unify_cache = context.rule_unify_cache,
-        };
+        const apply_context = context.ruleApplyContext(allocator, context.checked);
         if (counters) |actual| {
             actual.conclusion_probes += 1;
         }
