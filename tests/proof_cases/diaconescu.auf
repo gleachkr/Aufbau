@@ -1,0 +1,121 @@
+-- Diaconescu's theorem: an extensional choice operator forces excluded middle.
+-- The whole proof lives in intuitionistic natural deduction; the only
+-- non-constructive ingredients are `ac` and `ch_congr`.
+--
+-- Throughout, the two comprehension sets are written inline:
+--   A = { x ∈ pairset zero one | x = zero ∨ P }
+--   B = { x ∈ pairset zero one | x = one  ∨ P }
+
+-- collapse:  under the assumption P, A and B have exactly the same members.
+-- Given P, the defining predicate of each set is satisfied by every element of
+-- the domain (the right disjunct P holds), so membership in A and in B both
+-- collapse to membership in `pairset zero one`.
+collapse
+--------
+-- Forward: w ∈ A → w ∈ B.
+l1: $ w ∈ {x ∈ pairset zero one | x = zero ∨ P}
+       ⊢ w ∈ {x ∈ pairset zero one | x = zero ∨ P} $ by ax
+l2: $ w ∈ {x ∈ pairset zero one | x = zero ∨ P} ⊢ w ∈ pairset zero one $
+  by sep_elim_left [l1]
+l3: $ P ⊢ P $ by ax
+l4: $ P ⊢ w = one ∨ P $ by or_intro_r [l3]
+l5: $ w ∈ {x ∈ pairset zero one | x = zero ∨ P} , P
+       ⊢ w ∈ {x ∈ pairset zero one | x = one ∨ P} $ by sep_intro [l2, l4]
+l6: $ P ⊢ w ∈ {x ∈ pairset zero one | x = zero ∨ P}
+          → w ∈ {x ∈ pairset zero one | x = one ∨ P} $ by imp_intro [l5]
+
+-- Backward: w ∈ B → w ∈ A.
+l7: $ w ∈ {x ∈ pairset zero one | x = one ∨ P}
+       ⊢ w ∈ {x ∈ pairset zero one | x = one ∨ P} $ by ax
+l8: $ w ∈ {x ∈ pairset zero one | x = one ∨ P} ⊢ w ∈ pairset zero one $
+  by sep_elim_left [l7]
+l9: $ P ⊢ P $ by ax
+l10: $ P ⊢ w = zero ∨ P $ by or_intro_r [l9]
+l11: $ w ∈ {x ∈ pairset zero one | x = one ∨ P} , P
+        ⊢ w ∈ {x ∈ pairset zero one | x = zero ∨ P} $ by sep_intro [l8, l10]
+l12: $ P ⊢ w ∈ {x ∈ pairset zero one | x = one ∨ P}
+           → w ∈ {x ∈ pairset zero one | x = zero ∨ P} $ by imp_intro [l11]
+
+-- Biconditional, then generalise over w.
+l13: $ P ⊢ w ∈ {x ∈ pairset zero one | x = zero ∨ P}
+          ↔ w ∈ {x ∈ pairset zero one | x = one ∨ P} $ by bi_intro [l6, l12]
+l14: $ P ⊢ ∀ w (w ∈ {x ∈ pairset zero one | x = zero ∨ P}
+               ↔ w ∈ {x ∈ pairset zero one | x = one ∨ P}) $ by all_intro [l13]
+
+-- lem:  P ∨ ¬ P, for arbitrary P.
+--
+-- Both A and B are inhabited (zero ∈ A, one ∈ B).  Choice hands back a chosen
+-- element of each; from the defining predicates we learn
+--   ch A = zero ∨ P    and    ch B = one ∨ P.
+-- A double case split gives P in every branch that produces P; in the
+-- remaining branch (ch A = zero and ch B = one) we get ¬ P: assuming P makes
+-- A = B (collapse + extensionality), so ch_congr forces ch A = ch B, i.e.
+-- zero = one — contradicting zero_ne_one.
+--
+-- Note the chosen element `ch { x ∈ … }` names the very comprehension it is
+-- drawn from, so `sep_elim_right` reads it out as a `t` that mentions the bound
+-- variable — which the relaxed `t: set x` signature permits directly.
+lem
+---
+-- zero ∈ A.
+l1: $ _ ⊢ zero ∈ pairset zero one $ by pairset_intro_left
+l2: $ _ ⊢ zero = zero $ by eq_intro
+l3: $ _ ⊢ zero = zero ∨ P $ by or_intro_l [l2]
+l4: $ _ ⊢ zero ∈ {x ∈ pairset zero one | x = zero ∨ P} $ by sep_intro [l1, l3]
+
+-- one ∈ B.
+l5: $ _ ⊢ one ∈ pairset zero one $ by pairset_intro_right
+l6: $ _ ⊢ one = one $ by eq_intro
+l7: $ _ ⊢ one = one ∨ P $ by or_intro_l [l6]
+l8: $ _ ⊢ one ∈ {x ∈ pairset zero one | x = one ∨ P} $ by sep_intro [l5, l7]
+
+-- Choice picks members of A and B; read off their predicates.
+l9: $ _ ⊢ ch {x ∈ pairset zero one | x = zero ∨ P}
+            ∈ {x ∈ pairset zero one | x = zero ∨ P} $ by ac [l4]
+l10: $ _ ⊢ ch {x ∈ pairset zero one | x = one ∨ P}
+             ∈ {x ∈ pairset zero one | x = one ∨ P} $ by ac [l8]
+l11: $ _ ⊢ ch {x ∈ pairset zero one | x = zero ∨ P} = zero ∨ P $
+  by sep_elim_right [l9]
+l12: $ _ ⊢ ch {x ∈ pairset zero one | x = one ∨ P} = one ∨ P $
+  by sep_elim_right [l10]
+
+-- goalL:  P by itself already gives P ∨ ¬ P.
+l13: $ P ⊢ P $ by ax
+l14: $ P ⊢ P ∨ ¬ P $ by or_intro_l [l13]
+
+-- goalR:  from  ch A = zero  and  ch B = one  we derive ¬ P.
+-- Under P, A = B (collapse + ext), so ch A = ch B by ch_congr.
+l15: $ P ⊢ ∀ w (w ∈ {x ∈ pairset zero one | x = zero ∨ P}
+               ↔ w ∈ {x ∈ pairset zero one | x = one ∨ P}) $ by collapse
+l16: $ P ⊢ {x ∈ pairset zero one | x = zero ∨ P}
+          = {x ∈ pairset zero one | x = one ∨ P} $ by ext [l15]
+l17: $ P ⊢ ch {x ∈ pairset zero one | x = zero ∨ P}
+          = ch {x ∈ pairset zero one | x = one ∨ P} $ by ch_congr [l16]
+
+-- Rewrite  ch A ↦ zero  in l17, then  ch B ↦ one, landing at zero = one —
+-- which contradicts zero_ne_one, giving ¬ P.
+l18: $ ch {x ∈ pairset zero one | x = zero ∨ P} = zero
+       ⊢ ch {x ∈ pairset zero one | x = zero ∨ P} = zero $ by ax
+l19: $ ch {x ∈ pairset zero one | x = zero ∨ P} = zero , P
+       ⊢ zero = ch {x ∈ pairset zero one | x = one ∨ P} $ by eq_replace [l18, l17]
+l20: $ ch {x ∈ pairset zero one | x = one ∨ P} = one
+       ⊢ ch {x ∈ pairset zero one | x = one ∨ P} = one $ by ax
+l21: $ ch {x ∈ pairset zero one | x = zero ∨ P} = zero ,
+       ch {x ∈ pairset zero one | x = one ∨ P} = one , P ⊢ zero = one $
+  by eq_replace [l20, l19]
+l22: $ _ ⊢ ¬ zero = one $ by zero_ne_one
+l23: $ ch {x ∈ pairset zero one | x = zero ∨ P} = zero ,
+       ch {x ∈ pairset zero one | x = one ∨ P} = one , P ⊢ ⊥ $
+  by not_elim [l22, l21]
+l24: $ ch {x ∈ pairset zero one | x = zero ∨ P} = zero ,
+       ch {x ∈ pairset zero one | x = one ∨ P} = one ⊢ ¬ P $ by not_intro [l23]
+l25: $ ch {x ∈ pairset zero one | x = zero ∨ P} = zero ,
+       ch {x ∈ pairset zero one | x = one ∨ P} = one ⊢ P ∨ ¬ P $
+  by or_intro_r [l24]
+
+-- Inner case split on  ch A = zero ∨ P  (with  ch B = one  in context).
+l26: $ ch {x ∈ pairset zero one | x = one ∨ P} = one ⊢ P ∨ ¬ P $
+  by or_elim [l11, l25, l14]
+
+-- Outer case split on  ch B = one ∨ P.
+l27: $ _ ⊢ P ∨ ¬ P $ by or_elim [l12, l26, l14]

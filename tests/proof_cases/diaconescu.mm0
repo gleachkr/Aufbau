@@ -1,0 +1,361 @@
+-- Diaconescu's theorem: choice implies excluded middle.
+--
+-- This is the classic result that a constructive set theory cannot admit a
+-- (choice) selection operator without collapsing into classical logic.  We
+-- lay down just enough *intuitionistic* first-order set theory to state and
+-- prove
+--
+--   lem :  ∀ P.  ⊢ P ∨ ¬ P
+--
+-- from a single choice principle.  The base logic is intuitionistic natural
+-- deduction over ACUI hypothesis contexts (exactly the Prawitz-style core
+-- shared by euclid.mm0 / zermelo.mm0, but with NO classical rule: there is no
+-- excluded middle, no double-negation elimination, no Peirce law).  Without
+-- the choice axioms below, `lem` is NOT provable — that is the whole point.
+--
+-- The set-theoretic content is deliberately minimal:
+--
+--   * Separation   — form the comprehension set  { x ∈ D | φ(x) }.
+--   * Extensionality — sets with the same members are equal.
+--   * Pairing      — a two-point domain  D = pairset zero one  to separate over.
+--   * Two distinct points  zero ≠ one  (a basic distinctness fact, taken as an
+--     axiom the way euclid.mm0 takes 0 ≠ suc a).
+--
+-- Choice enters as an *extensional selection operator*:
+--
+--   term  ch (s : set) : set;
+--   ac       :  y ∈ s        →  ch s ∈ s     (inhabited sets get a member)
+--   ch_congr :  a = b        →  ch a = ch b   (selection respects equality)
+--
+-- The crux is `ch_congr`.  It says the choice operator is a genuine function
+-- of its argument set — the same set always yields the same chosen element.
+-- That extensionality is exactly what Diaconescu's argument turns against
+-- constructivism:  under a hypothetical P the two comprehension sets become
+-- equal, `ch_congr` forces their chosen elements equal, and that contradicts
+-- their construction — yielding ¬P; the other branch yields P.
+--
+-- Diaconescu, "Axiom of choice and complementation", PAMS 51 (1975).
+
+delimiter $ ( ) { } [ / ] , | $;
+
+strict provable sort wff;
+--| @vars x y z w P Q A B a b c d
+sort set;
+sort ctx;
+
+-- --------------------------------------------------------------------------
+-- Object-language connectives (intuitionistic)
+-- --------------------------------------------------------------------------
+
+term im (p q: wff): wff;
+infixr im: $→$ prec 25;
+infixr im: $->$ prec 25;
+
+term not (p: wff): wff;
+prefix not: $¬$ prec 41;
+prefix not: $~$ prec 41;
+
+term and (p q: wff): wff;
+infixr and: $∧$ prec 30;
+infixr and: $/\\$ prec 30;
+
+term or (p q: wff): wff;
+infixr or: $∨$ prec 28;
+infixr or: $\\/$ prec 28;
+
+term bi (p q: wff): wff;
+infixr bi: $↔$ prec 20;
+infixr bi: $<->$ prec 20;
+
+term bot: wff;
+prefix bot: $⊥$ prec max;
+prefix bot: $F.$ prec max;
+
+term all {x: set} (p: wff x): wff;
+prefix all: $∀$ prec 41;
+prefix all: $A.$ prec 41;
+
+term sb_f {x: set} (t: set x) (p: wff x): wff;
+notation sb_f {x: set} (t: set x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_s {x: set} (t: set x) (s: set x): set;
+notation sb_s {x: set} (t: set x) (s: set x): set =
+  ($⟦$:41) x ($/$:0) t ($⟧$:0) s;
+
+term set_eq (a b: set): wff;
+infixl set_eq: $=$ prec 50;
+
+term mem (x A: set): wff;
+infixl mem: $∈$ prec 50;
+infixl mem: $e.$ prec 50;
+
+-- --------------------------------------------------------------------------
+-- Natural-deduction context syntax (ACUI hypothesis multiset)
+-- --------------------------------------------------------------------------
+
+term ctx_eq (G H: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (G H: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+
+term nd (G: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+-- --------------------------------------------------------------------------
+-- Equivalence relations and congruence
+-- --------------------------------------------------------------------------
+
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (p: wff): $ p ↔ p $;
+axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation set set_eq setid settr setsym _
+axiom setid (a: set): $ a = a $;
+axiom settr (a b c: set): $ a = b $ > $ b = c $ > $ a = c $;
+axiom setsym (a b: set): $ a = b $ > $ b = a $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+axiom ctx_trans (G H K: ctx):
+  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+axiom ctx_assoc (G H K: ctx):
+  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
+
+--| @congr
+axiom join_congr (G1 G2 H1 H2: ctx):
+  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+  $ ctx_eq (G1 , H1) (G2 , H2) $;
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (G H: ctx) (p q: wff):
+  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+
+--| @congr
+axiom set_eq_congr (a b c d: set):
+  $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+--| @congr
+axiom im_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p → r) ↔ (q → s) $;
+--| @congr
+axiom not_congr (p q: wff): $ p ↔ q $ > $ ¬ p ↔ ¬ q $;
+--| @congr
+axiom and_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p ∧ r) ↔ (q ∧ s) $;
+--| @congr
+axiom or_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p ∨ r) ↔ (q ∨ s) $;
+--| @congr
+axiom bi_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p ↔ r) ↔ (q ↔ s) $;
+--| @congr
+axiom all_congr {x: set} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+--| @congr
+axiom mem_congr (x y A B: set):
+  $ x = y $ > $ A = B $ > $ (x ∈ A) ↔ (y ∈ B) $;
+
+-- --------------------------------------------------------------------------
+-- Intuitionistic natural-deduction rules
+--
+-- NOTE: there is deliberately no `excluded_middle_nd`, no `dne`, no Peirce
+-- law.  Excluded middle is the THEOREM `lem` below, provable only via choice.
+-- --------------------------------------------------------------------------
+
+axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+
+axiom imp_intro (G: ctx) (p q: wff):
+  $ G , p ⊢ q $ > $ G ⊢ p → q $;
+axiom imp_elim (G H: ctx) (p q: wff):
+  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+
+axiom and_intro (G H: ctx) (p q: wff):
+  $ G ⊢ p $ > $ H ⊢ q $ > $ G , H ⊢ p ∧ q $;
+axiom and_elim_l (G: ctx) (p q: wff):
+  $ G ⊢ p ∧ q $ > $ G ⊢ p $;
+axiom and_elim_r (G: ctx) (p q: wff):
+  $ G ⊢ p ∧ q $ > $ G ⊢ q $;
+
+axiom or_intro_l (G: ctx) (p q: wff):
+  $ G ⊢ p $ > $ G ⊢ p ∨ q $;
+axiom or_intro_r (G: ctx) (p q: wff):
+  $ G ⊢ q $ > $ G ⊢ p ∨ q $;
+axiom or_elim (G H K: ctx) (p q r: wff):
+  $ G ⊢ p ∨ q $ > $ H , p ⊢ r $ > $ K , q ⊢ r $ >
+  $ G , H , K ⊢ r $;
+
+axiom bi_intro (G H: ctx) (p q: wff):
+  $ G ⊢ p → q $ > $ H ⊢ q → p $ > $ G , H ⊢ p ↔ q $;
+axiom bi_elim_l (G H: ctx) (p q: wff):
+  $ G ⊢ p ↔ q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+axiom bi_elim_r (G H: ctx) (p q: wff):
+  $ G ⊢ p ↔ q $ > $ H ⊢ q $ > $ G , H ⊢ p $;
+
+axiom not_intro (G: ctx) (p: wff):
+  $ G , p ⊢ ⊥ $ > $ G ⊢ ¬ p $;
+axiom not_elim (G H: ctx) (p: wff):
+  $ G ⊢ ¬ p $ > $ H ⊢ p $ > $ G , H ⊢ ⊥ $;
+axiom bot_elim (G: ctx) (p: wff):
+  $ G ⊢ ⊥ $ > $ G ⊢ p $;
+
+--| @freshen G x
+axiom all_intro (G: ctx) {x: set} (p: wff x):
+  $ G ⊢ p $ > $ G ⊢ ∀ x p $;
+
+--| @view {x:set}(G:ctx x)(t:set x)(p:wff x)(q:wff): $ G ⊢ ∀ x p $ > $ G ⊢ q $
+--| @recover t q p x
+axiom all_elim {x: set} (G: ctx x) (t: set x) (p: wff x):
+  $ G ⊢ ∀ x p $ > $ G ⊢ [x/t] p $;
+
+axiom eq_intro (G: ctx) (a: set): $ G ⊢ a = a $;
+
+--| @view (G H:ctx){z:set}(a b:set)(p:wff z)(q r:wff): $ G ⊢ a = b $ > $ H ⊢ q $ > $ G,H ⊢ r $
+--| @abstract p q r z a b
+--| @fresh z
+axiom eq_replace (G H: ctx) {z: set} (a b: set) (p: wff z):
+  $ G ⊢ a = b $ > $ H ⊢ [z/a] p $ > $ G , H ⊢ [z/b] p $;
+
+-- --------------------------------------------------------------------------
+-- Set-forming syntax
+-- --------------------------------------------------------------------------
+
+-- Two distinct points to separate over.  `zero ≠ one` is a basic distinctness
+-- fact (cf. euclid.mm0's `¬ suc a = 0`), the minimal ingredient that gives the
+-- two-point domain any content.
+term zero: set;
+term one: set;
+
+axiom zero_ne_one (G: ctx): $ G ⊢ ¬ zero = one $;
+
+term pairset (a b: set): set;
+
+axiom pairset_intro_left (G: ctx) (x y: set):
+  $ G ⊢ x ∈ pairset x y $;
+axiom pairset_intro_right (G: ctx) (x y: set):
+  $ G ⊢ y ∈ pairset x y $;
+
+term sep (A: set) {x: set} (p: wff x): set;
+notation sep (A: set) {x: set} (p: wff x): set =
+  (${$:max) x ($∈$:50) A ($|$:0) p ($}$:0);
+
+--| @view {x:set}(G H:ctx x)(t A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
+--| @recover t q p x
+axiom sep_intro {x: set} (G H: ctx x) (t A: set) (p: wff x):
+  $ G ⊢ t ∈ A $ > $ H ⊢ [x/t] p $ >
+  $ G , H ⊢ t ∈ {x ∈ A | p} $;
+
+axiom sep_elim_left {x: set} (G: ctx x) (t A: set) (p: wff x):
+  $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ t ∈ A $;
+
+-- Note `t: set x`: the element read out MAY mention x.  Semantically this is
+-- always sound — `t ∈ {x ∈ A | p} ⊢ p[x:=t]` holds for any t, since the x's in
+-- t are free (t sits outside the comprehension) while the x's captured by the
+-- binder are only those in p.  This is exactly what lets `ch {x ∈ … }` (the
+-- chosen element, which names the set it lives in) be read out without hiding
+-- the comprehension behind a def.
+--| @view {x:set}(G:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ q $
+--| @recover t q p x
+axiom sep_elim_right {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):
+  $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ [x/t] p $;
+
+-- Extensionality:  members determine the set.
+axiom ext (G: ctx) {x: set} (A B: set):
+  $ G ⊢ ∀ x (x ∈ A ↔ x ∈ B) $ > $ G ⊢ A = B $;
+
+-- --------------------------------------------------------------------------
+-- Substitution rewriting (push [x/t] and ⟦x/t⟧ through the syntax)
+-- --------------------------------------------------------------------------
+
+--| @rewrite
+axiom sb_f_im {x: set} (t: set x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+--| @rewrite
+axiom sb_f_and {x: set} (t: set x) (p q: wff x):
+  $ [x/t] (p ∧ q) ↔ ([x/t] p ∧ [x/t] q) $;
+--| @rewrite
+axiom sb_f_or {x: set} (t: set x) (p q: wff x):
+  $ [x/t] (p ∨ q) ↔ ([x/t] p ∨ [x/t] q) $;
+--| @rewrite
+axiom sb_f_bi {x: set} (t: set x) (p q: wff x):
+  $ [x/t] (p ↔ q) ↔ ([x/t] p ↔ [x/t] q) $;
+--| @rewrite
+axiom sb_f_not {x: set} (t: set x) (p: wff x):
+  $ [x/t] (¬ p) ↔ ¬ [x/t] p $;
+--| @rewrite
+axiom sb_f_all {x y: set} (t: set x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y [x/t] p $;
+--| @rewrite
+axiom sb_f_mem {x: set} (t a A: set x):
+  $ [x/t] (a ∈ A) ↔ (⟦ x / t ⟧ a) ∈ (⟦ x / t ⟧ A) $;
+--| @rewrite
+axiom sb_f_set_eq {x: set} (t a b: set x):
+  $ [x/t] (a = b) ↔ (⟦ x / t ⟧ a) = (⟦ x / t ⟧ b) $;
+--| @rewrite
+axiom sb_f_id {x: set} (p: wff x): $ [x/x] p ↔ p $;
+--| @rewrite
+axiom sb_f_irrel {x: set} (t: set x) (p: wff): $ [x/t] p ↔ p $;
+
+--| @rewrite
+axiom sb_s_var {x: set} (t: set x): $ (⟦ x / t ⟧ x) = t $;
+--| @rewrite
+axiom sb_s_irrel {x: set} (t: set x) (s: set): $ (⟦ x / t ⟧ s) = s $;
+--| @rewrite
+axiom sb_s_pairset {x: set} (t a b: set x):
+  $ (⟦ x / t ⟧ (pairset a b)) = pairset (⟦ x / t ⟧ a) (⟦ x / t ⟧ b) $;
+--| @rewrite
+axiom sb_s_sep {x y: set} (t A: set x) (p: wff x y):
+  $ (⟦ x / t ⟧ {y ∈ A | p}) = {y ∈ (⟦ x / t ⟧ A) | [x/t] p} $;
+
+--| @alpha x y
+axiom all_alpha {x y: set} (p: wff x y):
+  $ ∀ x p ↔ ∀ y ([x/y] p) $;
+
+--| @congr
+axiom sb_f_congr {x: set} (t u: set x) (p q: wff x):
+  $ t = u $ > $ p ↔ q $ > $ [x/t] p ↔ [x/u] q $;
+
+-- --------------------------------------------------------------------------
+-- Choice: an extensional selection operator
+-- --------------------------------------------------------------------------
+
+term ch (s: set): set;
+
+-- An inhabited set contains its chosen element.
+axiom ac (G: ctx) (s y: set): $ G ⊢ y ∈ s $ > $ G ⊢ ch s ∈ s $;
+
+-- The choice operator respects equality of sets.  This single congruence is
+-- the extensional content of choice — and the hinge of Diaconescu's argument.
+axiom ch_congr (G: ctx) (a b: set): $ G ⊢ a = b $ > $ G ⊢ ch a = ch b $;
+
+-- --------------------------------------------------------------------------
+-- Diaconescu's theorem
+-- --------------------------------------------------------------------------
+--
+-- The two comprehension sets, over the two-point domain, are
+--   A = { x ∈ pairset zero one | x = zero ∨ P }
+--   B = { x ∈ pairset zero one | x = one  ∨ P }.
+
+-- Under a hypothetical P, A and B have the same members: given P, membership in
+-- either reduces to membership in `pairset zero one`.  `lem` feeds this to
+-- extensionality to get A = B.
+theorem collapse (P: wff) {w x: set}:
+  $ P ⊢ ∀ w (w ∈ {x ∈ pairset zero one | x = zero ∨ P}
+             ↔ w ∈ {x ∈ pairset zero one | x = one ∨ P}) $;
+
+-- Excluded middle, for an arbitrary proposition P.  Provable ONLY because of
+-- the choice axioms `ac` / `ch_congr`; the intuitionistic core alone cannot
+-- derive it.
+theorem lem (P: wff):
+  $ emp ⊢ P ∨ ¬ P $;
