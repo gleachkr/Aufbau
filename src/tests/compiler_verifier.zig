@@ -737,6 +737,43 @@ test "compiler analyze recovers after malformed local defs" {
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
 }
 
+test "compiler analyze does not cascade a broken predecessor onto dependents" {
+    // The embeddable editor's v2 (assembled) model stitches every cell into one
+    // document and uses the analyze path's per-theorem diagnostics as the
+    // correctness signal. A broken upstream cell must NOT red-line downstream
+    // cells that reference it, or every edit-in-progress would spuriously fail.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem helper: $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_src =
+        \\helper
+        \\------
+        \\l1: $ top $ by bogus_rule []
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by helper []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    // Exactly one diagnostic — on `helper`. `main`, which references the broken
+    // `helper`, is left clean (the recovery suppresses the dependent failure).
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.UnknownRule, diags[0].err);
+    try std.testing.expectEqualStrings("helper", diags[0].theorem_name.?);
+}
+
 test "compiler rejects annotations on proof-side local defs" {
     const mm0_src =
         \\provable sort wff;
@@ -769,7 +806,10 @@ test "compiler rejects annotations on proof-side local defs" {
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
 }
 
-test "compiler analyze reports extra local defs after proof blocks" {
+test "compiler analyze accepts trailing local defs after proof blocks" {
+    // A trailing local def, like a trailing lemma, has no public block to
+    // anchor to at end of stream but is self-contained; it is processed
+    // rather than reported as an extra proof item.
     const mm0_src =
         \\provable sort wff;
         \\term top: wff;
@@ -792,7 +832,5 @@ test "compiler analyze reports extra local defs after proof blocks" {
     try compiler.analyze();
 
     const diags = compiler.primaryDiagnostics();
-    try std.testing.expectEqual(@as(usize, 1), diags.len);
-    try std.testing.expectEqual(error.ExtraProofItem, diags[0].err);
-    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
+    try std.testing.expectEqual(@as(usize, 0), diags.len);
 }

@@ -1,0 +1,25 @@
+{
+  "name": "@aufbau/editor",
+  "version": "0.0.0",
+  "description": "Embeddable interactive Aufbau proof editor as a web component.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gleachkr/aufbau.git"
+  },
+  "type": "module",
+  "exports": "./index.js",
+  "files": [
+    "index.js"
+  ],
+  "peerDependencies": {
+    "@aufbau/compiler": "*",
+    "@codemirror/view": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/commands": "^6",
+    "@codemirror/lint": "^6"
+  },
+  "sideEffects": [
+    "./index.js"
+  ]
+}

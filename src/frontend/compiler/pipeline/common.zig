@@ -363,6 +363,57 @@ fn putBackItems(proofs: *ProofItemStream, items: []const TopLevelItem) void {
     }
 }
 
+/// Process any proof items remaining after the MM0 stream is exhausted.
+/// Local items (lemma blocks, local defs) have no MM0 counterpart to anchor
+/// to at end of stream, but they are self-contained emissions and everything
+/// they can reference is already in scope, so we simply process them in order.
+/// A trailing *public* block or def, by contrast, is a genuine orphan (a proof
+/// block with no matching theorem/def) and is still reported as an error.
+pub fn drainTrailingLocalProofItems(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    env: *GlobalEnv,
+    registry: *RewriteRegistry,
+    rule_catalog: *const RuleCatalog.Catalog,
+    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
+    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
+    views: *std.AutoHashMap(u32, ViewDecl),
+    sort_vars: *const SortVarRegistry,
+    proofs: *ProofItemStream,
+    emit: ?*Output,
+) !void {
+    while (true) {
+        const item = proofs.next() catch |err| {
+            self.setDiagnostic(CompilerDiag.proofParserDiagnostic(
+                &proofs.parser,
+                null,
+                err,
+            ));
+            return err;
+        } orelse return;
+
+        if (!isLocalProofItem(item)) {
+            return setExtraProofItemDiagnostic(self, item);
+        }
+
+        try processLocalProofItem(
+            self,
+            allocator,
+            parser,
+            env,
+            registry,
+            rule_catalog,
+            fresh_bindings,
+            freshen_bindings,
+            views,
+            sort_vars,
+            item,
+            emit,
+        );
+    }
+}
+
 pub fn isLocalProofItem(item: TopLevelItem) bool {
     return switch (item) {
         .block => |block| block.kind == .lemma,

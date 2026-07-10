@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@aufbau/editor — embeddable proof editor</title>
+    <script type="importmap">
+      {
+        "imports": {
+          "@codemirror/state": "https://esm.sh/@codemirror/state",
+          "@codemirror/view": "https://esm.sh/@codemirror/view?external=@codemirror/state",
+          "@codemirror/commands": "https://esm.sh/@codemirror/commands?external=@codemirror/state,@codemirror/view",
+          "@codemirror/lint": "https://esm.sh/@codemirror/lint?external=@codemirror/state,@codemirror/view",
+          "@aufbau/compiler": "./@aufbau/compiler/index.js",
+          "@aufbau/verifier": "./@aufbau/verifier/index.js",
+          "@aufbau/editor": "./packages/editor/index.js"
+        }
+      }
+    </script>
+    <style>
+      body {
+        max-width: 46rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        font-family: system-ui, sans-serif;
+        line-height: 1.5;
+        color: #1c1c22;
+      }
+      h1 { font-size: 1.5rem; }
+      h2 { font-size: 1.1rem; margin-top: 2rem; }
+      code { font-family: ui-monospace, monospace; }
+      p.hint { color: #6b7280; font-size: 0.92em; }
+    </style>
+  </head>
+  <body>
+    <h1><code>&lt;aufbau-proof&gt;</code> — interactive proof editor</h1>
+    <p>
+      Each editor below checks its proof against a fixed theory in the browser,
+      debounced as you type. Try breaking a proof line to see the diagnostics,
+      then fix it to watch it go green.
+    </p>
+
+    <h2>1. Standalone cell (theory + lemma in one element)</h2>
+    <p class="hint">
+      The theory is just axioms/terms; the cell is a self-contained lemma and
+      only its proof body is editable.
+    </p>
+    <aufbau-proof theme="auto">
+      <script type="text/mm0">
+        delimiter $ ( ) $;
+        provable sort wff;
+        term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        axiom ax_keep (a b: wff): $ a $ > $ a -> b -> a $;
+      </script>
+      <script type="text/auf">
+        lemma keep (a b: wff): $ a $ > $ a -> b -> a $
+        ----
+        l1: $ a -> b -> a $ by ax_keep (a := $ a $) [#1]
+      </script>
+    </aufbau-proof>
+
+    <h2>2. A progression — later cells cite earlier ones</h2>
+    <p class="hint">
+      Cells that share a theory form one <em>document</em>, stitched in page
+      order. The second cell proves <code>main</code> by citing the
+      <code>helper</code> lemma from the first cell. Break the first cell's proof
+      and note the second cell is not red-lined — it just stops being "verified"
+      until the whole document is clean again.
+    </p>
+    <aufbau-theory id="chain">
+      <script type="text/mm0">
+        provable sort wff;
+        term top: wff;
+        axiom top_i: $ top $;
+      </script>
+    </aufbau-theory>
+
+    <aufbau-proof theory="chain">
+      <script type="text/auf">
+        lemma helper: $ top $
+        ----
+        l1: $ top $ by top_i []
+      </script>
+    </aufbau-proof>
+
+    <aufbau-proof theory="chain">
+      <script type="text/auf">
+        lemma main: $ top $
+        ----
+        l1: $ top $ by helper []
+      </script>
+    </aufbau-proof>
+
+    <h2>3. A theorem cell (appends a declaration to the mm0)</h2>
+    <p class="hint">
+      A theorem cell contributes an mm0 <code>theorem</code> declaration
+      <em>and</em> its proof, both stitched into the document. This is the seam a
+      future editable mm0/def cell would use.
+    </p>
+    <aufbau-theory id="decl">
+      <script type="text/mm0">
+        provable sort wff;
+        term top: wff;
+        axiom top_i: $ top $;
+      </script>
+    </aufbau-theory>
+
+    <aufbau-proof theory="decl">
+      <script type="text/mm0">theorem thm_top: $ top $;</script>
+      <script type="text/auf">
+        thm_top
+        ----
+        l1: $ top $ by top_i []
+      </script>
+    </aufbau-proof>
+
+    <h2>4. A real theory by URL (full-file mode)</h2>
+    <p class="hint">
+      A multi-theorem fixture loaded from <code>src</code> — the whole proof is
+      editable, no single goal display.
+    </p>
+    <aufbau-proof
+      theory-src="./fixtures/hilbert.mm0"
+      src="./fixtures/hilbert.auf"
+      max-height="24rem"
+    ></aufbau-proof>
+
+    <script type="module">
+      import "@aufbau/editor";
+    </script>
+  </body>
+</html>

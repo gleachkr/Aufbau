@@ -1275,6 +1275,44 @@ test "compiler rejects out-of-order and extra proof blocks" {
     try std.testing.expectError(error.ExtraProofBlock, extra.check());
 }
 
+test "compiler accepts trailing local lemmas with no anchor" {
+    // A local lemma after the last public block has nothing to anchor to, but
+    // it is self-contained; it should be checked/emitted, not rejected.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+    ;
+
+    var trailing = Compiler.initWithProof(std.testing.allocator, mm0_src,
+        \\first
+        \\-----
+        \\l1: $ top $ by top_i []
+        \\
+        \\lemma tail_lemma: $ top $
+        \\------------------------
+        \\l1: $ top $ by top_i []
+    );
+    const trailing_mmb = try trailing.compileMmb(std.testing.allocator);
+    std.testing.allocator.free(trailing_mmb);
+
+    // A lemmas-only proof against a theorem-free theory is also fine (the
+    // embeddable-editor "isolated lemma cell" case).
+    const axioms_only =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+    ;
+    var solo = Compiler.initWithProof(std.testing.allocator, axioms_only,
+        \\lemma solo: $ top $
+        \\-------------------
+        \\l1: $ top $ by top_i []
+    );
+    const solo_mmb = try solo.compileMmb(std.testing.allocator);
+    std.testing.allocator.free(solo_mmb);
+}
+
 test "compiler records proof diagnostics for failing proof lines" {
     const mm0_src =
         \\delimiter $ ( ) $;

@@ -232,7 +232,7 @@ fn analyzeInternal(
     };
 
     if (state.proof) |*proof| {
-        try analyzeExtraProofBlocks(self, proof);
+        try analyzeExtraProofBlocks(self, allocator, &state, proof);
     }
 }
 
@@ -1013,6 +1013,8 @@ fn analyzeTheoremProof(
 
 fn analyzeExtraProofBlocks(
     self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    state: *AnalysisState,
     proof: *ProofAnalysisState,
 ) !void {
     if (proof.exhausted and proof.pending.items.len == 0) return;
@@ -1036,6 +1038,15 @@ fn analyzeExtraProofBlocks(
             }
             continue;
         } orelse return;
+
+        // Trailing local items (lemmas, local defs) have nothing to anchor to
+        // at end of stream, but they are self-contained; process them so they
+        // are checked (and, on the compile path, emitted) rather than flagged.
+        if (isLocalProofItem(item)) {
+            try analyzeLocalProofItem(self, allocator, state, proof, item);
+            continue;
+        }
+
         switch (item) {
             .block => |block| {
                 if (proof.invalid_rules.contains(block.name)) {

@@ -22,9 +22,9 @@ const Output = Common.Output;
 const ProofItemStream = Common.ProofItemStream;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
 const drainAnchoredLocalProofItems = Common.drainAnchoredLocalProofItems;
+const drainTrailingLocalProofItems = Common.drainTrailingLocalProofItems;
 const fillPublicDefBody = Common.fillPublicDefBody;
 const processAssertion = Common.processAssertion;
-const setExtraProofItemDiagnostic = Common.setExtraProofItemDiagnostic;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
 pub fn run(
@@ -276,14 +276,19 @@ pub fn run(
     };
 
     if (proof_stream) |*proofs| {
-        const item = proofs.next() catch |err| {
-            self.setDiagnostic(CompilerDiag.proofParserDiagnostic(
-                &proofs.parser,
-                null,
-                err,
-            ));
-            return err;
-        } orelse return;
-        return setExtraProofItemDiagnostic(self, item);
+        try drainTrailingLocalProofItems(
+            self,
+            allocator,
+            &parser,
+            &env,
+            &registry,
+            &rule_catalog,
+            &fresh_bindings,
+            &freshen_bindings,
+            &views,
+            &sort_vars,
+            proofs,
+            emit,
+        );
     }
 }
