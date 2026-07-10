@@ -25,6 +25,7 @@ const FreshDecl = FreshSelect.FreshDecl;
 const FreshenDecl = FreshSelect.FreshenDecl;
 const CompilerDiag = @import("./diag.zig");
 const CompilerContext = @import("./context.zig").CompilerContext;
+const HoleInferenceSink = @import("./context.zig").HoleInferenceSink;
 const DiagnosticSink = @import("./diagnostic_sink.zig").DiagnosticSink;
 const Normalize = @import("./normalize.zig");
 const ViewTrace = @import("../view_trace.zig");
@@ -272,6 +273,20 @@ pub fn checkTheoremBlock(
             &theorem_vars,
         );
 
+        if (parsed_assertion == .holey) {
+            try collectHoleInferences(
+                self,
+                allocator,
+                parser,
+                theorem,
+                env,
+                &theorem_vars,
+                line,
+                parsed_assertion.holey,
+                checked.items[attempt.line_idx].expr,
+            );
+        }
+
         try labels.put(line.label, attempt.line_idx);
         last_line = checked.items[attempt.line_idx].expr;
         last_line_idx = attempt.line_idx;
@@ -363,6 +378,93 @@ pub fn checkTheoremBlock(
         return error.FinalLineMismatch;
     }
     return try checked.toOwnedSlice(allocator);
+}
+
+fn collectHoleInferences(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    theorem_vars: *const NameExprMap,
+    line: ProofLine,
+    surface: *const Expr,
+    concrete: ExprId,
+) !void {
+    const sink = self.hole_inference_sink orelse return;
+    var names = try ViewTrace.DiagNames.build(
+        allocator,
+        theorem,
+        parser,
+        theorem_vars,
+    );
+    defer names.deinit(allocator);
+    try collectHoleInferencesRecursive(
+        sink,
+        theorem,
+        env,
+        &names,
+        line.assertion.span.start + 1,
+        surface,
+        concrete,
+    );
+}
+
+fn collectHoleInferencesRecursive(
+    sink: *HoleInferenceSink,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names: *const ViewTrace.DiagNames,
+    math_start: usize,
+    surface: *const Expr,
+    concrete: ExprId,
+) !void {
+    switch (surface.*) {
+        .hole => |hole| {
+            const token_span = hole.token_span orelse return;
+            const expression = try ViewTrace.formatExprNamed(
+                sink.allocator,
+                theorem,
+                env,
+                names,
+                concrete,
+            );
+            try sink.addOwned(
+                .{
+                    .start = math_start + token_span.start,
+                    .end = math_start + token_span.end,
+                },
+                expression,
+            );
+        },
+        .variable => {},
+        .term => |surface_app| {
+            const concrete_app = switch (theorem.interner.node(concrete).*) {
+                .app => |app| app,
+                else => return,
+            };
+            if (surface_app.id != concrete_app.term_id or
+                surface_app.args.len != concrete_app.args.len)
+            {
+                return;
+            }
+            for (surface_app.args, concrete_app.args) |
+                surface_arg,
+                concrete_arg,
+            | {
+                if (!Holes.contains(surface_arg)) continue;
+                try collectHoleInferencesRecursive(
+                    sink,
+                    theorem,
+                    env,
+                    names,
+                    math_start,
+                    surface_arg,
+                    concrete_arg,
+                );
+            }
+        },
+    }
 }
 
 fn parseProofLineAssertion(

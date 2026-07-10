@@ -1180,6 +1180,60 @@ test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
     ));
 }
 
+test "LSP proof hole hover shows the inferred expression" {
+    const mm0_uri = "file:///tmp/lsp-hole-hover.mm0";
+    const proof_uri = "file:///tmp/lsp-hole-hover.auf";
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\term pair (a b: wff): wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom select_right (a b: wff): $ pair a b $ > $ b $;
+        \\theorem main (p r s: wff):
+        \\  $ pair p (r -> s) $ > $ r -> s $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ _wff $ by select_right [#1]
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const hover_result = try handler.@"textDocument/hover"(
+        arena_state.allocator(),
+        .{
+            .textDocument = .{ .uri = proof_uri },
+            .position = try testPosition(proof_text, "_wff"),
+        },
+    );
+    const hover = hover_result orelse return error.ExpectedHover;
+    const range = hover.range orelse return error.ExpectedHoverRange;
+    try expectRangeText(proof_text, range, "_wff");
+
+    const rendered = switch (hover.contents) {
+        .MarkupContent => |content| content.value,
+        else => return error.ExpectedMarkdownHover,
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        rendered,
+        1,
+        "$ r -> s $",
+    ));
+}
+
 test "LSP proof hover resolves rule applications" {
     const mm0_uri = "file:///tmp/lsp-stage2.mm0";
     const proof_uri = "file:///tmp/lsp-stage2.auf";

@@ -1,7 +1,9 @@
 const std = @import("std");
 
 const completion = @import("completion.zig");
+const CompilerModule = @import("../compiler.zig");
 const Builder = @import("builder.zig").Builder;
+const markdown = @import("markdown.zig");
 const model = @import("model.zig");
 const notation = @import("notation.zig");
 const Types = @import("types.zig");
@@ -28,6 +30,11 @@ const ProofLineDecl = model.ProofLineDecl;
 const ProofApplicationInfo = model.ProofApplicationInfo;
 const NotationCompletionDecl = notation.NotationCompletionDecl;
 
+const InferredHoleHover = struct {
+    range: SourceRange,
+    markdown: []const u8,
+};
+
 pub const Snapshot = struct {
     arena: std.heap.ArenaAllocator,
     mm0_uri: []const u8,
@@ -37,6 +44,7 @@ pub const Snapshot = struct {
     declarations: []const Declaration,
     decl_by_name: std.StringHashMapUnmanaged(usize),
     symbols: []const NavigationSymbol,
+    inferred_hole_hovers: []const InferredHoleHover,
     mm0_outline: []const OutlineSymbol,
     proof_outline: []const OutlineSymbol,
     proof_blocks: []const ProofBlockInfo,
@@ -72,6 +80,10 @@ pub const Snapshot = struct {
         if (proof_text) |text| {
             try builder.indexProof(text);
         }
+        const inferred_hole_hovers = if (proof_text) |text|
+            try buildInferredHoleHovers(arena, mm0_text, text)
+        else
+            &.{};
 
         return .{
             .arena = arena_state,
@@ -82,6 +94,7 @@ pub const Snapshot = struct {
             .declarations = try builder.declarations.toOwnedSlice(arena),
             .decl_by_name = builder.decl_by_name,
             .symbols = try builder.symbols.toOwnedSlice(arena),
+            .inferred_hole_hovers = inferred_hole_hovers,
             .mm0_outline = try builder.mm0_outline.toOwnedSlice(arena),
             .proof_outline = try builder.proof_outline.toOwnedSlice(arena),
             .proof_blocks = try builder.proof_blocks.toOwnedSlice(arena),
@@ -104,6 +117,16 @@ pub const Snapshot = struct {
         document: DocumentId,
         offset: usize,
     ) ?HoverResult {
+        if (document == .proof) {
+            for (self.inferred_hole_hovers) |hover| {
+                if (rangeContains(hover.range, document, offset)) {
+                    return .{
+                        .range = hover.range,
+                        .markdown = hover.markdown,
+                    };
+                }
+            }
+        }
         const hit = self.lookupAt(document, offset) orelse return null;
         return .{
             .range = hit.source_range,
@@ -260,6 +283,46 @@ pub const Snapshot = struct {
         return null;
     }
 };
+
+fn buildInferredHoleHovers(
+    allocator: std.mem.Allocator,
+    mm0_text: []const u8,
+    proof_text: []const u8,
+) ![]const InferredHoleHover {
+    if (std.mem.indexOf(u8, mm0_text, "@hole") == null) return &.{};
+
+    var sink = CompilerModule.HoleInferenceSink{
+        .allocator = allocator,
+    };
+    defer sink.deinit();
+
+    var compiler = CompilerModule.Compiler.initWithProof(
+        allocator,
+        mm0_text,
+        proof_text,
+    );
+    compiler.allow_search_placeholders = true;
+    compiler.hole_inference_sink = &sink;
+    compiler.analyze() catch |err| {
+        if (err == error.OutOfMemory) return err;
+    };
+
+    var hovers = std.ArrayListUnmanaged(InferredHoleHover){};
+    for (sink.items.items) |inference| {
+        try hovers.append(allocator, .{
+            .range = .{
+                .document = .proof,
+                .start = inference.span.start,
+                .end = inference.span.end,
+            },
+            .markdown = try markdown.inferredHoleMarkdown(
+                allocator,
+                inference.expression,
+            ),
+        });
+    }
+    return try hovers.toOwnedSlice(allocator);
+}
 
 fn rangeContains(range: SourceRange, document: DocumentId, offset: usize) bool {
     return range.document == document and offset >= range.start and

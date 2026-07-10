@@ -1031,6 +1031,104 @@ test "hover returns markdown and source token range" {
     ));
 }
 
+test "proof hole hover shows the inferred expression" {
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\term pair (a b: wff): wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom select_right (a b: wff): $ pair a b $ > $ b $;
+        \\theorem main (p r s: wff):
+        \\  $ pair p (r -> s) $ > $ r -> s $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ _wff $ by select_right [#1]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const offset =
+        (std.mem.indexOf(u8, proof_text, "_wff") orelse unreachable) + 1;
+    const hover = snapshot.hoverAt(.proof, offset) orelse {
+        return error.MissingInferredHoleHover;
+    };
+    try std.testing.expectEqualStrings(
+        "_wff",
+        snapshot.proof_text.?[hover.range.start..hover.range.end],
+    );
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "$ r -> s $",
+    ));
+}
+
+test "proof hole hovers are independent for each occurrence" {
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\term pair (a b: wff): wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom keep_pair (a b: wff):
+        \\  $ pair a b $ > $ pair a b $;
+        \\theorem main (p r s: wff):
+        \\  $ pair p (r -> s) $ > $ pair p (r -> s) $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ pair _wff _wff $ by keep_pair [#1]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const first_offset = std.mem.indexOf(u8, proof_text, "_wff") orelse {
+        return error.MissingFirstHole;
+    };
+    const second_offset = std.mem.lastIndexOf(u8, proof_text, "_wff") orelse {
+        return error.MissingSecondHole;
+    };
+    try std.testing.expect(first_offset != second_offset);
+
+    const first = snapshot.hoverAt(.proof, first_offset + 1) orelse {
+        return error.MissingFirstHoleHover;
+    };
+    const second = snapshot.hoverAt(.proof, second_offset + 1) orelse {
+        return error.MissingSecondHoleHover;
+    };
+    try std.testing.expectEqual(first_offset, first.range.start);
+    try std.testing.expectEqual(second_offset, second.range.start);
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        first.markdown,
+        1,
+        "$ p $",
+    ));
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        second.markdown,
+        1,
+        "$ r -> s $",
+    ));
+}
+
 test "global hover shows definition bodies and assertion formulas" {
     const text =
         \\provable sort wff;

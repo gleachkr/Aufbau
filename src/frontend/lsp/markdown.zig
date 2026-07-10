@@ -11,6 +11,17 @@ const findStatementByte = source.findStatementByte;
 const nextMathStringIn = source.nextMathStringIn;
 const trimMathWhitespace = source.trimMathWhitespace;
 
+pub fn inferredHoleMarkdown(
+    allocator: std.mem.Allocator,
+    expression: []const u8,
+) ![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "Inferred expression:\n\n```mm0\n$ {s} $\n```",
+        .{expression},
+    );
+}
+
 pub fn sortMarkdown(
     allocator: std.mem.Allocator,
     sort: parse.SortStmt,

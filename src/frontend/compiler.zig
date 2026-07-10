@@ -4,11 +4,15 @@ const CompilerDiag = @import("./compiler/diag.zig");
 const Pipeline = @import("./compiler/pipeline.zig");
 const DiagnosticSink = @import("./compiler/diagnostic_sink.zig")
     .DiagnosticSink;
-const CompilerContext = @import("./compiler/context.zig").CompilerContext;
+const Context = @import("./compiler/context.zig");
+const CompilerContext = Context.CompilerContext;
 const DebugConfig = @import("./debug.zig").DebugConfig;
 
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
+
+pub const HoleInference = Context.HoleInference;
+pub const HoleInferenceSink = Context.HoleInferenceSink;
 
 pub const Compiler = struct {
     pub const max_warnings = DiagnosticSink.max_warnings;
@@ -21,6 +25,7 @@ pub const Compiler = struct {
     diagnostics: DiagnosticSink,
     debug: DebugConfig,
     allow_search_placeholders: bool,
+    hole_inference_sink: ?*HoleInferenceSink,
 
     const PipelineOutput = Pipeline.Output;
 
@@ -51,6 +56,7 @@ pub const Compiler = struct {
             .diagnostics = DiagnosticSink.init(source, proof_source),
             .debug = DebugConfig.none,
             .allow_search_placeholders = false,
+            .hole_inference_sink = null,
         };
     }
 
@@ -175,6 +181,7 @@ pub const Compiler = struct {
             &self.diagnostics,
         );
         result.allow_search_placeholders = self.allow_search_placeholders;
+        result.hole_inference_sink = self.hole_inference_sink;
         return result;
     }
 };

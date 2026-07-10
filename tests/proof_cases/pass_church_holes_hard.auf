@@ -82,7 +82,7 @@ l3: $ _wff $ by sym [l2]
 l4: $ G , y: A , x: A ⊩ t: B $ by weaken [#1]
 l5: $ G , y: A ⊩ y: A $ by ax
 l6: $ G , y: A , ≃[A] x = y ⊩ ≃[B] t = u $ by weaken [#3]
-l7: $ G , y: A ⊩ ≃[B] (λ x: A. t) · y = u $ by betacv [l4, l5, #2, l6]
+l7: $ _wff $ by betacv [l4, l5, #2, l6]
 l8: $ _wff $ by leqt [l7]
 l9: $ _wff $ by trans [l3, l8]
 
@@ -158,16 +158,9 @@ l1: $ G ⊩ ≃[𝔹 → 𝔹 → 𝔹] and =
       (λ x: 𝔹. λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
         (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
         (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) $ by AND_DEF
-l2: $ G ⊩ ≃[𝔹 → 𝔹] and · p =
-      ((λ x: 𝔹. λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) · p) $ by aeq1 [l1, #1]
-l3: $ G ⊩ λ x: 𝔹. λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T): 𝔹 → 𝔹 → 𝔹 $ by eqTR2 [l1]
-l4: $ G , x: 𝔹 ⊩ λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T): 𝔹 → 𝔹 $ by lamTR [l3]
+l2: $ _wff $ by aeq1 [l1, #1]
+l3: $ _wff $ by eqTR2 [l1]
+l4: $ _wff $ by lamTR [l3]
 l5: $ G , y: 𝔹 , f: 𝔹 → 𝔹 → 𝔹 ⊩ f: 𝔹 → 𝔹 → 𝔹 $ by ax
 l6: $ G , y: 𝔹 ⊩ y: 𝔹 $ by ax
 l7: $ G , y: 𝔹 , f: 𝔹 → 𝔹 → 𝔹 ⊩ p: 𝔹 $ by weaken [#1]
@@ -180,16 +173,11 @@ l13: $ G , f: 𝔹 → 𝔹 → 𝔹 ⊩ T: 𝔹 $ by weaken [l11]
 l14: $ _wff $ by appT [l12, l13]
 l15: $ _wff $ by appT [l14, l13]
 l16: $ _wff $ by lamT [l15]
-l17: $ G , y: 𝔹 ⊩ λ f: 𝔹 → 𝔹 → 𝔹. f · p · y:
-      (𝔹 → 𝔹 → 𝔹) → 𝔹 $ by lamT [l10]
+l17: $ _wff $ by lamT [l10]
 l18: $ G , y: 𝔹 ⊩ λ f: 𝔹 → 𝔹 → 𝔹. f · T · T:
       (𝔹 → 𝔹 → 𝔹) → 𝔹 $ by weaken [l16]
-l19: $ G , y: 𝔹 ⊩ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T): 𝔹 $ by eqcT [l17, l18]
-l20: $ G ⊩ λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T): 𝔹 → 𝔹 $ by lamT [l19]
+l19: $ _wff $ by eqcT [l17, l18]
+l20: $ _wff $ by lamT [l19]
 l21: $ G , ≃[𝔹] x = p ⊩ ≃[𝔹] x = p $ by ax
 l22: $ G , ≃[𝔹] x = p , y: 𝔹 ⊩ ≃[𝔹] x = p $ by weaken [l21]
 l23: $ G , ≃[𝔹] x = p , y: 𝔹 , f: 𝔹 → 𝔹 → 𝔹 ⊩ ≃[𝔹] x = p $ by weaken [l22]
@@ -205,74 +193,31 @@ l29: $ G , ≃[𝔹] x = p , y: 𝔹 ⊩ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
       (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) $ by leqt [l28]
 l30: $ G , ≃[𝔹] x = p , y: 𝔹 ⊩ eq ((𝔹 → 𝔹 → 𝔹) → 𝔹):
       ((𝔹 → 𝔹 → 𝔹) → 𝔹) → ((𝔹 → 𝔹 → 𝔹) → 𝔹) → 𝔹 $ by eqT
-l31: $ G , ≃[𝔹] x = p , y: 𝔹 ⊩
-      ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) ⇔
-      ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) $ by bineq1 [l30, l29, l27]
-l32: $ G , ≃[𝔹] x = p ⊩ ≃[𝔹 → 𝔹]
-      (λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) =
-      (λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) $ by leqt [l31]
-l33: $ G ⊩ ≃[𝔹 → 𝔹]
-      ((λ x: 𝔹. λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · x · y) =
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) · p) =
-      (λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) $ by betacv [l4, #1, l20, l32]
-l34: $ G ⊩ ≃[𝔹 → 𝔹] and · p =
-      (λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) $ by trans [l2, l33]
+l31: $ _wff $ by bineq1 [l30, l29, l27]
+l32: $ _wff $ by leqt [l31]
+l33: $ _wff $ by betacv [l4, #1, l20, l32]
+l34: $ _wff $ by trans [l2, l33]
 l35: $ G , f: 𝔹 → 𝔹 → 𝔹 ⊩ f: 𝔹 → 𝔹 → 𝔹 $ by ax
 l36: $ G , f: 𝔹 → 𝔹 → 𝔹 ⊩ p: 𝔹 $ by weaken [#1]
 l37: $ G , f: 𝔹 → 𝔹 → 𝔹 ⊩ q: 𝔹 $ by weaken [#2]
 l38: $ _wff $ by appT [l35, l36]
 l39: $ _wff $ by appT [l38, l37]
 l40: $ _wff $ by lamT [l39]
-l41: $ G ⊩ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T): 𝔹 $ by eqcT [l40, l16]
+l41: $ _wff $ by eqcT [l40, l16]
 l42: $ G , ≃[𝔹] y = q ⊩ ≃[𝔹] y = q $ by ax
 l43: $ G , ≃[𝔹] y = q , f: 𝔹 → 𝔹 → 𝔹 ⊩ ≃[𝔹] y = q $ by weaken [l42]
 l44: $ G , ≃[𝔹] y = q , f: 𝔹 → 𝔹 → 𝔹 ⊩ f: 𝔹 → 𝔹 → 𝔹 $ by ax
 l45: $ G , ≃[𝔹] y = q , f: 𝔹 → 𝔹 → 𝔹 ⊩ p: 𝔹 $ by weaken [#1]
-l46: $ G , ≃[𝔹] y = q , f: 𝔹 → 𝔹 → 𝔹 ⊩
-      ≃[𝔹] f · p · y = f · p · q $ by bineq2 [l44, l45, l43]
-l47: $ G , ≃[𝔹] y = q ⊩ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) $ by leqt [l46]
+l46: $ _wff $ by bineq2 [l44, l45, l43]
+l47: $ _wff $ by leqt [l46]
 l48: $ G , ≃[𝔹] y = q ⊩ λ f: 𝔹 → 𝔹 → 𝔹. f · T · T:
       (𝔹 → 𝔹 → 𝔹) → 𝔹 $ by weaken [l16]
 l49: $ G , ≃[𝔹] y = q ⊩ eq ((𝔹 → 𝔹 → 𝔹) → 𝔹):
       ((𝔹 → 𝔹 → 𝔹) → 𝔹) → ((𝔹 → 𝔹 → 𝔹) → 𝔹) → 𝔹 $ by eqT
-l50: $ G , ≃[𝔹] y = q ⊩
-      ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) ⇔
-      ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) $ by bineq1 [l49, l47, l48]
-l51: $ G ⊩ ≃[𝔹]
-      ((λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) · q) =
-      ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) =
-        (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) $ by betacv [l19, #2, l41, l50]
-l52: $ G ⊩ ≃[𝔹] and · p · q =
-      ((λ y: 𝔹. ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · p · y) =
-          (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T)) · q) $ by aeq1 [l34, #2]
-l53: $ G ⊩ p ⋏ q ⇔ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) $ by trans [l52, l51]
+l50: $ _wff $ by bineq1 [l49, l47, l48]
+l51: $ _wff $ by betacv [l19, #2, l41, l50]
+l52: $ _wff $ by aeq1 [l34, #2]
+l53: $ _wff $ by trans [l52, l51]
 
 CONJ
 -----
@@ -290,9 +235,7 @@ lq: $ G , f: 𝔹 → 𝔹 → 𝔹 ⊩ q $ by weaken [#2]
 l10: $ _wff $ by EQT_INTRO [lp]
 l11: $ _wff $ by EQT_INTRO [lq]
 l12: $ _wff $ by bineq [l3, l10, l11]
-l13: $ G ⊩ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) =
-      (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) $ by leqt [l12]
+l13: $ _wff $ by leqt [l12]
 l14: $ G ⊩ p ⋏ q ⇔ ≃[(𝔹 → 𝔹 → 𝔹) → 𝔹]
       (λ f: 𝔹 → 𝔹 → 𝔹. f · p · q) =
       (λ f: 𝔹 → 𝔹 → 𝔹. f · T · T) $ by andc_def [l1, l2]
@@ -1169,17 +1112,17 @@ l2: $ _wff $ by eqTR2 [#1]
 l3: $ G , p ⊩ p ⇔ q $ by weaken [#1]
 l4: $ G , p ⊩ p $ by ax
 l5: $ _wff $ by eqmp [l3, l4]
-l6: $ G ⊩ p ⇒ q $ by DISCH [l1, l2, l5]
+l6: $ _wff $ by DISCH [l1, l2, l5]
 
 EQ_IMP2
 --------
-l1: $ G ⊩ q ⇔ p $ by sym [#1]
-l2: $ G ⊩ q ⇒ p $ by EQ_IMP1 [l1]
+l1: $ _wff $ by sym [#1]
+l2: $ _wff $ by EQ_IMP1 [l1]
 
 IMP_ID
 -------
 l1: $ G , p ⊩ p $ by ax
-l2: $ G ⊩ p ⇒ p $ by DISCH [#1, #1, l1]
+l2: $ _wff $ by DISCH [#1, #1, l1]
 
 IMP_TRANS
 ----------
@@ -1190,17 +1133,17 @@ l4: $ G , p ⊩ p $ by ax
 l5: $ _wff $ by MP [l3, l4]
 l6: $ G , p ⊩ q ⇒ r $ by weaken [#2]
 l7: $ _wff $ by MP [l6, l5]
-l8: $ G ⊩ p ⇒ r $ by DISCH [l1, l2, l7]
+l8: $ _wff $ by DISCH [l1, l2, l7]
 
 CONJ_COMM
 ----------
-l1: $ G ⊩ p ⋏ q: 𝔹 $ by andcT [#1, #2]
-l2: $ G ⊩ q ⋏ p: 𝔹 $ by andcT [#2, #1]
+l1: $ _wff $ by andcT [#1, #2]
+l2: $ _wff $ by andcT [#2, #1]
 l3: $ G , p ⋏ q ⊩ p ⋏ q $ by ax
 l4: $ _wff $ by CONJUNCT2 [l3]
 l5: $ _wff $ by CONJUNCT1 [l3]
-l6: $ G , p ⋏ q ⊩ q ⋏ p $ by CONJ [l4, l5]
-l7: $ G ⊩ p ⋏ q ⇒ q ⋏ p $ by DISCH [l1, l2, l6]
+l6: $ _wff $ by CONJ [l4, l5]
+l7: $ _wff $ by DISCH [l1, l2, l6]
 
 CONJ_ASSOC
 -----------
@@ -1222,26 +1165,26 @@ IMP_CONJ_CHAIN
 l1: $ _wff $ by impR1 [#1]
 l2: $ _wff $ by impR1 [#2]
 l3: $ _wff $ by impR2 [#2]
-l4: $ G ⊩ q ⋏ r: 𝔹 $ by andcT [l2, l3]
+l4: $ _wff $ by andcT [l2, l3]
 l5: $ _wff $ by UNDISCH [#1]
 l6: $ G , p ⊩ q ⇒ r $ by weaken [#2]
 l7: $ _wff $ by MP [l6, l5]
-l8: $ G , p ⊩ q ⋏ r $ by CONJ [l5, l7]
-l9: $ G ⊩ p ⇒ q ⋏ r $ by DISCH [l1, l4, l8]
+l8: $ _wff $ by CONJ [l5, l7]
+l9: $ _wff $ by DISCH [l1, l4, l8]
 
 EQF_INTRO
 ----------
-l1: $ G ⊩ p: 𝔹 $ by notR [#1]
-l2: $ G ⊩ p ⇒ F $ by NOT_ELIM [#1]
+l1: $ _wff $ by notR [#1]
+l2: $ _wff $ by NOT_ELIM [#1]
 l3: $ G , F ⊩ p: 𝔹 $ by weaken [l1]
 l4: $ G , F ⊩ F $ by ax
-l5: $ G , F ⊩ p $ by CONTR [l3, l4]
+l5: $ _wff $ by CONTR [l3, l4]
 l6: $ G ⊩ F: 𝔹 $ by FT
-l7: $ G ⊩ F ⇒ p $ by DISCH [l6, l1, l5]
-l8: $ G ⊩ p ⇔ F $ by IMP_ANTISYM [l2, l7]
+l7: $ _wff $ by DISCH [l6, l1, l5]
+l8: $ _wff $ by IMP_ANTISYM [l2, l7]
 
 EQF_ELIM
 ---------
-l1: $ G ⊩ p ⇒ F $ by EQ_IMP1 [#1]
+l1: $ _wff $ by EQ_IMP1 [#1]
 l2: $ _wff $ by eqTR1 [#1]
-l3: $ G ⊩ ¬ p $ by NOT_INTRO [l2, l1]
+l3: $ _wff $ by NOT_INTRO [l2, l1]

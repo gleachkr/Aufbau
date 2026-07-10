@@ -1,3 +1,5 @@
+const std = @import("std");
+
 const DebugConfig = @import("../debug.zig").DebugConfig;
 const DiagnosticSink = @import("./diagnostic_sink.zig").DiagnosticSink;
 const CompilerDiag = @import("./diag.zig");
@@ -6,12 +8,43 @@ const DiagnosticPhase = CompilerDiag.DiagnosticPhase;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const Span = @import("../proof_script.zig").Span;
 
+pub const HoleInference = struct {
+    span: Span,
+    expression: []const u8,
+};
+
+pub const HoleInferenceSink = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayListUnmanaged(HoleInference) = .{},
+
+    pub fn deinit(self: *HoleInferenceSink) void {
+        for (self.items.items) |item| {
+            self.allocator.free(item.expression);
+        }
+        self.items.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn addOwned(
+        self: *HoleInferenceSink,
+        span: Span,
+        expression: []const u8,
+    ) !void {
+        errdefer self.allocator.free(expression);
+        try self.items.append(self.allocator, .{
+            .span = span,
+            .expression = expression,
+        });
+    }
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
     debug: DebugConfig,
     diagnostics: *DiagnosticSink,
     allow_search_placeholders: bool = false,
+    hole_inference_sink: ?*HoleInferenceSink = null,
 
     pub fn init(
         source: []const u8,
