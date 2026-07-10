@@ -102,7 +102,12 @@ pub fn suggestionsAtSourceOffset(
     defer work_arena.deinit();
     const work = work_arena.allocator();
 
-    const target = try findSearchLine(work, proof_src, offset) orelse {
+    const target = try findSearchLine(
+        work,
+        proof_src,
+        offset,
+        options.apply_at_offset,
+    ) orelse {
         return .{ .allocator = allocator, .items = &.{} };
     };
     var fixture = try fixtureForSourceTarget(
@@ -235,8 +240,10 @@ pub fn suggestionsAtSourceOffset(
     else
         line_goal;
 
-    const is_exact = std.mem.eql(u8, target_application.rule_name, "exact?");
-    const is_auto = std.mem.eql(u8, target_application.rule_name, "auto?");
+    const is_exact = !options.apply_at_offset and
+        std.mem.eql(u8, target_application.rule_name, "exact?");
+    const is_auto = !options.apply_at_offset and
+        std.mem.eql(u8, target_application.rule_name, "auto?");
     // `auto?` shares `exact?`'s direct-search dispatch; generation is layered on
     // top of the direct results below.
     const is_exact_like = is_exact or is_auto;
@@ -337,6 +344,10 @@ pub fn suggestionsAtSourceOffset(
         work,
         results.candidates,
         target_application.span,
+        if (options.apply_at_offset)
+            target_application.rule_name
+        else
+            "apply?",
     );
     apply_suggestions.target_span = match_span;
     apply_suggestions.status = searchStatus(
@@ -460,10 +471,21 @@ fn findSearchLine(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
     offset: usize,
+    apply_at_offset: bool,
 ) !?SourceTarget {
     var parser = ProofParser.init(allocator, proof_src);
     while (try parser.nextBlock()) |block| {
         for (block.lines, 0..) |line, line_index| {
+            if (apply_at_offset and spanContains(
+                line.application.rule_span,
+                offset,
+            )) {
+                return .{
+                    .block = block,
+                    .line_index = line_index,
+                    .path = &.{},
+                };
+            }
             if (ProofScript.isSearchPlaceholderRuleName(
                 line.application.rule_name,
             )) {
@@ -487,6 +509,7 @@ fn findSearchLine(
                 allocator,
                 line.application,
                 offset,
+                apply_at_offset,
             )) |path| {
                 return .{
                     .block = block,
@@ -503,19 +526,28 @@ fn findNestedSearchPath(
     allocator: std.mem.Allocator,
     application: RuleApplication,
     offset: usize,
+    apply_at_offset: bool,
 ) !?[]const usize {
     for (application.refs, 0..) |ref, idx| {
         const child = switch (ref) {
             .application => |app| app,
             .hyp, .line => continue,
         };
-        if (offset < child.span.start or offset > child.span.end) continue;
-        if (ProofScript.isSearchPlaceholderRuleName(child.rule_name)) {
+        if (!spanContains(child.span, offset)) continue;
+        if ((apply_at_offset and spanContains(child.rule_span, offset)) or
+            (!apply_at_offset and
+                ProofScript.isSearchPlaceholderRuleName(child.rule_name)))
+        {
             const path = try allocator.alloc(usize, 1);
             path[0] = idx;
             return path;
         }
-        if (try findNestedSearchPath(allocator, child, offset)) |suffix| {
+        if (try findNestedSearchPath(
+            allocator,
+            child,
+            offset,
+            apply_at_offset,
+        )) |suffix| {
             const path = try allocator.alloc(usize, suffix.len + 1);
             path[0] = idx;
             @memcpy(path[1..], suffix);
@@ -523,6 +555,10 @@ fn findNestedSearchPath(
         }
     }
     return null;
+}
+
+fn spanContains(span: Span, offset: usize) bool {
+    return offset >= span.start and offset <= span.end;
 }
 
 fn applicationAtPath(
@@ -777,6 +813,7 @@ fn renderApplySourceSuggestions(
     allocator: std.mem.Allocator,
     candidates: []const ApplyCandidate,
     replace_span: Span,
+    replaced_rule_name: []const u8,
 ) !SourceSuggestions {
     var items = std.ArrayListUnmanaged(SourceSuggestion){};
     errdefer deinitSourceSuggestionItems(allocator, items.items);
@@ -785,8 +822,8 @@ fn renderApplySourceSuggestions(
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
             allocator,
-            "Replace apply? with {s}",
-            .{replacement},
+            "Replace {s} with {s}",
+            .{ replaced_rule_name, replacement },
         );
         errdefer allocator.free(title);
         try items.append(allocator, .{

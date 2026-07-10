@@ -66,6 +66,22 @@ pub fn completionsAt(
     return try list.toOwnedSlice(allocator);
 }
 
+/// Whether `offset` is in a proof-rule completion position. This follows the
+/// same context precedence as `proofCompletionsAt`, so callers do not mistake
+/// theorem headers, bindings, references, comments, or math for rule uses.
+pub fn isProofRuleCompletionAt(self: anytype, offset: usize) bool {
+    const text = self.textForDocument(.proof) orelse return false;
+    const safe_offset = @min(offset, text.len);
+    if (lineCommentContextAt(text, safe_offset)) return false;
+    if (mathStringAt(text, safe_offset) != null) return false;
+    if (proofHeaderContextAt(text, safe_offset)) return false;
+    if (proofRuleApplicationAt(self, safe_offset) != null) return true;
+    if (proofBindingApplicationAt(self, safe_offset) != null) return false;
+    if (proofReferenceApplicationAt(self, safe_offset) != null) return false;
+    if (!proofRuleContextAt(text, safe_offset)) return false;
+    return proofBlockNear(self, safe_offset) != null;
+}
+
 fn completionReplacementRange(
     self: anytype,
     document: DocumentId,

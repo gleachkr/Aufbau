@@ -1271,6 +1271,11 @@ pub const GenerateOptions = struct {
 
 pub const SourceSuggestionOptions = struct {
     max_results: usize = 5,
+    /// Treat the ordinary rule application under the requested source offset
+    /// as an `apply?` target. This lets editor features reuse source search
+    /// without rewriting the proof document. The default still requires an
+    /// explicit search-placeholder rule name.
+    apply_at_offset: bool = false,
     /// Optional tighter cap for the single-proof modes (`exact?`/`auto?`), which
     /// want one best result, leaving `apply?` (a list of candidate rules) on the
     /// full `max_results`. When set, it also lets `exact?` short-circuit

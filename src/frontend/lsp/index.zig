@@ -222,6 +222,13 @@ pub const Snapshot = struct {
         );
     }
 
+    pub fn isProofRuleCompletionAt(
+        self: *const Snapshot,
+        offset: usize,
+    ) bool {
+        return completion.isProofRuleCompletionAt(self, offset);
+    }
+
     fn lookupAt(
         self: *const Snapshot,
         document: DocumentId,

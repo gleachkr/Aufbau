@@ -300,6 +300,61 @@ fn outcomeForPlaceholder(
     return null;
 }
 
+/// Filter static rule completions through the same conclusion probe as
+/// `apply?`. Search locates the ordinary application at `offset` and treats it
+/// as an apply target, preserving prior-line checking, local-lemma
+/// availability, and inline expected-goal inference.
+fn applicableRuleCompletions(
+    arena: std.mem.Allocator,
+    snapshot: *const LspIndex.Snapshot,
+    proof_src: []const u8,
+    offset: usize,
+    completions: []const LspIndex.CompletionItem,
+) ![]const LspIndex.CompletionItem {
+    if (completions.len == 0) return completions;
+
+    var suggestions = Search.suggestionsAtSourceOffset(
+        arena,
+        snapshot.mm0_text,
+        proof_src,
+        offset,
+        .{
+            .max_results = completions.len,
+            .apply_at_offset = true,
+        },
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        // Completion must remain useful while surrounding source is
+        // malformed. A recognized search target with no candidates is handled
+        // below and correctly returns an empty list; only setup/parse failure
+        // falls back.
+        else => return completions,
+    };
+    defer suggestions.deinit();
+    if (suggestions.target_span == null) return completions;
+
+    var filtered = std.ArrayListUnmanaged(LspIndex.CompletionItem){};
+    for (completions) |item| {
+        if (!searchOffersRule(suggestions.items, item.label)) continue;
+        try filtered.append(arena, item);
+    }
+    return try filtered.toOwnedSlice(arena);
+}
+
+fn searchOffersRule(
+    suggestions: []const Search.SourceSuggestion,
+    rule_name: []const u8,
+) bool {
+    for (suggestions) |suggestion| {
+        if (!std.mem.startsWith(u8, suggestion.replacement, rule_name)) {
+            continue;
+        }
+        if (suggestion.replacement.len == rule_name.len) return true;
+        if (suggestion.replacement[rule_name.len] == ' ') return true;
+    }
+    return false;
+}
+
 pub const Handler = struct {
     allocator: std.mem.Allocator,
     transport: *lsp.Transport,
@@ -583,12 +638,23 @@ pub const Handler = struct {
             params.position,
             self.offset_encoding,
         );
-        const completions = try nav.snapshot.completionsAt(
+        var completions = try nav.snapshot.completionsAt(
             arena,
             nav.document,
             offset,
             .{ .snippet_support = self.snippet_support },
         );
+        if (nav.document == .proof and
+            nav.snapshot.isProofRuleCompletionAt(offset))
+        {
+            completions = try applicableRuleCompletions(
+                arena,
+                nav.snapshot,
+                text,
+                offset,
+                completions,
+            );
+        }
         const items = try completionsToLsp(
             arena,
             nav.snapshot,

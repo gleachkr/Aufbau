@@ -1271,6 +1271,105 @@ test "LSP proof hover resolves rule applications" {
     ));
 }
 
+test "LSP completion returns only rules applicable to the line goal" {
+    const mm0_uri = "file:///tmp/lsp-applicable-completion.mm0";
+    const proof_uri = "file:///tmp/lsp-applicable-completion.auf";
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term bot: wff;
+        \\axiom top_i: $ top $;
+        \\axiom bot_i: $ bot $;
+        \\axiom keep: $ top $ > $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by ke
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const result = try handler.@"textDocument/completion"(
+        arena_state.allocator(),
+        .{
+            .textDocument = .{ .uri = proof_uri },
+            .position = lsp.offsets.indexToPosition(
+                proof_text,
+                proof_text.len,
+                .@"utf-16",
+            ),
+        },
+    );
+    const items = try expectCompletionItems(result);
+    try std.testing.expect(completionItemNamed(items, "top_i") != null);
+    try std.testing.expect(completionItemNamed(items, "keep") != null);
+    try std.testing.expect(completionItemNamed(items, "bot_i") == null);
+
+    const keep = completionItemNamed(items, "keep") orelse {
+        return error.MissingApplicableKeepCompletion;
+    };
+    try expectCompletionEditText(proof_text, keep, "ke", "keep");
+}
+
+test "LSP completion filters rules inside nested applications" {
+    const mm0_uri = "file:///tmp/lsp-nested-applicable-completion.mm0";
+    const proof_uri = "file:///tmp/lsp-nested-applicable-completion.auf";
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term bot: wff;
+        \\axiom top_i: $ top $;
+        \\axiom bot_i: $ bot $;
+        \\axiom keep: $ top $ > $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by keep [to []]
+    ;
+    const offset = (std.mem.indexOf(u8, proof_text, "to []") orelse {
+        return error.MissingNestedCompletionContext;
+    }) + "to".len;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const result = try handler.@"textDocument/completion"(
+        arena_state.allocator(),
+        .{
+            .textDocument = .{ .uri = proof_uri },
+            .position = lsp.offsets.indexToPosition(
+                proof_text,
+                offset,
+                .@"utf-16",
+            ),
+        },
+    );
+    const items = try expectCompletionItems(result);
+    try std.testing.expect(completionItemNamed(items, "top_i") != null);
+    try std.testing.expect(completionItemNamed(items, "bot_i") == null);
+}
+
 test "LSP completion returns explicit edits" {
     const mm0_uri = "file:///tmp/lsp-completion.mm0";
     const proof_uri = "file:///tmp/lsp-completion.auf";

@@ -575,6 +575,58 @@ test "source search records search counters" {
     try expectTimingCounter(counters.warm_search_ns);
 }
 
+test "source suggestions can apply at an ordinary rule offset" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom q: $ Q $;
+        \\axiom keep (a: wff): $ a $ > $ a $;
+        \\theorem t: $ P $;
+    ;
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ P $ by ke
+    ;
+    const rule_start = std.mem.indexOf(u8, proof_src, "ke") orelse {
+        return error.MissingNeedle;
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        rule_start + "ke".len,
+        .{ .apply_at_offset = true },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.target_span != null);
+    var found_p = false;
+    var found_keep = false;
+    for (suggestions.items) |item| {
+        try std.testing.expectEqualStrings(
+            "ke",
+            proof_src[item.replace_span.start..item.replace_span.end],
+        );
+        if (std.mem.eql(u8, item.replacement, "p")) found_p = true;
+        if (std.mem.startsWith(u8, item.replacement, "keep ")) {
+            found_keep = true;
+        }
+        try std.testing.expect(!std.mem.startsWith(
+            u8,
+            item.replacement,
+            "q",
+        ));
+    }
+    try std.testing.expect(found_p);
+    try std.testing.expect(found_keep);
+}
+
 test "source suggestions report found and miss status" {
     const mm0_src =
         \\delimiter $ ( ) $;
