@@ -14,10 +14,16 @@
   ],
   "peerDependencies": {
     "@aufbau/compiler": "*",
+    "@aufbau/lsp": "*",
     "@codemirror/view": "^6",
     "@codemirror/state": "^6",
     "@codemirror/commands": "^6",
-    "@codemirror/lint": "^6"
+    "@codemirror/lint": "^6",
+    "@codemirror/autocomplete": "^6"
+  },
+  "peerDependenciesMeta": {
+    "@aufbau/lsp": { "optional": true },
+    "@codemirror/autocomplete": { "optional": true }
   },
   "sideEffects": [
     "./index.js"

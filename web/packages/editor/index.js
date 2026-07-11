@@ -24,8 +24,9 @@ import {
   keymap,
   highlightActiveLine,
   drawSelection,
+  hoverTooltip,
 } from "@codemirror/view";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
 import {
   defaultKeymap,
   history,
@@ -45,6 +46,82 @@ function loadCompilerOnce() {
   if (!compilerPromise) compilerPromise = loadCompiler();
   return compilerPromise;
 }
+
+// ---------------------------------------------------------------------------
+// LSP interaction (hover + applicable-rule completion). Optional and lazy: the
+// wasm language server (a shared web worker) plus @codemirror/autocomplete are
+// dynamically imported the first time a cell is focused or moused over, so
+// readers who never touch a proof pay nothing, and a page that doesn't map
+// `@aufbau/lsp` just gets no tooltips. Compile feedback stays with the compiler
+// path — the server's publishDiagnostics notifications are ignored.
+// ---------------------------------------------------------------------------
+
+class LspRpc {
+  constructor(server) {
+    this.server = server;
+    this.nextId = 1;
+    this.pending = new Map();
+    server.subscribe((raw) => {
+      let msg;
+      try {
+        msg = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      const waiter = msg.id != null && this.pending.get(msg.id);
+      if (!waiter) return; // a notification (e.g. publishDiagnostics)
+      this.pending.delete(msg.id);
+      if (msg.error) waiter.reject(new Error(msg.error.message ?? "LSP error"));
+      else waiter.resolve(msg.result ?? null);
+    });
+  }
+
+  request(method, params) {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.server.send({ jsonrpc: "2.0", id, method, params });
+    });
+  }
+
+  notify(method, params) {
+    this.server.send({ jsonrpc: "2.0", method, params });
+  }
+}
+
+let lspPromise = null;
+function loadLspOnce() {
+  if (!lspPromise) {
+    lspPromise = (async () => {
+      const { loadLspServerWorker } = await import("@aufbau/lsp");
+      const rpc = new LspRpc(await loadLspServerWorker());
+      // No snippet support advertised → the server only sends plain-text edits.
+      await rpc.request("initialize", {
+        processId: null,
+        rootUri: "file:///aufbau-editor",
+        capabilities: {},
+      });
+      rpc.notify("initialized", {});
+      return rpc;
+    })();
+  }
+  return lspPromise;
+}
+
+let lspDocSeq = 0;
+
+// Map LSP CompletionItemKind numbers onto CodeMirror completion type names
+// (which drive the icons in the popup).
+const CM_COMPLETION_TYPES = {
+  2: "method", // axiom/theorem/lemma
+  3: "function", // term/def
+  6: "variable", // binder
+  7: "class", // sort
+  12: "constant", // hypothesis
+  14: "keyword",
+  18: "text", // proof-line reference
+  25: "keyword", // notation operator
+};
 
 // Registries: <aufbau-theory> elements by id, and documents by theory key.
 const theoryRegistry = new Map();
@@ -262,6 +339,7 @@ class AufbauDocument {
     this._theorySrc = representative.getAttribute("theory-src");
     this._theoryText = null;
     this._timer = null;
+    this._lsp = null;
   }
 
   register(cell) {
@@ -370,6 +448,71 @@ class AufbauDocument {
       });
     }
   }
+
+  // Prepare an LSP view of this document for one cell: sync the stitched
+  // `(mm0, auf)` pair to the language server as a sibling document pair, and
+  // return the request context — the auf uri plus the line delta that maps the
+  // cell's body-local positions into the stitched document. Restitched on every
+  // request (it's cheap) so hover/completion always see the live text.
+  async lspContext(cell) {
+    const [rpc, theory] = await Promise.all([loadLspOnce(), this.theoryText()]);
+    const cells = this.orderedCells().filter((c) => c.isReady());
+    const mm0 = stitch(
+      theory ?? "",
+      cells.map((c) => ({ id: c, text: c.mm0Fragment() })),
+      "\n",
+    );
+    const auf = stitch(
+      "",
+      cells.map((c) => ({ id: c, text: c.aufText() })),
+      "\n\n",
+    );
+
+    if (!this._lsp) {
+      const root = `file:///aufbau-editor/doc${lspDocSeq++}`;
+      this._lsp = {
+        mm0Uri: `${root}/current.mm0`,
+        aufUri: `${root}/current.auf`,
+        mm0Version: 0,
+        aufVersion: 0,
+        lastMm0: null,
+        lastAuf: null,
+      };
+    }
+    const s = this._lsp;
+    // The mm0 must be synced first: analyzing a proof reads its sibling .mm0.
+    if (s.lastMm0 !== mm0.text) {
+      s.lastMm0 = mm0.text;
+      syncLspDoc(rpc, s.mm0Uri, "mm0", ++s.mm0Version, mm0.text);
+    }
+    if (s.lastAuf !== auf.text) {
+      s.lastAuf = auf.text;
+      syncLspDoc(rpc, s.aufUri, "aufbau", ++s.aufVersion, auf.text);
+    }
+
+    const range = auf.ranges.find((r) => r.id === cell);
+    if (!range) return null;
+    const bodyCharStart =
+      byteToCharIndex(auf.text, range.start) + cell.prefixText().length;
+    let lineDelta = 0;
+    for (let i = 0; i < bodyCharStart; i += 1) {
+      if (auf.text.charCodeAt(i) === 10) lineDelta += 1;
+    }
+    return { rpc, uri: s.aufUri, lineDelta };
+  }
+}
+
+function syncLspDoc(rpc, uri, languageId, version, text) {
+  if (version === 1) {
+    rpc.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId, version, text },
+    });
+  } else {
+    rpc.notify("textDocument/didChange", {
+      textDocument: { uri, version },
+      contentChanges: [{ text }],
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +580,9 @@ class AufbauProof extends HTMLElement {
   prefixBytes() {
     return this._prefixBytesValue ?? 0;
   }
+  prefixText() {
+    return this._prefix ?? "";
+  }
   aufText() {
     const body = this._view ? this._view.state.doc.toString() : this._body;
     return this._prefix + body;
@@ -502,6 +648,16 @@ class AufbauProof extends HTMLElement {
     const onEdit = EditorView.updateListener.of((u) => {
       if (u.docChanged) this._doc.scheduleCheck(this);
     });
+    // LSP hover/completion live in a compartment that starts empty and is
+    // filled in the first time the reader shows intent (focus or mouse-over),
+    // so the language-server wasm is never loaded for a page that's only read.
+    this._interactions = new Compartment();
+    const wantLsp = this.getAttribute("lsp") !== "off";
+    // Must not return the promise: a truthy return tells CodeMirror the event
+    // was handled and would swallow every focus/pointerover.
+    const enable = () => {
+      void this.enableInteractions();
+    };
     this._view = new EditorView({
       parent: this._editorHost,
       state: EditorState.create({
@@ -516,9 +672,148 @@ class AufbauProof extends HTMLElement {
           EditorState.readOnly.of(readonly),
           EditorView.editable.of(!readonly),
           onEdit,
+          this._interactions.of([]),
+          wantLsp
+            ? EditorView.domEventHandlers({ focus: enable, pointerover: enable })
+            : [],
         ],
       }),
     });
+  }
+
+  // Load the language server + autocomplete module (both optional) and switch
+  // the interactions compartment on. Failures degrade to a plain editor.
+  async enableInteractions() {
+    if (this._lspBooted) return;
+    this._lspBooted = true;
+    try {
+      const readonly = this.hasAttribute("readonly");
+      const [, autocompleteMod] = await Promise.all([
+        loadLspOnce(),
+        readonly ? null : import("@codemirror/autocomplete"),
+      ]);
+      const exts = [
+        hoverTooltip((view, pos) => this._hoverTooltipAt(pos), {
+          hideOnChange: true,
+        }),
+      ];
+      if (autocompleteMod) {
+        exts.push(
+          autocompleteMod.autocompletion({
+            override: [(context) => this._completionSource(context)],
+          }),
+        );
+      }
+      this._view.dispatch({ effects: this._interactions.reconfigure(exts) });
+      this._lspReady = true;
+    } catch (err) {
+      console.warn("[aufbau-proof] LSP interactions unavailable:", err);
+    }
+  }
+
+  // Hover contents at a body-local position, via the stitched document.
+  // Public (and used by the hover tooltip) so pages/tests can drive it.
+  async lspHover(pos) {
+    const ctx = await this._doc.lspContext(this);
+    if (!ctx) return null;
+    const line = this._view.state.doc.lineAt(pos);
+    const result = await ctx.rpc.request("textDocument/hover", {
+      textDocument: { uri: ctx.uri },
+      position: {
+        line: ctx.lineDelta + line.number - 1,
+        character: pos - line.from,
+      },
+    });
+    if (!result || !result.contents) return null;
+    const value =
+      typeof result.contents === "string"
+        ? result.contents
+        : (result.contents.value ?? "");
+    const range = result.range
+      ? this._rangeFromStitched(result.range, ctx.lineDelta)
+      : null;
+    return { value, from: range?.from ?? pos, to: range?.to ?? pos };
+  }
+
+  _hoverTooltipAt(pos) {
+    return this.lspHover(pos)
+      .then((hover) => {
+        if (!hover || !hover.value.trim()) return null;
+        return {
+          pos: hover.from,
+          end: hover.to,
+          create: () => ({ dom: hoverDom(hover.value) }),
+        };
+      })
+      .catch(() => null);
+  }
+
+  // Completion options at a body-local position. Public for the same reason.
+  async lspCompletionsAt(pos) {
+    const ctx = await this._doc.lspContext(this);
+    if (!ctx) return null;
+    const line = this._view.state.doc.lineAt(pos);
+    const result = await ctx.rpc.request("textDocument/completion", {
+      textDocument: { uri: ctx.uri },
+      position: {
+        line: ctx.lineDelta + line.number - 1,
+        character: pos - line.from,
+      },
+      context: { triggerKind: 1 },
+    });
+    const items = Array.isArray(result) ? result : (result?.items ?? []);
+    if (!items.length) return null;
+
+    // The server anchors every item to the token being completed; map that
+    // replacement range back into the body once.
+    let from = pos;
+    let to = pos;
+    const anchored = items.find((i) => i.textEdit?.range);
+    if (anchored) {
+      const mapped = this._rangeFromStitched(
+        anchored.textEdit.range,
+        ctx.lineDelta,
+      );
+      if (mapped) ({ from, to } = mapped);
+    }
+    const options = items.map((item, idx) => ({
+      label: item.label,
+      detail: item.detail ?? undefined,
+      type: CM_COMPLETION_TYPES[item.kind] ?? "text",
+      info: item.documentation?.value
+        ? () => hoverDom(item.documentation.value)
+        : undefined,
+      apply: item.textEdit?.newText ?? item.insertText ?? item.label,
+      boost: -idx / 100, // keep the server's relevance order among equal matches
+    }));
+    return { from, to, options };
+  }
+
+  _completionSource(context) {
+    if (!context.explicit) {
+      // Only auto-trigger inside a word; Ctrl-Space works anywhere.
+      const before = context.matchBefore(/[\w'!?]+/);
+      if (!before) return null;
+    }
+    return this.lspCompletionsAt(context.pos)
+      .then((r) => (r ? { ...r, validFor: /^[\w'!?]*$/ } : null))
+      .catch(() => null);
+  }
+
+  // Map a stitched-document LSP range back to body-local positions. Returns
+  // null when the range falls outside this cell's editable body.
+  _rangeFromStitched(range, lineDelta) {
+    const doc = this._view.state.doc;
+    const mapPos = (p) => {
+      const ln = p.line - lineDelta;
+      if (ln < 0 || ln >= doc.lines) return null;
+      const line = doc.line(ln + 1);
+      return Math.min(line.from + p.character, line.to);
+    };
+    const from = mapPos(range.start);
+    const to = mapPos(range.end);
+    if (from == null || to == null || to < from) return null;
+    return { from, to };
   }
 
   // Apply the document's routing result to this cell: in-body squiggles, a
@@ -600,6 +895,22 @@ function formulaChip(text, kind) {
   return el;
 }
 
+// Minimal markdown for hover contents: fenced code blocks become <pre>, the
+// prose between them plain text (the server's hover markdown is just those two).
+function hoverDom(markdown) {
+  const dom = document.createElement("div");
+  dom.className = "lsp-hover";
+  const parts = markdown.split(/```[^\n]*\n?/);
+  parts.forEach((part, i) => {
+    const text = i % 2 === 1 ? part.replace(/\n$/, "") : part.trim();
+    if (!text) return;
+    const el = document.createElement(i % 2 === 1 ? "pre" : "div");
+    el.textContent = text;
+    dom.append(el);
+  });
+  return dom;
+}
+
 // ---------------------------------------------------------------------------
 // Styles (scoped to the shadow root).
 // ---------------------------------------------------------------------------
@@ -649,6 +960,17 @@ const STYLE = `
   background: var(--bg) !important;
   border-right: none !important;
 }
+.lsp-hover { max-width: 32rem; padding: .3rem .5rem; font-size: .85em; }
+.lsp-hover pre {
+  margin: .2rem 0; padding: .25rem .4rem; overflow-x: auto;
+  background: color-mix(in srgb, var(--fg) 5%, var(--bg)); border-radius: 4px;
+}
+.lsp-hover div { color: var(--muted); }
+.editor .cm-tooltip {
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.editor .cm-tooltip.cm-tooltip-autocomplete > ul { font-family: inherit; }
 .status {
   padding: .35rem .7rem; font-size: .82em; border-top: 1px solid var(--line);
   color: var(--muted);

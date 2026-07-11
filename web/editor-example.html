@@ -11,8 +11,9 @@
           "@codemirror/view": "https://esm.sh/@codemirror/view?external=@codemirror/state",
           "@codemirror/commands": "https://esm.sh/@codemirror/commands?external=@codemirror/state,@codemirror/view",
           "@codemirror/lint": "https://esm.sh/@codemirror/lint?external=@codemirror/state,@codemirror/view",
+          "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete?external=@codemirror/state,@codemirror/view",
           "@aufbau/compiler": "./@aufbau/compiler/index.js",
-          "@aufbau/verifier": "./@aufbau/verifier/index.js",
+          "@aufbau/lsp": "./@aufbau/lsp/index.js",
           "@aufbau/editor": "./packages/editor/index.js"
         }
       }
@@ -37,7 +38,10 @@
     <p>
       Each editor below checks its proof against a fixed theory in the browser,
       debounced as you type. Try breaking a proof line to see the diagnostics,
-      then fix it to watch it go green.
+      then fix it to watch it go green. Once a cell has been focused, hovering a
+      proof line shows what the compiler inferred, and
+      <kbd>Ctrl-Space</kbd> completes rule names — filtered to the rules that
+      actually apply at that line.
     </p>
 
     <h2>1. Standalone cell (theory + lemma in one element)</h2>
