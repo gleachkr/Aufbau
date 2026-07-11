@@ -118,7 +118,29 @@
       </script>
     </aufbau-proof>
 
-    <h2>4. A real theory by URL (full-file mode)</h2>
+    <h2>4. Proof search (code actions)</h2>
+    <p class="hint">
+      This proof is left as an <code>auto?</code> hole, flagged as a warning
+      (an unfilled hole, not a mistake). Put the caret on the
+      <code>auto?</code> line and pause: a lightbulb appears at the end of the
+      line offering the proof the search engine found. Apply it and the cell
+      verifies.
+    </p>
+    <aufbau-proof theme="auto">
+      <script type="text/mm0">
+        delimiter $ ( ) $;
+        provable sort wff;
+        term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        axiom ax_keep (a b: wff): $ a $ > $ a -> b -> a $;
+      </script>
+      <script type="text/auf">
+        lemma keep2 (a b: wff): $ a $ > $ a -> b -> a $
+        ----
+        l1: $ a -> b -> a $ by auto?
+      </script>
+    </aufbau-proof>
+
+    <h2>5. A real theory by URL (full-file mode)</h2>
     <p class="hint">
       A multi-theorem fixture loaded from <code>src</code> — the whole proof is
       editable, no single goal display.

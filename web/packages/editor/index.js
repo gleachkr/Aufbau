@@ -25,8 +25,15 @@ import {
   highlightActiveLine,
   drawSelection,
   hoverTooltip,
+  Decoration,
+  WidgetType,
 } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
+import {
+  EditorState,
+  Compartment,
+  StateField,
+  StateEffect,
+} from "@codemirror/state";
 import {
   defaultKeymap,
   history,
@@ -77,11 +84,18 @@ class LspRpc {
   }
 
   request(method, params) {
+    return this.requestCancellable(method, params).promise;
+  }
+
+  // Cancellation is best-effort: the worker runs one message at a time, so a
+  // `$/cancelRequest` only takes effect once the current search returns.
+  requestCancellable(method, params) {
     const id = this.nextId++;
-    return new Promise((resolve, reject) => {
+    const promise = new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.server.send({ jsonrpc: "2.0", id, method, params });
     });
+    return { promise, cancel: () => this.notify("$/cancelRequest", { id }) };
   }
 
   notify(method, params) {
@@ -122,6 +136,86 @@ const CM_COMPLETION_TYPES = {
   18: "text", // proof-line reference
   25: "keyword", // notation operator
 };
+
+// Code actions: when the caret pauses on a search placeholder (`auto?` /
+// `exact?` / `apply?`), the server offers proof suggestions. The offer renders
+// as a line-end bulb whose menu applies the chosen edit. Whether an offer
+// exists is entirely the server's call — the client never scans proof text.
+const setCellActions = StateEffect.define();
+
+const cellActionField = StateField.define({
+  create() {
+    return null;
+  },
+  update(value, tr) {
+    // Any edit invalidates the stored offsets and the actions themselves.
+    if (tr.docChanged) value = null;
+    for (const effect of tr.effects) {
+      if (effect.is(setCellActions)) value = effect.value;
+    }
+    return value;
+  },
+  provide: (field) =>
+    EditorView.decorations.from(field, (value) => {
+      if (!value) return Decoration.none;
+      return Decoration.set([
+        Decoration.widget({
+          widget: new ActionBulb(value.cell, value.actions),
+          side: 1,
+        }).range(value.pos),
+      ]);
+    }),
+});
+
+// Minimalist outline lightbulb (the FontAwesome lightbulb-o silhouette the
+// main demo gets from a Nerd Font glyph, redrawn as inline SVG so it renders
+// identically without any font dependency).
+const BULB_SVG =
+  '<svg viewBox="0 0 16 16" width="1em" height="1em" aria-hidden="true" ' +
+  'fill="none" stroke="currentColor" stroke-width="1.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M8 1.75a4.25 4.25 0 0 1 2.45 7.72c-.5.36-.83.9-.93 1.5l-.02.28h-3l-.02-.28c-.1-.6-.43-1.14-.93-1.5A4.25 4.25 0 0 1 8 1.75Z"/>' +
+  '<path d="M6.6 13.4h2.8"/><path d="M7.1 14.9h1.8"/></svg>';
+
+class ActionBulb extends WidgetType {
+  constructor(cell, actions) {
+    super();
+    this.cell = cell;
+    this.actions = actions;
+  }
+
+  eq(other) {
+    return other.actions === this.actions;
+  }
+
+  toDOM() {
+    const bulb = document.createElement("span");
+    bulb.className = "action-bulb";
+    bulb.innerHTML = BULB_SVG;
+    const label =
+      this.actions.length === 1
+        ? this.actions[0].title
+        : `${this.actions.length} suggestions`;
+    bulb.title = label;
+    bulb.setAttribute("role", "button");
+    bulb.setAttribute("aria-label", label);
+    bulb.setAttribute("tabindex", "0");
+    const open = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.cell.openActionMenu(bulb, this.actions);
+    };
+    bulb.addEventListener("mousedown", open);
+    bulb.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") open(event);
+    });
+    return bulb;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
 
 // Registries: <aufbau-theory> elements by id, and documents by theory key.
 const theoryRegistry = new Map();
@@ -531,6 +625,7 @@ class AufbauProof extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.closeActionMenu();
     this._doc?.unregister(this);
   }
 
@@ -598,6 +693,7 @@ class AufbauProof extends HTMLElement {
     const host = document.createElement("div");
     host.className = "aufbau";
     host.dataset.theme = this.getAttribute("theme") ?? "auto";
+    this._container = host; // positioning context for the code-action menu
 
     if (goal && (goal.concl || goal.hyps.length)) {
       const g = document.createElement("div");
@@ -704,6 +800,14 @@ class AufbauProof extends HTMLElement {
           }),
         );
       }
+      if (!readonly) {
+        exts.push(
+          cellActionField,
+          EditorView.updateListener.of((u) => {
+            if (u.selectionSet || u.docChanged) this._scheduleActionQuery();
+          }),
+        );
+      }
       this._view.dispatch({ effects: this._interactions.reconfigure(exts) });
       this._lspReady = true;
     } catch (err) {
@@ -800,6 +904,152 @@ class AufbauProof extends HTMLElement {
       .catch(() => null);
   }
 
+  // Code actions at a body-local position — proof-search suggestions when the
+  // position is a search placeholder. Returns [{ title, changes }] with
+  // body-local CodeMirror change specs, or null. Public for tests/pages.
+  // The proof search can run for seconds; it happens on the worker thread, and
+  // the cell status shows "searching…" while a slow request is in flight.
+  async lspCodeActionsAt(pos) {
+    const ctx = await this._doc.lspContext(this);
+    if (!ctx) return null;
+    const line = this._view.state.doc.lineAt(pos);
+    const position = {
+      line: ctx.lineDelta + line.number - 1,
+      character: pos - line.from,
+    };
+    this._pendingAction?.cancel();
+    const req = ctx.rpc.requestCancellable("textDocument/codeAction", {
+      textDocument: { uri: ctx.uri },
+      range: { start: position, end: position },
+      context: { diagnostics: [] },
+    });
+    this._pendingAction = req;
+    const saved = this._statusState;
+    const slow = setTimeout(() => this.setStatus("busy", "searching…"), 250);
+    let result = null;
+    try {
+      result = await req.promise;
+    } catch {
+      result = null;
+    } finally {
+      clearTimeout(slow);
+      if (this._pendingAction === req) this._pendingAction = null;
+      // Restore the pre-search status unless a compile overwrote it meanwhile.
+      if (saved && this._statusState?.text === "searching…") {
+        this.setStatus(saved.kind, saved.text);
+      }
+    }
+
+    const actions = [];
+    for (const action of Array.isArray(result) ? result : []) {
+      const edits = action?.edit?.changes
+        ? Object.values(action.edit.changes).flat()
+        : [];
+      const changes = [];
+      for (const edit of edits) {
+        const mapped = this._rangeFromStitched(edit.range, ctx.lineDelta);
+        if (!mapped) {
+          changes.length = 0;
+          break;
+        }
+        changes.push({ from: mapped.from, to: mapped.to, insert: edit.newText });
+      }
+      if (changes.length) actions.push({ title: action.title, changes });
+    }
+    return actions;
+  }
+
+  _scheduleActionQuery() {
+    clearTimeout(this._actionTimer);
+    this._actionTimer = setTimeout(() => {
+      void this._runActionQuery();
+    }, 350);
+  }
+
+  async _runActionQuery() {
+    const gen = (this._actionGen = (this._actionGen ?? 0) + 1);
+    const head = this._view.state.selection.main.head;
+    const actions = await this.lspCodeActionsAt(head).catch(() => null);
+    // Drop stale answers: a newer query started, or the caret moved on.
+    if (gen !== this._actionGen) return;
+    if (this._view.state.selection.main.head !== head) return;
+    const line = this._view.state.doc.lineAt(head);
+    if (actions?.length) {
+      this._view.dispatch({
+        effects: setCellActions.of({ cell: this, actions, pos: line.to }),
+      });
+    } else if (this._view.state.field(cellActionField, false)) {
+      this._view.dispatch({ effects: setCellActions.of(null) });
+    }
+  }
+
+  openActionMenu(anchor, actions) {
+    this.closeActionMenu();
+    const menu = document.createElement("div");
+    menu.className = "action-menu";
+    menu.setAttribute("role", "menu");
+    for (const action of actions) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "action-item";
+      item.setAttribute("role", "menuitem");
+      item.textContent = action.title;
+      item.addEventListener("click", () => {
+        this.closeActionMenu();
+        this._view.dispatch({
+          changes: action.changes,
+          effects: setCellActions.of(null),
+        });
+        this._view.focus();
+      });
+      menu.append(item);
+    }
+    // Attached beside .aufbau (not inside it): the container clips overflow
+    // for its rounded corners, and a menu near the bottom edge must escape it.
+    // Copy the resolved theme vars over, since it no longer inherits them.
+    const containerStyle = getComputedStyle(this._container);
+    for (const v of ["--bg", "--fg", "--muted", "--line"]) {
+      menu.style.setProperty(v, containerStyle.getPropertyValue(v));
+    }
+    this.shadowRoot.append(menu);
+    const cRect = this.getBoundingClientRect();
+    const aRect = anchor.getBoundingClientRect();
+    menu.style.top = `${aRect.bottom - cRect.top + 4}px`;
+    const left = Math.min(
+      aRect.left - cRect.left,
+      cRect.width - menu.offsetWidth - 8,
+    );
+    menu.style.left = `${Math.max(8, left)}px`;
+    this._menu = menu;
+    const dismiss = (event) => {
+      const path = event.composedPath ? event.composedPath() : [event.target];
+      if (!path.includes(menu) && !path.includes(anchor)) {
+        this.closeActionMenu();
+      }
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        this.closeActionMenu();
+        this._view.focus();
+      }
+    };
+    // Defer so the opening click doesn't immediately dismiss the menu.
+    setTimeout(() => document.addEventListener("mousedown", dismiss), 0);
+    document.addEventListener("keydown", onKey);
+    this._menuCleanup = () => {
+      document.removeEventListener("mousedown", dismiss);
+      document.removeEventListener("keydown", onKey);
+    };
+    menu.querySelector("button")?.focus();
+  }
+
+  closeActionMenu() {
+    this._menu?.remove();
+    this._menu = null;
+    this._menuCleanup?.();
+    this._menuCleanup = null;
+  }
+
   // Map a stitched-document LSP range back to body-local positions. Returns
   // null when the range falls outside this cell's editable body.
   _rangeFromStitched(range, lineDelta) {
@@ -852,8 +1102,17 @@ class AufbauProof extends HTMLElement {
     } else if (ok) {
       this.setStatus("ok", `✓ verified · ${durationMs} ms`);
     } else {
-      // Clean cell, but the document has errors elsewhere: no hard seal.
-      this.setStatus("note", "no errors (pending)");
+      // Clean cell, but the whole document didn't compile: no hard seal. An
+      // unfilled search placeholder is the common warning here.
+      const warnings = entry.proof.filter(
+        (p) => p.diag.severity === "warning",
+      ).length;
+      this.setStatus(
+        "note",
+        warnings
+          ? `${warnings} warning${warnings === 1 ? "" : "s"}`
+          : "no errors (pending)",
+      );
     }
   }
 
@@ -869,6 +1128,7 @@ class AufbauProof extends HTMLElement {
   }
 
   setStatus(kind, text) {
+    this._statusState = { kind, text };
     if (!this._status) return;
     this._status.dataset.kind = kind;
     this._status.textContent = text;
@@ -916,11 +1176,12 @@ function hoverDom(markdown) {
 // ---------------------------------------------------------------------------
 
 const STYLE = `
-:host { display: block; margin: 1rem 0; }
+:host { display: block; margin: 1rem 0; position: relative; }
 .aufbau {
   --bg: #ffffff; --fg: #1c1c22; --muted: #6b7280; --line: #e5e7eb;
   --hyp: #eef2ff; --concl: #ecfdf5; --ok: #059669; --err: #dc2626;
-  --warnbg: #fef2f2;
+  --warnbg: #fef2f2; --bulb: #d97706;
+  position: relative;
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color: var(--fg); background: var(--bg);
@@ -928,13 +1189,13 @@ const STYLE = `
 .aufbau[data-theme="dark"] {
   --bg: #16181d; --fg: #e6e6ea; --muted: #9aa0aa; --line: #2b2f38;
   --hyp: #24304d; --concl: #12332a; --ok: #34d399; --err: #f87171;
-  --warnbg: #3a1d1d;
+  --warnbg: #3a1d1d; --bulb: #fbbf24;
 }
 @media (prefers-color-scheme: dark) {
   .aufbau[data-theme="auto"] {
     --bg: #16181d; --fg: #e6e6ea; --muted: #9aa0aa; --line: #2b2f38;
     --hyp: #24304d; --concl: #12332a; --ok: #34d399; --err: #f87171;
-    --warnbg: #3a1d1d;
+    --warnbg: #3a1d1d; --bulb: #fbbf24;
   }
 }
 .goal {
@@ -971,6 +1232,29 @@ const STYLE = `
   border: 1px solid var(--line); border-radius: 6px;
 }
 .editor .cm-tooltip.cm-tooltip-autocomplete > ul { font-family: inherit; }
+.action-bulb {
+  cursor: pointer; margin-left: .75ch; color: var(--bulb);
+  opacity: .85; user-select: none;
+}
+.action-bulb svg { vertical-align: -0.15em; }
+.action-bulb:hover, .action-bulb:focus-visible { opacity: 1; outline: none; }
+.action-menu {
+  position: absolute; z-index: 10; display: flex; flex-direction: column;
+  min-width: 14rem; max-width: calc(100% - 1rem); padding: .2rem;
+  background: var(--bg, #fff); color: var(--fg, #1c1c22);
+  border: 1px solid var(--line, #e5e7eb); border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .15);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .85em;
+}
+.action-item {
+  all: unset; box-sizing: border-box; cursor: pointer;
+  padding: .35rem .55rem; border-radius: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.action-item:hover, .action-item:focus-visible {
+  background: color-mix(in srgb, var(--fg, #1c1c22) 8%, var(--bg, #fff));
+}
 .status {
   padding: .35rem .7rem; font-size: .82em; border-top: 1px solid var(--line);
   color: var(--muted);
