@@ -513,11 +513,14 @@ class AufbauDocument {
   constructor(representative, key) {
     this.key = key;
     this.cells = new Set();
+    this.indexes = new Set();
     this._theoryRef = representative.getAttribute("theory");
     this._theorySrc = representative.getAttribute("theory-src");
     this._theoryText = null;
     this._timer = null;
     this._lsp = null;
+    this._statements = null; // latest statement snapshot (name-hover lookups)
+    this._lastDocState = null; // latest check result (replayed to late indexes)
   }
 
   register(cell) {
@@ -526,7 +529,26 @@ class AufbauDocument {
 
   unregister(cell) {
     this.cells.delete(cell);
-    if (this.cells.size === 0 && documentRegistry.get(this.key) === this) {
+    this._maybeRetire();
+  }
+
+  registerIndex(el) {
+    this.indexes.add(el);
+    // A late-arriving index catches up on the last completed check.
+    if (this._lastDocState) el.applyDocument(this._lastDocState);
+  }
+
+  unregisterIndex(el) {
+    this.indexes.delete(el);
+    this._maybeRetire();
+  }
+
+  _maybeRetire() {
+    if (
+      this.cells.size === 0 &&
+      this.indexes.size === 0 &&
+      documentRegistry.get(this.key) === this
+    ) {
       documentRegistry.delete(this.key);
     }
   }
@@ -634,6 +656,10 @@ class AufbauDocument {
       });
       c.applyStatements(statements);
     }
+
+    this._statements = statements;
+    this._lastDocState = { statements, cells, ok: Boolean(meta.ok) };
+    for (const idx of this.indexes) idx.applyDocument(this._lastDocState);
   }
 
   // Prepare an LSP view of this document for one cell: sync the stitched
@@ -816,6 +842,23 @@ class AufbauProof extends HTMLElement {
     const body = this._view ? this._view.state.doc.toString() : this._body;
     return this._prefix + body;
   }
+  // The statements-snapshot key this cell owns (`rule:name` / `def:name`),
+  // or null for theory and full-file cells.
+  statementKey() {
+    return this._stmtKey ?? null;
+  }
+  statusState() {
+    return this._statusState ?? null;
+  }
+
+  // Briefly highlight this cell — the index panel's click-to-scroll target.
+  flash() {
+    const host = this._container;
+    if (!host) return;
+    host.classList.remove("flash");
+    void host.offsetWidth; // restart the animation on repeat clicks
+    host.classList.add("flash");
+  }
 
   renderChrome(goal) {
     const root = this.shadowRoot;
@@ -829,7 +872,7 @@ class AufbauProof extends HTMLElement {
     host.dataset.theme = this.getAttribute("theme") ?? "auto";
     this._container = host; // positioning context for the code-action menu
 
-    this._goalEl = this._buildGoalRow(goal);
+    this._goalEl = buildGoalRow(goal);
     if (this._goalEl) host.append(this._goalEl);
 
     this._banner = document.createElement("div");
@@ -856,50 +899,10 @@ class AufbauProof extends HTMLElement {
     root.append(host);
   }
 
-  // The goal row: `define` + signature (+ live definiens) for definition
-  // cells, name + hyps ⊢ concl for theorem/lemma cells. Returns null when
-  // there is nothing to show.
-  _buildGoalRow(goal) {
-    if (!goal) return null;
-    const g = document.createElement("div");
-    g.className = "goal";
-    if (goal.signature != null) {
-      // Definition cell: the declaration to inhabit, not a goal to prove.
-      const n = document.createElement("span");
-      n.className = "goal-name";
-      n.textContent = "define";
-      const sep = goal.signature.startsWith(":") ? "" : " ";
-      g.append(n, formulaChip(`${goal.name}${sep}${goal.signature}`, "concl"));
-      if (goal.body) {
-        const eq = document.createElement("span");
-        eq.className = "turnstile";
-        eq.textContent = "=";
-        g.append(eq, formulaChip(goal.body, "hyp"));
-      }
-      return g;
-    }
-    if (!goal.concl && !goal.hyps?.length) return null;
-    if (goal.name) {
-      const n = document.createElement("span");
-      n.className = "goal-name";
-      n.textContent = `${goal.name}:`;
-      g.append(n);
-    }
-    for (const h of goal.hyps) g.append(formulaChip(h, "hyp"));
-    if (goal.hyps.length && goal.concl) {
-      const turnstile = document.createElement("span");
-      turnstile.className = "turnstile";
-      turnstile.textContent = "⊢";
-      g.append(turnstile);
-    }
-    if (goal.concl) g.append(formulaChip(goal.concl, "concl"));
-    return g;
-  }
-
   // Replace (or introduce) the goal row in place — used when a compile brings
   // pretty-printed statement data that supersedes the source-derived render.
   renderGoalRow(goal) {
-    const next = this._buildGoalRow(goal);
+    const next = buildGoalRow(goal);
     if (!next) return;
     if (this._goalEl) {
       this._goalEl.replaceWith(next);
@@ -929,18 +932,8 @@ class AufbauProof extends HTMLElement {
       }
       return;
     }
-    let goal = null;
-    if (stmt.kind === "def") {
-      if (stmt.signature == null) return;
-      goal = {
-        name: stmt.name,
-        signature: stmt.signature,
-        body: stmt.body ?? null,
-      };
-    } else {
-      if (stmt.concl == null) return;
-      goal = { name: stmt.name, hyps: stmt.hyps ?? [], concl: stmt.concl };
-    }
+    const goal = goalFromStatement(stmt);
+    if (!goal) return;
     // Skip the DOM churn when nothing changed since the last upgrade.
     const key = JSON.stringify(goal);
     if (key === this._lastGoalKey) return;
@@ -991,39 +984,44 @@ class AufbauProof extends HTMLElement {
   async enableInteractions() {
     if (this._lspBooted) return;
     this._lspBooted = true;
+    const readonly = this.hasAttribute("readonly");
+    let autocompleteMod = null;
+    let lspOk = false;
     try {
-      const readonly = this.hasAttribute("readonly");
-      const [, autocompleteMod] = await Promise.all([
+      [, autocompleteMod] = await Promise.all([
         loadLspOnce(),
         readonly ? null : import("@codemirror/autocomplete"),
       ]);
-      const exts = [
-        hoverTooltip((view, pos) => this._hoverTooltipAt(pos), {
-          hideOnChange: true,
-        }),
-      ];
-      if (autocompleteMod) {
-        exts.push(
-          autocompleteMod.autocompletion({
-            override: [(context) => this._completionSource(context)],
-          }),
-        );
-      }
-      // Code actions are proof-search suggestions; a theory cell's mm0 body
-      // has no search placeholders, so don't poll for them there.
-      if (!readonly && !this._mm0Editable) {
-        exts.push(
-          cellActionField,
-          EditorView.updateListener.of((u) => {
-            if (u.selectionSet || u.docChanged) this._scheduleActionQuery();
-          }),
-        );
-      }
-      this._view.dispatch({ effects: this._interactions.reconfigure(exts) });
-      this._lspReady = true;
+      lspOk = true;
     } catch (err) {
       console.warn("[aufbau-proof] LSP interactions unavailable:", err);
     }
+    // Hover installs regardless: statement popovers come from the compile
+    // path's statement snapshots, not the language server.
+    const exts = [
+      hoverTooltip((view, pos) => this._hoverTooltipAt(pos), {
+        hideOnChange: true,
+      }),
+    ];
+    if (autocompleteMod) {
+      exts.push(
+        autocompleteMod.autocompletion({
+          override: [(context) => this._completionSource(context)],
+        }),
+      );
+    }
+    // Code actions are proof-search suggestions; a theory cell's mm0 body
+    // has no search placeholders, so don't poll for them there.
+    if (lspOk && !readonly && !this._mm0Editable) {
+      exts.push(
+        cellActionField,
+        EditorView.updateListener.of((u) => {
+          if (u.selectionSet || u.docChanged) this._scheduleActionQuery();
+        }),
+      );
+    }
+    this._view.dispatch({ effects: this._interactions.reconfigure(exts) });
+    this._lspReady = lspOk;
   }
 
   // Hover contents at a body-local position, via the stitched document.
@@ -1050,7 +1048,47 @@ class AufbauProof extends HTMLElement {
     return { value, from: range?.from ?? pos, to: range?.to ?? pos };
   }
 
+  // The compiler statement for the name token at a body-local position, if
+  // the document's latest snapshot knows one — `{ stmt, from, to }` with the
+  // token's body range, or null. Public for tests/pages.
+  statementAt(pos) {
+    const statements = this._doc?._statements;
+    if (!statements || !this._view) return null;
+    const line = this._view.state.doc.lineAt(pos);
+    const text = line.text;
+    let from = pos - line.from;
+    let to = from;
+    const wordChar = (ch) => /[\w']/.test(ch);
+    while (from > 0 && wordChar(text[from - 1])) from -= 1;
+    while (to < text.length && wordChar(text[to])) to += 1;
+    const word = text.slice(from, to);
+    if (!/^[A-Za-z_][\w']*$/.test(word)) return null;
+    const stmt =
+      statements.get(`rule:${word}`) ?? statements.get(`def:${word}`);
+    if (!stmt) return null;
+    return { stmt, from: line.from + from, to: line.from + to };
+  }
+
   _hoverTooltipAt(pos) {
+    // A name with a known statement pops its pretty-printed form immediately
+    // (no LSP round-trip; works even when the language server failed to
+    // load). The server's prose is appended when it arrives.
+    const named = this.statementAt(pos);
+    if (named && goalFromStatement(named.stmt)) {
+      return {
+        pos: named.from,
+        end: named.to,
+        create: () => {
+          const dom = statementHoverDom(named.stmt);
+          this.lspHover(pos)
+            .then((hover) => {
+              if (hover?.value) appendHoverProse(dom, hover.value);
+            })
+            .catch(() => {});
+          return { dom };
+        },
+      };
+    }
     return this.lspHover(pos)
       .then((hover) => {
         if (!hover || !hover.value.trim()) return null;
@@ -1374,11 +1412,265 @@ class AufbauProof extends HTMLElement {
   }
 }
 
+// ---------------------------------------------------------------------------
+// <aufbau-index> — a live table of contents for one document: every statement
+// in the compiler's snapshot, pretty-printed, with the owning cell's
+// verification state. Owned rows scroll to (and flash) their cell on click.
+// ---------------------------------------------------------------------------
+
+class AufbauIndex extends HTMLElement {
+  connectedCallback() {
+    if (this._booted) return;
+    this._booted = true;
+    this.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = STYLE;
+    this._container = document.createElement("div");
+    this._container.className = "aufbau index";
+    this._container.dataset.theme = this.getAttribute("theme") ?? "auto";
+    const mh = this.getAttribute("max-height");
+    if (mh) {
+      this._container.style.maxHeight = mh;
+      this._container.style.overflowY = "auto";
+    }
+    this.shadowRoot.append(style, this._container);
+    this._lastStmt = new Map();
+    this._lastRenderKey = null;
+
+    if (documentKeyFor(this) == null) {
+      this._container.append(
+        hintDiv("aufbau-index needs a theory, theory-src, or doc attribute"),
+      );
+      return;
+    }
+    this._container.append(hintDiv("waiting for the first check…"));
+    this._doc = getOrCreateDocument(this);
+    this._doc.registerIndex(this);
+  }
+
+  disconnectedCallback() {
+    this._doc?.unregisterIndex(this);
+  }
+
+  // Called by the document coordinator after every check (and once on
+  // registration, replaying the last check).
+  applyDocument({ statements, cells }) {
+    // Ownership: a single-statement cell claims its own key; beyond that, the
+    // cell whose mm0 fragment declares the name claims it (theory cells).
+    // What's left is the base theory (or a full-file cell's contents).
+    const owners = new Map();
+    for (const cell of cells) {
+      const key = cell.statementKey();
+      if (key) owners.set(key, cell);
+    }
+    for (const [key, stmt] of statements) {
+      if (owners.has(key)) continue;
+      const declRe = new RegExp(
+        `\\b(?:axiom|theorem|def)\\s+${escapeRe(stmt.name)}\\b`,
+      );
+      const owner = cells.find((c) => declRe.test(c.mm0Fragment()));
+      if (owner) owners.set(key, owner);
+    }
+
+    // Row order mirrors the stitched document: base-theory statements first,
+    // then each cell's statements in page order. A cell whose statement
+    // vanished from the snapshot (broken definition or theorem — recovery
+    // invalidated it) keeps its last-known render, marked stale.
+    const byCell = new Map();
+    const entries = [];
+    for (const [key, stmt] of statements) {
+      this._lastStmt.set(key, stmt);
+      const cell = owners.get(key);
+      if (!cell) {
+        entries.push({ key, stmt, cell: null, stale: false });
+        continue;
+      }
+      let list = byCell.get(cell);
+      if (!list) byCell.set(cell, (list = []));
+      list.push({ key, stmt, cell, stale: false });
+    }
+    for (const cell of cells) {
+      const list = byCell.get(cell) ?? [];
+      const key = cell.statementKey();
+      if (key && !statements.has(key)) {
+        list.push({
+          key,
+          stmt: this._lastStmt.get(key) ?? null,
+          cell,
+          stale: true,
+        });
+      }
+      entries.push(...list);
+    }
+    this._render(entries);
+  }
+
+  _render(entries) {
+    const renderKey = JSON.stringify(
+      entries.map((e) => [
+        e.key,
+        e.stale,
+        e.cell ? (e.cell.statusState()?.kind ?? null) : null,
+        e.stmt ? goalFromStatement(e.stmt) : null,
+        e.stmt ? statementKindLabel(e.stmt) : null,
+      ]),
+    );
+    if (renderKey === this._lastRenderKey) return;
+    this._lastRenderKey = renderKey;
+    this._container.replaceChildren();
+    if (!entries.length) {
+      this._container.append(hintDiv("no statements yet"));
+      return;
+    }
+    for (const e of entries) this._container.append(this._buildRow(e));
+  }
+
+  _buildRow({ key, stmt, cell, stale }) {
+    const row = document.createElement(cell ? "button" : "div");
+    row.className = `index-row${stale ? " stale" : ""}`;
+    const dot = document.createElement("span");
+    dot.className = "index-dot";
+    if (cell) {
+      row.type = "button";
+      row.title = "go to the cell";
+      dot.dataset.kind = cell.statusState()?.kind ?? "";
+      row.addEventListener("click", () => {
+        cell.scrollIntoView({ behavior: "smooth", block: "center" });
+        cell.flash();
+      });
+    } else {
+      dot.classList.add("given"); // part of the theory, nothing to verify
+    }
+    const badge = document.createElement("span");
+    badge.className = "index-kind";
+    badge.textContent = stmt
+      ? statementKindLabel(stmt)
+      : key.startsWith("def:")
+        ? "def"
+        : "theorem";
+    row.append(dot, badge);
+    const goal = stmt && goalFromStatement(stmt);
+    if (goal) {
+      row.append(buildGoalRow(goal, { noDefineLabel: true }));
+    } else {
+      // Unrenderable (or never-seen) statement: name only.
+      const n = document.createElement("span");
+      n.className = "goal-name";
+      n.textContent = key.slice(key.indexOf(":") + 1);
+      row.append(n);
+    }
+    return row;
+  }
+}
+
+function hintDiv(text) {
+  const el = document.createElement("div");
+  el.className = "index-empty";
+  el.textContent = text;
+  return el;
+}
+
 function formulaChip(text, kind) {
   const el = document.createElement("code");
   el.className = `formula ${kind}`;
   el.textContent = text;
   return el;
+}
+
+// A statement row: `define` + signature (+ live definiens) for definitions,
+// name + hyps ⊢ concl for assertions. Shared by the cell goal header, the
+// document index, and the name-hover popover. Returns null when there is
+// nothing to show. `noDefineLabel` drops the leading `define` when the
+// surrounding context already names the kind (index badge, popover caption).
+function buildGoalRow(goal, { noDefineLabel = false } = {}) {
+  if (!goal) return null;
+  const g = document.createElement("div");
+  g.className = "goal";
+  if (goal.signature != null) {
+    // Definition: the declaration to inhabit, not a goal to prove.
+    if (!noDefineLabel) {
+      const n = document.createElement("span");
+      n.className = "goal-name";
+      n.textContent = "define";
+      g.append(n);
+    }
+    const sep = goal.signature.startsWith(":") ? "" : " ";
+    g.append(formulaChip(`${goal.name}${sep}${goal.signature}`, "concl"));
+    if (goal.body) {
+      const eq = document.createElement("span");
+      eq.className = "turnstile";
+      eq.textContent = "=";
+      g.append(eq, formulaChip(goal.body, "hyp"));
+    }
+    return g;
+  }
+  if (!goal.concl && !goal.hyps?.length) return null;
+  if (goal.name) {
+    const n = document.createElement("span");
+    n.className = "goal-name";
+    n.textContent = `${goal.name}:`;
+    g.append(n);
+  }
+  for (const h of goal.hyps) g.append(formulaChip(h, "hyp"));
+  if (goal.hyps.length && goal.concl) {
+    const turnstile = document.createElement("span");
+    turnstile.className = "turnstile";
+    turnstile.textContent = "⊢";
+    g.append(turnstile);
+  }
+  if (goal.concl) g.append(formulaChip(goal.concl, "concl"));
+  return g;
+}
+
+// Convert a compiler statement snapshot into the shape `buildGoalRow`
+// renders. Returns null when the statement isn't renderable (the
+// pretty-printer bails on anonymous binders, say) so callers keep whatever
+// display they already have.
+function goalFromStatement(stmt) {
+  if (stmt.kind === "def") {
+    if (stmt.signature == null) return null;
+    return {
+      name: stmt.name,
+      signature: stmt.signature,
+      body: stmt.body ?? null,
+    };
+  }
+  if (stmt.concl == null) return null;
+  return { name: stmt.name, hyps: stmt.hyps ?? [], concl: stmt.concl };
+}
+
+function statementKindLabel(stmt) {
+  if (stmt.kind === "def") return "def";
+  if (stmt.kind === "axiom") return "axiom";
+  return stmt.local ? "lemma" : "theorem";
+}
+
+// The name-hover popover: kind caption + the pretty-printed statement chips.
+function statementHoverDom(stmt) {
+  const dom = document.createElement("div");
+  dom.className = "lsp-hover stmt-hover";
+  const caption = document.createElement("div");
+  caption.className = "stmt-kind";
+  caption.textContent = statementKindLabel(stmt);
+  dom.append(
+    caption,
+    buildGoalRow(goalFromStatement(stmt), { noDefineLabel: true }),
+  );
+  return dom;
+}
+
+// Append the prose parts (everything outside code fences) of a hover markdown
+// below the statement chips — the server's kind/hypothesis-count summary and
+// annotation metadata, without repeating the statement in source form.
+function appendHoverProse(dom, markdown) {
+  const parts = markdown.split(/```[^\n]*\n?/);
+  for (let i = 0; i < parts.length; i += 2) {
+    const text = parts[i].trim();
+    if (!text) continue;
+    const el = document.createElement("div");
+    el.textContent = text;
+    dom.append(el);
+  }
 }
 
 // Minimal markdown for hover contents: fenced code blocks become <pre>, the
@@ -1405,7 +1697,7 @@ const STYLE = `
 :host { display: block; margin: 1rem 0; position: relative; }
 .aufbau {
   --bg: #ffffff; --fg: #1c1c22; --muted: #6b7280; --line: #e5e7eb;
-  --hyp: #eef2ff; --concl: #ecfdf5; --ok: #059669; --err: #dc2626;
+  --ok: #059669; --err: #dc2626;
   --warnbg: #fef2f2; --bulb: #d97706;
   position: relative;
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
@@ -1414,13 +1706,13 @@ const STYLE = `
 }
 .aufbau[data-theme="dark"] {
   --bg: #16181d; --fg: #e6e6ea; --muted: #9aa0aa; --line: #2b2f38;
-  --hyp: #24304d; --concl: #12332a; --ok: #34d399; --err: #f87171;
+  --ok: #34d399; --err: #f87171;
   --warnbg: #3a1d1d; --bulb: #fbbf24;
 }
 @media (prefers-color-scheme: dark) {
   .aufbau[data-theme="auto"] {
     --bg: #16181d; --fg: #e6e6ea; --muted: #9aa0aa; --line: #2b2f38;
-    --hyp: #24304d; --concl: #12332a; --ok: #34d399; --err: #f87171;
+    --ok: #34d399; --err: #f87171;
     --warnbg: #3a1d1d; --bulb: #fbbf24;
   }
 }
@@ -1448,6 +1740,14 @@ const STYLE = `
   border-right: none !important;
 }
 .lsp-hover { max-width: 32rem; padding: .3rem .5rem; font-size: .85em; }
+.stmt-kind {
+  color: var(--muted); font-size: .72em;
+  text-transform: uppercase; letter-spacing: .05em;
+}
+.stmt-hover .goal {
+  border-bottom: none; background: none; color: var(--fg);
+  padding: .15rem 0 .1rem;
+}
 .lsp-hover pre {
   margin: .2rem 0; padding: .25rem .4rem; overflow-x: auto;
   background: color-mix(in srgb, var(--fg) 5%, var(--bg)); border-radius: 4px;
@@ -1481,6 +1781,40 @@ const STYLE = `
 .action-item:hover, .action-item:focus-visible {
   background: color-mix(in srgb, var(--fg, #1c1c22) 8%, var(--bg, #fff));
 }
+.aufbau.flash { animation: aufbau-flash 1.4s ease-out; }
+@keyframes aufbau-flash {
+  from { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 70%, transparent); }
+  to { box-shadow: 0 0 0 3px transparent; }
+}
+.aufbau.index { font-size: .9em; }
+.index-row {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: .45rem;
+  box-sizing: border-box; width: 100%; margin: 0; padding: .4rem .7rem;
+  font: inherit; text-align: left; color: inherit;
+  background: none; border: none;
+}
+.index-row + .index-row { border-top: 1px solid var(--line); }
+button.index-row { cursor: pointer; }
+button.index-row:hover, button.index-row:focus-visible {
+  background: color-mix(in srgb, var(--fg) 5%, var(--bg)); outline: none;
+}
+.index-row.stale { opacity: .6; }
+/* The shared goal-row wrapper dissolves into the row's own flex layout. */
+.index-row .goal { display: contents; }
+.index-dot {
+  flex: none; align-self: center; width: .55em; height: .55em;
+  border-radius: 50%; background: var(--muted);
+}
+.index-dot[data-kind="ok"] { background: var(--ok); }
+.index-dot[data-kind="err"] { background: var(--err); }
+.index-dot.given {
+  background: none; border: 1px solid var(--muted); box-sizing: border-box;
+}
+.index-kind {
+  flex: none; font-size: .75em; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 .55em;
+}
+.index-empty { padding: .45rem .7rem; color: var(--muted); font-size: .85em; }
 .status {
   padding: .35rem .7rem; font-size: .82em; border-top: 1px solid var(--line);
   color: var(--muted);
@@ -1502,13 +1836,19 @@ if (!customElements.get("aufbau-theory")) {
 if (!customElements.get("aufbau-proof")) {
   customElements.define("aufbau-proof", AufbauProof);
 }
+if (!customElements.get("aufbau-index")) {
+  customElements.define("aufbau-index", AufbauIndex);
+}
 
 export {
   AufbauProof,
   AufbauTheory,
+  AufbauIndex,
   stitch,
   routeDiagnostics,
   defFillerName,
   mm0DefSignature,
   localDefSignature,
+  goalFromStatement,
+  statementKindLabel,
 };

@@ -237,7 +237,20 @@
       </script>
     </aufbau-proof>
 
-    <h2>8. A real theory by URL (full-file mode)</h2>
+    <h2>8. A document index — what does this page prove?</h2>
+    <p class="hint">
+      An <code>&lt;aufbau-index&gt;</code> joins a document and lists every
+      statement the compiler sees, pretty-printed with the theory's notation:
+      hollow dots are the theory's givens, filled dots track each cell's
+      verification state live. Click a row to jump to its cell. (This one
+      indexes the definition document from section 5 — break the definition
+      up there and watch its row here.) Relatedly, hovering a rule or
+      definition name inside any proof pops up the same pretty-printed
+      statement in place.
+    </p>
+    <aufbau-index theory="defs"></aufbau-index>
+
+    <h2>9. A real theory by URL (full-file mode)</h2>
     <p class="hint">
       A multi-theorem fixture loaded from <code>src</code> — the whole proof is
       editable, no single goal display.
