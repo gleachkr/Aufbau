@@ -20,7 +20,9 @@
 //     the same seam for a bodyless `def …;` declaration whose `.auf` content is
 //     the public body filler — the definiens (and any hidden dummy binders it
 //     needs) is what the reader edits, and the cells that prove things *about*
-//     the definition check it. A theory cell has mm0 content and no
+//     the definition check it. A local-def cell's `.auf` content is a
+//     proof-local definition (it declares its own signature, nothing in the
+//     mm0) usable by every later cell. A theory cell has mm0 content and no
 //     `.auf` at all: its editable body IS its mm0 fragment, so terms and
 //     axioms can be authored in place; with the `doc` grouping attribute a
 //     page needs no <aufbau-theory> element at all.
@@ -326,6 +328,21 @@ function mm0DefSignature(mm0Text, name) {
     mm0Text,
   );
   return decl ? decl[1].trim() : null;
+}
+
+// A proof-local definition declares its own signature in the `.auf` item: a
+// top-level `: sort` in the header tail before the `=`. Returns that tail, or
+// null for a public body filler (whose declaration lives in the mm0 instead).
+function localDefSignature(text) {
+  const m = /^\s*def\s+[A-Za-z_][\w']*([^=]*)=/.exec(text);
+  if (!m) return null;
+  let depth = 0;
+  for (const ch of m[1]) {
+    if (ch === "(" || ch === "{") depth += 1;
+    else if (ch === ")" || ch === "}") depth -= 1;
+    else if (ch === ":" && depth === 0) return m[1].trim();
+  }
+  return null;
 }
 
 // Byte offset (UTF-8, as reported by the compiler) → JS string index (UTF-16),
@@ -728,8 +745,9 @@ class AufbauProof extends HTMLElement {
 
       // Goal display: a lemma block states its own assertion; a theorem block
       // gets its statement from the mm0 — the cell's own fragment first, then
-      // the theory. A definition cell (a def filler, so no `----` split) shows
-      // the bodyless declaration it is filling, looked up the same way.
+      // the theory. A definition cell (a def item, so no `----` split) shows
+      // the signature it inhabits: the bodyless mm0 declaration for a public
+      // filler, the item's own header for a proof-local def.
       goal = block ? parseGoal(block.header) : null;
       if (goal && !goal.concl) {
         goal =
@@ -741,8 +759,9 @@ class AufbauProof extends HTMLElement {
         const defName = defFillerName(proofText);
         const signature =
           mm0DefSignature(this._mm0Fragment, defName) ??
-          mm0DefSignature(await this._doc.theoryText(), defName);
-        if (signature != null) goal = { name: defName, signature };
+          mm0DefSignature(await this._doc.theoryText(), defName) ??
+          localDefSignature(proofText);
+        if (defName && signature != null) goal = { name: defName, signature };
       }
     }
     this.renderChrome(goal);
@@ -796,7 +815,8 @@ class AufbauProof extends HTMLElement {
       const n = document.createElement("span");
       n.className = "goal-name";
       n.textContent = "define";
-      g.append(n, formulaChip(`${goal.name}${goal.signature}`, "concl"));
+      const sep = goal.signature.startsWith(":") ? "" : " ";
+      g.append(n, formulaChip(`${goal.name}${sep}${goal.signature}`, "concl"));
       host.append(g);
     } else if (goal && (goal.concl || goal.hyps.length)) {
       const g = document.createElement("div");
@@ -1389,4 +1409,5 @@ export {
   routeDiagnostics,
   defFillerName,
   mm0DefSignature,
+  localDefSignature,
 };

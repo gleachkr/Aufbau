@@ -179,7 +179,40 @@
       </script>
     </aufbau-proof>
 
-    <h2>6. Theory cells — author the mm0 in place</h2>
+    <h2>6. A local definition — a shared helper, not in the theory</h2>
+    <p class="hint">
+      A def item that declares its own signature
+      (<code>def dup (a: wff): wff = …</code>) is <em>proof-local</em>: it never
+      appears in the mm0, but every later cell can use it, and proofs unfold it
+      transparently. Change the body and watch the lemma below react.
+    </p>
+    <aufbau-theory id="helper">
+      <script type="text/mm0">
+        delimiter $ ( ) $;
+        provable sort wff;
+        term top: wff;
+        term and (a b: wff): wff;
+        axiom top_i: $ top $;
+        axiom and_i (a b: wff): $ a $ > $ b $ > $ and a b $;
+      </script>
+    </aufbau-theory>
+
+    <aufbau-proof theory="helper">
+      <script type="text/auf">
+        def dup (a: wff): wff = $ and a a $
+      </script>
+    </aufbau-proof>
+
+    <aufbau-proof theory="helper">
+      <script type="text/auf">
+        lemma dup_top: $ dup top $
+        ----
+        l1: $ top $ by top_i []
+        l2: $ and top top $ by and_i [l1, l1]
+      </script>
+    </aufbau-proof>
+
+    <h2>7. Theory cells — author the mm0 in place</h2>
     <p class="hint">
       A cell with only mm0 content edits the theory itself. These two cells
       share a document via <code>doc="play"</code> — there is no
@@ -203,7 +236,7 @@
       </script>
     </aufbau-proof>
 
-    <h2>7. A real theory by URL (full-file mode)</h2>
+    <h2>8. A real theory by URL (full-file mode)</h2>
     <p class="hint">
       A multi-theorem fixture loaded from <code>src</code> — the whole proof is
       editable, no single goal display.
