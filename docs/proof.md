@@ -40,11 +40,13 @@ It may also declare top-level `lemma` blocks. These are proof-only local
 rules. They may be cited by later proof blocks and are emitted as local
 MMB theorems.
 
-Top-level `def` items have two meanings. A headerless item of the form
-`def name = $ body $` fills the next public bodyless MM0 definition with
-the same name. A full-header item of the form
-`def name (args): sort = $ body $` declares a proof-local definition and
-emits it as an MMB `LocalDef` statement.
+Top-level `def` items have two meanings. An item without a return sort,
+of the form `def name = $ body $` or `def name (.d: s) = $ body $`, fills
+the next public bodyless MM0 definition with the same name; binder groups
+before the `=` may declare extra hidden dummies for the body. A
+full-header item of the form `def name (args): sort = $ body $` declares
+a proof-local definition and emits it as an MMB `LocalDef` statement.
+The two are distinguished by the `: sort` return annotation.
 
 ## Processing model
 
@@ -56,7 +58,7 @@ This means:
 - each public theorem block in the `.auf` stream must match the next
   public theorem declaration in the `.mm0` stream
 - when the next MM0 declaration is a bodyless `def`, the next `.auf`
-  item must be a matching headerless public body filler
+  item must be a matching public body filler
 - zero or more `lemma` blocks or full-header local `def` items may appear
   before the next public theorem block or public body filler
 - proof blocks may reference only earlier proof lines in the same block
@@ -196,10 +198,14 @@ do not have an underline. There are two forms.
 
 ```text
 def-item ::= public-body-filler | local-def
-public-body-filler ::= 'def' identifier '=' math-string newline
+public-body-filler ::= 'def' identifier dummy-group* '=' math-string newline
+dummy-group ::= '(' ('.' identifier)+ ':' sort ')'
 local-def ::= 'def' identifier def-header-tail '=' math-string newline
 def-header-tail ::= binder* ':' sort
 ```
+
+An item with a top-level `: sort` return annotation is a local def;
+anything else is a public body filler.
 
 #### Public body fillers
 
@@ -229,8 +235,32 @@ including named hidden dummy binders. Anonymous hidden binders cannot be
 referenced by name. The filled definition is public: it is emitted as an
 ordinary MMB term definition and is checked against the MM0 declaration.
 
-Only the headerless form is supported for public body fillers. This is
-not accepted yet:
+A filler may declare extra hidden dummies of its own, so the `.mm0` file
+does not have to reveal how many dummies the hidden definition uses:
+
+```mm0
+delimiter $ ( ) $;
+sort obj;
+provable sort wff;
+term all {x: obj} (p: wff x): wff;
+term eq (a b: obj): wff;
+def refl_closure: wff;
+```
+
+```auf
+def refl_closure (.d: obj) = $ all d (eq d d) $
+```
+
+Filler binder groups may contain only `.`-prefixed dummy binders — the
+visible signature stays with the MM0 declaration. Filler dummies are
+appended after any dummies declared on the MM0 definition, and their
+names must not collide with the MM0 binders. As everywhere else, a
+dummy's sort must not be declared `strict` or `free` (the verifier
+rejects the definition otherwise).
+
+A filler must not redeclare the signature. This is parsed as a local
+def, not a public body filler, and is rejected (the public name is
+already taken and the awaited filler may not carry a signature):
 
 ```auf
 def alias: wff = $ top $  -- local def, not a public body filler

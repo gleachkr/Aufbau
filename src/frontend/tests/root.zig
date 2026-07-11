@@ -720,6 +720,141 @@ test "public def body parser rejects unknown and anonymous binders" {
     );
 }
 
+test "filler dummy tail extends a bodyless def's dummies" {
+    const src =
+        \\sort obj;
+        \\def pick {x: obj} (y: obj): obj;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    const stmt = (try parser.next()).?;
+    const term = switch (stmt) {
+        .term => |value| value,
+        else => return error.UnexpectedStatementKind,
+    };
+
+    const extended = try parser.extendStmtWithFillerDummies(
+        term,
+        "(.d: obj)",
+        0,
+    );
+    try std.testing.expectEqual(@as(usize, 1), extended.dummy_args.len);
+    try std.testing.expectEqualStrings("d", extended.dummy_names[0].?);
+    const dummy = extended.dummy_exprs[0];
+    try std.testing.expect(dummy.bound());
+    // The bound var x occupies dep bit 0; the filler dummy comes next.
+    try std.testing.expectEqual(@as(u55, 1) << 1, dummy.deps());
+
+    const body = try parser.parsePublicDefBodyText(
+        extended,
+        "d",
+        .{ .start = 0, .end = 1 },
+    );
+    try std.testing.expect(body == dummy);
+}
+
+test "filler dummies append after mm0-declared dummies" {
+    const src =
+        \\sort obj;
+        \\def pick (.m: obj): obj;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    const stmt = (try parser.next()).?;
+    const term = switch (stmt) {
+        .term => |value| value,
+        else => return error.UnexpectedStatementKind,
+    };
+
+    const extended = try parser.extendStmtWithFillerDummies(
+        term,
+        "(.d .e: obj)",
+        0,
+    );
+    try std.testing.expectEqual(@as(usize, 3), extended.dummy_args.len);
+    try std.testing.expectEqualStrings("m", extended.dummy_names[0].?);
+    try std.testing.expectEqualStrings("d", extended.dummy_names[1].?);
+    try std.testing.expectEqualStrings("e", extended.dummy_names[2].?);
+    try std.testing.expectEqual(@as(u55, 1) << 0, extended.dummy_exprs[0].deps());
+    try std.testing.expectEqual(@as(u55, 1) << 1, extended.dummy_exprs[1].deps());
+    try std.testing.expectEqual(@as(u55, 1) << 2, extended.dummy_exprs[2].deps());
+}
+
+test "filler dummy tail rejects invalid binders" {
+    const src =
+        \\sort obj;
+        \\def pick (y: obj): obj;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    const stmt = (try parser.next()).?;
+    const term = switch (stmt) {
+        .term => |value| value,
+        else => return error.UnexpectedStatementKind,
+    };
+
+    try std.testing.expectError(
+        error.FillerBinderMustBeDummy,
+        parser.extendStmtWithFillerDummies(term, "(x: obj)", 0),
+    );
+    try std.testing.expectError(
+        error.DuplicateFillerBinderName,
+        parser.extendStmtWithFillerDummies(term, "(.y: obj)", 0),
+    );
+    try std.testing.expectError(
+        error.DuplicateFillerBinderName,
+        parser.extendStmtWithFillerDummies(term, "(.d .d: obj)", 0),
+    );
+    try std.testing.expectError(
+        error.UnknownSort,
+        parser.extendStmtWithFillerDummies(term, "(.d: nope)", 0),
+    );
+    try std.testing.expectError(
+        error.PublicDefBodyMustBeHeaderless,
+        parser.extendStmtWithFillerDummies(term, "junk", 0),
+    );
+    try std.testing.expectError(
+        error.PublicDefBodyMustBeHeaderless,
+        parser.extendStmtWithFillerDummies(term, "(.d: obj", 0),
+    );
+}
+
+test "def item classifier separates local defs from filler tails" {
+    const src =
+        \\def plain = $ x $
+        \\def filler (.d: obj) = $ d $
+        \\def local (x: obj): obj = $ x $
+        \\def nullary: obj = $ z $
+        \\def depped {x: obj} (p: obj x): obj = $ p $
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    const expected = [_]bool{ false, false, true, true, true };
+    for (expected) |is_local| {
+        const item = (try parser.nextItem()).?;
+        const def = switch (item) {
+            .def => |value| value,
+            else => return error.UnexpectedItemKind,
+        };
+        try std.testing.expectEqual(is_local, def.isLocalDef());
+    }
+}
+
 test "local def parser mutates live term table" {
     const src =
         \\sort obj;

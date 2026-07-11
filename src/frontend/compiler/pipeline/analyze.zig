@@ -40,8 +40,6 @@ const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
 const processLocalProofBlock = Common.processLocalProofBlock;
-const proofMathTextSpan = Common.proofMathTextSpan;
-const publicDefBodyParseDiagnostic = Common.publicDefBodyParseDiagnostic;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
 const FilledPublicDef = Common.FilledPublicDef;
@@ -621,49 +619,12 @@ fn analyzeFillPublicDefBody(
 
     switch (item) {
         .def => |def| {
-            if (def.annotations.len != 0) {
-                self.setDiagnostic(
-                    CompilerDiag.unsupportedProofDefAnnotationDiagnostic(
-                        def.name,
-                        def.name_span,
-                    ),
-                );
-                return null;
-            }
-            if (!std.mem.eql(u8, def.name, term_stmt.name)) {
-                self.setDiagnostic(
-                    CompilerDiag.publicDefBodyNameMismatchDiagnostic(
-                        term_stmt.name,
-                        def.name,
-                        def.name_span,
-                    ),
-                );
-                return null;
-            }
-            if (def.header_tail != null) {
-                self.setDiagnostic(
-                    CompilerDiag.publicDefBodyHeaderDiagnostic(
-                        def.name,
-                        def.header_tail_span orelse def.name_span,
-                    ),
-                );
-                return null;
-            }
-            const body_span = proofMathTextSpan(def.body.span);
-            var filled = term_stmt;
-            filled.body = state.parser.parsePublicDefBodyText(
+            return Common.fillFromFillerDefItem(
+                self,
+                &state.parser,
                 term_stmt,
-                def.body.text,
-                body_span,
-            ) catch |err| {
-                self.setDiagnostic(publicDefBodyParseDiagnostic(
-                    &state.parser,
-                    def,
-                    err,
-                ));
-                return null;
-            };
-            return .{ .stmt = filled, .body_span = def.body.span };
+                def,
+            ) catch null;
         },
         .block => {
             proof.putBack(item);

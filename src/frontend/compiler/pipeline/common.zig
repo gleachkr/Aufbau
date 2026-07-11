@@ -189,43 +189,7 @@ pub fn fillPublicDefBody(
     };
 
     switch (item) {
-        .def => |def| {
-            try rejectDefAnnotations(self, def);
-            if (!std.mem.eql(u8, def.name, term_stmt.name)) {
-                self.setDiagnostic(
-                    CompilerDiag.publicDefBodyNameMismatchDiagnostic(
-                        term_stmt.name,
-                        def.name,
-                        def.name_span,
-                    ),
-                );
-                return error.PublicDefBodyNameMismatch;
-            }
-            if (def.header_tail != null) {
-                self.setDiagnostic(
-                    CompilerDiag.publicDefBodyHeaderDiagnostic(
-                        def.name,
-                        def.header_tail_span orelse def.name_span,
-                    ),
-                );
-                return error.PublicDefBodyMustBeHeaderless;
-            }
-            const body_span = proofMathTextSpan(def.body.span);
-            var filled = term_stmt;
-            filled.body = parser.parsePublicDefBodyText(
-                term_stmt,
-                def.body.text,
-                body_span,
-            ) catch |err| {
-                self.setDiagnostic(publicDefBodyParseDiagnostic(
-                    parser,
-                    def,
-                    err,
-                ));
-                return err;
-            };
-            return .{ .stmt = filled, .body_span = def.body.span };
-        },
+        .def => |def| return fillFromFillerDefItem(self, parser, term_stmt, def),
         .block => {
             actual_proofs.putBack(item);
             self.setDiagnostic(CompilerDiag.missingPublicDefBodyDiagnostic(
@@ -235,6 +199,80 @@ pub fn fillPublicDefBody(
             return error.MissingPublicDefBody;
         },
     }
+}
+
+/// Fill `term_stmt` (a bodyless public def) from its .auf filler item. The
+/// filler may carry a dummy-only binder tail declaring extra hidden dummies
+/// (`def name (.d: obj) = $ ... $`); a tail with a full signature — a
+/// local-def shape — is rejected.
+pub fn fillFromFillerDefItem(
+    self: *CompilerContext,
+    parser: *MM0Parser,
+    term_stmt: TermStmt,
+    def: DefItem,
+) !FilledPublicDef {
+    try rejectDefAnnotations(self, def);
+    if (!std.mem.eql(u8, def.name, term_stmt.name)) {
+        self.setDiagnostic(
+            CompilerDiag.publicDefBodyNameMismatchDiagnostic(
+                term_stmt.name,
+                def.name,
+                def.name_span,
+            ),
+        );
+        return error.PublicDefBodyNameMismatch;
+    }
+    var base = term_stmt;
+    if (def.header_tail) |tail| {
+        if (def.isLocalDef()) {
+            self.setDiagnostic(
+                CompilerDiag.publicDefBodyHeaderDiagnostic(
+                    def.name,
+                    def.header_tail_span orelse def.name_span,
+                ),
+            );
+            return error.PublicDefBodyMustBeHeaderless;
+        }
+        const tail_span = def.header_tail_span orelse def.name_span;
+        base = parser.extendStmtWithFillerDummies(
+            term_stmt,
+            tail,
+            tail_span.start,
+        ) catch |err| {
+            self.setDiagnostic(fillerDummyDiagnostic(parser, def, err));
+            return err;
+        };
+    }
+    const body_span = proofMathTextSpan(def.body.span);
+    var filled = base;
+    filled.body = parser.parsePublicDefBodyText(
+        base,
+        def.body.text,
+        body_span,
+    ) catch |err| {
+        self.setDiagnostic(publicDefBodyParseDiagnostic(
+            parser,
+            def,
+            err,
+        ));
+        return err;
+    };
+    return .{ .stmt = filled, .body_span = def.body.span };
+}
+
+pub fn fillerDummyDiagnostic(
+    parser: *const MM0Parser,
+    def: DefItem,
+    err: anyerror,
+) Diagnostic {
+    return .{
+        .kind = .generic,
+        .err = err,
+        .source = .proof,
+        .name = def.name,
+        .span = CompilerDiag.mathSpanToSpanOpt(parser.diagnosticSpan()) orelse
+            (def.header_tail_span orelse def.name_span),
+    };
 }
 
 pub fn proofMathTextSpan(span: Span) MathSpan {
@@ -417,7 +455,7 @@ pub fn drainTrailingLocalProofItems(
 pub fn isLocalProofItem(item: TopLevelItem) bool {
     return switch (item) {
         .block => |block| block.kind == .lemma,
-        .def => |def| def.header_tail != null,
+        .def => |def| def.isLocalDef(),
     };
 }
 
@@ -430,7 +468,7 @@ pub fn anchorMatches(header: PublicStmtHeader, item: TopLevelItem) bool {
             return std.mem.eql(u8, name, block.name);
         },
         .def => |def| {
-            if (def.header_tail != null) return false;
+            if (def.isLocalDef()) return false;
             if (header.kind != .def) return false;
             const name = header.name orelse return false;
             return std.mem.eql(u8, name, def.name);
@@ -488,13 +526,16 @@ pub fn processLocalDefItem(
 ) !void {
     try rejectDefAnnotations(self, def);
 
-    const header_tail = def.header_tail orelse {
+    // Covers both a missing tail and a dummy-only filler tail: neither
+    // declares the signature a local def needs.
+    if (!def.isLocalDef()) {
         self.setDiagnostic(CompilerDiag.unexpectedProofDefDiagnostic(
             def.name,
             def.name_span,
         ));
         return error.UnexpectedProofDefItem;
-    };
+    }
+    const header_tail = def.header_tail.?;
     const term_stmt = parser.parseLocalDefText(
         def.name,
         .{ .start = def.name_span.start, .end = def.name_span.end },

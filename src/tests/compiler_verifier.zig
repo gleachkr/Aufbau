@@ -461,6 +461,96 @@ test "compiler fills public bodyless defs from proof source" {
     try mm0.verifyPair(allocator, mm0_src, mmb);
 }
 
+test "compiler fills public bodyless defs with filler-declared dummies" {
+    const allocator = std.testing.allocator;
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort obj;
+        \\provable sort wff;
+        \\term all {x: obj} (p: wff x): wff;
+        \\term eq (a b: obj): wff;
+        \\term conj (a b: wff): wff;
+        \\def mix (.m: obj): wff;
+        \\def pick: wff;
+    ;
+    const proof_src =
+        \\def mix (.d: obj) = $ conj (all m (eq m m)) (all d (eq d d)) $
+        \\def pick (.a .b: obj) = $ all a (all b (eq a b)) $
+    ;
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+}
+
+test "compiler rejects invalid filler binder tails" {
+    const mm0_src =
+        \\sort obj;
+        \\def alias: obj;
+    ;
+
+    const cases = [_]struct { proof: []const u8, err: anyerror }{
+        .{
+            .proof = "def alias (x: obj) = $ x $",
+            .err = error.FillerBinderMustBeDummy,
+        },
+        .{
+            .proof = "def alias (.d .d: obj) = $ d $",
+            .err = error.DuplicateFillerBinderName,
+        },
+        .{
+            .proof = "def alias (.d: nope) = $ d $",
+            .err = error.UnknownSort,
+        },
+        .{
+            .proof = "def alias (x: obj): obj = $ x $",
+            .err = error.PublicDefBodyMustBeHeaderless,
+        },
+    };
+    for (cases) |case| {
+        var compiler = Compiler.initWithProof(
+            std.testing.allocator,
+            mm0_src,
+            case.proof,
+        );
+        try std.testing.expectError(
+            case.err,
+            compiler.compileMmb(std.testing.allocator),
+        );
+        const diag = compiler.diagnostics.last_diagnostic orelse
+            return error.ExpectedDiagnostic;
+        try std.testing.expectEqual(case.err, diag.err);
+    }
+}
+
+test "filler dummies in a free sort are rejected by the kernel" {
+    const allocator = std.testing.allocator;
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\free sort obj;
+        \\provable sort wff;
+        \\term all {x: obj} (p: wff x): wff;
+        \\term eq (a b: obj): wff;
+        \\def alias: wff;
+    ;
+    const proof_src =
+        \\def alias (.d: obj) = $ all d (eq d d) $
+    ;
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+
+    // The compiler mirrors local-def behavior and leaves the free-sort dummy
+    // restriction to the verifier.
+    try std.testing.expectError(
+        error.FreeSort,
+        mm0.verifyPair(allocator, mm0_src, mmb),
+    );
+}
+
 test "compiler rejects missing public body filler" {
     const mm0_src =
         \\provable sort wff;
@@ -695,6 +785,37 @@ test "compiler analyze accepts valid local defs" {
         \\thm
         \\---
         \\p: $ alias $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        compiler.primaryDiagnostics().len,
+    );
+}
+
+test "compiler analyze accepts filler-declared dummies" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort obj;
+        \\provable sort wff;
+        \\term all {x: obj} (p: wff x): wff;
+        \\term eq (a b: obj): wff;
+        \\def refl_closure: wff;
+        \\axiom ax_rc: $ refl_closure $;
+        \\theorem thm: $ refl_closure $;
+    ;
+    const proof_src =
+        \\def refl_closure (.d: obj) = $ all d (eq d d) $
+        \\
+        \\thm
+        \\---
+        \\p: $ refl_closure $ by ax_rc []
     ;
 
     var compiler = Compiler.initWithProof(

@@ -458,8 +458,8 @@ pub const Builder = struct {
         text: []const u8,
         def: proof_script.DefItem,
     ) !void {
-        if (def.header_tail) |header_tail| {
-            try self.addLocalProofDef(text, def, header_tail);
+        if (def.isLocalDef()) {
+            try self.addLocalProofDef(text, def, def.header_tail.?);
         } else {
             try self.addPublicDefBodyItem(def);
         }

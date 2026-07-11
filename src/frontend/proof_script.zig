@@ -106,6 +106,23 @@ pub const DefItem = struct {
     body: MathString,
     annotations: []const []const u8 = &.{},
     span: Span,
+
+    /// A def item whose header tail declares a full signature — it has a
+    /// top-level `: sort` return annotation — is a proof-local definition.
+    /// A tail of bare binder groups (`def name (.d: obj) = $ ... $`) is a
+    /// public body filler declaring extra hidden dummies, and a `null` tail
+    /// is a plain filler.
+    pub fn isLocalDef(self: DefItem) bool {
+        const tail = self.header_tail orelse return false;
+        var depth: usize = 0;
+        for (tail) |ch| switch (ch) {
+            '(', '{' => depth += 1,
+            ')', '}' => depth -|= 1,
+            ':' => if (depth == 0) return true,
+            else => {},
+        };
+        return false;
+    }
 };
 
 pub const TopLevelItem = union(enum) {

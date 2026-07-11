@@ -153,6 +153,222 @@ pub const MM0Parser = struct {
         return term;
     }
 
+    /// Extend a bodyless public def's parsed .mm0 statement with the extra
+    /// hidden dummies declared on its .auf filler:
+    /// `def name (.d: obj) = $ ... $`. The visible signature stays with the
+    /// .mm0 declaration, so every binder group in the tail must contain only
+    /// `.name` dummy binders. New dummies are appended after the
+    /// .mm0-declared ones, with bound-dep bits positioned after all existing
+    /// bound variables (mirroring how the core parser numbers binders).
+    /// `tail_start` is the tail's absolute offset in the proof source; error
+    /// spans are reported relative to it via `diagnosticSpan()`.
+    pub fn extendStmtWithFillerDummies(
+        self: *MM0Parser,
+        stmt: TermStmt,
+        tail: []const u8,
+        tail_start: usize,
+    ) anyerror!TermStmt {
+        self.clearDiagnosticOverrides();
+        self.diagnostic_name_override = stmt.name;
+
+        var scanned = std.ArrayListUnmanaged(ScannedFillerDummy){};
+        defer scanned.deinit(self.core.allocator);
+        try self.scanFillerDummyTail(tail, tail_start, &scanned);
+
+        var bound_count: usize = stmt.dummy_args.len;
+        for (stmt.args) |arg| {
+            if (arg.bound) bound_count += 1;
+        }
+
+        const allocator = self.core.allocator;
+        const old_len = stmt.dummy_args.len;
+        const new_infos = try allocator.alloc(
+            ArgInfo,
+            old_len + scanned.items.len,
+        );
+        const new_names = try allocator.alloc(
+            ?[]const u8,
+            old_len + scanned.items.len,
+        );
+        const new_exprs = try allocator.alloc(
+            *const Expr,
+            old_len + scanned.items.len,
+        );
+        @memcpy(new_infos[0..old_len], stmt.dummy_args);
+        @memcpy(new_names[0..old_len], stmt.dummy_names);
+        @memcpy(new_exprs[0..old_len], stmt.dummy_exprs);
+
+        for (scanned.items, old_len..) |dummy, idx| {
+            if (dummy.name) |name| {
+                if (bindsName(stmt, new_names[0..idx], name)) {
+                    return self.fillerError(
+                        error.DuplicateFillerBinderName,
+                        tail_start,
+                        dummy.name_span,
+                    );
+                }
+                if (self.core.isRegisteredHoleToken(name)) {
+                    return self.fillerError(
+                        error.HoleTokenNameCollision,
+                        tail_start,
+                        dummy.name_span,
+                    );
+                }
+                if (self.core.token_precs.contains(name)) {
+                    return self.fillerError(
+                        error.BinderTokenCollision,
+                        tail_start,
+                        dummy.name_span,
+                    );
+                }
+            }
+            const sort_id = self.core.sort_names.get(dummy.sort_name) orelse {
+                return self.fillerError(
+                    error.UnknownSort,
+                    tail_start,
+                    dummy.sort_span,
+                );
+            };
+            if (bound_count >= 55) {
+                return self.fillerError(
+                    error.TooManyBoundVars,
+                    tail_start,
+                    dummy.name_span,
+                );
+            }
+            const expr = try allocator.create(Expr);
+            expr.* = .{ .variable = .{
+                .sort = @intCast(sort_id),
+                .bound = true,
+                .deps = @as(u55, 1) << @intCast(bound_count),
+            } };
+            bound_count += 1;
+            new_infos[idx] = .{
+                .sort_name = dummy.sort_name,
+                .bound = true,
+                .deps = expr.variable.deps,
+            };
+            new_names[idx] = dummy.name;
+            new_exprs[idx] = expr;
+        }
+
+        var extended = stmt;
+        extended.dummy_args = new_infos;
+        extended.dummy_names = new_names;
+        extended.dummy_exprs = new_exprs;
+        return extended;
+    }
+
+    /// Scan the filler tail as binder groups of dummies. Structural
+    /// violations (not a binder group, missing sort, unclosed group) fall
+    /// back to the headerless-filler error; a well-formed binder that just
+    /// isn't a dummy gets the specific error.
+    fn scanFillerDummyTail(
+        self: *MM0Parser,
+        tail: []const u8,
+        tail_start: usize,
+        out: *std.ArrayListUnmanaged(ScannedFillerDummy),
+    ) anyerror!void {
+        var pos: usize = 0;
+        while (true) {
+            skipFillerSpace(tail, &pos);
+            if (pos >= tail.len) return;
+            const open = tail[pos];
+            if (open != '(' and open != '{') {
+                return self.fillerError(
+                    error.PublicDefBodyMustBeHeaderless,
+                    tail_start,
+                    .{ .start = pos, .end = tail.len },
+                );
+            }
+            const close: u8 = if (open == '(') ')' else '}';
+            pos += 1;
+
+            const group_start = out.items.len;
+            while (true) {
+                skipFillerSpace(tail, &pos);
+                if (pos >= tail.len) {
+                    return self.fillerError(
+                        error.PublicDefBodyMustBeHeaderless,
+                        tail_start,
+                        .{ .start = pos, .end = tail.len },
+                    );
+                }
+                if (tail[pos] == ':') break;
+                if (tail[pos] != '.') {
+                    const span = fillerIdentSpan(tail, pos);
+                    return self.fillerError(
+                        error.FillerBinderMustBeDummy,
+                        tail_start,
+                        span,
+                    );
+                }
+                pos += 1;
+                const name_span = fillerIdentSpan(tail, pos);
+                if (name_span.end == name_span.start) {
+                    return self.fillerError(
+                        error.PublicDefBodyMustBeHeaderless,
+                        tail_start,
+                        .{ .start = pos, .end = tail.len },
+                    );
+                }
+                const name = tail[name_span.start..name_span.end];
+                pos = name_span.end;
+                try out.append(self.core.allocator, .{
+                    .name = if (std.mem.eql(u8, name, "_")) null else name,
+                    .name_span = name_span,
+                    .sort_name = undefined,
+                    .sort_span = undefined,
+                });
+            }
+            if (out.items.len == group_start) {
+                return self.fillerError(
+                    error.PublicDefBodyMustBeHeaderless,
+                    tail_start,
+                    .{ .start = pos, .end = tail.len },
+                );
+            }
+            pos += 1;
+            skipFillerSpace(tail, &pos);
+            const sort_span = fillerIdentSpan(tail, pos);
+            if (sort_span.end == sort_span.start) {
+                return self.fillerError(
+                    error.PublicDefBodyMustBeHeaderless,
+                    tail_start,
+                    .{ .start = pos, .end = tail.len },
+                );
+            }
+            const sort_name = tail[sort_span.start..sort_span.end];
+            pos = sort_span.end;
+            skipFillerSpace(tail, &pos);
+            if (pos >= tail.len or tail[pos] != close) {
+                return self.fillerError(
+                    error.PublicDefBodyMustBeHeaderless,
+                    tail_start,
+                    .{ .start = pos, .end = tail.len },
+                );
+            }
+            pos += 1;
+            for (out.items[group_start..]) |*dummy| {
+                dummy.sort_name = sort_name;
+                dummy.sort_span = sort_span;
+            }
+        }
+    }
+
+    fn fillerError(
+        self: *MM0Parser,
+        err: anyerror,
+        tail_start: usize,
+        rel_span: MathSpan,
+    ) anyerror {
+        self.diagnostic_span_override = .{
+            .start = tail_start + rel_span.start,
+            .end = tail_start + rel_span.end,
+        };
+        return err;
+    }
+
     pub fn parseFormulaText(
         self: *MM0Parser,
         math: []const u8,
@@ -322,6 +538,57 @@ pub const MM0Parser = struct {
         }
     }
 };
+
+const ScannedFillerDummy = struct {
+    name: ?[]const u8,
+    name_span: MathSpan,
+    sort_name: []const u8,
+    sort_span: MathSpan,
+};
+
+fn skipFillerSpace(tail: []const u8, pos: *usize) void {
+    while (pos.* < tail.len) : (pos.* += 1) {
+        switch (tail[pos.*]) {
+            ' ', '\t', '\r', '\n' => {},
+            else => return,
+        }
+    }
+}
+
+/// Span of the identifier at `pos` (empty span if none), using the core
+/// parser's identifier character classes.
+fn fillerIdentSpan(tail: []const u8, pos: usize) MathSpan {
+    var end = pos;
+    if (end < tail.len and
+        (std.ascii.isAlphabetic(tail[end]) or tail[end] == '_'))
+    {
+        end += 1;
+        while (end < tail.len and
+            (std.ascii.isAlphanumeric(tail[end]) or tail[end] == '_'))
+        {
+            end += 1;
+        }
+    }
+    return .{ .start = pos, .end = end };
+}
+
+fn bindsName(
+    stmt: TermStmt,
+    extra_dummy_names: []const ?[]const u8,
+    name: []const u8,
+) bool {
+    for (stmt.arg_names) |maybe_name| {
+        if (maybe_name) |existing| {
+            if (std.mem.eql(u8, existing, name)) return true;
+        }
+    }
+    for (extra_dummy_names) |maybe_name| {
+        if (maybe_name) |existing| {
+            if (std.mem.eql(u8, existing, name)) return true;
+        }
+    }
+    return false;
+}
 
 fn spanTouches(span: MathSpan, target: MathSpan) bool {
     return span.start <= target.end and span.end >= target.start;
