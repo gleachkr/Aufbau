@@ -120,11 +120,18 @@ pub fn fixtureForSourceTarget(
     proof_src: []const u8,
     target: SourceTarget,
 ) !Fixture {
+    // A lemma target normally anchors to the next public block; a TRAILING
+    // lemma (no following public block) anchors to mm0 EOF instead — every
+    // declared rule is in scope, mirroring `drainTrailingLocalProofItems` on
+    // the compile path.
     const anchor_name = try sourceTargetAnchorName(
         allocator,
         proof_src,
         target.block,
-    ) orelse return error.MissingTheorem;
+    );
+    if (target.block.kind == .theorem and anchor_name == null) {
+        return error.MissingTheorem;
+    }
     var fixture = try initSearchFixture(allocator, mm0_src);
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
@@ -133,12 +140,13 @@ pub fn fixtureForSourceTarget(
 
     while (true) {
         try fixture.parser.prepareNextPublicStatement();
-        const header = fixture.parser.peekNextPublicStmtHeader() orelse {
-            return error.MissingTheorem;
-        };
-        if (target.block.kind == .lemma and
-            publicHeaderNameEql(header, anchor_name))
-        {
+        const maybe_header = fixture.parser.peekNextPublicStmtHeader();
+        const lemma_scope_complete = target.block.kind == .lemma and
+            if (anchor_name) |name|
+                maybe_header != null and publicHeaderNameEql(maybe_header.?, name)
+            else
+                maybe_header == null;
+        if (lemma_scope_complete) {
             const block = try drainLocalItemsBeforeSearchTarget(
                 &compiler,
                 allocator,
@@ -155,6 +163,7 @@ pub fn fixtureForSourceTarget(
             fixture.available_rule_count = fixture.env.rules.items.len;
             return fixture;
         }
+        if (maybe_header == null) return error.MissingTheorem;
 
         try PipelineCommon.drainAnchoredLocalProofItems(
             &compiler,
@@ -188,8 +197,9 @@ pub fn fixtureForSourceTarget(
                 term_stmt,
             ),
             .assertion => |assertion| {
+                // For a theorem target the anchor is its own (non-null) name.
                 if (target.block.kind == .theorem and
-                    std.mem.eql(u8, assertion.name, anchor_name))
+                    std.mem.eql(u8, assertion.name, anchor_name.?))
                 {
                     fixture.assertion = assertion;
                     fixture.available_rule_count = fixture.env.rules.items.len;

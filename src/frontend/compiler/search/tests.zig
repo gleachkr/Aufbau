@@ -676,6 +676,58 @@ test "source suggestions report found and miss status" {
     try std.testing.expect(miss.target_span != null);
 }
 
+// A trailing local lemma has no public anchor block; its search scope is the
+// whole mm0 (mirrors `drainTrailingLocalProofItems` on the compile path).
+test "source suggestions work in a trailing local lemma" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\axiom p: $ P $;
+        \\theorem t: $ P $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // Lemmas-only proof source: no public block at all.
+    const solo_src =
+        \\lemma l: $ P $
+        \\----
+        \\l1: $ P $ by exact?
+    ;
+    var solo = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        solo_src,
+        std.mem.indexOf(u8, solo_src, "exact?").?,
+        .{},
+    );
+    defer solo.deinit();
+    try std.testing.expect(solo.items.len > 0);
+    try std.testing.expectEqual(types.SearchStatus.found, solo.status);
+
+    // A lemma after the last public block (trailing, not anchored).
+    const trailing_src =
+        \\t
+        \\----
+        \\l1: $ P $ by p []
+        \\
+        \\lemma l: $ P $
+        \\----
+        \\l1: $ P $ by exact?
+    ;
+    var trailing = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        trailing_src,
+        std.mem.indexOf(u8, trailing_src, "exact?").?,
+        .{},
+    );
+    defer trailing.deinit();
+    try std.testing.expect(trailing.items.len > 0);
+    try std.testing.expectEqual(types.SearchStatus.found, trailing.status);
+}
+
 // Minimal one-sided ACUI sequent theory exercising the unbound-repeated-binder
 // branch of `closedAcuiTemplateMismatch` (repeatedBinderMemberMismatch): the
 // `ax`-style closing rule `⊢ a , (~ a) , d` repeats the wff binder `a` across two
