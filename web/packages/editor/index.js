@@ -20,7 +20,10 @@
 //     the same seam for a bodyless `def …;` declaration whose `.auf` content is
 //     the public body filler — the definiens (and any hidden dummy binders it
 //     needs) is what the reader edits, and the cells that prove things *about*
-//     the definition check it.
+//     the definition check it. A theory cell has mm0 content and no
+//     `.auf` at all: its editable body IS its mm0 fragment, so terms and
+//     axioms can be authored in place; with the `doc` grouping attribute a
+//     page needs no <aufbau-theory> element at all.
 
 import {
   EditorView,
@@ -342,6 +345,16 @@ function byteToCharIndex(str, byteOffset) {
   return str.length;
 }
 
+// Number of newlines before `charIndex` — the line delta that maps a cell's
+// body-local LSP positions into the stitched document it starts within.
+function lineDeltaAt(text, charIndex) {
+  let delta = 0;
+  for (let i = 0; i < charIndex; i += 1) {
+    if (text.charCodeAt(i) === 10) delta += 1;
+  }
+  return delta;
+}
+
 function severityOf(diag) {
   if (diag.severity === "warning") return "warning";
   if (diag.severity === "error") return "error";
@@ -372,7 +385,13 @@ function stitch(base, fragments, sep) {
 // Returns a Map<cellId, { proof: [...], banner: [...] }> plus `theory` diags
 // (mm0 diagnostics that fall in the shared base theory, i.e. author errors).
 // `proof` diagnostics carry a `localByte` offset into that cell's editable body.
-function routeDiagnostics(diagnostics, { aufRanges, mm0Ranges, bodyStartOf }) {
+// `mm0BodyOwned(id)` marks cells whose editable body IS their mm0 fragment
+// (theory cells): their mm0 diagnostics localize like proof ones instead of
+// becoming banners.
+function routeDiagnostics(
+  diagnostics,
+  { aufRanges, mm0Ranges, bodyStartOf, mm0BodyOwned },
+) {
   const perCell = new Map();
   const theory = [];
   const cellEntry = (id) => {
@@ -401,8 +420,17 @@ function routeDiagnostics(diagnostics, { aufRanges, mm0Ranges, bodyStartOf }) {
       }
     } else {
       const r = owning(mm0Ranges, d.spanStart);
-      if (r) cellEntry(r.id).banner.push(d);
-      else theory.push(d); // fell in the base theory
+      if (!r) {
+        theory.push(d); // fell in the base theory
+      } else if (mm0BodyOwned?.(r.id)) {
+        cellEntry(r.id).proof.push({
+          diag: d,
+          localByte: d.spanStart - r.start,
+          localEnd: (d.spanEnd ?? d.spanStart) - r.start,
+        });
+      } else {
+        cellEntry(r.id).banner.push(d);
+      }
     }
   }
   return { perCell, theory };
@@ -437,6 +465,10 @@ function documentKeyFor(cell) {
   if (ref) return `theory:${ref}`;
   const src = cell.getAttribute("theory-src");
   if (src) return `theory-src:${src}`;
+  // `doc` groups cells with no shared <aufbau-theory> at all (empty base
+  // theory) — the natural pairing for theory cells, which bring their own mm0.
+  const doc = cell.getAttribute("doc");
+  if (doc) return `doc:${doc}`;
   return null; // standalone → singleton document
 }
 
@@ -556,6 +588,7 @@ class AufbauDocument {
       aufRanges: auf.ranges,
       mm0Ranges: mm0.ranges,
       bodyStartOf: (id) => bodyStartByte.get(id),
+      mm0BodyOwned: (id) => id.isTheoryCell(),
     });
 
     const durationMs = Math.round(result.durationMs ?? 0);
@@ -610,15 +643,19 @@ class AufbauDocument {
       syncLspDoc(rpc, s.aufUri, "aufbau", ++s.aufVersion, auf.text);
     }
 
+    // A theory cell's body lives in the stitched mm0; every other cell's body
+    // lives in the stitched auf after its fixed prefix.
+    if (cell.isTheoryCell()) {
+      const range = mm0.ranges.find((r) => r.id === cell);
+      if (!range) return null;
+      const bodyCharStart = byteToCharIndex(mm0.text, range.start);
+      return { rpc, uri: s.mm0Uri, lineDelta: lineDeltaAt(mm0.text, bodyCharStart) };
+    }
     const range = auf.ranges.find((r) => r.id === cell);
     if (!range) return null;
     const bodyCharStart =
       byteToCharIndex(auf.text, range.start) + cell.prefixText().length;
-    let lineDelta = 0;
-    for (let i = 0; i < bodyCharStart; i += 1) {
-      if (auf.text.charCodeAt(i) === 10) lineDelta += 1;
-    }
-    return { rpc, uri: s.aufUri, lineDelta };
+    return { rpc, uri: s.aufUri, lineDelta: lineDeltaAt(auf.text, bodyCharStart) };
   }
 }
 
@@ -644,8 +681,11 @@ class AufbauProof extends HTMLElement {
     if (this._booted) return;
     this._booted = true;
     this.attachShadow({ mode: "open" });
-    // Preserve the raw proof source for the static fallback before we build UI.
-    this._rawProof = this.querySelector('script[type="text/auf"]')?.textContent;
+    // Preserve the raw source for the static fallback before we build UI (a
+    // theory cell has no text/auf; its mm0 fragment is the content).
+    this._rawProof =
+      this.querySelector('script[type="text/auf"]')?.textContent ??
+      this.querySelector('script[type="text/mm0"]')?.textContent;
     this._ready = false;
     this.boot().catch((err) => this.renderFallback(err));
   }
@@ -659,39 +699,51 @@ class AufbauProof extends HTMLElement {
     this._doc = getOrCreateDocument(this);
     this._doc.register(this);
 
-    const proofText = await readSource(this, {
-      inlineType: "text/auf",
-      srcAttr: "src",
-    });
-    if (proofText == null) throw new Error("no proof source (inline or src)");
-    if (this._rawProof == null) this._rawProof = proofText;
-
     // A cell's inline text/mm0 is its declaration contribution to the document.
     const inlineMm0 = this.querySelector('script[type="text/mm0"]');
     this._mm0Fragment = inlineMm0 ? dedent(inlineMm0.textContent ?? "") : "";
 
-    const block = splitBlock(proofText);
-    this._prefix = block ? `${block.header}\n${block.underline}\n` : "";
-    this._prefixBytesValue = byteLen(this._prefix);
-    this._body = block ? block.body : proofText;
-
-    // Goal display: a lemma block states its own assertion; a theorem block gets
-    // its statement from the mm0 — the cell's own fragment first, then the theory.
-    // A definition cell (a def filler, so no `----` split) shows the bodyless
-    // declaration it is filling, looked up the same way.
-    let goal = block ? parseGoal(block.header) : null;
-    if (goal && !goal.concl) {
-      goal =
-        mm0Goal(this._mm0Fragment, goal.name) ??
-        mm0Goal(await this._doc.theoryText(), goal.name) ??
-        goal;
+    const proofText = await readSource(this, {
+      inlineType: "text/auf",
+      srcAttr: "src",
+    });
+    // An mm0 fragment with no proof source makes this a theory cell: the
+    // fragment itself is what the editor holds and edits.
+    this._mm0Editable = proofText == null && this._mm0Fragment !== "";
+    if (proofText == null && !this._mm0Editable) {
+      throw new Error("no proof source (inline or src)");
     }
-    if (!block) {
-      const defName = defFillerName(proofText);
-      const signature =
-        mm0DefSignature(this._mm0Fragment, defName) ??
-        mm0DefSignature(await this._doc.theoryText(), defName);
-      if (signature != null) goal = { name: defName, signature };
+    if (this._rawProof == null) this._rawProof = proofText ?? this._mm0Fragment;
+
+    let goal = null;
+    if (this._mm0Editable) {
+      this._prefix = "";
+      this._prefixBytesValue = 0;
+      this._body = this._mm0Fragment;
+    } else {
+      const block = splitBlock(proofText);
+      this._prefix = block ? `${block.header}\n${block.underline}\n` : "";
+      this._prefixBytesValue = byteLen(this._prefix);
+      this._body = block ? block.body : proofText;
+
+      // Goal display: a lemma block states its own assertion; a theorem block
+      // gets its statement from the mm0 — the cell's own fragment first, then
+      // the theory. A definition cell (a def filler, so no `----` split) shows
+      // the bodyless declaration it is filling, looked up the same way.
+      goal = block ? parseGoal(block.header) : null;
+      if (goal && !goal.concl) {
+        goal =
+          mm0Goal(this._mm0Fragment, goal.name) ??
+          mm0Goal(await this._doc.theoryText(), goal.name) ??
+          goal;
+      }
+      if (!block) {
+        const defName = defFillerName(proofText);
+        const signature =
+          mm0DefSignature(this._mm0Fragment, defName) ??
+          mm0DefSignature(await this._doc.theoryText(), defName);
+        if (signature != null) goal = { name: defName, signature };
+      }
     }
     this.renderChrome(goal);
     await this.mountEditor(this._body);
@@ -704,7 +756,13 @@ class AufbauProof extends HTMLElement {
   isReady() {
     return this._ready === true;
   }
+  isTheoryCell() {
+    return this._mm0Editable === true;
+  }
   mm0Fragment() {
+    if (this._mm0Editable) {
+      return this._view ? this._view.state.doc.toString() : this._body;
+    }
     return this._mm0Fragment ?? "";
   }
   prefixBytes() {
@@ -714,6 +772,7 @@ class AufbauProof extends HTMLElement {
     return this._prefix ?? "";
   }
   aufText() {
+    if (this._mm0Editable) return "";
     const body = this._view ? this._view.state.doc.toString() : this._body;
     return this._prefix + body;
   }
@@ -844,7 +903,9 @@ class AufbauProof extends HTMLElement {
           }),
         );
       }
-      if (!readonly) {
+      // Code actions are proof-search suggestions; a theory cell's mm0 body
+      // has no search placeholders, so don't poll for them there.
+      if (!readonly && !this._mm0Editable) {
         exts.push(
           cellActionField,
           EditorView.updateListener.of((u) => {
