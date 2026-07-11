@@ -36,6 +36,9 @@ pub fn run(
     var rule_catalog = RuleCatalog.build(allocator, self.source) catch
         RuleCatalog.Catalog.init(allocator);
     var env = GlobalEnv.init(allocator);
+    // Snapshot pretty-printed statements on every exit path, while the parser
+    // (the notation provider) and env still live in this call's arena.
+    defer if (self.statement_sink) |sink| sink.capture(&parser, &env);
     var registry = RewriteRegistry.init(allocator);
     var fresh_bindings = std.AutoHashMap(u32, []const FreshDecl).init(
         allocator,

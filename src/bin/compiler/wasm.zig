@@ -27,7 +27,13 @@ pub export fn compile_sources(
 
     const mm0_src = ptrToConstSlice(mm0_ptr, mm0_len);
     const proof_src = ptrToConstSlice(proof_ptr, proof_len);
+    // Pretty-printed statement snapshots for the meta JSON, captured at the
+    // end of the pipeline run (or of the analysis rerun on failure, which
+    // resets and re-captures with recovery's richer environment).
+    var statements = mm0.StatementSink.init(allocator);
+    defer statements.deinit();
     var compiler = mm0.Compiler.initWithProof(allocator, mm0_src, proof_src);
+    compiler.statement_sink = &statements;
 
     result_mmb = compiler.compileMmb(allocator) catch |err| {
         var analysis_compiler = mm0.Compiler.initWithProof(
@@ -40,12 +46,18 @@ pub export fn compile_sources(
         // checker stops cleanly at it, and a warning-severity diagnostic per
         // placeholder is synthesized below (`writePlaceholderDiagnostics`).
         analysis_compiler.allow_search_placeholders = true;
+        analysis_compiler.statement_sink = &statements;
         analysis_compiler.analyze() catch {};
-        writeCompileFailure(&compiler, &analysis_compiler, proof_src, err) catch
-            clearState();
+        writeCompileFailure(
+            &compiler,
+            &analysis_compiler,
+            &statements,
+            proof_src,
+            err,
+        ) catch clearState();
         return 0;
     };
-    writeCompileSuccess(result_mmb.len) catch {
+    writeCompileSuccess(result_mmb.len, &statements) catch {
         clearState();
         return 0;
     };
@@ -89,7 +101,10 @@ fn slicePtr(bytes: []const u8) u32 {
     return @intCast(@intFromPtr(bytes.ptr));
 }
 
-fn writeCompileSuccess(mmb_len: usize) !void {
+fn writeCompileSuccess(
+    mmb_len: usize,
+    statements: *const mm0.StatementSink,
+) !void {
     var out: std.io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
 
@@ -102,6 +117,8 @@ fn writeCompileSuccess(mmb_len: usize) !void {
     try out.writer.print("{d}", .{mmb_len});
     try out.writer.writeAll(",\"diagnostic\":null,");
     try writeDiagnosticsField(&out.writer, null, null);
+    try out.writer.writeByte(',');
+    try writeStatementsField(&out.writer, statements);
     try out.writer.writeByte('}');
 
     result_json = try out.toOwnedSlice();
@@ -110,6 +127,7 @@ fn writeCompileSuccess(mmb_len: usize) !void {
 fn writeCompileFailure(
     compiler: *const mm0.Compiler,
     analysis_compiler: *const mm0.Compiler,
+    statements: *const mm0.StatementSink,
     proof_src: []const u8,
     err: anyerror,
 ) !void {
@@ -136,6 +154,8 @@ fn writeCompileFailure(
     }
     try out.writer.writeByte(',');
     try writeDiagnosticsField(&out.writer, analysis_compiler, proof_src);
+    try out.writer.writeByte(',');
+    try writeStatementsField(&out.writer, statements);
     try out.writer.writeByte('}');
 
     result_json = try out.toOwnedSlice();
@@ -280,6 +300,63 @@ fn writeJsonStringField(
     value: []const u8,
 ) !void {
     try writer.print("\"{s}\":\"{s}\"", .{ name, value });
+}
+
+// Pretty-printed statement snapshots: `[{name, kind, local, hyps, concl,
+// signature, body}]`. Rendered math can contain any notation token (`\/`,
+// quotes), so unlike the controlled diagnostic strings above these values go
+// through full JSON escaping.
+fn writeStatementsField(
+    writer: anytype,
+    statements: *const mm0.StatementSink,
+) !void {
+    try writer.writeAll("\"statements\":[");
+    for (statements.items(), 0..) |stmt, idx| {
+        if (idx != 0) try writer.writeByte(',');
+        try writer.writeAll("{\"name\":");
+        try writeJsonString(writer, stmt.name);
+        try writer.print(
+            ",\"kind\":\"{s}\",\"local\":{},\"hyps\":[",
+            .{ @tagName(stmt.kind), stmt.is_local },
+        );
+        for (stmt.hyps, 0..) |hyp, hyp_idx| {
+            if (hyp_idx != 0) try writer.writeByte(',');
+            try writeJsonString(writer, hyp);
+        }
+        try writer.writeAll("],\"concl\":");
+        try writeOptionalJsonString(writer, stmt.concl);
+        try writer.writeAll(",\"signature\":");
+        try writeOptionalJsonString(writer, stmt.signature);
+        try writer.writeAll(",\"body\":");
+        try writeOptionalJsonString(writer, stmt.body);
+        try writer.writeByte('}');
+    }
+    try writer.writeByte(']');
+}
+
+fn writeOptionalJsonString(writer: anytype, value: ?[]const u8) !void {
+    if (value) |actual| {
+        try writeJsonString(writer, actual);
+    } else {
+        try writer.writeAll("null");
+    }
+}
+
+fn writeJsonString(writer: anytype, value: []const u8) !void {
+    try writer.writeByte('"');
+    for (value) |ch| switch (ch) {
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        else => if (ch < 0x20) {
+            try writer.print("\\u{x:0>4}", .{ch});
+        } else {
+            try writer.writeByte(ch);
+        },
+    };
+    try writer.writeByte('"');
 }
 
 fn writeOptionalStringField(

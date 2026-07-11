@@ -154,6 +154,10 @@ fn analyzeInternal(
         self.proof_source,
         with_proof,
     );
+    // Snapshot pretty-printed statements on every exit path (recovery bails
+    // early in several places), while the parser and env are still alive.
+    defer if (self.statement_sink) |sink|
+        sink.capture(&state.parser, &state.env);
 
     parse_loop: while (true) {
         state.parser.prepareNextPublicStatement() catch |err| {

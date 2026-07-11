@@ -955,3 +955,93 @@ test "compiler analyze accepts trailing local defs after proof blocks" {
     const diags = compiler.primaryDiagnostics();
     try std.testing.expectEqual(@as(usize, 0), diags.len);
 }
+
+fn findStatement(
+    items: []const mm0.StatementSink.Statement,
+    name: []const u8,
+) ?mm0.StatementSink.Statement {
+    for (items) |stmt| {
+        if (std.mem.eql(u8, stmt.name, name)) return stmt;
+    }
+    return null;
+}
+
+test "statement sink captures pretty-printed statements" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort obj;
+        \\provable sort wff;
+        \\term top: wff;
+        \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        \\term all {x: obj} (p: wff x): wff;
+        \\term eq (a b: obj): wff;
+        \\axiom ax_i: $ top $;
+        \\axiom ax_k (a b: wff): $ a $ > $ b -> a $;
+        \\def mid: wff;
+        \\def rc: wff;
+        \\theorem mid_thm: $ mid $;
+    ;
+    const proof_src =
+        \\def mid = $ top -> top $
+        \\
+        \\def rc (.d: obj) = $ all d (eq d d) $
+        \\
+        \\mid_thm
+        \\----
+        \\l1: $ top $ by ax_i []
+        \\l2: $ top -> top $ by ax_k (a := $ top $, b := $ top $) [l1]
+        \\
+        \\lemma lemma_k (a: wff): $ a $ > $ top -> a $
+        \\----
+        \\l1: $ top -> a $ by ax_k (a := $ a $, b := $ top $) [#1]
+    ;
+
+    var sink = mm0.StatementSink.init(std.testing.allocator);
+    defer sink.deinit();
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    compiler.statement_sink = &sink;
+    const mmb_bytes = try compiler.compileMmb(std.testing.allocator);
+    std.testing.allocator.free(mmb_bytes);
+
+    const ax_k = findStatement(sink.items(), "ax_k").?;
+    try std.testing.expectEqual(mm0.StatementSink.Kind.axiom, ax_k.kind);
+    try std.testing.expect(ax_k.is_local == false);
+    try std.testing.expectEqual(@as(usize, 1), ax_k.hyps.len);
+    try std.testing.expectEqualStrings("a", ax_k.hyps[0]);
+    try std.testing.expectEqualStrings("b -> a", ax_k.concl.?);
+
+    const lemma_k = findStatement(sink.items(), "lemma_k").?;
+    try std.testing.expectEqual(mm0.StatementSink.Kind.theorem, lemma_k.kind);
+    try std.testing.expect(lemma_k.is_local);
+    try std.testing.expectEqualStrings("top -> a", lemma_k.concl.?);
+
+    // Definition entries: signature plus the current definiens, rendered with
+    // notation (mid) and in prefix form for notationless terms (rc, whose
+    // body also exercises hidden-dummy binder naming).
+    const mid = findStatement(sink.items(), "mid").?;
+    try std.testing.expectEqual(mm0.StatementSink.Kind.def, mid.kind);
+    try std.testing.expectEqualStrings(": wff", mid.signature.?);
+    try std.testing.expectEqualStrings("top -> top", mid.body.?);
+
+    const rc = findStatement(sink.items(), "rc").?;
+    try std.testing.expectEqualStrings("all d (eq d d)", rc.body.?);
+
+    // The analyze (recovery) path captures through the same seam.
+    var analysis = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    analysis.statement_sink = &sink;
+    try analysis.analyze();
+    try std.testing.expect(findStatement(sink.items(), "mid_thm") != null);
+    try std.testing.expectEqualStrings(
+        "top -> top",
+        findStatement(sink.items(), "mid").?.body.?,
+    );
+}

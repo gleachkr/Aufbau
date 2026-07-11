@@ -7,6 +7,7 @@ const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticPhase = CompilerDiag.DiagnosticPhase;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const Span = @import("../proof_script.zig").Span;
+const StatementSink = @import("../statement_sink.zig").StatementSink;
 
 pub const HoleInference = struct {
     span: Span,
@@ -45,6 +46,7 @@ pub const CompilerContext = struct {
     diagnostics: *DiagnosticSink,
     allow_search_placeholders: bool = false,
     hole_inference_sink: ?*HoleInferenceSink = null,
+    statement_sink: ?*StatementSink = null,
 
     pub fn init(
         source: []const u8,

@@ -608,6 +608,13 @@ class AufbauDocument {
       mm0BodyOwned: (id) => id.isTheoryCell(),
     });
 
+    // Pretty-printed statement snapshots, keyed the way cells look them up
+    // (defs live in the term namespace, everything else in the rule one).
+    const statements = new Map();
+    for (const s of meta.statements ?? []) {
+      statements.set(`${s.kind === "def" ? "def" : "rule"}:${s.name}`, s);
+    }
+
     const durationMs = Math.round(result.durationMs ?? 0);
     for (const c of cells) {
       const entry = routed.perCell.get(c) ?? { proof: [], banner: [] };
@@ -616,6 +623,7 @@ class AufbauDocument {
         durationMs,
         theoryDiags: routed.theory,
       });
+      c.applyStatements(statements);
     }
   }
 
@@ -747,7 +755,9 @@ class AufbauProof extends HTMLElement {
       // gets its statement from the mm0 — the cell's own fragment first, then
       // the theory. A definition cell (a def item, so no `----` split) shows
       // the signature it inhabits: the bodyless mm0 declaration for a public
-      // filler, the item's own header for a proof-local def.
+      // filler, the item's own header for a proof-local def. These are
+      // source-derived first renders; after each compile, `applyStatements`
+      // swaps in the compiler's pretty-printed forms under `_stmtKey`.
       goal = block ? parseGoal(block.header) : null;
       if (goal && !goal.concl) {
         goal =
@@ -755,8 +765,10 @@ class AufbauProof extends HTMLElement {
           mm0Goal(await this._doc.theoryText(), goal.name) ??
           goal;
       }
+      if (block && goal?.name) this._stmtKey = `rule:${goal.name}`;
       if (!block) {
         const defName = defFillerName(proofText);
+        if (defName) this._stmtKey = `def:${defName}`;
         const signature =
           mm0DefSignature(this._mm0Fragment, defName) ??
           mm0DefSignature(await this._doc.theoryText(), defName) ??
@@ -808,35 +820,8 @@ class AufbauProof extends HTMLElement {
     host.dataset.theme = this.getAttribute("theme") ?? "auto";
     this._container = host; // positioning context for the code-action menu
 
-    if (goal && goal.signature != null) {
-      // Definition cell: the declaration to inhabit, not a goal to prove.
-      const g = document.createElement("div");
-      g.className = "goal";
-      const n = document.createElement("span");
-      n.className = "goal-name";
-      n.textContent = "define";
-      const sep = goal.signature.startsWith(":") ? "" : " ";
-      g.append(n, formulaChip(`${goal.name}${sep}${goal.signature}`, "concl"));
-      host.append(g);
-    } else if (goal && (goal.concl || goal.hyps.length)) {
-      const g = document.createElement("div");
-      g.className = "goal";
-      if (goal.name) {
-        const n = document.createElement("span");
-        n.className = "goal-name";
-        n.textContent = `${goal.name}:`;
-        g.append(n);
-      }
-      for (const h of goal.hyps) g.append(formulaChip(h, "hyp"));
-      if (goal.hyps.length && goal.concl) {
-        const turnstile = document.createElement("span");
-        turnstile.className = "turnstile";
-        turnstile.textContent = "⊢";
-        g.append(turnstile);
-      }
-      if (goal.concl) g.append(formulaChip(goal.concl, "concl"));
-      host.append(g);
-    }
+    this._goalEl = this._buildGoalRow(goal);
+    if (this._goalEl) host.append(this._goalEl);
 
     this._banner = document.createElement("div");
     this._banner.className = "banner";
@@ -860,6 +845,98 @@ class AufbauProof extends HTMLElement {
       host.append(this._status);
     }
     root.append(host);
+  }
+
+  // The goal row: `define` + signature (+ live definiens) for definition
+  // cells, name + hyps ⊢ concl for theorem/lemma cells. Returns null when
+  // there is nothing to show.
+  _buildGoalRow(goal) {
+    if (!goal) return null;
+    const g = document.createElement("div");
+    g.className = "goal";
+    if (goal.signature != null) {
+      // Definition cell: the declaration to inhabit, not a goal to prove.
+      const n = document.createElement("span");
+      n.className = "goal-name";
+      n.textContent = "define";
+      const sep = goal.signature.startsWith(":") ? "" : " ";
+      g.append(n, formulaChip(`${goal.name}${sep}${goal.signature}`, "concl"));
+      if (goal.body) {
+        const eq = document.createElement("span");
+        eq.className = "turnstile";
+        eq.textContent = "=";
+        g.append(eq, formulaChip(goal.body, "hyp"));
+      }
+      return g;
+    }
+    if (!goal.concl && !goal.hyps?.length) return null;
+    if (goal.name) {
+      const n = document.createElement("span");
+      n.className = "goal-name";
+      n.textContent = `${goal.name}:`;
+      g.append(n);
+    }
+    for (const h of goal.hyps) g.append(formulaChip(h, "hyp"));
+    if (goal.hyps.length && goal.concl) {
+      const turnstile = document.createElement("span");
+      turnstile.className = "turnstile";
+      turnstile.textContent = "⊢";
+      g.append(turnstile);
+    }
+    if (goal.concl) g.append(formulaChip(goal.concl, "concl"));
+    return g;
+  }
+
+  // Replace (or introduce) the goal row in place — used when a compile brings
+  // pretty-printed statement data that supersedes the source-derived render.
+  renderGoalRow(goal) {
+    const next = this._buildGoalRow(goal);
+    if (!next) return;
+    if (this._goalEl) {
+      this._goalEl.replaceWith(next);
+    } else {
+      this._container.prepend(next);
+    }
+    this._goalEl = next;
+  }
+
+  // Upgrade the goal display from the compiler's statement snapshots: the
+  // pretty-printed statement for theorem/lemma cells, the signature plus the
+  // live definiens for definition cells. Entries whose render failed
+  // (`concl`/`signature` null) leave the source-derived display in place.
+  applyStatements(statements) {
+    if (!this._stmtKey) return;
+    const stmt = statements.get(this._stmtKey);
+    if (!stmt) {
+      // A definition invalidated by recovery vanishes from the snapshot:
+      // drop the stale definiens chip but keep the signature on display.
+      if (this._stmtKey.startsWith("def:") && this._lastGoalKey) {
+        const last = JSON.parse(this._lastGoalKey);
+        if (last.body) {
+          last.body = null;
+          this._lastGoalKey = JSON.stringify(last);
+          this.renderGoalRow(last);
+        }
+      }
+      return;
+    }
+    let goal = null;
+    if (stmt.kind === "def") {
+      if (stmt.signature == null) return;
+      goal = {
+        name: stmt.name,
+        signature: stmt.signature,
+        body: stmt.body ?? null,
+      };
+    } else {
+      if (stmt.concl == null) return;
+      goal = { name: stmt.name, hyps: stmt.hyps ?? [], concl: stmt.concl };
+    }
+    // Skip the DOM churn when nothing changed since the last upgrade.
+    const key = JSON.stringify(goal);
+    if (key === this._lastGoalKey) return;
+    this._lastGoalKey = key;
+    this.renderGoalRow(goal);
   }
 
   async mountEditor(body) {

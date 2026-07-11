@@ -144,12 +144,13 @@
     <p class="hint">
       The theory declares <code>def reflexive: wff;</code> with no body; the
       first cell supplies the definition, including a hidden dummy binder
-      <code>(.d: obj)</code> the declaration never mentions. The read-only
-      second cell proves a theorem <em>about</em> <code>reflexive</code>, so it
-      only verifies while the definition is right. Try
-      <code>$ eq d d $</code> as the body (leaves the dummy free — rejected on
-      the spot), or a different well-formed body (the fixed proof below stops
-      proving it).
+      <code>(.d: obj)</code> the declaration never mentions. The header shows
+      the definition the compiler currently sees, rendered with the theory's
+      notation. The read-only second cell proves a theorem <em>about</em>
+      <code>reflexive</code>, so it only verifies while the definition is
+      right. Try <code>$ d = d $</code> as the body (leaves the dummy free —
+      rejected on the spot), or a different well-formed body (the fixed proof
+      below stops proving it).
     </p>
     <aufbau-theory id="defs">
       <script type="text/mm0">
@@ -157,16 +158,16 @@
         --| @vars u v w
         sort obj;
         provable sort wff;
-        term all {x: obj} (p: wff x): wff;
-        term eq (a b: obj): wff;
-        axiom all_self_eq {y: obj}: $ all y (eq y y) $;
+        term all {x: obj} (p: wff x): wff; prefix all: $∀$ prec 41;
+        term eq (a b: obj): wff; infixl eq: $=$ prec 50;
+        axiom all_self_eq {y: obj}: $ ∀ y (y = y) $;
       </script>
     </aufbau-theory>
 
     <aufbau-proof theory="defs">
       <script type="text/mm0">def reflexive: wff;</script>
       <script type="text/auf">
-        def reflexive (.d: obj) = $ all d (eq d d) $
+        def reflexive (.d: obj) = $ ∀ d (d = d) $
       </script>
     </aufbau-proof>
 
@@ -191,15 +192,15 @@
         delimiter $ ( ) $;
         provable sort wff;
         term top: wff;
-        term and (a b: wff): wff;
+        term and (a b: wff): wff; infixl and: $∧$ prec 35;
         axiom top_i: $ top $;
-        axiom and_i (a b: wff): $ a $ > $ b $ > $ and a b $;
+        axiom and_i (a b: wff): $ a $ > $ b $ > $ a ∧ b $;
       </script>
     </aufbau-theory>
 
     <aufbau-proof theory="helper">
       <script type="text/auf">
-        def dup (a: wff): wff = $ and a a $
+        def dup (a: wff): wff = $ a ∧ a $
       </script>
     </aufbau-proof>
 
@@ -208,7 +209,7 @@
         lemma dup_top: $ dup top $
         ----
         l1: $ top $ by top_i []
-        l2: $ and top top $ by and_i [l1, l1]
+        l2: $ top ∧ top $ by and_i [l1, l1]
       </script>
     </aufbau-proof>
 
