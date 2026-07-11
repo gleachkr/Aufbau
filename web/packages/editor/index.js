@@ -16,8 +16,11 @@
 //
 //   - A lemma cell contributes an `.auf` block only (proves something not in the
 //     mm0). A theorem cell also contributes an mm0 `theorem …;` declaration that
-//     is stitched *into the document* (not the theory) — the same seam a future
-//     editable mm0/def cell would use.
+//     is stitched *into the document* (not the theory). A definition cell uses
+//     the same seam for a bodyless `def …;` declaration whose `.auf` content is
+//     the public body filler — the definiens (and any hidden dummy binders it
+//     needs) is what the reader edits, and the cells that prove things *about*
+//     the definition check it.
 
 import {
   EditorView,
@@ -284,6 +287,10 @@ function parseGoal(header) {
   return { name, hyps: formulas.slice(0, -1), concl: formulas.at(-1) };
 }
 
+function escapeRe(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // A plain theorem block's `.auf` header is only a name; its statement is the
 // matching MM0 `theorem <name> (…): … ;` declaration. Parse the assertion tail
 // out of that declaration (looked up in the cell's own mm0 fragment, then the
@@ -291,12 +298,31 @@ function parseGoal(header) {
 function mm0Goal(mm0Text, name) {
   if (!mm0Text || !name) return null;
   const decl = new RegExp(
-    `\\btheorem\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b[^;]*`,
+    `\\btheorem\\s+${escapeRe(name)}\\b[^;]*`,
   ).exec(mm0Text);
   if (!decl) return null;
   const formulas = [...decl[0].matchAll(/\$([^$]*)\$/g)].map((m) => m[1].trim());
   if (formulas.length === 0) return null;
   return { name, hyps: formulas.slice(0, -1), concl: formulas.at(-1) };
+}
+
+// A definition cell's proof text is a public def body filler: a `def` item
+// with no `----` underline (so splitBlock returned null). Returns the def's
+// name, or null when the text doesn't start with a def item.
+function defFillerName(text) {
+  const m = /^\s*def\s+([A-Za-z_][\w']*)/.exec(text);
+  return m ? m[1] : null;
+}
+
+// The declaration a definition cell is filling: a bodyless `def <name> …;` in
+// the mm0 (no `=` before the `;`). Returns the signature tail after the name
+// (binders and return sort, e.g. `: wff`), or null when there is no match.
+function mm0DefSignature(mm0Text, name) {
+  if (!mm0Text || !name) return null;
+  const decl = new RegExp(`\\bdef\\s+${escapeRe(name)}\\b([^;=]*);`).exec(
+    mm0Text,
+  );
+  return decl ? decl[1].trim() : null;
 }
 
 // Byte offset (UTF-8, as reported by the compiler) → JS string index (UTF-16),
@@ -651,12 +677,21 @@ class AufbauProof extends HTMLElement {
 
     // Goal display: a lemma block states its own assertion; a theorem block gets
     // its statement from the mm0 — the cell's own fragment first, then the theory.
+    // A definition cell (a def filler, so no `----` split) shows the bodyless
+    // declaration it is filling, looked up the same way.
     let goal = block ? parseGoal(block.header) : null;
     if (goal && !goal.concl) {
       goal =
         mm0Goal(this._mm0Fragment, goal.name) ??
         mm0Goal(await this._doc.theoryText(), goal.name) ??
         goal;
+    }
+    if (!block) {
+      const defName = defFillerName(proofText);
+      const signature =
+        mm0DefSignature(this._mm0Fragment, defName) ??
+        mm0DefSignature(await this._doc.theoryText(), defName);
+      if (signature != null) goal = { name: defName, signature };
     }
     this.renderChrome(goal);
     await this.mountEditor(this._body);
@@ -695,7 +730,16 @@ class AufbauProof extends HTMLElement {
     host.dataset.theme = this.getAttribute("theme") ?? "auto";
     this._container = host; // positioning context for the code-action menu
 
-    if (goal && (goal.concl || goal.hyps.length)) {
+    if (goal && goal.signature != null) {
+      // Definition cell: the declaration to inhabit, not a goal to prove.
+      const g = document.createElement("div");
+      g.className = "goal";
+      const n = document.createElement("span");
+      n.className = "goal-name";
+      n.textContent = "define";
+      g.append(n, formulaChip(`${goal.name}${goal.signature}`, "concl"));
+      host.append(g);
+    } else if (goal && (goal.concl || goal.hyps.length)) {
       const g = document.createElement("div");
       g.className = "goal";
       if (goal.name) {
@@ -1277,4 +1321,11 @@ if (!customElements.get("aufbau-proof")) {
   customElements.define("aufbau-proof", AufbauProof);
 }
 
-export { AufbauProof, AufbauTheory, stitch, routeDiagnostics };
+export {
+  AufbauProof,
+  AufbauTheory,
+  stitch,
+  routeDiagnostics,
+  defFillerName,
+  mm0DefSignature,
+};

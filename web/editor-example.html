@@ -98,8 +98,8 @@
     <h2>3. A theorem cell (appends a declaration to the mm0)</h2>
     <p class="hint">
       A theorem cell contributes an mm0 <code>theorem</code> declaration
-      <em>and</em> its proof, both stitched into the document. This is the seam a
-      future editable mm0/def cell would use.
+      <em>and</em> its proof, both stitched into the document. Definition cells
+      (section 6) use the same seam.
     </p>
     <aufbau-theory id="decl">
       <script type="text/mm0">
@@ -140,7 +140,46 @@
       </script>
     </aufbau-proof>
 
-    <h2>5. A real theory by URL (full-file mode)</h2>
+    <h2>5. A definition cell — fill in the definiens</h2>
+    <p class="hint">
+      The theory declares <code>def reflexive: wff;</code> with no body; the
+      first cell supplies the definition, including a hidden dummy binder
+      <code>(.d: obj)</code> the declaration never mentions. The read-only
+      second cell proves a theorem <em>about</em> <code>reflexive</code>, so it
+      only verifies while the definition is right. Try
+      <code>$ eq d d $</code> as the body (leaves the dummy free — rejected on
+      the spot), or a different well-formed body (the fixed proof below stops
+      proving it).
+    </p>
+    <aufbau-theory id="defs">
+      <script type="text/mm0">
+        delimiter $ ( ) $;
+        --| @vars u v w
+        sort obj;
+        provable sort wff;
+        term all {x: obj} (p: wff x): wff;
+        term eq (a b: obj): wff;
+        axiom all_self_eq {y: obj}: $ all y (eq y y) $;
+      </script>
+    </aufbau-theory>
+
+    <aufbau-proof theory="defs">
+      <script type="text/mm0">def reflexive: wff;</script>
+      <script type="text/auf">
+        def reflexive (.d: obj) = $ all d (eq d d) $
+      </script>
+    </aufbau-proof>
+
+    <aufbau-proof theory="defs" readonly>
+      <script type="text/mm0">theorem reflexive_holds: $ reflexive $;</script>
+      <script type="text/auf">
+        reflexive_holds
+        ----
+        l1: $ reflexive $ by all_self_eq
+      </script>
+    </aufbau-proof>
+
+    <h2>6. A real theory by URL (full-file mode)</h2>
     <p class="hint">
       A multi-theorem fixture loaded from <code>src</code> — the whole proof is
       editable, no single goal display.
