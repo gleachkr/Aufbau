@@ -132,6 +132,15 @@ function loadLspOnce() {
 
 let lspDocSeq = 0;
 
+// Completion fragments: a word (rule/term names, `auto?`), or a run of
+// notation-symbol characters (`->`, `∀`, `∧`, `==>`, …) — everything except
+// whitespace, word characters, and structural punctuation. The two never mix,
+// so a fragment stays valid while it grows within one class and triggers a
+// fresh server query when it doesn't.
+const WORD_FRAGMENT = /[\w'!?]+/;
+const SYMBOL_FRAGMENT = /[^\w\s$()[\]{},;:.]+/u;
+const FRAGMENT_VALID = /^(?:[\w'!?]*|[^\w\s$()[\]{},;:.]*)$/u;
+
 // Map LSP CompletionItemKind numbers onto CodeMirror completion type names
 // (which drive the icons in the popup).
 const CM_COMPLETION_TYPES = {
@@ -142,7 +151,7 @@ const CM_COMPLETION_TYPES = {
   12: "constant", // hypothesis
   14: "keyword",
   18: "text", // proof-line reference
-  25: "keyword", // notation operator
+  24: "keyword", // notation operator
 };
 
 // Code actions: when the caret pauses on a search placeholder (`auto?` /
@@ -1082,8 +1091,20 @@ class AufbauProof extends HTMLElement {
       );
       if (mapped) ({ from, to } = mapped);
     }
-    const options = items.map((item, idx) => ({
-      label: item.label,
+    // The wire order is construction order; the server's ranking lives in
+    // sortText (plain string comparison, per LSP).
+    const ranked = [...items].sort((a, b) => {
+      const ka = a.sortText ?? a.label;
+      const kb = b.sortText ?? b.label;
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    const options = ranked.map((item, idx) => ({
+      // CodeMirror matches typed text against `label`; routing the server's
+      // filterText through it makes notation items reachable by symbol or by
+      // term name (`∀ all`), while displayLabel keeps the popup showing the
+      // token itself.
+      label: item.filterText ?? item.label,
+      displayLabel: item.label,
       detail: item.detail ?? undefined,
       type: CM_COMPLETION_TYPES[item.kind] ?? "text",
       info: item.documentation?.value
@@ -1097,12 +1118,15 @@ class AufbauProof extends HTMLElement {
 
   _completionSource(context) {
     if (!context.explicit) {
-      // Only auto-trigger inside a word; Ctrl-Space works anywhere.
-      const before = context.matchBefore(/[\w'!?]+/);
+      // Auto-trigger inside a word or a run of notation symbols (`->`,
+      // `∀`, `∧`, …); Ctrl-Space works anywhere.
+      const before =
+        context.matchBefore(WORD_FRAGMENT) ??
+        context.matchBefore(SYMBOL_FRAGMENT);
       if (!before) return null;
     }
     return this.lspCompletionsAt(context.pos)
-      .then((r) => (r ? { ...r, validFor: /^[\w'!?]*$/ } : null))
+      .then((r) => (r ? { ...r, validFor: FRAGMENT_VALID } : null))
       .catch(() => null);
   }
 
