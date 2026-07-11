@@ -35,8 +35,14 @@ pub export fn compile_sources(
             mm0_src,
             proof_src,
         );
+        // Match the LSP's analysis posture: a search placeholder (`auto?` /
+        // `exact?` / `apply?`) is an unfilled hole, not an unknown rule — the
+        // checker stops cleanly at it, and a warning-severity diagnostic per
+        // placeholder is synthesized below (`writePlaceholderDiagnostics`).
+        analysis_compiler.allow_search_placeholders = true;
         analysis_compiler.analyze() catch {};
-        writeCompileFailure(&compiler, &analysis_compiler, err) catch clearState();
+        writeCompileFailure(&compiler, &analysis_compiler, proof_src, err) catch
+            clearState();
         return 0;
     };
     writeCompileSuccess(result_mmb.len) catch {
@@ -95,7 +101,7 @@ fn writeCompileSuccess(mmb_len: usize) !void {
     try out.writer.writeAll("\"mmbLen\":");
     try out.writer.print("{d}", .{mmb_len});
     try out.writer.writeAll(",\"diagnostic\":null,");
-    try writeDiagnosticsField(&out.writer, null);
+    try writeDiagnosticsField(&out.writer, null, null);
     try out.writer.writeByte('}');
 
     result_json = try out.toOwnedSlice();
@@ -104,6 +110,7 @@ fn writeCompileSuccess(mmb_len: usize) !void {
 fn writeCompileFailure(
     compiler: *const mm0.Compiler,
     analysis_compiler: *const mm0.Compiler,
+    proof_src: []const u8,
     err: anyerror,
 ) !void {
     var out: std.io.Writer.Allocating = .init(allocator);
@@ -128,7 +135,7 @@ fn writeCompileFailure(
         try out.writer.writeAll(",\"mmbLen\":0,\"diagnostic\":null");
     }
     try out.writer.writeByte(',');
-    try writeDiagnosticsField(&out.writer, analysis_compiler);
+    try writeDiagnosticsField(&out.writer, analysis_compiler, proof_src);
     try out.writer.writeByte('}');
 
     result_json = try out.toOwnedSlice();
@@ -137,11 +144,12 @@ fn writeCompileFailure(
 fn writeDiagnosticsField(
     writer: anytype,
     compiler: ?*const mm0.Compiler,
+    proof_src: ?[]const u8,
 ) !void {
     try writer.writeAll("\"diagnostics\":[");
 
+    var need_comma = false;
     if (compiler) |actual| {
-        var need_comma = false;
         for (actual.primaryDiagnostics()) |diag| {
             if (need_comma) try writer.writeByte(',');
             try writeDiagnosticObject(writer, diag);
@@ -163,8 +171,49 @@ fn writeDiagnosticsField(
             need_comma = true;
         }
     }
+    if (proof_src) |src| {
+        try writePlaceholderDiagnostics(writer, src, &need_comma);
+    }
 
     try writer.writeByte(']');
+}
+
+// One warning per search placeholder, mirroring the LSP's "search not yet
+// run". The analysis pass tolerates placeholders (`allow_search_placeholders`)
+// so they produce no compiler diagnostic of their own; this is the signal
+// that marks them as unfilled holes rather than errors.
+fn writePlaceholderDiagnostics(
+    writer: anytype,
+    proof_src: []const u8,
+    need_comma: *bool,
+) !void {
+    const placeholders = mm0.CompilerSupport.Search.searchPlaceholders(
+        allocator,
+        proof_src,
+    ) catch return;
+    defer allocator.free(placeholders);
+
+    for (placeholders) |placeholder| {
+        if (need_comma.*) try writer.writeByte(',');
+        need_comma.* = true;
+        try writer.writeByte('{');
+        try writer.print(
+            "\"message\":\"{s} placeholder: proof search has not " ++
+                "filled this hole\",",
+            .{placeholder.kind.keyword()},
+        );
+        try writer.writeAll(
+            "\"severity\":\"warning\",\"source\":\"proof\"," ++
+                "\"error\":\"SearchPlaceholder\",\"theorem\":null," ++
+                "\"block\":null,\"lineLabel\":null,\"rule\":null," ++
+                "\"name\":null,\"expected\":null,\"phase\":null,",
+        );
+        try writer.print(
+            "\"spanStart\":{d},\"spanEnd\":{d},",
+            .{ placeholder.span.start, placeholder.span.end },
+        );
+        try writer.writeAll("\"detail\":null,\"notes\":[],\"related\":[]}");
+    }
 }
 
 fn writeDiagnosticObject(
