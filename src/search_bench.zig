@@ -166,13 +166,18 @@ const default_frontier_corpus = [_]FixturePair{
         .proof_path = "tests/search_bench_cases/zermelo_frontier.auf",
     },
     .{
-        // church does NOT respond to @auto in any direction (3-way sweep):
-        // backward `ded` over the pervasive ⇔ goals regresses EQF_INTRO (+39%
-        // wall); forward eqmp/iff_mp is harmless but buys 0 FULL (+10% wall, only
-        // a ~0.03 mean-frontier nudge). Gap is higher-order/equational. Left clean.
+        // search-only @auto-annotated copy (see euclid note above): `@auto
+        // forward` on MP + eqTR1/eqTR2 only. Measured (2026-07-13, task #120,
+        // docs/design_notes/church_forward_enrollment.md): +6 frontier gains
+        // / 0 losses (DISJ_CASES 1->2, OR_DEF 3->14 FULL, IMP_TRANS 2->3) at
+        // +13% wall. The old "church does NOT respond to @auto" note only
+        // swept forward eqmp/iff_mp + backward ded — the wrong rules; the
+        // depth misses were missing forward MP joins. Do NOT enroll
+        // trans/sym/reflt (equational closure squares the pool: 24 losses),
+        // DISCH (CONJ_ASSOC 2->1), or thmR (CHOOSE 1->0).
         .name = "church",
-        .mm0_path = "tests/proof_cases/church.mm0",
-        .proof_path = "tests/proof_cases/church.auf",
+        .mm0_path = "tests/search_bench_cases/church_frontier.mm0",
+        .proof_path = "tests/search_bench_cases/church_frontier.auf",
     },
     .{
         // search-only @auto-annotated copy (see euclid note above).

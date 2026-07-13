@@ -606,6 +606,20 @@ pub fn build(b: *std.Build) void {
                 "tests/search_bench_cases/zermelo_frontier.auf",
             .mode = "depth",
         },
+        // Forward-enrollment depth guard for church (task #120,
+        // docs/design_notes/church_forward_enrollment.md). church_frontier
+        // carries `@auto forward` on MP + eqTR1/eqTR2 — the measured
+        // zero-loss set. `OR_DEF` goes 3/14 -> FULL with it (the flagship
+        // per-theorem change; DISJ_CASES 1->2 and IMP_TRANS 2->3 aren't
+        // FULL-able so can't be pinned by a depth guard). FULL at the
+        // default budget; trips if forward join enrollment, the eqTR typing
+        // extraction, or the annotation parsing regresses.
+        .{
+            .filter = "OR_DEF",
+            .files = "tests/search_bench_cases/church_frontier.mm0:" ++
+                "tests/search_bench_cases/church_frontier.auf",
+            .mode = "depth",
+        },
         // Forward-JOIN depth guards (∀∃ quantifier alternation, META_STRESS.md
         // "Bespoke theory #3"). These pin the forward-join meta grounding: a
         // universal family fact (`P ?t → Q ?t`, from `all_elim`) joined with a
