@@ -1,67 +1,76 @@
 # Aufbau
 
-Aufbau is a Metamath Zero (MM0/MMB) toolkit written in Zig.
+Aufbau is an experimental Metamath Zero (MM0/MMB) verifier and proof compiler
+written in Zig. The compiler translates MM0 source and Aufbau proof scripts to
+MMB; the verifier checks the resulting MM0/MMB pair.
+
+Try the [web demo](https://gleachkr.github.io/Aufbau/).
+
+## Build
+
+Aufbau requires Zig 0.15.2.
+
+```sh
+git clone --recurse-submodules https://github.com/gleachkr/Aufbau.git
+cd aufbau
+zig build -Doptimize=ReleaseFast
+```
+
+The native binaries are written to `zig-out/bin/`:
+
+- `abc` — proof compiler and language server
+- `mm0-zig` — MMB verifier
 
 ## Usage
 
-Verifier:
+Compile a proof:
 
-`mm0-zig FILE.mmb < FILE.mm0`
+```sh
+abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb
+```
 
-Compiler:
+Verify it:
 
-`abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb`
+```sh
+mm0-zig OUTPUT.mmb < INPUT.mm0
+```
 
-## Building
+## JavaScript packages
 
-The shared logic lives in the reusable Zig module in `src/lib.zig`.
-There are two binaries built on top of it:
+WebAssembly and browser packages are published on npm:
 
-- `mm0-zig` in `src/bin/verifier/`
-- `abc` in `src/bin/compiler/`
+- [`@aufbau/compiler`](https://www.npmjs.com/package/@aufbau/compiler)
+- [`@aufbau/verifier`](https://www.npmjs.com/package/@aufbau/verifier)
+- [`@aufbau/lsp`](https://www.npmjs.com/package/@aufbau/lsp)
+- [`@aufbau/editor`](https://www.npmjs.com/package/@aufbau/editor)
 
-Build both with:
-
-`zig build -Doptimize=ReleaseFast`
+Each package README contains a minimal usage example.
 
 ## Documentation
 
-- `ARCHITECTURE.md` — project structure and trust boundary
-- `docs/proof.md` — Aufbau proof-script format
-- `docs/rewrite_system.md` — rewrite metadata and normalization
-- `docs/transparent_defs.md` — transparent def handling
-- `docs/view_recover.md` — `@view`, `@recover`, `@abstract`
-- `docs/fresh_binders.md` — `@vars` and `@fresh`
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — structure and trust boundary
+- [`docs/proof.md`](docs/proof.md) — Aufbau proof-script format
+- [`docs/rewrite_system.md`](docs/rewrite_system.md) — rewrite metadata
+- [`docs/transparent_defs.md`](docs/transparent_defs.md) — transparent defs
+- [`docs/view_recover.md`](docs/view_recover.md) — view and recovery metadata
+- [`docs/fresh_binders.md`](docs/fresh_binders.md) — fresh binders
+- [`docs/holes.md`](docs/holes.md) — proof-side holes
 
-## Testing
+The canonical MM0 and MMB specifications are maintained by the
+[Metamath Zero project](https://github.com/digama0/mm0).
 
-This project has separate unit and integration test steps:
+## Test
 
-- `zig build test-unit -Doptimize=ReleaseFast`
-- `zig build test-integration -Doptimize=ReleaseFast`
-- `zig build test-node-wasm -Doptimize=ReleaseFast`
-- `zig build test -Doptimize=ReleaseFast`
+```sh
+zig build test -Doptimize=ReleaseFast
+```
 
-The Node WASM test requires Node and npm. It packs and installs the generated
-npm packages before exercising their default loaders.
-
-Integration tests scan `third_party/mm0/examples` for `.mm1` files, compile
-with `mm0-rs`, and verify corresponding `.mm0`/`.mmb` pairs where a matching
-`.mm0` exists.
-
-To run one subset while iterating locally, use:
-
-`MM0_ZIG_EXAMPLE_FILTER=peano zig build test-integration`
-
-If you cloned without submodules, run:
-
-`git submodule update --init --recursive`
+Full integration coverage also requires Node, npm, `mm0-rs`, `mm0-c`, and
+initialized repository submodules.
 
 ## Status
 
-- Verifier: working against the current MM0/MMB specs.
-- Compiler: supports the Aufbau script format in `docs/proof.md`,
-  omitted-binder inference, transparent defs, hidden-dummy witness
-  resolution, `@view` / `@recover` / `@abstract` / `@vars` /
-  `@fresh`, and mixed rewrite / structural normalization.
-- Web demo: ships several proof-case fixtures from `tests/proof_cases`.
+Aufbau is pre-1.0 software. The verifier is usable, and the compiler supports
+its documented proof format, but APIs and proof syntax may still change.
+
+Licensed under the [Apache License 2.0](LICENSE).

@@ -69,12 +69,10 @@ Subsystem-level architecture notes live next to their code:
   `auto?` proof-search subsystem (pipeline, ACUI principal-matching mechanisms,
   COW-interner invariant, verification contract)
 
-The language / binary specs remain under `specs/`:
+The canonical language and binary specifications are maintained upstream:
 
-- `specs/mm0.md`
-- `specs/mmb.md`
-
-`specs/proof.md` is now just a redirect to `docs/proof.md`.
+- [MM0 language specification](https://github.com/digama0/mm0/blob/master/mm0.md)
+- [MMB binary specification](https://github.com/digama0/mm0/blob/master/mm0-c/mmb.md)
 
 ## Directory layout
 

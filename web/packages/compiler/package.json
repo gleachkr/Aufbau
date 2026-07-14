@@ -10,6 +10,7 @@
   "type": "module",
   "exports": "./index.js",
   "files": [
+    "README.md",
     "index.js",
     "compiler.wasm"
   ],

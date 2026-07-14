@@ -4,8 +4,12 @@ This document describes the current text format accepted by the Aufbau
 compiler for `.auf` proof scripts.
 
 It is a project-level frontend format, not part of the MM0 core spec.
-The MM0 and MMB format specs remain in `specs/mm0.md` and
-`specs/mmb.md`.
+The canonical [MM0 language specification][mm0-spec] and
+[MMB binary specification][mmb-spec] are maintained by the Metamath Zero
+project.
+
+[mm0-spec]: https://github.com/digama0/mm0/blob/master/mm0.md
+[mmb-spec]: https://github.com/digama0/mm0/blob/master/mm0-c/mmb.md
 
 Related docs:
 

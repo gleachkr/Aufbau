@@ -2,6 +2,12 @@
 
 This package runs the Aufbau language server as WebAssembly.
 
+## Install
+
+```sh
+npm install @aufbau/lsp
+```
+
 ## Direct server
 
 `loadLspServer()` loads `lsp.wasm` and runs the server synchronously in the
