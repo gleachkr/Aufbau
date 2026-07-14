@@ -1,6 +1,12 @@
-.zig-cache
+.cache*
+.zig-cache*
 .zig-global-cache
 zig-out
 .direnv
 *.lec
 *.vim
+AGENTS.md
+CLAUDE.md
+.claude
+docs/design_notes
+specs/
