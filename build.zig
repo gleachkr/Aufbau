@@ -63,6 +63,15 @@ fn installWebPackageSet(
             ),
         });
         step.dependOn(&install_pkg.step);
+
+        const install_license = b.addInstallFile(
+            b.path("LICENSE"),
+            b.fmt(
+                "{s}/@aufbau/{s}/LICENSE",
+                .{ install_root, pkg.package_name },
+            ),
+        );
+        step.dependOn(&install_license.step);
     }
 
     const wasm_installs = [_]WebWasmInstall{
