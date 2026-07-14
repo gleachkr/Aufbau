@@ -11,7 +11,8 @@
   "exports": "./index.js",
   "files": [
     "index.js",
-    "lsp.wasm"
+    "lsp.wasm",
+    "worker.js"
   ],
   "sideEffects": false
 }
