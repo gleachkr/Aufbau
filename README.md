@@ -39,7 +39,11 @@ This project has separate unit and integration test steps:
 
 - `zig build test-unit -Doptimize=ReleaseFast`
 - `zig build test-integration -Doptimize=ReleaseFast`
+- `zig build test-node-wasm -Doptimize=ReleaseFast`
 - `zig build test -Doptimize=ReleaseFast`
+
+The Node WASM test requires Node and npm. It packs and installs the generated
+npm packages before exercising their default loaders.
 
 Integration tests scan `third_party/mm0/examples` for `.mm1` files, compile
 with `mm0-rs`, and verify corresponding `.mm0`/`.mmb` pairs where a matching

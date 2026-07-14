@@ -129,8 +129,10 @@ export class WorkerLspServer {
 
 // Spawn the worker-hosted LSP server and resolve once its wasm is instantiated
 // (so a load failure surfaces as a rejection rather than a silently dead
-// transport). Pass `options.worker` to supply a preconstructed worker, or
-// `options.workerUrl` to override where it is loaded from.
+// transport). This API is browser-only: it expects a Web Worker with the
+// browser's event interface, not `node:worker_threads`. Pass `options.worker`
+// to supply a preconstructed Web Worker, or `options.workerUrl` to override
+// where it is loaded from.
 export async function loadLspServerWorker(options = {}) {
   const worker = options.worker
     ?? new Worker(options.workerUrl ?? defaultWorkerUrl, { type: "module" });
@@ -153,13 +155,33 @@ async function instantiateWasm(options, fallbackUrl) {
   }
 
   const url = options.wasmUrl ?? fallbackUrl;
+  const bytes = await loadWasmBytes(url);
+  const result = await WebAssembly.instantiate(bytes, imports);
+  return result.instance;
+}
+
+async function loadWasmBytes(url) {
+  if (isFileUrl(url)) {
+    const { readFile } = await import("node:fs/promises");
+    return readFile(url);
+  }
+
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to load ${url}`);
   }
-  const bytes = await response.arrayBuffer();
-  const result = await WebAssembly.instantiate(bytes, imports);
-  return result.instance;
+  return response.arrayBuffer();
+}
+
+function isFileUrl(url) {
+  if (url instanceof URL) return url.protocol === "file:";
+  if (typeof url !== "string") return false;
+
+  try {
+    return new URL(url).protocol === "file:";
+  } catch {
+    return false;
+  }
 }
 
 function writeBytes(exports, bytes) {

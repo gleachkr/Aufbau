@@ -48,6 +48,7 @@
               zls
               mm0-rs
               mm0-c
+              nodejs_22
               hyperfine
               perf
             ];
@@ -58,6 +59,7 @@
               zig
               mm0-rs
               mm0-c
+              pkgs.nodejs_22
             ];
           };
         };

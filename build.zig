@@ -309,6 +309,18 @@ pub fn build(b: *std.Build) void {
     );
     installWebDemoFixtures(b, web_demo_step);
 
+    const node_wasm_test_cmd = b.addSystemCommand(&.{"node"});
+    node_wasm_test_cmd.addFileArg(b.path("tests/node_wasm_loading.mjs"));
+    node_wasm_test_cmd.addArg(
+        b.getInstallPath(.prefix, "npm/@aufbau"),
+    );
+    node_wasm_test_cmd.step.dependOn(web_packages_step);
+    const node_wasm_test_step = b.step(
+        "test-node-wasm",
+        "Test packed npm WASM packages under Node",
+    );
+    node_wasm_test_step.dependOn(&node_wasm_test_cmd.step);
+
     const run_step = b.step("run", "Run the mm0-zig verifier");
     const run_cmd = b.addRunArtifact(verifier_exe);
     run_step.dependOn(&run_cmd.step);
@@ -1001,4 +1013,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(integration_step);
     test_step.dependOn(frontier_smoke_step);
     test_step.dependOn(search_scenarios_step);
+    test_step.dependOn(node_wasm_test_step);
 }

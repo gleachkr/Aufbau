@@ -47,8 +47,12 @@ jobs:
             command -v zig
             command -v mm0-rs
             command -v mm0-c
+            command -v node
+            command -v npm
             test -d third_party/mm0/examples
             zig version
+            node --version
+            npm --version
             mm0-rs --version
 
             if mm0-c >/dev/null 2>&1; then

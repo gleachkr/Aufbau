@@ -59,13 +59,33 @@ async function instantiateWasm(options, fallbackUrl) {
   }
 
   const url = options.wasmUrl ?? fallbackUrl;
+  const bytes = await loadWasmBytes(url);
+  const result = await WebAssembly.instantiate(bytes, imports);
+  return result.instance;
+}
+
+async function loadWasmBytes(url) {
+  if (isFileUrl(url)) {
+    const { readFile } = await import("node:fs/promises");
+    return readFile(url);
+  }
+
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to load ${url}`);
   }
-  const bytes = await response.arrayBuffer();
-  const result = await WebAssembly.instantiate(bytes, imports);
-  return result.instance;
+  return response.arrayBuffer();
+}
+
+function isFileUrl(url) {
+  if (url instanceof URL) return url.protocol === "file:";
+  if (typeof url !== "string") return false;
+
+  try {
+    return new URL(url).protocol === "file:";
+  } catch {
+    return false;
+  }
 }
 
 function writeBytes(exports, bytes) {
