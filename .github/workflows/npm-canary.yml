@@ -63,7 +63,7 @@ jobs:
           echo "Publishing canary version ${version}"
           echo "version=${version}" >> "${GITHUB_ENV}"
 
-          for pkg in compiler verifier lsp; do
+          for pkg in compiler verifier lsp editor; do
             cd "zig-out/npm/@aufbau/${pkg}"
             npm version "${version}" --no-git-tag-version
             cd - >/dev/null
@@ -79,7 +79,7 @@ jobs:
             publish_args+=(--dry-run)
           fi
 
-          for pkg in compiler verifier lsp; do
+          for pkg in compiler verifier lsp editor; do
             cd "zig-out/npm/@aufbau/${pkg}"
             npm publish "${publish_args[@]}"
             cd - >/dev/null

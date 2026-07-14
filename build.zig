@@ -9,6 +9,7 @@ const WEB_PACKAGE_INSTALLS = [_]WebPackageInstall{
     .{ .source_dir = "web/packages/compiler", .package_name = "compiler" },
     .{ .source_dir = "web/packages/verifier", .package_name = "verifier" },
     .{ .source_dir = "web/packages/lsp", .package_name = "lsp" },
+    .{ .source_dir = "web/packages/editor", .package_name = "editor" },
 };
 
 const WebWasmInstall = struct {
