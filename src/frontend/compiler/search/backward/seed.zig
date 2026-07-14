@@ -1057,4 +1057,3 @@ fn mergeOptionalBindings(dst: []?ExprId, src: []const ?ExprId) bool {
     }
     return true;
 }
-

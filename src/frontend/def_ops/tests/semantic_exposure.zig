@@ -191,4 +191,3 @@ test "semantic def exposure keeps wrapped bound witnesses unresolved" {
     try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_id);
     try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_dep);
 }
-

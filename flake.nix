@@ -41,15 +41,25 @@
         packages.default = package;
         defaultPackage = packages.default;
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            zig
-            zls
-            mm0-rs
-            mm0-c
-            hyperfine
-            perf
-          ];
+        devShells = {
+          default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              zig
+              zls
+              mm0-rs
+              mm0-c
+              hyperfine
+              perf
+            ];
+          };
+
+          ci = pkgs.mkShell {
+            packages = [
+              zig
+              mm0-rs
+              mm0-c
+            ];
+          };
         };
         devShell = devShells.default;
       }

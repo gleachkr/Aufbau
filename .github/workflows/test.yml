@@ -1,0 +1,82 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Zig build data
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/zig-global
+            .cache/zig-local
+          key: zig-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            zig-${{ runner.os }}-
+
+      - name: Check external test tools
+        run: |
+          nix develop .#ci --command bash -euo pipefail -c '
+            command -v zig
+            command -v mm0-rs
+            command -v mm0-c
+            test -d third_party/mm0/examples
+            zig version
+            mm0-rs --version
+
+            if mm0-c >/dev/null 2>&1; then
+              echo "mm0-c unexpectedly accepted no arguments" >&2
+              exit 1
+            fi
+          '
+
+      - name: Check formatting
+        run: nix develop .#ci --command zig fmt --check build.zig src
+
+      - name: Build native binaries
+        run: |
+          nix develop .#ci --command zig build \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global
+
+      - name: Run complete test suite
+        run: |
+          nix develop .#ci --command zig build test \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global
+
+      - name: Build web packages
+        run: |
+          nix develop .#ci --command zig build web-packages \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global

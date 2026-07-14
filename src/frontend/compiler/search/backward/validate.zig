@@ -338,7 +338,8 @@ pub fn validateSelectedRefs(
         if (((err == error.MissingBinderAssignment) or
             (err == error.HypothesisMismatch and goal == .implicit_whole_conclusion) or
             unify_retry) and
-            arg_bindings.len == 0) blk_retry: {
+            arg_bindings.len == 0)
+        blk_retry: {
             const retry_bindings = renderAllResolvedBindings(
                 allocator,
                 context,
