@@ -18,6 +18,21 @@ const WebWasmInstall = struct {
     file_name: []const u8,
 };
 
+fn readProjectVersion(b: *std.Build) []const u8 {
+    const contents = b.build_root.handle.readFileAlloc(
+        b.allocator,
+        "VERSION",
+        64,
+    ) catch |err| {
+        std.debug.panic("unable to read VERSION: {s}", .{@errorName(err)});
+    };
+    const version = std.mem.trim(u8, contents, " \t\r\n");
+    _ = std.SemanticVersion.parse(version) catch |err| {
+        std.debug.panic("invalid VERSION: {s}", .{@errorName(err)});
+    };
+    return version;
+}
+
 const WEB_DEMO_FIXTURES = [_][]const u8{
     "hilbert",
     "russell",
@@ -148,6 +163,9 @@ fn addSearchBuildOptions(
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const project_version = readProjectVersion(b);
+    const version_options = b.addOptions();
+    version_options.addOption([]const u8, "version", project_version);
     const search_timers = b.option(
         bool,
         "search-timers",
@@ -228,6 +246,7 @@ pub fn build(b: *std.Build) void {
     compiler_module.addImport("mm0", mm0_lib);
     compiler_module.addImport("lsp", lsp_module);
     compiler_module.addImport("lsp_diagnostics", lsp_diagnostics_module);
+    compiler_module.addOptions("build_options", version_options);
 
     const compiler_exe = b.addExecutable(.{
         .name = "abc",
@@ -276,6 +295,7 @@ pub fn build(b: *std.Build) void {
         "lsp_diagnostics",
         lsp_diagnostics_wasm_module,
     );
+    lsp_server_wasm_module.addOptions("build_options", version_options);
 
     const lsp_server_wasm = b.addExecutable(.{
         .name = "abc-lsp-web",
@@ -953,6 +973,7 @@ pub fn build(b: *std.Build) void {
         "lsp_diagnostics",
         lsp_diagnostics_module,
     );
+    compiler_bin_test_module.addOptions("build_options", version_options);
 
     const compiler_bin_tests = b.addTest(.{
         .root_module = compiler_bin_test_module,

@@ -3,6 +3,7 @@ name: Publish to npm
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,11 +17,22 @@ permissions:
   id-token: write
 
 concurrency:
-  group: npm-canary
+  group: npm-publish
   cancel-in-progress: false
 
 jobs:
+  release_test:
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
   publish:
+    needs: release_test
+    if: >-
+      always() &&
+      (needs.release_test.result == 'success' ||
+       needs.release_test.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,6 +59,35 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
+      - name: Check release version
+        run: |
+          node scripts/check-version.mjs
+          base_version="$(tr -d '\r\n' < VERSION)"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            if [[ ! "${GITHUB_REF_NAME}" =~ \
+              ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Stable release tags must have the form v1.2.3" >&2
+              exit 1
+            fi
+
+            tag_version="${GITHUB_REF_NAME#v}"
+            node scripts/check-version.mjs "${tag_version}"
+            version="${base_version}"
+            npm_tag="latest"
+          else
+            stamp="$(date -u +'%Y%m%dT%H%M%SZ')"
+            sha="$(git rev-parse --short=12 HEAD)"
+            printf -v version '%s-canary.%s.%s.g%s' \
+              "${base_version}" "${stamp}" \
+              "${GITHUB_RUN_NUMBER}" "${sha}"
+            npm_tag="canary"
+          fi
+
+          echo "Publishing ${version} with npm tag ${npm_tag}"
+          echo "version=${version}" >> "${GITHUB_ENV}"
+          echo "npm_tag=${npm_tag}" >> "${GITHUB_ENV}"
+
       - name: Build packages
         run: |
           zig build web-packages \
@@ -54,18 +95,13 @@ jobs:
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
-      - name: Set canary versions
+      - name: Set package versions
         run: |
-          stamp="$(date -u +'%Y%m%dT%H%M%SZ')"
-          sha="$(git rev-parse --short=12 HEAD)"
-          version="0.0.0-canary.${stamp}.${GITHUB_RUN_NUMBER}.g${sha}"
-
-          echo "Publishing canary version ${version}"
-          echo "version=${version}" >> "${GITHUB_ENV}"
-
           for pkg in compiler verifier lsp editor; do
             cd "zig-out/npm/@aufbau/${pkg}"
-            npm version "${version}" --no-git-tag-version
+            npm version "${version}" \
+              --no-git-tag-version \
+              --allow-same-version
             cd - >/dev/null
           done
 
@@ -73,7 +109,11 @@ jobs:
         env:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          publish_args=(--access public --tag canary --provenance)
+          publish_args=(
+            --access public
+            --tag "${npm_tag}"
+            --provenance
+          )
 
           if [[ "${DRY_RUN}" == "true" ]]; then
             publish_args+=(--dry-run)

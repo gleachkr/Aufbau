@@ -13,15 +13,17 @@
         mm0-rs = mm0.packages.${system}.mm0-rs;
         mm0-c = mm0.packages.${system}.mm0-c;
         zig = pkgs.zig;
+        version = builtins.replaceStrings
+          [ "\n" ] [ "" ] (builtins.readFile ./VERSION);
         deps = zig.fetchDeps {
           pname = "mm0-zig";
-          version = "0.0.0";
+          inherit version;
           src = self;
           hash = "sha256-tMfArbqVNjHRRrJdBrln/9tCT40ZZPNJg27fIO9VUHw=";
         };
         package = pkgs.stdenvNoCC.mkDerivation {
           pname = "mm0-zig";
-          version = "0.0.0";
+          inherit version;
           src = self;
 
           nativeBuildInputs = [ zig ];

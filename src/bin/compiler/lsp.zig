@@ -1,4 +1,5 @@
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
@@ -473,7 +474,7 @@ pub const Handler = struct {
         return .{
             .serverInfo = .{
                 .name = LSP_SERVER_NAME,
-                .version = "0.1.0",
+                .version = build_options.version,
             },
             .capabilities = capabilities,
         };
