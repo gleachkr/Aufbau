@@ -153,7 +153,10 @@ pub fn build(b: *std.Build) void {
         "search-timers",
         "Enable proof-search timing counters",
     ) orelse true;
-    const lsp_dep = b.dependency("lsp_kit", .{});
+    const lsp_dep = b.dependency("lsp_kit", .{
+        .target = target,
+        .optimize = optimize,
+    });
     const lsp_module = lsp_dep.module("lsp");
     const lsp_types_module = lsp_dep.module("lsp-types");
 
