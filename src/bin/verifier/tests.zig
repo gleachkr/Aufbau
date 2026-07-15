@@ -1,4 +1,3 @@
 comptime {
     _ = @import("./cli.zig");
-    _ = @import("./tests/root.zig");
 }

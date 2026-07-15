@@ -231,6 +231,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     verifier_module.addImport("mm0", mm0_lib);
+    verifier_module.addOptions("build_options", version_options);
 
     const verifier_exe = b.addExecutable(.{
         .name = "mm0-zig",
@@ -980,6 +981,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_compiler_bin_tests = b.addRunArtifact(compiler_bin_tests);
 
+    const verifier_bin_test_module = b.createModule(.{
+        .root_source_file = b.path("src/bin/verifier/tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    verifier_bin_test_module.addImport("mm0", mm0_lib);
+    verifier_bin_test_module.addOptions("build_options", version_options);
+
+    const verifier_bin_tests = b.addTest(.{
+        .root_module = verifier_bin_test_module,
+    });
+    const run_verifier_bin_tests = b.addRunArtifact(verifier_bin_tests);
+
     const integration_test_module = b.createModule(.{
         .root_source_file = b.path("tests/integration_examples.zig"),
         .target = target,
@@ -1000,6 +1014,88 @@ pub fn build(b: *std.Build) void {
     unit_step.dependOn(&run_compiler_tests.step);
     unit_step.dependOn(&run_compiler_search_tests.step);
     unit_step.dependOn(&run_compiler_bin_tests.step);
+    unit_step.dependOn(&run_verifier_bin_tests.step);
+
+    const cli_smoke_step = b.step(
+        "test-cli",
+        "Smoke-test native CLI help, version, and I/O errors",
+    );
+
+    const abc_usage_text =
+        "Usage:\n" ++
+        "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
+        "[--debug SYSTEMS] [-Werror]\n" ++
+        "  abc lsp\n" ++
+        "  abc [--help | --version]\n" ++
+        "\nOptions:\n" ++
+        "  -h, --help       Show this help and exit\n" ++
+        "  -V, --version    Show the version and exit\n" ++
+        "  --debug SYSTEMS  Enable debug output (comma-separated:\n" ++
+        "                   inference,views,dependency,freshen," ++
+        "normalization,boundary,all)\n" ++
+        "  -Werror          Treat compiler warnings as errors\n";
+
+    const abc_help = b.addRunArtifact(compiler_exe);
+    abc_help.addArg("--help");
+    abc_help.expectStdOutEqual(abc_usage_text);
+    cli_smoke_step.dependOn(&abc_help.step);
+
+    const abc_invalid = b.addRunArtifact(compiler_exe);
+    abc_invalid.expectExitCode(1);
+    abc_invalid.expectStdErrEqual(abc_usage_text);
+    cli_smoke_step.dependOn(&abc_invalid.step);
+
+    const abc_version = b.addRunArtifact(compiler_exe);
+    abc_version.addArg("--version");
+    abc_version.expectStdOutEqual(b.fmt("abc {s}\n", .{project_version}));
+    cli_smoke_step.dependOn(&abc_version.step);
+
+    const abc_missing = b.addRunArtifact(compiler_exe);
+    abc_missing.addArgs(&.{
+        "compile",
+        "does-not-exist.mm0",
+        "does-not-exist.auf",
+        "unused.mmb",
+    });
+    abc_missing.expectExitCode(1);
+    abc_missing.expectStdErrEqual(
+        "abc: unable to read 'does-not-exist.mm0': FileNotFound\n",
+    );
+    cli_smoke_step.dependOn(&abc_missing.step);
+
+    const verifier_usage_text =
+        "Usage: mm0-zig [OPTIONS] FILE.mmb < FILE.mm0\n" ++
+        "\nOptions:\n" ++
+        "  -h, --help     Show this help and exit\n" ++
+        "  -V, --version  Show the version and exit\n";
+
+    const verifier_help = b.addRunArtifact(verifier_exe);
+    verifier_help.addArg("--help");
+    verifier_help.expectStdOutEqual(verifier_usage_text);
+    cli_smoke_step.dependOn(&verifier_help.step);
+
+    const verifier_invalid = b.addRunArtifact(verifier_exe);
+    verifier_invalid.expectExitCode(1);
+    verifier_invalid.expectStdErrEqual(verifier_usage_text);
+    cli_smoke_step.dependOn(&verifier_invalid.step);
+
+    const verifier_version = b.addRunArtifact(verifier_exe);
+    verifier_version.addArg("--version");
+    verifier_version.expectStdOutEqual(b.fmt(
+        "mm0-zig {s}\n",
+        .{project_version},
+    ));
+    cli_smoke_step.dependOn(&verifier_version.step);
+
+    const verifier_missing = b.addRunArtifact(verifier_exe);
+    verifier_missing.addArg("does-not-exist.mmb");
+    verifier_missing.expectExitCode(1);
+    verifier_missing.expectStdErrEqual(
+        "mm0-zig: unable to read 'does-not-exist.mmb': FileNotFound\n",
+    );
+    cli_smoke_step.dependOn(&verifier_missing.step);
+
+    unit_step.dependOn(cli_smoke_step);
 
     const integration_step = b.step(
         "test-integration",
