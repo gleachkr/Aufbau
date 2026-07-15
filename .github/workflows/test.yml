@@ -88,3 +88,10 @@ jobs:
             -Doptimize=ReleaseFast \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
+
+      - name: Smoke-test the packed editor in Chromium
+        run: |
+          nix develop .#ci --command zig build test-editor-browser \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global

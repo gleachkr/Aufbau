@@ -342,6 +342,20 @@ pub fn build(b: *std.Build) void {
     );
     node_wasm_test_step.dependOn(&node_wasm_test_cmd.step);
 
+    const editor_browser_test_cmd = b.addSystemCommand(&.{"node"});
+    editor_browser_test_cmd.addFileArg(
+        b.path("tests/editor_browser_smoke.mjs"),
+    );
+    editor_browser_test_cmd.addArg(
+        b.getInstallPath(.prefix, "npm/@aufbau"),
+    );
+    editor_browser_test_cmd.step.dependOn(web_packages_step);
+    const editor_browser_test_step = b.step(
+        "test-editor-browser",
+        "Test the packed editor package in Chromium",
+    );
+    editor_browser_test_step.dependOn(&editor_browser_test_cmd.step);
+
     const run_step = b.step("run", "Run the mm0-zig verifier");
     const run_cmd = b.addRunArtifact(verifier_exe);
     run_step.dependOn(&run_cmd.step);
