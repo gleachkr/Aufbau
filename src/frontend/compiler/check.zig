@@ -26,6 +26,7 @@ const FreshenDecl = FreshSelect.FreshenDecl;
 const CompilerDiag = @import("./diag.zig");
 const CompilerContext = @import("./context.zig").CompilerContext;
 const HoleInferenceSink = @import("./context.zig").HoleInferenceSink;
+const InlineConclusionSink = @import("./context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("./diagnostic_sink.zig").DiagnosticSink;
 const Normalize = @import("./normalize.zig");
 const ViewTrace = @import("../view_trace.zig");
@@ -3279,10 +3280,52 @@ fn elaborateRefs(
                     theorem_vars,
                 );
                 refs[idx] = .{ .line = attempt.line_idx };
-                break :blk context.checked.items[attempt.line_idx].expr;
+                const conclusion =
+                    context.checked.items[attempt.line_idx].expr;
+                try recordInlineConclusion(
+                    self,
+                    context,
+                    theorem,
+                    theorem_vars,
+                    inline_app.span,
+                    conclusion,
+                );
+                break :blk conclusion;
             },
         };
     }
+}
+
+/// Record the conclusion an inline application elaborated to, rendered with
+/// declared notation and source binder names, for presentation features (the
+/// `unpack` code action). Fallback retries re-record the same span; the last
+/// entry wins, and entries from candidates that were rolled back are
+/// harmless because consumers only read the sink out of documents that
+/// analyzed cleanly. No-op (and free) when no sink is configured.
+fn recordInlineConclusion(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+    span: Span,
+    conclusion: ExprId,
+) !void {
+    const sink = self.inline_conclusion_sink orelse return;
+    var names = try ViewTrace.DiagNames.build(
+        context.allocator,
+        theorem,
+        context.parser,
+        theorem_vars,
+    );
+    defer names.deinit(context.allocator);
+    const rendered = try ViewTrace.formatExprNamed(
+        sink.allocator,
+        theorem,
+        context.env,
+        &names,
+        conclusion,
+    );
+    try sink.addOwned(span, rendered);
 }
 
 /// Sharpen an inline minor's expected-conclusion hint using the concrete

@@ -46,6 +46,7 @@ pub const CompilerSupport = struct {
     pub const Metadata = @import("./frontend/compiler/metadata.zig");
     pub const Normalize = @import("./frontend/compiler/normalize.zig");
     pub const Search = @import("./frontend/compiler/search.zig");
+    pub const Unpack = @import("./frontend/unpack.zig");
     pub const Vars = @import("./frontend/compiler/vars.zig");
     pub const Views = @import("./frontend/compiler/views.zig");
 };

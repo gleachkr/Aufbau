@@ -7,6 +7,7 @@ const mm0 = @import("mm0");
 const types = lsp.types;
 const LspIndex = mm0.Frontend.LspIndex;
 const Search = mm0.CompilerSupport.Search;
+const Unpack = mm0.CompilerSupport.Unpack;
 const lsp_diagnostics = @import("lsp_diagnostics");
 const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
 const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
@@ -692,25 +693,82 @@ pub const Handler = struct {
             .mm0 = mm0_state,
             .proof = navigationState(proof_loaded),
         };
-        const suggestions = try self.suggestionsForKey(
+        var actions = std.ArrayListUnmanaged(CodeActionItem){};
+        if (try self.suggestionsForKey(
             arena,
             key,
             offset,
             mm0_path,
             proof_loaded.text,
-        ) orelse return null;
-        if (suggestions.len == 0) return null;
-
-        const actions = try arena.alloc(CodeActionItem, suggestions.len);
-        for (suggestions, 0..) |suggestion, idx| {
-            actions[idx] = .{ .CodeAction = try self.searchCodeAction(
-                arena,
-                params.textDocument.uri,
-                proof_loaded.text,
-                suggestion,
-            ) };
+        )) |suggestions| {
+            for (suggestions) |suggestion| {
+                try actions.append(arena, .{
+                    .CodeAction = try self.searchCodeAction(
+                        arena,
+                        params.textDocument.uri,
+                        proof_loaded.text,
+                        suggestion,
+                    ),
+                });
+            }
         }
-        return actions;
+        if (try self.unpackCodeAction(
+            arena,
+            params.textDocument.uri,
+            proof_loaded.text,
+            mm0_path,
+            offset,
+        )) |action| {
+            try actions.append(arena, .{ .CodeAction = action });
+        }
+        if (actions.items.len == 0) return null;
+        return try actions.toOwnedSlice(arena);
+    }
+
+    /// Offer the `unpack` rewrite when the cursor sits on a checked proof
+    /// line containing inline rule applications. The parse-only `hasTargetAt`
+    /// gate keeps the common case (no inline application under the cursor)
+    /// free of the .mm0 read and the two compile passes the full rewrite
+    /// performs.
+    fn unpackCodeAction(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+        proof_text: []const u8,
+        mm0_path: []const u8,
+        offset: usize,
+    ) !?types.CodeAction {
+        if (!Unpack.hasTargetAt(arena, proof_text, offset)) return null;
+        const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch
+            return null;
+        const suggestion = Unpack.unpackAtSourceOffset(
+            arena,
+            mm0_loaded.text,
+            proof_text,
+            offset,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+        } orelse return null;
+
+        const edits = try arena.alloc(types.TextEdit, 1);
+        edits[0] = .{
+            .range = lsp.offsets.locToRange(
+                proof_text,
+                .{
+                    .start = suggestion.replace_span.start,
+                    .end = suggestion.replace_span.end,
+                },
+                self.offset_encoding,
+            ),
+            .newText = suggestion.replacement,
+        };
+        var changes: std.json.ArrayHashMap([]const types.TextEdit) = .{};
+        try changes.map.put(arena, uri, edits);
+        return .{
+            .title = suggestion.title,
+            .kind = .@"refactor.rewrite",
+            .edit = .{ .changes = changes },
+        };
     }
 
     /// Return the search suggestions for `key` at `offset`, serving the per-proof

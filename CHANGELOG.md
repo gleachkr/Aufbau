@@ -5,7 +5,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [0.0.2] - Unreleased
 
-No user-facing changes have been recorded yet.
+### Added
+
+- `unpack` code action: the language server offers to rewrite a proof line
+  containing inline rule applications into separate labeled lines, one per
+  hidden application, with each new line's assertion filled in from the
+  checked conclusion. Offered only when the document checks cleanly and the
+  rewritten document does too.
 
 ## [0.0.1] - 2026-07-16
 

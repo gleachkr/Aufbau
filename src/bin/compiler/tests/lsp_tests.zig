@@ -418,6 +418,61 @@ test "LSP code action replaces exact placeholder" {
     try expectRangeText(lsp_search_exact_proof_text, edit.range, "exact?");
 }
 
+test "LSP code action offers unpack for inline applications" {
+    const mm0_uri = "file:///tmp/lsp-code-action-unpack.mm0";
+    const proof_uri = "file:///tmp/lsp-code-action-unpack.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by keep [top_i []]
+        \\
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, lsp_search_mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "keep [top_i"),
+        ),
+    );
+    const expected_replacement =
+        \\l1_1: $ top $ by top_i
+        \\l1: $ top $ by keep [l1_1]
+        \\
+    ;
+    const action = codeActionWithReplacement(
+        actions,
+        proof_uri,
+        expected_replacement,
+    ) orelse return error.MissingUnpackCodeAction;
+    try std.testing.expectEqual(
+        types.CodeActionKind.@"refactor.rewrite",
+        action.kind.?,
+    );
+    try std.testing.expectEqualStrings(
+        "Unpack inline application",
+        action.title,
+    );
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(
+        proof_text,
+        edit.range,
+        "l1: $ top $ by keep [top_i []]\n",
+    );
+}
+
 test "LSP code action caches search results across identical requests" {
     const mm0_uri = "file:///tmp/lsp-code-action-cache.mm0";
     const proof_uri = "file:///tmp/lsp-code-action-cache.auf";

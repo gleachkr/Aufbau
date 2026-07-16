@@ -407,6 +407,12 @@ conclusion of `inner [#1]`, followed by `outer` using that hidden line as
 its first reference. Hidden lines have no user-visible label and cannot
 be referenced later.
 
+The language server offers an `unpack` code action on such lines: it
+rewrites the line into separate labeled lines, one per inline
+application, with each new line's assertion filled in from the checked
+conclusion. The action is offered only when the document checks cleanly
+and the rewritten document does too.
+
 Inline applications may be nested arbitrarily and may use explicit
 bindings, omitted-binder inference, theorem-hypothesis refs, prior line
 refs, and other inline applications:

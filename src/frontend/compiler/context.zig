@@ -39,6 +39,42 @@ pub const HoleInferenceSink = struct {
     }
 };
 
+pub const InlineConclusion = struct {
+    /// Span of the inline rule application in the proof source.
+    span: Span,
+    /// Rendered conclusion of the hidden line the application elaborated to.
+    conclusion: []const u8,
+};
+
+/// Collects the rendered conclusion of every inline rule application the
+/// checker elaborates. Fallback and retry candidates re-elaborate the same
+/// source application, so one span may be recorded more than once; the LAST
+/// entry for a span is the one from the attempt that ultimately succeeded.
+pub const InlineConclusionSink = struct {
+    allocator: std.mem.Allocator,
+    items: std.ArrayListUnmanaged(InlineConclusion) = .{},
+
+    pub fn deinit(self: *InlineConclusionSink) void {
+        for (self.items.items) |item| {
+            self.allocator.free(item.conclusion);
+        }
+        self.items.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    pub fn addOwned(
+        self: *InlineConclusionSink,
+        span: Span,
+        conclusion: []const u8,
+    ) !void {
+        errdefer self.allocator.free(conclusion);
+        try self.items.append(self.allocator, .{
+            .span = span,
+            .conclusion = conclusion,
+        });
+    }
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
@@ -46,6 +82,7 @@ pub const CompilerContext = struct {
     diagnostics: *DiagnosticSink,
     allow_search_placeholders: bool = false,
     hole_inference_sink: ?*HoleInferenceSink = null,
+    inline_conclusion_sink: ?*InlineConclusionSink = null,
     statement_sink: ?*StatementSink = null,
 
     pub fn init(

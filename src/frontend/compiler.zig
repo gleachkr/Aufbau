@@ -13,6 +13,8 @@ const DiagnosticSource = CompilerDiag.DiagnosticSource;
 
 pub const HoleInference = Context.HoleInference;
 pub const HoleInferenceSink = Context.HoleInferenceSink;
+pub const InlineConclusion = Context.InlineConclusion;
+pub const InlineConclusionSink = Context.InlineConclusionSink;
 pub const StatementSink = @import("./statement_sink.zig").StatementSink;
 
 pub const Compiler = struct {
@@ -27,6 +29,7 @@ pub const Compiler = struct {
     debug: DebugConfig,
     allow_search_placeholders: bool,
     hole_inference_sink: ?*HoleInferenceSink,
+    inline_conclusion_sink: ?*InlineConclusionSink,
     statement_sink: ?*StatementSink,
 
     const PipelineOutput = Pipeline.Output;
@@ -59,6 +62,7 @@ pub const Compiler = struct {
             .debug = DebugConfig.none,
             .allow_search_placeholders = false,
             .hole_inference_sink = null,
+            .inline_conclusion_sink = null,
             .statement_sink = null,
         };
     }
@@ -185,6 +189,7 @@ pub const Compiler = struct {
         );
         result.allow_search_placeholders = self.allow_search_placeholders;
         result.hole_inference_sink = self.hole_inference_sink;
+        result.inline_conclusion_sink = self.inline_conclusion_sink;
         result.statement_sink = self.statement_sink;
         return result;
     }
