@@ -105,7 +105,12 @@ try {
   );
 } finally {
   if (server) await close(server);
-  await rm(tempRoot, { force: true, recursive: true });
+  await rm(tempRoot, {
+    force: true,
+    maxRetries: 10,
+    recursive: true,
+    retryDelay: 100,
+  });
 }
 
 function run(command, args, options = {}) {
