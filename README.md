@@ -48,6 +48,7 @@ Each package README contains a minimal usage example.
 
 ## Documentation
 
+- [`CHANGELOG.md`](CHANGELOG.md) — release history and unreleased changes
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — structure and trust boundary
 - [`docs/proof.md`](docs/proof.md) — Aufbau proof-script format
 - [`docs/rewrite_system.md`](docs/rewrite_system.md) — rewrite metadata
