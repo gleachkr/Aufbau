@@ -84,21 +84,22 @@ try {
   });
 
   await writeFile(join(tempRoot, "index.html"), smokePageSource());
-  server = createStaticServer(tempRoot);
+  const smokeServer = createSmokeServer(tempRoot);
+  server = smokeServer.server;
   const address = await listen(server);
   const url = `http://127.0.0.1:${address.port}/index.html`;
   const browser = findBrowser();
-  const result = await runBrowser(browser, url, tempRoot);
+  const result = await runBrowser(
+    browser,
+    url,
+    tempRoot,
+    smokeServer.result,
+  );
 
   assert.equal(
     result.status,
-    0,
-    `${basename(browser)} failed:\n${result.stderr}`,
-  );
-  assert.match(
-    result.stdout,
-    /data-smoke="passed"/,
-    `browser smoke test failed:\n${result.stdout}\n${result.stderr}`,
+    "passed",
+    `browser smoke test failed:\n${result.detail}\n${result.stderr}`,
   );
   console.log(
     "Packed @aufbau/editor loads and verifies a proof in Chromium.",
@@ -151,10 +152,30 @@ function findBrowser() {
   );
 }
 
-function createStaticServer(root) {
-  return createServer(async (request, response) => {
+function createSmokeServer(root) {
+  let resolveResult;
+  const result = new Promise((resolveSmoke) => {
+    resolveResult = resolveSmoke;
+  });
+  const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
+      if (url.pathname === "/__smoke_result") {
+        const body = await readRequestBody(request);
+        const report = JSON.parse(body);
+        if (
+          request.method !== "POST" ||
+          !["passed", "failed"].includes(report.status) ||
+          typeof report.detail !== "string"
+        ) {
+          response.writeHead(400).end("Invalid smoke result");
+          return;
+        }
+        response.writeHead(204).end();
+        resolveResult(report);
+        return;
+      }
+
       const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
       if (path !== root && !path.startsWith(`${root}/`)) {
         response.writeHead(403).end("Forbidden");
@@ -172,6 +193,13 @@ function createStaticServer(root) {
       response.writeHead(404).end("Not found");
     }
   });
+  return { result, server };
+}
+
+async function readRequestBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function mimeType(path) {
@@ -207,39 +235,88 @@ function close(httpServer) {
   });
 }
 
-function runBrowser(browser, url, root) {
-  return new Promise((resolveRun, reject) => {
-    const child = spawn(browser, [
+async function runBrowser(browser, url, root, resultPromise) {
+  const child = spawn(
+    browser,
+    [
       "--headless=new",
       "--no-sandbox",
       "--disable-background-networking",
       "--disable-dev-shm-usage",
       "--disable-gpu",
+      "--no-default-browser-check",
+      "--no-first-run",
       `--user-data-dir=${join(root, "chrome-profile")}`,
-      "--virtual-time-budget=20000",
-      "--dump-dom",
       url,
-    ]);
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
+    ],
+    { detached: process.platform !== "win32" },
+  );
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
 
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${basename(browser)} timed out\n${stderr}`));
-    }, 45000);
-    child.once("close", (status) => {
-      clearTimeout(timeout);
-      resolveRun({ status, stdout, stderr });
-    });
+  const closed = new Promise((resolveClose, rejectClose) => {
+    child.once("error", rejectClose);
+    child.once("close", resolveClose);
+  });
+  let timeout;
+
+  try {
+    const result = await Promise.race([
+      resultPromise,
+      closed.then((status) => {
+        throw new Error(
+          `${basename(browser)} exited with status ${status}\n${stderr}`,
+        );
+      }),
+      new Promise((_, rejectTimeout) => {
+        timeout = setTimeout(() => {
+          rejectTimeout(
+            new Error(`${basename(browser)} timed out\n${stderr}`),
+          );
+        }, 90000);
+      }),
+    ]);
+    return { ...result, stderr };
+  } finally {
+    clearTimeout(timeout);
+    await stopBrowser(child, closed);
+  }
+}
+
+async function stopBrowser(child, closed) {
+  if (
+    child.pid === undefined ||
+    child.exitCode !== null ||
+    child.signalCode !== null
+  ) return;
+  signalBrowser(child, "SIGTERM");
+  const stopped = await Promise.race([
+    closed.then(
+      () => true,
+      () => true,
+    ),
+    delay(5000).then(() => false),
+  ]);
+  if (stopped) return;
+  signalBrowser(child, "SIGKILL");
+  await closed.catch(() => {});
+}
+
+function signalBrowser(child, signal) {
+  try {
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+  }
+}
+
+function delay(milliseconds) {
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, milliseconds);
   });
 }
 
@@ -338,10 +415,23 @@ try {
 
   document.body.dataset.smoke = "passed";
   document.querySelector("#result").textContent = "passed";
+  await reportSmokeResult("passed", "");
 } catch (error) {
+  const detail = error?.stack ?? String(error);
   document.body.dataset.smoke = "failed";
-  document.querySelector("#result").textContent =
-    error?.stack ?? String(error);
+  document.querySelector("#result").textContent = detail;
+  await reportSmokeResult("failed", detail);
+}
+
+async function reportSmokeResult(status, detail) {
+  const response = await fetch("/__smoke_result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, detail }),
+  });
+  if (!response.ok) {
+    throw new Error("unable to report browser smoke result");
+  }
 }
 
 function check(condition, message) {
