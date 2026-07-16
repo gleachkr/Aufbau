@@ -53,8 +53,14 @@ pub const matchDummyToSymbolic = BoundValueMatch.matchDummyToSymbolic;
 pub const representResolvedBindings = Materialize.representResolvedBindings;
 pub const collectUnresolvedRootsInBoundValue =
     Materialize.collectUnresolvedRootsInBoundValue;
+pub const collectUnresolvedRootsInSymbolicOwned =
+    Materialize.collectUnresolvedRootsInSymbolicOwned;
 pub const collectConcreteDepsInBoundValue =
     Materialize.collectConcreteDepsInBoundValue;
+pub const collectConcreteDepsInSymbolicRoot =
+    Materialize.collectConcreteDepsInSymbolicRoot;
+pub const applyMaterializedDummyAssignments =
+    Materialize.applyMaterializedDummyAssignments;
 pub const materializeResolvedBoundValue =
     Materialize.materializeResolvedBoundValue;
 pub const projectMaterializedExpr = Materialize.projectMaterializedExpr;

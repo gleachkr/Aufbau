@@ -1,0 +1,3 @@
+fail_def_unfold_then_rewrite_concl_pool_exhausted
+------------------------------------------------
+l1: $ target x $ by pre_ax (f := $ f $, y := $ y $) []

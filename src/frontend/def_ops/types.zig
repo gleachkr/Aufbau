@@ -135,6 +135,33 @@ pub const MaterializedDummyAssignment = struct {
     expr_id: ExprId,
 };
 
+/// Caller-owned policy for grounding unresolved hidden dummy roots. The
+/// callback may depend on mutable compiler state, so queries using it must not
+/// populate the pure def-instantiation caches.
+pub const HiddenWitnessProvider = struct {
+    context: *anyopaque,
+    provideFn: *const fn (
+        context: *anyopaque,
+        allocator: std.mem.Allocator,
+        roots: []const UnresolvedDummyRoot,
+        extra_used_deps: u55,
+    ) anyerror!?[]MaterializedDummyAssignment,
+
+    pub fn provide(
+        self: HiddenWitnessProvider,
+        allocator: std.mem.Allocator,
+        roots: []const UnresolvedDummyRoot,
+        extra_used_deps: u55,
+    ) anyerror!?[]MaterializedDummyAssignment {
+        return try self.provideFn(
+            self.context,
+            allocator,
+            roots,
+            extra_used_deps,
+        );
+    }
+};
+
 pub const WitnessMap = std.AutoHashMapUnmanaged(usize, ExprId);
 pub const WitnessSlotMap = std.AutoHashMapUnmanaged(ExprId, usize);
 pub const DummyAliasMap = std.AutoHashMapUnmanaged(usize, usize);

@@ -691,14 +691,13 @@ After a successful rule match, finalization returns an ordinary concrete
 `[]const ExprId` binding list. Only after that do the usual sort,
 boundness, and dependency checks run.
 
-That finalization step is also the only place where hidden-dummy
-witnesses are allowed to materialize as main-theorem dummy vars. For
-bound witnesses, that escape path reuses or allocates a theorem-local
-variable from the sort's `@vars` pool, using the same dependency-aware
-selection policy as `@fresh`. If no suitable pool entry exists, the
-match stays unresolved instead of inventing an unnamed theorem dummy.
-If a match is abandoned before finalization, it should leave the main
-`TheoremContext` unchanged.
+Hidden-dummy witnesses may materialize as main-theorem dummy vars at two
+proof-producing seams: rule-match finalization and conclusion normalization
+after semantic def matching has succeeded. Bound witnesses use a theorem-local
+variable from the sort's `@vars` pool with the same dependency-aware policy as
+`@fresh`. If no suitable pool entry exists, the match stays unresolved instead
+of inventing an unnamed theorem dummy. Pure cached def queries never contain a
+selected theorem-local witness.
 
 Nothing symbolic escapes into proof emission or into the trusted kernel.
 
@@ -895,8 +894,8 @@ Operationally, the view pipeline now has a few important invariants:
   retry that unfolds concrete defs without hidden dummy args and
   canonicalizes
 - none of this is allowed to force theorem-local dummy creation early;
-  witness escape is deferred to final rule instantiation, where bound
-  escapes go through the same `@vars` pool machinery used by `@fresh`
+  bound witness escape occurs only at a proof-producing finalization seam and
+  goes through the same `@vars` pool machinery used by `@fresh`
 
 `view_trace.zig` is the debug-oriented formatter used when view tracing is
 turned on.

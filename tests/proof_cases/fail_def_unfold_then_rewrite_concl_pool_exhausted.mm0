@@ -1,5 +1,6 @@
 delimiter $ ( ) $;
 provable sort wff;
+--| @vars x
 sort obj;
 
 term iff (a b: wff): wff;
@@ -8,6 +9,7 @@ term imp (a b: wff): wff;
 infixr imp: $->$ prec 25;
 term top: wff;
 term mark (a: wff): wff;
+term target (x: obj): wff;
 term eq (a b: obj): wff;
 infixl eq: $=$ prec 35;
 term all {x: obj} (p: wff x): wff;
@@ -22,11 +24,13 @@ axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @rewrite
 axiom mark_any (a: wff): $ mark a <-> top $;
+--| @rewrite
+axiom target_any (x: obj): $ target x <-> top $;
 
 def pre_wrap (f y: obj) {.x: obj}: wff
   = $ mark (A. x (((g f x) = y) -> (x = x))) $;
 
 axiom pre_ax (f y: obj): $ pre_wrap f y $;
 
-theorem unsupported_def_unfold_then_rewrite_concl (f y: obj):
-  $ top $;
+theorem fail_def_unfold_then_rewrite_concl_pool_exhausted
+  (x f y: obj): $ target x $;

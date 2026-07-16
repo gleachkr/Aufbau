@@ -25,13 +25,7 @@ const ProofCaseMetadata = struct {
 
 const known_proof_case_failures = [_]ProofCaseMetadata{};
 
-const unsupported_proof_cases = [_]ProofCaseMetadata{
-    .{
-        .stem = "unsupported_def_unfold_then_rewrite_concl",
-        .reason = "requires inventing an erased hidden def witness after " ++
-            "unfold then rewrite; treating that as out of scope",
-    },
-};
+const unsupported_proof_cases = [_]ProofCaseMetadata{};
 
 fn lookupProofCaseReason(
     entries: []const ProofCaseMetadata,
@@ -138,9 +132,22 @@ const proof_cases = [_]ProofCase{
         .outcome = .{ .fail = error.ConclusionMismatch },
     },
     .{ .stem = "fail_nested_def_unfold_then_acui", .outcome = .pass },
+    .{ .stem = "pass_def_unfold_then_rewrite_concl", .outcome = .pass },
     .{
-        .stem = "unsupported_def_unfold_then_rewrite_concl",
-        .outcome = .unsupported,
+        .stem = "pass_def_unfold_then_rewrite_concl_two_roots",
+        .outcome = .pass,
+    },
+    .{
+        .stem = "fail_def_unfold_then_rewrite_concl_no_vars",
+        .outcome = .{ .fail = error.ConclusionMismatch },
+    },
+    .{
+        .stem = "fail_def_unfold_then_rewrite_concl_pool_exhausted",
+        .outcome = .{ .fail = error.HiddenWitnessNoAvailableVar },
+    },
+    .{
+        .stem = "fail_def_unfold_then_rewrite_concl_two_roots_one_var",
+        .outcome = .{ .fail = error.HiddenWitnessNoAvailableVar },
     },
     .{ .stem = "pass_alleq_transparent_inference", .outcome = .pass },
     .{ .stem = "pass_alleq_surface_inference", .outcome = .pass },

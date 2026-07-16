@@ -775,50 +775,11 @@ pub const RuleMatchSession = struct {
         self: *RuleMatchSession,
         assignments: []const MaterializedDummyAssignment,
     ) !void {
-        for (assignments) |assignment| {
-            const root = try SymbolicEngine.resolveDummySlot(
-                assignment.root_slot,
-                &self.state,
-            );
-            const info = self.state.symbolic_dummy_infos.items[root];
-            if (self.state.witnesses.get(root)) |existing| {
-                if (existing != assignment.expr_id) return error.UnifyMismatch;
-            }
-            if (self.state.materialized_witnesses.get(root)) |existing| {
-                if (existing != assignment.expr_id) return error.UnifyMismatch;
-            }
-            if (self.state.materialized_witness_slots.get(assignment.expr_id)) |slot| {
-                const slot_root = try SymbolicEngine.resolveDummySlot(
-                    slot,
-                    &self.state,
-                );
-                if (slot_root != root) return error.UnifyMismatch;
-            }
-            if (self.state.materialized_witness_infos.get(assignment.expr_id)) |existing_info| {
-                if (existing_info.bound != info.bound or
-                    !std.mem.eql(
-                        u8,
-                        existing_info.sort_name,
-                        info.sort_name,
-                    )) return error.UnifyMismatch;
-            }
-            try self.state.putMaterializedWitness(
-                self.shared.allocator,
-                root,
-                assignment.expr_id,
-            );
-            try self.state.putMaterializedWitnessSlot(
-                self.shared.allocator,
-                assignment.expr_id,
-                root,
-            );
-            try self.state.putMaterializedWitnessInfo(
-                self.shared.allocator,
-                assignment.expr_id,
-                info,
-            );
-            SymbolicEngine.invalidateRepresentativeCaches(&self.state);
-        }
+        var symbolic_engine = self.engine();
+        try symbolic_engine.applyMaterializedDummyAssignments(
+            &self.state,
+            assignments,
+        );
     }
 
     pub fn collectConcreteDepsForPendingFinalization(

@@ -27,10 +27,11 @@ This is useful for systems with a variable convention: a set of tokens
 that readers understand to be variables of a particular sort, without
 needing each theorem to redeclare them.
 
-The same pools also back a newer hidden-dummy path: when advanced
-matching keeps a bound hidden witness symbolic for most of elaboration,
-final rule instantiation may still need to materialize that witness as a
-real theorem-local variable. That escape path reuses the sort's `@vars`
+The same pools also back hidden-dummy finalization. Advanced matching and
+semantic def exposure keep bound hidden witnesses symbolic for most of
+elaboration. Final rule instantiation, or the narrow proof-producing
+conclusion-normalization fallback, may still need to materialize a witness as
+a real theorem-local variable. Those escape paths reuse the sort's `@vars`
 pool instead of inventing an unnamed theorem dummy.
 
 ### Syntax
@@ -375,9 +376,9 @@ Def-aware matching may keep hidden binders symbolic while it compares a
 rule against concrete proof data. That is deliberate: most hidden
 witnesses never need to escape into the theorem context at all.
 
-If final rule instantiation still needs a *bound* hidden witness as a
-concrete theorem expression, the compiler uses the same sort pool and the
-same dependency-aware selection policy described above:
+If final rule instantiation or proof-producing conclusion normalization still
+needs a *bound* hidden witness as a concrete theorem expression, the compiler
+uses the same sort pool and dependency-aware selection policy described above:
 
 1. reuse an already-allocated theorem-local dummy when it is fresh for
    the current application;
@@ -391,9 +392,9 @@ Two failure modes matter:
 - if the pool exists but every token is blocked by the current concrete
   inputs, the compiler reports `HiddenWitnessNoAvailableVar`.
 
-This is why hidden-dummy support does not create theorem-local dummies
-just because a def was unfolded. Escape happens only at the final
-instantiation boundary.
+This is why hidden-dummy support does not create theorem-local dummies just
+because a def was unfolded. Escape happens only after symbolic matching has
+succeeded and proof production requires a concrete witness.
 
 #### Seeding omitted recover holes
 

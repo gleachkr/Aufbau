@@ -110,17 +110,25 @@ pub fn buildSemanticCommonTargetFromDef(
     );
     defer def_ops.deinit();
 
-    const witness = try def_ops.instantiateDefTowardExpr(
-        def_expr,
-        other_expr,
-    ) orelse return null;
+    const witness = if (self.hidden_witness_provider) |provider|
+        try def_ops.instantiateDefTowardExprWithProvider(
+            def_expr,
+            other_expr,
+            provider,
+        )
+    else
+        try def_ops.instantiateDefTowardExpr(
+            def_expr,
+            other_expr,
+        );
+    const concrete_witness = witness orelse return null;
     const def_to_witness = try ProofEmit.emitTransparentRelationProof(
         self,
         relation,
         def_expr,
-        witness,
+        concrete_witness,
     );
-    const norm_witness = try Core.normalize(self, witness);
+    const norm_witness = try Core.normalize(self, concrete_witness);
     if (norm_witness.result_expr == other_expr) {
         return .{
             .target_expr = other_expr,
@@ -128,7 +136,7 @@ pub fn buildSemanticCommonTargetFromDef(
                 self,
                 relation,
                 def_expr,
-                witness,
+                concrete_witness,
                 other_expr,
                 def_to_witness,
                 norm_witness.conv_line_idx,
@@ -145,7 +153,7 @@ pub fn buildSemanticCommonTargetFromDef(
     const witness_to_common = try ProofEmit.composeTransitivity(
         self,
         relation,
-        witness,
+        concrete_witness,
         norm_witness.result_expr,
         common.target_expr,
         norm_witness.conv_line_idx,
@@ -157,7 +165,7 @@ pub fn buildSemanticCommonTargetFromDef(
             self,
             relation,
             def_expr,
-            witness,
+            concrete_witness,
             common.target_expr,
             def_to_witness,
             witness_to_common,

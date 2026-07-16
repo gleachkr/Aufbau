@@ -298,14 +298,19 @@ is enough. For conclusions, it can also build a folded intermediate first:
 selected raw subterms are folded toward the user assertion, then ordinary
 normalization / ACUI cleanup proves the remaining difference.
 
+There is one further conclusion-only path. If semantic def exposure and
+rewrite matching succeed but an erased bound hidden witness remains symbolic,
+proof-producing conclusion normalization may materialize it from the sort's
+`@vars` pool. The pure `(def, target)` query stays cached independently; the
+selected theorem-local witness is never cached.
+
 The normalizer itself still does **not** generally unfold defs first in order
 to discover more rewrites. Rewriting works on the visible instantiated
-expression, or on an explicitly folded intermediate chosen by theorem-line
-matching.
+expression, on the narrow semantic def-exposure path above, or on an explicitly
+folded intermediate chosen by theorem-line matching.
 
-If you need witness recovery only after a broader unfold / rewrite alignment,
-that is usually a job for `@view` plus `@recover` or `@abstract`, not for
-normalization alone.
+Broader witness recovery after unfold / rewrite alignment is still usually a
+job for `@view` plus `@recover` or `@abstract`.
 
 ### Def-aware normalized conclusion
 

@@ -8,6 +8,7 @@ const SymbolicExpr = Types.SymbolicExpr;
 const BindingMode = Types.BindingMode;
 const BoundValue = Types.BoundValue;
 const UnresolvedDummyRoot = Types.UnresolvedDummyRoot;
+const MaterializedDummyAssignment = Types.MaterializedDummyAssignment;
 const MatchSession = MatchState.MatchSession;
 const ConcreteVarInfo = Types.ConcreteVarInfo;
 
@@ -144,6 +145,30 @@ pub fn collectUnresolvedRootsInBoundValue(
     }
 }
 
+/// Collect the unresolved roots reachable from one symbolic result. The
+/// returned slice is owned by the caller.
+pub fn collectUnresolvedRootsInSymbolicOwned(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+    state: *MatchSession,
+) anyerror![]UnresolvedDummyRoot {
+    var roots = std.ArrayListUnmanaged(UnresolvedDummyRoot){};
+    errdefer roots.deinit(self.shared.allocator);
+    var seen_roots: std.AutoHashMapUnmanaged(usize, void) = .empty;
+    defer seen_roots.deinit(self.shared.allocator);
+    var seen_binders: std.AutoHashMapUnmanaged(usize, void) = .empty;
+    defer seen_binders.deinit(self.shared.allocator);
+    try collectUnresolvedRootsInSymbolic(
+        self,
+        symbolic,
+        state,
+        &roots,
+        &seen_roots,
+        &seen_binders,
+    );
+    return try roots.toOwnedSlice(self.shared.allocator);
+}
+
 fn collectConcreteDepsInSymbolic(
     self: anytype,
     symbolic: *const SymbolicExpr,
@@ -218,6 +243,71 @@ pub fn collectConcreteDepsInBoundValue(
             deps,
             seen_binders,
         ),
+    }
+}
+
+pub fn collectConcreteDepsInSymbolicRoot(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+    state: *MatchSession,
+) anyerror!u55 {
+    var deps: u55 = 0;
+    var seen_binders: std.AutoHashMapUnmanaged(usize, void) = .empty;
+    defer seen_binders.deinit(self.shared.allocator);
+    try collectConcreteDepsInSymbolic(
+        self,
+        symbolic,
+        state,
+        &deps,
+        &seen_binders,
+    );
+    return deps;
+}
+
+pub fn applyMaterializedDummyAssignments(
+    self: anytype,
+    state: *MatchSession,
+    assignments: []const MaterializedDummyAssignment,
+) anyerror!void {
+    for (assignments) |assignment| {
+        const root = try resolveDummySlot(assignment.root_slot, state);
+        const info = state.symbolic_dummy_infos.items[root];
+        if (state.witnesses.get(root)) |existing| {
+            if (existing != assignment.expr_id) return error.UnifyMismatch;
+        }
+        if (state.materialized_witnesses.get(root)) |existing| {
+            if (existing != assignment.expr_id) return error.UnifyMismatch;
+        }
+        if (state.materialized_witness_slots.get(assignment.expr_id)) |slot| {
+            const slot_root = try resolveDummySlot(slot, state);
+            if (slot_root != root) return error.UnifyMismatch;
+        }
+        if (state.materialized_witness_infos.get(
+            assignment.expr_id,
+        )) |existing_info| {
+            if (existing_info.bound != info.bound or
+                !std.mem.eql(
+                    u8,
+                    existing_info.sort_name,
+                    info.sort_name,
+                )) return error.UnifyMismatch;
+        }
+        try state.putMaterializedWitness(
+            self.shared.allocator,
+            root,
+            assignment.expr_id,
+        );
+        try state.putMaterializedWitnessSlot(
+            self.shared.allocator,
+            assignment.expr_id,
+            root,
+        );
+        try state.putMaterializedWitnessInfo(
+            self.shared.allocator,
+            assignment.expr_id,
+            info,
+        );
+        Root.invalidateRepresentativeCaches(state);
     }
 }
 

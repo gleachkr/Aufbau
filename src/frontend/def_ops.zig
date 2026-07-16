@@ -19,6 +19,7 @@ pub const MatchSeedState = Types.MatchSeedState;
 pub const UnresolvedDummyRoot = Types.UnresolvedDummyRoot;
 pub const MaterializedDummyAssignment =
     Types.MaterializedDummyAssignment;
+pub const HiddenWitnessProvider = Types.HiddenWitnessProvider;
 pub const SemanticStepCandidate =
     @import("./def_ops/symbolic_engine.zig").SemanticStepCandidate;
 pub const default_semantic_match_budget: usize = 8;
@@ -119,6 +120,23 @@ pub const Context = struct {
         return try symbolic_engine.instantiateDefTowardExpr(
             def_expr,
             target_expr,
+        );
+    }
+
+    pub fn instantiateDefTowardExprWithProvider(
+        self: *Context,
+        def_expr: ExprId,
+        target_expr: ExprId,
+        provider: HiddenWitnessProvider,
+    ) anyerror!?ExprId {
+        if (try self.instantiateDefTowardExpr(def_expr, target_expr)) |witness| {
+            return witness;
+        }
+        var symbolic_engine = self.symbolicEngine();
+        return try symbolic_engine.instantiateDefTowardExprWithProvider(
+            def_expr,
+            target_expr,
+            provider,
         );
     }
 

@@ -1044,6 +1044,8 @@ fn applyRuleCandidateCore(
         }
 
         const conclusion_mark = checked.items.len;
+        // A probe may be abandoned, so it must not allocate theorem-local
+        // hidden witnesses. The full application below gets the provider.
         const line_idx = (Matching.tryBuildConclusionLine(
             allocator,
             theorem,
@@ -1052,6 +1054,7 @@ fn applyRuleCandidateCore(
             checked,
             diag_scratch,
             self.debug,
+            null,
             candidate.displayed_conclusion,
             candidate.raw_conclusion,
             rule_id,
@@ -1445,6 +1448,7 @@ fn applyRuleCandidateCore(
         checked,
         diag_scratch,
         self.debug,
+        fresh_context,
         candidate.displayed_conclusion,
         candidate.raw_conclusion,
         rule_id,

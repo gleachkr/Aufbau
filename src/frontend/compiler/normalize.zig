@@ -16,6 +16,7 @@ const CompilerDiag = @import("./diag.zig");
 const DebugConfig = @import("../debug.zig").DebugConfig;
 const DebugTrace = @import("../debug.zig");
 const ViewTrace = @import("../view_trace.zig");
+const DefOps = @import("../def_ops.zig");
 
 pub const NormalizedConversion = struct {
     relation: ResolvedRelation,
@@ -127,6 +128,32 @@ pub fn buildNormalizedConversionWithDebug(
     expected: ExprId,
     debug: DebugConfig,
 ) !?NormalizedConversion {
+    return try buildNormalizedConversionWithProviderAndDebug(
+        allocator,
+        theorem,
+        registry,
+        env,
+        checked,
+        scratch,
+        actual,
+        expected,
+        null,
+        debug,
+    );
+}
+
+pub fn buildNormalizedConversionWithProviderAndDebug(
+    allocator: std.mem.Allocator,
+    theorem: *TheoremContext,
+    registry: *RewriteRegistry,
+    env: *const GlobalEnv,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    scratch: *CompilerDiag.Scratch,
+    actual: ExprId,
+    expected: ExprId,
+    hidden_witness_provider: ?DefOps.HiddenWitnessProvider,
+    debug: DebugConfig,
+) !?NormalizedConversion {
     tryTraceComparison(
         debug,
         allocator,
@@ -145,6 +172,7 @@ pub fn buildNormalizedConversionWithDebug(
         scratch,
         debug,
     );
+    normalizer.hidden_witness_provider = hidden_witness_provider;
     const relation = normalizer.resolveRelationForExpr(actual) orelse {
         DebugTrace.traceNormalization(
             debug,

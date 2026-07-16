@@ -14,6 +14,7 @@ const WitnessState = @import("./witness_state.zig");
 const ConversionPlan = Types.ConversionPlan;
 const SymbolicExpr = Types.SymbolicExpr;
 const BindingMode = Types.BindingMode;
+const HiddenWitnessProvider = Types.HiddenWitnessProvider;
 const MatchSession = MatchState.MatchSession;
 const semantic_match_budget: usize = 8;
 
@@ -280,6 +281,88 @@ pub fn instantiateDefTowardExpr(
         result,
     );
     return result;
+}
+
+pub fn instantiateDefTowardExprWithProvider(
+    self: anytype,
+    def_expr: ExprId,
+    target_expr: ExprId,
+    provider: HiddenWitnessProvider,
+) anyerror!?ExprId {
+    _ = getConcreteDef(self, def_expr) orelse return null;
+
+    var session = try MatchSession.init(self.shared.allocator, 0);
+    defer session.deinit(self.shared.allocator);
+    const symbolic = try expandConcreteDef(
+        self,
+        def_expr,
+        &session,
+    ) orelse return null;
+
+    if (!try matchSymbolicToExprState(
+        self,
+        symbolic,
+        target_expr,
+        &session,
+    ) and !try self.matchSymbolicToExprSemantic(
+        symbolic,
+        target_expr,
+        &session,
+        semantic_match_budget,
+    )) {
+        return null;
+    }
+    if (try WitnessState.materializeResolvedSymbolic(
+        self,
+        symbolic,
+        &session,
+    )) |witness| {
+        return witness;
+    }
+
+    const roots = try WitnessState.collectUnresolvedRootsInSymbolicOwned(
+        self,
+        symbolic,
+        &session,
+    );
+    defer self.shared.allocator.free(roots);
+    if (roots.len == 0) return null;
+    sortUnresolvedRoots(roots);
+
+    const extra_used_deps =
+        try WitnessState.collectConcreteDepsInSymbolicRoot(
+            self,
+            symbolic,
+            &session,
+        );
+    const assignments = try provider.provide(
+        self.shared.allocator,
+        roots,
+        extra_used_deps,
+    ) orelse return null;
+    defer self.shared.allocator.free(assignments);
+    try WitnessState.applyMaterializedDummyAssignments(
+        self,
+        &session,
+        assignments,
+    );
+    return try WitnessState.materializeResolvedSymbolic(
+        self,
+        symbolic,
+        &session,
+    );
+}
+
+fn sortUnresolvedRoots(roots: []Types.UnresolvedDummyRoot) void {
+    var i: usize = 1;
+    while (i < roots.len) : (i += 1) {
+        const root = roots[i];
+        var j = i;
+        while (j > 0 and roots[j - 1].root_slot > root.root_slot) : (j -= 1) {
+            roots[j] = roots[j - 1];
+        }
+        roots[j] = root;
+    }
 }
 
 fn instantiateDefTowardExprUncached(

@@ -26,6 +26,8 @@ pub const SymbolicEngine = struct {
         TransparentMatch.matchTemplateTransparent;
     pub const instantiateDefTowardExpr =
         TransparentMatch.instantiateDefTowardExpr;
+    pub const instantiateDefTowardExprWithProvider =
+        TransparentMatch.instantiateDefTowardExprWithProvider;
     pub const expandConcreteDef = TransparentMatch.expandConcreteDef;
     pub const matchTemplateRecState =
         TransparentMatch.matchTemplateRecState;
@@ -64,8 +66,14 @@ pub const SymbolicEngine = struct {
         WitnessState.projectMaterializedExpr;
     pub const collectUnresolvedRootsInBoundValue =
         WitnessState.collectUnresolvedRootsInBoundValue;
+    pub const collectUnresolvedRootsInSymbolicOwned =
+        WitnessState.collectUnresolvedRootsInSymbolicOwned;
     pub const collectConcreteDepsInBoundValue =
         WitnessState.collectConcreteDepsInBoundValue;
+    pub const collectConcreteDepsInSymbolicRoot =
+        WitnessState.collectConcreteDepsInSymbolicRoot;
+    pub const applyMaterializedDummyAssignments =
+        WitnessState.applyMaterializedDummyAssignments;
     pub const resolveDummySlot = WitnessState.resolveDummySlot;
     pub const currentWitnessExpr = WitnessState.currentWitnessExpr;
     pub const isProvisionalWitnessExpr =

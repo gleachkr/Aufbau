@@ -7,6 +7,7 @@ const ResolvedRelation =
     @import("./rewrite_registry.zig").ResolvedRelation;
 const DiagScratch = @import("./diag_scratch.zig");
 const DebugConfig = @import("./debug.zig").DebugConfig;
+const DefOps = @import("./def_ops.zig");
 const CheckedLine = @import("./compiler/checked_ir.zig").CheckedLine;
 const CheckedRef = @import("./compiler/checked_ir.zig").CheckedRef;
 const Types = @import("./normalizer/types.zig");
@@ -26,6 +27,7 @@ pub const Normalizer = struct {
     lines: *std.ArrayListUnmanaged(CheckedLine),
     diag_scratch: ?*DiagScratch.Scratch,
     debug: DebugConfig = .none,
+    hidden_witness_provider: ?DefOps.HiddenWitnessProvider = null,
     cache: std.AutoHashMap(ExprId, NormalizeResult),
     step_count: usize = 0,
     step_limit: usize = 1000,

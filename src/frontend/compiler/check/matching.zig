@@ -13,9 +13,86 @@ const appendRuleLine = CheckedIr.appendRuleLine;
 const appendTransportLine = CheckedIr.appendTransportLine;
 const CompilerDiag = @import("../diag.zig");
 const AcuiSupport = @import("../../acui_support.zig");
+const DefOps = @import("../../def_ops.zig");
+const FreshSelect = @import("../fresh_select.zig");
 
 const max_fold_depth: usize = 12;
 const max_acui_fold_items: usize = 24;
+
+const HiddenWitnessProviderContext = struct {
+    env: *const GlobalEnv,
+    theorem: *TheoremContext,
+    fresh: Inference.HiddenWitnessFreshContext,
+    compared_exprs: [2]ExprId,
+
+    fn provider(self: *HiddenWitnessProviderContext) DefOps.HiddenWitnessProvider {
+        return .{
+            .context = self,
+            .provideFn = provide,
+        };
+    }
+
+    fn provide(
+        raw_context: *anyopaque,
+        allocator: std.mem.Allocator,
+        roots: []const DefOps.UnresolvedDummyRoot,
+        extra_used_deps: u55,
+    ) anyerror!?[]DefOps.MaterializedDummyAssignment {
+        const self: *HiddenWitnessProviderContext =
+            @ptrCast(@alignCast(raw_context));
+        for (roots) |root| {
+            if (!root.bound) return null;
+            if (self.fresh.sort_vars.getPool(root.sort_name) == null) {
+                return null;
+            }
+        }
+
+        const needs = try allocator.alloc(
+            FreshSelect.HiddenRootNeed,
+            roots.len,
+        );
+        defer allocator.free(needs);
+        for (roots, 0..) |root, idx| {
+            needs[idx] = .{
+                .root_slot = root.root_slot,
+                .sort_name = root.sort_name,
+            };
+        }
+
+        const selected = FreshSelect
+            .assignHiddenRootsFromVarsPoolWithLineDeps(
+            allocator,
+            self.fresh.parser,
+            self.env,
+            self.theorem,
+            self.fresh.theorem_vars,
+            self.fresh.sort_vars,
+            0,
+            &self.compared_exprs,
+            &.{},
+            extra_used_deps,
+            needs,
+        ) catch |err| {
+            if (err == error.FreshNoAvailableVar) {
+                return error.HiddenWitnessNoAvailableVar;
+            }
+            return err;
+        };
+        defer allocator.free(selected);
+
+        const assignments = try allocator.alloc(
+            DefOps.MaterializedDummyAssignment,
+            selected.len,
+        );
+        for (selected, 0..) |assignment, idx| {
+            assignments[idx] = .{
+                .root_slot = assignment.root_slot,
+                .expr_id = assignment.expr_id,
+            };
+        }
+        return assignments;
+    }
+};
 
 pub fn tryMatchHypothesis(
     allocator: std.mem.Allocator,
@@ -110,6 +187,7 @@ fn tryBuildFoldedIntermediateConclusionLine(
     checked: *std.ArrayListUnmanaged(CheckedLine),
     scratch: *CompilerDiag.Scratch,
     debug: DebugConfig,
+    hidden_witness_provider: ?DefOps.HiddenWitnessProvider,
     line_expr: ExprId,
     expected_line: ExprId,
     rule_id: u32,
@@ -138,7 +216,7 @@ fn tryBuildFoldedIntermediateConclusionLine(
     var conversion = if (intermediate == line_expr)
         null
     else
-        try Normalize.buildNormalizedConversionWithDebug(
+        try Normalize.buildNormalizedConversionWithProviderAndDebug(
             allocator,
             theorem,
             registry,
@@ -147,6 +225,7 @@ fn tryBuildFoldedIntermediateConclusionLine(
             scratch,
             intermediate,
             line_expr,
+            hidden_witness_provider,
             debug,
         ) orelse return null;
 
@@ -352,12 +431,25 @@ pub fn tryBuildConclusionLine(
     checked: *std.ArrayListUnmanaged(CheckedLine),
     scratch: *CompilerDiag.Scratch,
     debug: DebugConfig,
+    fresh_context: ?Inference.HiddenWitnessFreshContext,
     line_expr: ExprId,
     expected_line: ExprId,
     rule_id: u32,
     bindings: []const ExprId,
     refs: []const CheckedRef,
 ) !?usize {
+    var provider_context: HiddenWitnessProviderContext = undefined;
+    const hidden_witness_provider: ?DefOps.HiddenWitnessProvider =
+        if (fresh_context) |fresh| blk: {
+            provider_context = .{
+                .env = env,
+                .theorem = theorem,
+                .fresh = fresh,
+                .compared_exprs = .{ line_expr, expected_line },
+            };
+            break :blk provider_context.provider();
+        } else null;
+
     if (line_expr == expected_line) {
         return try appendRuleLine(
             checked,
@@ -402,6 +494,7 @@ pub fn tryBuildConclusionLine(
         checked,
         scratch,
         debug,
+        hidden_witness_provider,
         line_expr,
         expected_line,
         rule_id,
@@ -415,7 +508,7 @@ pub fn tryBuildConclusionLine(
     // proves the user's assertion equivalent to the raw conclusion, emit the
     // required proof-producing transport.
     const normalized_mark = checked.items.len;
-    if (try Normalize.buildNormalizedConversionWithDebug(
+    if (try Normalize.buildNormalizedConversionWithProviderAndDebug(
         allocator,
         theorem,
         registry,
@@ -424,6 +517,7 @@ pub fn tryBuildConclusionLine(
         scratch,
         expected_line,
         line_expr,
+        hidden_witness_provider,
         debug,
     )) |conversion| {
         var conversion_mut = conversion;
