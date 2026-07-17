@@ -586,6 +586,8 @@ fn annotationDiagnosticSpan(
         error.InvalidAlphaAnnotation,
         error.InvalidCongruenceAnnotation,
         error.CongruenceBinderOrderMismatch,
+        error.CongruenceBinderMissingDeps,
+        error.RelationBundleBoundBinder,
         error.InvalidConversionAnnotation,
         error.DuplicateConversionAnnotation,
         error.ConversionRuleHasHypotheses,
@@ -777,6 +779,10 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.AlphaRuleHasHypotheses => "@alpha rule must not have hypotheses",
         error.InvalidCongruenceAnnotation => "@congr rule does not have the expected congruence shape",
         error.CongruenceBinderOrderMismatch => "@congr binders must be ordered old₀ new₀ old₁ new₁ ...",
+        error.CongruenceBinderMissingDeps => "@congr old/new binders must declare every dependency " ++
+            "the head term's argument permits (e.g. (p q: wff x))",
+        error.RelationBundleBoundBinder => "@relation bundle rules (refl/trans/symm/transport) " ++
+            "must not have bound binders",
         error.InvalidConversionAnnotation => "@conversion expects one direction: ltr, rtl, or both",
         error.DuplicateConversionAnnotation => "multiple @conversion annotations were attached to one rule",
         error.ConversionRuleHasHypotheses => "@conversion rule must not have hypotheses",

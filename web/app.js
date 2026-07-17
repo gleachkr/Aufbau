@@ -139,6 +139,11 @@ const examples = {
     mm0: "./fixtures/hoare.mm0",
     proof: "./fixtures/hoare.auf",
   },
+  herbrand: {
+    label: "herbrand",
+    mm0: "./fixtures/herbrand.mm0",
+    proof: "./fixtures/herbrand.auf",
+  },
 };
 
 const editorTheme = EditorView.theme({

@@ -544,6 +544,14 @@ fn buildConversionDetail(
             },
         ),
     }
+    if (goal_concrete and result.stats.dep_deferred != 0) {
+        try w.writeAll(
+            " Some rule matches were refused because no instantiation " ++
+                "could satisfy the rule's variable-dependency " ++
+                "constraints; if a rewrite you expected did not fire, " ++
+                "check the binders' declared dependencies.",
+        );
+    }
     return try buf.toOwnedSlice(allocator);
 }
 

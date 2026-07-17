@@ -6822,6 +6822,190 @@ test "conversion? tolerates a self-referential local equation" {
     );
 }
 
+// --- conversion? dep safety: prenex/CNF rules of passage ------------------
+//
+// A first-order theory whose interesting rewrites carry variable-dependency
+// side conditions (the classical rules of passage: quantifier scope moves
+// legal only when the moved formula does not mention the bound variable).
+// The egraph's dep gate must admit exactly the matches whose side condition
+// some class representative can witness, and extraction must cite that
+// representative. Without the gate, `al_vac` alone would "prove"
+// `Pr x ⊢ al x (Pr x)`.
+
+const fol_passage_prelude =
+    \\delimiter $ ( ) $;
+    \\sort var;
+    \\provable sort form;
+    \\term iff (p q: form): form;
+    \\term an (p q: form): form;
+    \\term or (p q: form): form;
+    \\term imp (p q: form): form;
+    \\term not (p: form): form;
+    \\term al {x: var} (p: form x): form;
+    \\term ex {x: var} (p: form x): form;
+    \\term Pr (v: var): form;
+    \\--| @relation form iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: form): $ iff a a $;
+    \\axiom iff_trans (a b c: form) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: form) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: form) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @congr
+    \\axiom an_congr (a b c d: form) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (an a c) (an b d) $;
+    \\--| @congr
+    \\axiom or_congr (a b c d: form) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (or a c) (or b d) $;
+    \\--| @congr
+    \\axiom imp_congr (a b c d: form) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (imp a c) (imp b d) $;
+    \\--| @congr
+    \\axiom not_congr (a b: form) (h: $ iff a b $): $ iff (not a) (not b) $;
+    \\--| @congr
+    \\axiom al_congr {x: var} (p q: form x) (h: $ iff p q $): $ iff (al x p) (al x q) $;
+    \\--| @congr
+    \\axiom ex_congr {x: var} (p q: form x) (h: $ iff p q $): $ iff (ex x p) (ex x q) $;
+    \\--| @conversion both
+    \\axiom pass_al_or {x: var} (a: form) (b: form x): $ iff (al x (or a b)) (or a (al x b)) $;
+    \\--| @conversion ltr
+    \\axiom al_vac {x: var} (a: form): $ iff (al x a) a $;
+    \\--| @conversion both
+    \\axiom not_al {x: var} (b: form x): $ iff (not (al x b)) (ex x (not b)) $;
+    \\--| @conversion both
+    \\axiom imp_def (a b: form): $ iff (imp a b) (or (not a) b) $;
+    \\
+;
+
+test "conversion? applies a rule of passage when the side condition holds" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // x does not occur in p, so pulling p out of the quantifier is legal.
+    const mm0_src = fol_passage_prelude ++
+        \\theorem pass_out {x: var} (p: form) (h: $ or p (al x (Pr x)) $): $ al x (or p (Pr x)) $;
+    ;
+    const proof_src =
+        \\pass_out
+        \\----
+        \\goal: $ al x (or p (Pr x)) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "pass_al_or") != null,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? refuses an unsound generalization as a dep-deferred miss" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // al_vac matches `al x (Pr x)` textually, but its `a` binder must
+    // avoid x and the class holds only `Pr x` — the gate defers forever
+    // and the saturated miss names the dependency constraint. Without the
+    // gate this "proves" Pr x ⊢ al x (Pr x) and emits a broken splice.
+    const mm0_src = fol_passage_prelude ++
+        \\theorem vac_blocked {x: var} (h: $ Pr x $): $ al x (Pr x) $;
+    ;
+    const proof_src =
+        \\vac_blocked
+        \\----
+        \\goal: $ al x (Pr x) $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "the egraph saturated") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "variable-dependency") != null,
+    );
+}
+
+test "conversion? discharges a side condition through a local equation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The pulled-out slot's class is {Pr x, an p q}: the unmasked
+    // extraction minimum is the x-containing `Pr x`, so the splice only
+    // checks if the restricted binder extracts under its avoid-mask and
+    // cites `an p q`. This is the test that fails if the gate admits
+    // without constraint-aware extraction.
+    const mm0_src = fol_passage_prelude ++
+        \\theorem pass_via_eq {x: var} (p q: form) (h1: $ iff (Pr x) (an p q) $) (h2: $ or (Pr x) (al x (Pr x)) $): $ al x (or (Pr x) (Pr x)) $;
+    ;
+    const proof_src =
+        \\pass_via_eq
+        \\----
+        \\goal: $ al x (or (Pr x) (Pr x)) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "pass_al_or") != null,
+    );
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? applies fully-dependent binder rules without deferral" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // not_al's binder depends on x — no restriction, no gate involvement.
+    const mm0_src = fol_passage_prelude ++
+        \\theorem prenex_neg {x: var} (h: $ ex x (not (Pr x)) $): $ not (al x (Pr x)) $;
+    ;
+    const proof_src =
+        \\prenex_neg
+        \\----
+        \\goal: $ not (al x (Pr x)) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expect(
+        std.mem.indexOf(u8, found.items[0].replacement, "not_al") != null,
+    );
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? rewrites implications into CNF shape" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = fol_passage_prelude ++
+        \\theorem cnf_imp (p q: form) (h: $ or (not p) q $): $ imp p q $;
+    ;
+    const proof_src =
+        \\cnf_imp
+        \\----
+        \\goal: $ imp p q $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expect(
+        std.mem.indexOf(u8, found.items[0].replacement, "imp_def") != null,
+    );
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 // --- conversion? stress: two-sorted equational theories -------------------
 //
 // Boolean-algebra and commutative-ring axiom sets adapted from
@@ -7173,3 +7357,4 @@ test "conversion? proves difference of squares across distributivity and AC" {
 
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
+

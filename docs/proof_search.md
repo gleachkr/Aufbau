@@ -148,6 +148,15 @@ must pass through, and `@conversion` annotations on the rewrite theorems
   fixpoint without connecting the goal to any reference, no chain of the
   enrolled rules exists at all — not "the search gave up", but "there is
   no such conversion". The failure report says which of the two happened.
+- **Variable dependencies are respected by construction.** Rules with
+  bound binders (quantifier rules of passage, vacuous-quantifier drops)
+  only fire when their dependency side conditions have a satisfiable
+  instantiation in the egraph — a rule requiring `x` not free in `a`
+  never fires with an `a`-class that can only denote `x`-containing
+  terms, and the extracted chain cites a representative the verifier
+  accepts. A local equation can unlock such a match (an in-scope
+  `iff (Pr x) p` lets `al x (Pr x)` leave the quantifier as `p`). When
+  dependency constraints refused matches, the failure report says so.
 - **Found chains return as soon as the goal converges.** Saturation stops
   the moment the goal shares a class with a reference, so a hit doesn't
   pay for the rest of the budget. This matters in theories whose rules

@@ -27,6 +27,10 @@ pub const RelationBundle = struct {
     trans_id: ?u32 = null,
     symm_id: ?u32 = null,
     transport_id: ?u32 = null,
+    /// Lazily-computed shape verdict: bundle rules must have no bound
+    /// binders, or the lines extraction emits from them carry
+    /// disjointness obligations nothing discharges.
+    shape_ok: ?bool = null,
 };
 
 /// Resolved relation with all IDs known.
@@ -377,6 +381,7 @@ pub const RewriteRegistry = struct {
             return error.ConversionMissingRelation;
         };
         if (rel_term_id != expected) return error.ConversionMissingRelation;
+        try validateBundleRuleShapes(env, relation);
     }
 
     fn processAlpha(
@@ -529,6 +534,18 @@ pub const RewriteRegistry = struct {
                 return error.CongruenceBinderOrderMismatch;
             }
             try expectRuleArgCompatible(rule, new_idx, term_arg, false);
+            // Congruence lifts instantiate old/new with arbitrary child
+            // terms, which may contain any bound atom the head term
+            // permits at this position. The rule binders must admit those
+            // dependencies, or every lift over such a child violates
+            // disjointness. Bit k indexes the k'th bound arg in both
+            // masks: the rule's bound binders are exactly the term's
+            // bound args, in order (enforced by this loop).
+            if (term_arg.deps & ~rule.args[old_idx].deps != 0 or
+                term_arg.deps & ~rule.args[new_idx].deps != 0)
+            {
+                return error.CongruenceBinderMissingDeps;
+            }
             try self.validateCongrHyp(
                 env,
                 rule,
@@ -568,6 +585,7 @@ pub const RewriteRegistry = struct {
         if (rel_term_id != expected_rel_term_id) {
             return error.InvalidCongruenceAnnotation;
         }
+        try validateBundleRuleShapes(env, relation);
     }
 
     fn validateCongrHyp(
@@ -927,7 +945,7 @@ pub const RewriteRegistry = struct {
             bundle.transport_id = env.getRuleId(bundle.transport_name);
         }
 
-        return .{
+        const resolved = ResolvedRelation{
             .rel_term_id = bundle.rel_term_id orelse return null,
             .refl_id = bundle.refl_id orelse return null,
             .trans_id = bundle.trans_id orelse return null,
@@ -937,6 +955,15 @@ pub const RewriteRegistry = struct {
             else
                 null,
         };
+        if (bundle.shape_ok == null) {
+            bundle.shape_ok = !ruleHasBoundBinder(env, resolved.refl_id) and
+                !ruleHasBoundBinder(env, resolved.trans_id) and
+                !ruleHasBoundBinder(env, resolved.symm_id) and
+                (resolved.transport_id == null or
+                    !ruleHasBoundBinder(env, resolved.transport_id.?));
+        }
+        if (!bundle.shape_ok.?) return null;
+        return resolved;
     }
 
     pub fn conversionRules(
@@ -1283,6 +1310,38 @@ fn validateTriggerApp(
 /// match side would match every e-class), and it must bind every binder the
 /// target side uses (an egraph rule cannot invent fresh variables).
 /// Overflowed binder masks (>= 64 binders) conservatively fail coverage.
+fn ruleHasBoundBinder(env: *const GlobalEnv, rule_id: u32) bool {
+    if (rule_id >= env.rules.items.len) return false;
+    for (env.rules.items[rule_id].args) |arg| {
+        if (arg.bound) return true;
+    }
+    return false;
+}
+
+/// Relation-bundle rules (refl/trans/symm/transport) must have no bound
+/// binders: extraction cites them on arbitrary terms, and a bound binder
+/// would attach a disjointness obligation nothing discharges. Members not
+/// yet declared are skipped here — `resolveRelation` re-checks once the
+/// whole bundle resolves.
+fn validateBundleRuleShapes(
+    env: *const GlobalEnv,
+    bundle: *const RelationBundle,
+) !void {
+    const names = [_][]const u8{
+        bundle.refl_name,
+        bundle.trans_name,
+        bundle.symm_name,
+        bundle.transport_name,
+    };
+    for (names) |name| {
+        if (std.mem.eql(u8, name, "_")) continue;
+        const rule_id = env.getRuleId(name) orelse continue;
+        if (ruleHasBoundBinder(env, rule_id)) {
+            return error.RelationBundleBoundBinder;
+        }
+    }
+}
+
 fn validateConversionOrientation(
     match: TemplateExpr,
     target: TemplateExpr,

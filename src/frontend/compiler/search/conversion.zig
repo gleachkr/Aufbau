@@ -62,15 +62,37 @@ pub fn run(
     var result = Result{};
 
     // Rules: one egraph orientation per enrolled direction, declaration
-    // order (deterministic).
+    // order (deterministic). Bound-binder slots and dep restrictions are
+    // shared by both orientations; the dep gate uses them to admit only
+    // matches the verifier's disjointness conditions can accept.
     var rules: std.ArrayListUnmanaged(egraph.Rule) = .{};
     for (context.registry.conversionRules()) |conv| {
+        const decl = &context.env.rules.items[conv.rule_id];
+        var bound_slots: std.ArrayListUnmanaged(u32) = .{};
+        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
+        var bound_ordinal: u6 = 0;
+        for (decl.args, 0..) |arg, slot| {
+            if (!arg.bound) continue;
+            try bound_slots.append(work, @intCast(slot));
+            for (decl.args, 0..) |term_arg, term_slot| {
+                if (term_arg.bound) continue;
+                if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
+                    try restrictions.append(work, .{
+                        .bound_slot = @intCast(slot),
+                        .term_slot = @intCast(term_slot),
+                    });
+                }
+            }
+            bound_ordinal += 1;
+        }
         if (conv.ltr) try rules.append(work, .{
             .rule_id = conv.rule_id,
             .reversed = false,
             .match_side = conv.lhs,
             .target_side = conv.rhs,
             .num_binders = conv.num_binders,
+            .bound_slots = bound_slots.items,
+            .restrictions = restrictions.items,
         });
         if (conv.rtl) try rules.append(work, .{
             .rule_id = conv.rule_id,
@@ -78,6 +100,8 @@ pub fn run(
             .match_side = conv.rhs,
             .target_side = conv.lhs,
             .num_binders = conv.num_binders,
+            .bound_slots = bound_slots.items,
+            .restrictions = restrictions.items,
         });
     }
     result.rule_count = rules.items.len;
@@ -172,6 +196,7 @@ pub fn run(
         });
         result.stats.iterations += slice.iterations;
         result.stats.unions_applied += slice.unions_applied;
+        result.stats.dep_deferred += slice.dep_deferred;
         if (slice.outcome != .iteration_capped) {
             result.stats.outcome = slice.outcome;
             break;

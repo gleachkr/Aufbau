@@ -4258,6 +4258,92 @@ test "compiler rejects @congr with wrong outer relation" {
     try std.testing.expectEqualStrings("@congr", mm0_src[span.start..span.end]);
 }
 
+test "compiler rejects @congr binders missing head-term dependencies" {
+    // `all`'s child position permits x, so lifts substitute x-containing
+    // children; a congr rule whose old/new binders don't declare the x
+    // dependency would make every such lift violate disjointness.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort var;
+        \\provable sort wff;
+        \\term bi (a b: wff): wff;
+        \\term all {x: var} (p: wff x): wff;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff):
+        \\  $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+        \\--| @congr
+        \\axiom all_congr {x: var} (p q: wff):
+        \\  $ bi p q $ > $ bi (all x p) (all x q) $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.CongruenceBinderMissingDeps,
+        compiler.check(),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.CongruenceBinderMissingDeps, diag.err);
+    try std.testing.expectEqualStrings("all_congr", diag.name.?);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("@congr", mm0_src[span.start..span.end]);
+}
+
+test "compiler accepts @congr binders with full head-term dependencies" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort var;
+        \\provable sort wff;
+        \\term bi (a b: wff): wff;
+        \\term all {x: var} (p: wff x): wff;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff):
+        \\  $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+        \\--| @congr
+        \\axiom all_congr {x: var} (p q: wff x):
+        \\  $ bi p q $ > $ bi (all x p) (all x q) $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.check();
+}
+
+test "compiler rejects @relation bundle rule with a bound binder" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort var;
+        \\provable sort wff;
+        \\term bi (a b: wff): wff;
+        \\term neg (a: wff): wff;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff):
+        \\  $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym {x: var} (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+        \\--| @conversion ltr
+        \\axiom neg_invol (a: wff): $ bi (neg (neg a)) a $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.RelationBundleBoundBinder,
+        compiler.check(),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.RelationBundleBoundBinder, diag.err);
+    try std.testing.expectEqualStrings("neg_invol", diag.name.?);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("@conversion ltr", mm0_src[span.start..span.end]);
+}
+
 test "compiler normalizes conclusions with automatic normalization" {
     const mm0_src =
         \\delimiter $ ( ) $;

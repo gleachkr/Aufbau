@@ -1,0 +1,181 @@
+-- Herbrand's rules of passage: prenexification as `conversion?` search.
+--
+-- The "règles de passage" of Herbrand's thesis move a quantifier past a
+-- connective when the other operand does not mention the bound variable:
+--
+--   ∀x (a ∧ b(x))  ↔  a ∧ ∀x b(x)      [x not free in a]
+--   (∀x b(x)) → a  ↔  ∃x (b(x) → a)    [x not free in a]   ... etc.
+--
+-- Applied left-to-right they drive every quantifier to the front (prenex
+-- normal form); right-to-left they miniscope. This fixture states the full
+-- set as `@conversion` axioms and proves a battery of prenexifications and
+-- reverse prenexifications whose proofs were each produced by a single
+-- `conversion?` search — the egraph explores the passage laws in both
+-- directions at once and emits the ordinary rewrite chain you see in
+-- herbrand.auf. In the web editor, replace any proof body with its
+-- one-line original (kept in a comment above each proof)
+--
+--   goal: $ ... $ by conversion?
+--
+-- and the code action regenerates it.
+--
+-- The side conditions are not checked by any bespoke machinery: `a: form`
+-- (declared without `x`) *is* the proviso, enforced by MM0's dependency
+-- discipline. The `conversion?` egraph respects it by construction — a
+-- passage law only fires when the moved operand's e-class can denote an
+-- x-free formula, so unsound instances like `P x ⊢ ∀x P x` (via the
+-- vacuous-quantifier law) are never even proposed, while a local
+-- equivalence in scope can legitimately unlock the same law
+-- (`constant_gen` below).
+
+delimiter $ ( ) $;
+
+provable sort form;
+
+--| @vars x y z u v w
+sort obj;
+
+-- ============================================================
+-- Formula language
+-- ============================================================
+
+term im (a b: form): form;
+infixr im: $→$ prec 25;
+term an (a b: form): form;
+infixr an: $∧$ prec 35;
+term or (a b: form): form;
+infixr or: $∨$ prec 30;
+term not (a: form): form;
+prefix not: $¬$ prec 40;
+term bi (a b: form): form;
+infixl bi: $↔$ prec 20;
+
+term all {x: obj} (p: form x): form;
+prefix all: $∀$ prec 41;
+term ex {x: obj} (p: form x): form;
+prefix ex: $∃$ prec 41;
+
+-- Schematic predicate symbols for concrete goals.
+term P (a: obj): form;
+prefix P: $P$ prec 45;
+term Q (a: obj): form;
+prefix Q: $Q$ prec 45;
+
+-- ============================================================
+-- Equivalence scaffolding: the ↔ relation bundle and congruence
+-- rules for every connective the chains rewrite under.
+-- ============================================================
+
+--| @relation form bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: form): $ a ↔ a $;
+axiom bi_trans (a b c: form) (h1: $ a ↔ b $) (h2: $ b ↔ c $):
+  $ a ↔ c $;
+axiom bi_symm (a b: form) (h: $ a ↔ b $): $ b ↔ a $;
+axiom mpbi (a b: form) (h1: $ a ↔ b $) (h2: $ a $): $ b $;
+
+--| @congr
+axiom an_congr (a b c d: form) (h1: $ a ↔ b $) (h2: $ c ↔ d $):
+  $ (a ∧ c) ↔ (b ∧ d) $;
+--| @congr
+axiom or_congr (a b c d: form) (h1: $ a ↔ b $) (h2: $ c ↔ d $):
+  $ (a ∨ c) ↔ (b ∨ d) $;
+--| @congr
+axiom im_congr (a b c d: form) (h1: $ a ↔ b $) (h2: $ c ↔ d $):
+  $ (a → c) ↔ (b → d) $;
+--| @congr
+axiom not_congr (a b: form) (h: $ a ↔ b $): $ (¬ a) ↔ (¬ b) $;
+--| @congr
+axiom all_congr {x: obj} (p q: form x) (h: $ p ↔ q $):
+  $ (∀ x p) ↔ (∀ x q) $;
+--| @congr
+axiom ex_congr {x: obj} (p q: form x) (h: $ p ↔ q $):
+  $ (∃ x p) ↔ (∃ x q) $;
+
+-- ============================================================
+-- The rules of passage. In each, `a: form` cannot mention x —
+-- that declaration is the classical side condition.
+-- ============================================================
+
+--| @conversion both
+axiom pass_al_an {x: obj} (a: form) (b: form x):
+  $ (∀ x (a ∧ b)) ↔ (a ∧ (∀ x b)) $;
+--| @conversion both
+axiom pass_al_or {x: obj} (a: form) (b: form x):
+  $ (∀ x (a ∨ b)) ↔ (a ∨ (∀ x b)) $;
+--| @conversion both
+axiom pass_ex_an {x: obj} (a: form) (b: form x):
+  $ (∃ x (a ∧ b)) ↔ (a ∧ (∃ x b)) $;
+--| @conversion both
+axiom pass_ex_or {x: obj} (a: form) (b: form x):
+  $ (∃ x (a ∨ b)) ↔ (a ∨ (∃ x b)) $;
+--| @conversion both
+axiom pass_im_ante_al {x: obj} (a: form) (b: form x):
+  $ ((∀ x b) → a) ↔ (∃ x (b → a)) $;
+--| @conversion both
+axiom pass_im_ante_ex {x: obj} (a: form) (b: form x):
+  $ ((∃ x b) → a) ↔ (∀ x (b → a)) $;
+--| @conversion both
+axiom pass_im_cons_al {x: obj} (a: form) (b: form x):
+  $ (a → (∀ x b)) ↔ (∀ x (a → b)) $;
+--| @conversion both
+axiom pass_im_cons_ex {x: obj} (a: form) (b: form x):
+  $ (a → (∃ x b)) ↔ (∃ x (a → b)) $;
+
+-- Negation passage: no side condition, the binder is fully dependent.
+--| @conversion both
+axiom neg_al {x: obj} (b: form x): $ (¬ (∀ x b)) ↔ (∃ x (¬ b)) $;
+--| @conversion both
+axiom neg_ex {x: obj} (b: form x): $ (¬ (∃ x b)) ↔ (∀ x (¬ b)) $;
+
+-- Vacuous quantification. Enrolled ltr only: the right-hand side is a
+-- bare formula variable, which cannot be e-matched.
+--| @conversion ltr
+axiom al_vac {x: obj} (a: form): $ (∀ x a) ↔ a $;
+--| @conversion ltr
+axiom ex_vac {x: obj} (a: form): $ (∃ x a) ↔ a $;
+
+-- Commutations, so each passage law (stated with the x-free operand on
+-- the left) also reaches the mirrored operand order.
+--| @conversion both
+axiom an_comm (a b: form): $ (a ∧ b) ↔ (b ∧ a) $;
+--| @conversion both
+axiom or_comm (a b: form): $ (a ∨ b) ↔ (b ∨ a) $;
+
+-- ============================================================
+-- The battery. Every proof in herbrand.auf is `conversion?` output.
+-- ============================================================
+
+-- Reverse prenexification with a commuted operand: the quantifier leaves
+-- a disjunction whose x-free part sits on the wrong side for the law.
+theorem prenex_or {x: obj} (q: form) (h: $ ∀ x ((P x) ∨ q) $):
+  $ (∀ x (P x)) ∨ q $;
+
+-- Half of the drinker: an antecedent ∀ flips to an ∃ over the whole
+-- implication.
+theorem drinker_half {x: obj} (q: form) (h: $ ∃ x ((P x) → q) $):
+  $ (∀ x (P x)) → q $;
+
+-- Miniscoping in reverse: push a conjunct into the quantifier.
+theorem miniscope_an {x: obj} (q: form) (h: $ (∃ x (P x)) ∧ q $):
+  $ ∃ x ((P x) ∧ q) $;
+
+-- Negation passage.
+theorem prenex_neg {x: obj} (h: $ ∃ x (¬ (P x)) $): $ ¬ (∀ x (P x)) $;
+
+-- Two quantifiers pulled out of one implication, one from each side.
+theorem prenex_two {x y: obj} (h: $ (∀ x (P x)) → (∃ y (Q y)) $):
+  $ ∃ x (∃ y ((P x) → (Q y))) $;
+
+-- A full prenexification: commute, pull ∃ out of the disjunction, flip
+-- it across the implication, then pull the consequent's ∀ through.
+theorem prenex_deep {x y: obj} (q: form)
+  (h: $ ((∃ x (P x)) ∨ q) → (∀ y (Q y)) $):
+  $ ∀ x (∀ y (((P x) ∨ q) → (Q y))) $;
+
+-- Generalization is unsound in general — `P x ⊢ ∀x P x` gets refused,
+-- and `conversion?` reports the dependency constraint. But a local
+-- equivalence certifying that P x does not really depend on x makes the
+-- vacuous-quantifier law legal, and the chain must cite the x-free
+-- representative `p` inside the quantifier, never `P x` itself.
+theorem constant_gen {x: obj} (p: form) (h1: $ (P x) ↔ p $)
+  (h2: $ P x $): $ ∀ x (P x) $;

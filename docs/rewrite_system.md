@@ -375,6 +375,30 @@ reference directly in the emitted chain. `@conversion` enrolls *schemas*
 (theorems matched against every subterm); local equations contribute only
 the one ground fact they state.
 
+### Variable dependencies
+
+`@conversion` rules may have bound binders and dependency-restricted term
+binders — the classical rules of passage enroll directly:
+
+```
+--| @conversion both
+axiom pass_al_or {x: var} (a: form) (b: form x):
+  $ iff (al x (or a b)) (or a (al x b)) $;
+```
+
+The side condition (`a` must not mention `x`) is enforced *inside the
+egraph*: a match is admitted only when the verifier's disjointness
+conditions have a satisfiable instantiation — bound binders map to
+pairwise-distinct variables, and each restricted binder's e-class can
+denote at least one term avoiding the bound variable. Proof extraction
+then cites exactly such a representative. A local equation can discharge
+the side condition: with `h1: $ iff (Pr x) p $` in scope, `al x (Pr x)`
+*can* be pulled out of the quantifier as `p`. Matches with no admissible
+instantiation are simply refused (and the failure report says so), so
+`conversion?` never emits a chain the checker rejects on dependencies —
+and never claims an unsound instance like `Pr x ⊢ al x (Pr x)` from a
+vacuous-quantifier rule.
+
 ## `@congr`
 
 ### Purpose
@@ -407,6 +431,15 @@ and `d` is the after-value of the second.
 When an argument does not change, the normalizer supplies a reflexivity proof
 for it automatically; you do not need a separate congruence axiom for every
 possible combination of changed and unchanged arguments.
+
+For a binder-headed constructor, the before/after binders must declare
+every dependency the constructor's argument permits (`(p q: form x)` for
+`al {x: var} (p: form x)`, not `(p q: form)`). A congruence lift
+instantiates them with arbitrary child terms, which may mention the bound
+variable; an under-dependent binder would make every such lift violate
+the rule's disjointness conditions, so the annotation is rejected at
+declaration time. For the same reason, the four `@relation` bundle rules
+(`refl`/`trans`/`symm`/transport) must not have bound binders.
 
 ### Cross-sort congruence
 

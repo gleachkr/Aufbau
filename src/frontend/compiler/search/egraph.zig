@@ -49,6 +49,15 @@ pub const ENode = union(enum) {
     };
 };
 
+/// A dependency restriction on one rule: the theorem's bound binder at
+/// `bound_slot` may not occur in the instantiation of the term binder at
+/// `term_slot` (its `deps` bit for that bound binder is unset). Slots are
+/// rule binder indices.
+pub const Restriction = struct {
+    bound_slot: u32,
+    term_slot: u32,
+};
+
 /// One enrolled `@conversion` orientation. `match_side` is e-matched;
 /// `target_side` is instantiated over the resulting substitution and
 /// unioned with the matched class. The caller guarantees `match_side` is an
@@ -63,6 +72,13 @@ pub const Rule = struct {
     match_side: TemplateExpr,
     target_side: TemplateExpr,
     num_binders: usize,
+    /// Rule binder indices that are bound binders (instantiate to atoms).
+    /// Both dep-gate halves key off this: distinctness across the slots,
+    /// and the avoidance checks in `restrictions`.
+    bound_slots: []const u32 = &.{},
+    /// Dependency restrictions the verifier will enforce on every emitted
+    /// instance of this rule. Shared by both orientations of a theorem.
+    restrictions: []const Restriction = &.{},
 };
 
 /// Why two classes were unioned. Consumed by explanation extraction. The
@@ -125,6 +141,10 @@ pub const SaturateStats = struct {
     outcome: SaturateOutcome,
     iterations: usize = 0,
     unions_applied: usize = 0,
+    /// Matches refused by the dep gate this run. A nonzero count on a
+    /// saturated miss means dependency constraints (not rule coverage)
+    /// blocked at least one candidate union.
+    dep_deferred: usize = 0,
 };
 
 pub const SaturateOptions = struct {
@@ -411,7 +431,16 @@ pub const EGraph = struct {
             }
 
             var changed = false;
+            var avoid_cache: AvoidCache = .{};
             for (matches.items) |m| {
+                if (!try self.depGateAllows(
+                    rules[m.rule_slot],
+                    m.subst,
+                    &avoid_cache,
+                )) {
+                    stats.dep_deferred += 1;
+                    continue;
+                }
                 const target = (try self.instantiate(
                     rules[m.rule_slot].target_side,
                     m.subst,
@@ -444,6 +473,98 @@ pub const EGraph = struct {
             }
         }
         return stats;
+    }
+
+    const AvoidCache = std.AutoArrayHashMapUnmanaged(LeafId, []const bool);
+
+    /// Per-class snapshot of `avoidable(class, atom)`: the class can
+    /// denote at least one term in which `atom` does not occur. Monotone
+    /// in graph growth (members only accumulate under adds and merges),
+    /// so a stale false only defers a match to a later iteration — it
+    /// never admits a bad one.
+    fn computeAvoidable(self: *EGraph, atom: LeafId) ![]const bool {
+        const avoid = try self.allocator.alloc(bool, self.parents.items.len);
+        @memset(avoid, false);
+        while (true) {
+            var changed = false;
+            node_loop: for (self.nodes.items) |stored| {
+                const root = self.find(stored.class);
+                if (avoid[root]) continue;
+                switch (stored.node) {
+                    .leaf => |leaf| if (leaf == atom) continue :node_loop,
+                    .app => |app| for (app.children) |child| switch (child) {
+                        .bound => |leaf| if (leaf == atom) {
+                            continue :node_loop;
+                        },
+                        .class => |c| {
+                            const child_root = self.find(c);
+                            if (child_root >= avoid.len or
+                                !avoid[child_root])
+                            {
+                                continue :node_loop;
+                            }
+                        },
+                    },
+                }
+                avoid[root] = true;
+                changed = true;
+            }
+            if (!changed) break;
+        }
+        return avoid;
+    }
+
+    /// The dep gate: admit a match only when the instance the lowering
+    /// will emit can satisfy the verifier's disjointness conditions —
+    /// bound binders map to pairwise-distinct atoms, and each restricted
+    /// term binder's class can denote a term avoiding the paired atom
+    /// (extraction then picks such a representative). A refusal defers
+    /// the match, not the union: matching reruns every iteration and
+    /// avoidability only grows, so gating loses no valid union — only
+    /// unprovable ones.
+    fn depGateAllows(
+        self: *EGraph,
+        rule: Rule,
+        subst: []const ?Child,
+        cache: *AvoidCache,
+    ) !bool {
+        if (rule.bound_slots.len == 0) return true;
+        for (rule.bound_slots, 0..) |slot, idx| {
+            const binding = subst[slot] orelse continue;
+            // A bound binder matched only in term positions binds a
+            // class; the instance needs a concrete atom, which
+            // extraction cannot conjure. Defer.
+            if (binding != .bound) return false;
+            for (rule.bound_slots[0..idx]) |prev_slot| {
+                const prev = subst[prev_slot] orelse continue;
+                if (prev == .bound and prev.bound == binding.bound) {
+                    return false;
+                }
+            }
+        }
+        for (rule.restrictions) |restriction| {
+            const bound_binding = subst[restriction.bound_slot] orelse {
+                continue;
+            };
+            const atom = switch (bound_binding) {
+                .bound => |leaf| leaf,
+                .class => return false,
+            };
+            const term_binding = subst[restriction.term_slot] orelse continue;
+            switch (term_binding) {
+                .bound => |leaf| if (leaf == atom) return false,
+                .class => |c| {
+                    const gop = try cache.getOrPut(self.allocator, atom);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = try self.computeAvoidable(atom);
+                    }
+                    const avoid = gop.value_ptr.*;
+                    const root = self.find(c);
+                    if (root >= avoid.len or !avoid[root]) return false;
+                },
+            }
+        }
+        return true;
     }
 
     fn canonicalize(self: *const EGraph, node: ENode) !ENode {
@@ -719,7 +840,6 @@ pub const EGraph = struct {
             .rules = rules,
             .opts = opts,
         };
-        try ctx.computeExtraction();
         if (!try ctx.explainTerms(from, to, &.{})) return null;
         return ctx.steps.items;
     }
@@ -845,31 +965,80 @@ const ExplainCtx = struct {
     opts: ExplainOptions,
     steps: std.ArrayListUnmanaged(Step) = .{},
     depth: usize = 0,
-    /// Extraction state: minimal-size representative per class root.
-    class_cost: std.AutoArrayHashMapUnmanaged(EClassId, usize) = .{},
-    class_best: std.AutoArrayHashMapUnmanaged(EClassId, ENodeId) = .{},
-    class_term: std.AutoArrayHashMapUnmanaged(EClassId, *const Term) = .{},
+    /// Interned avoid-masks: sorted atom lists a representative's subtree
+    /// must not mention. Index 0 is always the empty mask.
+    mask_atoms: std.ArrayListUnmanaged([]const LeafId) = .{},
+    /// Masks whose extraction fixpoint has run.
+    masks_computed: std.AutoArrayHashMapUnmanaged(u32, void) = .{},
+    /// Extraction state: minimal-size representative per (class root,
+    /// avoid-mask). Restricted rule binders extract under a nonzero mask
+    /// so the cited term satisfies the instance's disjointness
+    /// conditions; everything else uses mask 0.
+    class_cost: std.AutoArrayHashMapUnmanaged(u64, usize) = .{},
+    class_best: std.AutoArrayHashMapUnmanaged(u64, ENodeId) = .{},
+    class_term: std.AutoArrayHashMapUnmanaged(u64, *const Term) = .{},
 
     fn allocator(self: *ExplainCtx) std.mem.Allocator {
         return self.eg.allocator;
     }
 
+    fn maskedKey(root: EClassId, mask_id: u32) u64 {
+        return (@as(u64, mask_id) << 32) | root;
+    }
+
+    fn maskContains(atoms: []const LeafId, leaf: LeafId) bool {
+        return std.mem.indexOfScalar(LeafId, atoms, leaf) != null;
+    }
+
+    /// Intern a sorted, deduplicated atom list. Linear scan: distinct
+    /// masks per explanation are few (one per restricted atom set).
+    fn internMask(self: *ExplainCtx, atoms: []const LeafId) !u32 {
+        if (self.mask_atoms.items.len == 0) {
+            try self.mask_atoms.append(self.allocator(), &.{});
+        }
+        for (self.mask_atoms.items, 0..) |existing, idx| {
+            if (std.mem.eql(LeafId, existing, atoms)) return @intCast(idx);
+        }
+        try self.mask_atoms.append(
+            self.allocator(),
+            try self.allocator().dupe(LeafId, atoms),
+        );
+        return @intCast(self.mask_atoms.items.len - 1);
+    }
+
+    fn maskAtoms(self: *const ExplainCtx, mask_id: u32) []const LeafId {
+        if (mask_id == 0) return &.{};
+        return self.mask_atoms.items[mask_id];
+    }
+
     /// Fixpoint pass computing, per class root, the minimal-size member
-    /// node (ties broken by first node id). Well-founded by construction:
-    /// a best node's children always have strictly smaller cost.
-    fn computeExtraction(self: *ExplainCtx) !void {
+    /// node (ties broken by first node id) whose subtree avoids the
+    /// mask's atoms. Well-founded by construction: a best node's children
+    /// always have strictly smaller cost. Classes with no avoiding
+    /// member simply get no entry (`classTerm` then returns null).
+    fn ensureExtraction(self: *ExplainCtx, mask_id: u32) !void {
+        const gop = try self.masks_computed.getOrPut(
+            self.allocator(),
+            mask_id,
+        );
+        if (gop.found_existing) return;
+        const atoms = self.maskAtoms(mask_id);
         while (true) {
             var changed = false;
             node_loop: for (self.eg.nodes.items, 0..) |stored, node_id| {
                 var cost: usize = 1;
                 switch (stored.node) {
-                    .leaf => {},
+                    .leaf => |leaf| if (maskContains(atoms, leaf)) {
+                        continue :node_loop;
+                    },
                     .app => |app| for (app.children) |child| {
                         switch (child) {
-                            .bound => {},
+                            .bound => |leaf| if (maskContains(atoms, leaf)) {
+                                continue :node_loop;
+                            },
                             .class => |c| {
                                 const child_cost = self.class_cost.get(
-                                    self.eg.find(c),
+                                    maskedKey(self.eg.find(c), mask_id),
                                 ) orelse continue :node_loop;
                                 cost += child_cost;
                             },
@@ -877,15 +1046,16 @@ const ExplainCtx = struct {
                     },
                 }
                 const root = self.eg.find(stored.class);
-                const gop = try self.class_cost.getOrPut(
+                const key = maskedKey(root, mask_id);
+                const cost_gop = try self.class_cost.getOrPut(
                     self.allocator(),
-                    root,
+                    key,
                 );
-                if (!gop.found_existing or cost < gop.value_ptr.*) {
-                    gop.value_ptr.* = cost;
+                if (!cost_gop.found_existing or cost < cost_gop.value_ptr.*) {
+                    cost_gop.value_ptr.* = cost;
                     try self.class_best.put(
                         self.allocator(),
-                        root,
+                        key,
                         @intCast(node_id),
                     );
                     changed = true;
@@ -895,24 +1065,29 @@ const ExplainCtx = struct {
         }
     }
 
-    /// The extracted representative term of a class (memoized per root).
+    /// The extracted representative term of a class under an avoid-mask
+    /// (memoized per root and mask). Null when the class has no member
+    /// avoiding the masked atoms.
     fn classTerm(
         self: *ExplainCtx,
         class: EClassId,
+        mask_id: u32,
     ) error{OutOfMemory}!?*const Term {
-        const root = self.eg.find(class);
-        if (self.class_term.get(root)) |term| return term;
-        const best = self.class_best.get(root) orelse return null;
-        const term = (try self.termForNode(best)) orelse return null;
-        try self.class_term.put(self.allocator(), root, term);
+        try self.ensureExtraction(mask_id);
+        const key = maskedKey(self.eg.find(class), mask_id);
+        if (self.class_term.get(key)) |term| return term;
+        const best = self.class_best.get(key) orelse return null;
+        const term = (try self.termForNode(best, mask_id)) orelse return null;
+        try self.class_term.put(self.allocator(), key, term);
         return term;
     }
 
     /// A resolved term with `node` at the top and extracted representatives
-    /// below.
+    /// below, all avoiding the mask's atoms.
     fn termForNode(
         self: *ExplainCtx,
         node_id: ENodeId,
+        mask_id: u32,
     ) error{OutOfMemory}!?*const Term {
         const node = self.eg.nodes.items[node_id].node;
         const children: []?*const Term = switch (node) {
@@ -925,7 +1100,7 @@ const ExplainCtx = struct {
                 for (app.children, 0..) |child, idx| {
                     children[idx] = switch (child) {
                         .bound => null,
-                        .class => |c| (try self.classTerm(c)) orelse {
+                        .class => |c| (try self.classTerm(c, mask_id)) orelse {
                             return null;
                         },
                     };
@@ -1069,7 +1244,7 @@ const ExplainCtx = struct {
                 const v = if (edge.forward) congr.right else congr.left;
                 var aligned = current;
                 if (!nodeShapeEql(self.eg, aligned.node, u)) {
-                    const anchor = (try self.termForNode(u)) orelse {
+                    const anchor = (try self.termForNode(u, 0)) orelse {
                         return null;
                     };
                     if (!try self.explainTerms(aligned, anchor, pos)) {
@@ -1102,16 +1277,22 @@ const ExplainCtx = struct {
                 const class = self.eg.find(
                     self.eg.nodes.items[current.node].class,
                 );
+                const binder_masks = try self.binderMasks(
+                    rule,
+                    rule_just.subst,
+                );
                 const lhs = (try self.renderPattern(
                     class,
                     pattern_in,
                     rule_just.subst,
+                    binder_masks,
                 )) orelse return null;
                 if (!try self.explainTerms(current, lhs, pos)) return null;
                 const rhs = (try self.renderPattern(
                     class,
                     pattern_out,
                     rule_just.subst,
+                    binder_masks,
                 )) orelse return null;
 
                 const bindings = try self.allocator().alloc(
@@ -1125,7 +1306,10 @@ const ExplainCtx = struct {
                     };
                     bindings[idx] = switch (binding) {
                         .class => |c| .{
-                            .term = (try self.classTerm(c)) orelse {
+                            .term = (try self.classTerm(
+                                c,
+                                binder_masks[idx],
+                            )) orelse {
                                 return null;
                             },
                         },
@@ -1164,6 +1348,34 @@ const ExplainCtx = struct {
         }
     }
 
+    /// Per-binder avoid-mask ids for one admitted rule edge, derived from
+    /// the rule's restrictions and the edge's substitution: a restricted
+    /// term binder must render a representative avoiding the atoms its
+    /// paired bound binders were instantiated with.
+    fn binderMasks(
+        self: *ExplainCtx,
+        rule: Rule,
+        subst: []const ?Child,
+    ) ![]const u32 {
+        const masks = try self.allocator().alloc(u32, rule.num_binders);
+        @memset(masks, 0);
+        if (rule.restrictions.len == 0) return masks;
+        for (0..rule.num_binders) |slot| {
+            var atoms: std.ArrayListUnmanaged(LeafId) = .{};
+            for (rule.restrictions) |restriction| {
+                if (restriction.term_slot != slot) continue;
+                const binding = subst[restriction.bound_slot] orelse continue;
+                if (binding != .bound) continue;
+                if (maskContains(atoms.items, binding.bound)) continue;
+                try atoms.append(self.allocator(), binding.bound);
+            }
+            if (atoms.items.len == 0) continue;
+            std.mem.sort(LeafId, atoms.items, {}, std.sort.asc(LeafId));
+            masks[slot] = try self.internMask(atoms.items);
+        }
+        return masks;
+    }
+
     /// Render a pattern instance as a resolved term. A bare binder renders
     /// its binding; an application finds a member node of `class` matching
     /// the pattern under the substitution (first member in id order) so
@@ -1173,11 +1385,12 @@ const ExplainCtx = struct {
         class: EClassId,
         pattern: TemplateExpr,
         subst: []const ?Child,
+        binder_masks: []const u32,
     ) error{OutOfMemory}!?*const Term {
         switch (pattern) {
             .binder => |binder_idx| {
                 const binding = subst[binder_idx] orelse return null;
-                return try self.bindingTerm(binding);
+                return try self.bindingTerm(binding, binder_masks[binder_idx]);
             },
             .app => |pattern_app| {
                 const root = self.eg.find(class);
@@ -1228,6 +1441,7 @@ const ExplainCtx = struct {
                                         )) continue :member;
                                         children[idx] = (try self.bindingTerm(
                                             binding,
+                                            binder_masks[b],
                                         )) orelse continue :member;
                                     },
                                     .app => {
@@ -1236,6 +1450,7 @@ const ExplainCtx = struct {
                                                 child_class,
                                                 sub_pattern,
                                                 subst,
+                                                binder_masks,
                                             )) orelse continue :member;
                                     },
                                 }
@@ -1252,14 +1467,16 @@ const ExplainCtx = struct {
     }
 
     /// The representative term of a binding: the binder's step-consistent
-    /// rendering (class extraction for class bindings, the atom's own leaf
-    /// node for bound bindings used in term positions).
+    /// rendering (class extraction under the binder's avoid-mask for
+    /// class bindings, the atom's own leaf node for bound bindings used
+    /// in term positions).
     fn bindingTerm(
         self: *ExplainCtx,
         binding: Child,
+        mask_id: u32,
     ) error{OutOfMemory}!?*const Term {
         switch (binding) {
-            .class => |c| return try self.classTerm(c),
+            .class => |c| return try self.classTerm(c, mask_id),
             .bound => |leaf| {
                 const node_id = (try self.eg.lookupNode(
                     .{ .leaf = leaf },
@@ -1723,6 +1940,160 @@ test "egraph explains through a pool-equation ground union" {
         try testing.expect(step.needs_symm);
     }
     try expectValidChain(&eg, fy, fx, reverse);
+}
+
+/// `all` term for tests: a bound atom at position 0, the body class at
+/// position 1 (mirror of `tApp2` for a binder-headed term).
+fn tAll(eg: *EGraph, atom: LeafId, body: *const Term) !*const Term {
+    const shape = ENode{ .app = .{ .term_id = ALL, .children = &.{
+        .{ .bound = atom },
+        .{ .class = termClassOf(eg, body) },
+    } } };
+    _ = try eg.add(shape);
+    const node = (try eg.lookupNode(shape)).?;
+    const children = try eg.allocator.alloc(?*const Term, 2);
+    children[0] = null;
+    children[1] = body;
+    const term = try eg.allocator.create(Term);
+    term.* = .{ .node = node, .children = children };
+    return term;
+}
+
+// all x. p ~ p, with the verifier's obligation that x not occur in p
+// (binder 1 does not depend on binder 0).
+const DROP_ALL = [_]Rule{.{
+    .rule_id = 104,
+    .reversed = false,
+    .match_side = app2(ALL, BINDER_A, BINDER_B),
+    .target_side = BINDER_B,
+    .num_binders = 2,
+    .bound_slots = &.{0},
+    .restrictions = &.{.{ .bound_slot = 0, .term_slot = 1 }},
+}};
+
+test "dep gate refuses a match with no avoiding representative" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.bound_masks.put(eg.allocator, ALL, 0b01);
+
+    // all v. f(v, v): the body class denotes only v-containing terms, so
+    // the vacuous-quantifier drop must not fire.
+    const v = try tLeaf(&eg, 1);
+    const body = try tApp2(&eg, F, v, v);
+    const all_v = try tAll(&eg, 1, body);
+
+    const stats = try eg.saturate(&DROP_ALL, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(stats.dep_deferred > 0);
+    try testing.expect(!eg.sameClass(
+        termClassOf(&eg, all_v),
+        termClassOf(&eg, body),
+    ));
+
+    // Control: without the declared restriction the same match unions —
+    // the refusal above is the gate, not the matcher.
+    var eg2 = EGraph.init(arena_state.allocator());
+    try eg2.bound_masks.put(eg2.allocator, ALL, 0b01);
+    const v2 = try tLeaf(&eg2, 1);
+    const body2 = try tApp2(&eg2, F, v2, v2);
+    const all_v2 = try tAll(&eg2, 1, body2);
+    const ungated = [_]Rule{.{
+        .rule_id = 104,
+        .reversed = false,
+        .match_side = app2(ALL, BINDER_A, BINDER_B),
+        .target_side = BINDER_B,
+        .num_binders = 2,
+    }};
+    _ = try eg2.saturate(&ungated, .{});
+    try testing.expect(eg2.sameClass(
+        termClassOf(&eg2, all_v2),
+        termClassOf(&eg2, body2),
+    ));
+}
+
+test "dep gate admits via a ground union and extraction cites the avoiding representative" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.bound_masks.put(eg.allocator, ALL, 0b01);
+
+    // all v. f(v, v) with a local equation f(v, v) ~ c: the body class
+    // now denotes the v-free `c`, so the drop is justified — and the
+    // extracted instance must cite `c`, never f(v, v).
+    const v = try tLeaf(&eg, 1);
+    const body = try tApp2(&eg, F, v, v);
+    const c = try tLeaf(&eg, 2);
+    _ = try eg.merge(
+        termClassOf(&eg, body),
+        termClassOf(&eg, c),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = body, .rhs = c } },
+    );
+    const all_v = try tAll(&eg, 1, body);
+
+    const stats = try eg.saturate(&DROP_ALL, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(eg.sameClass(
+        termClassOf(&eg, all_v),
+        termClassOf(&eg, c),
+    ));
+
+    const steps = (try eg.explain(&DROP_ALL, all_v, c, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try expectValidChain(&eg, all_v, c, steps);
+    var saw_rule = false;
+    for (steps) |step| switch (step.source) {
+        .rule => {
+            saw_rule = true;
+            // The restricted binding extracts under the avoid-mask.
+            try testing.expect(termEql(&eg, step.bindings[1].?.term, c));
+        },
+        .pool_equation => {},
+    };
+    try testing.expect(saw_rule);
+}
+
+test "dep gate requires pairwise-distinct bound atoms" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    // all x. all y. p ~ all y. all x. p (p depends on both, so no
+    // restrictions — only the distinctness half applies).
+    const swap = [_]Rule{.{
+        .rule_id = 105,
+        .reversed = false,
+        .match_side = app2(ALL, BINDER_A, app2(ALL, BINDER_B, BINDER_C)),
+        .target_side = app2(ALL, BINDER_B, app2(ALL, BINDER_A, BINDER_C)),
+        .num_binders = 3,
+        .bound_slots = &.{ 0, 1 },
+    }};
+
+    // Same atom twice: all v. all v. q must defer.
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.bound_masks.put(eg.allocator, ALL, 0b01);
+    const q = try tLeaf(&eg, 3);
+    const inner = try tAll(&eg, 1, q);
+    _ = try tAll(&eg, 1, inner);
+    const stats = try eg.saturate(&swap, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(stats.dep_deferred > 0);
+    try testing.expectEqual(@as(usize, 0), stats.unions_applied);
+
+    // Distinct atoms admit: all v. all w. q gains the swapped form.
+    var eg2 = EGraph.init(arena_state.allocator());
+    try eg2.bound_masks.put(eg2.allocator, ALL, 0b01);
+    const q2 = try tLeaf(&eg2, 3);
+    const inner2 = try tAll(&eg2, 2, q2);
+    const outer2 = try tAll(&eg2, 1, inner2);
+    const stats2 = try eg2.saturate(&swap, .{});
+    try testing.expectEqual(@as(usize, 0), stats2.dep_deferred);
+    const swapped_inner = try tAll(&eg2, 1, q2);
+    const swapped_outer = try tAll(&eg2, 2, swapped_inner);
+    try testing.expect(eg2.sameClass(
+        termClassOf(&eg2, outer2),
+        termClassOf(&eg2, swapped_outer),
+    ));
 }
 
 test "egraph explains a two-step nested rewrite chain" {

@@ -433,6 +433,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pratt", .outcome = .pass },
     .{ .stem = "hoare", .outcome = .pass },
     .{ .stem = "diaconescu", .outcome = .pass },
+    .{ .stem = "herbrand", .outcome = .pass },
     .{
         .stem = "fail_missing_binding",
         .outcome = .{ .fail = error.MissingBinderAssignment },
