@@ -44,6 +44,7 @@ pub const shape = root.shape;
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("./search/tests.zig");
+        _ = @import("./search/egraph.zig");
         _ = @import("./search/clipper.zig");
         _ = @import("./search/shape.zig");
         _ = @import("./search/ref_index.zig");

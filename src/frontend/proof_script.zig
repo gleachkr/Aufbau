@@ -1232,13 +1232,15 @@ fn isIdentChar(ch: u8) bool {
 fn isSearchPlaceholderBase(name: []const u8) bool {
     return std.mem.eql(u8, name, "exact") or
         std.mem.eql(u8, name, "apply") or
-        std.mem.eql(u8, name, "auto");
+        std.mem.eql(u8, name, "auto") or
+        std.mem.eql(u8, name, "conversion");
 }
 
 pub fn isSearchPlaceholderRuleName(name: []const u8) bool {
     return std.mem.eql(u8, name, "exact?") or
         std.mem.eql(u8, name, "apply?") or
-        std.mem.eql(u8, name, "auto?");
+        std.mem.eql(u8, name, "auto?") or
+        std.mem.eql(u8, name, "conversion?");
 }
 
 pub fn applicationHasSearchPlaceholder(application: RuleApplication) bool {

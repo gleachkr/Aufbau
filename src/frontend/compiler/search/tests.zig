@@ -6291,8 +6291,29 @@ test "search tunables validate names, values, and placeholder kind" {
         std.mem.indexOf(
             u8,
             not_auto[0].message,
-            "only apply to auto?",
+            "only apply to auto? and conversion?",
         ) != null,
+    );
+
+    // conversion? accepts its own parameter set.
+    const conv = try tunables.validateSearchParams(allocator, .conversion, &.{
+        testParam("iters", 32), // valid: no issue
+        testParam("depth", 8), // auto?-only name
+    });
+    defer {
+        for (conv) |issue| allocator.free(issue.message);
+        allocator.free(conv);
+    }
+    try std.testing.expectEqual(@as(usize, 1), conv.len);
+    try std.testing.expect(
+        std.mem.indexOf(
+            u8,
+            conv[0].message,
+            "unknown conversion? parameter 'depth'",
+        ) != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, conv[0].message, "iters, nodes") != null,
     );
 }
 
@@ -6464,4 +6485,201 @@ test "searchPlaceholders carries parsed search params" {
         placeholders[0].params[0].name,
     );
     try std.testing.expectEqual(@as(u64, 8), placeholders[0].params[0].value);
+}
+
+// --- conversion? end-to-end ---------------------------------------------
+
+const conversion_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term iff (p q: wff): wff;
+    \\term an (p q: wff): wff;
+    \\term or (p q: wff): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @congr
+    \\axiom an_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (an a c) (an b d) $;
+    \\--| @congr
+    \\axiom or_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (or a c) (or b d) $;
+    \\--| @conversion both
+    \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+    \\--| @conversion both
+    \\axiom or_comm (a b: wff): $ iff (or a b) (or b a) $;
+    \\--| @conversion ltr
+    \\axiom an_contract (a: wff): $ iff (an a a) a $;
+    \\
+;
+
+fn conversionSuggestions(
+    arena: *std.heap.ArenaAllocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    options: types.SourceSuggestionOptions,
+) !types.SourceSuggestions {
+    const offset = std.mem.indexOf(u8, proof_src, "conversion?") orelse
+        return error.MissingNeedle;
+    return source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        offset,
+        options,
+    );
+}
+
+/// Splice the suggestion into the proof source and run the full compile
+/// path over the pair: the emitted chain must actually check.
+fn expectConversionCompiles(
+    arena: *std.heap.ArenaAllocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    suggestion: types.SourceSuggestion,
+) !void {
+    const spliced = try std.mem.concat(arena.allocator(), u8, &.{
+        proof_src[0..suggestion.replace_span.start],
+        suggestion.replacement,
+        proof_src[suggestion.replace_span.end..],
+    });
+    const Compiler = @import("../../compiler.zig").Compiler;
+    var compiler = Compiler.initWithProof(
+        arena.allocator(),
+        mm0_src,
+        spliced,
+    );
+    try compiler.check();
+}
+
+test "conversion? proves a nested commutativity goal from a hypothesis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_deep (p q r: wff) (h: $ or (an p q) r $): $ or r (an q p) $;
+    ;
+    const proof_src =
+        \\conv_deep
+        \\----
+        \\goal: $ or r (an q p) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expectEqual(@as(usize, 1), found.items.len);
+
+    // The chain lowers through the enrolled rewrites, a congruence lift, a
+    // trans join, and the relation transport citing the hypothesis.
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "an_comm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "or_congr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_trans") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? lowers a reversed ltr rule through symm" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `an_contract` is enrolled ltr only; proving the expanded form from
+    // the contracted hypothesis traverses its union edge backwards.
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_expand (p: wff) (h: $ p $): $ an p p $;
+    ;
+    const proof_src =
+        \\conv_expand
+        \\----
+        \\goal: $ an p p $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "an_contract") != null,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_symm") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? saturated miss is reported as a forced negative" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_none (p q: wff) (h: $ an p q $): $ or p q $;
+    ;
+    const proof_src =
+        \\conv_none
+        \\----
+        \\goal: $ or p q $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "the egraph saturated") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "no chain of the enrolled") != null,
+    );
+
+    // Opt-in: the same miss without the flag carries no detail.
+    var plain = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer plain.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, plain.status);
+    try std.testing.expectEqual(@as(?[]const u8, null), plain.status_detail);
+}
+
+test "conversion? reports missing enrollment and node-cap truncation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // A theory with no @conversion rules at all.
+    var unenrolled = try conversionSuggestions(&arena, tunable_chain_mm0,
+        \\t
+        \\----
+        \\l1: $ R $ by conversion?
+    , .{ .status_detail = true });
+    defer unenrolled.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, unenrolled.status);
+    const no_rules = unenrolled.status_detail orelse
+        return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, no_rules, "no @conversion rules are enrolled") != null,
+    );
+
+    // A starved e-node cap surfaces as truncation with a concrete hint.
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_deep (p q r: wff) (h: $ or (an p q) r $): $ or r (an q p) $;
+    ;
+    var capped = try conversionSuggestions(&arena, mm0_src,
+        \\conv_deep
+        \\----
+        \\goal: $ or r (an q p) $ by conversion? (nodes: 1)
+        \\
+    , .{ .status_detail = true });
+    defer capped.deinit();
+    try std.testing.expectEqual(
+        types.SearchStatus.budget_exhausted,
+        capped.status,
+    );
+    const detail = capped.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "e-node cap (1)") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "conversion? (nodes: 2)") != null,
+    );
 }

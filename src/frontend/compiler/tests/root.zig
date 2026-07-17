@@ -515,6 +515,190 @@ test "compiler rejects extra tab-separated auto annotation tokens" {
     );
 }
 
+// Shared prelude for the `@conversion` annotation tests: a wff relation
+// bundle plus a binary connective to convert under.
+const conversion_mm0_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term top: wff;
+    \\term iff (p q: wff): wff;
+    \\term an (p q: wff): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\
+;
+
+test "compiler stores conversion annotations with direction flags" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion both
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+        \\--| @conversion rtl
+        \\axiom an_idem (a: wff): $ iff a (an a a) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rules = metadata.registry.conversionRules();
+    try std.testing.expectEqual(@as(usize, 2), rules.len);
+
+    const comm_id = metadata.env.getRuleId("an_comm") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expectEqual(comm_id, rules[0].rule_id);
+    try std.testing.expect(rules[0].ltr);
+    try std.testing.expect(rules[0].rtl);
+    try std.testing.expectEqual(@as(usize, 2), rules[0].num_binders);
+
+    const idem_id = metadata.env.getRuleId("an_idem") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expectEqual(idem_id, rules[1].rule_id);
+    try std.testing.expect(!rules[1].ltr);
+    try std.testing.expect(rules[1].rtl);
+    try std.testing.expectEqual(@as(usize, 1), rules[1].num_binders);
+}
+
+test "compiler validates conversion annotation direction tokens" {
+    const cases = [_][]const u8{
+        "--| @conversion",
+        "--| @conversion sideways",
+        "--| @conversion ltr junk",
+    };
+    for (cases) |annotation_line| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+            conversion_mm0_prelude,
+            annotation_line,
+            "\naxiom an_comm (a b: wff): $ iff (an a b) (an b a) $;\n",
+        });
+        try std.testing.expectError(
+            error.InvalidConversionAnnotation,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+}
+
+test "compiler rejects conversion conclusions that are not a relation" {
+    // Not a binary application at all.
+    const shape_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\axiom top_i: $ top $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.ConversionConclusionNotRelation,
+        processAnnotatedMetadata(arena.allocator(), shape_src),
+    );
+
+    // Binary application, but its head is not the registered @relation term.
+    const wrong_rel_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\axiom an_intro (a b: wff): $ an a b $;
+    ;
+    try std.testing.expectError(
+        error.ConversionMissingRelation,
+        processAnnotatedMetadata(arena.allocator(), wrong_rel_src),
+    );
+
+    // Right shape, but no @relation bundle was registered for the sort.
+    const no_relation_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term iff (p q: wff): wff;
+        \\term an (p q: wff): wff;
+        \\--| @conversion ltr
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+    ;
+    try std.testing.expectError(
+        error.ConversionMissingRelation,
+        processAnnotatedMetadata(arena.allocator(), no_relation_src),
+    );
+}
+
+test "compiler rejects conversion rules with hypotheses" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\axiom an_cond (a b: wff) (h: $ a $): $ iff (an a b) (an b a) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.ConversionRuleHasHypotheses,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler rejects conversion orientations that cannot match or cover" {
+    // ltr on `iff a (an a a)`: the match side is a bare binder.
+    const bare_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\axiom an_idem (a: wff): $ iff a (an a a) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.ConversionBareMatchSide,
+        processAnnotatedMetadata(arena.allocator(), bare_src),
+    );
+
+    // ltr on `iff (an a a) (an a b)`: the match side never binds `b`, so the
+    // instantiate side would have to invent it.
+    const coverage_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\axiom an_cov (a b: wff): $ iff (an a a) (an a b) $;
+    ;
+    try std.testing.expectError(
+        error.ConversionBinderNotCovered,
+        processAnnotatedMetadata(arena.allocator(), coverage_src),
+    );
+}
+
+test "compiler rejects duplicate conversion annotations" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\--| @conversion rtl
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.DuplicateConversionAnnotation,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler reports conversion annotation diagnostics with spans" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion sideways
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.InvalidConversionAnnotation,
+        compiler.check(),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.InvalidConversionAnnotation, diag.err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
+    try std.testing.expectEqualStrings("an_comm", diag.name.?);
+    try std.testing.expectEqualStrings(
+        "@conversion expects one direction: ltr, rtl, or both",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(
+        "@conversion sideways",
+        mm0_src[span.start..span.end],
+    );
+}
+
 // Shared prelude for the `@auto trigger` annotation tests: enough context
 // machinery that `ax`'s unnamed `G` binder can default to the ACUI unit.
 const trigger_mm0_prelude =

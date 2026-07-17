@@ -102,6 +102,7 @@ form. The two normalized forms agree, so the line is accepted.
 |-------------|-------------------|---------|
 | `@relation` | MM0 assertion / lemma | Declares a relation bundle |
 | `@rewrite`  | MM0 assertion / lemma | Registers an oriented rewrite |
+| `@conversion` | MM0 assertion / lemma | Enrolls a rewrite for `conversion?` search |
 | `@congr`    | MM0 assertion / lemma | Registers a congruence rule |
 | `@acui`     | `term`            | Enables ACUI-style normalization |
 | `@fallback` | MM0 assertion / lemma | Retries through another rule |
@@ -316,6 +317,55 @@ rewrite would become available only after exposing a def, ordinary
 normalization will not discover it automatically.
 
 ---
+
+## `@conversion`
+
+### Purpose
+
+Enrolls a theorem as an *equality-saturation* rewrite for the `conversion?`
+search placeholder (see `docs/proof_search.md`). Where `@rewrite` feeds the
+normalizer — a directed, terminating reduction toward a normal form —
+`@conversion` feeds an egraph, which explores rewrites in every direction at
+once and never commits to an orientation. Rules that cannot be oriented
+(commutativity, distributivity both ways) are natural `@conversion` rules
+and would loop the normalizer.
+
+The two systems never interact: annotating a theorem `@conversion` changes
+nothing about compilation or the other searches, and a theorem may carry
+both `@rewrite` and `@conversion`.
+
+### Syntax
+
+```
+--| @conversion ltr|rtl|both
+axiom an_comm (a b: wff): $ (a /\ b) <-> (b /\ a) $;
+```
+
+The direction token is required. Since the relation is symmetric, direction
+does not change what is provable — it controls which side is *matched* and
+which side is *instantiated* during saturation, i.e. which new terms the
+egraph is allowed to build. Enroll `x <-> (x /\ x)` as `rtl` and the egraph
+only ever contracts; enroll it `both` and it floods.
+
+### Requirements
+
+Checked at annotation time (unlike `@rewrite`, malformed `@conversion`
+annotations are hard errors):
+
+- The conclusion has the shape `rel(lhs, rhs)` where `rel` is the
+  registered `@relation` term for its operand sort (extraction needs the
+  bundle's `refl`/`trans`/`symm`/transport vocabulary).
+- The rule has no hypotheses (conditional conversion rules would need
+  side-condition discharge during saturation; not supported).
+- For each enrolled orientation, the matched side must be a term
+  application and must bind every binder the instantiated side uses (an
+  egraph rule cannot invent fresh variables).
+
+`conversion?` proofs also lean on `@congr`: congruence closure inside the
+egraph is *gated* on the rewritten positions' head terms having `@congr`
+rules, because those rules are exactly the proof steps the extracted chain
+emits. A sort or connective without `@congr` coverage simply contributes no
+congruence merges — the search stays sound but finds fewer conversions.
 
 ## `@congr`
 

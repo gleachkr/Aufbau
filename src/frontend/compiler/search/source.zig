@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("./types.zig");
 const tunables = @import("./tunables.zig");
+const ConversionSearch = @import("./conversion.zig");
 const timer = @import("./timer.zig");
 const apply_mod = @import("./apply.zig");
 const backtrack = @import("./backward/backtrack.zig");
@@ -251,6 +252,8 @@ pub fn suggestionsAtSourceOffset(
         std.mem.eql(u8, target_application.rule_name, "exact?");
     const is_auto = !options.apply_at_offset and
         std.mem.eql(u8, target_application.rule_name, "auto?");
+    const is_conversion = !options.apply_at_offset and
+        std.mem.eql(u8, target_application.rule_name, "conversion?");
     // `auto?` shares `exact?`'s direct-search dispatch; generation is layered on
     // top of the direct results below.
     const is_exact_like = is_exact or is_auto;
@@ -277,6 +280,80 @@ pub fn suggestionsAtSourceOffset(
                 .target_span = match_span,
             };
         }
+    }
+
+    if (is_conversion) {
+        // Top-level lines only: an inline conversion has no line of its own
+        // in front of which the chain could be spliced.
+        if (target.path.len != 0) {
+            if (options.counters) |counters| {
+                counters.warm_search_ns += timer.elapsedSince(search_start);
+            }
+            return .{
+                .allocator = allocator,
+                .items = &.{},
+                .target_span = match_span,
+            };
+        }
+        var conv_options = ConversionSearch.Options{};
+        tunables.applyConversionParams(
+            &conv_options,
+            target_application.search_params,
+        );
+        const goal_expr: ?ExprId = switch (line_goal) {
+            .concrete => |expr| expr,
+            else => null,
+        };
+        var conv_result = ConversionSearch.Result{};
+        if (goal_expr) |expr| {
+            conv_result = try ConversionSearch.run(
+                work,
+                &context,
+                &theorem,
+                &theorem_vars,
+                expr,
+                proof_src,
+                target.block.lines,
+                target_line,
+                conv_options,
+            );
+        }
+        var conv_suggestions = SourceSuggestions{
+            .allocator = work,
+            .items = &.{},
+            .target_span = match_span,
+        };
+        if (conv_result.replacement) |replacement| {
+            const items = try work.alloc(SourceSuggestion, 1);
+            items[0] = .{
+                .title = try std.fmt.allocPrint(
+                    work,
+                    "conversion from {s}",
+                    .{conv_result.via.?},
+                ),
+                .replacement = replacement,
+                .replace_span = target_line.span,
+            };
+            conv_suggestions.items = items;
+            conv_suggestions.status = .found;
+        } else {
+            conv_suggestions.status = switch (conv_result.stats.outcome) {
+                .saturated => .miss,
+                .iteration_capped, .node_capped => .budget_exhausted,
+            };
+            if (options.status_detail) {
+                conv_suggestions.status_detail = try buildConversionDetail(
+                    work,
+                    conv_result,
+                    conv_options,
+                    goal_expr != null,
+                );
+            }
+        }
+        if (options.counters) |counters| {
+            counters.warm_search_ns += timer.elapsedSince(search_start);
+        }
+        return try copyOutSuggestions(allocator, conv_suggestions);
     }
 
     if (is_exact_like) {
@@ -397,6 +474,76 @@ pub fn suggestionsAtSourceOffset(
     }
     // `apply_suggestions` lives on the work arena; hand the caller an owned copy.
     return try copyOutSuggestions(allocator, apply_suggestions);
+}
+
+/// Failure report for a `conversion?` search. A saturated egraph with no
+/// convertible pool formula is a forced negative (no chain of the enrolled
+/// rules exists, period); a capped run gets the concrete next parameter.
+fn buildConversionDetail(
+    allocator: std.mem.Allocator,
+    result: ConversionSearch.Result,
+    conv_options: ConversionSearch.Options,
+    goal_concrete: bool,
+) !?[]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
+    if (!goal_concrete) {
+        try w.writeAll(
+            "conversion? needs a concrete goal formula (no holes).",
+        );
+    } else if (result.rule_count == 0) {
+        try w.writeAll(
+            "no @conversion rules are enrolled — annotate theorems " ++
+                "concluding rel(lhs, rhs) with '@conversion ltr|rtl|both' " ++
+                "to give the egraph rewrites to saturate.",
+        );
+    } else if (result.convertible_unlowered) {
+        try w.writeAll(
+            "a reference convertible to this goal was found, but a proof " ++
+                "chain could not be extracted from it (missing @congr " ++
+                "coverage or a missing @relation transport are the usual " ++
+                "causes).",
+        );
+    } else switch (result.stats.outcome) {
+        .saturated => try w.print(
+            "the egraph saturated ({d} e-classes, {d} e-nodes, {d} " ++
+                "iterations, {d} rule orientations): no chain of the " ++
+                "enrolled @conversion rewrites connects this goal to any " ++
+                "of the {d} pool references.",
+            .{
+                result.classes,
+                result.nodes,
+                result.stats.iterations,
+                result.rule_count,
+                result.pool_size,
+            },
+        ),
+        .iteration_capped => try w.print(
+            "the egraph hit its iteration cap ({d}) before saturating " ++
+                "({d} e-nodes so far). A conversion may still exist — try " ++
+                "'conversion? (iters: {d})'.",
+            .{
+                conv_options.max_iterations,
+                result.nodes,
+                @min(
+                    conv_options.max_iterations * 2,
+                    tunables.max_iters_value,
+                ),
+            },
+        ),
+        .node_capped => try w.print(
+            "the egraph hit its e-node cap ({d}) after {d} iterations. " ++
+                "A conversion may still exist — try 'conversion? " ++
+                "(nodes: {d})'.",
+            .{
+                conv_options.max_nodes,
+                result.stats.iterations,
+                @min(conv_options.max_nodes * 2, tunables.max_nodes_value),
+            },
+        ),
+    }
+    return try buf.toOwnedSlice(allocator);
 }
 
 /// Derive the user-facing outcome of a completed search: found beats
@@ -627,12 +774,14 @@ pub const SearchPlaceholder = struct {
         exact,
         apply,
         auto,
+        conversion,
 
         pub fn keyword(self: Kind) []const u8 {
             return switch (self) {
                 .exact => "exact?",
                 .apply => "apply?",
                 .auto => "auto?",
+                .conversion => "conversion?",
             };
         }
 
@@ -643,6 +792,7 @@ pub const SearchPlaceholder = struct {
                 .exact => .exact,
                 .apply => .apply,
                 .auto => .auto,
+                .conversion => .conversion,
             };
         }
     };
@@ -698,6 +848,8 @@ fn collectSearchPlaceholders(
                 .exact
             else if (std.mem.eql(u8, application.rule_name, "apply?"))
                 .apply
+            else if (std.mem.eql(u8, application.rule_name, "conversion?"))
+                .conversion
             else
                 .auto;
         // The param structs hold only source slices and values, but the

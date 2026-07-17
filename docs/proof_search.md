@@ -1,4 +1,4 @@
-# Proof search: `auto?`, `exact?`, `apply?`, and the `@auto` annotations
+# Proof search: `auto?`, `exact?`, `apply?`, `conversion?`, and the `@auto` annotations
 
 Aufbau can fill in proof steps for you. Where you would normally write a
 concrete rule application like
@@ -97,6 +97,49 @@ take a couple of seconds before it does.
 close; it is fast and its answer is unambiguous. Use `auto?` when the
 step is genuinely a small proof and you want the compiler to find the
 chain.
+
+### `conversion?` — rewrite the goal to an existing reference
+
+`conversion?` answers a different question from the other three: is the
+goal formula **convertible** — by a chain of enrolled `@conversion`
+rewrites, applied anywhere, in any direction — to a hypothesis or an
+earlier proof line? It builds an egraph seeded with the goal and every
+pool formula, saturates it under the `@conversion` rules (with congruence
+closure gated on `@congr` coverage), and on success replaces the line
+with an *ordinary proof*: one line per rewrite step, `@congr` lines
+lifting each step through the surrounding structure, `refl`/`trans`/
+`symm` glue, and a final transport application citing the reference.
+
+```text
+goal: $ or r (an q p) $ by conversion?
+```
+
+with `h: $ or (an p q) r $` in scope and commutativity of `an`/`or`
+enrolled `@conversion both` produces something like:
+
+```text
+goal_1: $ iff (or (an p q) r) (or r (an p q)) $ by or_comm
+goal_2: $ iff (an p q) (an q p) $ by an_comm
+goal_3: $ iff r r $ by iff_refl
+goal_4: $ iff (or r (an p q)) (or r (an q p)) $ by or_congr [goal_3, goal_2]
+goal_5: $ iff (or (an p q) r) (or r (an q p)) $ by iff_trans [goal_1, goal_4]
+goal: $ or r (an q p) $ by mpbi [goal_5, #1]
+```
+
+Everything it emits is checked the ordinary way — the search is untrusted
+and its output is just proof text.
+
+What it needs from the theory: a `@relation` bundle for the goal's sort
+*with a transport rule*, `@congr` rules for the connectives the rewrites
+must pass through, and `@conversion` annotations on the rewrite theorems
+(see `docs/rewrite_system.md`). Two properties are worth knowing:
+
+- **A saturated miss is a forced negative.** If the egraph reaches a
+  fixpoint without connecting the goal to any reference, no chain of the
+  enrolled rules exists at all — not "the search gave up", but "there is
+  no such conversion". The failure report says which of the two happened.
+- **v1 restrictions**: top-level proof lines only (no argument-slot
+  `conversion?`), concrete goals only (no holes).
 
 ### Placeholders in argument positions
 
@@ -211,6 +254,14 @@ l1: $ hard goal $ by auto? (depth: 8, budget: 13)
 | `nodes` | 256 | distinct sub-goal solves per depth pass |
 | `fuel` | 4096 | candidate validations per retry phase |
 | `budget` | ≈6 | whole-call work cap, in units of ≈1 second of calibrated work; `0` disables the cap |
+
+`conversion?` accepts its own pair, tuning the egraph instead of the
+generator:
+
+| parameter | default | meaning |
+|---|---|---|
+| `iters` | 16 | saturation iterations (match-all → instantiate → rebuild rounds) |
+| `nodes` | 10000 | e-node cap: distinct term shapes the egraph may hold |
 
 The parameters scope to **that one placeholder** — the engine defaults
 never move. This is deliberate: the defaults are tuned so that the

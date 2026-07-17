@@ -23,6 +23,18 @@ This file records notable user-facing changes to Aufbau. The project follows
   defaults (`budget` is in units of ≈1s of calibrated work; `0` uncaps).
   Invalid names/values get their own error diagnostics and are ignored.
   See `docs/proof_search.md`.
+- `@conversion` annotation: enrolls a hypothesis-free theorem concluding
+  `rel(lhs, rhs)` (for a registered `@relation`) as an equality-saturation
+  rewrite, with an explicit direction token (`ltr`, `rtl`, or `both`).
+  See `docs/rewrite_system.md`.
+- `conversion?` search placeholder: builds an egraph from the goal and the
+  reference pool, saturates the `@conversion` rules under `@congr`-gated
+  congruence, and — when the goal is convertible to a hypothesis or an
+  earlier line — replaces the line with an ordinary proof: the rewrite
+  chain (rule instances, congruence lifts, `refl`/`trans`/`symm`) and a
+  final transport citing the reference. A saturated miss is reported as a
+  forced negative; capped runs suggest `conversion? (iters: N, nodes: M)`.
+  See `docs/proof_search.md`.
 
 ## [0.0.1] - 2026-07-16
 

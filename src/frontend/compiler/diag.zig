@@ -586,6 +586,13 @@ fn annotationDiagnosticSpan(
         error.InvalidAlphaAnnotation,
         error.InvalidCongruenceAnnotation,
         error.CongruenceBinderOrderMismatch,
+        error.InvalidConversionAnnotation,
+        error.DuplicateConversionAnnotation,
+        error.ConversionRuleHasHypotheses,
+        error.ConversionConclusionNotRelation,
+        error.ConversionMissingRelation,
+        error.ConversionBareMatchSide,
+        error.ConversionBinderNotCovered,
         error.InvalidFallbackAnnotation,
         error.DuplicateFallbackAnnotation,
         error.UnknownFallbackRule,
@@ -770,6 +777,17 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.AlphaRuleHasHypotheses => "@alpha rule must not have hypotheses",
         error.InvalidCongruenceAnnotation => "@congr rule does not have the expected congruence shape",
         error.CongruenceBinderOrderMismatch => "@congr binders must be ordered old₀ new₀ old₁ new₁ ...",
+        error.InvalidConversionAnnotation => "@conversion expects one direction: ltr, rtl, or both",
+        error.DuplicateConversionAnnotation => "multiple @conversion annotations were attached to one rule",
+        error.ConversionRuleHasHypotheses => "@conversion rule must not have hypotheses",
+        error.ConversionConclusionNotRelation => "@conversion rule conclusion must have the shape " ++
+            "rel(lhs, rhs)",
+        error.ConversionMissingRelation => "@conversion rule conclusion head must be the registered " ++
+            "@relation term for its operand sort",
+        error.ConversionBareMatchSide => "@conversion match side must be a term application, " ++
+            "not a bare binder",
+        error.ConversionBinderNotCovered => "@conversion match side must bind every binder " ++
+            "the instantiate side uses",
         error.FreshStrictSort => "@fresh cannot target a binder in a strict sort",
         error.FreshFreeSort => "@fresh cannot target a binder in a free sort",
         error.FreshNoAvailableVar => "@fresh could not find an available @vars token",

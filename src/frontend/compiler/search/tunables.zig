@@ -16,20 +16,22 @@
 const std = @import("std");
 const types = @import("./types.zig");
 const ProofScript = @import("../../proof_script.zig");
+const ConversionOptions = @import("./conversion.zig").Options;
 
 pub const SearchParam = ProofScript.SearchParam;
 pub const Span = ProofScript.Span;
 pub const GenerateOptions = types.GenerateOptions;
 
-/// Which placeholder keyword a parameter list is attached to; only `auto?`
-/// accepts parameters (`exact?`/`apply?` accept none).
-pub const ParamContext = enum { exact, apply, auto };
+/// Which placeholder keyword a parameter list is attached to; each keyword
+/// accepts its own parameter set (`auto?` tunes the generator, `conversion?`
+/// tunes the egraph, `exact?`/`apply?` accept none).
+pub const ParamContext = enum { exact, apply, auto, conversion };
 
 /// The `budget` parameter is written in billions of weighted work ticks —
 /// per the `GlobalBudget` calibration, one unit ≈ 1 second of search work.
 pub const ticks_per_budget_unit: u64 = 1_000_000_000;
 
-const ParamKind = enum { depth, nodes, fuel, budget };
+const ParamKind = enum { depth, nodes, fuel, budget, iters };
 
 const ParamSpec = struct {
     name: []const u8,
@@ -50,6 +52,7 @@ pub const max_depth_value: u64 = 64;
 pub const max_nodes_value: u64 = 1_000_000;
 pub const max_fuel_value: u64 = 100_000_000;
 pub const max_budget_value: u64 = 100_000;
+pub const max_iters_value: u64 = 10_000;
 
 const auto_specs = [_]ParamSpec{
     .{ .name = "depth", .kind = .depth, .min = 1, .max = max_depth_value },
@@ -58,12 +61,19 @@ const auto_specs = [_]ParamSpec{
     .{ .name = "budget", .kind = .budget, .min = 0, .max = max_budget_value },
 };
 
+const conversion_specs = [_]ParamSpec{
+    .{ .name = "iters", .kind = .iters, .min = 1, .max = max_iters_value },
+    .{ .name = "nodes", .kind = .nodes, .min = 1, .max = max_nodes_value },
+};
+
 /// For diagnostics: the accepted parameter names, comma-separated.
 pub const known_param_names = "depth, nodes, fuel, budget";
+pub const known_conversion_param_names = "iters, nodes";
 
 fn specsFor(context: ParamContext) []const ParamSpec {
     return switch (context) {
         .auto => &auto_specs,
+        .conversion => &conversion_specs,
         .exact, .apply => &.{},
     };
 }
@@ -101,6 +111,9 @@ pub fn applySearchParams(
                 null
             else
                 param.value * ticks_per_budget_unit,
+            // `iters` is a conversion?-only parameter; it never appears in
+            // `auto_specs`.
+            .iters => {},
         }
     }
 }
@@ -111,6 +124,25 @@ pub const ParamIssue = struct {
     span: Span,
     message: []const u8,
 };
+
+/// Overlay the valid `conversion?` parameters (`iters`, `nodes`) onto the
+/// egraph options; same skip semantics as `applySearchParams`.
+pub fn applyConversionParams(
+    options: *ConversionOptions,
+    params: []const SearchParam,
+) void {
+    for (params) |param| {
+        const spec = specForNameIn(&conversion_specs, param.name) orelse {
+            continue;
+        };
+        if (param.value < spec.min or param.value > spec.max) continue;
+        switch (spec.kind) {
+            .iters => options.max_iterations = @intCast(param.value),
+            .nodes => options.max_nodes = @intCast(param.value),
+            else => {},
+        }
+    }
+}
 
 /// Check a placeholder's parameter list and return an issue per rejected
 /// entry (unknown name, out-of-range value, or any parameter on a
@@ -133,21 +165,33 @@ pub fn validateSearchParams(
                 allocator,
                 &issues,
                 param.span,
-                "search parameters only apply to auto? (exact? and " ++
-                    "apply? are single-shot searches with nothing to tune)",
+                "search parameters only apply to auto? and conversion? " ++
+                    "(exact? and apply? are single-shot searches with " ++
+                    "nothing to tune)",
                 .{},
             );
             continue;
         }
         const spec = specForNameIn(table, param.name) orelse {
-            try appendIssue(
-                allocator,
-                &issues,
-                param.name_span,
-                "unknown auto? parameter '{s}' (expected one of: " ++
-                    known_param_names ++ ")",
-                .{param.name},
-            );
+            switch (context) {
+                .auto => try appendIssue(
+                    allocator,
+                    &issues,
+                    param.name_span,
+                    "unknown auto? parameter '{s}' (expected one of: " ++
+                        known_param_names ++ ")",
+                    .{param.name},
+                ),
+                .conversion => try appendIssue(
+                    allocator,
+                    &issues,
+                    param.name_span,
+                    "unknown conversion? parameter '{s}' (expected one " ++
+                        "of: " ++ known_conversion_param_names ++ ")",
+                    .{param.name},
+                ),
+                .exact, .apply => unreachable,
+            }
             continue;
         };
         if (param.value < spec.min or param.value > spec.max) {

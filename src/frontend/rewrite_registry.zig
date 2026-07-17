@@ -3,6 +3,7 @@ const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RuleDecl = @import("./env.zig").RuleDecl;
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const hypBinderDeferredByConcl = @import("./rules.zig").hypBinderDeferredByConcl;
+const templateBinderMask = @import("./rules.zig").templateBinderMask;
 
 /// True when a rule defers a hypothesis binder as an existential witness (see
 /// `rules.hypBinderDeferredByConcl`) — `@auto eager` rejects such rules
@@ -61,6 +62,22 @@ pub const RewriteRule = struct {
     rhs: TemplateExpr,
     num_binders: usize,
     head_term_id: u32,
+};
+
+/// A `@conversion` rule: a hypothesis-free theorem concluding `rel(lhs, rhs)`
+/// for a registered `@relation`, enrolled for egraph saturation in
+/// `conversion?` search. `ltr`/`rtl` record which orientations may be
+/// e-matched (the matched side's binders instantiate the other side); a
+/// `both` annotation sets both flags. Unlike `@rewrite` rules these never
+/// feed the normalizer, so enrollment cannot change any existing search or
+/// compilation behavior.
+pub const ConversionRule = struct {
+    rule_id: u32,
+    lhs: TemplateExpr,
+    rhs: TemplateExpr,
+    num_binders: usize,
+    ltr: bool,
+    rtl: bool,
 };
 
 /// A special alpha-renaming rule used only by freshening.
@@ -159,6 +176,10 @@ pub const RewriteRegistry = struct {
         u32,
         std.ArrayListUnmanaged(TriggerPattern),
     ),
+    /// `@conversion` rules in declaration order. The egraph builds its own
+    /// match-side head indexes per search call; the registry keeps a flat
+    /// list.
+    conversions: std.ArrayListUnmanaged(ConversionRule) = .{},
 
     pub fn init(allocator: std.mem.Allocator) RewriteRegistry {
         return .{
@@ -215,6 +236,8 @@ pub const RewriteRegistry = struct {
             try self.processRewrite(env, stmt_name, &iter);
         } else if (std.mem.eql(u8, directive, "@alpha")) {
             try self.processAlpha(env, stmt_name, &iter);
+        } else if (std.mem.eql(u8, directive, "@conversion")) {
+            try self.processConversion(env, stmt_name, &iter);
         } else if (std.mem.eql(u8, directive, "@congr")) {
             try self.processCongr(env, stmt_name);
         } else if (std.mem.eql(u8, directive, "@fallback")) {
@@ -280,6 +303,80 @@ pub const RewriteRegistry = struct {
             },
             else => {},
         }
+    }
+
+    fn processConversion(
+        self: *RewriteRegistry,
+        env: *const GlobalEnv,
+        stmt_name: []const u8,
+        iter: *std.mem.TokenIterator(u8, .any),
+    ) !void {
+        const direction = iter.next() orelse {
+            return error.InvalidConversionAnnotation;
+        };
+        if (iter.next() != null) return error.InvalidConversionAnnotation;
+        const both = std.mem.eql(u8, direction, "both");
+        const ltr = both or std.mem.eql(u8, direction, "ltr");
+        const rtl = both or std.mem.eql(u8, direction, "rtl");
+        if (!ltr and !rtl) return error.InvalidConversionAnnotation;
+
+        const rule_id = env.getRuleId(stmt_name) orelse return;
+        const rule = &env.rules.items[rule_id];
+
+        for (self.conversions.items) |existing| {
+            if (existing.rule_id == rule_id) {
+                return error.DuplicateConversionAnnotation;
+            }
+        }
+
+        // Conditional conversion rules would need side-condition discharge
+        // during egraph saturation; not supported.
+        if (rule.hyps.len != 0) return error.ConversionRuleHasHypotheses;
+
+        const app = switch (rule.concl) {
+            .app => |value| value,
+            else => return error.ConversionConclusionNotRelation,
+        };
+        if (app.args.len != 2) return error.ConversionConclusionNotRelation;
+        try self.validateConversionRelation(env, app.term_id);
+
+        const lhs = app.args[0];
+        const rhs = app.args[1];
+        if (ltr) try validateConversionOrientation(lhs, rhs);
+        if (rtl) try validateConversionOrientation(rhs, lhs);
+
+        try self.conversions.append(self.allocator, .{
+            .rule_id = rule_id,
+            .lhs = lhs,
+            .rhs = rhs,
+            .num_binders = rule.args.len,
+            .ltr = ltr,
+            .rtl = rtl,
+        });
+    }
+
+    /// The conclusion head must be the registered `@relation` term for its
+    /// operand sort — otherwise proof extraction has no
+    /// refl/trans/symm/transport vocabulary to lower a conversion chain with.
+    fn validateConversionRelation(
+        self: *const RewriteRegistry,
+        env: *const GlobalEnv,
+        rel_term_id: u32,
+    ) !void {
+        if (rel_term_id >= env.terms.items.len) {
+            return error.ConversionMissingRelation;
+        }
+        const rel_term = &env.terms.items[rel_term_id];
+        if (!rel_term.available or rel_term.args.len != 2) {
+            return error.ConversionMissingRelation;
+        }
+        const relation = self.getRelationForSort(
+            rel_term.args[0].sort_name,
+        ) orelse return error.ConversionMissingRelation;
+        const expected = env.term_names.get(relation.rel_term_name) orelse {
+            return error.ConversionMissingRelation;
+        };
+        if (rel_term_id != expected) return error.ConversionMissingRelation;
     }
 
     fn processAlpha(
@@ -842,6 +939,12 @@ pub const RewriteRegistry = struct {
         };
     }
 
+    pub fn conversionRules(
+        self: *const RewriteRegistry,
+    ) []const ConversionRule {
+        return self.conversions.items;
+    }
+
     pub fn getRewriteRules(
         self: *const RewriteRegistry,
         head_term_id: u32,
@@ -1172,6 +1275,26 @@ fn validateTriggerApp(
                 try validateTriggerApp(env, rule, child_app, named);
             },
         }
+    }
+}
+
+/// One enrolled `@conversion` orientation: `match` is e-matched, `target` is
+/// instantiated. The match side must be a term application (a bare-binder
+/// match side would match every e-class), and it must bind every binder the
+/// target side uses (an egraph rule cannot invent fresh variables).
+/// Overflowed binder masks (>= 64 binders) conservatively fail coverage.
+fn validateConversionOrientation(
+    match: TemplateExpr,
+    target: TemplateExpr,
+) !void {
+    if (match != .app) return error.ConversionBareMatchSide;
+    const match_mask = templateBinderMask(match);
+    const target_mask = templateBinderMask(target);
+    if (match_mask.overflow or target_mask.overflow) {
+        return error.ConversionBinderNotCovered;
+    }
+    if ((target_mask.mask & ~match_mask.mask) != 0) {
+        return error.ConversionBinderNotCovered;
     }
 }
 
