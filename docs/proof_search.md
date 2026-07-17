@@ -129,6 +129,16 @@ goal: $ or r (an q p) $ by mpbi [goal_5, #1]
 Everything it emits is checked the ordinary way — the search is untrusted
 and its output is just proof text.
 
+Beyond the enrolled rules, **local equations rewrite too**: any
+hypothesis or earlier line whose formula is `rel(lhs, rhs)` for a
+registered `@relation` — an `iff` hypothesis, an `eq` fact proved three
+lines up — acts as a ground rewrite between its two sides, no annotation
+needed (the analogue of Lean's `simp [h]`). Such a step cites the
+reference directly in the chain instead of emitting a rule line (through
+one `symm` line when used right-to-left). With relation and congruence
+coverage but no `@conversion` rules at all, `conversion?` still runs as a
+pure congruence-closure prover over the local equations.
+
 What it needs from the theory: a `@relation` bundle for the goal's sort
 *with a transport rule*, `@congr` rules for the connectives the rewrites
 must pass through, and `@conversion` annotations on the rewrite theorems

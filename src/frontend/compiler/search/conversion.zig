@@ -42,6 +42,8 @@ pub const Result = struct {
     stats: egraph.SaturateStats = .{ .outcome = .saturated },
     pool_size: usize = 0,
     rule_count: usize = 0,
+    /// Pool entries of shape `rel(lhs, rhs)` enrolled as ground unions.
+    pool_equations: usize = 0,
     classes: usize = 0,
     nodes: usize = 0,
 };
@@ -79,7 +81,6 @@ pub fn run(
         });
     }
     result.rule_count = rules.items.len;
-    if (rules.items.len == 0) return result;
 
     var eg = egraph.EGraph.init(work);
     // The congruence gate: only heads with a `@congr` proof step may drive
@@ -98,6 +99,18 @@ pub fn run(
             try eg.bound_masks.put(work, @intCast(term_id), mask);
         }
     }
+    // Registered relation heads: pool entries with one of these at the top
+    // are proven `rel(lhs, rhs)` facts whose sides may be unioned. Set
+    // semantics, so hash-map iteration order is fine.
+    var rel_heads: std.AutoArrayHashMapUnmanaged(u32, void) = .{};
+    var sort_it = context.registry.relations.keyIterator();
+    while (sort_it.next()) |sort_name| {
+        const relation = context.registry.resolveRelation(
+            context.env,
+            sort_name.*,
+        ) orelse continue;
+        try rel_heads.put(work, relation.rel_term_id, {});
+    }
 
     const goal_term = (try addExpr(&eg, context.env, theorem, goal)) orelse {
         return result;
@@ -113,6 +126,36 @@ pub fn run(
         };
         pool_terms[idx] = try addExpr(&eg, context.env, theorem, expr);
     }
+
+    // Local equations: a pool entry shaped `rel(lhs, rhs)` is itself a
+    // proof that its sides convert, so union them up front. These ground
+    // unions participate in congruence closure from the first rebuild and
+    // lower as direct citations of the entry (`simp [h]`, in effect).
+    for (pool_terms, 0..) |maybe_term, idx| {
+        const term = maybe_term orelse continue;
+        const app = switch (eg.nodes.items[term.node].node) {
+            .app => |app| app,
+            .leaf => continue,
+        };
+        if (!rel_heads.contains(app.term_id)) continue;
+        if (term.children.len != 2) continue;
+        const lhs = term.children[0] orelse continue;
+        const rhs = term.children[1] orelse continue;
+        result.pool_equations += 1;
+        _ = try eg.merge(
+            termClass(&eg, lhs),
+            termClass(&eg, rhs),
+            .{ .pool_equation = .{
+                .pool_index = @intCast(idx),
+                .lhs = lhs,
+                .rhs = rhs,
+            } },
+        );
+    }
+
+    // Nothing can ever union: report the enrollment gap without paying for
+    // a saturation that provably does no work.
+    if (rules.items.len == 0 and result.pool_equations == 0) return result;
 
     // Saturate one iteration at a time and stop as soon as the goal shares
     // a class with a pool entry. Absorption-style rules union a variable's
@@ -155,6 +198,7 @@ pub fn run(
             .context = context,
             .theorem = theorem,
             .eg = &eg,
+            .pool = pool,
             .names = try ViewTrace.DiagNames.build(
                 work,
                 theorem,
@@ -282,6 +326,7 @@ const Lowerer = struct {
     context: *const Context,
     theorem: *TheoremContext,
     eg: *egraph.EGraph,
+    pool: []const Refs.RefPoolEntry,
     names: ViewTrace.DiagNames,
     proof_src: []const u8,
     target_line: ProofScript.ProofLine,
@@ -463,28 +508,40 @@ const Lowerer = struct {
     }
 
     /// Emit the proof of `rel(current, next)` for one step: the rule
-    /// instance (through `symm` when traversed backwards), lifted through
-    /// one `@congr` application per enclosing level with `refl` siblings.
-    /// Returns the label proving the root-level relation.
+    /// instance, or the pool equation cited directly (through `symm` when
+    /// traversed backwards), lifted through one `@congr` application per
+    /// enclosing level with `refl` siblings. Returns the label proving the
+    /// root-level relation.
     fn emitStep(
         self: *Lowerer,
         step: egraph.Step,
         full_before: *const egraph.Term,
         full_after: *const egraph.Term,
     ) !?[]const u8 {
-        // Redex-level rule instance.
         const redex_relation = self.relationForTerm(step.before) orelse
             self.relationForTerm(step.after) orelse return null;
-        const thm_lhs = if (step.needs_symm) step.after else step.before;
-        const thm_rhs = if (step.needs_symm) step.before else step.after;
-        const instance = (try self.relExpr(
-            redex_relation,
-            thm_lhs,
-            thm_rhs,
-        )) orelse return null;
-        var label = (try self.emitLine(instance, step.rule_id, &.{})) orelse {
-            return null;
-        };
+        var label: []const u8 = undefined;
+        switch (step.source) {
+            // Redex-level rule instance: a fresh line, since the rule
+            // proves any instance.
+            .rule => |rule_id| {
+                const thm_lhs = if (step.needs_symm) step.after else step.before;
+                const thm_rhs = if (step.needs_symm) step.before else step.after;
+                const instance = (try self.relExpr(
+                    redex_relation,
+                    thm_lhs,
+                    thm_rhs,
+                )) orelse return null;
+                label = (try self.emitLine(instance, rule_id, &.{})) orelse {
+                    return null;
+                };
+            },
+            // The pool entry already asserts exactly rel(before, after)
+            // (or its flip): cite it, no new line.
+            .pool_equation => |pool_idx| {
+                label = try self.renderRefText(self.pool[pool_idx].ref);
+            },
+        }
         if (step.needs_symm) {
             const flipped = (try self.relExpr(
                 redex_relation,

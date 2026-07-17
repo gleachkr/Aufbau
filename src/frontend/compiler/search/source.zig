@@ -492,7 +492,7 @@ fn buildConversionDetail(
         try w.writeAll(
             "conversion? needs a concrete goal formula (no holes).",
         );
-    } else if (result.rule_count == 0) {
+    } else if (result.rule_count == 0 and result.pool_equations == 0) {
         try w.writeAll(
             "no @conversion rules are enrolled — annotate theorems " ++
                 "concluding rel(lhs, rhs) with '@conversion ltr|rtl|both' " ++
@@ -508,14 +508,15 @@ fn buildConversionDetail(
     } else switch (result.stats.outcome) {
         .saturated => try w.print(
             "the egraph saturated ({d} e-classes, {d} e-nodes, {d} " ++
-                "iterations, {d} rule orientations): no chain of the " ++
-                "enrolled @conversion rewrites connects this goal to any " ++
-                "of the {d} pool references.",
+                "iterations, {d} rule orientations, {d} local equations): " ++
+                "no chain of the enrolled @conversion rewrites connects " ++
+                "this goal to any of the {d} pool references.",
             .{
                 result.classes,
                 result.nodes,
                 result.stats.iterations,
                 result.rule_count,
+                result.pool_equations,
                 result.pool_size,
             },
         ),

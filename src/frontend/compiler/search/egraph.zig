@@ -85,12 +85,23 @@ pub const Justification = union(enum) {
         left: ENodeId,
         right: ENodeId,
     },
+    /// A ground union seeded by the driver: the reference-pool entry at
+    /// `pool_index` is itself a proven `rel(lhs, rhs)` fact, so its two
+    /// sides are one class. The seeded side terms ride along because the
+    /// lowering cites the entry's exact formula — unlike a rule instance,
+    /// which may anchor on any class representative.
+    pool_equation: struct {
+        pool_index: u32,
+        lhs: *const Term,
+        rhs: *const Term,
+    },
 };
 
 fn justEndpoints(just: Justification) struct { a: ENodeId, b: ENodeId } {
     return switch (just) {
         .rule => |rule| .{ .a = rule.from_node, .b = rule.to_node },
         .congruence => |congr| .{ .a = congr.left, .b = congr.right },
+        .pool_equation => |eq| .{ .a = eq.lhs.node, .b = eq.rhs.node },
     };
 }
 
@@ -791,11 +802,20 @@ pub const BindingValue = union(enum) {
     bound: LeafId,
 };
 
-/// One extracted rewrite: apply the `@conversion` theorem `rule_id`
-/// (right-to-left when `needs_symm`) with `bindings` at `position`,
-/// rewriting the redex `before` into `after`.
+/// One extracted rewrite at `position`, turning the redex `before` into
+/// `after`. A `.rule` step applies the `@conversion` theorem (right-to-left
+/// when `needs_symm`) with `bindings`; a `.pool_equation` step is the
+/// reference-pool entry's own `rel(lhs, rhs)` fact, cited directly
+/// (through `symm` when `needs_symm`).
 pub const Step = struct {
-    rule_id: u32,
+    pub const Source = union(enum) {
+        /// The `@conversion` theorem's rule id (caller tag, opaque here).
+        rule: u32,
+        /// Index into the driver's reference pool.
+        pool_equation: u32,
+    };
+
+    source: Source,
     needs_symm: bool,
     /// Argument-index path from the formula root to the redex.
     position: []const u32,
@@ -1113,7 +1133,7 @@ const ExplainCtx = struct {
                     };
                 }
                 try self.steps.append(self.allocator(), .{
-                    .rule_id = rule.rule_id,
+                    .source = .{ .rule = rule.rule_id },
                     .needs_symm = needs_symm,
                     .position = pos,
                     .before = lhs,
@@ -1121,6 +1141,25 @@ const ExplainCtx = struct {
                     .bindings = bindings,
                 });
                 return rhs;
+            },
+            .pool_equation => |eq| {
+                // The seeded side terms are the step endpoints verbatim:
+                // the lowering cites the pool entry's exact formula, so no
+                // representative substitution is allowed here.
+                const before = if (edge.forward) eq.lhs else eq.rhs;
+                const after = if (edge.forward) eq.rhs else eq.lhs;
+                if (!try self.explainTerms(current, before, pos)) {
+                    return null;
+                }
+                try self.steps.append(self.allocator(), .{
+                    .source = .{ .pool_equation = eq.pool_index },
+                    .needs_symm = !edge.forward,
+                    .position = pos,
+                    .before = before,
+                    .after = after,
+                    .bindings = &.{},
+                });
+                return after;
             },
         }
     }
@@ -1571,7 +1610,7 @@ test "egraph explains a root commutativity step" {
         return error.ExpectedExplanation;
     };
     try testing.expectEqual(@as(usize, 1), steps.len);
-    try testing.expectEqual(@as(u32, 101), steps[0].rule_id);
+    try testing.expectEqual(@as(u32, 101), steps[0].source.rule);
     try testing.expect(!steps[0].needs_symm);
     try testing.expectEqual(@as(usize, 0), steps[0].position.len);
     try expectValidChain(&eg, from, to, steps);
@@ -1638,6 +1677,52 @@ test "egraph explains bare-binder contraction in both directions" {
     try testing.expectEqual(@as(usize, 1), reverse.len);
     try testing.expect(reverse[0].needs_symm);
     try expectValidChain(&eg, x, xx, reverse);
+}
+
+test "egraph explains through a pool-equation ground union" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, F, {});
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const fx = try tApp2(&eg, F, x, x);
+    const fy = try tApp2(&eg, F, y, y);
+    _ = try eg.merge(
+        termClassOf(&eg, x),
+        termClassOf(&eg, y),
+        .{ .pool_equation = .{ .pool_index = 3, .lhs = x, .rhs = y } },
+    );
+    _ = try eg.saturate(&.{}, .{});
+    try testing.expect(eg.sameClass(
+        termClassOf(&eg, fx),
+        termClassOf(&eg, fy),
+    ));
+
+    // Forward: both congruence positions rewrite x -> y, citing the pool
+    // entry as-is.
+    const forward = (try eg.explain(&.{}, fx, fy, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try testing.expectEqual(@as(usize, 2), forward.len);
+    for (forward) |step| {
+        try testing.expectEqual(@as(u32, 3), step.source.pool_equation);
+        try testing.expect(!step.needs_symm);
+        try testing.expectEqual(@as(usize, 1), step.position.len);
+    }
+    try expectValidChain(&eg, fx, fy, forward);
+
+    // Reverse traversal of the same edge needs symm.
+    const reverse = (try eg.explain(&.{}, fy, fx, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try testing.expectEqual(@as(usize, 2), reverse.len);
+    for (reverse) |step| {
+        try testing.expectEqual(@as(u32, 3), step.source.pool_equation);
+        try testing.expect(step.needs_symm);
+    }
+    try expectValidChain(&eg, fy, fx, reverse);
 }
 
 test "egraph explains a two-step nested rewrite chain" {

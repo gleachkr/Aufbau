@@ -367,6 +367,14 @@ rules, because those rules are exactly the proof steps the extracted chain
 emits. A sort or connective without `@congr` coverage simply contributes no
 congruence merges — the search stays sound but finds fewer conversions.
 
+One rewrite source needs no annotation at all: a hypothesis or earlier
+proof line whose formula is `rel(lhs, rhs)` for a registered `@relation`
+is already a proof that its sides convert, and `conversion?` uses every
+such **local equation** as a ground rewrite automatically, citing the
+reference directly in the emitted chain. `@conversion` enrolls *schemas*
+(theorems matched against every subterm); local equations contribute only
+the one ground fact they state.
+
 ## `@congr`
 
 ### Purpose

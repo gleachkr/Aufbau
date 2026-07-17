@@ -6684,6 +6684,144 @@ test "conversion? reports missing enrollment and node-cap truncation" {
     );
 }
 
+// A theory with a relation bundle and congruence but ZERO @conversion
+// rules: local equations are the only way anything ever unions.
+const equation_only_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term iff (p q: wff): wff;
+    \\term an (p q: wff): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @congr
+    \\axiom an_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (an a c) (an b d) $;
+    \\
+;
+
+test "conversion? converges through a local equation with no rules enrolled" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // h1 is an ordinary iff hypothesis, not an enrolled rewrite: its sides
+    // union at seed time and congruence closure alone connects the goal.
+    const mm0_src = equation_only_prelude ++
+        \\theorem conv_ground (p q r: wff) (h1: $ iff q p $) (h2: $ an q r $): $ an p r $;
+    ;
+    const proof_src =
+        \\conv_ground
+        \\----
+        \\goal: $ an p r $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+
+    // The forward equation step is the hypothesis cited as-is — no rule
+    // line, just the congruence lift and the transport.
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "an_congr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_symm") == null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? joins a local equation with enrolled rewrites" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Needs BOTH: the equation q ~ p (no enrolled rule swaps atoms) and
+    // an_comm for the argument flip.
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_mixed (p q r: wff) (h1: $ iff q p $) (h2: $ an q r $): $ an r p $;
+    ;
+    const proof_src =
+        \\conv_mixed
+        \\----
+        \\goal: $ an r p $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "an_comm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_trans") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? cites a local equation backwards through symm" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // h1 proves iff(p, q); the chain rewrites q -> p, traversing the
+    // equation's union edge against its stated direction.
+    const mm0_src = equation_only_prelude ++
+        \\theorem conv_eq_rev (p q r: wff) (h1: $ iff p q $) (h2: $ an q r $): $ an p r $;
+    ;
+    const proof_src =
+        \\conv_eq_rev
+        \\----
+        \\goal: $ an p r $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_symm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? tolerates a self-referential local equation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // h1 unions p with a compound containing p's own class — a cyclic
+    // e-class from the first rebuild. The found case must not pay for it
+    // and the miss case must still saturate to a forced negative.
+    const found_mm0 = conversion_prelude ++
+        \\theorem conv_cyc (p q: wff) (h1: $ iff p (an p p) $) (h2: $ an p q $): $ an q p $;
+    ;
+    const found_proof =
+        \\conv_cyc
+        \\----
+        \\goal: $ an q p $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, found_mm0, found_proof, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, found_mm0, found_proof, found.items[0]);
+
+    const miss_mm0 = conversion_prelude ++
+        \\theorem conv_cyc_miss (p q: wff) (h1: $ iff p (an p p) $) (h2: $ an p q $): $ or p q $;
+    ;
+    var miss = try conversionSuggestions(&arena, miss_mm0,
+        \\conv_cyc_miss
+        \\----
+        \\goal: $ or p q $ by conversion?
+        \\
+    , .{ .status_detail = true });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "the egraph saturated") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "1 local equations") != null,
+    );
+}
+
 // --- conversion? stress: two-sorted equational theories -------------------
 //
 // Boolean-algebra and commutative-ring axiom sets adapted from

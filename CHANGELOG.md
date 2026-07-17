@@ -35,6 +35,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   final transport citing the reference. A saturated miss is reported as a
   forced negative; capped runs suggest `conversion? (iters: N, nodes: M)`.
   See `docs/proof_search.md`.
+- `conversion?` local equations: a hypothesis or earlier line whose formula
+  is `rel(lhs, rhs)` for a registered `@relation` acts as a ground rewrite
+  between its sides (the `simp [h]` analogue), cited directly in the
+  emitted chain — no annotation needed. With no `@conversion` rules at all,
+  `conversion?` degrades gracefully to a congruence-closure prover over
+  the local equations.
 
 ## [0.0.1] - 2026-07-16
 
