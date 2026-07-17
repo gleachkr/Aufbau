@@ -6683,3 +6683,355 @@ test "conversion? reports missing enrollment and node-cap truncation" {
         std.mem.indexOf(u8, detail, "conversion? (nodes: 2)") != null,
     );
 }
+
+// --- conversion? stress: two-sorted equational theories -------------------
+//
+// Boolean-algebra and commutative-ring axiom sets adapted from
+// gleachkr/eggbau (tests/fixtures/domain_boolean_algebra.mm0 and
+// domain_ring.mm0). Unlike the wff-only prelude above, every rewrite step
+// here happens at a non-provable object sort (`bool`/`R`) under `eq`, so a
+// chain must lift through the relation term's own congruence (`eq_congr`)
+// into provable `iff` land before the mpbi transport fires. The object
+// sort's `@relation` bundle is transport-free (`_`).
+
+const bool_conversion_prelude =
+    \\delimiter $ ( ) $;
+    \\sort bool;
+    \\provable sort wff;
+    \\term iff (p q: wff): wff;
+    \\term eq (x y: bool): wff;
+    \\term top: bool;
+    \\term bot: bool;
+    \\term and (x y: bool): bool;
+    \\term or (x y: bool): bool;
+    \\term not (x: bool): bool;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @relation bool eq eq_refl eq_trans eq_symm _
+    \\axiom eq_refl (x: bool): $ eq x x $;
+    \\axiom eq_trans (x y z: bool) (h1: $ eq x y $) (h2: $ eq y z $): $ eq x z $;
+    \\axiom eq_symm (x y: bool) (h: $ eq x y $): $ eq y x $;
+    \\--| @congr
+    \\axiom eq_congr (a b c d: bool) (h1: $ eq a b $) (h2: $ eq c d $): $ iff (eq a c) (eq b d) $;
+    \\--| @congr
+    \\axiom and_congr (a b c d: bool) (h1: $ eq a b $) (h2: $ eq c d $): $ eq (and a c) (and b d) $;
+    \\--| @congr
+    \\axiom or_congr (a b c d: bool) (h1: $ eq a b $) (h2: $ eq c d $): $ eq (or a c) (or b d) $;
+    \\--| @congr
+    \\axiom not_congr (a b: bool) (h: $ eq a b $): $ eq (not a) (not b) $;
+    \\--| @conversion ltr
+    \\axiom and_comm (x y: bool): $ eq (and x y) (and y x) $;
+    \\--| @conversion ltr
+    \\axiom and_assoc (x y z: bool): $ eq (and (and x y) z) (and x (and y z)) $;
+    \\--| @conversion ltr
+    \\axiom and_idem (x: bool): $ eq (and x x) x $;
+    \\--| @conversion ltr
+    \\axiom and_top (x: bool): $ eq (and top x) x $;
+    \\--| @conversion ltr
+    \\axiom and_bot (x: bool): $ eq (and bot x) bot $;
+    \\--| @conversion ltr
+    \\axiom or_comm (x y: bool): $ eq (or x y) (or y x) $;
+    \\--| @conversion ltr
+    \\axiom or_assoc (x y z: bool): $ eq (or (or x y) z) (or x (or y z)) $;
+    \\--| @conversion ltr
+    \\axiom or_idem (x: bool): $ eq (or x x) x $;
+    \\--| @conversion ltr
+    \\axiom or_bot (x: bool): $ eq (or bot x) x $;
+    \\--| @conversion ltr
+    \\axiom or_top (x: bool): $ eq (or x top) top $;
+    \\--| @conversion ltr
+    \\axiom and_absorb (x y: bool): $ eq (and x (or x y)) x $;
+    \\--| @conversion ltr
+    \\axiom or_absorb (x y: bool): $ eq (or x (and x y)) x $;
+    \\--| @conversion ltr
+    \\axiom and_compl (x: bool): $ eq (and x (not x)) bot $;
+    \\--| @conversion ltr
+    \\axiom or_compl (x: bool): $ eq (or x (not x)) top $;
+    \\--| @conversion ltr
+    \\axiom not_not (x: bool): $ eq (not (not x)) x $;
+    \\--| @conversion ltr
+    \\axiom not_top: $ eq (not top) bot $;
+    \\--| @conversion ltr
+    \\axiom not_bot: $ eq (not bot) top $;
+    \\--| @conversion both
+    \\axiom demorgan_and (x y: bool): $ eq (not (and x y)) (or (not x) (not y)) $;
+    \\--| @conversion both
+    \\axiom demorgan_or (x y: bool): $ eq (not (or x y)) (and (not x) (not y)) $;
+    \\--| @conversion ltr
+    \\axiom or_factor (x y z: bool): $ eq (or (and x y) (and x z)) (and x (or y z)) $;
+    \\--| @conversion ltr
+    \\axiom and_factor (x y z: bool): $ eq (and (or x y) (or x z)) (or x (and y z)) $;
+    \\
+;
+
+const ring_conversion_prelude =
+    \\delimiter $ ( ) $;
+    \\sort R;
+    \\provable sort wff;
+    \\term iff (p q: wff): wff;
+    \\term eq (x y: R): wff;
+    \\term zero: R;
+    \\term one: R;
+    \\term add (x y: R): R;
+    \\term mul (x y: R): R;
+    \\term neg (x: R): R;
+    \\term sub (x y: R): R;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @relation R eq eq_refl eq_trans eq_symm _
+    \\axiom eq_refl (x: R): $ eq x x $;
+    \\axiom eq_trans (x y z: R) (h1: $ eq x y $) (h2: $ eq y z $): $ eq x z $;
+    \\axiom eq_symm (x y: R) (h: $ eq x y $): $ eq y x $;
+    \\--| @congr
+    \\axiom eq_congr (a b c d: R) (h1: $ eq a b $) (h2: $ eq c d $): $ iff (eq a c) (eq b d) $;
+    \\--| @congr
+    \\axiom add_congr (a b c d: R) (h1: $ eq a b $) (h2: $ eq c d $): $ eq (add a c) (add b d) $;
+    \\--| @congr
+    \\axiom mul_congr (a b c d: R) (h1: $ eq a b $) (h2: $ eq c d $): $ eq (mul a c) (mul b d) $;
+    \\--| @congr
+    \\axiom neg_congr (a b: R) (h: $ eq a b $): $ eq (neg a) (neg b) $;
+    \\--| @congr
+    \\axiom sub_congr (a b c d: R) (h1: $ eq a b $) (h2: $ eq c d $): $ eq (sub a c) (sub b d) $;
+    \\--| @conversion ltr
+    \\axiom add_zero (x: R): $ eq (add x zero) x $;
+    \\--| @conversion ltr
+    \\axiom zero_add (x: R): $ eq (add zero x) x $;
+    \\--| @conversion ltr
+    \\axiom add_comm (x y: R): $ eq (add x y) (add y x) $;
+    \\--| @conversion ltr
+    \\axiom add_assoc (x y z: R): $ eq (add (add x y) z) (add x (add y z)) $;
+    \\--| @conversion ltr
+    \\axiom add_neg (x: R): $ eq (add x (neg x)) zero $;
+    \\--| @conversion ltr
+    \\axiom neg_neg (x: R): $ eq (neg (neg x)) x $;
+    \\--| @conversion ltr
+    \\axiom mul_one (x: R): $ eq (mul x one) x $;
+    \\--| @conversion ltr
+    \\axiom one_mul (x: R): $ eq (mul one x) x $;
+    \\--| @conversion ltr
+    \\axiom mul_zero (x: R): $ eq (mul x zero) zero $;
+    \\--| @conversion ltr
+    \\axiom zero_mul (x: R): $ eq (mul zero x) zero $;
+    \\--| @conversion ltr
+    \\axiom mul_comm (x y: R): $ eq (mul x y) (mul y x) $;
+    \\--| @conversion ltr
+    \\axiom mul_assoc (x y z: R): $ eq (mul (mul x y) z) (mul x (mul y z)) $;
+    \\--| @conversion both
+    \\axiom factor_l (x y z: R): $ eq (add (mul x y) (mul x z)) (mul x (add y z)) $;
+    \\--| @conversion both
+    \\axiom factor_r (x y z: R): $ eq (add (mul x z) (mul y z)) (mul (add x y) z) $;
+    \\--| @conversion ltr
+    \\axiom neg_mul_l (x y: R): $ eq (mul (neg x) y) (neg (mul x y)) $;
+    \\--| @conversion ltr
+    \\axiom neg_mul_r (x y: R): $ eq (mul x (neg y)) (neg (mul x y)) $;
+    \\--| @conversion ltr
+    \\axiom sub_def (x y: R): $ eq (sub x y) (add x (neg y)) $;
+    \\
+;
+
+test "conversion? lifts a two-sorted chained De Morgan through eq_congr" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = bool_conversion_prelude ++
+        \\theorem conv_chained_demorgan (x y z w: bool)
+        \\  (h: $ eq (not (or x (and y z))) w $):
+        \\  $ eq (and (not x) (or (not y) (not z))) w $;
+    ;
+    const proof_src =
+        \\conv_chained_demorgan
+        \\----
+        \\goal: $ eq (and (not x) (or (not y) (not z))) w $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // Both De Morgan steps happen at sort bool; the inner one additionally
+    // lifts through and_congr, and every step crosses into iff land via
+    // the relation term's own congruence before the transport.
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "demorgan_or") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "demorgan_and") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "and_congr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "eq_congr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_trans") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? proves boolean consensus through factor, complement, and unit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // or(x∧y, x∧¬y) → x∧(y∨¬y) → x∧⊤ → ⊤∧x → x: the complement and unit
+    // collapse only exist as nodes minted by earlier rule instantiations,
+    // so the chain needs several saturation rounds.
+    const mm0_src = bool_conversion_prelude ++
+        \\theorem conv_consensus (x y w: bool) (h: $ eq x w $):
+        \\  $ eq (or (and x y) (and x (not y))) w $;
+    ;
+    const proof_src =
+        \\conv_consensus
+        \\----
+        \\goal: $ eq (or (and x y) (and x (not y))) w $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "or_factor") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "or_compl") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "and_top") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? reverses an ltr rule at the object sort through eq_symm" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The goal's lhs IS the or_absorb redex, so the ref-to-goal chain
+    // traverses that union edge backwards: the symm fires at sort bool
+    // (eq_symm), not at the wff level.
+    const mm0_src = bool_conversion_prelude ++
+        \\theorem conv_absorb_expand (x y w: bool) (h: $ eq x w $):
+        \\  $ eq (or x (and x y)) w $;
+    ;
+    const proof_src =
+        \\conv_absorb_expand
+        \\----
+        \\goal: $ eq (or x (and x y)) w $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "or_absorb") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "eq_symm") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? forced negative on the boolean lattice" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // x∧y and x∨y are never lattice-convertible; the full boolean rule set
+    // must still saturate (AC permutations of the seeds are finite) and
+    // report a forced negative.
+    const mm0_src = bool_conversion_prelude ++
+        \\theorem conv_bool_none (x y w: bool) (h: $ eq (and x y) w $):
+        \\  $ eq (or x y) w $;
+    ;
+    const proof_src =
+        \\conv_bool_none
+        \\----
+        \\goal: $ eq (or x y) w $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "the egraph saturated") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "no chain of the enrolled") != null,
+    );
+}
+
+test "conversion? proves ring sub_self through the definitional unfold" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = ring_conversion_prelude ++
+        \\theorem conv_sub_self (x w: R) (h: $ eq zero w $):
+        \\  $ eq (sub x x) w $;
+    ;
+    const proof_src =
+        \\conv_sub_self
+        \\----
+        \\goal: $ eq (sub x x) w $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "sub_def") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "add_neg") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? pushes negation through a product under neg_congr" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // (−x)·(−y) → ¬(x·(−y)) → ¬(¬(x·y)) → x·y: the middle step rewrites
+    // underneath neg, exercising the unary congruence lift.
+    const mm0_src = ring_conversion_prelude ++
+        \\theorem conv_neg_mul_neg (x y w: R) (h: $ eq (mul x y) w $):
+        \\  $ eq (mul (neg x) (neg y)) w $;
+    ;
+    const proof_src =
+        \\conv_neg_mul_neg
+        \\----
+        \\goal: $ eq (mul (neg x) (neg y)) w $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // Either neg_mul orientation may anchor the route; both share the
+    // prefix, and the double negation must collapse under the unary lift.
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "neg_mul") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "neg_neg") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "neg_congr") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? proves difference of squares across distributivity and AC" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The deep stress: (a+b)(a−b) expands through both-direction
+    // distributivity, commutes ba into ab, cancels via add_neg after AC
+    // regrouping, and refolds into sub — many rounds, dense egraph.
+    const mm0_src = ring_conversion_prelude ++
+        \\theorem conv_diff_squares (a b w: R)
+        \\  (h: $ eq (mul (add a b) (sub a b)) w $):
+        \\  $ eq (sub (mul a a) (mul b b)) w $;
+    ;
+    const proof_src =
+        \\conv_diff_squares
+        \\----
+        \\goal: $ eq (sub (mul a a) (mul b b)) w $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}

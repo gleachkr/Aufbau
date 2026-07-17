@@ -114,10 +114,26 @@ pub fn run(
         pool_terms[idx] = try addExpr(&eg, context.env, theorem, expr);
     }
 
-    result.stats = try eg.saturate(rules.items, .{
-        .max_iterations = opts.max_iterations,
-        .max_nodes = opts.max_nodes,
-    });
+    // Saturate one iteration at a time and stop as soon as the goal shares
+    // a class with a pool entry. Absorption-style rules union a variable's
+    // class with a compound containing that same class, and such cyclic
+    // classes make AC rule sets generative up to any node cap — a found
+    // chain must not pay for that tail. Misses still saturate to fixpoint
+    // (or a cap), which the forced-negative report requires.
+    result.stats = .{ .outcome = .iteration_capped };
+    while (!poolConverged(&eg, goal_term, pool_terms)) {
+        if (result.stats.iterations >= opts.max_iterations) break;
+        const slice = try eg.saturate(rules.items, .{
+            .max_iterations = 1,
+            .max_nodes = opts.max_nodes,
+        });
+        result.stats.iterations += slice.iterations;
+        result.stats.unions_applied += slice.unions_applied;
+        if (slice.outcome != .iteration_capped) {
+            result.stats.outcome = slice.outcome;
+            break;
+        }
+    }
     result.classes = eg.classCount();
     result.nodes = eg.eNodeCount();
 
@@ -162,6 +178,19 @@ pub fn run(
 
 fn termClass(eg: *const egraph.EGraph, term: *const egraph.Term) egraph.EClassId {
     return eg.find(eg.nodes.items[term.node].class);
+}
+
+fn poolConverged(
+    eg: *const egraph.EGraph,
+    goal_term: *const egraph.Term,
+    pool_terms: []const ?*const egraph.Term,
+) bool {
+    const goal_class = termClass(eg, goal_term);
+    for (pool_terms) |maybe_term| {
+        const ref_term = maybe_term orelse continue;
+        if (eg.sameClass(termClass(eg, ref_term), goal_class)) return true;
+    }
+    return false;
 }
 
 /// Leaf encoding for variables: theorem vars on even ids, dummies on odd.

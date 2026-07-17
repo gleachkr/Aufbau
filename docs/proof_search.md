@@ -132,12 +132,18 @@ and its output is just proof text.
 What it needs from the theory: a `@relation` bundle for the goal's sort
 *with a transport rule*, `@congr` rules for the connectives the rewrites
 must pass through, and `@conversion` annotations on the rewrite theorems
-(see `docs/rewrite_system.md`). Two properties are worth knowing:
+(see `docs/rewrite_system.md`). Three properties are worth knowing:
 
 - **A saturated miss is a forced negative.** If the egraph reaches a
   fixpoint without connecting the goal to any reference, no chain of the
   enrolled rules exists at all — not "the search gave up", but "there is
   no such conversion". The failure report says which of the two happened.
+- **Found chains return as soon as the goal converges.** Saturation stops
+  the moment the goal shares a class with a reference, so a hit doesn't
+  pay for the rest of the budget. This matters in theories whose rules
+  keep generating — absorption laws like `x ∨ (x ∧ y) = x` make e-classes
+  cyclic, after which the AC rules mint new nodes up to any cap — where a
+  genuine miss uses the full iteration/node budget but a hit stays fast.
 - **v1 restrictions**: top-level proof lines only (no argument-slot
   `conversion?`), concrete goals only (no holes).
 
