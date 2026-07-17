@@ -537,6 +537,13 @@ pub const SearchCounters = struct {
     /// Set when the generation call was truncated by the per-call
     /// `GlobalBudget` (as opposed to per-phase fuel).
     gen_budget_exhausted: bool = false,
+    /// Ladder progress observability (for the user-facing failure report):
+    /// the (depth, phase) of the last generation ladder cell that STARTED.
+    /// On a truncated call this locates where the budget died; on a clean
+    /// miss the depth equals the configured `max_depth`. Phase is 1-based
+    /// (1 non-splitting .. 5 constrained MP); 0 = generation never ran.
+    gen_last_depth: usize = 0,
+    gen_last_phase: usize = 0,
     rule_index_build_ns: u64 = 0,
     ref_index_build_ns: u64 = 0,
     shape_emission_ns: u64 = 0,
@@ -1155,6 +1162,11 @@ pub const SourceSuggestions = struct {
     /// `target_span` is set (a placeholder was actually searched); the early
     /// no-placeholder returns leave the default.
     status: SearchStatus = .miss,
+    /// Human-readable elaboration of a `.miss`/`.budget_exhausted` status —
+    /// which bound truncated the search, how far it got, what to tune. Only
+    /// built when `SourceSuggestionOptions.status_detail` is set (the LSP
+    /// path); null otherwise. Owned by `allocator` when present.
+    status_detail: ?[]const u8 = null,
 
     pub fn deinit(self: *SourceSuggestions) void {
         for (self.items) |item| {
@@ -1162,6 +1174,7 @@ pub const SourceSuggestions = struct {
             self.allocator.free(item.replacement);
         }
         self.allocator.free(self.items);
+        if (self.status_detail) |detail| self.allocator.free(detail);
         self.* = undefined;
     }
 };
@@ -1284,4 +1297,10 @@ pub const SourceSuggestionOptions = struct {
     exact_result_limit: ?usize = null,
     counters: ?*SearchCounters = null,
     generate: GenerateOptions = .{},
+    /// Build a human-readable `status_detail` string for failed searches
+    /// (see `SourceSuggestions.status_detail`) and enable the per-rule
+    /// attempt tallies feeding it (`SearchCounters.collect` on the local
+    /// counters block, when the caller supplies none). Off by default so
+    /// the bench and programmatic callers pay nothing.
+    status_detail: bool = false,
 };

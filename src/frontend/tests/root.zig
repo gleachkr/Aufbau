@@ -124,6 +124,67 @@ test "proof script parser keeps bare identifiers as line refs" {
     }
 }
 
+test "proof script parser reads search parameters on placeholders" {
+    const src =
+        \\demo
+        \\----
+        \\l1: $ c $ by auto? (depth: 8, fuel: 8192)
+        \\l2: $ c $ by rule1 [auto? (t := $ k $, nodes: 400)]
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), block.lines.len);
+
+    const top = block.lines[0].application;
+    try std.testing.expectEqualStrings("auto?", top.rule_name);
+    try std.testing.expectEqual(@as(usize, 0), top.arg_bindings.len);
+    try std.testing.expectEqual(@as(usize, 2), top.search_params.len);
+    try std.testing.expectEqualStrings("depth", top.search_params[0].name);
+    try std.testing.expectEqual(@as(u64, 8), top.search_params[0].value);
+    try std.testing.expectEqualStrings("fuel", top.search_params[1].name);
+    try std.testing.expectEqual(@as(u64, 8192), top.search_params[1].value);
+    const fuel_value = top.search_params[1].value_span;
+    try std.testing.expectEqualStrings(
+        "8192",
+        src[fuel_value.start..fuel_value.end],
+    );
+
+    // Nested placeholder: params coexist with an explicit `:=` binding.
+    const nested = switch (block.lines[1].application.refs[0]) {
+        .application => |child| child,
+        else => return error.UnexpectedRefKind,
+    };
+    try std.testing.expectEqualStrings("auto?", nested.rule_name);
+    try std.testing.expectEqual(@as(usize, 1), nested.arg_bindings.len);
+    try std.testing.expectEqualStrings("t", nested.arg_bindings[0].name);
+    try std.testing.expectEqual(@as(usize, 1), nested.search_params.len);
+    try std.testing.expectEqualStrings("nodes", nested.search_params[0].name);
+    try std.testing.expectEqual(@as(u64, 400), nested.search_params[0].value);
+}
+
+test "proof script parser rejects the parameter form on real rules" {
+    // Only search placeholders accept `name: INTEGER`; a real rule keeps the
+    // strict `name := $ math $` grammar.
+    const src =
+        \\demo
+        \\----
+        \\l1: $ c $ by rule1 (a: 4)
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    try std.testing.expectError(
+        error.UnexpectedCharacter,
+        parser.nextBlock(),
+    );
+}
+
 test "proof script parser reads zero-ref inline applications" {
     const src =
         \\demo

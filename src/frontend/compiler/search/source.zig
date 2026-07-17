@@ -1,5 +1,6 @@
 const std = @import("std");
 const types = @import("./types.zig");
+const tunables = @import("./tunables.zig");
 const timer = @import("./timer.zig");
 const apply_mod = @import("./apply.zig");
 const backtrack = @import("./backward/backtrack.zig");
@@ -76,7 +77,13 @@ pub fn suggestionsAtSourceOffset(
     // depends on the counters (they are observe-only), so this is free.
     var local_counters = types.SearchCounters{};
     var options = caller_options;
-    if (options.counters == null) options.counters = &local_counters;
+    if (options.counters == null) {
+        // The per-rule attempt tallies feed the failure report's
+        // "most-tried rules" line; they are only recorded under `collect`,
+        // which stays off unless the caller asked for the detail string.
+        local_counters.collect = options.status_detail;
+        options.counters = &local_counters;
+    }
 
     const setup_start = if (options.counters != null)
         timer.nanoTimestamp()
@@ -248,6 +255,17 @@ pub fn suggestionsAtSourceOffset(
     // top of the direct results below.
     const is_exact_like = is_exact or is_auto;
 
+    // Per-call tunables (`auto? (depth: 8)`): overlay the placeholder's valid
+    // parameters onto this one call's generation options. Invalid entries are
+    // skipped here — the LSP's placeholder diagnostics report them — so a
+    // typo never silently changes or blocks the search.
+    if (is_auto) {
+        tunables.applySearchParams(
+            &options.generate,
+            target_application.search_params,
+        );
+    }
+
     if (inline_expectation) |expected| {
         if (expected.has_placeholder and !is_exact_like) {
             if (options.counters) |counters| {
@@ -321,6 +339,16 @@ pub fn suggestionsAtSourceOffset(
             suggestions.items.len,
             options.counters.?,
         );
+        if (options.status_detail and suggestions.status != .found) {
+            suggestions.status_detail = try buildStatusDetail(
+                work,
+                target_application.rule_name,
+                is_auto,
+                suggestions.status,
+                options.counters.?,
+                options.generate,
+            );
+        }
         // `suggestions` lives on the work arena; hand the caller an owned copy.
         return try copyOutSuggestions(allocator, suggestions);
     }
@@ -354,6 +382,19 @@ pub fn suggestionsAtSourceOffset(
         apply_suggestions.items.len,
         options.counters.?,
     );
+    if (options.status_detail and apply_suggestions.status != .found) {
+        apply_suggestions.status_detail = try buildStatusDetail(
+            work,
+            if (options.apply_at_offset)
+                target_application.rule_name
+            else
+                "apply?",
+            false,
+            apply_suggestions.status,
+            options.counters.?,
+            options.generate,
+        );
+    }
     // `apply_suggestions` lives on the work arena; hand the caller an owned copy.
     return try copyOutSuggestions(allocator, apply_suggestions);
 }
@@ -373,6 +414,194 @@ fn searchStatus(
         return .budget_exhausted;
     }
     return .miss;
+}
+
+const ladder_phase_names = [_][]const u8{
+    "non-splitting generation",
+    "context splitting",
+    "witness invention",
+    "principal retention",
+    "constrained modus ponens",
+};
+
+/// Elaborate a failed search into the user-facing detail string: which bound
+/// truncated it (per-call work budget vs. per-phase fuel vs. forward
+/// saturation), how far the generation ladder got, how many candidates were
+/// validated vs. accepted, and — since every number is actionable — the
+/// concrete per-call parameter to try next (`auto? (depth: 8)`). Built on the
+/// caller's allocator (the per-call work arena; `copyOutSuggestions` deep-
+/// copies it out). Purely observational: reads the same counters the search
+/// already fills, never influences it.
+fn buildStatusDetail(
+    allocator: std.mem.Allocator,
+    keyword: []const u8,
+    is_auto: bool,
+    status: types.SearchStatus,
+    counters: *const types.SearchCounters,
+    gen: types.GenerateOptions,
+) !?[]const u8 {
+    var buf = std.ArrayListUnmanaged(u8){};
+    errdefer buf.deinit(allocator);
+    const w = buf.writer(allocator);
+
+    const validated = counters.full_try_candidate_calls;
+    const accepted = counters.accepted_candidates;
+    const rejected = counters.rejected_candidates_after_validation;
+    // The ladder records the cell it is in as each pass starts, so a nonzero
+    // phase means recursive generation actually ran (an `exact?`, an open
+    // inline slot, or a disabled generation permit leaves it 0).
+    const generation_ran = is_auto and counters.gen_last_phase != 0;
+
+    switch (status) {
+        .found => return null,
+        .miss => {
+            if (generation_ran) {
+                try w.print(
+                    "no proof found within depth {d}. The search space was " ++
+                        "exhausted ({d} applications validated: {d} " ++
+                        "accepted, {d} rejected), so only a deeper proof " ++
+                        "can exist — try '{s} (depth: {d})'.",
+                    .{
+                        gen.max_depth,
+                        validated,
+                        accepted,
+                        rejected,
+                        keyword,
+                        @min(gen.max_depth + 2, tunables.max_depth_value),
+                    },
+                );
+            } else {
+                try w.print(
+                    "no rule application closes this goal from existing " ++
+                        "references ({d} candidate rules considered " ++
+                        "against a pool of {d} references).",
+                    .{
+                        counters.candidate_rules_before_conclusion_validation,
+                        counters.ref_pool_size,
+                    },
+                );
+                if (std.mem.eql(u8, keyword, "exact?")) {
+                    try w.writeAll(
+                        " auto? can additionally synthesize sub-proofs.",
+                    );
+                }
+            }
+        },
+        .budget_exhausted => {
+            if (counters.gen_budget_exhausted) {
+                // Whole-call weighted-tick cap: report consumption in the
+                // `budget` parameter's unit (billions of ticks ≈ seconds of
+                // calibrated work) and suggest roughly doubling it.
+                const limit = gen.global_budget orelse 0;
+                const limit_units = std.math.divCeil(
+                    u64,
+                    limit,
+                    tunables.ticks_per_budget_unit,
+                ) catch unreachable;
+                try w.print(
+                    "stopped by the per-call work budget (~{d}s of work) " ++
+                        "during {s} at depth {d} of {d}; {d} applications " ++
+                        "validated ({d} accepted). A proof may still " ++
+                        "exist — try '{s} (budget: {d})', or 'budget: 0' " ++
+                        "for no cap.",
+                    .{
+                        limit_units,
+                        ladderPhaseName(counters.gen_last_phase),
+                        counters.gen_last_depth,
+                        gen.max_depth,
+                        validated,
+                        accepted,
+                        keyword,
+                        std.math.clamp(
+                            limit_units * 2,
+                            1,
+                            tunables.max_budget_value,
+                        ),
+                    },
+                );
+            } else if (counters.recursive_budget_exhausted) {
+                try w.print(
+                    "a search phase ran out of fuel ({d} candidate " ++
+                        "validations per phase) during {s} at depth {d} " ++
+                        "of {d}. A proof may still exist — try " ++
+                        "'{s} (fuel: {d})'.",
+                    .{
+                        gen.fuel,
+                        ladderPhaseName(counters.gen_last_phase),
+                        counters.gen_last_depth,
+                        gen.max_depth,
+                        keyword,
+                        @min(gen.fuel * 2, tunables.max_fuel_value),
+                    },
+                );
+            } else {
+                try w.writeAll(
+                    "forward saturation stopped at its bounds before " ++
+                        "reaching a fixpoint, so the derived-fact pool is " ++
+                        "incomplete and a proof may still exist.",
+                );
+            }
+        },
+    }
+
+    // Where the work went: the most-tried rules with their accept counts
+    // (attempts ≠ accepts — a rule tried 500 times with 0 accepted is a
+    // reject-flood, the usual budget sink). Only recorded under `collect`.
+    try appendTopRuleAttempts(w, counters);
+
+    return try buf.toOwnedSlice(allocator);
+}
+
+fn ladderPhaseName(phase_1based: usize) []const u8 {
+    if (phase_1based == 0 or phase_1based > ladder_phase_names.len) {
+        return "generation";
+    }
+    return ladder_phase_names[phase_1based - 1];
+}
+
+/// Append a "Most-tried rules: ..." sentence listing the top 3 rules by
+/// validation attempts. Silent when the per-rule tallies were not collected
+/// or nothing was attempted.
+fn appendTopRuleAttempts(
+    w: anytype,
+    counters: *const types.SearchCounters,
+) !void {
+    const len = counters.rule_attempt_diagnostics_len;
+    if (len == 0) return;
+    const tallies = counters.rule_attempt_diagnostics[0..len];
+
+    // Insertion-select the top 3 indices by attempts.
+    var top: [3]usize = undefined;
+    var top_len: usize = 0;
+    for (0..len) |idx| {
+        var insert = idx;
+        for (top[0..top_len]) |*held| {
+            if (tallies[insert].attempts > tallies[held.*].attempts) {
+                std.mem.swap(usize, &insert, held);
+            }
+        }
+        if (top_len < top.len) {
+            top[top_len] = insert;
+            top_len += 1;
+        }
+    }
+
+    var wrote_header = false;
+    for (top[0..top_len]) |idx| {
+        const tally = tallies[idx];
+        if (tally.attempts == 0) continue;
+        if (!wrote_header) {
+            try w.writeAll(" Most-tried rules: ");
+            wrote_header = true;
+        } else {
+            try w.writeAll(", ");
+        }
+        try w.print(
+            "{s} ({d} tried, {d} accepted)",
+            .{ tally.rule_name.slice(), tally.attempts, tally.accepted },
+        );
+    }
+    if (wrote_header) try w.writeAll(".");
 }
 
 const InlineExpectedRef = struct {
@@ -406,6 +635,16 @@ pub const SearchPlaceholder = struct {
                 .auto => "auto?",
             };
         }
+
+        /// The parameter set this placeholder accepts (per-keyword
+        /// validation in `tunables.validateSearchParams`).
+        pub fn paramContext(self: Kind) tunables.ParamContext {
+            return switch (self) {
+                .exact => .exact,
+                .apply => .apply,
+                .auto => .auto,
+            };
+        }
     };
 
     kind: Kind,
@@ -414,6 +653,11 @@ pub const SearchPlaceholder = struct {
     /// a search at this placeholder reports (the whole line for a top-level
     /// placeholder, this same span for a nested one).
     span: Span,
+    /// The placeholder's `name: INTEGER` parameters, verbatim from the parse
+    /// (name strings are slices of the proof source, not the parse arena).
+    /// The LSP validates these per placeholder (`tunables.validateSearchParams`)
+    /// to diagnose typos without running a search.
+    params: []const ProofScript.SearchParam = &.{},
 };
 
 /// Enumerate every search placeholder (`exact?`/`apply?`/`auto?`) in
@@ -421,7 +665,8 @@ pub const SearchPlaceholder = struct {
 /// publish a status diagnostic per placeholder. A parse error ends the scan
 /// early (the compiler's own diagnostics already cover malformed source);
 /// whatever was collected before it is returned. The result is allocated on
-/// `allocator`; parser transients are torn down before returning.
+/// `allocator` (including each placeholder's non-empty `params` array);
+/// parser transients are torn down before returning.
 pub fn searchPlaceholders(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
@@ -455,7 +700,23 @@ fn collectSearchPlaceholders(
                 .apply
             else
                 .auto;
-        try out.append(allocator, .{ .kind = kind, .span = application.span });
+        // The param structs hold only source slices and values, but the
+        // ARRAY lives on the parse arena — copy it onto the caller's
+        // allocator alongside the placeholder itself (empty stays a literal
+        // so param-free placeholders allocate nothing extra).
+        const params: []const ProofScript.SearchParam =
+            if (application.search_params.len == 0)
+                &.{}
+            else
+                try allocator.dupe(
+                    ProofScript.SearchParam,
+                    application.search_params,
+                );
+        try out.append(allocator, .{
+            .kind = kind,
+            .span = application.span,
+            .params = params,
+        });
     }
     for (application.refs) |ref| switch (ref) {
         .application => |child| try collectSearchPlaceholders(
@@ -1388,11 +1649,16 @@ fn copyOutSuggestions(
         };
         filled = idx + 1;
     }
+    const status_detail: ?[]const u8 = if (src.status_detail) |detail|
+        try allocator.dupe(u8, detail)
+    else
+        null;
     return .{
         .allocator = allocator,
         .items = items,
         .target_span = src.target_span,
         .status = src.status,
+        .status_detail = status_detail,
     };
 }
 

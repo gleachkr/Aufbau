@@ -26,6 +26,7 @@ pub const SourceSuggestionOptions = types.SourceSuggestionOptions;
 pub const SearchStatus = types.SearchStatus;
 pub const SearchPlaceholder = @import("./source.zig").SearchPlaceholder;
 pub const searchPlaceholders = @import("./source.zig").searchPlaceholders;
+pub const tunables = @import("./tunables.zig");
 pub const Span = types.Span;
 pub const SearchSession = @import("./session.zig").SearchSession;
 

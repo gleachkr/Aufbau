@@ -12,6 +12,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   hidden application, with each new line's assertion filled in from the
   checked conclusion. Offered only when the document checks cleanly and the
   rewritten document does too.
+- `auto?` failure reports: a failed search's placeholder diagnostic now
+  explains how it failed — a definitive exhaustion of the space up to the
+  depth limit vs. a truncation by the work budget or per-phase fuel (with
+  the ladder phase and depth it died in), how many candidates were
+  validated vs. accepted, the most-tried rules with their accept counts,
+  and the concrete parameter to try next.
+- Per-call `auto?` tuning parameters: `auto? (depth: 8, nodes: 512,
+  fuel: 8192, budget: 13)` widens one search without moving the engine
+  defaults (`budget` is in units of ≈1s of calibrated work; `0` uncaps).
+  Invalid names/values get their own error diagnostics and are ignored.
+  See `docs/proof_search.md`.
 
 ## [0.0.1] - 2026-07-16
 

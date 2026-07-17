@@ -145,12 +145,99 @@ The search runs in your editor through the language server. The loop is:
 
 If the search finds nothing, the line reports that it has no suggestion
 rather than silently doing nothing — so a failed search is
-distinguishable from one still in progress.
+distinguishable from one still in progress. The failure diagnostic also
+explains *how* the search failed and what to do about it — see the next
+two sections.
 
 > The web demo hosts the language server in a background worker, so even a
 > slow `auto?` search never freezes the editor. A search in flight can't
 > be interrupted mid-flight, but the page stays responsive and the search
 > stops itself when it hits its budget.
+
+## Reading a failure report
+
+A failed `auto?` is not one thing. The placeholder diagnostic
+distinguishes the cases, because they call for different responses:
+
+- **"no proof found within depth N. The search space was exhausted
+  (… validated: … accepted, … rejected) …"** — the search ran every
+  candidate it had, to completion, up to its depth limit. Within that
+  depth the answer is definitive: no proof exists over the current rules
+  and references. Only two things can change it: search *deeper*
+  (`auto? (depth: 8)` — see the next section), or make the space richer
+  (prove an intermediate lemma line for the pool, or enroll rules with
+  `@auto` annotations).
+- **"stopped by the per-call work budget (~Ns of work) during
+  `<phase>` at depth D of N …"** — the bounded work budget ran out
+  before the search completed, so the empty result is *inconclusive*: a
+  proof may exist just past where it stopped. The report names the
+  ladder phase and depth the budget died in. Raise the budget for this
+  one call (`auto? (budget: 13)`, roughly seconds of work; `budget: 0`
+  removes the cap) — or reduce the space with better annotations.
+- **"a search phase ran out of fuel (N candidate validations per
+  phase) …"** — same inconclusiveness, but the bound that tripped was
+  the per-phase validation budget rather than the global one; raise it
+  per call with `auto? (fuel: 8192)`.
+- **"forward saturation stopped at its bounds …"** — the theory's
+  `@auto forward` rules derived facts up to a bound without reaching a
+  fixpoint, so the derived-fact pool itself is incomplete.
+
+Failure reports end with a **"Most-tried rules"** list — each entry
+shows how many times a rule was *tried* against how many attempts were
+*accepted*. A rule tried hundreds of times with zero accepts is a
+reject-flood: the search is burning its budget disproving that rule over
+and over. That is your cue to look at the rule's annotations (should it
+really be enrolled backward?) or at the goal shape that keeps attracting
+it.
+
+`exact?` and `apply?` misses are simpler — they are single-shot, so a
+miss just reports how many candidate rules and pool references were
+considered, and reminds you that `auto?` can additionally synthesize
+sub-proofs.
+
+## Tuning a single search (per-call parameters)
+
+`auto?` accepts per-call parameters in its parenthesized argument list,
+written `name: INTEGER` (alongside any ordinary `name := $ … $`
+bindings):
+
+```text
+l1: $ hard goal $ by auto? (depth: 8, budget: 13)
+```
+
+| parameter | default | meaning |
+|---|---|---|
+| `depth` | 6 | iterative-deepening limit: the maximum nesting of generated (synthesized) proof steps |
+| `nodes` | 256 | distinct sub-goal solves per depth pass |
+| `fuel` | 4096 | candidate validations per retry phase |
+| `budget` | ≈6 | whole-call work cap, in units of ≈1 second of calibrated work; `0` disables the cap |
+
+The parameters scope to **that one placeholder** — the engine defaults
+never move. This is deliberate: the defaults are tuned so that the
+common case (goals the search can crack) stays fast *and* the miss case
+(goals it can't) fails quickly; raising them globally makes every doomed
+search on every line pay the higher ceiling. A hard goal you are
+actively working on is exactly the place to spend more, so you raise
+the ceiling there and nowhere else.
+
+Rules of thumb:
+
+- Raise **`depth`** when the report says the space was *exhausted* — the
+  proof, if any, is deeper than the ladder looked. Depth is the
+  exponential knob; go up in small steps and expect the miss case to get
+  slower.
+- Raise **`budget`** (or `fuel`, if that is the bound the report named)
+  when the report says the search was *truncated* — it never finished
+  looking at the depth it was already exploring.
+- `nodes` rarely needs touching; the report will steer you to the other
+  three first.
+
+A typo'd parameter name or an out-of-range value gets its own error
+diagnostic immediately (no search needed), and is otherwise ignored —
+it never silently changes what the search does. Parameters are
+meaningful only on `auto?`; `exact?` and `apply?` are single-shot
+searches with nothing to tune, and reject them with the same
+diagnostic.
 
 ## The `@auto` rule annotations
 

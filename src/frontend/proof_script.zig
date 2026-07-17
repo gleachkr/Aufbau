@@ -17,6 +17,19 @@ pub const ArgBinding = struct {
     span: Span,
 };
 
+/// One `name: INTEGER` entry in a search placeholder's argument list
+/// (`auto? (depth: 8, fuel: 8192)`). Purely syntactic here: which names are
+/// meaningful, and what their values mean, is the search layer's business
+/// (`search/tunables.zig`). Only placeholder applications accept this form;
+/// real rule applications keep the strict `name := $ math $` grammar.
+pub const SearchParam = struct {
+    name: []const u8,
+    name_span: Span,
+    value: u64,
+    value_span: Span,
+    span: Span,
+};
+
 pub const HypRef = struct {
     index: usize,
     span: Span,
@@ -32,6 +45,9 @@ pub const RuleApplication = struct {
     rule_span: Span,
     binding_list_span: ?Span = null,
     arg_bindings: []const ArgBinding = &.{},
+    /// Search-tunable parameters (`auto? (depth: 8)`); always empty on
+    /// non-placeholder applications.
+    search_params: []const SearchParam = &.{},
     refs_span: ?Span = null,
     refs: []const Ref = &.{},
     span: Span,
@@ -440,9 +456,16 @@ pub const Parser = struct {
         };
 
         var arg_bindings: []const ArgBinding = &.{};
+        var search_params: []const SearchParam = &.{};
         var binding_list_span: ?Span = null;
         if (self.consumeOptionalProofDelimiter('(')) |binding_start| {
-            arg_bindings = try self.parseArgBindings();
+            if (isSearchPlaceholderRuleName(rule_name)) {
+                const parsed = try self.parsePlaceholderBindings();
+                arg_bindings = parsed.bindings;
+                search_params = parsed.params;
+            } else {
+                arg_bindings = try self.parseArgBindings();
+            }
             try self.expectProof(')');
             binding_list_span = .{
                 .start = binding_start,
@@ -465,6 +488,7 @@ pub const Parser = struct {
             .rule_span = rule_span,
             .binding_list_span = binding_list_span,
             .arg_bindings = arg_bindings,
+            .search_params = search_params,
             .refs_span = refs_span,
             .refs = refs,
             .span = .{
@@ -511,6 +535,75 @@ pub const Parser = struct {
             self.skipProofWhitespace();
         }
         return try bindings.toOwnedSlice(self.allocator);
+    }
+
+    const PlaceholderBindings = struct {
+        bindings: []const ArgBinding,
+        params: []const SearchParam,
+    };
+
+    /// The argument list of a search placeholder (`auto? (...)`): each entry
+    /// is either an ordinary `name := $ math $` binding or a `name: INTEGER`
+    /// search parameter. Real rule applications never come through here, so
+    /// their strict `:=` grammar (and its error spans) is untouched.
+    fn parsePlaceholderBindings(self: *Parser) !PlaceholderBindings {
+        var bindings = std.ArrayListUnmanaged(ArgBinding){};
+        var params = std.ArrayListUnmanaged(SearchParam){};
+        self.skipProofWhitespace();
+        if (self.peek() == ')') {
+            return .{
+                .bindings = try bindings.toOwnedSlice(self.allocator),
+                .params = try params.toOwnedSlice(self.allocator),
+            };
+        }
+        while (true) {
+            const start = self.pos;
+            const name = try self.parseIdentifier();
+            const name_span = Span{
+                .start = start,
+                .end = start + name.len,
+            };
+            self.skipHorizontalSpace();
+            try self.expect(':');
+            if (self.peek() == '=') {
+                self.pos += 1;
+                const formula = try self.parseMathString();
+                try bindings.append(self.allocator, .{
+                    .name = name,
+                    .name_span = name_span,
+                    .formula = formula,
+                    .span = .{
+                        .start = start,
+                        .end = formula.span.end,
+                    },
+                });
+            } else {
+                self.skipHorizontalSpace();
+                const value_start = self.pos;
+                const value = try self.parseNumber();
+                try params.append(self.allocator, .{
+                    .name = name,
+                    .name_span = name_span,
+                    .value = value,
+                    .value_span = .{
+                        .start = value_start,
+                        .end = self.pos,
+                    },
+                    .span = .{
+                        .start = start,
+                        .end = self.pos,
+                    },
+                });
+            }
+            self.skipProofWhitespace();
+            if (self.peek() != ',') break;
+            self.pos += 1;
+            self.skipProofWhitespace();
+        }
+        return .{
+            .bindings = try bindings.toOwnedSlice(self.allocator),
+            .params = try params.toOwnedSlice(self.allocator),
+        };
     }
 
     fn parseRefs(self: *Parser) ![]const Ref {

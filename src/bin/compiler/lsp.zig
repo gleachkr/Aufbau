@@ -808,8 +808,14 @@ pub const Handler = struct {
             // also lets `exact?` short-circuit recursive generation once it has a
             // proof. `apply?` keeps the full `max_results` (it lists candidate
             // rules). Grant the generation permit; the keyword under the cursor
-            // decides whether recursive generation actually runs.
-            .{ .exact_result_limit = 1, .generate = .{ .enabled = true } },
+            // decides whether recursive generation actually runs. `status_detail`
+            // asks for the human-readable failure elaboration the placeholder
+            // diagnostics surface.
+            .{
+                .exact_result_limit = 1,
+                .generate = .{ .enabled = true },
+                .status_detail = true,
+            },
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
             else => return null,
@@ -840,7 +846,10 @@ pub const Handler = struct {
             store_key,
             target_span,
             suggestions.status,
-            if (suggestions.items.len > 0) suggestions.items[0].replacement else "",
+            if (suggestions.items.len > 0)
+                suggestions.items[0].replacement
+            else
+                suggestions.status_detail orelse "",
         );
         try self.analyzeUri(arena, store_key.proof.uri);
         return stored;
@@ -1401,11 +1410,8 @@ pub const Handler = struct {
             if (entry.key.eql(current_key)) outcomes = entry.statuses.items;
         }
 
-        const diagnostics = try arena.alloc(
-            types.Diagnostic,
-            placeholders.len,
-        );
-        for (placeholders, diagnostics) |placeholder, *diagnostic| {
+        var diagnostics = std.ArrayListUnmanaged(types.Diagnostic){};
+        for (placeholders) |placeholder| {
             const keyword = placeholder.kind.keyword();
             var severity: types.DiagnosticSeverity = .Warning;
             var message: []const u8 = try std.fmt.allocPrint(
@@ -1424,26 +1430,33 @@ pub const Handler = struct {
                             .{ keyword, outcome.detail },
                         );
                     },
-                    .miss => {
+                    .miss, .budget_exhausted => {
                         severity = .Error;
+                        // The recorded detail elaborates the failure (which
+                        // bound truncated the search, how far it got, what
+                        // to tune); fall back to the generic wording for
+                        // outcomes recorded without one.
+                        const fallback: []const u8 =
+                            if (outcome.status == .miss)
+                                "no proof found"
+                            else
+                                "budget exhausted before the search " ++
+                                    "completed (a proof may still exist)";
                         message = try std.fmt.allocPrint(
                             arena,
-                            "{s} search failed: no proof found",
-                            .{keyword},
-                        );
-                    },
-                    .budget_exhausted => {
-                        severity = .Error;
-                        message = try std.fmt.allocPrint(
-                            arena,
-                            "{s} search failed: budget exhausted before " ++
-                                "the search completed (a proof may still exist)",
-                            .{keyword},
+                            "{s} search failed: {s}",
+                            .{
+                                keyword,
+                                if (outcome.detail.len > 0)
+                                    outcome.detail
+                                else
+                                    fallback,
+                            },
                         );
                     },
                 }
             }
-            diagnostic.* = .{
+            try diagnostics.append(arena, .{
                 .range = lsp.offsets.locToRange(
                     proof_text,
                     .{
@@ -1455,9 +1468,35 @@ pub const Handler = struct {
                 .severity = severity,
                 .source = LSP_SERVER_NAME,
                 .message = message,
-            };
+            });
+            // Per-parameter validation (typo'd names, out-of-range values,
+            // parameters on a non-auto? placeholder): one error diagnostic
+            // per rejected entry, underlining the offending token. These
+            // never block the search — invalid entries are simply not
+            // applied — so the author sees the problem while the valid
+            // parameters still work.
+            const issues = try Search.tunables.validateSearchParams(
+                arena,
+                placeholder.kind.paramContext(),
+                placeholder.params,
+            );
+            for (issues) |issue| {
+                try diagnostics.append(arena, .{
+                    .range = lsp.offsets.locToRange(
+                        proof_text,
+                        .{
+                            .start = issue.span.start,
+                            .end = issue.span.end,
+                        },
+                        self.offset_encoding,
+                    ),
+                    .severity = .Error,
+                    .source = LSP_SERVER_NAME,
+                    .message = issue.message,
+                });
+            }
         }
-        return diagnostics;
+        return try diagnostics.toOwnedSlice(arena);
     }
 
     fn loadTextPreferOpenDocument(

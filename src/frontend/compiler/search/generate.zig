@@ -792,6 +792,12 @@ fn runDepthPass(
     applications: *std.ArrayListUnmanaged(RuleApplication),
 ) anyerror!bool {
     driver.nodes = 0;
+    // Ladder-progress observability for the failure report: which (depth,
+    // phase) cell was running when the search ended (phase 1-based).
+    if (driver.counters) |c| {
+        c.gen_last_depth = depth_limit;
+        c.gen_last_phase = driver.phase_index + 1;
+    }
     driver.visited.clearRetainingCapacity();
     var open_keys = driver.visited_open.keyIterator();
     while (open_keys.next()) |key| driver.scratch.free(key.*);

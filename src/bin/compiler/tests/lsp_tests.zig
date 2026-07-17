@@ -873,10 +873,67 @@ test "LSP placeholder status diagnostics report a search miss as error" {
         arena,
         try codeActionParamsAt(proof_uri, miss_proof_text, "exact?"),
     );
-    try std.testing.expect(
-        transport_state.containsMessage("exact? search failed: no proof found"),
-    );
+    try std.testing.expect(transport_state.containsMessage(
+        "exact? search failed: no rule application closes this goal",
+    ));
+    // The failure detail elaborates the coverage and points at auto?.
+    try std.testing.expect(transport_state.containsMessage(
+        "auto? can additionally synthesize sub-proofs",
+    ));
     try std.testing.expect(transport_state.containsMessage("\"severity\":1"));
+}
+
+test "LSP placeholder diagnostics report invalid search parameters" {
+    const mm0_uri = "file:///tmp/lsp-status-params.mm0";
+    const proof_uri = "file:///tmp/lsp-status-params.auf";
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem main: $ top $;
+    ;
+    // One typo'd name and one out-of-range value: each gets its own error
+    // diagnostic straight from the analyze pass, no search required.
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by auto? (depht: 8, depth: 0)
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = mm0_uri,
+            .languageId = "mm0",
+            .version = 1,
+            .text = mm0_text,
+        },
+    });
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "auf",
+            .version = 1,
+            .text = proof_text,
+        },
+    });
+
+    try std.testing.expect(transport_state.containsMessage(
+        "unknown auto? parameter 'depht'",
+    ));
+    try std.testing.expect(transport_state.containsMessage(
+        "'depth' must be between 1 and 64",
+    ));
 }
 
 test "LSP code action replaces apply placeholder with plain refs" {
