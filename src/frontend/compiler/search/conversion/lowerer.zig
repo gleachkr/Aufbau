@@ -379,6 +379,21 @@ pub const Lowerer = struct {
                     )) orelse return null;
                 }
             },
+            // A splice re-tree: both endpoints carry the same member
+            // multiset, so the whole step is one AC seam alignment.
+            .ac_flatten => {
+                const before_expr = (try self.termToExpr(
+                    step.before,
+                )) orelse return null;
+                const after_expr = (try self.termToExpr(
+                    step.after,
+                )) orelse return null;
+                label = (try self.alignEmit(
+                    before_expr,
+                    after_expr,
+                    redex_relation.sort_name,
+                )) orelse return null;
+            },
         }
 
         // Congruence lifting, innermost level first.

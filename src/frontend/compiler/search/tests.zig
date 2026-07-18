@@ -7588,13 +7588,6 @@ test "conversion? pushes negation through a product under neg_congr" {
 }
 
 test "conversion? proves difference of squares across distributivity and AC" {
-    // KNOWN BROKEN since the ring prelude migrated to AC role tokens
-    // (task #136): on the bag path this search generates match volume in
-    // the tens of gigabytes per iteration (budget-bounded solutions x
-    // thousands of bag-node/rule pairs) and misses as budget_exhausted
-    // when it survives at all. The failure predates the review fix batch
-    // and was masked because the AC-4 suite's output was truncated.
-    if (true) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // The deep stress: (a+b)(a−b) expands through both-direction

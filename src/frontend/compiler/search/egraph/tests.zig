@@ -574,7 +574,7 @@ test "dep gate admits via a ground union and extraction cites the avoiding repre
             // The restricted binding extracts under the avoid-mask.
             try testing.expect(termEql(&eg, step.bindings[1].?.term, c));
         },
-        .pool_equation => {},
+        .pool_equation, .ac_flatten => {},
     };
     try testing.expect(saw_rule);
 }
@@ -1201,12 +1201,12 @@ test "pool-equation bag terms survive a member re-sort (regression)" {
     try testing.expect(steps.len != 0);
 }
 
-test "pool-equation bag terms after a splice miss cleanly (v1 cut)" {
+test "pool-equation bag terms explain through a splice twin" {
     // When a seeded equation side's member class later denotes a
-    // same-head bag, the stored node splices to MORE members than the
-    // written formula has children. No written-pinned re-pairing exists,
-    // so the explanation cleanly fails (the driver reports the converged
-    // goal as convertible-but-unlowered, never as a forced negative).
+    // same-head bag, the stored node keeps its written member count (the
+    // flat view is a twin node behind a `.splice` edge), so the citation
+    // re-pairs cleanly and the chain crosses the twin via an
+    // `.ac_flatten` regroup step plus the member's own equation.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     var eg = EGraph.init(arena_state.allocator());
@@ -1242,6 +1242,24 @@ test "pool-equation bag terms after a splice miss cleanly (v1 cut)" {
         termClassOf(&eg, goal),
         termClassOf(&eg, c2),
     ));
-    // The h1 citation cannot re-pair 2 written children onto 3 members.
-    try testing.expect((try eg.explain(&.{}, goal, c2, .{})) == null);
+    const steps = (try eg.explain(&.{}, goal, c2, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try expectValidChain(&eg, goal, c2, steps);
+    // The chain must regroup {a, b, y} into {(a + b), y} before citing
+    // the equations; both citations appear.
+    var saw_flatten = false;
+    var saw_h1 = false;
+    var saw_h2 = false;
+    for (steps) |step| switch (step.source) {
+        .ac_flatten => saw_flatten = true,
+        .pool_equation => |pool_idx| {
+            if (pool_idx == 0) saw_h1 = true;
+            if (pool_idx == 1) saw_h2 = true;
+        },
+        .rule => {},
+    };
+    try testing.expect(saw_flatten);
+    try testing.expect(saw_h1);
+    try testing.expect(saw_h2);
 }

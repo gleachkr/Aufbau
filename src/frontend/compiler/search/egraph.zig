@@ -130,13 +130,71 @@ pub const Justification = union(enum) {
         lhs: *const Term,
         rhs: *const Term,
     },
+    /// A rebuild splice: `to` is the flattened twin minted for `from` when
+    /// a member class acquired a same-head bag. Stored nodes keep their
+    /// member multiset for life (explanation edges reference them by
+    /// shape), so the spliced canonical form becomes a separate node
+    /// linked by this edge. The two sides denote the same member multiset
+    /// once each expanded member is rewritten to its same-head bag; the
+    /// residual difference is a pure AC re-tree.
+    splice: SpliceJust,
 };
+
+pub const SpliceJust = struct {
+    from: ENodeId,
+    to: ENodeId,
+    /// Snapshot of `from`'s member list at mint time, parallel to
+    /// `expansion` (member lists re-sort in place as unions land, so
+    /// explain-time pairing goes through this snapshot by class).
+    members: []const EClassId,
+    /// Per snapshot member: null = kept atomic in `to`, else the
+    /// expansion tree it contributed.
+    expansion: []const ?*const SpliceExpansion,
+};
+
+/// One level of a member-class expansion recorded when a splice twin is
+/// minted: the same-head bag node the class expanded through, a snapshot
+/// of that node's member list, and per-member deeper expansions. Mirrors
+/// the `spliceInto` recursion that produced the twin's flat member list.
+pub const SpliceExpansion = struct {
+    node: ENodeId,
+    members: []const EClassId,
+    entries: []const ?*const SpliceExpansion,
+};
+
+/// Does `binder_idx` occur in `pattern` at a position that does NOT splice
+/// into an enclosing `term_id` bag? Positions on the same-head binary spine
+/// (starting `spliceable`) flatten away under bag interning; any other
+/// position is structural.
+fn binderOccursStructurally(
+    pattern: TemplateExpr,
+    term_id: u32,
+    binder_idx: u32,
+    spliceable: bool,
+) bool {
+    switch (pattern) {
+        .binder => |b| return b == binder_idx and !spliceable,
+        .app => |app| {
+            const same_head = app.term_id == term_id and app.args.len == 2;
+            for (app.args) |arg| {
+                if (binderOccursStructurally(
+                    arg,
+                    term_id,
+                    binder_idx,
+                    spliceable and same_head,
+                )) return true;
+            }
+            return false;
+        },
+    }
+}
 
 fn justEndpoints(just: Justification) struct { a: ENodeId, b: ENodeId } {
     return switch (just) {
         .rule => |rule| .{ .a = rule.from_node, .b = rule.to_node },
         .congruence => |congr| .{ .a = congr.left, .b = congr.right },
         .pool_equation => |eq| .{ .a = eq.lhs.node, .b = eq.rhs.node },
+        .splice => |sp| .{ .a = sp.from, .b = sp.to },
     };
 }
 
@@ -181,6 +239,13 @@ pub const SaturateOptions = struct {
     /// Assignment-enumeration budget per top-level bag match (a rule
     /// against one bag node). Trips count in `ac_match_capped`.
     ac_match_budget: usize = 10_000,
+    /// Retained-match budget per iteration, bag-mode only (no effect on
+    /// tree egraphs). Charged AFTER dedup, so matches whose effect was
+    /// already applied in an earlier iteration are free — each iteration's
+    /// budget goes entirely to new unions and the search ratchets forward
+    /// through a dense frontier instead of flooding one iteration. Trips
+    /// count in `ac_match_capped` (they weaken a forced negative).
+    ac_iter_match_budget: usize = 2_048,
 };
 
 const StoredNode = struct {
@@ -265,8 +330,11 @@ pub const EGraph = struct {
     parents: std.ArrayListUnmanaged(EClassId) = .{},
     /// Append-only node store; `ENodeId` indexes stay stable across
     /// rebuilds (justifications reference them). Node contents are
-    /// re-canonicalized in place — safe because bound children are rigid
-    /// and class children only move within their class.
+    /// find-updated in place — safe because bound children are rigid and
+    /// class children only move within their class. A bag's member
+    /// MULTISET never changes after insert: explanation edges render
+    /// against the shapes recorded at union time, so a pending splice
+    /// mints a twin node (`.splice` edge) instead of rewriting history.
     nodes: std.ArrayListUnmanaged(StoredNode) = .{},
     /// Canonical node -> first node id with that shape. Maintained
     /// incrementally by `add`, reconstructed wholesale by `rebuild`.
@@ -290,6 +358,16 @@ pub const EGraph = struct {
     /// wholesale each rebuild pass; staleness between passes only defers a
     /// splice to the next canonicalization (never corrupts one).
     bag_in_class: std.AutoArrayHashMapUnmanaged(u64, ENodeId) = .{},
+    /// Lowest bag node id per `(term_id, root)` WITHOUT the
+    /// atomic-representative exemption (cyclic entries are still
+    /// dropped). This is the FULL expansion view: splice-twin minting and
+    /// residual-binder rendering must see every same-head bag a class
+    /// denotes, even where the canonical form keeps the class atomic.
+    bag_node_index: std.AutoArrayHashMapUnmanaged(u64, ENodeId) = .{},
+    /// Nodes whose fully spliced form was minted as a twin node (nested
+    /// node id -> twin node id). A twinned node's own shape is final;
+    /// further member expansion deepens through the twin's chain.
+    splice_twin: std.AutoHashMapUnmanaged(ENodeId, ENodeId) = .{},
     /// Remaining assignment budget for the current top-level bag match;
     /// reset per (rule, node) match call.
     ac_budget_remaining: usize = 0,
@@ -297,6 +375,10 @@ pub const EGraph = struct {
     /// distinguishes truncation from an enumeration that completed on
     /// exactly its last budget unit. Reset per (rule, node) match call.
     ac_budget_hit: bool = false,
+    /// Target side of the rule being matched (set for the duration of one
+    /// matchRule/matchRuleBag call); consulted by the residual-only binder
+    /// cut (`binderResidualOnly`).
+    ac_active_target: ?TemplateExpr = null,
     /// Total bag-match budget trips (monotone; `saturate` reports deltas).
     ac_match_capped_total: usize = 0,
     /// Total cyclic bag-index entries dropped (monotone; `saturate`
@@ -367,6 +449,11 @@ pub const EGraph = struct {
         }
         if (owned == .bag) {
             try self.bag_in_class.put(
+                self.allocator,
+                bagKey(owned.bag.term_id, class),
+                node_id,
+            );
+            try self.bag_node_index.put(
                 self.allocator,
                 bagKey(owned.bag.term_id, class),
                 node_id,
@@ -465,18 +552,79 @@ pub const EGraph = struct {
     /// fixpoint, unioning nodes that collapse to the same canonical shape
     /// when the congruence gate allows it. Reuses existing class ids
     /// (never makesets). Returns true when any union happened.
+    ///
+    /// Stable-shape invariant: a stored bag node's member MULTISET never
+    /// changes after insert (member ids only move within their class and
+    /// re-sort). When a member class acquires a same-head bag, the spliced
+    /// canonical form is minted as a twin node in the same class, linked
+    /// by a `.splice` explanation edge — explanation edges reference nodes
+    /// recorded at union time, and re-splicing them in place would erase
+    /// the shapes those edges render against.
     pub fn rebuild(self: *EGraph) !bool {
         var any = false;
+        // Rebuild re-canonicalizes every node every pass; on large bag
+        // graphs the member arrays are the dominant allocation, and most
+        // nodes are already canonical. Canonicalize into a reusable
+        // scratch arena and copy into the egraph arena only when the
+        // canonical form actually changed.
+        var scratch_state = std.heap.ArenaAllocator.init(
+            std.heap.page_allocator,
+        );
+        defer scratch_state.deinit();
+        const scratch = scratch_state.allocator();
         while (true) {
             var changed = false;
             self.memo.clearRetainingCapacity();
-            try self.refreshBagIndex();
+            _ = scratch_state.reset(.retain_capacity);
+            try self.refreshBagIndex(scratch);
+            var mints: std.ArrayListUnmanaged(PendingTwin) = .{};
             for (self.nodes.items, 0..) |*stored, idx| {
                 stored.class = self.find(stored.class);
-                stored.node = try self.canonicalizeWith(
-                    stored.node,
-                    stored.class,
-                );
+                switch (stored.node) {
+                    .bag => |bag| {
+                        // Stored bag shapes are stable: find-update and
+                        // re-sort only. When the full expansion view says
+                        // a member class denotes a same-head bag, the
+                        // flat form is minted as a twin instead.
+                        const nosplice = try self.sortMembersOnly(
+                            bag,
+                            scratch,
+                        );
+                        if (!nodeEql(nosplice, stored.node)) {
+                            stored.node = try self.ownNode(nosplice);
+                        }
+                        if (self.splice_twin.get(@intCast(idx)) == null) {
+                            const full = try self.fullSplice(
+                                stored.node.bag.term_id,
+                                stored.node.bag.members,
+                                stored.class,
+                                scratch,
+                            );
+                            if (full.bag.members.len !=
+                                stored.node.bag.members.len)
+                            {
+                                try mints.append(scratch, .{
+                                    .from = @intCast(idx),
+                                    .flat = full,
+                                    .just = try self.buildSpliceJust(
+                                        @intCast(idx),
+                                        scratch,
+                                    ),
+                                });
+                            }
+                        }
+                    },
+                    else => {
+                        const canon = try self.canonicalizeInto(
+                            stored.node,
+                            stored.class,
+                            scratch,
+                        );
+                        if (!nodeEql(canon, stored.node)) {
+                            stored.node = try self.ownNode(canon);
+                        }
+                    },
+                }
                 const gop = try self.memo.getOrPut(
                     self.allocator,
                     stored.node,
@@ -498,9 +646,145 @@ pub const EGraph = struct {
                 changed = true;
                 any = true;
             }
+            for (mints.items) |mint| {
+                try self.mintSpliceTwin(mint);
+                changed = true;
+            }
             if (!changed) break;
         }
         return any;
+    }
+
+    const PendingTwin = struct {
+        from: ENodeId,
+        /// Scratch-backed fully spliced shape.
+        flat: ENode,
+        /// Fully arena-backed justification (snapshots taken at detection
+        /// time, before later merges in the same pass move any finds).
+        just: Justification,
+    };
+
+    /// Find-update and re-sort a bag's members without splicing: the
+    /// stable stored shape of a node whose spliced form lives in a twin.
+    fn sortMembersOnly(
+        self: *const EGraph,
+        bag: ENode.Bag,
+        alloc: std.mem.Allocator,
+    ) !ENode {
+        const members = try alloc.dupe(EClassId, bag.members);
+        for (members) |*member| member.* = self.find(member.*);
+        std.mem.sort(EClassId, members, {}, std.sort.asc(EClassId));
+        return .{ .bag = .{ .term_id = bag.term_id, .members = members } };
+    }
+
+    /// Record the splice justification for `from` against the current
+    /// bag-index state — the same state `canonicalizeInto` just spliced
+    /// with. All slices land in the egraph arena (the justification
+    /// outlives the pass).
+    fn buildSpliceJust(
+        self: *EGraph,
+        from: ENodeId,
+        scratch: std.mem.Allocator,
+    ) !Justification {
+        const bag = self.nodes.items[from].node.bag;
+        var visited: std.ArrayListUnmanaged(EClassId) = .{};
+        try visited.append(
+            scratch,
+            self.find(self.nodes.items[from].class),
+        );
+        const members = try self.allocator.alloc(
+            EClassId,
+            bag.members.len,
+        );
+        const expansion = try self.allocator.alloc(
+            ?*const SpliceExpansion,
+            bag.members.len,
+        );
+        for (bag.members, 0..) |member, idx| {
+            members[idx] = self.find(member);
+            expansion[idx] = try self.buildSpliceExpansion(
+                bag.term_id,
+                members[idx],
+                &visited,
+                scratch,
+            );
+        }
+        return .{ .splice = .{
+            .from = from,
+            .to = undefined, // patched by mintSpliceTwin
+            .members = members,
+            .expansion = expansion,
+        } };
+    }
+
+    /// Mirror of the full-view splice recursion, recording the expansion
+    /// tree instead of the flat list. Null exactly where the expansion
+    /// keeps the class atomic (no same-head bag, or the cycle guard).
+    fn buildSpliceExpansion(
+        self: *EGraph,
+        term_id: u32,
+        root: EClassId,
+        visited: *std.ArrayListUnmanaged(EClassId),
+        scratch: std.mem.Allocator,
+    ) error{OutOfMemory}!?*const SpliceExpansion {
+        const bag_node = self.bag_node_index.get(
+            bagKey(term_id, root),
+        ) orelse return null;
+        if (std.mem.indexOfScalar(
+            EClassId,
+            visited.items,
+            root,
+        ) != null) return null;
+        try visited.append(scratch, root);
+        defer _ = visited.pop();
+        const sub = self.nodes.items[bag_node].node.bag;
+        const members = try self.allocator.alloc(
+            EClassId,
+            sub.members.len,
+        );
+        const entries = try self.allocator.alloc(
+            ?*const SpliceExpansion,
+            sub.members.len,
+        );
+        for (sub.members, 0..) |member, idx| {
+            members[idx] = self.find(member);
+            entries[idx] = try self.buildSpliceExpansion(
+                term_id,
+                members[idx],
+                visited,
+                scratch,
+            );
+        }
+        const exp = try self.allocator.create(SpliceExpansion);
+        exp.* = .{
+            .node = bag_node,
+            .members = members,
+            .entries = entries,
+        };
+        return exp;
+    }
+
+    /// Append the flat twin node into `from`'s class and hang the splice
+    /// edge off it (a fresh node is a leaf of the explanation forest, so
+    /// no re-rooting is needed). The twin enters the memo on the next
+    /// rebuild pass, where a shape collision with another class merges
+    /// through the ordinary congruence path.
+    fn mintSpliceTwin(self: *EGraph, mint: PendingTwin) !void {
+        var just = mint.just;
+        const node_id: ENodeId = @intCast(self.nodes.items.len);
+        just.splice.to = node_id;
+        try self.nodes.append(self.allocator, .{
+            .node = try self.ownNode(mint.flat),
+            .class = self.find(self.nodes.items[mint.from].class),
+        });
+        try self.expl_parent.append(self.allocator, .{
+            .to = mint.from,
+            .just = just,
+            // Semantic direction (from -> to) runs parent -> child along
+            // this link, so the child -> parent traversal is reversed.
+            .forward = false,
+        });
+        try self.splice_twin.put(self.allocator, mint.from, node_id);
     }
 
     /// Rebuild the splice index from scratch: lowest bag node id per
@@ -516,45 +800,77 @@ pub const EGraph = struct {
     /// member everywhere — bags over it are not fully canonical, which
     /// costs some congruence merges in that corner but keeps every list
     /// finite.
-    fn refreshBagIndex(self: *EGraph) !void {
+    fn refreshBagIndex(self: *EGraph, scratch: std.mem.Allocator) !void {
         self.bag_in_class.clearRetainingCapacity();
+        // Classes holding an atomic representative (a leaf or a plain
+        // application) are exempt from splicing. Once a cancellation
+        // unions some `x + (-x)` bag into zero's class, splicing through
+        // that class would replace every zero-valued member with
+        // cancellation junk (`{zero, t}` canonicalizes to `{a, -a, t}`),
+        // making the unit rules that normalize a cancelled sum away
+        // (x+0 -> x) permanently unmatchable. The atomic member is the
+        // productive canonical choice; the class's bag nodes stay
+        // reachable through congruence and direct matching.
+        var atomic_roots: std.AutoHashMapUnmanaged(EClassId, void) = .{};
+        for (self.nodes.items) |stored| {
+            switch (stored.node) {
+                .bag => {},
+                .leaf, .app => try atomic_roots.put(
+                    scratch,
+                    self.find(stored.class),
+                    {},
+                ),
+            }
+        }
+        self.bag_node_index.clearRetainingCapacity();
         for (self.nodes.items, 0..) |stored, idx| {
             const bag = switch (stored.node) {
                 .bag => |bag| bag,
                 else => continue,
             };
-            const key = bagKey(bag.term_id, self.find(stored.class));
+            const root = self.find(stored.class);
+            const key = bagKey(bag.term_id, root);
+            const node_gop = try self.bag_node_index.getOrPut(
+                self.allocator,
+                key,
+            );
+            if (!node_gop.found_existing or node_gop.value_ptr.* > idx) {
+                node_gop.value_ptr.* = @intCast(idx);
+            }
+            if (atomic_roots.contains(root)) continue;
             const gop = try self.bag_in_class.getOrPut(self.allocator, key);
             if (!gop.found_existing or gop.value_ptr.* > idx) {
                 gop.value_ptr.* = @intCast(idx);
             }
         }
         var cyclic: std.ArrayListUnmanaged(u64) = .{};
-        for (self.bag_in_class.keys()) |key| {
+        for (self.bag_node_index.keys()) |key| {
             const term_id: u32 = @intCast(key >> 32);
             const root: EClassId = @truncate(key);
-            if (try self.bagExpansionReenters(term_id, root)) {
-                try cyclic.append(self.allocator, key);
+            if (try self.bagExpansionReenters(term_id, root, scratch)) {
+                try cyclic.append(scratch, key);
             }
         }
         for (cyclic.items) |key| {
             _ = self.bag_in_class.swapRemove(key);
+            _ = self.bag_node_index.swapRemove(key);
         }
         self.ac_cyclic_dropped_total += cyclic.items.len;
     }
 
     /// True when the transitive same-head member expansion of `root`'s
-    /// bag reaches `root` again.
+    /// bag reaches `root` again (over the full, unexempted view).
     fn bagExpansionReenters(
         self: *const EGraph,
         term_id: u32,
         root: EClassId,
+        scratch: std.mem.Allocator,
     ) !bool {
         var stack: std.ArrayListUnmanaged(EClassId) = .{};
         var seen: std.ArrayListUnmanaged(EClassId) = .{};
-        const bag_node = self.bag_in_class.get(bagKey(term_id, root)).?;
+        const bag_node = self.bag_node_index.get(bagKey(term_id, root)).?;
         for (self.nodes.items[bag_node].node.bag.members) |member| {
-            try stack.append(self.allocator, self.find(member));
+            try stack.append(scratch, self.find(member));
         }
         while (stack.pop()) |class| {
             if (class == root) return true;
@@ -563,12 +879,12 @@ pub const EGraph = struct {
                 seen.items,
                 class,
             ) != null) continue;
-            try seen.append(self.allocator, class);
-            const node = self.bag_in_class.get(
+            try seen.append(scratch, class);
+            const node = self.bag_node_index.get(
                 bagKey(term_id, class),
             ) orelse continue;
             for (self.nodes.items[node].node.bag.members) |member| {
-                try stack.append(self.allocator, self.find(member));
+                try stack.append(scratch, self.find(member));
             }
         }
         return false;
@@ -597,12 +913,16 @@ pub const EGraph = struct {
             std.heap.page_allocator,
         );
         defer scratch_state.deinit();
+        var dedup: MatchDedup = .{};
+        defer dedup.deinit();
         _ = try self.rebuild();
         while (stats.iterations < opts.max_iterations) {
             stats.iterations += 1;
             try self.buildClassIndex();
+            dedup.iter.clearRetainingCapacity();
 
             var matches: std.ArrayListUnmanaged(Match) = .{};
+            var iter_capped = false;
             const matched_nodes = self.nodes.items.len;
             for (0..matched_nodes) |node_id| {
                 switch (self.nodes.items[node_id].node) {
@@ -619,6 +939,7 @@ pub const EGraph = struct {
                             @intCast(rule_slot),
                             @intCast(node_id),
                             &matches,
+                            &dedup,
                             scratch_state.allocator(),
                         );
                         if (self.ac_budget_hit) {
@@ -636,6 +957,7 @@ pub const EGraph = struct {
                             @intCast(rule_slot),
                             @intCast(node_id),
                             &matches,
+                            &dedup,
                             scratch_state.allocator(),
                         );
                         if (self.ac_budget_hit) {
@@ -649,6 +971,20 @@ pub const EGraph = struct {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
                     return self.finishStats(stats, capped_start, cyclic_start);
+                }
+                // Per-iteration retained-match budget (bag mode only): on a
+                // dense AC frontier one unthrottled iteration can retain
+                // tens of thousands of new-effect matches whose applied
+                // unions make the NEXT frontier combinatorially worse. Stop
+                // collecting, apply what we have, and let later iterations
+                // continue — already-applied effects are deduped free, so
+                // every iteration's budget goes to fresh unions.
+                if (self.ac_heads.count() != 0 and
+                    matches.items.len >= opts.ac_iter_match_budget)
+                {
+                    iter_capped = true;
+                    self.ac_match_capped_total += 1;
+                    break;
                 }
             }
 
@@ -702,6 +1038,12 @@ pub const EGraph = struct {
                     changed = true;
                     stats.unions_applied += 1;
                 }
+                // The union now holds (either it merged or it was already
+                // one class), so identical-effect matches in later
+                // iterations are dropped at collection. Dep-deferred and
+                // instantiation-failed matches never reach this point and
+                // stay eligible for retry.
+                try dedup.applied.put(std.heap.page_allocator, m.key, {});
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
@@ -711,7 +1053,9 @@ pub const EGraph = struct {
 
             const grew = self.nodes.items.len != matched_nodes;
             const congr_changed = try self.rebuild();
-            if (!changed and !grew and !congr_changed) {
+            // A capped collection pass is not a fixpoint claim: uncollected
+            // matches may remain even when the collected ones all no-oped.
+            if (!changed and !grew and !congr_changed and !iter_capped) {
                 stats.outcome = .saturated;
                 return self.finishStats(stats, capped_start, cyclic_start);
             }
@@ -903,9 +1247,45 @@ pub const EGraph = struct {
     /// Splice, canonicalize, and sort bag members: any member class that
     /// denotes a same-head bag contributes its members instead of itself
     /// (recursively), so every grouping of the same multiset interns to
-    /// one shape.
+    /// one shape. Uses the canonical (exempted) index.
     fn canonicalBag(
         self: *const EGraph,
+        term_id: u32,
+        members: []const EClassId,
+        self_class: ?EClassId,
+        alloc: std.mem.Allocator,
+    ) error{OutOfMemory}!ENode {
+        return try self.spliceBag(
+            &self.bag_in_class,
+            term_id,
+            members,
+            self_class,
+            alloc,
+        );
+    }
+
+    /// `canonicalBag` over the FULL (unexempted) view — the shape a
+    /// splice twin carries so flat arrivals congruence-join the class
+    /// even where the canonical form keeps an atomic member.
+    fn fullSplice(
+        self: *const EGraph,
+        term_id: u32,
+        members: []const EClassId,
+        self_class: ?EClassId,
+        alloc: std.mem.Allocator,
+    ) error{OutOfMemory}!ENode {
+        return try self.spliceBag(
+            &self.bag_node_index,
+            term_id,
+            members,
+            self_class,
+            alloc,
+        );
+    }
+
+    fn spliceBag(
+        self: *const EGraph,
+        index: *const std.AutoArrayHashMapUnmanaged(u64, ENodeId),
         term_id: u32,
         members: []const EClassId,
         self_class: ?EClassId,
@@ -918,6 +1298,7 @@ pub const EGraph = struct {
         }
         for (members) |member| {
             try self.spliceInto(
+                index,
                 term_id,
                 self.find(member),
                 &out,
@@ -930,20 +1311,22 @@ pub const EGraph = struct {
     }
 
     /// Append `root` to `out`, expanding through its bag node when the
-    /// class denotes one. `visited` is the ancestor set of the current
-    /// expansion: re-entering a class keeps it atomic, so bags over
-    /// cyclic classes (absorption-style unions) stay finite. The cost is
-    /// full canonicality in that corner — strictly better than the
-    /// unbounded minting the same corner causes in tree representation.
+    /// class denotes one in `index`. `visited` is the ancestor set of the
+    /// current expansion: re-entering a class keeps it atomic, so bags
+    /// over cyclic classes (absorption-style unions) stay finite. The
+    /// cost is full canonicality in that corner — strictly better than
+    /// the unbounded minting the same corner causes in tree
+    /// representation.
     fn spliceInto(
         self: *const EGraph,
+        index: *const std.AutoArrayHashMapUnmanaged(u64, ENodeId),
         term_id: u32,
         root: EClassId,
         out: *std.ArrayListUnmanaged(EClassId),
         visited: *std.ArrayListUnmanaged(EClassId),
         alloc: std.mem.Allocator,
     ) error{OutOfMemory}!void {
-        const bag_node = self.bag_in_class.get(bagKey(term_id, root)) orelse {
+        const bag_node = index.get(bagKey(term_id, root)) orelse {
             try out.append(alloc, root);
             return;
         };
@@ -956,6 +1339,7 @@ pub const EGraph = struct {
         const members = self.nodes.items[bag_node].node.bag.members;
         for (members) |member| {
             try self.spliceInto(
+                index,
                 term_id,
                 self.find(member),
                 out,
@@ -993,6 +1377,65 @@ pub const EGraph = struct {
         /// Unmatched bag members (canonical roots at match time) of an AC
         /// match; the apply loop wraps the target with them.
         extension: []const EClassId = &.{},
+        /// Effect key at collection time (see `matchEffectKey`).
+        key: u64,
+    };
+
+    /// Content key of a match's effect: the union it applies is fully
+    /// determined by the rule, the matched class, the canonical
+    /// substitution, and the extension multiset. Two matches sharing a key
+    /// are interchangeable — once either is applied the other is a no-op —
+    /// so collection retains only the first (which is also the one the
+    /// pre-dedup apply order would have recorded the explanation edge for).
+    fn matchEffectKey(
+        self: *EGraph,
+        rule_slot: u32,
+        root_node: ENodeId,
+        subst: []const ?Child,
+        extension: []const EClassId,
+    ) u64 {
+        var h = std.hash.Wyhash.init(0x0136);
+        h.update(std.mem.asBytes(&rule_slot));
+        const root = self.find(self.nodes.items[root_node].class);
+        h.update(std.mem.asBytes(&root));
+        for (subst) |entry| {
+            var tag: u8 = 0;
+            var value: u64 = 0;
+            if (entry) |child| switch (child) {
+                .class => |id| {
+                    tag = 1;
+                    value = self.find(id);
+                },
+                .bound => |leaf| {
+                    tag = 2;
+                    value = leaf;
+                },
+            };
+            h.update(std.mem.asBytes(&tag));
+            h.update(std.mem.asBytes(&value));
+        }
+        // Extension entries are canonical roots in member order; members
+        // are kept sorted by root, so the order is stable across nodes of
+        // one class. (An unsorted slice would only weaken dedup, never
+        // conflate distinct effects.)
+        h.update(std.mem.sliceAsBytes(extension));
+        return h.final();
+    }
+
+    /// Match dedup state for one `saturate` call. `applied` persists across
+    /// iterations: a key goes in only once its union has actually been
+    /// applied (union-find merges are monotone, so an identical later match
+    /// is guaranteed a no-op). Dep-deferred matches are NOT recorded, so
+    /// they are re-collected and retried next iteration. `iter` additionally
+    /// collapses same-effect matches within one collection pass.
+    const MatchDedup = struct {
+        applied: std.AutoHashMapUnmanaged(u64, void) = .{},
+        iter: std.AutoHashMapUnmanaged(u64, void) = .{},
+
+        fn deinit(self: *MatchDedup) void {
+            self.applied.deinit(std.heap.page_allocator);
+            self.iter.deinit(std.heap.page_allocator);
+        }
     };
 
     fn matchRule(
@@ -1001,10 +1444,13 @@ pub const EGraph = struct {
         rule_slot: u32,
         root_node: ENodeId,
         matches: *std.ArrayListUnmanaged(Match),
+        dedup: *MatchDedup,
         scratch: std.mem.Allocator,
     ) !void {
         const pattern = rule.match_side.app;
         const node = self.nodes.items[root_node].node.app;
+        self.ac_active_target = rule.target_side;
+        defer self.ac_active_target = null;
         const pairs = try scratch.alloc(PatternPair, pattern.args.len);
         for (pattern.args, node.children, 0..) |p, c, idx| {
             pairs[idx] = .{ .pattern = p, .child = c };
@@ -1012,13 +1458,20 @@ pub const EGraph = struct {
         const subst = try scratch.alloc(?Child, rule.num_binders);
         @memset(subst, null);
 
+        // Solutions stage in scratch; only new-effect ones are copied into
+        // the run allocator and retained.
         var solutions: std.ArrayListUnmanaged([]const ?Child) = .{};
-        try self.solvePairs(pairs, 0, subst, &solutions, self.allocator, scratch);
+        try self.solvePairs(pairs, 0, subst, &solutions, scratch, scratch);
         for (solutions.items) |solution| {
+            const key = self.matchEffectKey(rule_slot, root_node, solution, &.{});
+            if (dedup.applied.contains(key)) continue;
+            const gop = try dedup.iter.getOrPut(std.heap.page_allocator, key);
+            if (gop.found_existing) continue;
             try matches.append(self.allocator, .{
                 .rule_slot = rule_slot,
                 .root_node = root_node,
-                .subst = solution,
+                .subst = try self.allocator.dupe(?Child, solution),
+                .key = key,
             });
         }
     }
@@ -1059,6 +1512,24 @@ pub const EGraph = struct {
         return a == .app and b == .binder;
     }
 
+    /// True when binding this binder to any sub-multiset and rejoining the
+    /// leftover as extension splices to the same flat bag as binding the
+    /// full residual: the binder is absent from the rule's target side, or
+    /// every occurrence lies on the target's same-head spine (the target
+    /// IS the binder, or the binder sits directly under the AC head).
+    /// Unit and annihilator rules (x+0→x, x·0→0) are the archetypes —
+    /// without this cut their subset enumeration mints one sub-bag and one
+    /// union per sub-multiset of every matching bag, an exponential
+    /// attractor of derivable-but-useless facts.
+    fn binderResidualOnly(
+        self: *const EGraph,
+        term_id: u32,
+        binder_idx: u32,
+    ) bool {
+        const target = self.ac_active_target orelse return false;
+        return !binderOccursStructurally(target, term_id, binder_idx, true);
+    }
+
     /// E-matching modulo AC: match a rule whose match side is headed by
     /// the bag's operator against one bag node. Pattern members assign to
     /// distinct member positions (structured members one each, binder
@@ -1071,9 +1542,12 @@ pub const EGraph = struct {
         rule_slot: u32,
         root_node: ENodeId,
         matches: *std.ArrayListUnmanaged(Match),
+        dedup: *MatchDedup,
         scratch: std.mem.Allocator,
     ) !void {
         const bag = self.nodes.items[root_node].node.bag;
+        self.ac_active_target = rule.target_side;
+        defer self.ac_active_target = null;
         var pattern_members: std.ArrayListUnmanaged(TemplateExpr) = .{};
         try self.flattenPattern(
             scratch,
@@ -1102,15 +1576,28 @@ pub const EGraph = struct {
             used,
             true,
             &solutions,
-            self.allocator,
+            scratch,
             scratch,
         );
         for (solutions.items) |solution| {
+            const key = self.matchEffectKey(
+                rule_slot,
+                root_node,
+                solution.subst,
+                solution.extension,
+            );
+            if (dedup.applied.contains(key)) continue;
+            const gop = try dedup.iter.getOrPut(std.heap.page_allocator, key);
+            if (gop.found_existing) continue;
             try matches.append(self.allocator, .{
                 .rule_slot = rule_slot,
                 .root_node = root_node,
-                .subst = solution.subst,
-                .extension = solution.extension,
+                .subst = try self.allocator.dupe(?Child, solution.subst),
+                .extension = try self.allocator.dupe(
+                    EClassId,
+                    solution.extension,
+                ),
+                .key = key,
             });
         }
     }
@@ -1158,6 +1645,16 @@ pub const EGraph = struct {
             .app => {
                 for (bag.members, 0..) |member, idx| {
                     if (used[idx]) continue;
+                    // Occurrence dedup: members are sorted by canonical
+                    // root, so equal-class occurrences are adjacent; claim
+                    // only the leftmost unused one. Any occurrence of the
+                    // same class yields the same substitution and the same
+                    // extension multiset, so the others are pure duplicates.
+                    if (idx > 0 and !used[idx - 1] and
+                        self.find(bag.members[idx - 1]) == self.find(member))
+                    {
+                        continue;
+                    }
                     // Solve the structured pattern against this member
                     // class, then continue assigning under each solution.
                     const pairs = try scratch.alloc(PatternPair, 1);
@@ -1199,6 +1696,44 @@ pub const EGraph = struct {
                 }
             },
             .binder => |binder_idx| {
+                // A sole trailing unbound binder takes the full residual
+                // outright when subset choices are provably redundant: an
+                // exact-cover match (no extension) leaves it no other
+                // option, and a residual-only binder makes every
+                // subset/extension split splice-equivalent to the full
+                // residual (see binderResidualOnly).
+                if (p_idx == pattern_members.len - 1 and
+                    subst[binder_idx] == null and
+                    (!allow_extension or
+                        self.binderResidualOnly(
+                            bag.term_id,
+                            @intCast(binder_idx),
+                        )))
+                {
+                    var residual: std.ArrayListUnmanaged(usize) = .{};
+                    for (used, 0..) |is_used, i| {
+                        if (!is_used) try residual.append(scratch, i);
+                    }
+                    if (residual.items.len == 0) return;
+                    for (residual.items) |i| used[i] = true;
+                    defer for (residual.items) |i| {
+                        used[i] = false;
+                    };
+                    try self.applyBinderSubset(
+                        bag,
+                        pattern_members,
+                        p_idx,
+                        subst,
+                        used,
+                        allow_extension,
+                        solutions,
+                        binder_idx,
+                        residual.items,
+                        dest,
+                        scratch,
+                    );
+                    return;
+                }
                 var chosen: std.ArrayListUnmanaged(usize) = .{};
                 try self.enumerateBinderSubsets(
                     bag,
@@ -1238,6 +1773,15 @@ pub const EGraph = struct {
     ) error{OutOfMemory}!void {
         for (start..bag.members.len) |idx| {
             if (used[idx]) continue;
+            // Occurrence dedup (see the structured-member arm): a subset
+            // may pick a later occurrence of a class only when every
+            // earlier equal-class occurrence is already used, so each
+            // distinct class sub-multiset is enumerated exactly once.
+            if (idx > 0 and !used[idx - 1] and
+                self.find(bag.members[idx - 1]) == self.find(bag.members[idx]))
+            {
+                continue;
+            }
             if (self.ac_budget_remaining == 0) {
                 self.ac_budget_hit = true;
                 return;
@@ -1745,6 +2289,10 @@ pub const Step = struct {
         rule: u32,
         /// Index into the driver's reference pool.
         pool_equation: u32,
+        /// A splice-edge re-tree: `before` and `after` are the same member
+        /// multiset grouped differently; the lowering is a pure AC
+        /// alignment (no theorem cited).
+        ac_flatten,
     };
 
     /// Present when an endpoint of a `.rule` step is a bag: the member
@@ -1801,6 +2349,14 @@ const ExplainCtx = struct {
     class_cost: std.AutoArrayHashMapUnmanaged(u64, usize) = .{},
     class_best: std.AutoArrayHashMapUnmanaged(u64, ENodeId) = .{},
     class_term: std.AutoArrayHashMapUnmanaged(u64, *const Term) = .{},
+    /// Per-binder term overrides for the rule edge currently rendering
+    /// its endpoints (null outside `renderRuleEndpoints`). A residual
+    /// binder claimed member-wise as a same-head sub-bag must render as
+    /// that exact bag term EVERYWHERE in the edge — endpoint children,
+    /// the opposite endpoint's pattern rendering, and the step bindings —
+    /// or the lowering's rule-instance seam cannot align (the class's
+    /// minimal representative may not even share the bag's head).
+    rule_binder_terms: ?[]?*const Term = null,
 
     fn allocator(self: *ExplainCtx) std.mem.Allocator {
         return self.eg.allocator;
@@ -2197,87 +2753,31 @@ const ExplainCtx = struct {
                     rule,
                     rule_just.subst,
                 );
-                // Bag endpoints render against the edge's own nodes (the
-                // extension members live there); tree endpoints keep the
-                // class-anchored pattern rendering.
-                var bag_info: ?Step.BagInfo = null;
-                var lhs: *const Term = undefined;
-                var rhs: *const Term = undefined;
-                const before_is_bag =
-                    self.eg.nodes.items[before_node].node == .bag;
-                const after_is_bag =
-                    self.eg.nodes.items[after_node].node == .bag;
-                if (before_is_bag or after_is_bag) {
-                    var matched_before: []const u32 = &.{};
-                    var matched_after: []const u32 = &.{};
-                    if (before_is_bag) {
-                        const rendered = (try self.renderBag(
-                            before_node,
-                            pattern_in,
-                            rule_just.subst,
-                            binder_masks,
-                            true,
-                        )) orelse return null;
-                        lhs = rendered.term;
-                        matched_before = rendered.matched;
-                    } else {
-                        lhs = (try self.renderPattern(
-                            self.eg.find(
-                                self.eg.nodes.items[before_node].class,
-                            ),
-                            pattern_in,
-                            rule_just.subst,
-                            binder_masks,
-                        )) orelse return null;
-                    }
-                    if (after_is_bag) {
-                        const rendered = (try self.renderBag(
-                            after_node,
-                            pattern_out,
-                            rule_just.subst,
-                            binder_masks,
-                            true,
-                        )) orelse return null;
-                        rhs = rendered.term;
-                        matched_after = rendered.matched;
-                    } else {
-                        rhs = (try self.renderPattern(
-                            self.eg.find(
-                                self.eg.nodes.items[after_node].class,
-                            ),
-                            pattern_out,
-                            rule_just.subst,
-                            binder_masks,
-                        )) orelse return null;
-                    }
-                    bag_info = .{
-                        .matched_before = matched_before,
-                        .matched_after = matched_after,
-                    };
-                } else {
-                    const class = self.eg.find(
-                        self.eg.nodes.items[current.node].class,
-                    );
-                    lhs = (try self.renderPattern(
-                        class,
-                        pattern_in,
-                        rule_just.subst,
-                        binder_masks,
-                    )) orelse return null;
-                    rhs = (try self.renderPattern(
-                        class,
-                        pattern_out,
-                        rule_just.subst,
-                        binder_masks,
-                    )) orelse return null;
+                const rendered = (try self.renderRuleEndpoints(
+                    rule,
+                    pattern_in,
+                    pattern_out,
+                    before_node,
+                    after_node,
+                    current,
+                    rule_just.subst,
+                    binder_masks,
+                )) orelse return null;
+                const lhs = rendered.lhs;
+                const rhs = rendered.rhs;
+                if (!try self.explainTerms(current, lhs, pos)) {
+                    return null;
                 }
-                if (!try self.explainTerms(current, lhs, pos)) return null;
 
                 const bindings = try self.allocator().alloc(
                     ?BindingValue,
                     rule.num_binders,
                 );
                 for (rule_just.subst, 0..) |maybe_binding, idx| {
+                    if (rendered.overrides[idx]) |term| {
+                        bindings[idx] = .{ .term = term };
+                        continue;
+                    }
                     const binding = maybe_binding orelse {
                         bindings[idx] = null;
                         continue;
@@ -2294,6 +2794,7 @@ const ExplainCtx = struct {
                         .bound => |leaf| .{ .bound = leaf },
                     };
                 }
+                const bag_info = rendered.bag_info;
                 try self.steps.append(self.allocator(), .{
                     .source = .{ .rule = rule.rule_id },
                     .needs_symm = needs_symm,
@@ -2331,6 +2832,415 @@ const ExplainCtx = struct {
                 });
                 return after;
             },
+            .splice => |sp| {
+                return try self.processSplice(current, sp, edge.forward, pos);
+            },
+        }
+    }
+
+    /// A splice edge: the nested node and its flat twin denote the same
+    /// multiset once each expanded member is rewritten (in its own class)
+    /// to the same-head bag it expanded through. The member rewrites are
+    /// ordinary recursive explanations at the member position; the
+    /// residual nested-vs-flat difference is one `.ac_flatten` step that
+    /// lowers to a pure AC re-tree.
+    fn processSplice(
+        self: *ExplainCtx,
+        current: *const Term,
+        sp: SpliceJust,
+        forward: bool,
+        pos: []const u32,
+    ) error{OutOfMemory}!?*const Term {
+        const anchor_node = if (forward) sp.from else sp.to;
+        const result_node = if (forward) sp.to else sp.from;
+        var aligned = current;
+        if (!nodeShapeEql(self.eg, aligned.node, anchor_node)) {
+            const anchor = (try self.termForNode(anchor_node, 0)) orelse {
+                return null;
+            };
+            if (!try self.explainTerms(aligned, anchor, pos)) return null;
+            aligned = anchor;
+        }
+        const anchor_bag = switch (self.eg.nodes.items[aligned.node].node) {
+            .bag => |bag| bag,
+            else => return null,
+        };
+        if (forward) {
+            // Nested -> flat. Pair the anchored children with the snapshot
+            // members by class, rewrite each expanded child to its
+            // expansion term, then flatten.
+            const map = (try self.pairSnapshot(
+                anchor_bag.members,
+                sp.members,
+            )) orelse return null;
+            const children = try self.allocator().alloc(
+                ?*const Term,
+                anchor_bag.members.len,
+            );
+            var leaves: std.ArrayListUnmanaged(*const Term) = .{};
+            var leaf_roots: std.ArrayListUnmanaged(EClassId) = .{};
+            for (anchor_bag.members, 0..) |member, idx| {
+                const child = aligned.children[idx].?;
+                const exp = sp.expansion[map[idx]] orelse {
+                    children[idx] = child;
+                    try leaves.append(self.allocator(), child);
+                    try leaf_roots.append(
+                        self.allocator(),
+                        self.eg.find(member),
+                    );
+                    continue;
+                };
+                const target = (try self.expansionTerm(exp)) orelse {
+                    return null;
+                };
+                if (!termEql(self.eg, child, target)) {
+                    const child_pos = try self.pushPos(pos, @intCast(idx));
+                    if (!try self.explainTerms(child, target, child_pos)) {
+                        return null;
+                    }
+                }
+                children[idx] = target;
+                if (!try self.expansionLeaves(
+                    exp,
+                    target,
+                    &leaves,
+                    &leaf_roots,
+                )) return null;
+            }
+            const nested = try self.allocator().create(Term);
+            nested.* = .{ .node = aligned.node, .children = children };
+            const flat = (try self.pairFlatChildren(
+                result_node,
+                leaves.items,
+                leaf_roots.items,
+            )) orelse return null;
+            try self.steps.append(self.allocator(), .{
+                .source = .ac_flatten,
+                .needs_symm = false,
+                .position = pos,
+                .before = nested,
+                .after = flat,
+                .bindings = &.{},
+            });
+            return flat;
+        }
+        // Flat -> nested: rebuild the expansion trees, claiming the flat
+        // children as leaves (terms are reused verbatim; only the
+        // grouping changes).
+        const claimed = try self.allocator().alloc(bool, aligned.children.len);
+        @memset(claimed, false);
+        const from_members = self.eg.nodes.items[sp.from].node.bag.members;
+        const map = (try self.pairSnapshot(
+            from_members,
+            sp.members,
+        )) orelse return null;
+        const children = try self.allocator().alloc(
+            ?*const Term,
+            from_members.len,
+        );
+        for (from_members, 0..) |member, idx| {
+            children[idx] = if (sp.expansion[map[idx]]) |exp|
+                (try self.regroupExpansion(exp, aligned, claimed)) orelse {
+                    return null;
+                }
+            else
+                (self.claimFlatLeaf(
+                    self.eg.find(member),
+                    aligned,
+                    claimed,
+                )) orelse return null;
+        }
+        for (claimed) |flag| if (!flag) return null;
+        const nested = try self.allocator().create(Term);
+        nested.* = .{ .node = sp.from, .children = children };
+        try self.steps.append(self.allocator(), .{
+            .source = .ac_flatten,
+            .needs_symm = false,
+            .position = pos,
+            .before = aligned,
+            .after = nested,
+            .bindings = &.{},
+        });
+        return nested;
+    }
+
+    /// Pair a node's current member list against a mint-time snapshot:
+    /// `out[i]` is the snapshot index covering current member `i`
+    /// (leftmost-unused by class root — member lists re-sort in place as
+    /// unions land, so positions move but the multiset of roots agrees).
+    /// Null when they no longer correspond.
+    fn pairSnapshot(
+        self: *ExplainCtx,
+        members: []const EClassId,
+        snapshot: []const EClassId,
+    ) error{OutOfMemory}!?[]const usize {
+        if (members.len != snapshot.len) return null;
+        const out = try self.allocator().alloc(usize, members.len);
+        const used = try self.allocator().alloc(bool, snapshot.len);
+        @memset(used, false);
+        for (members, 0..) |member, idx| {
+            const root = self.eg.find(member);
+            out[idx] = for (snapshot, 0..) |snap, j| {
+                if (used[j]) continue;
+                if (self.eg.find(snap) == root) break j;
+            } else return null;
+            used[out[idx]] = true;
+        }
+        return out;
+    }
+
+    /// Rendered term of one expansion tree: the recorded same-head bag
+    /// node with extraction representatives at kept members and deeper
+    /// expansion terms below. Children parallel the node's CURRENT member
+    /// order (the snapshot only classifies which members expanded).
+    fn expansionTerm(
+        self: *ExplainCtx,
+        exp: *const SpliceExpansion,
+    ) error{OutOfMemory}!?*const Term {
+        const members = self.eg.nodes.items[exp.node].node.bag.members;
+        const map = (try self.pairSnapshot(members, exp.members)) orelse {
+            return null;
+        };
+        const children = try self.allocator().alloc(
+            ?*const Term,
+            members.len,
+        );
+        for (members, 0..) |member, idx| {
+            children[idx] = if (exp.entries[map[idx]]) |deeper|
+                (try self.expansionTerm(deeper)) orelse return null
+            else
+                (try self.classTerm(member, 0)) orelse return null;
+        }
+        const term = try self.allocator().create(Term);
+        term.* = .{ .node = exp.node, .children = children };
+        return term;
+    }
+
+    /// Collect the flat leaves of an expansion term (parallel walk of the
+    /// expansion tree and its rendered term) with their class roots.
+    fn expansionLeaves(
+        self: *ExplainCtx,
+        exp: *const SpliceExpansion,
+        term: *const Term,
+        leaves: *std.ArrayListUnmanaged(*const Term),
+        leaf_roots: *std.ArrayListUnmanaged(EClassId),
+    ) error{OutOfMemory}!bool {
+        const members = self.eg.nodes.items[exp.node].node.bag.members;
+        const map = (try self.pairSnapshot(
+            members,
+            exp.members,
+        )) orelse return false;
+        for (members, 0..) |member, idx| {
+            if (exp.entries[map[idx]]) |deeper| {
+                if (!try self.expansionLeaves(
+                    deeper,
+                    term.children[idx].?,
+                    leaves,
+                    leaf_roots,
+                )) return false;
+            } else {
+                try leaves.append(self.allocator(), term.children[idx].?);
+                try leaf_roots.append(
+                    self.allocator(),
+                    self.eg.find(member),
+                );
+            }
+        }
+        return true;
+    }
+
+    /// Pair collected leaves with the flat twin's current member order
+    /// (leftmost-unused by class root).
+    fn pairFlatChildren(
+        self: *ExplainCtx,
+        flat_node: ENodeId,
+        leaves: []const *const Term,
+        leaf_roots: []const EClassId,
+    ) error{OutOfMemory}!?*const Term {
+        const flat_members = self.eg.nodes.items[flat_node].node.bag.members;
+        if (flat_members.len != leaves.len) return null;
+        const children = try self.allocator().alloc(
+            ?*const Term,
+            flat_members.len,
+        );
+        @memset(children, null);
+        for (leaves, leaf_roots) |leaf, root| {
+            const slot = for (flat_members, 0..) |member, idx| {
+                if (children[idx] != null) continue;
+                if (self.eg.find(member) == root) break idx;
+            } else return null;
+            children[slot] = leaf;
+        }
+        const term = try self.allocator().create(Term);
+        term.* = .{ .node = flat_node, .children = children };
+        return term;
+    }
+
+    /// Rebuild one expansion tree from a flat term's children (reverse
+    /// splice): leaves claim unclaimed flat children by class root.
+    fn regroupExpansion(
+        self: *ExplainCtx,
+        exp: *const SpliceExpansion,
+        flat: *const Term,
+        claimed: []bool,
+    ) error{OutOfMemory}!?*const Term {
+        const children = try self.allocator().alloc(
+            ?*const Term,
+            exp.members.len,
+        );
+        for (exp.members, exp.entries, 0..) |member, entry, idx| {
+            children[idx] = if (entry) |deeper|
+                (try self.regroupExpansion(deeper, flat, claimed)) orelse {
+                    return null;
+                }
+            else
+                (self.claimFlatLeaf(
+                    self.eg.find(member),
+                    flat,
+                    claimed,
+                )) orelse return null;
+        }
+        const term = try self.allocator().create(Term);
+        term.* = .{ .node = exp.node, .children = children };
+        return term;
+    }
+
+    fn claimFlatLeaf(
+        self: *ExplainCtx,
+        root: EClassId,
+        flat: *const Term,
+        claimed: []bool,
+    ) ?*const Term {
+        const members = self.eg.nodes.items[flat.node].node.bag.members;
+        for (members, 0..) |member, idx| {
+            if (claimed[idx]) continue;
+            if (self.eg.find(member) != root) continue;
+            claimed[idx] = true;
+            return flat.children[idx].?;
+        }
+        return null;
+    }
+
+    const RenderedEndpoints = struct {
+        lhs: *const Term,
+        rhs: *const Term,
+        bag_info: ?Step.BagInfo,
+        /// Edge-scoped binder term overrides (residual sub-bag claims);
+        /// null entries fall back to the class representative.
+        overrides: []?*const Term,
+    };
+
+    /// Render both endpoints of a rule edge. Bag endpoints render against
+    /// the edge's own nodes (the extension members live there); tree
+    /// endpoints keep the class-anchored pattern rendering. Rendering
+    /// runs to a fixpoint over the binder overrides: a residual claim on
+    /// one endpoint fixes the binder's term, and every other rendering of
+    /// that binder must then be redone against it.
+    fn renderRuleEndpoints(
+        self: *ExplainCtx,
+        rule: Rule,
+        pattern_in: TemplateExpr,
+        pattern_out: TemplateExpr,
+        before_node: ENodeId,
+        after_node: ENodeId,
+        current: *const Term,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+    ) error{OutOfMemory}!?RenderedEndpoints {
+        const overrides = try self.allocator().alloc(
+            ?*const Term,
+            rule.num_binders,
+        );
+        @memset(overrides, null);
+        const saved = self.rule_binder_terms;
+        self.rule_binder_terms = overrides;
+        defer self.rule_binder_terms = saved;
+
+        const before_is_bag =
+            self.eg.nodes.items[before_node].node == .bag;
+        const after_is_bag =
+            self.eg.nodes.items[after_node].node == .bag;
+        var pass: usize = 0;
+        while (true) : (pass += 1) {
+            var fills: usize = 0;
+            for (overrides) |entry| fills += @intFromBool(entry != null);
+            var bag_info: ?Step.BagInfo = null;
+            var lhs: *const Term = undefined;
+            var rhs: *const Term = undefined;
+            if (before_is_bag or after_is_bag) {
+                var matched_before: []const u32 = &.{};
+                var matched_after: []const u32 = &.{};
+                if (before_is_bag) {
+                    const rendered = (try self.renderBag(
+                        before_node,
+                        pattern_in,
+                        subst,
+                        binder_masks,
+                        true,
+                    )) orelse return null;
+                    lhs = rendered.term;
+                    matched_before = rendered.matched;
+                } else {
+                    lhs = (try self.renderPattern(
+                        self.eg.find(
+                            self.eg.nodes.items[before_node].class,
+                        ),
+                        pattern_in,
+                        subst,
+                        binder_masks,
+                    )) orelse return null;
+                }
+                if (after_is_bag) {
+                    const rendered = (try self.renderBag(
+                        after_node,
+                        pattern_out,
+                        subst,
+                        binder_masks,
+                        true,
+                    )) orelse return null;
+                    rhs = rendered.term;
+                    matched_after = rendered.matched;
+                } else {
+                    rhs = (try self.renderPattern(
+                        self.eg.find(
+                            self.eg.nodes.items[after_node].class,
+                        ),
+                        pattern_out,
+                        subst,
+                        binder_masks,
+                    )) orelse return null;
+                }
+                bag_info = .{
+                    .matched_before = matched_before,
+                    .matched_after = matched_after,
+                };
+            } else {
+                const class = self.eg.find(
+                    self.eg.nodes.items[current.node].class,
+                );
+                lhs = (try self.renderPattern(
+                    class,
+                    pattern_in,
+                    subst,
+                    binder_masks,
+                )) orelse return null;
+                rhs = (try self.renderPattern(
+                    class,
+                    pattern_out,
+                    subst,
+                    binder_masks,
+                )) orelse return null;
+            }
+            var fills_after: usize = 0;
+            for (overrides) |entry| fills_after += @intFromBool(entry != null);
+            if (fills_after == fills or pass >= 4) {
+                return .{
+                    .lhs = lhs,
+                    .rhs = rhs,
+                    .bag_info = bag_info,
+                    .overrides = overrides,
+                };
+            }
         }
     }
 
@@ -2434,9 +3344,10 @@ const ExplainCtx = struct {
             if (children[idx] != null) continue;
             if (self.eg.find(member) != root) continue;
             children[idx] = switch (pm) {
-                .binder => |b| (try self.bindingTerm(
-                    subst[b] orelse return false,
-                    binder_masks[b],
+                .binder => |b| (try self.binderTerm(
+                    b,
+                    subst,
+                    binder_masks,
                 )) orelse return false,
                 .app => (try self.renderPattern(
                     root,
@@ -2449,23 +3360,88 @@ const ExplainCtx = struct {
             return true;
         }
         // A binder bound to a sub-bag (residual binding) spans several
-        // members; claim each individually with the binder's mask.
+        // members; claim each individually with the binder's mask. The
+        // class may hold several same-head bag nodes (splice twins at
+        // different depths); try each against the enclosing bag's members
+        // and keep the first full claim. The winning decomposition is
+        // recorded as the binder's edge-scoped term so every other
+        // rendering of the binder in this edge matches it member-wise.
         if (pm != .binder) return false;
         const mask_id = binder_masks[pm.binder];
-        const sub_node = self.eg.bag_in_class.get(
-            EGraph.bagKey(bag.term_id, root),
-        ) orelse return false;
-        const sub_members = self.eg.nodes.items[sub_node].node.bag.members;
-        for (sub_members) |sub_member| {
+        if (self.rule_binder_terms) |overrides| {
+            if (overrides[pm.binder]) |term| {
+                return try self.claimTermMembers(bag, children, matched, term);
+            }
+        }
+        const class_members = self.eg.class_index.get(root) orelse {
+            return false;
+        };
+        candidate: for (class_members.items) |cand_id| {
+            const sub = switch (self.eg.nodes.items[cand_id].node) {
+                .bag => |sub| sub,
+                else => continue,
+            };
+            if (sub.term_id != bag.term_id) continue;
+            const mark = matched.items.len;
+            const sub_terms = try self.allocator().alloc(
+                ?*const Term,
+                sub.members.len,
+            );
+            for (sub.members, 0..) |sub_member, sub_idx| {
+                const sub_root = self.eg.find(sub_member);
+                var claimed = false;
+                for (bag.members, 0..) |member, idx| {
+                    if (children[idx] != null) continue;
+                    if (self.eg.find(member) != sub_root) continue;
+                    const term = (try self.classTerm(
+                        sub_member,
+                        mask_id,
+                    )) orelse return false;
+                    children[idx] = term;
+                    sub_terms[sub_idx] = term;
+                    try matched.append(self.allocator(), @intCast(idx));
+                    claimed = true;
+                    break;
+                }
+                if (!claimed) {
+                    for (matched.items[mark..]) |undo| {
+                        children[undo] = null;
+                    }
+                    matched.shrinkRetainingCapacity(mark);
+                    continue :candidate;
+                }
+            }
+            if (self.rule_binder_terms) |overrides| {
+                const term = try self.allocator().create(Term);
+                term.* = .{ .node = cand_id, .children = sub_terms };
+                overrides[pm.binder] = term;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// Claim the enclosing bag's member positions covered by an already
+    /// fixed sub-bag term (a binder override), reusing its child terms.
+    fn claimTermMembers(
+        self: *ExplainCtx,
+        bag: ENode.Bag,
+        children: []?*const Term,
+        matched: *std.ArrayListUnmanaged(u32),
+        term: *const Term,
+    ) error{OutOfMemory}!bool {
+        const sub = switch (self.eg.nodes.items[term.node].node) {
+            .bag => |sub| sub,
+            else => return false,
+        };
+        if (sub.term_id != bag.term_id) return false;
+        for (sub.members, term.children) |sub_member, sub_child| {
             const sub_root = self.eg.find(sub_member);
             var claimed = false;
             for (bag.members, 0..) |member, idx| {
                 if (children[idx] != null) continue;
                 if (self.eg.find(member) != sub_root) continue;
-                children[idx] = (try self.classTerm(
-                    sub_member,
-                    mask_id,
-                )) orelse return false;
+                children[idx] = sub_child.?;
                 try matched.append(self.allocator(), @intCast(idx));
                 claimed = true;
                 break;
@@ -2488,8 +3464,7 @@ const ExplainCtx = struct {
     ) error{OutOfMemory}!?*const Term {
         switch (pattern) {
             .binder => |binder_idx| {
-                const binding = subst[binder_idx] orelse return null;
-                return try self.bindingTerm(binding, binder_masks[binder_idx]);
+                return try self.binderTerm(binder_idx, subst, binder_masks);
             },
             .app => |pattern_app| {
                 const root = self.eg.find(class);
@@ -2553,9 +3528,10 @@ const ExplainCtx = struct {
                                             binding,
                                             .{ .class = child_class },
                                         )) continue :member;
-                                        children[idx] = (try self.bindingTerm(
-                                            binding,
-                                            binder_masks[b],
+                                        children[idx] = (try self.binderTerm(
+                                            b,
+                                            subst,
+                                            binder_masks,
                                         )) orelse continue :member;
                                     },
                                     .app => {
@@ -2578,6 +3554,22 @@ const ExplainCtx = struct {
                 return null;
             },
         }
+    }
+
+    /// The rendering of rule binder `b` under the current edge: the
+    /// edge-scoped override when one is active (see `rule_binder_terms`),
+    /// else the binding's representative term.
+    fn binderTerm(
+        self: *ExplainCtx,
+        b: usize,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+    ) error{OutOfMemory}!?*const Term {
+        if (self.rule_binder_terms) |overrides| {
+            if (overrides[b]) |term| return term;
+        }
+        const binding = subst[b] orelse return null;
+        return try self.bindingTerm(binding, binder_masks[b]);
     }
 
     /// The representative term of a binding: the binder's step-consistent

@@ -46,7 +46,12 @@ the `@conversion`-enrolled rewrites plus the pool's local ground equations,
 asks whether the goal's two sides land in one class, and lowers the resulting
 explanation back to ordinary proof lines (`conversion/lowerer.zig`). AC
 operators declared via `@conversion assoc`/`comm` role tokens are absorbed
-into the e-graph's bag-node interning instead of being enrolled as rules. See
+into the e-graph's bag-node interning instead of being enrolled as rules.
+A stored bag node's member multiset is stable for life: when a member class
+later denotes a same-head bag, rebuild mints the flattened form as a twin
+node behind a `.splice` explanation edge rather than re-splicing in place —
+explanation edges render against the shapes recorded at union time, and the
+lowering crosses the twin with a pure AC re-tree (`.ac_flatten` step). See
 `docs/rewrite_system.md` for the user-facing surface.
 
 ## The pipeline (one `exactWithSession` call)
