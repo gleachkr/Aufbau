@@ -147,7 +147,11 @@ must pass through, and `@conversion` annotations on the rewrite theorems
 - **A saturated miss is a forced negative.** If the egraph reaches a
   fixpoint without connecting the goal to any reference, no chain of the
   enrolled rules exists at all — not "the search gave up", but "there is
-  no such conversion". The failure report says which of the two happened.
+  no such conversion". The failure report says which of the two happened,
+  and hedges the claim honestly when the fixpoint itself was approximate:
+  an AC bag-match enumeration that hit its budget, or a self-containing
+  class (idempotence/absorption union) kept atomic during AC
+  canonicalization, each append their own "NOT a forced negative" caveat.
 - **Variable dependencies are respected by construction.** Rules with
   bound binders (quantifier rules of passage, vacuous-quantifier drops)
   only fire when their dependency side conditions have a satisfiable

@@ -35,6 +35,8 @@ pub const RelationBundle = struct {
 
 /// Resolved relation with all IDs known.
 pub const ResolvedRelation = struct {
+    /// The operand sort the relation equates.
+    sort_name: []const u8,
     rel_term_id: u32,
     refl_id: u32,
     trans_id: u32,
@@ -342,8 +344,11 @@ pub const RewriteRegistry = struct {
         else
             .none;
         const both = std.mem.eql(u8, token, "both");
-        // Role rules enroll with both orientations until the bag
-        // representation lands (semantics-preserving, same as `both`).
+        // Role rules enroll with both orientations (same as `both`). This
+        // is permanent, not transitional: a head holding both certificates
+        // plus @congr is absorbed into bag interning at search time and
+        // skipped from enrollment there, but a single-certificate head
+        // relies on these flags to saturate as an ordinary rule.
         const ltr = both or role != .none or std.mem.eql(u8, token, "ltr");
         const rtl = both or role != .none or std.mem.eql(u8, token, "rtl");
         if (!ltr and !rtl) return error.InvalidConversionAnnotation;
@@ -386,6 +391,18 @@ pub const RewriteRegistry = struct {
                 .assoc => try validateAssocShape(rule, lhs, rhs),
                 .none => unreachable,
             };
+            // A registered @relation head must stay a plain application:
+            // local equations cite `rel(lhs, rhs)` nodes directly, and an
+            // absorbed relation would intern them as bags.
+            var rel_it = self.relations.valueIterator();
+            while (rel_it.next()) |relation| {
+                const rel_id = env.term_names.get(
+                    relation.rel_term_name,
+                ) orelse continue;
+                if (rel_id == head) {
+                    return error.ConversionRoleRelationHead;
+                }
+            }
             // One certificate per law per operator.
             for (self.conversions.items) |existing| {
                 if (existing.role == role and existing.head_term_id == head) {
@@ -997,6 +1014,7 @@ pub const RewriteRegistry = struct {
         }
 
         const resolved = ResolvedRelation{
+            .sort_name = bundle.sort_name,
             .rel_term_id = bundle.rel_term_id orelse return null,
             .refl_id = bundle.refl_id orelse return null,
             .trans_id = bundle.trans_id orelse return null,

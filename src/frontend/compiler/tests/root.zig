@@ -691,8 +691,10 @@ test "compiler stores conversion role annotations as both-direction rules" {
         return error.MissingTerm;
     };
     for (rules) |rule| {
-        // Role rules enroll with both orientations until the bag
-        // representation lands.
+        // Role rules permanently enroll with both orientations: fully
+        // certified heads are absorbed into bag interning at search time
+        // (and skipped there), but a single-certificate head relies on
+        // these flags to saturate as an ordinary rule.
         try std.testing.expect(rule.ltr);
         try std.testing.expect(rule.rtl);
         try std.testing.expectEqual(an_id, rule.head_term_id.?);
@@ -733,6 +735,23 @@ test "compiler accepts one role certificate per law per operator" {
     try std.testing.expectEqual(
         @as(usize, 2),
         metadata.registry.conversionRules().len,
+    );
+}
+
+test "compiler rejects role certificates on a registered relation head" {
+    // iff is classically assoc+comm, but certifying the relation itself
+    // would intern every rel(lhs, rhs) pool fact as a bag, silently
+    // disabling local-equation citation.
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion comm
+        \\axiom iff_comm (a b: wff): $ iff (iff a b) (iff b a) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.ConversionRoleRelationHead,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
     );
 }
 

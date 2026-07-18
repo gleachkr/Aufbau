@@ -598,6 +598,7 @@ fn annotationDiagnosticSpan(
         error.ConversionCommRuleShape,
         error.ConversionAssocRuleShape,
         error.ConversionRoleBoundBinder,
+        error.ConversionRoleRelationHead,
         error.DuplicateConversionRoleForHead,
         error.InvalidFallbackAnnotation,
         error.DuplicateFallbackAnnotation,
@@ -797,6 +798,9 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
             "rel(t(t(a, b), c), t(a, t(b, c))) (either orientation) over " ++
             "exactly three distinct binders",
         error.ConversionRoleBoundBinder => "@conversion assoc/comm rules must not have bound binders",
+        error.ConversionRoleRelationHead => "@conversion assoc/comm cannot certify a registered " ++
+            "@relation term: relation applications must stay plain so local " ++
+            "equations can be cited directly",
         error.DuplicateConversionRoleForHead => "another @conversion rule already certifies " ++
             "this law for the same operator",
         error.ConversionConclusionNotRelation => "@conversion rule conclusion must have the shape " ++

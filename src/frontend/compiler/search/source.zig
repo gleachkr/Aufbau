@@ -492,34 +492,63 @@ fn buildConversionDetail(
         try w.writeAll(
             "conversion? needs a concrete goal formula (no holes).",
         );
-    } else if (result.rule_count == 0 and result.pool_equations == 0) {
+    } else if (result.rule_count == 0 and
+        result.pool_equations == 0 and
+        result.ac_heads == 0)
+    {
         try w.writeAll(
             "no @conversion rules are enrolled — annotate theorems " ++
                 "concluding rel(lhs, rhs) with '@conversion ltr|rtl|both' " ++
                 "to give the egraph rewrites to saturate.",
         );
     } else if (result.convertible_unlowered) {
-        try w.writeAll(
-            "a reference convertible to this goal was found, but a proof " ++
-                "chain could not be extracted from it (missing @congr " ++
-                "coverage or a missing @relation transport are the usual " ++
-                "causes).",
-        );
+        if (result.lower_capped) {
+            try w.writeAll(
+                "a reference convertible to this goal was found, but the " ++
+                    "extracted proof chain outgrew the lowering's emission " ++
+                    "cap — the conversion is proven, its re-treeing proof " ++
+                    "is too large to write out.",
+            );
+        } else {
+            try w.writeAll(
+                "a reference convertible to this goal was found, but a proof " ++
+                    "chain could not be extracted from it (missing @congr " ++
+                    "coverage or a missing @relation transport are the usual " ++
+                    "causes).",
+            );
+        }
     } else switch (result.stats.outcome) {
-        .saturated => try w.print(
-            "the egraph saturated ({d} e-classes, {d} e-nodes, {d} " ++
-                "iterations, {d} rule orientations, {d} local equations): " ++
-                "no chain of the enrolled @conversion rewrites connects " ++
-                "this goal to any of the {d} pool references.",
-            .{
-                result.classes,
-                result.nodes,
-                result.stats.iterations,
-                result.rule_count,
-                result.pool_equations,
-                result.pool_size,
-            },
-        ),
+        .saturated => {
+            try w.print(
+                "the egraph saturated ({d} e-classes, {d} e-nodes, {d} " ++
+                    "iterations, {d} rule orientations, {d} local equations): " ++
+                    "no chain of the enrolled @conversion rewrites connects " ++
+                    "this goal to any of the {d} pool references.",
+                .{
+                    result.classes,
+                    result.nodes,
+                    result.stats.iterations,
+                    result.rule_count,
+                    result.pool_equations,
+                    result.pool_size,
+                },
+            );
+            if (result.stats.ac_match_capped != 0) {
+                try w.writeAll(
+                    " Some AC bag matches hit their enumeration budget, " ++
+                        "so this is NOT a forced negative: assignments " ++
+                        "were left untried.",
+                );
+            }
+            if (result.stats.ac_cyclic_dropped != 0) {
+                try w.writeAll(
+                    " Some self-containing classes (idempotence/" ++
+                        "absorption unions) were kept atomic during AC " ++
+                        "canonicalization, so this is NOT a forced " ++
+                        "negative: a few congruence merges were forfeited.",
+                );
+            }
+        },
         .iteration_capped => try w.print(
             "the egraph hit its iteration cap ({d}) before saturating " ++
                 "({d} e-nodes so far). A conversion may still exist — try " ++
@@ -552,10 +581,12 @@ fn buildConversionDetail(
                 "check the binders' declared dependencies.",
         );
     }
-    if (result.stats.ac_match_capped != 0) {
-        try w.writeAll(
-            " Some AC bag matches hit their enumeration budget, so this " ++
-                "is NOT a forced negative: assignments were left untried.",
+    if (goal_concrete and result.partial_ac_heads != 0) {
+        try w.print(
+            " {d} operator(s) hold an assoc/comm certificate without the " ++
+                "partner law or @congr coverage; their certificates enroll " ++
+                "as ordinary both-way rewrites instead of absorbing.",
+            .{result.partial_ac_heads},
         );
     }
     return try buf.toOwnedSlice(allocator);

@@ -375,8 +375,14 @@ the tree representation's AC closure grows as `3^n` e-nodes and starts
 losing forced negatives around seven atoms, where the absorbed
 representation stays linear (see
 `docs/design_notes/ac_representation.md`). An operator with only one of
-the two certificates enrolls for ordinary `both`-ways saturation,
-unchanged.
+the two certificates (or without `@congr` coverage) enrolls for ordinary
+`both`-ways saturation, unchanged — note this enables *both* orientations
+even if the law was previously annotated with a single direction token;
+`conversion?` failure reports call out such partially-certified operators.
+
+A registered `@relation` term itself cannot take a role certificate (a
+hard error): local equations cite `rel(lhs, rhs)` applications directly,
+and an absorbed relation would intern them as multisets instead.
 
 ### Requirements
 

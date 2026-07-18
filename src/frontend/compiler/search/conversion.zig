@@ -102,6 +102,17 @@ pub const Result = struct {
     rule_count: usize = 0,
     /// Pool entries of shape `rel(lhs, rhs)` enrolled as ground unions.
     pool_equations: usize = 0,
+    /// Operators absorbed into bag interning (both role certificates
+    /// plus @congr coverage). Their laws are representational, so they
+    /// keep the search alive even with zero enrolled rules.
+    ac_heads: usize = 0,
+    /// Operators holding at least one role certificate that did NOT
+    /// absorb (missing the partner law or @congr); their certificates
+    /// enroll as ordinary both-way rewrites.
+    partial_ac_heads: usize = 0,
+    /// The found chain (or a seam of it) outgrew the lowering's emission
+    /// caps; the conversion is proven, the proof text was abandoned.
+    lower_capped: bool = false,
     classes: usize = 0,
     nodes: usize = 0,
 };
@@ -172,6 +183,17 @@ pub fn run(
         });
     }
     result.rule_count = rules.items.len;
+    result.ac_heads = ac_certs.count();
+    {
+        var partial: std.AutoArrayHashMapUnmanaged(u32, void) = .{};
+        for (context.registry.conversionRules()) |conv| {
+            if (conv.role == .none) continue;
+            const head = conv.head_term_id orelse continue;
+            if (ac_certs.contains(head)) continue;
+            try partial.put(work, head, {});
+        }
+        result.partial_ac_heads = partial.count();
+    }
 
     var eg = egraph.EGraph.init(work);
     // The congruence gate: only heads with a `@congr` proof step may drive
@@ -254,8 +276,15 @@ pub fn run(
     }
 
     // Nothing can ever union: report the enrollment gap without paying for
-    // a saturation that provably does no work.
-    if (rules.items.len == 0 and result.pool_equations == 0) return result;
+    // a saturation that provably does no work. Absorbed AC heads still
+    // convert by interning alone (pure permutation goals), so they keep
+    // the search alive even with zero enrolled rules.
+    if (rules.items.len == 0 and
+        result.pool_equations == 0 and
+        ac_certs.count() == 0)
+    {
+        return result;
+    }
 
     // Saturate one iteration at a time and stop as soon as the goal shares
     // a class with a pool entry. Absorption-style rules union a variable's
@@ -274,6 +303,7 @@ pub fn run(
         result.stats.unions_applied += slice.unions_applied;
         result.stats.dep_deferred += slice.dep_deferred;
         result.stats.ac_match_capped += slice.ac_match_capped;
+        result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
         if (slice.outcome != .iteration_capped) {
             result.stats.outcome = slice.outcome;
             break;
@@ -304,8 +334,22 @@ pub fn run(
     }
 
     const goal_class = termClass(&eg, extract_goal);
-    for (pool, extract_pool, pool_exprs) |entry, maybe_term, maybe_expr| {
-        const ref_term = maybe_term orelse continue;
+    for (pool, extract_pool, pool_exprs, 0..) |entry, maybe_term, maybe_expr, idx| {
+        const ref_term = maybe_term orelse {
+            // The extraction rebuild failed (a written member's class
+            // spliced deeper than the written tree). If the seed-time
+            // term had converged, the goal is provably convertible —
+            // keep the failure report honest.
+            if (pool_terms[idx]) |seed| {
+                if (eg.sameClass(
+                    termClass(&eg, seed),
+                    termClass(&eg, goal_term),
+                )) {
+                    result.convertible_unlowered = true;
+                }
+            }
+            continue;
+        };
         if (!eg.sameClass(termClass(&eg, ref_term), goal_class)) continue;
         const steps = (try eg.explain(
             rules.items,
@@ -346,6 +390,7 @@ pub fn run(
             return result;
         }
         result.convertible_unlowered = true;
+        if (lowerer.cap_tripped) result.lower_capped = true;
     }
     return result;
 }
@@ -556,6 +601,9 @@ const Lowerer = struct {
     /// runaway chain aborts the ref instead of flooding the buffer.
     lines_emitted: usize = 0,
     align_depth: usize = 0,
+    /// Set when a null return came from an emission cap rather than a
+    /// structural gap — the driver reports the two differently.
+    cap_tripped: bool = false,
     out: std.ArrayListUnmanaged(u8) = .{},
 
     fn seedLabels(
@@ -730,7 +778,10 @@ const Lowerer = struct {
         ref_labels: []const []const u8,
     ) !?[]const u8 {
         self.lines_emitted += 1;
-        if (self.lines_emitted > 4096) return null;
+        if (self.lines_emitted > 4096) {
+            self.cap_tripped = true;
+            return null;
+        }
         const text = (try self.ppExpr(formula));
         const label = try self.freshLabel();
         const writer = self.out.writer(self.work);
@@ -859,6 +910,7 @@ const Lowerer = struct {
                     const pre = (try self.alignEmit(
                         before_expr,
                         w_before,
+                        redex_relation.sort_name,
                     )) orelse return null;
                     label = (try self.emitLine(
                         try self.relIds(redex_relation, before_expr, w_after),
@@ -870,6 +922,7 @@ const Lowerer = struct {
                     const post = (try self.alignEmit(
                         w_after,
                         after_expr,
+                        redex_relation.sort_name,
                     )) orelse return null;
                     label = (try self.emitLine(
                         try self.relIds(
@@ -1377,16 +1430,23 @@ const Lowerer = struct {
     /// Emit a proof of `rel(from, to)` for two expressions equal modulo
     /// the certified AC laws, recursively under congruence. Emits refl for
     /// identical expressions. Null aborts the ref (clean miss).
+    /// `sort_hint` supplies the sort when the expression itself cannot
+    /// (a dummy variable has no interned sort); the congruent descent
+    /// passes each child's declared arg sort.
     fn alignEmit(
         self: *Lowerer,
         from: ExprId,
         to: ExprId,
+        sort_hint: ?[]const u8,
     ) AlignErr!?[]const u8 {
-        if (self.align_depth >= 64) return null;
+        if (self.align_depth >= 64) {
+            self.cap_tripped = true;
+            return null;
+        }
         self.align_depth += 1;
         defer self.align_depth -= 1;
         const relation = self.relationForSort(
-            self.sortOfExpr(from) orelse return null,
+            self.sortOfExpr(from) orelse sort_hint orelse return null,
         ) orelse return null;
         if (from == to) {
             return try self.emitLine(
@@ -1416,7 +1476,11 @@ const Lowerer = struct {
                 if (fc != tc) return null;
                 continue;
             }
-            const label = (try self.alignEmit(fc, tc)) orelse return null;
+            const label = (try self.alignEmit(
+                fc,
+                tc,
+                arg_info.sort_name,
+            )) orelse return null;
             try ref_labels.append(self.work, label);
         }
         return try self.emitLine(
@@ -1486,6 +1550,7 @@ const Lowerer = struct {
             const sub = (try self.alignEmit(
                 from_members.items[i],
                 target_member,
+                self.context.env.terms.items[head].args[0].sort_name,
             )) orelse return null;
             const lifted = (try self.liftExprLabel(
                 current,
@@ -1758,6 +1823,7 @@ const Lowerer = struct {
             const pre = (try self.alignEmit(
                 before_expr,
                 x_before,
+                seam_rel.sort_name,
             )) orelse return null;
             chain = (try self.emitLine(
                 try self.relIds(seam_rel, before_expr, x_after),
@@ -1769,6 +1835,7 @@ const Lowerer = struct {
             const post = (try self.alignEmit(
                 x_after,
                 after_expr,
+                seam_rel.sort_name,
             )) orelse return null;
             chain = (try self.emitLine(
                 try self.relIds(seam_rel, before_expr, after_expr),
@@ -1872,12 +1939,15 @@ const Lowerer = struct {
 
         var label = child_label;
         const m: usize = changed_idx;
+        // Sorts come from the head's declaration, not the expressions: a
+        // bare member can be a dummy variable, which has no interned sort.
+        const head_decl = &self.context.env.terms.items[head];
         const relation = self.relationForSort(
-            self.sortOfExpr(before_combs[0]) orelse return null,
+            head_decl.ret_sort_name,
         ) orelse return null;
         if (m != count - 1) {
             const tail_rel = self.relationForSort(
-                self.sortOfExpr(before_combs[m + 1]) orelse return null,
+                head_decl.args[1].sort_name,
             ) orelse return null;
             const refl_tail = (try self.emitLine(
                 try self.relIds(
@@ -1901,7 +1971,7 @@ const Lowerer = struct {
                 before_parent.children[i].?,
             )) orelse return null;
             const member_rel = self.relationForSort(
-                self.sortOfExpr(member_expr) orelse return null,
+                head_decl.args[0].sort_name,
             ) orelse return null;
             const refl_member = (try self.emitLine(
                 try self.relIds(member_rel, member_expr, member_expr),
@@ -1952,6 +2022,7 @@ const Lowerer = struct {
             chain_label = (try self.alignEmit(
                 ref_expr,
                 current_expr,
+                root_relation.sort_name,
             )) orelse return null;
         }
         for (steps) |step| {
@@ -1983,6 +2054,7 @@ const Lowerer = struct {
             const seam = (try self.alignEmit(
                 current_expr,
                 self.goal_expr,
+                root_relation.sort_name,
             )) orelse return null;
             if (chain_label) |prev| {
                 chain_label = (try self.emitLine(

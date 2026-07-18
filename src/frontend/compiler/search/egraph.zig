@@ -168,6 +168,11 @@ pub const SaturateStats = struct {
     /// run. A nonzero count on a saturated miss means the miss is NOT a
     /// forced negative — some assignments were never tried.
     ac_match_capped: usize = 0,
+    /// Cyclic `bag_in_class` entries dropped by rebuild passes this run.
+    /// Dropping keeps member lists finite but forfeits some congruence
+    /// merges, so a nonzero count on a saturated miss means the miss is
+    /// NOT a forced negative in the AC quotient.
+    ac_cyclic_dropped: usize = 0,
 };
 
 pub const SaturateOptions = struct {
@@ -288,8 +293,15 @@ pub const EGraph = struct {
     /// Remaining assignment budget for the current top-level bag match;
     /// reset per (rule, node) match call.
     ac_budget_remaining: usize = 0,
+    /// Set when an enumeration actually early-outs on an empty budget —
+    /// distinguishes truncation from an enumeration that completed on
+    /// exactly its last budget unit. Reset per (rule, node) match call.
+    ac_budget_hit: bool = false,
     /// Total bag-match budget trips (monotone; `saturate` reports deltas).
     ac_match_capped_total: usize = 0,
+    /// Total cyclic bag-index entries dropped (monotone; `saturate`
+    /// reports deltas).
+    ac_cyclic_dropped_total: usize = 0,
     /// Proof-forest edges, one per effective union, in union order.
     unions: std.ArrayListUnmanaged(UnionEdge) = .{},
     /// Creating node of each class (parallel to `parents`). Every class is
@@ -322,31 +334,61 @@ pub const EGraph = struct {
     /// Child slices are duplicated into the arena; callers may pass stack
     /// slices.
     pub fn add(self: *EGraph, node: ENode) !EClassId {
-        const canon = try self.canonicalize(node);
+        return self.addWith(node, self.allocator);
+    }
+
+    /// `add` with canonicalization scratch supplied by the caller: the
+    /// canonical shape's slices are duplicated into the egraph arena only
+    /// when the node is actually inserted. Memo hits (the overwhelmingly
+    /// common case on hot match paths) then cost the scratch arena
+    /// nothing durable.
+    fn addWith(
+        self: *EGraph,
+        node: ENode,
+        scratch: std.mem.Allocator,
+    ) !EClassId {
+        const canon = try self.canonicalizeInto(node, null, scratch);
         if (self.memo.get(canon)) |node_id| {
             return self.find(self.nodes.items[node_id].class);
         }
+        const owned = try self.ownNode(canon);
         const class: EClassId = @intCast(self.parents.items.len);
         try self.parents.append(self.allocator, class);
         const node_id: ENodeId = @intCast(self.nodes.items.len);
         try self.nodes.append(self.allocator, .{
-            .node = canon,
+            .node = owned,
             .class = class,
         });
         try self.class_node.append(self.allocator, node_id);
         try self.expl_parent.append(self.allocator, null);
-        try self.memo.put(self.allocator, canon, node_id);
-        if (canon == .leaf) {
-            try self.leaf_classes.put(self.allocator, canon.leaf, class);
+        try self.memo.put(self.allocator, owned, node_id);
+        if (owned == .leaf) {
+            try self.leaf_classes.put(self.allocator, owned.leaf, class);
         }
-        if (canon == .bag) {
+        if (owned == .bag) {
             try self.bag_in_class.put(
                 self.allocator,
-                bagKey(canon.bag.term_id, class),
+                bagKey(owned.bag.term_id, class),
                 node_id,
             );
         }
         return class;
+    }
+
+    /// Duplicate a (possibly scratch-backed) canonical node's slices into
+    /// the egraph arena for permanent storage.
+    fn ownNode(self: *EGraph, node: ENode) !ENode {
+        return switch (node) {
+            .leaf => node,
+            .app => |app| .{ .app = .{
+                .term_id = app.term_id,
+                .children = try self.allocator.dupe(Child, app.children),
+            } },
+            .bag => |bag| .{ .bag = .{
+                .term_id = bag.term_id,
+                .members = try self.allocator.dupe(EClassId, bag.members),
+            } },
+        };
     }
 
     /// The node id of a shape already in the graph (canonicalized first).
@@ -498,6 +540,7 @@ pub const EGraph = struct {
         for (cyclic.items) |key| {
             _ = self.bag_in_class.swapRemove(key);
         }
+        self.ac_cyclic_dropped_total += cyclic.items.len;
     }
 
     /// True when the transitive same-head member expansion of `root`'s
@@ -542,6 +585,18 @@ pub const EGraph = struct {
     ) !SaturateStats {
         var stats = SaturateStats{ .outcome = .iteration_capped };
         const capped_start = self.ac_match_capped_total;
+        const cyclic_start = self.ac_cyclic_dropped_total;
+        // Match-phase scratch: pattern pairs, substitution probes, and
+        // candidate lists are garbage the moment one (node, rule) match
+        // call returns. Left in the egraph arena they accumulate to
+        // budget x (nodes x rules) allocations per iteration — gigabytes
+        // on dense workloads — so they live in a reusable arena instead.
+        // Escaping values (solution substs, extensions, sub-bag member
+        // arrays) stay on `self.allocator`.
+        var scratch_state = std.heap.ArenaAllocator.init(
+            std.heap.page_allocator,
+        );
+        defer scratch_state.deinit();
         _ = try self.rebuild();
         while (stats.iterations < opts.max_iterations) {
             stats.iterations += 1;
@@ -557,13 +612,16 @@ pub const EGraph = struct {
                         if (pattern.term_id != app.term_id) continue;
                         if (pattern.args.len != app.children.len) continue;
                         self.ac_budget_remaining = opts.ac_match_budget;
+                        self.ac_budget_hit = false;
+                        _ = scratch_state.reset(.retain_capacity);
                         try self.matchRule(
                             rule,
                             @intCast(rule_slot),
                             @intCast(node_id),
                             &matches,
+                            scratch_state.allocator(),
                         );
-                        if (self.ac_budget_remaining == 0) {
+                        if (self.ac_budget_hit) {
                             self.ac_match_capped_total += 1;
                         }
                     },
@@ -571,16 +629,26 @@ pub const EGraph = struct {
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != bag.term_id) continue;
                         self.ac_budget_remaining = opts.ac_match_budget;
+                        self.ac_budget_hit = false;
+                        _ = scratch_state.reset(.retain_capacity);
                         try self.matchRuleBag(
                             rule,
                             @intCast(rule_slot),
                             @intCast(node_id),
                             &matches,
+                            scratch_state.allocator(),
                         );
-                        if (self.ac_budget_remaining == 0) {
+                        if (self.ac_budget_hit) {
                             self.ac_match_capped_total += 1;
                         }
                     },
+                }
+                // Binder-subset matching materializes sub-bags via add();
+                // hold that growth to the same node cap as the apply loop.
+                if (self.nodes.items.len > opts.max_nodes) {
+                    _ = try self.rebuild();
+                    stats.outcome = .node_capped;
+                    return self.finishStats(stats, capped_start, cyclic_start);
                 }
             }
 
@@ -637,9 +705,7 @@ pub const EGraph = struct {
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
-                    stats.ac_match_capped =
-                        self.ac_match_capped_total - capped_start;
-                    return stats;
+                    return self.finishStats(stats, capped_start, cyclic_start);
                 }
             }
 
@@ -647,13 +713,22 @@ pub const EGraph = struct {
             const congr_changed = try self.rebuild();
             if (!changed and !grew and !congr_changed) {
                 stats.outcome = .saturated;
-                stats.ac_match_capped =
-                    self.ac_match_capped_total - capped_start;
-                return stats;
+                return self.finishStats(stats, capped_start, cyclic_start);
             }
         }
-        stats.ac_match_capped = self.ac_match_capped_total - capped_start;
-        return stats;
+        return self.finishStats(stats, capped_start, cyclic_start);
+    }
+
+    fn finishStats(
+        self: *const EGraph,
+        stats: SaturateStats,
+        capped_start: usize,
+        cyclic_start: usize,
+    ) SaturateStats {
+        var out = stats;
+        out.ac_match_capped = self.ac_match_capped_total - capped_start;
+        out.ac_cyclic_dropped = self.ac_cyclic_dropped_total - cyclic_start;
+        return out;
     }
 
     const AvoidCache = std.AutoArrayHashMapUnmanaged(LeafId, []const bool);
@@ -759,16 +834,27 @@ pub const EGraph = struct {
     }
 
     fn canonicalize(self: *const EGraph, node: ENode) !ENode {
-        return self.canonicalizeWith(node, null);
+        return self.canonicalizeInto(node, null, self.allocator);
     }
 
-    /// Canonicalize a node. `self_class` (the node's own class, when
-    /// re-canonicalizing a stored node) seeds the splice cycle guard so a
-    /// cyclic class stays an atomic member of its own bag.
     fn canonicalizeWith(
         self: *const EGraph,
         node: ENode,
         self_class: ?EClassId,
+    ) error{OutOfMemory}!ENode {
+        return self.canonicalizeInto(node, self_class, self.allocator);
+    }
+
+    /// Canonicalize a node into `alloc`. `self_class` (the node's own
+    /// class, when re-canonicalizing a stored node) seeds the splice
+    /// cycle guard so a cyclic class stays an atomic member of its own
+    /// bag. Callers that only probe the memo pass a scratch allocator;
+    /// storage paths pass the egraph arena (or own the result).
+    fn canonicalizeInto(
+        self: *const EGraph,
+        node: ENode,
+        self_class: ?EClassId,
+        alloc: std.mem.Allocator,
     ) error{OutOfMemory}!ENode {
         switch (node) {
             .leaf => return node,
@@ -783,9 +869,10 @@ pub const EGraph = struct {
                         app.term_id,
                         &.{ app.children[0].class, app.children[1].class },
                         self_class,
+                        alloc,
                     );
                 }
-                const children = try self.allocator.alloc(
+                const children = try alloc.alloc(
                     Child,
                     app.children.len,
                 );
@@ -804,6 +891,7 @@ pub const EGraph = struct {
                 bag.term_id,
                 bag.members,
                 self_class,
+                alloc,
             ),
         }
     }
@@ -821,14 +909,21 @@ pub const EGraph = struct {
         term_id: u32,
         members: []const EClassId,
         self_class: ?EClassId,
+        alloc: std.mem.Allocator,
     ) error{OutOfMemory}!ENode {
         var out: std.ArrayListUnmanaged(EClassId) = .{};
         var visited: std.ArrayListUnmanaged(EClassId) = .{};
         if (self_class) |class| {
-            try visited.append(self.allocator, self.find(class));
+            try visited.append(alloc, self.find(class));
         }
         for (members) |member| {
-            try self.spliceInto(term_id, self.find(member), &out, &visited);
+            try self.spliceInto(
+                term_id,
+                self.find(member),
+                &out,
+                &visited,
+                alloc,
+            );
         }
         std.mem.sort(EClassId, out.items, {}, std.sort.asc(EClassId));
         return .{ .bag = .{ .term_id = term_id, .members = out.items } };
@@ -846,20 +941,27 @@ pub const EGraph = struct {
         root: EClassId,
         out: *std.ArrayListUnmanaged(EClassId),
         visited: *std.ArrayListUnmanaged(EClassId),
+        alloc: std.mem.Allocator,
     ) error{OutOfMemory}!void {
         const bag_node = self.bag_in_class.get(bagKey(term_id, root)) orelse {
-            try out.append(self.allocator, root);
+            try out.append(alloc, root);
             return;
         };
         if (std.mem.indexOfScalar(EClassId, visited.items, root) != null) {
-            try out.append(self.allocator, root);
+            try out.append(alloc, root);
             return;
         }
-        try visited.append(self.allocator, root);
+        try visited.append(alloc, root);
         defer _ = visited.pop();
         const members = self.nodes.items[bag_node].node.bag.members;
         for (members) |member| {
-            try self.spliceInto(term_id, self.find(member), out, visited);
+            try self.spliceInto(
+                term_id,
+                self.find(member),
+                out,
+                visited,
+                alloc,
+            );
         }
     }
 
@@ -899,18 +1001,19 @@ pub const EGraph = struct {
         rule_slot: u32,
         root_node: ENodeId,
         matches: *std.ArrayListUnmanaged(Match),
+        scratch: std.mem.Allocator,
     ) !void {
         const pattern = rule.match_side.app;
         const node = self.nodes.items[root_node].node.app;
-        const pairs = try self.allocator.alloc(PatternPair, pattern.args.len);
+        const pairs = try scratch.alloc(PatternPair, pattern.args.len);
         for (pattern.args, node.children, 0..) |p, c, idx| {
             pairs[idx] = .{ .pattern = p, .child = c };
         }
-        const subst = try self.allocator.alloc(?Child, rule.num_binders);
+        const subst = try scratch.alloc(?Child, rule.num_binders);
         @memset(subst, null);
 
         var solutions: std.ArrayListUnmanaged([]const ?Child) = .{};
-        try self.solvePairs(pairs, 0, subst, &solutions);
+        try self.solvePairs(pairs, 0, subst, &solutions, self.allocator, scratch);
         for (solutions.items) |solution| {
             try matches.append(self.allocator, .{
                 .rule_slot = rule_slot,
@@ -935,6 +1038,7 @@ pub const EGraph = struct {
     /// binders and other-headed applications are members.
     fn flattenPattern(
         self: *EGraph,
+        alloc: std.mem.Allocator,
         term_id: u32,
         pattern: TemplateExpr,
         out: *std.ArrayListUnmanaged(TemplateExpr),
@@ -942,11 +1046,11 @@ pub const EGraph = struct {
         if (pattern == .app and pattern.app.term_id == term_id and
             pattern.app.args.len == 2)
         {
-            try self.flattenPattern(term_id, pattern.app.args[0], out);
-            try self.flattenPattern(term_id, pattern.app.args[1], out);
+            try self.flattenPattern(alloc, term_id, pattern.app.args[0], out);
+            try self.flattenPattern(alloc, term_id, pattern.app.args[1], out);
             return;
         }
-        try out.append(self.allocator, pattern);
+        try out.append(alloc, pattern);
     }
 
     /// Structured members sort before binder members: they pin bindings
@@ -967,10 +1071,12 @@ pub const EGraph = struct {
         rule_slot: u32,
         root_node: ENodeId,
         matches: *std.ArrayListUnmanaged(Match),
+        scratch: std.mem.Allocator,
     ) !void {
         const bag = self.nodes.items[root_node].node.bag;
         var pattern_members: std.ArrayListUnmanaged(TemplateExpr) = .{};
         try self.flattenPattern(
+            scratch,
             bag.term_id,
             rule.match_side,
             &pattern_members,
@@ -983,9 +1089,9 @@ pub const EGraph = struct {
             structuredFirst,
         );
 
-        const subst = try self.allocator.alloc(?Child, rule.num_binders);
+        const subst = try scratch.alloc(?Child, rule.num_binders);
         @memset(subst, null);
-        const used = try self.allocator.alloc(bool, bag.members.len);
+        const used = try scratch.alloc(bool, bag.members.len);
         @memset(used, false);
         var solutions: std.ArrayListUnmanaged(BagSolution) = .{};
         try self.assignBagMembers(
@@ -996,6 +1102,8 @@ pub const EGraph = struct {
             used,
             true,
             &solutions,
+            self.allocator,
+            scratch,
         );
         for (solutions.items) |solution| {
             try matches.append(self.allocator, .{
@@ -1009,7 +1117,8 @@ pub const EGraph = struct {
 
     /// Recursive assignment of pattern members to bag member positions.
     /// `subst` and `used` thread through with backtracking; solutions
-    /// carry owned copies.
+    /// carry copies owned by `dest` (the caller's escape allocator);
+    /// every intermediate probe lives in `scratch`.
     fn assignBagMembers(
         self: *EGraph,
         bag: ENode.Bag,
@@ -1019,20 +1128,29 @@ pub const EGraph = struct {
         used: []bool,
         allow_extension: bool,
         solutions: *std.ArrayListUnmanaged(BagSolution),
+        dest: std.mem.Allocator,
+        scratch: std.mem.Allocator,
     ) error{OutOfMemory}!void {
-        if (self.ac_budget_remaining == 0) return;
+        // Entry charge, completions included: it bounds calls, solutions,
+        // and recursion depth alike. The flag distinguishes a genuine
+        // early-out from an enumeration that finished exactly on its last
+        // budget unit (only the former weakens a forced negative).
+        if (self.ac_budget_remaining == 0) {
+            self.ac_budget_hit = true;
+            return;
+        }
         self.ac_budget_remaining -= 1;
         if (p_idx == pattern_members.len) {
             var extension: std.ArrayListUnmanaged(EClassId) = .{};
             for (bag.members, used) |member, is_used| {
                 if (!is_used) {
-                    try extension.append(self.allocator, self.find(member));
+                    try extension.append(scratch, self.find(member));
                 }
             }
             if (extension.items.len != 0 and !allow_extension) return;
-            try solutions.append(self.allocator, .{
-                .subst = try self.allocator.dupe(?Child, subst),
-                .extension = extension.items,
+            try solutions.append(dest, .{
+                .subst = try dest.dupe(?Child, subst),
+                .extension = try dest.dupe(EClassId, extension.items),
             });
             return;
         }
@@ -1042,19 +1160,26 @@ pub const EGraph = struct {
                     if (used[idx]) continue;
                     // Solve the structured pattern against this member
                     // class, then continue assigning under each solution.
-                    const pairs = try self.allocator.alloc(PatternPair, 1);
+                    const pairs = try scratch.alloc(PatternPair, 1);
                     pairs[0] = .{
                         .pattern = pattern_members[p_idx],
                         .child = .{ .class = member },
                     };
-                    const scratch = try self.allocator.dupe(?Child, subst);
+                    const probe = try scratch.dupe(?Child, subst);
                     var partial: std.ArrayListUnmanaged(
                         []const ?Child,
                     ) = .{};
-                    try self.solvePairs(pairs, 0, scratch, &partial);
+                    try self.solvePairs(
+                        pairs,
+                        0,
+                        probe,
+                        &partial,
+                        scratch,
+                        scratch,
+                    );
                     used[idx] = true;
                     for (partial.items) |candidate| {
-                        const next = try self.allocator.dupe(
+                        const next = try scratch.dupe(
                             ?Child,
                             candidate,
                         );
@@ -1066,6 +1191,8 @@ pub const EGraph = struct {
                             used,
                             allow_extension,
                             solutions,
+                            dest,
+                            scratch,
                         );
                     }
                     used[idx] = false;
@@ -1084,6 +1211,8 @@ pub const EGraph = struct {
                     binder_idx,
                     0,
                     &chosen,
+                    dest,
+                    scratch,
                 );
             },
         }
@@ -1104,12 +1233,17 @@ pub const EGraph = struct {
         binder_idx: usize,
         start: usize,
         chosen: *std.ArrayListUnmanaged(usize),
+        dest: std.mem.Allocator,
+        scratch: std.mem.Allocator,
     ) error{OutOfMemory}!void {
         for (start..bag.members.len) |idx| {
             if (used[idx]) continue;
-            if (self.ac_budget_remaining == 0) return;
+            if (self.ac_budget_remaining == 0) {
+                self.ac_budget_hit = true;
+                return;
+            }
             self.ac_budget_remaining -= 1;
-            try chosen.append(self.allocator, idx);
+            try chosen.append(scratch, idx);
             used[idx] = true;
             try self.applyBinderSubset(
                 bag,
@@ -1121,6 +1255,8 @@ pub const EGraph = struct {
                 solutions,
                 binder_idx,
                 chosen.items,
+                dest,
+                scratch,
             );
             try self.enumerateBinderSubsets(
                 bag,
@@ -1133,6 +1269,8 @@ pub const EGraph = struct {
                 binder_idx,
                 idx + 1,
                 chosen,
+                dest,
+                scratch,
             );
             used[idx] = false;
             _ = chosen.pop();
@@ -1153,14 +1291,15 @@ pub const EGraph = struct {
         solutions: *std.ArrayListUnmanaged(BagSolution),
         binder_idx: usize,
         chosen: []const usize,
+        dest: std.mem.Allocator,
+        scratch: std.mem.Allocator,
     ) error{OutOfMemory}!void {
         const binding: Child = if (chosen.len == 1)
             .{ .class = bag.members[chosen[0]] }
         else blk: {
-            const members = try self.allocator.alloc(
-                EClassId,
-                chosen.len,
-            );
+            // Scratch-backed shape: addWith copies the canonical members
+            // into the egraph arena only if the sub-bag is actually new.
+            const members = try scratch.alloc(EClassId, chosen.len);
             for (chosen, 0..) |member_idx, i| {
                 members[i] = bag.members[member_idx];
             }
@@ -1168,7 +1307,7 @@ pub const EGraph = struct {
                 .term_id = bag.term_id,
                 .members = members,
             } };
-            break :blk .{ .class = try self.add(shape) };
+            break :blk .{ .class = try self.addWith(shape, scratch) };
         };
         if (subst[binder_idx]) |existing| {
             if (!self.bindingsCompatible(existing, binding)) return;
@@ -1180,6 +1319,8 @@ pub const EGraph = struct {
                 used,
                 allow_extension,
                 solutions,
+                dest,
+                scratch,
             );
         } else {
             subst[binder_idx] = self.normalizeBinding(binding);
@@ -1192,6 +1333,8 @@ pub const EGraph = struct {
                 used,
                 allow_extension,
                 solutions,
+                dest,
+                scratch,
             );
         }
     }
@@ -1206,10 +1349,12 @@ pub const EGraph = struct {
         idx: usize,
         subst: []?Child,
         solutions: *std.ArrayListUnmanaged([]const ?Child),
+        dest: std.mem.Allocator,
+        scratch: std.mem.Allocator,
     ) !void {
         if (idx == pairs.len) {
-            const copy = try self.allocator.dupe(?Child, subst);
-            try solutions.append(self.allocator, copy);
+            const copy = try dest.dupe(?Child, subst);
+            try solutions.append(dest, copy);
             return;
         }
         const pair = pairs[idx];
@@ -1219,10 +1364,24 @@ pub const EGraph = struct {
                     if (!self.bindingsCompatible(existing, pair.child)) {
                         return;
                     }
-                    try self.solvePairs(pairs, idx + 1, subst, solutions);
+                    try self.solvePairs(
+                        pairs,
+                        idx + 1,
+                        subst,
+                        solutions,
+                        dest,
+                        scratch,
+                    );
                 } else {
                     subst[binder_idx] = self.normalizeBinding(pair.child);
-                    try self.solvePairs(pairs, idx + 1, subst, solutions);
+                    try self.solvePairs(
+                        pairs,
+                        idx + 1,
+                        subst,
+                        solutions,
+                        dest,
+                        scratch,
+                    );
                     subst[binder_idx] = null;
                 }
             },
@@ -1243,7 +1402,7 @@ pub const EGraph = struct {
                                 {
                                     continue;
                                 }
-                                const extended = try self.allocator.alloc(
+                                const extended = try scratch.alloc(
                                     PatternPair,
                                     pattern_app.args.len +
                                         (pairs.len - idx - 1),
@@ -1267,6 +1426,8 @@ pub const EGraph = struct {
                                     0,
                                     subst,
                                     solutions,
+                                    dest,
+                                    scratch,
                                 );
                             },
                             // A same-head sub-pattern against a bag
@@ -1284,6 +1445,7 @@ pub const EGraph = struct {
                                     TemplateExpr,
                                 ) = .{};
                                 try self.flattenPattern(
+                                    scratch,
                                     member_bag.term_id,
                                     pair.pattern,
                                     &flat,
@@ -1299,11 +1461,11 @@ pub const EGraph = struct {
                                     {},
                                     structuredFirst,
                                 );
-                                const scratch = try self.allocator.dupe(
+                                const probe = try scratch.dupe(
                                     ?Child,
                                     subst,
                                 );
-                                const used = try self.allocator.alloc(
+                                const used = try scratch.alloc(
                                     bool,
                                     member_bag.members.len,
                                 );
@@ -1315,13 +1477,15 @@ pub const EGraph = struct {
                                     member_bag,
                                     flat.items,
                                     0,
-                                    scratch,
+                                    probe,
                                     used,
                                     false,
                                     &bag_solutions,
+                                    scratch,
+                                    scratch,
                                 );
                                 for (bag_solutions.items) |solution| {
-                                    const next = try self.allocator.dupe(
+                                    const next = try scratch.dupe(
                                         ?Child,
                                         solution.subst,
                                     );
@@ -1330,6 +1494,8 @@ pub const EGraph = struct {
                                         0,
                                         next,
                                         solutions,
+                                        dest,
+                                        scratch,
                                     );
                                 }
                             },
@@ -1861,6 +2027,73 @@ const ExplainCtx = struct {
     /// Emit the steps rewriting `from` into exactly `to` at `pos`. Returns
     /// false to give up (caps or an unexplainable gap) — the caller treats
     /// the whole extraction as a miss.
+    /// Re-pair a seed-time term's children with its nodes' current member
+    /// order. Bag members re-sort in place as unions land, so a Term built
+    /// before saturation may no longer parallel its node. Children are
+    /// reused verbatim (they pin the written formula's representatives) —
+    /// only the bag-level pairing moves. Null when no pairing exists: a
+    /// splice changed the member count, or a member's class drifted away
+    /// from every child (the caller treats the edge as unexplainable).
+    fn refreshSeedTerm(
+        self: *ExplainCtx,
+        term: *const Term,
+    ) error{OutOfMemory}!?*const Term {
+        if (self.eg.ac_heads.count() == 0) return term;
+        switch (self.eg.nodes.items[term.node].node) {
+            .leaf => return term,
+            .app => {
+                var children: ?[]?*const Term = null;
+                for (term.children, 0..) |maybe_child, idx| {
+                    const child = maybe_child orelse continue;
+                    const fixed = (try self.refreshSeedTerm(child)) orelse {
+                        return null;
+                    };
+                    if (fixed == child) continue;
+                    if (children == null) {
+                        children = try self.allocator().dupe(
+                            ?*const Term,
+                            term.children,
+                        );
+                    }
+                    children.?[idx] = fixed;
+                }
+                const updated = children orelse return term;
+                const copy = try self.allocator().create(Term);
+                copy.* = .{ .node = term.node, .children = updated };
+                return copy;
+            },
+            .bag => |bag| {
+                if (term.children.len != bag.members.len) return null;
+                const children = try self.allocator().alloc(
+                    ?*const Term,
+                    bag.members.len,
+                );
+                @memset(children, null);
+                for (term.children) |maybe_child| {
+                    const child = maybe_child orelse return null;
+                    const fixed = (try self.refreshSeedTerm(child)) orelse {
+                        return null;
+                    };
+                    const root = self.eg.find(
+                        self.eg.nodes.items[fixed.node].class,
+                    );
+                    var placed = false;
+                    for (bag.members, 0..) |member, idx| {
+                        if (children[idx] != null) continue;
+                        if (self.eg.find(member) != root) continue;
+                        children[idx] = fixed;
+                        placed = true;
+                        break;
+                    }
+                    if (!placed) return null;
+                }
+                const copy = try self.allocator().create(Term);
+                copy.* = .{ .node = term.node, .children = children };
+                return copy;
+            },
+        }
+    }
+
     fn explainTerms(
         self: *ExplainCtx,
         from: *const Term,
@@ -2075,9 +2308,16 @@ const ExplainCtx = struct {
             .pool_equation => |eq| {
                 // The seeded side terms are the step endpoints verbatim:
                 // the lowering cites the pool entry's exact formula, so no
-                // representative substitution is allowed here.
-                const before = if (edge.forward) eq.lhs else eq.rhs;
-                const after = if (edge.forward) eq.rhs else eq.lhs;
+                // representative substitution is allowed here. Bag members
+                // re-sort as unions land, so re-pair the seed-time children
+                // with their nodes' current member order first (children
+                // are kept verbatim — only the pairing moves).
+                const before = (try self.refreshSeedTerm(
+                    if (edge.forward) eq.lhs else eq.rhs,
+                )) orelse return null;
+                const after = (try self.refreshSeedTerm(
+                    if (edge.forward) eq.rhs else eq.lhs,
+                )) orelse return null;
                 if (!try self.explainTerms(current, before, pos)) {
                     return null;
                 }
@@ -2145,7 +2385,7 @@ const ExplainCtx = struct {
     ) error{OutOfMemory}!?RenderedBag {
         const bag = self.eg.nodes.items[bag_node].node.bag;
         var flat: std.ArrayListUnmanaged(TemplateExpr) = .{};
-        try self.eg.flattenPattern(bag.term_id, pattern, &flat);
+        try self.eg.flattenPattern(self.allocator(), bag.term_id, pattern, &flat);
         const children = try self.allocator().alloc(
             ?*const Term,
             bag.members.len,
@@ -3221,6 +3461,9 @@ test "bag absorption saturates instead of minting to the cap" {
     try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
     try testing.expect(eg.sameClass(or_p, p));
     try testing.expect(eg.eNodeCount() < 10);
+    // The guard forfeits merges, so the honesty stat must record it: a
+    // saturated miss here is not a forced negative.
+    try testing.expect(stats.ac_cyclic_dropped != 0);
 }
 
 test "bag matching binds a residual binder to a materialized sub-bag" {
@@ -3445,7 +3688,9 @@ test "bag ladder: ten-atom AC closure is free at default caps" {
     // 57,012 e-nodes for the ten-atom closure (5.7x over the default cap;
     // see docs/design_notes/ac_representation.md). With comm/assoc
     // absorbed there is nothing to saturate at all: the closure exists at
-    // intern time, in n + 1 nodes.
+    // intern time. Incremental seeding interns each partial sum once (a
+    // distinct sub-term, so a distinct e-node): n leaves plus n - 1
+    // suffix sums = 2n - 1 nodes, linear where the tree is exponential.
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     var eg = EGraph.init(arena_state.allocator());
@@ -3457,10 +3702,12 @@ test "bag ladder: ten-atom AC closure is free at default caps" {
     const stats = try eg.saturate(&.{}, .{});
     try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
     try testing.expectEqual(@as(usize, 0), stats.unions_applied);
-    try testing.expectEqual(@as(usize, n + 1), eg.eNodeCount());
+    try testing.expectEqual(@as(usize, 2 * n - 1), eg.eNodeCount());
 
     // Every reassociation and permutation of the same sum interns to the
-    // same class with zero additional work.
+    // same class with zero additional work: the reversed comb adds only
+    // its own n - 2 new prefix sub-sums (the full sum memo-hits), and no
+    // union is ever needed.
     var reversed = try eg.add(.{ .leaf = 1 });
     var i: u32 = 2;
     while (i <= n) : (i += 1) {
@@ -3474,7 +3721,7 @@ test "bag ladder: ten-atom AC closure is free at default caps" {
     }
     const original = try seedSum(&eg, n);
     try testing.expect(eg.sameClass(reversed, original));
-    try testing.expectEqual(@as(usize, n + 1), eg.eNodeCount());
+    try testing.expectEqual(@as(usize, 3 * n - 3), eg.eNodeCount());
 }
 
 test "bag match budget trips are reported, not silent" {
@@ -3499,4 +3746,91 @@ test "bag match budget trips are reported, not silent" {
         .ac_match_budget = 3,
     });
     try testing.expect(stats.ac_match_capped > 0);
+}
+
+test "pool-equation bag terms survive a member re-sort (regression)" {
+    // A union can renumber a member's canonical root, re-sorting the
+    // stored bag node's members in place. The seed-time Justification
+    // terms must be re-paired at explain time, or a proven conversion
+    // degrades to an unexplainable miss.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+    try eg.congr_heads.put(eg.allocator, F, {});
+    try eg.ac_heads.put(eg.allocator, ADD, {});
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const xy = try tAc2(&eg, ADD, x, y);
+    const c = try tLeaf(&eg, 3);
+    const z = try tLeaf(&eg, 4);
+    // h1: (x + y) = c
+    _ = try eg.merge(
+        termClassOf(&eg, xy),
+        termClassOf(&eg, c),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = xy, .rhs = c } },
+    );
+    // h2: x = z  (x's root merges into z's higher root -> member re-sort)
+    _ = try eg.merge(
+        termClassOf(&eg, x),
+        termClassOf(&eg, z),
+        .{ .pool_equation = .{ .pool_index = 1, .lhs = x, .rhs = z } },
+    );
+    _ = try eg.saturate(&.{}, .{});
+
+    // Goal z + y converts to c via h1 (citing h2 inside).
+    const goal = try tAc2(&eg, ADD, z, y);
+    const c2 = try tLeaf(&eg, 3);
+    try testing.expect(eg.sameClass(
+        termClassOf(&eg, goal),
+        termClassOf(&eg, c2),
+    ));
+    const steps = (try eg.explain(&.{}, goal, c2, .{})).?;
+    try testing.expect(steps.len != 0);
+}
+
+test "pool-equation bag terms after a splice miss cleanly (v1 cut)" {
+    // When a seeded equation side's member class later denotes a
+    // same-head bag, the stored node splices to MORE members than the
+    // written formula has children. No written-pinned re-pairing exists,
+    // so the explanation cleanly fails (the driver reports the converged
+    // goal as convertible-but-unlowered, never as a forced negative).
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+    try eg.ac_heads.put(eg.allocator, ADD, {});
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const c = try tLeaf(&eg, 3);
+    const xy = try tAc2(&eg, ADD, x, y);
+    const a = try tLeaf(&eg, 4);
+    const b = try tLeaf(&eg, 5);
+    const ab = try tAc2(&eg, ADD, a, b);
+
+    // h1: (x + y) = c
+    _ = try eg.merge(
+        termClassOf(&eg, xy),
+        termClassOf(&eg, c),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = xy, .rhs = c } },
+    );
+    // h2: x = (a + b)  -> x's class denotes a same-head bag; the stored
+    // {x, y} node splices to {a, b, y}.
+    _ = try eg.merge(
+        termClassOf(&eg, x),
+        termClassOf(&eg, ab),
+        .{ .pool_equation = .{ .pool_index = 1, .lhs = x, .rhs = ab } },
+    );
+    _ = try eg.saturate(&.{}, .{});
+
+    const goal = try tAc2(&eg, ADD, a, try tAc2(&eg, ADD, b, y));
+    const c2 = try tLeaf(&eg, 3);
+    try testing.expect(eg.sameClass(
+        termClassOf(&eg, goal),
+        termClassOf(&eg, c2),
+    ));
+    // The h1 citation cannot re-pair 2 written children onto 3 members.
+    try testing.expect((try eg.explain(&.{}, goal, c2, .{})) == null);
 }
