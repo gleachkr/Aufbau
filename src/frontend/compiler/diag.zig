@@ -565,6 +565,7 @@ fn unknownTermAnnotationSpan(parser: *const MM0Parser) ?Span {
     for (parser.last_annotations, parser.last_annotation_spans) |ann, span| {
         const directive = annotationDirective(ann) orelse continue;
         if (std.mem.eql(u8, directive, "@acui")) continue;
+        if (std.mem.eql(u8, directive, "@conversion")) continue;
         return mathSpanToSpan(span);
     }
     return firstAnnotationSpan(parser);
@@ -589,6 +590,9 @@ fn annotationDiagnosticSpan(
         error.CongruenceBinderMissingDeps,
         error.RelationBundleBoundBinder,
         error.InvalidConversionAnnotation,
+        error.InvalidDefConversionAnnotation,
+        error.ConversionTermNotDef,
+        error.ConversionDefUnfoldHiddenDummies,
         error.DuplicateConversionAnnotation,
         error.ConversionRuleHasHypotheses,
         error.ConversionConclusionNotRelation,
@@ -790,6 +794,13 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
             "must not have bound binders",
         error.InvalidConversionAnnotation => "@conversion expects one token: " ++
             "ltr, rtl, both, assoc, or comm",
+        error.InvalidDefConversionAnnotation => "@conversion on a definition expects one " ++
+            "token: unfold, fold, or both",
+        error.ConversionTermNotDef => "@conversion on a term requires a definition " ++
+            "with a visible definiens",
+        error.ConversionDefUnfoldHiddenDummies => "@conversion unfold/both cannot enroll a " ++
+            "definition with hidden dummy binders: unfolding would have to " ++
+            "invent a dummy witness at every match; only fold is legal here",
         error.DuplicateConversionAnnotation => "multiple @conversion annotations were attached to one rule",
         error.ConversionRuleHasHypotheses => "@conversion rule must not have hypotheses",
         error.ConversionCommRuleShape => "@conversion comm requires the conclusion " ++

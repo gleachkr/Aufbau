@@ -69,6 +69,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   stays linear. Emitted proof chains cite the certificate theorems in
   explicit re-treeing steps wherever a canonical form meets a written
   formula. See `docs/rewrite_system.md`.
+- `@conversion unfold` / `fold` / `both` orientation tokens on definitions:
+  a def can enroll its own equation `rel(definiens, head args)` for
+  `conversion?` saturation, so goals separated by a definition boundary
+  (one side folded, one side expanded) close without a hand-written bridge.
+  Defs with hidden dummy binders may only enroll `fold` (`unfold`/`both`
+  is an enrollment-time error): the fold direction binds the dummy to a
+  variable already written in the matched term and is admitted only when
+  that variable avoids every argument instantiation, while unfolding would
+  have to invent a fresh witness at every match. Each def step lowers as a
+  single `refl` line closed by transparent-definition unfolding. Defs are
+  never enrolled implicitly. See `docs/rewrite_system.md`.
 
 ## [0.0.1] - 2026-07-16
 

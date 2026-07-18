@@ -102,6 +102,24 @@ pub const ConversionRule = struct {
     head_term_id: ?u32 = null,
 };
 
+/// A `@conversion`-enrolled definition: the def's own equation
+/// `rel(definiens, head args)` as rule templates for egraph saturation.
+/// `lhs` is the definiens (binder space = the def's args followed by its
+/// hidden dummies, matching `TermDecl.body`); `rhs` is the synthesized head
+/// application over the arg binders. `fold` e-matches the definiens and
+/// instantiates the head; `unfold` the reverse. A def with hidden dummy
+/// binders may only enroll `fold`: unfolding would have to invent a dummy
+/// witness at every match (see
+/// `docs/design_notes/conversion_def_folding.md`).
+pub const DefConversionRule = struct {
+    term_id: u32,
+    lhs: TemplateExpr,
+    rhs: TemplateExpr,
+    num_binders: usize,
+    fold: bool,
+    unfold: bool,
+};
+
 /// A special alpha-renaming rule used only by freshening.
 pub const AlphaRule = struct {
     rule_id: u32,
@@ -202,6 +220,8 @@ pub const RewriteRegistry = struct {
     /// match-side head indexes per search call; the registry keeps a flat
     /// list.
     conversions: std.ArrayListUnmanaged(ConversionRule) = .{},
+    /// `@conversion`-enrolled defs in declaration order.
+    def_conversions: std.ArrayListUnmanaged(DefConversionRule) = .{},
 
     pub fn init(allocator: std.mem.Allocator) RewriteRegistry {
         return .{
@@ -337,6 +357,19 @@ pub const RewriteRegistry = struct {
             return error.InvalidConversionAnnotation;
         };
         if (iter.next() != null) return error.InvalidConversionAnnotation;
+
+        // On a term statement the annotation enrolls the definition itself
+        // (orientation tokens `unfold`/`fold`/`both`); everything below is
+        // the theorem path.
+        const maybe_rule_id = env.getRuleId(stmt_name);
+        if (maybe_rule_id == null) {
+            if (env.term_names.get(stmt_name)) |term_id| {
+                return self.processDefConversion(env, term_id, token);
+            }
+            return;
+        }
+        const rule_id = maybe_rule_id.?;
+
         const role: ConversionRole = if (std.mem.eql(u8, token, "assoc"))
             .assoc
         else if (std.mem.eql(u8, token, "comm"))
@@ -353,7 +386,6 @@ pub const RewriteRegistry = struct {
         const rtl = both or role != .none or std.mem.eql(u8, token, "rtl");
         if (!ltr and !rtl) return error.InvalidConversionAnnotation;
 
-        const rule_id = env.getRuleId(stmt_name) orelse return;
         const rule = &env.rules.items[rule_id];
 
         for (self.conversions.items) |existing| {
@@ -424,6 +456,75 @@ pub const RewriteRegistry = struct {
             .rtl = rtl,
             .role = role,
             .head_term_id = head_term_id,
+        });
+    }
+
+    /// Enroll a definition for `conversion?` saturation. The orientation
+    /// token picks the e-matched direction(s): `fold` matches the definiens
+    /// and folds it to `head args`, `unfold` the reverse, `both` enrolls
+    /// both directions. A def with hidden dummy binders may only enroll
+    /// `fold` — its unfold direction would have to invent a fresh dummy
+    /// witness at every match, while the fold direction merely binds an
+    /// existing variable and checks freshness (see
+    /// `docs/design_notes/conversion_def_folding.md`).
+    fn processDefConversion(
+        self: *RewriteRegistry,
+        env: *const GlobalEnv,
+        term_id: u32,
+        token: []const u8,
+    ) !void {
+        const both = std.mem.eql(u8, token, "both");
+        const fold = both or std.mem.eql(u8, token, "fold");
+        const unfold = both or std.mem.eql(u8, token, "unfold");
+        if (!fold and !unfold) return error.InvalidDefConversionAnnotation;
+
+        const term = &env.terms.items[term_id];
+        if (!term.available or !term.is_def) return error.ConversionTermNotDef;
+        const body = term.body orelse return error.ConversionTermNotDef;
+
+        if (term.dummy_args.len != 0 and unfold) {
+            return error.ConversionDefUnfoldHiddenDummies;
+        }
+
+        for (self.def_conversions.items) |existing| {
+            if (existing.term_id == term_id) {
+                return error.DuplicateConversionAnnotation;
+            }
+        }
+
+        // Lowering states each def step as a `refl` line the checker
+        // closes through transparent unfolding, so the def's sort needs
+        // the full relation vocabulary.
+        const relation = self.getRelationForSort(
+            term.ret_sort_name,
+        ) orelse return error.ConversionMissingRelation;
+        try validateBundleRuleShapes(env, relation);
+
+        // Synthesized `head args` side over the arg binders (hidden
+        // dummies never appear on the head side).
+        const head_args = try self.allocator.alloc(
+            TemplateExpr,
+            term.args.len,
+        );
+        for (head_args, 0..) |*slot, idx| slot.* = .{ .binder = idx };
+        const head = TemplateExpr{
+            .app = .{ .term_id = term_id, .args = head_args },
+        };
+
+        // Same coverage rules as theorem orientations: the match side must
+        // be an application binding every binder the target instantiates
+        // (fold additionally requires the definiens to mention every arg —
+        // an egraph rule cannot invent the dropped ones).
+        if (fold) try validateConversionOrientation(body, head);
+        if (unfold) try validateConversionOrientation(head, body);
+
+        try self.def_conversions.append(self.allocator, .{
+            .term_id = term_id,
+            .lhs = body,
+            .rhs = head,
+            .num_binders = term.args.len + term.dummy_args.len,
+            .fold = fold,
+            .unfold = unfold,
         });
     }
 
@@ -1039,6 +1140,22 @@ pub const RewriteRegistry = struct {
         self: *const RewriteRegistry,
     ) []const ConversionRule {
         return self.conversions.items;
+    }
+
+    pub fn defConversionRules(
+        self: *const RewriteRegistry,
+    ) []const DefConversionRule {
+        return self.def_conversions.items;
+    }
+
+    pub fn defConversionByTerm(
+        self: *const RewriteRegistry,
+        term_id: u32,
+    ) ?DefConversionRule {
+        for (self.def_conversions.items) |def_conv| {
+            if (def_conv.term_id == term_id) return def_conv;
+        }
+        return null;
     }
 
     pub fn getRewriteRules(

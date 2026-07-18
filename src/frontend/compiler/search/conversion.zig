@@ -88,6 +88,18 @@ pub const Options = struct {
     max_nodes: usize = 10_000,
 };
 
+/// Def rules tag their egraph `Rule.rule_id` with the high bit so the
+/// lowering can tell a definition step (one `refl` line the checker closes
+/// through transparent unfolding) from a theorem citation. Theorem rule ids
+/// index `env.rules` and never reach the bit.
+pub const def_rule_tag: u32 = 1 << 31;
+
+/// The enrolled def's term id, when `rule_id` carries the def tag.
+pub fn defRuleTermId(rule_id: u32) ?u32 {
+    if (rule_id & def_rule_tag == 0) return null;
+    return rule_id & ~def_rule_tag;
+}
+
 pub const Result = struct {
     /// Full replacement text for the placeholder line's span (the emitted
     /// chain lines plus the transported goal line), or null on a miss.
@@ -179,6 +191,64 @@ pub fn run(
             .match_side = conv.rhs,
             .target_side = conv.lhs,
             .num_binders = conv.num_binders,
+            .bound_slots = bound_slots.items,
+            .restrictions = restrictions.items,
+        });
+    }
+    // Enrolled defs: the def's own equation `rel(definiens, head args)` as
+    // an ordinary rule (`fold` matches the definiens, `unfold` the head).
+    // The binder space is the def's args followed by its hidden dummies;
+    // each dummy slot is a bound slot whose freshness against every term
+    // arg rides the same restriction machinery as theorem dep conditions
+    // (an arg is declared before the dummies exist, so no dep bit can
+    // license an occurrence).
+    for (context.registry.defConversionRules()) |def_conv| {
+        if (def_conv.term_id & def_rule_tag != 0) continue;
+        const decl = &context.env.terms.items[def_conv.term_id];
+        var bound_slots: std.ArrayListUnmanaged(u32) = .{};
+        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
+        var bound_ordinal: u6 = 0;
+        for (decl.args, 0..) |arg, slot| {
+            if (!arg.bound) continue;
+            try bound_slots.append(work, @intCast(slot));
+            for (decl.args, 0..) |term_arg, term_slot| {
+                if (term_arg.bound) continue;
+                if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
+                    try restrictions.append(work, .{
+                        .bound_slot = @intCast(slot),
+                        .term_slot = @intCast(term_slot),
+                    });
+                }
+            }
+            bound_ordinal += 1;
+        }
+        for (0..decl.dummy_args.len) |dummy_idx| {
+            const slot: u32 = @intCast(decl.args.len + dummy_idx);
+            try bound_slots.append(work, slot);
+            for (decl.args, 0..) |term_arg, term_slot| {
+                if (term_arg.bound) continue;
+                try restrictions.append(work, .{
+                    .bound_slot = slot,
+                    .term_slot = @intCast(term_slot),
+                });
+            }
+        }
+        const tag = def_rule_tag | def_conv.term_id;
+        if (def_conv.fold) try rules.append(work, .{
+            .rule_id = tag,
+            .reversed = false,
+            .match_side = def_conv.lhs,
+            .target_side = def_conv.rhs,
+            .num_binders = def_conv.num_binders,
+            .bound_slots = bound_slots.items,
+            .restrictions = restrictions.items,
+        });
+        if (def_conv.unfold) try rules.append(work, .{
+            .rule_id = tag,
+            .reversed = true,
+            .match_side = def_conv.rhs,
+            .target_side = def_conv.lhs,
+            .num_binders = def_conv.num_binders,
             .bound_slots = bound_slots.items,
             .restrictions = restrictions.items,
         });

@@ -51,6 +51,7 @@ fn processTermAnnotations(annotations: []const []const u8) !void {
     for (annotations) |ann| {
         const directive = annotationDirective(ann) orelse continue;
         if (std.mem.eql(u8, directive, "@acui")) continue;
+        if (std.mem.eql(u8, directive, "@conversion")) continue;
         return error.UnknownTermAnnotation;
     }
 }

@@ -7615,3 +7615,210 @@ test "conversion? proves difference of squares across distributivity and AC" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+
+// --- conversion? def-wrangling (@conversion unfold/fold/both) -------------
+//
+// Enrolled defs saturate as ordinary rules built from the def's own
+// equation rel(definiens, head args). Each def step lowers as a single
+// refl line the checker closes through transparent unfolding. A hidden
+// dummy is a pattern binder BOUND to an existing variable at match time;
+// its freshness against every arg instantiation rides the dep-gate
+// restrictions, which is load-bearing for suggestion validity (the
+// verifier rejects a captured witness with DepViolation).
+
+const conversion_def_prelude =
+    \\delimiter $ ( ) $;
+    \\sort var;
+    \\provable sort form;
+    \\term an (p q: form): form;
+    \\term or (p q: form): form;
+    \\term iff (p q: form): form;
+    \\term eqv (a b: var): form;
+    \\term ex {x: var} (p: form x): form;
+    \\--| @relation form iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: form): $ iff a a $;
+    \\axiom iff_trans (a b c: form) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: form) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: form) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @congr
+    \\axiom an_congr (a b c d: form) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (an a c) (an b d) $;
+    \\--| @congr
+    \\axiom or_congr (a b c d: form) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (or a c) (or b d) $;
+    \\
+;
+
+test "conversion? folds a dummy-free def" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_def_prelude ++
+        \\--| @conversion fold
+        \\def dup (a: form): form = $ an a a $;
+        \\theorem conv_fold (p q: form) (h: $ or (an p p) q $): $ or (dup p) q $;
+    ;
+    const proof_src =
+        \\conv_fold
+        \\----
+        \\goal: $ or (dup p) q $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // The def boundary lowers as a refl line, lifted through @congr and
+    // transported onto the hypothesis.
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_refl") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "or_congr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? unfolds a dummy-free def" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_def_prelude ++
+        \\--| @conversion unfold
+        \\def dup (a: form): form = $ an a a $;
+        \\theorem conv_unfold (p q: form) (h: $ or (dup p) q $): $ or (an p p) q $;
+    ;
+    const proof_src =
+        \\conv_unfold
+        \\----
+        \\goal: $ or (an p p) q $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? both-enrolled def rewrites in both directions at once" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // One chain needs an unfold (dup p) and a fold (an q q) of the same def.
+    const mm0_src = conversion_def_prelude ++
+        \\--| @conversion both
+        \\def dup (a: form): form = $ an a a $;
+        \\theorem conv_both (p q: form) (h: $ or (dup p) (an q q) $): $ or (an p p) (dup q) $;
+    ;
+    const proof_src =
+        \\conv_both
+        \\----
+        \\goal: $ or (an p p) (dup q) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? folds a hidden-dummy def binding the written witness" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // someeq's dummy w is a pattern binder matched against the theorem's
+    // own bound variable u; the freshness condition u ∉ deps(a) holds.
+    const mm0_src = conversion_def_prelude ++
+        \\--| @conversion fold
+        \\def someeq {.w: var} (v: var): form = $ ex w (eqv w v) $;
+        \\theorem conv_hidden {u: var} (a: var) (q: form) (h: $ an (ex u (eqv u a)) q $): $ an (someeq a) q $;
+    ;
+    const proof_src =
+        \\conv_hidden
+        \\----
+        \\goal: $ an (someeq a) q $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_refl") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? refuses a captured dummy witness as a deferred miss" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // ex u (eqv u u) is NOT an unfolding of someeq u: the witness u is the
+    // arg itself (capture), which the verifier rejects as a DepViolation.
+    // The dep gate must defer the fold match forever — an honest miss, no
+    // unsound suggestion.
+    const mm0_src = conversion_def_prelude ++
+        \\--| @conversion fold
+        \\def someeq {.w: var} (v: var): form = $ ex w (eqv w v) $;
+        \\theorem conv_capture {u: var} (q: form) (h: $ an (ex u (eqv u u)) q $): $ an (someeq u) q $;
+    ;
+    const proof_src =
+        \\conv_capture
+        \\----
+        \\goal: $ an (someeq u) q $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "the egraph saturated") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "variable-dependency") != null,
+    );
+}
+
+test "conversion? unannotated defs stay dormant" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_def_prelude ++
+        \\def dup (a: form): form = $ an a a $;
+        \\theorem conv_dormant (p q: form) (h: $ or (an p p) q $): $ or (dup p) q $;
+    ;
+    const proof_src =
+        \\conv_dormant
+        \\----
+        \\goal: $ or (dup p) q $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+}
+
+test "conversion? folds a bag-shaped definiens on the AC path" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // dup's definiens flattens to the sub-multiset {p, p} of the 3-member
+    // bag {q, p, p}; the leftover q rejoins the folded target as the
+    // extension, exercising the bag-step lowering of a def rule.
+    const mm0_src = conversion_ac_prelude ++
+        \\--| @conversion fold
+        \\def dup (a: wff): wff = $ an a a $;
+        \\theorem conv_bag_fold (p q: wff) (h: $ an q (an p p) $): $ an (dup p) q $;
+    ;
+    const proof_src =
+        \\conv_bag_fold
+        \\----
+        \\goal: $ an (dup p) q $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_refl") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}

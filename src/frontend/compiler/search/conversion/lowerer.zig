@@ -297,27 +297,45 @@ pub const Lowerer = struct {
             // Redex-level rule instance: a fresh line, since the rule
             // proves any instance.
             .rule => |rule_id| {
-                const thm_lhs = if (step.needs_symm) step.after else step.before;
-                const thm_rhs = if (step.needs_symm) step.before else step.after;
-                const instance = (try self.relExpr(
-                    redex_relation,
-                    thm_lhs,
-                    thm_rhs,
-                )) orelse return null;
-                label = (try self.emitLine(instance, rule_id, &.{})) orelse {
-                    return null;
-                };
-                if (step.needs_symm) {
-                    const flipped = (try self.relExpr(
+                // A def step: the endpoints denote the same term up to
+                // transparent unfolding (the matched dummy witness is part
+                // of the stated formula), so one `refl` line states the
+                // boundary in traversal order and the checker closes it.
+                // No symm — refl is orientation-free here.
+                if (conversion.defRuleTermId(rule_id) != null) {
+                    const instance = (try self.relExpr(
                         redex_relation,
                         step.before,
                         step.after,
                     )) orelse return null;
                     label = (try self.emitLine(
-                        flipped,
-                        redex_relation.symm_id,
-                        &.{label},
+                        instance,
+                        redex_relation.refl_id,
+                        &.{},
                     )) orelse return null;
+                } else {
+                    const thm_lhs = if (step.needs_symm) step.after else step.before;
+                    const thm_rhs = if (step.needs_symm) step.before else step.after;
+                    const instance = (try self.relExpr(
+                        redex_relation,
+                        thm_lhs,
+                        thm_rhs,
+                    )) orelse return null;
+                    label = (try self.emitLine(instance, rule_id, &.{})) orelse {
+                        return null;
+                    };
+                    if (step.needs_symm) {
+                        const flipped = (try self.relExpr(
+                            redex_relation,
+                            step.before,
+                            step.after,
+                        )) orelse return null;
+                        label = (try self.emitLine(
+                            flipped,
+                            redex_relation.symm_id,
+                            &.{label},
+                        )) orelse return null;
+                    }
                 }
             },
             // The pool entry asserts rel(before, after) — or its flip —
@@ -1160,33 +1178,58 @@ pub const Lowerer = struct {
     ) !?[]const u8 {
         const info = step.bag.?;
         const rule_id = step.source.rule;
-        const conv = self.conversionRuleById(rule_id) orelse return null;
+        const sides: struct { lhs: TemplateExpr, rhs: TemplateExpr } =
+            if (conversion.defRuleTermId(rule_id)) |term_id| blk: {
+                const def_conv = self.context.registry.defConversionByTerm(
+                    term_id,
+                ) orelse return null;
+                break :blk .{ .lhs = def_conv.lhs, .rhs = def_conv.rhs };
+            } else blk: {
+                const conv = self.conversionRuleById(rule_id) orelse {
+                    return null;
+                };
+                break :blk .{ .lhs = conv.lhs, .rhs = conv.rhs };
+            };
         const lhs_inst = (try self.instantiateTemplate(
-            conv.lhs,
+            sides.lhs,
             step.bindings,
         )) orelse return null;
         const rhs_inst = (try self.instantiateTemplate(
-            conv.rhs,
+            sides.rhs,
             step.bindings,
         )) orelse return null;
         const redex_relation = self.relationForSort(
             self.sortOfExpr(lhs_inst) orelse return null,
         ) orelse return null;
-        var label = (try self.emitLine(
-            try self.relIds(redex_relation, lhs_inst, rhs_inst),
-            rule_id,
-            &.{},
-        )) orelse return null;
         var inst_before = lhs_inst;
         var inst_after = rhs_inst;
         if (step.needs_symm) {
             inst_before = rhs_inst;
             inst_after = lhs_inst;
+        }
+        var label: []const u8 = undefined;
+        if (conversion.defRuleTermId(rule_id) != null) {
+            // A def step lowers as one orientation-free `refl` line (see
+            // emitStep); the swap above already put the instances in
+            // traversal order.
             label = (try self.emitLine(
                 try self.relIds(redex_relation, inst_before, inst_after),
-                redex_relation.symm_id,
-                &.{label},
+                redex_relation.refl_id,
+                &.{},
             )) orelse return null;
+        } else {
+            label = (try self.emitLine(
+                try self.relIds(redex_relation, lhs_inst, rhs_inst),
+                rule_id,
+                &.{},
+            )) orelse return null;
+            if (step.needs_symm) {
+                label = (try self.emitLine(
+                    try self.relIds(redex_relation, inst_before, inst_after),
+                    redex_relation.symm_id,
+                    &.{label},
+                )) orelse return null;
+            }
         }
 
         // Extension: complement of the matched member indices on a bag

@@ -821,6 +821,155 @@ test "compiler rejects malformed assoc certificates" {
     }
 }
 
+const def_conversion_prelude =
+    \\delimiter $ ( ) $;
+    \\sort var;
+    \\provable sort wff;
+    \\term iff (p q: wff): wff;
+    \\term an (p q: wff): wff;
+    \\term eqv (a b: var): wff;
+    \\term ex {x: var} (p: wff x): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\
+;
+
+test "compiler stores def conversion orientations" {
+    const mm0_src = def_conversion_prelude ++
+        \\--| @conversion fold
+        \\def dup (a: wff): wff = $ an a a $;
+        \\--| @conversion both
+        \\def dup2 (a b: wff): wff = $ an a (an b b) $;
+        \\--| @conversion fold
+        \\def someeq {.w: var} (v: var): wff = $ ex w (eqv w v) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rules = metadata.registry.defConversionRules();
+    try std.testing.expectEqual(@as(usize, 3), rules.len);
+
+    const dup_id = metadata.env.term_names.get("dup") orelse {
+        return error.MissingTerm;
+    };
+    try std.testing.expectEqual(dup_id, rules[0].term_id);
+    try std.testing.expect(rules[0].fold);
+    try std.testing.expect(!rules[0].unfold);
+    try std.testing.expectEqual(@as(usize, 1), rules[0].num_binders);
+
+    try std.testing.expect(rules[1].fold);
+    try std.testing.expect(rules[1].unfold);
+    try std.testing.expectEqual(@as(usize, 2), rules[1].num_binders);
+
+    // The hidden dummy claims a binder slot after the args.
+    try std.testing.expectEqual(@as(usize, 2), rules[2].num_binders);
+    try std.testing.expect(rules[2].fold);
+    try std.testing.expect(!rules[2].unfold);
+}
+
+test "compiler rejects unfold orientations on hidden-dummy defs" {
+    const tokens = [_][]const u8{ "unfold", "both" };
+    for (tokens) |token| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+            def_conversion_prelude,
+            "--| @conversion ",
+            token,
+            "\ndef someeq {.w: var} (v: var): wff = $ ex w (eqv w v) $;\n",
+        });
+        try std.testing.expectError(
+            error.ConversionDefUnfoldHiddenDummies,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+}
+
+test "compiler validates def conversion tokens and shapes" {
+    // A theorem-only token on a def.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = def_conversion_prelude ++
+            \\--| @conversion ltr
+            \\def dup (a: wff): wff = $ an a a $;
+        ;
+        try std.testing.expectError(
+            error.InvalidDefConversionAnnotation,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+    // A def-only token on a theorem.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = def_conversion_prelude ++
+            \\--| @conversion fold
+            \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+        ;
+        try std.testing.expectError(
+            error.InvalidConversionAnnotation,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+    // A plain term has no definiens to enroll.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = def_conversion_prelude ++
+            \\--| @conversion fold
+            \\term also (p q: wff): wff;
+        ;
+        try std.testing.expectError(
+            error.ConversionTermNotDef,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+    // Folding a definiens that drops an arg would have to invent it.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = def_conversion_prelude ++
+            \\--| @conversion fold
+            \\def fst (a b: wff): wff = $ an a a $;
+        ;
+        try std.testing.expectError(
+            error.ConversionBinderNotCovered,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+    // A bare-binder definiens would match every class.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = def_conversion_prelude ++
+            \\--| @conversion fold
+            \\def same (a: wff): wff = $ a $;
+        ;
+        try std.testing.expectError(
+            error.ConversionBareMatchSide,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+    // No @relation bundle registered for the def's sort.
+    {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src =
+            \\delimiter $ ( ) $;
+            \\provable sort wff;
+            \\term an (p q: wff): wff;
+            \\--| @conversion fold
+            \\def dup (a: wff): wff = $ an a a $;
+        ;
+        try std.testing.expectError(
+            error.ConversionMissingRelation,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+}
+
 test "compiler rejects role certificates with bound binders" {
     const mm0_src =
         \\delimiter $ ( ) $;

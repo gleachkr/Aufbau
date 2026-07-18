@@ -102,7 +102,7 @@ form. The two normalized forms agree, so the line is accepted.
 |-------------|-------------------|---------|
 | `@relation` | MM0 assertion / lemma | Declares a relation bundle |
 | `@rewrite`  | MM0 assertion / lemma | Registers an oriented rewrite |
-| `@conversion` | MM0 assertion / lemma | Enrolls a rewrite for `conversion?` search |
+| `@conversion` | MM0 assertion / lemma / def | Enrolls a rewrite (or a def's equation) for `conversion?` search |
 | `@congr`    | MM0 assertion / lemma | Registers a congruence rule |
 | `@acui`     | `term`            | Enables ACUI-style normalization |
 | `@fallback` | MM0 assertion / lemma | Retries through another rule |
@@ -435,6 +435,43 @@ instantiation are simply refused (and the failure report says so), so
 `conversion?` never emits a chain the checker rejects on dependencies —
 and never claims an unsound instance like `Pr x ⊢ al x (Pr x)` from a
 vacuous-quantifier rule.
+
+### Definitions
+
+A `def` can enroll its own equation `rel(definiens, head args)` with an
+*orientation* token:
+
+```
+--| @conversion fold
+def le {.k: nat} (a b: nat): wff = $ ∃ k (a + k = b) $;
+```
+
+`fold` e-matches the definiens shape and folds it to `head args`; `unfold`
+matches applications of the head and expands them; `both` enrolls both
+directions. Since unions are symmetric, orientation only controls which
+new terms saturation may *build* — a fold-enrolled def still meets its
+unfolded form whenever that shape already exists anywhere in the graph.
+Defs are never enrolled implicitly; an unannotated def stays invisible to
+`conversion?`.
+
+For a def with **hidden dummy binders, only `fold` is legal** — `unfold`
+or `both` there is an enrollment-time error. Unfolding such a def would
+have to invent a fresh dummy witness at every match, and under the MM0
+variable model two inventions can never be identified afterwards. The
+fold direction instead *binds* the dummy to a variable already written in
+the matched term, and admits the match only when that variable can avoid
+every arg instantiation (the same dependency gate as rules of passage;
+a captured witness like `ex u (eq u u)` for `someeq u` is refused as a
+deferred miss).
+
+Each def step in an emitted chain is a single `refl` line stating
+`rel(definiens-instance, head-instance)`, which the checker closes
+through ordinary transparent-definition unfolding — the matched dummy
+witness is simply part of the stated formula. Requirements mirror the
+theorem checks: a registered `@relation` for the def's return sort, an
+application-shaped definiens for `fold` (a bare-binder body would match
+everything), and definiens coverage of every arg for `fold` (folding
+`def fst (a b) = a`-style projections would have to invent `b`).
 
 ## `@congr`
 
