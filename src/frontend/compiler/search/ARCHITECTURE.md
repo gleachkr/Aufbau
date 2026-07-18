@@ -39,6 +39,16 @@ the generation-only behavior is gated on `options.generator != null` (in
 reading `backward/backtrack.zig`, "is `generator` null?" is the single most important branch
 to track — it separates plain `exact?` (must stay untouched) from `auto?`.
 
+There is also a fourth, standalone entry: **`conversion?`**
+(`conversion.zig:run`, dispatched from `source.zig` like the others). It does
+*not* share the pipeline below — it saturates an e-graph (`egraph.zig`) over
+the `@conversion`-enrolled rewrites plus the pool's local ground equations,
+asks whether the goal's two sides land in one class, and lowers the resulting
+explanation back to ordinary proof lines (`conversion/lowerer.zig`). AC
+operators declared via `@conversion assoc`/`comm` role tokens are absorbed
+into the e-graph's bag-node interning instead of being enrolled as rules. See
+`docs/rewrite_system.md` for the user-facing surface.
+
 ## The pipeline (one `exactWithSession` call)
 
 ```
@@ -921,4 +931,8 @@ width is real.
 | `ref_index.zig` / `refs.zig` / `rule_index.zig` | candidate/ref indexing |
 | `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome) + `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics) |
 | `rank.zig` | candidate ranking |
+| `egraph.zig` | `conversion?` e-graph: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation, explanation extraction |
+| `egraph/tests.zig` | egraph unit tests (public-API only) |
+| `conversion.zig` | `conversion?` driver: `@conversion` enrollment, pool/goal seeding, absorbed AC certificates, forced-negative reporting |
+| `conversion/lowerer.zig` | `Lowerer`: explanation chain → proof-script lines (AC re-treeing seams, congruence descent, pool-equation citation) |
 | `tests.zig` | subsystem unit tests |
