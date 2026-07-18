@@ -57,6 +57,18 @@ This file records notable user-facing changes to Aufbau. The project follows
   including a generalization that is only legal because a local
   equivalence certifies the formula is independent of the bound variable.
   Wired into the web demo's example picker.
+- `@conversion assoc` / `@conversion comm` role tokens: instead of a
+  direction, a `@conversion` annotation can certify that its theorem IS
+  the operator's associativity or commutativity law (the exact shape is
+  validated at annotation time). An operator certified both laws (with
+  `@congr` coverage) is absorbed into `conversion?`'s term representation:
+  applications intern as flattened, sorted multisets, so the AC laws cost
+  zero saturation work and large conjunctions stay tractable — the tree
+  representation's AC closure grows as `3^n` e-nodes and stops reporting
+  forced negatives around seven atoms, where the absorbed representation
+  stays linear. Emitted proof chains cite the certificate theorems in
+  explicit re-treeing steps wherever a canonical form meets a written
+  formula. See `docs/rewrite_system.md`.
 
 ## [0.0.1] - 2026-07-16
 

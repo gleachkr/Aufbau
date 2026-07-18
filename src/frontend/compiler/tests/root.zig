@@ -11,6 +11,7 @@ const Mmb = mm0.Mmb;
 const Proof = mm0.Proof;
 const ProofScript = mm0.ProofScript;
 const RewriteRegistry = mm0.RewriteRegistry.RewriteRegistry;
+const ConversionRole = mm0.RewriteRegistry.ConversionRole;
 const CompilerMetadata = mm0.CompilerSupport.Metadata;
 const CompilerViews = mm0.CompilerSupport.Views;
 const DefOps = mm0.DefOps;
@@ -671,6 +672,157 @@ test "compiler rejects duplicate conversion annotations" {
     );
 }
 
+test "compiler stores conversion role annotations as both-direction rules" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion comm
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+        \\--| @conversion assoc
+        \\axiom an_assoc (a b c: wff):
+        \\  $ iff (an (an a b) c) (an a (an b c)) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rules = metadata.registry.conversionRules();
+    try std.testing.expectEqual(@as(usize, 2), rules.len);
+
+    const an_id = metadata.env.term_names.get("an") orelse {
+        return error.MissingTerm;
+    };
+    for (rules) |rule| {
+        // Role rules enroll with both orientations until the bag
+        // representation lands.
+        try std.testing.expect(rule.ltr);
+        try std.testing.expect(rule.rtl);
+        try std.testing.expectEqual(an_id, rule.head_term_id.?);
+    }
+    try std.testing.expectEqual(ConversionRole.comm, rules[0].role);
+    try std.testing.expectEqual(ConversionRole.assoc, rules[1].role);
+}
+
+test "compiler accepts assoc certificates in either orientation" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion assoc
+        \\axiom an_assoc (a b c: wff):
+        \\  $ iff (an a (an b c)) (an (an a b) c) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rules = metadata.registry.conversionRules();
+    try std.testing.expectEqual(@as(usize, 1), rules.len);
+    try std.testing.expectEqual(ConversionRole.assoc, rules[0].role);
+}
+
+test "compiler accepts one role certificate per law per operator" {
+    // Distinct operators may each certify the same law — the per-operator
+    // scoping is exactly what `@acui`'s one-combiner-per-sort rule forbids.
+    const mm0_src = conversion_mm0_prelude ++
+        \\term or (p q: wff): wff;
+        \\--| @conversion comm
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+        \\--| @conversion comm
+        \\axiom or_comm (a b: wff): $ iff (or a b) (or b a) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        metadata.registry.conversionRules().len,
+    );
+}
+
+test "compiler rejects duplicate role certificates for one operator" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion comm
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+        \\--| @conversion comm
+        \\axiom an_comm2 (a b: wff): $ iff (an a b) (an b a) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.DuplicateConversionRoleForHead,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler rejects malformed comm certificates" {
+    const cases = [_][]const u8{
+        // Not swapped.
+        "axiom bad (a b: wff): $ iff (an a b) (an a b) $;\n",
+        // Idempotence, not commutativity.
+        "axiom bad (a: wff): $ iff (an a a) (an a a) $;\n",
+        // Bare binder side.
+        "axiom bad (a b: wff): $ iff a (an b a) $;\n",
+        // Extra binder beyond the law's two.
+        "axiom bad (a b c: wff): $ iff (an a b) (an b a) $;\n",
+    };
+    for (cases) |axiom_line| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+            conversion_mm0_prelude,
+            "--| @conversion comm\n",
+            axiom_line,
+        });
+        try std.testing.expectError(
+            error.ConversionCommRuleShape,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+}
+
+test "compiler rejects malformed assoc certificates" {
+    const cases = [_][]const u8{
+        // Commutativity shape under the assoc token.
+        "axiom bad (a b c: wff): $ iff (an a b) (an b a) $;\n",
+        // Repeated binder.
+        "axiom bad (a b c: wff): $ iff (an (an a b) a) (an a (an b a)) $;\n",
+        // Association that also permutes.
+        "axiom bad (a b c: wff): $ iff (an (an a b) c) (an b (an a c)) $;\n",
+    };
+    for (cases) |axiom_line| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+            conversion_mm0_prelude,
+            "--| @conversion assoc\n",
+            axiom_line,
+        });
+        try std.testing.expectError(
+            error.ConversionAssocRuleShape,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+}
+
+test "compiler rejects role certificates with bound binders" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort var;
+        \\provable sort wff;
+        \\term iff (p q: wff): wff;
+        \\term an (p q: wff): wff;
+        \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+        \\axiom iff_refl (a: wff): $ iff a a $;
+        \\--| @conversion comm
+        \\axiom an_comm {x: var} (a b: wff): $ iff (an a b) (an b a) $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.ConversionRoleBoundBinder,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
 test "compiler reports conversion annotation diagnostics with spans" {
     const mm0_src = conversion_mm0_prelude ++
         \\--| @conversion sideways
@@ -689,7 +841,7 @@ test "compiler reports conversion annotation diagnostics with spans" {
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
     try std.testing.expectEqualStrings("an_comm", diag.name.?);
     try std.testing.expectEqualStrings(
-        "@conversion expects one direction: ltr, rtl, or both",
+        "@conversion expects one token: ltr, rtl, both, assoc, or comm",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;

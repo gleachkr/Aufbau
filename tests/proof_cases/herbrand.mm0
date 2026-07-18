@@ -135,10 +135,13 @@ axiom al_vac {x: obj} (a: form): $ (∀ x a) ↔ a $;
 axiom ex_vac {x: obj} (a: form): $ (∃ x a) ↔ a $;
 
 -- Commutations, so each passage law (stated with the x-free operand on
--- the left) also reaches the mirrored operand order.
---| @conversion both
+-- the left) also reaches the mirrored operand order. The `comm` role
+-- token certifies the law's shape; without a matching `assoc`
+-- certificate the theorems still enroll for ordinary both-ways
+-- saturation (comm alone cannot be absorbed into bag interning).
+--| @conversion comm
 axiom an_comm (a b: form): $ (a ∧ b) ↔ (b ∧ a) $;
---| @conversion both
+--| @conversion comm
 axiom or_comm (a b: form): $ (a ∨ b) ↔ (b ∨ a) $;
 
 -- ============================================================

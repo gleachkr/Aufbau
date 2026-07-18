@@ -552,6 +552,12 @@ fn buildConversionDetail(
                 "check the binders' declared dependencies.",
         );
     }
+    if (result.stats.ac_match_capped != 0) {
+        try w.writeAll(
+            " Some AC bag matches hit their enumeration budget, so this " ++
+                "is NOT a forced negative: assignments were left untried.",
+        );
+    }
     return try buf.toOwnedSlice(allocator);
 }
 

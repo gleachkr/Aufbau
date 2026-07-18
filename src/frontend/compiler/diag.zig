@@ -595,6 +595,10 @@ fn annotationDiagnosticSpan(
         error.ConversionMissingRelation,
         error.ConversionBareMatchSide,
         error.ConversionBinderNotCovered,
+        error.ConversionCommRuleShape,
+        error.ConversionAssocRuleShape,
+        error.ConversionRoleBoundBinder,
+        error.DuplicateConversionRoleForHead,
         error.InvalidFallbackAnnotation,
         error.DuplicateFallbackAnnotation,
         error.UnknownFallbackRule,
@@ -783,9 +787,18 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
             "the head term's argument permits (e.g. (p q: wff x))",
         error.RelationBundleBoundBinder => "@relation bundle rules (refl/trans/symm/transport) " ++
             "must not have bound binders",
-        error.InvalidConversionAnnotation => "@conversion expects one direction: ltr, rtl, or both",
+        error.InvalidConversionAnnotation => "@conversion expects one token: " ++
+            "ltr, rtl, both, assoc, or comm",
         error.DuplicateConversionAnnotation => "multiple @conversion annotations were attached to one rule",
         error.ConversionRuleHasHypotheses => "@conversion rule must not have hypotheses",
+        error.ConversionCommRuleShape => "@conversion comm requires the conclusion " ++
+            "rel(t(a, b), t(b, a)) over exactly two distinct binders",
+        error.ConversionAssocRuleShape => "@conversion assoc requires the conclusion " ++
+            "rel(t(t(a, b), c), t(a, t(b, c))) (either orientation) over " ++
+            "exactly three distinct binders",
+        error.ConversionRoleBoundBinder => "@conversion assoc/comm rules must not have bound binders",
+        error.DuplicateConversionRoleForHead => "another @conversion rule already certifies " ++
+            "this law for the same operator",
         error.ConversionConclusionNotRelation => "@conversion rule conclusion must have the shape " ++
             "rel(lhs, rhs)",
         error.ConversionMissingRelation => "@conversion rule conclusion head must be the registered " ++

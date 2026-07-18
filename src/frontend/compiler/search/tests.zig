@@ -6642,6 +6642,176 @@ test "conversion? saturated miss is reported as a forced negative" {
     try std.testing.expectEqual(@as(?[]const u8, null), plain.status_detail);
 }
 
+// The same connectives with comm/assoc as role certificates: the AC laws
+// are absorbed into bag interning instead of saturating, and the lowering
+// pays them back as explicit certificate chains.
+const conversion_ac_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term iff (p q: wff): wff;
+    \\term an (p q: wff): wff;
+    \\term or (p q: wff): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @congr
+    \\axiom an_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (an a c) (an b d) $;
+    \\--| @congr
+    \\axiom or_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (or a c) (or b d) $;
+    \\--| @conversion comm
+    \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+    \\--| @conversion assoc
+    \\axiom an_assoc (a b c: wff): $ iff (an (an a b) c) (an a (an b c)) $;
+    \\--| @conversion comm
+    \\axiom or_comm (a b: wff): $ iff (or a b) (or b a) $;
+    \\--| @conversion assoc
+    \\axiom or_assoc (a b c: wff): $ iff (or (or a b) c) (or a (or b c)) $;
+    \\--| @conversion ltr
+    \\axiom an_contract (a: wff): $ iff (an a a) a $;
+    \\
+;
+
+test "conversion? AC: pure reassociation+permutation lowers via certificates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_ac_prelude ++
+        \\theorem conv_ac (p q r: wff) (h: $ an (an p q) r $): $ an r (an q p) $;
+    ;
+    const proof_src =
+        \\conv_ac
+        \\----
+        \\goal: $ an r (an q p) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // Zero saturation steps: the whole chain is seam re-treeing citing
+    // the certificates.
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "an_comm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? AC: rule fires on a sub-multiset with extension" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // an_contract's redex {p, p} is a sub-multiset of the 3-member bag
+    // {p, p, q}; the leftover member rejoins the contracted target.
+    const mm0_src = conversion_ac_prelude ++
+        \\theorem conv_ext (p q: wff) (h: $ an p (an q p) $): $ an q p $;
+    ;
+    const proof_src =
+        \\conv_ext
+        \\----
+        \\goal: $ an q p $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "an_contract") != null,
+    );
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? AC: rewrite inside a bag member lifts through the comb" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_ac_prelude ++
+        \\theorem conv_in (p q r: wff) (h: $ or (an p (an q q)) r $): $ or r (an q p) $;
+    ;
+    const proof_src =
+        \\conv_in
+        \\----
+        \\goal: $ or r (an q p) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "an_contract") != null,
+    );
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? AC: local equation over bags cites the written formula" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = conversion_ac_prelude ++
+        \\theorem conv_eq (p q s: wff) (h1: $ iff (an p q) s $) (h2: $ an q p $): $ s $;
+    ;
+    const proof_src =
+        \\conv_eq
+        \\----
+        \\goal: $ s $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? AC: seven-atom forced negative saturates at defaults" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The tree-representation baseline dies at n = 7: the miss degrades
+    // to budget_exhausted before the AC closure completes (see
+    // docs/design_notes/ac_representation.md). With bags the closure is
+    // definitional and the forced negative survives.
+    const mm0_src = conversion_ac_prelude ++
+        \\theorem conv_neg (p1 p2 p3 p4 p5 p6 p7: wff)
+        \\  (h: $ an p1 (an p2 (an p3 (an p4 (an p5 (an p6 p7))))) $):
+        \\  $ or p1 (or p2 (or p3 (or p4 (or p5 (or p6 p7))))) $;
+    ;
+    const proof_src =
+        \\conv_neg
+        \\----
+        \\goal: $ or p1 (or p2 (or p3 (or p4 (or p5 (or p6 p7))))) $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "the egraph saturated") != null,
+    );
+
+    // And the positive twin — a reversed seven-atom conjunction — is
+    // found and compiles.
+    const found_src = conversion_ac_prelude ++
+        \\theorem conv_pos (p1 p2 p3 p4 p5 p6 p7: wff)
+        \\  (h: $ an p1 (an p2 (an p3 (an p4 (an p5 (an p6 p7))))) $):
+        \\  $ an p7 (an p6 (an p5 (an p4 (an p3 (an p2 p1))))) $;
+    ;
+    const found_proof =
+        \\conv_pos
+        \\----
+        \\goal: $ an p7 (an p6 (an p5 (an p4 (an p3 (an p2 p1))))) $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, found_src, found_proof, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, found_src, found_proof, found.items[0]);
+}
+
 test "conversion? reports missing enrollment and node-cap truncation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -7044,9 +7214,9 @@ const bool_conversion_prelude =
     \\axiom or_congr (a b c d: bool) (h1: $ eq a b $) (h2: $ eq c d $): $ eq (or a c) (or b d) $;
     \\--| @congr
     \\axiom not_congr (a b: bool) (h: $ eq a b $): $ eq (not a) (not b) $;
-    \\--| @conversion ltr
+    \\--| @conversion comm
     \\axiom and_comm (x y: bool): $ eq (and x y) (and y x) $;
-    \\--| @conversion ltr
+    \\--| @conversion assoc
     \\axiom and_assoc (x y z: bool): $ eq (and (and x y) z) (and x (and y z)) $;
     \\--| @conversion ltr
     \\axiom and_idem (x: bool): $ eq (and x x) x $;
@@ -7054,9 +7224,9 @@ const bool_conversion_prelude =
     \\axiom and_top (x: bool): $ eq (and top x) x $;
     \\--| @conversion ltr
     \\axiom and_bot (x: bool): $ eq (and bot x) bot $;
-    \\--| @conversion ltr
+    \\--| @conversion comm
     \\axiom or_comm (x y: bool): $ eq (or x y) (or y x) $;
-    \\--| @conversion ltr
+    \\--| @conversion assoc
     \\axiom or_assoc (x y z: bool): $ eq (or (or x y) z) (or x (or y z)) $;
     \\--| @conversion ltr
     \\axiom or_idem (x: bool): $ eq (or x x) x $;
@@ -7124,9 +7294,9 @@ const ring_conversion_prelude =
     \\axiom add_zero (x: R): $ eq (add x zero) x $;
     \\--| @conversion ltr
     \\axiom zero_add (x: R): $ eq (add zero x) x $;
-    \\--| @conversion ltr
+    \\--| @conversion comm
     \\axiom add_comm (x y: R): $ eq (add x y) (add y x) $;
-    \\--| @conversion ltr
+    \\--| @conversion assoc
     \\axiom add_assoc (x y z: R): $ eq (add (add x y) z) (add x (add y z)) $;
     \\--| @conversion ltr
     \\axiom add_neg (x: R): $ eq (add x (neg x)) zero $;
@@ -7140,9 +7310,9 @@ const ring_conversion_prelude =
     \\axiom mul_zero (x: R): $ eq (mul x zero) zero $;
     \\--| @conversion ltr
     \\axiom zero_mul (x: R): $ eq (mul zero x) zero $;
-    \\--| @conversion ltr
+    \\--| @conversion comm
     \\axiom mul_comm (x y: R): $ eq (mul x y) (mul y x) $;
-    \\--| @conversion ltr
+    \\--| @conversion assoc
     \\axiom mul_assoc (x y z: R): $ eq (mul (mul x y) z) (mul x (mul y z)) $;
     \\--| @conversion both
     \\axiom factor_l (x y z: R): $ eq (add (mul x y) (mul x z)) (mul x (add y z)) $;

@@ -347,6 +347,37 @@ which side is *instantiated* during saturation, i.e. which new terms the
 egraph is allowed to build. Enroll `x <-> (x /\ x)` as `rtl` and the egraph
 only ever contracts; enroll it `both` and it floods.
 
+Two *role* tokens join the direction tokens:
+
+```
+--| @conversion comm
+axiom an_comm (a b: wff): $ (a /\ b) <-> (b /\ a) $;
+--| @conversion assoc
+axiom an_assoc (a b c: wff): $ ((a /\ b) /\ c) <-> (a /\ (b /\ c)) $;
+```
+
+A role annotation certifies the operator's algebraic law instead of picking
+a match direction, and its conclusion must be *exactly* that law:
+`rel(t(a, b), t(b, a))` for `comm`, `rel(t(t(a,b), c), t(a, t(b,c)))` (in
+either orientation) for `assoc` — distinct bare binders, no bound binders,
+no hypotheses. Each operator may carry at most one certificate per law, but
+any number of operators may be certified (unlike `@acui`, which names one
+structural combiner per sort).
+
+An operator certified **both** `assoc` and `comm` (and covered by a
+`@congr` rule) is *absorbed*: `conversion?` interns its applications as
+flattened, sorted multisets, so every reassociation and permutation of the
+same operands IS one e-graph node and the two laws cost zero saturation
+work. The certificates are cited by the emitted proof chains wherever a
+canonical form meets a written one (the goal, the reference, a rule
+instance's own shape). This is what keeps large conjunctions tractable:
+the tree representation's AC closure grows as `3^n` e-nodes and starts
+losing forced negatives around seven atoms, where the absorbed
+representation stays linear (see
+`docs/design_notes/ac_representation.md`). An operator with only one of
+the two certificates enrolls for ordinary `both`-ways saturation,
+unchanged.
+
 ### Requirements
 
 Checked at annotation time (unlike `@rewrite`, malformed `@conversion`

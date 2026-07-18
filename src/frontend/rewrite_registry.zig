@@ -68,6 +68,14 @@ pub const RewriteRule = struct {
     head_term_id: u32,
 };
 
+/// The role a `@conversion` annotation assigns its theorem. Direction
+/// tokens (`ltr`/`rtl`/`both`) enroll ordinary saturation rules; the role
+/// tokens `assoc`/`comm` instead certify the conclusion head's algebraic
+/// law, letting `conversion?` absorb it into term representation (see
+/// `docs/design_notes/ac_representation.md`). Role-annotated theorems are
+/// validated against the exact law shape at annotation time.
+pub const ConversionRole = enum { none, assoc, comm };
+
 /// A `@conversion` rule: a hypothesis-free theorem concluding `rel(lhs, rhs)`
 /// for a registered `@relation`, enrolled for egraph saturation in
 /// `conversion?` search. `ltr`/`rtl` record which orientations may be
@@ -75,6 +83,11 @@ pub const RewriteRule = struct {
 /// `both` annotation sets both flags. Unlike `@rewrite` rules these never
 /// feed the normalizer, so enrollment cannot change any existing search or
 /// compilation behavior.
+///
+/// A role-annotated theorem (`role != .none`) records `head_term_id` — the
+/// binary operator whose law it certifies. Until the bag representation
+/// lands these enroll with both direction flags set (identical to `both`),
+/// so enrollment stays semantics-preserving.
 pub const ConversionRule = struct {
     rule_id: u32,
     lhs: TemplateExpr,
@@ -82,6 +95,9 @@ pub const ConversionRule = struct {
     num_binders: usize,
     ltr: bool,
     rtl: bool,
+    role: ConversionRole = .none,
+    /// The certified operator for a role rule; null for direction rules.
+    head_term_id: ?u32 = null,
 };
 
 /// A special alpha-renaming rule used only by freshening.
@@ -315,13 +331,21 @@ pub const RewriteRegistry = struct {
         stmt_name: []const u8,
         iter: *std.mem.TokenIterator(u8, .any),
     ) !void {
-        const direction = iter.next() orelse {
+        const token = iter.next() orelse {
             return error.InvalidConversionAnnotation;
         };
         if (iter.next() != null) return error.InvalidConversionAnnotation;
-        const both = std.mem.eql(u8, direction, "both");
-        const ltr = both or std.mem.eql(u8, direction, "ltr");
-        const rtl = both or std.mem.eql(u8, direction, "rtl");
+        const role: ConversionRole = if (std.mem.eql(u8, token, "assoc"))
+            .assoc
+        else if (std.mem.eql(u8, token, "comm"))
+            .comm
+        else
+            .none;
+        const both = std.mem.eql(u8, token, "both");
+        // Role rules enroll with both orientations until the bag
+        // representation lands (semantics-preserving, same as `both`).
+        const ltr = both or role != .none or std.mem.eql(u8, token, "ltr");
+        const rtl = both or role != .none or std.mem.eql(u8, token, "rtl");
         if (!ltr and !rtl) return error.InvalidConversionAnnotation;
 
         const rule_id = env.getRuleId(stmt_name) orelse return;
@@ -346,6 +370,31 @@ pub const RewriteRegistry = struct {
 
         const lhs = app.args[0];
         const rhs = app.args[1];
+
+        // Role certificates are validated against the exact law shape
+        // (before the generic orientation checks, whose validity the shape
+        // implies — the role-specific diagnostic is the useful one).
+        var head_term_id: ?u32 = null;
+        if (role != .none) {
+            // A representation-level law cannot carry dependency side
+            // conditions, so the certificate must be binder-clean.
+            for (rule.args) |arg| {
+                if (arg.bound) return error.ConversionRoleBoundBinder;
+            }
+            const head = switch (role) {
+                .comm => try validateCommShape(rule, lhs, rhs),
+                .assoc => try validateAssocShape(rule, lhs, rhs),
+                .none => unreachable,
+            };
+            // One certificate per law per operator.
+            for (self.conversions.items) |existing| {
+                if (existing.role == role and existing.head_term_id == head) {
+                    return error.DuplicateConversionRoleForHead;
+                }
+            }
+            head_term_id = head;
+        }
+
         if (ltr) try validateConversionOrientation(lhs, rhs);
         if (rtl) try validateConversionOrientation(rhs, lhs);
 
@@ -356,6 +405,8 @@ pub const RewriteRegistry = struct {
             .num_binders = rule.args.len,
             .ltr = ltr,
             .rtl = rtl,
+            .role = role,
+            .head_term_id = head_term_id,
         });
     }
 
@@ -1340,6 +1391,77 @@ fn validateBundleRuleShapes(
             return error.RelationBundleBoundBinder;
         }
     }
+}
+
+/// `@conversion comm` certificate: `rel(t(a, b), t(b, a))` with exactly
+/// the two distinct bare binders and nothing else. Returns the head `t`.
+fn validateCommShape(
+    rule: *const RuleDecl,
+    lhs: TemplateExpr,
+    rhs: TemplateExpr,
+) !u32 {
+    if (rule.args.len != 2) return error.ConversionCommRuleShape;
+    const left = binaryAppArgs(lhs) orelse return error.ConversionCommRuleShape;
+    const a = bareBinder(left.args[0]) orelse return error.ConversionCommRuleShape;
+    const b = bareBinder(left.args[1]) orelse return error.ConversionCommRuleShape;
+    if (a == b) return error.ConversionCommRuleShape;
+    const right = binaryAppArgs(rhs) orelse return error.ConversionCommRuleShape;
+    if (right.term_id != left.term_id) return error.ConversionCommRuleShape;
+    if (!isBinder(right.args[0], b) or !isBinder(right.args[1], a)) {
+        return error.ConversionCommRuleShape;
+    }
+    return left.term_id;
+}
+
+/// `@conversion assoc` certificate: `rel(t(t(a,b), c), t(a, t(b,c)))` in
+/// either orientation, three distinct bare binders. Returns the head `t`.
+fn validateAssocShape(
+    rule: *const RuleDecl,
+    lhs: TemplateExpr,
+    rhs: TemplateExpr,
+) !u32 {
+    if (rule.args.len != 3) return error.ConversionAssocRuleShape;
+    if (assocHead(lhs, rhs)) |head| return head;
+    if (assocHead(rhs, lhs)) |head| return head;
+    return error.ConversionAssocRuleShape;
+}
+
+/// Match `left = t(t(a,b), c)` against `right = t(a, t(b,c))` for distinct
+/// binders a, b, c; null when the pair does not have that shape.
+fn assocHead(left: TemplateExpr, right: TemplateExpr) ?u32 {
+    const outer_l = binaryAppArgs(left) orelse return null;
+    const inner_l = binaryAppArgs(outer_l.args[0]) orelse return null;
+    if (inner_l.term_id != outer_l.term_id) return null;
+    const a = bareBinder(inner_l.args[0]) orelse return null;
+    const b = bareBinder(inner_l.args[1]) orelse return null;
+    const c = bareBinder(outer_l.args[1]) orelse return null;
+    if (a == b or a == c or b == c) return null;
+    const outer_r = binaryAppArgs(right) orelse return null;
+    if (outer_r.term_id != outer_l.term_id) return null;
+    if (!isBinder(outer_r.args[0], a)) return null;
+    const inner_r = binaryAppArgs(outer_r.args[1]) orelse return null;
+    if (inner_r.term_id != outer_l.term_id) return null;
+    if (!isBinder(inner_r.args[0], b)) return null;
+    if (!isBinder(inner_r.args[1], c)) return null;
+    return outer_l.term_id;
+}
+
+const BinaryApp = struct { term_id: u32, args: []const TemplateExpr };
+
+fn binaryAppArgs(template: TemplateExpr) ?BinaryApp {
+    const app = switch (template) {
+        .app => |app| app,
+        .binder => return null,
+    };
+    if (app.args.len != 2) return null;
+    return .{ .term_id = app.term_id, .args = app.args };
+}
+
+fn bareBinder(template: TemplateExpr) ?usize {
+    return switch (template) {
+        .binder => |idx| idx,
+        .app => null,
+    };
 }
 
 fn validateConversionOrientation(
