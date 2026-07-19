@@ -535,9 +535,7 @@ fn addExpr(
             );
             for (decl.args, app.args, 0..) |arg_info, child_expr, idx| {
                 if (arg_info.bound) {
-                    const var_id = switch (
-                        theorem.interner.node(child_expr).*
-                    ) {
+                    const var_id = switch (theorem.interner.node(child_expr).*) {
                         .variable => |v| v,
                         else => return null,
                     };
@@ -648,4 +646,3 @@ pub fn flattenAcExpr(
     }
     try out.append(allocator, expr_id);
 }
-

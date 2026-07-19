@@ -711,12 +711,14 @@ pub const EGraph = struct {
                 scratch,
             );
         }
-        return .{ .splice = .{
-            .from = from,
-            .to = undefined, // patched by mintSpliceTwin
-            .members = members,
-            .expansion = expansion,
-        } };
+        return .{
+            .splice = .{
+                .from = from,
+                .to = undefined, // patched by mintSpliceTwin
+                .members = members,
+                .expansion = expansion,
+            },
+        };
     }
 
     /// Mirror of the full-view splice recursion, recording the expansion
@@ -3617,7 +3619,6 @@ const ExplainCtx = struct {
         }
     }
 };
-
 
 test {
     _ = @import("egraph/tests.zig");

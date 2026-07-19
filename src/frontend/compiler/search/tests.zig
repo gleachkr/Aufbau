@@ -7615,7 +7615,6 @@ test "conversion? proves difference of squares across distributivity and AC" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
-
 // --- conversion? def-wrangling (@conversion unfold/fold/both) -------------
 //
 // Enrolled defs saturate as ordinary rules built from the def's own
