@@ -1,5 +1,15 @@
 const std = @import("std");
 const mm0 = @import("mm0");
+const json_out = @import("json_out.zig");
+
+// JSON string emitters live in `json_out.zig` so they can be unit-tested
+// natively (this file pins `wasm_allocator` and only builds for wasm32). Every
+// string value — including source-derived ones like a diagnostic's echoed math
+// token — is escaped, so the result buffer is always valid JSON.
+const writeJsonString = json_out.writeString;
+const writeOptionalJsonString = json_out.writeOptionalString;
+const writeJsonStringField = json_out.writeStringField;
+const writeOptionalStringField = json_out.writeOptionalStringField;
 
 const allocator = std.heap.wasm_allocator;
 
@@ -294,18 +304,10 @@ fn writeDiagnosticObject(
     try writer.writeByte('}');
 }
 
-fn writeJsonStringField(
-    writer: anytype,
-    name: []const u8,
-    value: []const u8,
-) !void {
-    try writer.print("\"{s}\":\"{s}\"", .{ name, value });
-}
-
 // Pretty-printed statement snapshots: `[{name, kind, local, hyps, concl,
 // signature, body}]`. Rendered math can contain any notation token (`\/`,
-// quotes), so unlike the controlled diagnostic strings above these values go
-// through full JSON escaping.
+// quotes), so these values are JSON-escaped via `writeJsonString` — as are all
+// the diagnostic string fields above.
 fn writeStatementsField(
     writer: anytype,
     statements: *const mm0.StatementSink,
@@ -332,44 +334,6 @@ fn writeStatementsField(
         try writer.writeByte('}');
     }
     try writer.writeByte(']');
-}
-
-fn writeOptionalJsonString(writer: anytype, value: ?[]const u8) !void {
-    if (value) |actual| {
-        try writeJsonString(writer, actual);
-    } else {
-        try writer.writeAll("null");
-    }
-}
-
-fn writeJsonString(writer: anytype, value: []const u8) !void {
-    try writer.writeByte('"');
-    for (value) |ch| switch (ch) {
-        '"' => try writer.writeAll("\\\""),
-        '\\' => try writer.writeAll("\\\\"),
-        '\n' => try writer.writeAll("\\n"),
-        '\r' => try writer.writeAll("\\r"),
-        '\t' => try writer.writeAll("\\t"),
-        else => if (ch < 0x20) {
-            try writer.print("\\u{x:0>4}", .{ch});
-        } else {
-            try writer.writeByte(ch);
-        },
-    };
-    try writer.writeByte('"');
-}
-
-fn writeOptionalStringField(
-    writer: anytype,
-    name: []const u8,
-    value: ?[]const u8,
-) !void {
-    try writer.print("\"{s}\":", .{name});
-    if (value) |actual| {
-        try writer.print("\"{s}\"", .{actual});
-    } else {
-        try writer.writeAll("null");
-    }
 }
 
 fn writeOptionalUsizeField(

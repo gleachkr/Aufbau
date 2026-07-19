@@ -83,6 +83,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- The WebAssembly compiler now emits a valid JSON result buffer even when a
+  diagnostic echoes a source token containing a JSON-special character. A bad
+  math token such as `t\p` was previously copied verbatim into the diagnostic
+  detail's `token` field, producing `"token":"t\p"` — an invalid JSON escape —
+  so the `@aufbau/compiler` npm package's `JSON.parse` of the result threw and
+  `compile()` failed on otherwise ordinary erroneous input. All string values
+  in the result JSON (tokens, identifiers, messages) are now escaped.
 - `conversion?` tree-mode matching is now memory-bounded. AC-style laws
   enrolled as plain rewrites (a `comm`/`assoc` role token without its
   partner law or `@congr` coverage falls back to ordinary both-way
