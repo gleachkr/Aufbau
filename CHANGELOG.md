@@ -81,6 +81,19 @@ This file records notable user-facing changes to Aufbau. The project follows
   single `refl` line closed by transparent-definition unfolding. Defs are
   never enrolled implicitly. See `docs/rewrite_system.md`.
 
+### Fixed
+
+- Capture-unfolding of hidden-dummy defs is now rejected at compile time.
+  A stated unfolding whose dummy witness variable also occurs in one of the
+  def's argument instantiations (e.g. `ex u (eq u u)` written for
+  `somesame u` where `def somesame {.w} (a) = $ ex w (eq w a) $`) is not a
+  definitional equality — MMB `UDummy` requires the witness to be disjoint
+  from every argument substitution — but the compiler previously accepted
+  it and emitted a proof the verifier rejected with `DepViolation`. The
+  transparent-def matcher now tracks each expansion's argument dependencies
+  and treats a captured witness as an ordinary mismatch, on both the
+  written-line and binder-inference paths. See `docs/transparent_defs.md`.
+
 ## [0.0.1] - 2026-07-16
 
 ### Added

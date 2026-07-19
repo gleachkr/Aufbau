@@ -1109,6 +1109,26 @@ pub fn matchSymbolicAcuiLeafToExprState(
     return try tryMatchSymbolicToExprDirect(self, symbolic, actual, state);
 }
 
+/// Dep bits of the parts of `symbolic` that are already concrete at call
+/// time (`.fixed` leaves, recursively through apps). Unresolved binders and
+/// dummies contribute nothing: this is a stable under-approximation used for
+/// capture masks — it must only contain bits that are certainly part of the
+/// argument instantiation, whatever the rest resolves to later.
+fn fixedSymbolicDeps(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+) anyerror!u55 {
+    return switch (symbolic.*) {
+        .fixed => |expr_id| try WitnessState.exprDeps(self, expr_id),
+        .app => |app| blk: {
+            var deps: u55 = 0;
+            for (app.args) |arg| deps |= try fixedSymbolicDeps(self, arg);
+            break :blk deps;
+        },
+        .binder, .dummy => 0,
+    };
+}
+
 pub fn expandTemplateApp(
     self: anytype,
     app: TemplateExpr.App,
@@ -1124,13 +1144,16 @@ pub fn expandTemplateApp(
         *const SymbolicExpr,
         term.args.len + term.dummy_args.len,
     );
+    var forbidden_deps: u55 = 0;
     for (app.args, 0..) |arg, idx| {
         subst[idx] = try symbolicFromTemplate(self, arg);
+        forbidden_deps |= try fixedSymbolicDeps(self, subst[idx]);
     }
     for (term.dummy_args, 0..) |dummy_arg, idx| {
         const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
+            .forbidden_deps = forbidden_deps,
         });
         subst[term.args.len + idx] = try self.allocSymbolic(
             .{ .dummy = slot },
@@ -1150,13 +1173,16 @@ pub fn expandConcreteDef(
         *const SymbolicExpr,
         def.term.args.len + def.term.dummy_args.len,
     );
+    var forbidden_deps: u55 = 0;
     for (def.app.args, 0..) |arg, idx| {
         subst[idx] = try self.allocSymbolic(.{ .fixed = arg });
+        forbidden_deps |= try WitnessState.exprDeps(self, arg);
     }
     for (def.term.dummy_args, 0..) |dummy_arg, idx| {
         const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
+            .forbidden_deps = forbidden_deps,
         });
         subst[def.term.args.len + idx] = try self.allocSymbolic(
             .{ .dummy = slot },
@@ -1178,10 +1204,15 @@ pub fn expandSymbolicApp(
         term.args.len + term.dummy_args.len,
     );
     @memcpy(subst[0..term.args.len], app.args);
+    var forbidden_deps: u55 = 0;
+    for (app.args) |arg| {
+        forbidden_deps |= try fixedSymbolicDeps(self, arg);
+    }
     for (term.dummy_args, 0..) |dummy_arg, idx| {
         const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
+            .forbidden_deps = forbidden_deps,
         });
         subst[term.args.len + idx] = try self.allocSymbolic(
             .{ .dummy = slot },

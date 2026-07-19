@@ -126,6 +126,24 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_def_body_free_hidden_binder",
         .outcome = .{ .fail = error.DepViolation },
     },
+    // Capture-unfolding of a hidden-dummy def (task #138): the stated
+    // formula spells out the unfolding with the dummy witness equal to a
+    // def argument. MMB `UDummy` requires the witness to be disjoint from
+    // every argument substitution, so the two sides are not def-equal and
+    // the line must fail conclusion matching at compile time — the emitted
+    // MMB would otherwise be rejected by the verifier (DepViolation).
+    .{
+        .stem = "fail_def_capture_unfold",
+        .outcome = .{ .fail = error.ConclusionMismatch },
+    },
+    // Same capture, reached through binder inference instead of a written
+    // def application: the rule conclusion is the def app and the binder is
+    // inferred from the stated unfolding. Inference may still pick the
+    // captured binding; concrete conclusion validation must reject it.
+    .{
+        .stem = "fail_def_capture_unfold_infer",
+        .outcome = .{ .fail = error.ConclusionMismatch },
+    },
     .{ .stem = "pass_def_acui_assoc", .outcome = .pass },
     .{
         .stem = "fail_def_unfold_then_rewrite",

@@ -925,6 +925,7 @@ pub fn hashMatchSessionForSearch(
     for (state.symbolic_dummy_infos.items) |info| {
         h = Types.mixHashBytes(h, info.sort_name);
         h = Types.mixHash(h, @intFromBool(info.bound));
+        h = Types.mixHash(h, info.forbidden_deps);
     }
 
     h = hashWitnessMapForSearch(h, state.witnesses);

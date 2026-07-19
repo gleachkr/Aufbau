@@ -95,6 +95,17 @@ pub fn alignDummySlots(
         return false;
     }
 
+    // The merged slot must forbid the union of both expansions' argument
+    // deps; a witness already in place has only been checked against its own
+    // side's mask, so re-check it against the union before aliasing.
+    const merged_forbidden =
+        lhs_info.forbidden_deps | rhs_info.forbidden_deps;
+    for ([2]?ExprId{ lhs_witness, rhs_witness }) |maybe_witness| {
+        const witness = maybe_witness orelse continue;
+        const deps = try Root.exprDeps(self, witness);
+        if (deps & merged_forbidden != 0) return false;
+    }
+
     const winner = if (lhs_witness != null)
         lhs_root
     else if (rhs_witness != null)
@@ -131,6 +142,11 @@ pub fn alignDummySlots(
         try state.removeMaterializedWitness(self.shared.allocator, loser);
     }
 
+    try state.widenDummyForbiddenDeps(
+        self.shared.allocator,
+        winner,
+        merged_forbidden,
+    );
     try state.putDummyAlias(self.shared.allocator, loser, winner);
     invalidateRepresentativeCaches(state);
     return true;

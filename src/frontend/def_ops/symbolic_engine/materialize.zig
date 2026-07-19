@@ -42,7 +42,7 @@ pub fn representResolvedBindings(
     }
 }
 
-fn exprDeps(self: anytype, expr_id: ExprId) anyerror!u55 {
+pub fn exprDeps(self: anytype, expr_id: ExprId) anyerror!u55 {
     if (try self.shared.theorem.currentLeafInfo(expr_id)) |leaf| {
         return leaf.deps;
     }
@@ -562,5 +562,6 @@ pub fn getConcreteLeafInfo(
     return .{
         .sort_name = leaf.sort_name,
         .bound = leaf.bound,
+        .deps = leaf.deps,
     };
 }

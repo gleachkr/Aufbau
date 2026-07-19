@@ -13,6 +13,7 @@ pub const TrailEntry = union(enum) {
     dummy_alias: struct { key: usize, old: ?usize },
     provisional_witness_info: struct { key: ExprId, old: ?Types.SymbolicDummyInfo },
     materialized_witness_info: struct { key: ExprId, old: ?Types.SymbolicDummyInfo },
+    dummy_forbidden: struct { slot: usize, old: u55 },
 };
 
 pub const MatchSession = struct {
@@ -240,6 +241,26 @@ pub const MatchSession = struct {
         } });
     }
 
+    /// Widen a dummy slot's capture mask in place, trailed. Used when two
+    /// dummy slots are aliased (`alignDummySlots`): the surviving root must
+    /// forbid the union of both expansions' argument deps. In-place mutation
+    /// of a surviving entry is otherwise illegal (snapshots roll the list
+    /// back by length only), hence the trail entry.
+    pub fn widenDummyForbiddenDeps(
+        self: *MatchSession,
+        allocator: std.mem.Allocator,
+        slot: usize,
+        merged: u55,
+    ) !void {
+        const info = &self.symbolic_dummy_infos.items[slot];
+        if (info.forbidden_deps == merged) return;
+        try self.trail.append(allocator, .{ .dummy_forbidden = .{
+            .slot = slot,
+            .old = info.forbidden_deps,
+        } });
+        info.forbidden_deps = merged;
+    }
+
     /// Undo all mutations past `trail_len`, most recent first.
     ///
     /// Map restoration is intentionally infallible. The trail is unwound in
@@ -285,6 +306,12 @@ pub const MatchSession = struct {
                     self.materialized_witness_infos.putAssumeCapacity(e.key, old);
                 } else {
                     _ = self.materialized_witness_infos.remove(e.key);
+                },
+                // The slot is still in bounds here: snapshot restore unwinds
+                // the trail before truncating `symbolic_dummy_infos`.
+                .dummy_forbidden => |e| {
+                    self.symbolic_dummy_infos.items[e.slot].forbidden_deps =
+                        e.old;
                 },
             }
         }

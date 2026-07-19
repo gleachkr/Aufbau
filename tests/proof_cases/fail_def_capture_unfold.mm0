@@ -1,0 +1,20 @@
+delimiter $ ( ) $;
+
+provable sort form;
+
+--| @vars x y z
+sort obj;
+
+term bi (a b: form): form;
+term eq (a b: obj): form;
+term ex {x: obj} (p: form x): form;
+
+--| @relation form bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: form): $ bi a a $;
+axiom bi_trans (a b c: form) (h1: $ bi a b $) (h2: $ bi b c $): $ bi a c $;
+axiom bi_symm (a b: form) (h: $ bi a b $): $ bi b a $;
+axiom mpbi (a b: form) (h1: $ bi a b $) (h2: $ a $): $ b $;
+
+def somesame {.w: obj} (a: obj): form = $ ex w (eq w a) $;
+
+theorem capture {u: obj}: $ bi (ex u (eq u u)) (somesame u) $;

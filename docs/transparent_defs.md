@@ -150,6 +150,16 @@ the theorem, it must do so through the sort's `@vars` pool, using the same
 selection policy as `@fresh`. This is still targeted, witness-driven exposure
 rather than a general-purpose "open this hidden-dummy def" operation.
 
+A matched witness must additionally be **disjoint from the def's argument
+instantiations**. MMB's `UDummy` opcode requires the dummy substituted during
+an unfold to be disjoint from every expression already on the unify heap, so a
+stated unfolding whose witness variable also occurs in an argument — e.g.
+writing `ex u (eq u u)` for `somesame u` where
+`def somesame {.w: obj} (a: obj): form = $ ex w (eq w a) $;` — is a capture,
+not an unfolding. The two expressions are simply not definitionally equal, and
+the compiler rejects the line with an ordinary conclusion mismatch instead of
+emitting a proof the verifier would refuse.
+
 ---
 
 ## Omitted-binder inference

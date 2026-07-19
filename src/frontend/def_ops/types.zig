@@ -19,6 +19,14 @@ pub const ConversionPlan = union(enum) {
 pub const SymbolicDummyInfo = struct {
     sort_name: []const u8,
     bound: bool,
+    /// Dep bits of the def-argument instantiations of the expansion that
+    /// minted this dummy. MMB `UDummy` requires the dummy witness to be
+    /// disjoint from every argument substitution on the unify heap, so a
+    /// witness whose dep bits intersect this mask would be captured — the
+    /// exprs are simply not def-equal, and matching it is a plain mismatch.
+    /// Zero for witness-first slots (`slotForWitness`), which never lower
+    /// through an `Unfold`/`UDummy` of their own.
+    forbidden_deps: u55 = 0,
 };
 
 pub const SymbolicExpr = union(enum) {
@@ -314,4 +322,7 @@ pub fn freeBindingSeedOwned(
 pub const ConcreteVarInfo = struct {
     sort_name: []const u8,
     bound: bool,
+    /// Leaf dep bits: a bound/dummy variable's own singleton bit, a regular
+    /// variable's declared dependency bits.
+    deps: u55,
 };

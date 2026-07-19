@@ -77,3 +77,4 @@ pub const isProvisionalWitnessExpr = Materialize.isProvisionalWitnessExpr;
 pub const resolveWitnessForDummySlot =
     Materialize.resolveWitnessForDummySlot;
 pub const getConcreteLeafInfo = Materialize.getConcreteLeafInfo;
+pub const exprDeps = Materialize.exprDeps;

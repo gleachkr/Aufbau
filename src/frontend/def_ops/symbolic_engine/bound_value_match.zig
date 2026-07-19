@@ -246,6 +246,10 @@ pub fn matchSymbolicDummyState(
     if (!std.mem.eql(u8, root_info.sort_name, actual_info.sort_name)) {
         return false;
     }
+    // A witness occurring in the minting expansion's argument instantiations
+    // would be captured by the unfolding (MMB `UDummy` disjointness), so the
+    // exprs are not def-equal: plain mismatch.
+    if (actual_info.deps & root_info.forbidden_deps != 0) return false;
     _ = info;
 
     if (currentWitnessExpr(root, state)) |existing| {

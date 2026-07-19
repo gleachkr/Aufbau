@@ -1,0 +1,15 @@
+delimiter $ ( ) $;
+
+provable sort form;
+
+--| @vars x y z
+sort obj;
+
+term eq (a b: obj): form;
+term ex {x: obj} (p: form x): form;
+
+def somesame {.w: obj} (a: obj): form = $ ex w (eq w a) $;
+
+axiom mk (a: obj): $ somesame a $;
+
+theorem capture_infer {u: obj}: $ ex u (eq u u) $;
