@@ -222,9 +222,10 @@ pub const SaturateStats = struct {
     /// saturated miss means dependency constraints (not rule coverage)
     /// blocked at least one candidate union.
     dep_deferred: usize = 0,
-    /// AC bag-match enumerations truncated by the per-match budget this
-    /// run. A nonzero count on a saturated miss means the miss is NOT a
-    /// forced negative — some assignments were never tried.
+    /// Match enumerations (tree `solvePairs` walks and AC bag
+    /// assignments alike) truncated by the per-match or per-iteration
+    /// budget this run. A nonzero count on a saturated miss means the
+    /// miss is NOT a forced negative — some assignments were never tried.
     ac_match_capped: usize = 0,
     /// Cyclic `bag_in_class` entries dropped by rebuild passes this run.
     /// Dropping keeps member lists finite but forfeits some congruence
@@ -236,15 +237,16 @@ pub const SaturateStats = struct {
 pub const SaturateOptions = struct {
     max_iterations: usize = 16,
     max_nodes: usize = 10_000,
-    /// Assignment-enumeration budget per top-level bag match (a rule
-    /// against one bag node). Trips count in `ac_match_capped`.
+    /// Enumeration budget per (rule, node) match call, charged per
+    /// candidate member processed in tree `solvePairs` walks and per AC
+    /// bag-assignment step alike. Trips count in `ac_match_capped`.
     ac_match_budget: usize = 10_000,
-    /// Retained-match budget per iteration, bag-mode only (no effect on
-    /// tree egraphs). Charged AFTER dedup, so matches whose effect was
-    /// already applied in an earlier iteration are free — each iteration's
-    /// budget goes entirely to new unions and the search ratchets forward
-    /// through a dense frontier instead of flooding one iteration. Trips
-    /// count in `ac_match_capped` (they weaken a forced negative).
+    /// Retained-match budget per iteration. Charged AFTER dedup, so
+    /// matches whose effect was already applied in an earlier iteration
+    /// are free — each iteration's budget goes entirely to new unions and
+    /// the search ratchets forward through a dense frontier instead of
+    /// flooding one iteration. Trips count in `ac_match_capped` (they
+    /// weaken a forced negative).
     ac_iter_match_budget: usize = 2_048,
 };
 
@@ -972,16 +974,15 @@ pub const EGraph = struct {
                     stats.outcome = .node_capped;
                     return self.finishStats(stats, capped_start, cyclic_start);
                 }
-                // Per-iteration retained-match budget (bag mode only): on a
-                // dense AC frontier one unthrottled iteration can retain
-                // tens of thousands of new-effect matches whose applied
-                // unions make the NEXT frontier combinatorially worse. Stop
-                // collecting, apply what we have, and let later iterations
-                // continue — already-applied effects are deduped free, so
-                // every iteration's budget goes to fresh unions.
-                if (self.ac_heads.count() != 0 and
-                    matches.items.len >= opts.ac_iter_match_budget)
-                {
+                // Per-iteration retained-match budget: on a dense frontier
+                // (AC bags, or AC-style laws enrolled as plain tree
+                // rewrites) one unthrottled iteration can retain tens of
+                // thousands of new-effect matches whose applied unions make
+                // the NEXT frontier combinatorially worse. Stop collecting,
+                // apply what we have, and let later iterations continue —
+                // already-applied effects are deduped free, so every
+                // iteration's budget goes to fresh unions.
+                if (matches.items.len >= opts.ac_iter_match_budget) {
                     iter_capped = true;
                     self.ac_match_capped_total += 1;
                     break;
@@ -1946,6 +1947,20 @@ pub const EGraph = struct {
                                 {
                                     continue;
                                 }
+                                // Per-candidate charge (the tree analogue
+                                // of the bag arms' enumeration charges):
+                                // a nested pattern against merge-heavy
+                                // classes branches here, members ^ depth
+                                // worklist allocations that all live until
+                                // the (rule, node) call returns. Every
+                                // solution and every recursion passes
+                                // through a charged candidate, so this
+                                // bounds the whole tree enumeration.
+                                if (self.ac_budget_remaining == 0) {
+                                    self.ac_budget_hit = true;
+                                    return;
+                                }
+                                self.ac_budget_remaining -= 1;
                                 const extended = try scratch.alloc(
                                     PatternPair,
                                     pattern_app.args.len +
@@ -1985,6 +2000,14 @@ pub const EGraph = struct {
                                 {
                                     continue;
                                 }
+                                // Same per-candidate charge as the app
+                                // arm; the bag assignment below charges
+                                // its own enumeration on top.
+                                if (self.ac_budget_remaining == 0) {
+                                    self.ac_budget_hit = true;
+                                    return;
+                                }
+                                self.ac_budget_remaining -= 1;
                                 var flat: std.ArrayListUnmanaged(
                                     TemplateExpr,
                                 ) = .{};

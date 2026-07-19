@@ -647,7 +647,15 @@ test "egraph AC oracle: four-variable closed form" {
 }
 
 test "egraph AC oracle: seven-variable closed form" {
-    try checkAcOracle(7, .{ .max_iterations = 64, .max_nodes = 1_000_000 });
+    // Deliberately exhaustive: the closed form needs the full tree-mode
+    // flood the production match budgets exist to throttle, so lift them
+    // along with the node/iteration caps.
+    try checkAcOracle(7, .{
+        .max_iterations = 64,
+        .max_nodes = 1_000_000,
+        .ac_match_budget = std.math.maxInt(usize),
+        .ac_iter_match_budget = std.math.maxInt(usize),
+    });
 }
 
 // --- AC bag-representation tests ----------------------------------------
@@ -790,10 +798,13 @@ test "bag egraph agrees with saturated tree egraph (differential oracle)" {
     }
 
     // The tree side must saturate comm+assoc to see the equalities the
-    // bag side gets at intern time.
+    // bag side gets at intern time — exhaustively, so lift the match
+    // budgets that throttle exactly this workload in production.
     const stats = try tree.saturate(&AC_RULES, .{
         .max_iterations = 64,
         .max_nodes = 100_000,
+        .ac_match_budget = std.math.maxInt(usize),
+        .ac_iter_match_budget = std.math.maxInt(usize),
     });
     try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
 
@@ -1157,6 +1168,88 @@ test "bag match budget trips are reported, not silent" {
         .ac_match_budget = 3,
     });
     try testing.expect(stats.ac_match_capped > 0);
+}
+
+test "tree match budget trips are reported, not silent" {
+    // solvePairs walks every same-head member of each child class, so a
+    // nested pattern against merge-heavy classes goes combinatorial with
+    // no bag anywhere in sight (AC-style laws enrolled as plain tree
+    // rewrites are the archetype). The per-(rule, node) budget must
+    // charge those candidate visits too.
+    const assoc = [_]Rule{.{
+        .rule_id = 108,
+        .reversed = false,
+        .match_side = ASSOC_MATCH,
+        .target_side = ASSOC_TARGET,
+        .num_binders = 3,
+    }};
+
+    // add(xy, w) where xy's class also holds xz: the nested add(a, b)
+    // sub-pattern has two candidate members to enumerate.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    const x = try eg.add(.{ .leaf = 1 });
+    const y = try eg.add(.{ .leaf = 2 });
+    const z = try eg.add(.{ .leaf = 3 });
+    const w = try eg.add(.{ .leaf = 4 });
+    const xy = try testAdd2(&eg, ADD, .{ .class = x }, .{ .class = y });
+    const xz = try testAdd2(&eg, ADD, .{ .class = x }, .{ .class = z });
+    _ = try eg.merge(xy, xz, .{ .congruence = .{ .left = 0, .right = 1 } });
+    _ = try testAdd2(&eg, ADD, .{ .class = xy }, .{ .class = w });
+    const stats = try eg.saturate(&assoc, .{
+        .max_iterations = 1,
+        .ac_match_budget = 1,
+    });
+    // The budget admits the first candidate's solution and early-outs on
+    // the second: one union lands, and the trip is reported.
+    try testing.expect(stats.ac_match_capped > 0);
+    try testing.expectEqual(@as(usize, 1), stats.unions_applied);
+
+    // Sanity: the default budget enumerates both candidates.
+    var eg2 = EGraph.init(arena_state.allocator());
+    const x2 = try eg2.add(.{ .leaf = 1 });
+    const y2 = try eg2.add(.{ .leaf = 2 });
+    const z2 = try eg2.add(.{ .leaf = 3 });
+    const w2 = try eg2.add(.{ .leaf = 4 });
+    const xy2 = try testAdd2(&eg2, ADD, .{ .class = x2 }, .{ .class = y2 });
+    const xz2 = try testAdd2(&eg2, ADD, .{ .class = x2 }, .{ .class = z2 });
+    _ = try eg2.merge(xy2, xz2, .{ .congruence = .{ .left = 0, .right = 1 } });
+    _ = try testAdd2(&eg2, ADD, .{ .class = xy2 }, .{ .class = w2 });
+    const stats2 = try eg2.saturate(&assoc, .{ .max_iterations = 1 });
+    try testing.expectEqual(@as(usize, 2), stats2.unions_applied);
+    try testing.expectEqual(@as(usize, 0), stats2.ac_match_capped);
+}
+
+test "tree iteration match budget throttles and still ratchets to fixpoint" {
+    // The per-iteration retained-match budget must apply to tree egraphs
+    // too (it was bag-gated once): capped collection stops the flood, and
+    // because applied effects are deduped free, later iterations spend
+    // their budget on fresh unions until genuine saturation.
+    const comm = [_]Rule{.{
+        .rule_id = 109,
+        .reversed = false,
+        .match_side = COMM_MATCH,
+        .target_side = COMM_TARGET,
+        .num_binders = 2,
+    }};
+
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    const a = try eg.add(.{ .leaf = 1 });
+    const b = try eg.add(.{ .leaf = 2 });
+    const c = try eg.add(.{ .leaf = 3 });
+    const d = try eg.add(.{ .leaf = 4 });
+    const ab = try testAdd2(&eg, ADD, .{ .class = a }, .{ .class = b });
+    const cd = try testAdd2(&eg, ADD, .{ .class = c }, .{ .class = d });
+    const stats = try eg.saturate(&comm, .{ .ac_iter_match_budget = 1 });
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(stats.ac_match_capped > 0);
+    const ba = try testAdd2(&eg, ADD, .{ .class = b }, .{ .class = a });
+    const dc = try testAdd2(&eg, ADD, .{ .class = d }, .{ .class = c });
+    try testing.expect(eg.sameClass(ab, ba));
+    try testing.expect(eg.sameClass(cd, dc));
 }
 
 test "pool-equation bag terms survive a member re-sort (regression)" {

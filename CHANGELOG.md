@@ -83,6 +83,15 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `conversion?` tree-mode matching is now memory-bounded. AC-style laws
+  enrolled as plain rewrites (a `comm`/`assoc` role token without its
+  partner law or `@congr` coverage falls back to ordinary both-way
+  rewrites) could drive pattern matching combinatorial against
+  merge-heavy e-classes, growing memory without limit until the process
+  was killed. The per-match enumeration budget and the per-iteration
+  retained-match budget now cover tree matching as well as AC bags, so a
+  pathological rule set terminates as a capped miss with the usual
+  honesty note ("NOT a forced negative") instead of exhausting memory.
 - Capture-unfolding of hidden-dummy defs is now rejected at compile time.
   A stated unfolding whose dummy witness variable also occurs in one of the
   def's argument instantiations (e.g. `ex u (eq u u)` written for
