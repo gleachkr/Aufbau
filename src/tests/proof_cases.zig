@@ -118,8 +118,12 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_def_hidden_dummy_all_elim_ctx_fold", .outcome = .pass },
     .{ .stem = "pass_def_hidden_dummy_all_elim_ctx_twostep", .outcome = .pass },
     .{ .stem = "pass_def_hidden_dummy_imp_elim_ctx_mixed", .outcome = .pass },
+    // Historically named fail_verify_hidden_dummy_dep, but the failure has
+    // long been a compile-time dep-validation rejection; the runner now
+    // guarantees that a fail-case which compiles but does not verify is
+    // surfaced as an emission gap, so the stage can no longer drift silently.
     .{
-        .stem = "fail_verify_hidden_dummy_dep",
+        .stem = "fail_hidden_dummy_dep",
         .outcome = .{ .fail = error.DepViolation },
     },
     .{
@@ -800,8 +804,38 @@ test "compiler proof cases from files" {
                     };
                 }
             },
-            .fail => |err| {
-                try std.testing.expectError(err, compiler.compileMmb(allocator));
+            .fail => |expected_err| {
+                if (compiler.compileMmb(allocator)) |mmb| {
+                    defer allocator.free(mmb);
+                    // The compiler accepted a case that must fail. If the
+                    // verifier then rejects the output, that is not a
+                    // diagnostic — it is the compiler emitting invalid MMB
+                    // (the task #138 class of bug), and it must surface as
+                    // its own failure mode rather than hide behind an
+                    // error-code match.
+                    if (mm0.verifyPair(allocator, mm0_src, mmb)) |_| {
+                        std.debug.print(
+                            "FAIL (expected {}) case={s}: compiled and verified\n",
+                            .{ expected_err, case.stem },
+                        );
+                    } else |verify_err| {
+                        std.debug.print(
+                            "FAIL (emission gap) case={s}: compile passed but the verifier rejected the output with {} (expected compile-time {})\n",
+                            .{ case.stem, verify_err, expected_err },
+                        );
+                    }
+                    failed_cases[failure_count] = case.stem;
+                    failure_count += 1;
+                } else |actual_err| {
+                    if (actual_err != expected_err) {
+                        std.debug.print(
+                            "FAIL (wrong error) case={s}: expected {}, got {}\n",
+                            .{ case.stem, expected_err, actual_err },
+                        );
+                        failed_cases[failure_count] = case.stem;
+                        failure_count += 1;
+                    }
+                }
             },
             .known_fail => {
                 if (compiler.compileMmb(allocator)) |mmb| {

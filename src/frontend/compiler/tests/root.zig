@@ -3362,13 +3362,13 @@ test "compiler reports conflicting dependency binders by name" {
 test "compiler reports checked-ir dep violations before emission" {
     const mm0_src = try readProofCaseFile(
         std.testing.allocator,
-        "fail_verify_hidden_dummy_dep",
+        "fail_hidden_dummy_dep",
         "mm0",
     );
     defer std.testing.allocator.free(mm0_src);
     const proof_src = try readProofCaseFile(
         std.testing.allocator,
-        "fail_verify_hidden_dummy_dep",
+        "fail_hidden_dummy_dep",
         "auf",
     );
     defer std.testing.allocator.free(proof_src);

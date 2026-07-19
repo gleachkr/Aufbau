@@ -137,13 +137,13 @@ test "compiler rejects hidden-dummy dep violations before emission" {
     const allocator = std.testing.allocator;
     const mm0_src = try readProofCaseFile(
         allocator,
-        "fail_verify_hidden_dummy_dep",
+        "fail_hidden_dummy_dep",
         "mm0",
     );
     defer allocator.free(mm0_src);
     const proof_src = try readProofCaseFile(
         allocator,
-        "fail_verify_hidden_dummy_dep",
+        "fail_hidden_dummy_dep",
         proof_case_ext,
     );
     defer allocator.free(proof_src);
