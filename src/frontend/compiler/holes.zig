@@ -65,11 +65,34 @@ pub const ParsedAssertion = union(enum) {
 };
 
 pub const InferenceFailure = union(enum) {
-    hypothesis_mismatch,
-    visible_structure_mismatch,
+    hypothesis_mismatch: struct {
+        /// Source-order index of the cited premise / rule hypothesis.
+        index: usize,
+        /// What the cited premise proves.
+        ref_expr: ExprId,
+    },
+    visible_structure_mismatch: VisibleMismatchDetail,
     missing_binder: struct {
         index: usize,
         name: ?[]const u8,
+    },
+};
+
+/// Where the visible (non-hole) structure clashed with the rule template.
+pub const VisibleMismatchDetail = union(enum) {
+    unknown,
+    /// The template requires an application of `expected_term_id`, but the
+    /// visible statement has `actual_term_id` (null: a variable) there.
+    head_clash: struct {
+        expected_term_id: u32,
+        actual_term_id: ?u32,
+    },
+    /// A rule binder already bound to `existing` while the visible statement
+    /// requires `actual` at another occurrence of the same binder.
+    binder_conflict: struct {
+        binder_idx: usize,
+        existing: ExprId,
+        actual: ExprId,
     },
 };
 
@@ -142,9 +165,12 @@ pub fn inferBindingsFromAssertionDetailed(
     const bindings = try allocator.dupe(?ExprId, partial_bindings);
     defer allocator.free(bindings);
 
-    for (rule.hyps, ref_exprs) |hyp, ref_expr| {
+    for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, idx| {
         if (!theorem.matchTemplate(hyp, ref_expr, bindings)) {
-            setInferenceFailure(report, .hypothesis_mismatch);
+            setInferenceFailure(report, .{ .hypothesis_mismatch = .{
+                .index = idx,
+                .ref_expr = ref_expr,
+            } });
             return error.UnifyMismatch;
         }
     }
@@ -204,19 +230,40 @@ pub fn matchTemplateToSurfaceDetailed(
             if (theorem.matchTemplate(template, expr_id, bindings)) {
                 return true;
             }
-            setInferenceFailure(report, .visible_structure_mismatch);
+            setInferenceFailure(
+                report,
+                .{ .visible_structure_mismatch = switch (template) {
+                    .app => |tmpl_app| .{ .head_clash = .{
+                        .expected_term_id = tmpl_app.term_id,
+                        .actual_term_id = null,
+                    } },
+                    .binder => .unknown,
+                } },
+            );
             return false;
         },
         .term => |holey_term| switch (template) {
             .binder => |idx| {
                 const expr_id = try theorem.internParsedExpr(holey);
                 if (idx >= bindings.len) {
-                    setInferenceFailure(report, .visible_structure_mismatch);
+                    setInferenceFailure(
+                        report,
+                        .{ .visible_structure_mismatch = .unknown },
+                    );
                     return false;
                 }
                 if (bindings[idx]) |existing| {
                     if (existing == expr_id) return true;
-                    setInferenceFailure(report, .visible_structure_mismatch);
+                    setInferenceFailure(
+                        report,
+                        .{ .visible_structure_mismatch = .{
+                            .binder_conflict = .{
+                                .binder_idx = idx,
+                                .existing = existing,
+                                .actual = expr_id,
+                            },
+                        } },
+                    );
                     return false;
                 }
                 bindings[idx] = expr_id;
@@ -224,11 +271,20 @@ pub fn matchTemplateToSurfaceDetailed(
             },
             .app => |tmpl_app| {
                 if (tmpl_app.term_id != holey_term.id) {
-                    setInferenceFailure(report, .visible_structure_mismatch);
+                    setInferenceFailure(
+                        report,
+                        .{ .visible_structure_mismatch = .{ .head_clash = .{
+                            .expected_term_id = tmpl_app.term_id,
+                            .actual_term_id = holey_term.id,
+                        } } },
+                    );
                     return false;
                 }
                 if (tmpl_app.args.len != holey_term.args.len) {
-                    setInferenceFailure(report, .visible_structure_mismatch);
+                    setInferenceFailure(
+                        report,
+                        .{ .visible_structure_mismatch = .unknown },
+                    );
                     return false;
                 }
                 for (tmpl_app.args, holey_term.args) |tmpl_arg, holey_arg| {

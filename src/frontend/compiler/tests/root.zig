@@ -3046,7 +3046,7 @@ test "compiler records inference diagnostics for omitted arguments" {
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
     try std.testing.expectEqual(error.HypothesisMismatch, diag.err);
     try std.testing.expectEqualStrings(
-        "rule reference does not match the expected hypothesis",
+        "a cited premise does not match the hypothesis the rule expects there",
         mm0.compilerDiagnosticSummary(diag),
     );
     try std.testing.expectEqualStrings("keep_bad", diag.theorem_name.?);
@@ -3128,7 +3128,7 @@ test "compiler explains proof hole sort mismatches" {
     try std.testing.expectEqual(error.HoleConclusionMismatch, diag.err);
     try std.testing.expectEqual(.conclusion_mismatch, diag.kind);
     try std.testing.expectEqualStrings(
-        "holey assertion does not match the candidate conclusion",
+        "the visible parts of the statement do not match the rule's conclusion",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
@@ -3176,7 +3176,7 @@ test "compiler explains proof hole visible structure mismatches" {
     try std.testing.expectEqual(error.HoleConclusionMismatch, diag.err);
     try std.testing.expectEqual(.conclusion_mismatch, diag.kind);
     try std.testing.expectEqualStrings(
-        "holey assertion does not match the candidate conclusion",
+        "the visible parts of the statement do not match the rule's conclusion",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
@@ -3186,8 +3186,8 @@ test "compiler explains proof hole visible structure mismatches" {
     );
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
     try std.testing.expectEqualStrings(
-        "visible structure in the holey assertion did not match " ++
-            "the candidate conclusion",
+        "the visible parts of the statement do not match " ++
+            "the rule's conclusion",
         diag.noteSlice()[0].message,
     );
     try std.testing.expect(diag.noteSlice()[0].span == null);
@@ -3292,11 +3292,11 @@ test "compiler reports which binder assignment is missing" {
     }
     try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
     try std.testing.expectEqualStrings(
-        "inference path: strict replay",
+        "inference path: exact match",
         diag.noteSlice()[0].message,
     );
     try std.testing.expectEqualStrings(
-        "explicit bindings: a = v0",
+        "explicit bindings: a = a",
         diag.noteSlice()[1].message,
     );
     try std.testing.expectEqualStrings(
@@ -3306,6 +3306,262 @@ test "compiler reports which binder assignment is missing" {
     try std.testing.expectEqualStrings(
         "first unsolved binder: b",
         diag.noteSlice()[3].message,
+    );
+}
+
+test "inference failure names the clashing operator in the conclusion" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        \\term an (a b: wff): wff; infixl an: $&$ prec 30;
+        \\axiom ax_keep (a b: wff): $ a $ > $ a -> b -> a $;
+        \\theorem bad (a b: wff): $ a $ > $ a & b $;
+    ;
+    const proof_src =
+        \\bad
+        \\---
+        \\l1: $ a & b $ by ax_keep [#1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.TermMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.TermMismatch, diag.err);
+    try std.testing.expectEqual(.inference_failed, diag.kind);
+    try std.testing.expectEqualStrings(
+        "the statement or a cited premise does not have the shape " ++
+            "this rule requires",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    try std.testing.expect(diag.noteSlice().len >= 2);
+    try std.testing.expectEqualStrings(
+        "the statement does not match the rule's conclusion",
+        diag.noteSlice()[0].message,
+    );
+    try std.testing.expectEqualStrings(
+        "the rule requires 'imp' at the mismatch, but found: a & b",
+        diag.noteSlice()[1].message,
+    );
+}
+
+test "inference failure reports a rule variable needing two values" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        \\axiom ax_dup (a b: wff): $ a -> a -> b $;
+        \\theorem bad (p q r: wff): $ p -> q -> r $;
+    ;
+    const proof_src =
+        \\bad
+        \\---
+        \\l1: $ p -> q -> r $ by ax_dup []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.UnifyMismatch, diag.err);
+    try std.testing.expectEqualStrings(
+        "the statement and cited premises could not be matched " ++
+            "against this rule",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    try std.testing.expect(diag.noteSlice().len >= 4);
+    try std.testing.expectEqualStrings(
+        "the statement does not match the rule's conclusion",
+        diag.noteSlice()[0].message,
+    );
+    try std.testing.expectEqualStrings(
+        "rule variable a would need two different values",
+        diag.noteSlice()[1].message,
+    );
+    try std.testing.expectEqualStrings(
+        "already matched: p",
+        diag.noteSlice()[2].message,
+    );
+    try std.testing.expectEqualStrings(
+        "at the mismatch: q",
+        diag.noteSlice()[3].message,
+    );
+}
+
+test "inference failure names the mismatching cited premise" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        \\term an (a b: wff): wff; infixl an: $&$ prec 30;
+        \\axiom cut2 (a b: wff): $ a & a $ > $ b $;
+        \\theorem bad (p q: wff): $ p -> p $ > $ q $;
+    ;
+    const proof_src =
+        \\bad
+        \\---
+        \\l1: $ q $ by cut2 [#1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.TermMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.TermMismatch, diag.err);
+    try std.testing.expect(diag.noteSlice().len >= 2);
+    try std.testing.expectEqualStrings(
+        "cited premise 1 does not match hypothesis 1 of the rule",
+        diag.noteSlice()[0].message,
+    );
+    try std.testing.expectEqualStrings(
+        "the rule requires 'an' at the mismatch, but found: p -> p",
+        diag.noteSlice()[1].message,
+    );
+}
+
+// Shared ACUI sequent theory for the structural-solver clash tests: rules
+// with ctx binders route inference through the structural solver, whose
+// failures used to surface with no clash-site notes at all.
+const acui_clash_mm0_prefix =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term iff (a b: wff): wff;
+    \\infixr iff: $<->$ prec 20;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (g h: ctx): ctx;
+    \\infixl join: $,$ prec 5;
+    \\term hyp (a: wff): ctx;
+    \\coercion hyp: wff > ctx;
+    \\term seq (g d: ctx): wff;
+    \\infixl seq: $==>$ prec 0;
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (a: wff): $ a <-> a $;
+    \\axiom iff_trans (a b c: wff):
+    \\  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+    \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+    \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx):
+    \\  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+    \\--| @congr
+    \\axiom seq_congr (g1 g2 d1 d2: ctx):
+    \\  $ ctx_eq g1 g2 $ > $ ctx_eq d1 d2 $ > $ (g1 ==> d1) <-> (g2 ==> d2) $;
+    \\axiom balance (g h: ctx): $ g , h ==> g , h $;
+    \\
+;
+
+test "structural solver failure locates the conclusion clash" {
+    const mm0_src = acui_clash_mm0_prefix ++
+        \\theorem bad_concl (x: wff): $ x <-> x $;
+    ;
+    const proof_src =
+        \\bad_concl
+        \\---------
+        \\l1: $ x <-> x $ by balance []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.UnifyMismatch, diag.err);
+    switch (diag.detail) {
+        .inference_failure => |detail| {
+            try std.testing.expectEqual(.structural_solver, detail.path);
+        },
+        else => return error.ExpectedInferenceFailureDetail,
+    }
+    try std.testing.expect(diag.noteSlice().len >= 2);
+    try std.testing.expectEqualStrings(
+        "the statement does not match the rule's conclusion",
+        diag.noteSlice()[0].message,
+    );
+    try std.testing.expectEqualStrings(
+        "no way of filling in the rule's variables makes them match",
+        diag.noteSlice()[1].message,
+    );
+}
+
+test "structural solver failure names the mismatching cited premise" {
+    const mm0_src = acui_clash_mm0_prefix ++
+        \\theorem bad_prem (x: wff):
+        \\  $ x <-> x $ > $ (x ==> x) <-> (x ==> x) $;
+    ;
+    const proof_src =
+        \\bad_prem
+        \\--------
+        \\l1: $ (x ==> x) <-> (x ==> x) $ by seq_congr [#1, #1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.UnifyMismatch, diag.err);
+    switch (diag.detail) {
+        .inference_failure => |detail| {
+            try std.testing.expectEqual(.structural_solver, detail.path);
+        },
+        else => return error.ExpectedInferenceFailureDetail,
+    }
+    try std.testing.expect(diag.noteSlice().len >= 3);
+    try std.testing.expectEqualStrings(
+        "cited premise 1 does not match hypothesis 1 of the rule",
+        diag.noteSlice()[0].message,
+    );
+    try std.testing.expectEqualStrings(
+        "no way of filling in the rule's variables makes them match",
+        diag.noteSlice()[1].message,
+    );
+    try std.testing.expectEqualStrings(
+        "the cited premise proves: x <-> x",
+        diag.noteSlice()[2].message,
     );
 }
 
@@ -3354,6 +3610,61 @@ test "compiler reports conflicting dependency binders by name" {
             try std.testing.expectEqual(@as(u55, 1), detail.second_deps);
             try std.testing.expect(detail.first_bound);
             try std.testing.expect(detail.second_bound);
+            try std.testing.expect(detail.first_rule_bound);
+            try std.testing.expect(detail.second_rule_bound);
+            try std.testing.expectEqualStrings(
+                "z",
+                detail.first_binding_text.?,
+            );
+            try std.testing.expectEqualStrings(
+                "z",
+                detail.second_binding_text.?,
+            );
+        },
+        else => return error.ExpectedDepViolationDetail,
+    }
+}
+
+test "compiler explains one-sided dependency violations logically" {
+    const mm0_src =
+        \\provable sort wff;
+        \\sort obj;
+        \\term rel {x y: obj}: wff;
+        \\axiom gen {x: obj} (p: wff): $ p $;
+        \\theorem gen_bad {z: obj}: $ rel z z $;
+    ;
+    const proof_src =
+        \\gen_bad
+        \\-------
+        \\l1: $ rel z z $ by gen (x := $ z $, p := $ rel z z $) []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.DepViolation,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.DepViolation, diag.err);
+    switch (diag.detail) {
+        .dep_violation => |detail| {
+            try std.testing.expectEqualStrings("x", detail.first_arg_name.?);
+            try std.testing.expectEqualStrings("p", detail.second_arg_name.?);
+            try std.testing.expect(detail.first_rule_bound);
+            try std.testing.expect(!detail.second_rule_bound);
+            try std.testing.expectEqualStrings(
+                "z",
+                detail.first_binding_text.?,
+            );
+            try std.testing.expectEqualStrings(
+                "rel z z",
+                detail.second_binding_text.?,
+            );
         },
         else => return error.ExpectedDepViolationDetail,
     }
@@ -3968,8 +4279,8 @@ test "compiler reports structural ambiguity without ACUI-only wording" {
     try std.testing.expectEqual(.inference_failed, diag.kind);
     try std.testing.expectEqual(mm0.CompilerDiagnosticPhase.inference, diag.phase.?);
     try std.testing.expectEqualStrings(
-        "omitted rule arguments remain ambiguous after structural " ++
-            "or def-aware matching",
+        "the omitted parts of this rule application can be completed " ++
+            "in more than one way",
         mm0.compilerDiagnosticSummary(diag),
     );
     switch (diag.detail) {
@@ -3980,7 +4291,7 @@ test "compiler reports structural ambiguity without ACUI-only wording" {
     }
     try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
     try std.testing.expectEqualStrings(
-        "inference path: structural or def-aware solver",
+        "inference path: structural matching",
         diag.noteSlice()[0].message,
     );
     try std.testing.expect(std.mem.startsWith(
@@ -4466,6 +4777,8 @@ test "compiler points binding validation errors at explicit assignments" {
             &compiler_context,
             &env,
             &theorem,
+            null,
+            null,
             assertion,
             line,
             rule,

@@ -78,6 +78,47 @@ pub const RuleInferenceContext = struct {
     }
 };
 
+/// Concrete clash captured by strict unify replay at the moment it fails.
+/// `region` records which part of the rule application the walker was
+/// matching: the conclusion until the first `UHyp`, then the hypothesis whose
+/// ref the opcode pushed. Diagnostics render this so a failed application
+/// names the mismatching premise and the two expressions that clashed
+/// instead of a bare error code.
+pub const ReplayMismatch = struct {
+    region: Region,
+    kind: Kind,
+
+    pub const Region = union(enum) {
+        conclusion,
+        /// Source-order index into the cited refs / rule hypotheses.
+        hypothesis: usize,
+    };
+
+    pub const Kind = union(enum) {
+        /// The rule requires an application of `expected_term_id` at this
+        /// position, but the matched expression is `actual`.
+        term_shape: struct {
+            expected_term_id: u32,
+            actual: ExprId,
+        },
+        /// Two positions the rule requires to be identical matched different
+        /// expressions. When `heap_id` is below the rule's arg count it names
+        /// a rule binder; higher ids are `UTermSave` subtree repeats.
+        repeat_conflict: struct {
+            heap_id: u32,
+            first: ExprId,
+            second: ExprId,
+        },
+        /// A search-based matcher (structural solver or rule-match session)
+        /// exhausted every candidate completion of the rule's variables for
+        /// this region. `actual` is the cited premise's conclusion when the
+        /// region is a hypothesis.
+        no_completion: struct {
+            actual: ?ExprId,
+        },
+    };
+};
+
 pub const InferenceContext = struct {
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
@@ -90,6 +131,8 @@ pub const InferenceContext = struct {
     ustack: std.ArrayListUnmanaged(ExprId) = .{},
     hyps: []const ExprId,
     next_hyp: usize,
+    region: ReplayMismatch.Region = .conclusion,
+    mismatch: ?ReplayMismatch = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -163,7 +206,16 @@ pub const InferenceContext = struct {
                 // wildcard; identity cannot be required against it.
                 return;
             }
-            if (expr_id != expected) return error.UnifyMismatch;
+            if (expr_id != expected) {
+                self.mismatch = .{ .region = self.region, .kind = .{
+                    .repeat_conflict = .{
+                        .heap_id = heap_id,
+                        .first = expected,
+                        .second = expr_id,
+                    },
+                } };
+                return error.UnifyMismatch;
+            }
         } else {
             // This is the one semantic difference from verifier-style unify:
             // the first encounter with an omitted binder solves it.
@@ -183,7 +235,10 @@ pub const InferenceContext = struct {
         const node = self.theorem.interner.node(expr_id);
         const app = switch (node.*) {
             .app => |value| value,
-            .variable => return error.ExpectedTermApp,
+            .variable => {
+                self.noteTermShapeMismatch(term_id, expr_id);
+                return error.ExpectedTermApp;
+            },
             .placeholder => |pid| {
                 if (self.theorem.placeholderClass(pid) == .meta and
                     term_id < self.env.terms.items.len)
@@ -200,10 +255,14 @@ pub const InferenceContext = struct {
                     }
                     return;
                 }
+                self.noteTermShapeMismatch(term_id, expr_id);
                 return error.ExpectedTermApp;
             },
         };
-        if (app.term_id != term_id) return error.TermMismatch;
+        if (app.term_id != term_id) {
+            self.noteTermShapeMismatch(term_id, expr_id);
+            return error.TermMismatch;
+        }
         if (save) try self.uheap.append(self.allocator, expr_id);
         var i = app.args.len;
         while (i > 0) {
@@ -222,6 +281,20 @@ pub const InferenceContext = struct {
         // See `buildRuleUnifyStream`: hypotheses are replayed from the end so
         // that they are matched in source order overall.
         self.next_hyp -= 1;
+        self.region = .{ .hypothesis = self.next_hyp };
         try self.ustack.append(self.allocator, self.hyps[self.next_hyp]);
+    }
+
+    fn noteTermShapeMismatch(
+        self: *InferenceContext,
+        expected_term_id: u32,
+        actual: ExprId,
+    ) void {
+        self.mismatch = .{ .region = self.region, .kind = .{
+            .term_shape = .{
+                .expected_term_id = expected_term_id,
+                .actual = actual,
+            },
+        } };
     }
 };

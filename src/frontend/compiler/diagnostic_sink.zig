@@ -376,6 +376,14 @@ pub const DiagnosticSink = struct {
                 .second_deps = info.second_deps,
                 .first_bound = info.first_bound,
                 .second_bound = info.second_bound,
+                .first_rule_bound = info.first_rule_bound,
+                .second_rule_bound = info.second_rule_bound,
+                .first_binding_text = self.stableString(
+                    info.first_binding_text,
+                ),
+                .second_binding_text = self.stableString(
+                    info.second_binding_text,
+                ),
             } },
             .definition_body => |info| .{ .definition_body = .{
                 .declared_sort_name = self.stableRequiredString(
@@ -519,14 +527,26 @@ fn reportDiagnosticDetail(detail: DiagnosticDetail) void {
             stderr.writeAll("  dependency violation: ") catch return;
             CompilerDiag.writeDepViolationSummary(stderr, info) catch return;
             stderr.writeByte('\n') catch return;
-            std.debug.print(
-                "  first binder: deps=0x{x} bound={}\n",
-                .{ info.first_deps, info.first_bound },
-            );
-            std.debug.print(
-                "  second binder: deps=0x{x} bound={}\n",
-                .{ info.second_deps, info.second_bound },
-            );
+            if (info.first_binding_text) |text| {
+                stderr.writeAll("  ") catch return;
+                CompilerDiag.writeDepViolationAssignment(
+                    stderr,
+                    info.first_arg_name,
+                    info.first_arg_idx,
+                    text,
+                ) catch return;
+                stderr.writeByte('\n') catch return;
+            }
+            if (info.second_binding_text) |text| {
+                stderr.writeAll("  ") catch return;
+                CompilerDiag.writeDepViolationAssignment(
+                    stderr,
+                    info.second_arg_name,
+                    info.second_arg_idx,
+                    text,
+                ) catch return;
+                stderr.writeByte('\n') catch return;
+            }
         },
         .definition_body => |info| {
             std.debug.print(

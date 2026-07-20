@@ -47,6 +47,7 @@ const hasOmittedStructuralBindings = Strategies.hasOmittedStructuralBindings;
 const StrictReplayFailure = struct {
     err: anyerror,
     partial_bindings: []const ?ExprId,
+    mismatch: ?Context.ReplayMismatch = null,
 };
 
 const StrictReplayResult = union(enum) {
@@ -203,6 +204,7 @@ fn inferBindingsNoView(
                     partial_bindings,
                     ref_exprs,
                     line_expr,
+                    fresh_context,
                 );
             }
 
@@ -261,6 +263,7 @@ fn inferBindingsNoView(
                             partial_bindings,
                             failure.partial_bindings,
                             idx,
+                            fresh_context,
                         ),
                     );
                     return failure.err;
@@ -278,6 +281,8 @@ fn inferBindingsNoView(
                     failure.err,
                     partial_bindings,
                     failure.partial_bindings,
+                    fresh_context,
+                    failure.mismatch,
                 ),
             );
             return failure.err;
@@ -544,6 +549,8 @@ pub fn inferBindings(
                         error.UnresolvedDummyWitness,
                         partial_bindings,
                         solver_bindings,
+                        fresh_context,
+                        null,
                     ),
                 );
                 return error.UnresolvedDummyWitness;
@@ -594,6 +601,8 @@ pub fn inferBindings(
                     err,
                     partial_bindings,
                     solver_bindings,
+                    fresh_context,
+                    Strategies.solverFailureMismatch(&solver),
                 ),
             );
             return err;
@@ -652,6 +661,8 @@ pub fn inferBindings(
                     strict_failure.err,
                     partial_bindings,
                     strict_failure.partial_bindings,
+                    fresh_context,
+                    strict_failure.mismatch,
                 ),
             );
             return strict_failure.err;
@@ -694,6 +705,7 @@ fn strictInferBindingsDetailed(
                 allocator,
                 inference.uheap.items[0..rule.args.len],
             ),
+            .mismatch = inference.mismatch,
         } };
     };
     if (inference.ustack.items.len != 0) {
@@ -738,6 +750,7 @@ fn strictInferBindingsDetailed(
                     partial_bindings,
                     snapshot,
                     idx,
+                    fresh_context,
                 ),
             );
             return .{ .failed = .{

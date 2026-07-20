@@ -440,14 +440,24 @@ pub fn compilerDiagnosticMessage(
         .dep_violation => |detail| {
             try writer.writeAll("\ndependency violation: ");
             try mm0.writeCompilerDepViolationSummary(&writer, detail);
-            try writer.print(
-                "\nfirst binder: deps=0x{x} bound={}",
-                .{ detail.first_deps, detail.first_bound },
-            );
-            try writer.print(
-                "\nsecond binder: deps=0x{x} bound={}",
-                .{ detail.second_deps, detail.second_bound },
-            );
+            if (detail.first_binding_text) |text| {
+                try writer.writeAll("\n");
+                try mm0.writeCompilerDepViolationAssignment(
+                    &writer,
+                    detail.first_arg_name,
+                    detail.first_arg_idx,
+                    text,
+                );
+            }
+            if (detail.second_binding_text) |text| {
+                try writer.writeAll("\n");
+                try mm0.writeCompilerDepViolationAssignment(
+                    &writer,
+                    detail.second_arg_name,
+                    detail.second_arg_idx,
+                    text,
+                );
+            }
         },
         .definition_body => |detail| {
             try writer.print(

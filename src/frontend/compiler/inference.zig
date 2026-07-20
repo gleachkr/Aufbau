@@ -6,6 +6,10 @@ const Validation = @import("./inference/validation.zig");
 
 pub const RuleMatchResult = Strategies.RuleMatchResult;
 pub const DepViolationDetail = Validation.DepViolationDetail;
+pub const DepViolationTextBufs = Validation.DepViolationTextBufs;
+pub const attachDepViolationBindingTexts =
+    Validation.attachDepViolationBindingTexts;
+pub const NameExprMap = Validation.NameExprMap;
 pub const RuleUnifyCache = Context.RuleUnifyCache;
 pub const RuleInferenceContext = Context.RuleInferenceContext;
 pub const InferenceContext = Context.InferenceContext;

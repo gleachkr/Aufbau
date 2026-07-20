@@ -2277,6 +2277,10 @@ test "compiler dependency diagnostics render detail in LSP messages" {
                 .second_deps = 1,
                 .first_bound = true,
                 .second_bound = true,
+                .first_rule_bound = true,
+                .second_rule_bound = true,
+                .first_binding_text = "z",
+                .second_binding_text = "z",
             } },
         },
         .@"utf-16",
@@ -2286,18 +2290,88 @@ test "compiler dependency diagnostics render detail in LSP messages" {
         u8,
         lsp_diag.message,
         1,
-        "dependency violation: conflicting binders x and y",
+        "dependency violation: bound variables x and y " ++
+            "must be assigned distinct variables",
     ));
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
         lsp_diag.message,
         1,
-        "first binder: deps=0x1 bound=true",
+        "x was assigned: z",
     ));
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
         lsp_diag.message,
         1,
-        "second binder: deps=0x1 bound=true",
+        "y was assigned: z",
+    ));
+}
+
+test "compiler dependency diagnostics explain one-sided violations" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    const proof_text =
+        \\gen_bad
+        \\-------
+        \\l1: $ rel z z $ by gen (x := $ z $, p := $ rel z z $) []
+    ;
+
+    const diag_context: DiagnosticContext = .{
+        .proof = .{
+            .uri = "file:///tmp/test.auf",
+            .text = proof_text,
+            .version = 1,
+        },
+    };
+    const lsp_diag = try compilerDiagnosticToLsp(
+        allocator,
+        diag_context,
+        .{
+            .kind = .generic,
+            .err = error.DepViolation,
+            .source = .proof,
+            .phase = .theorem_application,
+            .theorem_name = "gen_bad",
+            .line_label = "l1",
+            .rule_name = "gen",
+            .span = .{ .start = 16, .end = 22 },
+            .detail = .{ .dep_violation = .{
+                .first_arg_idx = 0,
+                .second_arg_idx = 1,
+                .first_arg_name = "x",
+                .second_arg_name = "p",
+                .first_deps = 1,
+                .second_deps = 1,
+                .first_bound = true,
+                .second_bound = false,
+                .first_rule_bound = true,
+                .second_rule_bound = false,
+                .first_binding_text = "z",
+                .second_binding_text = "rel z z",
+            } },
+        },
+        .@"utf-16",
+    );
+
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        lsp_diag.message,
+        1,
+        "dependency violation: the rule does not allow p " ++
+            "to mention the variable assigned to x",
+    ));
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        lsp_diag.message,
+        1,
+        "x was assigned: z",
+    ));
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        lsp_diag.message,
+        1,
+        "p was assigned: rel z z",
     ));
 }

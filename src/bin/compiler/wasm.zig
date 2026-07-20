@@ -476,6 +476,18 @@ fn writeDiagnosticDetailField(
             try writer.print("\"firstBound\":{}", .{info.first_bound});
             try writer.writeByte(',');
             try writer.print("\"secondBound\":{}", .{info.second_bound});
+            try writer.writeByte(',');
+            try writeOptionalStringField(
+                writer,
+                "firstAssigned",
+                info.first_binding_text,
+            );
+            try writer.writeByte(',');
+            try writeOptionalStringField(
+                writer,
+                "secondAssigned",
+                info.second_binding_text,
+            );
             try writer.writeAll("}");
         },
         .definition_body => |info| {

@@ -9,6 +9,7 @@ const ViewTrace = @import("../../view_trace.zig");
 const text_util = @import("../../text_util.zig");
 const HiddenWitnessFreshContext =
     @import("context.zig").HiddenWitnessFreshContext;
+const ReplayMismatch = @import("context.zig").ReplayMismatch;
 const DebugConfig = @import("../../debug.zig").DebugConfig;
 const DebugTrace = @import("../../debug.zig");
 
@@ -31,6 +32,8 @@ pub fn buildInferenceFailureDiagnostic(
     err: anyerror,
     explicit_bindings: []const ?ExprId,
     current_bindings: []const ?ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
+    mismatch: ?ReplayMismatch,
 ) !Diagnostic {
     var diag = CompilerDiag.withPhase(.{
         .kind = .inference_failed,
@@ -44,7 +47,22 @@ pub fn buildInferenceFailureDiagnostic(
             .first_unsolved_binder_name = firstUnsolvedNamedBinder(rule, current_bindings),
         } },
     }, .inference);
-    try addInferenceNotes(
+    var names = try buildOptionalDiagNames(allocator, theorem, fresh_context);
+    defer if (names) |*n| n.deinit(allocator);
+    const names_ptr: ?*const ViewTrace.DiagNames =
+        if (names) |*n| n else null;
+    if (mismatch) |site| {
+        try addReplayMismatchNotes(
+            allocator,
+            &diag,
+            env,
+            theorem,
+            rule,
+            site,
+            names_ptr,
+        );
+    }
+    try addInferenceNotesNamed(
         allocator,
         &diag,
         env,
@@ -53,9 +71,7 @@ pub fn buildInferenceFailureDiagnostic(
         path,
         explicit_bindings,
         current_bindings,
-        // These builder paths have no notation provider in scope; the strict
-        // replay path supplies one. Fall back to internal-coordinate rendering.
-        null,
+        names_ptr,
     );
     return diag;
 }
@@ -71,6 +87,7 @@ pub fn buildMissingBinderDiagnostic(
     explicit_bindings: []const ?ExprId,
     current_bindings: []const ?ExprId,
     missing_idx: usize,
+    fresh_context: ?HiddenWitnessFreshContext,
 ) !Diagnostic {
     const binder_name = rule.arg_names[missing_idx] orelse "_";
     var diag = CompilerDiag.withPhase(.{
@@ -95,7 +112,7 @@ pub fn buildMissingBinderDiagnostic(
         path,
         explicit_bindings,
         current_bindings,
-        null,
+        fresh_context,
     );
     return diag;
 }
@@ -111,28 +128,55 @@ pub fn addInferenceNotes(
     current_bindings: []const ?ExprId,
     fresh_context: ?HiddenWitnessFreshContext,
 ) !void {
+    var names = try buildOptionalDiagNames(allocator, theorem, fresh_context);
+    defer if (names) |*n| n.deinit(allocator);
+    try addInferenceNotesNamed(
+        allocator,
+        diag,
+        env,
+        theorem,
+        rule,
+        path,
+        explicit_bindings,
+        current_bindings,
+        if (names) |*n| n else null,
+    );
+}
+
+/// Render binding values with declared notation and real binder names when a
+/// notation provider + binder map are available; otherwise fall back to the
+/// internal prefix/coordinate form inside `buildBindingSummary`.
+fn buildOptionalDiagNames(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    fresh_context: ?HiddenWitnessFreshContext,
+) !?ViewTrace.DiagNames {
+    const fresh = fresh_context orelse return null;
+    return try ViewTrace.DiagNames.build(
+        allocator,
+        theorem,
+        fresh.parser,
+        fresh.theorem_vars,
+    );
+}
+
+fn addInferenceNotesNamed(
+    allocator: std.mem.Allocator,
+    diag: *Diagnostic,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    rule: *const RuleDecl,
+    path: InferencePath,
+    explicit_bindings: []const ?ExprId,
+    current_bindings: []const ?ExprId,
+    names_ptr: ?*const ViewTrace.DiagNames,
+) !void {
     try addFormattedInferenceNote(
         allocator,
         diag,
         "inference path: {s}",
         .{CompilerDiag.inferencePathName(path)},
     );
-
-    // Render binding values with declared notation and real binder names when a
-    // notation provider + binder map are available; otherwise fall back to the
-    // internal prefix/coordinate form inside `buildBindingSummary`.
-    var names: ?ViewTrace.DiagNames = if (fresh_context) |fresh|
-        try ViewTrace.DiagNames.build(
-            allocator,
-            theorem,
-            fresh.parser,
-            fresh.theorem_vars,
-        )
-    else
-        null;
-    defer if (names) |*n| n.deinit(allocator);
-    const names_ptr: ?*const ViewTrace.DiagNames =
-        if (names) |*n| n else null;
 
     const explicit_summary = try buildBindingSummary(
         allocator,
@@ -178,6 +222,156 @@ pub fn addInferenceNotes(
             .{label},
         );
     }
+}
+
+/// Turn the strict-replay clash site into notes that describe the failure at
+/// the logical level: which part of the rule application failed to match and
+/// which expressions clashed. Deliberately no advice about proof-file syntax:
+/// frontends generate proof files from GUIs, so "what went wrong" must stand
+/// on its own.
+fn addReplayMismatchNotes(
+    allocator: std.mem.Allocator,
+    diag: *Diagnostic,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    rule: *const RuleDecl,
+    mismatch: ReplayMismatch,
+    names_ptr: ?*const ViewTrace.DiagNames,
+) !void {
+    switch (mismatch.region) {
+        .conclusion => addStaticInferenceNote(
+            diag,
+            "the statement does not match the rule's conclusion",
+        ),
+        .hypothesis => |idx| try addFormattedInferenceNote(
+            allocator,
+            diag,
+            "cited premise {d} does not match hypothesis {d} of the rule",
+            .{ idx + 1, idx + 1 },
+        ),
+    }
+    switch (mismatch.kind) {
+        .term_shape => |shape| {
+            const term_name = if (shape.expected_term_id < env.terms.items.len)
+                env.terms.items[shape.expected_term_id].name
+            else
+                "?";
+            const actual_text = try formatMismatchExpr(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                shape.actual,
+            );
+            defer allocator.free(actual_text);
+            try addFormattedInferenceNote(
+                allocator,
+                diag,
+                "the rule requires '{s}' at the mismatch, but found: {s}",
+                .{ term_name, truncateMismatchText(actual_text) },
+            );
+        },
+        .repeat_conflict => |conflict| {
+            const first_text = try formatMismatchExpr(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                conflict.first,
+            );
+            defer allocator.free(first_text);
+            const second_text = try formatMismatchExpr(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                conflict.second,
+            );
+            defer allocator.free(second_text);
+            const binder_name: ?[]const u8 =
+                if (conflict.heap_id < rule.arg_names.len)
+                    rule.arg_names[conflict.heap_id]
+                else
+                    null;
+            if (binder_name) |name| {
+                try addFormattedInferenceNote(
+                    allocator,
+                    diag,
+                    "rule variable {s} would need two different values",
+                    .{name},
+                );
+            } else {
+                addStaticInferenceNote(
+                    diag,
+                    "two positions the rule requires to be identical " ++
+                        "matched different expressions",
+                );
+            }
+            try addFormattedInferenceNote(
+                allocator,
+                diag,
+                "already matched: {s}",
+                .{truncateMismatchText(first_text)},
+            );
+            try addFormattedInferenceNote(
+                allocator,
+                diag,
+                "at the mismatch: {s}",
+                .{truncateMismatchText(second_text)},
+            );
+        },
+        .no_completion => |info| {
+            addStaticInferenceNote(
+                diag,
+                "no way of filling in the rule's variables makes them match",
+            );
+            if (mismatch.region == .hypothesis) {
+                if (info.actual) |actual| {
+                    const actual_text = try formatMismatchExpr(
+                        allocator,
+                        theorem,
+                        env,
+                        names_ptr,
+                        actual,
+                    );
+                    defer allocator.free(actual_text);
+                    try addFormattedInferenceNote(
+                        allocator,
+                        diag,
+                        "the cited premise proves: {s}",
+                        .{truncateMismatchText(actual_text)},
+                    );
+                }
+            }
+        },
+    }
+}
+
+fn formatMismatchExpr(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names_ptr: ?*const ViewTrace.DiagNames,
+    expr_id: ExprId,
+) ![]const u8 {
+    if (names_ptr) |names| {
+        return try ViewTrace.formatExprNamed(
+            allocator,
+            theorem,
+            env,
+            names,
+            expr_id,
+        );
+    }
+    return try ViewTrace.formatExpr(allocator, theorem, env, expr_id);
+}
+
+fn truncateMismatchText(text: []const u8) []const u8 {
+    return text_util.truncateUtf8(text, 64);
+}
+
+fn addStaticInferenceNote(diag: *Diagnostic, message: []const u8) void {
+    CompilerDiag.addNote(diag, message, .proof, null);
 }
 
 pub fn addAmbiguityWarningNotes(

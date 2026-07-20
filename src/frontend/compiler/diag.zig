@@ -62,6 +62,19 @@ pub const DepViolationDiagnosticDetail = struct {
     second_deps: u55,
     first_bound: bool,
     second_bound: bool,
+    /// Whether the rule declares each argument as a bound binder ({x} vs
+    /// (p)). Distinguishes the two violation shapes: a bound binder's
+    /// variable occurring where the rule forbids it (exactly one side
+    /// bound) vs two bound binders assigned the same variable (both
+    /// bound). False/false means the construction path predates this
+    /// field; renderers fall back to the generic wording.
+    first_rule_bound: bool = false,
+    second_rule_bound: bool = false,
+    /// Notation-rendered assigned expressions (truncated), for showing the
+    /// student what each conflicting argument actually received. Null when
+    /// rendering failed or the argument was not yet assigned.
+    first_binding_text: ?[]const u8 = null,
+    second_binding_text: ?[]const u8 = null,
 };
 
 pub const InferencePath = enum {
@@ -212,10 +225,10 @@ pub fn addRelated(
 
 pub fn inferencePathName(path: InferencePath) []const u8 {
     return switch (path) {
-        .strict_replay => "strict replay",
-        .transparent_fallback => "transparent fallback",
-        .normalized_session_fallback => "normalized session fallback",
-        .structural_solver => "structural or def-aware solver",
+        .strict_replay => "exact match",
+        .transparent_fallback => "matching with definitions unfolded",
+        .normalized_session_fallback => "matching after normalization",
+        .structural_solver => "structural matching",
         .holey_surface_match => "holey assertion match",
     };
 }
@@ -678,11 +691,12 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .rule_not_yet_available => "rule is declared later and is not yet available here",
         .unknown_binder_name => "unknown binder name in rule application",
         .duplicate_binder_assignment => "duplicate binder assignment in rule application",
-        .missing_binder_assignment => "missing binder assignment in rule application",
+        .missing_binder_assignment => "one of the rule's variables could not " ++
+            "be determined from the statement and cited premises",
         .ref_count_mismatch => "wrong number of references for rule application",
         .unknown_hypothesis_ref => "unknown theorem hypothesis reference",
         .unknown_label => "unknown proof line label",
-        .hypothesis_mismatch => "rule reference does not match the expected hypothesis",
+        .hypothesis_mismatch => "a cited premise does not match the hypothesis the rule expects there",
         .conclusion_mismatch => if (diag.err == error.HoleConclusionMismatch)
             compilerErrorSummary(diag.err)
         else
@@ -710,19 +724,25 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
             "bound-variable constraint",
         error.SortMismatch => "binding does not satisfy the rule's sort constraint",
         error.UnifyMismatch,
+        error.UnifyStackNotEmpty,
+        => "the statement and cited premises could not be matched " ++
+            "against this rule",
         error.TermMismatch,
         error.ExpectedTermApp,
-        error.UnifyStackNotEmpty,
-        error.HypCountMismatch,
-        => "could not infer omitted rule arguments from the line and refs",
+        => "the statement or a cited premise does not have the shape " ++
+            "this rule requires",
+        error.HypCountMismatch => "the number of cited premises does not " ++
+            "match the number of hypotheses this rule has",
         error.HoleTokenNameCollision => "name conflicts with a proof hole token",
         error.BinderTokenCollision => "binder name conflicts with a declared notation token",
-        error.HoleyInferenceMismatch => "could not infer omitted rule arguments from the holey assertion",
-        error.HoleConclusionMismatch => "holey assertion does not match the candidate conclusion",
+        error.HoleyInferenceMismatch => "the visible parts of the statement " ++
+            "do not match what this rule proves",
+        error.HoleConclusionMismatch => "the visible parts of the statement " ++
+            "do not match the rule's conclusion",
         // Legacy public error name. The repaired structural solver uses
         // this for ambiguity across AU, ACU, AUI, and ACUI matching.
-        error.AmbiguousAcuiMatch => "omitted rule arguments remain ambiguous after structural " ++
-            "or def-aware matching",
+        error.AmbiguousAcuiMatch => "the omitted parts of this rule " ++
+            "application can be completed in more than one way",
         error.RuleNotYetAvailable => "rule is declared later and is not yet available here",
         error.UnknownTheoremVariable => "binding refers to a theorem variable that is not in scope",
         error.DuplicateRuleName => "duplicate rule name",
@@ -999,6 +1019,38 @@ pub fn writeDepViolationSummary(
     writer: anytype,
     info: DepViolationDiagnosticDetail,
 ) !void {
+    if (info.first_rule_bound and info.second_rule_bound) {
+        try writer.writeAll("bound variables ");
+        try writeDepViolationArgLabel(
+            writer,
+            info.first_arg_name,
+            info.first_arg_idx,
+        );
+        try writer.writeAll(" and ");
+        try writeDepViolationArgLabel(
+            writer,
+            info.second_arg_name,
+            info.second_arg_idx,
+        );
+        try writer.writeAll(" must be assigned distinct variables");
+        return;
+    }
+    if (info.first_rule_bound != info.second_rule_bound) {
+        const bound_is_first = info.first_rule_bound;
+        try writer.writeAll("the rule does not allow ");
+        try writeDepViolationArgLabel(
+            writer,
+            if (bound_is_first) info.second_arg_name else info.first_arg_name,
+            if (bound_is_first) info.second_arg_idx else info.first_arg_idx,
+        );
+        try writer.writeAll(" to mention the variable assigned to ");
+        try writeDepViolationArgLabel(
+            writer,
+            if (bound_is_first) info.first_arg_name else info.second_arg_name,
+            if (bound_is_first) info.first_arg_idx else info.second_arg_idx,
+        );
+        return;
+    }
     try writer.writeAll("conflicting binders ");
     try writeDepViolationArgLabel(
         writer,
@@ -1011,6 +1063,19 @@ pub fn writeDepViolationSummary(
         info.second_arg_name,
         info.second_arg_idx,
     );
+}
+
+/// One "<arg> was assigned: <expr>" line, shared by the LSP and stderr
+/// renderers so the wording stays in one place.
+pub fn writeDepViolationAssignment(
+    writer: anytype,
+    name: ?[]const u8,
+    idx: usize,
+    text: []const u8,
+) !void {
+    try writeDepViolationArgLabel(writer, name, idx);
+    try writer.writeAll(" was assigned: ");
+    try writer.writeAll(text);
 }
 
 fn writeDepViolationArgLabel(

@@ -27,8 +27,9 @@ const InferenceDiagnostics = @import("diagnostics.zig");
 pub const RuleMatchResult = union(enum) {
     /// Match succeeded and all bindings are concrete ExprIds.
     concrete: []const ExprId,
-    /// The rule's hypotheses/conclusion did not match.
-    no_match,
+    /// The rule's hypotheses/conclusion did not match. Carries the clash
+    /// site (which premise or the conclusion) when the session knows it.
+    no_match: ?ReplayMismatch,
     /// Matching succeeded symbolically but still needs explicit bindings.
     unresolved_dummy_witness,
 };
@@ -36,6 +37,7 @@ pub const RuleMatchResult = union(enum) {
 const RuleInferenceContext = InferenceContextModule.RuleInferenceContext;
 const HiddenWitnessFreshContext =
     InferenceContextModule.HiddenWitnessFreshContext;
+const ReplayMismatch = InferenceContextModule.ReplayMismatch;
 const exprInfo = InferenceValidation.exprInfo;
 const buildMissingBinderDiagnostic =
     InferenceDiagnostics.buildMissingBinderDiagnostic;
@@ -617,7 +619,7 @@ fn finishRuleMatchSession(
     const scratch = context.scratch;
     const rule = context.rule;
 
-    for (rule.hyps, ref_exprs) |hyp, ref_expr| {
+    for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, hyp_idx| {
         if (try matchRuleHypForInference(
             allocator,
             env,
@@ -627,7 +629,7 @@ fn finishRuleMatchSession(
             hyp,
             ref_expr,
         )) continue;
-        return .no_match;
+        return .{ .no_match = hypothesisMismatch(hyp_idx, ref_expr) };
     }
 
     if (!try session.matchTransparentOrSemantic(rule.concl, line_expr)) {
@@ -640,7 +642,7 @@ fn finishRuleMatchSession(
             rule.concl,
             line_expr,
         )) {
-            return .no_match;
+            return .{ .no_match = conclusionMismatch() };
         }
     }
 
@@ -804,7 +806,7 @@ fn finishHoleyRuleMatchSession(
     const assertion = context.assertion;
     const rule = context.rule;
 
-    for (rule.hyps, ref_exprs) |hyp, ref_expr| {
+    for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, hyp_idx| {
         if (try matchRuleHypForInference(
             allocator,
             env,
@@ -814,7 +816,7 @@ fn finishHoleyRuleMatchSession(
             hyp,
             ref_expr,
         )) continue;
-        return .no_match;
+        return .{ .no_match = hypothesisMismatch(hyp_idx, ref_expr) };
     }
 
     const matched_concl = try matchRulePartSurfaceWithRollback(
@@ -832,7 +834,7 @@ fn finishHoleyRuleMatchSession(
         rule.concl,
         holey_concl,
     );
-    if (!matched_concl) return .no_match;
+    if (!matched_concl) return .{ .no_match = conclusionMismatch() };
 
     return tryFinalizeRuleMatchSession(
         allocator,
@@ -860,6 +862,7 @@ fn finishHoleyRuleMatchSession(
                         partial_bindings,
                         snapshot,
                         idx,
+                        fresh_context,
                     ),
                 );
                 break;
@@ -877,6 +880,8 @@ fn finishHoleyRuleMatchSession(
                     err,
                     partial_bindings,
                     diagnostic_bindings,
+                    fresh_context,
+                    null,
                 ),
             );
         }
@@ -964,7 +969,7 @@ pub fn inferBindingsFromHoleyAdvanced(
     };
     return switch (result) {
         .concrete => |bindings| bindings,
-        .no_match => {
+        .no_match => |mismatch| {
             self.setProof(
                 try buildInferenceFailureDiagnostic(
                     allocator,
@@ -977,6 +982,8 @@ pub fn inferBindingsFromHoleyAdvanced(
                     error.UnifyMismatch,
                     partial_bindings,
                     diagnostic_bindings,
+                    fresh_context,
+                    mismatch,
                 ),
             );
             return error.UnifyMismatch;
@@ -994,6 +1001,8 @@ pub fn inferBindingsFromHoleyAdvanced(
                     error.UnresolvedDummyWitness,
                     partial_bindings,
                     diagnostic_bindings,
+                    fresh_context,
+                    null,
                 ),
             );
             return error.UnresolvedDummyWitness;
@@ -1123,6 +1132,33 @@ pub fn maybeAddStructuralAmbiguityWarning(
     self.addWarning(diag);
 }
 
+fn hypothesisMismatch(hyp_idx: usize, ref_expr: ExprId) ReplayMismatch {
+    return .{
+        .region = .{ .hypothesis = hyp_idx },
+        .kind = .{ .no_completion = .{ .actual = ref_expr } },
+    };
+}
+
+fn conclusionMismatch() ReplayMismatch {
+    return .{
+        .region = .conclusion,
+        .kind = .{ .no_completion = .{ .actual = null } },
+    };
+}
+
+/// Translate the structural solver's recorded constraint failure into the
+/// shared clash-site shape used by inference diagnostics.
+pub fn solverFailureMismatch(solver: *const InferenceSolver) ?ReplayMismatch {
+    const failure = solver.getFailure() orelse return null;
+    return switch (failure.region) {
+        .conclusion => conclusionMismatch(),
+        .hypothesis => |idx| .{
+            .region = .{ .hypothesis = idx },
+            .kind = .{ .no_completion = .{ .actual = failure.actual } },
+        },
+    };
+}
+
 pub fn tryConcreteStructuralSolver(
     self: *CompilerContext,
     context: *const RuleInferenceContext,
@@ -1130,6 +1166,7 @@ pub fn tryConcreteStructuralSolver(
     partial_bindings: []const ?ExprId,
     ref_exprs: []const ExprId,
     line_expr: ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
 ) ![]const ExprId {
     const allocator = context.allocator;
     const env = context.env;
@@ -1180,6 +1217,8 @@ pub fn tryConcreteStructuralSolver(
                 err,
                 partial_bindings,
                 partial_bindings,
+                fresh_context,
+                solverFailureMismatch(&solver),
             ),
         );
         return err;
@@ -1260,6 +1299,8 @@ pub fn tryConcreteRuleMatchSessionFallback(
                     error.UnresolvedDummyWitness,
                     explicit_bindings,
                     diagnostic_bindings,
+                    fresh_context,
+                    null,
                 ),
             );
             break :blk error.UnresolvedDummyWitness;

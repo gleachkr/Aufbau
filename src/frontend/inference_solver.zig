@@ -40,6 +40,29 @@ const ConclusionConstraint = union(enum) {
     surface: *const Expr,
 };
 
+/// Which rule-application region a constraint filters against. Hypothesis
+/// constraints are indexed in source order (premise i vs rule hypothesis i).
+const ConstraintRegion = enum {
+    hypothesis,
+    conclusion,
+};
+
+/// Recorded when a constraint stage empties the branch-state set: no
+/// completion of the rule's variables makes that part of the application
+/// match. Finalization-stage failures (structural obligations, derived
+/// bindings) leave this null — they have no single clashing region.
+pub const SolveFailure = struct {
+    region: Region,
+    /// The concrete expression the failing constraint matched against
+    /// (the cited premise's conclusion, or the statement itself).
+    actual: ?ExprId,
+
+    pub const Region = union(enum) {
+        conclusion,
+        hypothesis: usize,
+    };
+};
+
 pub const Solver = struct {
     // During `solveWithConclusion`, `allocator` is repointed at `state_arena`
     // so the throwaway BranchState generations (each solve fans out into many
@@ -64,6 +87,7 @@ pub const Solver = struct {
     debug: DebugConfig,
     ambiguity_warning: bool = false,
     ambiguity_report: AmbiguityReport = .{},
+    failure: ?SolveFailure = null,
     // Reusable def_ops contexts, created lazily and torn down in `deinit`.
     // One solve fans out into many short-lived match attempts that each used
     // to build a fresh context — discarding the symbolic hash-cons table and
@@ -175,6 +199,10 @@ pub const Solver = struct {
         return self.ambiguity_report;
     }
 
+    pub fn getFailure(self: *const Solver) ?SolveFailure {
+        return self.failure;
+    }
+
     pub fn structuralSupport(self: *Solver) AcuiSupport.Context {
         // AcuiSupport builds def_ops contexts internally, whose `internAppOwned`
         // frees interned args with the theorem interner allocator, so it must run
@@ -245,6 +273,7 @@ pub const Solver = struct {
         _ = self.state_arena.reset(.retain_capacity);
         self.allocator = self.state_arena.allocator();
         errdefer self.allocator = self.real_allocator;
+        self.failure = null;
 
         var states = try self.initialStates(partial_bindings);
 
@@ -331,7 +360,12 @@ pub const Solver = struct {
                 .actual = actual,
             });
         }
-        return try self.applyConstraints(states, constraints.items, space);
+        return try self.applyConstraints(
+            states,
+            constraints.items,
+            space,
+            .hypothesis,
+        );
     }
 
     fn applyConclusionConstraint(
@@ -351,6 +385,7 @@ pub const Solver = struct {
                     states,
                     constraints[0..],
                     space,
+                    .conclusion,
                 );
             },
             .surface => |actual| try self.applySurfaceConstraint(
@@ -367,11 +402,12 @@ pub const Solver = struct {
         states: []const BranchState,
         constraints: []const MatchConstraint,
         space: BinderSpace,
+        region: ConstraintRegion,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
         var current = std.ArrayListUnmanaged(BranchState){};
         try current.appendSlice(self.allocator, states);
 
-        for (constraints) |constraint| {
+        for (constraints, 0..) |constraint, constraint_idx| {
             var next = std.ArrayListUnmanaged(BranchState){};
             for (current.items) |state| {
                 const matches = try StructuralMatcher.matchExpr(
@@ -397,7 +433,16 @@ pub const Solver = struct {
                     }
                 }
             }
-            if (next.items.len == 0) return error.UnifyMismatch;
+            if (next.items.len == 0) {
+                self.failure = .{
+                    .region = switch (region) {
+                        .hypothesis => .{ .hypothesis = constraint_idx },
+                        .conclusion => .conclusion,
+                    },
+                    .actual = constraint.actual,
+                };
+                return error.UnifyMismatch;
+            }
             current = next;
         }
         return current;
@@ -420,7 +465,10 @@ pub const Solver = struct {
             );
             try next.appendSlice(self.allocator, matches);
         }
-        if (next.items.len == 0) return error.UnifyMismatch;
+        if (next.items.len == 0) {
+            self.failure = .{ .region = .conclusion, .actual = null };
+            return error.UnifyMismatch;
+        }
         return next;
     }
 

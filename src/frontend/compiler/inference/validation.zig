@@ -7,6 +7,8 @@ const ParseRecovery = @import("../../parse_recovery.zig");
 const ArgInfo = ParseRecovery.ArgInfo;
 const AssertionStmt = ParseRecovery.AssertionStmt;
 const BindingValidation = @import("../../binding_validation.zig");
+const ViewTrace = @import("../../view_trace.zig");
+const text_util = @import("../../text_util.zig");
 const CompilerDiag = @import("../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const DebugConfig = @import("../../debug.zig").DebugConfig;
@@ -20,6 +22,8 @@ pub fn validateResolvedBindingsWithDebug(
     debug: DebugConfig,
     env: *const GlobalEnv,
     theorem: *const TheoremContext,
+    parser: ?*const ParseRecovery.MM0Parser,
+    theorem_vars: ?*const NameExprMap,
     assertion: AssertionStmt,
     line: anytype,
     rule: *const RuleDecl,
@@ -52,7 +56,19 @@ pub fn validateResolvedBindingsWithDebug(
         rule.args,
         rule.arg_names,
         bindings,
-    )) |detail| {
+    )) |found_detail| {
+        var detail = found_detail;
+        var text_bufs: DepViolationTextBufs = .{};
+        attachDepViolationBindingTexts(
+            &text_bufs,
+            env,
+            theorem,
+            parser,
+            theorem_vars,
+            &detail,
+            bindings[detail.first_arg_idx],
+            bindings[detail.second_arg_idx],
+        );
         DebugTrace.traceDependency(
             debug,
             "rule {s} on line {s} violates dependency constraints",
@@ -90,6 +106,8 @@ pub fn validateResolvedBindings(
     self: *CompilerContext,
     env: *const GlobalEnv,
     theorem: *const TheoremContext,
+    parser: ?*const ParseRecovery.MM0Parser,
+    theorem_vars: ?*const NameExprMap,
     assertion: AssertionStmt,
     line: anytype,
     rule: *const RuleDecl,
@@ -100,6 +118,8 @@ pub fn validateResolvedBindings(
         .none,
         env,
         theorem,
+        parser,
+        theorem_vars,
         assertion,
         line,
         rule,
@@ -144,6 +164,7 @@ pub fn firstDepViolation(
         infos[0..bindings.len],
     ) orelse return null;
     return depViolationDetail(
+        rule_args,
         rule_arg_names,
         violation.first_idx,
         infos[violation.first_idx],
@@ -181,6 +202,7 @@ pub fn firstPartialDepViolation(
                 | {
                     if (prev_dep & actual.deps != 0) {
                         return depViolationDetail(
+                            rule_args,
                             rule_arg_names,
                             prev_idx,
                             try exprInfo(
@@ -211,6 +233,7 @@ pub fn firstPartialDepViolation(
                 }
                 if (bound_dep & actual.deps != 0) {
                     return depViolationDetail(
+                        rule_args,
                         rule_arg_names,
                         bound_idx,
                         try exprInfo(
@@ -236,6 +259,7 @@ pub fn firstPartialDepViolation(
 }
 
 fn depViolationDetail(
+    rule_args: []const ArgInfo,
     rule_arg_names: []const ?[]const u8,
     first_idx: usize,
     first_info: ExprInfo,
@@ -257,7 +281,93 @@ fn depViolationDetail(
         .second_deps = second_info.deps,
         .first_bound = first_info.bound,
         .second_bound = second_info.bound,
+        .first_rule_bound = first_idx < rule_args.len and
+            rule_args[first_idx].bound,
+        .second_rule_bound = second_idx < rule_args.len and
+            rule_args[second_idx].bound,
     };
+}
+
+pub const NameExprMap = std.StringHashMap(
+    *const @import("../../../trusted/expressions.zig").Expr,
+);
+
+pub const dep_violation_text_buf_len = 512;
+
+/// Stack scratch for `attachDepViolationBindingTexts`. The caller keeps
+/// these alive through `setProof`; the sink stable-copies the slices at
+/// set time, so the buffers may die with the caller's frame afterwards.
+pub const DepViolationTextBufs = struct {
+    first: [dep_violation_text_buf_len]u8 = undefined,
+    second: [dep_violation_text_buf_len]u8 = undefined,
+};
+
+/// Fill the detail's notation-rendered assignment texts from the two
+/// violating binding expressions. Best-effort: rendering failure (or an
+/// expression too large for the scratch buffer) leaves the field null,
+/// which renderers treat as "omit the assignment line". `parser` +
+/// `theorem_vars` enable real binder names and declared notation; without
+/// them the render falls back to internal coordinates, so callers should
+/// pass both whenever they are in scope.
+pub fn attachDepViolationBindingTexts(
+    bufs: *DepViolationTextBufs,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    parser: ?*const ParseRecovery.MM0Parser,
+    theorem_vars: ?*const NameExprMap,
+    detail: *DepViolationDetail,
+    first_expr: ?ExprId,
+    second_expr: ?ExprId,
+) void {
+    var names: ?ViewTrace.DiagNames = null;
+    defer if (names) |*built| built.deinit(theorem.allocator);
+    if (parser) |actual_parser| {
+        if (theorem_vars) |vars| {
+            names = ViewTrace.DiagNames.build(
+                theorem.allocator,
+                theorem,
+                actual_parser,
+                vars,
+            ) catch null;
+        }
+    }
+    const names_ptr: ?*const ViewTrace.DiagNames =
+        if (names) |*built| built else null;
+
+    if (first_expr) |expr_id| {
+        detail.first_binding_text =
+            renderBoundedExpr(&bufs.first, env, theorem, names_ptr, expr_id);
+    }
+    if (second_expr) |expr_id| {
+        detail.second_binding_text =
+            renderBoundedExpr(&bufs.second, env, theorem, names_ptr, expr_id);
+    }
+}
+
+fn renderBoundedExpr(
+    buf: []u8,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    names_ptr: ?*const ViewTrace.DiagNames,
+    expr_id: ExprId,
+) ?[]const u8 {
+    var fba = std.heap.FixedBufferAllocator.init(buf);
+    const text = if (names_ptr) |names|
+        ViewTrace.formatExprNamed(
+            fba.allocator(),
+            theorem,
+            env,
+            names,
+            expr_id,
+        ) catch return null
+    else
+        ViewTrace.formatExpr(
+            fba.allocator(),
+            theorem,
+            env,
+            expr_id,
+        ) catch return null;
+    return text_util.truncateUtf8(text, 64);
 }
 
 // Inference only solves equalities. We still need the same sort, boundness,

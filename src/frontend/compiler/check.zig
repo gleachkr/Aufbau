@@ -349,6 +349,8 @@ pub fn checkTheoremBlock(
                     self,
                     env,
                     theorem,
+                    parser,
+                    &theorem_vars,
                     assertion.name,
                     checked.items[checked_mark..],
                     last_label,
@@ -595,6 +597,8 @@ pub fn applyRuleApplication(
                 self,
                 context.env,
                 &attempt.theorem,
+                context.parser,
+                &attempt.theorem_vars,
                 diag_context.theorem_name,
                 context.checked.items[checked_mark..],
                 diag_context.line_label,
@@ -642,6 +646,8 @@ pub fn applyRuleApplication(
             self,
             context.env,
             theorem,
+            context.parser,
+            theorem_vars,
             diag_context.theorem_name,
             context.checked.items[checked_mark..],
             diag_context.line_label,
@@ -997,6 +1003,8 @@ fn applyRuleCandidateCore(
             self,
             env,
             theorem,
+            parser,
+            theorem_vars,
             assertion,
             line,
             rule,
@@ -1136,6 +1144,8 @@ fn applyRuleCandidateCore(
         self.debug,
         env,
         theorem,
+        parser,
+        theorem_vars,
         assertion,
         line,
         rule,
@@ -1144,7 +1154,7 @@ fn applyRuleCandidateCore(
         if (err != error.DepViolation) return err;
         const rule_freshen = context.freshen_bindings.get(rule_id) orelse
             return err;
-        const dep_detail = (try Inference.firstDepViolation(
+        var dep_detail = (try Inference.firstDepViolation(
             env,
             theorem,
             assertion.args,
@@ -1152,6 +1162,17 @@ fn applyRuleCandidateCore(
             rule.arg_names,
             resolved_bindings,
         )) orelse return err;
+        var dep_text_bufs: Inference.DepViolationTextBufs = .{};
+        Inference.attachDepViolationBindingTexts(
+            &dep_text_bufs,
+            env,
+            theorem,
+            parser,
+            theorem_vars,
+            &dep_detail,
+            resolved_bindings[dep_detail.first_arg_idx],
+            resolved_bindings[dep_detail.second_arg_idx],
+        );
         var freshen_report: AlphaRewrite.FreshenAttemptReport = .{};
         freshened_bindings = AlphaRewrite.tryFreshenBindings(
             allocator,
@@ -1206,7 +1227,19 @@ fn applyRuleCandidateCore(
             rule.args,
             rule.arg_names,
             resolved_bindings,
-        )) |remaining_dep_detail| {
+        )) |found_remaining_detail| {
+            var remaining_dep_detail = found_remaining_detail;
+            var remaining_text_bufs: Inference.DepViolationTextBufs = .{};
+            Inference.attachDepViolationBindingTexts(
+                &remaining_text_bufs,
+                env,
+                theorem,
+                parser,
+                theorem_vars,
+                &remaining_dep_detail,
+                resolved_bindings[remaining_dep_detail.first_arg_idx],
+                resolved_bindings[remaining_dep_detail.second_arg_idx],
+            );
             var diag = CompilerDiag.withPhase(.{
                 .kind = .generic,
                 .err = error.AlphaRewriteSearchFailed,
@@ -1226,6 +1259,8 @@ fn applyRuleCandidateCore(
             self.debug,
             env,
             theorem,
+            parser,
+            theorem_vars,
             assertion,
             line,
             rule,
@@ -1646,6 +1681,7 @@ fn requireConcreteBindingsWithDiagnostic(
                 partial_bindings,
                 partial_bindings,
                 idx,
+                null,
             ),
         );
         return error.MissingBinderAssignment;
@@ -1797,6 +1833,8 @@ fn validateOptionalBindingsForProbe(
     self: *CompilerContext,
     env: *const GlobalEnv,
     theorem: *const TheoremContext,
+    parser: ?*const MM0Parser,
+    theorem_vars: ?*const NameExprMap,
     assertion: AssertionStmt,
     line: ApplicationLine,
     rule: *const RuleDecl,
@@ -1838,7 +1876,19 @@ fn validateOptionalBindingsForProbe(
             rule.args,
             rule.arg_names,
             bindings,
-        )) |detail| {
+        )) |found_detail| {
+            var detail = found_detail;
+            var text_bufs: Inference.DepViolationTextBufs = .{};
+            Inference.attachDepViolationBindingTexts(
+                &text_bufs,
+                env,
+                theorem,
+                parser,
+                theorem_vars,
+                &detail,
+                bindings[detail.first_arg_idx],
+                bindings[detail.second_arg_idx],
+            );
             self.setProof(CompilerDiag.withPhase(.{
                 .kind = .generic,
                 .err = error.DepViolation,
@@ -1863,6 +1913,8 @@ fn validateOptionalBindingsForProbe(
         self.debug,
         env,
         theorem,
+        parser,
+        theorem_vars,
         assertion,
         line,
         rule,
@@ -1936,12 +1988,15 @@ fn inferCandidateBindings(
                         try setHoleyInferenceDiagnostic(
                             self,
                             allocator,
+                            env,
+                            theorem,
                             assertion,
                             line,
                             rule,
                             holey,
                             err,
                             .{},
+                            fresh_context,
                         );
                     }
                     return err;
@@ -1991,12 +2046,15 @@ fn inferCandidateBindings(
                 try setHoleyInferenceDiagnostic(
                     self,
                     allocator,
+                    env,
+                    theorem,
                     assertion,
                     line,
                     rule,
                     holey,
                     err,
                     hole_report,
+                    fresh_context,
                 );
                 return err;
             };
@@ -2328,6 +2386,8 @@ fn ensureConcreteCheckedIrRange(
     self: *CompilerContext,
     env: *const GlobalEnv,
     theorem: *TheoremContext,
+    parser: ?*const MM0Parser,
+    theorem_vars: ?*const NameExprMap,
     theorem_name: []const u8,
     lines: []const CheckedLine,
     line_label: ?[]const u8,
@@ -2347,6 +2407,21 @@ fn ensureConcreteCheckedIrRange(
         return err;
     };
     if (try CheckedIr.firstDepViolationCached(env, theorem, lines)) |failure| {
+        var detail = failure.detail;
+        var text_bufs: Inference.DepViolationTextBufs = .{};
+        switch (lines[failure.line_idx].data) {
+            .rule => |rule_line| Inference.attachDepViolationBindingTexts(
+                &text_bufs,
+                env,
+                theorem,
+                parser,
+                theorem_vars,
+                &detail,
+                rule_line.bindings[detail.first_arg_idx],
+                rule_line.bindings[detail.second_arg_idx],
+            ),
+            .transport => {},
+        }
         self.setProof(CompilerDiag.withPhase(.{
             .kind = .generic,
             .err = error.DepViolation,
@@ -2357,7 +2432,7 @@ fn ensureConcreteCheckedIrRange(
             else
                 null,
             .span = span,
-            .detail = .{ .dep_violation = failure.detail },
+            .detail = .{ .dep_violation = detail },
         }, phase));
         return error.DepViolation;
     }
@@ -2370,6 +2445,8 @@ fn validateAttemptCheckedIrRange(
     self: *CompilerContext,
     env: *const GlobalEnv,
     theorem: *TheoremContext,
+    parser: ?*const MM0Parser,
+    theorem_vars: ?*const NameExprMap,
     theorem_name: []const u8,
     lines: []const CheckedLine,
     line_label: ?[]const u8,
@@ -2381,6 +2458,8 @@ fn validateAttemptCheckedIrRange(
         self,
         env,
         theorem,
+        parser,
+        theorem_vars,
         theorem_name,
         lines,
         line_label,
@@ -2430,6 +2509,8 @@ test "checked ir leak diagnostics replace saved diagnostics" {
             &context,
             &env,
             &theorem,
+            null,
+            null,
             "demo",
             &lines,
             "l2",

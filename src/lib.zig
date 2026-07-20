@@ -23,6 +23,8 @@ pub const writeCompilerMissingCongruenceRuleSummary =
     @import("./frontend/compiler/diag.zig").writeMissingCongruenceRuleSummary;
 pub const writeCompilerDepViolationSummary =
     @import("./frontend/compiler/diag.zig").writeDepViolationSummary;
+pub const writeCompilerDepViolationAssignment =
+    @import("./frontend/compiler/diag.zig").writeDepViolationAssignment;
 pub const writeCompilerOmittedDiagnosticsSummary =
     @import("./frontend/compiler/diag.zig").writeOmittedDiagnosticsSummary;
 pub const compilerInferencePathName =

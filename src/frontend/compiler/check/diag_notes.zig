@@ -18,6 +18,8 @@ const TheoremBoundary = @import("../theorem_boundary.zig");
 const ViewTrace = @import("../../view_trace.zig");
 const text_util = @import("../../text_util.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
+const HiddenWitnessFreshContext =
+    @import("../inference/context.zig").HiddenWitnessFreshContext;
 
 pub fn addFallbackFailureNote(
     diag: *Diagnostic,
@@ -70,12 +72,15 @@ fn proofSpanForSourceSpan(
 pub fn setHoleyInferenceDiagnostic(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
     assertion: AssertionStmt,
     line: anytype,
     rule: *const RuleDecl,
     holey: *const Expr,
     err: anyerror,
     report: Holes.InferenceReport,
+    fresh_context: ?HiddenWitnessFreshContext,
 ) !void {
     const failure = report.failure;
     const missing = if (failure) |actual| switch (actual) {
@@ -114,17 +119,30 @@ pub fn setHoleyInferenceDiagnostic(
             .first_unsolved_binder_name = null,
         } },
     }, .inference);
-    try addHoleyInferenceNotes(allocator, &diag, rule, line, holey, report);
+    try addHoleyInferenceNotes(
+        allocator,
+        &diag,
+        env,
+        theorem,
+        rule,
+        line,
+        holey,
+        report,
+        fresh_context,
+    );
     self.setProof(diag);
 }
 
 fn addHoleyInferenceNotes(
     allocator: std.mem.Allocator,
     diag: *Diagnostic,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
     rule: *const RuleDecl,
     line: anytype,
     holey: *const Expr,
     report: Holes.InferenceReport,
+    fresh_context: ?HiddenWitnessFreshContext,
 ) !void {
     try addFormattedProofNote(
         allocator,
@@ -134,17 +152,60 @@ fn addHoleyInferenceNotes(
     );
     const failure = report.failure orelse return;
     const hole_span = firstHoleProofSpan(line, holey);
+
+    var names: ?ViewTrace.DiagNames = if (fresh_context) |fresh|
+        try ViewTrace.DiagNames.build(
+            allocator,
+            theorem,
+            fresh.parser,
+            fresh.theorem_vars,
+        )
+    else
+        null;
+    defer if (names) |*n| n.deinit(allocator);
+    const names_ptr: ?*const ViewTrace.DiagNames =
+        if (names) |*n| n else null;
+
     switch (failure) {
-        .hypothesis_mismatch => addStaticProofNote(
-            diag,
-            "referenced hypotheses did not match the candidate rule",
-        ),
-        .visible_structure_mismatch => addStaticProofNoteSpan(
-            diag,
-            "visible structure in the holey assertion did not match " ++
-                "the candidate conclusion",
-            hole_span,
-        ),
+        .hypothesis_mismatch => |info| {
+            try addFormattedProofNote(
+                allocator,
+                diag,
+                "cited premise {d} does not match hypothesis {d} of the rule",
+                .{ info.index + 1, info.index + 1 },
+            );
+            const ref_text = try formatNoteExpr(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                info.ref_expr,
+            );
+            defer allocator.free(ref_text);
+            try addFormattedProofNote(
+                allocator,
+                diag,
+                "the cited premise proves: {s}",
+                .{truncateSnapshot(ref_text)},
+            );
+        },
+        .visible_structure_mismatch => |detail| {
+            addStaticProofNoteSpan(
+                diag,
+                "the visible parts of the statement do not match " ++
+                    "the rule's conclusion",
+                hole_span,
+            );
+            try addVisibleMismatchNotes(
+                allocator,
+                diag,
+                env,
+                theorem,
+                rule,
+                detail,
+                names_ptr,
+            );
+        },
         .missing_binder => |info| {
             const name = info.name orelse "_";
             try addFormattedProofNoteSpan(
@@ -166,6 +227,112 @@ fn addHoleyInferenceNotes(
     }
 }
 
+fn addVisibleMismatchNotes(
+    allocator: std.mem.Allocator,
+    diag: *Diagnostic,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    rule: *const RuleDecl,
+    detail: Holes.VisibleMismatchDetail,
+    names_ptr: ?*const ViewTrace.DiagNames,
+) !void {
+    switch (detail) {
+        .unknown => {},
+        .head_clash => |clash| {
+            const expected_name = termNameById(env, clash.expected_term_id);
+            if (clash.actual_term_id) |actual_id| {
+                try addFormattedProofNote(
+                    allocator,
+                    diag,
+                    "the rule's conclusion has '{s}' where the statement " ++
+                        "has '{s}'",
+                    .{ expected_name, termNameById(env, actual_id) },
+                );
+            } else {
+                try addFormattedProofNote(
+                    allocator,
+                    diag,
+                    "the rule's conclusion has '{s}' where the statement " ++
+                        "has a variable",
+                    .{expected_name},
+                );
+            }
+        },
+        .binder_conflict => |conflict| {
+            const binder_name: ?[]const u8 =
+                if (conflict.binder_idx < rule.arg_names.len)
+                    rule.arg_names[conflict.binder_idx]
+                else
+                    null;
+            if (binder_name) |name| {
+                try addFormattedProofNote(
+                    allocator,
+                    diag,
+                    "rule variable {s} would need two different values",
+                    .{name},
+                );
+            } else {
+                addStaticProofNote(
+                    diag,
+                    "one rule variable would need two different values",
+                );
+            }
+            const existing_text = try formatNoteExpr(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                conflict.existing,
+            );
+            defer allocator.free(existing_text);
+            try addFormattedProofNote(
+                allocator,
+                diag,
+                "already matched: {s}",
+                .{truncateSnapshot(existing_text)},
+            );
+            const actual_text = try formatNoteExpr(
+                allocator,
+                theorem,
+                env,
+                names_ptr,
+                conflict.actual,
+            );
+            defer allocator.free(actual_text);
+            try addFormattedProofNote(
+                allocator,
+                diag,
+                "in the statement: {s}",
+                .{truncateSnapshot(actual_text)},
+            );
+        },
+    }
+}
+
+fn termNameById(env: *const GlobalEnv, term_id: u32) []const u8 {
+    if (term_id < env.terms.items.len) return env.terms.items[term_id].name;
+    return "?";
+}
+
+fn formatNoteExpr(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names_ptr: ?*const ViewTrace.DiagNames,
+    expr_id: ExprId,
+) ![]const u8 {
+    if (names_ptr) |names| {
+        return try ViewTrace.formatExprNamed(
+            allocator,
+            theorem,
+            env,
+            names,
+            expr_id,
+        );
+    }
+    return try ViewTrace.formatExpr(allocator, theorem, env, expr_id);
+}
+
 pub fn addHoleConcreteMatchNotes(
     allocator: std.mem.Allocator,
     diag: *Diagnostic,
@@ -176,8 +343,8 @@ pub fn addHoleConcreteMatchNotes(
     switch (failure) {
         .visible_structure_mismatch => addStaticProofNote(
             diag,
-            "visible structure in the holey assertion did not match " ++
-                "the candidate conclusion",
+            "the visible parts of the statement do not match " ++
+                "the rule's conclusion",
         ),
         .hole_sort_mismatch => |mismatch| {
             try addFormattedProofNoteSpan(

@@ -4,6 +4,7 @@ const PlaceholderId = @import("../expr.zig").PlaceholderId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const BindingValidation = @import("../binding_validation.zig");
+const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
 const CompilerDiag = @import("./diag.zig");
 
 pub const CheckedRef = union(enum) {
@@ -221,6 +222,7 @@ fn firstDepViolationImpl(
             .line_idx = line_idx,
             .rule_id = rule.rule_id,
             .detail = depViolationDetail(
+                rule_decl.args,
                 rule_decl.arg_names,
                 violation.first_idx,
                 infos[violation.first_idx],
@@ -233,6 +235,7 @@ fn firstDepViolationImpl(
 }
 
 fn depViolationDetail(
+    rule_args: []const ArgInfo,
     rule_arg_names: []const ?[]const u8,
     first_idx: usize,
     first_info: BindingValidation.ExprInfo,
@@ -254,6 +257,10 @@ fn depViolationDetail(
         .second_deps = second_info.deps,
         .first_bound = first_info.bound,
         .second_bound = second_info.bound,
+        .first_rule_bound = first_idx < rule_args.len and
+            rule_args[first_idx].bound,
+        .second_rule_bound = second_idx < rule_args.len and
+            rule_args[second_idx].bound,
     };
 }
 
