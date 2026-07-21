@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.0.2] - Unreleased
+## [0.0.2] - 2026-07-21
 
 ### Added
 
@@ -81,6 +81,24 @@ This file records notable user-facing changes to Aufbau. The project follows
   single `refl` line closed by transparent-definition unfolding. Defs are
   never enrolled implicitly. See `docs/rewrite_system.md`.
 
+### Changed
+
+- Diagnostics for failed rule applications now explain the failure in logical
+  terms. When omitted rule arguments cannot be inferred, the report names the
+  specific mismatch — which region (a hypothesis by index, or the conclusion)
+  failed to line up, and the expected versus found shapes, pretty-printed with
+  the theory's notation — instead of a single generic "could not infer"
+  headline.
+- When the structural/ACUI solver cannot complete a match, the report names the
+  constraint that ruled out every remaining possibility, states that no way of
+  filling in the rule's variables makes the premises match, and shows what the
+  cited premise actually proves.
+- Dependency-violation diagnostics are now phrased as logical constraints rather
+  than raw dependency bitmasks. A clash between two bound variables reads "bound
+  variables x and y must be assigned distinct variables"; an illegal occurrence
+  reads "the rule does not allow p to mention the variable assigned to x", each
+  followed by the offending assignments rendered in the theory's notation.
+
 ### Fixed
 
 - The WebAssembly compiler now emits a valid JSON result buffer even when a
@@ -122,5 +140,5 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
-[0.0.2]: https://github.com/gleachkr/Aufbau/compare/v0.0.1...HEAD
+[0.0.2]: https://github.com/gleachkr/Aufbau/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/gleachkr/Aufbau/releases/tag/v0.0.1
