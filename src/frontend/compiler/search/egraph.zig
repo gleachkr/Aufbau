@@ -2356,12 +2356,23 @@ const Traversed = struct {
     forward: bool,
 };
 
+const AlignKey = struct {
+    from: ENodeId,
+    to: ENodeId,
+};
+
 const ExplainCtx = struct {
     eg: *EGraph,
     rules: []const Rule,
     opts: ExplainOptions,
     steps: std.ArrayListUnmanaged(Step) = .{},
     depth: usize = 0,
+    /// (from node, to node) alignment subgoals currently active on the
+    /// recursion stack. Re-entering the same node-pair means the forest-path /
+    /// re-anchoring is circling a cyclic e-class (idempotence / absorption
+    /// unions merge a class into a same-head compound containing itself);
+    /// cutting the re-entry keeps extraction well-founded.
+    active: std.AutoHashMapUnmanaged(AlignKey, void) = .{},
     /// Interned avoid-masks: sorted atom lists a representative's subtree
     /// must not mention. Index 0 is always the empty mask.
     mask_atoms: std.ArrayListUnmanaged([]const LeafId) = .{},
@@ -2689,6 +2700,20 @@ const ExplainCtx = struct {
         if (nodeShapeEql(self.eg, from.node, to.node)) {
             return try self.alignChildren(from, to, pos);
         }
+
+        // Guard against re-entering the same node-pair alignment while it is
+        // already on the recursion stack. Idempotence / absorption unions make
+        // an e-class self-containing (a same-head compound whose child is the
+        // class itself, e.g. `(hZ:x0)+(hZ:x0) = hZ:x0`); aligning the minimal
+        // form to that compound then re-poses the identical `(from, to)`
+        // subgoal one position deeper, expanding without bound. A genuinely
+        // nested repeat of one node-pair only arises from such self-reference,
+        // so cutting it keeps extraction well-founded (finite: at most one
+        // active entry per ordered node-pair).
+        const key = AlignKey{ .from = from.node, .to = to.node };
+        if (self.active.contains(key)) return false;
+        try self.active.put(self.allocator(), key, {});
+        defer _ = self.active.remove(key);
 
         const path = (try self.forestPath(from.node, to.node)) orelse {
             return false;
