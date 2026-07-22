@@ -1,0 +1,864 @@
+-- Repro: conversion? with assoc/comm role certificates dies (OOM)
+-- on a hex digit-addition table with carry rules.
+--
+-- The reconvergent interference chain of
+-- reconvergent_interference_chain.mm0, at full 16-digit numerals,
+-- with the complete 256-entry digit table: pairs with i+j > 15
+-- produce a nested sum on the right-hand side,
+--   (a :x hi) + (b :x hj) = ((a + b) + (hZ :x h1)) :x h(i+j-16),
+-- and the all-F + all-1 numerals make every position carry. Under
+-- bag absorption those nested-sum classes chain 16 deep; splice
+-- flattening expanded every member reference independently (the
+-- cycle guard is per-path, blind to sharing), so flat forms outgrew
+-- the node graph exponentially and the process died allocating
+-- tens of GB at ~650 e-nodes. The splice member cap, the
+-- per-iteration enumeration step pool, and budget-fixpoint
+-- detection bound this to an honest capped miss in seconds; the
+-- goal digit string (all zeros) is wrong on purpose, so a fixed
+-- engine must still refuse to find a chain.
+
+delimiter $ ( ) $;
+
+provable sort wff;
+sort bv;
+
+term iff (a b: wff): wff;
+infixl iff: $<->$ prec 20;
+term eq (a b: bv): wff;
+infixl eq: $=$ prec 50;
+
+term hZ: bv;
+term hx (a d: bv): bv;
+infixl hx: $:x$ prec 100;
+term add (a b: bv): bv;
+infixl add: $+$ prec 64;
+
+term h0: bv;
+term h1: bv;
+term h2: bv;
+term h3: bv;
+term h4: bv;
+term h5: bv;
+term h6: bv;
+term h7: bv;
+term h8: bv;
+term h9: bv;
+term hA: bv;
+term hB: bv;
+term hC: bv;
+term hD: bv;
+term hE: bv;
+term hF: bv;
+
+--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff) (h1: $ a <-> b $) (h2: $ b <-> c $):
+  $ a <-> c $;
+axiom iff_symm (a b: wff) (h: $ a <-> b $): $ b <-> a $;
+axiom mpbi (a b: wff) (h1: $ a <-> b $) (h2: $ a $): $ b $;
+
+--| @relation bv eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: bv): $ a = a $;
+axiom eq_trans (a b c: bv) (h1: $ a = b $) (h2: $ b = c $):
+  $ a = c $;
+axiom eq_symm (a b: bv) (h: $ a = b $): $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a = c) <-> (b = d) $;
+--| @congr
+axiom add_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a + c) = (b + d) $;
+--| @congr
+axiom hx_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a :x c) = (b :x d) $;
+
+--| @conversion assoc
+axiom add_assoc (a b c: bv): $ ((a + b) + c) = (a + (b + c)) $;
+--| @conversion comm
+axiom add_comm (a b: bv): $ (a + b) = (b + a) $;
+
+--| @conversion ltr
+axiom addd_0_0 (a b: bv):
+  $ (a :x h0) + (b :x h0) = (a + b) :x h0 $;
+--| @conversion ltr
+axiom addd_0_1 (a b: bv):
+  $ (a :x h0) + (b :x h1) = (a + b) :x h1 $;
+--| @conversion ltr
+axiom addd_0_2 (a b: bv):
+  $ (a :x h0) + (b :x h2) = (a + b) :x h2 $;
+--| @conversion ltr
+axiom addd_0_3 (a b: bv):
+  $ (a :x h0) + (b :x h3) = (a + b) :x h3 $;
+--| @conversion ltr
+axiom addd_0_4 (a b: bv):
+  $ (a :x h0) + (b :x h4) = (a + b) :x h4 $;
+--| @conversion ltr
+axiom addd_0_5 (a b: bv):
+  $ (a :x h0) + (b :x h5) = (a + b) :x h5 $;
+--| @conversion ltr
+axiom addd_0_6 (a b: bv):
+  $ (a :x h0) + (b :x h6) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_0_7 (a b: bv):
+  $ (a :x h0) + (b :x h7) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_0_8 (a b: bv):
+  $ (a :x h0) + (b :x h8) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_0_9 (a b: bv):
+  $ (a :x h0) + (b :x h9) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_0_A (a b: bv):
+  $ (a :x h0) + (b :x hA) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_0_B (a b: bv):
+  $ (a :x h0) + (b :x hB) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_0_C (a b: bv):
+  $ (a :x h0) + (b :x hC) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_0_D (a b: bv):
+  $ (a :x h0) + (b :x hD) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_0_E (a b: bv):
+  $ (a :x h0) + (b :x hE) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_0_F (a b: bv):
+  $ (a :x h0) + (b :x hF) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addd_1_0 (a b: bv):
+  $ (a :x h1) + (b :x h0) = (a + b) :x h1 $;
+--| @conversion ltr
+axiom addd_1_1 (a b: bv):
+  $ (a :x h1) + (b :x h1) = (a + b) :x h2 $;
+--| @conversion ltr
+axiom addd_1_2 (a b: bv):
+  $ (a :x h1) + (b :x h2) = (a + b) :x h3 $;
+--| @conversion ltr
+axiom addd_1_3 (a b: bv):
+  $ (a :x h1) + (b :x h3) = (a + b) :x h4 $;
+--| @conversion ltr
+axiom addd_1_4 (a b: bv):
+  $ (a :x h1) + (b :x h4) = (a + b) :x h5 $;
+--| @conversion ltr
+axiom addd_1_5 (a b: bv):
+  $ (a :x h1) + (b :x h5) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_1_6 (a b: bv):
+  $ (a :x h1) + (b :x h6) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_1_7 (a b: bv):
+  $ (a :x h1) + (b :x h7) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_1_8 (a b: bv):
+  $ (a :x h1) + (b :x h8) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_1_9 (a b: bv):
+  $ (a :x h1) + (b :x h9) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_1_A (a b: bv):
+  $ (a :x h1) + (b :x hA) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_1_B (a b: bv):
+  $ (a :x h1) + (b :x hB) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_1_C (a b: bv):
+  $ (a :x h1) + (b :x hC) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_1_D (a b: bv):
+  $ (a :x h1) + (b :x hD) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_1_E (a b: bv):
+  $ (a :x h1) + (b :x hE) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_1_F (a b: bv):
+  $ (a :x h1) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addd_2_0 (a b: bv):
+  $ (a :x h2) + (b :x h0) = (a + b) :x h2 $;
+--| @conversion ltr
+axiom addd_2_1 (a b: bv):
+  $ (a :x h2) + (b :x h1) = (a + b) :x h3 $;
+--| @conversion ltr
+axiom addd_2_2 (a b: bv):
+  $ (a :x h2) + (b :x h2) = (a + b) :x h4 $;
+--| @conversion ltr
+axiom addd_2_3 (a b: bv):
+  $ (a :x h2) + (b :x h3) = (a + b) :x h5 $;
+--| @conversion ltr
+axiom addd_2_4 (a b: bv):
+  $ (a :x h2) + (b :x h4) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_2_5 (a b: bv):
+  $ (a :x h2) + (b :x h5) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_2_6 (a b: bv):
+  $ (a :x h2) + (b :x h6) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_2_7 (a b: bv):
+  $ (a :x h2) + (b :x h7) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_2_8 (a b: bv):
+  $ (a :x h2) + (b :x h8) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_2_9 (a b: bv):
+  $ (a :x h2) + (b :x h9) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_2_A (a b: bv):
+  $ (a :x h2) + (b :x hA) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_2_B (a b: bv):
+  $ (a :x h2) + (b :x hB) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_2_C (a b: bv):
+  $ (a :x h2) + (b :x hC) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_2_D (a b: bv):
+  $ (a :x h2) + (b :x hD) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_2_E (a b: bv):
+  $ (a :x h2) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_2_F (a b: bv):
+  $ (a :x h2) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addd_3_0 (a b: bv):
+  $ (a :x h3) + (b :x h0) = (a + b) :x h3 $;
+--| @conversion ltr
+axiom addd_3_1 (a b: bv):
+  $ (a :x h3) + (b :x h1) = (a + b) :x h4 $;
+--| @conversion ltr
+axiom addd_3_2 (a b: bv):
+  $ (a :x h3) + (b :x h2) = (a + b) :x h5 $;
+--| @conversion ltr
+axiom addd_3_3 (a b: bv):
+  $ (a :x h3) + (b :x h3) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_3_4 (a b: bv):
+  $ (a :x h3) + (b :x h4) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_3_5 (a b: bv):
+  $ (a :x h3) + (b :x h5) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_3_6 (a b: bv):
+  $ (a :x h3) + (b :x h6) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_3_7 (a b: bv):
+  $ (a :x h3) + (b :x h7) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_3_8 (a b: bv):
+  $ (a :x h3) + (b :x h8) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_3_9 (a b: bv):
+  $ (a :x h3) + (b :x h9) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_3_A (a b: bv):
+  $ (a :x h3) + (b :x hA) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_3_B (a b: bv):
+  $ (a :x h3) + (b :x hB) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_3_C (a b: bv):
+  $ (a :x h3) + (b :x hC) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_3_D (a b: bv):
+  $ (a :x h3) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_3_E (a b: bv):
+  $ (a :x h3) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_3_F (a b: bv):
+  $ (a :x h3) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addd_4_0 (a b: bv):
+  $ (a :x h4) + (b :x h0) = (a + b) :x h4 $;
+--| @conversion ltr
+axiom addd_4_1 (a b: bv):
+  $ (a :x h4) + (b :x h1) = (a + b) :x h5 $;
+--| @conversion ltr
+axiom addd_4_2 (a b: bv):
+  $ (a :x h4) + (b :x h2) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_4_3 (a b: bv):
+  $ (a :x h4) + (b :x h3) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_4_4 (a b: bv):
+  $ (a :x h4) + (b :x h4) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_4_5 (a b: bv):
+  $ (a :x h4) + (b :x h5) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_4_6 (a b: bv):
+  $ (a :x h4) + (b :x h6) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_4_7 (a b: bv):
+  $ (a :x h4) + (b :x h7) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_4_8 (a b: bv):
+  $ (a :x h4) + (b :x h8) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_4_9 (a b: bv):
+  $ (a :x h4) + (b :x h9) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_4_A (a b: bv):
+  $ (a :x h4) + (b :x hA) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_4_B (a b: bv):
+  $ (a :x h4) + (b :x hB) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_4_C (a b: bv):
+  $ (a :x h4) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_4_D (a b: bv):
+  $ (a :x h4) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_4_E (a b: bv):
+  $ (a :x h4) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_4_F (a b: bv):
+  $ (a :x h4) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addd_5_0 (a b: bv):
+  $ (a :x h5) + (b :x h0) = (a + b) :x h5 $;
+--| @conversion ltr
+axiom addd_5_1 (a b: bv):
+  $ (a :x h5) + (b :x h1) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_5_2 (a b: bv):
+  $ (a :x h5) + (b :x h2) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_5_3 (a b: bv):
+  $ (a :x h5) + (b :x h3) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_5_4 (a b: bv):
+  $ (a :x h5) + (b :x h4) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_5_5 (a b: bv):
+  $ (a :x h5) + (b :x h5) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_5_6 (a b: bv):
+  $ (a :x h5) + (b :x h6) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_5_7 (a b: bv):
+  $ (a :x h5) + (b :x h7) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_5_8 (a b: bv):
+  $ (a :x h5) + (b :x h8) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_5_9 (a b: bv):
+  $ (a :x h5) + (b :x h9) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_5_A (a b: bv):
+  $ (a :x h5) + (b :x hA) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_5_B (a b: bv):
+  $ (a :x h5) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_5_C (a b: bv):
+  $ (a :x h5) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_5_D (a b: bv):
+  $ (a :x h5) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_5_E (a b: bv):
+  $ (a :x h5) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_5_F (a b: bv):
+  $ (a :x h5) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addd_6_0 (a b: bv):
+  $ (a :x h6) + (b :x h0) = (a + b) :x h6 $;
+--| @conversion ltr
+axiom addd_6_1 (a b: bv):
+  $ (a :x h6) + (b :x h1) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_6_2 (a b: bv):
+  $ (a :x h6) + (b :x h2) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_6_3 (a b: bv):
+  $ (a :x h6) + (b :x h3) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_6_4 (a b: bv):
+  $ (a :x h6) + (b :x h4) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_6_5 (a b: bv):
+  $ (a :x h6) + (b :x h5) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_6_6 (a b: bv):
+  $ (a :x h6) + (b :x h6) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_6_7 (a b: bv):
+  $ (a :x h6) + (b :x h7) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_6_8 (a b: bv):
+  $ (a :x h6) + (b :x h8) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_6_9 (a b: bv):
+  $ (a :x h6) + (b :x h9) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_6_A (a b: bv):
+  $ (a :x h6) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_6_B (a b: bv):
+  $ (a :x h6) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_6_C (a b: bv):
+  $ (a :x h6) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_6_D (a b: bv):
+  $ (a :x h6) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_6_E (a b: bv):
+  $ (a :x h6) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_6_F (a b: bv):
+  $ (a :x h6) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addd_7_0 (a b: bv):
+  $ (a :x h7) + (b :x h0) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_7_1 (a b: bv):
+  $ (a :x h7) + (b :x h1) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_7_2 (a b: bv):
+  $ (a :x h7) + (b :x h2) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_7_3 (a b: bv):
+  $ (a :x h7) + (b :x h3) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_7_4 (a b: bv):
+  $ (a :x h7) + (b :x h4) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_7_5 (a b: bv):
+  $ (a :x h7) + (b :x h5) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_7_6 (a b: bv):
+  $ (a :x h7) + (b :x h6) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_7_7 (a b: bv):
+  $ (a :x h7) + (b :x h7) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_7_8 (a b: bv):
+  $ (a :x h7) + (b :x h8) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_7_9 (a b: bv):
+  $ (a :x h7) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_7_A (a b: bv):
+  $ (a :x h7) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_7_B (a b: bv):
+  $ (a :x h7) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_7_C (a b: bv):
+  $ (a :x h7) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_7_D (a b: bv):
+  $ (a :x h7) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_7_E (a b: bv):
+  $ (a :x h7) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_7_F (a b: bv):
+  $ (a :x h7) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addd_8_0 (a b: bv):
+  $ (a :x h8) + (b :x h0) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_8_1 (a b: bv):
+  $ (a :x h8) + (b :x h1) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_8_2 (a b: bv):
+  $ (a :x h8) + (b :x h2) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_8_3 (a b: bv):
+  $ (a :x h8) + (b :x h3) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_8_4 (a b: bv):
+  $ (a :x h8) + (b :x h4) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_8_5 (a b: bv):
+  $ (a :x h8) + (b :x h5) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_8_6 (a b: bv):
+  $ (a :x h8) + (b :x h6) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_8_7 (a b: bv):
+  $ (a :x h8) + (b :x h7) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_8_8 (a b: bv):
+  $ (a :x h8) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_8_9 (a b: bv):
+  $ (a :x h8) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_8_A (a b: bv):
+  $ (a :x h8) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_8_B (a b: bv):
+  $ (a :x h8) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_8_C (a b: bv):
+  $ (a :x h8) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_8_D (a b: bv):
+  $ (a :x h8) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_8_E (a b: bv):
+  $ (a :x h8) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_8_F (a b: bv):
+  $ (a :x h8) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addd_9_0 (a b: bv):
+  $ (a :x h9) + (b :x h0) = (a + b) :x h9 $;
+--| @conversion ltr
+axiom addd_9_1 (a b: bv):
+  $ (a :x h9) + (b :x h1) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_9_2 (a b: bv):
+  $ (a :x h9) + (b :x h2) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_9_3 (a b: bv):
+  $ (a :x h9) + (b :x h3) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_9_4 (a b: bv):
+  $ (a :x h9) + (b :x h4) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_9_5 (a b: bv):
+  $ (a :x h9) + (b :x h5) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_9_6 (a b: bv):
+  $ (a :x h9) + (b :x h6) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_9_7 (a b: bv):
+  $ (a :x h9) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_9_8 (a b: bv):
+  $ (a :x h9) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_9_9 (a b: bv):
+  $ (a :x h9) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_9_A (a b: bv):
+  $ (a :x h9) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_9_B (a b: bv):
+  $ (a :x h9) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_9_C (a b: bv):
+  $ (a :x h9) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_9_D (a b: bv):
+  $ (a :x h9) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_9_E (a b: bv):
+  $ (a :x h9) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_9_F (a b: bv):
+  $ (a :x h9) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addd_A_0 (a b: bv):
+  $ (a :x hA) + (b :x h0) = (a + b) :x hA $;
+--| @conversion ltr
+axiom addd_A_1 (a b: bv):
+  $ (a :x hA) + (b :x h1) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_A_2 (a b: bv):
+  $ (a :x hA) + (b :x h2) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_A_3 (a b: bv):
+  $ (a :x hA) + (b :x h3) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_A_4 (a b: bv):
+  $ (a :x hA) + (b :x h4) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_A_5 (a b: bv):
+  $ (a :x hA) + (b :x h5) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_A_6 (a b: bv):
+  $ (a :x hA) + (b :x h6) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_A_7 (a b: bv):
+  $ (a :x hA) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_A_8 (a b: bv):
+  $ (a :x hA) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_A_9 (a b: bv):
+  $ (a :x hA) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_A_A (a b: bv):
+  $ (a :x hA) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_A_B (a b: bv):
+  $ (a :x hA) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_A_C (a b: bv):
+  $ (a :x hA) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_A_D (a b: bv):
+  $ (a :x hA) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_A_E (a b: bv):
+  $ (a :x hA) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addc_A_F (a b: bv):
+  $ (a :x hA) + (b :x hF) = ((a + b) + (hZ :x h1)) :x h9 $;
+--| @conversion ltr
+axiom addd_B_0 (a b: bv):
+  $ (a :x hB) + (b :x h0) = (a + b) :x hB $;
+--| @conversion ltr
+axiom addd_B_1 (a b: bv):
+  $ (a :x hB) + (b :x h1) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_B_2 (a b: bv):
+  $ (a :x hB) + (b :x h2) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_B_3 (a b: bv):
+  $ (a :x hB) + (b :x h3) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_B_4 (a b: bv):
+  $ (a :x hB) + (b :x h4) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_B_5 (a b: bv):
+  $ (a :x hB) + (b :x h5) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_B_6 (a b: bv):
+  $ (a :x hB) + (b :x h6) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_B_7 (a b: bv):
+  $ (a :x hB) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_B_8 (a b: bv):
+  $ (a :x hB) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_B_9 (a b: bv):
+  $ (a :x hB) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_B_A (a b: bv):
+  $ (a :x hB) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_B_B (a b: bv):
+  $ (a :x hB) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_B_C (a b: bv):
+  $ (a :x hB) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_B_D (a b: bv):
+  $ (a :x hB) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addc_B_E (a b: bv):
+  $ (a :x hB) + (b :x hE) = ((a + b) + (hZ :x h1)) :x h9 $;
+--| @conversion ltr
+axiom addc_B_F (a b: bv):
+  $ (a :x hB) + (b :x hF) = ((a + b) + (hZ :x h1)) :x hA $;
+--| @conversion ltr
+axiom addd_C_0 (a b: bv):
+  $ (a :x hC) + (b :x h0) = (a + b) :x hC $;
+--| @conversion ltr
+axiom addd_C_1 (a b: bv):
+  $ (a :x hC) + (b :x h1) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_C_2 (a b: bv):
+  $ (a :x hC) + (b :x h2) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_C_3 (a b: bv):
+  $ (a :x hC) + (b :x h3) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_C_4 (a b: bv):
+  $ (a :x hC) + (b :x h4) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_C_5 (a b: bv):
+  $ (a :x hC) + (b :x h5) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_C_6 (a b: bv):
+  $ (a :x hC) + (b :x h6) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_C_7 (a b: bv):
+  $ (a :x hC) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_C_8 (a b: bv):
+  $ (a :x hC) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_C_9 (a b: bv):
+  $ (a :x hC) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_C_A (a b: bv):
+  $ (a :x hC) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_C_B (a b: bv):
+  $ (a :x hC) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_C_C (a b: bv):
+  $ (a :x hC) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addc_C_D (a b: bv):
+  $ (a :x hC) + (b :x hD) = ((a + b) + (hZ :x h1)) :x h9 $;
+--| @conversion ltr
+axiom addc_C_E (a b: bv):
+  $ (a :x hC) + (b :x hE) = ((a + b) + (hZ :x h1)) :x hA $;
+--| @conversion ltr
+axiom addc_C_F (a b: bv):
+  $ (a :x hC) + (b :x hF) = ((a + b) + (hZ :x h1)) :x hB $;
+--| @conversion ltr
+axiom addd_D_0 (a b: bv):
+  $ (a :x hD) + (b :x h0) = (a + b) :x hD $;
+--| @conversion ltr
+axiom addd_D_1 (a b: bv):
+  $ (a :x hD) + (b :x h1) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_D_2 (a b: bv):
+  $ (a :x hD) + (b :x h2) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_D_3 (a b: bv):
+  $ (a :x hD) + (b :x h3) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_D_4 (a b: bv):
+  $ (a :x hD) + (b :x h4) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_D_5 (a b: bv):
+  $ (a :x hD) + (b :x h5) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_D_6 (a b: bv):
+  $ (a :x hD) + (b :x h6) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_D_7 (a b: bv):
+  $ (a :x hD) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_D_8 (a b: bv):
+  $ (a :x hD) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_D_9 (a b: bv):
+  $ (a :x hD) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_D_A (a b: bv):
+  $ (a :x hD) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_D_B (a b: bv):
+  $ (a :x hD) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addc_D_C (a b: bv):
+  $ (a :x hD) + (b :x hC) = ((a + b) + (hZ :x h1)) :x h9 $;
+--| @conversion ltr
+axiom addc_D_D (a b: bv):
+  $ (a :x hD) + (b :x hD) = ((a + b) + (hZ :x h1)) :x hA $;
+--| @conversion ltr
+axiom addc_D_E (a b: bv):
+  $ (a :x hD) + (b :x hE) = ((a + b) + (hZ :x h1)) :x hB $;
+--| @conversion ltr
+axiom addc_D_F (a b: bv):
+  $ (a :x hD) + (b :x hF) = ((a + b) + (hZ :x h1)) :x hC $;
+--| @conversion ltr
+axiom addd_E_0 (a b: bv):
+  $ (a :x hE) + (b :x h0) = (a + b) :x hE $;
+--| @conversion ltr
+axiom addd_E_1 (a b: bv):
+  $ (a :x hE) + (b :x h1) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_E_2 (a b: bv):
+  $ (a :x hE) + (b :x h2) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_E_3 (a b: bv):
+  $ (a :x hE) + (b :x h3) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_E_4 (a b: bv):
+  $ (a :x hE) + (b :x h4) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_E_5 (a b: bv):
+  $ (a :x hE) + (b :x h5) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_E_6 (a b: bv):
+  $ (a :x hE) + (b :x h6) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_E_7 (a b: bv):
+  $ (a :x hE) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_E_8 (a b: bv):
+  $ (a :x hE) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_E_9 (a b: bv):
+  $ (a :x hE) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_E_A (a b: bv):
+  $ (a :x hE) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addc_E_B (a b: bv):
+  $ (a :x hE) + (b :x hB) = ((a + b) + (hZ :x h1)) :x h9 $;
+--| @conversion ltr
+axiom addc_E_C (a b: bv):
+  $ (a :x hE) + (b :x hC) = ((a + b) + (hZ :x h1)) :x hA $;
+--| @conversion ltr
+axiom addc_E_D (a b: bv):
+  $ (a :x hE) + (b :x hD) = ((a + b) + (hZ :x h1)) :x hB $;
+--| @conversion ltr
+axiom addc_E_E (a b: bv):
+  $ (a :x hE) + (b :x hE) = ((a + b) + (hZ :x h1)) :x hC $;
+--| @conversion ltr
+axiom addc_E_F (a b: bv):
+  $ (a :x hE) + (b :x hF) = ((a + b) + (hZ :x h1)) :x hD $;
+--| @conversion ltr
+axiom addd_F_0 (a b: bv):
+  $ (a :x hF) + (b :x h0) = (a + b) :x hF $;
+--| @conversion ltr
+axiom addc_F_1 (a b: bv):
+  $ (a :x hF) + (b :x h1) = ((a + b) + (hZ :x h1)) :x h0 $;
+--| @conversion ltr
+axiom addc_F_2 (a b: bv):
+  $ (a :x hF) + (b :x h2) = ((a + b) + (hZ :x h1)) :x h1 $;
+--| @conversion ltr
+axiom addc_F_3 (a b: bv):
+  $ (a :x hF) + (b :x h3) = ((a + b) + (hZ :x h1)) :x h2 $;
+--| @conversion ltr
+axiom addc_F_4 (a b: bv):
+  $ (a :x hF) + (b :x h4) = ((a + b) + (hZ :x h1)) :x h3 $;
+--| @conversion ltr
+axiom addc_F_5 (a b: bv):
+  $ (a :x hF) + (b :x h5) = ((a + b) + (hZ :x h1)) :x h4 $;
+--| @conversion ltr
+axiom addc_F_6 (a b: bv):
+  $ (a :x hF) + (b :x h6) = ((a + b) + (hZ :x h1)) :x h5 $;
+--| @conversion ltr
+axiom addc_F_7 (a b: bv):
+  $ (a :x hF) + (b :x h7) = ((a + b) + (hZ :x h1)) :x h6 $;
+--| @conversion ltr
+axiom addc_F_8 (a b: bv):
+  $ (a :x hF) + (b :x h8) = ((a + b) + (hZ :x h1)) :x h7 $;
+--| @conversion ltr
+axiom addc_F_9 (a b: bv):
+  $ (a :x hF) + (b :x h9) = ((a + b) + (hZ :x h1)) :x h8 $;
+--| @conversion ltr
+axiom addc_F_A (a b: bv):
+  $ (a :x hF) + (b :x hA) = ((a + b) + (hZ :x h1)) :x h9 $;
+--| @conversion ltr
+axiom addc_F_B (a b: bv):
+  $ (a :x hF) + (b :x hB) = ((a + b) + (hZ :x h1)) :x hA $;
+--| @conversion ltr
+axiom addc_F_C (a b: bv):
+  $ (a :x hF) + (b :x hC) = ((a + b) + (hZ :x h1)) :x hB $;
+--| @conversion ltr
+axiom addc_F_D (a b: bv):
+  $ (a :x hF) + (b :x hD) = ((a + b) + (hZ :x h1)) :x hC $;
+--| @conversion ltr
+axiom addc_F_E (a b: bv):
+  $ (a :x hF) + (b :x hE) = ((a + b) + (hZ :x h1)) :x hD $;
+--| @conversion ltr
+axiom addc_F_F (a b: bv):
+  $ (a :x hF) + (b :x hF) = ((a + b) + (hZ :x h1)) :x hE $;
+--| @conversion ltr
+axiom add_zz: $ hZ + hZ = hZ $;
+
+theorem thm (x v0 v1 a b d e f g: bv)
+  (h1: $ v0 = x + (hZ :x hF :x hF :x hF :x hF :x hF :x hF :x hF :x hF :x hF :x hF
+    :x hF :x hF :x hF :x hF :x hF :x hF) $)
+  (h2: $ v1 = v0 + (hZ :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1
+    :x h1 :x h1 :x h1 :x h1 :x h1 :x h1) $)
+  (h3: $ d = a + b $)
+  (h4: $ e = d + (hZ :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0
+    :x h0 :x h0 :x h0 :x h0 :x h0 :x h1) $)
+  (h5: $ f = e + (hZ :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0
+    :x h0 :x h0 :x h0 :x h0 :x h0 :x h1) $)
+  (h6: $ g = f + e $)
+  : $ v1 = x + (hZ :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0 :x h0
+    :x h0 :x h0 :x h0 :x h0 :x h0 :x h0) $;

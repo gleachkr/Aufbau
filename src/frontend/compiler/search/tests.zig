@@ -7559,6 +7559,38 @@ test "conversion? survives a goal-irrelevant reconvergent match flood" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? bounds a carry-rule splice flood to an honest capped miss" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Carry rules mint nested sums whose classes chain 16 deep under
+    // bag absorption; splice flattening used to expand every member
+    // reference independently (the cycle guard is per-path, blind to
+    // sharing), so one rebuild allocated flat forms exponentially
+    // longer than the node graph and the process died of OOM at ~650
+    // e-nodes. The splice member cap, the per-iteration enumeration
+    // step pool, and budget-fixpoint detection must bound the whole
+    // widened search (iters: 80, nodes: 100000) to seconds, and the
+    // report must say that raising `iters:` cannot help.
+    const mm0_src = @embedFile("fixtures/carry_cascade_interference.mm0");
+    const proof_src = @embedFile("fixtures/carry_cascade_interference.auf");
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(
+        types.SearchStatus.budget_exhausted,
+        miss.status,
+    );
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "budget-limited fixpoint") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "NOT a forced negative") != null,
+    );
+}
+
 test "conversion? forced negative on the boolean lattice" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

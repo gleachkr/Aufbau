@@ -7,6 +7,24 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `conversion?` no longer exhausts memory (or grinds for minutes) when
+  `@conversion` rules build nested results on top of AC-absorbed
+  operators — a hex digit-addition table whose carry rules produce
+  `((a + b) + 1) :x d` is the canonical case. Flattening a bag member
+  expanded every reference to a shared class independently (the cycle
+  guard only tracks the current path), so chains of nested sum classes
+  made flat forms exponentially longer than the e-graph itself: the
+  process died allocating tens of gigabytes at a few hundred e-nodes.
+  Three bounds now contain the corner, each reported through the usual
+  "NOT a forced negative" honesty note: a flat form longer than 256
+  members is abandoned whole (the node keeps its unspliced shape), one
+  iteration's rule matching shares a total enumeration budget instead
+  of only per-call budgets, and a budget-capped iteration that changes
+  nothing ends the search as a budget-limited fixpoint — the failure
+  report says outright that raising `iters:` cannot help, instead of
+  suggesting a larger value that would burn minutes to reach the same
+  place. The pathological table now degrades to a capped miss in
+  seconds even at `(iters: 80, nodes: 100000)`.
 - `conversion?` no longer stalls permanently when an unrelated dense
   equation cluster floods rule matching. Saturation runs one iteration at
   a time (so a converted goal can stop the search early), but the ledger

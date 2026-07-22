@@ -212,7 +212,18 @@ const ExplEdge = struct {
     forward: bool,
 };
 
-pub const SaturateOutcome = enum { saturated, iteration_capped, node_capped };
+pub const SaturateOutcome = enum {
+    saturated,
+    iteration_capped,
+    node_capped,
+    /// A budget-capped iteration made no progress at all — no union, no
+    /// node, no congruence repair, not even a newly recorded applied
+    /// effect. Collection is deterministic, so every further iteration
+    /// would re-enumerate the same capped frontier bit-for-bit: raising
+    /// `iters:` cannot help. Still NOT a forced negative (the capped
+    /// frontier was never fully explored).
+    budget_fixpoint,
+};
 
 pub const SaturateStats = struct {
     outcome: SaturateOutcome,
@@ -224,8 +235,11 @@ pub const SaturateStats = struct {
     dep_deferred: usize = 0,
     /// Match enumerations (tree `solvePairs` walks and AC bag
     /// assignments alike) truncated by the per-match or per-iteration
-    /// budget this run. A nonzero count on a saturated miss means the
-    /// miss is NOT a forced negative — some assignments were never tried.
+    /// budget this run, plus bag splices abandoned at
+    /// `max_splice_members` (the node keeps its unspliced shape, so
+    /// congruent joins only the flat form reveals are skipped). A
+    /// nonzero count on a saturated miss means the miss is NOT a forced
+    /// negative — some assignments were never tried.
     ac_match_capped: usize = 0,
     /// Cyclic `bag_in_class` entries dropped by rebuild passes this run.
     /// Dropping keeps member lists finite but forfeits some congruence
@@ -248,7 +262,30 @@ pub const SaturateOptions = struct {
     /// flooding one iteration. Trips count in `ac_match_capped` (they
     /// weaken a forced negative).
     ac_iter_match_budget: usize = 2_048,
+    /// Total enumeration budget per iteration, shared across every
+    /// (rule, node) match call. `ac_match_budget` bounds one call, but
+    /// on a dense frontier (hundreds of same-head AC rules against
+    /// thousands of merge-heavy bag nodes) the CALLS multiply beyond
+    /// any per-call bound and one iteration's match phase runs minutes.
+    /// This pool bounds their sum; exhaustion stops collecting for the
+    /// iteration and counts in `ac_match_capped` like the other budget
+    /// trips.
+    ac_iter_step_budget: usize = 1_000_000,
 };
+
+/// Member cap on one bag splice expansion. The splice cycle guard keeps
+/// self-containing classes finite, but it is a per-path guard: a class
+/// referenced twice expands twice, and chains of nested same-head sum
+/// classes (digit-carry rules mint them) compound that duplication into
+/// flat forms exponentially longer than the node graph. A splice that
+/// would exceed this many members is abandoned whole — the node keeps
+/// its unspliced shape and the trip counts in `ac_match_capped` — so
+/// the pathological corner degrades to an honest capped miss instead of
+/// exhausting memory. The value also bounds what every later touch of a
+/// flat form costs (hashing, sorting, member assignment), so it sits
+/// well above real proof bags (wide conjunctions run tens of members)
+/// but far below where per-iteration wall time becomes minutes.
+pub const max_splice_members: usize = 256;
 
 const StoredNode = struct {
     node: ENode,
@@ -370,6 +407,20 @@ pub const EGraph = struct {
     /// node id -> twin node id). A twinned node's own shape is final;
     /// further member expansion deepens through the twin's chain.
     splice_twin: std.AutoHashMapUnmanaged(ENodeId, ENodeId) = .{},
+    /// Nodes whose splice expansion tripped `max_splice_members`. Sticky:
+    /// expansions only grow as more classes come to denote same-head bags
+    /// (merges never shrink a member occurrence count), so a capped node
+    /// would trip on every later rebuild pass too — this set skips those
+    /// doomed re-attempts (each burns a cap's worth of appends and a
+    /// sort). The trip was counted in `ac_match_capped_total` once, when
+    /// it first happened.
+    splice_capped_nodes: std.AutoHashMapUnmanaged(ENodeId, void) = .{},
+    /// Set when a saturation iteration was budget-capped yet changed
+    /// nothing (see `SaturateOutcome.budget_fixpoint`); later `saturate`
+    /// calls return immediately instead of re-running the identical
+    /// iteration. Cleared by any real union or node insertion, so
+    /// external graph mutation between calls re-arms saturation.
+    budget_fixpoint: bool = false,
     /// Remaining assignment budget for the current top-level bag match;
     /// reset per (rule, node) match call.
     ac_budget_remaining: usize = 0,
@@ -442,16 +493,48 @@ pub const EGraph = struct {
     /// when the node is actually inserted. Memo hits (the overwhelmingly
     /// common case on hot match paths) then cost the scratch arena
     /// nothing durable.
+    /// Canonicalize with the splice-cap fallback: a `SpliceCapped` trip
+    /// counts in `ac_match_capped_total` and degrades to the unspliced
+    /// shape, so storage paths never see the error.
+    fn canonicalizeOrCap(
+        self: *EGraph,
+        node: ENode,
+        self_class: ?EClassId,
+        alloc: std.mem.Allocator,
+    ) error{OutOfMemory}!ENode {
+        return self.canonicalizeInto(
+            node,
+            self_class,
+            alloc,
+            .splice,
+        ) catch |err| switch (err) {
+            error.SpliceCapped => blk: {
+                self.ac_match_capped_total += 1;
+                break :blk self.canonicalizeInto(
+                    node,
+                    self_class,
+                    alloc,
+                    .no_splice,
+                ) catch |e| switch (e) {
+                    error.SpliceCapped => unreachable,
+                    error.OutOfMemory => return error.OutOfMemory,
+                };
+            },
+            error.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
     fn addWith(
         self: *EGraph,
         node: ENode,
         scratch: std.mem.Allocator,
     ) !EClassId {
-        const canon = try self.canonicalizeInto(node, null, scratch);
+        const canon = try self.canonicalizeOrCap(node, null, scratch);
         if (self.memo.get(canon)) |node_id| {
             return self.find(self.nodes.items[node_id].class);
         }
         const owned = try self.ownNode(canon);
+        self.budget_fixpoint = false;
         const class: EClassId = @intCast(self.parents.items.len);
         try self.parents.append(self.allocator, class);
         const node_id: ENodeId = @intCast(self.nodes.items.len);
@@ -499,7 +582,7 @@ pub const EGraph = struct {
     /// The node id of a shape already in the graph (canonicalized first).
     /// Drivers use this to anchor seed expressions for `explain`.
     pub fn lookupNode(self: *EGraph, node: ENode) !?ENodeId {
-        const canon = try self.canonicalize(node);
+        const canon = try self.canonicalizeOrCap(node, null, self.allocator);
         return self.memo.get(canon);
     }
 
@@ -536,6 +619,7 @@ pub const EGraph = struct {
             return false;
         }
         self.parents.items[root_a] = root_b;
+        self.budget_fixpoint = false;
         try self.unions.append(self.allocator, .{
             .a = a,
             .b = b,
@@ -626,29 +710,50 @@ pub const EGraph = struct {
                         if (!nodeEql(nosplice, stored.node)) {
                             stored.node = try self.ownNode(nosplice);
                         }
-                        if (self.splice_twin.get(@intCast(idx)) == null) {
-                            const full = try self.fullSplice(
+                        if (self.splice_twin.get(@intCast(idx)) == null and
+                            !self.splice_capped_nodes.contains(
+                                @intCast(idx),
+                            ))
+                        {
+                            // A capped expansion mints no twin: the flat
+                            // form this node's congruent joins need would
+                            // be over-budget, so the joins are skipped
+                            // and the trip weakens any forced negative.
+                            if (self.fullSplice(
                                 stored.node.bag.term_id,
                                 stored.node.bag.members,
                                 stored.class,
                                 scratch,
-                            );
-                            if (full.bag.members.len !=
-                                stored.node.bag.members.len)
-                            {
-                                try mints.append(scratch, .{
-                                    .from = @intCast(idx),
-                                    .flat = full,
-                                    .just = try self.buildSpliceJust(
+                            )) |full| {
+                                if (full.bag.members.len !=
+                                    stored.node.bag.members.len)
+                                {
+                                    try mints.append(scratch, .{
+                                        .from = @intCast(idx),
+                                        .flat = full,
+                                        .just = try self.buildSpliceJust(
+                                            @intCast(idx),
+                                            scratch,
+                                        ),
+                                    });
+                                }
+                            } else |err| switch (err) {
+                                error.SpliceCapped => {
+                                    self.ac_match_capped_total += 1;
+                                    try self.splice_capped_nodes.put(
+                                        self.allocator,
                                         @intCast(idx),
-                                        scratch,
-                                    ),
-                                });
+                                        {},
+                                    );
+                                },
+                                error.OutOfMemory => {
+                                    return error.OutOfMemory;
+                                },
                             }
                         }
                     },
                     else => {
-                        const canon = try self.canonicalizeInto(
+                        const canon = try self.canonicalizeOrCap(
                             stored.node,
                             stored.class,
                             scratch,
@@ -962,21 +1067,36 @@ pub const EGraph = struct {
         const dedup = &self.match_dedup;
         _ = try self.rebuild();
         while (stats.iterations < opts.max_iterations) {
+            if (self.budget_fixpoint) {
+                stats.outcome = .budget_fixpoint;
+                return self.finishStats(stats, capped_start, cyclic_start);
+            }
             stats.iterations += 1;
             try self.buildClassIndex();
             dedup.iter.clearRetainingCapacity();
+            const applied_before = dedup.applied.count();
 
             var matches: std.ArrayListUnmanaged(Match) = .{};
             var iter_capped = false;
+            var iter_steps: usize = opts.ac_iter_step_budget;
             const matched_nodes = self.nodes.items.len;
-            for (0..matched_nodes) |node_id| {
+            collect: for (0..matched_nodes) |node_id| {
                 switch (self.nodes.items[node_id].node) {
                     .leaf => {},
                     .app => |app| for (rules, 0..) |rule, rule_slot| {
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != app.term_id) continue;
                         if (pattern.args.len != app.children.len) continue;
-                        self.ac_budget_remaining = opts.ac_match_budget;
+                        const allotted = @min(
+                            opts.ac_match_budget,
+                            iter_steps,
+                        );
+                        if (allotted == 0) {
+                            iter_capped = true;
+                            self.ac_match_capped_total += 1;
+                            break :collect;
+                        }
+                        self.ac_budget_remaining = allotted;
                         self.ac_budget_hit = false;
                         _ = scratch_state.reset(.retain_capacity);
                         try self.matchRule(
@@ -987,6 +1107,7 @@ pub const EGraph = struct {
                             dedup,
                             scratch_state.allocator(),
                         );
+                        iter_steps -= allotted - self.ac_budget_remaining;
                         if (self.ac_budget_hit) {
                             self.ac_match_capped_total += 1;
                         }
@@ -994,7 +1115,16 @@ pub const EGraph = struct {
                     .bag => |bag| for (rules, 0..) |rule, rule_slot| {
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != bag.term_id) continue;
-                        self.ac_budget_remaining = opts.ac_match_budget;
+                        const allotted = @min(
+                            opts.ac_match_budget,
+                            iter_steps,
+                        );
+                        if (allotted == 0) {
+                            iter_capped = true;
+                            self.ac_match_capped_total += 1;
+                            break :collect;
+                        }
+                        self.ac_budget_remaining = allotted;
                         self.ac_budget_hit = false;
                         _ = scratch_state.reset(.retain_capacity);
                         try self.matchRuleBag(
@@ -1005,6 +1135,7 @@ pub const EGraph = struct {
                             dedup,
                             scratch_state.allocator(),
                         );
+                        iter_steps -= allotted - self.ac_budget_remaining;
                         if (self.ac_budget_hit) {
                             self.ac_match_capped_total += 1;
                         }
@@ -1101,6 +1232,19 @@ pub const EGraph = struct {
             // matches may remain even when the collected ones all no-oped.
             if (!changed and !grew and !congr_changed and !iter_capped) {
                 stats.outcome = .saturated;
+                return self.finishStats(stats, capped_start, cyclic_start);
+            }
+            // Deterministic no-progress under a budget cap: nothing this
+            // iteration changed — no union, no node, no congruence repair,
+            // not even a newly recorded applied effect — yet collection
+            // was capped. Collection is deterministic, so the next
+            // iteration would re-enumerate the same capped frontier
+            // bit-for-bit; stop instead of burning the remaining budget.
+            if (!changed and !grew and !congr_changed and
+                dedup.applied.count() == applied_before)
+            {
+                self.budget_fixpoint = true;
+                stats.outcome = .budget_fixpoint;
                 return self.finishStats(stats, capped_start, cyclic_start);
             }
         }
@@ -1222,16 +1366,23 @@ pub const EGraph = struct {
     }
 
     fn canonicalize(self: *const EGraph, node: ENode) !ENode {
-        return self.canonicalizeInto(node, null, self.allocator);
+        return self.canonicalizeInto(node, null, self.allocator, .splice);
     }
 
     fn canonicalizeWith(
         self: *const EGraph,
         node: ENode,
         self_class: ?EClassId,
-    ) error{OutOfMemory}!ENode {
-        return self.canonicalizeInto(node, self_class, self.allocator);
+    ) SpliceError!ENode {
+        return self.canonicalizeInto(node, self_class, self.allocator, .splice);
     }
+
+    /// `.no_splice` is the fallback shape after a `SpliceCapped` trip:
+    /// members are find-updated and sorted but member classes denoting
+    /// same-head bags stay atomic, so equal multisets may intern as
+    /// distinct shapes. Callers count the trip in `ac_match_capped_total`
+    /// (missed congruent joins weaken a forced negative).
+    const SpliceMode = enum { splice, no_splice };
 
     /// Canonicalize a node into `alloc`. `self_class` (the node's own
     /// class, when re-canonicalizing a stored node) seeds the splice
@@ -1243,7 +1394,8 @@ pub const EGraph = struct {
         node: ENode,
         self_class: ?EClassId,
         alloc: std.mem.Allocator,
-    ) error{OutOfMemory}!ENode {
+        mode: SpliceMode,
+    ) SpliceError!ENode {
         switch (node) {
             .leaf => return node,
             .app => |app| {
@@ -1253,12 +1405,22 @@ pub const EGraph = struct {
                     app.children[1] == .class and
                     self.ac_heads.contains(app.term_id))
                 {
-                    return try self.canonicalBag(
-                        app.term_id,
-                        &.{ app.children[0].class, app.children[1].class },
-                        self_class,
-                        alloc,
-                    );
+                    const members: [2]EClassId = .{
+                        app.children[0].class,
+                        app.children[1].class,
+                    };
+                    return switch (mode) {
+                        .splice => try self.canonicalBag(
+                            app.term_id,
+                            &members,
+                            self_class,
+                            alloc,
+                        ),
+                        .no_splice => try self.sortMembersOnly(.{
+                            .term_id = app.term_id,
+                            .members = &members,
+                        }, alloc),
+                    };
                 }
                 const children = try alloc.alloc(
                     Child,
@@ -1275,12 +1437,15 @@ pub const EGraph = struct {
                     .children = children,
                 } };
             },
-            .bag => |bag| return try self.canonicalBag(
-                bag.term_id,
-                bag.members,
-                self_class,
-                alloc,
-            ),
+            .bag => |bag| return switch (mode) {
+                .splice => try self.canonicalBag(
+                    bag.term_id,
+                    bag.members,
+                    self_class,
+                    alloc,
+                ),
+                .no_splice => try self.sortMembersOnly(bag, alloc),
+            },
         }
     }
 
@@ -1292,13 +1457,15 @@ pub const EGraph = struct {
     /// denotes a same-head bag contributes its members instead of itself
     /// (recursively), so every grouping of the same multiset interns to
     /// one shape. Uses the canonical (exempted) index.
+    const SpliceError = error{ OutOfMemory, SpliceCapped };
+
     fn canonicalBag(
         self: *const EGraph,
         term_id: u32,
         members: []const EClassId,
         self_class: ?EClassId,
         alloc: std.mem.Allocator,
-    ) error{OutOfMemory}!ENode {
+    ) SpliceError!ENode {
         return try self.spliceBag(
             &self.bag_in_class,
             term_id,
@@ -1317,7 +1484,7 @@ pub const EGraph = struct {
         members: []const EClassId,
         self_class: ?EClassId,
         alloc: std.mem.Allocator,
-    ) error{OutOfMemory}!ENode {
+    ) SpliceError!ENode {
         return try self.spliceBag(
             &self.bag_node_index,
             term_id,
@@ -1334,7 +1501,7 @@ pub const EGraph = struct {
         members: []const EClassId,
         self_class: ?EClassId,
         alloc: std.mem.Allocator,
-    ) error{OutOfMemory}!ENode {
+    ) SpliceError!ENode {
         var out: std.ArrayListUnmanaged(EClassId) = .{};
         var visited: std.ArrayListUnmanaged(EClassId) = .{};
         if (self_class) |class| {
@@ -1360,7 +1527,10 @@ pub const EGraph = struct {
     /// over cyclic classes (absorption-style unions) stay finite. The
     /// cost is full canonicality in that corner — strictly better than
     /// the unbounded minting the same corner causes in tree
-    /// representation.
+    /// representation. The guard is per-path, though, so shared classes
+    /// still expand once per reference and the flat form can outgrow the
+    /// node graph exponentially; `max_splice_members` abandons such an
+    /// expansion whole (see the constant's doc).
     fn spliceInto(
         self: *const EGraph,
         index: *const std.AutoArrayHashMapUnmanaged(u64, ENodeId),
@@ -1369,7 +1539,8 @@ pub const EGraph = struct {
         out: *std.ArrayListUnmanaged(EClassId),
         visited: *std.ArrayListUnmanaged(EClassId),
         alloc: std.mem.Allocator,
-    ) error{OutOfMemory}!void {
+    ) SpliceError!void {
+        if (out.items.len >= max_splice_members) return error.SpliceCapped;
         const bag_node = index.get(bagKey(term_id, root)) orelse {
             try out.append(alloc, root);
             return;

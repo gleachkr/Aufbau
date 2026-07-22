@@ -339,7 +339,10 @@ pub fn suggestionsAtSourceOffset(
         } else {
             conv_suggestions.status = switch (conv_result.stats.outcome) {
                 .saturated => .miss,
-                .iteration_capped, .node_capped => .budget_exhausted,
+                .iteration_capped,
+                .node_capped,
+                .budget_fixpoint,
+                => .budget_exhausted,
             };
             if (options.status_detail) {
                 conv_suggestions.status_detail = try buildConversionDetail(
@@ -570,6 +573,19 @@ fn buildConversionDetail(
                 conv_options.max_nodes,
                 result.stats.iterations,
                 @min(conv_options.max_nodes * 2, tunables.max_nodes_value),
+            },
+        ),
+        .budget_fixpoint => try w.print(
+            "the egraph stopped after {d} iterations at a budget-limited " ++
+                "fixpoint ({d} e-nodes): rule matching kept hitting its " ++
+                "enumeration budget while no further iteration could make " ++
+                "progress, so raising 'iters:' will not help. A conversion " ++
+                "may still exist beyond the enumeration budget — this is " ++
+                "NOT a forced negative. Dense clusters of interacting " ++
+                "equations in the hypothesis pool are the usual cause.",
+            .{
+                result.stats.iterations,
+                result.nodes,
             },
         ),
     }
