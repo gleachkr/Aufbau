@@ -7,6 +7,20 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `conversion?` no longer stalls permanently when an unrelated dense
+  equation cluster floods rule matching. Saturation runs one iteration at
+  a time (so a converted goal can stop the search early), but the ledger
+  of already-applied matches was rebuilt from scratch every iteration: on
+  hypothesis pools whose associativity/commutativity closure exceeds the
+  per-iteration match budget — a handful of chained sums over symbolic
+  variables suffices — each iteration re-collected the same
+  already-applied rewrites, spent the whole budget re-confirming them,
+  and never reached the matches that prove the goal. The search reported
+  an iteration cap that raising `iters:` could never satisfy, with the
+  e-graph frozen at a fixpoint. The ledger now persists across
+  iterations, so each iteration's budget goes to new work: the
+  interference case converges in a few iterations, and saturated misses
+  are reported as such again.
 - `conversion?` explanation extraction no longer diverges on
   self-containing e-classes. Rule sets that derive ground sums
   transitively (digit-addition chains over zero-padded numerals, or

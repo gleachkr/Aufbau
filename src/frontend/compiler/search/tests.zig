@@ -7537,6 +7537,28 @@ test "conversion? extracts chained ground sums under AC certificates" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? survives a goal-irrelevant reconvergent match flood" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The goal needs only assoc + one digit rule, but the pool carries an
+    // unrelated reconvergent add chain (a symbolic a+b, two +1 links, and
+    // a join of two chain levels) whose assoc/comm closure floods one
+    // iteration's match collection past the retained-match budget. The
+    // driver saturates one iteration per call (goal-converged early
+    // exit), so match dedup must persist on the egraph across calls —
+    // rebuilt per call, every iteration re-collected the same
+    // already-applied no-op effects, tripped the budget, and starved the
+    // goal's matches forever: a node-count fixpoint that never saturated
+    // and could not be rescued by any `iters:` value.
+    const mm0_src = @embedFile("fixtures/reconvergent_interference_chain.mm0");
+    const proof_src = @embedFile("fixtures/reconvergent_interference_chain.auf");
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 test "conversion? forced negative on the boolean lattice" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

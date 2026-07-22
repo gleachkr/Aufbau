@@ -1,0 +1,3 @@
+thm
+---
+goal: $ v1 = x + (hZ :x h0 :x h0 :x h0 :x h7) $ by conversion? (iters: 80, nodes: 100000)

@@ -410,6 +410,13 @@ pub const EGraph = struct {
         EClassId,
         std.ArrayListUnmanaged(ENodeId),
     ) = .{},
+    /// Match dedup state; lives on the egraph (not one `saturate` call) so
+    /// the `applied` set survives drivers that saturate one iteration at a
+    /// time. Without that persistence a dense already-applied frontier can
+    /// re-fill the per-iteration retained-match budget forever: every call
+    /// re-collects the same no-op effects, caps, and starves the matches
+    /// past the cut — a livelock at a node fixpoint that never saturates.
+    match_dedup: MatchDedup = .{},
 
     pub fn init(allocator: std.mem.Allocator) EGraph {
         return .{ .allocator = allocator };
@@ -952,8 +959,7 @@ pub const EGraph = struct {
             std.heap.page_allocator,
         );
         defer scratch_state.deinit();
-        var dedup: MatchDedup = .{};
-        defer dedup.deinit();
+        const dedup = &self.match_dedup;
         _ = try self.rebuild();
         while (stats.iterations < opts.max_iterations) {
             stats.iterations += 1;
@@ -978,7 +984,7 @@ pub const EGraph = struct {
                             @intCast(rule_slot),
                             @intCast(node_id),
                             &matches,
-                            &dedup,
+                            dedup,
                             scratch_state.allocator(),
                         );
                         if (self.ac_budget_hit) {
@@ -996,7 +1002,7 @@ pub const EGraph = struct {
                             @intCast(rule_slot),
                             @intCast(node_id),
                             &matches,
-                            &dedup,
+                            dedup,
                             scratch_state.allocator(),
                         );
                         if (self.ac_budget_hit) {
@@ -1081,7 +1087,7 @@ pub const EGraph = struct {
                 // iterations are dropped at collection. Dep-deferred and
                 // instantiation-failed matches never reach this point and
                 // stay eligible for retry.
-                try dedup.applied.put(std.heap.page_allocator, m.key, {});
+                try dedup.applied.put(self.allocator, m.key, {});
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
@@ -1460,20 +1466,17 @@ pub const EGraph = struct {
         return h.final();
     }
 
-    /// Match dedup state for one `saturate` call. `applied` persists across
-    /// iterations: a key goes in only once its union has actually been
-    /// applied (union-find merges are monotone, so an identical later match
-    /// is guaranteed a no-op). Dep-deferred matches are NOT recorded, so
+    /// Match dedup state for the egraph's lifetime (see the `match_dedup`
+    /// field). `applied` persists across iterations AND `saturate` calls: a
+    /// key goes in only once its union has actually been applied
+    /// (union-find merges are monotone, so an identical later match is
+    /// guaranteed a no-op). Dep-deferred matches are NOT recorded, so
     /// they are re-collected and retried next iteration. `iter` additionally
-    /// collapses same-effect matches within one collection pass.
+    /// collapses same-effect matches within one collection pass. Maps live
+    /// on the egraph arena like every other egraph structure.
     const MatchDedup = struct {
         applied: std.AutoHashMapUnmanaged(u64, void) = .{},
         iter: std.AutoHashMapUnmanaged(u64, void) = .{},
-
-        fn deinit(self: *MatchDedup) void {
-            self.applied.deinit(std.heap.page_allocator);
-            self.iter.deinit(std.heap.page_allocator);
-        }
     };
 
     fn matchRule(
@@ -1503,7 +1506,7 @@ pub const EGraph = struct {
         for (solutions.items) |solution| {
             const key = self.matchEffectKey(rule_slot, root_node, solution, &.{});
             if (dedup.applied.contains(key)) continue;
-            const gop = try dedup.iter.getOrPut(std.heap.page_allocator, key);
+            const gop = try dedup.iter.getOrPut(self.allocator, key);
             if (gop.found_existing) continue;
             try matches.append(self.allocator, .{
                 .rule_slot = rule_slot,
@@ -1625,7 +1628,7 @@ pub const EGraph = struct {
                 solution.extension,
             );
             if (dedup.applied.contains(key)) continue;
-            const gop = try dedup.iter.getOrPut(std.heap.page_allocator, key);
+            const gop = try dedup.iter.getOrPut(self.allocator, key);
             if (gop.found_existing) continue;
             try matches.append(self.allocator, .{
                 .rule_slot = rule_slot,

@@ -1,0 +1,108 @@
+-- Repro: conversion? egraph reaches a fixpoint but never saturates
+-- (and never finds the goal) when the hypothesis pool contains an
+-- irrelevant reconvergent add chain.
+--
+--   diag: conversion? search failed: the egraph hit its iteration cap
+--   (80) before saturating (~400 e-nodes so far). A conversion may
+--   still exist — try 'conversion? (iters: 160)'.
+--
+-- Raising the cap does not help: the e-node count is identical at
+-- iters 80 and 400 (a fixpoint), yet saturation is never reported and
+-- the goal — provable from h1,h2 alone by assoc + addd_3_4 — is never
+-- found.  Found on abc @ 2c228d5 ("Fix remaining issues with ac and
+-- cyclic terms"); the goal itself proves in <30ms if h3..h6 are
+-- deleted, so the interference chain is the trigger.
+--
+-- Load-bearing shape of the (goal-irrelevant) chain h3..h6:
+--   d = a + b        symbolic add of two free vars
+--   e = d + 1        two ground +1 links...
+--   f = e + 1
+--   g = f + e        ...and a RECONVERGENT join of two chain levels
+-- Toggles (each independently makes the search SUCCEED):
+--   * g = e + e or g = d + d instead of f + e (no reconvergence);
+--   * delete either +1 link (chain depth < 2 past the symbolic add);
+--   * delete h6 entirely.
+--
+-- With assoc/comm role certificates (@conversion assoc / @conversion
+-- comm) instead of `both`, this 4-digit version passes, but the same
+-- shape stalls at full 16-digit numerals (and iterations slow to
+-- ~0.5s each, 862 e-nodes after 80 iters / 39s).
+
+delimiter $ ( ) $;
+
+provable sort wff;
+sort bv;
+
+term iff (a b: wff): wff;
+infixl iff: $<->$ prec 20;
+term eq (a b: bv): wff;
+infixl eq: $=$ prec 50;
+
+term hZ: bv;
+term hx (a d: bv): bv;
+infixl hx: $:x$ prec 100;
+term add (a b: bv): bv;
+infixl add: $+$ prec 64;
+
+term h0: bv;
+term h1: bv;
+term h2: bv;
+term h3: bv;
+term h4: bv;
+term h7: bv;
+
+--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff) (h1: $ a <-> b $) (h2: $ b <-> c $):
+  $ a <-> c $;
+axiom iff_symm (a b: wff) (h: $ a <-> b $): $ b <-> a $;
+axiom mpbi (a b: wff) (h1: $ a <-> b $) (h2: $ a $): $ b $;
+
+--| @relation bv eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: bv): $ a = a $;
+axiom eq_trans (a b c: bv) (h1: $ a = b $) (h2: $ b = c $):
+  $ a = c $;
+axiom eq_symm (a b: bv) (h: $ a = b $): $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a = c) <-> (b = d) $;
+--| @congr
+axiom add_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a + c) = (b + d) $;
+--| @congr
+axiom hx_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a :x c) = (b :x d) $;
+
+--| @conversion both
+axiom add_assoc (a b c: bv): $ ((a + b) + c) = (a + (b + c)) $;
+--| @conversion both
+axiom add_comm (a b: bv): $ (a + b) = (b + a) $;
+
+--| @conversion ltr
+axiom addd_0_0 (a b: bv): $ (a :x h0) + (b :x h0) = (a + b) :x h0 $;
+--| @conversion ltr
+axiom addd_0_1 (a b: bv): $ (a :x h0) + (b :x h1) = (a + b) :x h1 $;
+--| @conversion ltr
+axiom addd_1_0 (a b: bv): $ (a :x h1) + (b :x h0) = (a + b) :x h1 $;
+--| @conversion ltr
+axiom addd_1_1 (a b: bv): $ (a :x h1) + (b :x h1) = (a + b) :x h2 $;
+--| @conversion ltr
+axiom addd_3_4 (a b: bv): $ (a :x h3) + (b :x h4) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_4_3 (a b: bv): $ (a :x h4) + (b :x h3) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_0_7 (a b: bv): $ (a :x h0) + (b :x h7) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_7_0 (a b: bv): $ (a :x h7) + (b :x h0) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom add_zz: $ hZ + hZ = hZ $;
+
+theorem thm (x v0 v1 a b d e f g: bv)
+  (h1: $ v0 = x + (hZ :x h0 :x h0 :x h0 :x h3) $)
+  (h2: $ v1 = v0 + (hZ :x h0 :x h0 :x h0 :x h4) $)
+  (h3: $ d = a + b $)
+  (h4: $ e = d + (hZ :x h0 :x h0 :x h0 :x h1) $)
+  (h5: $ f = e + (hZ :x h0 :x h0 :x h0 :x h1) $)
+  (h6: $ g = f + e $)
+  : $ v1 = x + (hZ :x h0 :x h0 :x h0 :x h7) $;
