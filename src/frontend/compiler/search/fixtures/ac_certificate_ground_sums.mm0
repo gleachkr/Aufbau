@@ -1,0 +1,95 @@
+-- Repro 2: conversion? extraction failure specific to AC role
+-- certificates (@conversion assoc / @conversion comm).
+--
+--   diag: conversion? search failed: a reference convertible to this
+--   goal was found, but a proof chain could not be extracted from it
+--   (missing @congr coverage or a missing @relation transport are the
+--   usual causes).  [neither is missing]
+--
+-- Toggles (each independently makes the search SUCCEED):
+--   * annotate add_assoc/add_comm `@conversion both` instead of the
+--     assoc/comm certificates — the identical input then passes in
+--     <50ms, so this is specific to the certificate path;
+--   * remove hypothesis h2 and give i1 = x2 + 0x0007 directly — one
+--     derived ground sum (7+16=23) extracts fine; the failure needs a
+--     ground sum computed FROM another derived ground sum (3+4=7,
+--     then 7+16=23 across the comm rearrangement).
+--
+-- Distinct from repro 1 (nested ground sums via a >=3-link chain,
+-- which fails in ALL annotation modes): here the chain is only 2
+-- links — too short to trigger repro 1 — and the same input under
+-- `both`-schema annotations proves instantly.
+
+delimiter $ ( ) $;
+
+provable sort wff;
+sort bv;
+
+term iff (a b: wff): wff;
+infixl iff: $<->$ prec 20;
+term eq (a b: bv): wff;
+infixl eq: $=$ prec 50;
+
+term hZ: bv;
+term hx (a d: bv): bv;
+infixl hx: $:x$ prec 100;
+term add (a b: bv): bv;
+infixl add: $+$ prec 64;
+
+term h0: bv;
+term h1: bv;
+term h3: bv;
+term h4: bv;
+term h7: bv;
+
+--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff) (h1: $ a <-> b $) (h2: $ b <-> c $):
+  $ a <-> c $;
+axiom iff_symm (a b: wff) (h: $ a <-> b $): $ b <-> a $;
+axiom mpbi (a b: wff) (h1: $ a <-> b $) (h2: $ a $): $ b $;
+
+--| @relation bv eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: bv): $ a = a $;
+axiom eq_trans (a b c: bv) (h1: $ a = b $) (h2: $ b = c $):
+  $ a = c $;
+axiom eq_symm (a b: bv) (h: $ a = b $): $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a = c) <-> (b = d) $;
+--| @congr
+axiom add_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a + c) = (b + d) $;
+--| @congr
+axiom hx_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a :x c) = (b :x d) $;
+
+--| @conversion assoc
+axiom add_assoc (a b c: bv): $ ((a + b) + c) = (a + (b + c)) $;
+--| @conversion comm
+axiom add_comm (a b: bv): $ (a + b) = (b + a) $;
+
+--| @conversion ltr
+axiom addd_0_0 (a b: bv): $ (a :x h0) + (b :x h0) = (a + b) :x h0 $;
+--| @conversion ltr
+axiom addd_0_1 (a b: bv): $ (a :x h0) + (b :x h1) = (a + b) :x h1 $;
+--| @conversion ltr
+axiom addd_0_7 (a b: bv): $ (a :x h0) + (b :x h7) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_1_0 (a b: bv): $ (a :x h1) + (b :x h0) = (a + b) :x h1 $;
+--| @conversion ltr
+axiom addd_3_4 (a b: bv): $ (a :x h3) + (b :x h4) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_4_3 (a b: bv): $ (a :x h4) + (b :x h3) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_7_0 (a b: bv): $ (a :x h7) + (b :x h0) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom add_zz: $ hZ + hZ = hZ $;
+
+theorem thm (x2 x6 i0 i1 i2 i3: bv)
+  (h1: $ i0 = x2 + (hZ :x h0 :x h0 :x h0 :x h3) $)
+  (h2: $ i1 = i0 + (hZ :x h0 :x h0 :x h0 :x h4) $)
+  (h3: $ i2 = x6 + (hZ :x h0 :x h0 :x h1 :x h0) $)
+  (h4: $ i3 = i1 + i2 $)
+  : $ i3 = (x2 + x6) + (hZ :x h0 :x h0 :x h1 :x h7) $;

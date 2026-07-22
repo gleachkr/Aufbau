@@ -3,6 +3,30 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `conversion?` explanation extraction no longer diverges on
+  self-containing e-classes. Rule sets that derive ground sums
+  transitively (digit-addition chains over zero-padded numerals, or
+  absorption/idempotence laws) can merge a class with a same-head
+  compound of itself (`00 + 00 = 00`); extraction previously recursed
+  without bound on such classes, so a provably convertible goal was
+  reported as *"a proof chain could not be extracted from it (missing
+  @congr coverage or a missing @relation transport)"* — with neither
+  missing — and large instances crashed the language server
+  (stack overflow) mid-session. Extraction now anchors rendered rule
+  endpoints at each explanation edge's exact recorded nodes, keeps the
+  redundant unions and congruent duplicates the explanation forest used
+  to drop, and — when the forest's unique tree route through a cyclic
+  class is inherently circular (an edge on the path re-poses the path's
+  own endpoints as its child obligation) — retries the alignment over
+  the shortest recorded detour. Already-extracting chains are unchanged
+  (the tree route stays primary); the cyclic cases now emit ordinary
+  verified chains; and pathological inputs degrade to a fast honest miss
+  under explicit route/depth budgets instead of hanging or crashing.
+
 ## [0.0.2] - 2026-07-21
 
 ### Added

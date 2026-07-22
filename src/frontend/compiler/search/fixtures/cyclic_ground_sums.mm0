@@ -1,0 +1,80 @@
+-- Repro: conversion? finds the goal convertible to a reference but
+-- fails proof-chain extraction, reporting "missing @congr coverage or a
+-- missing @relation transport" (neither is missing).
+--
+-- goal chain: w = (x + 3) + 4, provable as w = x + 7 via assoc + digit
+-- rules. The three unrelated q-equations (a chain of +4s) make the
+-- egraph compute nested ground sums (4+4=8, then 8+4=c). With only two
+-- q-equations, or with 1-digit numerals (no h0 prefix padding), the
+-- same search succeeds. abc 0.0.2.
+--
+-- expected: conversion? on `goal` emits a chain / actual: search fails.
+
+delimiter $ ( ) $;
+
+provable sort wff;
+sort bv;
+
+term iff (a b: wff): wff;
+infixl iff: $<->$ prec 20;
+term eq (a b: bv): wff;
+infixl eq: $=$ prec 50;
+
+term hZ: bv;
+term hx (a d: bv): bv;
+infixl hx: $:x$ prec 100;
+term add (a b: bv): bv;
+infixl add: $+$ prec 64;
+
+term h0: bv;
+term h3: bv;
+term h4: bv;
+term h7: bv;
+term h8: bv;
+term hc: bv;
+
+--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff) (h1: $ a <-> b $) (h2: $ b <-> c $):
+  $ a <-> c $;
+axiom iff_symm (a b: wff) (h: $ a <-> b $): $ b <-> a $;
+axiom mpbi (a b: wff) (h1: $ a <-> b $) (h2: $ a $): $ b $;
+
+--| @relation bv eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: bv): $ a = a $;
+axiom eq_trans (a b c: bv) (h1: $ a = b $) (h2: $ b = c $):
+  $ a = c $;
+axiom eq_symm (a b: bv) (h: $ a = b $): $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a = c) <-> (b = d) $;
+--| @congr
+axiom add_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a + c) = (b + d) $;
+--| @congr
+axiom hx_congr (a b c d: bv) (h1: $ a = b $) (h2: $ c = d $):
+  $ (a :x c) = (b :x d) $;
+
+--| @conversion both
+axiom add_assoc (a b c: bv): $ ((a + b) + c) = (a + (b + c)) $;
+--| @conversion ltr
+axiom addd_0_0 (a b: bv): $ (a :x h0) + (b :x h0) = (a + b) :x h0 $;
+--| @conversion ltr
+axiom addd_3_4 (a b: bv): $ (a :x h3) + (b :x h4) = (a + b) :x h7 $;
+--| @conversion ltr
+axiom addd_4_4 (a b: bv): $ (a :x h4) + (b :x h4) = (a + b) :x h8 $;
+--| @conversion ltr
+axiom addd_8_4 (a b: bv): $ (a :x h8) + (b :x h4) = (a + b) :x hc $;
+--| @conversion ltr
+axiom addd_4_8 (a b: bv): $ (a :x h4) + (b :x h8) = (a + b) :x hc $;
+--| @conversion ltr
+axiom add_zz: $ hZ + hZ = hZ $;
+
+theorem thm (x v w pc q0 q1 q2: bv)
+  (h1: $ v = x + (hZ :x h0 :x h0 :x h0 :x h3) $)
+  (h2: $ w = v + (hZ :x h0 :x h0 :x h0 :x h4) $)
+  (h3: $ q0 = pc + (hZ :x h0 :x h0 :x h0 :x h4) $)
+  (h4: $ q1 = q0 + (hZ :x h0 :x h0 :x h0 :x h4) $)
+  (h5: $ q2 = q1 + (hZ :x h0 :x h0 :x h0 :x h4) $):
+  $ w = x + (hZ :x h0 :x h0 :x h0 :x h7) $;

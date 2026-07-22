@@ -7503,6 +7503,40 @@ test "conversion? reverses an ltr rule at the object sort through eq_symm" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? extracts through cyclic nested ground-sum classes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Digit-addition rules make derived ground-sum classes self-containing
+    // (hZ+hZ=hZ chains 0-padded numerals into classes containing same-head
+    // compounds of themselves). Extraction must thread the exact forest
+    // vertices to stay well-founded; class-anchored re-rendering used to
+    // re-pose parent alignments unboundedly (a misleading miss).
+    const mm0_src = @embedFile("fixtures/cyclic_ground_sums.mm0");
+    const proof_src = @embedFile("fixtures/cyclic_ground_sums.auf");
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? extracts chained ground sums under AC certificates" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Same cyclic-class family as above, but the assoc/comm laws are
+    // enrolled as AC role certificates (bag nodes), and the second ground
+    // sum is computed from the first across a comm rearrangement.
+    const mm0_src = @embedFile("fixtures/ac_certificate_ground_sums.mm0");
+    const proof_src = @embedFile("fixtures/ac_certificate_ground_sums.auf");
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 test "conversion? forced negative on the boolean lattice" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

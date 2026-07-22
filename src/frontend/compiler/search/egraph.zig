@@ -396,6 +396,15 @@ pub const EGraph = struct {
     /// edges connect the *semantic endpoint nodes* of each union and are
     /// never path-compressed, only re-rooted.
     expl_parent: std.ArrayListUnmanaged(?ExplEdge) = .{},
+    /// Justifications whose union was a no-op (classes already merged),
+    /// plus same-class congruent duplicates found during rebuild. The
+    /// forest keeps only class-merging edges, so its unique tree path
+    /// between two nodes can be inherently circular on a self-containing
+    /// class (an edge on the path re-poses the path's own endpoints as a
+    /// child obligation). These edges give extraction acyclic detours;
+    /// they are never primary. Deduplicated per endpoint node-pair.
+    alt_edges: std.ArrayListUnmanaged(Justification) = .{},
+    alt_seen: std.AutoHashMapUnmanaged(u64, void) = .{},
     /// Root class -> member node ids; rebuilt per saturation iteration.
     class_index: std.AutoArrayHashMapUnmanaged(
         EClassId,
@@ -515,7 +524,10 @@ pub const EGraph = struct {
     ) !bool {
         const root_a = self.find(a);
         const root_b = self.find(b);
-        if (root_a == root_b) return false;
+        if (root_a == root_b) {
+            try self.recordAltEdge(just);
+            return false;
+        }
         self.parents.items[root_a] = root_b;
         try self.unions.append(self.allocator, .{
             .a = a,
@@ -530,6 +542,18 @@ pub const EGraph = struct {
             .forward = true,
         };
         return true;
+    }
+
+    /// Keep one alternate edge per endpoint node-pair (first wins).
+    fn recordAltEdge(self: *EGraph, just: Justification) !void {
+        const ends = justEndpoints(just);
+        if (ends.a == ends.b) return;
+        const lo = @min(ends.a, ends.b);
+        const hi = @max(ends.a, ends.b);
+        const key = (@as(u64, lo) << 32) | hi;
+        const gop = try self.alt_seen.getOrPut(self.allocator, key);
+        if (gop.found_existing) return;
+        try self.alt_edges.append(self.allocator, just);
     }
 
     /// Reverse the explanation-forest parent chain above `node` so it
@@ -637,7 +661,18 @@ pub const EGraph = struct {
                 }
                 const other = self.nodes.items[gop.value_ptr.*];
                 const other_class = self.find(other.class);
-                if (other_class == stored.class) continue;
+                if (other_class == stored.class) {
+                    // Same-class duplicate shapes never union, but the
+                    // congruent-twin link is an extraction detour around
+                    // circular tree paths in self-containing classes.
+                    if (self.congruenceAllowed(stored.node)) {
+                        try self.recordAltEdge(.{ .congruence = .{
+                            .left = gop.value_ptr.*,
+                            .right = @intCast(idx),
+                        } });
+                    }
+                    continue;
+                }
                 if (!self.congruenceAllowed(stored.node)) continue;
                 _ = try self.merge(other_class, stored.class, .{
                     .congruence = .{
@@ -2347,6 +2382,12 @@ pub const ExplainOptions = struct {
     max_steps: usize = 512,
     /// Recursion cap over forest stitching + congruence descent.
     max_depth: usize = 64,
+    /// Total route attempts across the extraction. Failed routes roll
+    /// their steps back (so `max_steps` does not bound cumulative work),
+    /// and each failing pair retries one detour — an adversarial nest of
+    /// failing pairs could otherwise branch exponentially. Far above any
+    /// legitimate chain (which needs about one attempt per alignment).
+    max_routes: usize = 4096,
 };
 
 const Traversed = struct {
@@ -2367,6 +2408,9 @@ const ExplainCtx = struct {
     opts: ExplainOptions,
     steps: std.ArrayListUnmanaged(Step) = .{},
     depth: usize = 0,
+    /// Route attempts consumed (successful and rolled-back alike); see
+    /// `ExplainOptions.max_routes`.
+    routes: usize = 0,
     /// (from node, to node) alignment subgoals currently active on the
     /// recursion stack. Re-entering the same node-pair means the forest-path /
     /// re-anchoring is circling a cyclic e-class (idempotence / absorption
@@ -2393,6 +2437,9 @@ const ExplainCtx = struct {
     /// or the lowering's rule-instance seam cannot align (the class's
     /// minimal representative may not even share the bag's head).
     rule_binder_terms: ?[]?*const Term = null,
+    /// Lazily built undirected adjacency over forest + alternate edges;
+    /// see `routeAdj`.
+    route_adj: ?[]std.ArrayListUnmanaged(RouteEdge) = null,
 
     fn allocator(self: *ExplainCtx) std.mem.Allocator {
         return self.eg.allocator;
@@ -2718,15 +2765,165 @@ const ExplainCtx = struct {
         const path = (try self.forestPath(from.node, to.node)) orelse {
             return false;
         };
+        const mark = self.steps.items.len;
+        if (try self.processPath(from, to, path, pos)) return true;
+        self.steps.shrinkRetainingCapacity(mark);
+
+        // The forest's unique tree route can be inherently circular on a
+        // self-containing class: an edge on the path re-poses the path's
+        // own endpoints as its child obligation (e.g. an assoc instance
+        // whose subterm slot holds the very sum being aligned). Retry once
+        // with the BFS-shortest route over the full recorded edge graph
+        // (forest + no-op alternates) — the duplicate-congruence and
+        // re-derivation edges the forest drops are exactly the acyclic
+        // detours. Tree-first keeps successful extractions byte-identical.
+        const alt = (try self.bfsPath(from.node, to.node)) orelse return false;
+        if (sameRoute(path, alt)) return false;
+        if (try self.processPath(from, to, alt, pos)) return true;
+        self.steps.shrinkRetainingCapacity(mark);
+        return false;
+    }
+
+    /// Process one route's edges in order, then close the residual gap to
+    /// `to`. Anchored endpoints keep the running term's node in lockstep
+    /// with the route vertices, so the closing call reduces to the
+    /// shape-equal fast path; it is a real re-alignment only when an
+    /// endpoint fell back to class-anchored rendering.
+    fn processPath(
+        self: *ExplainCtx,
+        from: *const Term,
+        to: *const Term,
+        path: []const Traversed,
+        pos: []const u32,
+    ) error{OutOfMemory}!bool {
+        self.routes += 1;
+        if (self.routes > self.opts.max_routes) return false;
         var current = from;
         for (path) |edge| {
             current = (try self.processEdge(current, edge, pos)) orelse {
                 return false;
             };
         }
-        // A rendered pattern instance can anchor on a different member than
-        // the forest vertex; the recursion re-aligns (bounded by max_depth).
         return try self.explainTerms(current, to, pos);
+    }
+
+    const RouteEdge = struct {
+        just: Justification,
+        /// Traversal along this entry runs the justification's semantic
+        /// direction (endpoint a -> endpoint b).
+        forward: bool,
+        to: ENodeId,
+    };
+
+    /// Undirected adjacency over the full recorded edge graph (forest +
+    /// alternates); materialized only when a tree path fails.
+    fn routeAdj(
+        self: *ExplainCtx,
+    ) error{OutOfMemory}![]std.ArrayListUnmanaged(RouteEdge) {
+        if (self.route_adj) |adj| return adj;
+        const adj = try self.allocator().alloc(
+            std.ArrayListUnmanaged(RouteEdge),
+            self.eg.nodes.items.len,
+        );
+        @memset(adj, .{});
+        for (self.eg.expl_parent.items) |maybe_edge| {
+            const edge = maybe_edge orelse continue;
+            try self.addRouteEdge(adj, edge.just);
+        }
+        for (self.eg.alt_edges.items) |just| {
+            try self.addRouteEdge(adj, just);
+        }
+        self.route_adj = adj;
+        return adj;
+    }
+
+    fn addRouteEdge(
+        self: *ExplainCtx,
+        adj: []std.ArrayListUnmanaged(RouteEdge),
+        just: Justification,
+    ) error{OutOfMemory}!void {
+        const ends = justEndpoints(just);
+        try adj[ends.a].append(self.allocator(), .{
+            .just = just,
+            .forward = true,
+            .to = ends.b,
+        });
+        try adj[ends.b].append(self.allocator(), .{
+            .just = just,
+            .forward = false,
+            .to = ends.a,
+        });
+    }
+
+    /// Shortest route between two same-class nodes over forest +
+    /// alternate edges (deterministic: adjacency in recording order, FIFO
+    /// traversal). Null when unreachable.
+    fn bfsPath(
+        self: *ExplainCtx,
+        n1: ENodeId,
+        n2: ENodeId,
+    ) error{OutOfMemory}!?[]const Traversed {
+        const adj = try self.routeAdj();
+        const Prev = struct {
+            from: ENodeId,
+            just: Justification,
+            forward: bool,
+        };
+        const prev = try self.allocator().alloc(?Prev, adj.len);
+        @memset(prev, null);
+        var queue: std.ArrayListUnmanaged(ENodeId) = .{};
+        try queue.append(self.allocator(), n1);
+        var head: usize = 0;
+        search: while (head < queue.items.len) {
+            const u = queue.items[head];
+            head += 1;
+            for (adj[u].items) |re| {
+                if (re.to == n1 or prev[re.to] != null) continue;
+                prev[re.to] = .{
+                    .from = u,
+                    .just = re.just,
+                    .forward = re.forward,
+                };
+                if (re.to == n2) break :search;
+                try queue.append(self.allocator(), re.to);
+            }
+        } else return null;
+        var route: std.ArrayListUnmanaged(Traversed) = .{};
+        var cursor = n2;
+        while (cursor != n1) {
+            const link = prev[cursor].?;
+            try route.append(self.allocator(), .{
+                .just = link.just,
+                .forward = link.forward,
+            });
+            cursor = link.from;
+        }
+        std.mem.reverse(Traversed, route.items);
+        return route.items;
+    }
+
+    fn sameRoute(a: []const Traversed, b: []const Traversed) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |x, y| {
+            if (x.forward != y.forward) return false;
+            if (!sameJust(x.just, y.just)) return false;
+        }
+        return true;
+    }
+
+    fn sameJust(a: Justification, b: Justification) bool {
+        if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+        return switch (a) {
+            .rule => |r| r.rule_slot == b.rule.rule_slot and
+                r.from_node == b.rule.from_node and
+                r.to_node == b.rule.to_node,
+            .congruence => |c| c.left == b.congruence.left and
+                c.right == b.congruence.right,
+            .pool_equation => |eq| eq.pool_index ==
+                b.pool_equation.pool_index,
+            .splice => |sp| sp.from == b.splice.from and
+                sp.to == b.splice.to,
+        };
     }
 
     /// Same top node: recursively align differing child representatives.
@@ -2809,7 +3006,6 @@ const ExplainCtx = struct {
                     pattern_out,
                     before_node,
                     after_node,
-                    current,
                     rule_just.subst,
                     binder_masks,
                 )) orelse return null;
@@ -3180,9 +3376,10 @@ const ExplainCtx = struct {
         overrides: []?*const Term,
     };
 
-    /// Render both endpoints of a rule edge. Bag endpoints render against
-    /// the edge's own nodes (the extension members live there); tree
-    /// endpoints keep the class-anchored pattern rendering. Rendering
+    /// Render both endpoints of a rule edge, each anchored at the edge's
+    /// exact recorded node (bag endpoints because the extension members
+    /// live there; tree endpoints so edge processing stays in node-identity
+    /// lockstep with the forest path — see `renderEndpointAt`). Rendering
     /// runs to a fixpoint over the binder overrides: a residual claim on
     /// one endpoint fixes the binder's term, and every other rendering of
     /// that binder must then be redone against it.
@@ -3193,7 +3390,6 @@ const ExplainCtx = struct {
         pattern_out: TemplateExpr,
         before_node: ENodeId,
         after_node: ENodeId,
-        current: *const Term,
         subst: []const ?Child,
         binder_masks: []const u32,
     ) error{OutOfMemory}!?RenderedEndpoints {
@@ -3231,10 +3427,8 @@ const ExplainCtx = struct {
                     lhs = rendered.term;
                     matched_before = rendered.matched;
                 } else {
-                    lhs = (try self.renderPattern(
-                        self.eg.find(
-                            self.eg.nodes.items[before_node].class,
-                        ),
+                    lhs = (try self.renderEndpointAt(
+                        before_node,
                         pattern_in,
                         subst,
                         binder_masks,
@@ -3251,10 +3445,8 @@ const ExplainCtx = struct {
                     rhs = rendered.term;
                     matched_after = rendered.matched;
                 } else {
-                    rhs = (try self.renderPattern(
-                        self.eg.find(
-                            self.eg.nodes.items[after_node].class,
-                        ),
+                    rhs = (try self.renderEndpointAt(
+                        after_node,
                         pattern_out,
                         subst,
                         binder_masks,
@@ -3265,17 +3457,14 @@ const ExplainCtx = struct {
                     .matched_after = matched_after,
                 };
             } else {
-                const class = self.eg.find(
-                    self.eg.nodes.items[current.node].class,
-                );
-                lhs = (try self.renderPattern(
-                    class,
+                lhs = (try self.renderEndpointAt(
+                    before_node,
                     pattern_in,
                     subst,
                     binder_masks,
                 )) orelse return null;
-                rhs = (try self.renderPattern(
-                    class,
+                rhs = (try self.renderEndpointAt(
+                    after_node,
                     pattern_out,
                     subst,
                     binder_masks,
@@ -3516,92 +3705,168 @@ const ExplainCtx = struct {
             .binder => |binder_idx| {
                 return try self.binderTerm(binder_idx, subst, binder_masks);
             },
-            .app => |pattern_app| {
+            .app => {
                 const root = self.eg.find(class);
                 const members = self.eg.class_index.get(root) orelse {
                     return null;
                 };
-                member: for (members.items) |member_id| {
-                    const member = switch (self.eg.nodes.items[member_id].node) {
-                        .app => |app| app,
-                        .leaf => continue,
-                        .bag => |member_bag| {
-                            // A same-head pattern against a bag member:
-                            // exact-cover instance rendering.
-                            if (member_bag.term_id != pattern_app.term_id) {
-                                continue;
-                            }
-                            const rendered = (try self.renderBag(
-                                member_id,
-                                pattern,
-                                subst,
-                                binder_masks,
-                                false,
-                            )) orelse continue;
-                            return rendered.term;
-                        },
-                    };
-                    if (member.term_id != pattern_app.term_id) continue;
-                    if (member.children.len != pattern_app.args.len) continue;
-                    const children = try self.allocator().alloc(
-                        ?*const Term,
-                        member.children.len,
-                    );
-                    for (
-                        pattern_app.args,
-                        member.children,
-                        0..,
-                    ) |sub_pattern, child, idx| {
-                        switch (child) {
-                            .bound => |leaf| {
-                                const binder_idx = switch (sub_pattern) {
-                                    .binder => |b| b,
-                                    .app => continue :member,
-                                };
-                                const binding = subst[binder_idx] orelse {
-                                    continue :member;
-                                };
-                                if (binding != .bound or
-                                    binding.bound != leaf)
-                                {
-                                    continue :member;
-                                }
-                                children[idx] = null;
-                            },
-                            .class => |child_class| {
-                                switch (sub_pattern) {
-                                    .binder => |b| {
-                                        const binding = subst[b] orelse {
-                                            continue :member;
-                                        };
-                                        if (!self.eg.bindingsCompatible(
-                                            binding,
-                                            .{ .class = child_class },
-                                        )) continue :member;
-                                        children[idx] = (try self.binderTerm(
-                                            b,
-                                            subst,
-                                            binder_masks,
-                                        )) orelse continue :member;
-                                    },
-                                    .app => {
-                                        children[idx] =
-                                            (try self.renderPattern(
-                                                child_class,
-                                                sub_pattern,
-                                                subst,
-                                                binder_masks,
-                                            )) orelse continue :member;
-                                    },
-                                }
-                            },
-                        }
-                    }
-                    const term = try self.allocator().create(Term);
-                    term.* = .{ .node = member_id, .children = children };
-                    return term;
+                for (members.items) |member_id| {
+                    if (try self.renderPatternAt(
+                        member_id,
+                        pattern,
+                        subst,
+                        binder_masks,
+                    )) |term| return term;
                 }
                 return null;
+            },
+        }
+    }
+
+    /// Render an application pattern's instance anchored at one exact
+    /// node. Null when this node does not instantiate the pattern under
+    /// `subst` (class-anchored callers scan on to the next member).
+    fn renderPatternAt(
+        self: *ExplainCtx,
+        node_id: ENodeId,
+        pattern: TemplateExpr,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+    ) error{OutOfMemory}!?*const Term {
+        const pattern_app = switch (pattern) {
+            .app => |app| app,
+            .binder => return null,
+        };
+        const member = switch (self.eg.nodes.items[node_id].node) {
+            .app => |app| app,
+            .leaf => return null,
+            .bag => |member_bag| {
+                // A same-head pattern against a bag member: exact-cover
+                // instance rendering.
+                if (member_bag.term_id != pattern_app.term_id) {
+                    return null;
+                }
+                const rendered = (try self.renderBag(
+                    node_id,
+                    pattern,
+                    subst,
+                    binder_masks,
+                    false,
+                )) orelse return null;
+                return rendered.term;
+            },
+        };
+        if (member.term_id != pattern_app.term_id) return null;
+        if (member.children.len != pattern_app.args.len) return null;
+        const children = try self.allocator().alloc(
+            ?*const Term,
+            member.children.len,
+        );
+        for (
+            pattern_app.args,
+            member.children,
+            0..,
+        ) |sub_pattern, child, idx| {
+            switch (child) {
+                .bound => |leaf| {
+                    const binder_idx = switch (sub_pattern) {
+                        .binder => |b| b,
+                        .app => return null,
+                    };
+                    const binding = subst[binder_idx] orelse {
+                        return null;
+                    };
+                    if (binding != .bound or
+                        binding.bound != leaf)
+                    {
+                        return null;
+                    }
+                    children[idx] = null;
+                },
+                .class => |child_class| {
+                    switch (sub_pattern) {
+                        .binder => |b| {
+                            const binding = subst[b] orelse {
+                                return null;
+                            };
+                            if (!self.eg.bindingsCompatible(
+                                binding,
+                                .{ .class = child_class },
+                            )) return null;
+                            children[idx] = (try self.binderTerm(
+                                b,
+                                subst,
+                                binder_masks,
+                            )) orelse return null;
+                        },
+                        .app => {
+                            children[idx] =
+                                (try self.renderPattern(
+                                    child_class,
+                                    sub_pattern,
+                                    subst,
+                                    binder_masks,
+                                )) orelse return null;
+                        },
+                    }
+                },
+            }
+        }
+        const term = try self.allocator().create(Term);
+        term.* = .{ .node = node_id, .children = children };
+        return term;
+    }
+
+    /// Render a rule-edge endpoint anchored at the edge's exact recorded
+    /// node. Anchoring keeps the running term's node identity in lockstep
+    /// with the explanation-forest vertices, so every bridge call in edge
+    /// processing short-circuits through its shape-equal fast path and
+    /// descends only into strictly smaller children — the whole-term
+    /// re-anchors that diverge on self-containing classes stay dead. Falls
+    /// back to class-anchored rendering when the exact node cannot
+    /// instantiate the pattern (the pre-anchoring behavior).
+    fn renderEndpointAt(
+        self: *ExplainCtx,
+        node_id: ENodeId,
+        pattern: TemplateExpr,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+    ) error{OutOfMemory}!?*const Term {
+        switch (pattern) {
+            .app => {
+                if (try self.renderPatternAt(
+                    node_id,
+                    pattern,
+                    subst,
+                    binder_masks,
+                )) |term| return term;
+                return try self.renderPattern(
+                    self.eg.find(self.eg.nodes.items[node_id].class),
+                    pattern,
+                    subst,
+                    binder_masks,
+                );
+            },
+            .binder => |b| {
+                const rep = (try self.binderTerm(
+                    b,
+                    subst,
+                    binder_masks,
+                )) orelse return null;
+                if (nodeShapeEql(self.eg, rep.node, node_id)) return rep;
+                // A bare-binder endpoint whose class representative is not
+                // the recorded vertex's shape (a self-containing class
+                // folds the compound away): anchor at the vertex and pin
+                // the binder override so the step's citation renders the
+                // same term everywhere in this edge.
+                const anchored = (try self.termForNode(
+                    node_id,
+                    binder_masks[b],
+                )) orelse return rep;
+                if (self.rule_binder_terms) |overrides| {
+                    overrides[b] = anchored;
+                }
+                return anchored;
             },
         }
     }
