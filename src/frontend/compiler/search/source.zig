@@ -338,7 +338,14 @@ pub fn suggestionsAtSourceOffset(
             conv_suggestions.status = .found;
         } else {
             conv_suggestions.status = switch (conv_result.stats.outcome) {
-                .saturated => .miss,
+                // A saturated miss is a forced negative ONLY without
+                // `@compute` rules: the directed fold reduces each redex
+                // once in one order, so its fixpoint never certifies that
+                // no chain exists.
+                .saturated => if (conv_result.compute_rule_count != 0)
+                    types.SearchStatus.budget_exhausted
+                else
+                    types.SearchStatus.miss,
                 .iteration_capped,
                 .node_capped,
                 .budget_fixpoint,
@@ -536,6 +543,16 @@ fn buildConversionDetail(
                     result.pool_size,
                 },
             );
+            if (result.compute_rule_count != 0) {
+                try w.print(
+                    " {d} @compute orientations folded by the directed " ++
+                        "scheduler, which reduces each redex once in " ++
+                        "declaration order — alternative reduction " ++
+                        "orders were never explored, so this is NOT a " ++
+                        "forced negative.",
+                    .{result.compute_rule_count},
+                );
+            }
             if (result.stats.ac_match_capped != 0) {
                 try w.writeAll(
                     " Some rule matches hit their enumeration budget, " ++

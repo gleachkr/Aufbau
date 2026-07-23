@@ -222,6 +222,11 @@ pub const RewriteRegistry = struct {
     conversions: std.ArrayListUnmanaged(ConversionRule) = .{},
     /// `@conversion`-enrolled defs in declaration order.
     def_conversions: std.ArrayListUnmanaged(DefConversionRule) = .{},
+    /// `@compute` rules in declaration order: single-direction conversion
+    /// rules (exactly one of ltr/rtl, role always .none) the egraph
+    /// applies through its directed fold scheduler instead of general
+    /// saturation.
+    computes: std.ArrayListUnmanaged(ConversionRule) = .{},
 
     pub fn init(allocator: std.mem.Allocator) RewriteRegistry {
         return .{
@@ -280,6 +285,8 @@ pub const RewriteRegistry = struct {
             try self.processAlpha(env, stmt_name, &iter);
         } else if (std.mem.eql(u8, directive, "@conversion")) {
             try self.processConversion(env, stmt_name, &iter);
+        } else if (std.mem.eql(u8, directive, "@compute")) {
+            try self.processCompute(env, stmt_name, &iter);
         } else if (std.mem.eql(u8, directive, "@congr")) {
             try self.processCongr(env, stmt_name);
         } else if (std.mem.eql(u8, directive, "@fallback")) {
@@ -393,6 +400,12 @@ pub const RewriteRegistry = struct {
                 return error.DuplicateConversionAnnotation;
             }
         }
+        // One egraph enrollment per theorem: a rule is saturated OR folded.
+        for (self.computes.items) |existing| {
+            if (existing.rule_id == rule_id) {
+                return error.DuplicateConversionAnnotation;
+            }
+        }
 
         // Conditional conversion rules would need side-condition discharge
         // during egraph saturation; not supported.
@@ -456,6 +469,83 @@ pub const RewriteRegistry = struct {
             .rtl = rtl,
             .role = role,
             .head_term_id = head_term_id,
+        });
+    }
+
+    /// Enroll a hypothesis-free `rel(lhs, rhs)` theorem as a `@compute`
+    /// rule: a single-direction rewrite the `conversion?` egraph applies
+    /// through its directed fold scheduler instead of general
+    /// saturation. Bound binders are fine: the orientation check below
+    /// guarantees the match side binds every binder the target uses (a
+    /// fold never mints a fresh one), and dependency side conditions
+    /// ride the same dep gate as general saturation rules.
+    fn processCompute(
+        self: *RewriteRegistry,
+        env: *const GlobalEnv,
+        stmt_name: []const u8,
+        iter: *std.mem.TokenIterator(u8, .any),
+    ) !void {
+        const token = iter.next() orelse {
+            return error.InvalidComputeAnnotation;
+        };
+        if (iter.next() != null) return error.InvalidComputeAnnotation;
+
+        const ltr = std.mem.eql(u8, token, "ltr");
+        const rtl = std.mem.eql(u8, token, "rtl");
+        if (!ltr and !rtl) return error.InvalidComputeAnnotation;
+
+        // Theorem statements only (term-side annotations are whitelisted
+        // upstream, so a def can't reach here; an unknown name is skipped
+        // like the other rule annotations).
+        const rule_id = env.getRuleId(stmt_name) orelse return;
+        const rule = &env.rules.items[rule_id];
+
+        for (self.computes.items) |existing| {
+            if (existing.rule_id == rule_id) {
+                return error.DuplicateComputeAnnotation;
+            }
+        }
+        for (self.conversions.items) |existing| {
+            if (existing.rule_id == rule_id) {
+                return error.DuplicateComputeAnnotation;
+            }
+        }
+
+        if (rule.hyps.len != 0) return error.ComputeRuleHasHypotheses;
+
+        const app = switch (rule.concl) {
+            .app => |value| value,
+            else => return error.ComputeConclusionNotRelation,
+        };
+        if (app.args.len != 2) return error.ComputeConclusionNotRelation;
+        self.validateConversionRelation(env, app.term_id) catch |err| {
+            return switch (err) {
+                error.ConversionMissingRelation => error.ComputeMissingRelation,
+                else => err,
+            };
+        };
+
+        const lhs = app.args[0];
+        const rhs = app.args[1];
+        const orient_err = if (ltr)
+            validateConversionOrientation(lhs, rhs)
+        else
+            validateConversionOrientation(rhs, lhs);
+        orient_err catch |err| {
+            return switch (err) {
+                error.ConversionBareMatchSide => error.ComputeBareMatchSide,
+                error.ConversionBinderNotCovered => error.ComputeBinderNotCovered,
+            };
+        };
+
+        try self.computes.append(self.allocator, .{
+            .rule_id = rule_id,
+            .lhs = lhs,
+            .rhs = rhs,
+            .num_binders = rule.args.len,
+            .ltr = ltr,
+            .rtl = rtl,
+            .role = .none,
         });
     }
 
@@ -1140,6 +1230,12 @@ pub const RewriteRegistry = struct {
         self: *const RewriteRegistry,
     ) []const ConversionRule {
         return self.conversions.items;
+    }
+
+    pub fn computeRules(
+        self: *const RewriteRegistry,
+    ) []const ConversionRule {
+        return self.computes.items;
     }
 
     pub fn defConversionRules(

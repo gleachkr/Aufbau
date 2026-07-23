@@ -1,0 +1,3 @@
+thm_compute
+---
+goal: $ d = x + (hZ :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h1 :x h0) $ by conversion?

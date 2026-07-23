@@ -103,6 +103,7 @@ form. The two normalized forms agree, so the line is accepted.
 | `@relation` | MM0 assertion / lemma | Declares a relation bundle |
 | `@rewrite`  | MM0 assertion / lemma | Registers an oriented rewrite |
 | `@conversion` | MM0 assertion / lemma / def | Enrolls a rewrite (or a def's equation) for `conversion?` search |
+| `@compute`  | MM0 assertion / lemma | Enrolls a rewrite for `conversion?`'s directed fold |
 | `@congr`    | MM0 assertion / lemma | Registers a congruence rule |
 | `@acui`     | `term`            | Enables ACUI-style normalization |
 | `@fallback` | MM0 assertion / lemma | Retries through another rule |
@@ -472,6 +473,95 @@ theorem checks: a registered `@relation` for the def's return sort, an
 application-shaped definiens for `fold` (a bare-binder body would match
 everything), and definiens coverage of every arg for `fold` (folding
 `def fst (a b) = a`-style projections would have to invent `b`).
+
+## `@compute`
+
+### Purpose
+
+`@compute` enrolls a hypothesis-free theorem concluding `rel(lhs, rhs)`
+as a **computational** rule for `conversion?`. Where `@conversion` rules
+saturate — every match fires, in every direction the annotation allows,
+against every regrouping of an AC bag — a `@compute` rule is excluded
+from general saturation and applied only by a directed fold scheduler
+that runs *inside* the same egraph.
+
+Undirected saturation is the wrong engine for computation. A digit
+addition table with carry rules
+
+```
+--| @compute ltr
+axiom addc_F_1 (a b: bv):
+  $ (a :x hF) + (b :x h1) = ((a + b) + (hZ :x h1)) :x h0 $;
+```
+
+is a terminating, confluent rewrite system: directed rewriting adds two
+k-digit numerals in O(k) steps. Saturating the same rules explores
+every application order and every sub-multiset regrouping — a closure
+exponentially larger than the computation — and grinds to a
+budget-limited fixpoint. The fold instead:
+
+- reduces each e-node's redex **once**: the first fresh match in rule
+  declaration order, with the cascade continuing through the nodes each
+  fold mints — alternative regroupings of an already-reduced shape
+  never fire;
+- runs to fixpoint before each saturation iteration, under its own
+  round budget (cascade depth) and the shared enumeration step pool.
+
+There is no groundness restriction. `conversion?` matches — it never
+instantiates anything in the goal — so a theorem variable of the
+enclosing theorem is an inert constant to the fold, and `hZ + x`
+reduces by the zero law exactly like `hZ + h7` does. What the fold
+gives up relative to saturation is not symbolic reasoning but
+*alternative reduction orders*.
+
+Fold steps are ordinary rule unions with ordinary justifications, so
+emitted proof chains cite the `@compute` theorems exactly like
+`@conversion` rules — no new proof machinery, and the verifier sees
+nothing new.
+
+### Syntax
+
+```
+--| @compute ltr
+axiom addd_3_4 (a b: bv):
+  $ (a :x h3) + (b :x h4) = (a + b) :x h7 $;
+```
+
+Exactly one direction token, `ltr` or `rtl`, selecting which side is
+the redex. There is no `both`: a fold is directed by definition.
+
+### Requirements
+
+- The conclusion must be `rel(lhs, rhs)` for a registered `@relation`
+  on the operand sort.
+- No hypotheses (same as `@conversion`).
+- The match side must be a term application binding every binder the
+  target side uses (same coverage rule as `@conversion`). Bound binders
+  are allowed under that rule — a fold direction may consume a binder
+  (`iff (al x a) a` as `ltr`) but never mint a fresh one — and their
+  dependency side conditions are enforced by the same match-admission
+  gate as `@conversion` rules: an illegal instance is deferred, never
+  fired.
+- One enrollment per theorem: a rule is saturated *or* folded, never
+  both.
+
+### Choosing the rule set
+
+Declaration order is the fold's redex priority: each class reduces its
+first fresh match in rule order. For a computational theory this
+should be confluent (any reduction order reaches the same value); the
+fold then computes the normal form regardless of ordering
+quirks. A non-confluent set is never unsound — the fold just commits to
+one order, and a goal reachable only along another order is reported as
+a miss that is explicitly NOT a forced negative. For the same reason a
+saturated `conversion?` miss never claims a forced negative when any
+`@compute` rule is enrolled: the fold is a strategy, not a closure.
+
+Zero/unit laws (`hZ + a = a`) belong in the compute set — carry rules
+accumulate zero atoms that the digit table alone cannot clear — and are
+best declared *after* the main table, so digit redexes reduce before
+debris clears and the emitted chain keeps the shape proof extraction
+re-trees most readily.
 
 ## `@congr`
 

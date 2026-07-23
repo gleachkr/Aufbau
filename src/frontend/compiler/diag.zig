@@ -617,6 +617,13 @@ fn annotationDiagnosticSpan(
         error.ConversionRoleBoundBinder,
         error.ConversionRoleRelationHead,
         error.DuplicateConversionRoleForHead,
+        error.InvalidComputeAnnotation,
+        error.DuplicateComputeAnnotation,
+        error.ComputeRuleHasHypotheses,
+        error.ComputeConclusionNotRelation,
+        error.ComputeMissingRelation,
+        error.ComputeBareMatchSide,
+        error.ComputeBinderNotCovered,
         error.InvalidFallbackAnnotation,
         error.DuplicateFallbackAnnotation,
         error.UnknownFallbackRule,
@@ -841,6 +848,18 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.ConversionBareMatchSide => "@conversion match side must be a term application, " ++
             "not a bare binder",
         error.ConversionBinderNotCovered => "@conversion match side must bind every binder " ++
+            "the instantiate side uses",
+        error.InvalidComputeAnnotation => "@compute expects one token: ltr or rtl",
+        error.DuplicateComputeAnnotation => "this rule is already enrolled for conversion? " ++
+            "(one @compute/@conversion enrollment per rule)",
+        error.ComputeRuleHasHypotheses => "@compute rule must not have hypotheses",
+        error.ComputeConclusionNotRelation => "@compute rule conclusion must have the shape " ++
+            "rel(lhs, rhs)",
+        error.ComputeMissingRelation => "@compute rule conclusion head must be the registered " ++
+            "@relation term for its operand sort",
+        error.ComputeBareMatchSide => "@compute match side must be a term application, " ++
+            "not a bare binder",
+        error.ComputeBinderNotCovered => "@compute match side must bind every binder " ++
             "the instantiate side uses",
         error.FreshStrictSort => "@fresh cannot target a binder in a strict sort",
         error.FreshFreeSort => "@fresh cannot target a binder in a free sort",

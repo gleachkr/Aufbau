@@ -1132,6 +1132,11 @@ pub const Lowerer = struct {
         for (self.context.registry.conversionRules()) |conv| {
             if (conv.rule_id == rule_id) return conv;
         }
+        // `@compute` enrollments cite through the same rule id space and
+        // lower identically (their unions are ordinary rule unions).
+        for (self.context.registry.computeRules()) |comp| {
+            if (comp.rule_id == rule_id) return comp;
+        }
         return null;
     }
 

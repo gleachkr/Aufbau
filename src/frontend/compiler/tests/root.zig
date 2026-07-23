@@ -582,6 +582,78 @@ test "compiler validates conversion annotation direction tokens" {
     }
 }
 
+test "compiler reports invalid compute annotations with spans" {
+    const cases = [_][]const u8{
+        "@compute",
+        "@compute sideways",
+        "@compute ltr junk",
+    };
+    for (cases) |annotation| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+            conversion_mm0_prelude,
+            "--| ",
+            annotation,
+            "\naxiom an_comm (a b: wff): $ iff (an a b) (an b a) $;\n",
+        });
+
+        var compiler = Compiler.init(std.testing.allocator, mm0_src);
+        try std.testing.expectError(
+            error.InvalidComputeAnnotation,
+            compiler.check(),
+        );
+
+        const diag = compiler.diagnostics.last_diagnostic orelse
+            return error.ExpectedDiagnostic;
+        try std.testing.expectEqual(error.InvalidComputeAnnotation, diag.err);
+        try std.testing.expectEqual(
+            mm0.CompilerDiagnosticSource.mm0,
+            diag.source,
+        );
+        try std.testing.expectEqualStrings("an_comm", diag.name.?);
+        try std.testing.expectEqualStrings(
+            "@compute expects one token: ltr or rtl",
+            mm0.compilerDiagnosticSummary(diag),
+        );
+        const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+        try std.testing.expectEqualStrings(
+            annotation,
+            mm0_src[span.start..span.end],
+        );
+    }
+}
+
+test "compiler reports duplicate compute annotations with a span" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @compute ltr
+        \\--| @compute rtl
+        \\axiom an_comm (a b: wff): $ iff (an a b) (an b a) $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(
+        error.DuplicateComputeAnnotation,
+        compiler.check(),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.DuplicateComputeAnnotation, diag.err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
+    try std.testing.expectEqualStrings("an_comm", diag.name.?);
+    try std.testing.expectEqualStrings(
+        "this rule is already enrolled for conversion? " ++
+            "(one @compute/@conversion enrollment per rule)",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(
+        "@compute ltr",
+        mm0_src[span.start..span.end],
+    );
+}
+
 test "compiler rejects conversion conclusions that are not a relation" {
     // Not a binary application at all.
     const shape_src = conversion_mm0_prelude ++

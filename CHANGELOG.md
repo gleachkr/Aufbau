@@ -5,7 +5,65 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- `@compute` annotation: enrolls a hypothesis-free `rel(lhs, rhs)`
+  theorem (one direction token, `ltr` or `rtl`) as a computational rule
+  for `conversion?`. Compute rules are excluded from
+  general equality saturation and applied by a directed fold scheduler
+  inside the same egraph: each e-node reduces its designated redex once
+  (first fresh match in rule declaration order), and the fold runs to
+  fixpoint before each saturation iteration under its own round budget.
+  Theorem variables of the enclosing theorem are inert constants to the
+  fold, so `x + 0` reduces by an enrolled zero law just like a
+  constant sum does. Rules with bound binders enroll too, provided the
+  chosen direction binds every binder from the matched term (a fold may
+  consume a quantifier, never invent one); their variable-dependency
+  side conditions are enforced by the same match-admission gate as
+  `@conversion` rules.
+  This makes terminating computations — digit-addition tables with
+  carries are the motivating case — cost linearly many folds instead of
+  the exponential closure undirected saturation explores: the
+  carry-cascade table that previously ground a widened search to a
+  budget-limited fixpoint now folds 16-digit sums to a found, verified
+  chain at plain defaults. Fold steps lower as ordinary rule citations.
+  Because the fold commits to one reduction order, a saturated miss
+  with `@compute` rules enrolled is reported as NOT a forced negative.
+  See `docs/rewrite_system.md`.
+
 ### Fixed
+
+- `conversion?`'s dependency gate now honors DECLARED variable
+  dependencies. A theorem variable such as `(m: tm y)` depends on the
+  bound variable `y` through its binder declaration alone, with no
+  structural occurrence the egraph could see, so a rule match whose
+  side condition required avoiding `y` was admitted anyway — the search
+  could claim a capture-unsound goal proven and emit a chain the
+  verifier rejects with a dependency violation. Both match admission
+  and extraction's representative selection now consult declared
+  dependencies, so such matches defer honestly (the lambda-calculus
+  test battery's capture case pins the behavior).
+- `conversion?` proof extraction no longer fails or miscites rule
+  instances on self-containing classes minted by vacuous rewrites
+  (`x + 0 = x`, vacuous quantifier drops, vacuous substitutions —
+  any rule that unions a node with its own child class). Rendering a
+  rule edge's bindings from class representatives could pick a member
+  from elsewhere in the chain being explained (a circular obligation
+  the alignment guard then kills) or pair endpoint renderings from two
+  different members of one class (a citation that is not an instance
+  of the cited rule). Edge rendering now pins bindings to the chain's
+  in-hand subterms when they denote the recorded classes, retries a
+  failed alignment once preferring the newest member for
+  self-referential bindings, and never overwrites a pinned binding
+  during endpoint anchoring.
+- `conversion?` proof extraction no longer gives up when re-deriving a
+  rule instance whose nested sum canonicalized differently at
+  explanation time than when the rule fired (a class that later folded
+  to a value stops splicing into enclosing bags, so re-instantiating
+  the rule's target lands in a class its union never touched — carry
+  rules that mint nested sums hit this on every chain). Bag-member
+  claiming now falls back to structure-matching the rule pattern
+  against the recorded members themselves.
 
 - `conversion?` no longer exhausts memory (or grinds for minutes) when
   `@conversion` rules build nested results on top of AC-absorbed

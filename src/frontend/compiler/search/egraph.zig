@@ -95,6 +95,14 @@ pub const Rule = struct {
     /// Dependency restrictions the verifier will enforce on every emitted
     /// instance of this rule. Shared by both orientations of a theorem.
     restrictions: []const Restriction = &.{},
+    /// True for a `@compute` enrollment: the rule is excluded from the
+    /// general saturation match loop and applied only by the directed
+    /// fold scheduler (`foldCompute`), which fires at most one
+    /// designated redex per class per round. Bound binders ride the
+    /// same dep gate as general rules (enrollment guarantees the match
+    /// side binds every binder, so a fold never mints a fresh one); a
+    /// dep-deferred designated redex stays unconsumed.
+    compute: bool = false,
 };
 
 /// Why two classes were unioned. Consumed by explanation extraction. The
@@ -246,6 +254,10 @@ pub const SaturateStats = struct {
     /// merges, so a nonzero count on a saturated miss means the miss is
     /// NOT a forced negative in the AC quotient.
     ac_cyclic_dropped: usize = 0,
+    /// Unions applied by the `@compute` fold scheduler this run (a
+    /// subset of `unions_applied`). Zero with compute rules enrolled
+    /// means the fold never found a redex.
+    fold_applied: usize = 0,
 };
 
 pub const SaturateOptions = struct {
@@ -271,6 +283,13 @@ pub const SaturateOptions = struct {
     /// iteration and counts in `ac_match_capped` like the other budget
     /// trips.
     ac_iter_step_budget: usize = 1_000_000,
+    /// Bounds the rounds of the per-iteration `@compute` fold pass.
+    /// Each round fires at most one designated redex per class, so this
+    /// caps cascade DEPTH (the step pool above bounds match volume): a
+    /// k-digit carry cascade folds in O(k) rounds, and a non-terminating
+    /// compute rule set stops here instead of minting forever. Trips
+    /// count in `ac_match_capped` like every other budget.
+    fold_round_budget: usize = 256,
 };
 
 /// Member cap on one bag splice expansion. The splice cycle guard keeps
@@ -415,6 +434,22 @@ pub const EGraph = struct {
     /// sort). The trip was counted in `ac_match_capped_total` once, when
     /// it first happened.
     splice_capped_nodes: std.AutoHashMapUnmanaged(ENodeId, void) = .{},
+    /// Declared bound-atom dependencies per leaf, supplied by the driver
+    /// from the theorem's binder list. A theorem variable `(m: tm y)`
+    /// depends on `y` with no structural occurrence the graph could see,
+    /// so avoidability checks (dep gate AND extraction representative
+    /// selection) must consult this alongside structural occurrence —
+    /// otherwise a capture-unsound instance is admitted and the emitted
+    /// chain dies in the verifier with a DepViolation.
+    leaf_deps: std.AutoHashMapUnmanaged(LeafId, []const LeafId) = .{},
+    /// Nodes whose designated `@compute` fold redex was applied (see
+    /// `foldCompute`). Sticky and STRUCTURAL — match-effect keys are
+    /// canonical-root-relative and refresh on every merge, so without
+    /// this ledger a node re-fires its consumed redex under a fresh key
+    /// after every union touching its class, re-deriving the alternative
+    /// regroupings the normalization strategy exists to avoid. A class's
+    /// cascade continues through the newer result nodes the fold minted.
+    fold_consumed: std.AutoHashMapUnmanaged(ENodeId, void) = .{},
     /// Set when a saturation iteration was budget-capped yet changed
     /// nothing (see `SaturateOutcome.budget_fixpoint`); later `saturate`
     /// calls return immediately instead of re-running the identical
@@ -1053,6 +1088,13 @@ pub const EGraph = struct {
         var stats = SaturateStats{ .outcome = .iteration_capped };
         const capped_start = self.ac_match_capped_total;
         const cyclic_start = self.ac_cyclic_dropped_total;
+        var has_compute = false;
+        for (rules) |rule| {
+            if (rule.compute) {
+                has_compute = true;
+                break;
+            }
+        }
         // Match-phase scratch: pattern pairs, substitution probes, and
         // candidate lists are garbage the moment one (node, rule) match
         // call returns. Left in the egraph arena they accumulate to
@@ -1072,18 +1114,42 @@ pub const EGraph = struct {
                 return self.finishStats(stats, capped_start, cyclic_start);
             }
             stats.iterations += 1;
-            try self.buildClassIndex();
             dedup.iter.clearRetainingCapacity();
             const applied_before = dedup.applied.count();
+            const nodes_before = self.nodes.items.len;
+
+            var changed = false;
+            var iter_capped = false;
+            // `@compute` rules fold first: the directed pass consumes the
+            // computation before the general loop's undirected matching
+            // can breed its regroupings.
+            if (has_compute) {
+                const fold = try self.foldCompute(
+                    rules,
+                    opts,
+                    dedup,
+                    &scratch_state,
+                    &stats,
+                );
+                if (fold.node_capped) {
+                    _ = try self.rebuild();
+                    stats.outcome = .node_capped;
+                    return self.finishStats(stats, capped_start, cyclic_start);
+                }
+                if (fold.capped) iter_capped = true;
+                if (fold.changed) changed = true;
+                dedup.iter.clearRetainingCapacity();
+            }
+            try self.buildClassIndex();
 
             var matches: std.ArrayListUnmanaged(Match) = .{};
-            var iter_capped = false;
             var iter_steps: usize = opts.ac_iter_step_budget;
             const matched_nodes = self.nodes.items.len;
             collect: for (0..matched_nodes) |node_id| {
                 switch (self.nodes.items[node_id].node) {
                     .leaf => {},
                     .app => |app| for (rules, 0..) |rule, rule_slot| {
+                        if (rule.compute) continue;
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != app.term_id) continue;
                         if (pattern.args.len != app.children.len) continue;
@@ -1113,6 +1179,7 @@ pub const EGraph = struct {
                         }
                     },
                     .bag => |bag| for (rules, 0..) |rule, rule_slot| {
+                        if (rule.compute) continue;
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != bag.term_id) continue;
                         const allotted = @min(
@@ -1163,62 +1230,18 @@ pub const EGraph = struct {
                 }
             }
 
-            var changed = false;
             var avoid_cache: AvoidCache = .{};
             for (matches.items) |m| {
-                if (!try self.depGateAllows(
-                    rules[m.rule_slot],
-                    m.subst,
+                switch (try self.applyMatch(
+                    rules,
+                    m,
+                    dedup,
+                    &stats,
                     &avoid_cache,
                 )) {
-                    stats.dep_deferred += 1;
-                    continue;
+                    .merged => changed = true,
+                    .noop, .dep_deferred, .instantiation_failed => {},
                 }
-                const target = (try self.instantiate(
-                    rules[m.rule_slot].target_side,
-                    m.subst,
-                )) orelse continue;
-                var to_class = target.class;
-                var to_node = target.node;
-                if (m.extension.len != 0) {
-                    // Extension semantics: the rewrite hit a sub-multiset
-                    // of the bag; the target rejoins the leftover members
-                    // before the union.
-                    const bag_term =
-                        self.nodes.items[m.root_node].node.bag.term_id;
-                    const members = try self.allocator.alloc(
-                        EClassId,
-                        m.extension.len + 1,
-                    );
-                    members[0] = target.class;
-                    @memcpy(members[1..], m.extension);
-                    const shape = ENode{ .bag = .{
-                        .term_id = bag_term,
-                        .members = members,
-                    } };
-                    to_class = try self.add(shape);
-                    to_node = (try self.lookupNode(shape)).?;
-                }
-                const from = self.find(self.nodes.items[m.root_node].class);
-                const merged = try self.merge(from, to_class, .{
-                    .rule = .{
-                        .rule_slot = m.rule_slot,
-                        .from_node = m.root_node,
-                        .to_node = to_node,
-                        .subst = m.subst,
-                        .extension = m.extension,
-                    },
-                });
-                if (merged) {
-                    changed = true;
-                    stats.unions_applied += 1;
-                }
-                // The union now holds (either it merged or it was already
-                // one class), so identical-effect matches in later
-                // iterations are dropped at collection. Dep-deferred and
-                // instantiation-failed matches never reach this point and
-                // stay eligible for retry.
-                try dedup.applied.put(self.allocator, m.key, {});
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
@@ -1226,7 +1249,7 @@ pub const EGraph = struct {
                 }
             }
 
-            const grew = self.nodes.items.len != matched_nodes;
+            const grew = self.nodes.items.len != nodes_before;
             const congr_changed = try self.rebuild();
             // A capped collection pass is not a fixpoint claim: uncollected
             // matches may remain even when the collected ones all no-oped.
@@ -1263,6 +1286,281 @@ pub const EGraph = struct {
         return out;
     }
 
+    const MatchApplyOutcome = enum {
+        merged,
+        noop,
+        dep_deferred,
+        instantiation_failed,
+    };
+
+    /// Apply one collected match: dep gate, target instantiation,
+    /// extension rejoin, union, applied-ledger entry. Shared by the
+    /// general apply loop and the fold scheduler so both record
+    /// identical explanation edges and dedup state. The union holds after
+    /// `merged`/`noop` (so identical-effect matches are dropped at
+    /// collection from then on); dep-deferred and instantiation-failed
+    /// matches are NOT recorded and stay eligible for retry. Node-cap
+    /// policing stays with the callers.
+    fn applyMatch(
+        self: *EGraph,
+        rules: []const Rule,
+        m: Match,
+        dedup: *MatchDedup,
+        stats: *SaturateStats,
+        avoid_cache: *AvoidCache,
+    ) !MatchApplyOutcome {
+        if (!try self.depGateAllows(
+            rules[m.rule_slot],
+            m.subst,
+            avoid_cache,
+        )) {
+            stats.dep_deferred += 1;
+            return .dep_deferred;
+        }
+        const target = (try self.instantiate(
+            rules[m.rule_slot].target_side,
+            m.subst,
+        )) orelse return .instantiation_failed;
+        var to_class = target.class;
+        var to_node = target.node;
+        if (m.extension.len != 0) {
+            // Extension semantics: the rewrite hit a sub-multiset of the
+            // bag; the target rejoins the leftover members before the
+            // union.
+            const bag_term =
+                self.nodes.items[m.root_node].node.bag.term_id;
+            const members = try self.allocator.alloc(
+                EClassId,
+                m.extension.len + 1,
+            );
+            members[0] = target.class;
+            @memcpy(members[1..], m.extension);
+            const shape = ENode{ .bag = .{
+                .term_id = bag_term,
+                .members = members,
+            } };
+            to_class = try self.add(shape);
+            to_node = (try self.lookupNode(shape)).?;
+        }
+        const from = self.find(self.nodes.items[m.root_node].class);
+        const merged = try self.merge(from, to_class, .{
+            .rule = .{
+                .rule_slot = m.rule_slot,
+                .from_node = m.root_node,
+                .to_node = to_node,
+                .subst = m.subst,
+                .extension = m.extension,
+            },
+        });
+        if (merged) stats.unions_applied += 1;
+        try dedup.applied.put(self.allocator, m.key, {});
+        return if (merged) .merged else .noop;
+    }
+
+    const FoldOutcome = struct {
+        changed: bool = false,
+        capped: bool = false,
+        node_capped: bool = false,
+    };
+
+    /// Directed folding for `@compute` rules. Undirected saturation is
+    /// the wrong engine for computational rule sets (digit tables, carry
+    /// cascades): every regrouping of a bag matches, every application
+    /// order mints distinct intermediate classes, and the closure is
+    /// exponential in what a rewrite engine computes in linearly many
+    /// steps. This pass runs the compute subset as a normalization
+    /// strategy instead:
+    ///
+    ///   - each node fires at most ONCE, EVER (`fold_consumed`): its
+    ///     designated redex is the first fresh match in (rule,
+    ///     enumeration) order, the cascade continues through the result
+    ///     nodes the fold mints, and alternative pairings of a consumed
+    ///     shape never fire — that closure is exactly what a rewrite
+    ///     strategy exists to avoid;
+    ///   - per round, each class fires at most once, and nodes scan in
+    ///     ASCENDING id order over a round-start snapshot — the general
+    ///     apply loop's orientation, which keeps recorded rule edges
+    ///     firing before their subterm results merge (extraction renders
+    ///     rule endpoints from the recorded substitution, and an already-
+    ///     merged binding class renders as a different representative
+    ///     than the anchored after-node, a seam only the fold rule
+    ///     itself could prove);
+    ///   - rounds repeat to fixpoint under `fold_round_budget`, with one
+    ///     `ac_iter_step_budget` pool across the whole pass.
+    ///
+    /// There is no groundness restriction: `conversion?` matches, it
+    /// never narrows, so a theorem variable in a substitution is an
+    /// inert constant and firing on it is ordinary evaluation over the
+    /// extended signature (proving with fresh constants IS proving
+    /// universally). Fold unions are ordinary rule unions (same
+    /// justification, same dedup ledger), so extraction and lowering are
+    /// unchanged. For a confluent compute set the strategy reaches the
+    /// same normal forms as exhaustive saturation; a non-confluent set
+    /// reaches SOME fold — never unsound, merely less complete, and
+    /// every budget trip counts in `ac_match_capped` so a subsequent
+    /// miss stays honest.
+    fn foldCompute(
+        self: *EGraph,
+        rules: []const Rule,
+        opts: SaturateOptions,
+        dedup: *MatchDedup,
+        scratch_state: *std.heap.ArenaAllocator,
+        stats: *SaturateStats,
+    ) !FoldOutcome {
+        var out = FoldOutcome{};
+        var fold_steps: usize = opts.ac_iter_step_budget;
+        var dirty = false;
+        var rounds: usize = 0;
+        round: while (rounds < opts.fold_round_budget) : (rounds += 1) {
+            dedup.iter.clearRetainingCapacity();
+            _ = scratch_state.reset(.retain_capacity);
+            const scratch = scratch_state.allocator();
+            // The matchers resolve structured pattern members through
+            // `class_index`; every round's merges move nodes between
+            // classes, so it must be fresh per round.
+            try self.buildClassIndex();
+            var fired_classes: std.AutoHashMapUnmanaged(EClassId, void) = .{};
+            var avoid_cache: AvoidCache = .{};
+            var fired = false;
+            // Round-start snapshot: nodes a fire mints wait for the next
+            // round, so within one round every fire's binding classes are
+            // in their pre-round state.
+            const round_nodes = self.nodes.items.len;
+            var node_id: usize = 0;
+            scan: while (node_id < round_nodes) : (node_id += 1) {
+                const stored = self.nodes.items[node_id];
+                if (stored.node == .leaf) continue;
+                // Effect keys are canonical-root-relative and refresh on
+                // every merge, so without this structural ledger a node
+                // would re-fire its consumed redex under a fresh key after
+                // every union touching its class — re-deriving exactly the
+                // regrouping junk the strategy avoids.
+                if (self.fold_consumed.contains(@intCast(node_id))) continue;
+                const root = self.find(stored.class);
+                if (fired_classes.contains(root)) continue;
+                var matches: std.ArrayListUnmanaged(Match) = .{};
+                for (rules, 0..) |rule, rule_slot| {
+                    if (!rule.compute) continue;
+                    const pattern = rule.match_side.app;
+                    switch (stored.node) {
+                        .leaf => unreachable,
+                        .app => |app| {
+                            if (pattern.term_id != app.term_id) continue;
+                            if (pattern.args.len != app.children.len)
+                                continue;
+                        },
+                        .bag => |bag| {
+                            if (pattern.term_id != bag.term_id) continue;
+                        },
+                    }
+                    const allotted = @min(opts.ac_match_budget, fold_steps);
+                    if (allotted == 0) {
+                        out.capped = true;
+                        self.ac_match_capped_total += 1;
+                        break :round;
+                    }
+                    self.ac_budget_remaining = allotted;
+                    self.ac_budget_hit = false;
+                    matches.clearRetainingCapacity();
+                    switch (stored.node) {
+                        .leaf => unreachable,
+                        .app => try self.matchRule(
+                            rule,
+                            @intCast(rule_slot),
+                            @intCast(node_id),
+                            &matches,
+                            dedup,
+                            scratch,
+                        ),
+                        .bag => try self.matchRuleBag(
+                            rule,
+                            @intCast(rule_slot),
+                            @intCast(node_id),
+                            &matches,
+                            dedup,
+                            scratch,
+                        ),
+                    }
+                    fold_steps -= allotted - self.ac_budget_remaining;
+                    if (self.ac_budget_hit) {
+                        out.capped = true;
+                        self.ac_match_capped_total += 1;
+                    }
+                    // Binder-subset matching materializes sub-bags via
+                    // add(); police that growth like the collect loop.
+                    if (self.nodes.items.len > opts.max_nodes) {
+                        out.node_capped = true;
+                        return out;
+                    }
+                    if (matches.items.len == 0) continue;
+                    // The node's designated redex: the first fresh match
+                    // in (rule, enumeration) order.
+                    for (matches.items) |m| {
+                        switch (try self.applyMatch(
+                            rules,
+                            m,
+                            dedup,
+                            stats,
+                            &avoid_cache,
+                        )) {
+                            .merged => {
+                                try self.fold_consumed.put(
+                                    self.allocator,
+                                    @intCast(node_id),
+                                    {},
+                                );
+                                try fired_classes.put(scratch, root, {});
+                                fired = true;
+                                dirty = true;
+                                out.changed = true;
+                                stats.fold_applied += 1;
+                                if (self.nodes.items.len > opts.max_nodes) {
+                                    out.node_capped = true;
+                                    return out;
+                                }
+                                continue :scan;
+                            },
+                            .noop => {
+                                // The union already held: the redex is
+                                // just as reduced as after a real merge.
+                                try self.fold_consumed.put(
+                                    self.allocator,
+                                    @intCast(node_id),
+                                    {},
+                                );
+                                continue :scan;
+                            },
+                            .dep_deferred,
+                            .instantiation_failed,
+                            => continue,
+                        }
+                    }
+                }
+            }
+            if (out.capped or !fired) break;
+            _ = try self.rebuild();
+            dirty = false;
+            if (self.nodes.items.len > opts.max_nodes) {
+                out.node_capped = true;
+                return out;
+            }
+        }
+        if (rounds >= opts.fold_round_budget) {
+            out.capped = true;
+            self.ac_match_capped_total += 1;
+        }
+        // Leave the graph congruence-repaired for the general collect
+        // pass that follows (its matchers read the bag indexes rebuild
+        // refreshes).
+        if (dirty) {
+            _ = try self.rebuild();
+            if (self.nodes.items.len > opts.max_nodes) {
+                out.node_capped = true;
+            }
+        }
+        return out;
+    }
+
     const AvoidCache = std.AutoArrayHashMapUnmanaged(LeafId, []const bool);
 
     /// Per-class snapshot of `avoidable(class, atom)`: the class can
@@ -1270,6 +1568,16 @@ pub const EGraph = struct {
     /// in graph growth (members only accumulate under adds and merges),
     /// so a stale false only defers a match to a later iteration — it
     /// never admits a bad one.
+    /// A leaf denotes a term free of `atom` unless it IS the atom or its
+    /// declared dependencies include it.
+    pub fn leafAvoids(self: *const EGraph, leaf: LeafId, atom: LeafId) bool {
+        if (leaf == atom) return false;
+        if (self.leaf_deps.get(leaf)) |deps| {
+            for (deps) |dep| if (dep == atom) return false;
+        }
+        return true;
+    }
+
     fn computeAvoidable(self: *EGraph, atom: LeafId) ![]const bool {
         const avoid = try self.allocator.alloc(bool, self.parents.items.len);
         @memset(avoid, false);
@@ -1279,7 +1587,9 @@ pub const EGraph = struct {
                 const root = self.find(stored.class);
                 if (avoid[root]) continue;
                 switch (stored.node) {
-                    .leaf => |leaf| if (leaf == atom) continue :node_loop,
+                    .leaf => |leaf| if (!self.leafAvoids(leaf, atom)) {
+                        continue :node_loop;
+                    },
                     .app => |app| for (app.children) |child| switch (child) {
                         .bound => |leaf| if (leaf == atom) {
                             continue :node_loop;
@@ -2611,6 +2921,10 @@ const ExplainCtx = struct {
     /// or the lowering's rule-instance seam cannot align (the class's
     /// minimal representative may not even share the bag's head).
     rule_binder_terms: ?[]?*const Term = null,
+    /// Root of the class the currently-rendering rule edge lives in
+    /// (null outside `renderRuleEndpoints`). Bindings that land in this
+    /// class are self-referential — see `selfRefBindingTerm`.
+    edge_self_root: ?EClassId = null,
     /// Lazily built undirected adjacency over forest + alternate edges;
     /// see `routeAdj`.
     route_adj: ?[]std.ArrayListUnmanaged(RouteEdge) = null,
@@ -2665,8 +2979,14 @@ const ExplainCtx = struct {
             node_loop: for (self.eg.nodes.items, 0..) |stored, node_id| {
                 var cost: usize = 1;
                 switch (stored.node) {
-                    .leaf => |leaf| if (maskContains(atoms, leaf)) {
-                        continue :node_loop;
+                    // Mirrors the dep gate's `leafAvoids`: a leaf is
+                    // masked out when it IS a masked atom or its declared
+                    // deps include one (a `(m: tm y)` theorem variable
+                    // never renders where y must be avoided).
+                    .leaf => |leaf| for (atoms) |atom| {
+                        if (!self.eg.leafAvoids(leaf, atom)) {
+                            continue :node_loop;
+                        }
                     },
                     .app => |app| for (app.children) |child| {
                         switch (child) {
@@ -3174,20 +3494,57 @@ const ExplainCtx = struct {
                     rule,
                     rule_just.subst,
                 );
-                const rendered = (try self.renderRuleEndpoints(
-                    rule,
-                    pattern_in,
-                    pattern_out,
-                    before_node,
-                    after_node,
-                    rule_just.subst,
-                    binder_masks,
-                )) orelse return null;
+                // Two rendering attempts: the default representatives
+                // first (keeps every previously-extracting chain
+                // identical), then — only when aligning the chain onto
+                // that rendering fails — a retry preferring the
+                // newest-minimal member for bindings that land in the
+                // edge's own class (see `selfRefBindingTerm`; vacuous
+                // rewrites make such bindings self-referential and the
+                // default representative circular).
+                // The retry only exists for edges that HAVE a
+                // self-referential binding; elsewhere a failed default
+                // alignment must fall through to the caller's route-level
+                // retry untouched.
+                var has_self_ref = false;
+                {
+                    const edge_root = self.eg.find(
+                        self.eg.nodes.items[before_node].class,
+                    );
+                    for (rule_just.subst) |maybe_binding| {
+                        const binding = maybe_binding orelse continue;
+                        if (binding != .class) continue;
+                        if (self.eg.find(binding.class) == edge_root) {
+                            has_self_ref = true;
+                            break;
+                        }
+                    }
+                }
+                const max_attempts: usize =
+                    if (has_self_ref) 2 else 1;
+                const step_mark = self.steps.items.len;
+                var rendered: RenderedEndpoints = undefined;
+                var attempt: usize = 0;
+                aligned: while (true) : (attempt += 1) {
+                    if (attempt == max_attempts) return null;
+                    self.steps.shrinkRetainingCapacity(step_mark);
+                    rendered = (try self.renderRuleEndpoints(
+                        rule,
+                        pattern_in,
+                        pattern_out,
+                        before_node,
+                        after_node,
+                        rule_just.subst,
+                        binder_masks,
+                        if (current.node == before_node) current else null,
+                        attempt == 1,
+                    )) orelse return null;
+                    if (try self.explainTerms(current, rendered.lhs, pos)) {
+                        break :aligned;
+                    }
+                }
                 const lhs = rendered.lhs;
                 const rhs = rendered.rhs;
-                if (!try self.explainTerms(current, lhs, pos)) {
-                    return null;
-                }
 
                 const bindings = try self.allocator().alloc(
                     ?BindingValue,
@@ -3566,15 +3923,46 @@ const ExplainCtx = struct {
         after_node: ENodeId,
         subst: []const ?Child,
         binder_masks: []const u32,
+        seed: ?*const Term,
+        prefer_newest_self_ref: bool,
     ) error{OutOfMemory}!?RenderedEndpoints {
         const overrides = try self.allocator().alloc(
             ?*const Term,
             rule.num_binders,
         );
         @memset(overrides, null);
+        // Seed binder overrides from the chain's in-hand term: rendering
+        // a binding via its class representative can pick a member from
+        // ELSEWHERE in the chain when the binding's class merged into the
+        // chain's own class (vacuous rewrites like `x + 0 = x` or
+        // `sb x e a = e` union a node with its own child class), and the
+        // resulting child obligation re-poses the alignment in flight —
+        // a cycle the active-guard then kills. The in-hand subterm is
+        // already rendered, mask-checked here, and denotes the same
+        // class, so pinning it keeps the whole edge in lockstep with the
+        // chain, exactly as node anchoring does for the endpoints.
+        if (seed) |term| {
+            self.seedOverridesFromTerm(
+                pattern_in,
+                term,
+                subst,
+                binder_masks,
+                overrides,
+            );
+        }
         const saved = self.rule_binder_terms;
         self.rule_binder_terms = overrides;
         defer self.rule_binder_terms = saved;
+        // Retry-only: mark the edge's own class while its endpoints
+        // render, so a binding that lands THERE gets the newest-minimal
+        // representative instead of the default oldest one — see
+        // `selfRefBindingTerm` and the caller's two-attempt loop.
+        const saved_root = self.edge_self_root;
+        self.edge_self_root = if (prefer_newest_self_ref)
+            self.eg.find(self.eg.nodes.items[before_node].class)
+        else
+            null;
+        defer self.edge_self_root = saved_root;
 
         const before_is_bag =
             self.eg.nodes.items[before_node].node == .bag;
@@ -3772,6 +4160,32 @@ const ExplainCtx = struct {
             try matched.append(self.allocator(), @intCast(idx));
             return true;
         }
+        // Structured member whose re-instantiated class matches nothing:
+        // instantiation canonicalizes with TODAY's splice state, which can
+        // diverge from the fire-time state — a rule target that minted a
+        // nested same-head sum spliced it away when the inner class was
+        // bag-only, but by explain time that class has folded to a value
+        // (gained a non-bag node, exempting it from splicing), so the
+        // fresh interning lands in a class the union never touched. Fall
+        // back to structure-matching the pattern against the recorded
+        // members themselves.
+        if (pm == .app) {
+            for (bag.members, 0..) |member, idx| {
+                if (children[idx] != null) continue;
+                const member_root = self.eg.find(member);
+                if (try self.renderPattern(
+                    member_root,
+                    pm,
+                    subst,
+                    binder_masks,
+                )) |term| {
+                    children[idx] = term;
+                    try matched.append(self.allocator(), @intCast(idx));
+                    return true;
+                }
+            }
+            return false;
+        }
         // A binder bound to a sub-bag (residual binding) spans several
         // members; claim each individually with the binder's mask. The
         // class may hold several same-head bag nodes (splice twins at
@@ -3779,7 +4193,6 @@ const ExplainCtx = struct {
         // and keep the first full claim. The winning decomposition is
         // recorded as the binder's edge-scoped term so every other
         // rendering of the binder in this edge matches it member-wise.
-        if (pm != .binder) return false;
         const mask_id = binder_masks[pm.binder];
         if (self.rule_binder_terms) |overrides| {
             if (overrides[pm.binder]) |term| {
@@ -4028,6 +4441,17 @@ const ExplainCtx = struct {
                     binder_masks,
                 )) orelse return null;
                 if (nodeShapeEql(self.eg, rep.node, node_id)) return rep;
+                // An override already pinned (seeded from the in-hand
+                // term, or by the other endpoint) WINS even off-anchor:
+                // overwriting it here would desynchronize a side already
+                // rendered with it — the render fixpoint only detects
+                // fill-count growth, not overwrites — and the citation
+                // would pair endpoints from two different members of the
+                // binding's class. Anchor drift costs the caller a
+                // residual re-alignment, which processPath handles.
+                if (self.rule_binder_terms) |overrides| {
+                    if (overrides[b] != null) return rep;
+                }
                 // A bare-binder endpoint whose class representative is not
                 // the recorded vertex's shape (a self-containing class
                 // folds the compound away): anchor at the vertex and pin
@@ -4043,6 +4467,98 @@ const ExplainCtx = struct {
                 return anchored;
             },
         }
+    }
+
+    /// Walk `pattern` against an already-rendered term, pinning each
+    /// term-position binder's first structural occurrence as its
+    /// edge-scoped override — provided the subterm satisfies the
+    /// binder's avoid-mask (a mask-violating subterm falls back to the
+    /// class representative, which `ensureExtraction` mask-filters).
+    /// Bound-position and already-pinned binders are skipped; a shape
+    /// mismatch (spliced bag, drifted representative) skips silently.
+    fn seedOverridesFromTerm(
+        self: *ExplainCtx,
+        pattern: TemplateExpr,
+        term: *const Term,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+        overrides: []?*const Term,
+    ) void {
+        switch (pattern) {
+            .binder => |b| {
+                if (overrides[b] != null) return;
+                const binding = subst[b] orelse return;
+                if (binding != .class) return;
+                // The walk can descend through a same-head member that
+                // is NOT the one the match resolved, so this subterm may
+                // sit in a different class than the recorded binding —
+                // harvesting it would make the citation a different
+                // (wrong) instance. Only class-consistent subterms pin.
+                const term_root = self.eg.find(
+                    self.eg.nodes.items[term.node].class,
+                );
+                if (self.eg.find(binding.class) != term_root) return;
+                const atoms = self.maskAtoms(binder_masks[b]);
+                if (!self.termAvoidsAtoms(term, atoms)) return;
+                overrides[b] = term;
+            },
+            .app => |app| {
+                const stored = self.eg.nodes.items[term.node].node;
+                switch (stored) {
+                    .app => |napp| {
+                        if (napp.term_id != app.term_id) return;
+                        if (app.args.len != term.children.len) return;
+                        for (app.args, term.children) |arg, maybe_child| {
+                            const child = maybe_child orelse continue;
+                            self.seedOverridesFromTerm(
+                                arg,
+                                child,
+                                subst,
+                                binder_masks,
+                                overrides,
+                            );
+                        }
+                    },
+                    .leaf, .bag => return,
+                }
+            },
+        }
+    }
+
+    /// Whether a rendered term's denotation avoids every listed atom,
+    /// counting declared leaf dependencies (`leafAvoids`).
+    fn termAvoidsAtoms(
+        self: *const ExplainCtx,
+        term: *const Term,
+        atoms: []const LeafId,
+    ) bool {
+        if (atoms.len == 0) return true;
+        switch (self.eg.nodes.items[term.node].node) {
+            .leaf => |leaf| {
+                for (atoms) |atom| {
+                    if (!self.eg.leafAvoids(leaf, atom)) return false;
+                }
+            },
+            .app => |app| {
+                for (app.children) |child| {
+                    if (child != .bound) continue;
+                    for (atoms) |atom| {
+                        if (child.bound == atom) return false;
+                    }
+                }
+                for (term.children) |maybe_child| {
+                    const child = maybe_child orelse continue;
+                    if (!self.termAvoidsAtoms(child, atoms)) return false;
+                }
+            },
+            .bag => {
+                for (term.children) |maybe_child| {
+                    const child = maybe_child orelse return false;
+                    if (!self.termAvoidsAtoms(child, atoms)) return false;
+                }
+            },
+        }
+        return true;
     }
 
     /// The rendering of rule binder `b` under the current edge: the
@@ -4061,6 +4577,61 @@ const ExplainCtx = struct {
         return try self.bindingTerm(binding, binder_masks[b]);
     }
 
+    /// Representative for a rule-edge binding whose class IS the edge's
+    /// own class: vacuous rewrites (`x + 0 = x`, `sb x e a = e`) union a
+    /// node with its own child class, so the binding's class holds both
+    /// the written side's tower and the value it reduced to. The default
+    /// representative (oldest minimal member) is the written side there,
+    /// and rendering it re-poses the tower currently being explained — a
+    /// cycle the alignment guard kills. Among minimal-cost mask-avoiding
+    /// members, prefer the NEWEST node: fold-minted values postdate the
+    /// written tower. Children still render as default representatives.
+    fn selfRefBindingTerm(
+        self: *ExplainCtx,
+        class: EClassId,
+        mask_id: u32,
+    ) error{OutOfMemory}!?*const Term {
+        try self.ensureExtraction(mask_id);
+        const root = self.eg.find(class);
+        const atoms = self.maskAtoms(mask_id);
+        var best: ?ENodeId = null;
+        var best_cost: usize = 0;
+        node_loop: for (self.eg.nodes.items, 0..) |stored, node_id| {
+            if (self.eg.find(stored.class) != root) continue;
+            var cost: usize = 1;
+            switch (stored.node) {
+                .leaf => |leaf| for (atoms) |atom| {
+                    if (!self.eg.leafAvoids(leaf, atom)) {
+                        continue :node_loop;
+                    }
+                },
+                .app => |app| for (app.children) |child| switch (child) {
+                    .bound => |leaf| if (maskContains(atoms, leaf)) {
+                        continue :node_loop;
+                    },
+                    .class => |c| {
+                        cost += self.class_cost.get(
+                            maskedKey(self.eg.find(c), mask_id),
+                        ) orelse continue :node_loop;
+                    },
+                },
+                .bag => |bag| for (bag.members) |member| {
+                    cost += self.class_cost.get(
+                        maskedKey(self.eg.find(member), mask_id),
+                    ) orelse continue :node_loop;
+                },
+            }
+            if (best == null or cost < best_cost or
+                (cost == best_cost and node_id > best.?))
+            {
+                best = @intCast(node_id);
+                best_cost = cost;
+            }
+        }
+        const node = best orelse return null;
+        return try self.termForNode(node, mask_id);
+    }
+
     /// The representative term of a binding: the binder's step-consistent
     /// rendering (class extraction under the binder's avoid-mask for
     /// class bindings, the atom's own leaf node for bound bindings used
@@ -4071,7 +4642,14 @@ const ExplainCtx = struct {
         mask_id: u32,
     ) error{OutOfMemory}!?*const Term {
         switch (binding) {
-            .class => |c| return try self.classTerm(c, mask_id),
+            .class => |c| {
+                if (self.edge_self_root) |root| {
+                    if (self.eg.find(c) == root) {
+                        return try self.selfRefBindingTerm(c, mask_id);
+                    }
+                }
+                return try self.classTerm(c, mask_id);
+            },
             .bound => |leaf| {
                 const node_id = (try self.eg.lookupNode(
                     .{ .leaf = leaf },

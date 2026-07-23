@@ -126,6 +126,11 @@ pub const Result = struct {
     /// The found chain (or a seam of it) outgrew the lowering's emission
     /// caps; the conversion is proven, the proof text was abandoned.
     lower_capped: bool = false,
+    /// `@compute` orientations enrolled for the directed fold. Nonzero
+    /// means a saturated miss is NOT a forced negative: the fold reduces
+    /// each redex once in declaration order and never explores
+    /// alternative reduction orders.
+    compute_rule_count: usize = 0,
     classes: usize = 0,
     nodes: usize = 0,
 };
@@ -253,6 +258,42 @@ pub fn run(
             .restrictions = restrictions.items,
         });
     }
+    // `@compute` rules: one orientation each, flagged for the egraph's
+    // directed fold scheduler instead of general saturation. Bound-binder
+    // slots and dep restrictions ride the same machinery as general
+    // rules; the fold's shared apply path runs the same dep gate, and a
+    // dep-deferred designated redex stays unconsumed.
+    for (context.registry.computeRules()) |comp| {
+        const decl = &context.env.rules.items[comp.rule_id];
+        var bound_slots: std.ArrayListUnmanaged(u32) = .{};
+        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
+        var bound_ordinal: u6 = 0;
+        for (decl.args, 0..) |arg, slot| {
+            if (!arg.bound) continue;
+            try bound_slots.append(work, @intCast(slot));
+            for (decl.args, 0..) |term_arg, term_slot| {
+                if (term_arg.bound) continue;
+                if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
+                    try restrictions.append(work, .{
+                        .bound_slot = @intCast(slot),
+                        .term_slot = @intCast(term_slot),
+                    });
+                }
+            }
+            bound_ordinal += 1;
+        }
+        try rules.append(work, .{
+            .rule_id = comp.rule_id,
+            .reversed = comp.rtl,
+            .match_side = if (comp.ltr) comp.lhs else comp.rhs,
+            .target_side = if (comp.ltr) comp.rhs else comp.lhs,
+            .num_binders = comp.num_binders,
+            .bound_slots = bound_slots.items,
+            .restrictions = restrictions.items,
+            .compute = true,
+        });
+    }
+    result.compute_rule_count = context.registry.computeRules().len;
     result.rule_count = rules.items.len;
     result.ac_heads = ac_certs.count();
     {
@@ -284,6 +325,36 @@ pub fn run(
         }
         if (mask != 0) {
             try eg.bound_masks.put(work, @intCast(term_id), mask);
+        }
+    }
+    // Declared leaf dependencies: a theorem variable `(m: tm y)` depends
+    // on the bound binder y with no structural occurrence the egraph
+    // could see, so the dep gate's and extraction's avoidability checks
+    // consult these masks. Dep bits index bound binders in declaration
+    // order, same convention as the rule restrictions above.
+    {
+        var bound_leaves: std.ArrayListUnmanaged(egraph.LeafId) = .{};
+        for (theorem.arg_infos, 0..) |arg, idx| {
+            if (!arg.bound) continue;
+            try bound_leaves.append(
+                work,
+                leafIdFor(.{ .theorem_var = @intCast(idx) }),
+            );
+        }
+        for (theorem.arg_infos, 0..) |arg, idx| {
+            if (arg.bound or arg.deps == 0) continue;
+            var deps: std.ArrayListUnmanaged(egraph.LeafId) = .{};
+            for (bound_leaves.items, 0..) |leaf, ordinal| {
+                if ((arg.deps >> @intCast(ordinal)) & 1 != 0) {
+                    try deps.append(work, leaf);
+                }
+            }
+            if (deps.items.len == 0) continue;
+            try eg.leaf_deps.put(
+                work,
+                leafIdFor(.{ .theorem_var = @intCast(idx) }),
+                deps.items,
+            );
         }
     }
     // Registered relation heads: pool entries with one of these at the top
@@ -375,6 +446,7 @@ pub fn run(
         result.stats.dep_deferred += slice.dep_deferred;
         result.stats.ac_match_capped += slice.ac_match_capped;
         result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
+        result.stats.fold_applied += slice.fold_applied;
         if (slice.outcome != .iteration_capped) {
             result.stats.outcome = slice.outcome;
             break;
