@@ -95,3 +95,10 @@ jobs:
             -Doptimize=ReleaseFast \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
+
+      - name: Test the cross-origin LSP worker in Chromium
+        run: |
+          nix develop .#ci --command zig build test-lsp-cross-origin \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global

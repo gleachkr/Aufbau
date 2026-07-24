@@ -3,6 +3,23 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `@aufbau/lsp` can now be loaded straight from a CDN. Browsers refuse
+  to construct a Web Worker from a cross-origin script, and CORS does
+  not lift that, so `loadLspServerWorker()` previously threw a
+  `SecurityError` whenever the package was served from somewhere other
+  than the page's own origin — an embedding page got a plain editor with
+  no hover, completion, or proof search, and had to supply its own
+  worker to get them back. It now detects the cross-origin case and
+  boots the worker from a same-origin `blob:` URL that imports the real
+  module, which leaves `import.meta.url` (and so the sibling
+  `lsp.wasm`) pointing at the CDN. Pages with a Content-Security-Policy
+  need `worker-src blob:`; callers who pass their own `options.worker`
+  or `options.workerUrl` are unaffected.
+
 ## [0.0.3] - 2026-07-23
 
 ### Added

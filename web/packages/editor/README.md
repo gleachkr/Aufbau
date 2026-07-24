@@ -54,3 +54,42 @@ individual proof element. The package also registers `<aufbau-index>` for a
 live statement index.
 
 This package requires a browser DOM. It does not run under plain Node.
+
+## Loading from a CDN
+
+The components need no bundler and no build step — an import map is enough. The
+`?external=` parameters keep CodeMirror and the Aufbau wasm packages as single
+shared instances rather than one copy per dependent:
+
+```html
+<script type="importmap">
+  {
+    "imports": {
+      "@codemirror/state": "https://esm.sh/@codemirror/state",
+      "@codemirror/view": "https://esm.sh/@codemirror/view?external=@codemirror/state",
+      "@codemirror/commands": "https://esm.sh/@codemirror/commands?external=@codemirror/state,@codemirror/view",
+      "@codemirror/lint": "https://esm.sh/@codemirror/lint?external=@codemirror/state,@codemirror/view",
+      "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete?external=@codemirror/state,@codemirror/view",
+      "@aufbau/compiler": "https://esm.sh/@aufbau/compiler",
+      "@aufbau/lsp": "https://esm.sh/@aufbau/lsp",
+      "@aufbau/editor": "https://esm.sh/@aufbau/editor?external=@aufbau/compiler,@aufbau/lsp,@codemirror/state,@codemirror/view,@codemirror/commands,@codemirror/lint,@codemirror/autocomplete"
+    }
+  }
+</script>
+<script type="module">
+  import "@aufbau/editor";
+</script>
+```
+
+The language server runs in a Web Worker that the browser will only build from
+a same-origin script, so `@aufbau/lsp` bootstraps it through a `blob:` URL when
+it is served from a CDN. A page with a Content-Security-Policy therefore needs
+`worker-src blob:` alongside the CDN host — see the `@aufbau/lsp` README. Drop
+the `@aufbau/lsp` and `@codemirror/autocomplete` entries to run without a
+language server; the editor still compiles and reports diagnostics.
+
+Host pages with their own global keyboard shortcuts should be aware that
+keystrokes typed in a cell bubble out of its shadow root retargeted to the
+`<aufbau-*>` host element. If those shortcuts swallow ordinary characters, stop
+keyboard events whose `composedPath()` contains an `AUFBAU-` element before the
+page's own handlers see them.

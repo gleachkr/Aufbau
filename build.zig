@@ -357,6 +357,20 @@ pub fn build(b: *std.Build) void {
     );
     editor_browser_test_step.dependOn(&editor_browser_test_cmd.step);
 
+    const lsp_cross_origin_test_cmd = b.addSystemCommand(&.{"node"});
+    lsp_cross_origin_test_cmd.addFileArg(
+        b.path("tests/lsp_cross_origin_worker.mjs"),
+    );
+    lsp_cross_origin_test_cmd.addArg(
+        b.getInstallPath(.prefix, "npm/@aufbau"),
+    );
+    lsp_cross_origin_test_cmd.step.dependOn(web_packages_step);
+    const lsp_cross_origin_test_step = b.step(
+        "test-lsp-cross-origin",
+        "Test the LSP worker transport across origins in Chromium",
+    );
+    lsp_cross_origin_test_step.dependOn(&lsp_cross_origin_test_cmd.step);
+
     const run_step = b.step("run", "Run the mm0-zig verifier");
     const run_cmd = b.addRunArtifact(verifier_exe);
     run_step.dependOn(&run_cmd.step);

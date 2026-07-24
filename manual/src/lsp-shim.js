@@ -1,9 +1,14 @@
 // Same-origin shim for @aufbau/lsp.
 //
+// TEMPORARY: @aufbau/lsp does this itself as of the next release (see its
+// `spawnWorker`). esm.sh still serves 0.0.3, which does not, so the shim has to
+// stay until then — at which point this file goes away and the `@aufbau/lsp`
+// import-map entry in theme/head.hbs points straight at esm.sh.
+//
 // The language server runs in a Web Worker, and browsers forbid constructing a
-// worker from a cross-origin script — so `@aufbau/lsp` cannot be loaded straight
-// from esm.sh the way the compiler and editor can. The workaround is the
-// module-worker analogue of the classic cross-origin `importScripts` trick:
+// worker from a cross-origin script — so `@aufbau/lsp` 0.0.3 cannot be loaded
+// straight from esm.sh the way the compiler and editor can. The workaround is
+// the module-worker analogue of the classic cross-origin `importScripts` trick:
 // build the Worker from a *same-origin* blob whose only job is to `import` the
 // real (cross-origin) worker module. The blob URL inherits this page's origin,
 // so `new Worker` is allowed; the import inside is a cross-origin module fetch,

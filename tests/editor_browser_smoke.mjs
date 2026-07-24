@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import {
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
-import { createServer } from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, extname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  close,
+  createResultServer,
+  findBrowser,
+  listen,
+  run,
+  runBrowser,
+} from "./browser_harness.mjs";
 
 const packageRoot = resolve(
   process.argv[2] ?? "zig-out/npm/@aufbau",
@@ -84,7 +84,9 @@ try {
   });
 
   await writeFile(join(tempRoot, "index.html"), smokePageSource());
-  const smokeServer = createSmokeServer(tempRoot);
+  const smokeServer = createResultServer(tempRoot, {
+    resultPath: "/__smoke_result",
+  });
   server = smokeServer.server;
   const address = await listen(server);
   const url = `http://127.0.0.1:${address.port}/index.html`;
@@ -111,226 +113,6 @@ try {
     maxRetries: 10,
     recursive: true,
     retryDelay: 100,
-  });
-}
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    ...options,
-  });
-
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    const detail = [result.stdout, result.stderr]
-      .filter(Boolean)
-      .join("\n");
-    throw new Error(
-      `${basename(command)} exited with status ${result.status}\n${detail}`,
-    );
-  }
-  return result.stdout;
-}
-
-function findBrowser() {
-  const configured = process.env.CHROME;
-  if (configured) return configured;
-
-  for (const candidate of [
-    "chromium",
-    "chromium-browser",
-    "google-chrome",
-    "google-chrome-stable",
-  ]) {
-    const found = spawnSync("which", [candidate], {
-      encoding: "utf8",
-    });
-    if (found.status === 0) return found.stdout.trim();
-  }
-  throw new Error(
-    "Chromium was not found; set CHROME to a Chromium executable",
-  );
-}
-
-function createSmokeServer(root) {
-  let resolveResult;
-  const result = new Promise((resolveSmoke) => {
-    resolveResult = resolveSmoke;
-  });
-  const server = createServer(async (request, response) => {
-    try {
-      const url = new URL(request.url ?? "/", "http://localhost");
-      if (url.pathname === "/__smoke_result") {
-        const body = await readRequestBody(request);
-        const report = JSON.parse(body);
-        if (
-          request.method !== "POST" ||
-          !["passed", "failed"].includes(report.status) ||
-          typeof report.detail !== "string"
-        ) {
-          response.writeHead(400).end("Invalid smoke result");
-          return;
-        }
-        response.writeHead(204).end();
-        resolveResult(report);
-        return;
-      }
-
-      const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
-      if (path !== root && !path.startsWith(`${root}/`)) {
-        response.writeHead(403).end("Forbidden");
-        return;
-      }
-      const info = await stat(path);
-      if (!info.isFile()) throw new Error("not a file");
-      const body = await readFile(path);
-      response.writeHead(200, {
-        "Content-Type": mimeType(path),
-        "Cache-Control": "no-store",
-      });
-      response.end(body);
-    } catch {
-      response.writeHead(404).end("Not found");
-    }
-  });
-  return { result, server };
-}
-
-async function readRequestBody(request) {
-  const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function mimeType(path) {
-  switch (extname(path)) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-    case ".mjs":
-      return "text/javascript; charset=utf-8";
-    case ".wasm":
-      return "application/wasm";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-function listen(httpServer) {
-  return new Promise((resolveListen, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", () => {
-      httpServer.off("error", reject);
-      resolveListen(httpServer.address());
-    });
-  });
-}
-
-function close(httpServer) {
-  return new Promise((resolveClose, reject) => {
-    httpServer.close((error) => {
-      if (error) reject(error);
-      else resolveClose();
-    });
-  });
-}
-
-async function runBrowser(browser, url, root, resultPromise) {
-  try {
-    return await launchBrowser(browser, url, root, resultPromise, 1);
-  } catch (error) {
-    if (!error?.timedOut) throw error;
-    console.warn(
-      `${basename(browser)} timed out without reporting; retrying once`,
-    );
-    return await launchBrowser(browser, url, root, resultPromise, 2);
-  }
-}
-
-async function launchBrowser(browser, url, root, resultPromise, attempt) {
-  const child = spawn(
-    browser,
-    [
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-background-networking",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-default-browser-check",
-      "--no-first-run",
-      `--user-data-dir=${join(root, `chrome-profile-${attempt}`)}`,
-      url,
-    ],
-    { detached: process.platform !== "win32" },
-  );
-  let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => {
-    stderr += chunk;
-  });
-
-  const closed = new Promise((resolveClose, rejectClose) => {
-    child.once("error", rejectClose);
-    child.once("close", resolveClose);
-  });
-  let timeout;
-
-  try {
-    const result = await Promise.race([
-      resultPromise,
-      closed.then((status) => {
-        throw new Error(
-          `${basename(browser)} exited with status ${status}\n${stderr}`,
-        );
-      }),
-      new Promise((_, rejectTimeout) => {
-        timeout = setTimeout(() => {
-          const error = new Error(
-            `${basename(browser)} timed out\n${stderr}`,
-          );
-          error.timedOut = true;
-          rejectTimeout(error);
-        }, 90000);
-      }),
-    ]);
-    return { ...result, stderr };
-  } finally {
-    clearTimeout(timeout);
-    await stopBrowser(child, closed);
-  }
-}
-
-async function stopBrowser(child, closed) {
-  if (
-    child.pid === undefined ||
-    child.exitCode !== null ||
-    child.signalCode !== null
-  ) return;
-  signalBrowser(child, "SIGTERM");
-  const stopped = await Promise.race([
-    closed.then(
-      () => true,
-      () => true,
-    ),
-    delay(5000).then(() => false),
-  ]);
-  if (stopped) return;
-  signalBrowser(child, "SIGKILL");
-  await closed.catch(() => {});
-}
-
-function signalBrowser(child, signal) {
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch (error) {
-    if (error.code !== "ESRCH") throw error;
-  }
-}
-
-function delay(milliseconds) {
-  return new Promise((resolveDelay) => {
-    setTimeout(resolveDelay, milliseconds);
   });
 }
 

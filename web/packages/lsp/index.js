@@ -134,11 +134,62 @@ export class WorkerLspServer {
 // to supply a preconstructed Web Worker, or `options.workerUrl` to override
 // where it is loaded from.
 export async function loadLspServerWorker(options = {}) {
-  const worker = options.worker
-    ?? new Worker(options.workerUrl ?? defaultWorkerUrl, { type: "module" });
-  const server = new WorkerLspServer(worker);
-  await server.ready;
+  const spawned = options.worker
+    ? null
+    : spawnWorker(options.workerUrl ?? defaultWorkerUrl);
+  const server = new WorkerLspServer(options.worker ?? spawned.worker);
+  try {
+    await server.ready;
+  } finally {
+    // The blob only has to survive until the worker script has been fetched.
+    // Revoking after `ready` (rather than right after construction) keeps us
+    // clear of the spec's "fetch the worker script in parallel" wording.
+    if (spawned?.objectUrl) URL.revokeObjectURL(spawned.objectUrl);
+  }
   return server;
+}
+
+// Browsers refuse to construct a Worker from a cross-origin script, and CORS
+// does not lift that — so loading this package straight from a CDN (esm.sh,
+// unpkg) would leave the worker transport unusable. The way around it is the
+// module-worker analogue of the classic cross-origin `importScripts` trick:
+// build the worker from a *same-origin* blob whose only job is to `import` the
+// real URL. The blob inherits the page's origin, so construction is allowed,
+// while the import inside is an ordinary cross-origin module fetch that the CDN
+// serves with permissive CORS. `import.meta.url` inside the worker stays the
+// real URL, so its `./lsp.wasm` sibling still resolves back to the CDN.
+//
+// Pages that do this need `worker-src blob:` in their CSP (plus the CDN host in
+// `script-src`/`connect-src`).
+function spawnWorker(url) {
+  const remote = crossOriginHttpUrl(url);
+  if (remote === null) {
+    return { worker: new Worker(url, { type: "module" }), objectUrl: null };
+  }
+  const bootstrap = `import ${JSON.stringify(remote)};`;
+  const objectUrl = URL.createObjectURL(
+    new Blob([bootstrap], { type: "text/javascript" }),
+  );
+  return { worker: new Worker(objectUrl, { type: "module" }), objectUrl };
+}
+
+// The absolute form of `url` when it is an http(s) URL on another origin, else
+// null. Restricted to http(s) so that same-origin URLs, and opaque schemes a
+// caller may have built the worker script from themselves (`blob:`, `data:`),
+// keep going down the direct path.
+function crossOriginHttpUrl(url) {
+  const here = globalThis.location;
+  if (!here) return null;
+  try {
+    const resolved = new URL(url, here.href);
+    if (resolved.origin === here.origin) return null;
+    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+      return null;
+    }
+    return resolved.href;
+  } catch {
+    return null;
+  }
 }
 
 async function instantiateWasm(options, fallbackUrl) {
