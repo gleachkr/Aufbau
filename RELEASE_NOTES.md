@@ -1,3 +1,91 @@
+# Aufbau 0.0.3
+
+Aufbau 0.0.3 teaches `conversion?` to compute, and makes it considerably
+harder to break. It adds `@compute`, a directed-computation counterpart to the
+`@conversion` equality-saturation rules, and a substantial batch of fixes to
+saturation, proof extraction, and failure reporting. The verifier and the
+trusted kernel are unchanged: everything new lowers through ordinary proof
+lines that the 0.0.1 verifier already accepts.
+
+## Highlights
+
+### `@compute` — directed computation inside `conversion?`
+
+A `@compute ltr` (or `rtl`) annotation enrolls a hypothesis-free theorem
+concluding `rel(lhs, rhs)` as a *computational* rule. Compute rules are
+excluded from general equality saturation; instead, a directed fold scheduler
+inside the same egraph reduces each node's first fresh match once, running to
+fixpoint before each saturation iteration. For a terminating rule set this
+makes computation cost linearly many folds where undirected saturation
+explores an exponential closure: the motivating digit-addition table with
+carries folds 16-digit sums to a found, verified chain at plain defaults,
+where the same rules as `@conversion` grind a widened search to a
+budget-limited fixpoint.
+
+Theorem variables are inert constants to the fold — `x + 0` reduces by an
+enrolled zero law just as a constant sum does — and rules with bound binders
+enroll too, provided the chosen direction binds every binder from the matched
+term (a fold may consume a quantifier, never invent one), with their
+variable-dependency side conditions enforced by the same match-admission gate
+as `@conversion` rules. That combination is enough to run an equational
+lambda calculus: the test suite evaluates beta-reduction through an explicit
+object-level substitution operator, with capture avoidance falling out of the
+dependency conditions, and folds applied lambda terms down to numerals.
+
+Fold steps lower as ordinary rule citations, so the verifier sees nothing
+new. Because the fold commits to one reduction order, a saturated miss with
+compute rules enrolled is reported as *not* a forced negative, and
+declaration order is the fold's redex priority — `docs/rewrite_system.md`
+covers how to order a rule table.
+
+### Sturdier saturation, extraction, and failure reports
+
+Most of the release is `conversion?` keeping its promises under stress. The
+search no longer stalls permanently when a dense equation cluster floods rule
+matching (the applied-match ledger now persists across iterations), no longer
+exhausts memory when rules build nested results over AC-absorbed operators,
+and a budget-capped run that changes nothing now ends as a *budget-limited
+fixpoint* — the report says outright that raising `iters:` cannot help,
+instead of suggesting a larger value that would burn minutes reaching the
+same place.
+
+Proof extraction — the step that turns a convertible egraph into a verified
+rewrite chain — was hardened against three classes of self-referential
+structure: e-classes merged with compounds of themselves (which previously
+recursed without bound and could crash the language server), classes that
+contain their own children via vacuous rewrites like `x + 0 = x` (which
+could fail to extract, or worse, miscite a rule instance), and rule
+instances whose nested sums canonicalized differently at explanation time
+than when the rule fired. Provably convertible goals in all three shapes now
+emit ordinary verified chains.
+
+### Fixes
+
+- `conversion?`'s dependency gate now honors *declared* variable
+  dependencies, not just structural ones: a theorem variable `(m: tm y)`
+  depends on `y` through its binder declaration alone, and a rule match
+  whose side condition required avoiding `y` was previously admitted anyway
+  — the search could claim a capture-unsound goal proven and emit a chain
+  the verifier rejects. Such matches now defer honestly, in both match
+  admission and extraction.
+- Explanation extraction terminates on cyclic ground-sum classes instead of
+  overflowing the stack mid-session in the language server.
+- Bag-member claiming falls back to structure-matching the rule pattern
+  against recorded members when re-instantiation lands in a class the union
+  never touched (carry rules hit this on every chain).
+
+See the [changelog](CHANGELOG.md) for the complete list.
+
+## Compatibility
+
+MMB proof files produced by earlier releases remain valid. Proof syntax is
+additive: `@compute` is opt-in, and existing `.mm0`/`.auf` sources compile
+unchanged. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.2
 
 Aufbau 0.0.2 is a feature release focused on proof automation. It adds an

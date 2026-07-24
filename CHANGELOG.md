@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.3] - 2026-07-23
 
 ### Added
 
@@ -254,5 +254,6 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.3]: https://github.com/gleachkr/Aufbau/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/gleachkr/Aufbau/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/gleachkr/Aufbau/releases/tag/v0.0.1

@@ -1,6 +1,6 @@
 {
   "name": "@aufbau/lsp",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Aufbau language server for browsers and JavaScript runtimes.",
   "license": "Apache-2.0",
   "repository": {
