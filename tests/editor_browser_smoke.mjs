@@ -236,6 +236,18 @@ function close(httpServer) {
 }
 
 async function runBrowser(browser, url, root, resultPromise) {
+  try {
+    return await launchBrowser(browser, url, root, resultPromise, 1);
+  } catch (error) {
+    if (!error?.timedOut) throw error;
+    console.warn(
+      `${basename(browser)} timed out without reporting; retrying once`,
+    );
+    return await launchBrowser(browser, url, root, resultPromise, 2);
+  }
+}
+
+async function launchBrowser(browser, url, root, resultPromise, attempt) {
   const child = spawn(
     browser,
     [
@@ -246,7 +258,7 @@ async function runBrowser(browser, url, root, resultPromise) {
       "--disable-gpu",
       "--no-default-browser-check",
       "--no-first-run",
-      `--user-data-dir=${join(root, "chrome-profile")}`,
+      `--user-data-dir=${join(root, `chrome-profile-${attempt}`)}`,
       url,
     ],
     { detached: process.platform !== "win32" },
@@ -273,9 +285,11 @@ async function runBrowser(browser, url, root, resultPromise) {
       }),
       new Promise((_, rejectTimeout) => {
         timeout = setTimeout(() => {
-          rejectTimeout(
-            new Error(`${basename(browser)} timed out\n${stderr}`),
+          const error = new Error(
+            `${basename(browser)} timed out\n${stderr}`,
           );
+          error.timedOut = true;
+          rejectTimeout(error);
         }, 90000);
       }),
     ]);
