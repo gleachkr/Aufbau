@@ -1,8 +1,10 @@
 .cache*
 .zig-cache*
+manual/book
 .zig-global-cache
 zig-out
 .direnv
+.mcp.json
 *.lec
 *.vim
 AGENTS.md

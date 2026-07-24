@@ -43,6 +43,14 @@ jobs:
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Build manual
+        run: |
+          nix develop .#ci --command mdbook build manual
+          cp -r manual/book zig-out/web-demo/manual
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

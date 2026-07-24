@@ -1,0 +1,47 @@
+<script type="importmap">
+  {
+    "imports": {
+      "@codemirror/state": "https://esm.sh/@codemirror/state",
+      "@codemirror/view": "https://esm.sh/@codemirror/view?external=@codemirror/state",
+      "@codemirror/commands": "https://esm.sh/@codemirror/commands?external=@codemirror/state,@codemirror/view",
+      "@codemirror/lint": "https://esm.sh/@codemirror/lint?external=@codemirror/state,@codemirror/view",
+      "@codemirror/autocomplete": "https://esm.sh/@codemirror/autocomplete?external=@codemirror/state,@codemirror/view",
+      "@aufbau/compiler": "https://esm.sh/@aufbau/compiler",
+      "@aufbau/lsp": "./{{ path_to_root }}lsp-shim.js",
+      "@aufbau/editor": "https://esm.sh/@aufbau/editor?external=@aufbau/compiler,@aufbau/lsp,@codemirror/state,@codemirror/view,@codemirror/commands,@codemirror/lint,@codemirror/autocomplete"
+    }
+  }
+</script>
+<script type="module">
+  import "@aufbau/editor";
+</script>
+<script>
+  // The proof editor lives in a shadow root, so its keystrokes bubble out to
+  // `document` retargeted to the <aufbau-*> host, where mdbook's global key
+  // handlers (the `?` help overlay, `s`/`/` search, chapter nav) mistake them
+  // for page shortcuts and swallow characters — you couldn't type the `?` in
+  // `auto?`. Stop keyboard events that originate inside a cell before they
+  // reach those handlers. This runs from <head>, before book.js, so it is the
+  // first document listener in the bubble phase and can halt the rest.
+  for (const type of ["keydown", "keyup", "keypress"]) {
+    document.addEventListener(type, function (event) {
+      for (const node of event.composedPath()) {
+        if (node.tagName && node.tagName.startsWith("AUFBAU-")) {
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
+    });
+  }
+</script>
+<style>
+  .aufbau-cell {
+    margin: 1.2rem 0;
+  }
+  aufbau-proof,
+  aufbau-theory,
+  aufbau-index {
+    display: block;
+    margin: 0.6rem 0;
+  }
+</style>

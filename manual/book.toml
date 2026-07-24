@@ -1,0 +1,14 @@
+[book]
+title = "The Aufbau Manual"
+authors = ["Graham Leach-Krouse"]
+language = "en"
+src = "src"
+
+[preprocessor.aufbau-cells]
+command = "node preprocessor/aufbau-cells.mjs"
+renderers = ["html"]
+
+[output.html]
+theme = "theme"
+default-theme = "light"
+preferred-dark-theme = "navy"

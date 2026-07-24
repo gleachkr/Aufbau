@@ -51,6 +51,7 @@
               mm0-rs
               mm0-c
               nodejs_22
+              mdbook
               hyperfine
               perf
             ];
@@ -62,6 +63,7 @@
               mm0-rs
               mm0-c
               pkgs.nodejs_22
+              pkgs.mdbook
             ];
           };
         };
