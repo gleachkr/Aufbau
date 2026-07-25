@@ -47,7 +47,7 @@
 # Tools
 
 - [Install and run](install-and-run.md)
-- [Embedding the editor]()
+- [Embedding the editor](embedding.md)
 - [The npm packages]()
 
 # Appendices
