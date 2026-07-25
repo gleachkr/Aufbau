@@ -424,6 +424,18 @@ runs the normal assertion-metadata path for those annotations.
 Proof-side def annotations are intentionally rejected for now; local def
 notation and term metadata are not part of the current format.
 
+The parser has two modes. `Parser.init` is strict — the first line it
+cannot read fails the whole item — and that is what everything which
+checks or compiles a proof uses. `Parser.initLenient` recovers per proof
+line instead, retaining the label and goal of a line whose rule
+application did not parse and marking it `ProofLine.incomplete`. Only
+the LSP indexer (`lsp/builder.zig`) parses leniently: a half-typed line
+is the normal state of a file being edited, and under the strict parser
+it costs the reader every completion, hover, and outline entry in the
+surrounding block rather than just that line's. Consumers that resolve
+a rule must skip `incomplete` lines; syntax diagnostics are unaffected,
+because they come from the pipeline's own strict parse.
+
 Local defs are inserted into the live parser and `GlobalEnv` immediately
 after they are checked. Later `.auf` math and later MM0 declarations can
 therefore resolve them, but earlier items cannot. Bodyless public def

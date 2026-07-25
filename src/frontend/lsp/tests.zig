@@ -292,7 +292,7 @@ test "completion returns sorts and math symbols in mm0 contexts" {
         return error.MissingBinderCompletion;
     };
     try expectSortPrefix(p, "00");
-    try expectSortPrefix(top, "07");
+    try expectSortPrefix(top, "08");
 }
 
 test "completion returns notation tokens and aliases in mm0 math" {
@@ -347,8 +347,8 @@ test "completion returns notation tokens and aliases in mm0 math" {
     const raw_forall = completionNamed(alias_items, "forall") orelse {
         return error.MissingRawTermCompletion;
     };
-    try expectSortPrefix(forall, "04");
-    try expectSortPrefix(raw_forall, "07");
+    try expectSortPrefix(forall, "05");
+    try expectSortPrefix(raw_forall, "08");
     try std.testing.expect(std.mem.order(
         u8,
         forall.sort_text,
@@ -359,7 +359,7 @@ test "completion returns notation tokens and aliases in mm0 math" {
     const open_bracket = completionNamed(alias_items, "[") orelse {
         return error.MissingBracketNotationCompletion;
     };
-    try expectSortPrefix(open_bracket, "05");
+    try expectSortPrefix(open_bracket, "06");
 }
 
 test "snippet escaping protects snippet metacharacters" {
@@ -407,7 +407,7 @@ test "completion returns prefix notation snippets when supported" {
         "∀ ${1:p}$0",
         snippet.snippet_replacement_text orelse "",
     );
-    try expectSortPrefix(snippet, "06");
+    try expectSortPrefix(snippet, "07");
     try std.testing.expect(snippet.filter_text != null);
     try std.testing.expectEqualStrings(
         "forall ∀",
@@ -776,6 +776,233 @@ test "completion returns proof rules, references, and binders" {
     );
     defer std.testing.allocator.free(bind_items);
     try std.testing.expect(completionNamed(bind_items, "p") != null);
+}
+
+test "a half-typed proof line does not blank its block" {
+    const mm0_text =
+        \\provable sort wff;
+        \\axiom use (p: wff): $ p $;
+        \\theorem main (p: wff): $ p $ > $ p $;
+    ;
+    // `by a?` is what the file looks like partway through typing `auto?`, and
+    // it does not parse. The block around it still has to work.
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ p $ by use []
+        \\l2: $ p $ by a?
+        \\l3: $ p $ by use []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const broken_offset = std.mem.indexOf(u8, proof_text, "a?") orelse {
+        return error.MissingRuleContext;
+    };
+    var broken_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer broken_arena.deinit();
+    const broken_items = try snapshot.completionsAt(
+        broken_arena.allocator(),
+        .proof,
+        broken_offset + "a?".len,
+        .{},
+    );
+    if (completionNamed(broken_items, "auto?") == null) {
+        return error.MissingSearchTacticCompletion;
+    }
+    // A token holding a `?` can only become a placeholder, so the theory's
+    // rules drop out — no rule name can contain one.
+    if (completionNamed(broken_items, "use") != null) {
+        return error.UnexpectedRuleCompletion;
+    }
+
+    // The broken line's own label survives, so the lines after it can still
+    // cite it — the whole point of keeping the partial line.
+    const ref_offset = std.mem.lastIndexOf(u8, proof_text, "use [") orelse {
+        return error.MissingRefContext;
+    };
+    var ref_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ref_arena.deinit();
+    const ref_items = try snapshot.completionsAt(
+        ref_arena.allocator(),
+        .proof,
+        ref_offset + "use [".len,
+        .{},
+    );
+    for ([_][]const u8{ "l1", "l2" }) |label| {
+        if (completionNamed(ref_items, label) == null) {
+            return error.MissingProofLineCompletion;
+        }
+    }
+}
+
+test "a token holding a question mark completes only to search tactics" {
+    const mm0_text =
+        \\provable sort wff;
+        \\axiom use (p: wff): $ p $;
+        \\theorem main (p: wff): $ p $ > $ p $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ p $ by use []
+        \\l2: $ p $ by ?
+        \\l3: $ p $ by use [auto?]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    // A bare `?` in the rule position, and a placeholder in a reference slot:
+    // both are committed, so both offer the four tactics and nothing else.
+    // (A *bare* `?` in a reference slot does not parse at all, so that line
+    // is incomplete and offers no reference context — a separate gap.)
+    for ([_][]const u8{ "by ?", "use [auto?" }) |prefix| {
+        const offset = std.mem.indexOf(u8, proof_text, prefix) orelse {
+            return error.MissingPlaceholderContext;
+        };
+        const typed = prefix[std.mem.lastIndexOfScalar(
+            u8,
+            prefix,
+            if (std.mem.indexOfScalar(u8, prefix, '[') != null) '[' else ' ',
+        ).? + 1 ..];
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const items = try snapshot.completionsAt(
+            arena.allocator(),
+            .proof,
+            offset + prefix.len,
+            .{},
+        );
+        try std.testing.expectEqual(@as(usize, 4), items.len);
+        for ([_][]const u8{
+            "auto?",
+            "exact?",
+            "apply?",
+            "conversion?",
+        }) |label| {
+            const item = completionNamed(items, label) orelse {
+                return error.MissingSearchTacticCompletion;
+            };
+            // The replacement swallows the token the reader already typed,
+            // trailing `?` included.
+            try std.testing.expectEqualStrings(
+                typed,
+                proof_text[item.replacement.start..item.replacement.end],
+            );
+        }
+    }
+}
+
+test "completion offers search tactics in rule and reference positions" {
+    const mm0_text =
+        \\provable sort wff;
+        \\axiom use (p: wff): $ p $;
+        \\theorem main (p: wff): $ p $ > $ p $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ p $ by use (p := $ p $) []
+        \\l2: $ p $ by au
+        \\l3: $ p $ by auto?
+        \\l4: $ p $ by use [auto?]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const stem_offset = std.mem.indexOf(u8, proof_text, "au\n") orelse {
+        return error.MissingRuleContext;
+    };
+    const stem_items = try snapshot.completionsAt(
+        std.testing.allocator,
+        .proof,
+        stem_offset + "au".len,
+        .{},
+    );
+    defer std.testing.allocator.free(stem_items);
+
+    const auto = completionNamed(stem_items, "auto?") orelse {
+        return error.MissingSearchTacticCompletion;
+    };
+    try std.testing.expectEqual(Index.CompletionKind.keyword, auto.kind);
+    try std.testing.expect(auto.documentation_markdown != null);
+    try std.testing.expectEqualStrings("auto?", auto.replacement_text);
+    try std.testing.expectEqualStrings(
+        "au",
+        proof_text[auto.replacement.start..auto.replacement.end],
+    );
+    for ([_][]const u8{ "exact?", "apply?", "conversion?" }) |label| {
+        if (completionNamed(stem_items, label) == null) {
+            return error.MissingSearchTacticCompletion;
+        }
+    }
+
+    // Tactics lead the rule list: four fixed entries a reader can learn, ahead
+    // of the theory's own rules.
+    const use_rule = completionNamed(stem_items, "use") orelse {
+        return error.MissingRuleCompletion;
+    };
+    try std.testing.expect(std.mem.order(
+        u8,
+        auto.sort_text,
+        use_rule.sort_text,
+    ) == .lt);
+
+    // Completing over a placeholder takes its trailing `?` with it, so swapping
+    // one tactic for another does not leave `auto?exact?`.
+    const rule_offset = std.mem.indexOf(u8, proof_text, "auto?") orelse {
+        return error.MissingPlaceholderRuleContext;
+    };
+    var rule_arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer rule_arena_state.deinit();
+    const rule_items = try snapshot.completionsAt(
+        rule_arena_state.allocator(),
+        .proof,
+        rule_offset + "auto?".len,
+        .{},
+    );
+    const exact = completionNamed(rule_items, "exact?") orelse {
+        return error.MissingSearchTacticCompletion;
+    };
+    try std.testing.expectEqualStrings(
+        "auto?",
+        proof_text[exact.replacement.start..exact.replacement.end],
+    );
+
+    // A reference slot takes a placeholder too (`use [auto?]`).
+    const ref_offset = std.mem.lastIndexOf(u8, proof_text, "auto?") orelse {
+        return error.MissingRefContext;
+    };
+    var ref_arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ref_arena_state.deinit();
+    const ref_items = try snapshot.completionsAt(
+        ref_arena_state.allocator(),
+        .proof,
+        ref_offset + "auto?".len,
+        .{},
+    );
+    const ref_exact = completionNamed(ref_items, "exact?") orelse {
+        return error.MissingRefTacticCompletion;
+    };
+    try std.testing.expectEqualStrings(
+        "auto?",
+        proof_text[ref_exact.replacement.start..ref_exact.replacement.end],
+    );
 }
 
 test "completion returns proof rules inside nested applications" {

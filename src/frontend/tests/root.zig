@@ -578,6 +578,147 @@ test "proof script parser recovery requires underlines on later blocks" {
     try std.testing.expect(!parser.recoverToNextBlockBoundary());
 }
 
+test "lenient parser keeps a broken line's label and goal" {
+    // `by a?` is the shape a reader is mid-keystroke in: a rule name that no
+    // longer parses because a `?` is being typed after it.
+    const src =
+        \\main
+        \\----
+        \\l1: $ top $ by keep []
+        \\l2: $ top $ by a?
+        \\l3: $ top $ by keep [l1]
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 3), block.lines.len);
+
+    try std.testing.expect(!block.lines[0].incomplete);
+    try std.testing.expect(!block.lines[2].incomplete);
+
+    const broken = block.lines[1];
+    try std.testing.expect(broken.incomplete);
+    try std.testing.expectEqualStrings("l2", broken.label);
+    try std.testing.expectEqualStrings(" top ", broken.assertion.text);
+    try std.testing.expectEqualStrings("", broken.application.rule_name);
+    try std.testing.expectEqualStrings(
+        "l2",
+        src[broken.label_span.start..broken.label_span.end],
+    );
+    // The line claims its own text and no more.
+    try std.testing.expectEqualStrings(
+        "l2: $ top $ by a?",
+        src[broken.span.start..broken.span.end],
+    );
+    try std.testing.expect((try parser.nextBlock()) == null);
+}
+
+test "lenient parser keeps the label when the goal is half-typed" {
+    const src =
+        \\main
+        \\----
+        \\l1: $ top
+        \\l2: $ top $ by keep []
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), block.lines.len);
+    try std.testing.expect(block.lines[0].incomplete);
+    try std.testing.expectEqualStrings("l1", block.lines[0].label);
+    try std.testing.expectEqualStrings("", block.lines[0].assertion.text);
+    try std.testing.expect(!block.lines[1].incomplete);
+    try std.testing.expectEqualStrings("l2", block.lines[1].label);
+}
+
+test "lenient parser resyncs past a broken line's continuation" {
+    const src =
+        \\main
+        \\----
+        \\l1: $ top $ by keep [] junk
+        \\    more junk
+        \\l2: $ top $ by keep []
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), block.lines.len);
+    try std.testing.expect(block.lines[0].incomplete);
+    try std.testing.expect(!block.lines[1].incomplete);
+    try std.testing.expectEqualStrings("l2", block.lines[1].label);
+}
+
+test "lenient parser stops a block at the next item header" {
+    const src =
+        \\main
+        \\----
+        \\l1: $ top $ by a?
+        \\
+        \\later
+        \\-----
+        \\l1: $ top $ by keep []
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    const first = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("main", first.name);
+    try std.testing.expectEqual(@as(usize, 1), first.lines.len);
+    try std.testing.expect(first.lines[0].incomplete);
+
+    const second = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("later", second.name);
+    try std.testing.expectEqual(@as(usize, 1), second.lines.len);
+    try std.testing.expect(!second.lines[0].incomplete);
+    try std.testing.expect((try parser.nextBlock()) == null);
+}
+
+test "lenient parser terminates on a run of broken lines at eof" {
+    const src =
+        \\main
+        \\----
+        \\l1: $ top $ by a?
+        \\l2: $ top $ by a?
+        \\l3: $ top $ by a?
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 3), block.lines.len);
+    for (block.lines) |line| try std.testing.expect(line.incomplete);
+    try std.testing.expect((try parser.nextBlock()) == null);
+}
+
+test "strict parser still rejects a broken proof line" {
+    const src =
+        \\main
+        \\----
+        \\l1: $ top $ by keep []
+        \\l2: $ top $ by a?
+        \\l3: $ top $ by keep [l1]
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    try std.testing.expectError(error.ExpectedLineEnd, parser.nextBlock());
+}
+
 test "proof script parser reads headerless def items" {
     const src =
         \\def foo = $ x $

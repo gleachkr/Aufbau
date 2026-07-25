@@ -176,7 +176,15 @@ pub fn addProofLine(
         .markdown = try proofLineMarkdown(self.allocator, line),
     };
     const decl_index = try self.addDeclaration(decl);
-    try self.indexRuleApplication(block_index, line.application, line.span.start);
+    // An incomplete line has no application to speak of — its placeholder
+    // would index as an unknown rule and hover as one.
+    if (!line.incomplete) {
+        try self.indexRuleApplication(
+            block_index,
+            line.application,
+            line.span.start,
+        );
+    }
     try self.indexProofMathString(block_index, line.assertion);
     try self.proof_lines.append(self.allocator, .{
         .block_index = block_index,

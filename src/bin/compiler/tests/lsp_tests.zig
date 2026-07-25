@@ -140,7 +140,13 @@ fn expectCompletionItems(
 ) ![]const types.CompletionItem {
     const value = result orelse return error.ExpectedCompletions;
     return switch (value) {
-        .array_of_CompletionItem => |items| items,
+        // Always a list, and always incomplete: the items depend on the token
+        // under the cursor, so a client must re-query rather than filter the
+        // previous answer.
+        .CompletionList => |list| blk: {
+            if (!list.isIncomplete) return error.ExpectedIncompleteCompletions;
+            break :blk list.items;
+        },
         else => error.ExpectedCompletions,
     };
 }
@@ -350,6 +356,14 @@ test "LSP initialize advertises navigation capabilities" {
         return error.ExpectedCompletionProvider;
     };
     try std.testing.expectEqual(false, completion.resolveProvider.?);
+    // `?` must be declared: clients only auto-open the popup on identifier
+    // characters otherwise, and several close it when a non-word character
+    // lands in the token — which is every keystroke that finishes `auto?`.
+    const triggers = completion.triggerCharacters orelse {
+        return error.ExpectedCompletionTriggerCharacters;
+    };
+    try std.testing.expectEqual(@as(usize, 1), triggers.len);
+    try std.testing.expectEqualStrings("?", triggers[0]);
 
     const code_action = result.capabilities.codeActionProvider orelse {
         return error.ExpectedCodeActionProvider;

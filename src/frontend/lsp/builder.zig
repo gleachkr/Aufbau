@@ -131,7 +131,10 @@ pub const Builder = struct {
     }
 
     pub fn indexProof(self: *Builder, text: []const u8) !void {
-        var parser = proof_script.Parser.init(self.allocator, text);
+        // Index leniently: a line whose rule application is half-typed is the
+        // normal state of a file being edited, and the strict parser drops the
+        // whole block over it.
+        var parser = proof_script.Parser.initLenient(self.allocator, text);
         var items = std.ArrayListUnmanaged(proof_script.TopLevelItem){};
         while (true) {
             const next = parser.nextItem() catch |err| {

@@ -206,7 +206,14 @@ details of this boundary.)
 
 The search runs in your editor through the language server. The loop is:
 
-1. Write a placeholder line, e.g. `l1: $ a -> a $ by auto?`.
+1. Write a placeholder line, e.g. `l1: $ a -> a $ by auto?`. The four
+   tactics are offered by completion wherever a rule name is — in the
+   rule position after `by`, and in an argument slot — so typing `au`
+   and accepting gives you `auto?`. They lead the completion list, ahead
+   of the theory's own rules, and completing over one replaces its
+   trailing `?` as well (swapping `auto?` for `exact?` leaves one `?`).
+   Typing the `?` itself narrows the list to just the four: no rule name
+   contains one, so a token holding a `?` can only be a placeholder.
 2. The editor shows a status on that line while the search runs, then a
    lightbulb (a code action) if it found something.
 3. Open the code action. Each suggestion appears as

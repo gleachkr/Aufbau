@@ -222,6 +222,8 @@ pub const Snapshot = struct {
         );
     }
 
+    pub const isSearchTacticLabel = completion.isSearchTacticLabel;
+
     pub fn isProofRuleCompletionAt(
         self: *const Snapshot,
         offset: usize,

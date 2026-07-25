@@ -314,6 +314,12 @@ fn applicableRuleCompletions(
     completions: []const LspIndex.CompletionItem,
 ) ![]const LspIndex.CompletionItem {
     if (completions.len == 0) return completions;
+    // Every tactic is exempt from the filter below, so a list holding nothing
+    // else cannot lose an entry — and the search that would decide it costs
+    // tens of milliseconds on a large proof, once per keystroke. This is the
+    // list you get while typing a placeholder, which is exactly when the
+    // reader is typing fastest.
+    if (allSearchTactics(completions)) return completions;
 
     var suggestions = Search.suggestionsAtSourceOffset(
         arena,
@@ -337,10 +343,23 @@ fn applicableRuleCompletions(
 
     var filtered = std.ArrayListUnmanaged(LspIndex.CompletionItem){};
     for (completions) |item| {
-        if (!searchOffersRule(suggestions.items, item.label)) continue;
+        // The tactics are what you write *instead of* naming a rule, so the
+        // search has no opinion on them and the filter must not eat them.
+        if (!LspIndex.Snapshot.isSearchTacticLabel(item.label) and
+            !searchOffersRule(suggestions.items, item.label))
+        {
+            continue;
+        }
         try filtered.append(arena, item);
     }
     return try filtered.toOwnedSlice(arena);
+}
+
+fn allSearchTactics(items: []const LspIndex.CompletionItem) bool {
+    for (items) |item| {
+        if (!LspIndex.Snapshot.isSearchTacticLabel(item.label)) return false;
+    }
+    return true;
 }
 
 fn searchOffersRule(
@@ -451,6 +470,14 @@ pub const Handler = struct {
             .referencesProvider = .{ .bool = true },
             .completionProvider = .{
                 .resolveProvider = false,
+                // `?` is the one completion-worthy character that is not part
+                // of an identifier: it turns a rule name into a search
+                // placeholder. Clients only auto-open the popup on identifier
+                // characters unless the server says otherwise, and several
+                // also treat a declared trigger character as belonging to the
+                // token — which is what keeps the list open while `auto?` is
+                // being typed.
+                .triggerCharacters = &.{"?"},
             },
             .codeActionProvider = .{ .bool = true },
             .documentSymbolProvider = if (supports_hierarchical_document_symbols)
@@ -663,7 +690,17 @@ pub const Handler = struct {
             completions,
             self.offset_encoding,
         );
-        return .{ .array_of_CompletionItem = items };
+        // Incomplete, always: what we return depends on the token under the
+        // cursor, so the list cannot be narrowed by filtering a previous one.
+        // A rule position runs the proof search and keeps only the rules that
+        // can actually close the goal, which differs between `by a` and `by m`
+        // for reasons no client-side filter could reconstruct; a token holding
+        // a `?` drops the rules entirely. Saying `isIncomplete` asks the
+        // client to re-query per keystroke instead of reusing a stale list.
+        return .{ .CompletionList = .{
+            .isIncomplete = true,
+            .items = items,
+        } };
     }
 
     pub fn @"textDocument/codeAction"(

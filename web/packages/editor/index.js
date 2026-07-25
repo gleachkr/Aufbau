@@ -1116,6 +1116,10 @@ class AufbauProof extends HTMLElement {
     });
     const items = Array.isArray(result) ? result : (result?.items ?? []);
     if (!items.length) return null;
+    // A server that says `isIncomplete` computed this list for the token as it
+    // stands; the next keystroke has to be a fresh request, not a re-filter of
+    // this one. Ours always does — the applicable-rule search reads the token.
+    const incomplete = !Array.isArray(result) && result?.isIncomplete === true;
 
     // The server anchors every item to the token being completed; map that
     // replacement range back into the body once.
@@ -1151,7 +1155,7 @@ class AufbauProof extends HTMLElement {
       apply: item.textEdit?.newText ?? item.insertText ?? item.label,
       boost: -idx / 100, // keep the server's relevance order among equal matches
     }));
-    return { from, to, options };
+    return { from, to, options, incomplete };
   }
 
   _completionSource(context) {
@@ -1164,7 +1168,14 @@ class AufbauProof extends HTMLElement {
       if (!before) return null;
     }
     return this.lspCompletionsAt(context.pos)
-      .then((r) => (r ? { ...r, validFor: FRAGMENT_VALID } : null))
+      .then((r) => {
+        if (!r) return null;
+        const { incomplete, ...result } = r;
+        // `validFor` is the opposite of `isIncomplete`: it licenses CodeMirror
+        // to keep this list and narrow it locally while the token still
+        // matches. Withhold it when the server asked to be re-queried.
+        return incomplete ? result : { ...result, validFor: FRAGMENT_VALID };
+      })
       .catch(() => null);
   }
 

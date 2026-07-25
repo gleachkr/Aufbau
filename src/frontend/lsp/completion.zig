@@ -98,7 +98,26 @@ fn completionReplacementRange(
             self.right_delims,
         );
     }
-    return identifierCompletionReplacementRange(document, text, offset);
+    return identifierCompletionReplacementRange(
+        document,
+        text,
+        offset,
+        placeholderPositionAt(self, document, offset),
+    );
+}
+
+/// Whether a `?` at `offset` would be the tail of a search placeholder — true in
+/// the two positions that accept one, a rule name and a reference slot. Nothing
+/// else in a proof script spells `?`, so there the character is part of the
+/// token being completed rather than a boundary.
+fn placeholderPositionAt(
+    self: anytype,
+    document: DocumentId,
+    offset: usize,
+) bool {
+    if (document != .proof) return false;
+    return isProofRuleCompletionAt(self, offset) or
+        proofReferenceApplicationAt(self, offset) != null;
 }
 
 fn mm0CompletionsAt(
@@ -213,6 +232,7 @@ fn proofCompletionsAt(
         );
         return;
     }
+    const placeholder_token = placeholderTokenAt(text, replacement);
     if (proofRuleApplicationAt(self, offset)) |app| {
         try appendProofRuleCompletions(
             self,
@@ -221,6 +241,7 @@ fn proofCompletionsAt(
             app.block_index,
             offset,
             replacement,
+            placeholder_token,
         );
         return;
     }
@@ -242,6 +263,7 @@ fn proofCompletionsAt(
             app.block_index,
             app.line_start,
             replacement,
+            placeholder_token,
         );
         return;
     }
@@ -254,6 +276,7 @@ fn proofCompletionsAt(
                 block_index,
                 offset,
                 replacement,
+                placeholder_token,
             );
         }
     }
@@ -492,6 +515,102 @@ fn appendGlobalDeclarationCompletions(
     }
 }
 
+const SearchTactic = struct {
+    label: []const u8,
+    detail: []const u8,
+    sort_text: []const u8,
+    markdown: []const u8,
+};
+
+/// The proof-search placeholders (`proof_script.isSearchPlaceholderRuleName`).
+/// They are legal wherever a rule name is, so they ride along with the rule
+/// completions instead of forming a context of their own, and they lead the
+/// list: four fixed entries a reader can learn, ahead of the theory's rules.
+const search_tactics = [_]SearchTactic{
+    .{
+        .label = "auto?",
+        .detail = "search: multi-step proof",
+        .sort_text = sort_group_search_tactic ++ " 00",
+        .markdown =
+        \\Search for a proof of this goal, synthesizing intermediate steps.
+        \\
+        \\The most capable and the most expensive of the placeholders. Bounded
+        \\by a work budget, so it gives up rather than running forever.
+        ,
+    },
+    .{
+        .label = "exact?",
+        .detail = "search: one step from what is in reach",
+        .sort_text = sort_group_search_tactic ++ " 01",
+        .markdown =
+        \\Close the goal with a single rule whose hypotheses are all discharged
+        \\by the hypotheses (`#1`, `#2`, …) and earlier lines already in scope.
+        \\
+        \\Fast, and its answer is unambiguous. It invents no intermediate steps.
+        ,
+    },
+    .{
+        .label = "apply?",
+        .detail = "search: apply a rule to what is in reach",
+        .sort_text = sort_group_search_tactic ++ " 02",
+        .markdown =
+        \\A variant of `exact?` oriented toward "apply *a* rule here" rather
+        \\than "close this goal outright". It reports candidates the same way.
+        ,
+    },
+    .{
+        .label = "conversion?",
+        .detail = "search: rewrite to a reference",
+        .sort_text = sort_group_search_tactic ++ " 03",
+        .markdown =
+        \\Rewrite the goal, by a chain of enrolled `@conversion` rules applied
+        \\anywhere and in either direction, to a hypothesis or an earlier line.
+        \\
+        \\On success it expands into ordinary rewrite, congruence, and transport
+        \\lines — one per step.
+        ,
+    },
+};
+
+/// Whether `label` names one of the search tactics. Callers that post-filter
+/// proof-rule completions against the theory's rules use this to let the
+/// tactics through — they are not rules and no rule filter can vouch for them.
+pub fn isSearchTacticLabel(label: []const u8) bool {
+    for (search_tactics) |tactic| {
+        if (std.mem.eql(u8, tactic.label, label)) return true;
+    }
+    return false;
+}
+
+fn appendSearchTacticCompletions(
+    list: *std.ArrayListUnmanaged(CompletionItem),
+    allocator: std.mem.Allocator,
+    replacement: SourceRange,
+) !void {
+    for (search_tactics) |tactic| {
+        try list.append(allocator, .{
+            .label = tactic.label,
+            .kind = .keyword,
+            .detail = tactic.detail,
+            .documentation_markdown = tactic.markdown,
+            .replacement = replacement,
+            .replacement_text = tactic.label,
+            .sort_text = tactic.sort_text,
+        });
+    }
+}
+
+/// Whether the token being completed already holds a `?`. No rule name can
+/// contain one, so the reader has committed to a placeholder and the theory's
+/// rules are noise. Narrowing here rather than leaving it to the client keeps
+/// the answer the same in every editor: clients disagree about whether `?` is
+/// part of a word, and the ones that say no do not filter the list at all.
+fn placeholderTokenAt(text: []const u8, replacement: SourceRange) bool {
+    const end = @min(replacement.end, text.len);
+    const start = @min(replacement.start, end);
+    return std.mem.indexOfScalar(u8, text[start..end], '?') != null;
+}
+
 fn appendProofRuleCompletions(
     self: anytype,
     list: *std.ArrayListUnmanaged(CompletionItem),
@@ -499,7 +618,10 @@ fn appendProofRuleCompletions(
     block_index: usize,
     use_start: usize,
     replacement: SourceRange,
+    placeholder_token: bool,
 ) !void {
+    try appendSearchTacticCompletions(list, allocator, replacement);
+    if (placeholder_token) return;
     var seen = std.StringHashMapUnmanaged(void){};
     for (self.proof_rules) |rule| {
         if (rule.available_start > use_start) continue;
@@ -542,7 +664,12 @@ fn appendProofReferenceCompletions(
     block_index: usize,
     line_start: usize,
     replacement: SourceRange,
+    placeholder_token: bool,
 ) !void {
+    // A reference slot also accepts a placeholder — `mp [auto?, #1]` fills just
+    // the first premise — so the same four tactics belong here.
+    try appendSearchTacticCompletions(list, allocator, replacement);
+    if (placeholder_token) return;
     const block = self.proof_blocks[block_index];
     if (block.hyp_count_known) {
         var i: usize = 1;
@@ -686,17 +813,17 @@ const AnnotationDirective = struct {
 };
 
 const annotation_directives = [_]AnnotationDirective{
-    .{ .label = "@vars", .detail = "sort variable pool", .sort_text = "09 00" },
-    .{ .label = "@relation", .detail = "rewrite relation", .sort_text = "09 01" },
-    .{ .label = "@rewrite", .detail = "rewrite rule", .sort_text = "09 02" },
-    .{ .label = "@congr", .detail = "congruence rule", .sort_text = "09 03" },
-    .{ .label = "@acui", .detail = "ACUI metadata", .sort_text = "09 04" },
-    .{ .label = "@view", .detail = "view theorem", .sort_text = "09 05" },
-    .{ .label = "@recover", .detail = "recovery theorem", .sort_text = "09 06" },
-    .{ .label = "@abstract", .detail = "abstract theorem", .sort_text = "09 07" },
-    .{ .label = "@fresh", .detail = "freshness theorem", .sort_text = "09 08" },
-    .{ .label = "@hole", .detail = "proof hole", .sort_text = "09 09" },
-    .{ .label = "@auto", .detail = "search automation", .sort_text = "09 10" },
+    .{ .label = "@vars", .detail = "sort variable pool", .sort_text = "10 00" },
+    .{ .label = "@relation", .detail = "rewrite relation", .sort_text = "10 01" },
+    .{ .label = "@rewrite", .detail = "rewrite rule", .sort_text = "10 02" },
+    .{ .label = "@congr", .detail = "congruence rule", .sort_text = "10 03" },
+    .{ .label = "@acui", .detail = "ACUI metadata", .sort_text = "10 04" },
+    .{ .label = "@view", .detail = "view theorem", .sort_text = "10 05" },
+    .{ .label = "@recover", .detail = "recovery theorem", .sort_text = "10 06" },
+    .{ .label = "@abstract", .detail = "abstract theorem", .sort_text = "10 07" },
+    .{ .label = "@fresh", .detail = "freshness theorem", .sort_text = "10 08" },
+    .{ .label = "@hole", .detail = "proof hole", .sort_text = "10 09" },
+    .{ .label = "@auto", .detail = "search automation", .sort_text = "10 10" },
 };
 
 const CompletionItemSeed = struct {
@@ -707,21 +834,21 @@ const CompletionItemSeed = struct {
 };
 
 const top_level_keywords = [_]CompletionItemSeed{
-    .{ .label = "sort", .kind = .keyword, .detail = "sort declaration", .sort_text = "09 00" },
-    .{ .label = "term", .kind = .keyword, .detail = "term declaration", .sort_text = "09 01" },
-    .{ .label = "def", .kind = .keyword, .detail = "definition", .sort_text = "09 02" },
-    .{ .label = "axiom", .kind = .keyword, .detail = "axiom", .sort_text = "09 03" },
-    .{ .label = "theorem", .kind = .keyword, .detail = "theorem", .sort_text = "09 04" },
-    .{ .label = "notation", .kind = .keyword, .detail = "notation", .sort_text = "09 05" },
-    .{ .label = "prefix", .kind = .keyword, .detail = "prefix notation", .sort_text = "09 06" },
-    .{ .label = "infixl", .kind = .keyword, .detail = "left infix", .sort_text = "09 07" },
-    .{ .label = "infixr", .kind = .keyword, .detail = "right infix", .sort_text = "09 08" },
-    .{ .label = "delimiter", .kind = .keyword, .detail = "delimiter", .sort_text = "09 09" },
-    .{ .label = "pub", .kind = .modifier, .detail = "public", .sort_text = "09 10" },
-    .{ .label = "pure", .kind = .modifier, .detail = "pure", .sort_text = "09 11" },
-    .{ .label = "strict", .kind = .modifier, .detail = "strict", .sort_text = "09 12" },
-    .{ .label = "provable", .kind = .modifier, .detail = "provable", .sort_text = "09 13" },
-    .{ .label = "free", .kind = .modifier, .detail = "free", .sort_text = "09 14" },
+    .{ .label = "sort", .kind = .keyword, .detail = "sort declaration", .sort_text = "10 00" },
+    .{ .label = "term", .kind = .keyword, .detail = "term declaration", .sort_text = "10 01" },
+    .{ .label = "def", .kind = .keyword, .detail = "definition", .sort_text = "10 02" },
+    .{ .label = "axiom", .kind = .keyword, .detail = "axiom", .sort_text = "10 03" },
+    .{ .label = "theorem", .kind = .keyword, .detail = "theorem", .sort_text = "10 04" },
+    .{ .label = "notation", .kind = .keyword, .detail = "notation", .sort_text = "10 05" },
+    .{ .label = "prefix", .kind = .keyword, .detail = "prefix notation", .sort_text = "10 06" },
+    .{ .label = "infixl", .kind = .keyword, .detail = "left infix", .sort_text = "10 07" },
+    .{ .label = "infixr", .kind = .keyword, .detail = "right infix", .sort_text = "10 08" },
+    .{ .label = "delimiter", .kind = .keyword, .detail = "delimiter", .sort_text = "10 09" },
+    .{ .label = "pub", .kind = .modifier, .detail = "public", .sort_text = "10 10" },
+    .{ .label = "pure", .kind = .modifier, .detail = "pure", .sort_text = "10 11" },
+    .{ .label = "strict", .kind = .modifier, .detail = "strict", .sort_text = "10 12" },
+    .{ .label = "provable", .kind = .modifier, .detail = "provable", .sort_text = "10 13" },
+    .{ .label = "free", .kind = .modifier, .detail = "free", .sort_text = "10 14" },
 };
 
 fn appendAnnotationCompletions(
@@ -760,14 +887,15 @@ fn appendKeywordCompletions(
 
 pub const sort_group_local_binder = "00";
 pub const sort_group_proof_reference = "01";
-pub const sort_group_proof_lemma = "02";
-pub const sort_group_global_rule = "03";
-pub const sort_group_notation_alias = "04";
-pub const sort_group_notation_token = "05";
-pub const sort_group_notation_snippet = "06";
-pub const sort_group_term = "07";
-pub const sort_group_sort = "08";
-pub const sort_group_keyword = "09";
+pub const sort_group_search_tactic = "02";
+pub const sort_group_proof_lemma = "03";
+pub const sort_group_global_rule = "04";
+pub const sort_group_notation_alias = "05";
+pub const sort_group_notation_token = "06";
+pub const sort_group_notation_snippet = "07";
+pub const sort_group_term = "08";
+pub const sort_group_sort = "09";
+pub const sort_group_keyword = "10";
 
 pub fn completionSortText(
     allocator: std.mem.Allocator,
@@ -876,12 +1004,20 @@ fn identifierCompletionReplacementRange(
     document: DocumentId,
     text: []const u8,
     offset: usize,
+    placeholder_position: bool,
 ) SourceRange {
     var start = offset;
-    while (start > 0 and completionTokenChar(text[start - 1])) start -= 1;
+    while (start > 0 and
+        tokenChar(text[start - 1], placeholder_position)) start -= 1;
     var end = offset;
-    while (end < text.len and completionTokenChar(text[end])) end += 1;
+    while (end < text.len and tokenChar(text[end], placeholder_position)) {
+        end += 1;
+    }
     return .{ .document = document, .start = start, .end = end };
+}
+
+fn tokenChar(ch: u8, placeholder_position: bool) bool {
+    return completionTokenChar(ch) or (placeholder_position and ch == '?');
 }
 
 fn mathCompletionReplacementRange(
@@ -1191,7 +1327,7 @@ fn isTopLevelModifier(word: []const u8) bool {
 
 fn rangeTouchesCurrentToken(text: []const u8, pos: usize, offset: usize) bool {
     if (pos >= text.len or offset > text.len) return false;
-    const repl = identifierCompletionReplacementRange(.mm0, text, offset);
+    const repl = identifierCompletionReplacementRange(.mm0, text, offset, false);
     return pos >= repl.start and pos <= repl.end;
 }
 

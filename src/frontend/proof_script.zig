@@ -86,6 +86,12 @@ pub const ProofLine = struct {
     assertion: MathString,
     application: RuleApplication,
     span: Span,
+    /// Set only by a lenient parse (`Parser.initLenient`), on a line whose
+    /// rule application failed to parse: the label and — usually — the
+    /// assertion are real, and `application` is a placeholder standing at the
+    /// point of failure. Consumers that resolve the rule must skip these; the
+    /// strict parse the compiler runs never produces one.
+    incomplete: bool = false,
 
     pub fn ruleApplicationSpan(self: ProofLine) Span {
         return self.application.ruleApplicationSpan();
@@ -156,11 +162,29 @@ pub const Parser = struct {
     current_block_name_span: ?Span = null,
     last_error_span: ?Span = null,
     last_header_tail_span: ?Span = null,
+    /// Keep going after a proof line fails to parse, retaining whatever prefix
+    /// of it did parse. See `initLenient`.
+    lenient: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, src: []const u8) Parser {
         return .{
             .allocator = allocator,
             .src = src,
+        };
+    }
+
+    /// A parser that recovers per proof line instead of abandoning the block.
+    /// A half-typed line is the normal state of a file being edited, and under
+    /// the strict parser it costs the reader every completion, hover, and
+    /// outline entry in the block — not just on that line. Editor-facing
+    /// consumers parse leniently and skip `ProofLine.incomplete` lines where
+    /// they need a rule; everything that checks or compiles a proof stays
+    /// strict, so a broken line is still an error there.
+    pub fn initLenient(allocator: std.mem.Allocator, src: []const u8) Parser {
+        return .{
+            .allocator = allocator,
+            .src = src,
+            .lenient = true,
         };
     }
 
@@ -402,9 +426,116 @@ pub const Parser = struct {
             self.pos = line_start;
             if (self.pos >= self.src.len) break;
             if (!self.lineStartsProofLine()) break;
-            try lines.append(self.allocator, try self.parseProofLine());
+            // Start each lenient attempt with no recorded error, so a failure
+            // that never reaches `recordErrorAt*` cannot inherit the previous
+            // line's span.
+            if (self.lenient) self.last_error_span = null;
+            const line = self.parseProofLine() catch |err| {
+                if (!self.lenient or err == error.OutOfMemory) return err;
+                const failure = self.last_error_span orelse
+                    self.tokenSpanAt(self.pos);
+                self.recoverToNextProofLine(line_start);
+                const partial = self.partialProofLine(line_start, failure) catch |partial_err| {
+                    if (partial_err == error.OutOfMemory) return partial_err;
+                    // Recovery has already run, so dropping just this line
+                    // still costs the reader less than dropping the block.
+                    continue;
+                };
+                try lines.append(self.allocator, partial);
+                continue;
+            };
+            try lines.append(self.allocator, line);
         }
         return try lines.toOwnedSlice(self.allocator);
+    }
+
+    /// Rebuild what a failed proof line still tells us. `parseProofLine` reads
+    /// label, assertion, then application, and it is the application you are
+    /// in the middle of typing — so by the time it fails the label and goal
+    /// are usually both there, and both are worth keeping: later lines refer
+    /// to the label, and the goal is what hover and the search tactics read.
+    /// Called after `recoverToNextProofLine`, so `self.pos` is where parsing
+    /// will resume — the line's claim is clamped to it below.
+    fn partialProofLine(
+        self: *Parser,
+        line_start: usize,
+        failure: Span,
+    ) !ProofLine {
+        const resume_pos = self.pos;
+        const saved_error = self.last_error_span;
+        defer {
+            self.pos = resume_pos;
+            self.last_error_span = saved_error;
+        }
+
+        self.pos = line_start;
+        self.skipHorizontalSpace();
+        const label_start = self.pos;
+        // `lineStartsProofLine` gated the caller, so the label and its colon
+        // should both be there — but that reads a predicate defined far from
+        // here, so failing is handled (the caller drops the line) rather than
+        // asserted.
+        const label = try self.parseIdentifier();
+        self.skipHorizontalSpace();
+        try self.expect(':');
+        const assertion_start = self.pos;
+        const empty_assertion = MathString{
+            .text = "",
+            .span = .{ .start = assertion_start, .end = assertion_start },
+        };
+        // Hold the goal to this line. An unterminated `$` runs on to the next
+        // line's, which would hand hover a goal spliced out of two lines —
+        // worse than admitting we do not know it.
+        const own_line_end = self.lineEnd(line_start);
+        const assertion = blk: {
+            const parsed = self.parseMathString() catch break :blk empty_assertion;
+            if (parsed.span.end > own_line_end) break :blk empty_assertion;
+            break :blk parsed;
+        };
+
+        // Claim through the physical line the failure sits on — a wrapped line
+        // is exactly the case where the failure is further down — but never
+        // into the line recovery resumed at, which belongs to someone else.
+        var line_end = @min(
+            self.lineEnd(@max(line_start, failure.start)),
+            @max(own_line_end, resume_pos),
+        );
+        while (line_end > line_start and
+            (self.src[line_end - 1] == '\n' or
+                isHorizontalSpace(self.src[line_end - 1])))
+        {
+            line_end -= 1;
+        }
+        return .{
+            .label = label,
+            .label_span = .{
+                .start = label_start,
+                .end = label_start + label.len,
+            },
+            .assertion = assertion,
+            .application = .{
+                .rule_name = "",
+                .rule_span = failure,
+                .span = failure,
+            },
+            .span = .{ .start = line_start, .end = line_end },
+            .incomplete = true,
+        };
+    }
+
+    /// Resync after a broken proof line, so it costs only itself. Resuming at
+    /// the very next line would end the block on any line the parser cannot
+    /// read as a proof line — including the broken line's own continuation —
+    /// so scan for the next line that starts one, stopping at the item header
+    /// that ends the block.
+    fn recoverToNextProofLine(self: *Parser, failed_line_start: usize) void {
+        self.pos = self.nextLineStart(failed_line_start);
+        while (self.pos < self.src.len) {
+            const line_start = self.pos;
+            if (self.lineStartsItemHeaderLead(line_start)) break;
+            if (self.lineStartsProofLine()) break;
+            self.pos = self.nextLineStart(line_start);
+        }
     }
 
     fn parseProofLine(self: *Parser) !ProofLine {

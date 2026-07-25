@@ -5,7 +5,58 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- The language server offers `auto?`, `exact?`, `apply?`, and
+  `conversion?` as completions wherever a rule name is legal — the rule
+  position after `by`, and argument slots — so the tactics are
+  discoverable from the editor rather than only from these docs. They
+  sort ahead of the theory's own rules, and they are exempt from the
+  applicable-rule filter that narrows rule completions to what the
+  search can actually offer, since no rule filter can vouch for a
+  placeholder.
+
 ### Fixed
+
+- Completion responses are now a `CompletionList` with
+  `isIncomplete: true` rather than a bare item array. The server has
+  always filtered rule completions by what the proof search can actually
+  apply at the cursor, so `by a` and `by m` yield genuinely different
+  rule sets — not two filterings of one list. Returning a bare array
+  told clients the opposite: that the list was complete and could be
+  narrowed locally as you kept typing, which could leave a stale or
+  empty popup with no follow-up request. Clients now re-query per
+  keystroke, which measures at under 55 ms across the fixture corpus
+  (55 ms on a 145 KB proof, single digits on a small one). Typing a
+  placeholder skips the applicability search altogether, since a list of
+  search tactics has nothing the search could filter out.
+
+- Typing `?` now narrows completion to the four search tactics instead of
+  listing every rule in the theory alongside them. No rule name can
+  contain a `?`, so once the token holds one the reader has committed to
+  a placeholder. This is done on the server rather than left to the
+  client: editors disagree about whether `?` belongs to a word, and the
+  ones that say it does not were showing the whole unfiltered list.
+
+- The language server now declares `?` as a completion trigger
+  character. Clients only open the completion popup on identifier
+  characters unless the server says otherwise, and some close it as soon
+  as a non-word character lands in the token — which is exactly the
+  keystroke that finishes `auto?`.
+
+- A proof line that does not parse no longer costs the reader the rest
+  of its block. The language server indexed a proof block all or
+  nothing, so a single half-typed line — the normal state of a file
+  being edited — left the whole block with no completions, no hover, no
+  outline entries, and no go-to-definition, right when they are most
+  wanted. The indexer now recovers line by line, keeping the broken
+  line's label and goal so the lines after it can still cite it. The
+  compiler is unchanged: a broken line is still an error there.
+
+- Completing a proof rule over an existing search placeholder now
+  replaces the placeholder's trailing `?` too. Accepting `exact?` over
+  `auto?` previously left `exact??`, because the completion token
+  stopped at the `?`.
 
 - `@aufbau/lsp` can now be loaded straight from a CDN. Browsers refuse
   to construct a Web Worker from a cross-origin script, and CORS does
