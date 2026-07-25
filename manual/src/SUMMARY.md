@@ -5,7 +5,7 @@
 # Proving
 
 - [Your first proof](first-proof.md)
-- [The Parts of a Proof lines]()
+- [The Parts of a Proof Line](proof-line.md)
 - [Proof Search]()
 - [Lemmas, definitions, and holes]()
 
