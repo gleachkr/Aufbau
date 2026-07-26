@@ -21,7 +21,7 @@
 - [Proof blocks and lines]()
 - [References and bindings]()
 - [Chained applications]()
-- [Lemmas and definitions in proofs]()
+- [Lemmas and definitions in proofs](lemmas-defs-in-proofs.md)
 
 # Designing theories
 
