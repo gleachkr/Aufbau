@@ -11,7 +11,7 @@
 
 # The MM0 language
 
-- [Sorts and terms]()
+- [Sorts and terms](sorts-and-terms.md)
 - [Variables, binders, and dependencies]()
 - [Notation]()
 - [Axioms, theorems, and definitions]()
