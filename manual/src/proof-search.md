@@ -141,7 +141,10 @@ work in stages and are intended for general equational search.
 
 Here is a small lambda calculus with explicit substitution and addition on
 numerals. Beta reduction, the substitution equations, and the addition
-table are enrolled as computation rules:
+table are enrolled as computation rules. The substitution equations carry a
+second annotation, `@rewrite`, which lets the compiler apply them on its own
+when it checks an ordinary proof line, in order to eliminate a lot of 
+boilerplate:
 
 ```aufbau-listing prelude=lam-rules
 ```

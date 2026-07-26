@@ -1,5 +1,6 @@
 delimiter $ ( ) [ ] . S $;
 provable sort wff;
+--| @hole _tm
 sort tm;
 
 term iff (a b: wff): wff;

@@ -7,7 +7,7 @@
 - [Your first proof](first-proof.md)
 - [The Parts of a Proof Line](proof-line.md)
 - [Proof Search](proof-search.md)
-- [Lemmas, definitions, and holes]()
+- [Holes](holes.md)
 
 # The MM0 language
 
@@ -22,7 +22,6 @@
 - [References and bindings]()
 - [Chained applications]()
 - [Lemmas and definitions in proofs]()
-- [Holes]()
 
 # Designing theories
 
