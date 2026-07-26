@@ -6,7 +6,7 @@
 
 - [Your first proof](first-proof.md)
 - [The Parts of a Proof Line](proof-line.md)
-- [Proof Search]()
+- [Proof Search](proof-search.md)
 - [Lemmas, definitions, and holes]()
 
 # The MM0 language

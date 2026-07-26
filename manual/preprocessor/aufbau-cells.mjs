@@ -33,17 +33,56 @@
 // `key=value` (bare or "quoted") and bare flags (`readonly`). So
 // `aufbau-proof theory=chain readonly theme=auto` →
 // `<aufbau-proof theory="chain" readonly theme="auto">`.
+//
+// Shared preludes
+// ---------------
+// `prelude=nd-base,nd-rules` inlines `preludes/nd-base.mm0` and
+// `preludes/nd-rules.mm0` as the cell's mm0, ahead of any `@@mm0` section,
+// and is consumed rather than emitted as an attribute. Each such cell stays
+// a *standalone* document — cells only share a document when they share a
+// `theory`/`theory-src`/`doc` — which is what a page full of independent
+// search demos needs, since a cell with an unresolved placeholder suppresses
+// code actions in later cells of the same document.
+//
+// The same files can be displayed with ```aufbau-listing prelude=nd-rules```,
+// so what a page shows the reader is literally what its cells load.
 
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 if (process.argv[2] === "supports") {
   // `mdbook` asks whether we support a given renderer; we only touch html.
   process.exit(process.argv[3] === "html" ? 0 : 1);
 }
 
-const [, book] = JSON.parse(readFileSync(0, "utf8"));
+const [context, book] = JSON.parse(readFileSync(0, "utf8"));
+const preludeDir = join(context?.root ?? process.cwd(), "preludes");
+const preludeCache = new Map();
 walk(book.items);
 process.stdout.write(JSON.stringify(book));
+
+// Read `preludes/NAME.mm0`. A missing file fails the build loudly: a cell
+// silently missing its theory would show up as a wall of confusing
+// diagnostics instead.
+function prelude(name) {
+  if (!preludeCache.has(name)) {
+    const path = join(preludeDir, `${name}.mm0`);
+    try {
+      preludeCache.set(name, readFileSync(path, "utf8").split("\n"));
+    } catch {
+      throw new Error(`aufbau-cells: cannot read prelude ${path}`);
+    }
+  }
+  return preludeCache.get(name);
+}
+
+function preludeLines(value) {
+  return value
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .flatMap((name) => prelude(name));
+}
 
 function walk(items) {
   for (const item of items) {
@@ -90,6 +129,7 @@ function renderCell(indent, lang, infoRest, body) {
   const attrs = parseAttributes(infoRest);
   if (lang === "aufbau-theory") return renderTheory(attrs, body);
   if (lang === "aufbau-proof") return renderProof(attrs, body);
+  if (lang === "aufbau-listing") return renderListing(indent, attrs, body);
   // Unknown aufbau-* language: leave the source visible rather than drop it.
   return `${indent}<pre><code>${escapeText(body.join("\n"))}</code></pre>`;
 }
@@ -103,10 +143,22 @@ function renderTheory(attrs, body) {
   ]);
 }
 
+// A read-only listing of prelude files, as an ordinary highlighted code
+// block. Lets a page show the rules its cells are loading without keeping a
+// second copy of them in the prose.
+function renderListing(indent, attrs, body) {
+  const spec = takeAttribute(attrs, "prelude");
+  const lines = spec === null ? body : preludeLines(spec);
+  const text = escapeText(trimBlank(lines).join("\n"));
+  return `${indent}<pre><code class="language-mm0">${text}</code></pre>`;
+}
+
 function renderProof(attrs, body) {
+  const spec = takeAttribute(attrs, "prelude");
   const { mm0, auf } = splitProofBody(body);
+  const preamble = spec === null ? mm0 : [...preludeLines(spec), ...mm0];
   const parts = [openTag("aufbau-proof", attrs)];
-  if (mm0.length) parts.push(script("text/mm0", mm0));
+  if (preamble.length) parts.push(script("text/mm0", preamble));
   if (auf.length) parts.push(script("text/auf", auf));
   parts.push("</aufbau-proof>");
   return oneBlock(parts);
@@ -150,6 +202,15 @@ function trimBlank(body) {
   while (start < end && body[start].trim() === "") start += 1;
   while (end > start && body[end - 1].trim() === "") end -= 1;
   return body.slice(start, end);
+}
+
+// Pull a build-time directive out of the info string so it does not reach
+// the element as an attribute.
+function takeAttribute(attrs, name) {
+  const at = attrs.findIndex((attr) => attr.name === name);
+  if (at === -1) return null;
+  const [attr] = attrs.splice(at, 1);
+  return attr.value ?? "";
 }
 
 function parseAttributes(info) {
