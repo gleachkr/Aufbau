@@ -579,7 +579,11 @@ fn reportDiagnosticDetail(detail: DiagnosticDetail) void {
             }
         },
         .hypothesis_ref => |info| {
-            std.debug.print("  hypothesis ref: #{d}\n", .{info.index});
+            if (info.name) |name| {
+                std.debug.print("  hypothesis ref: #{s}\n", .{name});
+            } else {
+                std.debug.print("  hypothesis ref: #{d}\n", .{info.index});
+            }
         },
         .unused_parameter => |info| {
             std.debug.print("  parameter: {s}\n", .{info.parameter_name});

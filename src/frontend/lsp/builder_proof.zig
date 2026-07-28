@@ -20,6 +20,7 @@ const sort_group_proof_reference = completion.sort_group_proof_reference;
 
 const binderMarkdown = markdown.binderMarkdown;
 const hypRefMarkdown = markdown.hypRefMarkdown;
+const namedHypMarkdown = markdown.namedHypMarkdown;
 const lemmaMarkdown = markdown.lemmaMarkdown;
 const proofLineMarkdown = markdown.proofLineMarkdown;
 const unknownBindingMarkdown = markdown.unknownBindingMarkdown;
@@ -315,6 +316,24 @@ pub fn addHypRef(
     hyp: proof_script.HypRef,
 ) !void {
     const block = self.proof_blocks.items[block_index];
+    if (hyp.name) |name| {
+        // Named refs resolve against binder names the indexer does not
+        // track; point at the declaration without index validation.
+        const decl_range = if (block.decl_index) |decl_index|
+            self.declarations.items[decl_index].name_range
+        else
+            null;
+        try self.addSymbol(.{
+            .source_range = proofSpanRange(hyp.span),
+            .target_range = decl_range,
+            .markdown = try namedHypMarkdown(
+                self.allocator,
+                block.name,
+                name,
+            ),
+        });
+        return;
+    }
     if (hyp.index == 0 or
         (block.hyp_count_known and hyp.index > block.hyp_count))
     {

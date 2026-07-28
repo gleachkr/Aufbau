@@ -102,6 +102,81 @@ test "proof script parser reads nested rule applications" {
     }
 }
 
+test "proof script parser reads named hypothesis refs" {
+    const src =
+        \\demo
+        \\----
+        \\l1: $ c $ by rule1 [#ha, #2, rule2 [#hb]]
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 1), block.lines.len);
+    const refs = block.lines[0].application.refs;
+    try std.testing.expectEqual(@as(usize, 3), refs.len);
+    switch (refs[0]) {
+        .hyp => |hyp| try std.testing.expectEqualStrings("ha", hyp.name.?),
+        else => return error.UnexpectedRefKind,
+    }
+    switch (refs[1]) {
+        .hyp => |hyp| {
+            try std.testing.expectEqual(@as(usize, 2), hyp.index);
+            try std.testing.expect(hyp.name == null);
+        },
+        else => return error.UnexpectedRefKind,
+    }
+    switch (refs[2]) {
+        .application => |child| switch (child.refs[0]) {
+            .hyp => |hyp| try std.testing.expectEqualStrings(
+                "hb",
+                hyp.name.?,
+            ),
+            else => return error.UnexpectedRefKind,
+        },
+        else => return error.UnexpectedRefKind,
+    }
+}
+
+test "resolveHypRef maps names, indices, and ambiguity" {
+    const names = [_]?[]const u8{ "ha", null, "hb", "hb" };
+    const span = ProofScript.Span{ .start = 0, .end = 0 };
+
+    const by_name = ProofScript.resolveHypRef(
+        &names,
+        names.len,
+        .{ .index = 0, .name = "ha", .span = span },
+    );
+    try std.testing.expectEqual(@as(usize, 0), by_name.index);
+
+    const by_index = ProofScript.resolveHypRef(
+        &names,
+        names.len,
+        .{ .index = 2, .span = span },
+    );
+    try std.testing.expectEqual(@as(usize, 1), by_index.index);
+
+    try std.testing.expect(ProofScript.resolveHypRef(
+        &names,
+        names.len,
+        .{ .index = 0, .name = "nope", .span = span },
+    ) == .unknown);
+
+    try std.testing.expect(ProofScript.resolveHypRef(
+        &names,
+        names.len,
+        .{ .index = 0, .name = "hb", .span = span },
+    ) == .ambiguous);
+
+    try std.testing.expect(ProofScript.resolveHypRef(
+        &names,
+        names.len,
+        .{ .index = 5, .span = span },
+    ) == .unknown);
+}
+
 test "proof script parser keeps bare identifiers as line refs" {
     const src =
         \\demo

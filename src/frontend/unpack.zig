@@ -239,10 +239,10 @@ const Emitter = struct {
             for (app.refs, 0..) |ref, idx| {
                 if (idx != 0) try buf.appendSlice(allocator, ", ");
                 switch (ref) {
-                    .hyp => |hyp| try buf.writer(allocator).print(
-                        "#{d}",
-                        .{hyp.index},
-                    ),
+                    .hyp => |hyp| if (hyp.name) |name|
+                        try buf.writer(allocator).print("#{s}", .{name})
+                    else
+                        try buf.writer(allocator).print("#{d}", .{hyp.index}),
                     .line => |line| try buf.appendSlice(
                         allocator,
                         line.label,

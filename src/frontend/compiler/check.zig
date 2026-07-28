@@ -1403,6 +1403,7 @@ fn applyRuleCandidateCore(
                 .detail = .{
                     .hypothesis_ref = .{
                         .index = hyp.index,
+                        .name = hyp.name,
                     },
                 },
             }, .theorem_application),
@@ -3069,12 +3070,15 @@ fn knownInlineSiblingRefExpr(
 ) ?ExprId {
     return switch (ref) {
         .hyp => |hyp| blk: {
-            if (hyp.index == 0 or
-                hyp.index > theorem.theorem_hyps.items.len)
-            {
-                break :blk null;
-            }
-            break :blk theorem.theorem_hyps.items[hyp.index - 1];
+            const hyp_idx = switch (ProofScript.resolveHypRef(
+                theorem.theorem_hyp_names,
+                theorem.theorem_hyps.items.len,
+                hyp,
+            )) {
+                .index => |value| value,
+                .unknown, .ambiguous => break :blk null,
+            };
+            break :blk theorem.theorem_hyps.items[hyp_idx];
         },
         .line => |label| blk: {
             const line_idx = context.labels.get(label.label) orelse {
@@ -3298,25 +3302,41 @@ fn elaborateRefs(
     for (source_refs, 0..) |ref, idx| {
         ref_exprs[idx] = switch (ref) {
             .hyp => |hyp| blk: {
-                if (hyp.index == 0 or
-                    hyp.index > theorem.theorem_hyps.items.len)
-                {
-                    self.setProof(CompilerDiag.withPhase(.{
-                        .kind = .unknown_hypothesis_ref,
-                        .err = error.UnknownHypothesisRef,
-                        .theorem_name = assertion.name,
-                        .line_label = line.label,
-                        .span = hyp.span,
-                        .detail = .{
-                            .hypothesis_ref = .{
-                                .index = hyp.index,
+                const resolved = ProofScript.resolveHypRef(
+                    theorem.theorem_hyp_names,
+                    theorem.theorem_hyps.items.len,
+                    hyp,
+                );
+                const hyp_idx = switch (resolved) {
+                    .index => |value| value,
+                    .unknown, .ambiguous => {
+                        self.setProof(CompilerDiag.withPhase(.{
+                            .kind = if (resolved == .ambiguous)
+                                .ambiguous_hypothesis_ref
+                            else
+                                .unknown_hypothesis_ref,
+                            .err = if (resolved == .ambiguous)
+                                error.AmbiguousHypothesisRef
+                            else
+                                error.UnknownHypothesisRef,
+                            .theorem_name = assertion.name,
+                            .line_label = line.label,
+                            .span = hyp.span,
+                            .detail = .{
+                                .hypothesis_ref = .{
+                                    .index = hyp.index,
+                                    .name = hyp.name,
+                                },
                             },
-                        },
-                    }, .theorem_application));
-                    return error.UnknownHypothesisRef;
-                }
-                refs[idx] = .{ .hyp = hyp.index - 1 };
-                break :blk theorem.theorem_hyps.items[hyp.index - 1];
+                        }, .theorem_application));
+                        return if (resolved == .ambiguous)
+                            error.AmbiguousHypothesisRef
+                        else
+                            error.UnknownHypothesisRef;
+                    },
+                };
+                refs[idx] = .{ .hyp = hyp_idx };
+                break :blk theorem.theorem_hyps.items[hyp_idx];
             },
             .line => |label| blk: {
                 const line_idx = context.labels.get(label.label) orelse {

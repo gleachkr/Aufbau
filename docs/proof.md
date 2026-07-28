@@ -360,7 +360,7 @@ lines, or inline rule applications.
 ```text
 refs ::= empty | ref (',' ref)*
 ref ::= hyp-ref | line-ref | inline-application
-hyp-ref ::= '#' number
+hyp-ref ::= '#' number | '#' identifier
 line-ref ::= identifier
 inline-application ::= rule-application
 ```
@@ -369,12 +369,17 @@ Meaning:
 
 - `#1`, `#2`, ... refer to the hypotheses of the theorem being proved
 - inside a lemma block, `#1`, `#2`, ... refer to the lemma hypotheses
+- `#h` refers to the hypothesis declared by a binder named `h` in the
+  theorem or lemma header (`(h: $ a $)`); arrow-form hypotheses have no
+  name and can only be cited positionally
 - `l1`, `l2`, ... refer to prior proof lines in the current block
 - `rule [...]` applies `rule` anonymously and uses its conclusion as the
   reference expression
 
 Hypotheses are numbered in the order they appear in the theorem or lemma
-header after MM0 parsing.
+header after MM0 parsing. A named reference that matches no hypothesis
+binder is an error, as is one that matches more than one (duplicate
+hypothesis names are only rejected when actually cited by name).
 
 A bare identifier in a reference list is always a line reference, even if
 it is also the name of a rule. This preserves the older syntax. A

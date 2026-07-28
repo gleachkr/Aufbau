@@ -32,6 +32,7 @@ pub const DiagnosticKind = enum {
     missing_binder_assignment,
     ref_count_mismatch,
     unknown_hypothesis_ref,
+    ambiguous_hypothesis_ref,
     unknown_label,
     hypothesis_mismatch,
     conclusion_mismatch,
@@ -115,6 +116,8 @@ pub const DiagnosticDetail = union(enum) {
     missing_congruence_rule: MissingCongruenceRuleDetail,
     hypothesis_ref: struct {
         index: usize,
+        /// Set when the reference was written by name (`#h`).
+        name: ?[]const u8 = null,
     },
     unused_parameter: struct {
         parameter_name: []const u8,
@@ -702,6 +705,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
             "be determined from the statement and cited premises",
         .ref_count_mismatch => "wrong number of references for rule application",
         .unknown_hypothesis_ref => "unknown theorem hypothesis reference",
+        .ambiguous_hypothesis_ref => "hypothesis name matches more than one hypothesis",
         .unknown_label => "unknown proof line label",
         .hypothesis_mismatch => "a cited premise does not match the hypothesis the rule expects there",
         .conclusion_mismatch => if (diag.err == error.HoleConclusionMismatch)

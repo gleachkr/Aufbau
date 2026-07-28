@@ -551,6 +551,8 @@ fn writeDiagnosticDetailField(
             try writer.writeByte(',');
             try writer.writeAll("\"index\":");
             try writer.print("{d}", .{info.index});
+            try writer.writeByte(',');
+            try writeOptionalStringField(writer, "name", info.name);
             try writer.writeAll("}");
         },
         .unused_parameter => |info| {

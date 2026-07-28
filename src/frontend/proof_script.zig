@@ -31,9 +31,44 @@ pub const SearchParam = struct {
 };
 
 pub const HypRef = struct {
+    /// 1-based position for `#N` refs; 0 (unused) when `name` is set.
     index: usize,
+    /// Set for `#name` refs; resolved against the theorem's hypothesis
+    /// binder names at check time.
+    name: ?[]const u8 = null,
     span: Span,
 };
+
+pub const HypResolution = union(enum) {
+    /// 0-based index into the theorem's hypothesis list.
+    index: usize,
+    unknown,
+    /// The referenced name matches more than one hypothesis binder.
+    ambiguous,
+};
+
+/// Resolve a hypothesis ref against a theorem's hypothesis binder names
+/// (aligned with its hypothesis list; null entries are arrow-form
+/// hypotheses, which have no name).
+pub fn resolveHypRef(
+    hyp_names: []const ?[]const u8,
+    hyp_count: usize,
+    hyp: HypRef,
+) HypResolution {
+    if (hyp.name) |name| {
+        var found: ?usize = null;
+        for (hyp_names, 0..) |maybe_name, idx| {
+            const candidate = maybe_name orelse continue;
+            if (!std.mem.eql(u8, candidate, name)) continue;
+            if (found != null) return .ambiguous;
+            found = idx;
+        }
+        const idx = found orelse return .unknown;
+        return .{ .index = idx };
+    }
+    if (hyp.index == 0 or hyp.index > hyp_count) return .unknown;
+    return .{ .index = hyp.index - 1 };
+}
 
 pub const LineRef = struct {
     label: []const u8,
@@ -758,9 +793,21 @@ pub const Parser = struct {
         const start = self.pos;
         if (self.peek() == '#') {
             self.pos += 1;
-            const index = try self.parseNumber();
+            self.skipHorizontalSpace();
+            if (std.ascii.isDigit(self.peek())) {
+                const index = try self.parseNumber();
+                return .{ .hyp = .{
+                    .index = index,
+                    .span = .{
+                        .start = start,
+                        .end = self.pos,
+                    },
+                } };
+            }
+            const name = try self.parseIdentifier();
             return .{ .hyp = .{
-                .index = index,
+                .index = 0,
+                .name = name,
                 .span = .{
                     .start = start,
                     .end = self.pos,

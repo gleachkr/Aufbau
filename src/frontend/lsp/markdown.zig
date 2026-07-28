@@ -241,6 +241,18 @@ pub fn unknownLineMarkdown(
     return try std.fmt.allocPrint(allocator, "unknown line `{s}`", .{label});
 }
 
+pub fn namedHypMarkdown(
+    allocator: std.mem.Allocator,
+    block_name: []const u8,
+    hyp_name: []const u8,
+) ![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "hypothesis `{s}` of `{s}`.",
+        .{ hyp_name, block_name },
+    );
+}
+
 pub fn unknownHypMarkdown(
     allocator: std.mem.Allocator,
     block_name: []const u8,

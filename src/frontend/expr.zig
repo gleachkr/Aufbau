@@ -316,6 +316,10 @@ pub const TheoremContext = struct {
     arg_infos: []const ArgInfo = &.{},
     theorem_vars: std.ArrayListUnmanaged(ExprId) = .{},
     theorem_hyps: std.ArrayListUnmanaged(ExprId) = .{},
+    /// Borrowed from the parsed assertion (parser-arena-owned), aligned with
+    /// `theorem_hyps`: binder names for binder-form hypotheses, null for
+    /// arrow-form ones.
+    theorem_hyp_names: []const ?[]const u8 = &.{},
     theorem_dummies: std.ArrayListUnmanaged(DummyInfo) = .{},
     theorem_placeholders: std.ArrayListUnmanaged(PlaceholderInfo) = .{},
     next_dummy_id: DummyVarId = 0,
@@ -439,6 +443,7 @@ pub const TheoremContext = struct {
 
         copy.interner = try self.interner.clone();
         copy.arg_infos = self.arg_infos;
+        copy.theorem_hyp_names = self.theorem_hyp_names;
         try copy.theorem_vars.appendSlice(
             self.allocator,
             self.theorem_vars.items,
@@ -543,6 +548,7 @@ pub const TheoremContext = struct {
             const hyp_id = try self.internParsedExpr(hyp);
             try self.theorem_hyps.append(self.allocator, hyp_id);
         }
+        self.theorem_hyp_names = stmt.hyp_names;
     }
 
     pub fn addDummyVar(

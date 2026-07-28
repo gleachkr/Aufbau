@@ -81,6 +81,15 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_chained_fallback_cycle",
         .outcome = .{ .fail = error.FallbackCycle },
     },
+    .{ .stem = "pass_named_hyp_refs", .outcome = .pass },
+    .{
+        .stem = "fail_named_hyp_unknown",
+        .outcome = .{ .fail = error.UnknownHypothesisRef },
+    },
+    .{
+        .stem = "fail_named_hyp_ambiguous",
+        .outcome = .{ .fail = error.AmbiguousHypothesisRef },
+    },
     .{ .stem = "pass_gen", .outcome = .pass },
     .{ .stem = "pass_dup", .outcome = .pass },
     .{ .stem = "pass_def", .outcome = .pass },

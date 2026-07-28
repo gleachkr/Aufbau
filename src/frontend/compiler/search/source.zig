@@ -1948,7 +1948,10 @@ fn renderRef(
     ref: ProofScript.Ref,
 ) anyerror!void {
     switch (ref) {
-        .hyp => |hyp| try buf.writer(allocator).print("#{}", .{hyp.index}),
+        .hyp => |hyp| if (hyp.name) |name|
+            try buf.writer(allocator).print("#{s}", .{name})
+        else
+            try buf.writer(allocator).print("#{}", .{hyp.index}),
         .line => |line| try buf.appendSlice(allocator, line.label),
         .application => |app| {
             const rendered = try renderApplication(

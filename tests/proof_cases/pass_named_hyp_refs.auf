@@ -1,0 +1,15 @@
+named
+---
+l1: $ b $ by mp [#ha, #hab]
+
+mixed
+---
+l1: $ b $ by mp [#ha, #2]
+
+lemma lem (c d: wff) (hc: $ c $) (hcd: $ c -> d $): $ d $
+----
+l1: $ d $ by mp [#hc, #hcd]
+
+chained
+---
+l1: $ c $ by mp [mp [#ha, #hab], #hbc]

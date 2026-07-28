@@ -483,7 +483,11 @@ pub fn compilerDiagnosticMessage(
             try appendNamedLine(&writer, "sort", detail.sort_name);
         },
         .hypothesis_ref => |detail| {
-            try writer.print("\nhypothesis ref: #{d}", .{detail.index});
+            if (detail.name) |name| {
+                try writer.print("\nhypothesis ref: #{s}", .{name});
+            } else {
+                try writer.print("\nhypothesis ref: #{d}", .{detail.index});
+            }
         },
         .unused_parameter => |detail| {
             try writer.print(

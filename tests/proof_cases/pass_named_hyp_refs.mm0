@@ -1,0 +1,7 @@
+delimiter $ ( ) $;
+provable sort wff;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+axiom mp (a b: wff): $ a $ > $ a -> b $ > $ b $;
+theorem named (a b: wff) (ha: $ a $) (hab: $ a -> b $): $ b $;
+theorem mixed (a b: wff) (ha: $ a $): $ a -> b $ > $ b $;
+theorem chained (a b c: wff) (ha: $ a $) (hab: $ a -> b $) (hbc: $ b -> c $): $ c $;

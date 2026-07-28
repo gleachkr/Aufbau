@@ -17,10 +17,15 @@ pub fn sourceRefExpr(
 ) !ExprId {
     return switch (ref) {
         .hyp => |hyp| blk: {
-            if (hyp.index == 0 or hyp.index > theorem.theorem_hyps.items.len) {
-                return error.UnknownHypothesisRef;
-            }
-            break :blk theorem.theorem_hyps.items[hyp.index - 1];
+            const hyp_idx = switch (ProofScript.resolveHypRef(
+                theorem.theorem_hyp_names,
+                theorem.theorem_hyps.items.len,
+                hyp,
+            )) {
+                .index => |value| value,
+                .unknown, .ambiguous => return error.UnknownHypothesisRef,
+            };
+            break :blk theorem.theorem_hyps.items[hyp_idx];
         },
         .line => |line| blk: {
             const line_idx = context.labels.get(line.label) orelse {

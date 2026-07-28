@@ -69,6 +69,10 @@ pub const AssertionStmt = struct {
     arg_names: []const ?[]const u8,
     arg_exprs: []const *const Expr,
     hyps: []const *const Expr,
+    /// Aligned with `hyps`: the binder name for binder-form hypotheses
+    /// (`(h: $ a $)`), null for arrow-form ones. Metadata only — the
+    /// verifier and cross-checker never read it.
+    hyp_names: []const ?[]const u8 = &.{},
     concl: *const Expr,
     kind: AssertionKind,
     is_local: bool,
@@ -766,11 +770,12 @@ pub const MM0Parser = struct {
 
         var ctx = BinderContext.init(self.allocator);
         var hyps_rev: std.ArrayListUnmanaged(*const Expr) = .{};
+        var hyp_names_rev: std.ArrayListUnmanaged(?[]const u8) = .{};
         self.skipWhitespaceAndComments();
-        try self.parseBindersWithHyps(&ctx, &hyps_rev, .assertion);
+        try self.parseBindersWithHyps(&ctx, &hyps_rev, &hyp_names_rev, .assertion);
 
         try self.expect(':');
-        const concl = try self.parseAssertionTail(&ctx, &hyps_rev);
+        const concl = try self.parseAssertionTail(&ctx, &hyps_rev, &hyp_names_rev);
 
         self.skipWhitespaceAndComments();
         if (self.peek() == '=') {
@@ -786,6 +791,7 @@ pub const MM0Parser = struct {
             .arg_names = try ctx.arg_names.toOwnedSlice(self.allocator),
             .arg_exprs = try ctx.arg_exprs.toOwnedSlice(self.allocator),
             .hyps = try hyps_rev.toOwnedSlice(self.allocator),
+            .hyp_names = try hyp_names_rev.toOwnedSlice(self.allocator),
             .concl = concl,
             .kind = kind,
             .is_local = is_local,
@@ -796,6 +802,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         ctx: *BinderContext,
         hyps_rev: *std.ArrayListUnmanaged(*const Expr),
+        hyp_names_rev: *std.ArrayListUnmanaged(?[]const u8),
     ) !*const Expr {
         while (true) {
             self.skipWhitespaceAndComments();
@@ -805,6 +812,7 @@ pub const MM0Parser = struct {
                 if (self.peek() == '>') {
                     self.pos += 1;
                     try hyps_rev.append(self.allocator, formula);
+                    try hyp_names_rev.append(self.allocator, null);
                     continue;
                 }
                 return formula;
@@ -827,7 +835,8 @@ pub const MM0Parser = struct {
         kind: BinderKind,
     ) !void {
         var ignore_hyps: std.ArrayListUnmanaged(*const Expr) = .{};
-        try self.parseBindersWithHyps(ctx, &ignore_hyps, kind);
+        var ignore_hyp_names: std.ArrayListUnmanaged(?[]const u8) = .{};
+        try self.parseBindersWithHyps(ctx, &ignore_hyps, &ignore_hyp_names, kind);
         if (ignore_hyps.items.len != 0) return error.UnexpectedHypothesisBinder;
     }
 
@@ -835,6 +844,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         ctx: *BinderContext,
         hyps_rev: *std.ArrayListUnmanaged(*const Expr),
+        hyp_names_rev: *std.ArrayListUnmanaged(?[]const u8),
         kind: BinderKind,
     ) !void {
         while (self.peek() == '(' or self.peek() == '{') {
@@ -874,9 +884,10 @@ pub const MM0Parser = struct {
                 const hyp = try self.parseFormulaMathString(&ctx.vars);
                 self.skipWhitespaceAndComments();
                 try self.expect(close);
-                for (names.items, is_dummy_buf.items) |_, is_dummy| {
+                for (names.items, is_dummy_buf.items) |name, is_dummy| {
                     if (is_dummy) return error.DummyHypothesisBinder;
                     try hyps_rev.append(self.allocator, hyp);
+                    try hyp_names_rev.append(self.allocator, name);
                 }
                 self.skipWhitespaceAndComments();
                 continue;

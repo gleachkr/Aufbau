@@ -1496,11 +1496,10 @@ pub const Lowerer = struct {
 
     pub fn renderRefText(self: *Lowerer, ref: ProofScript.Ref) ![]const u8 {
         return switch (ref) {
-            .hyp => |hyp| try std.fmt.allocPrint(
-                self.work,
-                "#{d}",
-                .{hyp.index},
-            ),
+            .hyp => |hyp| if (hyp.name) |name|
+                try std.fmt.allocPrint(self.work, "#{s}", .{name})
+            else
+                try std.fmt.allocPrint(self.work, "#{d}", .{hyp.index}),
             .line => |line| line.label,
             .application => error.UnexpectedInlineRef,
         };
