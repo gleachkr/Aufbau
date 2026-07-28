@@ -210,6 +210,59 @@ for (const label of ["l1", "l2"]) {
   );
 }
 
+// Named hypothesis refs: offered in reference slots and validated on hover.
+const namedLines = ["l1: $ p $ by use [#hp]", "l2: $ p $ by use []"];
+for (const [uri, languageId, text] of [
+  [
+    "file:///named.mm0",
+    "mm0",
+    "provable sort wff;\naxiom use (p: wff): $ p $;\n" +
+      "theorem main (p: wff) (hp: $ p $): $ p $;\n",
+  ],
+  ["file:///named.auf", "aufbau", "main\n----\n" + namedLines.join("\n") + "\n"],
+]) {
+  lsp.process({
+    jsonrpc: "2.0",
+    method: "textDocument/didOpen",
+    params: { textDocument: { uri, languageId, version: 1, text } },
+  });
+}
+const namedOutput = lsp.process({
+  jsonrpc: "2.0",
+  id: 5,
+  method: "textDocument/completion",
+  params: {
+    textDocument: { uri: "file:///named.auf" },
+    position: { line: 3, character: "l2: $ p $ by use [".length },
+  },
+});
+const namedMessage = namedOutput.map(JSON.parse).find((m) => m.id === 5);
+const namedItems = Array.isArray(namedMessage?.result)
+  ? namedMessage.result
+  : (namedMessage?.result?.items ?? []);
+const namedLabels = namedItems.map((item) => item.label);
+for (const label of ["#1", "#hp"]) {
+  assert.ok(
+    namedLabels.includes(label),
+    "reference completion omitted " + label,
+  );
+}
+const hoverOutput = lsp.process({
+  jsonrpc: "2.0",
+  id: 6,
+  method: "textDocument/hover",
+  params: {
+    textDocument: { uri: "file:///named.auf" },
+    position: { line: 2, character: namedLines[0].indexOf("#hp") + 1 },
+  },
+});
+const hoverMessage = hoverOutput.map(JSON.parse).find((m) => m.id === 6);
+const hoverText = JSON.stringify(hoverMessage?.result ?? null);
+assert.ok(
+  hoverText.includes("(#1) of") && hoverText.includes("hp"),
+  "named hypothesis hover did not resolve: " + hoverText,
+);
+
 console.log("Packed npm WASM packages load and run under Node.");
 `;
 }

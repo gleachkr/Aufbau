@@ -103,6 +103,11 @@ pub const BinderDecl = struct {
 pub const HypothesisDecl = struct {
     text: []const u8,
     range: SourceRange,
+    /// Binder name for a binder-form hypothesis (`(h: $ a $)`); null for
+    /// arrow-form hypotheses, which are positional only.
+    name: ?[]const u8 = null,
+    /// Range of the binder name token, when it was located in source.
+    name_range: ?SourceRange = null,
 };
 
 pub const Declaration = struct {

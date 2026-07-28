@@ -689,6 +689,13 @@ fn appendProofReferenceCompletions(
                 ),
             });
         }
+        try appendNamedHypCompletions(
+            self,
+            list,
+            allocator,
+            block,
+            replacement,
+        );
     }
     for (self.proof_lines) |line| {
         if (line.block_index != block_index) continue;
@@ -704,6 +711,55 @@ fn appendProofReferenceCompletions(
             .sort_text = line.sort_text,
         });
     }
+}
+
+fn appendNamedHypCompletions(
+    self: anytype,
+    list: *std.ArrayListUnmanaged(CompletionItem),
+    allocator: std.mem.Allocator,
+    block: model.ProofBlockInfo,
+    replacement: SourceRange,
+) !void {
+    const decl_index = block.decl_index orelse return;
+    const hypotheses = self.declarations[decl_index].hypotheses;
+    for (hypotheses, 0..) |hyp, i| {
+        const name = hyp.name orelse continue;
+        // A duplicated name cannot be cited (the compiler rejects the ref as
+        // ambiguous), so don't offer it.
+        if (hypNameIsDuplicated(hypotheses, i, name)) continue;
+        const label = try std.fmt.allocPrint(allocator, "#{s}", .{name});
+        try list.append(allocator, .{
+            .label = label,
+            .kind = .hypothesis,
+            .detail = "hypothesis",
+            .documentation_markdown = try std.fmt.allocPrint(
+                allocator,
+                "```mm0\n${s}$\n```",
+                .{hyp.text},
+            ),
+            .replacement = replacement,
+            .replacement_text = label,
+            .sort_text = try completionSortText(
+                allocator,
+                sort_group_proof_reference,
+                i + 1,
+                label,
+            ),
+        });
+    }
+}
+
+fn hypNameIsDuplicated(
+    hypotheses: []const Types.HypothesisDecl,
+    index: usize,
+    name: []const u8,
+) bool {
+    for (hypotheses, 0..) |other, j| {
+        if (j == index) continue;
+        const other_name = other.name orelse continue;
+        if (std.mem.eql(u8, other_name, name)) return true;
+    }
+    return false;
 }
 
 fn mm0DeclarationIndexAt(

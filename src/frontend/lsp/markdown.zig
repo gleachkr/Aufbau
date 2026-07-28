@@ -173,6 +173,7 @@ pub fn proofLineMarkdown(
 pub fn hypRefMarkdown(
     allocator: std.mem.Allocator,
     block_name: []const u8,
+    hyp_name: ?[]const u8,
     hyp_index: usize,
     hyp_count: usize,
     hyp_count_known: bool,
@@ -185,7 +186,18 @@ pub fn hypRefMarkdown(
         try writer.writeAll(text);
         try writer.writeAll("$\n```\n\n");
     }
-    try writer.print("hypothesis #{d} of `{s}`.", .{ hyp_index, block_name });
+    if (hyp_name) |name| {
+        try writer.print("hypothesis `{s}` (#{d}) of `{s}`.", .{
+            name,
+            hyp_index,
+            block_name,
+        });
+    } else {
+        try writer.print("hypothesis #{d} of `{s}`.", .{
+            hyp_index,
+            block_name,
+        });
+    }
     if (hyp_count_known) {
         try writer.print("\n\n{d} of {d} hypotheses.", .{
             hyp_index,
@@ -262,6 +274,31 @@ pub fn unknownHypMarkdown(
         allocator,
         "unknown hypothesis #{d} of `{s}`",
         .{ hyp_index, block_name },
+    );
+}
+
+pub fn unknownNamedHypMarkdown(
+    allocator: std.mem.Allocator,
+    block_name: []const u8,
+    hyp_name: []const u8,
+) ![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "unknown hypothesis #{s} of `{s}` — no hypothesis binder has this name",
+        .{ hyp_name, block_name },
+    );
+}
+
+pub fn ambiguousHypMarkdown(
+    allocator: std.mem.Allocator,
+    block_name: []const u8,
+    hyp_name: []const u8,
+) ![]const u8 {
+    return try std.fmt.allocPrint(
+        allocator,
+        "ambiguous hypothesis #{s} of `{s}` — " ++
+            "the name matches more than one hypothesis",
+        .{ hyp_name, block_name },
     );
 }
 

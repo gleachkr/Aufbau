@@ -135,9 +135,11 @@ pub fn hypothesesFromMm0Assertion(
     return hypothesesFromMathStrings(
         allocator,
         .mm0,
+        text,
         math_strings,
         0,
         assertion.hyps.len,
+        assertion.hyp_names,
     );
 }
 
@@ -145,6 +147,7 @@ pub fn hypothesesFromLemma(
     allocator: std.mem.Allocator,
     block: proof_script.ProofBlock,
     hyp_count: usize,
+    hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
     if (block.header_tail.len == 0 or hyp_count == 0) return &.{};
     return collectHypotheses(
@@ -155,6 +158,7 @@ pub fn hypothesesFromLemma(
         block.header_tail.len,
         block.header_tail_span.start,
         hyp_count,
+        hyp_names,
     );
 }
 
@@ -166,6 +170,7 @@ fn collectHypotheses(
     end: usize,
     offset_base: usize,
     hyp_count: usize,
+    hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
     var pos = start;
     var math_strings = std.ArrayListUnmanaged(source.MathStringSpan){};
@@ -177,33 +182,74 @@ fn collectHypotheses(
     return hypothesesFromMathStrings(
         allocator,
         document,
+        text,
         math_strings.items,
         offset_base,
         hyp_count,
+        hyp_names,
     );
 }
 
 fn hypothesesFromMathStrings(
     allocator: std.mem.Allocator,
     document: DocumentId,
+    text: []const u8,
     math_strings: []const source.MathStringSpan,
     offset_base: usize,
     hyp_count: usize,
+    hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
     var result = std.ArrayListUnmanaged(HypothesisDecl){};
     const count = @min(hyp_count, math_strings.len);
-    for (math_strings[0..count]) |math| {
+    for (math_strings[0..count], 0..) |math, i| {
         const range: SourceRange = .{
             .document = document,
             .start = offset_base + math.inner_start,
             .end = offset_base + math.inner_end,
         };
+        const name = if (i < hyp_names.len) hyp_names[i] else null;
         try result.append(allocator, .{
             .text = math.text,
             .range = range,
+            .name = name,
+            .name_range = if (name) |actual| binderNameRangeBeforeMath(
+                document,
+                text,
+                offset_base,
+                math.inner_start,
+                actual,
+            ) else null,
         });
     }
     return try result.toOwnedSlice(allocator);
+}
+
+/// Locate the binder name token of a binder-form hypothesis by scanning
+/// backwards from the opening `$` of its formula: `(name: $ ... $)`. The
+/// name is already known from the parsed assertion; this only recovers its
+/// source position, so any mismatch just yields null.
+fn binderNameRangeBeforeMath(
+    document: DocumentId,
+    text: []const u8,
+    offset_base: usize,
+    math_inner_start: usize,
+    name: []const u8,
+) ?SourceRange {
+    if (math_inner_start == 0 or name.len == 0) return null;
+    var pos = math_inner_start - 1;
+    while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
+    if (pos == 0 or text[pos - 1] != ':') return null;
+    pos -= 1;
+    while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
+    if (pos < name.len) return null;
+    const start = pos - name.len;
+    if (!std.mem.eql(u8, text[start..pos], name)) return null;
+    if (start > 0 and isProofIdentChar(text[start - 1])) return null;
+    return .{
+        .document = document,
+        .start = offset_base + start,
+        .end = offset_base + pos,
+    };
 }
 
 pub fn bindersFromTerm(

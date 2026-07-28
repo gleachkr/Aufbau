@@ -2080,6 +2080,199 @@ test "hypothesis refs hover and jump to exact theorem hypothesis" {
     );
 }
 
+test "named hypothesis refs validate and jump to the theorem binder" {
+    const mm0_text =
+        \\provable sort wff;
+        \\term first: wff;
+        \\term second: wff;
+        \\term top: wff;
+        \\axiom keep: $ second $ > $ top $;
+        \\theorem main (h1: $ first $) (h2: $ second $): $ top $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by keep [#h2]
+        \\l2: $ top $ by keep [#nope]
+        \\l3: $ top $ by keep []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const named_offset =
+        (std.mem.indexOf(u8, proof_text, "#h2") orelse unreachable) + 1;
+    const hover = snapshot.hoverAt(.proof, named_offset) orelse {
+        return error.MissingHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "$ second $",
+    ));
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "hypothesis `h2` (#2)",
+    ));
+    const def = snapshot.definitionAt(.proof, named_offset) orelse {
+        return error.MissingDefinition;
+    };
+    try std.testing.expectEqualStrings("file:///test.mm0", def.uri);
+    try std.testing.expectEqualStrings(
+        "h2",
+        snapshot.mm0_text[def.range.start..def.range.end],
+    );
+
+    const unknown_offset =
+        (std.mem.indexOf(u8, proof_text, "#nope") orelse unreachable) + 1;
+    const unknown_hover = snapshot.hoverAt(.proof, unknown_offset) orelse {
+        return error.MissingUnknownHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        unknown_hover.markdown,
+        1,
+        "unknown hypothesis #nope",
+    ));
+    try std.testing.expect(
+        snapshot.definitionAt(.proof, unknown_offset) == null,
+    );
+
+    const slot_offset =
+        (std.mem.indexOf(u8, proof_text, "keep []") orelse unreachable) +
+        "keep [".len;
+    var ref_arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ref_arena_state.deinit();
+    const ref_items = try snapshot.completionsAt(
+        ref_arena_state.allocator(),
+        .proof,
+        slot_offset,
+        .{},
+    );
+    try std.testing.expect(completionNamed(ref_items, "#1") != null);
+    try std.testing.expect(completionNamed(ref_items, "#h1") != null);
+    const named_item = completionNamed(ref_items, "#h2") orelse {
+        return error.MissingNamedHypCompletion;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        named_item.documentation_markdown orelse "",
+        1,
+        "$ second $",
+    ));
+}
+
+test "duplicate hypothesis names make a named ref ambiguous" {
+    const mm0_text =
+        \\provable sort wff;
+        \\term first: wff;
+        \\term top: wff;
+        \\axiom keep: $ first $ > $ top $;
+        \\theorem dup (h: $ first $) (h: $ first $): $ top $;
+    ;
+    const proof_text =
+        \\dup
+        \\----
+        \\l1: $ top $ by keep [#h]
+        \\l2: $ top $ by keep []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const ref_offset =
+        (std.mem.indexOf(u8, proof_text, "#h]") orelse unreachable) + 1;
+    const hover = snapshot.hoverAt(.proof, ref_offset) orelse {
+        return error.MissingHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "matches more than one hypothesis",
+    ));
+    try std.testing.expect(snapshot.definitionAt(.proof, ref_offset) == null);
+
+    const slot_offset =
+        (std.mem.indexOf(u8, proof_text, "keep []") orelse unreachable) +
+        "keep [".len;
+    var ref_arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ref_arena_state.deinit();
+    const ref_items = try snapshot.completionsAt(
+        ref_arena_state.allocator(),
+        .proof,
+        slot_offset,
+        .{},
+    );
+    try std.testing.expect(completionNamed(ref_items, "#1") != null);
+    try std.testing.expect(completionNamed(ref_items, "#2") != null);
+    try std.testing.expect(completionNamed(ref_items, "#h") == null);
+}
+
+test "named hypothesis refs resolve in lemma headers" {
+    const mm0_text =
+        \\provable sort wff;
+        \\term first: wff;
+        \\term top: wff;
+        \\axiom keep: $ first $ > $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_text =
+        \\lemma lem (hf: $ first $): $ top $
+        \\----
+        \\l1: $ top $ by keep [#hf]
+        \\
+        \\main
+        \\----
+        \\l1: $ top $ by keep []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const ref_offset =
+        (std.mem.indexOf(u8, proof_text, "#hf") orelse unreachable) + 1;
+    const hover = snapshot.hoverAt(.proof, ref_offset) orelse {
+        return error.MissingHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "$ first $",
+    ));
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "hypothesis `hf` (#1)",
+    ));
+    const def = snapshot.definitionAt(.proof, ref_offset) orelse {
+        return error.MissingDefinition;
+    };
+    try std.testing.expectEqualStrings("file:///test.auf", def.uri);
+    const header_binder = std.mem.indexOf(u8, proof_text, "hf") orelse {
+        return error.MissingHeaderBinder;
+    };
+    try std.testing.expectEqual(header_binder, def.range.start);
+    try std.testing.expectEqual(header_binder + "hf".len, def.range.end);
+}
+
 test "unresolved proof symbols still hover" {
     const mm0_text =
         \\provable sort wff;

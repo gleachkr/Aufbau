@@ -18,6 +18,7 @@ const completionSortText = completion.completionSortText;
 const sort_group_proof_lemma = completion.sort_group_proof_lemma;
 const sort_group_proof_reference = completion.sort_group_proof_reference;
 
+const ambiguousHypMarkdown = markdown.ambiguousHypMarkdown;
 const binderMarkdown = markdown.binderMarkdown;
 const hypRefMarkdown = markdown.hypRefMarkdown;
 const namedHypMarkdown = markdown.namedHypMarkdown;
@@ -25,6 +26,7 @@ const lemmaMarkdown = markdown.lemmaMarkdown;
 const proofLineMarkdown = markdown.proofLineMarkdown;
 const unknownBindingMarkdown = markdown.unknownBindingMarkdown;
 const unknownHypMarkdown = markdown.unknownHypMarkdown;
+const unknownNamedHypMarkdown = markdown.unknownNamedHypMarkdown;
 const unknownLineMarkdown = markdown.unknownLineMarkdown;
 const unknownRuleMarkdown = markdown.unknownRuleMarkdown;
 const unresolvedBindingMarkdown = markdown.unresolvedBindingMarkdown;
@@ -135,6 +137,7 @@ pub fn addLemmaBlockHeader(
             self.allocator,
             block,
             hyp_count,
+            if (maybe_assertion) |assertion| assertion.hyp_names else &.{},
         ),
     };
     const decl_index = try self.addDeclaration(decl);
@@ -317,22 +320,7 @@ pub fn addHypRef(
 ) !void {
     const block = self.proof_blocks.items[block_index];
     if (hyp.name) |name| {
-        // Named refs resolve against binder names the indexer does not
-        // track; point at the declaration without index validation.
-        const decl_range = if (block.decl_index) |decl_index|
-            self.declarations.items[decl_index].name_range
-        else
-            null;
-        try self.addSymbol(.{
-            .source_range = proofSpanRange(hyp.span),
-            .target_range = decl_range,
-            .markdown = try namedHypMarkdown(
-                self.allocator,
-                block.name,
-                name,
-            ),
-        });
-        return;
+        return addNamedHypRef(self, block, hyp, name);
     }
     if (hyp.index == 0 or
         (block.hyp_count_known and hyp.index > block.hyp_count))
@@ -371,10 +359,89 @@ pub fn addHypRef(
         .markdown = try hypRefMarkdown(
             self.allocator,
             block.name,
+            null,
             hyp.index,
             block.hyp_count,
             block.hyp_count_known,
             if (hyp_decl) |item| item.text else null,
+        ),
+    });
+}
+
+fn addNamedHypRef(
+    self: anytype,
+    block: model.ProofBlockInfo,
+    hyp: proof_script.HypRef,
+    name: []const u8,
+) !void {
+    const source_range = proofSpanRange(hyp.span);
+    const decl_index = block.decl_index orelse {
+        try self.addSymbol(.{
+            .source_range = source_range,
+            .target_range = null,
+            .markdown = try namedHypMarkdown(self.allocator, block.name, name),
+        });
+        return;
+    };
+    const decl = self.declarations.items[decl_index];
+    // Validate only against a complete table: when the header scan came up
+    // short, a missed name is indistinguishable from missing data, so fall
+    // back to naming the ref without judging it.
+    if (!block.hyp_count_known or decl.hypotheses.len < block.hyp_count) {
+        try self.addSymbol(.{
+            .source_range = source_range,
+            .target_range = decl.name_range,
+            .markdown = try namedHypMarkdown(self.allocator, block.name, name),
+        });
+        return;
+    }
+    var found: ?usize = null;
+    var ambiguous = false;
+    for (decl.hypotheses, 0..) |item, i| {
+        const hyp_name = item.name orelse continue;
+        if (!std.mem.eql(u8, hyp_name, name)) continue;
+        if (found != null) {
+            ambiguous = true;
+            break;
+        }
+        found = i;
+    }
+    if (ambiguous) {
+        try self.addSymbol(.{
+            .source_range = source_range,
+            .target_range = null,
+            .markdown = try ambiguousHypMarkdown(
+                self.allocator,
+                block.name,
+                name,
+            ),
+        });
+        return;
+    }
+    const index = found orelse {
+        try self.addSymbol(.{
+            .source_range = source_range,
+            .target_range = null,
+            .markdown = try unknownNamedHypMarkdown(
+                self.allocator,
+                block.name,
+                name,
+            ),
+        });
+        return;
+    };
+    const item = decl.hypotheses[index];
+    try self.addSymbol(.{
+        .source_range = source_range,
+        .target_range = item.name_range orelse item.range,
+        .markdown = try hypRefMarkdown(
+            self.allocator,
+            block.name,
+            name,
+            index + 1,
+            block.hyp_count,
+            block.hyp_count_known,
+            item.text,
         ),
     });
 }
