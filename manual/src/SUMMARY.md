@@ -14,7 +14,7 @@
 - [Sorts and terms](sorts-and-terms.md)
 - [Variables, binders, and dependencies](variables-and-binders.md)
 - [Notation](notation.md)
-- [Axioms, theorems, and definitions]()
+- [Axioms, theorems, and definitions](axioms-theorems-definitions.md)
 
 # The .auf language
 
