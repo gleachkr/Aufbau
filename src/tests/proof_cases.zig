@@ -56,6 +56,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_chained_metadata", .outcome = .pass },
     .{ .stem = "pass_chained_normalize", .outcome = .pass },
     .{ .stem = "pass_nested_additive_inline", .outcome = .pass },
+    .{ .stem = "pass_ret_deps", .outcome = .pass },
     .{
         .stem = "fail_chained_bare_rule_label",
         .outcome = .{ .fail = error.UnknownLabel },

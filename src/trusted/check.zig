@@ -109,6 +109,9 @@ pub const CrossChecker = struct {
         };
         if (expected_ret != mmb_term.ret_sort.sort) return error.RetSortMismatch;
 
+        const mmb_ret = try mmb_term.getRetArgChecked(file_bytes);
+        if (mm0_term.ret_deps != mmb_ret.deps) return error.RetDepsMismatch;
+
         if (mm0_term.body) |body| {
             const unify_ptr = mmb_term.getUnifyPtr(file_bytes) orelse {
                 return error.ExpectedDef;

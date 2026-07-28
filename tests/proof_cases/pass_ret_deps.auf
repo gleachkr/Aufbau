@@ -1,0 +1,7 @@
+selfsub_refl
+----
+l1: $ eq (selfsub x e a) (selfsub x e a) $ by eq_refl
+
+keeps_refl
+----
+l1: $ eq (keeps x e) (keeps x e) $ by eq_refl

@@ -86,6 +86,17 @@ pub fn lintUnusedDefinitionParameters(
         term.dummy_args,
     );
 
+    // A bound arg named only in the result type's dependency list is still
+    // used: it makes every application count as mentioning that variable.
+    var bound_arg_idx: u6 = 0;
+    for (term.args, 0..) |arg, idx| {
+        if (!arg.bound) continue;
+        if ((@as(u64, term.ret_deps) >> bound_arg_idx) & 1 != 0) {
+            used_args[idx] = true;
+        }
+        bound_arg_idx += 1;
+    }
+
     for (term.arg_names, 0..) |arg_name, idx| {
         if (used_args[idx]) continue;
         const parameter_name = try parameterDisplayName(

@@ -16,6 +16,7 @@ const HYP_ID = [4]u8{ 'H', 'y', 'p', 'N' };
 pub const TermRecord = struct {
     args: []const Arg,
     ret_sort: u7,
+    ret_deps: u55 = 0,
     is_def: bool,
     unify: []const u8,
     name: ?[]const u8 = null,
@@ -134,7 +135,7 @@ pub fn buildFile(
             try appendValue(&bytes, allocator, arg);
         }
         try appendValue(&bytes, allocator, Arg{
-            .deps = 0,
+            .deps = record.ret_deps,
             .reserved = 0,
             .sort = record.ret_sort,
             .bound = false,

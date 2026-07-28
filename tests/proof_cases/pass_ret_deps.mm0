@@ -1,0 +1,11 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort tm;
+term eq (a b: tm): wff;
+term sb {x: tm} (e: tm x) (a: tm): tm;
+term fresh {x: tm} (e: tm): tm x;
+def selfsub {x: tm} (e: tm x) (a: tm x): tm x = $ sb x e a $;
+def keeps {x: tm} (e: tm): tm x = $ fresh x e $;
+axiom eq_refl (a: tm): $ eq a a $;
+theorem selfsub_refl {x: tm} (e: tm x) (a: tm x): $ eq (selfsub x e a) (selfsub x e a) $;
+theorem keeps_refl {x: tm} (e: tm): $ eq (keeps x e) (keeps x e) $;

@@ -450,6 +450,7 @@ pub fn compileTermRecord(
     return .{
         .args = try buildArgArray(parser, stmt.args),
         .ret_sort = try lookupSortId(parser, stmt.ret_sort_name),
+        .ret_deps = stmt.ret_deps,
         .is_def = stmt.is_def,
         .unify = unify,
         .name = stmt.name,

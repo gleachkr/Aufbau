@@ -719,7 +719,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
 
 fn definitionBodySummary(err: anyerror) []const u8 {
     return switch (err) {
-        error.DepViolation => "definition body leaves hidden binders free in the result",
+        error.DepViolation => "definition body has free variables that the result type does not declare",
         error.SortMismatch => "definition body sort does not match the declared result sort",
         else => "definition body does not satisfy the declared result",
     };
@@ -742,6 +742,8 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
             "match the number of hypotheses this rule has",
         error.HoleTokenNameCollision => "name conflicts with a proof hole token",
         error.BinderTokenCollision => "binder name conflicts with a declared notation token",
+        error.ResultDependencyOnDummy => "a result type may only depend on " ++
+            "bound variables from the argument list, not hidden binders",
         error.HoleyInferenceMismatch => "the visible parts of the statement " ++
             "do not match what this rule proves",
         error.HoleConclusionMismatch => "the visible parts of the statement " ++

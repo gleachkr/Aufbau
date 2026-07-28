@@ -15,6 +15,9 @@ pub const TermDecl = struct {
     dummy_args: []const ArgInfo,
     dummy_names: []const ?[]const u8,
     ret_sort_name: []const u8,
+    /// Result-type dependencies, indexed over the bound args in declaration
+    /// order (same convention as the MMB return Arg).
+    ret_deps: u55 = 0,
     is_def: bool,
     body: ?TemplateExpr,
     // In recovery mode we sometimes keep a placeholder here for a parsed
@@ -189,6 +192,7 @@ pub const GlobalEnv = struct {
             .dummy_args = stmt.dummy_args,
             .dummy_names = stmt.dummy_names,
             .ret_sort_name = stmt.ret_sort_name,
+            .ret_deps = stmt.ret_deps,
             .is_def = stmt.is_def,
             .body = body,
         };

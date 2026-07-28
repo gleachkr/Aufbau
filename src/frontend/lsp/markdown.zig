@@ -58,6 +58,7 @@ pub fn termMarkdown(
     });
     try writeCompactArgList(&writer, term.arg_names, term.args);
     try writer.print(": {s}", .{term.ret_sort_name});
+    try writeDeps(&writer, term.ret_deps, term.arg_names, term.args, term.args.len);
     if (term.is_def) {
         if (definitionBodySource(text, term.name_span)) |body| {
             try writer.writeAll(" =\n");

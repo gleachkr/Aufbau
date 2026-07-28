@@ -55,6 +55,9 @@ pub const TermStmt = struct {
     dummy_names: []const ?[]const u8 = &.{},
     dummy_exprs: []const *const Expr = &.{},
     ret_sort_name: []const u8,
+    /// Result-type dependencies, indexed over the bound args in declaration
+    /// order (the MMB return-Arg convention), not over all bound binders.
+    ret_deps: u55 = 0,
     is_def: bool,
     body: ?*const Expr,
 };
@@ -692,7 +695,8 @@ pub const MM0Parser = struct {
         try self.parseBinders(&ctx, .term);
 
         try self.expect(':');
-        const ret_sort_name = try self.parseTermType(&ctx);
+        const ret_info = try self.parseTermType(&ctx);
+        const ret_sort_name = ret_info.sort_name;
         const ret_sort = try self.lookupSortId(ret_sort_name);
 
         var body: ?*const Expr = null;
@@ -710,6 +714,23 @@ pub const MM0Parser = struct {
         const arg_slice = try ctx.arg_infos.toOwnedSlice(self.allocator);
         const arg_names = try ctx.arg_names.toOwnedSlice(self.allocator);
         const arg_exprs = try ctx.arg_exprs.toOwnedSlice(self.allocator);
+
+        // `parseSortExpr` yields dependency bits over all bound binders in
+        // declaration order, dummies included. The result type may only
+        // depend on bound *args*, and MMB indexes its return-Arg deps over
+        // those, so remap and reject anything left over (a dummy).
+        var ret_deps: u55 = 0;
+        var pending_ret_deps = ret_info.deps;
+        var bound_arg_idx: u6 = 0;
+        for (arg_slice) |arg| {
+            if (!arg.bound) continue;
+            if (pending_ret_deps & arg.deps != 0) {
+                pending_ret_deps &= ~arg.deps;
+                ret_deps |= @as(u55, 1) << bound_arg_idx;
+            }
+            bound_arg_idx += 1;
+        }
+        if (pending_ret_deps != 0) return error.ResultDependencyOnDummy;
         const term_id = try self.nextTermId();
         const term_args = try self.buildTermArgs(arg_slice);
         try self.terms.append(self.allocator, .{
@@ -728,6 +749,7 @@ pub const MM0Parser = struct {
             .dummy_names = try ctx.dummy_names.toOwnedSlice(self.allocator),
             .dummy_exprs = try ctx.dummy_exprs.toOwnedSlice(self.allocator),
             .ret_sort_name = ret_sort_name,
+            .ret_deps = ret_deps,
             .is_def = is_def,
             .body = body,
         };
@@ -957,7 +979,7 @@ pub const MM0Parser = struct {
         return .{ .sort_name = sort_info.text, .bound = false, .deps = deps };
     }
 
-    fn parseTermType(self: *MM0Parser, ctx: *BinderContext) ![]const u8 {
+    fn parseTermType(self: *MM0Parser, ctx: *BinderContext) !ArgInfo {
         var current = try self.parseSortExpr(ctx.bound_names.items);
         while (true) {
             self.skipWhitespaceAndComments();
@@ -969,7 +991,7 @@ pub const MM0Parser = struct {
             try ctx.arg_exprs.append(self.allocator, expr);
             current = try self.parseSortExpr(ctx.bound_names.items);
         }
-        return current.sort_name;
+        return current;
     }
 
     fn parseDelimiterStmt(self: *MM0Parser) !void {

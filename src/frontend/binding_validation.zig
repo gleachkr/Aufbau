@@ -162,6 +162,15 @@ pub fn defExprInfo(
         deps |= arg_deps;
     }
 
+    // A dependency declared on the term's result type makes the variable
+    // substituted for that bound arg free in the whole application,
+    // whether or not it occurs in the regular args (verifier.zig opTerm,
+    // defn context, is the reference).
+    for (0..bound_len) |j| {
+        if ((@as(u64, term.ret_deps) >> @intCast(j)) & 1 == 0) continue;
+        deps |= bound_deps[j];
+    }
+
     return .{
         .sort_name = term.ret_sort_name,
         .bound = false,

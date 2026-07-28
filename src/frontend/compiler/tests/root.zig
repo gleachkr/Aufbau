@@ -3814,7 +3814,7 @@ test "compiler rejects def bodies that leave hidden binders free" {
     try std.testing.expectEqual(error.DepViolation, diag.err);
     try std.testing.expectEqual(.invalid_definition_body, diag.kind);
     try std.testing.expectEqualStrings(
-        "definition body leaves hidden binders free in the result",
+        "definition body has free variables that the result type does not declare",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
@@ -3837,8 +3837,66 @@ test "compiler rejects def bodies that leave hidden binders free" {
         diag.noteSlice()[0].message,
     );
     try std.testing.expectEqualStrings(
-        "the body still depends on one or more hidden binders",
+        "every free variable of the body must be declared as a " ++
+            "dependency of the result type",
         diag.noteSlice()[1].message,
+    );
+}
+
+test "def result-type deps cover body free variables" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort tm;
+        \\term sb {x: tm} (e: tm x) (a: tm): tm;
+        \\def selfsub {x: tm} (e: tm x) (a: tm x): tm x = $ sb x e a $;
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        "",
+    );
+    const mmb = try compiler.compileMmb(std.testing.allocator);
+    defer std.testing.allocator.free(mmb);
+}
+
+test "compiler rejects def bodies freed only by a term's result deps" {
+    // `fresh x e` counts as mentioning `x` via fresh's result-type
+    // dependency, so a bare `tm` result cannot cover the body.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort tm;
+        \\term fresh {x: tm} (e: tm): tm x;
+        \\def bad {x: tm} (e: tm): tm = $ fresh x e $;
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        "",
+    );
+    try std.testing.expectError(
+        error.DepViolation,
+        compiler.compileMmb(std.testing.allocator),
+    );
+}
+
+test "parser rejects result-type deps naming a hidden binder" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\sort tm;
+        \\term pair (a b: tm): tm;
+        \\def bad {.y: tm} (a: tm): tm y = $ pair a a $;
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        "",
+    );
+    try std.testing.expectError(
+        error.ResultDependencyOnDummy,
+        compiler.compileMmb(std.testing.allocator),
     );
 }
 

@@ -119,7 +119,23 @@ pub fn validateDefinitionBody(
         return error.SortMismatch;
     }
 
-    if (body_info.deps != 0) {
+    // The declared result deps index the bound args in order; body deps are
+    // in binder-declaration order (dummies included), so widen the declared
+    // mask to that space before comparing. Free variables the result type
+    // does not declare are the violation (superset declarations are fine),
+    // matching the verifier's checkExprAgainstArg.
+    var declared_deps: u55 = 0;
+    var bound_arg_idx: u6 = 0;
+    for (term_stmt.args) |arg| {
+        if (!arg.bound) continue;
+        if ((@as(u64, term_stmt.ret_deps) >> bound_arg_idx) & 1 != 0) {
+            declared_deps |= arg.deps;
+        }
+        bound_arg_idx += 1;
+    }
+
+    const uncovered_deps = body_info.deps & ~declared_deps;
+    if (uncovered_deps != 0) {
         var diag = Diagnostic{
             .kind = .invalid_definition_body,
             .err = error.DepViolation,
@@ -130,7 +146,7 @@ pub fn validateDefinitionBody(
             .detail = .{ .definition_body = .{
                 .declared_sort_name = term_stmt.ret_sort_name,
                 .actual_sort_name = body_info.sort_name,
-                .body_deps = body_info.deps,
+                .body_deps = uncovered_deps,
                 .hidden_binder_count = term_stmt.dummy_args.len,
             } },
         };
@@ -142,7 +158,8 @@ pub fn validateDefinitionBody(
         );
         CompilerDiag.addNote(
             &diag,
-            "the body still depends on one or more hidden binders",
+            "every free variable of the body must be declared as a " ++
+                "dependency of the result type",
             .mm0,
             null,
         );
