@@ -1,23 +1,26 @@
+-- `a` replaces `x`, so it may mention it. The one denial that carries weight is
+-- `a`'s lack of `y` in `sb_lam`: that is what blocks capture.
+
 --| @compute ltr
-axiom beta {x: tm} (e: tm x) (a: tm): $ (λ x. e) · a = [x := a] e $;
---| @compute ltr
---| @rewrite
-axiom sb_var {x: tm} (a: tm): $ [x := a] x = a $;
---| @compute ltr
---| @rewrite
-axiom sb_vac {x: tm} (e a: tm): $ [x := a] e = e $;
+axiom beta {x: tm} (e: tm x) (a: tm x): $ (λ x. e) · a = [x := a] e $;
 --| @compute ltr
 --| @rewrite
-axiom sb_app {x: tm} (f g: tm x) (a: tm): $ [x := a] (f · g) = ([x := a] f) · ([x := a] g) $;
+axiom sb_var {x: tm} (a: tm x): $ [x := a] x = a $;
 --| @compute ltr
 --| @rewrite
-axiom sb_suc {x: tm} (e: tm x) (a: tm): $ [x := a] (S e) = S ([x := a] e) $;
+axiom sb_vac {x: tm} (e: tm) (a: tm x): $ [x := a] e = e $;
 --| @compute ltr
 --| @rewrite
-axiom sb_add {x: tm} (f g: tm x) (a: tm): $ [x := a] (f + g) = ([x := a] f) + ([x := a] g) $;
+axiom sb_app {x: tm} (f g: tm x) (a: tm x): $ [x := a] (f · g) = ([x := a] f) · ([x := a] g) $;
 --| @compute ltr
 --| @rewrite
-axiom sb_lam {x y: tm} (e: tm x y) (a: tm): $ [x := a] (λ y. e) = (λ y. [x := a] e) $;
+axiom sb_suc {x: tm} (e: tm x) (a: tm x): $ [x := a] (S e) = S ([x := a] e) $;
+--| @compute ltr
+--| @rewrite
+axiom sb_add {x: tm} (f g: tm x) (a: tm x): $ [x := a] (f + g) = ([x := a] f) + ([x := a] g) $;
+--| @compute ltr
+--| @rewrite
+axiom sb_lam {x y: tm} (e: tm x y) (a: tm x): $ [x := a] (λ y. e) = (λ y. [x := a] e) $;
 --| @compute ltr
 axiom add_z (n: tm): $ 0 + n = n $;
 --| @compute ltr

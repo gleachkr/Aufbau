@@ -12,8 +12,8 @@
 # The MM0 language
 
 - [Sorts and terms](sorts-and-terms.md)
-- [Variables, binders, and dependencies]()
-- [Notation]()
+- [Variables, binders, and dependencies](variables-and-binders.md)
+- [Notation](notation.md)
 - [Axioms, theorems, and definitions]()
 
 # The .auf language
