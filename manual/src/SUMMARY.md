@@ -18,9 +18,8 @@
 
 # The .auf language
 
-- [Proof blocks and lines]()
-- [References and bindings]()
-- [Chained applications]()
+- [Proof blocks and lines](proof-blocks-and-lines.md)
+- [References and bindings](references-and-bindings.md)
 - [Lemmas and definitions in proofs](lemmas-defs-in-proofs.md)
 
 # Designing theories

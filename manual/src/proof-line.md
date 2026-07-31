@@ -102,9 +102,8 @@ l1: $ p -> p $ by mp [h1 [], mp [h1 [], h2 []]]
 ```
 
 The diagnostic says one of `h1`'s variables could not be determined. Aufbau can 
-only infer what is forced by the goal and the references. Information 
-mostly flows left to right through a reference list, and at the moment the 
-first `h1 []` is read, nothing has pinned down what it should prove.
+only infer what is forced by the goal and the references, and nothing here 
+forces a choice of instance for the first `h1 []`.
 
 If a variable cannot be determined, you can give the premise its own labeled
 line, as in `imp_refl_chained` above, or state the instances yourself with

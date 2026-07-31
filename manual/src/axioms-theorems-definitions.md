@@ -210,4 +210,4 @@ def nand (a b: wff): wff;
 The interface then commits only to the connective existing, and the `.mm0` file
 can go on to state theorems about it which function as an implicit definition 
 of the defined term. The body then needs to be supplied by the proof file (See 
-Chapter 12).
+Chapter 11).

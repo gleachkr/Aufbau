@@ -52,7 +52,7 @@ l1: $ (a /\ b -> c) <-> (imp (and a b) c) $ by iff_refl
 An infix precedence must be below max, and a token may be declared at only one 
 precedence. If two infix operators have the same precedence, they must 
 associate the same way. An `infixl` and an `infixr` declared at the same 
-precedence will be rejected. Operators sharing an associativity and precidence 
+precedence will be rejected. Operators sharing an associativity and precedence 
 level can be mixed freely, so with `/\` and `\/` both `infixl` at 30, `a /\ b 
 \/ c` is `(a /\ b) \/ c`.
 
