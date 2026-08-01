@@ -172,13 +172,15 @@ seeded derived pool. Since 2026-07-05 the ladder is a **hybrid nesting**:
   phase-1–3 proofs; phase-4/5 proofs keep the old behavior.
 
 The ordering is load-bearing: within a core depth an anchored proof still
-wins (split-free beats split beats invented witness at equal height), and
+wins (split-free beats split at equal height, and within any single
+application an anchored witness beats an invented one — invention is the
+last rung of the slot-local witness ladder, not a phase capability), and
 phases 4–6 still fire only on clean misses, so they can only *add*
 found-ness. What the reorder changed is the cross-depth preference within
 the core — a shallow invented-witness proof now beats a deeper split-free
-one (measured impact: none — breadth corpus byte-identical). Each ladder
-phase keeps the previous phases' flags on (cumulative), so e.g. phase 3 is
-"split + invent":
+one (measured impact: none — breadth corpus byte-identical). Flag sets are
+monotone along the ladder (phase 3 carries the same flags as phase 2),
+which the persisted-memo covering rule requires:
 
 1. **Phase 1 — non-splitting.** `hook.allow_split = false`. Goals provable
    without a speculative ACUI context split are found here and never pay split
@@ -186,11 +188,19 @@ phase keeps the previous phases' flags on (cumulative), so e.g. phase 3 is
 2. **Phase 2 — context splitting** (`allow_split = true`). Per core depth,
    only after phase 1 missed at that depth. Enables `trySplitGenerate` for
    multiplicative rules whose hypothesis context halves must be guessed.
-3. **Phase 3 — witness invention** (`allow_invent_witness = true`). Per core
+3. **Phase 3 — pool retry** (capability-identical to phase 2). Per core
    depth, only after phase 2 missed at that depth, and only if the theory
    pre-materialized `@vars`-pool dummies (`@auto backward` + non-empty
-   `@vars`). An open existential whose witness *nothing forces* is grounded
-   to a reused pool dummy.
+   `@vars`). A re-run with its own fuel pool and persisted-memo lineage;
+   deep open-witness theories need it (peano `mul_eq_*_all` at depth 6 are
+   found by this cell and by nothing else — #174: neither 4x fuel nor
+   `max_depth` 10 recovers them without it). Witness invention itself —
+   grounding an open existential whose witness *nothing forces* to a reused
+   pool dummy — is not a phase capability: `allow_invent_witness` is on in
+   every core phase whenever the pool exists, and invention stays the last
+   rung of the slot-local witness ladder (`emitOpenTarget`), a single
+   deterministic continuation per slot (measured outcome-identical to the
+   historical phase-3 gating).
 4. **Phase 4 — principal retention** (`allow_retain_principal = true`). Only on
    a clean core miss, and only when the theory declares an **idempotent**
    structural combiner (`hasIdempotentCombiner`). Lets the ACUI split enumerator
@@ -502,8 +512,8 @@ ACUI context split, a `.witness` rule instantiates the binders the goal does not
 determine as **existential metas**, turning the hypothesis into a sub-goal the
 generation hook solves. Witnesses are committed in a deliberate order: forced from
 a concrete ACUI member first, then a generated sub-proof, then coupled/invented
-last (phase-3 invention also needs a `@vars` pool — see the four-phase retry
-above).
+last (invention needs a `@vars` pool; it is slot-local, not a retry phase — see
+the phase ladder above).
 
 The member-force pass cross-matches every meta-bearing fragment of the open
 target (innermost first) against every concrete region member, descending
@@ -871,11 +881,11 @@ it is the identity, gated by `has_acui` so those theories pay nothing.
   bitset) and survives the whole retry ladder. Sound because a
   genuinely-exhaustive fail at (target, depth d, phase p) is a pure semantic
   fact — no proof of gen-depth ≤ d exists under phase-p capabilities and
-  this pool — and the phase flags are cumulative, linearly ordered, and
-  purely additive: the verdict covers any re-encounter at (depth ≤ d,
-  phase ≤ p), which the depth-major core hits constantly (phases 1–2 re-run
-  at every new depth after phase 3 already failed the same targets at the
-  previous one). Depth-0 solves carry no hook, so ANY recorded fail covers
+  this pool — and the phase flag sets are monotone and linearly ordered
+  (phase 3 equals phase 2; the rest strictly grow): the verdict covers any
+  re-encounter at (depth ≤ d, phase ≤ p), which the depth-major core hits
+  constantly (phases 1–2 re-run at every new depth after phase 3 already
+  failed the same targets at the previous one). Depth-0 solves carry no hook, so ANY recorded fail covers
   depth-0 re-encounters at every phase. Open verdicts persist only when the
   child enumeration was NOT truncated by `open_child_max_results` (a
   truncated fail can flip when `concrete_ok` growth changes which child

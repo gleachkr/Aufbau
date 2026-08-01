@@ -2006,9 +2006,10 @@ fn emitOpenTarget(
         slot.store.rollbackTo(mark);
         try tryCoupledWitnesses(slot, raw_target, unknowns, view, view_bindings);
         if (slot.candidates.items.len != candidates_before) return;
-        // Last resort (phase-3 only): the witness is genuinely free — invent it
-        // from the `@vars` pool. Gated so the forced passes above stay the
-        // default; only a clean miss reaches this with the flag set.
+        // Last resort: the witness is genuinely free — invent it from the
+        // `@vars` pool. The flag is set whenever the theory has a pool; the
+        // forced passes above stay the default because they run first and
+        // this rung is reached only when they leave metas unsolved.
         if (slot.hook.allow_invent_witness) {
             slot.store.rollbackTo(mark);
             try tryVarPoolWitnesses(slot, raw_target, unknowns, view, view_bindings);
@@ -2452,7 +2453,8 @@ fn tryCoupledWitnesses(
     }
 }
 
-/// Invented-witness fallback (phase-3 only, `allow_invent_witness`): an open
+/// Invented-witness fallback (the ladder's last rung, `allow_invent_witness`,
+/// set whenever the theory has a `@vars` pool): an open
 /// target still carrying unsolved existential metas after the concrete-member
 /// and coupled passes has a *genuinely free* witness — e.g. the `y` in
 /// `(∀x P x) → (∃y P y)`, which any domain element satisfies. The calculus is

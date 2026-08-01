@@ -601,7 +601,8 @@ pub const SearchCounters = struct {
     // targets (each one is a full child generation attempt).
     acui_witness_attempts: usize = 0,
     // Invented-witness fills: an unsolved existential meta with no concrete or
-    // coupled anchor grounded to a reused `@vars`-pool dummy (phase-3 only).
+    // coupled anchor grounded to a reused `@vars`-pool dummy (the witness
+    // ladder's last rung; needs a `@vars` pool).
     var_pool_witness_attempts: usize = 0,
     // Open-target read-back triple-failures (positional, unit-normalized, and
     // member-wise passes all failed) where the child conclusion still contains
@@ -807,10 +808,13 @@ pub const GenerationHook = struct {
     /// member or coupled-member anchor may *invent* a witness by grounding the
     /// meta to a reused `@vars`-pool dummy (`backward/backtrack.zig` `tryVarPoolWitnesses`).
     /// This is the only place search picks an underdetermined witness rather
-    /// than forcing one, so it is gated to a final phase-3 generation pass run
-    /// with fresh fuel only on a clean miss — by construction it can only add
-    /// found-ness, never displace an anchored proof found in an earlier phase.
-    /// `exact?`/`apply?` never set it.
+    /// than forcing one, but it needs no phase gate: it is the last rung of
+    /// the slot-local witness ladder (forced-member, child-search, and
+    /// coupled solving all run first) and a single deterministic
+    /// continuation per slot, not a fan-out. The generation driver sets it
+    /// in every core phase whenever the theory pre-materialized a `@vars`
+    /// pool (#174: measured outcome-identical to the historical
+    /// final-phase gating). `exact?`/`apply?` never set it.
     allow_invent_witness: bool = false,
 
     /// When true, a speculative ACUI split for an *idempotent* combiner may also
@@ -818,7 +822,7 @@ pub const GenerationHook = struct {
     /// rest binder — the non-minimal complement `g , g = g` allows (see
     /// `split.buildEnumerator`). Broadens every additive split node, so it
     /// is gated to a final phase run with fresh fuel only on a clean miss
-    /// (mirrors `allow_invent_witness`): theories whose proofs use the minimal
+    /// (mirrors `allow_constrained_mp`): theories whose proofs use the minimal
     /// complement never pay the cost. `exact?`/`apply?` never set it.
     allow_retain_principal: bool = false,
 
@@ -830,9 +834,9 @@ pub const GenerationHook = struct {
     /// backward modus-ponens path: `ax_mp`'s cut `a` is determined by the major
     /// premise's proving rule (e.g. a congruence axiom), never propagated or
     /// guessed. Broadens every implication-shaped goal, so — like
-    /// `allow_invent_witness`/`allow_retain_principal` — it is gated to a final
-    /// phase run with fresh fuel only on a clean miss; proofs found by the
-    /// ordinary phases never pay the cost. `exact?`/`apply?` never set it.
+    /// `allow_retain_principal` — it is gated to a final phase run with
+    /// fresh fuel only on a clean miss; proofs found by the ordinary
+    /// phases never pay the cost. `exact?`/`apply?` never set it.
     allow_constrained_mp: bool = false,
 
     /// When false, the backtracker ignores the `@auto eager` set-commit cut:

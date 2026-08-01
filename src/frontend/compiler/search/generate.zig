@@ -639,12 +639,15 @@ fn buildDerivedIndex(
 ///
 /// What phase-major guaranteed and how it is preserved:
 /// - Within a core depth, phase order still runs anchored-first: a
-///   split-free proof beats a split proof beats an invented witness, at
-///   equal proof height; retention and constrained-MP proofs rank last
-///   overall exactly as before. Each phase's capability flags stay
-///   cumulative (see the flag docs on `GenerationHook`). What changes is
-///   the CROSS-depth preference within the core: a shallow invented-witness
-///   proof now beats a deeper split-free proof.
+///   split-free proof beats a split proof at equal proof height, and
+///   within any single application an anchored witness beats an invented
+///   one (invention is the last rung of the slot-local ladder, tried only
+///   after forced-member, child-search, and coupled solving miss);
+///   retention and constrained-MP proofs rank last overall exactly as
+///   before. Phase flags stay monotone along the ladder (see the flag docs
+///   on `GenerationHook`). What changes is the CROSS-depth preference
+///   within the core: a shallow invented-witness proof now beats a deeper
+///   split-free proof.
 /// - Each phase still draws from its own per-phase fuel pool across depths
 ///   (`phase_fuel`). A phase's own cell sequence in depth order is identical
 ///   in both nestings, so its fuel drains — and exhausts — at exactly the
@@ -670,12 +673,17 @@ fn runPhaseLadder(
     has_vars_pool: bool,
 ) anyerror!bool {
     const options = driver.options;
-    // Phase gates, constant across the ladder. Phase 3 (witness invention)
-    // needs the pre-materialized `@vars` witness pool (the `@auto backward` +
-    // non-empty `@vars` gate in `generateTopLevel`); phase 4 (principal
-    // retention) needs an idempotent structural combiner. A gated-off phase
-    // contributes neither its cell nor its capability flag to later phases,
-    // exactly as phase-major's cumulative flag inheritance did.
+    // Phase gates, constant across the ladder. Phase 3 is a capability-
+    // identical retry of phase 2 — same flags, its own fuel pool, its own
+    // persisted-memo lineage (`persist*Covered` is phase-indexed). It runs
+    // only for theories with a pre-materialized `@vars` witness pool (the
+    // `@auto backward` + non-empty `@vars` gate in `generateTopLevel`),
+    // where deep open-witness churn makes the retry pay: peano's
+    // mul_eq_*_all at depth 6 are found by this cell and by nothing else
+    // (#174 — neither 4x fuel nor max_depth 10 recovers them without it).
+    // Phase 4 (principal retention) needs an idempotent structural
+    // combiner. A gated-off phase contributes neither its cell nor its
+    // capability flag to later phases.
     const has_idem = hasIdempotentCombiner(driver.context);
     var phase_fuel = [5]usize{
         options.fuel,
@@ -692,12 +700,17 @@ fn runPhaseLadder(
         for (0..core_phase_count) |phase| {
             if (retired[phase]) continue;
             if (phase == 2 and !has_vars_pool) continue;
-            // Cumulative capabilities, phase index 0-based: 0 ordinary
-            // (non-splitting) generation, 1 + ACUI context splitting, 2
-            // + witness invention, 3 + idempotent principal retention, 4
-            // + constrained backward modus ponens.
+            // Capabilities, phase index 0-based: 0 ordinary (non-splitting)
+            // generation, 1 + ACUI context splitting, 2 a capability-identical
+            // RETRY of phase 1 (see the phase-gates comment), 3 + idempotent
+            // principal retention, 4 + constrained backward modus ponens.
+            // Witness invention is not a phase capability: it is the last
+            // rung of `emitOpenTarget`'s slot-local witness ladder, on
+            // whenever the theory has a `@vars` pool. Flags stay monotone
+            // along the phase order (index 2 equals index 1), which the
+            // persisted-memo covering rule below requires.
             driver.hook.allow_split = phase >= 1;
-            driver.hook.allow_invent_witness = phase >= 2 and has_vars_pool;
+            driver.hook.allow_invent_witness = has_vars_pool;
             driver.hook.allow_retain_principal = false;
             driver.hook.allow_constrained_mp = false;
             driver.phase_index = phase;
