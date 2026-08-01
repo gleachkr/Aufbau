@@ -280,17 +280,21 @@ pub fn generateTopLevel(
     var work_theorem = try theorem.clone();
     defer work_theorem.deinit();
 
-    // When the theory enrolls rules in open backward generation,
+    // When the theory enrolls a rule that can DEFER a witness,
     // pre-materialize every `@vars` pool token as a named theorem-local dummy
     // in the work theorem (sorted for deterministic dummy ids), through a
     // driver-owned clone of the theorem-vars map. Open bound binders then
     // enumerate these as concrete witnesses; the rendered explicit binding
-    // re-materializes the same name on the user's side. Theories without
-    // `@auto backward` skip this entirely, keeping behavior byte-identical.
+    // re-materializes the same name on the user's side. Theories without a
+    // witness-deferring backward rule skip this entirely, keeping behavior
+    // byte-identical — the gate is `hasWitnessBackwardRules`, not raw
+    // enrollment count, because `@auto eager` implies enrollment while
+    // rejecting witness-deferring rules: an eager-only theory has no
+    // consumer for the pool.
     var vars_clone: ?types.NameExprMap = null;
     defer if (vars_clone) |*clone| clone.deinit();
     var effective_vars: *const NameExprMap = theorem_vars;
-    if (session.context.registry.autoBackwardRuleCount() > 0 and
+    if (session.context.registry.hasWitnessBackwardRules(session.context.env) and
         session.context.sort_vars.count() > 0)
     {
         vars_clone = try Check.cloneNameExprMap(

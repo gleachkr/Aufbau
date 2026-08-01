@@ -448,26 +448,36 @@ confidence:
 precise, the annotation gates four things, all in service of that
 existential witness:
 
-1. **Existential opening.** The rule may be applied with the binders the
-   goal doesn't determine opened as existential metavariables — the only
-   path that introduces one — which the commitment ladder above then
-   solves.
+1. **Existential opening as standing policy.** The rule may be applied with
+   the binders the goal doesn't determine opened as existential
+   metavariables — in the main phases, at every depth, with the meta
+   carried into nested sub-goals — which the commitment ladder above then
+   solves. (Un-enrolled rules get only a constrained form of opening, as a
+   last-resort retry after the ordinary candidates miss: the child proof
+   must fully determine the unknown by read-back, nothing carries into
+   nested openings, and nothing is invented.)
 2. **The `@vars` witness pool.** The theory's `@vars` dummies are prepared
    as invention candidates for step 3 of that ladder. (This setup happens
-   at all only when the theory has at least one `@auto backward` rule.)
+   only when some enrolled rule can actually consume the pool: a rule that
+   defers a premise-only witness, or a generalization-style rule whose
+   bound `{x}` binder needs a concrete variable name for its premise.)
 3. **Candidate ordering.** A backward (witness-deferring) rule is tried
    *after* the non-generating structural and eigenvariable rules, so a
    fresh eigenvariable is already in scope before a witness rule has to
    commit — which is precisely what lets step 1 of the ladder read a
    witness off an in-scope member.
 4. **Witness-aware splitting.** When a context split leaves a witness
-   binder open, or when several goal members compete to be a rule's
-   principal, the backward path enumerates those choices.
+   binder open, the backward path re-enters the split with the witness
+   deferred as a metavariable.
 
-Note the boundary in (4): plain context *splitting* — partitioning a
-sequent context between a rule's premises — is *not* backward-gated;
-`auto?` applies it to multiplicative rules whether or not they are `@auto
-backward`. What backward adds is only the witness-aware refinement of it.
+Two nearby mechanisms are *not* backward-gated. Plain context *splitting* —
+partitioning a sequent context between a rule's premises — is applied to
+multiplicative rules whether or not they are `@auto backward`; (4) is only
+the witness-aware refinement of it. And *principal enumeration* — trying
+each concrete goal member that could be an ambiguous rule's principal
+formula — is purely structural: it enumerates existing members, introduces
+no metavariable, and runs for any rule as a final split fallback, exactly
+like its seed-time counterpart.
 
 **Which rules — three cases.** The rule of thumb is *backward ⟺
 introduction, forward ⟺ elimination*. Three rules from a natural-deduction

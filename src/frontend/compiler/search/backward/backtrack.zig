@@ -72,8 +72,8 @@ const lookupHypReferences = lookup_mod.lookupHypReferences;
 const HypPlan = plan.HypPlan;
 const buildHypPlans = plan.buildHypPlans;
 const templateBinderMask = plan.templateBinderMask;
-const hypBinderDeferredByConcl =
-    @import("../../../rules.zig").hypBinderDeferredByConcl;
+const hasPremiseOnlyBinder =
+    @import("../../../rules.zig").hasPremiseOnlyBinder;
 const conclusionBinderMaskOrNone = plan.conclusionBinderMaskOrNone;
 const validateSelectedRefs = validate.validateSelectedRefs;
 const appendDerivedDirectCandidates = validate.appendDerivedDirectCandidates;
@@ -376,9 +376,40 @@ pub fn generationOrderClass(context: *const Context, rule_id: u32) u16 {
 /// (`rex`) floods the open-child searches. Overflowed binder masks (>=64
 /// binders) conservatively stay in class 1.
 pub fn witnessClass(context: *const Context, rule_id: u32) u8 {
+    // Scheduling reads enrollment directly by design: ordering and open-path
+    // capability are separate axes (see `OpenMode`; uniform structural
+    // ordering is task #88's question, not this one's).
     if (!context.registry.isAutoBackwardRule(rule_id)) return 0;
     const rule = context.env.rules.items[rule_id];
-    return if (hypBinderDeferredByConcl(rule.concl, rule.hyps)) 2 else 1;
+    return if (hasPremiseOnlyBinder(rule.concl, rule.hyps)) 2 else 1;
+}
+
+/// Open-generation policy for one candidate slot, computed once at each
+/// open-path seam instead of re-deriving `isAutoBackwardRule` at every layer.
+///
+/// `.witness` — exactly `@auto backward` enrollment: the rule may defer a
+/// premise-only binder as an existential meta, with the full witness
+/// machinery (ancestor-meta carrying, force-first member pass, coupled leaf
+/// solving, and — only under `allow_invent_witness` — `@vars` pool
+/// invention).
+///
+/// `.constrained` — the phase-5 constrained-backward-MP concession for
+/// un-enrolled rules (`hook.allow_constrained_mp`): a structured open target
+/// is built, but the child proof must determine every meta by read-back; no
+/// meta propagates into nested open slots and nothing is invented.
+/// `@abstract` motive inference rides this branch too.
+///
+/// `.none` — no open generation for this candidate.
+pub const OpenMode = enum { none, constrained, witness };
+
+pub fn openMode(
+    context: *const Context,
+    rule_id: u32,
+    allow_constrained_mp: bool,
+) OpenMode {
+    if (context.registry.isAutoBackwardRule(rule_id)) return .witness;
+    if (allow_constrained_mp) return .constrained;
+    return .none;
 }
 
 fn exactRuleCandidates(
@@ -1123,8 +1154,7 @@ fn tryGenerateSlot(
     // child conclusion determines the binder, the slot simply fails.
     if (candidates.items.len != candidates_before_split) return;
     if (hook.solveOpenFn != null and
-        (context.registry.isAutoBackwardRule(candidate.rule_id) or
-            hook.allow_constrained_mp))
+        openMode(context, candidate.rule_id, hook.allow_constrained_mp) != .none)
     {
         try tryOpenGenerateSlot(
             compiler,
@@ -1370,7 +1400,11 @@ fn trySplitGenerate(
                     raw_target,
                 );
             } else if (hook.solveOpenFn != null and
-                context.registry.isAutoBackwardRule(candidate.rule_id))
+                openMode(
+                    context,
+                    candidate.rule_id,
+                    hook.allow_constrained_mp,
+                ) == .witness)
             {
                 // The split pinned this context binder, but
                 // the hypothesis still has an open witness binder (e.g.
@@ -1458,7 +1492,12 @@ fn tryPrincipalEnumerate(
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) anyerror!void {
     if (!hook.allow_split) return;
-    if (!context.registry.isAutoBackwardRule(candidate.rule_id)) return;
+    // Structural gate only, no enrollment requirement: everything below
+    // enumerates concrete goal members for one unresolved structured
+    // principal (no metas minted, ≥2 genuinely competing members), mirroring
+    // seed-time `detectPrincipalFanout`, which is likewise
+    // annotation-independent. The seed-time/generation-time pair differ by
+    // *phase*, not by author permission.
     const goal_expr = goal.concreteOrHint() orelse return;
     const hyp_template = rule.hyps[hyp_index];
     const hyp_binders = templateBinderMask(hyp_template);
@@ -1612,6 +1651,11 @@ const OpenSlot = struct {
     /// taken before each construction layer and rolled back beside the
     /// bindings snapshot (the meta-store rollback invariant).
     store: *MetaStore,
+    /// Open policy for this candidate, computed once at slot entry.
+    /// `.witness` gates the existential machinery (bound-binder meta
+    /// deferral, ancestor-meta registration, the force-first ladder);
+    /// `.constrained` keeps the child-search-first read-back discipline.
+    mode: OpenMode,
 };
 
 /// Structured open backward generation for one hypothesis
@@ -1691,6 +1735,11 @@ fn tryOpenGenerateSlot(
         .fuel = fuel,
         .candidates = candidates,
         .store = &store,
+        .mode = openMode(
+            context,
+            candidate.rule_id,
+            hook.allow_constrained_mp,
+        ),
     };
     if (context.views.get(candidate.rule_id)) |view| {
         try openSlotViaView(&slot, view);
@@ -1718,9 +1767,7 @@ fn openSlotRaw(slot: *OpenSlot) anyerror!void {
         .logical_unknowns = unknowns,
         .excluded = null,
         .conclusion_binders = conclusionBinderMaskOrNone(slot.rule.concl),
-        .open_bound_in_combiner = !slot.context.registry.isAutoBackwardRule(
-            slot.candidate.rule_id,
-        ),
+        .open_bound_in_combiner = slot.mode != .witness,
         .arg_infos = slot.rule.args,
     };
     const mark = slot.store.mark();
@@ -1830,9 +1877,7 @@ fn instantiateAndEmitView(
         .logical_unknowns = unknowns,
         .excluded = excluded,
         .conclusion_binders = conclusionBinderMaskOrNone(view.concl),
-        .open_bound_in_combiner = !slot.context.registry.isAutoBackwardRule(
-            slot.candidate.rule_id,
-        ),
+        .open_bound_in_combiner = slot.mode != .witness,
         .arg_infos = view.arg_infos,
     };
     const mark = slot.store.mark();
@@ -1929,19 +1974,19 @@ fn emitOpenTarget(
     // needs the ancestor leaves bindable, and `solveOpen`'s hint reintern bails
     // outright on an unregistered meta. Registration is trailed and unwound by
     // `tryOpenGenerateSlot`'s outer mark, so it does not leak past this slot.
-    // Only `@auto backward` open slots carry witness metas.
-    if (slot.context.registry.isAutoBackwardRule(slot.candidate.rule_id)) {
+    // Only `.witness` open slots carry witness metas.
+    if (slot.mode == .witness) {
         try registerAncestorMetas(slot.store, theorem, raw_target);
     }
 
     const mark = slot.store.mark();
 
-    // Force-first is a *witness-rule* optimization: only an open slot driven by
-    // an `@auto backward` rule defers a witness that a leaf must force. Gate on
-    // that so witness-free open generation (notably `@abstract` motive
-    // inference, which has no `@auto` rule but still mints open metas) keeps its
-    // original child-search-first ordering untouched.
-    if (slot.context.registry.isAutoBackwardRule(slot.candidate.rule_id)) {
+    // Force-first is a *witness-rule* optimization: only a `.witness` open
+    // slot defers a witness that a leaf must force. Gate on that so
+    // witness-free `.constrained` open generation (notably `@abstract` motive
+    // inference, which has no `@auto` rule but still mints open metas) keeps
+    // its original child-search-first ordering untouched.
+    if (slot.mode == .witness) {
         // Witness migration: FORCE the carried witness by the cheap,
         // deterministic concrete-member pass first (e.g. an `ax` leaf whose
         // `[x/t]p` instance must equal a concrete succedent member uniquely

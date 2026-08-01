@@ -226,34 +226,26 @@ axiom ax (g d: ctx) (a: wff): $ g , a ⊢ a , d $;
 axiom lfal (g d: ctx): $ g , ⊥ ⊢ d $;
 
 -- Negation.
---| @auto backward
 axiom lnot (g d: ctx) (a: wff):
   $ g ⊢ a , d $ > $ g , (¬ a) ⊢ d $;
---| @auto backward
 axiom rnot (g d: ctx) (a: wff):
   $ g , a ⊢ d $ > $ g ⊢ (¬ a) , d $;
 
 -- Implication.
---| @auto backward
 axiom lim (g d: ctx) (a b: wff):
   $ g ⊢ a , d $ > $ g , b ⊢ d $ > $ g , (a → b) ⊢ d $;
---| @auto backward
 axiom rim (g d: ctx) (a b: wff):
   $ g , a ⊢ b , d $ > $ g ⊢ (a → b) , d $;
 
 -- Conjunction.
---| @auto backward
 axiom lan (g d: ctx) (a b: wff):
   $ g , a , b ⊢ d $ > $ g , (a ∧ b) ⊢ d $;
---| @auto backward
 axiom ran (g d: ctx) (a b: wff):
   $ g ⊢ a , d $ > $ g ⊢ b , d $ > $ g ⊢ (a ∧ b) , d $;
 
 -- Disjunction.
---| @auto backward
 axiom lor (g d: ctx) (a b: wff):
   $ g , a ⊢ d $ > $ g , b ⊢ d $ > $ g , (a ∨ b) ⊢ d $;
---| @auto backward
 axiom ror (g d: ctx) (a b: wff):
   $ g ⊢ a , b , d $ > $ g ⊢ (a ∨ b) , d $;
 

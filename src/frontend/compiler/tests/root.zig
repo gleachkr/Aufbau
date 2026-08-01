@@ -379,6 +379,80 @@ test "compiler stores auto eager annotations (default priority, implies backward
     );
     // Eager implies backward enrollment.
     try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+    // ... but eager rules never defer a witness, so an eager-only theory
+    // must not trigger witness-pool setup.
+    try std.testing.expect(
+        !metadata.registry.hasWitnessBackwardRules(&metadata.env),
+    );
+}
+
+test "hasWitnessBackwardRules: premise-only binder flips it on" {
+    // `mp`'s cut formula `a` occurs only in the hypotheses: enrolling it
+    // backward makes it a witness-deferring rule.
+    const mm0_src =
+        \\provable sort wff;
+        \\term imp (p q: wff): wff;
+        \\--| @auto backward
+        \\axiom mp (a b: wff) (h1: $ imp a b $) (h2: $ a $): $ b $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("mp") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+    try std.testing.expect(
+        metadata.registry.hasWitnessBackwardRules(&metadata.env),
+    );
+}
+
+test "hasWitnessBackwardRules: conclusion-determined backward rule stays off" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term and (p q: wff): wff;
+        \\--| @auto backward
+        \\axiom and_i (a b: wff) (h1: $ a $) (h2: $ b $): $ and a b $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("and_i") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+    try std.testing.expect(
+        !metadata.registry.hasWitnessBackwardRules(&metadata.env),
+    );
+}
+
+test "hasWitnessBackwardRules: bound binder counts as a pool consumer" {
+    // `ax_gen`-style generalization: every binder occurs in the conclusion
+    // (no deferred witness), but the bound `{x}` needs a concrete variable
+    // name from the pool when applied backward.
+    const mm0_src =
+        \\provable sort wff;
+        \\sort nat;
+        \\term all {x: nat} (p: wff x): wff;
+        \\--| @auto backward
+        \\axiom gen {x: nat} (p: wff x) (h: $ p $): $ all x p $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("gen") orelse {
+        return error.MissingRule;
+    };
+    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+    try std.testing.expect(
+        metadata.registry.hasWitnessBackwardRules(&metadata.env),
+    );
 }
 
 test "compiler stores auto eager annotations with explicit priority" {

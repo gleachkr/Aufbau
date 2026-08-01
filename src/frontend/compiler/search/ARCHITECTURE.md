@@ -104,7 +104,7 @@ are not. Each is specialized by **rule-class × phase**:
 | mechanism | rule class | phase | file |
 |---|---|---|---|
 | seed fan-out (`detectPrincipalFanout` / `findAmbiguousPrincipal` / `findAmbiguousLeaf` / `cloneCandidateWithPrincipalPin`) | **non-view** | seed | `backward/seed.zig`, `backward/acui.zig` |
-| `tryPrincipalEnumerate` | **view / `@auto backward`** | generation | `backward/backtrack.zig` |
+| `tryPrincipalEnumerate` | **any** (structural gates only; annotation-independent, like seed fan-out) | generation | `backward/backtrack.zig` |
 | `trySplitGenerate` + `backward/split.zig` (`findSplitSite` / `buildEnumerator`) | **multiplicative** (2+ context binders that *partition*) | generation | `backward/backtrack.zig`, `backward/split.zig` |
 
 Why they cannot collapse into one (verified empirically, 2026-06-24):
@@ -115,7 +115,14 @@ Why they cannot collapse into one (verified empirically, 2026-06-24):
   mechanisms already `return null` on `context.views.contains(rule_id)` for
   exactly this reason. View/witness rules instead get their principal chosen at
   **generation** time by `tryPrincipalEnumerate`. Disabling it regresses 5
-  additive_fol theorems (`all_swap`, `ex_swap`, `forall_mono`, …).
+  additive_fol theorems (`all_swap`, `ex_swap`, `forall_mono`, …). Since the
+  `OpenMode` pass (2026-08-01) the mechanism is annotation-independent —
+  enrollment is not required; the structural preconditions (ACUI split site,
+  exactly one unresolved structured principal, ≥2 genuinely competing concrete
+  members, no metas minted) are the whole gate. The seed-time/generation-time
+  pair differ by *phase*, not by author permission: un-annotated ambiguous-
+  principal theorems (additive_fol `de_morgan`, `dummett`, …) regenerate FULL
+  through this path.
 - **Multiplicative partition is a different problem.** A genuinely
   multiplicative rule (euclid `or_elim` `g,h,k`; `ex_elim` `g,h`) *splits* the
   goal context between premises; that is a search over partitions
@@ -339,7 +346,7 @@ note in `tryMetaAwareHypMatch`).
 Two supporting pieces: the step hypothesis's bound binder (`ih`) is opened *in
 place* inside its ACUI context combiner rather than hard-blocked — via
 `OpenInstantiateOptions.open_bound_in_combiner`, set to
-`!isAutoBackwardRule(rule_id)` so the `@auto backward` witness path (which
+`slot.mode != .witness` (see `OpenMode` below) so the witness path (which
 resolves such binders by enumeration) keeps the old block; and the substitution
 redexes in a generated target (`[k/n] C` = `sb_ty …`) are reduced for emission by
 `backward/backtrack.zig:reduceRedexOnly` (structural recursion that reduces only
@@ -476,10 +483,22 @@ results.
 
 ### `@auto backward` — open existential sub-goals
 
-Gated by `isAutoBackwardRule` in `backward/backtrack.zig` (`tryOpenGenerateSlot`,
-`trySplitGenerate`, and the witness-forcing in `registerAncestorMetas` /
-`tryAcuiMemberWitnesses`). When a hypothesis cannot be closed by the pool or by an
-ACUI context split, an enrolled rule instantiates the binders the goal does not
+The open-generation policy is computed once per candidate slot as
+`OpenMode {none, constrained, witness}` (`openMode()` in
+`backward/backtrack.zig`): `.witness` is exactly `@auto backward` enrollment;
+`.constrained` is the phase-5 constrained-backward-MP concession for
+un-enrolled rules (child proof must determine every meta by read-back, no
+carrying, no invention; `@abstract` motive inference rides this branch);
+`.none` means no open generation. The mode gates `tryOpenGenerateSlot`'s
+entry and split re-entry, `open_bound_in_combiner`, `registerAncestorMetas`,
+and the force-first witness ladder — scheduling (`witnessClass` /
+`generationOrderClass`) deliberately keeps reading enrollment directly
+(ordering and capability are separate axes; see task #88). Principal
+enumeration (`tryPrincipalEnumerate`) is NOT mode-gated: it is structural
+(see the three-mechanism table above).
+
+When a hypothesis cannot be closed by the pool or by an
+ACUI context split, a `.witness` rule instantiates the binders the goal does not
 determine as **existential metas**, turning the hypothesis into a sub-goal the
 generation hook solves. Witnesses are committed in a deliberate order: forced from
 a concrete ACUI member first, then a generated sub-proof, then coupled/invented

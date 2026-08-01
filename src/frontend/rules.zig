@@ -99,14 +99,20 @@ fn collectTemplateBinderMask(
     }
 }
 
-/// True when some hypothesis references a binder the conclusion does not — a
-/// binder a backward application must defer as an existential witness. This is
-/// the invertibility predicate shared by `@auto eager` validation
-/// (`rewrite_registry.zig`, which rejects such rules) and the witness-class
-/// scheduler (`search/backward/backtrack.zig`, which demotes them to class 2), so the two
-/// can never drift. Overflowed masks (>= 64 binders) conservatively report
-/// false (the conclusion-determined / class-1 side).
-pub fn hypBinderDeferredByConcl(
+/// True when some hypothesis references a binder the conclusion does not.
+/// This is a purely SYNTACTIC fact about the rule; whether the search may
+/// existentially defer such a binder is a separate policy question
+/// (`@auto backward` enrollment / `OpenMode.witness`). The name is neutral
+/// on purpose: `ex_intro`'s witness is a premise-only binder, but so are
+/// `ax_mp`'s cut formula and `or_elim`'s eliminated disjunction — calling
+/// them all "witnesses" invites treating cut formulas as inventable, which
+/// is exactly the search explosion the enrollment policy exists to prevent.
+/// Shared by `@auto eager` validation (`rewrite_registry.zig`, rejects such
+/// rules), the witness-class scheduler (`search/backward/backtrack.zig`,
+/// demotes them to class 2), and the witness-pool gate, so they can never
+/// drift. Overflowed masks (>= 64 binders) conservatively report false (the
+/// conclusion-determined / class-1 side).
+pub fn hasPremiseOnlyBinder(
     concl: TemplateExpr,
     hyps: []const TemplateExpr,
 ) bool {

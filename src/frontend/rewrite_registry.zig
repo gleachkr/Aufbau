@@ -2,14 +2,15 @@ const std = @import("std");
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RuleDecl = @import("./env.zig").RuleDecl;
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
-const hypBinderDeferredByConcl = @import("./rules.zig").hypBinderDeferredByConcl;
+const hasPremiseOnlyBinder = @import("./rules.zig").hasPremiseOnlyBinder;
 const templateBinderMask = @import("./rules.zig").templateBinderMask;
 
-/// True when a rule defers a hypothesis binder as an existential witness (see
-/// `rules.hypBinderDeferredByConcl`) — `@auto eager` rejects such rules
-/// because their invertible-shape guarantee fails.
+/// True when a rule has a premise-only binder (see
+/// `rules.hasPremiseOnlyBinder`) — the binder a backward application would
+/// have to defer. `@auto eager` rejects such rules because their
+/// invertible-shape guarantee fails.
 fn ruleDefersWitness(rule: *const RuleDecl) bool {
-    return hypBinderDeferredByConcl(rule.concl, rule.hyps);
+    return hasPremiseOnlyBinder(rule.concl, rule.hyps);
 }
 
 /// A relation bundle defines an equivalence relation on a sort, with the
@@ -1131,6 +1132,31 @@ pub const RewriteRegistry = struct {
 
     pub fn autoBackwardRuleCount(self: *const RewriteRegistry) usize {
         return self.auto_backward_rules.count();
+    }
+
+    /// True when some enrolled backward rule can consume the `@vars` witness
+    /// pool: it defers a hypothesis binder as an existential witness
+    /// (`rex`-style, premise-only binder) OR carries a bound binder
+    /// (`ax_gen`-style `{x}` — a backward generalization premise needs a
+    /// concrete variable name, enumerated from the pre-materialized pool).
+    /// `@auto eager` implies backward enrollment but rejects witness-deferring
+    /// rules, so an eager-only theory whose rules bind no `{x}` has enrolled
+    /// rules yet no pool consumer — this predicate (not
+    /// `autoBackwardRuleCount`) is the right gate for witness-pool setup.
+    pub fn hasWitnessBackwardRules(
+        self: *const RewriteRegistry,
+        env: *const GlobalEnv,
+    ) bool {
+        var iter = self.auto_backward_rules.keyIterator();
+        while (iter.next()) |rule_id| {
+            if (rule_id.* >= env.rules.items.len) continue;
+            const rule = &env.rules.items[rule_id.*];
+            if (ruleDefersWitness(rule)) return true;
+            for (rule.args) |arg| {
+                if (arg.bound) return true;
+            }
+        }
+        return false;
     }
 
     /// Intra-eager-band priority for an `@auto eager` rule (1 = tried
