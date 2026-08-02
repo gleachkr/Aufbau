@@ -1,8 +1,9 @@
 delimiter $ ( ) , $;
 --| @hole _wff
-provable sort wff;
+sort wff;
 --| @hole _ctx
 sort ctx;
+provable sort seq;
 
 term imp (a b: wff): wff;
 infixr imp: $→$ prec 25;
@@ -18,24 +19,26 @@ prefix not: $¬$ prec 40;
 prefix not: $~$ prec 40;
 term bot: wff; notation bot: wff = ($⊥$:max);
 
-term iff (a b: wff): wff;
+term iff (a b: wff): seq;
 infixr iff: $↔$ prec 20;
 infixr iff: $<->$ prec 20;
-term ctx_eq (g h: ctx): wff;
+term ctx_eq (g h: ctx): seq;
 term emp: ctx; notation emp: ctx = ($_$:max);
 
 --| @acui ctx_assoc ctx_comm emp ctx_idem
 term join (g h: ctx): ctx; infixl join: $,$ prec 5;
 term hyp (a: wff): ctx; coercion hyp: wff > ctx;
-term nd (g: ctx) (a: wff): wff;
+term nd (g: ctx) (a: wff): seq;
 infixl nd: $⊢$ prec 0;
 infixl nd: $|-$ prec 0;
+term seq_eq (s t: seq): seq;
+infixl seq_eq: $⟚$ prec 1;
+infixl seq_eq: $<==>$ prec 1;
 
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+--| @relation wff iff iff_refl iff_trans iff_sym _
 axiom iff_refl (a: wff): $ a ↔ a $;
 axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
 axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
-axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
 
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 axiom ctx_refl (g: ctx): $ ctx_eq g g $;
@@ -46,6 +49,12 @@ axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
 axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
 axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
 
+--| @relation seq seq_eq seq_refl seq_trans seq_sym seq_mp
+axiom seq_refl (s: seq): $ s ⟚ s $;
+axiom seq_trans (s t u: seq): $ s ⟚ t $ > $ t ⟚ u $ > $ s ⟚ u $;
+axiom seq_sym (s t: seq): $ s ⟚ t $ > $ t ⟚ s $;
+axiom seq_mp (s t: seq): $ s ⟚ t $ > $ s $ > $ t $;
+
 --| @congr
 axiom join_congr (g1 g2 h1 h2: ctx):
   $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
@@ -53,5 +62,4 @@ axiom join_congr (g1 g2 h1 h2: ctx):
 axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
 --| @congr
 axiom nd_congr (g h: ctx) (a b: wff):
-  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ↔ (h ⊢ b) $;
-
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ⟚ (h ⊢ b) $;

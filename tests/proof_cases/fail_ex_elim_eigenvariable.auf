@@ -1,0 +1,8 @@
+unsound
+-------
+l1: $ P u ⊢ P u $ by ax
+l2: $ P u ⊢ ∃ x (P x) $ by ex_intro [l1]
+l3: $ ¬ (P x) ⊢ ¬ (P x) $ by ax
+l4: $ P x ⊢ P x $ by ax
+l5: $ ¬ (P x) , P x ⊢ ⊥ $ by not_elim [l3, l4]
+l6: $ P u , ¬ (P x) ⊢ ⊥ $ by ex_elim [l2, l5]

@@ -29,6 +29,13 @@
 //   l1: $ top $ by top_i []
 //   ```
 //
+// A literate page grows one shared document instead: cells carrying the same
+// `doc=NAME` attribute stitch into a single (mm0, auf) pair in page order.
+// An ```aufbau-theory doc=NAME``` block (no `id`) is an editable theory cell
+// contributing mm0 to that document; ```aufbau-proof doc=NAME``` cells add
+// declarations and proofs; ```aufbau-index doc=NAME``` renders a live
+// statement index for the whole page.
+//
 // Info-string tokens after the language become element attributes:
 // `key=value` (bare or "quoted") and bare flags (`readonly`). So
 // `aufbau-proof theory=chain readonly theme=auto` →
@@ -130,17 +137,35 @@ function renderCell(indent, lang, infoRest, body) {
   if (lang === "aufbau-theory") return renderTheory(attrs, body);
   if (lang === "aufbau-proof") return renderProof(attrs, body);
   if (lang === "aufbau-listing") return renderListing(indent, attrs, body);
+  if (lang === "aufbau-index") return renderIndex(attrs);
   // Unknown aufbau-* language: leave the source visible rather than drop it.
   return `${indent}<pre><code>${escapeText(body.join("\n"))}</code></pre>`;
 }
 
+// With an `id` the block is a hidden prelude holder (<aufbau-theory>). Without
+// one it is an *editable theory cell* of a shared document — an <aufbau-proof>
+// element whose body is its mm0 fragment — so a literate page can grow its
+// theory in visible, editable chunks: ```aufbau-theory doc=hilbert```.
 function renderTheory(attrs, body) {
+  if (!attrs.some((attr) => attr.name === "id")) {
+    const parts = [
+      openTag("aufbau-proof", attrs),
+      script("text/mm0", body),
+      "</aufbau-proof>",
+    ];
+    return oneBlock(parts);
+  }
   const open = openTag("aufbau-theory", attrs);
   return oneBlock([
     open,
     script("text/mm0", body),
     "</aufbau-theory>",
   ]);
+}
+
+// ```aufbau-index doc=hilbert``` → a live statement index for the document.
+function renderIndex(attrs) {
+  return oneBlock([openTag("aufbau-index", attrs), "</aufbau-index>"]);
 }
 
 // A read-only listing of prelude files, as an ordinary highlighted code

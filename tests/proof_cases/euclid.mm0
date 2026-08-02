@@ -247,11 +247,12 @@ axiom ex_intro {x: nat} (g: ctx x) (t: nat x) (p: wff x):
 -- binder type `c: wff` is the eigenvariable side condition: c must not
 -- depend on either x or u.  The @freshen annotations only repair bound
 -- occurrences of those names inside c by alpha-renaming them away.
---| @view {x u: nat} (g h: ctx x u) (p: wff x) (q c: wff): $ g ⊢ ∃ x p $ > $ h , q ⊢ c $ > $ g , h ⊢ c $
+--| @view {x u: nat} (g: ctx x u) (h: ctx x) (p: wff x) (q c: wff): $ g ⊢ ∃ x p $ > $ h , q ⊢ c $ > $ g , h ⊢ c $
 --| @recover u q p x
+--| @freshen h u
 --| @freshen c x
 --| @freshen c u
-axiom ex_elim_sub {x u: nat} (g h: ctx x u) (p: wff x) (c: wff):
+axiom ex_elim_sub {x u: nat} (g: ctx x u) (h: ctx x) (p: wff x) (c: wff):
   $ g ⊢ ∃ x p $ > $ h , [x/u] p ⊢ c $ > $ g , h ⊢ c $;
 
 -- Simple existential elimination.  As above, `c: wff` is the real side

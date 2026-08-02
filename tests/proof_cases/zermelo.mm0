@@ -192,8 +192,9 @@ axiom all_elim {x: set} (G: ctx x) (t: set x) (p: wff x):
 axiom ex_intro {x: set} (G: ctx) (t: set x) (p: wff x):
   $ G ⊢ [x/t] p $ > $ G ⊢ ∃ x p $;
 
+--| @freshen H x
 --| @freshen c x
-axiom ex_elim {x: set} (G H: ctx x) (p: wff x) (c: wff):
+axiom ex_elim {x: set} (G: ctx x) (H: ctx) (p: wff x) (c: wff):
   $ G ⊢ ∃ x p $ > $ H , p ⊢ c $ > $ G , H ⊢ c $;
 
 axiom eq_intro (G: ctx) (a: set): $ G ⊢ a = a $;

@@ -290,8 +290,9 @@ axiom all_elim {x: obj} (g: ctx x) (t: obj x) (p: wff x):
 axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 
+--| @freshen h x
 --| @freshen c x
-axiom ex_elim {x: obj} (g: ctx x) (h: ctx x) (p: wff x) (c: wff):
+axiom ex_elim {x: obj} (g: ctx x) (h: ctx) (p: wff x) (c: wff):
   $ g ⊢ ∃ x p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
 
 

@@ -1138,7 +1138,8 @@ fn applyRuleCandidateCore(
     );
 
     var resolved_bindings = bindings;
-    var freshened_bindings: ?AlphaRewrite.FreshenResult = null;
+    var freshen_steps: std.ArrayListUnmanaged(AlphaRewrite.FreshenResult) = .{};
+    defer freshen_steps.deinit(allocator);
     Inference.validateResolvedBindingsWithDebug(
         self,
         self.debug,
@@ -1162,96 +1163,122 @@ fn applyRuleCandidateCore(
             rule.arg_names,
             resolved_bindings,
         )) orelse return err;
-        var dep_text_bufs: Inference.DepViolationTextBufs = .{};
-        Inference.attachDepViolationBindingTexts(
-            &dep_text_bufs,
-            env,
-            theorem,
-            parser,
-            theorem_vars,
-            &dep_detail,
-            resolved_bindings[dep_detail.first_arg_idx],
-            resolved_bindings[dep_detail.second_arg_idx],
-        );
-        var freshen_report: AlphaRewrite.FreshenAttemptReport = .{};
-        freshened_bindings = AlphaRewrite.tryFreshenBindings(
-            allocator,
-            parser,
-            env,
-            registry,
-            theorem,
-            theorem_vars,
-            context.sort_vars,
-            rule,
-            try resolveLineAssertionForBindings(
-                self,
-                allocator,
-                parser,
-                theorem,
-                env,
-                registry,
-                diag_scratch,
-                assertion,
-                line,
-                rule,
-                line_assertion,
-                resolved_bindings,
-            ),
-            ref_exprs,
-            resolved_bindings,
-            rule_freshen,
-            dep_detail,
-            checked,
-            diag_scratch,
-            self.debug,
-            &freshen_report,
-        ) catch |fresh_err| {
-            var diag = CompilerDiag.withPhase(.{
-                .kind = .generic,
-                .err = fresh_err,
-                .theorem_name = assertion.name,
-                .line_label = line.label,
-                .rule_name = application.rule_name,
-                .span = application.ruleApplicationSpan(),
-                .detail = .{ .dep_violation = dep_detail },
-            }, .theorem_application);
-            try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
-            self.setProof(diag);
-            return fresh_err;
-        } orelse return err;
-        resolved_bindings = freshened_bindings.?.bindings;
-        if (try Inference.firstDepViolation(
-            env,
-            theorem,
-            assertion.args,
-            rule.args,
-            rule.arg_names,
-            resolved_bindings,
-        )) |found_remaining_detail| {
-            var remaining_dep_detail = found_remaining_detail;
-            var remaining_text_bufs: Inference.DepViolationTextBufs = .{};
+        // Repair blocked targets one at a time: each pass alpha-renames the
+        // single argument named by the current violation, then re-checks.
+        // One application can need several passes — e.g. ex_elim with the
+        // eigenvariable bound in both the side context and the conclusion.
+        // Each successful pass removes its (target, blocker) violation and
+        // never adds one, so the loop is bounded by the declared targets;
+        // the cap is a backstop.
+        while (true) {
+            var dep_text_bufs: Inference.DepViolationTextBufs = .{};
             Inference.attachDepViolationBindingTexts(
-                &remaining_text_bufs,
+                &dep_text_bufs,
                 env,
                 theorem,
                 parser,
                 theorem_vars,
-                &remaining_dep_detail,
-                resolved_bindings[remaining_dep_detail.first_arg_idx],
-                resolved_bindings[remaining_dep_detail.second_arg_idx],
+                &dep_detail,
+                resolved_bindings[dep_detail.first_arg_idx],
+                resolved_bindings[dep_detail.second_arg_idx],
             );
-            var diag = CompilerDiag.withPhase(.{
-                .kind = .generic,
-                .err = error.AlphaRewriteSearchFailed,
-                .theorem_name = assertion.name,
-                .line_label = line.label,
-                .rule_name = application.rule_name,
-                .span = application.ruleApplicationSpan(),
-                .detail = .{ .dep_violation = remaining_dep_detail },
-            }, .theorem_application);
-            try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
-            self.setProof(diag);
-            return error.AlphaRewriteSearchFailed;
+            var freshen_report: AlphaRewrite.FreshenAttemptReport = .{};
+            const step = AlphaRewrite.tryFreshenBindings(
+                allocator,
+                parser,
+                env,
+                registry,
+                theorem,
+                theorem_vars,
+                context.sort_vars,
+                rule,
+                try resolveLineAssertionForBindings(
+                    self,
+                    allocator,
+                    parser,
+                    theorem,
+                    env,
+                    registry,
+                    diag_scratch,
+                    assertion,
+                    line,
+                    rule,
+                    line_assertion,
+                    resolved_bindings,
+                ),
+                ref_exprs,
+                resolved_bindings,
+                rule_freshen,
+                dep_detail,
+                checked,
+                diag_scratch,
+                self.debug,
+                &freshen_report,
+            ) catch |fresh_err| {
+                var diag = CompilerDiag.withPhase(.{
+                    .kind = .generic,
+                    .err = fresh_err,
+                    .theorem_name = assertion.name,
+                    .line_label = line.label,
+                    .rule_name = application.rule_name,
+                    .span = application.ruleApplicationSpan(),
+                    .detail = .{ .dep_violation = dep_detail },
+                }, .theorem_application);
+                try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
+                self.setProof(diag);
+                return fresh_err;
+            } orelse {
+                if (freshen_steps.items.len == 0) return err;
+                // Earlier passes made progress, but this violation has no
+                // matching @freshen declaration to repair it.
+                var diag = CompilerDiag.withPhase(.{
+                    .kind = .generic,
+                    .err = error.AlphaRewriteSearchFailed,
+                    .theorem_name = assertion.name,
+                    .line_label = line.label,
+                    .rule_name = application.rule_name,
+                    .span = application.ruleApplicationSpan(),
+                    .detail = .{ .dep_violation = dep_detail },
+                }, .theorem_application);
+                try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
+                self.setProof(diag);
+                return error.AlphaRewriteSearchFailed;
+            };
+            try freshen_steps.append(allocator, step);
+            resolved_bindings = step.bindings;
+            dep_detail = (try Inference.firstDepViolation(
+                env,
+                theorem,
+                assertion.args,
+                rule.args,
+                rule.arg_names,
+                resolved_bindings,
+            )) orelse break;
+            if (freshen_steps.items.len > rule_freshen.len) {
+                var remaining_text_bufs: Inference.DepViolationTextBufs = .{};
+                Inference.attachDepViolationBindingTexts(
+                    &remaining_text_bufs,
+                    env,
+                    theorem,
+                    parser,
+                    theorem_vars,
+                    &dep_detail,
+                    resolved_bindings[dep_detail.first_arg_idx],
+                    resolved_bindings[dep_detail.second_arg_idx],
+                );
+                var diag = CompilerDiag.withPhase(.{
+                    .kind = .generic,
+                    .err = error.AlphaRewriteSearchFailed,
+                    .theorem_name = assertion.name,
+                    .line_label = line.label,
+                    .rule_name = application.rule_name,
+                    .span = application.ruleApplicationSpan(),
+                    .detail = .{ .dep_violation = dep_detail },
+                }, .theorem_application);
+                try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
+                self.setProof(diag);
+                return error.AlphaRewriteSearchFailed;
+            }
         }
         restoreDiagnostic(self, null);
         try Inference.validateResolvedBindingsWithDebug(
@@ -1269,7 +1296,7 @@ fn applyRuleCandidateCore(
     };
     restoreDiagnostic(self, null);
 
-    if (freshened_bindings) |freshened| {
+    if (freshen_steps.items.len != 0) {
         if (context.fresh_bindings.get(rule_id)) |rule_fresh| {
             try validateFreshBindingsAgainstLine(
                 self,
@@ -1323,7 +1350,7 @@ fn applyRuleCandidateCore(
             rule,
             rule_id,
             bindings,
-            freshened,
+            freshen_steps.items,
             refs,
             ref_exprs,
         ) catch |err| {

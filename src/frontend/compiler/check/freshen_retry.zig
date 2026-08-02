@@ -11,6 +11,13 @@ const CheckedLine = CheckedIr.CheckedLine;
 const CheckedRef = CheckedIr.CheckedRef;
 const Matching = @import("./matching.zig");
 
+// Applies a rule whose bindings went through one or more @freshen repairs.
+// `steps` is the repair sequence in the order it was performed: step i's
+// bindings differ from step i-1's (or from `original_bindings` for i = 0) in
+// exactly one target argument, and each step carries the conversion line that
+// proves its target change. Hypothesis references are transported forward
+// through the steps in order; the freshened conclusion is transported
+// backward through them in reverse, landing on the form the line states.
 pub fn applyFreshenedRuleLine(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
@@ -22,10 +29,12 @@ pub fn applyFreshenedRuleLine(
     rule: *const RuleDecl,
     rule_id: u32,
     original_bindings: []const ExprId,
-    freshened: AlphaRewrite.FreshenResult,
+    steps: []const AlphaRewrite.FreshenResult,
     refs: []const CheckedRef,
     base_ref_exprs: []const ExprId,
 ) !usize {
+    std.debug.assert(steps.len != 0);
+    const final_bindings = steps[steps.len - 1].bindings;
     const fresh_refs = try allocator.dupe(CheckedRef, refs);
     errdefer allocator.free(fresh_refs);
 
@@ -34,7 +43,7 @@ pub fn applyFreshenedRuleLine(
             rule.hyps[idx],
             original_bindings,
         );
-        const matched_old = (try Matching.tryMatchHypothesis(
+        var current_ref = (try Matching.tryMatchHypothesis(
             allocator,
             theorem,
             registry,
@@ -47,63 +56,74 @@ pub fn applyFreshenedRuleLine(
             actual,
             expected_old,
         )) orelse return error.HypothesisMismatch;
+        var current_expected = expected_old;
 
-        const expected_new = try theorem.instantiateTemplate(
-            rule.hyps[idx],
-            freshened.bindings,
-        );
-        if (expected_old == expected_new) {
-            fresh_refs[idx] = matched_old;
-            continue;
+        for (steps) |step| {
+            const next_expected = try theorem.instantiateTemplate(
+                rule.hyps[idx],
+                step.bindings,
+            );
+            if (next_expected == current_expected) continue;
+
+            const conv_idx = (try AlphaRewrite.buildRelationProofFromTargetChange(
+                allocator,
+                theorem,
+                registry,
+                env,
+                checked,
+                diag_scratch,
+                current_expected,
+                next_expected,
+                step.old_target_expr,
+                step.new_target_expr,
+                step.target_conv_line_idx,
+            )) orelse return error.FreshenTransportFailed;
+            current_ref = try AlphaRewrite.transportRefAlongProof(
+                allocator,
+                theorem,
+                registry,
+                env,
+                checked,
+                diag_scratch,
+                next_expected,
+                current_expected,
+                conv_idx,
+                current_ref,
+            );
+            current_expected = next_expected;
         }
-
-        const conv_idx = (try AlphaRewrite.buildRelationProofFromTargetChange(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
-            expected_old,
-            expected_new,
-            freshened.old_target_expr,
-            freshened.new_target_expr,
-            freshened.target_conv_line_idx,
-        )) orelse return error.FreshenTransportFailed;
-        fresh_refs[idx] = try AlphaRewrite.transportRefAlongProof(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
-            expected_new,
-            expected_old,
-            conv_idx,
-            matched_old,
-        );
+        fresh_refs[idx] = current_ref;
     }
 
     const expected_new_line = try theorem.instantiateTemplate(
         rule.concl,
-        freshened.bindings,
+        final_bindings,
     );
     const raw_idx = try CheckedIr.appendRuleLine(
         checked,
         allocator,
         expected_new_line,
         rule_id,
-        freshened.bindings,
+        final_bindings,
         fresh_refs,
     );
 
     var result_ref: CheckedRef = .{ .line = raw_idx };
     var result_expr = expected_new_line;
-    const expected_old_line = try theorem.instantiateTemplate(
-        rule.concl,
-        original_bindings,
-    );
-    if (expected_old_line != expected_new_line) {
+    var step_idx = steps.len;
+    while (step_idx > 0) {
+        step_idx -= 1;
+        const step = steps[step_idx];
+        const before_bindings = if (step_idx == 0)
+            original_bindings
+        else
+            steps[step_idx - 1].bindings;
+        const expected_before = try theorem.instantiateTemplate(
+            rule.concl,
+            before_bindings,
+        );
+        if (expected_before == result_expr) continue;
+
         const conv_idx = (try AlphaRewrite.buildRelationProofFromTargetChange(
             allocator,
             theorem,
@@ -111,11 +131,11 @@ pub fn applyFreshenedRuleLine(
             env,
             checked,
             diag_scratch,
-            expected_old_line,
-            expected_new_line,
-            freshened.old_target_expr,
-            freshened.new_target_expr,
-            freshened.target_conv_line_idx,
+            expected_before,
+            result_expr,
+            step.old_target_expr,
+            step.new_target_expr,
+            step.target_conv_line_idx,
         )) orelse return error.FreshenTransportFailed;
         result_ref = try AlphaRewrite.transportRefBackwardAlongProof(
             allocator,
@@ -124,12 +144,12 @@ pub fn applyFreshenedRuleLine(
             env,
             checked,
             diag_scratch,
-            expected_old_line,
-            expected_new_line,
+            expected_before,
+            result_expr,
             conv_idx,
             result_ref,
         );
-        result_expr = expected_old_line;
+        result_expr = expected_before;
     }
 
     if (result_expr != line_expr) {

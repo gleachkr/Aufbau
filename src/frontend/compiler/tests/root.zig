@@ -4340,7 +4340,12 @@ test "prawitz metadata registers alpha and freshen annotations" {
     const ex_elim_freshen = meta.freshen_bindings.get(ex_elim_id) orelse {
         return error.MissingFreshenDecl;
     };
-    try std.testing.expectEqual(@as(usize, 1), ex_elim_freshen.len);
+    try std.testing.expectEqual(@as(usize, 2), ex_elim_freshen.len);
+    try std.testing.expect(hasFreshenDecl(
+        ex_elim_freshen,
+        try ruleArgIndex(ex_elim_rule, "h"),
+        try ruleArgIndex(ex_elim_rule, "x"),
+    ));
     try std.testing.expect(hasFreshenDecl(
         ex_elim_freshen,
         try ruleArgIndex(ex_elim_rule, "c"),

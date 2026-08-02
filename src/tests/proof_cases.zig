@@ -374,6 +374,13 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_hole_alpha_freshen_opaque",
         .outcome = .{ .fail = error.AlphaRewriteSearchFailed },
     },
+    // ex_elim eigenvariable condition: the side context h mentions the bound
+    // variable FREE, so no alpha repair can apply and the (semantically
+    // false) sequent must be rejected.
+    .{
+        .stem = "fail_ex_elim_eigenvariable",
+        .outcome = .{ .fail = error.AlphaRewriteSearchFailed },
+    },
     .{ .stem = "leibniz", .outcome = .pass },
     .{ .stem = "smullyan", .outcome = .pass },
     .{ .stem = "mac_lane", .outcome = .pass },
