@@ -28,6 +28,7 @@
 - [Ergonomics: variables, freshness, holes, fallbacks](ergonomics.md)
 - [Views and recovery](views-and-recovery.md)
 - [Powering search](powering-search.md)
+- [Computation](computation.md)
 
 # Worked theories
 
