@@ -24,15 +24,10 @@
 
 # Designing theories
 
-- [Ergonomics: variables, freshness, holes]()
-- [Views and recovery]()
-- [Equality and normalization]()
-- [Powering the search]()
-
-# Automation in depth
-
-- [Proof search: exact?, apply?, auto?]()
-- [Computation: conversion? and folding]()
+- [Equality and normalization](equality-and-normalization.md)
+- [Ergonomics: variables, freshness, holes, fallbacks](ergonomics.md)
+- [Views and recovery](views-and-recovery.md)
+- [Powering search](powering-search.md)
 
 # Worked theories
 

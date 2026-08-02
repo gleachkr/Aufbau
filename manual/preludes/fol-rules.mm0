@@ -1,0 +1,20 @@
+--| @freshen g x
+axiom all_intro (g: ctx) {x: obj} (p: wff x):
+  $ g ⊢ p $ > $ g ⊢ ∀ x p $;
+
+--| @auto forward
+--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ ∀ x p $ > $ g ⊢ q $
+--| @recover t q p x
+axiom all_elim {x: obj} (g: ctx x) (t: obj x) (p: wff x):
+  $ g ⊢ ∀ x p $ > $ g ⊢ [x := t] p $;
+
+--| @auto backward
+--| @view {x: obj} (g: ctx) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
+--| @recover t q p x
+--| @freshen g x
+axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
+  $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
+
+--| @freshen c x
+axiom ex_elim {x: obj} (g: ctx x) (h: ctx x) (p: wff x) (c: wff):
+  $ g ⊢ ∃ x p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;

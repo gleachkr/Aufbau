@@ -137,7 +137,8 @@ already in the ref pool through some chain of rewriting steps the theory has
 enrolled. Rules can be enrolled for conversion as either pure conversion rules, 
 or as computation rules. Computation rules run eagerly, and handle cases where 
 the rewrites are intended to rapidly derive a normal form. Conversion rules 
-work in stages and are intended for general equational search.
+saturate (every enrolled direction is explored at once) and are intended for 
+general equational search.
 
 Here is a small lambda calculus with explicit substitution and addition on
 numerals. Beta reduction, the substitution equations, and the addition
@@ -167,7 +168,7 @@ table, and normalizes at `SSS0`. `l1` already asserts that expression is equal
 to itself, so l1 can then ground the rewrite chain. 
 
 Rewriting is dependency-aware, so in the theory above a reduction that would 
-capture a variable simply never fires. If rewriting runs to a fixpoint without 
-connecting the goal to anything, the diagnostics will indicate that fact and 
-warn that the goal can't be proven with the reference pool and equations on 
-hand.
+capture a variable simply never fires. If the search stops without connecting 
+the goal to anything, the diagnostics say how it ended: a fully saturated 
+search rules the goal out, while a miss under a budget (or one involving 
+computation rules, whose fold commits to one reduction order) is inconclusive.
