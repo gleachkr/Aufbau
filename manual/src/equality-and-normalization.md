@@ -29,27 +29,29 @@ symmetry, and transport. A `@relation` annotation declares this bundle:
 --| @relation <sort> <relation-term> <refl> <trans> <symm> <transport>
 ```
 
-The natural deduction theory of the Proving chapters registers `↔` as the
-equivalence on formulas:
+The natural deduction theory of the Proving chapters proves sequents, and
+registers `⟚` as the equivalence on them:
 
 ```mm0
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a ↔ a $;
-axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
-axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
-axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+--| @relation seq seq_eq seq_refl seq_trans seq_sym seq_mp
+axiom seq_refl (s: seq): $ s ⟚ s $;
+axiom seq_trans (s t u: seq): $ s ⟚ t $ > $ t ⟚ u $ > $ s ⟚ u $;
+axiom seq_sym (s t: seq): $ s ⟚ t $ > $ t ⟚ s $;
+axiom seq_mp (s t: seq): $ s ⟚ t $ > $ s $ > $ t $;
 ```
 
-The transport rule `iff_mp` is what makes the bundle useful on a provable
+The transport rule `seq_mp` is what makes the bundle useful on a provable
 sort. After normalization by rewrite rules (see below), the compiler holds a 
 proof of the raw conclusion and a proof that the raw conclusion is equivalent 
 to the user's assertion; transport combines them into a proof of the assertion 
 itself.
 
 For a non-provable sort there is no such thing as a proof of the sort's
-expressions, so no transport rule is necessary. Write `_` in its place:
+expressions, so no transport rule is necessary. Write `_` in its place. The
+same theory does this for its equivalences on formulas and on contexts:
 
 ```mm0
+--| @relation wff iff iff_refl iff_trans iff_sym _
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 ```
 
@@ -66,7 +68,7 @@ justifies this for one constructor:
 ```mm0
 --| @congr
 axiom nd_congr (g h: ctx) (a b: wff):
-  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ↔ (h ⊢ b) $;
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ⟚ (h ⊢ b) $;
 ```
 
 The binder layout follows a fixed convention: for each regular argument of the 
@@ -76,7 +78,7 @@ supplies a reflexivity proof itself, so one congruence rule per constructor
 suffices.
 
 Congruence rules may cross sorts. `nd_congr` lifts a context equivalence and
-a formula equivalence into a formula equivalence; in the lambda calculus
+a formula equivalence into a sequent equivalence; in the lambda calculus
 theory, `eq_congr` lifts two term equations into `↔`:
 
 ```mm0

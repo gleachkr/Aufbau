@@ -32,10 +32,10 @@
 
 # Worked theories
 
-- [A Hilbert calculus]()
-- [Natural deduction]()
-- [Peano arithmetic]()
-- [The lambda calculus]()
+- [A Hilbert calculus](hilbert-calculus.md)
+- [Natural deduction](natural-deduction.md)
+- [Peano arithmetic](peano.md)
+- [The lambda calculus](lambda-calculus.md)
 - [Programs and correctness]()
 
 # Tools

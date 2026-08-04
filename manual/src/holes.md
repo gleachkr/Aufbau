@@ -9,7 +9,7 @@ one token for it:
 
 ```mm0
 --| @hole _wff
-provable sort wff;
+sort wff;
 --| @hole _ctx
 sort ctx;
 ```

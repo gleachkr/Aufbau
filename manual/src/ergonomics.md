@@ -25,7 +25,7 @@ an omitted subexpression of that sort:
 
 ```mm0
 --| @hole _wff
-provable sort wff;
+sort wff;
 --| @hole _ctx
 sort ctx;
 ```

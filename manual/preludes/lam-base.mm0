@@ -1,6 +1,7 @@
 delimiter $ ( ) [ ] . S $;
 provable sort wff;
 --| @hole _tm
+--| @vars u v w
 sort tm;
 
 term iff (a b: wff): wff;

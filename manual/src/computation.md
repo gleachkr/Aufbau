@@ -78,9 +78,9 @@ axiom and_comm (a b: wff): $ a ∧ b ↔ b ∧ a $;
 --| @conversion assoc
 axiom and_assoc (a b c: wff): $ (a ∧ b) ∧ c ↔ a ∧ (b ∧ c) $;
 @@auf
-lemma shuffle (a b c: wff): $ (a ∧ b) ∧ c $ > $ c ∧ (b ∧ a) $
+lemma shuffle (a b c: wff): $ _ ⊢ (a ∧ b) ∧ c $ > $ _ ⊢ c ∧ (b ∧ a) $
 ----
-l1: $ c ∧ (b ∧ a) $ by conversion?
+l1: $ _ ⊢ c ∧ (b ∧ a) $ by conversion?
 ```
 
 An operator certified with both structural rules and `@congr` is treated as a 
@@ -161,13 +161,13 @@ axiom and_comm (a b: wff): $ a ∧ b ↔ b ∧ a $;
 --| @conversion assoc
 axiom and_assoc (a b c: wff): $ (a ∧ b) ∧ c ↔ a ∧ (b ∧ c) $;
 @@auf
-lemma off (a b c: wff): $ (a ∧ b) ∧ c $ > $ c ∧ (b ∧ b) $
+lemma off (a b c: wff): $ _ ⊢ (a ∧ b) ∧ c $ > $ _ ⊢ c ∧ (b ∧ b) $
 ----
-l1: $ c ∧ (b ∧ b) $ by conversion?
+l1: $ _ ⊢ c ∧ (b ∧ b) $ by conversion?
 ```
 
 ```
-conversion? search failed: the egraph saturated (5 e-classes, 5 e-nodes,
+conversion? search failed: the egraph saturated (8 e-classes, 8 e-nodes,
 1 iterations, 0 rule orientations, 0 local equations): no chain of the
 enrolled @conversion rewrites connects this goal to any of the 1 pool
 references.

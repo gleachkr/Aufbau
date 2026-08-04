@@ -41,5 +41,5 @@ and demonstrates basic proof writing: reading and writing proof lines,
 letting the built-in search fill in steps, and organizing larger proofs. The 
 two parts after that teach the languages properly — MM0, the theory language, 
 and `.auf`, the proof language — assuming no prior acquaintance with either. 
-Later parts cover designing your own theories, the automation in depth, a tour 
-of worked theories, and the command-line and embedding tools.
+Later parts cover designing your own theories, a tour of worked theories, and 
+the command-line and embedding tools.
