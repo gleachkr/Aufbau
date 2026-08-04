@@ -179,6 +179,10 @@ pub const RuleApplyContext = struct {
     sort_vars: *const SortVarRegistry,
     assertion: AssertionStmt,
     labels: *const LabelIndexMap,
+    /// Labels of every line in the block, in order — including lines not
+    /// yet checked. Lets the unknown-label diagnostic distinguish a typo
+    /// from a reference to a line that appears later in the proof.
+    block_labels: []const []const u8 = &.{},
     checked: *std.ArrayListUnmanaged(CheckedLine),
     diag_scratch: *CompilerDiag.Scratch,
     rule_unify_cache: *Inference.RuleUnifyCache,
@@ -206,6 +210,12 @@ pub fn checkTheoremBlock(
     var labels = LabelIndexMap.init(allocator);
     defer labels.deinit();
 
+    const block_labels = try allocator.alloc([]const u8, block.lines.len);
+    defer allocator.free(block_labels);
+    for (block.lines, 0..) |block_line, idx| {
+        block_labels[idx] = block_line.label;
+    }
+
     var checked = std.ArrayListUnmanaged(CheckedLine){};
     var rule_unify_cache = Inference.RuleUnifyCache.init(allocator);
     defer rule_unify_cache.deinit();
@@ -221,6 +231,33 @@ pub fn checkTheoremBlock(
             if (self.allow_search_placeholders) {
                 return try checked.toOwnedSlice(allocator);
             }
+            const placeholder =
+                findSearchPlaceholder(line.application) orelse line.application;
+            var diag = CompilerDiag.withPhase(.{
+                .kind = .unresolved_search_placeholder,
+                .err = error.UnknownRule,
+                .theorem_name = assertion.name,
+                .line_label = line.label,
+                .rule_name = placeholder.rule_name,
+                .span = placeholder.rule_span,
+            }, .theorem_application);
+            CompilerDiag.addNote(
+                &diag,
+                "search placeholders (auto?, exact?, apply?, conversion?) " ++
+                    "stand for a search that runs in the editor and is " ++
+                    "replaced by the proof it finds",
+                .proof,
+                null,
+            );
+            CompilerDiag.addNote(
+                &diag,
+                "the compiler only checks finished proofs; this search " ++
+                    "has not produced one yet",
+                .proof,
+                null,
+            );
+            self.setProof(diag);
+            return error.UnknownRule;
         }
 
         if (labels.contains(line.label)) {
@@ -258,6 +295,7 @@ pub fn checkTheoremBlock(
             .sort_vars = sort_vars,
             .assertion = assertion,
             .labels = &labels,
+            .block_labels = block_labels,
             .checked = &checked,
             .diag_scratch = &diag_scratch,
             .rule_unify_cache = &rule_unify_cache,
@@ -337,7 +375,17 @@ pub fn checkTheoremBlock(
                         .span = last_span,
                         .detail = detail,
                     }, .final_reconciliation);
-                    addBoundaryAttemptNotes(&diag, final_report);
+                    addBoundaryAttemptNotes(
+                        allocator,
+                        &diag,
+                        theorem,
+                        env,
+                        parser,
+                        &theorem_vars,
+                        theorem_concl,
+                        final_line,
+                        final_report,
+                    );
                     self.setProof(diag);
                     return err;
                 }
@@ -367,7 +415,17 @@ pub fn checkTheoremBlock(
                 .line_label = last_label,
                 .span = last_span,
             }, .final_reconciliation);
-            addBoundaryAttemptNotes(&diag, final_report);
+            addBoundaryAttemptNotes(
+                allocator,
+                &diag,
+                theorem,
+                env,
+                parser,
+                &theorem_vars,
+                theorem_concl,
+                final_line,
+                final_report,
+            );
             self.setProof(diag);
             return error.FinalLineMismatch;
         }
@@ -516,6 +574,7 @@ pub fn applyRuleApplication(
         self,
         context.env,
         context.rule_catalog,
+        context.labels,
         diag_context,
         application,
     );
@@ -712,6 +771,7 @@ pub fn probeExpectedRefsForApplication(
         self,
         context.env,
         context.rule_catalog,
+        context.labels,
         diag_context,
         application,
     );
@@ -2561,10 +2621,111 @@ test "checked ir leak diagnostics replace saved diagnostics" {
     try std.testing.expectEqual(.proof, diag.source);
 }
 
+fn findSearchPlaceholder(application: RuleApplication) ?RuleApplication {
+    if (ProofScript.isSearchPlaceholderRuleName(application.rule_name)) {
+        return application;
+    }
+    for (application.refs) |ref| switch (ref) {
+        .application => |child| {
+            if (findSearchPlaceholder(child)) |found| return found;
+        },
+        .hyp, .line => {},
+    };
+    return null;
+}
+
+/// Bounded Levenshtein distance: returns null when the distance exceeds
+/// `max`. Used only on failed name lookups, so the quadratic cost is paid
+/// once per diagnostic.
+fn editDistanceAtMost(a: []const u8, b: []const u8, max: usize) ?usize {
+    const larger = @max(a.len, b.len);
+    const smaller = @min(a.len, b.len);
+    if (larger - smaller > max) return null;
+    if (larger > 64) return null;
+    var prev: [65]usize = undefined;
+    var curr: [65]usize = undefined;
+    for (0..b.len + 1) |j| prev[j] = j;
+    for (a[0..a.len], 0..) |ca, i| {
+        curr[0] = i + 1;
+        var row_min = curr[0];
+        for (b[0..b.len], 0..) |cb, j| {
+            const cost: usize = if (ca == cb) 0 else 1;
+            curr[j + 1] = @min(
+                @min(curr[j] + 1, prev[j + 1] + 1),
+                prev[j] + cost,
+            );
+            row_min = @min(row_min, curr[j + 1]);
+        }
+        if (row_min > max) return null;
+        @memcpy(prev[0 .. b.len + 1], curr[0 .. b.len + 1]);
+    }
+    if (prev[b.len] > max) return null;
+    return prev[b.len];
+}
+
+fn suggestionThreshold(name_len: usize) usize {
+    return if (name_len >= 5) 2 else 1;
+}
+
+/// Deterministically pick the known name closest to `name`: smallest edit
+/// distance wins, lexicographic order breaks ties (hash-map iteration
+/// order must not leak into diagnostics).
+fn considerSuggestion(
+    name: []const u8,
+    candidate: []const u8,
+    best: *?[]const u8,
+    best_dist: *usize,
+) void {
+    const max = suggestionThreshold(name.len);
+    const dist = editDistanceAtMost(name, candidate, max) orelse return;
+    if (dist == 0) return;
+    if (dist < best_dist.* or
+        (dist == best_dist.* and best.* != null and
+            std.mem.order(u8, candidate, best.*.?) == .lt))
+    {
+        best.* = candidate;
+        best_dist.* = dist;
+    }
+}
+
+fn closestRuleName(env: *const GlobalEnv, name: []const u8) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    var it = env.rule_names.keyIterator();
+    while (it.next()) |key| {
+        considerSuggestion(name, key.*, &best, &best_dist);
+    }
+    return best;
+}
+
+fn labelAppearsInBlock(
+    block_labels: []const []const u8,
+    name: []const u8,
+) bool {
+    for (block_labels) |label| {
+        if (std.mem.eql(u8, label, name)) return true;
+    }
+    return false;
+}
+
+fn closestLabelName(
+    labels: *const LabelIndexMap,
+    name: []const u8,
+) ?[]const u8 {
+    var best: ?[]const u8 = null;
+    var best_dist: usize = std.math.maxInt(usize);
+    var it = labels.keyIterator();
+    while (it.next()) |key| {
+        considerSuggestion(name, key.*, &best, &best_dist);
+    }
+    return best;
+}
+
 fn lookupRuleApplicationId(
     self: *CompilerContext,
     env: *const GlobalEnv,
     rule_catalog: *const RuleCatalog.Catalog,
+    labels: ?*const LabelIndexMap,
     diag_context: ApplicationDiagnosticContext,
     application: RuleApplication,
 ) !u32 {
@@ -2598,14 +2759,34 @@ fn lookupRuleApplicationId(
         }
     }
 
-    self.setProof(CompilerDiag.withPhase(.{
+    var diag = CompilerDiag.withPhase(.{
         .kind = .unknown_rule,
         .err = error.UnknownRule,
         .theorem_name = diag_context.theorem_name,
         .line_label = diag_context.line_label,
         .rule_name = application.rule_name,
         .span = application.rule_span,
-    }, .theorem_application));
+    }, .theorem_application);
+    if (env.term_names.get(application.rule_name) != null) {
+        CompilerDiag.addNote(
+            &diag,
+            "this name is a term or definition; it can appear inside " ++
+                "formulas but cannot justify a proof line",
+            .proof,
+            null,
+        );
+    } else if (labels != null and labels.?.contains(application.rule_name)) {
+        CompilerDiag.addNote(
+            &diag,
+            "this name is a proof line label, not a rule; earlier lines " ++
+                "are cited as premises in the brackets after a rule",
+            .proof,
+            null,
+        );
+    } else if (closestRuleName(env, application.rule_name)) |suggestion| {
+        diag.detail = .{ .name_suggestion = .{ .suggestion = suggestion } };
+    }
+    self.setProof(diag);
     return error.UnknownRule;
 }
 
@@ -3367,14 +3548,34 @@ fn elaborateRefs(
             },
             .line => |label| blk: {
                 const line_idx = context.labels.get(label.label) orelse {
-                    self.setProof(CompilerDiag.withPhase(.{
+                    var label_diag = CompilerDiag.withPhase(.{
                         .kind = .unknown_label,
                         .err = error.UnknownLabel,
                         .theorem_name = assertion.name,
                         .line_label = line.label,
                         .name = label.label,
                         .span = label.span,
-                    }, .theorem_application));
+                    }, .theorem_application);
+                    if (labelAppearsInBlock(
+                        context.block_labels,
+                        label.label,
+                    )) {
+                        CompilerDiag.addNote(
+                            &label_diag,
+                            "this label belongs to a later line; a line " ++
+                                "can only cite the lines above it",
+                            .proof,
+                            null,
+                        );
+                    } else if (closestLabelName(
+                        context.labels,
+                        label.label,
+                    )) |suggestion| {
+                        label_diag.detail = .{ .name_suggestion = .{
+                            .suggestion = suggestion,
+                        } };
+                    }
+                    self.setProof(label_diag);
                     return error.UnknownLabel;
                 };
                 refs[idx] = .{ .line = line_idx };

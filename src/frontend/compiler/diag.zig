@@ -26,6 +26,7 @@ pub const DiagnosticKind = enum {
     parse_fresh,
     inference_failed,
     unknown_rule,
+    unresolved_search_placeholder,
     rule_not_yet_available,
     unknown_binder_name,
     duplicate_binder_assignment,
@@ -121,6 +122,12 @@ pub const DiagnosticDetail = union(enum) {
     },
     unused_parameter: struct {
         parameter_name: []const u8,
+    },
+    /// A close-by known name for an unknown rule or line-label reference.
+    /// The slice must outlive the diagnostic (rule/label names stored in
+    /// the environment or proof script satisfy this).
+    name_suggestion: struct {
+        suggestion: []const u8,
     },
 };
 
@@ -698,6 +705,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .parse_fresh => compilerErrorSummary(diag.err),
         .inference_failed => compilerErrorSummary(diag.err),
         .unknown_rule => "unknown rule in proof line",
+        .unresolved_search_placeholder => "proof line is justified by a search placeholder, not a completed proof",
         .rule_not_yet_available => "rule is declared later and is not yet available here",
         .unknown_binder_name => "unknown binder name in rule application",
         .duplicate_binder_assignment => "duplicate binder assignment in rule application",
@@ -916,6 +924,7 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.UnexpectedProofDefItem => "unexpected proof-side definition item",
         error.UnsupportedProofDefAnnotation => "proof-side definition annotations are not supported yet",
         error.ExtraProofItem => "extra proof item with no matching declaration",
+        error.ExpectedBy => "expected 'by' after the proof line's statement",
         error.ExpectedKeyword => "expected keyword",
         error.ExpectedString => "expected quoted string",
         error.UnknownTerm => "unknown term",

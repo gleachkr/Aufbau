@@ -880,6 +880,11 @@ const annotation_directives = [_]AnnotationDirective{
     .{ .label = "@fresh", .detail = "freshness theorem", .sort_text = "10 08" },
     .{ .label = "@hole", .detail = "proof hole", .sort_text = "10 09" },
     .{ .label = "@auto", .detail = "search automation", .sort_text = "10 10" },
+    .{ .label = "@freshen", .detail = "fresh-binder repair", .sort_text = "10 11" },
+    .{ .label = "@alpha", .detail = "bound-variable renaming rule", .sort_text = "10 12" },
+    .{ .label = "@fallback", .detail = "search fallback rule", .sort_text = "10 13" },
+    .{ .label = "@conversion", .detail = "conversion? equation", .sort_text = "10 14" },
+    .{ .label = "@compute", .detail = "directed computation rule", .sort_text = "10 15" },
 };
 
 const CompletionItemSeed = struct {

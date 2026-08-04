@@ -415,6 +415,9 @@ pub fn compilerDiagnosticMessage(
         .unknown_math_token => |detail| {
             try writer.print("\ntoken: {s}", .{detail.token});
         },
+        .name_suggestion => |detail| {
+            try writer.print("\ndid you mean: {s}", .{detail.suggestion});
+        },
         .missing_binder_assignment => |detail| {
             try writer.print(
                 "\nmissing binder: {s}",

@@ -2919,14 +2919,24 @@ test "final mismatch reports reconciliation attempts" {
         mm0.CompilerDiagnosticPhase.final_reconciliation,
         diag.phase.?,
     );
-    try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
-        "attempted transparent final reconciliation",
+    try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
         diag.noteSlice()[0].message,
+        "the theorem concludes: ",
+    ));
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        diag.noteSlice()[1].message,
+        "the last line proves: ",
+    ));
+    try std.testing.expectEqualStrings(
+        "the two do not match, even with definitions unfolded",
+        diag.noteSlice()[2].message,
     );
     try std.testing.expectEqualStrings(
-        "attempted normalized final reconciliation",
-        diag.noteSlice()[1].message,
+        "nor after normalization",
+        diag.noteSlice()[3].message,
     );
 }
 
@@ -3376,16 +3386,12 @@ test "compiler explains proof holes that leave binders unsolved" {
         },
         else => return error.ExpectedMissingBinderDetail,
     }
-    try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
-        "inference path: holey assertion match",
-        diag.noteSlice()[0].message,
-    );
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
     try std.testing.expectEqualStrings(
         "holey assertion left binder b unsolved",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[0].message,
     );
-    const note_span = diag.noteSlice()[1].span orelse {
+    const note_span = diag.noteSlice()[0].span orelse {
         return error.ExpectedDiagnosticSpan;
     };
     try std.testing.expectEqualStrings(
@@ -3436,22 +3442,10 @@ test "compiler reports which binder assignment is missing" {
         },
         else => return error.ExpectedMissingBinderDetail,
     }
-    try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
-        "inference path: exact match",
-        diag.noteSlice()[0].message,
-    );
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
     try std.testing.expectEqualStrings(
         "explicit bindings: a = a",
-        diag.noteSlice()[1].message,
-    );
-    try std.testing.expectEqualStrings(
-        "inferred bindings before failure: none",
-        diag.noteSlice()[2].message,
-    );
-    try std.testing.expectEqualStrings(
-        "first unsolved binder: b",
-        diag.noteSlice()[3].message,
+        diag.noteSlice()[0].message,
     );
 }
 

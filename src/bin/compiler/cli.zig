@@ -171,9 +171,14 @@ fn runCompile(
     compiler.debug = cmd.debug;
     compiler.diagnostics.warnings_as_errors = cmd.warnings_as_errors;
     const mmb = compiler.compileMmb(allocator) catch |err| {
-        std.debug.print("abc: failed to compile '{s}'\n", .{
-            cmd.paths.input,
-        });
+        const failed_path = if (compiler.diagnostics.last_diagnostic) |diag|
+            switch (diag.source) {
+                .proof => cmd.paths.proof,
+                .mm0 => cmd.paths.input,
+            }
+        else
+            cmd.paths.input;
+        std.debug.print("abc: failed to compile '{s}'\n", .{failed_path});
         compiler.reportError(err);
         return CliError.Reported;
     };

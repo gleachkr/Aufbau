@@ -585,7 +585,7 @@ pub const Parser = struct {
         self.skipHorizontalSpace();
         try self.expect(':');
         const assertion = try self.parseMathString();
-        try self.expectProofKeyword("by");
+        try self.expectProofBy();
         const application = try self.parseRuleApplication();
         try self.expectLineEnd();
         return .{
@@ -984,24 +984,12 @@ pub const Parser = struct {
         return value;
     }
 
-    fn expectKeyword(self: *Parser, keyword: []const u8) !void {
-        self.skipHorizontalSpace();
-        const start = self.pos;
-        const actual = try self.parseIdentifier();
-        if (!std.mem.eql(u8, actual, keyword)) {
-            return self.recordErrorAtSpan(error.ExpectedKeyword, .{
-                .start = start,
-                .end = start + actual.len,
-            });
-        }
-    }
-
-    fn expectProofKeyword(self: *Parser, keyword: []const u8) !void {
+    fn expectProofBy(self: *Parser) !void {
         self.skipProofWhitespace();
         const start = self.pos;
         const actual = try self.parseIdentifier();
-        if (!std.mem.eql(u8, actual, keyword)) {
-            return self.recordErrorAtSpan(error.ExpectedKeyword, .{
+        if (!std.mem.eql(u8, actual, "by")) {
+            return self.recordErrorAtSpan(error.ExpectedBy, .{
                 .start = start,
                 .end = start + actual.len,
             });

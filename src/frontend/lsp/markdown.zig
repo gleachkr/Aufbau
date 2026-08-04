@@ -369,6 +369,10 @@ fn isSelectedMetadataDirective(directive: []const u8) bool {
         "@vars",
         "@hole",
         "@fallback",
+        "@auto",
+        "@alpha",
+        "@conversion",
+        "@compute",
     };
     for (selected) |tag| {
         if (std.mem.eql(u8, directive, tag)) return true;

@@ -355,6 +355,9 @@ pub const DiagnosticSink = struct {
             .unknown_math_token => |info| .{ .unknown_math_token = .{
                 .token = self.stableRequiredString(info.token),
             } },
+            .name_suggestion => |info| .{ .name_suggestion = .{
+                .suggestion = self.stableRequiredString(info.suggestion),
+            } },
             .missing_binder_assignment => |info| .{
                 .missing_binder_assignment = .{
                     .binder_name = self.stableRequiredString(info.binder_name),
@@ -499,6 +502,9 @@ fn reportDiagnosticDetail(detail: DiagnosticDetail) void {
         .omitted_diagnostics => {},
         .unknown_math_token => |info| {
             std.debug.print("  token: {s}\n", .{info.token});
+        },
+        .name_suggestion => |info| {
+            std.debug.print("  did you mean: {s}\n", .{info.suggestion});
         },
         .missing_binder_assignment => |info| {
             std.debug.print(

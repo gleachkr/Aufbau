@@ -399,6 +399,13 @@ fn writeDiagnosticDetailField(
             try writeJsonStringField(writer, "token", info.token);
             try writer.writeAll("}");
         },
+        .name_suggestion => |info| {
+            try writer.writeAll("{");
+            try writeJsonStringField(writer, "kind", "name_suggestion");
+            try writer.writeByte(',');
+            try writeJsonStringField(writer, "suggestion", info.suggestion);
+            try writer.writeAll("}");
+        },
         .missing_binder_assignment => |info| {
             try writer.writeAll("{");
             try writeJsonStringField(

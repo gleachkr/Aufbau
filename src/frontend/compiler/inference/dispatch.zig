@@ -792,7 +792,6 @@ fn strictInferBindingsDetailed(
                 env,
                 theorem,
                 rule,
-                .strict_replay,
                 partial_bindings,
                 snapshot,
                 fresh_context,

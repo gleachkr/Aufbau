@@ -68,7 +68,6 @@ pub fn buildInferenceFailureDiagnostic(
         env,
         theorem,
         rule,
-        path,
         explicit_bindings,
         current_bindings,
         names_ptr,
@@ -109,7 +108,6 @@ pub fn buildMissingBinderDiagnostic(
         env,
         theorem,
         rule,
-        path,
         explicit_bindings,
         current_bindings,
         fresh_context,
@@ -123,7 +121,6 @@ pub fn addInferenceNotes(
     env: *const GlobalEnv,
     theorem: *const TheoremContext,
     rule: *const RuleDecl,
-    path: InferencePath,
     explicit_bindings: []const ?ExprId,
     current_bindings: []const ?ExprId,
     fresh_context: ?HiddenWitnessFreshContext,
@@ -136,7 +133,6 @@ pub fn addInferenceNotes(
         env,
         theorem,
         rule,
-        path,
         explicit_bindings,
         current_bindings,
         if (names) |*n| n else null,
@@ -160,24 +156,20 @@ fn buildOptionalDiagNames(
     );
 }
 
+// The inference path and the first unsolved binder are carried in the
+// diagnostic's structured detail; repeating them as notes made every
+// renderer print them twice. Notes here only add what the detail
+// cannot: the binding summaries (skipped when empty).
 fn addInferenceNotesNamed(
     allocator: std.mem.Allocator,
     diag: *Diagnostic,
     env: *const GlobalEnv,
     theorem: *const TheoremContext,
     rule: *const RuleDecl,
-    path: InferencePath,
     explicit_bindings: []const ?ExprId,
     current_bindings: []const ?ExprId,
     names_ptr: ?*const ViewTrace.DiagNames,
 ) !void {
-    try addFormattedInferenceNote(
-        allocator,
-        diag,
-        "inference path: {s}",
-        .{CompilerDiag.inferencePathName(path)},
-    );
-
     const explicit_summary = try buildBindingSummary(
         allocator,
         theorem,
@@ -189,12 +181,14 @@ fn addInferenceNotesNamed(
         names_ptr,
     );
     defer allocator.free(explicit_summary);
-    try addFormattedInferenceNote(
-        allocator,
-        diag,
-        "explicit bindings: {s}",
-        .{explicit_summary},
-    );
+    if (!std.mem.eql(u8, explicit_summary, "none")) {
+        try addFormattedInferenceNote(
+            allocator,
+            diag,
+            "explicit bindings: {s}",
+            .{explicit_summary},
+        );
+    }
 
     const inferred_summary = try buildBindingSummary(
         allocator,
@@ -207,19 +201,12 @@ fn addInferenceNotesNamed(
         names_ptr,
     );
     defer allocator.free(inferred_summary);
-    try addFormattedInferenceNote(
-        allocator,
-        diag,
-        "inferred bindings before failure: {s}",
-        .{inferred_summary},
-    );
-
-    if (firstUnsolvedNamedBinder(rule, current_bindings)) |label| {
+    if (!std.mem.eql(u8, inferred_summary, "none")) {
         try addFormattedInferenceNote(
             allocator,
             diag,
-            "first unsolved binder: {s}",
-            .{label},
+            "inferred bindings before failure: {s}",
+            .{inferred_summary},
         );
     }
 }

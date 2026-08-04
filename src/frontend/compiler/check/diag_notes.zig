@@ -20,6 +20,7 @@ const text_util = @import("../../text_util.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const HiddenWitnessFreshContext =
     @import("../inference/context.zig").HiddenWitnessFreshContext;
+const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 
 pub fn addFallbackFailureNote(
     diag: *Diagnostic,
@@ -144,12 +145,8 @@ fn addHoleyInferenceNotes(
     report: Holes.InferenceReport,
     fresh_context: ?HiddenWitnessFreshContext,
 ) !void {
-    try addFormattedProofNote(
-        allocator,
-        diag,
-        "inference path: {s}",
-        .{CompilerDiag.inferencePathName(.holey_surface_match)},
-    );
+    // The inference path is carried in the diagnostic's structured detail;
+    // no note needed.
     const failure = report.failure orelse return;
     const hole_span = firstHoleProofSpan(line, holey);
 
@@ -520,15 +517,77 @@ pub fn addFreshenAttemptNotes(
 }
 
 pub fn addBoundaryAttemptNotes(
+    allocator: std.mem.Allocator,
     diag: *Diagnostic,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    parser: *const MM0Parser,
+    theorem_vars: *const std.StringHashMap(*const Expr),
+    theorem_concl: ExprId,
+    final_line: ExprId,
     report: TheoremBoundary.ReconciliationReport,
 ) void {
+    var names: ?ViewTrace.DiagNames = ViewTrace.DiagNames.build(
+        allocator,
+        theorem,
+        parser,
+        theorem_vars,
+    ) catch null;
+    defer if (names) |*n| n.deinit(allocator);
+    const names_ptr: ?*const ViewTrace.DiagNames =
+        if (names) |*n| n else null;
+    addRenderedExprNote(
+        allocator,
+        diag,
+        "the theorem concludes: {s}",
+        theorem,
+        env,
+        names_ptr,
+        theorem_concl,
+    );
+    addRenderedExprNote(
+        allocator,
+        diag,
+        "the last line proves: {s}",
+        theorem,
+        env,
+        names_ptr,
+        final_line,
+    );
     if (report.attempted_transparent) {
-        addStaticProofNote(diag, "attempted transparent final reconciliation");
+        addStaticProofNote(
+            diag,
+            "the two do not match, even with definitions unfolded",
+        );
     }
     if (report.attempted_normalized) {
-        addStaticProofNote(diag, "attempted normalized final reconciliation");
+        addStaticProofNote(diag, "nor after normalization");
     }
+}
+
+fn addRenderedExprNote(
+    allocator: std.mem.Allocator,
+    diag: *Diagnostic,
+    comptime fmt: []const u8,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names_ptr: ?*const ViewTrace.DiagNames,
+    expr_id: ExprId,
+) void {
+    const text = formatNoteExpr(
+        allocator,
+        theorem,
+        env,
+        names_ptr,
+        expr_id,
+    ) catch return;
+    defer allocator.free(text);
+    addFormattedProofNote(
+        allocator,
+        diag,
+        fmt,
+        .{truncateSnapshot(text)},
+    ) catch return;
 }
 
 fn addStaticProofNote(diag: *Diagnostic, message: []const u8) void {
