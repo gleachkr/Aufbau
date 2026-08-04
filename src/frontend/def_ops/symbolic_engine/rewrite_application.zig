@@ -12,6 +12,43 @@ const SymbolicExpr = Types.SymbolicExpr;
 const BoundValue = Types.BoundValue;
 const MatchSession = MatchState.MatchSession;
 
+/// Resolve a symbolic `.binder` node through the session bindings to its
+/// representative value. Rewrite patterns are structural; a rule binder that
+/// earlier matching already solved must be transparent to them (a conclusion
+/// like `[x := a] e` where `e` was bound through a hidden-def unfold).
+pub fn resolveBoundBinderSymbolic(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+    state: *MatchSession,
+) anyerror!*const SymbolicExpr {
+    var current = symbolic;
+    // A representative can itself be a binder reference; the hop cap breaks
+    // any aliasing cycle (an acyclic chain visits distinct binders).
+    var hops: usize = 0;
+    while (hops <= state.bindings.len) : (hops += 1) {
+        const idx = switch (current.*) {
+            .binder => |idx| idx,
+            else => return current,
+        };
+        if (idx >= state.bindings.len) return current;
+        const bound = state.bindings[idx] orelse return current;
+        const repr = try WitnessState.boundValueRepresentative(self, bound);
+        if (repr.* == .binder) {
+            // Representative selection re-expresses concrete values as binder
+            // back-references (possibly to this very binder); the raw concrete
+            // expr is the exact resolution.
+            switch (bound) {
+                .concrete => |concrete| return try self.allocSymbolic(
+                    .{ .fixed = concrete.raw },
+                ),
+                .symbolic => if (repr.binder == idx) return current,
+            }
+        }
+        current = repr;
+    }
+    return current;
+}
+
 pub fn applyRewriteRuleToExpr(
     self: anytype,
     rule: RewriteRule,
@@ -71,7 +108,8 @@ pub fn applyRewriteRuleToSymbolic(
     symbolic: *const SymbolicExpr,
     state: *MatchSession,
 ) anyerror!?*const SymbolicExpr {
-    return switch (symbolic.*) {
+    const resolved = try resolveBoundBinderSymbolic(self, symbolic, state);
+    return switch (resolved.*) {
         .fixed => |expr_id| try applyRewriteRuleToExpr(
             self,
             rule,
@@ -94,7 +132,7 @@ pub fn applyRewriteRuleToSymbolic(
             if (!try matchRewriteTemplateToSymbolic(
                 self,
                 rule.lhs,
-                symbolic,
+                resolved,
                 rewrite_bindings,
                 state,
             )) {
@@ -196,7 +234,11 @@ fn matchRewriteTemplateToSymbolic(
             actual,
             state,
         ),
-        .app => |tmpl_app| switch (actual.*) {
+        .app => |tmpl_app| switch ((try resolveBoundBinderSymbolic(
+            self,
+            actual,
+            state,
+        )).*) {
             .fixed => |expr_id| try matchRewriteTemplateToExpr(
                 self,
                 template,
@@ -285,7 +327,8 @@ fn rewriteBoundValueFromSymbolic(
     symbolic: *const SymbolicExpr,
     state: *MatchSession,
 ) anyerror!BoundValue {
-    return switch (symbolic.*) {
+    const resolved = try resolveBoundBinderSymbolic(self, symbolic, state);
+    return switch (resolved.*) {
         .fixed => |expr_id| try WitnessState.rebuildBoundValueFromState(
             self,
             expr_id,
@@ -293,7 +336,7 @@ fn rewriteBoundValueFromSymbolic(
             .transparent,
         ),
         else => WitnessState.makeSymbolicBoundValue(
-            symbolic,
+            resolved,
             .transparent,
         ),
     };
@@ -340,11 +383,95 @@ fn validateRewriteRuleBindings(
             ),
         };
     }
-    return BindingValidation.firstViolation(
+    if (BindingValidation.firstViolation(
         rule_decl.args,
         infos[0..rewrite_bindings.len],
-    ) == null;
+    ) != null) {
+        return false;
+    }
+
+    // The concrete dep masks cannot see unmaterialized hidden-def dummies, so
+    // a substitution rule could otherwise apply "vacuously" to a body that
+    // still mentions the bound dummy. Mirror the dependency half of
+    // `firstViolation` on dummy-root occurrence masks when they are all
+    // computable; when any mask is not, keep the concrete-only verdict.
+    dummy_check: {
+        var masks: [56]u64 = undefined;
+        var seen_binders: std.AutoHashMapUnmanaged(usize, void) = .empty;
+        defer seen_binders.deinit(self.shared.allocator);
+        for (rewrite_bindings, 0..) |binding_opt, idx| {
+            seen_binders.clearRetainingCapacity();
+            const repr = try WitnessState.boundValueRepresentative(
+                self,
+                binding_opt.?,
+            );
+            masks[idx] = (try dummyRootMaskInSymbolic(
+                self,
+                repr,
+                state,
+                &seen_binders,
+            )) orelse break :dummy_check;
+        }
+        if (BindingValidation.firstDepViolationOverMasks(
+            u64,
+            rule_decl.args,
+            masks[0..rewrite_bindings.len],
+        ) != null) {
+            return false;
+        }
+    }
+    return true;
 }
+
+/// Dummy-root occurrence mask for a rewrite binding. Unmaterialized hidden-def
+/// dummies carry no concrete dep bit, so dependency exclusions must be checked
+/// on these masks instead. Returns null when the mask is not computable (an
+/// unbound rule binder inside the value, or a root slot beyond the mask
+/// width); callers then fall back to the concrete-only check.
+fn dummyRootMaskInSymbolic(
+    self: anytype,
+    symbolic: *const SymbolicExpr,
+    state: *MatchSession,
+    seen_binders: *std.AutoHashMapUnmanaged(usize, void),
+) anyerror!?u64 {
+    switch (symbolic.*) {
+        .binder => |idx| {
+            if (idx >= state.bindings.len) return null;
+            const gop = try seen_binders.getOrPut(self.shared.allocator, idx);
+            if (gop.found_existing) return 0;
+            const bound = state.bindings[idx] orelse return null;
+            const repr = try WitnessState.boundValueRepresentative(self, bound);
+            return try dummyRootMaskInSymbolic(self, repr, state, seen_binders);
+        },
+        .fixed => return 0,
+        .dummy => |slot| {
+            const root = try WitnessState.resolveDummySlot(slot, state);
+            // A resolved root's witness is concrete; its deps are already in
+            // the concrete mask.
+            if (state.witnesses.get(root) != null or
+                state.materialized_witnesses.get(root) != null)
+            {
+                return 0;
+            }
+            if (root >= 64) return null;
+            return @as(u64, 1) << @intCast(root);
+        },
+        .app => |app| {
+            var mask: u64 = 0;
+            for (app.args) |arg| {
+                const child = (try dummyRootMaskInSymbolic(
+                    self,
+                    arg,
+                    state,
+                    seen_binders,
+                )) orelse return null;
+                mask |= child;
+            }
+            return mask;
+        },
+    }
+}
+
 
 fn rewriteBoundValueDeps(
     self: anytype,
@@ -369,7 +496,13 @@ fn rewriteBoundValueSortName(
     bound: BoundValue,
     state: *MatchSession,
 ) anyerror!?[]const u8 {
-    const symbolic = try WitnessState.boundValueRepresentative(self, bound);
+    // Representatives may be binder back-references; resolve them so the
+    // leaf info is readable.
+    const symbolic = try resolveBoundBinderSymbolic(
+        self,
+        try WitnessState.boundValueRepresentative(self, bound),
+        state,
+    );
     return WitnessState.symbolicSortName(self, symbolic, state);
 }
 
@@ -378,8 +511,11 @@ fn rewriteBoundValueIsBound(
     bound: BoundValue,
     state: *MatchSession,
 ) anyerror!bool {
-    _ = state;
-    const symbolic = try WitnessState.boundValueRepresentative(self, bound);
+    const symbolic = try resolveBoundBinderSymbolic(
+        self,
+        try WitnessState.boundValueRepresentative(self, bound),
+        state,
+    );
     return try symbolicIsBound(self, symbolic);
 }
 

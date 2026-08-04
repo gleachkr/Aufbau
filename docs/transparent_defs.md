@@ -218,14 +218,45 @@ The distinction is that replay is still exact, while the surrounding
 omitted-binder pipeline may fall back to a def-aware match when that is a
 safe local inference problem.
 
+### Rule binders bound to hidden dummies, with rewrite-normalized residuals
+
+A rule binder can be solved *through* a hidden-def unfold, leaving the rest
+of the conclusion stated in reduced form:
+
+```
+def Y {.f .x: tm}: tm = $ λ f. (λ x. f · (x · x)) · (λ x. f · (x · x)) $;
+theorem y_fixpoint (g: tm): $ Y · g = g · (Y · g) $;
+```
+
+```
+l1: $ Y · g = (λ u. g · (u · u)) · (λ u. g · (u · u)) $ by beta
+```
+
+Matching `beta`'s left side against `Y · g` opens `Y` and binds the rule's
+`{x}` and `e` to symbolic values that still carry `Y`'s hidden dummies. The
+raw right side `[x := a] e` then cannot match the stated reduced form
+directly. As a last inference fallback, the compiler reduces such residual
+conclusion arguments with the registered directed `@rewrite` rules while the
+hidden dummies stay symbolic, and matches the normal form against the stated
+line. That final match is what selects each dummy's witness — here the
+line's bound variable `u`, with the remaining dummy drawn from the sort's
+`@vars` pool. Substitution rules with dependency side conditions (`sb_vac`,
+`sb_lam` above) check those conditions against the symbolic dummies as well
+as concrete variables, so a substitution never "vacuously" drops a body that
+still mentions the bound dummy.
+
+This is inference evidence only: theorem-application validation still
+rechecks the application and emits the conversion.
+
 ### Harder def/rewrite cases still need metadata
 
 Transparent inference does not mean the compiler unfolds defs and then
-runs arbitrary rewrite search to discover binders. If the only way to
-recover a binder is to expose a def body and then use rewrite, ACUI, view,
-or recover/abstract structure, the rule should say so with the relevant
-metadata. Explicit binders are still the simplest way to disambiguate
-cases that are not local transparent matches.
+runs arbitrary rewrite search to discover binders; the conclusion-residual
+reduction above is deterministic and uses oriented `@rewrite` rules only.
+If the only way to recover a binder is to expose a def body and then use
+undirected rewrite, ACUI, view, or recover/abstract structure, the rule
+should say so with the relevant metadata. Explicit binders are still the
+simplest way to disambiguate cases that are not local transparent matches.
 
 ### Higher-level solver paths are separate
 

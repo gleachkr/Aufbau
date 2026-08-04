@@ -476,6 +476,7 @@ pub fn inferBindings(
                 ref_exprs,
                 line_expr,
                 partial_bindings,
+                null,
             )
         else
             inferBindingsByRuleMatchSession(
@@ -485,6 +486,7 @@ pub fn inferBindings(
                 ref_exprs,
                 line_expr,
                 partial_bindings,
+                null,
             )) catch |err| {
             try traceInferenceFailure(
                 self.debug,

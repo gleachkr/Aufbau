@@ -186,6 +186,68 @@ pub fn currentDefExprInfo(
     return try defExprInfo(env, theorem, theorem.arg_infos, expr_id);
 }
 
+/// The bound/regular dependency-exclusion algorithm alone, generic over the
+/// dependency-mask type. `firstDepViolation` runs it over concrete u55 dep
+/// masks; the def-ops rewrite validation runs it over dummy-root occurrence
+/// masks (u64), where an unmaterialized hidden-def dummy has no concrete dep
+/// bit. `firstViolation` inlines the same algorithm interleaved with sort and
+/// boundness checks so the first violation is reported in argument order —
+/// keep its dependency half in sync with this one.
+pub fn firstDepViolationOverMasks(
+    comptime Mask: type,
+    expected_args: []const ArgInfo,
+    deps: []const Mask,
+) ?DepViolation {
+    std.debug.assert(expected_args.len == deps.len);
+    std.debug.assert(expected_args.len <= 56);
+
+    var bound_deps: [56]Mask = undefined;
+    var bound_arg_indices: [56]usize = undefined;
+    var bound_len: usize = 0;
+    var prev_deps: [56]Mask = undefined;
+    var prev_arg_indices: [56]usize = undefined;
+    var prev_len: usize = 0;
+
+    for (expected_args, deps, 0..) |expected, mask, idx| {
+        if (expected.bound) {
+            for (prev_deps[0..prev_len], prev_arg_indices[0..prev_len]) |
+                prev_dep,
+                prev_idx,
+            | {
+                if (prev_dep & mask != 0) {
+                    return .{
+                        .first_idx = prev_idx,
+                        .second_idx = idx,
+                    };
+                }
+            }
+            bound_deps[bound_len] = mask;
+            bound_arg_indices[bound_len] = idx;
+            bound_len += 1;
+        } else {
+            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len], 0..) |
+                bound_dep,
+                bound_idx,
+                k,
+            | {
+                if ((@as(u64, expected.deps) >> @intCast(k)) & 1 != 0) {
+                    continue;
+                }
+                if (bound_dep & mask != 0) {
+                    return .{
+                        .first_idx = bound_idx,
+                        .second_idx = idx,
+                    };
+                }
+            }
+        }
+        prev_deps[prev_len] = mask;
+        prev_arg_indices[prev_len] = idx;
+        prev_len += 1;
+    }
+    return null;
+}
+
 pub fn firstViolation(
     expected_args: []const ArgInfo,
     infos: []const ExprInfo,
@@ -253,49 +315,9 @@ pub fn firstDepViolation(
     if (expected_args.len != infos.len) return null;
     std.debug.assert(expected_args.len <= 56);
 
-    var bound_deps: [56]u55 = undefined;
-    var bound_arg_indices: [56]usize = undefined;
-    var bound_len: usize = 0;
-    var prev_deps: [56]u55 = undefined;
-    var prev_arg_indices: [56]usize = undefined;
-    var prev_len: usize = 0;
-
-    for (expected_args, infos, 0..) |expected, info, idx| {
-        if (expected.bound) {
-            for (prev_deps[0..prev_len], prev_arg_indices[0..prev_len]) |
-                prev_dep,
-                prev_idx,
-            | {
-                if (prev_dep & info.deps != 0) {
-                    return .{
-                        .first_idx = prev_idx,
-                        .second_idx = idx,
-                    };
-                }
-            }
-            bound_deps[bound_len] = info.deps;
-            bound_arg_indices[bound_len] = idx;
-            bound_len += 1;
-        } else {
-            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len], 0..) |
-                bound_dep,
-                bound_idx,
-                k,
-            | {
-                if ((@as(u64, expected.deps) >> @intCast(k)) & 1 != 0) {
-                    continue;
-                }
-                if (bound_dep & info.deps != 0) {
-                    return .{
-                        .first_idx = bound_idx,
-                        .second_idx = idx,
-                    };
-                }
-            }
-        }
-        prev_deps[prev_len] = info.deps;
-        prev_arg_indices[prev_len] = idx;
-        prev_len += 1;
+    var deps: [56]u55 = undefined;
+    for (infos, 0..) |info, idx| {
+        deps[idx] = info.deps;
     }
-    return null;
+    return firstDepViolationOverMasks(u55, expected_args, deps[0..infos.len]);
 }

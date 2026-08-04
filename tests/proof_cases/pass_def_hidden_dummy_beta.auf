@@ -1,0 +1,14 @@
+-- Task #180: a rule binder (beta's {x}) binding a hidden def dummy at the
+-- unfolded head, with the conclusion's substitution residual stated in
+-- reduced form. l1 needs the def unfold, the directed sb reduction of the
+-- raw right side, and witness selection from the stated line (u) plus the
+-- @vars pool.
+y_fixpoint
+----------
+l1: $ Y · g = (λ u. g · (u · u)) · (λ u. g · (u · u)) $ by beta
+l2: $ (λ u. g · (u · u)) · (λ u. g · (u · u)) = g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) $ by beta
+l3: $ g = g $ by eq_refl
+l4: $ (λ u. g · (u · u)) · (λ u. g · (u · u)) = Y · g $ by eq_symm [l1]
+l5: $ g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) = g · (Y · g) $ by app_congr [l3, l4]
+l6: $ Y · g = g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) $ by eq_trans [l1, l2]
+l7: $ Y · g = g · (Y · g) $ by eq_trans [l6, l5]

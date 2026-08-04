@@ -470,6 +470,27 @@ pub const RuleMatchSession = struct {
         );
     }
 
+    /// Last-resort template match: residual subtrees are reduced with the
+    /// registry's directed `@rewrite` rules (hidden-def dummies staying
+    /// symbolic) before a final transparent match, which is what forces the
+    /// dummy witnesses from the stated line (task #180). `fuel_exhausted` is
+    /// set when the reduction hit its rule-application cap, so a false return
+    /// may be a fuel artifact; callers with a debug config should trace it.
+    pub fn matchRewriteNormalized(
+        self: *RuleMatchSession,
+        template: TemplateExpr,
+        actual: ExprId,
+        fuel_exhausted: *bool,
+    ) anyerror!bool {
+        var symbolic_engine = self.engine();
+        return try symbolic_engine.matchTemplateRewriteNormalized(
+            template,
+            actual,
+            &self.state,
+            fuel_exhausted,
+        );
+    }
+
     pub fn beginNormalizedComparison(
         self: *RuleMatchSession,
         template: TemplateExpr,

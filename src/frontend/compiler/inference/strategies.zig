@@ -612,6 +612,7 @@ fn finishRuleMatchSession(
     ref_exprs: []const ExprId,
     line_expr: ExprId,
     explicit_bindings: []const ?ExprId,
+    rewrite_fuel_exhausted: ?*bool,
 ) !RuleMatchResult {
     const allocator = context.allocator;
     const env = context.env;
@@ -633,6 +634,7 @@ fn finishRuleMatchSession(
     }
 
     if (!try session.matchTransparentOrSemantic(rule.concl, line_expr)) {
+        var fuel_sink = false;
         if (!try matchRulePartNormalized(
             allocator,
             env,
@@ -641,6 +643,10 @@ fn finishRuleMatchSession(
             session,
             rule.concl,
             line_expr,
+        ) and !try session.matchRewriteNormalized(
+            rule.concl,
+            line_expr,
+            rewrite_fuel_exhausted orelse &fuel_sink,
         )) {
             return .{ .no_match = conclusionMismatch() };
         }
@@ -670,6 +676,7 @@ pub fn inferBindingsByRuleMatchSession(
     ref_exprs: []const ExprId,
     line_expr: ExprId,
     explicit_bindings: []const ?ExprId,
+    rewrite_fuel_exhausted: ?*bool,
 ) !RuleMatchResult {
     const allocator = context.allocator;
     const rule = context.rule;
@@ -692,6 +699,7 @@ pub fn inferBindingsByRuleMatchSession(
         ref_exprs,
         line_expr,
         explicit_bindings,
+        rewrite_fuel_exhausted,
     );
 }
 
@@ -702,6 +710,7 @@ pub fn inferBindingsByMatchSeedState(
     ref_exprs: []const ExprId,
     line_expr: ExprId,
     explicit_bindings: []const ?ExprId,
+    rewrite_fuel_exhausted: ?*bool,
 ) !RuleMatchResult {
     const allocator = context.allocator;
     const rule = context.rule;
@@ -727,6 +736,7 @@ pub fn inferBindingsByMatchSeedState(
         ref_exprs,
         line_expr,
         explicit_bindings,
+        rewrite_fuel_exhausted,
     );
 }
 
@@ -1257,6 +1267,15 @@ pub fn tryConcreteRuleMatchSessionFallback(
         .{},
     );
     const mark = scratch.mark();
+    var rewrite_fuel_exhausted = false;
+    defer if (rewrite_fuel_exhausted) {
+        DebugTrace.traceInference(
+            self.debug,
+            "rewrite-normalized conclusion match for rule {s} hit the " ++
+                "rule-application fuel cap; a mismatch may be a fuel artifact",
+            .{rule.name},
+        );
+    };
     const result = inferBindingsByRuleMatchSession(
         context,
         seeds,
@@ -1264,6 +1283,7 @@ pub fn tryConcreteRuleMatchSessionFallback(
         ref_exprs,
         line_expr,
         explicit_bindings,
+        &rewrite_fuel_exhausted,
     ) catch |err| {
         try traceInferenceFailure(
             self.debug,

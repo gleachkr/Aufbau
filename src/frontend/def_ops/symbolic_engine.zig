@@ -5,6 +5,8 @@ const SemanticSearch =
     @import("./symbolic_engine/semantic_search.zig");
 const RewriteApplication =
     @import("./symbolic_engine/rewrite_application.zig");
+const DirectedNormalize =
+    @import("./symbolic_engine/directed_normalize.zig");
 const WitnessState = @import("./symbolic_engine/witness_state.zig");
 
 const Types = @import("./types.zig");
@@ -50,6 +52,8 @@ pub const SymbolicEngine = struct {
         RewriteApplication.applyRewriteRuleToExpr;
     pub const applyRewriteRuleToSymbolic =
         RewriteApplication.applyRewriteRuleToSymbolic;
+    pub const matchTemplateRewriteNormalized =
+        DirectedNormalize.matchTemplateRewriteNormalized;
 
     pub const boundValueFromSeed = WitnessState.boundValueFromSeed;
     pub const chooseRepresentative = WitnessState.chooseRepresentative;
