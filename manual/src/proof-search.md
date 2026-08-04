@@ -133,12 +133,12 @@ l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 13)
 ## Computation as search: `conversion?`
 
 `conversion?` attempts to determine whether the goal is equal to something 
-already in the ref pool through some chain of rewriting steps the theory has 
-enrolled. Rules can be enrolled for conversion as either pure conversion rules, 
-or as computation rules. Computation rules run eagerly, and handle cases where 
-the rewrites are intended to rapidly derive a normal form. Conversion rules 
-saturate (every enrolled direction is explored at once) and are intended for 
-general equational search.
+already in the ref pool or to a reflexivity law through some chain of rewriting 
+steps the theory has enrolled. Rules can be enrolled for conversion as either 
+pure conversion rules, or as computation rules. Computation rules run eagerly, 
+and handle cases where the rewrites are intended to rapidly derive a normal 
+form. Conversion rules saturate (every enrolled direction is explored at once) 
+and are intended for general equational search.
 
 Here is a small lambda calculus with explicit substitution and addition on
 numerals. Beta reduction, the substitution equations, and the addition
@@ -158,14 +158,12 @@ are what say how it distributes. Now a lemma in that theory.
 ```aufbau-proof prelude=lam-base,lam-rules
 lemma add_two {x y: tm}: $ (λ x. λ y. (x + y)) · S0 · SS0 = SSS0 $
 ----
-l1: $ SSS0 = SSS0 $ by eq_refl
-l2: $ (λ x. λ y. (x + y)) · S0 · SS0 = SSS0 $ by conversion?
+l1: $ (λ x. λ y. (x + y)) · S0 · SS0 = SSS0 $ by conversion?
 ```
 
 The goal says that `(λx. λy. x + y) 1 2` is `3`. `conversion?` reduces the
 two beta redexes, pushes the substitutions through `+`, runs the addition
-table, and normalizes at `SSS0`. `l1` already asserts that expression is equal 
-to itself, so l1 can then ground the rewrite chain. 
+table, and the two sides of the goal meet at `SSS0`.
 
 Rewriting is dependency-aware, so in the theory above a reduction that would 
 capture a variable simply never fires. If the search stops without connecting 

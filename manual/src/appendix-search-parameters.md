@@ -11,7 +11,7 @@ covered in [Computation](computation.md).
 | `exact?` | Close the goal with **one** rule application whose hypotheses are all discharged by existing references (theorem hypotheses, earlier lines). |
 | `apply?` | Like `exact?`, oriented at discovering *which* rules could produce the goal. |
 | `auto?` | `exact?` plus recursive generation of missing sub-proofs, under iterative deepening and a work budget. The only generating search. |
-| `conversion?` | Equality saturation: is the goal convertible, by `@conversion`/`@compute` rewrites and local equations, to a hypothesis or earlier line? |
+| `conversion?` | Equality saturation: is the goal convertible, by `@conversion`/`@compute` rewrites and local equations, to a hypothesis, earlier line, or instance of a reflexivity law? |
 
 A search command can be used on a proof line after `by`, or inside a reference 
 slot (`by mp [auto?, #1]`). `conversion?` can only be accepted on top-level 

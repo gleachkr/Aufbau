@@ -2,11 +2,12 @@
 
 `conversion?` searches for a proof by looking for a sequence of conversions 
 (specially annotated rules that represent some kind of equality or equivalence) 
-that connect the goal to an earlier line or hypothesis. This search is by 
-saturation (using an [egraph](https://en.wikipedia.org/wiki/E-graph)), 
-essentially just exploring all conversion paths until a connection is found. In 
-Chapter 3 we used conversion to evaluate a lambda term. This chapter explains 
-the conversion process in more detail.
+that connect the goal to an earlier line or hypothesis, or, when the goal is 
+itself an equation, that connect its two sides. This search is by saturation 
+(using an [egraph](https://en.wikipedia.org/wiki/E-graph)), essentially just 
+exploring all conversion paths until a connection is found. In Chapter 3 we 
+used conversion to evaluate a lambda term. This chapter explains the conversion 
+process in more detail.
 
 ## What comes back
 
@@ -16,26 +17,27 @@ In the lambda calculus theory:
 ```aufbau-proof prelude=lam-base,lam-rules
 lemma lift (a b: tm): $ a = b $ > $ S a = S b $
 ----
-l1: $ S a = S a $ by eq_refl
-l2: $ S a = S b $ by conversion?
+l1: $ S a = S b $ by conversion?
 ```
 
-Accepting the suggestion replaces `l2` with four lines:
+Accepting the suggestion replaces `l1` with three lines:
 
 ```
-l2_1: $ S a = S b $ by suc_congr [#1]
-l2_2: $ S a = S a $ by eq_refl
-l2_3: $ iff (S a = S a) (S a = S b) $ by eq_congr [l2_2, l2_1]
-l2: $ S a = S b $ by mpbi [l2_3, l1]
+l1_1: $ S a = S b $ by suc_congr [#1]
+l1_2: $ S a = S a $ by eq_refl
+l1: $ S a = S b $ by eq_trans [l1_2, l1_1]
 ```
 
-Everything is the vocabulary of the Equality chapter: there's a congruence step 
-followed by a reflexivity instance, a lift into `iff` by congruence, and a 
-transport along `iff`. Search output is proof text the compiler checks like 
-anything else. Since conversion works by transport, equivalence relation 
-properties, and congurences, that's what `conversion?` needs from a theory: a 
-`@relation` bundle with transport for the goal's sort, and `@congr` coverage
-for the connectives a rewrite must pass through.
+Everything is the vocabulary of the Equality chapter: the hypothesis rewrites 
+`a` to `b` under `S` through a congruence rule, and reflexivity and 
+transitivity restate the goal from the chain. The goal above is itself an 
+equation, so once its two sides meet in the search space the chain between them 
+is the proof. A goal of any other shape instead has to convert to a hypothesis 
+or an earlier line, and the emitted chain ends with a transport along the 
+sort's relation, citing that reference. So that's what `conversion?` needs from 
+a theory: a `@relation` bundle for the goal's sort (with a transport rule for 
+the reference-anchored form), and `@congr` coverage for the connectives a 
+rewrite must pass through.
 
 Any existing reference pool member (prior line or hypothesis) whose formula is 
 `rel lhs rhs` for a registered relation acts as a ground rewrite between its 
@@ -105,15 +107,14 @@ def double (a: tm): tm = $ a + a $;
 @@auf
 lemma zero_double: $ double 0 = 0 $
 ----
-l1: $ 0 = 0 $ by eq_refl
-l2: $ double 0 = 0 $ by conversion?
+l1: $ double 0 = 0 $ by conversion?
 ```
 
 `unfold` expands applications of the head, `fold` matches the definiens
 shape and folds it up, `both` does both; an unannotated def is invisible to
 `conversion?`. Here saturation unfolds `double 0` to `0 + 0`, the addition
 rules finish, and the emitted chain crosses the definition with a single
-reflexivity line (the `$ 0 + 0 = double 0 $ by eq_refl`) which the checker
+reflexivity line (the `$ double 0 = 0 + 0 $ by eq_refl`) which the checker
 closes through ordinary transparent unfolding.
 
 For a def with hidden dummy binders only `fold` is legal: unfolding would

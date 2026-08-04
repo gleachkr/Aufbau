@@ -6642,6 +6642,175 @@ test "conversion? saturated miss is reported as a forced negative" {
     try std.testing.expectEqual(@as(?[]const u8, null), plain.status_detail);
 }
 
+test "conversion? proves an equation goal with no references" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The goal line itself asserts the relation; both sides join under
+    // the enrolled rewrites, so the chain is grounded by refl and no
+    // hypothesis or prior line is cited at all.
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_eq_goal (p q r: wff): $ iff (or p (an q r)) (or (an r q) p) $;
+    ;
+    const proof_src =
+        \\conv_eq_goal
+        \\----
+        \\goal: $ iff (or p (an q r)) (or (an r q) p) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expectEqual(@as(usize, 1), found.items.len);
+    try std.testing.expectEqualStrings(
+        "conversion joining the goal's sides",
+        found.items[0].title,
+    );
+
+    // The chain rewrites lhs into rhs and the target line restates the
+    // goal verbatim as `trans [refl, chain]` — no transport, no citation.
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "or_comm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "an_comm") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_refl") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        replacement,
+        "goal: $ iff (or p (an q r)) (or (an r q) p) $ by iff_trans",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") == null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? closes a structurally reflexive equation goal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Zero steps: both sides are the same expression, so the target line
+    // is restated with a bare refl.
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_eq_triv (p q: wff): $ iff (an p q) (an p q) $;
+    ;
+    const proof_src =
+        \\conv_eq_triv
+        \\----
+        \\goal: $ iff (an p q) (an p q) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        replacement,
+        "goal: $ iff (an p q) (an p q) $ by iff_refl",
+    ) != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? equation goal still prefers a converged pool reference" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // A hypothesis carrying the goal formula outranks the self-contained
+    // equation chain: existing pool-anchored outputs must not change.
+    const mm0_src = conversion_prelude ++
+        \\theorem conv_eq_pool (p q: wff) (h: $ iff (or p q) (or q p) $): $ iff (or p q) (or q p) $;
+    ;
+    const proof_src =
+        \\conv_eq_pool
+        \\----
+        \\goal: $ iff (or p q) (or q p) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        found.items[0].title,
+        "conversion from ",
+    ));
+    try std.testing.expect(
+        std.mem.indexOf(u8, found.items[0].replacement, "#1") != null,
+    );
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? equation goal folds a computation without a wff relation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // A term-sort equation goal needs only the term relation bundle: no
+    // wff @relation, no transport (the bundle's slot is `_`), and no
+    // grounding refl line in the proof. The pool path could never close
+    // this; the equation path proves the line outright.
+    const mm0_src =
+        \\delimiter $ ( ) S $;
+        \\provable sort wff;
+        \\sort tm;
+        \\term eq (a b: tm): wff;
+        \\infixl eq: $=$ prec 20;
+        \\term zero: tm; notation zero: tm = ($0$:max);
+        \\term suc (n: tm): tm; prefix suc: $S$ prec 70;
+        \\term add (m n: tm): tm; infixl add: $+$ prec 30;
+        \\--| @relation tm eq eq_refl eq_trans eq_symm _
+        \\axiom eq_refl (a: tm): $ a = a $;
+        \\axiom eq_trans (a b c: tm) (h1: $ a = b $) (h2: $ b = c $): $ a = c $;
+        \\axiom eq_symm (a b: tm) (h: $ a = b $): $ b = a $;
+        \\--| @congr
+        \\axiom suc_congr (a b: tm) (h: $ a = b $): $ S a = S b $;
+        \\--| @congr
+        \\axiom add_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a + c = b + d $;
+        \\--| @compute ltr
+        \\axiom add_z (n: tm): $ 0 + n = n $;
+        \\--| @compute ltr
+        \\axiom add_s (m n: tm): $ S m + n = S (m + n) $;
+        \\theorem two_plus_two: $ S S 0 + S S 0 = S S S S 0 $;
+    ;
+    const proof_src =
+        \\two_plus_two
+        \\----
+        \\goal: $ S S 0 + S S 0 = S S S S 0 $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "add_s") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? equation goal subsumes the grounding refl-line idiom" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The church-addition fixture proof grounds its computation with a
+    // hand-written `l1: $ S S 0 = S S 0 $ by eq_refl` pool line. With the
+    // goal's own sides seeded, the same theorem closes without it.
+    const mm0_src = @embedFile("fixtures/lambda_one_plus_one.mm0");
+    const proof_src =
+        \\one_plus_one
+        \\------------
+        \\goal: $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expectEqualStrings(
+        "conversion joining the goal's sides",
+        found.items[0].title,
+    );
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 // The same connectives with comm/assoc as role certificates: the AC laws
 // are absorbed into bag interning instead of saturating, and the lowering
 // pays them back as explicit certificate chains.

@@ -139,10 +139,24 @@ one `symm` line when used right-to-left). With relation and congruence
 coverage but no `@conversion` rules at all, `conversion?` still runs as a
 pure congruence-closure prover over the local equations.
 
-What it needs from the theory: a `@relation` bundle for the goal's sort
-*with a transport rule*, `@congr` rules for the connectives the rewrites
-must pass through, and `@conversion` annotations on the rewrite theorems
-(see `docs/rewrite_system.md`). Three properties are worth knowing:
+**Equation goals prove themselves.** When the goal line is itself
+`rel(lhs, rhs)` for a registered `@relation`, the two sides are also
+seeded as terms in their own right, and joining *them* proves the line
+with no reference at all: the chain rewrites `lhs` into `rhs` and the
+goal is restated as `trans [refl, chain]` (one `symm` instead when the
+chain lowers in the reverse orientation). A converged reference still
+wins when both are available, but a computation like
+`$ 2 + 2 = 4 $ by conversion?` no longer needs a grounding
+`$ 4 = 4 $ by refl` line — and since no transport is involved, this form
+works even for sorts whose relation bundle declares no transport rule
+(`_` in the `@relation` line).
+
+What it needs from the theory: a `@relation` bundle for the goal's sort —
+*with a transport rule* to cite a reference; an equation goal uses only
+`refl`/`trans`/`symm` — plus `@congr` rules for the connectives the
+rewrites must pass through, and `@conversion` annotations on the rewrite
+theorems (see `docs/rewrite_system.md`). Three properties are worth
+knowing:
 
 - **A saturated miss is a forced negative.** If the egraph reaches a
   fixpoint without connecting the goal to any reference, no chain of the

@@ -158,21 +158,19 @@ function and `0` should evaluate it:
 ```aufbau-proof prelude=lam-base,lam-rules
 lemma two_apply {f x w: tm}: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 = S S 0 $
 ----
-l1: $ S S 0 = S S 0 $ by eq_refl
-l2: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 = S S 0 $ by conversion?
+l1: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 = S S 0 $ by conversion?
 ```
 
-As in the earlier chapters, `l1` grounds the chain: the fold reduces the goal 
-to `S S 0`, and the reflexivity line is the pool reference the chain connects 
-to. Church addition works the same way: `plus` uses its first numeral to 
-iterate `f` on top of the second's result, and `1 + 1 = 2` is just evaluation.
+The goal is an equation, so `conversion?` only has to join its two sides: the 
+fold reduces the left side to `S S 0`. Church addition works the same way: 
+`plus` uses its first numeral to iterate `f` on top of the second's result, and 
+`1 + 1 = 2` is just evaluation.
 
 ```aufbau-proof prelude=lam-base,lam-rules
 lemma one_plus_one {m n f x g y w: tm}:
   $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $
 ----
-l1: $ S S 0 = S S 0 $ by eq_refl
-l2: $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $ by conversion?
+l1: $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $ by conversion?
 ```
 
 If you accept the suggestion, brace yourself: the emitted proof is quite long. 

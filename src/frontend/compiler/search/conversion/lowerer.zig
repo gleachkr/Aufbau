@@ -1751,6 +1751,54 @@ pub const Lowerer = struct {
         );
     }
 
+    /// Equation goals: the target line itself asserts `rel(lhs, rhs)` for
+    /// a registered relation and both sides landed in one e-class, so the
+    /// lhs→rhs chain IS the goal — no pool reference, no transport. The
+    /// final line restates the target verbatim: `trans [refl(lhs), chain]`
+    /// forward, one `symm [chain]` when the chain was lowered reversed, or
+    /// a bare `refl` when the sides are structurally identical.
+    pub fn lowerEquation(
+        self: *Lowerer,
+        start_term: *const egraph.Term,
+        start_expr: ExprId,
+        end_expr: ExprId,
+        steps: []const egraph.Step,
+        reversed: bool,
+    ) !?[]const u8 {
+        const root_relation = self.relationForTerm(start_term) orelse {
+            return null;
+        };
+        const chain: ?[]const u8 = switch (try self.emitChain(
+            root_relation,
+            start_term,
+            start_expr,
+            end_expr,
+            steps,
+        )) {
+            .label => |label| label,
+            .empty => null,
+            .failed => return null,
+        };
+        if (chain) |label| {
+            if (reversed) {
+                try self.printTargetLine(root_relation.symm_id, &.{label});
+            } else {
+                const refl_label = (try self.emitLine(
+                    try self.relIds(root_relation, start_expr, start_expr),
+                    root_relation.refl_id,
+                    &.{},
+                )) orelse return null;
+                try self.printTargetLine(
+                    root_relation.trans_id,
+                    &.{ refl_label, label },
+                );
+            }
+        } else {
+            try self.printTargetLine(root_relation.refl_id, &.{});
+        }
+        return try self.out.toOwnedSlice(self.work);
+    }
+
     fn lowerOriented(
         self: *Lowerer,
         ref: ProofScript.Ref,
@@ -1766,73 +1814,17 @@ pub const Lowerer = struct {
         const transport_id = root_relation.transport_id orelse return null;
         const ref_expr = if (reversed) end_expr else start_expr;
 
-        var current = start_term;
-        var current_expr = (try self.termToExpr(start_term)) orelse {
-            return null;
+        var chain_label: ?[]const u8 = switch (try self.emitChain(
+            root_relation,
+            start_term,
+            start_expr,
+            end_expr,
+            steps,
+        )) {
+            .label => |label| label,
+            .empty => null,
+            .failed => return null,
         };
-        var chain_label: ?[]const u8 = null;
-        if (start_expr != current_expr) {
-            chain_label = (try self.alignEmit(
-                start_expr,
-                current_expr,
-                root_relation.sort_name,
-            )) orelse return null;
-        }
-        var step_idx: usize = 0;
-        while (step_idx < steps.len) {
-            const step = steps[step_idx];
-            var next = (try self.replaceAt(
-                current,
-                step.position,
-                step.before,
-                step.after,
-            )) orelse return null;
-            // A driving rule step may absorb its rewrite cascade: the
-            // emitted line then cites the rule with its result stated in
-            // normalized form, and line-check conclusion normalization
-            // re-derives the absorbed steps.
-            var emit_step = step;
-            var consumed: usize = 1;
-            if (try self.tryBigStep(steps, step_idx, next)) |group| {
-                emit_step.after = group.redex_after;
-                next = group.root;
-                consumed = group.consumed;
-            }
-            const step_label = (try self.emitStep(
-                emit_step,
-                current,
-                next,
-            )) orelse return null;
-            const next_expr = (try self.termToExpr(next)) orelse return null;
-            if (chain_label) |prev| {
-                chain_label = (try self.emitLine(
-                    try self.relIds(root_relation, start_expr, next_expr),
-                    root_relation.trans_id,
-                    &.{ prev, step_label },
-                )) orelse return null;
-            } else {
-                chain_label = step_label;
-            }
-            current = next;
-            current_expr = next_expr;
-            step_idx += consumed;
-        }
-        if (current_expr != end_expr) {
-            const seam = (try self.alignEmit(
-                current_expr,
-                end_expr,
-                root_relation.sort_name,
-            )) orelse return null;
-            if (chain_label) |prev| {
-                chain_label = (try self.emitLine(
-                    try self.relIds(root_relation, start_expr, end_expr),
-                    root_relation.trans_id,
-                    &.{ prev, seam },
-                )) orelse return null;
-            } else {
-                chain_label = seam;
-            }
-        }
         // A reversed chain proves rel(goal, ref); the transport needs
         // rel(ref, goal), so flip it once at the root.
         if (reversed) {
@@ -1855,20 +1847,134 @@ pub const Lowerer = struct {
         }
 
         // The original line, verbatim label and assertion, transported.
+        try self.printTargetLine(
+            transport_id,
+            &.{ chain_label.?, try self.renderRefText(ref) },
+        );
+        return try self.out.toOwnedSlice(self.work);
+    }
+
+    const Chain = union(enum) {
+        /// Label of the emitted line proving rel(start_expr, end_expr).
+        label: []const u8,
+        /// No steps and no seams: the endpoints are structurally identical.
+        empty,
+        /// Emission aborted (a cap tripped or a step could not be lifted).
+        failed,
+    };
+
+    /// Emit the trans-composed conversion chain from `start_term` to
+    /// `end_expr`: re-treeing seams at both ends, one stanza per step (with
+    /// big-step absorption), trans joins against the running prefix.
+    fn emitChain(
+        self: *Lowerer,
+        root_relation: ResolvedRelation,
+        start_term: *const egraph.Term,
+        start_expr: ExprId,
+        end_expr: ExprId,
+        steps: []const egraph.Step,
+    ) !Chain {
+        var current = start_term;
+        var current_expr = (try self.termToExpr(start_term)) orelse {
+            return .failed;
+        };
+        var chain_label: ?[]const u8 = null;
+        if (start_expr != current_expr) {
+            chain_label = (try self.alignEmit(
+                start_expr,
+                current_expr,
+                root_relation.sort_name,
+            )) orelse return .failed;
+        }
+        var step_idx: usize = 0;
+        while (step_idx < steps.len) {
+            const step = steps[step_idx];
+            var next = (try self.replaceAt(
+                current,
+                step.position,
+                step.before,
+                step.after,
+            )) orelse return .failed;
+            // A driving rule step may absorb its rewrite cascade: the
+            // emitted line then cites the rule with its result stated in
+            // normalized form, and line-check conclusion normalization
+            // re-derives the absorbed steps.
+            var emit_step = step;
+            var consumed: usize = 1;
+            if (try self.tryBigStep(steps, step_idx, next)) |group| {
+                emit_step.after = group.redex_after;
+                next = group.root;
+                consumed = group.consumed;
+            }
+            const step_label = (try self.emitStep(
+                emit_step,
+                current,
+                next,
+            )) orelse return .failed;
+            const next_expr = (try self.termToExpr(next)) orelse {
+                return .failed;
+            };
+            if (chain_label) |prev| {
+                chain_label = (try self.emitLine(
+                    try self.relIds(root_relation, start_expr, next_expr),
+                    root_relation.trans_id,
+                    &.{ prev, step_label },
+                )) orelse return .failed;
+            } else {
+                chain_label = step_label;
+            }
+            current = next;
+            current_expr = next_expr;
+            step_idx += consumed;
+        }
+        if (current_expr != end_expr) {
+            const seam = (try self.alignEmit(
+                current_expr,
+                end_expr,
+                root_relation.sort_name,
+            )) orelse return .failed;
+            if (chain_label) |prev| {
+                chain_label = (try self.emitLine(
+                    try self.relIds(root_relation, start_expr, end_expr),
+                    root_relation.trans_id,
+                    &.{ prev, seam },
+                )) orelse return .failed;
+            } else {
+                chain_label = seam;
+            }
+        }
+        return if (chain_label) |label|
+            .{ .label = label }
+        else
+            .empty;
+    }
+
+    /// Re-emit the target line verbatim — the user's label and assertion
+    /// text — with a fresh justification.
+    fn printTargetLine(
+        self: *Lowerer,
+        rule_id: u32,
+        ref_labels: []const []const u8,
+    ) !void {
         const line = self.target_line;
         const writer = self.out.writer(self.work);
-        try writer.print("{s}{s}: {s} by {s} [{s}, {s}]", .{
+        try writer.print("{s}{s}: {s} by {s}", .{
             self.indent,
             line.label,
             self.proof_src[line.assertion.span.start..line.assertion.span.end],
-            self.ruleName(transport_id),
-            chain_label.?,
-            try self.renderRefText(ref),
+            self.ruleName(rule_id),
         });
+        if (ref_labels.len != 0) {
+            try writer.writeAll(" [");
+            for (ref_labels, 0..) |ref_label, idx| {
+                if (idx != 0) try writer.writeAll(", ");
+                try writer.writeAll(ref_label);
+            }
+            try writer.writeAll("]");
+        }
         try writer.writeAll(
             self.proof_src[line.application.span.end..line.span.end],
         );
-        return try self.out.toOwnedSlice(self.work);
     }
 };
 

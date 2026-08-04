@@ -326,11 +326,16 @@ pub fn suggestionsAtSourceOffset(
         if (conv_result.replacement) |replacement| {
             const items = try work.alloc(SourceSuggestion, 1);
             items[0] = .{
-                .title = try std.fmt.allocPrint(
-                    work,
-                    "conversion from {s}",
-                    .{conv_result.via.?},
-                ),
+                // A null `via` is the equation-goal path: the chain joins
+                // the goal's own sides, no reference is cited.
+                .title = if (conv_result.via) |via|
+                    try std.fmt.allocPrint(
+                        work,
+                        "conversion from {s}",
+                        .{via},
+                    )
+                else
+                    "conversion joining the goal's sides",
                 .replacement = replacement,
                 .replace_span = target_line.span,
             };
@@ -514,14 +519,14 @@ fn buildConversionDetail(
     } else if (result.convertible_unlowered) {
         if (result.lower_capped) {
             try w.writeAll(
-                "a reference convertible to this goal was found, but the " ++
+                "a conversion proving this goal was found, but the " ++
                     "extracted proof chain outgrew the lowering's emission " ++
                     "cap — the conversion is proven, its re-treeing proof " ++
                     "is too large to write out.",
             );
         } else {
             try w.writeAll(
-                "a reference convertible to this goal was found, but a proof " ++
+                "a conversion proving this goal was found, but a proof " ++
                     "chain could not be extracted from it (missing @congr " ++
                     "coverage or a missing @relation transport are the usual " ++
                     "causes).",
@@ -543,6 +548,13 @@ fn buildConversionDetail(
                     result.pool_size,
                 },
             );
+            if (result.equation_goal) {
+                try w.writeAll(
+                    " The goal is itself a relation statement, so its two " ++
+                        "sides were seeded directly; they never joined " ++
+                        "either.",
+                );
+            }
             if (result.compute_rule_count != 0) {
                 try w.print(
                     " {d} @compute orientations folded by the directed " ++

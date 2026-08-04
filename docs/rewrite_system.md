@@ -526,8 +526,9 @@ line stating its conclusion in rewrite-normalized form, and line-check
 conclusion normalization re-derives the absorbed cascade — the same
 mechanism that lets a hand-written proof cite `beta` with the reduced
 conclusion. A chain grounded by a reduced-side reference (the usual
-`refl` line) is lowered in the reducing direction and flipped with one
-`symm` at the end. Steps the `@rewrite` registry cannot re-derive (the
+`refl` line — unnecessary when the goal is itself the equation, whose own
+sides then anchor the chain; see `docs/proof_search.md`) is lowered in
+the reducing direction and flipped with one `symm` at the end. Steps the `@rewrite` registry cannot re-derive (the
 fold steps themselves, `@conversion` citations, pool equations) keep
 the elementary stanza form; mixed chains are fine. The lowering commits
 a group only when the stated form provably shares the checker's normal
