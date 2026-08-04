@@ -1280,6 +1280,10 @@ pub const RewriteRegistry = struct {
         return null;
     }
 
+    pub fn hasRewriteRules(self: *const RewriteRegistry) bool {
+        return self.rewrites_by_head.count() != 0;
+    }
+
     pub fn getRewriteRules(
         self: *const RewriteRegistry,
         head_term_id: u32,

@@ -248,6 +248,12 @@ still mentions the bound dummy.
 This is inference evidence only: theorem-application validation still
 rechecks the application and emits the conversion.
 
+The fallback stays inert when the theory declares no `@rewrite` rules, and
+on conclusions that contain an ACUI-enrolled operator anywhere in their
+spine. Its matching is positional, and committing a naive member split
+under an ACUI head would preempt the structural-matching and hint-flow
+stages that know how to place members correctly.
+
 ### Harder def/rewrite cases still need metadata
 
 Transparent inference does not mean the compiler unfolds defs and then

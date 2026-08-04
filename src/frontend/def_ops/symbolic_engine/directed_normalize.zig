@@ -113,6 +113,12 @@ pub fn normalizeSymbolicRewrites(
 /// unfold) are available when a later argument needs reduction to take its
 /// stated shape. Inference evidence only — validation still rechecks the
 /// application and emits the transport.
+///
+/// Inert on templates containing an ACUI-enrolled head: the direct matching
+/// used here is positional, and committing a naive member split under an
+/// ACUI spine would turn the earlier tiers' deliberate no_match (which lets
+/// the strategy ladder continue into structural matching and hint flow) into
+/// a wrong bound guess that dies as a missing-binder failure.
 pub fn matchTemplateRewriteNormalized(
     self: anytype,
     template: TemplateExpr,
@@ -120,6 +126,9 @@ pub fn matchTemplateRewriteNormalized(
     state: *MatchSession,
     fuel_exhausted: *bool,
 ) anyerror!bool {
+    const registry = self.shared.registry orelse return false;
+    if (!registry.hasRewriteRules()) return false;
+    if (templateHasAcuiHead(registry, template)) return false;
     var fuel = Fuel{};
     defer if (fuel.exhausted) {
         fuel_exhausted.* = true;
@@ -193,10 +202,47 @@ fn matchTemplateRewriteNormalizedRec(
         fuel,
     );
     if (normalized == symbolic) return false;
+    // A rewrite right-hand side may introduce an ACUI head the template gate
+    // could not see; the final direct match is positional, so bail rather
+    // than commit a member split.
+    if (self.shared.registry) |registry| {
+        if (symbolicHasAcuiHead(registry, normalized)) return false;
+    }
     return try TransparentMatch.tryMatchSymbolicToExprDirect(
         self,
         normalized,
         actual,
         state,
     );
+}
+
+fn templateHasAcuiHead(registry: anytype, template: TemplateExpr) bool {
+    switch (template) {
+        .binder => return false,
+        .app => |app| {
+            if (registry.hasStructuralCombiner(app.term_id)) return true;
+            for (app.args) |arg| {
+                if (templateHasAcuiHead(registry, arg)) return true;
+            }
+            return false;
+        },
+    }
+}
+
+/// Fixed subtrees are opaque here: template binders never reach inside them,
+/// so no positional binding can be committed there.
+fn symbolicHasAcuiHead(
+    registry: anytype,
+    symbolic: *const SymbolicExpr,
+) bool {
+    switch (symbolic.*) {
+        .binder, .dummy, .fixed => return false,
+        .app => |app| {
+            if (registry.hasStructuralCombiner(app.term_id)) return true;
+            for (app.args) |arg| {
+                if (symbolicHasAcuiHead(registry, arg)) return true;
+            }
+            return false;
+        },
+    }
 }

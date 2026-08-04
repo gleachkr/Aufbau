@@ -825,6 +825,102 @@ test "MM0 parser rejects notation precedence conflicts" {
     }
 }
 
+test "MM0 parser rejects infixl at a level made right-assoc by prefix" {
+    // A prefix operator's final argument parses at the operator's own
+    // precedence, so that level is right-associative (mm0-c parser.c:728).
+    const src =
+        \\sort wff;
+        \\term p: wff > wff;
+        \\term l: wff > wff > wff;
+        \\prefix p: $~$ prec 7;
+        \\infixl l: $*$ prec 7;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    try std.testing.expectError(error.PrecedenceAssocMismatch, parser.next());
+}
+
+test "MM0 parser rejects infixl at a level made right-assoc by notation" {
+    // A notation whose last literal is a variable slot parses that slot at
+    // the notation's own precedence (mm0-c parser.c:801).
+    const src =
+        \\sort wff;
+        \\term p: wff > wff;
+        \\term l: wff > wff > wff;
+        \\notation p (x: wff): wff = ($!$: 7) x;
+        \\infixl l: $*$ prec 7;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    try std.testing.expectError(error.PrecedenceAssocMismatch, parser.next());
+}
+
+test "MM0 parser accepts compatible prec/assoc sharing" {
+    // prefix + infixr share a level (both right-assoc).
+    {
+        const src =
+            \\sort wff;
+            \\term p: wff > wff;
+            \\term r: wff > wff > wff;
+            \\prefix p: $~$ prec 7;
+            \\infixr r: $+$ prec 7;
+        ;
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var parser = MM0Parser.init(src, arena.allocator());
+        while (try parser.next()) |_| {}
+    }
+
+    // A zero-argument prefix registers no associativity, so infixl may
+    // share its level.
+    {
+        const src =
+            \\sort wff;
+            \\term t: wff;
+            \\term l: wff > wff > wff;
+            \\prefix t: $T$ prec 7;
+            \\infixl l: $*$ prec 7;
+        ;
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var parser = MM0Parser.init(src, arena.allocator());
+        while (try parser.next()) |_| {}
+    }
+
+    // A notation ending in a constant registers no associativity either.
+    {
+        const src =
+            \\sort wff;
+            \\term p: wff > wff;
+            \\term l: wff > wff > wff;
+            \\notation p (x: wff): wff = ($[$: 7) x ($]$: 7);
+            \\infixl l: $*$ prec 7;
+        ;
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var parser = MM0Parser.init(src, arena.allocator());
+        while (try parser.next()) |_| {}
+    }
+}
+
 test "MM0 parser rejects notation first-token conflicts" {
     const src =
         \\sort wff;

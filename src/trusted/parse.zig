@@ -1058,6 +1058,11 @@ pub const MM0Parser = struct {
                             .prec = if (idx + 1 == term.args.len) prec else MAX_PRECEDENCE,
                         } });
                     }
+                    // The final argument parses at the operator's own
+                    // precedence, so this level is right-associative; an
+                    // infixl at the same level would make the grammar
+                    // ambiguous (mm0-c parser.c:728).
+                    try self.registerInfixAssoc(prec, true);
                 }
                 const lit_slice = try lits.toOwnedSlice(self.allocator);
                 try self.registerPrefixNotation(term_id, token, prec, lit_slice);
@@ -1200,6 +1205,10 @@ pub const MM0Parser = struct {
         }
         if (pending_var_index) |idx| {
             lits.items[idx].variable.prec = first.prec;
+            // A trailing variable slot parses at the notation's own
+            // precedence, so this level is right-associative, exactly as
+            // for prefix operators (mm0-c parser.c:801).
+            try self.registerInfixAssoc(first.prec, true);
         }
         for (arg_coverage) |seen| {
             if (!seen) {
