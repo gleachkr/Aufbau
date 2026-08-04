@@ -1,0 +1,4 @@
+two_apply
+---------
+l1: $ S S 0 = S S 0 $ by eq_refl
+l2: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 = S S 0 $ by conversion?

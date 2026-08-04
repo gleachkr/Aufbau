@@ -519,6 +519,20 @@ emitted proof chains cite the `@compute` theorems exactly like
 `@conversion` rules — no new proof machinery, and the verifier sees
 nothing new.
 
+When the theory also enrolls rules with `@rewrite`, the emitted chain
+takes **big steps**: a fold step whose result spawns a rewrite cascade
+(a `beta` whose conclusion is a substitution redex) is emitted as one
+line stating its conclusion in rewrite-normalized form, and line-check
+conclusion normalization re-derives the absorbed cascade — the same
+mechanism that lets a hand-written proof cite `beta` with the reduced
+conclusion. A chain grounded by a reduced-side reference (the usual
+`refl` line) is lowered in the reducing direction and flipped with one
+`symm` at the end. Steps the `@rewrite` registry cannot re-derive (the
+fold steps themselves, `@conversion` citations, pool equations) keep
+the elementary stanza form; mixed chains are fine. The lowering commits
+a group only when the stated form provably shares the checker's normal
+form, so a big-step chain always checks.
+
 ### Syntax
 
 ```

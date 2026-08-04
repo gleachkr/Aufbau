@@ -7854,6 +7854,85 @@ test "@compute folds the carry cascade to a found chain at defaults" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? big-steps beta chains through @rewrite absorption" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The lambda theory enrolls the substitution rules both `@compute`
+    // (they drive the fold) and `@rewrite` (line checking replays them),
+    // so the lowering can group each beta with the sb cascade it spawns
+    // and state one conclusion in reduced form (the `beta_step` idiom).
+    const mm0_src = @embedFile("fixtures/lambda_two_apply.mm0");
+    const proof_src = @embedFile("fixtures/lambda_two_apply.auf");
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // The final beta big-steps clean through its whole cascade: cited
+    // with the fully reduced conclusion, no substitution left behind.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        replacement,
+        "$ (λ w . S w) · S 0 = S S 0 $ by beta",
+    ) != null);
+    // Elementary lowering emits ~185 lines for this chain; grouping
+    // collapses it to one stanza per beta plus a few stragglers.
+    try std.testing.expect(countLines(replacement) <= 90);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+fn countLines(text: []const u8) usize {
+    var count: usize = 0;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        if (line.len != 0) count += 1;
+    }
+    return count;
+}
+
+test "conversion? big-steps church addition (one plus one)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The manual's Church-addition evaluation — the worst chain of the
+    // demo battery (~2160 lines elementary).
+    const mm0_src = @embedFile("fixtures/lambda_one_plus_one.mm0");
+    const proof_src = @embedFile("fixtures/lambda_one_plus_one.auf");
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // Elementary lowering emits ~2160 lines here; grouping lands at ~620
+    // (the residue is extraction-route detours, not stanza overhead).
+    try std.testing.expect(countLines(replacement) <= 750);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? big-steps the Y-combinator fixpoint equation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `Y · g` has no normal form; the chain needs two beta steps, not a
+    // limit of reductions, and the fold must stop as soon as the pool
+    // converges.
+    const mm0_src = @embedFile("fixtures/lambda_y_fixpoint.mm0");
+    const proof_src = @embedFile("fixtures/lambda_y_fixpoint.auf");
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    // The first beta big-steps clean through its substitution cascade —
+    // the same line the manual's hand-written y_reduce proof opens with.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        replacement,
+        "$ (λ f . (λ x . f · (x · x)) · (λ x . f · (x · x))) · g = " ++
+            "(λ x . g · (x · x)) · (λ x . g · (x · x)) $ by beta",
+    ) != null);
+    try std.testing.expect(countLines(replacement) <= 60);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 // Binder-bearing `@compute` rules: the fold direction may consume a
 // quantifier (never mint one — enrollment's coverage check), and its
 // dependency side condition rides the same dep gate as general rules.

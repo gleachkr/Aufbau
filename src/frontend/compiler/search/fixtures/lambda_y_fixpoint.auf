@@ -1,0 +1,4 @@
+y_reduce
+--------
+l1: $ g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $ by eq_refl
+l2: $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $ by conversion?

@@ -1,6 +1,12 @@
 //! Explanation lowering for conversion?: turns an egraph explanation chain
 //! into proof-script source text (split out of conversion.zig; the one
 //! construction site is conversion.zig's run()).
+//!
+//! On theories with `@rewrite` rules the lowering emits BIG STEPS: a rule
+//! step whose result spawns a rewrite cascade (a beta step's substitution
+//! ladder) absorbs the in-redex `@rewrite` steps that follow it into one
+//! line stated in rewrite-normalized form, which line-check conclusion
+//! normalization re-derives (see "Big-step grouping" below).
 
 const std = @import("std");
 const egraph = @import("../egraph.zig");
@@ -21,6 +27,8 @@ const AcCert = conversion.AcCert;
 const AcCertMap = conversion.AcCertMap;
 const varIdForLeaf = conversion.varIdForLeaf;
 const flattenAcExpr = conversion.flattenAcExpr;
+const Normalizer = @import("../../../normalizer.zig").Normalizer;
+const CheckedLine = @import("../../checked_ir.zig").CheckedLine;
 
 /// Lowers one explanation into proof-script source text. Every emitted line
 /// asserts its full conclusion, so unification replay solves all rule
@@ -48,7 +56,17 @@ pub const Lowerer = struct {
     /// Set when a null return came from an emission cap rather than a
     /// structural gap — the driver reports the two differently.
     cap_tripped: bool = false,
+    /// Lazily built checker-equivalent rewrite normalizer for big-step
+    /// grouping (see `tryBigStep`).
+    norm_state: ?*NormState = null,
     out: std.ArrayListUnmanaged(u8) = .{},
+
+    const NormState = struct {
+        /// Proof lines the normalizer emits as it reduces; discarded —
+        /// only the resulting expressions gate the grouping.
+        lines: std.ArrayListUnmanaged(CheckedLine) = .{},
+        normalizer: Normalizer,
+    };
 
     pub fn seedLabels(
         self: *Lowerer,
@@ -280,7 +298,9 @@ pub const Lowerer = struct {
     /// instance, or the pool equation cited directly (through `symm` when
     /// traversed backwards), lifted through one `@congr` application per
     /// enclosing level with `refl` siblings. Returns the label proving the
-    /// root-level relation.
+    /// root-level relation. A big-step group passes the driving step with
+    /// `after` replaced by the group's final redex, so the rule line may
+    /// state a rewrite-normalized result side.
     fn emitStep(
         self: *Lowerer,
         step: egraph.Step,
@@ -1505,6 +1525,183 @@ pub const Lowerer = struct {
         };
     }
 
+    // --- Big-step grouping ---------------------------------------------
+    //
+    // One elementary rewrite costs a whole stanza (rule instance, symm
+    // orientation, a congruence ladder to the root, a trans splice), so a
+    // fold step that spawns a substitution cascade emits steps x depth
+    // lines. But a cited rule's conclusion may be *stated in reduced
+    // form*: line-check conclusion normalization replays the `@rewrite`
+    // registry against it (the manual's `beta_step` idiom). Grouping
+    // exploits that — a driving rule step absorbs the in-redex `@rewrite`
+    // steps that follow it and emits ONE line whose result side is the
+    // rewrite normal form; the checker re-derives the absorbed cascade.
+
+    /// Normal form under the checker's own line normalizer (the
+    /// `@rewrite` registry applied to fixpoint). The step budget resets
+    /// per call to mirror the checker's per-line budget; the proof lines
+    /// produced along the way are discarded.
+    fn rewriteNormalForm(self: *Lowerer, expr: ExprId) !ExprId {
+        const state = self.norm_state orelse blk: {
+            const state = try self.work.create(NormState);
+            state.* = .{ .normalizer = undefined };
+            state.normalizer = Normalizer.init(
+                self.work,
+                self.theorem,
+                self.context.registry,
+                self.context.env,
+                &state.lines,
+            );
+            self.norm_state = state;
+            break :blk state;
+        };
+        state.normalizer.step_count = 0;
+        const result = try state.normalizer.normalize(expr);
+        return result.result_expr;
+    }
+
+    /// Binder indices a template mentions, as a bitmask. Null when an
+    /// index does not fit the mask — the caller must abstain from
+    /// grouping rather than under-count the coverage requirement.
+    fn templateBinderMask(template: TemplateExpr) ?u64 {
+        switch (template) {
+            .binder => |idx| {
+                if (idx >= 64) return null;
+                return @as(u64, 1) << @intCast(idx);
+            },
+            .app => |app| {
+                var mask: u64 = 0;
+                for (app.args) |arg| {
+                    mask |= templateBinderMask(arg) orelse return null;
+                }
+                return mask;
+            },
+        }
+    }
+
+    /// The rewrite normal form of a rule step's result side, when the
+    /// step can drive a big-step group: a plain (non-def, non-bag)
+    /// theorem citation whose result still carries `@rewrite` residue,
+    /// and whose intact stated side binds every binder the reduced side
+    /// mentions (a binder occurring only in rewritten-away structure
+    /// would leave the emitted line uninferable). Null keeps the
+    /// elementary stanza.
+    fn bigStepNormalForm(self: *Lowerer, step: egraph.Step) !?ExprId {
+        if (step.bag != null) return null;
+        const rule_id = switch (step.source) {
+            .rule => |rule_id| rule_id,
+            else => return null,
+        };
+        if (conversion.defRuleTermId(rule_id) != null) return null;
+        if (!self.context.registry.hasRewriteRules()) return null;
+        const conv = self.conversionRuleById(rule_id) orelse return null;
+        const intact = if (step.needs_symm) conv.rhs else conv.lhs;
+        const reduced = if (step.needs_symm) conv.lhs else conv.rhs;
+        const intact_mask = templateBinderMask(intact) orelse return null;
+        const reduced_mask = templateBinderMask(reduced) orelse return null;
+        if (intact_mask & reduced_mask != reduced_mask) return null;
+        const after_expr = (try self.termToExpr(step.after)) orelse {
+            return null;
+        };
+        const normal_form = try self.rewriteNormalForm(after_expr);
+        return if (normal_form == after_expr) null else normal_form;
+    }
+
+    /// True when a step can fold into the enclosing big-step group: an
+    /// in-redex application of an `@rewrite`-enrolled rule, in either
+    /// direction — line-check normalization replays the forward ones, and
+    /// a backward detour is fine as long as the group's final form shares
+    /// the normal form (the commit gate checks exactly that). Anything
+    /// else (a def boundary, a pool citation, an AC re-tree, a step
+    /// outside the driving redex) ends the group.
+    fn isAbsorbableDebris(
+        self: *Lowerer,
+        step: egraph.Step,
+        driver_position: []const u32,
+    ) bool {
+        if (step.bag != null) return false;
+        const rule_id = switch (step.source) {
+            .rule => |rule_id| rule_id,
+            else => return false,
+        };
+        if (conversion.defRuleTermId(rule_id) != null) return false;
+        if (!std.mem.startsWith(u32, step.position, driver_position)) {
+            return false;
+        }
+        // The rewrite's match side sits on the `before` endpoint of a
+        // forward step and the `after` endpoint of a backward one.
+        return self.rewriteRuleAtHead(rule_id, step.before) or
+            self.rewriteRuleAtHead(rule_id, step.after);
+    }
+
+    fn rewriteRuleAtHead(
+        self: *Lowerer,
+        rule_id: u32,
+        term: *const egraph.Term,
+    ) bool {
+        const head = switch (self.eg.nodes.items[term.node].node) {
+            .app => |app| app.term_id,
+            else => return false,
+        };
+        for (self.context.registry.getRewriteRules(head)) |rule| {
+            if (rule.rule_id == rule_id) return true;
+        }
+        return false;
+    }
+
+    /// A committed big-step group: the root after every absorbed step,
+    /// the driving redex's result in rewrite-normalized form, and how
+    /// many steps the group consumed.
+    const BigStep = struct {
+        root: *const egraph.Term,
+        redex_after: *const egraph.Term,
+        consumed: usize,
+    };
+
+    /// Try to extend the driving step at `idx` into a big-step group:
+    /// absorb the following in-redex `@rewrite` steps and state one
+    /// conclusion whose result side is the rewrite normal form.
+    /// Committed only when the absorbed steps land exactly on the normal
+    /// form the checker will compute, so an emitted big-step line always
+    /// checks; anything short falls back to the elementary stanzas.
+    fn tryBigStep(
+        self: *Lowerer,
+        steps: []const egraph.Step,
+        idx: usize,
+        first_next: *const egraph.Term,
+    ) !?BigStep {
+        const step = steps[idx];
+        const normal_form = (try self.bigStepNormalForm(step)) orelse {
+            return null;
+        };
+        var root = first_next;
+        var end = idx + 1;
+        while (end < steps.len and
+            self.isAbsorbableDebris(steps[end], step.position))
+        {
+            root = (try self.replaceAt(
+                root,
+                steps[end].position,
+                steps[end].before,
+                steps[end].after,
+            )) orelse break;
+            end += 1;
+        }
+        if (end == idx + 1) return null;
+        const redex_after = termAt(root, step.position) orelse return null;
+        const redex_expr = (try self.termToExpr(redex_after)) orelse {
+            return null;
+        };
+        if ((try self.rewriteNormalForm(redex_expr)) != normal_form) {
+            return null;
+        }
+        return .{
+            .root = root,
+            .redex_after = redex_after,
+            .consumed = end - idx,
+        };
+    }
+
     /// Produce the replacement text for the whole placeholder line: the
     /// chain lines proving `rel(ref, goal)` followed by the original line
     /// transported from the ref. Null aborts this ref (clean miss). The
@@ -1518,35 +1715,98 @@ pub const Lowerer = struct {
         ref_expr: ExprId,
         steps: []const egraph.Step,
     ) !?[]const u8 {
-        const root_relation = self.relationForTerm(ref_term) orelse return null;
-        const transport_id = root_relation.transport_id orelse return null;
+        return try self.lowerOriented(
+            ref,
+            ref_term,
+            ref_expr,
+            self.goal_expr,
+            steps,
+            false,
+        );
+    }
 
-        var current = ref_term;
-        var current_expr = (try self.termToExpr(ref_term)) orelse return null;
+    /// Reversed-orientation variant: walk the chain from the goal term to
+    /// the reference and flip the finished chain with one `symm` line.
+    /// When the reference is the reduced side (a `refl` line grounding a
+    /// computation), the given explanation traverses the fold backwards —
+    /// every rule through `symm`, each rule's rewrite cascade *preceding*
+    /// it — and no big-step group can form. The same steps reversed run in
+    /// the reducing direction, where each fold step is followed by its
+    /// cascade and big-step grouping collapses it. The driver lowers both
+    /// orientations and keeps the shorter emission.
+    pub fn lowerReversed(
+        self: *Lowerer,
+        ref: ProofScript.Ref,
+        goal_term: *const egraph.Term,
+        ref_expr: ExprId,
+        reversed_steps: []const egraph.Step,
+    ) !?[]const u8 {
+        return try self.lowerOriented(
+            ref,
+            goal_term,
+            self.goal_expr,
+            ref_expr,
+            reversed_steps,
+            true,
+        );
+    }
+
+    fn lowerOriented(
+        self: *Lowerer,
+        ref: ProofScript.Ref,
+        start_term: *const egraph.Term,
+        start_expr: ExprId,
+        end_expr: ExprId,
+        steps: []const egraph.Step,
+        reversed: bool,
+    ) !?[]const u8 {
+        const root_relation = self.relationForTerm(start_term) orelse {
+            return null;
+        };
+        const transport_id = root_relation.transport_id orelse return null;
+        const ref_expr = if (reversed) end_expr else start_expr;
+
+        var current = start_term;
+        var current_expr = (try self.termToExpr(start_term)) orelse {
+            return null;
+        };
         var chain_label: ?[]const u8 = null;
-        if (ref_expr != current_expr) {
+        if (start_expr != current_expr) {
             chain_label = (try self.alignEmit(
-                ref_expr,
+                start_expr,
                 current_expr,
                 root_relation.sort_name,
             )) orelse return null;
         }
-        for (steps) |step| {
-            const next = (try self.replaceAt(
+        var step_idx: usize = 0;
+        while (step_idx < steps.len) {
+            const step = steps[step_idx];
+            var next = (try self.replaceAt(
                 current,
                 step.position,
                 step.before,
                 step.after,
             )) orelse return null;
+            // A driving rule step may absorb its rewrite cascade: the
+            // emitted line then cites the rule with its result stated in
+            // normalized form, and line-check conclusion normalization
+            // re-derives the absorbed steps.
+            var emit_step = step;
+            var consumed: usize = 1;
+            if (try self.tryBigStep(steps, step_idx, next)) |group| {
+                emit_step.after = group.redex_after;
+                next = group.root;
+                consumed = group.consumed;
+            }
             const step_label = (try self.emitStep(
-                step,
+                emit_step,
                 current,
                 next,
             )) orelse return null;
             const next_expr = (try self.termToExpr(next)) orelse return null;
             if (chain_label) |prev| {
                 chain_label = (try self.emitLine(
-                    try self.relIds(root_relation, ref_expr, next_expr),
+                    try self.relIds(root_relation, start_expr, next_expr),
                     root_relation.trans_id,
                     &.{ prev, step_label },
                 )) orelse return null;
@@ -1555,21 +1815,33 @@ pub const Lowerer = struct {
             }
             current = next;
             current_expr = next_expr;
+            step_idx += consumed;
         }
-        if (current_expr != self.goal_expr) {
+        if (current_expr != end_expr) {
             const seam = (try self.alignEmit(
                 current_expr,
-                self.goal_expr,
+                end_expr,
                 root_relation.sort_name,
             )) orelse return null;
             if (chain_label) |prev| {
                 chain_label = (try self.emitLine(
-                    try self.relIds(root_relation, ref_expr, self.goal_expr),
+                    try self.relIds(root_relation, start_expr, end_expr),
                     root_relation.trans_id,
                     &.{ prev, seam },
                 )) orelse return null;
             } else {
                 chain_label = seam;
+            }
+        }
+        // A reversed chain proves rel(goal, ref); the transport needs
+        // rel(ref, goal), so flip it once at the root.
+        if (reversed) {
+            if (chain_label) |prev| {
+                chain_label = (try self.emitLine(
+                    try self.relIds(root_relation, end_expr, start_expr),
+                    root_relation.symm_id,
+                    &.{prev},
+                )) orelse return null;
             }
         }
         if (chain_label == null) {

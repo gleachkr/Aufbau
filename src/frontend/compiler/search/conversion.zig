@@ -503,7 +503,9 @@ pub fn run(
             result.convertible_unlowered = true;
             continue;
         };
-        var lowerer = Lowerer{
+        // Prototype for both lowering attempts; every mutable field is
+        // still at its empty default when the copies are taken.
+        const lowerer_proto = Lowerer{
             .work = work,
             .context = context,
             .theorem = theorem,
@@ -521,21 +523,71 @@ pub fn run(
             .target_line = target_line,
             .indent = proof_src[target_line.span.start..target_line.label_span.start],
         };
+        var lowerer = lowerer_proto;
         try lowerer.seedLabels(block_lines);
-        if (try lowerer.lower(
+        var best = try lowerer.lower(
             entry.ref,
             ref_term,
             maybe_expr.?,
             steps,
-        )) |replacement| {
+        );
+        var any_cap = lowerer.cap_tripped;
+        // When the theory carries `@rewrite` rules, also lower the chain
+        // reversed: a computation grounded by a reduced-side reference
+        // (the `refl` pool line) traverses the fold backwards, where no
+        // big-step group can form; the reducing direction collapses each
+        // fold step's rewrite cascade. Keep whichever emission is shorter.
+        if (context.registry.hasRewriteRules()) {
+            var reversed_lowerer = lowerer_proto;
+            try reversed_lowerer.seedLabels(block_lines);
+            const reversed = try reversed_lowerer.lowerReversed(
+                entry.ref,
+                extract_goal,
+                maybe_expr.?,
+                try reverseSteps(work, steps),
+            );
+            if (reversed != null and
+                (best == null or
+                    reversed_lowerer.lines_emitted < lowerer.lines_emitted))
+            {
+                best = reversed;
+            }
+            any_cap = any_cap or reversed_lowerer.cap_tripped;
+        }
+        if (best) |replacement| {
             result.replacement = replacement;
             result.via = try lowerer.renderRefText(entry.ref);
             return result;
         }
         result.convertible_unlowered = true;
-        if (lowerer.cap_tripped) result.lower_capped = true;
+        if (any_cap) result.lower_capped = true;
     }
     return result;
+}
+
+/// Flip an explanation chain end-for-end: the step list reverses and each
+/// step swaps endpoints and orientation. Positions stay valid — a step's
+/// path components above its own redex are identical on both sides.
+fn reverseSteps(
+    work: std.mem.Allocator,
+    steps: []const egraph.Step,
+) ![]egraph.Step {
+    const out = try work.alloc(egraph.Step, steps.len);
+    for (steps, 0..) |step, idx| {
+        out[steps.len - 1 - idx] = .{
+            .source = step.source,
+            .needs_symm = !step.needs_symm,
+            .position = step.position,
+            .before = step.after,
+            .after = step.before,
+            .bindings = step.bindings,
+            .bag = if (step.bag) |bag| .{
+                .matched_before = bag.matched_after,
+                .matched_after = bag.matched_before,
+            } else null,
+        };
+    }
+    return out;
 }
 
 fn termClass(eg: *const egraph.EGraph, term: *const egraph.Term) egraph.EClassId {

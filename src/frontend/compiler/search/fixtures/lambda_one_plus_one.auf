@@ -1,0 +1,4 @@
+one_plus_one
+------------
+l1: $ S S 0 = S S 0 $ by eq_refl
+l2: $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $ by conversion?

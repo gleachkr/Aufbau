@@ -1,0 +1,78 @@
+-- Big-step lowering battery: the manual's lambda-calculus theory
+-- (manual/src/lambda-calculus.md). `@compute` drives beta/substitution
+-- evaluation in the egraph; the same substitution rules are enrolled
+-- `@rewrite`, so the lowering can state each fold rule's conclusion in
+-- reduced form and let line-check conclusion normalization absorb the
+-- sb-push cascade (one emitted line per beta instead of one stanza per
+-- elementary substitution step).
+
+delimiter $ ( ) [ ] . S $;
+provable sort wff;
+sort tm;
+
+term iff (a b: wff): wff;
+term eq (a b: tm): wff;
+infixl eq: $=$ prec 20;
+
+term lam {x: tm} (e: tm x): tm;
+notation lam {x: tm} (e: tm x): tm = ($λ$:41) x ($.$:0) e;
+term app (f a: tm): tm;
+infixl app: $·$ prec 60;
+term sb {x: tm} (e: tm x) (a: tm): tm;
+notation sb {x: tm} (e: tm x) (a: tm): tm = ($[$:41) x ($:=$:0) a ($]$:0) e;
+
+term zero: tm; notation zero: tm = ($0$:max);
+term suc (n: tm): tm; prefix suc: $S$ prec 70;
+term add (m n: tm): tm; infixl add: $+$ prec 30;
+
+--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+axiom iff_refl (a: wff): $ iff a a $;
+axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+--| @relation tm eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: tm): $ a = a $;
+axiom eq_trans (a b c: tm) (h1: $ a = b $) (h2: $ b = c $): $ a = c $;
+axiom eq_symm (a b: tm) (h: $ a = b $): $ b = a $;
+--| @congr
+axiom eq_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ iff (a = c) (b = d) $;
+--| @congr
+axiom app_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a · c = b · d $;
+--| @congr
+axiom suc_congr (a b: tm) (h: $ a = b $): $ S a = S b $;
+--| @congr
+axiom add_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a + c = b + d $;
+--| @congr
+axiom lam_congr {x: tm} (a b: tm x) (h: $ a = b $): $ (λ x. a) = (λ x. b) $;
+--| @congr
+axiom sb_congr {x: tm} (e1 e2: tm x) (a1 a2: tm x) (h1: $ e1 = e2 $) (h2: $ a1 = a2 $):
+  $ ([x := a1] e1) = ([x := a2] e2) $;
+
+--| @compute ltr
+axiom beta {x: tm} (e: tm x) (a: tm x): $ (λ x. e) · a = [x := a] e $;
+--| @compute ltr
+--| @rewrite
+axiom sb_var {x: tm} (a: tm x): $ [x := a] x = a $;
+--| @compute ltr
+--| @rewrite
+axiom sb_vac {x: tm} (e: tm) (a: tm x): $ [x := a] e = e $;
+--| @compute ltr
+--| @rewrite
+axiom sb_app {x: tm} (f g: tm x) (a: tm x): $ [x := a] (f · g) = ([x := a] f) · ([x := a] g) $;
+--| @compute ltr
+--| @rewrite
+axiom sb_suc {x: tm} (e: tm x) (a: tm x): $ [x := a] (S e) = S ([x := a] e) $;
+--| @compute ltr
+--| @rewrite
+axiom sb_add {x: tm} (f g: tm x) (a: tm x): $ [x := a] (f + g) = ([x := a] f) + ([x := a] g) $;
+--| @compute ltr
+--| @rewrite
+axiom sb_lam {x y: tm} (e: tm x y) (a: tm x): $ [x := a] (λ y. e) = (λ y. [x := a] e) $;
+--| @compute ltr
+axiom add_z (n: tm): $ 0 + n = n $;
+--| @compute ltr
+axiom add_s (m n: tm): $ S m + n = S (m + n) $;
+
+
+theorem y_reduce {f x: tm} (g: tm):
+  $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $;
