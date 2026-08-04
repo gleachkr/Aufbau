@@ -472,7 +472,6 @@ fn dummyRootMaskInSymbolic(
     }
 }
 
-
 fn rewriteBoundValueDeps(
     self: anytype,
     bound: BoundValue,

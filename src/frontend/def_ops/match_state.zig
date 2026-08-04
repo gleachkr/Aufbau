@@ -49,6 +49,12 @@ pub const MatchSession = struct {
     /// Once true, untrailed mutation (`seedBinding`) is illegal: a rollback
     /// could not undo it.
     snapshotted: bool = false,
+    /// Sticky diagnostic: a directed-rewrite big-step hit its
+    /// rule-application fuel cap somewhere in this session, so a failed
+    /// match may be a fuel artifact rather than a real mismatch. Never
+    /// trailed, never hashed, never rolled back — it records that the cap
+    /// fired at all, for the `--debug inference` trace upstream.
+    rewrite_fuel_exhausted: bool = false,
     /// Bumped by `invalidateRepresentativeCaches`. Snapshots record it so
     /// restore knows whether the representative caches were invalidated
     /// (and thus hold post-save entries that the rollback makes stale).

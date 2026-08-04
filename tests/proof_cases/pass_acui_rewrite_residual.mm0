@@ -1,0 +1,90 @@
+delimiter $ ( ) [ ] . $;
+provable sort wff;
+--| @vars u v w
+sort tm;
+sort ctx;
+
+term iff (a b: wff): wff;
+term eq (a b: tm): wff;
+infixl eq: $=$ prec 20;
+term eqc (g h: ctx): wff;
+
+term lam {x: tm} (e: tm x): tm;
+notation lam {x: tm} (e: tm x): tm = ($λ$:41) x ($.$:0) e;
+term app (f a: tm): tm;
+infixl app: $·$ prec 60;
+term sb {x: tm} (e: tm x) (a: tm): tm;
+notation sb {x: tm} (e: tm x) (a: tm): tm = ($[$:41) x ($:=$:0) a ($]$:0) e;
+
+--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+axiom iff_refl (a: wff): $ iff a a $;
+axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+--| @relation tm eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: tm): $ a = a $;
+axiom eq_trans (a b c: tm) (h1: $ a = b $) (h2: $ b = c $): $ a = c $;
+axiom eq_symm (a b: tm) (h: $ a = b $): $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ iff (a = c) (b = d) $;
+--| @congr
+axiom app_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a · c = b · d $;
+--| @congr
+axiom lam_congr {x: tm} (a b: tm x) (h: $ a = b $): $ (λ x. a) = (λ x. b) $;
+--| @congr
+axiom sb_congr {x: tm} (e1 e2: tm x) (a1 a2: tm) (h1: $ e1 = e2 $) (h2: $ a1 = a2 $):
+  $ ([x := a1] e1) = ([x := a2] e2) $;
+
+--| @rewrite
+axiom sb_var {x: tm} (a: tm x): $ [x := a] x = a $;
+--| @rewrite
+axiom sb_vac {x: tm} (e: tm) (a: tm x): $ [x := a] e = e $;
+--| @rewrite
+axiom sb_app {x: tm} (f g: tm x) (a: tm x): $ [x := a] (f · g) = ([x := a] f) · ([x := a] g) $;
+--| @rewrite
+axiom sb_lam {x y: tm} (e: tm x y) (a: tm x): $ [x := a] (λ y. e) = (λ y. [x := a] e) $;
+
+term emp: ctx;
+notation emp: ctx = ($E$:max);
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+
+--| @relation ctx eqc eqc_refl eqc_trans eqc_symm _
+axiom eqc_refl (g: ctx): $ eqc g g $;
+axiom eqc_trans (g h i: ctx) (h1: $ eqc g h $) (h2: $ eqc h i $): $ eqc g i $;
+axiom eqc_symm (g h: ctx) (h1: $ eqc g h $): $ eqc h g $;
+axiom ctx_assoc (g h i: ctx): $ eqc ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ eqc (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ eqc (g , g) g $;
+axiom ctx_unit (g: ctx): $ eqc (E , g) g $;
+
+term pd (a: tm): wff;
+--| @congr
+axiom pd_congr (a b: tm) (h: $ a = b $): $ iff (pd a) (pd b) $;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $|-$ prec 0;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx) (h1c: $ eqc g1 g2 $) (h2c: $ eqc h1 h2 $):
+  $ eqc (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff) (h: $ iff a b $): $ eqc (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff) (h1: $ eqc g h $) (h2: $ iff a b $):
+  $ iff (g |- a) (h |- b) $;
+
+-- Beta reduction stated as a sequent step: the redex sits in a context
+-- member under the @acui join, and the conclusion holds the substitution
+-- residual. Task #181: the residual must be reducible against a stated
+-- reduced form even though the conclusion template contains an
+-- ACUI-enrolled head (the #182 gate made the old directed tier inert here).
+axiom beta_nd {x: tm} (g: ctx) (e: tm x) (a: tm x):
+  $ g , pd ((λ x. e) · a) |- pd ([x := a] e) $;
+
+def Y {.f .x: tm}: tm = $ λ f. (λ x. f · (x · x)) · (λ x. f · (x · x)) $;
+theorem y_step {u: tm} (b g: tm):
+  $ pd b , pd (Y · g) |- pd ((λ u. g · (u · u)) · (λ u. g · (u · u))) $;

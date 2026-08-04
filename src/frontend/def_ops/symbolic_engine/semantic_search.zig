@@ -10,6 +10,7 @@ const MatchState = @import("../match_state.zig");
 const TransparentMatch = @import("./transparent_match.zig");
 const RewriteApplication =
     @import("./rewrite_application.zig");
+const DirectedNormalize = @import("./directed_normalize.zig");
 const WitnessState = @import("./witness_state.zig");
 
 const SymbolicExpr = Types.SymbolicExpr;
@@ -30,6 +31,14 @@ pub const SemanticStepCandidate = union(enum) {
     },
     rewrite_rule: RewriteRule,
     acui: ResolvedStructuralCombiner,
+    /// Big-step: reduce the whole subtree to a directed-`@rewrite` fixpoint
+    /// (`directed_normalize`), priced as ONE step. This is what makes a
+    /// deterministic substitution ladder affordable inside the budgeted
+    /// search (task #181); the per-rule `.rewrite_rule` steps stay alongside
+    /// it because first-rule-wins normalization commits to a single reduct,
+    /// which is incomplete for non-confluent rule sets. Appended last so it
+    /// fires only after the single-step alternatives failed at this node.
+    normalize_rewrites,
 };
 
 const SemanticSearchKey = struct {
@@ -93,7 +102,8 @@ fn appendSemanticHeadStepCandidates(
     out: *std.ArrayListUnmanaged(SemanticStepCandidate),
 ) anyerror!void {
     const registry = self.shared.registry orelse return;
-    for (registry.getRewriteRules(head_term_id)) |rule| {
+    const rules = registry.getRewriteRules(head_term_id);
+    for (rules) |rule| {
         try out.append(self.shared.allocator, .{ .rewrite_rule = rule });
     }
     if (try registry.resolveStructuralCombiner(
@@ -101,6 +111,9 @@ fn appendSemanticHeadStepCandidates(
         head_term_id,
     )) |acui| {
         try out.append(self.shared.allocator, .{ .acui = acui });
+    }
+    if (rules.len != 0) {
+        try out.append(self.shared.allocator, .normalize_rewrites);
     }
 }
 
@@ -717,6 +730,11 @@ fn applySemanticStepToExpr(
             state,
         ),
         .acui => |acui| try applyAcuiToExpr(self, acui, expr_id),
+        .normalize_rewrites => try DirectedNormalize.bigStepExpr(
+            self,
+            expr_id,
+            state,
+        ),
     };
 }
 
@@ -768,6 +786,18 @@ fn applySemanticStepToSymbolic(
             state,
         ),
         .acui => |acui| try applyAcuiToSymbolic(self, acui, symbolic, state),
+        .normalize_rewrites => switch (symbolic.*) {
+            .fixed => |expr_id| try DirectedNormalize.bigStepExpr(
+                self,
+                expr_id,
+                state,
+            ),
+            else => try DirectedNormalize.bigStepSymbolic(
+                self,
+                symbolic,
+                state,
+            ),
+        },
     };
 }
 

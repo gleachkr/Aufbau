@@ -1,37 +1,36 @@
 //! Directed rewrite normalization over symbolic expressions.
 //!
-//! Last-resort conclusion matching for rule applications whose binders were
-//! solved through a hidden-def unfold (task #180). After `beta` matches
-//! `Y · g` by opening `Y`, its conclusion's `[x := a] e` side holds symbolic
-//! values carrying unmaterialized def dummies — the strict normalizer cannot
-//! touch it (not concrete), and the semantic search pays per rewrite step
-//! from a small budget. Here the `@rewrite` rules are applied as directed
-//! reductions instead, dummies staying in place; the final transparent match
-//! of the normal form against the stated line is what forces each dummy's
-//! witness (e.g. the line's bound variable).
+//! Big-step reduction for the semantic def-eq search (task #181, subsuming
+//! the task-#180 conclusion fallback). After `beta` matches `Y · g` by
+//! opening `Y`, its conclusion's `[x := a] e` side holds symbolic values
+//! carrying unmaterialized def dummies — the strict normalizer cannot touch
+//! it (not concrete), and pricing each `@rewrite` reduction as its own
+//! semantic step makes a substitution ladder unpayable within the search
+//! budget. Here the `@rewrite` rules are applied to a fixpoint as ONE
+//! semantic step, dummies staying in place; the search's ordinary direct
+//! match of the normal form is what forces each dummy's witness (e.g. the
+//! stated line's bound variable).
 
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
-const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const Types = @import("../types.zig");
 const MatchState = @import("../match_state.zig");
-const TransparentMatch = @import("./transparent_match.zig");
 const RewriteApplication = @import("./rewrite_application.zig");
-const WitnessState = @import("./witness_state.zig");
 
 const SymbolicExpr = Types.SymbolicExpr;
 const MatchSession = MatchState.MatchSession;
 
-/// Rule applications allowed per conclusion match. The reductions this path
-/// exists for (substitution ladders under a def unfold) take a few dozen
-/// steps; the cap only guards non-terminating rule sets.
+/// Rule applications allowed per big-step. The reductions this path exists
+/// for (substitution ladders under a def unfold) take a few dozen steps; the
+/// cap only guards non-terminating rule sets.
 const directed_normalize_fuel: usize = 64;
 
 pub const Fuel = struct {
     remaining: usize = directed_normalize_fuel,
     /// Set when the cap was hit while rewrite rules remained to try, so a
     /// failed match may be a fuel artifact rather than a real mismatch.
-    /// Surfaced as a `--debug inference` trace by the caller.
+    /// Recorded as `MatchSession.rewrite_fuel_exhausted` by the big-step
+    /// entry points and surfaced as a `--debug inference` trace upstream.
     exhausted: bool = false,
 };
 
@@ -107,142 +106,70 @@ pub fn normalizeSymbolicRewrites(
     }
 }
 
-/// Match a rule template against a stated expression, normalizing residual
-/// template subtrees with directed rewrites. Left-to-right under matching
-/// heads, so binders solved by earlier arguments (e.g. through a hidden-def
-/// unfold) are available when a later argument needs reduction to take its
-/// stated shape. Inference evidence only — validation still rechecks the
-/// application and emits the transport.
-///
-/// Inert on templates containing an ACUI-enrolled head: the direct matching
-/// used here is positional, and committing a naive member split under an
-/// ACUI spine would turn the earlier tiers' deliberate no_match (which lets
-/// the strategy ladder continue into structural matching and hint flow) into
-/// a wrong bound guess that dies as a missing-binder failure.
-pub fn matchTemplateRewriteNormalized(
+/// One semantic-search big-step over a symbolic expression: reduce it to a
+/// directed-rewrite fixpoint, priced by the caller as a single step. Returns
+/// null when no rule applied anywhere — the step is a no-op and must not be
+/// recursed on as progress.
+pub fn bigStepSymbolic(
     self: anytype,
-    template: TemplateExpr,
-    actual: ExprId,
+    symbolic: *const SymbolicExpr,
     state: *MatchSession,
-    fuel_exhausted: *bool,
-) anyerror!bool {
-    const registry = self.shared.registry orelse return false;
-    if (!registry.hasRewriteRules()) return false;
-    if (templateHasAcuiHead(registry, template)) return false;
+) anyerror!?*const SymbolicExpr {
     var fuel = Fuel{};
-    defer if (fuel.exhausted) {
-        fuel_exhausted.* = true;
-    };
-    var snapshot = try WitnessState.saveMatchSnapshot(self, state);
-    defer WitnessState.deinitMatchSnapshot(self, &snapshot);
-    if (try matchTemplateRewriteNormalizedRec(
-        self,
-        template,
-        actual,
-        state,
-        &fuel,
-    )) {
-        return true;
-    }
-    try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
-    return false;
+    const next = try normalizeSymbolicRewrites(self, symbolic, state, &fuel);
+    if (fuel.exhausted) state.rewrite_fuel_exhausted = true;
+    if (fuel.remaining == directed_normalize_fuel) return null;
+    return next;
 }
 
-fn matchTemplateRewriteNormalizedRec(
+/// One semantic-search big-step over a concrete expression. App nodes above
+/// a rewritable head are opened into symbolic apps so the bottom-up
+/// recursion can reduce nested redexes; subtrees with no rewritable head
+/// anywhere stay `.fixed` (nothing in them can reduce, and rule-lhs matching
+/// reads through fixed nodes concretely). Returns null when no rule applied.
+pub fn bigStepExpr(
     self: anytype,
-    template: TemplateExpr,
-    actual: ExprId,
+    expr_id: ExprId,
     state: *MatchSession,
-    fuel: *Fuel,
-) anyerror!bool {
-    if (try TransparentMatch.tryMatchTemplateStateDirect(
+) anyerror!?*const SymbolicExpr {
+    const registry = self.shared.registry orelse return null;
+    const opened = (try openExprForNormalize(
         self,
-        template,
-        actual,
-        state,
-    )) {
-        return true;
-    }
-    const app = switch (template) {
-        .binder => return false,
-        .app => |app| app,
-    };
+        registry,
+        expr_id,
+    )) orelse return null;
+    return try bigStepSymbolic(self, opened, state);
+}
 
-    const actual_node = self.shared.theorem.interner.node(actual);
-    if (actual_node.* == .app) {
-        const actual_app = actual_node.app;
-        if (actual_app.term_id == app.term_id and
-            actual_app.args.len == app.args.len)
-        {
-            var snapshot = try WitnessState.saveMatchSnapshot(self, state);
-            defer WitnessState.deinitMatchSnapshot(self, &snapshot);
-            var all_matched = true;
-            for (app.args, actual_app.args) |tmpl_arg, actual_arg| {
-                if (!try matchTemplateRewriteNormalizedRec(
-                    self,
-                    tmpl_arg,
-                    actual_arg,
-                    state,
-                    fuel,
-                )) {
-                    all_matched = false;
-                    break;
-                }
-            }
-            if (all_matched) return true;
-            try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
+/// Convert a concrete expression into the symbolic shape the normalizer can
+/// reduce. Returns null when the subtree contains no rewritable head — the
+/// caller keeps it `.fixed` (or skips the big-step entirely at the root).
+fn openExprForNormalize(
+    self: anytype,
+    registry: anytype,
+    expr_id: ExprId,
+) anyerror!?*const SymbolicExpr {
+    const node = self.shared.theorem.interner.node(expr_id);
+    const app = switch (node.*) {
+        .app => |value| value,
+        .variable, .placeholder => return null,
+    };
+    var any_rewritable = registry.getRewriteRules(app.term_id).len != 0;
+    const args = try self.shared.scratch().alloc(
+        *const SymbolicExpr,
+        app.args.len,
+    );
+    for (app.args, 0..) |arg, idx| {
+        if (try openExprForNormalize(self, registry, arg)) |opened| {
+            args[idx] = opened;
+            any_rewritable = true;
+        } else {
+            args[idx] = try self.allocSymbolic(.{ .fixed = arg });
         }
     }
-
-    const symbolic = try TransparentMatch.symbolicFromTemplate(self, template);
-    const normalized = try normalizeSymbolicRewrites(
-        self,
-        symbolic,
-        state,
-        fuel,
-    );
-    if (normalized == symbolic) return false;
-    // A rewrite right-hand side may introduce an ACUI head the template gate
-    // could not see; the final direct match is positional, so bail rather
-    // than commit a member split.
-    if (self.shared.registry) |registry| {
-        if (symbolicHasAcuiHead(registry, normalized)) return false;
-    }
-    return try TransparentMatch.tryMatchSymbolicToExprDirect(
-        self,
-        normalized,
-        actual,
-        state,
-    );
-}
-
-fn templateHasAcuiHead(registry: anytype, template: TemplateExpr) bool {
-    switch (template) {
-        .binder => return false,
-        .app => |app| {
-            if (registry.hasStructuralCombiner(app.term_id)) return true;
-            for (app.args) |arg| {
-                if (templateHasAcuiHead(registry, arg)) return true;
-            }
-            return false;
-        },
-    }
-}
-
-/// Fixed subtrees are opaque here: template binders never reach inside them,
-/// so no positional binding can be committed there.
-fn symbolicHasAcuiHead(
-    registry: anytype,
-    symbolic: *const SymbolicExpr,
-) bool {
-    switch (symbolic.*) {
-        .binder, .dummy, .fixed => return false,
-        .app => |app| {
-            if (registry.hasStructuralCombiner(app.term_id)) return true;
-            for (app.args) |arg| {
-                if (symbolicHasAcuiHead(registry, arg)) return true;
-            }
-            return false;
-        },
-    }
+    if (!any_rewritable) return null;
+    return try self.allocSymbolic(.{ .app = .{
+        .term_id = app.term_id,
+        .args = args,
+    } });
 }

@@ -52,8 +52,8 @@ pub const SymbolicEngine = struct {
         RewriteApplication.applyRewriteRuleToExpr;
     pub const applyRewriteRuleToSymbolic =
         RewriteApplication.applyRewriteRuleToSymbolic;
-    pub const matchTemplateRewriteNormalized =
-        DirectedNormalize.matchTemplateRewriteNormalized;
+    pub const bigStepSymbolic = DirectedNormalize.bigStepSymbolic;
+    pub const bigStepExpr = DirectedNormalize.bigStepExpr;
 
     pub const boundValueFromSeed = WitnessState.boundValueFromSeed;
     pub const chooseRepresentative = WitnessState.chooseRepresentative;

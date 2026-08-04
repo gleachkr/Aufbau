@@ -1,0 +1,10 @@
+-- Task #181: @acui join + @rewrite sb residual in ONE rule conclusion.
+-- Matching beta_nd's context member against pd (Y · g) opens the hidden-def
+-- dummies (f, x); the conclusion's [x := a] e side then needs the directed
+-- big-step reduction (the ladder exceeds the per-step semantic budget), and
+-- the final match against the stated line forces the dummy witness (u).
+-- Before #181 this was unreachable: the #180 fallback tier was gated inert
+-- by the join head in the conclusion template (#182).
+y_step
+------
+l1: $ pd b , pd (Y · g) |- pd ((λ u. g · (u · u)) · (λ u. g · (u · u))) $ by beta_nd

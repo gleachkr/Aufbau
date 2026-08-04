@@ -19,6 +19,7 @@ const hasConcreteUnfold = Fixtures.hasConcreteUnfold;
 const hasSymbolicUnfold = Fixtures.hasSymbolicUnfold;
 const hasRewriteRule = Fixtures.hasRewriteRule;
 const hasAcuiHead = Fixtures.hasAcuiHead;
+const hasNormalizeBigStep = Fixtures.hasNormalizeBigStep;
 
 test "semantic step enumeration finds root def rewrite and acui moves" {
     var fixture = try SemanticStepFixture.init();
@@ -55,6 +56,8 @@ test "semantic step enumeration finds root def rewrite and acui moves" {
         mono_steps.items,
         fixture.join_term_id,
     ));
+    // The big-step is offered only where the head has rewrite rules.
+    try std.testing.expect(!hasNormalizeBigStep(mono_steps.items));
 
     var comp_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
     defer comp_steps.deinit(fixture.arena.allocator());
@@ -77,6 +80,12 @@ test "semantic step enumeration finds root def rewrite and acui moves" {
         comp_steps.items,
         fixture.join_term_id,
     ));
+    // Big-step offered for the rewritable head, ordered after the per-rule
+    // single steps so it fires only when they failed at this node.
+    try std.testing.expect(hasNormalizeBigStep(comp_steps.items));
+    try std.testing.expect(
+        comp_steps.items[comp_steps.items.len - 1] == .normalize_rewrites,
+    );
 
     var ctx_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
     defer ctx_steps.deinit(fixture.arena.allocator());

@@ -971,6 +971,13 @@ pub fn hasRewriteRule(
     return false;
 }
 
+pub fn hasNormalizeBigStep(steps: []const SemanticStepCandidate) bool {
+    for (steps) |step| {
+        if (step == .normalize_rewrites) return true;
+    }
+    return false;
+}
+
 pub fn hasAcuiHead(
     steps: []const SemanticStepCandidate,
     head_term_id: u32,

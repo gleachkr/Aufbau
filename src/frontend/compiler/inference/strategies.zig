@@ -620,6 +620,13 @@ fn finishRuleMatchSession(
     const scratch = context.scratch;
     const rule = context.rule;
 
+    // The directed-rewrite big-step inside the semantic matcher records fuel
+    // exhaustion on the session; surface it on every exit path so a caller's
+    // debug trace can flag a mismatch as a possible fuel artifact.
+    defer if (rewrite_fuel_exhausted) |out| {
+        if (session.state.rewrite_fuel_exhausted) out.* = true;
+    };
+
     for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, hyp_idx| {
         if (try matchRuleHypForInference(
             allocator,
@@ -634,7 +641,6 @@ fn finishRuleMatchSession(
     }
 
     if (!try session.matchTransparentOrSemantic(rule.concl, line_expr)) {
-        var fuel_sink = false;
         if (!try matchRulePartNormalized(
             allocator,
             env,
@@ -643,10 +649,6 @@ fn finishRuleMatchSession(
             session,
             rule.concl,
             line_expr,
-        ) and !try session.matchRewriteNormalized(
-            rule.concl,
-            line_expr,
-            rewrite_fuel_exhausted orelse &fuel_sink,
         )) {
             return .{ .no_match = conclusionMismatch() };
         }
@@ -1271,7 +1273,7 @@ pub fn tryConcreteRuleMatchSessionFallback(
     defer if (rewrite_fuel_exhausted) {
         DebugTrace.traceInference(
             self.debug,
-            "rewrite-normalized conclusion match for rule {s} hit the " ++
+            "a directed-rewrite big-step for rule {s} hit its " ++
                 "rule-application fuel cap; a mismatch may be a fuel artifact",
             .{rule.name},
         );
