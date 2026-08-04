@@ -94,8 +94,8 @@ l3: $ ∅ ⊢ u : ((⌊ x / e ⌋ p) → ([ ⟨ x ≔ e ⟩ ] p)) $ by imp_intro
 l4: $ ⊨ ((⌊ x / e ⌋ p) → ([ ⟨ x ≔ e ⟩ ] p)) $ by valid_intro [l3]
 l5: $ ⦃ ⌊ x / e ⌋ p ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $ by ht_intro [l4]
 
-hoare_assign_pre
-----------------
+hoare_assign_wp
+---------------
 
 l1: $ u : q ⊢ u : q $ by ax []
 l2: $ u : q ⊢ u : (⌊ x / e ⌋ p) $ by imp_elim [valid_elim [#1], l1]
@@ -140,34 +140,33 @@ overwrite
 ---------
 
 -- Backward from the postcondition.  Each assignment line states the
--- *computed* precondition; hoare_assign_pre's hypothesis is the
--- verification condition, discharged after the rewrite engine reduces
--- the substitution instance.
-l0: $ ⊨ ((b = b) → (b = b)) $ by imp_refl_valid []
-l1: $ ⦃ b = b ⦄ ⟨ x ≔ b ⟩ ⟦ x = b ⟧ $ by hoare_assign_pre [l0]
+-- *computed* precondition; the last write is a bare hoare_assign citation
+-- through its @view, and the rewrite engine reduces the substitution
+-- instance.
+l1: $ ⦃ b = b ⦄ ⟨ x ≔ b ⟩ ⟦ x = b ⟧ $ by hoare_assign []
 -- The first write is dead: its VC is `⊤ → b = b`, i.e. reflexivity.
 l2: $ u : ⊤ ⊢ u : (b = b) $ by eq_refl_nd []
 l3: $ ∅ ⊢ u : (⊤ → (b = b)) $ by imp_intro [l2]
 l4: $ ⊨ (⊤ → (b = b)) $ by valid_intro [l3]
-l5: $ ⦃ ⊤ ⦄ ⟨ x ≔ a ⟩ ⟦ b = b ⟧ $ by hoare_assign_pre [l4]
+l5: $ ⦃ ⊤ ⦄ ⟨ x ≔ a ⟩ ⟦ b = b ⟧ $ by hoare_assign_wp [l4]
 l6: $ ⦃ ⊤ ⦄ (⟨ x ≔ a ⟩ ⨟ ⟨ x ≔ b ⟩) ⟦ x = b ⟧ $ by hoare_seq [l5, l1]
 
 swap
 ----
 
 -- Three assignment steps, preconditions computed backward from the post.
--- The entry VC (commuting the conjunction) folds into the first step.
-l1: $ ⦃ (x = b) ∧ (t = a) ⦄ ⟨ y ≔ t ⟩ ⟦ (x = b) ∧ (y = a) ⟧ $
-  by hoare_assign_pre [imp_refl_valid (p := $ (x = b) ∧ (t = a) $)]
-l2: $ ⦃ (y = b) ∧ (t = a) ⦄ ⟨ x ≔ y ⟩ ⟦ (x = b) ∧ (t = a) ⟧ $
-  by hoare_assign_pre [imp_refl_valid (p := $ (y = b) ∧ (t = a) $)]
+-- The last two state exactly the computed precondition, so hoare_assign's
+-- @view carries them; the entry VC (commuting the conjunction) folds into
+-- the first step's strengthening form.
+l1: $ ⦃ (x = b) ∧ (t = a) ⦄ ⟨ y ≔ t ⟩ ⟦ (x = b) ∧ (y = a) ⟧ $ by hoare_assign []
+l2: $ ⦃ (y = b) ∧ (t = a) ⦄ ⟨ x ≔ y ⟩ ⟦ (x = b) ∧ (t = a) ⟧ $ by hoare_assign []
 l3: $ u : ((x = a) ∧ (y = b)) ⊢ u : ((x = a) ∧ (y = b)) $ by ax []
 l4: $ u : ((x = a) ∧ (y = b)) ⊢ u : (y = b) $ by an_elim_r [l3]
 l5: $ u : ((x = a) ∧ (y = b)) ⊢ u : (x = a) $ by an_elim_l [l3]
 l6: $ u : ((x = a) ∧ (y = b)) ⊢ u : ((y = b) ∧ (x = a)) $ by an_intro [l4, l5]
 l7: $ ∅ ⊢ u : (((x = a) ∧ (y = b)) → ((y = b) ∧ (x = a))) $ by imp_intro [l6]
 l8: $ ⊨ (((x = a) ∧ (y = b)) → ((y = b) ∧ (x = a))) $ by valid_intro [l7]
-l9: $ ⦃ (x = a) ∧ (y = b) ⦄ ⟨ t ≔ x ⟩ ⟦ (y = b) ∧ (t = a) ⟧ $ by hoare_assign_pre [l8]
+l9: $ ⦃ (x = a) ∧ (y = b) ⦄ ⟨ t ≔ x ⟩ ⟦ (y = b) ∧ (t = a) ⟧ $ by hoare_assign_wp [l8]
 l10: $ ⦃ (y = b) ∧ (t = a) ⦄ (⟨ x ≔ y ⟩ ⨟ ⟨ y ≔ t ⟩) ⟦ (x = b) ∧ (y = a) ⟧ $ by hoare_seq [l2, l1]
 l11: $ ⦃ (x = a) ∧ (y = b) ⦄ (⟨ t ≔ x ⟩ ⨟ ⟨ x ≔ y ⟩ ⨟ ⟨ y ≔ t ⟩) ⟦ (x = b) ∧ (y = a) ⟧ $
   by hoare_seq [l9, l10]
@@ -179,7 +178,7 @@ countdown
 l1: $ u : (⊤ ∧ (¬ (x = 0))) ⊢ u : ⊤ $ by tt_intro []
 l2: $ ∅ ⊢ u : ((⊤ ∧ (¬ (x = 0))) → ⊤) $ by imp_intro [l1]
 l3: $ ⊨ ((⊤ ∧ (¬ (x = 0))) → ⊤) $ by valid_intro [l2]
-l5: $ ⦃ ⊤ ∧ (¬ (x = 0)) ⦄ ⟨ x ≔ pred x ⟩ ⟦ ⊤ ⟧ $ by hoare_assign_pre [l3]
+l5: $ ⦃ ⊤ ∧ (¬ (x = 0)) ⦄ ⟨ x ≔ pred x ⟩ ⟦ ⊤ ⟧ $ by hoare_assign_wp [l3]
 -- The derived while rule, with invariant ⊤.
 l6: $ ⦃ ⊤ ⦄ while (¬ (x = 0)) (⟨ x ≔ pred x ⟩) ⟦ ⊤ ∧ (¬ (¬ (x = 0))) ⟧ $ by hoare_while [l5]
 -- Exit: the failed guard is a double negation; discharge it classically.

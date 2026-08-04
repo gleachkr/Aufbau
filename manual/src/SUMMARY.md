@@ -36,16 +36,16 @@
 - [Natural deduction](natural-deduction.md)
 - [Peano arithmetic](peano.md)
 - [The lambda calculus](lambda-calculus.md)
-- [Programs and correctness]()
+- [Programs and correctness](programs-and-correctness.md)
 
 # Tools
 
 - [Install and run](install-and-run.md)
 - [Embedding the editor](embedding.md)
-- [The npm packages]()
+- [The npm packages](npm-packages.md)
 
 # Appendices
 
-- [Annotation reference]()
-- [Search parameters]()
-- [Grammar summaries]()
+- [Annotation reference](appendix-annotations.md)
+- [Search parameters](appendix-search-parameters.md)
+- [Grammar summaries](appendix-grammars.md)

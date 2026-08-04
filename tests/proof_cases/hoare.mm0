@@ -383,20 +383,28 @@ theorem hoare_seq (a b: prog) (p q r: form):
   $ ⦃ q ⦄ b ⟦ r ⟧ $ >
   $ ⦃ p ⦄ (a ⨟ b) ⟦ r ⟧ $;
 
--- The Floyd/Hoare assignment rule: derived, not primitive.
+-- The Floyd/Hoare assignment rule: derived, not primitive.  The @view is
+-- what lets proofs cite it with a *computed* precondition: its phantom
+-- binder `q` absorbs whatever precondition the line states, while the
+-- assignment and postcondition positions pin x, e, p, leaving a fully
+-- determined `⌊ x / e ⌋ p` for the rewrite engine to reconcile.  Without
+-- it, inference dies at the `⌊ x / e ⌋ p` position — recovering e and p
+-- from a reduced form is ambiguous, and inference never guesses.
+--| @view {x: obj} (e: obj x) (p: form x) (q: form x): $ ⦃ q ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $
 theorem hoare_assign {x: obj} (e: obj x) (p: form x):
   $ ⦃ ⌊ x / e ⌋ p ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $;
 
--- The workhorse form, with precondition strengthening built in.  The
--- textbook form above cannot be cited with a *computed* precondition
--- (binder inference is exact and dies on the `⌊ x / e ⌋ p` slot before
--- reaching the slots that pin the binders — the same reason tait's
--- De Morgan steps are first-class rules).  Here the conclusion's
--- precondition is a plain binder `q`, and the substitution sits in the
--- hypothesis, where comparison against the cited reference is
--- normalization-aware: the rewrite engine computes `⌊ x / e ⌋ p` and the
--- verification condition `q → …` is discharged by an ordinary reference.
-theorem hoare_assign_pre {x: obj} (e: obj x) (p: form x) (q: form x):
+-- The strengthening form: "q implies the weakest precondition".  The view
+-- above only applies when the stated precondition is exactly the computed
+-- one; when a step wants a merely stronger precondition (the ⊤ steps in
+-- the programs below), the verification condition `q → …` sits in this
+-- rule's hypothesis.  Its own view gives that hypothesis a phantom `r` for
+-- the same reason hoare_assign's view has a phantom `q`: the VC is cited
+-- in computed form, and the rewrite engine reconciles it with
+-- `⌊ x / e ⌋ p`, so neither assignment rule ever shows an sb term at a
+-- use site.
+--| @view {x: obj} (e: obj x) (p: form x) (q: form x) (r: form x): $ ⊨ (q → r) $ > $ ⦃ q ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $
+theorem hoare_assign_wp {x: obj} (e: obj x) (p: form x) (q: form x):
   $ ⊨ (q → (⌊ x / e ⌋ p)) $ >
   $ ⦃ q ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $;
 

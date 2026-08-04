@@ -171,6 +171,9 @@ ordinary axioms and theorems:
 - `@view`
 - `@recover`
 - `@abstract`
+- `@auto`
+- `@conversion`
+- `@compute`
 
 Sort-level and term-level annotations such as `@vars`, `@hole`, and
 `@acui` still belong in the `.mm0` file on their corresponding sort or
