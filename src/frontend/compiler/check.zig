@@ -544,7 +544,7 @@ fn parseProofLineAssertion(
         sort_vars,
         line.assertion.text,
     ) catch |err| {
-        self.setProof(CompilerDiag.proofMathParseDiagnostic(
+        var diag = CompilerDiag.proofMathParseDiagnostic(
             parser,
             .parse_assertion,
             err,
@@ -553,7 +553,17 @@ fn parseProofLineAssertion(
             line.application.rule_name,
             null,
             line.assertion.span,
-        ));
+        );
+        var note_buf: [DiagNotes.sort_retry_note_buf_len]u8 = undefined;
+        DiagNotes.attachSortRetryNote(
+            &diag,
+            &note_buf,
+            parser,
+            theorem_vars,
+            null,
+            line.assertion.text,
+        );
+        self.setProof(diag);
         return err;
     };
 }
@@ -1941,7 +1951,7 @@ fn validateOptionalBindingsForProbe(
             rule.args[idx],
             expr,
         ) catch |err| {
-            self.setProof(CompilerDiag.withPhase(.{
+            var diag = CompilerDiag.withPhase(.{
                 .kind = .generic,
                 .err = err,
                 .theorem_name = assertion.name,
@@ -1952,7 +1962,21 @@ fn validateOptionalBindingsForProbe(
                     line,
                     rule.arg_names[idx],
                 ),
-            }, .inference));
+            }, .inference);
+            var note_bufs: Inference.BindingValidationNoteBufs = .{};
+            Inference.attachBindingValidationNotes(
+                &diag,
+                &note_bufs,
+                env,
+                theorem,
+                parser,
+                theorem_vars,
+                assertion.args,
+                rule.args[idx],
+                expr,
+                err,
+            );
+            self.setProof(diag);
             return err;
         };
     }
@@ -3841,7 +3865,7 @@ fn parseBindings(
                 rule.args[arg_index],
             );
         } catch |err| {
-            self.setProof(CompilerDiag.proofMathParseDiagnostic(
+            var diag = CompilerDiag.proofMathParseDiagnostic(
                 parser,
                 .parse_binding,
                 err,
@@ -3850,7 +3874,17 @@ fn parseBindings(
                 application.rule_name,
                 binding.name,
                 binding.formula.span,
-            ));
+            );
+            var note_buf: [DiagNotes.sort_retry_note_buf_len]u8 = undefined;
+            DiagNotes.attachSortRetryNote(
+                &diag,
+                &note_buf,
+                parser,
+                theorem_vars,
+                rule.args[arg_index],
+                binding.formula.text,
+            );
+            self.setProof(diag);
             return err;
         };
         bindings[arg_index] = try theorem.internParsedExpr(expr);

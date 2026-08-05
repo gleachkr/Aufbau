@@ -92,14 +92,18 @@ pub const MM0Parser = struct {
         return self.math_span_override orelse self.core.last_math_span;
     }
 
+    pub fn expectedChar(self: *const MM0Parser) ?u8 {
+        return self.core.expected_char;
+    }
+
     pub fn parseAssertionText(
-        self: *const MM0Parser,
+        self: *MM0Parser,
         src: []const u8,
         kind: AssertionKind,
         is_local: bool,
     ) !AssertionStmt {
-        var parser = self.core;
-        return try parser.parseAssertionText(src, kind, is_local);
+        self.clearDiagnosticOverrides();
+        return try self.core.parseAssertionText(src, kind, is_local);
     }
 
     pub fn parsePublicDefBodyText(

@@ -2606,6 +2606,292 @@ test "compiler pinpoints nested binding validation failures" {
     );
 }
 
+fn expectHasNote(diag: anytype, expected: []const u8) !void {
+    for (diag.notes[0..diag.note_count]) |note| {
+        if (std.mem.eql(u8, note.message, expected)) return;
+    }
+    return error.MissingExpectedNote;
+}
+
+test "binder assignment sort mismatch names both sorts" {
+    const mm0_src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom use_obj (x: obj): $ top $;
+        \\theorem target: $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ top $ by use_obj (x := $ top $)
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.SortMismatch, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_binding, diag.kind);
+    try std.testing.expectEqualStrings(
+        "binder assignment has the wrong sort",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    try expectHasNote(
+        diag,
+        "the assignment parses, but as sort 'wff'; this binder " ++
+            "expects sort 'obj'",
+    );
+}
+
+test "binder assignment inner sort mismatch gets a subexpression note" {
+    const mm0_src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term top: wff;
+        \\term pair (a b: obj): obj;
+        \\axiom use_obj (x: obj): $ top $;
+        \\theorem target: $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ top $ by use_obj (x := $ pair top top $)
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.SortMismatch, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_binding, diag.kind);
+    try expectHasNote(
+        diag,
+        "a subexpression here is used where a different sort is expected",
+    );
+}
+
+test "binder assignment boundness mismatch says bound variable" {
+    const mm0_src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term top: wff;
+        \\term all_o {x: obj} (p: wff): wff;
+        \\axiom alli {x: obj} (p: wff): $ all_o x p $;
+        \\theorem target {x: obj} (y: obj): $ all_o x top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ all_o x top $ by alli (x := $ y $)
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.BoundnessMismatch, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_binding, diag.kind);
+    try std.testing.expectEqualStrings(
+        "binder assignment must be a bound variable",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    try expectHasNote(
+        diag,
+        "the assignment parses with the right sort, but this binder " ++
+            "requires a single bound variable",
+    );
+}
+
+test "non-provable proof line statement names its sort" {
+    const mm0_src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem target (y: obj): $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ y $ by top_i
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.NotProvable, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_assertion, diag.kind);
+    try std.testing.expectEqualStrings(
+        "the statement is not of a provable sort",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    try expectHasNote(
+        diag,
+        "the statement parses, but as sort 'obj', which is not a " ++
+            "provable sort",
+    );
+}
+
+test "lemma header sort mismatch is not blamed on a rule" {
+    const mm0_src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term top: wff;
+        \\term pair (a b: obj): obj;
+        \\axiom top_i: $ top $;
+        \\theorem target: $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ top $ by top_i
+        \\
+        \\lemma bad (w: obj): $ pair top top $
+        \\------
+        \\l1: $ top $ by top_i
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.SortMismatch, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_block_header, diag.kind);
+    try std.testing.expectEqualStrings("bad", diag.block_name.?);
+    try std.testing.expectEqualStrings(
+        "a subexpression of the statement has the wrong sort",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+}
+
+test "trailing math token is named and pinpointed" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem target: $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ top /\ top $ by top_i
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.TrailingMathTokens, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("/\\", diag.detail.unknown_math_token.token);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("/\\", proof_src[span.start..span.end]);
+    try expectHasNote(
+        diag,
+        "the expression to the left parses on its own; this token is " ++
+            "not a notation that can extend it",
+    );
+}
+
+test "missing semicolon names the expected character" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $
+        \\theorem target: $ top $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(error.UnexpectedChar, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(@as(u8, ';'), diag.detail.expected_char.ch);
+    try expectHasNote(
+        diag,
+        "usually a missing ';' at the end of the declaration " ++
+            "before this point",
+    );
+}
+
+test "lemma header math error is remapped onto the real source" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem target: $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ top $ by top_i
+        \\
+        \\lemma bad: $ top zz $
+        \\------
+        \\l1: $ top $ by top_i
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.TrailingMathTokens, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_block_header, diag.kind);
+    try std.testing.expectEqualStrings("zz", diag.detail.unknown_math_token.token);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("zz", proof_src[span.start..span.end]);
+}
+
+test "unknown math token gets a not-declared hint note" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem target: $ top $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ zz $ by top_i
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.UnknownMathToken, compiler.check());
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.parse_assertion, diag.kind);
+    try expectHasNote(
+        diag,
+        "the token is not a variable of this theorem, nor a term or " ++
+            "notation of the theory",
+    );
+}
+
 test "compiler preserves nested fallback first failure diagnostics" {
     const mm0_src =
         \\provable sort wff;
@@ -4995,6 +5281,10 @@ test "compiler points binding validation errors at explicit assignments" {
     try std.testing.expectEqualStrings(
         "(x := $ top $)",
         proof_src[span.start..span.end],
+    );
+    try expectHasNote(
+        diag,
+        "it has sort 'wff', but the rule expects sort 'obj' here",
     );
 }
 

@@ -292,6 +292,9 @@ pub const MM0Parser = struct {
     current_decl_name: ?[]const u8 = null,
     current_decl_name_span: ?MathSpan = null,
     last_error_span: ?MathSpan = null,
+    // The character `expect` wanted when it failed (e.g. the ';' a
+    // declaration is missing); diagnostic metadata only.
+    expected_char: ?u8 = null,
 
     pub fn init(src: []const u8, allocator: std.mem.Allocator) MM0Parser {
         return .{
@@ -412,6 +415,7 @@ pub const MM0Parser = struct {
         self.current_decl_name = null;
         self.current_decl_name_span = null;
         self.last_error_span = null;
+        self.expected_char = null;
     }
 
     fn currentTokenSpan(self: *const MM0Parser) ?MathSpan {
@@ -1349,19 +1353,29 @@ pub const MM0Parser = struct {
         } });
     }
 
+    // Mutable like `parseTermText` (source position is saved and restored)
+    // so the diagnostic fields recorded during a failed parse survive for
+    // the caller to report; the old by-value copy discarded them.
     pub fn parseAssertionText(
-        self: *const MM0Parser,
+        self: *MM0Parser,
         src: []const u8,
         kind: AssertionKind,
         is_local: bool,
     ) !AssertionStmt {
-        var parser = self.*;
-        parser.src = src;
-        parser.pos = 0;
-        parser.resetDiagnosticContext();
-        const stmt = try parser.parseAssertionStmt(kind, is_local);
-        parser.skipWhitespaceAndComments();
-        if (parser.pos != parser.src.len) {
+        const saved_src = self.src;
+        const saved_pos = self.pos;
+        defer {
+            self.src = saved_src;
+            self.pos = saved_pos;
+        }
+
+        self.src = src;
+        self.pos = 0;
+        self.resetDiagnosticContext();
+        const stmt = try self.parseAssertionStmt(kind, is_local);
+        self.skipWhitespaceAndComments();
+        if (self.pos != self.src.len) {
+            self.recordCurrentTokenError();
             return error.UnexpectedTrailingInput;
         }
         return stmt;
@@ -1494,6 +1508,7 @@ pub const MM0Parser = struct {
             return err;
         };
         if (cursor.peek()) |token| {
+            self.last_math_error = .{ .unexpected_token = token };
             self.last_error_span = self.mathTokenSpanInSource(
                 token.span,
             ) orelse self.last_math_span;
@@ -2095,6 +2110,7 @@ pub const MM0Parser = struct {
 
     fn expect(self: *MM0Parser, ch: u8) !void {
         if (self.peek() != ch) {
+            self.expected_char = ch;
             self.recordCurrentTokenError();
             return error.UnexpectedChar;
         }

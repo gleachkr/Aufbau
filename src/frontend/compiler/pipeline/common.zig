@@ -954,7 +954,7 @@ pub fn nextTheoremBlock(
 pub fn parseLemmaAssertion(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *const MM0Parser,
+    parser: *MM0Parser,
     block: TheoremBlock,
 ) !AssertionStmt {
     const src = try std.fmt.allocPrint(
@@ -963,11 +963,18 @@ pub fn parseLemmaAssertion(
         .{ block.name, block.header_tail },
     );
     return parser.parseAssertionText(src, .theorem, true) catch |err| {
-        self.setDiagnostic(CompilerDiag.proofBlockDiagnostic(
+        var diag = CompilerDiag.lemmaHeaderDiagnostic(
             block.name,
             block.header_span,
             err,
-        ));
+        );
+        CompilerDiag.narrowLemmaHeaderDiagnostic(
+            &diag,
+            parser,
+            "theorem ".len + block.name.len,
+            block.header_tail_span,
+        );
+        self.setDiagnostic(diag);
         return err;
     };
 }

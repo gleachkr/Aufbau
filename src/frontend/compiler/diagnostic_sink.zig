@@ -410,6 +410,7 @@ pub const DiagnosticSink = struct {
                     info.parameter_name,
                 ),
             } },
+            .expected_char => |info| .{ .expected_char = info },
         };
     }
 
@@ -505,6 +506,9 @@ fn reportDiagnosticDetail(detail: DiagnosticDetail) void {
         },
         .name_suggestion => |info| {
             std.debug.print("  did you mean: {s}\n", .{info.suggestion});
+        },
+        .expected_char => |info| {
+            std.debug.print("  expected: '{c}'\n", .{info.ch});
         },
         .missing_binder_assignment => |info| {
             std.debug.print(

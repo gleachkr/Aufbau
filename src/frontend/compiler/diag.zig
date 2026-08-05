@@ -23,6 +23,7 @@ pub const DiagnosticKind = enum {
     duplicate_rule_name,
     parse_assertion,
     parse_binding,
+    parse_block_header,
     parse_fresh,
     inference_failed,
     unknown_rule,
@@ -128,6 +129,11 @@ pub const DiagnosticDetail = union(enum) {
     /// the environment or proof script satisfy this).
     name_suggestion: struct {
         suggestion: []const u8,
+    },
+    /// The character the statement parser wanted when it stopped (e.g.
+    /// the ';' a declaration is missing).
+    expected_char: struct {
+        ch: u8,
     },
 };
 
@@ -266,14 +272,28 @@ pub fn mm0ParserDiagnostic(
     parser: *const MM0Parser,
     err: anyerror,
 ) Diagnostic {
-    const diag = Diagnostic{
+    var diag = mathErrorDiagnostic(.{
         .kind = .generic,
         .err = err,
         .source = .mm0,
         .name = parser.diagnosticName(),
         .span = mathSpanToSpanOpt(parser.diagnosticSpan()),
-    };
-    return mathErrorDiagnostic(diag, err, parser.mathError());
+    }, parser.mathError());
+    if (err == error.UnexpectedChar) {
+        if (parser.expectedChar()) |ch| {
+            diag.detail = .{ .expected_char = .{ .ch = ch } };
+            if (ch == ';') {
+                addNote(
+                    &diag,
+                    "usually a missing ';' at the end of the " ++
+                        "declaration before this point",
+                    .mm0,
+                    null,
+                );
+            }
+        }
+    }
+    return diag;
 }
 
 pub fn mm0StatementDiagnostic(
@@ -473,6 +493,57 @@ pub fn proofBlockDiagnostic(
     };
 }
 
+/// For lemma-header parse failures specifically: there is no rule in play,
+/// so the `.generic` summaries ("binding does not satisfy the rule's sort
+/// constraint") would blame machinery the header never touched.
+pub fn lemmaHeaderDiagnostic(
+    block_name: []const u8,
+    span: Span,
+    err: anyerror,
+) Diagnostic {
+    return .{
+        .kind = .parse_block_header,
+        .err = err,
+        .source = .proof,
+        .theorem_name = block_name,
+        .block_name = block_name,
+        .span = span,
+    };
+}
+
+/// Remap the error state recorded while parsing the synthetic
+/// "theorem NAME<tail>;" buffer back onto the real header: synthetic
+/// offsets past the prefix land inside `header_tail`, whose source span
+/// the proof script records. Leaves the diagnostic untouched when the
+/// failure predates the tail or recorded no span.
+pub fn narrowLemmaHeaderDiagnostic(
+    diag: *Diagnostic,
+    parser: *const MM0Parser,
+    syn_prefix_len: usize,
+    tail_span: Span,
+) void {
+    if (parser.diagnosticSpan()) |syn_span| {
+        const tail_len = tail_span.end - tail_span.start;
+        if (syn_span.start >= syn_prefix_len and
+            syn_span.end <= syn_prefix_len + tail_len)
+        {
+            diag.span = .{
+                .start = tail_span.start + (syn_span.start - syn_prefix_len),
+                .end = tail_span.start + (syn_span.end - syn_prefix_len),
+            };
+        }
+    }
+    const math_err = parser.mathError() orelse return;
+    switch (math_err) {
+        // Token text slices the synthetic buffer; the sink stable-copies
+        // it at set time.
+        .unknown_token, .unexpected_token => |token| {
+            diag.detail = .{ .unknown_math_token = .{ .token = token.text } };
+        },
+        .unexpected_end => {},
+    }
+}
+
 pub fn proofMathTokenSpan(math_span: Span, token_span: MathSpan) Span {
     const inner_start = math_span.start + 1;
     return .{
@@ -519,10 +590,29 @@ fn proofMathErrorDiagnostic(
     math_err: MathParseError,
     math_span: Span,
 ) Diagnostic {
-    var result = mathErrorDiagnostic(diag, diag.err, math_err);
+    var result = mathErrorDiagnostic(diag, math_err);
     switch (math_err) {
-        .unknown_token, .unexpected_token => |token| {
+        .unknown_token => |token| {
             result.span = proofMathTokenSpan(math_span, token.span);
+            addNote(
+                &result,
+                "the token is not a variable of this theorem, " ++
+                    "nor a term or notation of the theory",
+                result.source,
+                null,
+            );
+        },
+        .unexpected_token => |token| {
+            result.span = proofMathTokenSpan(math_span, token.span);
+            if (diag.err == error.TrailingMathTokens) {
+                addNote(
+                    &result,
+                    "the expression to the left parses on its own; " ++
+                        "this token is not a notation that can extend it",
+                    result.source,
+                    null,
+                );
+            }
         },
         .unexpected_end => |pos| {
             const start = @min(math_span.start + pos, math_span.end);
@@ -534,24 +624,22 @@ fn proofMathErrorDiagnostic(
 
 fn mathErrorDiagnostic(
     diag: Diagnostic,
-    err: anyerror,
     math_err: ?MathParseError,
 ) Diagnostic {
-    if (err != error.UnknownMathToken) return diag;
     const actual = math_err orelse return diag;
 
     var result = diag;
     switch (actual) {
-        .unknown_token => |token| {
+        // Both variants carry the token the parse stopped at; naming it
+        // beats a bare "could not parse" with a whole-string span.
+        .unknown_token, .unexpected_token => |token| {
             result.detail = .{
                 .unknown_math_token = .{
                     .token = token.text,
                 },
             };
         },
-        .unexpected_token,
-        .unexpected_end,
-        => {},
+        .unexpected_end => {},
     }
     return result;
 }
@@ -700,8 +788,26 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .unexpected_proof_def => "unexpected proof-side definition item",
         .unsupported_proof_def_annotation => "proof-side definition annotations are not supported yet",
         .duplicate_rule_name => "duplicate rule name",
-        .parse_assertion => "could not parse proof line assertion",
-        .parse_binding => "could not parse binder assignment",
+        .parse_assertion => switch (diag.err) {
+            error.NotProvable => "the statement is not of a provable sort",
+            error.SortMismatch => "a subexpression of the statement " ++
+                "has the wrong sort",
+            else => "could not parse proof line assertion",
+        },
+        .parse_binding => switch (diag.err) {
+            error.SortMismatch => "binder assignment has the wrong sort",
+            error.BoundnessMismatch => "binder assignment must be " ++
+                "a bound variable",
+            else => "could not parse binder assignment",
+        },
+        .parse_block_header => switch (diag.err) {
+            error.NotProvable => "the statement is not of a provable sort",
+            error.SortMismatch => "a subexpression of the statement " ++
+                "has the wrong sort",
+            error.BoundnessMismatch => "the statement uses a compound " ++
+                "expression where a bound variable is required",
+            else => compilerErrorSummary(diag.err),
+        },
         .parse_fresh => compilerErrorSummary(diag.err),
         .inference_failed => compilerErrorSummary(diag.err),
         .unknown_rule => "unknown rule in proof line",

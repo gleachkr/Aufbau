@@ -418,6 +418,9 @@ pub fn compilerDiagnosticMessage(
         .name_suggestion => |detail| {
             try writer.print("\ndid you mean: {s}", .{detail.suggestion});
         },
+        .expected_char => |detail| {
+            try writer.print("\nexpected: '{c}'", .{detail.ch});
+        },
         .missing_binder_assignment => |detail| {
             try writer.print(
                 "\nmissing binder: {s}",

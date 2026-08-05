@@ -156,7 +156,9 @@ pub fn parseLemmaAssertion(
     self: anytype,
     block: proof_script.ProofBlock,
 ) !?parse.AssertionStmt {
-    const parser = self.mm0_parser orelse return null;
+    // Local copy: errors are swallowed here, so the diagnostic state the
+    // mutable parse records is not needed.
+    var parser = self.mm0_parser orelse return null;
     const src = try std.fmt.allocPrint(
         self.allocator,
         "theorem {s}{s};",

@@ -7,6 +7,8 @@ const Validation = @import("./inference/validation.zig");
 pub const RuleMatchResult = Strategies.RuleMatchResult;
 pub const DepViolationDetail = Validation.DepViolationDetail;
 pub const DepViolationTextBufs = Validation.DepViolationTextBufs;
+pub const BindingValidationNoteBufs = Validation.BindingValidationNoteBufs;
+pub const attachBindingValidationNotes = Validation.attachBindingValidationNotes;
 pub const attachDepViolationBindingTexts =
     Validation.attachDepViolationBindingTexts;
 pub const NameExprMap = Validation.NameExprMap;

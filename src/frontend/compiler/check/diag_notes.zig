@@ -22,6 +22,75 @@ const HiddenWitnessFreshContext =
     @import("../inference/context.zig").HiddenWitnessFreshContext;
 const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 
+const SurfaceExpr = @import("../../surface_expr.zig");
+const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
+
+pub const sort_retry_note_buf_len = 192;
+
+/// A math string that failed sort-directed coercion (rather than parsing)
+/// gets a note naming the sort it actually has: re-parse it with no target
+/// sort and report the root sort of the result. When even the sort-agnostic
+/// parse fails, the mismatch sits inside the expression (a term argument of
+/// the wrong sort) and the note says so instead — the trusted parser records
+/// no position for argument coercions, so no tighter span is available.
+/// `expected` carries the binder's ArgInfo, or null when the target is the
+/// provable-sort slot (line assertions). `buf` must stay alive through
+/// setProof; the sink stable-copies note strings at set time.
+pub fn attachSortRetryNote(
+    diag: *Diagnostic,
+    buf: []u8,
+    parser: *MM0Parser,
+    theorem_vars: *const std.StringHashMap(*const Expr),
+    expected: ?ArgInfo,
+    math_text: []const u8,
+) void {
+    switch (diag.err) {
+        error.SortMismatch,
+        error.BoundnessMismatch,
+        error.NotProvable,
+        => {},
+        else => return,
+    }
+    const expr = parser.parseMathText(math_text, theorem_vars) catch {
+        switch (diag.err) {
+            error.SortMismatch => addStaticProofNote(
+                diag,
+                "a subexpression here is used where a different " ++
+                    "sort is expected",
+            ),
+            error.BoundnessMismatch => addStaticProofNote(
+                diag,
+                "a position inside this expression requires a " ++
+                    "single bound variable",
+            ),
+            else => {},
+        }
+        return;
+    };
+    const actual = SurfaceExpr.parserSortName(parser, expr.sort());
+    const message: []const u8 = switch (diag.err) {
+        error.SortMismatch => blk: {
+            const arg = expected orelse return;
+            break :blk std.fmt.bufPrint(
+                buf,
+                "the assignment parses, but as sort '{s}'; this " ++
+                    "binder expects sort '{s}'",
+                .{ actual, arg.sort_name },
+            ) catch return;
+        },
+        error.NotProvable => std.fmt.bufPrint(
+            buf,
+            "the statement parses, but as sort '{s}', which is " ++
+                "not a provable sort",
+            .{actual},
+        ) catch return,
+        error.BoundnessMismatch => "the assignment parses with the " ++
+            "right sort, but this binder requires a single bound variable",
+        else => unreachable,
+    };
+    addStaticProofNote(diag, message);
+}
+
 pub fn addFallbackFailureNote(
     diag: *Diagnostic,
     line_assertion: anytype,

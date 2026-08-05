@@ -37,7 +37,7 @@ pub fn validateResolvedBindingsWithDebug(
             rule.args[idx],
             binding,
         ) catch |err| {
-            self.setProof(CompilerDiag.withPhase(.{
+            var diag = CompilerDiag.withPhase(.{
                 .kind = .generic,
                 .err = err,
                 .theorem_name = assertion.name,
@@ -45,7 +45,21 @@ pub fn validateResolvedBindingsWithDebug(
                 .rule_name = line.application.rule_name,
                 .name = rule.arg_names[idx],
                 .span = CompilerDiag.proofBindingDiagnosticSpan(line, rule.arg_names[idx]),
-            }, .inference));
+            }, .inference);
+            var note_bufs: BindingValidationNoteBufs = .{};
+            attachBindingValidationNotes(
+                &diag,
+                &note_bufs,
+                env,
+                theorem,
+                parser,
+                theorem_vars,
+                assertion.args,
+                rule.args[idx],
+                binding,
+                err,
+            );
+            self.setProof(diag);
             return err;
         };
     }
@@ -368,6 +382,73 @@ fn renderBoundedExpr(
             expr_id,
         ) catch return null;
     return text_util.truncateUtf8(text, 64);
+}
+
+pub const binding_note_buf_len = 192;
+
+/// Stack scratch for `attachBindingValidationNotes`; same lifetime contract
+/// as `DepViolationTextBufs` (alive through setProof, sink copies at set
+/// time).
+pub const BindingValidationNoteBufs = struct {
+    resolved: [binding_note_buf_len]u8 = undefined,
+    sorts: [binding_note_buf_len]u8 = undefined,
+};
+
+/// Notes for an inferred binding that failed sort/boundness validation:
+/// what the binder was resolved to, and which sorts disagree. Both facts
+/// are in hand at the failure point; without them the summary alone gives
+/// the author nothing to act on. Best-effort — a failed render or an
+/// oversized message just omits that note.
+pub fn attachBindingValidationNotes(
+    diag: *CompilerDiag.Diagnostic,
+    bufs: *BindingValidationNoteBufs,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    parser: ?*const ParseRecovery.MM0Parser,
+    theorem_vars: ?*const NameExprMap,
+    theorem_args: []const ArgInfo,
+    expected: ArgInfo,
+    expr_id: ExprId,
+    err: anyerror,
+) void {
+    var names: ?ViewTrace.DiagNames = null;
+    defer if (names) |*built| built.deinit(theorem.allocator);
+    if (parser) |actual_parser| {
+        if (theorem_vars) |vars| {
+            names = ViewTrace.DiagNames.build(
+                theorem.allocator,
+                theorem,
+                actual_parser,
+                vars,
+            ) catch null;
+        }
+    }
+    const names_ptr: ?*const ViewTrace.DiagNames =
+        if (names) |*built| built else null;
+
+    var scratch: [dep_violation_text_buf_len]u8 = undefined;
+    if (renderBoundedExpr(&scratch, env, theorem, names_ptr, expr_id)) |text| {
+        if (std.fmt.bufPrint(
+            &bufs.resolved,
+            "this binder was resolved to: {s}",
+            .{text},
+        )) |message| {
+            CompilerDiag.addNote(diag, message, .proof, null);
+        } else |_| {}
+    }
+
+    const info = exprInfo(env, theorem, theorem_args, expr_id) catch return;
+    const message: []const u8 = switch (err) {
+        error.SortMismatch => std.fmt.bufPrint(
+            &bufs.sorts,
+            "it has sort '{s}', but the rule expects sort '{s}' here",
+            .{ info.sort_name, expected.sort_name },
+        ) catch return,
+        error.BoundnessMismatch => "the rule requires a single bound " ++
+            "variable here",
+        else => return,
+    };
+    CompilerDiag.addNote(diag, message, .proof, null);
 }
 
 // Inference only solves equalities. We still need the same sort, boundness,

@@ -211,7 +211,10 @@ fn writeDiagnosticsField(
 // One warning per search placeholder, mirroring the LSP's "search not yet
 // run". The analysis pass tolerates placeholders (`allow_search_placeholders`)
 // so they produce no compiler diagnostic of their own; this is the signal
-// that marks them as unfilled holes rather than errors.
+// that marks them as unfilled holes rather than errors. Rejected search
+// parameters (unknown name, out-of-range value) additionally get one error
+// each, mirroring the LSP's `validateSearchParams` diagnostics — without
+// them a typo'd parameter is silently ignored in the browser editor.
 fn writePlaceholderDiagnostics(
     writer: anytype,
     proof_src: []const u8,
@@ -243,6 +246,32 @@ fn writePlaceholderDiagnostics(
             .{ placeholder.span.start, placeholder.span.end },
         );
         try writer.writeAll("\"detail\":null,\"notes\":[],\"related\":[]}");
+
+        const issues = mm0.CompilerSupport.Search.tunables.validateSearchParams(
+            allocator,
+            placeholder.kind.paramContext(),
+            placeholder.params,
+        ) catch continue;
+        defer {
+            for (issues) |issue| allocator.free(issue.message);
+            allocator.free(issues);
+        }
+        for (issues) |issue| {
+            try writer.writeByte(',');
+            try writer.writeByte('{');
+            try writeJsonStringField(writer, "message", issue.message);
+            try writer.writeAll(
+                ",\"severity\":\"error\",\"source\":\"proof\"," ++
+                    "\"error\":\"InvalidSearchParameter\",\"theorem\":null," ++
+                    "\"block\":null,\"lineLabel\":null,\"rule\":null," ++
+                    "\"name\":null,\"expected\":null,\"phase\":null,",
+            );
+            try writer.print(
+                "\"spanStart\":{d},\"spanEnd\":{d},",
+                .{ issue.span.start, issue.span.end },
+            );
+            try writer.writeAll("\"detail\":null,\"notes\":[],\"related\":[]}");
+        }
     }
 }
 
@@ -404,6 +433,13 @@ fn writeDiagnosticDetailField(
             try writeJsonStringField(writer, "kind", "name_suggestion");
             try writer.writeByte(',');
             try writeJsonStringField(writer, "suggestion", info.suggestion);
+            try writer.writeAll("}");
+        },
+        .expected_char => |info| {
+            try writer.writeAll("{");
+            try writeJsonStringField(writer, "kind", "expected_char");
+            try writer.writeByte(',');
+            try writeJsonStringField(writer, "expected", &[1]u8{info.ch});
             try writer.writeAll("}");
         },
         .missing_binder_assignment => |info| {
