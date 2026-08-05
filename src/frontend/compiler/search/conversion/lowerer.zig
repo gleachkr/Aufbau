@@ -1537,12 +1537,11 @@ pub const Lowerer = struct {
     // steps that follow it and emits ONE line whose result side is the
     // rewrite normal form; the checker re-derives the absorbed cascade.
 
-    /// Normal form under the checker's own line normalizer (the
-    /// `@rewrite` registry applied to fixpoint). The step budget resets
-    /// per call to mirror the checker's per-line budget; the proof lines
-    /// produced along the way are discarded.
-    fn rewriteNormalForm(self: *Lowerer, expr: ExprId) !ExprId {
-        const state = self.norm_state orelse blk: {
+    /// The lazily built checker-equivalent normalizer (the `@rewrite`
+    /// registry applied to fixpoint). The proof lines it emits are
+    /// discarded — only the resulting expressions gate the grouping.
+    fn normState(self: *Lowerer) !*NormState {
+        return self.norm_state orelse blk: {
             const state = try self.work.create(NormState);
             state.* = .{ .normalizer = undefined };
             state.normalizer = Normalizer.init(
@@ -1555,6 +1554,12 @@ pub const Lowerer = struct {
             self.norm_state = state;
             break :blk state;
         };
+    }
+
+    /// Normal form under the checker's own line normalizer. The step
+    /// budget resets per call to mirror the checker's per-line budget.
+    fn rewriteNormalForm(self: *Lowerer, expr: ExprId) !ExprId {
+        const state = try self.normState();
         state.normalizer.step_count = 0;
         const result = try state.normalizer.normalize(expr);
         return result.result_expr;
@@ -1579,32 +1584,30 @@ pub const Lowerer = struct {
         }
     }
 
-    /// The rewrite normal form of a rule step's result side, when the
-    /// step can drive a big-step group: a plain (non-def, non-bag)
-    /// theorem citation whose result still carries `@rewrite` residue,
-    /// and whose intact stated side binds every binder the reduced side
-    /// mentions (a binder occurring only in rewritten-away structure
-    /// would leave the emitted line uninferable). Null keeps the
-    /// elementary stanza.
-    fn bigStepNormalForm(self: *Lowerer, step: egraph.Step) !?ExprId {
-        if (step.bag != null) return null;
+    /// Whether a rule step can drive a big-step group: a plain (non-def,
+    /// non-bag) theorem citation whose result still carries `@rewrite`
+    /// residue, and whose intact stated side binds every binder the
+    /// reduced side mentions (a binder occurring only in rewritten-away
+    /// structure would leave the emitted line uninferable). False keeps
+    /// the elementary stanza.
+    fn canDriveBigStep(self: *Lowerer, step: egraph.Step) !bool {
+        if (step.bag != null) return false;
         const rule_id = switch (step.source) {
             .rule => |rule_id| rule_id,
-            else => return null,
+            else => return false,
         };
-        if (conversion.defRuleTermId(rule_id) != null) return null;
-        if (!self.context.registry.hasRewriteRules()) return null;
-        const conv = self.conversionRuleById(rule_id) orelse return null;
+        if (conversion.defRuleTermId(rule_id) != null) return false;
+        if (!self.context.registry.hasRewriteRules()) return false;
+        const conv = self.conversionRuleById(rule_id) orelse return false;
         const intact = if (step.needs_symm) conv.rhs else conv.lhs;
         const reduced = if (step.needs_symm) conv.lhs else conv.rhs;
-        const intact_mask = templateBinderMask(intact) orelse return null;
-        const reduced_mask = templateBinderMask(reduced) orelse return null;
-        if (intact_mask & reduced_mask != reduced_mask) return null;
+        const intact_mask = templateBinderMask(intact) orelse return false;
+        const reduced_mask = templateBinderMask(reduced) orelse return false;
+        if (intact_mask & reduced_mask != reduced_mask) return false;
         const after_expr = (try self.termToExpr(step.after)) orelse {
-            return null;
+            return false;
         };
-        const normal_form = try self.rewriteNormalForm(after_expr);
-        return if (normal_form == after_expr) null else normal_form;
+        return (try self.rewriteNormalForm(after_expr)) != after_expr;
     }
 
     /// True when a step can fold into the enclosing big-step group: an
@@ -1661,9 +1664,10 @@ pub const Lowerer = struct {
     /// Try to extend the driving step at `idx` into a big-step group:
     /// absorb the following in-redex `@rewrite` steps and state one
     /// conclusion whose result side is the rewrite normal form.
-    /// Committed only when the absorbed steps land exactly on the normal
-    /// form the checker will compute, so an emitted big-step line always
-    /// checks; anything short falls back to the elementary stanzas.
+    /// Committed only when the checker's own normalized comparison
+    /// accepts the stated line (see `checkerAcceptsBigStep`), so an
+    /// emitted big-step line always checks; anything short falls back to
+    /// the elementary stanzas.
     fn tryBigStep(
         self: *Lowerer,
         steps: []const egraph.Step,
@@ -1671,9 +1675,7 @@ pub const Lowerer = struct {
         first_next: *const egraph.Term,
     ) !?BigStep {
         const step = steps[idx];
-        const normal_form = (try self.bigStepNormalForm(step)) orelse {
-            return null;
-        };
+        if (!try self.canDriveBigStep(step)) return null;
         var root = first_next;
         var end = idx + 1;
         while (end < steps.len and
@@ -1689,10 +1691,7 @@ pub const Lowerer = struct {
         }
         if (end == idx + 1) return null;
         const redex_after = termAt(root, step.position) orelse return null;
-        const redex_expr = (try self.termToExpr(redex_after)) orelse {
-            return null;
-        };
-        if ((try self.rewriteNormalForm(redex_expr)) != normal_form) {
+        if (!try self.checkerAcceptsBigStep(step, redex_after)) {
             return null;
         }
         return .{
@@ -1700,6 +1699,56 @@ pub const Lowerer = struct {
             .redex_after = redex_after,
             .consumed = end - idx,
         };
+    }
+
+    /// The commit gate for a big-step group: replay the checker's own
+    /// acceptance test on the rule line the group will emit. That line
+    /// states the driving rule's conclusion with its result side replaced
+    /// by the group's final redex, so line-check falls through to
+    /// normalized comparison — which needs a relation registered for the
+    /// formula's sort, a transport to rebase the proof onto the stated
+    /// form, and rewrite normalization that joins the stated and derived
+    /// conclusions (descent through the relation head needs a `@congr`
+    /// lifting it into the formula relation). Running the same comparison
+    /// here keeps groups from forming when the theory cannot replay them.
+    fn checkerAcceptsBigStep(
+        self: *Lowerer,
+        step: egraph.Step,
+        redex_after: *const egraph.Term,
+    ) !bool {
+        const relation = self.relationForTerm(step.before) orelse
+            self.relationForTerm(step.after) orelse return false;
+        const before_expr = (try self.termToExpr(step.before)) orelse {
+            return false;
+        };
+        const after_expr = (try self.termToExpr(step.after)) orelse {
+            return false;
+        };
+        const redex_expr = (try self.termToExpr(redex_after)) orelse {
+            return false;
+        };
+        // Oriented the way emitStep states the rule line (the symm flip
+        // it appends for backward steps is an exact instance and always
+        // checks).
+        const stated = if (step.needs_symm)
+            try self.relIds(relation, redex_expr, before_expr)
+        else
+            try self.relIds(relation, before_expr, redex_expr);
+        const derived = if (step.needs_symm)
+            try self.relIds(relation, after_expr, before_expr)
+        else
+            try self.relIds(relation, before_expr, after_expr);
+        const state = try self.normState();
+        const line_relation = state.normalizer.resolveRelationForExpr(
+            derived,
+        ) orelse return false;
+        if (line_relation.transport_id == null) return false;
+        // One budget across both sides, as in the checker's
+        // buildNormalizedConversion.
+        state.normalizer.step_count = 0;
+        const norm_derived = try state.normalizer.normalize(derived);
+        const norm_stated = try state.normalizer.normalize(stated);
+        return norm_derived.result_expr == norm_stated.result_expr;
     }
 
     /// Produce the replacement text for the whole placeholder line: the

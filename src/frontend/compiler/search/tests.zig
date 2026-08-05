@@ -6787,6 +6787,119 @@ test "conversion? equation goal folds a computation without a wff relation" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+// The nat theory of the previous test with the fold rules also enrolled
+// as `@rewrite`, in two variants (task #190). Big-step grouping states a
+// rule line with its result side rewrite-normalized, which the checker
+// accepts only through formula-level normalized comparison — that needs a
+// relation for the formula's sort, a transport, and a `@congr` lifting
+// the equation head into it.
+test "conversion? equation goal keeps elementary steps when big-steps cannot check" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // No wff relation here, so no big-step line can ever check; the
+    // grouping gate used to fire on hasRewriteRules() alone and the
+    // suggestion failed to compile. Now the commit gate replays the
+    // checker's test and the lowering keeps the elementary stanzas
+    // (the add_z line below is one of them — absorbed if a group forms).
+    const mm0_src =
+        \\delimiter $ ( ) S $;
+        \\provable sort wff;
+        \\sort tm;
+        \\term eq (a b: tm): wff;
+        \\infixl eq: $=$ prec 20;
+        \\term zero: tm; notation zero: tm = ($0$:max);
+        \\term suc (n: tm): tm; prefix suc: $S$ prec 70;
+        \\term add (m n: tm): tm; infixl add: $+$ prec 30;
+        \\--| @relation tm eq eq_refl eq_trans eq_symm _
+        \\axiom eq_refl (a: tm): $ a = a $;
+        \\axiom eq_trans (a b c: tm) (h1: $ a = b $) (h2: $ b = c $): $ a = c $;
+        \\axiom eq_symm (a b: tm) (h: $ a = b $): $ b = a $;
+        \\--| @congr
+        \\axiom suc_congr (a b: tm) (h: $ a = b $): $ S a = S b $;
+        \\--| @congr
+        \\axiom add_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a + c = b + d $;
+        \\--| @rewrite
+        \\--| @compute ltr
+        \\axiom add_z (n: tm): $ 0 + n = n $;
+        \\--| @rewrite
+        \\--| @compute ltr
+        \\axiom add_s (m n: tm): $ S m + n = S (m + n) $;
+        \\theorem two_plus_two: $ S S 0 + S S 0 = S S S S 0 $;
+    ;
+    const proof_src =
+        \\two_plus_two
+        \\----
+        \\goal: $ S S 0 + S S 0 = S S S S 0 $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "add_z") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? equation goal big-steps an @rewrite-enrolled driver" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // With the full replay machinery present, a driver that is itself
+    // `@rewrite`-enrolled is fine: the stated line's left side reduces
+    // too, but the checker normalizes both conclusions to the same form.
+    // The whole fold collapses into the one add_s line (no add_z line —
+    // it is absorbed), grounded by the equation goal's refl/trans coda.
+    const mm0_src =
+        \\delimiter $ ( ) S $;
+        \\provable sort wff;
+        \\sort tm;
+        \\term iff (p q: wff): wff;
+        \\term eq (a b: tm): wff;
+        \\infixl eq: $=$ prec 20;
+        \\term zero: tm; notation zero: tm = ($0$:max);
+        \\term suc (n: tm): tm; prefix suc: $S$ prec 70;
+        \\term add (m n: tm): tm; infixl add: $+$ prec 30;
+        \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+        \\axiom iff_refl (a: wff): $ iff a a $;
+        \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+        \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+        \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+        \\--| @relation tm eq eq_refl eq_trans eq_symm _
+        \\axiom eq_refl (a: tm): $ a = a $;
+        \\axiom eq_trans (a b c: tm) (h1: $ a = b $) (h2: $ b = c $): $ a = c $;
+        \\axiom eq_symm (a b: tm) (h: $ a = b $): $ b = a $;
+        \\--| @congr
+        \\axiom eq_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ iff (a = c) (b = d) $;
+        \\--| @congr
+        \\axiom suc_congr (a b: tm) (h: $ a = b $): $ S a = S b $;
+        \\--| @congr
+        \\axiom add_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a + c = b + d $;
+        \\--| @rewrite
+        \\--| @compute ltr
+        \\axiom add_z (n: tm): $ 0 + n = n $;
+        \\--| @rewrite
+        \\--| @compute ltr
+        \\axiom add_s (m n: tm): $ S m + n = S (m + n) $;
+        \\theorem two_plus_two: $ S S 0 + S S 0 = S S S S 0 $;
+    ;
+    const proof_src =
+        \\two_plus_two
+        \\----
+        \\goal: $ S S 0 + S S 0 = S S S S 0 $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "add_s") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "add_z") == null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 test "conversion? equation goal subsumes the grounding refl-line idiom" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

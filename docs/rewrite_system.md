@@ -530,9 +530,16 @@ conclusion. A chain grounded by a reduced-side reference (the usual
 sides then anchor the chain; see `docs/proof_search.md`) is lowered in
 the reducing direction and flipped with one `symm` at the end. Steps the `@rewrite` registry cannot re-derive (the
 fold steps themselves, `@conversion` citations, pool equations) keep
-the elementary stanza form; mixed chains are fine. The lowering commits
-a group only when the stated form provably shares the checker's normal
-form, so a big-step chain always checks.
+the elementary stanza form; mixed chains are fine.
+
+Big-step collapsing needs the formula-level machinery the line check
+uses to accept the collapsed line: a `@relation` for the formula's
+sort with a non-`_` transport, and a `@congr` rule lifting the
+equation head into that relation (`eq_congr` producing `iff`, in the
+lambda fixtures). The lowering commits a group only after replaying
+that acceptance test itself, so in a theory without the wff bundle it
+falls back to elementary one-rule lines — longer, but they always
+check.
 
 ### Syntax
 
