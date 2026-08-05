@@ -135,8 +135,14 @@ pub fn fixtureForSourceTarget(
     var fixture = try initSearchFixture(allocator, mm0_src);
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
+    // A local lemma before the target may itself hold a placeholder or a
+    // half-typed line; tolerate both the way the LSP analysis does, so the
+    // target's search survives an unfinished sibling. The stream is lenient
+    // to match `findSearchLine`'s parse — the spans compared by
+    // `drainLocalItemsBeforeSearchTarget` must come from the same grammar.
+    compiler.allow_search_placeholders = true;
     var proof_stream: ?PipelineCommon.ProofItemStream =
-        PipelineCommon.ProofItemStream.init(allocator, proof_src);
+        PipelineCommon.ProofItemStream.initLenient(allocator, proof_src);
 
     while (true) {
         try fixture.parser.prepareNextPublicStatement();
@@ -305,7 +311,9 @@ fn sourceTargetAnchorName(
 ) !?[]const u8 {
     if (target_block.kind == .theorem) return target_block.name;
 
-    var parser = ProofParser.init(allocator, proof_src);
+    // Lenient to match `findSearchLine`'s parse: `spanEql` below compares
+    // this walk's block spans against the target block it produced.
+    var parser = ProofParser.initLenient(allocator, proof_src);
     var found_target = false;
     while (try parser.nextItem()) |item| {
         switch (item) {

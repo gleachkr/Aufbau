@@ -149,7 +149,12 @@ pub fn suggestionsAtSourceOffset(
     defer cache.deinit();
 
     for (target.block.lines[0..target.line_index]) |line| {
-        if (ProofScript.applicationHasSearchPlaceholder(line.application)) {
+        // An incomplete line has no rule to run, same as a placeholder:
+        // stop accumulating context, but keep searching at the target with
+        // the lines checked so far.
+        if (line.incomplete or
+            ProofScript.applicationHasSearchPlaceholder(line.application))
+        {
             break;
         }
         var result = runSearchLine(
@@ -903,11 +908,12 @@ pub const SearchPlaceholder = struct {
 
 /// Enumerate every search placeholder (`exact?`/`apply?`/`auto?`) in
 /// `proof_src`, top-level and nested, in source order. Used by the LSP to
-/// publish a status diagnostic per placeholder. A parse error ends the scan
-/// early (the compiler's own diagnostics already cover malformed source);
-/// whatever was collected before it is returned. The result is allocated on
-/// `allocator` (including each placeholder's non-empty `params` array);
-/// parser transients are torn down before returning.
+/// publish a status diagnostic per placeholder. The parse is lenient, so a
+/// broken proof line costs only itself; a parse error elsewhere (a broken
+/// header) still ends the scan early (the compiler's own diagnostics cover
+/// malformed source), returning whatever was collected before it. The result
+/// is allocated on `allocator` (including each placeholder's non-empty
+/// `params` array); parser transients are torn down before returning.
 pub fn searchPlaceholders(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
@@ -916,7 +922,7 @@ pub fn searchPlaceholders(
     defer parse_arena.deinit();
     var out = std.ArrayListUnmanaged(SearchPlaceholder){};
     errdefer out.deinit(allocator);
-    var parser = ProofParser.init(parse_arena.allocator(), proof_src);
+    var parser = ProofParser.initLenient(parse_arena.allocator(), proof_src);
     while (parser.nextBlock() catch null) |block| {
         for (block.lines) |line| {
             try collectSearchPlaceholders(allocator, &out, line.application);
@@ -977,9 +983,13 @@ fn findSearchLine(
     offset: usize,
     apply_at_offset: bool,
 ) !?SourceTarget {
-    var parser = ProofParser.init(allocator, proof_src);
+    // Lenient, like every editor-facing parse of the proof source: a broken
+    // sibling line must not cost the block its search targets. Incomplete
+    // lines themselves have no rule application to target.
+    var parser = ProofParser.initLenient(allocator, proof_src);
     while (try parser.nextBlock()) |block| {
         for (block.lines, 0..) |line, line_index| {
+            if (line.incomplete) continue;
             if (apply_at_offset and spanContains(
                 line.application.rule_span,
                 offset,

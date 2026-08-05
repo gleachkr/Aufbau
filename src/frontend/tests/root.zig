@@ -676,6 +676,7 @@ test "lenient parser keeps a broken line's label and goal" {
 
     const broken = block.lines[1];
     try std.testing.expect(broken.incomplete);
+    try std.testing.expectEqual(error.ExpectedLineEnd, broken.parse_err.?);
     try std.testing.expectEqualStrings("l2", broken.label);
     try std.testing.expectEqualStrings(" top ", broken.assertion.text);
     try std.testing.expectEqualStrings("", broken.application.rule_name);

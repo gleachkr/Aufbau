@@ -227,6 +227,25 @@ pub fn checkTheoremBlock(
     var last_span: ?Span = null;
 
     for (block.lines) |line| {
+        // A line the lenient parse could not finish. Only the analyze path
+        // parses leniently, so this mirrors the placeholder gate below:
+        // report the recorded parse failure and keep the lines checked so
+        // far, exactly as if the block ended here. The line contributes
+        // nothing to the label environment and can never reach emission —
+        // the compile path parses strictly and errors out instead.
+        if (line.incomplete) {
+            const diag = CompilerDiag.incompleteProofLineDiagnostic(
+                assertion.name,
+                line,
+            );
+            if (self.allow_search_placeholders) {
+                self.addPrimaryDiagnostic(diag);
+                return try checked.toOwnedSlice(allocator);
+            }
+            self.setProof(diag);
+            return diag.err;
+        }
+
         if (ProofScript.applicationHasSearchPlaceholder(line.application)) {
             if (self.allow_search_placeholders) {
                 return try checked.toOwnedSlice(allocator);

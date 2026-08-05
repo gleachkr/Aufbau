@@ -6351,15 +6351,58 @@ test "compiler analyze with proof recovers to later lemmas with binders" {
     );
     try compiler.analyze();
 
+    // The lenient parse keeps the first `target` block as THE proof of
+    // `target` (its broken line reported in place), so the trailing
+    // duplicate block is suppressed as a repeat of an already-failed
+    // theorem; the lemma in between is still processed.
     const diags = compiler.primaryDiagnostics();
-    try std.testing.expectEqual(@as(usize, 3), diags.len);
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
 
     try std.testing.expectEqual(error.ExpectedIdentifier, diags[0].err);
     try std.testing.expectEqualStrings("target", diags[0].theorem_name.?);
     try std.testing.expectEqual(error.UnknownRule, diags[1].err);
     try std.testing.expectEqualStrings("helper", diags[1].theorem_name.?);
-    try std.testing.expectEqual(error.UnknownRule, diags[2].err);
-    try std.testing.expectEqualStrings("target", diags[2].theorem_name.?);
+}
+
+// #156, editor semantics: with placeholders tolerated, a broken proof line
+// reports the parse failure the strict parse would have raised (same error,
+// pinpointed span) and stops the block there — like a placeholder line — so
+// the theorem still enters the environment and its dependents stay quiet.
+test "compiler analyze in editor mode contains a broken proof line" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\theorem t: $ top $;
+        \\theorem u: $ top $;
+    ;
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ top $ by [#1]
+        \\
+        \\u
+        \\----
+        \\l1: $ top $ by t []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    compiler.allow_search_placeholders = true;
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.ExpectedIdentifier, diags[0].err);
+    try std.testing.expectEqualStrings("t", diags[0].theorem_name.?);
+    try std.testing.expectEqualStrings("l1", diags[0].line_label.?);
+    // Pinned to where the line stopped parsing.
+    try std.testing.expectEqualStrings(
+        "[",
+        proof_src[diags[0].span.?.start..diags[0].span.?.end],
+    );
 }
 
 test "compiler analyze with proof ignores stray proof-line comments" {
@@ -6737,14 +6780,16 @@ test "compiler analyze with proof suppresses missing blocks after eof parse fail
         \\theorem bad_parse: $ top $;
         \\theorem blocked_after_eof: $ top $;
     ;
+    // The second block's failure is at the HEADER level (no underline, and
+    // EOF right after): line-level breakage no longer aborts the stream
+    // under the lenient parse, but an unrecoverable header failure still
+    // must suppress the missing-block cascade for the theorems behind it.
     const proof_src =
         \\bad_rule
         \\--------
         \\l1: $ top $ by missing []
         \\
         \\bad_parse
-        \\---------
-        \\l1: $ top $ by [#1]
     ;
 
     var compiler = Compiler.initWithProof(
@@ -6758,7 +6803,7 @@ test "compiler analyze with proof suppresses missing blocks after eof parse fail
     try std.testing.expectEqual(@as(usize, 2), diags.len);
     try std.testing.expectEqual(error.UnknownRule, diags[0].err);
     try std.testing.expectEqualStrings("bad_rule", diags[0].theorem_name.?);
-    try std.testing.expectEqual(error.ExpectedIdentifier, diags[1].err);
+    try std.testing.expectEqual(error.ExpectedBlockUnderline, diags[1].err);
     try std.testing.expectEqualStrings("bad_parse", diags[1].theorem_name.?);
 }
 

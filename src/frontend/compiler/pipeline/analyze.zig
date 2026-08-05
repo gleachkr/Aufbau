@@ -70,7 +70,12 @@ const ProofAnalysisState = struct {
             .allocator = allocator,
             .invalid_rules = InvalidRuleSet.init(allocator),
             .invalid_terms = InvalidRuleSet.init(allocator),
-            .parser = ProofScriptParser.init(allocator, source),
+            // Lenient: a broken proof line becomes a `ProofLine.incomplete`
+            // entry (reported by `checkTheoremBlock`'s incomplete gate)
+            // instead of abandoning the whole item, so the block's other
+            // lines keep their diagnostics and editor state. The compile
+            // path (`run.zig`) stays strict.
+            .parser = ProofScriptParser.initLenient(allocator, source),
         };
     }
 

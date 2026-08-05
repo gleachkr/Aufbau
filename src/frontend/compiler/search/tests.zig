@@ -676,6 +676,97 @@ test "source suggestions report found and miss status" {
     try std.testing.expect(miss.target_span != null);
 }
 
+// #156: a broken sibling line must not cost the block its search actions.
+// The lenient parse keeps the block; the incomplete line contributes nothing
+// to the checked context (same as a placeholder), and the target still
+// searches.
+test "source suggestions survive a broken sibling line" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom q: $ Q $;
+        \\theorem t: $ Q $;
+    ;
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ P $ by p []
+        \\l2: $ P $ by [#1]
+        \\l3: $ Q $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        std.mem.indexOf(u8, proof_src, "exact?").?,
+        .{},
+    );
+    defer suggestions.deinit();
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
+}
+
+// Same story one block earlier: a local lemma before the target holds the
+// broken line. The lenient proof stream and the placeholder-tolerant fixture
+// compiler keep the fixture build alive.
+test "source suggestions survive a broken line in a preceding local lemma" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom q: $ Q $;
+        \\theorem t: $ Q $;
+    ;
+    const proof_src =
+        \\lemma h: $ P $
+        \\----
+        \\h1: $ P $ by [#1]
+        \\
+        \\t
+        \\----
+        \\l1: $ Q $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        std.mem.indexOf(u8, proof_src, "exact?").?,
+        .{},
+    );
+    defer suggestions.deinit();
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
+}
+
+test "searchPlaceholders survives a broken sibling line" {
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ P $ by [#1]
+        \\l2: $ Q $ by auto?
+    ;
+    const placeholders = try source.searchPlaceholders(
+        std.testing.allocator,
+        proof_src,
+    );
+    defer std.testing.allocator.free(placeholders);
+
+    try std.testing.expectEqual(@as(usize, 1), placeholders.len);
+    try std.testing.expectEqual(
+        source.SearchPlaceholder.Kind.auto,
+        placeholders[0].kind,
+    );
+}
+
 // A trailing local lemma has no public anchor block; its search scope is the
 // whole mm0 (mirrors `drainTrailingLocalProofItems` on the compile path).
 test "source suggestions work in a trailing local lemma" {

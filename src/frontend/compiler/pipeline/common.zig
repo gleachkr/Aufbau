@@ -59,6 +59,20 @@ pub const ProofItemStream = struct {
         };
     }
 
+    /// Editor-facing variant: broken proof lines become
+    /// `ProofLine.incomplete` entries instead of ending the stream. The
+    /// compile path must keep using `init` — an incomplete line is an error
+    /// there.
+    pub fn initLenient(
+        allocator: std.mem.Allocator,
+        source: []const u8,
+    ) ProofItemStream {
+        return .{
+            .allocator = allocator,
+            .parser = ProofScriptParser.initLenient(allocator, source),
+        };
+    }
+
     pub fn next(self: *ProofItemStream) !?TopLevelItem {
         if (self.pending.items.len > 0) {
             return self.pending.pop().?;

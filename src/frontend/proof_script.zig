@@ -127,6 +127,10 @@ pub const ProofLine = struct {
     /// point of failure. Consumers that resolve the rule must skip these; the
     /// strict parse the compiler runs never produces one.
     incomplete: bool = false,
+    /// The parse failure behind an `incomplete` line, so consumers that
+    /// report diagnostics (the analyze path) can name the same error the
+    /// strict parse would have. Null on complete lines.
+    parse_err: ?anyerror = null,
 
     pub fn ruleApplicationSpan(self: ProofLine) Span {
         return self.application.ruleApplicationSpan();
@@ -470,7 +474,7 @@ pub const Parser = struct {
                 const failure = self.last_error_span orelse
                     self.tokenSpanAt(self.pos);
                 self.recoverToNextProofLine(line_start);
-                const partial = self.partialProofLine(line_start, failure) catch |partial_err| {
+                const partial = self.partialProofLine(line_start, failure, err) catch |partial_err| {
                     if (partial_err == error.OutOfMemory) return partial_err;
                     // Recovery has already run, so dropping just this line
                     // still costs the reader less than dropping the block.
@@ -495,6 +499,7 @@ pub const Parser = struct {
         self: *Parser,
         line_start: usize,
         failure: Span,
+        parse_err: anyerror,
     ) !ProofLine {
         const resume_pos = self.pos;
         const saved_error = self.last_error_span;
@@ -555,6 +560,7 @@ pub const Parser = struct {
             },
             .span = .{ .start = line_start, .end = line_end },
             .incomplete = true,
+            .parse_err = parse_err,
         };
     }
 

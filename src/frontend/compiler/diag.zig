@@ -1,5 +1,6 @@
 const std = @import("std");
 const Span = @import("../proof_script.zig").Span;
+const ProofLine = @import("../proof_script.zig").ProofLine;
 const ProofScriptParser = @import("../proof_script.zig").Parser;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const DiagScratch = @import("../diag_scratch.zig");
@@ -324,6 +325,25 @@ pub fn proofParserDiagnostic(
             fallback_theorem_name,
         .block_name = proofs.diagnosticBlockName(),
         .span = proofs.diagnosticSpan(),
+    };
+}
+
+/// A proof line the lenient parse could not finish (`ProofLine.incomplete`).
+/// Mirrors `proofParserDiagnostic`'s shape — same error, and the recorded
+/// failure span stands in for the parser's — so the analyze path reports
+/// what the strict parse would have raised at this spot.
+pub fn incompleteProofLineDiagnostic(
+    theorem_name: []const u8,
+    line: ProofLine,
+) Diagnostic {
+    return .{
+        .kind = .generic,
+        .err = line.parse_err orelse error.UnexpectedCharacter,
+        .source = .proof,
+        .theorem_name = theorem_name,
+        .block_name = theorem_name,
+        .line_label = line.label,
+        .span = line.application.rule_span,
     };
 }
 
