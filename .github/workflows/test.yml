@@ -102,3 +102,21 @@ jobs:
             -Doptimize=ReleaseFast \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
+
+      # The pages workflow builds the manual too, but only on push to main.
+      # Building it here catches a broken chapter or preprocessor on the PR.
+      - name: Build the manual
+        run: nix develop .#ci --command mdbook build manual
+
+      # Compile every live cell in the manual and diff the per-document report
+      # against the checked-in baseline. Some cells fail by design (error
+      # demonstrations, cells left holding a search placeholder), so the gate is
+      # the diff, not universal green — see manual/scripts/check-cells.mjs for
+      # how to regenerate the baseline.
+      - name: Check manual cells against the baseline
+        run: |
+          nix develop .#ci --command bash -euo pipefail -c '
+            node manual/scripts/check-cells.mjs --abc zig-out/bin/abc \
+              > "$RUNNER_TEMP/cells.actual"
+            diff -u manual/cells.expected "$RUNNER_TEMP/cells.actual"
+          '

@@ -1,0 +1,58 @@
+axioms-theorems-definitions.md cell1: ok
+axioms-theorems-definitions.md doc:defs: ok
+axioms-theorems-definitions.md doc:binderdefs: ok
+axioms-theorems-definitions.md cell2: error: error: definition body has free variables that the result type does not declare
+computation.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof
+computation.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof
+computation.md cell3: error: error: proof line is justified by a search placeholder, not a completed proof
+computation.md cell4: error: error: proof line is justified by a search placeholder, not a completed proof
+embedding.md cell1: ok
+embedding.md theory:hilbert: ok
+embedding.md doc:hilbert: ok
+equality-and-normalization.md cell1: ok
+equality-and-normalization.md cell2: ok
+equality-and-normalization.md cell3: ok
+equality-and-normalization.md cell4: error: error: proof line assertion does not match the rule conclusion
+ergonomics.md cell1: ok
+ergonomics.md cell2: error: error: binder assignments violate the rule's dependency constraints
+ergonomics.md cell3: ok
+ergonomics.md cell4: ok
+first-proof.md doc:hilbert: ok
+hilbert-calculus.md doc:hilbert: ok
+holes.md cell1: ok
+holes.md cell2: ok
+introduction.md cell1: ok
+lambda-calculus.md doc:lam: ok
+lambda-calculus.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof
+lambda-calculus.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof
+lemmas-defs-in-proofs.md cell1: ok
+lemmas-defs-in-proofs.md cell2: ok
+lemmas-defs-in-proofs.md cell3: ok
+lemmas-defs-in-proofs.md cell4: ok
+natural-deduction.md doc:nd: ok
+notation.md doc:notation: ok
+notation.md doc:lambda: ok
+npm-packages.md theory:example: ok
+peano.md doc:peano: ok
+powering-search.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof
+powering-search.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof
+powering-search.md cell3: error: error: proof line is justified by a search placeholder, not a completed proof
+powering-search.md cell4: error: error: proof line is justified by a search placeholder, not a completed proof
+programs-and-correctness.md doc:hoare: ok
+proof-blocks-and-lines.md doc:blocks: ok
+proof-line.md doc:hilbert: ok
+proof-line.md cell1: error: error: one of the rule's variables could not be determined from the statement and cited premises
+proof-search.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof
+proof-search.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof
+proof-search.md cell3: error: error: proof line is justified by a search placeholder, not a completed proof
+proof-search.md cell4: error: error: proof line is justified by a search placeholder, not a completed proof
+references-and-bindings.md doc:refs: ok
+references-and-bindings.md doc:quant: ok
+sorts-and-terms.md doc:prefix: ok
+sorts-and-terms.md doc:arith: ok
+sorts-and-terms.md doc:coercion: ok
+variables-and-binders.md doc:binders: ok
+views-and-recovery.md cell1: error: error: the statement and cited premises could not be matched against this rule
+views-and-recovery.md cell2: ok
+views-and-recovery.md cell3: ok
+views-and-recovery.md cell4: ok

@@ -11,6 +11,12 @@
 // Some cells fail by design (error demonstrations, cells left with search
 // placeholders); the point of the report is the *diff*, not universal green.
 //
+// CI diffs this report (stdout only — the failure count goes to stderr)
+// against the checked-in `manual/cells.expected`. When a change moves a cell
+// on purpose, regenerate the baseline and review the diff:
+//
+//   node manual/scripts/check-cells.mjs --abc zig-out/bin/abc > manual/cells.expected
+//
 // Usage: node scripts/check-cells.mjs [--abc PATH] [--keep DIR]
 //   --abc PATH   compiler binary (default ../zig-out/bin/abc)
 //   --keep DIR   write the assembled mm0/auf pairs to DIR for inspection
