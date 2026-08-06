@@ -544,6 +544,7 @@ fn instantiateRewriteRuleRhs(
         *const SymbolicExpr,
         rewrite_bindings.len,
     );
+    defer self.shared.allocator.free(subst);
     for (rewrite_bindings, 0..) |binding_opt, idx| {
         const binding = binding_opt orelse return null;
         subst[idx] = try WitnessState.boundValueRepresentative(self, binding);
