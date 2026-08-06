@@ -1,10 +1,10 @@
 # Programs and correctness
 
-This chapter shows how to verify small imperative programs. It builds 
-first-order dynamic logic in a world-labelled sequent calculus, derives the 
-rules of Hoare logic as theorems, and then verifies an assignment sequence and 
-a while loop. The Floyd assignment axiom is used as a `@rewrite`, so the 
-rewrite engine computes weakest preconditions and no substitution step is ever 
+This chapter shows how to verify small imperative programs. It builds
+first-order dynamic logic in a world-labelled sequent calculus, derives the
+rules of Hoare logic as theorems, and then verifies an assignment sequence and
+a while loop. The Floyd assignment axiom is used as a `@rewrite`, so the
+rewrite engine computes weakest preconditions and no substitution step is ever
 written by hand.
 
 ## Formulas and programs
@@ -67,9 +67,9 @@ notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
   ($subst$:41) x ($/$:0) t a;
 ```
 
-Programs are: sequencing `a ⨟ b`, iteration `⋆ a`, tests `? p`, and assignment. 
-`[ a ] p` says `p` holds after every terminating run of the program `a`. 
-Finally `⟨ x ≔ e ⟩` is assignment of the value of the expression `e` to the 
+Programs are: sequencing `a ⨟ b`, iteration `⋆ a`, tests `? p`, and assignment.
+`[ a ] p` says `p` holds after every terminating run of the program `a`.
+Finally `⟨ x ≔ e ⟩` is assignment of the value of the expression `e` to the
 variable `x`.
 
 ## Judgments
@@ -114,10 +114,10 @@ notation ht (p: form) (a: prog) (q: form): wff =
 The basic judgment is world-labelled truth: `w : p` says the formula `p`
 holds at state `w`, and `step w a v` says program `a` can move state `w` to
 state `v`. Sequents `g ⊢ w : p` carry labelled facts in an ACUI context, as
-in the [Natural deduction](natural-deduction.md) chapter. We also have validity 
+in the [Natural deduction](natural-deduction.md) chapter. We also have validity
 `⊨ p` (truth at every state) and the Hoare triple `⦃ p ⦄ a ⟦ q ⟧`.
 
-## The batteries
+## Equivalence infrastructure
 
 Each sort gets its equivalence, bundled for the normalizer as in [Equality
 and normalization](equality-and-normalization.md).
@@ -252,8 +252,8 @@ axiom sb_f_neg {x: obj} (t: obj x) (p: form x):
 
 ## The logic
 
-The propositional core is a labelled natural deduction system. These are the 
-rules of the [Natural deduction](natural-deduction.md) chapter, with world 
+The propositional core is a labelled natural deduction system. These are the
+rules of the [Natural deduction](natural-deduction.md) chapter, with world
 indices.
 
 ```aufbau-theory doc=hoare
@@ -365,8 +365,8 @@ def while (b: form) (a: prog): prog = $ ⋆ (? b ⨟ a) ⨟ ? (¬ b) $;
 ```
 
 A formula is valid when it is provable at an eigenstate from no assumptions,
-and `⦃ p ⦄ a ⟦ q ⟧` is interconvertible with `⊨ (p → ([ a ] q))`. The while 
-loop is a definition, not a primitive: iterate the guarded body, then exit 
+and `⦃ p ⦄ a ⟦ q ⟧` is interconvertible with `⊨ (p → ([ a ] q))`. The while
+loop is a definition, not a primitive: iterate the guarded body, then exit
 through the failed guard.
 
 ## The modal toolkit
@@ -489,7 +489,7 @@ l6: $ ⊨ (p → ([ a ⨟ b ] r)) $ by valid_intro [l5]
 l7: $ ⦃ p ⦄ (a ⨟ b) ⟦ r ⟧ $ by ht_intro [l6]
 ```
 
-Assignment comes in two forms. The Floyd/Hoare rule falls out of `red_assign` 
+Assignment comes in two forms. The Floyd/Hoare rule falls out of `red_assign`
 in five lines:
 
 ```aufbau-proof doc=hoare
@@ -520,16 +520,16 @@ l5: $ ⊨ (q → ([ ⟨ x ≔ e ⟩ ] p)) $ by valid_intro [l4]
 l6: $ ⦃ q ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $ by ht_intro [l5]
 ```
 
-The `@view` (from [Views and recovery](views-and-recovery.md)) lets us avoid 
-writing `⌊ x / b ⌋ (x = b)`. It puts a phantom binder `q` in the precondition 
-position, so reading the stated triple determines `x`, `e`, and `p` from the 
-assignment and the postcondition, while `q` absorbs whatever precondition was 
-written. The rewrite rules then compute the substitution for `⌊ x / e ⌋ p` .
+The `@view` described in
+[Views and recovery](views-and-recovery.md) avoids writing
+`⌊ x / b ⌋ (x = b)`. Its phantom binder `q` occupies the precondition, while
+the assignment and postcondition determine `x`, `e`, and `p`. The rewrite rules
+then compute the substitution `⌊ x / e ⌋ p`.
 
 `hoare_assign_wp` builds in precondition *strengthening*. Read its
-hypothesis as "`q` implies the weakest precondition". Its view again lets us 
-lean on the rewrite rules to handle substitutions. The phantom `r` stands where 
-`⌊ x / e ⌋ p` sits in the raw rule, so the cited verification condition can be 
+hypothesis as "`q` implies the weakest precondition". Its view again lets us
+lean on the rewrite rules to handle substitutions. The phantom `r` stands where
+`⌊ x / e ⌋ p` sits in the raw rule, so the cited verification condition can be
 written with the substitutions fully evaluated.
 
 ```aufbau-proof doc=hoare
@@ -588,8 +588,8 @@ l5: $ ⦃ ⊤ ⦄ ⟨ x ≔ a ⟩ ⟦ b = b ⟧ $ by hoare_assign_wp [l4]
 l6: $ ⦃ ⊤ ⦄ (⟨ x ≔ a ⟩ ⨟ ⟨ x ≔ b ⟩) ⟦ x = b ⟧ $ by hoare_seq [l5, l1]
 ```
 
-Finally, a loop: decrement `x` until it hits zero. The invariant is the 
-trivial `⊤`; `hoare_while` returns the invariant conjoined with the failed 
+Finally, a loop: decrement `x` until it hits zero. The invariant is the
+trivial `⊤`; `hoare_while` returns the invariant conjoined with the failed
 guard `¬ ¬ (x = 0)`, and `hoare_conseq` cleans up the double
 negation classically:
 

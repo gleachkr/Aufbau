@@ -1,7 +1,7 @@
-# Appendix: Search parameters
+# Appendix: search parameters
 
 Reference for proof-search invocation parameters. Concepts and
-workflow are in [Proof Search](proof-search.md); `conversion?` itself is
+workflow are in [Proof search](proof-search.md); `conversion?` itself is
 covered in [Computation](computation.md).
 
 ## The search commands
@@ -13,8 +13,8 @@ covered in [Computation](computation.md).
 | `auto?` | `exact?` plus recursive generation of missing sub-proofs, under iterative deepening and a work budget. The only generating search. |
 | `conversion?` | Equality saturation: is the goal convertible, by `@conversion`/`@compute` rewrites and local equations, to a hypothesis, earlier line, or instance of a reflexivity law? |
 
-A search command can be used on a proof line after `by`, or inside a reference 
-slot (`by mp [auto?, #1]`). `conversion?` can only be accepted on top-level 
+A search command can be used on a proof line after `by`, or inside a reference
+slot (`by mp [auto?, #1]`). `conversion?` can only be accepted on top-level
 proof lines, and only with a concrete goal (no holes).
 
 Search commands run in the editor and language server, which report the found
@@ -32,7 +32,7 @@ l1: $ c $ by auto? (depth: 8, fuel: 8192)
 l2: $ c $ by rule1 [auto? (t := $ k $, nodes: 400)]
 ```
 
-Unknown names and out-of-range values are reported and skipped. If a name is 
+Unknown names and out-of-range values are reported and skipped. If a name is
 repeated, the last occurrence wins.
 
 ## `auto?` parameters
@@ -55,8 +55,8 @@ than guessing.
 | `iters` | 16 | 1–10 000 | Saturation rounds (match → instantiate → rebuild). Saturation stops early the moment the goal joins a reference's class, so a hit does not pay the full count. |
 | `nodes` | 10 000 | 1–1 000 000 | Cap on distinct term shapes the e-graph may hold. |
 
-Note that `nodes` means different things on the two commands: a sub-goal
-count on `auto?`, an e-graph size on `conversion?`.
+`nodes` has command-specific units: sub-goals for `auto?`, and e-graph nodes
+for `conversion?`.
 
 ## `exact?` and `apply?`
 
@@ -64,9 +64,9 @@ Take no parameters.
 
 ## What search reads from the theory
 
-The searches can be controlled by annotations in the `.mm0` file: `@auto 
-forward` / `backward` / `eager` / `trigger` enroll rules for `auto?` (see 
-[Powering search](powering-search.md)), `@conversion` and `@compute` enroll 
-equations for `conversion?` (see [Computation](computation.md)), and `@vars` 
-supplies a witness pool. The per-invocation parameters above only decide how 
+The searches can be controlled by annotations in the `.mm0` file: `@auto
+forward` / `backward` / `eager` / `trigger` enroll rules for `auto?` (see
+[Powering search](powering-search.md)), `@conversion` and `@compute` enroll
+equations for `conversion?` (see [Computation](computation.md)), and `@vars`
+supplies a witness pool. The per-invocation parameters above only decide how
 much work those enrollments are allowed to do.

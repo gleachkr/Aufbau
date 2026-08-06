@@ -1,13 +1,13 @@
-# The Parts of a Proof Line
+# The parts of a proof line
 
 Proof lines look like this:
 ```
 label: $ GOAL $ by rule (bindings) [references]
 ```
 The label names the line. The goal, between `$` signs, is what the line
-asserts. Everything after `by` is the justification for the line: the rule 
-being applied, optional *bindings* in parentheses that pin down the rule's 
-variables, and optional *references* in brackets that supply the rule's 
+asserts. Everything after `by` is the justification for the line: the rule
+being applied, optional *bindings* in parentheses that pin down the rule's
+variables, and optional *references* in brackets that supply the rule's
 hypotheses.
 
 We'll work in the Hilbert system from the last chapter, extended with the
@@ -35,7 +35,7 @@ supplied three ways:
 - an **inline application** is a rule applied on the spot, inside the
   brackets, without a line of its own.
 
-As a running example, here's the usual proof that `p -> p`, which needs 
+As a running example, here's the usual proof that `p -> p`, which needs
 instances of `h1`, an instance of `h2`, and two applications of `mp`.
 
 ```aufbau-proof doc=hilbert
@@ -48,8 +48,7 @@ l4: $ (p -> (p -> p)) -> (p -> p) $ by mp [l1, l3]
 l5: $ p -> p $ by mp [l2, l4]
 ```
 
-It checks, but lines like `l3` are painful: you are transcribing an axiom
-instance the compiler could have worked out itself.
+It checks, but `l3` transcribes an axiom instance that the compiler can infer.
 
 ## Inline applications
 
@@ -63,8 +62,8 @@ l1: $ q -> p $ by mp [#1, h1 []]
 ```
 
 The second reference, `h1 []`, applies the axiom in place. The empty
-brackets say it has no hypotheses of its own. A bare name in a reference list 
-means a *line label*, so without the brackets `h1` would look for a line named 
+brackets say it has no hypotheses of its own. A bare name in a reference list
+means a *line label*, so without the brackets `h1` would look for a line named
 `h1` rather than the axiom.
 
 Inline applications can be nested, and mixed freely with the other reference
@@ -79,12 +78,12 @@ l2: $ p -> (p -> p) $ by h1
 l3: $ p -> p $ by mp [l2, mp [l1, h2 []]]
 ```
 
-This lets us avoid the painful `l3` from the first version. 
+This version omits the explicit `h2` line from the first proof.
 
 ## When chaining fails
 
-So why not fold everything into one line? Try it — this cell is broken on
-purpose:
+Folding every application into one line loses information needed for
+inference. The following cell is intentionally invalid:
 
 ```aufbau-proof
 @@mm0
@@ -101,8 +100,8 @@ lemma imp_refl_flat (p: wff): $ p -> p $
 l1: $ p -> p $ by mp [h1 [], mp [h1 [], h2 []]]
 ```
 
-The diagnostic says one of `h1`'s variables could not be determined. Aufbau can 
-only infer what is forced by the goal and the references, and nothing here 
+The diagnostic says one of `h1`'s variables could not be determined. Aufbau can
+only infer what is forced by the goal and the references, and nothing here
 forces a choice of instance for the first `h1 []`.
 
 If a variable cannot be determined, you can give the premise its own labeled
@@ -117,7 +116,7 @@ l1: $ p -> p $ by mp [h1 (a := $ p $, b := $ p $) [],
 
 ## Packing and unpacking
 
-Chains can be unpacked. Put your caret on the last line of `imp_refl_chained` 
-and pause: the lightbulb offers an *unpack* action that rewrites the line as 
-separate labeled lines, one per inline application, with each goal filled in 
-from what the compiler checked. 
+Chains can be unpacked. Put your caret on the last line of `imp_refl_chained`
+and pause: the lightbulb offers an *unpack* action that rewrites the line as
+separate labeled lines, one per inline application, with each goal filled in
+from what the compiler checked.

@@ -104,7 +104,7 @@ It should print:
 Verification successful!
 ```
 
-`mm0-zig` takes the MMB path as its argument and reads the matching MM0 source 
+`mm0-zig` takes the MMB path as its argument and reads the matching MM0 source
 from standard input.
 
 ## Command-line help

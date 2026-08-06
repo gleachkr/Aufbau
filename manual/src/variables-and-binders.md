@@ -1,6 +1,6 @@
 # Variables, binders, and dependencies
 
-Term declarations require a binder list, like `(a b: wff)`, `{x: tm}` and `(e: 
+Term declarations require a binder list, like `(a b: wff)`, `{x: tm}` and `(e:
 tm x)`.
 
 ## Regular variables
@@ -27,9 +27,9 @@ variable-binding:
 term lam {x: tm} (e: tm x): tm;
 ```
 
-`lam` takes a variable `x` and a body `e`, both of sort `tm`, with the curly 
-braces indicating that `x` is a variable. A bound variable slot can only ever 
-be filled by a bound variable: `lam (app u u) e` is not well formed. An 
+`lam` takes a variable `x` and a body `e`, both of sort `tm`, with the curly
+braces indicating that `x` is a variable. A bound variable slot can only ever
+be filled by a bound variable: `lam (app u u) e` is not well formed. An
 abstraction is therefore never over a compound term.
 
 These variables are also the object language's variables. A theory needs no
@@ -45,15 +45,14 @@ axiom sb_lam {x y: tm} (e: tm x y) (a: tm x):
   $ eq (sb x (lam y e) a) (lam y (sb x e a)) $;
 ```
 
-`sb x e a` substitutes `a` for `x` in `e`. This axiom pushes a substitution 
-under a lambda. `e: tm x y` says the body may mention either variable. `a: tm 
-x` says that `a` can mention `x`, but not `y`: whatever `a` is instantiated 
-with may not mention the variable `y` stands for. In general, if a bound binder 
-occurs in theorem or axiom signature, but does not appear as a dependency of a 
-regular binder in the same signature, then whatever is slotted in for the bound 
-binder may not appear in whatever is slotted in for the regular binder. A 
-variety of side conditions, for example freshness and accidental capture 
-avoidance, can be encoded using this style of dependency declaration.
+`sb x e a` substitutes `a` for `x` in `e`; this axiom pushes that
+substitution under a lambda. `e: tm x y` says that the body may mention either
+variable. `a: tm x` says that `a` may mention `x` but not `y`.
+
+More generally, if a bound binder is absent from a regular binder's dependency
+list, the expression assigned to the regular binder must not mention the
+variable assigned to the bound binder. Dependency lists encode side
+conditions such as freshness and capture avoidance.
 
 ```aufbau-proof doc=binders
 @@mm0
@@ -83,21 +82,20 @@ dependency violation: the rule does not allow a to mention the variable
 assigned to y
 ```
 
-That is precisely the capture the rule has to rule out. Substituting `y` for `x`
-in `lam y x` should leave that `y` free, but on the right-hand side it lands
-under the binder, and the two sides stop agreeing. MM0 does not automatically 
-rename variables to avoid this so the author states the condition in the binder 
-list and the verifier enforces it at every application (however, the `abc` 
-compiler does support some alpha-renaming, via special annotations discussed 
-later in this manual).
+This is the capture that the rule must exclude. Substituting `y` for `x` in
+`lam y x` should leave `y` free, but the right-hand side places it under the
+binder. MM0 does not rename variables automatically, so the binder list states
+the restriction and the verifier enforces it. Aufbau can perform selected
+alpha-renaming through annotations described in
+[Ergonomics](ergonomics.md).
 
-Distinct bound binders must stand for distinct variables. A rule declaring `{x 
-y: tm}`, as `sb_lam` does, cannot be applied with both slots filled by one 
+Distinct bound binders must stand for distinct variables. A rule declaring `{x
+y: tm}`, as `sb_lam` does, cannot be applied with both slots filled by one
 variable, and reports that `x` and `y` must be assigned distinct variables.
 
-A constructor's result sort can carry dependencies as well: `term fresh {x: tm} 
-(e: tm): tm x;` declares that `fresh x e` mentions `x` however `e` is 
-instantiated. This affects which variables a compound expression counts as 
+A constructor's result sort can carry dependencies as well: `term fresh {x: tm}
+(e: tm): tm x;` declares that `fresh x e` mentions `x` however `e` is
+instantiated. This affects which variables a compound expression counts as
 mentioning, which is relevant to how it can function in a definition.
 
 ## Dummy variables
@@ -113,8 +111,8 @@ def uniq {x .y: tm} (p: wff x): wff = $ ex y (all x (iff p (eq x y))) $;
 proof that unfolds `uniq` is free to instantiate it with any variable that does
 not clash. Proofs introduce dummies of their own in the same way.
 
-Definitions are the subject of chapter 8. What matters here is that dummies are
-the third way a variable enters a declaration, and that the two sort modifiers
-left hanging in the last chapter are about the material of this one: `free`
-forbids dummy variables of a sort, and `strict` forbids binding it at all — no
-bound binder, no dummy, and no appearance in a dependency list.
+Definitions are covered in
+[Axioms, theorems, and definitions](axioms-theorems-definitions.md). For now,
+dummy variables are the third way that variables enter declarations. The
+`free` sort modifier forbids dummies of that sort. The `strict` modifier
+forbids bound binders, dummies, and appearances in dependency lists.

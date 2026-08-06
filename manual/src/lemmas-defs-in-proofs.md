@@ -2,13 +2,13 @@
 
 An `.auf` file is a sequence of top-level items: proof blocks, `lemma` blocks,
 and `def` items. Proof blocks discharge the theorems declared in the `.mm0`
-file. `lemma`s and `defs` allow you to extend the theory in a logically-safe 
-way from within the `.auf` file.
+file. `lemma` and `def` items extend the theory without adding unproved
+assumptions.
 
 ## Proof blocks
 
-A theorem declared in the `.mm0` file is proved by a block consisting of the 
-name of the theorem, an underline of at least three dashes, and the proof 
+A theorem declared in the `.mm0` file is proved by a block consisting of the
+name of the theorem, an underline of at least three dashes, and the proof
 lines.
 
 ```aufbau-proof prelude=nd-base,nd-rules
@@ -29,7 +29,7 @@ and forward references are rejected.
 
 ## Lemma blocks
 
-A `lemma` block declares a proof-local rule. It carries its own signature, 
+A `lemma` block declares a proof-local rule. It carries its own signature,
 written like an MM0 axiom:
 
 ```
@@ -61,12 +61,12 @@ l3: $ _ ⊢ (a ∧ b) → (b ∧ a) $ by imp_intro [l2]
 applies it with `g` bound to `a ∧ b`.
 
 Lemmas are not part of the theory's `.mm0` interface, and nothing outside the
-proof file can cite them. In the compiled `.mmb` binary they are emitted as 
+proof file can cite them. In the compiled `.mmb` binary they are emitted as
 local theorems.
 
 ## Definitions with hidden bodies
 
-A definition declared in the `.mm0` file may omit its body. An omitted body can 
+A definition declared in the `.mm0` file may omit its body. An omitted body can
 then be supplied by the proof file:
 
 ```aufbau-proof prelude=nd-base,nd-rules
@@ -93,12 +93,11 @@ bodyless declaration is reached. The definition it fills is public: it is
 emitted as an ordinary term definition and checked against the `.mm0`
 declaration, so it can carry notation, and `a ⊼ b` is available in proofs.
 
-Leaving the body out of the `.mm0` file means the interface commits only to the
-connective existing. The `.mm0` file can still include theorems that involve 
-the defined term. Bodiless definitions are intended to provide a mechanism for 
-"constructive implicit definitions", where a term is defined by a set of 
-theorems that are provable about it, but the precise definition is left open by 
-the theory and instead supplied by the proof development.
+Leaving the body out of the `.mm0` file means that the interface commits only
+to the connective's existence. The file may still declare theorems involving
+the defined term. This supports *constructive implicit definitions*: the
+interface specifies a term through properties that must be proved, while the
+proof development supplies a concrete definition satisfying them.
 
 
 ## Proof-local definitions
@@ -130,8 +129,8 @@ l2: $ g , h ⊢ ⊥ $ by not_elim [#1, l1]
 Proof-side definitions cannot carry notation yet, which is why `nand a b` here
 is written in application form where the previous version could write `a ⊼ b`.
 
-Like ordinary definitions, proof local definitions are transparent at rule 
-applications: the folded and unfolded forms are interchangeable, and each line 
-can be stated in whichever form is clearer. A defined connective can be 
-introduced and its rules derived without writing the expanded form anywhere but 
+Like ordinary definitions, proof-local definitions are transparent at rule
+applications: the folded and unfolded forms are interchangeable, and each line
+can be stated in whichever form is clearer. A defined connective can be
+introduced and its rules derived without writing the expanded form anywhere but
 the definition itself.

@@ -1,13 +1,12 @@
 # Introduction
 
 Aufbau is a verifier and compiler for Metamath Zero (MM0), a language for
-writing formally checked mathematics. You write a theory — sorts, term
-constructors, axioms — and then proofs against it. A small, auditable kernel
-checks that every proof really does follow from the axioms.
+formally checked mathematics. An MM0 theory declares its sorts, term
+constructors, and axioms. Proofs state what follows from that theory, and a
+small verification kernel checks each result.
 
-This manual is interactive. The proof editor is embedded directly in the page: 
-the boxes below are not screenshots. They are the real editor running the 
-Aufbau compiler in WebAssembly and checking as you type.
+This manual is interactive. Its proof cells are not screenshots: each one runs
+the Aufbau compiler in WebAssembly and checks edits as you type.
 
 Here is a complete, checked proof to start with. It works in a tiny fragment
 of propositional logic: implication, and the *weakening* axiom `h1`, which
@@ -32,14 +31,11 @@ lemma named `weaken` with one line: it states the goal between `$` signs
 and cites the axiom with `by h1`. The compiler works out for itself that
 the axiom's `a` must be our `p` and its `b` our `q`.
 
-Try breaking it. Change the last `p` on the proof line to `q`, so the line
-claims `p -> (q -> q)` — the axiom no longer fits that shape, and the cell
-will tell you so. Put it back and it checks cleanly again.
+Try changing the last `p` on the proof line to `q`. The line will claim
+`p -> (q -> q)`, which no longer matches the axiom, and the cell will report
+an error. Restore the `p` to make the proof check again.
 
-The rest of this manual builds from here. The first part stays in the browser 
-and demonstrates basic proof writing: reading and writing proof lines, 
-letting the built-in search fill in steps, and organizing larger proofs. The 
-two parts after that teach the languages properly — MM0, the theory language, 
-and `.auf`, the proof language — assuming no prior acquaintance with either. 
-Later parts cover designing your own theories, a tour of worked theories, and 
-the command-line and embedding tools.
+The opening chapters cover proof lines, built-in search, and larger proofs.
+The next two parts describe MM0, the theory language, and `.auf`, Aufbau's
+proof language. Later parts explain theory design, develop several worked
+theories, and document the command-line and embedding tools.

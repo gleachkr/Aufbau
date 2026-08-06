@@ -1,14 +1,12 @@
 # Sorts and terms
 
-An `.mm0` file declares a theory, including the syntax its expressions are 
-built from, the axioms it assumes, and a set of theorems that are intended to 
-be provable. When a compiled proof development (an `.mmb` file) is verified, it 
-is checked against an `.mm0` file to see if it proves the stated theorems using 
-the stated axioms. So the `.mm0` file functions as a kind of specification of 
-requirements for the proof development in an `.auf` file.
+An `.mm0` file declares a theory: the syntax of its expressions, its axioms,
+and the theorems to be proved. A verifier checks the compiled `.mmb` proof
+against this declaration. The `.mm0` file is the specification that
+an `.auf` proof development must satisfy.
 
-The `.mm0` file is a list of statements, each ending in a semicolon. This 
-chapter covers the way in which a theory's syntax is declared.
+An `.mm0` file contains a sequence of statements, each ending in a semicolon.
+This chapter explains the statements that declare a theory's syntax.
 
 ## Sorts
 
@@ -20,7 +18,7 @@ sort tm;
 
 Every expression belongs to exactly one sort.
 
-Sorts can carry modifiers. One modifier is quite important:
+Sort declarations can carry modifiers. The most common is `provable`:
 
 ```mm0
 provable sort wff;
@@ -39,17 +37,17 @@ A `term` statement declares a way to build expressions.
 term imp (a b: wff): wff;
 ```
 
-`imp` takes two `wff`s and produces a `wff`. In a math string a term 
-constructor is applied prefix, and an argument that is itself an application is 
+`imp` takes two `wff`s and produces a `wff`. In a math string a term
+constructor is applied prefix, and an argument that is itself an application is
 parenthesized:
 
 ```
 $ imp a (imp b a) $
 ```
 
-Constructors and variables are the only syntactic forms that mm0 supports. The 
-`->` of the earlier chapters was *notation* for the `imp` constructor. Here is 
-the introduction's theory with its notation removed.
+Constructors and variables are the only syntactic forms that MM0 supports.
+The `->` in earlier chapters was notation for the `imp` constructor. Here is
+the theory from the introduction without that notation.
 
 ```aufbau-proof doc=prefix
 @@mm0
@@ -59,7 +57,7 @@ term imp (a b: wff): wff;
 axiom h1 (a b: wff): $ imp a (imp b a) $;
 ```
 
-Proofs using the notation-free syntax differ only in how their formulas are 
+Proofs using the notation-free syntax differ only in how their formulas are
 written.
 
 ```aufbau-proof doc=prefix
@@ -84,10 +82,10 @@ Theories generally open with something like this:
 delimiter $ ( ) $;
 ```
 
-Math strings are normally lexed (broken up into lexical tokens) by splitting on 
-whitespace. However, each character listed in a `delimiter` statement splits as 
-well, wherever it occurs. Drop the statement and `(imp` becomes a single token, 
-which the compiler reports as unknown. The rest of what `delimiter` controls 
+Math strings are normally lexed (broken up into lexical tokens) by splitting on
+whitespace. However, each character listed in a `delimiter` statement splits as
+well, wherever it occurs. Drop the statement and `(imp` becomes a single token,
+which the compiler reports as unknown. The rest of what `delimiter` controls
 belongs with notation, two chapters on.
 
 ## Several sorts
@@ -121,8 +119,8 @@ l1: $ eq (suc (add n zero)) (suc n) $ by eq_suc [add_zero []]
 math string does not have a provable sort. In this theory the only assertions
 available are equations.
 
-Sorts also provide the signatures for constructors. For example `eq` takes two 
-`tm`s, so `eq a (eq a a)` is rejected — the inner equation is a `wff`, and a 
+Sorts also provide the signatures for constructors. For example `eq` takes two
+`tm`s, so `eq a (eq a a)` is rejected — the inner equation is a `wff`, and a
 `wff` is never a `tm`.
 
 ## Coercions
@@ -153,8 +151,8 @@ lemma trivial (p: wff): $ nd p p $
 l1: $ nd (hyp p) p $ by ax
 ```
 
-That pair of declarations is why "a formula standing alone is a one-element 
-context" true in the natural deduction theory in chapter 3.
+These declarations make a formula by itself denote a one-element context in
+the natural-deduction theory used in [Proof search](proof-search.md).
 
 A coercion may also be what makes a sort assertable. If the arithmetic theory
 above declared `term holds (t: tm): wff;` and coerced `tm > wff`, then `$ suc
@@ -167,7 +165,7 @@ route between any two sorts.
 
 ## Sort modifiers
 
-There are a few sort modifiers other than just `provable`.
+MM0 provides three other sort modifiers.
 
 | modifier | meaning |
 |---|---|
@@ -177,6 +175,6 @@ There are a few sort modifiers other than just `provable`.
 | `free` | definitions and proofs may not introduce dummy variables of this sort |
 
 Modifiers are written before `sort` and can be combined. Most theories need only
-`provable`. The other three are mostly intended to govern how the sort 
-interacts with variables; for details take a look at the next chapter on 
-variables and dependencies.
+`provable`. The other three govern how the sort interacts with variables;
+[Variables, binders, and dependencies](variables-and-binders.md) gives the
+details.

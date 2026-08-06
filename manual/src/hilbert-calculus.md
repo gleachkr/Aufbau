@@ -1,7 +1,7 @@
 # A Hilbert calculus
 
-The chapters in this part each build a complete theory, in a literate 
-programming style (with the prose between the theory code). All cells on a page 
+The chapters in this part each build a complete theory, in a literate
+programming style (with the prose between the theory code). All cells on a page
 form one document: theory cells contribute MM0 declarations, proof cells
 contribute theorems and their proofs, and an edit to any cell rechecks the
 whole page. A later cell can use anything an earlier cell declares.
@@ -24,13 +24,13 @@ prefix not: $¬$ prec 40;
 prefix not: $~$ prec 40;
 ```
 
-Each connective registers its notation twice, giving every unicode token an
-ASCII alias that can be typed easily. Negation binds tighter than implication, 
+Each connective registers its notation twice, giving every Unicode token an
+ASCII alias that can be typed easily. Negation binds tighter than implication,
 and implication associates to the right.
 
 ## The axioms
 
-A Hilbert calculus concentrates its deductive strength in the (hypothesis-free) 
+A Hilbert calculus concentrates its deductive strength in the (hypothesis-free)
 axiom schemes. We use three such schemes and one rule:
 
 ```aufbau-theory doc=hilbert
@@ -87,9 +87,9 @@ The double negation laws need one more scheme:
 axiom con2 (a b: wff): $ (a → ¬ b) → (b → ¬ a) $;
 ```
 
-`con2` is derivable from the three schemes above, but the derivation is a bit 
-long, so we take it as an axiom. With it, the introduction of double negation 
-is three lines:
+`con2` is derivable from the three schemes above, but this small development
+assumes it to keep the example short. Double-negation introduction then takes
+three lines:
 
 ```aufbau-proof doc=hilbert
 @@mm0
@@ -102,8 +102,8 @@ l2: $ (¬ p → ¬ p) → (p → ¬ ¬ p) $ by con2
 l3: $ p → ¬ ¬ p $ by mp [l1, l2]
 ```
 
-Note that the first line cites `imp_refl` from earlier on the page. Elimination 
-is the same trick through `h3`:
+The first line cites `imp_refl` from earlier on the page. Elimination uses the
+same pattern with `h3`:
 
 ```aufbau-proof doc=hilbert
 @@mm0
@@ -123,5 +123,5 @@ l3: $ ¬ ¬ p → p $ by mp [l1, l2]
 
 The index lists every statement the page has built, in order, with a marker
 for each proof obligation. The document behind it is an ordinary
-`.mm0`/`.auf` pair, and everything on the page is live, so you can edit any of 
+`.mm0`/`.auf` pair, and everything on the page is live, so you can edit any of
 the theorems, axioms, or proofs.

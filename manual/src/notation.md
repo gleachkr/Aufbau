@@ -4,10 +4,10 @@ The last two chapters wrote expressions by applying constructors, as in `imp a
 (imp b a)`. A notation declaration lets that same expression be written `a -> (b
 -> a)`.
 
-Notation is used for parsing, and (in `abc`) for formatting strings when 
-displaying them to a user. It changes how a math string may be written, but the 
-result is still a tree of term constructors. In a theory that declares a 
-notation, the notation and constructor-application forms are interchangeable 
+Notation is used for parsing, and (in `abc`) for formatting strings when
+displaying them to a user. It changes how a math string may be written, but the
+result is still a tree of term constructors. In a theory that declares a
+notation, the notation and constructor-application forms are interchangeable
 everywhere.
 
 ## Infix operators
@@ -49,17 +49,17 @@ lemma tighter_binds_first (a b c: wff): $ (a /\ b -> c) <-> (imp (and a b) c) $
 l1: $ (a /\ b -> c) <-> (imp (and a b) c) $ by iff_refl
 ```
 
-An infix precedence must be below max, and a token may be declared at only one 
-precedence. If two infix operators have the same precedence, they must 
-associate the same way. An `infixl` and an `infixr` declared at the same 
-precedence will be rejected. Operators sharing an associativity and precedence 
-level can be mixed freely, so with `/\` and `\/` both `infixl` at 30, `a /\ b 
+An infix precedence must be below max, and a token may be declared at only one
+precedence. If two infix operators have the same precedence, they must
+associate the same way. An `infixl` and an `infixr` declared at the same
+precedence will be rejected. Operators sharing an associativity and precedence
+level can be mixed freely, so with `/\` and `\/` both `infixl` at 30, `a /\ b
 \/ c` is `(a /\ b) \/ c`.
 
 ## Prefix operators
 
-`prefix` creates an operator whose token comes ahead of its argument. Prefix 
-operators also get a precedence, so `~` at 40 outranks `/\` at 30 and applies 
+`prefix` creates an operator whose token comes ahead of its argument. Prefix
+operators also get a precedence, so `~` at 40 outranks `/\` at 30 and applies
 only to the formula immediately next to it.
 
 ```aufbau-proof doc=notation
@@ -72,14 +72,15 @@ lemma repeated_prefix (a: wff): $ (~ ~ a) <-> (not (not a)) $
 l1: $ (~ ~ a) <-> (not (not a)) $ by iff_refl
 ```
 
-Precedence also decides whether a prefix operator's argument needs parentheses 
+Precedence also decides whether a prefix operator's argument needs parentheses
 around it. Repeated application of a prefix operator never needs parentheses.
 
 ## Delimiters
 
-Delimiters were introduced in Chapter 5. Math strings are split on whitespace 
-first; delimiter characters then split the pieces further. The delimiter 
-characters can be given as one list or as two.
+[Sorts and terms](sorts-and-terms.md#delimiters) introduced delimiters. Math
+strings are split on whitespace first; delimiter characters then split the
+pieces further. The characters can be given as one list or as separate left
+and right lists.
 
 ```mm0
 delimiter $ ( ) $;          -- both
@@ -88,7 +89,7 @@ delimiter $ ( $ $ ) $;      -- left, then right
 
 A left delimiter splits *after* itself and a right delimiter *before* itself; a
 character in the one-list form does both. Grouping therefore needs `(` on the
-left and `)` on the right. Declaring them the other way round leaves something 
+left and `)` on the right. Declaring them the other way round leaves something
 like `(imp` a single token.
 
 Delimiters must be a single byte. `delimiter $ ( ) λ $;` is rejected, which is
@@ -97,8 +98,8 @@ a token it is glued to.
 
 ## Notation for everything else
 
-`notation` covers more complicated notations: bare constants, mixfix operators, 
-and binders. It lists the declaration's variables interleaved with constants, 
+`notation` covers more complicated notations: bare constants, mixfix operators,
+and binders. It lists the declaration's variables interleaved with constants,
 each constant written `(token:prec)`.
 
 ```aufbau-proof doc=lambda
@@ -119,7 +120,7 @@ notation. `.` is listed as a delimiter so that `x.` splits into two tokens.
 
 ## When a string parses as something else
 
-A binder notation's trailing slot is parsed with the precedence declared on the 
+A binder notation's trailing slot is parsed with the precedence declared on the
 leading constant, so `λ x. x + x` is `(λ x. x) + x` in the small theory above:
 
 ```aufbau-proof doc=lambda
@@ -128,9 +129,9 @@ lemma body_stops_early {x: tm}: $ eq (λ x. x + x) (add (lam x x) x) $
 l1: $ eq (λ x. x + x) (add (lam x x) x) $ by eq_refl
 ```
 
-`+` has precedence 30, which is less than the leading constant's 41, so the 
-body is just `x` and the sum is formed around the lambda rather than inside it. 
-The `($.$:0)` in the declaration is the precedence of the `.` token and does 
+`+` has precedence 30, which is less than the leading constant's 41, so the
+body is just `x` and the sum is formed around the lambda rather than inside it.
+The `($.$:0)` in the declaration is the precedence of the `.` token and does
 not make the body greedy. Parentheses give the intended reading:
 
 ```aufbau-proof doc=lambda
@@ -149,5 +150,5 @@ infixr imp: $->$ prec 25;
 infixr imp: $→$ prec 25;
 ```
 
-Both parse to `imp`, so a proof may use whichever reads better or is easier to 
+Both parse to `imp`, so a proof may use whichever reads better or is easier to
 type. A rule stated with one applies to a goal written with the other.

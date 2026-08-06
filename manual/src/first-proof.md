@@ -1,8 +1,7 @@
 # Your first proof
 
-Let's write a proof that actually uses a hypothesis. We stay in the same
-fragment of propositional logic as the introduction — implication and the
-weakening axiom — and add *modus ponens*.
+The proof in the introduction had no hypotheses. This chapter adds *modus
+ponens* and proves a result from an assumed proposition.
 
 ## The theory
 
@@ -25,7 +24,7 @@ so `mp` has two hypotheses and the conclusion `b`. The binder list
 ## Using it
 
 Now a lemma in that theory. Because the cell below is marked as part of the
-same document as the theory cell, it is checked against those axioms. From a 
+same document as the theory cell, it is checked against those axioms. From a
 hypothesis `p`, we prove `q -> p`: first weaken with `h1`, then apply `mp`.
 
 ```aufbau-proof doc=hilbert
@@ -40,14 +39,14 @@ hypothesis, the incoming proof of `p`. `l1` is the previous line. The
 brackets supply them to `mp` in the order its hypotheses were declared:
 first the proof of `a`, then the proof of `a -> b`.
 
-Notice what you did *not* have to write. Applying `mp` here means choosing
-`a := p` and `b := q -> p`, and applying `h1` means choosing its `a` and
-`b` too. The compiler inferred those bindings from the formulas you stated.
-Hover a proof line, once the cell has focus, to see exactly what was inferred.
+Applying `mp` here requires `a := p` and `b := q -> p`; applying `h1`
+requires bindings for its `a` and `b` as well. The compiler infers them from
+the formulas on the proof lines. Focus the cell and hover over a line to see
+the inferred bindings.
 
 ## Spelling it out
 
-You can make binding choices explicit with named bindings in parentheses. This 
+You can make binding choices explicit with named bindings in parentheses. This
 is the same lemma with nothing left to inference:
 
 ```aufbau-proof doc=hilbert
@@ -58,8 +57,8 @@ l2: $ q -> p $ by mp (a := $ p $, b := $ q -> p $) [#1, l1]
 ```
 
 Explicit bindings are rarely needed, but they are how you steer the
-compiler when a rule's variables are not determined by the goal and 
+compiler when a rule's variables are not determined by the goal and
 hypotheses.
 
-From here you can keep going: add more axioms to the theory cell above and
-the proof cells will re-check against them live.
+Edits to the theory cell cause the proof cells to be checked again
+immediately.

@@ -1,7 +1,7 @@
 # Natural deduction
 
-This chapter builds a sequent-style natural deduction system for intuitionistic 
-logic, with quantifiers. Each annotation that appears here was introduced in one 
+This chapter builds a sequent-style natural deduction system for intuitionistic
+logic, with quantifiers. Each annotation that appears here was introduced in one
 of the design chapters.
 
 ## Formulas
@@ -30,9 +30,9 @@ term bot: wff; notation bot: wff = ($⊥$:max);
 ```
 
 This theory has three sorts. Only `seq`, the sort of sequents,
-is provable. Formulas and contexts are pure syntax: nothing ever proves a bare 
-`wff`. Ungrammatical combinations like the conjunction of two sequents will not 
-parse. Each connective carries an ASCII alias alongside its unicode notation.
+is provable. Formulas and contexts are pure syntax: nothing ever proves a bare
+`wff`. Ungrammatical combinations like the conjunction of two sequents will not
+parse. Each connective carries an ASCII alias alongside its Unicode notation.
 
 ## Sequents and contexts
 
@@ -54,16 +54,16 @@ infixl seq_eq: $⟚$ prec 1;
 infixl seq_eq: $<==>$ prec 1;
 ```
 
-This cell declares judgment forms. A sequent like `g ⊢ a` is what deduction 
+This cell declares judgment forms. A sequent like `g ⊢ a` is what deduction
 rules actually derive. The other three are equivalence judgments — `↔` on
 formulas, `ctx_eq` on contexts, `⟚` on sequents — that exist to carry the
-equational layer. Since `↔` produces a judgment (of sort `seq`) rather than a 
-formula, an equivalence can never be embedded under a connective: it is 
+equational layer. Since `↔` produces a judgment (of sort `seq`) rather than a
+formula, an equivalence can never be embedded under a connective: it is
 metatheory, not object language.
 
-Contexts are built from single formulas (hence the coercion from `wff` to 
-`ctx`) with the join `,`, whose `@acui` annotation makes them behave as sets: 
-order, grouping, and duplication are normalized when lines are checked. The 
+Contexts are built from single formulas (hence the coercion from `wff` to
+`ctx`) with the join `,`, whose `@acui` annotation makes them behave as sets:
+order, grouping, and duplication are normalized when lines are checked. The
 empty context is written `_`.
 
 ## The equational layer
@@ -99,12 +99,12 @@ axiom nd_congr (g h: ctx) (a b: wff):
   $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ⟚ (h ⊢ b) $;
 ```
 
-This follows the pattern of the [Equality and 
-normalization](equality-and-normalization.md) chapter: a `@relation` bundle for 
-each equivalence judgment, plus the context laws the `@acui` annotation cited. 
-Only the sequent bundle carries a transport member, since `seq` is the only 
-provable sort. The `@congr` axioms assist with deeply nested rewrites: a 
-rewrite inside a formula lifts through `hyp_congr` and `nd_congr` to a `⟚` that 
+This follows the pattern of the [Equality and
+normalization](equality-and-normalization.md) chapter: a `@relation` bundle for
+each equivalence judgment, plus the context laws the `@acui` annotation cited.
+Only the sequent bundle carries a transport member, since `seq` is the only
+provable sort. The `@congr` axioms assist with deeply nested rewrites: a
+rewrite inside a formula lifts through `hyp_congr` and `nd_congr` to a `⟚` that
 the transport can use.
 
 ## The rules
@@ -129,9 +129,9 @@ axiom not_elim (g h: ctx) (a: wff): $ g ⊢ ¬ a $ > $ h ⊢ a $ > $ g , h ⊢ �
 axiom bot_elim (g: ctx) (a: wff): $ g ⊢ ⊥ $ > $ g ⊢ a $;
 ```
 
-The system is intuitionistic. Rules with two major premises join their contexts 
-multiplicatively in the conclusion. The `ax` axiom is the only "leaf" axiom 
-with no hypotheses. Since the `g` in `ax` is arbitrary, weakening happens at 
+The system is intuitionistic. Rules with two major premises join their contexts
+multiplicatively in the conclusion. The `ax` axiom is the only "leaf" axiom
+with no hypotheses. Since the `g` in `ax` is arbitrary, weakening happens at
 the leaves rather than by a structural rule.
 
 A first proof, elimination followed by re-introduction:
@@ -214,12 +214,11 @@ notation sb {x: obj} (t: obj x) (p: wff x): wff =
   ($[$:41) x ($:=$:0) t ($]$:0) p;
 ```
 
-The substitution operator `[x := t] p` is just a normal term with no built-in
-meaning. But some designated `@rewrite` equations let us automatically push it 
-through each connective and discharge it at atoms, so the normalizer can 
-compute substitutions whenever a rule application calls for one. The `@alpha` 
-axioms at the end are the proved renaming principles that the freshness 
-machinery of the [Ergonomics](ergonomics.md) chapter describes.
+The substitution operator `[x := t] p` is an ordinary term with no built-in
+meaning. Designated `@rewrite` equations push it through each connective and
+discharge it at atoms, allowing the normalizer to compute substitutions during
+rule applications. The `@alpha` axioms at the end prove the renaming principles
+used by the freshness machinery described in [Ergonomics](ergonomics.md).
 
 ```aufbau-theory doc=nd
 --| @congr
@@ -267,9 +266,9 @@ axiom all_alpha {x y: obj} (p: wff x y): $ ∀ x p ↔ ∀ y ([x := y] p) $;
 axiom ex_alpha {x y: obj} (p: wff x y): $ ∃ x p ↔ ∃ y ([x := y] p) $;
 ```
 
-The four quantifier rules have several additional annotations: `@freshen` 
-repairs from [Ergonomics](ergonomics.md), `@view`/`@recover` pairs from [Views 
-and recovery](views-and-recovery.md), and `@auto` enrollments from [Powering 
+The four quantifier rules have several additional annotations: `@freshen`
+repairs from [Ergonomics](ergonomics.md), `@view`/`@recover` pairs from [Views
+and recovery](views-and-recovery.md), and `@auto` enrollments from [Powering
 search](powering-search.md):
 
 ```aufbau-theory doc=nd
@@ -296,7 +295,7 @@ axiom ex_elim {x: obj} (g: ctx x) (h: ctx) (p: wff x) (c: wff):
   $ g ⊢ ∃ x p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
 ```
 
-Here `all_elim`'s conclusion is `[x := u] (P x)`, but `l2` states the 
+Here `all_elim`'s conclusion is `[x := u] (P x)`, but `l2` states the
 normalized form `P u`, with a witness `u` from the `@vars` pool:
 
 ```aufbau-proof doc=nd
@@ -310,12 +309,11 @@ l2: $ ∀ x (P x) ⊢ P u $ by all_elim [l1]
 l3: $ ∀ x (P x) ⊢ ∃ x (P x) $ by ex_intro [l2]
 ```
 
-Existential elimination can uses the bound `x` itself as the fresh name, and 
-the rule's dependency constraints guarantee that neither the conclusion `c` nor 
-the side context `h` can mention it that variable. Because of the alpha 
-freshening, cases where an inference mentions `x` *bound* in `h` or `c` will be 
-alpha-renamed behind the scenes before the rule is applied, and then 
-alpha-renamed back in a way that is transparent to the user.
+Existential elimination can use the bound `x` itself as the fresh name. The
+rule's dependency constraints ensure that neither the conclusion `c` nor the
+side context `h` mentions that variable. If `x` occurs *bound* in `h` or `c`,
+alpha-freshening renames it before applying the rule and restores the original
+form afterward.
 
 ```aufbau-proof doc=nd
 @@mm0

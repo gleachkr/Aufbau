@@ -53,18 +53,18 @@ through a local web server — module scripts don't load from `file:` URLs):
 </html>
 ```
 
-The cell should compile its theory and proof in wasm and show a live status line.
+The cell compiles its theory and proof in WebAssembly and shows a live status
+line.
 
 - Everything loads from [esm.sh](https://esm.sh), which serves npm packages
   as ES modules with permissive CORS.
-- The `?external=` parameters are load-bearing. They keep CodeMirror and
-  the Aufbau wasm packages as *single shared instances*; without them each
-  dependent would bundle its own copy and the editor breaks in confusing
-  ways.
+- The `?external=` parameters ensure that CodeMirror and the Aufbau WebAssembly
+  packages each have one shared instance. Without them, dependencies may load
+  separate copies, which breaks the editor.
 
 ## Sharing a theory between cells
 
-To share a theory between cells, give the theory its own element and point the 
+To share a theory between cells, give the theory its own element and point the
 proof cells at it.
 
 ```html
@@ -88,8 +88,8 @@ proof cells at it.
 </aufbau-proof>
 ```
 
-`<aufbau-theory>` only holds the shared prelude. Later cells can use anything 
-proved by earlier cells in the same document. A cell reads "verified" only when 
+`<aufbau-theory>` only holds the shared prelude. Later cells can use anything
+proved by earlier cells in the same document. A cell reads "verified" only when
 the entire document checks cleanly.
 
 Sources can also live in separate files instead of inline scripts:
@@ -114,9 +114,9 @@ proof cell whose body is only MM0 acts as an editable theory cell:
 </aufbau-proof>
 ```
 
-A document can also contain theorem cells (an MM0 `theorem` declaration plus 
-its proof), definition cells (a bodyless `def` whose editable content is the 
-definiens), and proof-local definitions. There is also `<aufbau-index 
+A document can also contain theorem cells (an MM0 `theorem` declaration plus
+its proof), definition cells (a bodyless `def` whose editable content is the
+definiens), and proof-local definitions. There is also `<aufbau-index
 theory="…">`, which provides a live index of every statement in the document.
 
 ## Cell attributes
@@ -144,7 +144,7 @@ Worker. Two things to know:
   package is served from a CDN it bootstraps the worker through a `blob:`
   URL. If your site sets a Content-Security-Policy, allow `worker-src
   blob:` alongside the CDN host.
-- If the language server fails to load, the cell degrades to a plain editor 
-  that still compiles, still shows diagnostics, and still verifies. To skip it 
-  deliberately, drop the `@aufbau/lsp` and `@codemirror/autocomplete` lines 
+- If the language server fails to load, the cell degrades to a plain editor
+  that still compiles, still shows diagnostics, and still verifies. To skip it
+  deliberately, drop the `@aufbau/lsp` and `@codemirror/autocomplete` lines
   from the import map.

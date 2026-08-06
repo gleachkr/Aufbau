@@ -1,8 +1,8 @@
 # Holes
 
-`.auf` proofs can be a bit verbose. Often, most of a line is already forced by 
-the rule being applied, the references cited, and other parts of the line. A 
-**hole** lets the line leave out a subexpression the compiler can recover.
+A proof line often contains subexpressions already determined by its rule,
+references, and remaining text. A **hole** omits such a subexpression and asks
+the compiler to recover it.
 
 Holes are opt-in per sort. A `@hole` annotation on a sort declaration registers
 one token for it:
@@ -14,9 +14,9 @@ sort wff;
 sort ctx;
 ```
 
-The natural deduction theory from the last chapter includes both of these 
-annotations. So `_wff` stands for an omitted formula and `_ctx` for an omitted 
-context. Contexts are the tedious part of a natural deduction proof; you can 
+The natural deduction theory from the last chapter includes both of these
+annotations. So `_wff` stands for an omitted formula and `_ctx` for an omitted
+context. Contexts are the tedious part of a natural deduction proof; you can
 use holes to mostly leave them out.
 
 ```aufbau-proof prelude=nd-base,nd-rules
@@ -36,13 +36,13 @@ l10: $ _ctx ⊢ ¬ (a ∨ b) $ by not_intro [l9]
 
 Each hole is filled from the rule application on its own line. `and_elim_l`
 carries the context of `l1` down to `l2`, `not_elim` joins the contexts of its
-two premises, and `or_elim` joins three contexts. You can hover a hole to see 
-what it was filled with: the `_ctx` on `l9` should become `a ∨ b , ¬ a ∧ ¬ b , 
-¬ a ∧ ¬ b`. 
+two premises, and `or_elim` joins three contexts. You can hover a hole to see
+what it was filled with: the `_ctx` on `l9` should become `a ∨ b , ¬ a ∧ ¬ b ,
+¬ a ∧ ¬ b`.
 
 Line `l2` shows that a line may have more than one hole, and that holes are not
 restricted to contexts. Each occurrence of a hole token is a separate hole, so
-`$ _wff → _wff $` indicates two holes rather than one used twice; there is no 
+`$ _wff → _wff $` indicates two holes rather than one used twice; there is no
 way to require that two positions be filled the same way.
 
 When the rule and the references do not determine what belongs in a hole, the
@@ -57,15 +57,14 @@ The diagnostic reports the undetermined variable, exactly as it would for a line
 whose bindings could not be inferred for any other reason.
 
 Holes are only allowed in the assertion of a proof line. They are rejected in
-`.mm0` files, in reference lists, in explicit bindings, and in the 
+`.mm0` files, in reference lists, in explicit bindings, and in the
 bound-variable position of a binder.
 
 ## Chains of equations
 
-Holes are useful for equational reasoning. For example, a chain of `eq_trans` 
-steps holds its left-hand side fixed. That repeated left side has to be written 
-out on every line, even though it's never changes. You can use a hole to avoid 
-retyping that boilerplate.
+Holes are useful for equational reasoning. A chain of `eq_trans` steps, for
+example, keeps its left-hand side fixed. A hole avoids repeating that side on
+every line.
 
 Here is the lambda calculus of the last chapter, with the goal `conversion?`
 was asked to prove there, done by hand. `beta` and `add_s` are rules listed in
@@ -98,6 +97,6 @@ of carrying that substitution out. The substitution equations are registered as
 rewrites, so the compiler applies them itself when it checks the line against
 the rule.
 
-This is similar to what a `calc` block does in other proof assistants (e.g. 
-lean), without being a separate construct: the lines are ordinary proof lines, 
-and the hole is the same one used for contexts above.
+This resembles a `calc` block in a proof assistant like Lean, but requires no
+separate construct: these are ordinary proof lines using the same holes as the
+context example above.

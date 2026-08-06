@@ -1,7 +1,7 @@
-# Appendix: Grammar summaries
+# Appendix: grammar summaries
 
 Condensed grammars for the two source languages. The MM0 grammar is fixed by
-the upstream [Metamath Zero 
+the upstream [Metamath Zero
 specification](https://github.com/digama0/mm0/blob/master/mm0.md); the `.auf`
 grammar is this project's proof-script format.
 
@@ -19,7 +19,7 @@ math-string   ::= '$' [^\$]* '$'
 
 Comments starting `--|` are *annotation comments*: Aufbau attaches them as
 metadata to the next statement (`@relation`, `@rewrite`, `@auto`, …). See the
-[Annotation reference](appendix-annotations.md).
+[annotation reference](appendix-annotations.md).
 
 ## MM0 statements
 
@@ -54,7 +54,7 @@ dummy-identifier ::= '.' identifier | identifier_
 Curly binders `{x: s}` are bound (binding) variables; parenthesized binders
 `(a: s)` are regular variables, with trailing identifiers in the type naming
 the bound variables the term may depend on. `.`-prefixed binders on a `def`
-are hidden dummies. A `def` without `= $ ... $` is bodyless. its definiens
+are hidden dummies. A `def` without `= $ ... $` is bodyless. Its definiens
 is supplied by the `.auf` file. See [Sorts and terms](sorts-and-terms.md) and
 [Variables, binders, and dependencies](variables-and-binders.md).
 
@@ -128,6 +128,6 @@ Notes:
   zero-hypothesis inline application needs its delimiter: `keep [top_i []]`.
 - `rule-name` may also be a search command (`exact?`, `apply?`, `auto?`,
   `conversion?`); the `name: number` parameter form is accepted only there
-  ([Search parameters](appendix-search-parameters.md)).
+  ([search parameters](appendix-search-parameters.md)).
 - `$ ... $` formulas may contain `@hole` tokens where the theory declares
   them ([Holes](holes.md)).

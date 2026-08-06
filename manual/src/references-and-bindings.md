@@ -7,7 +7,7 @@ rule (bindings) [references]
 ```
 
 The references supply proofs of the cited rule's hypotheses, and the bindings
-instantiate its variables. This chapter describes both references and bindings, 
+instantiate its variables. This chapter describes both references and bindings,
 ending with inline applications — rule applications used as references.
 
 ## The reference list
@@ -26,13 +26,13 @@ same name. Writing `h1` in a block with no line labeled `h1` reports an unknown
 label; applying the axiom in place requires the inline-application syntax, at
 minimum `h1 []`.
 
-Labels are local to their block, you cannot refer to a line that is part of 
-another proof block.
+Labels are local to their block. A proof cannot refer to a line in another
+block.
 
 ## Hypothesis references
 
 Hypotheses are numbered `#1`, `#2`, … in the order they appear in the
-theorem's header. A hypothesis declared as a named binder may also be cited by 
+theorem's header. A hypothesis declared as a named binder may also be cited by
 name.
 
 ```aufbau-proof doc=refs
@@ -50,9 +50,9 @@ l1: $ b $ by mp [#3, #hab]
 l2: $ c $ by mp [l1, #hbc]
 ```
 
-`#hab` and `#hbc` cite the two named hypotheses; `#1` and `#2` would be another 
-way of referring to those hypotheses. The arrow-form hypothesis `$ a $` has no 
-name and can only be cited as `#3`. A `#` name that matches no hypothesis 
+`#hab` and `#hbc` cite the two named hypotheses; `#1` and `#2` would be another
+way of referring to those hypotheses. The arrow-form hypothesis `$ a $` has no
+name and can only be cited as `#3`. A `#` name that matches no hypothesis
 binder is an error.
 
 ## Bindings
@@ -95,15 +95,15 @@ l1: $ eq y y $ by eq_refl
 l2: $ all y (eq y y) $ by gen (x := $ y $, p := $ eq y y $) [l1]
 ```
 
-Instantiations remain subject to the dependency restrictions of Chapter 6,
-enforced by occurrence as usual.
+Instantiations remain subject to the occurrence-based restrictions described
+in [Variables, binders, and dependencies](variables-and-binders.md).
 
 ## Omitted bindings
 
 Bindings are usually omitted. The compiler infers each missing binder by
 matching the stated goal against the rule's conclusion and the references
 against the rule's hypotheses. Both proofs above check with their binding
-lists deleted, so you can hover a line once its cell checks to see what was 
+lists deleted, so you can hover a line once its cell checks to see what was
 inferred.
 
 When the goal is written out and every reference is a hypothesis or an earlier
@@ -120,8 +120,8 @@ the reference expression. The hidden line has no label and cannot be cited
 later; a result needed more than once should get a labeled line of its own.
 
 Because a bare identifier is always a line reference, an inline application
-must carry a reference list or a binding list. A rule with no hypotheses is 
-applied as `h1 []`; when a binding list is present, an empty reference list may 
+must carry a reference list or a binding list. A rule with no hypotheses is
+applied as `h1 []`; when a binding list is present, an empty reference list may
 be dropped.
 
 ```aufbau-proof doc=refs
@@ -144,7 +144,7 @@ The expected conclusion need not be complete. A variable of the enclosing
 rule that is still unknown is left open in the hint, to be settled by the
 inline application's own conclusion or by another reference — including one
 further to the right. What is required is that every variable be determined
-by *something* in the line. When one is not the line is rejected, and the fix 
+by *something* in the line. When one is not the line is rejected, and the fix
 is a binding list on the inline application itself:
 
 ```aufbau-proof doc=refs
@@ -153,10 +153,11 @@ lemma weaken_pinned (p q: wff): $ p $ > $ q -> p $
 l1: $ q -> p $ by mp [#1, h1 (a := $ p $, b := $ q $)]
 ```
 
-Each inline application must elaborate to a single concrete hidden line before 
-the enclosing application can finish. The inline application mechanism does not 
+Each inline application must elaborate to a single concrete hidden line before
+the enclosing application can finish. The inline application mechanism does not
 attempt multiple disambiguations if it cannot resolve a binder.
 
-The unpack action of Chapter 2 is the inverse of this notation: it rewrites a
-line into separate labeled lines, one per inline application, with each new
-goal filled in from the checked conclusion.
+The unpack action described in
+[The parts of a proof line](proof-line.md#packing-and-unpacking) reverses this
+notation. It creates one labeled line per inline application and fills each
+new goal from the checked conclusion.

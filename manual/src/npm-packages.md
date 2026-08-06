@@ -1,6 +1,6 @@
 # The npm packages
 
-Aufbau ships four npm packages. Each wraps the same Zig code that the CLI uses, 
+Aufbau ships four npm packages. Each wraps the same Zig code that the CLI uses,
 compiled to WebAssembly for use in JS environments.
 
 | Package | Contents | Runs in |
@@ -39,8 +39,8 @@ if (result.ok) {
 }
 ```
 
-Compiling and verifying compose easily. A browser page can compile a proof 
-script and then check the output with the independent verifier.
+A browser page can compile a proof script and then pass the output to the
+independent verifier.
 
 Both loaders locate their `.wasm` file automatically in browsers and Node.
 To control loading (offline bundles, custom hosting), pass `wasmUrl`,
@@ -96,6 +96,7 @@ import "@aufbau/editor";
 
 It declares peer dependencies on `@aufbau/compiler` and CodeMirror 6
 (`@codemirror/view`, `state`, `commands`, `lint`), with `@aufbau/lsp` and
-`@codemirror/autocomplete` optional. Without those last two packages, the cells 
-still compile and report diagnostics, they just lose hover, completion, and 
-proof search. Element and attribute reference: [Embedding the editor](embedding.md).
+`@codemirror/autocomplete` optional. Without those last two packages, cells
+still compile and report diagnostics but have no hover, completion, or proof
+search. See [Embedding the editor](embedding.md) for the element and attribute
+reference.

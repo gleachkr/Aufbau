@@ -1,22 +1,21 @@
-# Proof Search
+# Proof search
 
-Aufbau can perform a few kinds of proof search. Where a rule name would go, you 
-can write a **search placeholder** and ask the compiler to work out the line 
-for you:
+A **search placeholder** can replace a rule name and ask the language server to
+find a justification:
 
 ```
 l2: $ a ∧ b ⊢ b $ by exact?
 ```
 
-There are four placeholders: `exact?` finishes a step from facts you already 
-have, `apply?` finds rules that might be applicable to the line being proved, 
-`auto?` performs backwards search, and `conversion?` performs equational 
-reasoning using egraph saturation. 
+The four placeholders serve different purposes: `exact?` closes a step from
+available facts, `apply?` lists rules that could produce the goal, `auto?`
+performs backward search, and `conversion?` performs equational reasoning with
+an e-graph.
 
 ## Example: search over natural deduction
 
 `auto?` and `exact?` work by matching rule conclusions against a goal and
-chaining backwards. 
+chaining backward.
 
 Some theories are better suited for this kind of reasoning than others. So, for 
 our running example in this chapter, we switch to natural deduction, where 
@@ -32,13 +31,13 @@ makes a context an unordered collection are already loaded.
 A sequent `g ⊢ a` says that `a` follows from the hypotheses in `g`. The
 context is built with `,`, and an empty context is written `_`. A formula
 standing alone is a one-element context. If you would rather not hunt for the
-symbols, `->`, `/\`, `\/`, `~`, and `|-` are accepted as alternative notation 
+symbols, `->`, `/\`, `\/`, `~`, and `|-` are accepted as alternative notation
 for `→`, `∧`, `∨`, `¬`, and `⊢`.
 
 ## Finishing a step: `exact?`
 
 Put the caret on the `exact?` line below and wait a moment. A lightbulb
-should appear. Open it and you are offered **"Replace exact? with and_elim_r 
+should appear. Open it and you are offered **"Replace exact? with and_elim_r
 [l1]"**. Accept, and the placeholder will be replaced with this justification.
 
 ```aufbau-proof prelude=nd-base,nd-rules
@@ -55,15 +54,15 @@ whose hypotheses are discharged by assertions already in scope, i.e. the
 lemma's own hypotheses (`#1`, `#2`, …) and the earlier lines. That collection 
 is the **reference pool**.
 
-`apply?` is similar but discovers which rules can be used to produce the goal, 
-without narrowing to rules that already have their hypotheses available in the 
+`apply?` is similar but discovers which rules can be used to produce the goal,
+without narrowing to rules that already have their hypotheses available in the
 reference pool.
 
 ## Finding a chain: `auto?`
 
 `exact?` gives up when no single rule closes the goal. `auto?` keeps
 going: when nothing in the pool discharges a rule's hypothesis, it tries
-to *prove that hypothesis too*, and so on. It can complete this proof from 
+to *prove that hypothesis too*, and so on. It can complete this proof from
 scratch for example:
 
 ```aufbau-proof prelude=nd-base,nd-rules
@@ -86,8 +85,8 @@ explicit bindings are there because nothing else pins those variables, as
 in the last chapter. If you would rather read the result as separate
 lines, accept it and use the *unpack* action.
 
-`auto?`'s search runs under a work budget and a depth limit, so it always 
-stops. Its results are deterministic — the same goal, theory, and pool always 
+`auto?`'s search runs under a work budget and a depth limit, so it always
+stops. Its results are deterministic — the same goal, theory, and pool always
 produce the same suggestions in the same order.
 
 ## Placeholders in argument slots
@@ -101,20 +100,20 @@ l1: $ a ∧ b ⊢ a ∧ b $ by ax []
 l2: $ a ∧ b ⊢ b ∧ a $ by and_intro [exact?, and_elim_l [l1]]
 ```
 
-The slot's goal is worked out from the outer rule and the rest of the line. 
-`and_intro` splits `b ∧ a` into `b` and `a`; `a` is supplied by `and_elim`, and 
+The slot's goal is worked out from the outer rule and the rest of the line.
+`and_intro` splits `b ∧ a` into `b` and `a`; `a` is supplied by `and_elim`, and
 the remaining goal `b` is then searched for exactly as a whole line would be.
-Putting placeholders in argument slots makes it possible to steer a search in a 
-certain direction: start with the rule you know is right and leave open only 
+Putting placeholders in argument slots makes it possible to steer a search in a
+certain direction: start with the rule you know is right and leave open only
 the part you don't want to write.
 
 ## Search failure diagnostics
 
-When a search fails, the diagnostic gives some information about how. If the 
-space was **exhausted**, the answer is definitive as far as it looked: no proof 
-exists at the configured search depth, so either search deeper or enrich the 
-pool. If it ran out of **budget** or **fuel**, the empty result is 
-inconclusive. The report also lists the most-tried rules, which is how you spot 
+When a search fails, the diagnostic gives some information about how. If the
+space was **exhausted**, the answer is definitive as far as it looked: no proof
+exists at the configured search depth, so either search deeper or enrich the
+pool. If it ran out of **budget** or **fuel**, the empty result is
+inconclusive. The report also lists the most-tried rules, which is how you spot
 a rule the search keeps attempting and rejecting.
 
 You can spend more on a single hard line by passing parameters to that call:
@@ -132,20 +131,17 @@ l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 13)
 
 ## Computation as search: `conversion?`
 
-`conversion?` attempts to determine whether the goal is equal to something 
-already in the ref pool or to a reflexivity law through some chain of rewriting 
-steps the theory has enrolled. Rules can be enrolled for conversion as either 
-pure conversion rules, or as computation rules. Computation rules run eagerly, 
-and handle cases where the rewrites are intended to rapidly derive a normal 
-form. Conversion rules saturate (every enrolled direction is explored at once) 
-and are intended for general equational search.
+`conversion?` looks for a rewrite chain from the goal to a member of the
+reference pool or, for an equation, between its two sides. A theory can enroll
+rules either for general conversion or for directed computation. Conversion
+rules are explored by saturation; computation rules run eagerly toward a
+normal form.
 
 Here is a small lambda calculus with explicit substitution and addition on
 numerals. Beta reduction, the substitution equations, and the addition
 table are enrolled as computation rules. The substitution equations carry a
-second annotation, `@rewrite`, which lets the compiler apply them on its own
-when it checks an ordinary proof line, in order to eliminate a lot of 
-boilerplate:
+second annotation, `@rewrite`, which lets the compiler apply them while
+checking ordinary proof lines and avoids explicit substitution steps:
 
 ```aufbau-listing prelude=lam-rules
 ```
@@ -165,8 +161,8 @@ The goal says that `(λx. λy. x + y) 1 2` is `3`. `conversion?` reduces the
 two beta redexes, pushes the substitutions through `+`, runs the addition
 table, and the two sides of the goal meet at `SSS0`.
 
-Rewriting is dependency-aware, so in the theory above a reduction that would 
-capture a variable simply never fires. If the search stops without connecting 
-the goal to anything, the diagnostics say how it ended: a fully saturated 
-search rules the goal out, while a miss under a budget (or one involving 
+Rewriting is dependency-aware, so a reduction that would capture a variable
+does not fire. If the search stops without connecting
+the goal to anything, the diagnostics say how it ended: a fully saturated
+search rules the goal out, while a miss under a budget (or one involving
 computation rules, whose fold commits to one reduction order) is inconclusive.

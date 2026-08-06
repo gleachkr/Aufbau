@@ -5,8 +5,8 @@
 # Proving
 
 - [Your first proof](first-proof.md)
-- [The Parts of a Proof Line](proof-line.md)
-- [Proof Search](proof-search.md)
+- [The parts of a proof line](proof-line.md)
+- [Proof search](proof-search.md)
 - [Holes](holes.md)
 
 # The MM0 language
@@ -16,7 +16,7 @@
 - [Notation](notation.md)
 - [Axioms, theorems, and definitions](axioms-theorems-definitions.md)
 
-# The .auf language
+# The `.auf` language
 
 - [Proof blocks and lines](proof-blocks-and-lines.md)
 - [References and bindings](references-and-bindings.md)

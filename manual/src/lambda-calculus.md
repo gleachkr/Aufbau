@@ -1,8 +1,8 @@
 # The lambda calculus
 
-This chapter builds an equational theory of the untyped lambda calculus, with 
-unary numerals mixed in. This is roughly the theory used in evaluation examples 
-during the [Proof Search](proof-search.md) and [Computation](computation.md) 
+This chapter builds an equational theory of the untyped lambda calculus with
+unary numerals. It extends the theory used in evaluation examples
+during the [Proof search](proof-search.md) and [Computation](computation.md)
 chapters. We end with the characteristic equation of the Y combinator.
 
 ## Syntax
@@ -30,16 +30,16 @@ term suc (n: tm): tm; prefix suc: $S$ prec 70;
 term add (m n: tm): tm; infixl add: $+$ prec 30;
 ```
 
-We have one syntactic sort of terms, with a `@vars` pool so proofs can invent 
-variables on demand. Abstractions are `λ x. e`, applications are `f · a`, and 
-explicit substitution is `[x := a] e`, governed by the reduction rules below. 
-The numerals are unary (`0`, `S0`, `SS0`, with `S` in the delimiter set so the 
+We have one syntactic sort of terms, with a `@vars` pool so proofs can invent
+variables on demand. Abstractions are `λ x. e`, applications are `f · a`, and
+explicit substitution is `[x := a] e`, governed by the reduction rules below.
+The numerals are unary (`0`, `S0`, `SS0`, with `S` in the delimiter set so the
 compact form parses), and `+` is their addition.
 
 ## The equational layer
 
-The only judgments are term equations `a = b` and their `iff` equivalences, 
-bundled as in the [Equality and normalization](equality-and-normalization.md) 
+The only judgments are term equations `a = b` and their `iff` equivalences,
+bundled as in the [Equality and normalization](equality-and-normalization.md)
 chapter:
 
 ```aufbau-theory doc=lam
@@ -67,15 +67,15 @@ axiom sb_congr {x: tm} (e1 e2: tm x) (a1 a2: tm x) (h1: $ e1 = e2 $) (h2: $ a1 =
   $ ([x := a1] e1) = ([x := a2] e2) $;
 ```
 
-Note `lam_congr`: it lets an equation proved about a body `a`, possibly 
-mentioning the bound variable, lift to an equation between abstractions. This 
+Note `lam_congr`: it lets an equation proved about a body `a`, possibly
+mentioning the bound variable, lift to an equation between abstractions. This
 is necessary to let rewriting descend under binders.
 
 ## Reduction
 
 ```aufbau-theory doc=lam
--- `a` replaces `x`, so it may mention it. The one denial that carries weight is
--- `a`'s lack of `y` in `sb_lam`: that is what blocks capture.
+-- `a` replaces `x`, so it may mention `x`. In `sb_lam`, excluding `y` from
+-- `a`'s dependencies prevents the binder from capturing a variable in `a`.
 
 --| @compute ltr
 axiom beta {x: tm} (e: tm x) (a: tm x): $ (λ x. e) · a = [x := a] e $;
@@ -103,21 +103,21 @@ axiom add_z (n: tm): $ 0 + n = n $;
 axiom add_s (m n: tm): $ S m + n = S (m + n) $;
 ```
 
-Capture avoidance is via restriction on substitutions. In `sb_lam`, the 
-substituted term `a` is declared `(a: tm x)` (it may mention `x` but not `y`) 
-so a substitution only crosses a binder that cannot capture anything in the 
+Capture avoidance is via restriction on substitutions. In `sb_lam`, the
+substituted term `a` is declared `(a: tm x)` (it may mention `x` but not `y`)
+so a substitution only crosses a binder that cannot capture anything in the
 substituted term.
 
-The substitution rules carry two annotations. `@rewrite` lets the compiler run 
-substitutions whenever it checks an ordinary line, so a cited rule whose 
-conclusion contains a substitution can be stated in reduced form. `@compute` 
-enrolls the same equations, plus `beta` and the addition table, as directed 
+The substitution rules carry two annotations. `@rewrite` lets the compiler run
+substitutions whenever it checks an ordinary line, so a cited rule whose
+conclusion contains a substitution can be stated in reduced form. `@compute`
+enrolls the same equations, plus `beta` and the addition table, as directed
 computation rules for `conversion?` (see [Computation](computation.md)).
 
 ## Single steps
 
-`@rewrite` normalization alone is enough to make one beta step a one-line 
-proof. The raw conclusion of `beta` here is `[x := 0] (S x)`; the line states 
+`@rewrite` normalization alone is enough to make one beta step a one-line
+proof. The raw conclusion of `beta` here is `[x := 0] (S x)`; the line states
 the reduced form and the compiler emits the conversion:
 
 ```aufbau-proof doc=lam
@@ -129,8 +129,8 @@ beta_step
 l1: $ (λ x. S x) · 0 = S 0 $ by beta
 ```
 
-For anything longer than one step, equations are chained by hand with the 
-congruence and transitivity axioms. Here is the K combinator discarding its 
+For anything longer than one step, equations are chained by hand with the
+congruence and transitivity axioms. Here is the K combinator discarding its
 second argument:
 
 ```aufbau-proof doc=lam
@@ -146,13 +146,13 @@ l4: $ (λ y. a) · b = a $ by beta
 l5: $ (λ x. λ y. x) · a · b = a $ by eq_trans [l3, l4]
 ```
 
-`l1` reduces under the binder through `sb_lam` (legal, since `a` doesn't 
-mention `y`), and `l4` discharges `[y := b] a` by `sb_vac`. Both capture facts 
+`l1` reduces under the binder through `sb_lam` (legal, since `a` doesn't
+mention `y`), and `l4` discharges `[y := b] a` by `sb_vac`. Both capture facts
 come straight from the binder declarations of the theorem.
 
 ## Evaluation
 
-A Church numeral is a function iterator so applying one to the successor 
+A Church numeral is a function iterator so applying one to the successor
 function and `0` should evaluate it:
 
 ```aufbau-proof prelude=lam-base,lam-rules
@@ -161,9 +161,9 @@ lemma two_apply {f x w: tm}: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 =
 l1: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 = S S 0 $ by conversion?
 ```
 
-The goal is an equation, so `conversion?` only has to join its two sides: the 
-fold reduces the left side to `S S 0`. Church addition works the same way: 
-`plus` uses its first numeral to iterate `f` on top of the second's result, and 
+The goal is an equation, so `conversion?` only has to join its two sides: the
+fold reduces the left side to `S S 0`. Church addition works the same way:
+`plus` uses its first numeral to iterate `f` on top of the second's result, and
 `1 + 1 = 2` is just evaluation.
 
 ```aufbau-proof prelude=lam-base,lam-rules
@@ -173,16 +173,16 @@ lemma one_plus_one {m n f x g y w: tm}:
 l1: $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $ by conversion?
 ```
 
-If you accept the suggestion, brace yourself: the emitted proof is quite long. 
-We hope to improve that.
+The accepted suggestion expands to a long proof because every conversion step
+is emitted explicitly.
 
 ## The Y combinator
 
-The fixed-point combinator `Y = λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))` 
-satisfies `Y · g = g · (Y · g)` for any `g`. The term `Y · g` has no normal 
-form, but the proof needs no limit of reductions: writing `ω` for `λ x. g · (x 
-· x)`, one beta step takes `Y · g` to `ω · ω`, and one more takes `ω · ω` to `g 
-· (ω · ω)` — so both sides of the fixed-point equation reduce to the same 
+The fixed-point combinator `Y = λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))`
+satisfies `Y · g = g · (Y · g)` for any `g`. The term `Y · g` has no normal
+form, but the proof needs no limit of reductions: writing `ω` for `λ x. g · (x
+· x)`, one beta step takes `Y · g` to `ω · ω`, and one more takes `ω · ω` to `g
+· (ω · ω)` — so both sides of the fixed-point equation reduce to the same
 thing:
 
 ```aufbau-proof doc=lam
@@ -201,21 +201,20 @@ l6: $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ x.
 l7: $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $ by eq_trans [l6, l5]
 ```
 
-`conversion?` also finds this equation on its own. That's an advantage of 
-egraph saturation rather than blind normalization. The egraph eventually 
-records that the term and `g · (itself)` are one equivalence class and extracts 
-the finite chain.
+`conversion?` also finds this equation. Unlike one-way normalization, e-graph
+saturation records the term and `g · (itself)` in one equivalence class and
+extracts a finite chain between them.
 
-A term this famous deserves a name. Its bound variables become dummy binders 
-of a definition:
+The term can be named by a definition whose bound variables become dummy
+binders:
 
 ```aufbau-theory doc=lam
 def Y {.f .x: tm}: tm = $ λ f. (λ x. f · (x · x)) · (λ x. f · (x · x)) $;
 ```
 
-The fixed-point equation can now be stated the way one would want to cite it. 
-The compiler matches `y_reduce` through the hidden definition structure, 
-drawing the variables that stand in for `Y`'s dummy binders from the sort's 
+The fixed-point equation can now be stated the way one would want to cite it.
+The compiler matches `y_reduce` through the hidden definition structure,
+drawing the variables that stand in for `Y`'s dummy binders from the sort's
 `@vars` pool:
 
 ```aufbau-proof doc=lam
