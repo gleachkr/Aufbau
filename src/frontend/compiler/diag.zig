@@ -1046,7 +1046,8 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.PublicDefBodyMustBeHeaderless => "public definition body filler may declare only dummy binders before `=`",
         error.FillerBinderMustBeDummy => "public definition body filler binders must be hidden dummies like (.x: s)",
         error.DuplicateFillerBinderName => "filler dummy name is already bound by the definition",
-        error.TooManyBoundVars => "too many bound variables",
+        error.TooManyBoundVars => "a declaration may bind at most 55 variables " ++
+            "(bound binders and hidden dummies together)",
         error.UnexpectedProofDefItem => "unexpected proof-side definition item",
         error.UnsupportedProofDefAnnotation => "proof-side definition annotations are not supported yet",
         error.ExtraProofItem => "extra proof item with no matching declaration",

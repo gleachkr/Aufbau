@@ -84,6 +84,10 @@ pub const ArgInfo = struct {
     deps: u55,
 };
 
+/// See constants.zig: 55 dep-mask bits means at most 55 bound binders
+/// (visible bound binders and hidden dummies together) per declaration.
+pub const max_bound_vars = @import("./constants.zig").MAX_BOUND_VARS;
+
 const TermEnv = struct {
     args: []const Arg,
     ret_sort: u7,
@@ -903,6 +907,11 @@ pub const MM0Parser = struct {
 
             for (names.items, is_dummy_buf.items) |name, is_dummy| {
                 const treat_as_bound = is_bound or is_dummy;
+                if (treat_as_bound and
+                    ctx.bound_names.items.len >= max_bound_vars)
+                {
+                    return error.TooManyBoundVars;
+                }
                 const actual_arg = if (treat_as_bound)
                     ArgInfo{
                         .sort_name = arg.sort_name,
@@ -954,6 +963,7 @@ pub const MM0Parser = struct {
         _ = try self.lookupSortIdInfo(sort_info);
         if (is_bound) {
             const bv_index = bound_names.len;
+            if (bv_index >= max_bound_vars) return error.TooManyBoundVars;
             return .{
                 .sort_name = sort_info.text,
                 .bound = true,

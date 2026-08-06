@@ -1164,6 +1164,55 @@ test "MM0 parser rejects non-bound terms in bound slots" {
     try std.testing.expectError(error.BoundnessMismatch, parser.next());
 }
 
+fn boundBinderList(comptime count: usize) []const u8 {
+    comptime {
+        @setEvalBranchQuota(200_000);
+        var s: []const u8 = "";
+        for (0..count) |i| {
+            s = s ++ std.fmt.comptimePrint(" {{x{d}: nat}}", .{i});
+        }
+        return s;
+    }
+}
+
+test "MM0 parser rejects declarations binding more than 55 variables" {
+    // MMB dep masks have 55 bits; a 56th bound binder's bit would silently
+    // shift out, so the parser must hard-error instead.
+    const src = "sort nat;\nterm f" ++ comptime boundBinderList(56) ++ ": nat;\n";
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    try std.testing.expectError(error.TooManyBoundVars, parser.next());
+}
+
+test "MM0 parser counts hidden dummies against the 55-binder limit" {
+    // Dummies share the same dep bit-space as visible bound binders.
+    const src = "sort nat;\ndef g" ++ comptime boundBinderList(55) ++
+        " (.y: nat): nat;\n";
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    try std.testing.expectError(error.TooManyBoundVars, parser.next());
+}
+
+test "MM0 parser accepts declarations binding exactly 55 variables" {
+    const src = "sort nat;\nterm f" ++ comptime boundBinderList(55) ++ ": nat;\n";
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    const stmt = (try parser.next()).?;
+    try std.testing.expectEqual(@as(usize, 55), stmt.term.args.len);
+}
+
 test "stack and heap basic behavior" {
     var expr = Expr{ .variable = .{ .sort = 1, .bound = false, .deps = 0 } };
 

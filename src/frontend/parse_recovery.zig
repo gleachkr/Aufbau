@@ -233,7 +233,7 @@ pub const MM0Parser = struct {
                     dummy.sort_span,
                 );
             };
-            if (bound_count >= 55) {
+            if (bound_count >= core.max_bound_vars) {
                 return self.fillerError(
                     error.TooManyBoundVars,
                     tail_start,

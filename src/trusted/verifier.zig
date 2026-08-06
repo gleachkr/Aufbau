@@ -18,6 +18,7 @@ const Expr = @import("./expressions.zig").Expr;
 const Arg = @import("./args.zig").Arg;
 const HEAP_SIZE = @import("./constants.zig").HEAP_SIZE;
 const ARENA_SIZE = @import("./constants.zig").ARENA_SIZE;
+const MAX_BOUND_VARS = @import("./constants.zig").MAX_BOUND_VARS;
 
 const ProofContext = enum {
     defn,
@@ -244,6 +245,7 @@ pub const Verifier = struct {
             const expr = try self.arena.allocator().create(Expr);
             if (arg.bound) {
                 if (self.sort_table[arg.sort].strict) return error.StrictSort;
+                if (bv_idx >= MAX_BOUND_VARS) return error.TooManyBoundVars;
                 expr.* = .{ .variable = .{
                     .sort = arg.sort,
                     .bound = true,
@@ -792,6 +794,7 @@ pub const Verifier = struct {
         if (self.sort_table[sort_id].strict) return error.StrictSort;
         if (self.sort_table[sort_id].free) return error.FreeSort;
         // Allocate fresh bound variable
+        if (self.next_bv >= MAX_BOUND_VARS) return error.TooManyBoundVars;
         const expr = try self.arena.allocator().create(Expr);
         expr.* = .{ .variable = .{
             .sort = @intCast(sort_id),
