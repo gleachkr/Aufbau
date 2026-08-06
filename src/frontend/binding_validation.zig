@@ -144,19 +144,24 @@ pub fn defExprInfo(
     const term = env.terms.items[app.term_id];
     var deps: u55 = 0;
     var bound_deps: [56]u55 = undefined;
+    // The j-th bound arg's own binder-space dep bit, for matching against
+    // `arg.deps` masks (which are binder-indexed and shift past any dummy
+    // the term declares ahead of a bound arg — bit j would be wrong).
+    var bound_bits: [56]u55 = undefined;
     var bound_len: usize = 0;
 
     for (term.args, app.args) |arg, arg_id| {
         const arg_info = try defExprInfo(env, theorem, theorem_args, arg_id);
         if (arg.bound) {
             bound_deps[bound_len] = arg_info.deps;
+            bound_bits[bound_len] = arg.deps;
             bound_len += 1;
             continue;
         }
 
         var arg_deps = arg_info.deps;
         for (0..bound_len) |j| {
-            if ((@as(u64, arg.deps) >> @intCast(j)) & 1 == 0) continue;
+            if (arg.deps & bound_bits[j] == 0) continue;
             arg_deps &= ~bound_deps[j];
         }
         deps |= arg_deps;
@@ -225,12 +230,11 @@ pub fn firstDepViolationOverMasks(
             bound_arg_indices[bound_len] = idx;
             bound_len += 1;
         } else {
-            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len], 0..) |
+            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len]) |
                 bound_dep,
                 bound_idx,
-                k,
             | {
-                if ((@as(u64, expected.deps) >> @intCast(k)) & 1 != 0) {
+                if (expected.deps & expected_args[bound_idx].deps != 0) {
                     continue;
                 }
                 if (bound_dep & mask != 0) {
@@ -285,12 +289,11 @@ pub fn firstViolation(
             bound_arg_indices[bound_len] = idx;
             bound_len += 1;
         } else {
-            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len], 0..) |
+            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len]) |
                 bound_dep,
                 bound_idx,
-                k,
             | {
-                if ((@as(u64, expected.deps) >> @intCast(k)) & 1 != 0) {
+                if (expected.deps & expected_args[bound_idx].deps != 0) {
                     continue;
                 }
                 if (bound_dep & info.deps != 0) {

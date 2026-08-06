@@ -1,0 +1,11 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort tm;
+term eq (a b: tm): wff;
+term all {x: tm} (p: wff x): wff;
+term pick {x: tm} (p: wff x): tm;
+def A {.d: tm} {x: tm} (p: wff x): wff = $ all d (all x p) $;
+def B {y: tm} (q: wff y): wff = $ A y q $;
+def C {x: tm} {.d: tm} {y: tm} (q: wff y): wff x = $ eq x (pick y q) $;
+axiom truth {z: tm} (r: wff z): $ B z r $;
+theorem use_B {z: tm} (r: wff z): $ B z r $;

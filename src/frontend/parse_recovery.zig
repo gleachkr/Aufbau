@@ -3,6 +3,8 @@ const core = @import("../trusted/parse.zig");
 const Expr = @import("../trusted/expressions.zig").Expr;
 
 pub const ArgInfo = core.ArgInfo;
+pub const binderDepsToBoundArgDeps = core.binderDepsToBoundArgDeps;
+pub const boundArgDepsToBinderDeps = core.boundArgDepsToBinderDeps;
 pub const AssertionKind = core.AssertionKind;
 pub const AssertionStmt = core.AssertionStmt;
 pub const MathParseError = core.MathParseError;

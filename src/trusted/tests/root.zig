@@ -1213,6 +1213,34 @@ test "MM0 parser accepts declarations binding exactly 55 variables" {
     try std.testing.expectEqual(@as(usize, 55), stmt.term.args.len);
 }
 
+test "dep masks remap between binder space and bound-arg space" {
+    // Args of `{x} {.d} {y} (p: wff x y)`: the dummy is not in the arg
+    // list, but binder space counts it — x=bit0, d=bit1, y=bit2. Bound-arg
+    // space is x=bit0, y=bit1.
+    const args = [_]mm0.ArgInfo{
+        .{ .sort_name = "tm", .bound = true, .deps = 1 << 0 },
+        .{ .sort_name = "tm", .bound = true, .deps = 1 << 2 },
+        .{ .sort_name = "wff", .bound = false, .deps = 0b101 },
+    };
+
+    const both = mm0.binderDepsToBoundArgDeps(&args, 0b101);
+    try std.testing.expectEqual(@as(u55, 0b11), both.deps);
+    try std.testing.expectEqual(@as(u55, 0), both.dummy_deps);
+
+    const on_dummy = mm0.binderDepsToBoundArgDeps(&args, 0b110);
+    try std.testing.expectEqual(@as(u55, 0b10), on_dummy.deps);
+    try std.testing.expectEqual(@as(u55, 0b010), on_dummy.dummy_deps);
+
+    try std.testing.expectEqual(
+        @as(u55, 0b101),
+        mm0.boundArgDepsToBinderDeps(&args, 0b11),
+    );
+    try std.testing.expectEqual(
+        @as(u55, 1 << 2),
+        mm0.boundArgDepsToBinderDeps(&args, 0b10),
+    );
+}
+
 test "stack and heap basic behavior" {
     var expr = Expr{ .variable = .{ .sort = 1, .bound = false, .deps = 0 } };
 

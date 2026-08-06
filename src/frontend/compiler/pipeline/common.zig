@@ -9,6 +9,8 @@ const Metadata = @import("../metadata.zig");
 const Sort = @import("../../../trusted/sorts.zig").Sort;
 const Expr = @import("../../../trusted/expressions.zig").Expr;
 const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
+const boundArgDepsToBinderDeps =
+    @import("../../parse_recovery.zig").boundArgDepsToBinderDeps;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const SortStmt = @import("../../parse_recovery.zig").SortStmt;
 const TermStmt = @import("../../parse_recovery.zig").TermStmt;
@@ -138,15 +140,10 @@ pub fn validateDefinitionBody(
     // mask to that space before comparing. Free variables the result type
     // does not declare are the violation (superset declarations are fine),
     // matching the verifier's checkExprAgainstArg.
-    var declared_deps: u55 = 0;
-    var bound_arg_idx: u6 = 0;
-    for (term_stmt.args) |arg| {
-        if (!arg.bound) continue;
-        if ((@as(u64, term_stmt.ret_deps) >> bound_arg_idx) & 1 != 0) {
-            declared_deps |= arg.deps;
-        }
-        bound_arg_idx += 1;
-    }
+    const declared_deps = boundArgDepsToBinderDeps(
+        term_stmt.args,
+        term_stmt.ret_deps,
+    );
 
     const uncovered_deps = body_info.deps & ~declared_deps;
     if (uncovered_deps != 0) {

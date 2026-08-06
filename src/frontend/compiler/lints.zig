@@ -1,5 +1,7 @@
 const std = @import("std");
 const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
+const boundArgDepsToBinderDeps =
+    @import("../parse_recovery.zig").boundArgDepsToBinderDeps;
 const RuleDecl = @import("../env.zig").RuleDecl;
 const TermDecl = @import("../env.zig").TermDecl;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
@@ -88,13 +90,11 @@ pub fn lintUnusedDefinitionParameters(
 
     // A bound arg named only in the result type's dependency list is still
     // used: it makes every application count as mentioning that variable.
-    var bound_arg_idx: u6 = 0;
+    const ret_binder_deps = boundArgDepsToBinderDeps(term.args, term.ret_deps);
     for (term.args, 0..) |arg, idx| {
-        if (!arg.bound) continue;
-        if ((@as(u64, term.ret_deps) >> bound_arg_idx) & 1 != 0) {
+        if (arg.bound and arg.deps & ret_binder_deps != 0) {
             used_args[idx] = true;
         }
-        bound_arg_idx += 1;
     }
 
     for (term.arg_names, 0..) |arg_name, idx| {

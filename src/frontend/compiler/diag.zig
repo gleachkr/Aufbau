@@ -882,6 +882,8 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.BinderTokenCollision => "binder name conflicts with a declared notation token",
         error.ResultDependencyOnDummy => "a result type may only depend on " ++
             "bound variables from the argument list, not hidden binders",
+        error.ArgDependencyOnDummy => "an argument type may only depend on " ++
+            "bound variables from the argument list, not hidden binders",
         error.HoleyInferenceMismatch => "the visible parts of the statement " ++
             "do not match what this rule proves",
         error.HoleConclusionMismatch => "the visible parts of the statement " ++

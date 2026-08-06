@@ -88,6 +88,47 @@ pub const ArgInfo = struct {
 /// (visible bound binders and hidden dummies together) per declaration.
 pub const max_bound_vars = @import("./constants.zig").MAX_BOUND_VARS;
 
+pub const BoundArgDeps = struct {
+    /// Mask over the bound args only, in declaration order (MMB Arg space).
+    deps: u55,
+    /// Input bits that belong to no bound arg, i.e. dummy dependencies.
+    dummy_deps: u55,
+};
+
+/// `ArgInfo.deps` masks index every bound binder of a declaration in source
+/// order, hidden dummies included. MMB `Arg` masks (and `ret_deps`) instead
+/// index only the bound args, because a replayed declaration allocates its
+/// dummies after all of its args. Compress a binder-space mask into
+/// bound-arg space; dependencies on dummies have no bound-arg bit and are
+/// returned separately for the caller to reject.
+pub fn binderDepsToBoundArgDeps(args: []const ArgInfo, deps: u55) BoundArgDeps {
+    var out: u55 = 0;
+    var pending = deps;
+    var bound_arg_idx: u6 = 0;
+    for (args) |arg| {
+        if (!arg.bound) continue;
+        if (pending & arg.deps != 0) {
+            pending &= ~arg.deps;
+            out |= @as(u55, 1) << bound_arg_idx;
+        }
+        bound_arg_idx += 1;
+    }
+    return .{ .deps = out, .dummy_deps = pending };
+}
+
+/// Inverse of `binderDepsToBoundArgDeps`: widen a bound-arg-indexed mask
+/// back into the binder space of `ArgInfo.deps`.
+pub fn boundArgDepsToBinderDeps(args: []const ArgInfo, deps: u55) u55 {
+    var out: u55 = 0;
+    var bound_arg_idx: u6 = 0;
+    for (args) |arg| {
+        if (!arg.bound) continue;
+        if ((@as(u64, deps) >> bound_arg_idx) & 1 != 0) out |= arg.deps;
+        bound_arg_idx += 1;
+    }
+    return out;
+}
+
 const TermEnv = struct {
     args: []const Arg,
     ret_sort: u7,
@@ -731,18 +772,9 @@ pub const MM0Parser = struct {
         // declaration order, dummies included. The result type may only
         // depend on bound *args*, and MMB indexes its return-Arg deps over
         // those, so remap and reject anything left over (a dummy).
-        var ret_deps: u55 = 0;
-        var pending_ret_deps = ret_info.deps;
-        var bound_arg_idx: u6 = 0;
-        for (arg_slice) |arg| {
-            if (!arg.bound) continue;
-            if (pending_ret_deps & arg.deps != 0) {
-                pending_ret_deps &= ~arg.deps;
-                ret_deps |= @as(u55, 1) << bound_arg_idx;
-            }
-            bound_arg_idx += 1;
-        }
-        if (pending_ret_deps != 0) return error.ResultDependencyOnDummy;
+        const remapped = binderDepsToBoundArgDeps(arg_slice, ret_info.deps);
+        if (remapped.dummy_deps != 0) return error.ResultDependencyOnDummy;
+        const ret_deps = remapped.deps;
         const term_id = try self.nextTermId();
         const term_args = try self.buildTermArgs(arg_slice);
         try self.terms.append(self.allocator, .{

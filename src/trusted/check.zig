@@ -158,7 +158,15 @@ pub const CrossChecker = struct {
         if (mm0_args.len != mmb_args.len) return error.ArgCountMismatch;
         for (mm0_args, mmb_args) |mm0_arg, mmb_arg| {
             if (mm0_arg.bound != mmb_arg.bound) return error.ArgBoundMismatch;
-            if (mm0_arg.deps != mmb_arg.deps) return error.ArgDepsMismatch;
+            // MM0-side masks are binder-indexed (dummies included); MMB Arg
+            // masks are bound-arg-indexed. Compare in the MMB space. A
+            // dependency on a dummy has no MMB representation at all.
+            const remapped = parse.binderDepsToBoundArgDeps(
+                mm0_args,
+                mm0_arg.deps,
+            );
+            if (remapped.dummy_deps != 0) return error.ArgDepsMismatch;
+            if (remapped.deps != mmb_arg.deps) return error.ArgDepsMismatch;
             const expected_sort = self.sort_names.get(mm0_arg.sort_name) orelse {
                 return error.UnknownSort;
             };

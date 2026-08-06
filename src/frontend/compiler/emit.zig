@@ -7,6 +7,8 @@ const MmbWriter = @import("./mmb_writer.zig");
 const TermRecord = MmbWriter.TermRecord;
 const DefOps = @import("../def_ops.zig");
 const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
+const binderDepsToBoundArgDeps =
+    @import("../parse_recovery.zig").binderDepsToBoundArgDeps;
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
 const TermStmt = @import("../parse_recovery.zig").TermStmt;
 const ProofCmd = @import("../../trusted/proof.zig").ProofCmd;
@@ -464,8 +466,13 @@ pub fn buildArgArray(
 ) ![]const Arg {
     const result = try parser.core.allocator.alloc(Arg, args.len);
     for (args, 0..) |arg, idx| {
+        // ArgInfo masks are binder-indexed (dummies included); MMB Arg
+        // masks index the bound args only. A dependency on a dummy is not
+        // representable in MMB.
+        const remapped = binderDepsToBoundArgDeps(args, arg.deps);
+        if (remapped.dummy_deps != 0) return error.ArgDependencyOnDummy;
         result[idx] = .{
-            .deps = arg.deps,
+            .deps = remapped.deps,
             .reserved = 0,
             .sort = try lookupSortId(parser, arg.sort_name),
             .bound = arg.bound,

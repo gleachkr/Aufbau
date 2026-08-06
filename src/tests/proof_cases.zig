@@ -59,6 +59,9 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_acui_rewrite_residual", .outcome = .pass },
     .{ .stem = "pass_nested_additive_inline", .outcome = .pass },
     .{ .stem = "pass_ret_deps", .outcome = .pass },
+    // Hidden dummies declared ahead of (or between) bound binders shift the
+    // binder-space dep-bit indices away from the bound-arg indices MMB uses.
+    .{ .stem = "pass_dummy_before_bound_arg", .outcome = .pass },
     .{
         .stem = "fail_chained_bare_rule_label",
         .outcome = .{ .fail = error.UnknownLabel },
