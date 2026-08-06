@@ -3,9 +3,56 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.4] - 2026-08-06
 
 ### Added
+
+- The Aufbau Manual, at <https://gleachkr.github.io/Aufbau/manual/>: a
+  book-length guide with live proof-editor cells throughout, so the
+  examples compile in the browser as you edit them. It runs from a
+  first proof through the MM0 and `.auf` languages and a section on
+  designing theories (equality and normalization, ergonomics, views
+  and recovery, powering search, computation), to five worked theories
+  — a Hilbert calculus, natural deduction, Peano arithmetic, the
+  lambda calculus, and program correctness — plus embedding guidance
+  and reference appendices for the annotations, search parameters, and
+  grammars. CI compiles every live cell and diffs the outcome against
+  a recorded baseline, so the manual's examples cannot silently rot.
+
+- Named hypothesis references: `#h` cites the hypothesis declared by a
+  named binder in a theorem or lemma header (`(h: $ a $)`), anywhere a
+  positional reference like `#2` is legal. Arrow-form hypotheses have
+  no name and stay positional. A reference matching no hypothesis
+  binder is an error, as is an ambiguous one — duplicate hypothesis
+  names are rejected only when actually cited by name. The language
+  server validates, hovers, and completes named references like
+  positional ones.
+
+- `conversion?` proves equation goals directly. When the goal line is
+  itself `rel(lhs, rhs)` for a registered `@relation`, the two sides
+  are seeded as terms in their own right, and joining them proves the
+  line with no reference at all: the chain rewrites `lhs` into `rhs`
+  and the goal is restated as `trans [refl, chain]` (one `symm`
+  instead when the chain lowers in the reverse orientation). A
+  computation like `$ 2 + 2 = 4 $ by conversion?` no longer needs a
+  grounding `$ 4 = 4 $ by refl` line — and since no transport is
+  involved, the form works even for sorts whose relation bundle
+  declares no transport rule.
+
+- Big-step lowering for computational conversion chains. When the
+  theory also enrolls `@rewrite` rules, a fold step whose result
+  spawns a rewrite cascade — a `beta` whose conclusion is a
+  substitution redex — is emitted as one line stating its conclusion
+  in rewrite-normalized form, and line-check conclusion normalization
+  re-derives the absorbed cascade: the same mechanism that lets a
+  hand-written proof cite `beta` with the reduced conclusion. Steps
+  the `@rewrite` registry cannot re-derive (`@conversion` citations,
+  pool equations, groups whose driving rule is itself a `@rewrite`)
+  keep the elementary stanza form, and a group that fails to
+  re-derive at lowering time falls back to elementary steps instead
+  of failing the extraction. The same directed normalization also
+  runs as a semantic step of the `auto?` ladder, so goals blocked
+  behind an unreduced redex can match after normalizing.
 
 - The language server offers `auto?`, `exact?`, `apply?`, and
   `conversion?` as completions wherever a rule name is legal — the rule
@@ -16,7 +63,102 @@ This file records notable user-facing changes to Aufbau. The project follows
   search can actually offer, since no rule filter can vouch for a
   placeholder.
 
+### Changed
+
+- `auto?` witness invention is now standing policy rather than a gated
+  retry. An `@auto`-enrolled rule may be applied with the binders the
+  goal does not determine opened as existential metavariables — in the
+  main phases, at every depth, with the metavariable carried into
+  nested sub-goals. Un-enrolled rules get a constrained form of
+  opening as a last-resort retry after the ordinary candidates miss:
+  the child proof must fully determine the unknown by read-back,
+  nothing carries into nested openings, and nothing is invented.
+  Principal enumeration — trying each concrete goal member as an
+  ambiguous rule's principal formula — is now purely structural and
+  runs for any rule as a final split fallback, no annotation required.
+
+- Diagnostics were reworked against a graded battery of beginner
+  mistakes. Citing a term or definition as a rule, citing a proof-line
+  label as a rule, citing a line that comes later, and leaving a
+  search placeholder in a finished proof each name the
+  misunderstanding ("this name is a term or definition; it can appear
+  inside formulas but cannot justify a proof line"). A conclusion
+  mismatch states both sides — "the theorem concludes: …" against
+  "the last line proves: …" — and says when the two fail to match even
+  with definitions unfolded and after normalization. Math-string parse
+  failures are sort-aware: an assignment or statement that does parse
+  under a different sort is reported as exactly that ("the assignment
+  parses, but as sort 'wff'; this binder expects sort 'nat'"), a
+  statement of a non-provable sort is named directly, and a token that
+  is neither a variable of the theorem nor a notation of the theory is
+  said to be that, with a missing-semicolon hint for the classic
+  run-on declaration.
+
 ### Fixed
+
+- More than 55 bound variables in scope is now an explicit error, in
+  both the MM0 parser and the MMB verifier. 55 is the dependency
+  bitmask's limit; beyond it, dependency bits were silently truncated,
+  so a proof violating a dependency condition on a later bound
+  variable could pass verification. (mm0-c's corresponding guard has
+  an off-by-one that admits a 56th; the strict cap is deliberate.)
+
+- MMB dependency masks for definitions are emitted in the spec's
+  bound-variable index space. MMB numbers dummies after all arguments,
+  but the writer indexed masks in source binder order, so a definition
+  declaring a dummy before a bound binder emitted masks that mm0-c
+  rejects ("bad binder deps"). The writer now emits spec-space masks,
+  definition-body checking and the cross-checker compare in matched
+  spaces, and a regular argument depending on a dummy — unrepresentable
+  in MMB — is an emit-time error instead of a corrupt mask. The
+  regression fixture is verified by abc, mm0-zig, and mm0-c; MMBs
+  compiled by earlier releases from such definitions should be
+  recompiled.
+
+- Result-sort dependency lists (`term fresh {x: tm} (e: tm): tm x`)
+  are honored end-to-end. They were previously discarded after
+  parsing, so a definition whose body kept `x` free could declare a
+  result type that hid it — laundering a real dependency away. The
+  parser keeps them, definition-body checking enforces that the body's
+  free variables are among the declared ones (superset declarations
+  remain legal, mirroring the verifier), the MMB writer emits them,
+  and the cross-checker compares them. Verified against mm0-rs and
+  mm0-c in the accepting and both rejecting directions.
+
+- `prefix` and `notation` declarations whose final argument parses at
+  the operator's own precedence now register that precedence level as
+  right-associative, as mm0-c does. Such an operator plus an `infixl`
+  at the same level is an ambiguous grammar that abc previously
+  accepted — and could then parse math strings differently from mm0-rs
+  and mm0-c.
+
+- Alpha-freshening repair handles several blocked binders at once. A
+  cited rule that needed multiple bound variables renamed
+  simultaneously previously failed after repairing only the first.
+
+- Binder inference can bind a rule binder to a definition's hidden
+  dummy variable when the written term exposes it only through a
+  transparent unfolding; such lines previously failed to infer.
+
+- The symbolic search engine no longer leaks a small buffer on every
+  rewrite-rule instantiation.
+
+- Language-server hover and completion for annotations list the full
+  current set; annotations added after 0.0.1 (`@conversion`,
+  `@compute`, and others) were missing.
+
+- Hypothesis references resolve correctly through multi-name binder
+  groups. A group like `(h1 h2: $ a $)` declares one formula for two
+  hypotheses, but the language server paired hypotheses with formulas
+  one for one, so every name after the first in a group took the
+  following formula — and the last took the conclusion. Hovering `#h2`
+  showed the wrong statement and go-to-definition jumped to the wrong
+  place, for named and positional references alike. Named references
+  now also jump to their own binder token rather than the group's last
+  name, and both hover and completion resolve through the same
+  resolver the compiler applies to a written proof, so the editor
+  accepts and rejects exactly what a proof does. The compiler was
+  never affected.
 
 - Completion responses are now a `CompletionList` with
   `isIncomplete: true` rather than a bare item array. The server has
@@ -51,7 +193,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   outline entries, and no go-to-definition, right when they are most
   wanted. The indexer now recovers line by line, keeping the broken
   line's label and goal so the lines after it can still cite it. The
-  compiler is unchanged: a broken line is still an error there.
+  analysis path recovers the same way, so code actions and searches
+  survive a broken sibling line. The compiler is unchanged: a broken
+  line is still an error there.
 
 - Completing a proof rule over an existing search placeholder now
   replaces the placeholder's trailing `?` too. Accepting `exact?` over
@@ -322,6 +466,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.4]: https://github.com/gleachkr/Aufbau/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/gleachkr/Aufbau/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/gleachkr/Aufbau/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/gleachkr/Aufbau/releases/tag/v0.0.1

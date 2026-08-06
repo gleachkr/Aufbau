@@ -121,7 +121,7 @@ termination (invertible rules strictly decrease formula weight) is the
 user's claim; the engine only guarantees boundedness. Note the parse-time
 validation checks only that every hypothesis binder is
 conclusion-determined (`ruleDefersWitness` /
-`rules.hypBinderDeferredByConcl`) — it does *not* verify weight decrease,
+`rules.hasPremiseOnlyBinder`) — it does *not* verify weight decrease,
 so a conclusion-determined but non-decreasing eager rule (e.g. premise
 `P (s x)` from conclusion `P x`) passes validation and descends
 depth-free until the node/tick budget stops it. That is the budget-bound

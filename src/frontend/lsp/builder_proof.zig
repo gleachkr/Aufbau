@@ -397,40 +397,41 @@ fn addNamedHypRef(
         });
         return;
     }
-    var found: ?usize = null;
-    var ambiguous = false;
-    for (decl.hypotheses, 0..) |item, i| {
-        const hyp_name = item.name orelse continue;
-        if (!std.mem.eql(u8, hyp_name, name)) continue;
-        if (found != null) {
-            ambiguous = true;
-            break;
-        }
-        found = i;
-    }
-    if (ambiguous) {
-        try self.addSymbol(.{
-            .source_range = source_range,
-            .target_range = null,
-            .markdown = try ambiguousHypMarkdown(
-                self.allocator,
-                block.name,
-                name,
-            ),
-        });
-        return;
-    }
-    const index = found orelse {
-        try self.addSymbol(.{
-            .source_range = source_range,
-            .target_range = null,
-            .markdown = try unknownNamedHypMarkdown(
-                self.allocator,
-                block.name,
-                name,
-            ),
-        });
-        return;
+    const hyp_names = try model.hypNamesFromHypotheses(
+        self.allocator,
+        decl.hypotheses,
+    );
+    defer self.allocator.free(hyp_names);
+    const index = switch (proof_script.resolveHypRef(
+        hyp_names,
+        decl.hypotheses.len,
+        hyp,
+    )) {
+        .ambiguous => {
+            try self.addSymbol(.{
+                .source_range = source_range,
+                .target_range = null,
+                .markdown = try ambiguousHypMarkdown(
+                    self.allocator,
+                    block.name,
+                    name,
+                ),
+            });
+            return;
+        },
+        .unknown => {
+            try self.addSymbol(.{
+                .source_range = source_range,
+                .target_range = null,
+                .markdown = try unknownNamedHypMarkdown(
+                    self.allocator,
+                    block.name,
+                    name,
+                ),
+            });
+            return;
+        },
+        .index => |idx| idx,
     };
     const item = decl.hypotheses[index];
     try self.addSymbol(.{

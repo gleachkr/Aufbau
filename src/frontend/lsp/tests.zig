@@ -2169,6 +2169,81 @@ test "named hypothesis refs validate and jump to the theorem binder" {
     ));
 }
 
+test "multi-name hypothesis groups pair with their own formula" {
+    // `(h1 h2: $ first $)` declares one formula for two hypotheses, so the
+    // hypothesis list is longer than the statement's math strings. Pairing
+    // one hypothesis per formula would slide h2 onto `$ second $` and h3
+    // onto the conclusion.
+    const mm0_text =
+        \\provable sort wff;
+        \\term first: wff;
+        \\term second: wff;
+        \\term top: wff;
+        \\axiom keep: $ second $ > $ top $;
+        \\theorem grouped (h1 h2: $ first $) (h3: $ second $): $ top $;
+    ;
+    const proof_text =
+        \\grouped
+        \\----
+        \\l1: $ top $ by keep [#h2]
+        \\l2: $ top $ by keep [#h3]
+        \\l3: $ top $ by keep [#2]
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    // h2 shares its group's formula, and jumps to its own name token.
+    const h2_offset =
+        (std.mem.indexOf(u8, proof_text, "#h2") orelse unreachable) + 1;
+    const h2_hover = snapshot.hoverAt(.proof, h2_offset) orelse {
+        return error.MissingGroupedHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        h2_hover.markdown,
+        1,
+        "$ first $",
+    ));
+    const h2_def = snapshot.definitionAt(.proof, h2_offset) orelse {
+        return error.MissingGroupedDefinition;
+    };
+    try std.testing.expectEqualStrings(
+        "h2",
+        snapshot.mm0_text[h2_def.range.start..h2_def.range.end],
+    );
+
+    // The hypothesis after the group keeps its own formula.
+    const h3_offset =
+        (std.mem.indexOf(u8, proof_text, "#h3") orelse unreachable) + 1;
+    const h3_hover = snapshot.hoverAt(.proof, h3_offset) orelse {
+        return error.MissingAfterGroupHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        h3_hover.markdown,
+        1,
+        "$ second $",
+    ));
+
+    // Positional refs pair the same way.
+    const second_offset =
+        (std.mem.indexOf(u8, proof_text, "#2") orelse unreachable) + 1;
+    const second_hover = snapshot.hoverAt(.proof, second_offset) orelse {
+        return error.MissingPositionalHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        second_hover.markdown,
+        1,
+        "$ first $",
+    ));
+}
+
 test "duplicate hypothesis names make a named ref ambiguous" {
     const mm0_text =
         \\provable sort wff;

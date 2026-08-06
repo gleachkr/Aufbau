@@ -1,3 +1,4 @@
+const std = @import("std");
 const proof_script = @import("../proof_script.zig");
 const Types = @import("types.zig");
 
@@ -57,3 +58,16 @@ pub const RuleResolution = struct {
     decl_index: usize,
     available: bool,
 };
+
+/// Project an indexed declaration's hypothesis table into the name slice
+/// `proof_script.resolveHypRef` takes, so hover and completion resolve
+/// refs through the same resolver the compiler applies to a written proof
+/// instead of re-implementing the rule. Caller owns the result.
+pub fn hypNamesFromHypotheses(
+    allocator: std.mem.Allocator,
+    hypotheses: []const Types.HypothesisDecl,
+) ![]const ?[]const u8 {
+    const names = try allocator.alloc(?[]const u8, hypotheses.len);
+    for (hypotheses, names) |item, *slot| slot.* = item.name;
+    return names;
+}

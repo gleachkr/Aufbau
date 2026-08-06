@@ -1,3 +1,119 @@
+# Aufbau 0.0.4
+
+Aufbau 0.0.4 ships the Aufbau Manual, lets proofs cite hypotheses by name,
+teaches `conversion?` to prove equations outright and to take big steps
+through computations, and makes `auto?`'s witness invention standing policy
+rather than an annotation-gated retry. It is also the first release to
+change the trusted kernel since 0.0.1 — three fixes, each making it
+stricter.
+
+## Highlights
+
+### The Aufbau Manual
+
+[The Aufbau Manual](https://gleachkr.github.io/Aufbau/manual/) is a
+book-length guide with live proof-editor cells throughout: the examples
+compile in the browser as you edit them. It runs from a first proof through
+the MM0 and `.auf` languages and a section on designing theories, to five
+worked theories — a Hilbert calculus, natural deduction, Peano arithmetic,
+the lambda calculus, and program correctness — plus embedding guidance and
+reference appendices for the annotations, search parameters, and grammars.
+CI compiles every live cell and diffs the outcome against a recorded
+baseline, so the examples cannot silently rot.
+
+### Cite hypotheses by name
+
+`#h` refers to the hypothesis declared by a named binder in a theorem or
+lemma header (`(h: $ a $)`), anywhere a positional reference like `#2` is
+legal, with language-server validation, hover, and completion. Positional
+references keep working; arrow-form hypotheses have no name and stay
+positional.
+
+### `conversion?`: equation goals and big steps
+
+A goal that is itself an equation — `$ 2 + 2 = 4 $ by conversion?` — now
+proves itself. The search seeds both sides, rewrites one into the other,
+and grounds the chain with `refl`: no reference line, and no transport rule
+required of the sort's `@relation` bundle.
+
+When the theory also enrolls `@rewrite` rules, emitted chains take big
+steps: a fold step whose result sets off a rewrite cascade becomes one line
+stating its conclusion in rewrite-normalized form, the same way a
+hand-written proof cites `beta` with the reduced conclusion. Steps that
+cannot be re-derived that way keep the elementary form, so mixed chains are
+fine. The same directed normalization also runs as a semantic step inside
+`auto?`, so goals blocked behind an unreduced redex can match after
+normalizing.
+
+### Witness invention as standing policy
+
+An `@auto`-enrolled rule may now be applied with the binders the goal does
+not determine opened as existential metavariables — in the main search
+phases, at every depth, with the metavariable carried into nested
+sub-goals. Un-enrolled rules get a constrained last-resort form that
+invents nothing, and principal enumeration no longer needs an annotation
+at all.
+
+### Clearer diagnostics
+
+Diagnostics were reworked against a graded battery of beginner mistakes.
+Citing a term as a rule, citing a line label as a rule, citing a later
+line, and leaving a search placeholder in a finished proof each name the
+misunderstanding; a conclusion mismatch states what the theorem concludes
+against what the last line proves; and math-string parse failures are
+sort-aware — text that parses under a different sort is reported as
+exactly that.
+
+### Three strictness fixes in the trusted kernel
+
+- More than 55 bound variables in scope is now an explicit error instead
+  of silent dependency-bit truncation, which could let a
+  dependency-violating proof verify.
+- Definition dependency masks are emitted in the MMB spec's index space.
+  Definitions declaring a dummy before a bound binder previously produced
+  masks that mm0-c rejects; recompile MMBs built from such definitions.
+- Result-sort dependency lists on `term` and `def` declarations are
+  honored end-to-end, so a definition can no longer launder away a
+  dependency its body actually has.
+
+### Fixes
+
+- `prefix` and `notation` declarations with a trailing argument at the
+  operator's own precedence now register the level right-associative, as
+  mm0-c does, rejecting a grammar ambiguity abc previously accepted.
+- Alpha-freshening repair handles several blocked binders at once.
+- Hypothesis references resolve correctly through multi-name binder groups
+  (`(h1 h2: $ a $)`), which the language server previously paired one
+  hypothesis per formula — sliding every name after the first onto the
+  next formula.
+- A proof line that does not parse no longer costs the rest of its block:
+  the language server recovers line by line, in indexing and analysis
+  both.
+- `@aufbau/lsp` can be loaded straight from a CDN: the worker now boots
+  through a same-origin `blob:` shim in the cross-origin case.
+- The symbolic search engine no longer leaks memory on every rewrite-rule
+  instantiation.
+
+See the [changelog](CHANGELOG.md) for the complete list.
+
+## Compatibility
+
+This release tightens the trusted kernel; nothing previously rejected is
+newly accepted. Now rejected: theories with more than 55 bound variables
+in scope, grammars pairing a trailing-argument notation with an `infixl`
+at the same precedence level, and definitions whose bodies have free
+variables their result type does not declare. MMB files from earlier
+releases verify unchanged with one exception: definitions declaring a
+dummy before a bound binder produced off-spec dependency masks (mm0-c
+always rejected them), and those files should be recompiled. Proof syntax
+is additive — named hypothesis references are opt-in — and existing
+`.mm0`/`.auf` sources compile unchanged unless they relied on a newly
+rejected shape. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.3
 
 Aufbau 0.0.3 teaches `conversion?` to compute, and makes it considerably

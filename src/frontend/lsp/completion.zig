@@ -1,4 +1,5 @@
 const std = @import("std");
+const proof_script = @import("../proof_script.zig");
 const source = @import("source.zig");
 const Types = @import("types.zig");
 const model = @import("model.zig");
@@ -722,11 +723,14 @@ fn appendNamedHypCompletions(
 ) !void {
     const decl_index = block.decl_index orelse return;
     const hypotheses = self.declarations[decl_index].hypotheses;
+    const hyp_names = try model.hypNamesFromHypotheses(allocator, hypotheses);
+    defer allocator.free(hyp_names);
     for (hypotheses, 0..) |hyp, i| {
         const name = hyp.name orelse continue;
-        // A duplicated name cannot be cited (the compiler rejects the ref as
-        // ambiguous), so don't offer it.
-        if (hypNameIsDuplicated(hypotheses, i, name)) continue;
+        // Offer a name only when a written `#name` would resolve to this
+        // hypothesis: a duplicated name is rejected as ambiguous, so
+        // offering it would suggest a ref the compiler refuses.
+        if (!hypNameResolvesTo(hyp_names, i, name)) continue;
         const label = try std.fmt.allocPrint(allocator, "#{s}", .{name});
         try list.append(allocator, .{
             .label = label,
@@ -749,17 +753,20 @@ fn appendNamedHypCompletions(
     }
 }
 
-fn hypNameIsDuplicated(
-    hypotheses: []const Types.HypothesisDecl,
+fn hypNameResolvesTo(
+    hyp_names: []const ?[]const u8,
     index: usize,
     name: []const u8,
 ) bool {
-    for (hypotheses, 0..) |other, j| {
-        if (j == index) continue;
-        const other_name = other.name orelse continue;
-        if (std.mem.eql(u8, other_name, name)) return true;
-    }
-    return false;
+    const resolution = proof_script.resolveHypRef(
+        hyp_names,
+        hyp_names.len,
+        .{ .index = 0, .name = name, .span = .{ .start = 0, .end = 0 } },
+    );
+    return switch (resolution) {
+        .index => |resolved| resolved == index,
+        .unknown, .ambiguous => false,
+    };
 }
 
 fn mm0DeclarationIndexAt(

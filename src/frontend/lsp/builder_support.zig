@@ -200,56 +200,114 @@ fn hypothesesFromMathStrings(
     hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
     var result = std.ArrayListUnmanaged(HypothesisDecl){};
-    const count = @min(hyp_count, math_strings.len);
-    for (math_strings[0..count], 0..) |math, i| {
+    var hyp_index: usize = 0;
+    for (math_strings) |math| {
+        if (hyp_index >= hyp_count) break;
         const range: SourceRange = .{
             .document = document,
             .start = offset_base + math.inner_start,
             .end = offset_base + math.inner_end,
         };
-        const name = if (i < hyp_names.len) hyp_names[i] else null;
+        // A binder group declares ONE formula for every name in it, so
+        // `(h1 h2: $ a $)` yields two hypotheses sharing this span. Pairing
+        // one hypothesis per math string would push every name after the
+        // first onto the following formula — ultimately the conclusion.
+        const group = try binderGroupNamesBeforeMath(
+            allocator,
+            document,
+            text,
+            offset_base,
+            math.inner_start,
+        );
+        defer allocator.free(group);
+        var consumed: usize = 0;
+        while (consumed < group.len and hyp_index < hyp_count) {
+            const declared = if (hyp_index < hyp_names.len)
+                hyp_names[hyp_index]
+            else
+                null;
+            // The scan is a source read-back of names the parse already
+            // knows; a disagreement means we misread the group, so stop
+            // rather than pair a formula with the wrong hypothesis.
+            const actual = declared orelse break;
+            if (!std.mem.eql(u8, actual, group[consumed].text)) break;
+            try result.append(allocator, .{
+                .text = math.text,
+                .range = range,
+                .name = actual,
+                .name_range = group[consumed].range,
+            });
+            consumed += 1;
+            hyp_index += 1;
+        }
+        if (consumed != 0) continue;
+        // An arrow-form hypothesis (no binder group), or a group we could
+        // not read back: pair one hypothesis with this formula, and leave
+        // the name unlocated rather than guessing at a position.
         try result.append(allocator, .{
             .text = math.text,
             .range = range,
-            .name = name,
-            .name_range = if (name) |actual| binderNameRangeBeforeMath(
-                document,
-                text,
-                offset_base,
-                math.inner_start,
-                actual,
-            ) else null,
+            .name = if (hyp_index < hyp_names.len) hyp_names[hyp_index] else null,
+            .name_range = null,
         });
+        hyp_index += 1;
     }
     return try result.toOwnedSlice(allocator);
 }
 
-/// Locate the binder name token of a binder-form hypothesis by scanning
-/// backwards from the opening `$` of its formula: `(name: $ ... $)`. The
-/// name is already known from the parsed assertion; this only recovers its
-/// source position, so any mismatch just yields null.
-fn binderNameRangeBeforeMath(
+const BinderNameToken = struct {
+    text: []const u8,
+    range: SourceRange,
+};
+
+/// Read back the binder-name list of a binder-form hypothesis by scanning
+/// backwards from the opening `$` of its formula: `(n1 n2 ...: $ ... $)`.
+/// The names are already known from the parsed assertion; this recovers
+/// their source positions and, because a group shares one formula, how
+/// many hypotheses that formula stands for. Returns an empty list for an
+/// arrow-form hypothesis, and for anything that does not read back as a
+/// complete group — callers treat that as one unlocated hypothesis.
+fn binderGroupNamesBeforeMath(
+    allocator: std.mem.Allocator,
     document: DocumentId,
     text: []const u8,
     offset_base: usize,
     math_inner_start: usize,
-    name: []const u8,
-) ?SourceRange {
-    if (math_inner_start == 0 or name.len == 0) return null;
+) ![]const BinderNameToken {
+    if (math_inner_start == 0) return &.{};
     var pos = math_inner_start - 1;
     while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
-    if (pos == 0 or text[pos - 1] != ':') return null;
+    if (pos == 0 or text[pos - 1] != ':') return &.{};
     pos -= 1;
-    while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
-    if (pos < name.len) return null;
-    const start = pos - name.len;
-    if (!std.mem.eql(u8, text[start..pos], name)) return null;
-    if (start > 0 and isProofIdentChar(text[start - 1])) return null;
-    return .{
-        .document = document,
-        .start = offset_base + start,
-        .end = offset_base + pos,
-    };
+
+    var names = std.ArrayListUnmanaged(BinderNameToken){};
+    errdefer names.deinit(allocator);
+    while (true) {
+        while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
+        if (pos == 0) {
+            names.deinit(allocator);
+            return &.{};
+        }
+        if (text[pos - 1] == '(') break;
+        const end = pos;
+        while (pos > 0 and isProofIdentChar(text[pos - 1])) pos -= 1;
+        if (pos == end) {
+            names.deinit(allocator);
+            return &.{};
+        }
+        try names.append(allocator, .{
+            .text = text[pos..end],
+            .range = .{
+                .document = document,
+                .start = offset_base + pos,
+                .end = offset_base + end,
+            },
+        });
+    }
+    if (names.items.len == 0) return &.{};
+    // Scanned right to left; hypotheses are paired in source order.
+    std.mem.reverse(BinderNameToken, names.items);
+    return try names.toOwnedSlice(allocator);
 }
 
 pub fn bindersFromTerm(
