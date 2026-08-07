@@ -333,20 +333,14 @@ pub fn attachDepViolationBindingTexts(
     first_expr: ?ExprId,
     second_expr: ?ExprId,
 ) void {
-    var names: ?ViewTrace.DiagNames = null;
-    defer if (names) |*built| built.deinit(theorem.allocator);
-    if (parser) |actual_parser| {
-        if (theorem_vars) |vars| {
-            names = ViewTrace.DiagNames.build(
-                theorem.allocator,
-                theorem,
-                actual_parser,
-                vars,
-            ) catch null;
-        }
-    }
-    const names_ptr: ?*const ViewTrace.DiagNames =
-        if (names) |*built| built else null;
+    var names = ViewTrace.OptionalDiagNames.build(
+        theorem.allocator,
+        theorem,
+        parser,
+        theorem_vars,
+    );
+    defer names.deinit(theorem.allocator);
+    const names_ptr = names.ptr();
 
     if (first_expr) |expr_id| {
         detail.first_binding_text =
@@ -411,20 +405,14 @@ pub fn attachBindingValidationNotes(
     expr_id: ExprId,
     err: anyerror,
 ) void {
-    var names: ?ViewTrace.DiagNames = null;
-    defer if (names) |*built| built.deinit(theorem.allocator);
-    if (parser) |actual_parser| {
-        if (theorem_vars) |vars| {
-            names = ViewTrace.DiagNames.build(
-                theorem.allocator,
-                theorem,
-                actual_parser,
-                vars,
-            ) catch null;
-        }
-    }
-    const names_ptr: ?*const ViewTrace.DiagNames =
-        if (names) |*built| built else null;
+    var names = ViewTrace.OptionalDiagNames.build(
+        theorem.allocator,
+        theorem,
+        parser,
+        theorem_vars,
+    );
+    defer names.deinit(theorem.allocator);
+    const names_ptr = names.ptr();
 
     var scratch: [dep_violation_text_buf_len]u8 = undefined;
     if (renderBoundedExpr(&scratch, env, theorem, names_ptr, expr_id)) |text| {

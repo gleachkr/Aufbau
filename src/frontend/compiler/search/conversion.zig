@@ -24,7 +24,8 @@ const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const Context = types.Context;
 const NameExprMap = types.NameExprMap;
-const Lowerer = @import("./conversion/lowerer.zig").Lowerer;
+const lowering = @import("./conversion/lowerer.zig");
+const Lowerer = lowering.Lowerer;
 
 /// The certificates backing one AC-absorbed operator: the `@conversion
 /// comm`/`assoc` theorems the lowering cites for re-treeing chains.
@@ -543,44 +544,24 @@ pub fn run(
             result.convertible_unlowered = true;
             continue;
         };
-        var lowerer = lowerer_proto;
-        try lowerer.seedLabels(block_lines);
-        var best = try lowerer.lower(
-            entry.ref,
-            ref_term,
-            maybe_expr.?,
+        const lowered = try lowerBothOrientations(
+            lowerer_proto,
+            block_lines,
+            .{ .pool = .{
+                .ref = entry.ref,
+                .ref_term = ref_term,
+                .goal_term = extract_goal,
+                .ref_expr = maybe_expr.?,
+            } },
             steps,
         );
-        var any_cap = lowerer.cap_tripped;
-        // When the theory carries `@rewrite` rules, also lower the chain
-        // reversed: a computation grounded by a reduced-side reference
-        // (the `refl` pool line) traverses the fold backwards, where no
-        // big-step group can form; the reducing direction collapses each
-        // fold step's rewrite cascade. Keep whichever emission is shorter.
-        if (context.registry.hasRewriteRules()) {
-            var reversed_lowerer = lowerer_proto;
-            try reversed_lowerer.seedLabels(block_lines);
-            const reversed = try reversed_lowerer.lowerReversed(
-                entry.ref,
-                extract_goal,
-                maybe_expr.?,
-                try reverseSteps(work, steps),
-            );
-            if (reversed != null and
-                (best == null or
-                    reversed_lowerer.lines_emitted < lowerer.lines_emitted))
-            {
-                best = reversed;
-            }
-            any_cap = any_cap or reversed_lowerer.cap_tripped;
-        }
-        if (best) |replacement| {
+        if (lowered.best) |replacement| {
             result.replacement = replacement;
-            result.via = try lowerer.renderRefText(entry.ref);
+            result.via = try lowering.renderRefText(work, entry.ref);
             return result;
         }
         result.convertible_unlowered = true;
-        if (any_cap) result.lower_capped = true;
+        if (lowered.any_cap) result.lower_capped = true;
     }
 
     // Equation fallback: no pool reference lowered, but the goal's own
@@ -601,46 +582,110 @@ pub fn run(
                 result.convertible_unlowered = true;
                 return result;
             };
-            var lowerer = lowerer_proto;
-            try lowerer.seedLabels(block_lines);
-            var best = try lowerer.lowerEquation(
-                sides.lhs,
-                sides.lhs_expr,
-                sides.rhs_expr,
+            const lowered = try lowerBothOrientations(
+                lowerer_proto,
+                block_lines,
+                .{ .equation = sides },
                 steps,
-                false,
             );
-            var any_cap = lowerer.cap_tripped;
-            if (context.registry.hasRewriteRules()) {
-                var reversed_lowerer = lowerer_proto;
-                try reversed_lowerer.seedLabels(block_lines);
-                const reversed = try reversed_lowerer.lowerEquation(
-                    sides.rhs,
-                    sides.rhs_expr,
-                    sides.lhs_expr,
-                    try reverseSteps(work, steps),
-                    true,
-                );
-                if (reversed != null and
-                    (best == null or
-                        reversed_lowerer.lines_emitted < lowerer.lines_emitted))
-                {
-                    best = reversed;
-                }
-                any_cap = any_cap or reversed_lowerer.cap_tripped;
-            }
-            if (best) |replacement| {
+            if (lowered.best) |replacement| {
                 result.replacement = replacement;
                 return result;
             }
             result.convertible_unlowered = true;
-            if (any_cap) result.lower_capped = true;
+            if (lowered.any_cap) result.lower_capped = true;
         }
     } else if (eqSidesConverged(&eg, eq_sides)) {
         // The extraction rebuild lost the sides (an AC splice); the goal
         // is still provably convertible — keep the failure report honest.
         result.convertible_unlowered = true;
     }
+    return result;
+}
+
+/// What one lowering attempt is grounded in: a pool reference the target
+/// line is transported from, or the goal's own equation sides.
+const LowerJob = union(enum) {
+    pool: struct {
+        ref: ProofScript.Ref,
+        ref_term: *const egraph.Term,
+        goal_term: *const egraph.Term,
+        ref_expr: ExprId,
+    },
+    equation: EqSides,
+};
+
+const DualLowering = struct {
+    /// The shorter of the two orientations' emissions; null when neither
+    /// lowered.
+    best: ?[]const u8 = null,
+    /// Set when either orientation aborted on an emission cap rather than a
+    /// structural gap — the driver reports the two differently.
+    any_cap: bool = false,
+};
+
+/// Lower one explanation in both orientations and keep the shorter emission.
+///
+/// When the theory carries `@rewrite` rules the chain is also lowered
+/// reversed: a computation grounded by a reduced-side reference (the `refl`
+/// pool line) traverses the fold backwards, where no big-step group can
+/// form; the reducing direction collapses each fold step's rewrite cascade.
+///
+/// Each orientation gets its own `Lowerer` copied from `proto`, whose every
+/// mutable field is still at its empty default.
+fn lowerBothOrientations(
+    proto: Lowerer,
+    block_lines: []const ProofScript.ProofLine,
+    job: LowerJob,
+    steps: []const egraph.Step,
+) !DualLowering {
+    var lowerer = proto;
+    try lowerer.seedLabels(block_lines);
+    var result = DualLowering{
+        .best = switch (job) {
+            .pool => |ref| try lowerer.lower(
+                ref.ref,
+                ref.ref_term,
+                ref.ref_expr,
+                steps,
+            ),
+            .equation => |sides| try lowerer.lowerEquation(
+                sides.lhs,
+                sides.lhs_expr,
+                sides.rhs_expr,
+                steps,
+                false,
+            ),
+        },
+        .any_cap = lowerer.cap_tripped,
+    };
+    if (!proto.context.registry.hasRewriteRules()) return result;
+
+    var reversed_lowerer = proto;
+    try reversed_lowerer.seedLabels(block_lines);
+    const reversed_steps = try reverseSteps(proto.work, steps);
+    const reversed = switch (job) {
+        .pool => |ref| try reversed_lowerer.lowerReversed(
+            ref.ref,
+            ref.goal_term,
+            ref.ref_expr,
+            reversed_steps,
+        ),
+        .equation => |sides| try reversed_lowerer.lowerEquation(
+            sides.rhs,
+            sides.rhs_expr,
+            sides.lhs_expr,
+            reversed_steps,
+            true,
+        ),
+    };
+    if (reversed != null and
+        (result.best == null or
+            reversed_lowerer.lines_emitted < lowerer.lines_emitted))
+    {
+        result.best = reversed;
+    }
+    result.any_cap = result.any_cap or reversed_lowerer.cap_tripped;
     return result;
 }
 

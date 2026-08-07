@@ -1401,18 +1401,38 @@ fn isIdentChar(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_';
 }
 
+/// The proof-search placeholders, without their trailing `?`. This list is
+/// the one place they are enumerated: the lexer below, and the LSP's
+/// completion table (`lsp/completion.zig`, which cross-checks it at
+/// comptime), both derive from it.
+pub const search_placeholder_bases = [_][]const u8{
+    "auto",
+    "exact",
+    "apply",
+    "conversion",
+};
+
+/// The same placeholders as they are written in a proof: `auto?`, …
+pub const search_placeholder_names = blk: {
+    var names: [search_placeholder_bases.len][]const u8 = undefined;
+    for (search_placeholder_bases, 0..) |base, idx| {
+        names[idx] = base ++ "?";
+    }
+    break :blk names;
+};
+
 fn isSearchPlaceholderBase(name: []const u8) bool {
-    return std.mem.eql(u8, name, "exact") or
-        std.mem.eql(u8, name, "apply") or
-        std.mem.eql(u8, name, "auto") or
-        std.mem.eql(u8, name, "conversion");
+    for (search_placeholder_bases) |base| {
+        if (std.mem.eql(u8, name, base)) return true;
+    }
+    return false;
 }
 
 pub fn isSearchPlaceholderRuleName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "exact?") or
-        std.mem.eql(u8, name, "apply?") or
-        std.mem.eql(u8, name, "auto?") or
-        std.mem.eql(u8, name, "conversion?");
+    for (search_placeholder_names) |placeholder| {
+        if (std.mem.eql(u8, name, placeholder)) return true;
+    }
+    return false;
 }
 
 pub fn applicationHasSearchPlaceholder(application: RuleApplication) bool {

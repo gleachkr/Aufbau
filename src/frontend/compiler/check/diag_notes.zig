@@ -219,18 +219,14 @@ fn addHoleyInferenceNotes(
     const failure = report.failure orelse return;
     const hole_span = firstHoleProofSpan(line, holey);
 
-    var names: ?ViewTrace.DiagNames = if (fresh_context) |fresh|
-        try ViewTrace.DiagNames.build(
-            allocator,
-            theorem,
-            fresh.parser,
-            fresh.theorem_vars,
-        )
-    else
-        null;
-    defer if (names) |*n| n.deinit(allocator);
-    const names_ptr: ?*const ViewTrace.DiagNames =
-        if (names) |*n| n else null;
+    var names = ViewTrace.OptionalDiagNames.build(
+        allocator,
+        theorem,
+        if (fresh_context) |fresh| fresh.parser else null,
+        if (fresh_context) |fresh| fresh.theorem_vars else null,
+    );
+    defer names.deinit(allocator);
+    const names_ptr = names.ptr();
 
     switch (failure) {
         .hypothesis_mismatch => |info| {
@@ -596,15 +592,14 @@ pub fn addBoundaryAttemptNotes(
     final_line: ExprId,
     report: TheoremBoundary.ReconciliationReport,
 ) void {
-    var names: ?ViewTrace.DiagNames = ViewTrace.DiagNames.build(
+    var names = ViewTrace.OptionalDiagNames.build(
         allocator,
         theorem,
         parser,
         theorem_vars,
-    ) catch null;
-    defer if (names) |*n| n.deinit(allocator);
-    const names_ptr: ?*const ViewTrace.DiagNames =
-        if (names) |*n| n else null;
+    );
+    defer names.deinit(allocator);
+    const names_ptr = names.ptr();
     addRenderedExprNote(
         allocator,
         diag,

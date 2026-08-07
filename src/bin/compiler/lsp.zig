@@ -345,7 +345,7 @@ fn applicableRuleCompletions(
     for (completions) |item| {
         // The tactics are what you write *instead of* naming a rule, so the
         // search has no opinion on them and the filter must not eat them.
-        if (!LspIndex.Snapshot.isSearchTacticLabel(item.label) and
+        if (!isSearchTactic(item) and
             !searchOffersRule(suggestions.items, item.label))
         {
             continue;
@@ -355,9 +355,16 @@ fn applicableRuleCompletions(
     return try filtered.toOwnedSlice(arena);
 }
 
+/// A completion this filter has no business judging. In a proof-rule
+/// position the keyword kind belongs to the search tactics alone — every
+/// name the theory supplies arrives as a rule, a label, or a hypothesis.
+fn isSearchTactic(item: LspIndex.CompletionItem) bool {
+    return item.kind == .keyword;
+}
+
 fn allSearchTactics(items: []const LspIndex.CompletionItem) bool {
     for (items) |item| {
-        if (!LspIndex.Snapshot.isSearchTacticLabel(item.label)) return false;
+        if (!isSearchTactic(item)) return false;
     }
     return true;
 }

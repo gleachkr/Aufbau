@@ -47,10 +47,9 @@ pub fn buildInferenceFailureDiagnostic(
             .first_unsolved_binder_name = firstUnsolvedNamedBinder(rule, current_bindings),
         } },
     }, .inference);
-    var names = try buildOptionalDiagNames(allocator, theorem, fresh_context);
-    defer if (names) |*n| n.deinit(allocator);
-    const names_ptr: ?*const ViewTrace.DiagNames =
-        if (names) |*n| n else null;
+    var names = optionalDiagNames(allocator, theorem, fresh_context);
+    defer names.deinit(allocator);
+    const names_ptr = names.ptr();
     if (mismatch) |site| {
         try addReplayMismatchNotes(
             allocator,
@@ -125,8 +124,8 @@ pub fn addInferenceNotes(
     current_bindings: []const ?ExprId,
     fresh_context: ?HiddenWitnessFreshContext,
 ) !void {
-    var names = try buildOptionalDiagNames(allocator, theorem, fresh_context);
-    defer if (names) |*n| n.deinit(allocator);
+    var names = optionalDiagNames(allocator, theorem, fresh_context);
+    defer names.deinit(allocator);
     try addInferenceNotesNamed(
         allocator,
         diag,
@@ -135,24 +134,23 @@ pub fn addInferenceNotes(
         rule,
         explicit_bindings,
         current_bindings,
-        if (names) |*n| n else null,
+        names.ptr(),
     );
 }
 
 /// Render binding values with declared notation and real binder names when a
 /// notation provider + binder map are available; otherwise fall back to the
 /// internal prefix/coordinate form inside `buildBindingSummary`.
-fn buildOptionalDiagNames(
+fn optionalDiagNames(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
     fresh_context: ?HiddenWitnessFreshContext,
-) !?ViewTrace.DiagNames {
-    const fresh = fresh_context orelse return null;
-    return try ViewTrace.DiagNames.build(
+) ViewTrace.OptionalDiagNames {
+    return ViewTrace.OptionalDiagNames.build(
         allocator,
         theorem,
-        fresh.parser,
-        fresh.theorem_vars,
+        if (fresh_context) |fresh| fresh.parser else null,
+        if (fresh_context) |fresh| fresh.theorem_vars else null,
     );
 }
 

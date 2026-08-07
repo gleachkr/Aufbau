@@ -177,6 +177,46 @@ pub const DiagNames = struct {
     }
 };
 
+/// `DiagNames` for a diagnostic renderer, when they can be had: present
+/// only when both a notation provider and a binder map are in scope.
+/// Absent — including when the build itself fails — the renderers fall back
+/// to the internal prefix/coordinate form, which every one of them accepts.
+/// A diagnostic is never lost because its pretty names could not be built.
+pub const OptionalDiagNames = struct {
+    names: ?DiagNames = null,
+
+    pub fn build(
+        allocator: std.mem.Allocator,
+        theorem: *const TheoremContext,
+        parser: ?*const MM0Parser,
+        name_exprs: ?*const std.StringHashMap(*const Expr),
+    ) OptionalDiagNames {
+        const actual_parser = parser orelse return .{};
+        const vars = name_exprs orelse return .{};
+        return .{
+            .names = DiagNames.build(
+                allocator,
+                theorem,
+                actual_parser,
+                vars,
+            ) catch null,
+        };
+    }
+
+    pub fn deinit(
+        self: *OptionalDiagNames,
+        allocator: std.mem.Allocator,
+    ) void {
+        if (self.names) |*built| built.deinit(allocator);
+    }
+
+    /// The `?*const DiagNames` the renderers take. Points into this value,
+    /// so it must not outlive it or survive a copy.
+    pub fn ptr(self: *const OptionalDiagNames) ?*const DiagNames {
+        return if (self.names) |*built| built else null;
+    }
+};
+
 /// Render `expr_id` for a user-facing diagnostic using the declared notation
 /// (the provider carried by `names`) and real binder names. Falls back to the
 /// internal prefix/coordinate form (`formatExpr`) if the notation render cannot

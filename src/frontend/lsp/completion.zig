@@ -573,14 +573,20 @@ const search_tactics = [_]SearchTactic{
     },
 };
 
-/// Whether `label` names one of the search tactics. Callers that post-filter
-/// proof-rule completions against the theory's rules use this to let the
-/// tactics through — they are not rules and no rule filter can vouch for them.
-pub fn isSearchTacticLabel(label: []const u8) bool {
-    for (search_tactics) |tactic| {
-        if (std.mem.eql(u8, tactic.label, label)) return true;
+comptime {
+    // The placeholders themselves live in `proof_script`; this table only
+    // adds the prose. Adding one there must not silently leave it
+    // un-offered here.
+    if (search_tactics.len != proof_script.search_placeholder_names.len) {
+        @compileError("search_tactics is out of sync with " ++
+            "proof_script.search_placeholder_names");
     }
-    return false;
+    for (search_tactics, proof_script.search_placeholder_names) |tactic, name| {
+        if (!std.mem.eql(u8, tactic.label, name)) {
+            @compileError("search_tactics is out of sync with " ++
+                "proof_script.search_placeholder_names: " ++ tactic.label);
+        }
+    }
 }
 
 fn appendSearchTacticCompletions(

@@ -20,6 +20,7 @@ const ViewTrace = @import("../../../view_trace.zig");
 const rewrite_registry = @import("../../../rewrite_registry.zig");
 const ResolvedRelation = rewrite_registry.ResolvedRelation;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const templateBinderMask = @import("../../../rules.zig").templateBinderMask;
 const Context = types.Context;
 
 const conversion = @import("../conversion.zig");
@@ -29,6 +30,23 @@ const varIdForLeaf = conversion.varIdForLeaf;
 const flattenAcExpr = conversion.flattenAcExpr;
 const Normalizer = @import("../../../normalizer.zig").Normalizer;
 const CheckedLine = @import("../../checked_ir.zig").CheckedLine;
+
+/// A reference as it is written in a proof line: `#name`/`#index` for a
+/// hypothesis, the label for an earlier line. Depends on nothing but the
+/// allocator, so the driver can render one without a lowering attempt.
+pub fn renderRefText(
+    work: std.mem.Allocator,
+    ref: ProofScript.Ref,
+) ![]const u8 {
+    return switch (ref) {
+        .hyp => |hyp| if (hyp.name) |name|
+            try std.fmt.allocPrint(work, "#{s}", .{name})
+        else
+            try std.fmt.allocPrint(work, "#{d}", .{hyp.index}),
+        .line => |line| line.label,
+        .application => error.UnexpectedInlineRef,
+    };
+}
 
 /// Lowers one explanation into proof-script source text. Every emitted line
 /// asserts its full conclusion, so unification replay solves all rule
@@ -363,7 +381,7 @@ pub const Lowerer = struct {
             // traversed backwards); when the chain's canonical renderings
             // differ from the written sides (AC bags), align the seams.
             .pool_equation => |pool_idx| {
-                label = try self.renderRefText(self.pool[pool_idx].ref);
+                label = try renderRefText(self.work, self.pool[pool_idx].ref);
                 const written = Refs.sourceRefExpr(
                     self.context,
                     self.theorem,
@@ -1514,17 +1532,6 @@ pub const Lowerer = struct {
         return label;
     }
 
-    pub fn renderRefText(self: *Lowerer, ref: ProofScript.Ref) ![]const u8 {
-        return switch (ref) {
-            .hyp => |hyp| if (hyp.name) |name|
-                try std.fmt.allocPrint(self.work, "#{s}", .{name})
-            else
-                try std.fmt.allocPrint(self.work, "#{d}", .{hyp.index}),
-            .line => |line| line.label,
-            .application => error.UnexpectedInlineRef,
-        };
-    }
-
     // --- Big-step grouping ---------------------------------------------
     //
     // One elementary rewrite costs a whole stanza (rule instance, symm
@@ -1565,25 +1572,6 @@ pub const Lowerer = struct {
         return result.result_expr;
     }
 
-    /// Binder indices a template mentions, as a bitmask. Null when an
-    /// index does not fit the mask — the caller must abstain from
-    /// grouping rather than under-count the coverage requirement.
-    fn templateBinderMask(template: TemplateExpr) ?u64 {
-        switch (template) {
-            .binder => |idx| {
-                if (idx >= 64) return null;
-                return @as(u64, 1) << @intCast(idx);
-            },
-            .app => |app| {
-                var mask: u64 = 0;
-                for (app.args) |arg| {
-                    mask |= templateBinderMask(arg) orelse return null;
-                }
-                return mask;
-            },
-        }
-    }
-
     /// Whether a rule step can drive a big-step group: a plain (non-def,
     /// non-bag) theorem citation whose result still carries `@rewrite`
     /// residue, and whose intact stated side binds every binder the
@@ -1601,9 +1589,14 @@ pub const Lowerer = struct {
         const conv = self.conversionRuleById(rule_id) orelse return false;
         const intact = if (step.needs_symm) conv.rhs else conv.lhs;
         const reduced = if (step.needs_symm) conv.lhs else conv.rhs;
-        const intact_mask = templateBinderMask(intact) orelse return false;
-        const reduced_mask = templateBinderMask(reduced) orelse return false;
-        if (intact_mask & reduced_mask != reduced_mask) return false;
+        const intact_mask = templateBinderMask(intact);
+        const reduced_mask = templateBinderMask(reduced);
+        // A binder index past the mask's width would under-count the
+        // coverage requirement; abstain from grouping rather than guess.
+        if (intact_mask.overflow or reduced_mask.overflow) return false;
+        if (intact_mask.mask & reduced_mask.mask != reduced_mask.mask) {
+            return false;
+        }
         const after_expr = (try self.termToExpr(step.after)) orelse {
             return false;
         };
@@ -1898,7 +1891,7 @@ pub const Lowerer = struct {
         // The original line, verbatim label and assertion, transported.
         try self.printTargetLine(
             transport_id,
-            &.{ chain_label.?, try self.renderRefText(ref) },
+            &.{ chain_label.?, try renderRefText(self.work, ref) },
         );
         return try self.out.toOwnedSlice(self.work);
     }

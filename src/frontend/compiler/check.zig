@@ -179,10 +179,11 @@ pub const RuleApplyContext = struct {
     sort_vars: *const SortVarRegistry,
     assertion: AssertionStmt,
     labels: *const LabelIndexMap,
-    /// Labels of every line in the block, in order — including lines not
-    /// yet checked. Lets the unknown-label diagnostic distinguish a typo
-    /// from a reference to a line that appears later in the proof.
-    block_labels: []const []const u8 = &.{},
+    /// Every line in the block, in order — including lines not yet
+    /// checked. Lets the unknown-label diagnostic distinguish a typo from a
+    /// reference to a line that appears later in the proof. Empty for the
+    /// search's own contexts, which check one line at a time.
+    block_lines: []const ProofScript.ProofLine = &.{},
     checked: *std.ArrayListUnmanaged(CheckedLine),
     diag_scratch: *CompilerDiag.Scratch,
     rule_unify_cache: *Inference.RuleUnifyCache,
@@ -209,12 +210,6 @@ pub fn checkTheoremBlock(
 
     var labels = LabelIndexMap.init(allocator);
     defer labels.deinit();
-
-    const block_labels = try allocator.alloc([]const u8, block.lines.len);
-    defer allocator.free(block_labels);
-    for (block.lines, 0..) |block_line, idx| {
-        block_labels[idx] = block_line.label;
-    }
 
     var checked = std.ArrayListUnmanaged(CheckedLine){};
     var rule_unify_cache = Inference.RuleUnifyCache.init(allocator);
@@ -314,7 +309,7 @@ pub fn checkTheoremBlock(
             .sort_vars = sort_vars,
             .assertion = assertion,
             .labels = &labels,
-            .block_labels = block_labels,
+            .block_lines = block.lines,
             .checked = &checked,
             .diag_scratch = &diag_scratch,
             .rule_unify_cache = &rule_unify_cache,
@@ -2731,10 +2726,13 @@ fn considerSuggestion(
     }
 }
 
-fn closestRuleName(env: *const GlobalEnv, name: []const u8) ?[]const u8 {
+/// The closest name in `map`'s keys to `name`, or null when nothing is
+/// close enough. `map` is any string-keyed map — the rule table or a
+/// block's label index.
+fn closestKeyName(map: anytype, name: []const u8) ?[]const u8 {
     var best: ?[]const u8 = null;
     var best_dist: usize = std.math.maxInt(usize);
-    var it = env.rule_names.keyIterator();
+    var it = map.keyIterator();
     while (it.next()) |key| {
         considerSuggestion(name, key.*, &best, &best_dist);
     }
@@ -2742,33 +2740,20 @@ fn closestRuleName(env: *const GlobalEnv, name: []const u8) ?[]const u8 {
 }
 
 fn labelAppearsInBlock(
-    block_labels: []const []const u8,
+    block_lines: []const ProofScript.ProofLine,
     name: []const u8,
 ) bool {
-    for (block_labels) |label| {
-        if (std.mem.eql(u8, label, name)) return true;
+    for (block_lines) |line| {
+        if (std.mem.eql(u8, line.label, name)) return true;
     }
     return false;
-}
-
-fn closestLabelName(
-    labels: *const LabelIndexMap,
-    name: []const u8,
-) ?[]const u8 {
-    var best: ?[]const u8 = null;
-    var best_dist: usize = std.math.maxInt(usize);
-    var it = labels.keyIterator();
-    while (it.next()) |key| {
-        considerSuggestion(name, key.*, &best, &best_dist);
-    }
-    return best;
 }
 
 fn lookupRuleApplicationId(
     self: *CompilerContext,
     env: *const GlobalEnv,
     rule_catalog: *const RuleCatalog.Catalog,
-    labels: ?*const LabelIndexMap,
+    labels: *const LabelIndexMap,
     diag_context: ApplicationDiagnosticContext,
     application: RuleApplication,
 ) !u32 {
@@ -2818,7 +2803,7 @@ fn lookupRuleApplicationId(
             .proof,
             null,
         );
-    } else if (labels != null and labels.?.contains(application.rule_name)) {
+    } else if (labels.contains(application.rule_name)) {
         CompilerDiag.addNote(
             &diag,
             "this name is a proof line label, not a rule; earlier lines " ++
@@ -2826,7 +2811,10 @@ fn lookupRuleApplicationId(
             .proof,
             null,
         );
-    } else if (closestRuleName(env, application.rule_name)) |suggestion| {
+    } else if (closestKeyName(
+        &env.rule_names,
+        application.rule_name,
+    )) |suggestion| {
         diag.detail = .{ .name_suggestion = .{ .suggestion = suggestion } };
     }
     self.setProof(diag);
@@ -3600,7 +3588,7 @@ fn elaborateRefs(
                         .span = label.span,
                     }, .theorem_application);
                     if (labelAppearsInBlock(
-                        context.block_labels,
+                        context.block_lines,
                         label.label,
                     )) {
                         CompilerDiag.addNote(
@@ -3610,7 +3598,7 @@ fn elaborateRefs(
                             .proof,
                             null,
                         );
-                    } else if (closestLabelName(
+                    } else if (closestKeyName(
                         context.labels,
                         label.label,
                     )) |suggestion| {
