@@ -8294,8 +8294,10 @@ test "conversion? big-steps beta chains through @rewrite absorption" {
         "$ (λ w . S w) · S 0 = S S 0 $ by beta",
     ) != null);
     // Elementary lowering emits ~185 lines for this chain; grouping plus
-    // route/consolidation/dedup (#202) lands at ~34.
-    try std.testing.expect(countLines(replacement) <= 45);
+    // route/consolidation/dedup (#202) landed at ~34, and the fold's
+    // size-decreasing anchor re-fire (#203) at ~20 — a pure forward
+    // evaluation, no backward step anywhere.
+    try std.testing.expect(countLines(replacement) <= 30);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
@@ -8321,12 +8323,12 @@ test "conversion? big-steps church addition (one plus one)" {
     try std.testing.expectEqual(types.SearchStatus.found, found.status);
     const replacement = found.items[0].replacement;
     // Elementary lowering emits ~2160 lines here; grouping landed at
-    // ~620, and #202 (group consolidation + repeated-line dedup) at ~290.
-    // The residue is fold-anchor detours: an outer substitution's
-    // `sb_app` fire committed to the unreduced app member of its body
-    // class, so the chain must expand through it (no forward route
-    // exists in the recorded graph).
-    try std.testing.expect(countLines(replacement) <= 350);
+    // ~620, #202 (group consolidation + repeated-line dedup) at ~290,
+    // and the fold's size-decreasing anchor re-fire (#203) at ~190 —
+    // the re-fires give the recorded graph forward routes through
+    // reduced members where the original fires had anchored on
+    // unreduced ones.
+    try std.testing.expect(countLines(replacement) <= 250);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 

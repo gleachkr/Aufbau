@@ -1601,9 +1601,17 @@ pub const Lowerer = struct {
         };
         if (conversion.defRuleTermId(rule_id) != null) return false;
         if (!self.context.registry.hasRewriteRules()) return false;
+        // A symm-cited driver would state the group's normalized result
+        // on the rule line's MATCH side. The checker's inference walks
+        // the conclusion positionally, so a normalized match side is a
+        // structural clash before any binder can bind from the intact
+        // side — uninferable no matter what the normal forms agree on.
+        // The reversed dual lowering sees the same group forward, so
+        // nothing is lost by keeping the elementary stanza here.
+        if (step.needs_symm) return false;
         const conv = self.conversionRuleById(rule_id) orelse return false;
-        const intact = if (step.needs_symm) conv.rhs else conv.lhs;
-        const reduced = if (step.needs_symm) conv.lhs else conv.rhs;
+        const intact = conv.lhs;
+        const reduced = conv.rhs;
         const intact_mask = templateBinderMask(intact);
         const reduced_mask = templateBinderMask(reduced);
         // A binder index past the mask's width would under-count the

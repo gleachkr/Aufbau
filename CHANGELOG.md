@@ -12,12 +12,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   theorem enrolled in one direction) along their reducing direction;
   the lowering reorders commuting steps so a rule's rewrite cascade is
   not split by a sibling subtree's reduction, letting big-step groups
-  absorb whole cascades; and a line identical to one already emitted
-  cites the earlier label instead of restating it. On the manual's
-  lambda-calculus examples: the Y-combinator fixpoint chain drops from
-  35 lines to 14 (the hand-written proof's shape), Church `1 + 1 = 2`
-  from ~620 to ~290, and the 16-digit carry cascade from ~1670 to
-  ~1070.
+  absorb whole cascades; a line identical to one already emitted
+  cites the earlier label instead of restating it; and once the
+  `@compute` fold reaches fixpoint, a redex whose operand was
+  meanwhile out-reduced re-fires on the reduced form (gated to
+  half-size-or-smaller redexes, so Y-style cyclic classes never
+  churn), giving the recorded graph forward routes where it previously
+  forced backward detours. On the manual's lambda-calculus examples:
+  the Y-combinator fixpoint chain drops from 35 lines to 14 (the
+  hand-written proof's shape), Church `2·succ` application from ~185
+  to 20 (a pure forward evaluation), Church `1 + 1 = 2` from ~2160 to
+  ~190, and the 16-digit carry cascade from ~1670 to ~1070.
 
 ## [0.0.4] - 2026-08-06
 

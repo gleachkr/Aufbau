@@ -206,6 +206,14 @@ fn justEndpoints(just: Justification) struct { a: ENodeId, b: ENodeId } {
     };
 }
 
+/// Order-insensitive key for an edge's endpoint node-pair (alt-edge
+/// dedup and the re-fire edge marker share it).
+fn nodePairKey(a: ENodeId, b: ENodeId) u64 {
+    const lo = @min(a, b);
+    const hi = @max(a, b);
+    return (@as(u64, lo) << 32) | hi;
+}
+
 pub const UnionEdge = struct {
     a: EClassId,
     b: EClassId,
@@ -443,13 +451,20 @@ pub const EGraph = struct {
     /// chain dies in the verifier with a DepViolation.
     leaf_deps: std.AutoHashMapUnmanaged(LeafId, []const LeafId) = .{},
     /// Nodes whose designated `@compute` fold redex was applied (see
-    /// `foldCompute`). Sticky and STRUCTURAL — match-effect keys are
+    /// `foldCompute`), mapped to the rendered size of the redex that
+    /// fired. Sticky and STRUCTURAL — match-effect keys are
     /// canonical-root-relative and refresh on every merge, so without
     /// this ledger a node re-fires its consumed redex under a fresh key
     /// after every union touching its class, re-deriving the alternative
     /// regroupings the normalization strategy exists to avoid. A class's
     /// cascade continues through the newer result nodes the fold minted.
-    fold_consumed: std.AutoHashMapUnmanaged(ENodeId, void) = .{},
+    /// The stored size admits exactly one relaxation: a consumed node may
+    /// re-fire on a redex at most HALF the consumed size (a reduced
+    /// member appeared in an operand class, or a later-declared rule
+    /// reads a member the designated fire ignored) — geometric decrease,
+    /// so never a livelock, and near-size regroupings stay dead. See
+    /// `foldCompute`.
+    fold_consumed: std.AutoHashMapUnmanaged(ENodeId, usize) = .{},
     /// Set when a saturation iteration was budget-capped yet changed
     /// nothing (see `SaturateOutcome.budget_fixpoint`); later `saturate`
     /// calls return immediately instead of re-running the identical
@@ -674,9 +689,7 @@ pub const EGraph = struct {
     fn recordAltEdge(self: *EGraph, just: Justification) !void {
         const ends = justEndpoints(just);
         if (ends.a == ends.b) return;
-        const lo = @min(ends.a, ends.b);
-        const hi = @max(ends.a, ends.b);
-        const key = (@as(u64, lo) << 32) | hi;
+        const key = nodePairKey(ends.a, ends.b);
         const gop = try self.alt_seen.getOrPut(self.allocator, key);
         if (gop.found_existing) return;
         try self.alt_edges.append(self.allocator, just);
@@ -1363,6 +1376,133 @@ pub const EGraph = struct {
         node_capped: bool = false,
     };
 
+    /// Per-round minimal rendered-size table for the fold scheduler's
+    /// size-decreasing re-fire gate.
+    const FoldSizes = std.AutoHashMapUnmanaged(EClassId, usize);
+
+    /// A class none of whose members render finitely (every member is
+    /// cyclic through the class itself) has no `FoldSizes` entry; matches
+    /// binding it measure as this sentinel, so they can never pass the
+    /// re-fire gate — but any later finite match beats them.
+    const fold_unrenderable: usize = std.math.maxInt(usize);
+
+    /// Minimal rendered term size per class root — the explain-side
+    /// `ensureExtraction` fixpoint, sans avoid-masks. Well-founded by
+    /// construction (a finite entry's children have strictly smaller
+    /// cost). Allocated in the round scratch arena: roots move every
+    /// round, so entries must not outlive one.
+    fn computeFoldSizes(
+        self: *EGraph,
+        scratch: std.mem.Allocator,
+    ) !FoldSizes {
+        var sizes: FoldSizes = .{};
+        while (true) {
+            var changed = false;
+            node_loop: for (self.nodes.items) |stored| {
+                var cost: usize = 1;
+                switch (stored.node) {
+                    .leaf => {},
+                    .app => |app| for (app.children) |child| switch (child) {
+                        .bound => cost +|= 1,
+                        .class => |c| {
+                            cost +|= sizes.get(self.find(c)) orelse
+                                continue :node_loop;
+                        },
+                    },
+                    .bag => |bag| for (bag.members) |member| {
+                        cost +|= sizes.get(self.find(member)) orelse
+                            continue :node_loop;
+                    },
+                }
+                const root = self.find(stored.class);
+                const gop = try sizes.getOrPut(scratch, root);
+                if (!gop.found_existing or cost < gop.value_ptr.*) {
+                    gop.value_ptr.* = cost;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+        return sizes;
+    }
+
+    fn foldSizeOf(
+        self: *EGraph,
+        sizes: *const FoldSizes,
+        class: EClassId,
+    ) usize {
+        return sizes.get(self.find(class)) orelse fold_unrenderable;
+    }
+
+    /// Rendered size of a collected fold match: the match side with every
+    /// binder at its binding's minimal representative, plus (for AC
+    /// matches) the leftover members the target rejoins. It measures the
+    /// redex as a TERM, not the pattern, so measures are comparable
+    /// across rules — a later-declared rule reading a reduced member
+    /// beats an earlier rule's fire through an unreduced one.
+    fn foldMatchMeasure(
+        self: *EGraph,
+        sizes: *const FoldSizes,
+        rule: Rule,
+        m: Match,
+    ) usize {
+        var total = self.foldTemplateSize(sizes, rule.match_side, m.subst);
+        for (m.extension) |member| {
+            total +|= self.foldSizeOf(sizes, member);
+        }
+        return total;
+    }
+
+    fn foldTemplateSize(
+        self: *EGraph,
+        sizes: *const FoldSizes,
+        template: TemplateExpr,
+        subst: []const ?Child,
+    ) usize {
+        switch (template) {
+            .binder => |idx| {
+                const child = subst[idx] orelse return 1;
+                return switch (child) {
+                    .bound => 1,
+                    .class => |c| self.foldSizeOf(sizes, c),
+                };
+            },
+            .app => |app| {
+                var total: usize = 1;
+                for (app.args) |arg| {
+                    total +|= self.foldTemplateSize(sizes, arg, subst);
+                }
+                return total;
+            },
+        }
+    }
+
+    /// Cheapest redex ANY match rooted at `node` could render at current
+    /// sizes: every binding lives inside the node's operand classes
+    /// (bare binders bind the class itself; structured sub-patterns
+    /// render a member, never below the class minimum), so one plus the
+    /// children's minimal sizes bounds every measure from below. Lets
+    /// the scan skip consumed nodes without re-matching when no strictly
+    /// smaller redex can exist.
+    fn foldNodeLowerBound(
+        self: *EGraph,
+        sizes: *const FoldSizes,
+        node: ENode,
+    ) usize {
+        var total: usize = 1;
+        switch (node) {
+            .leaf => {},
+            .app => |app| for (app.children) |child| switch (child) {
+                .bound => total +|= 1,
+                .class => |c| total +|= self.foldSizeOf(sizes, c),
+            },
+            .bag => |bag| for (bag.members) |member| {
+                total +|= self.foldSizeOf(sizes, member);
+            },
+        }
+        return total;
+    }
+
     /// Directed folding for `@compute` rules. Undirected saturation is
     /// the wrong engine for computational rule sets (digit tables, carry
     /// cascades): every regrouping of a bag matches, every application
@@ -1371,12 +1511,29 @@ pub const EGraph = struct {
     /// steps. This pass runs the compute subset as a normalization
     /// strategy instead:
     ///
-    ///   - each node fires at most ONCE, EVER (`fold_consumed`): its
-    ///     designated redex is the first fresh match in (rule,
-    ///     enumeration) order, the cascade continues through the result
-    ///     nodes the fold mints, and alternative pairings of a consumed
-    ///     shape never fire — that closure is exactly what a rewrite
-    ///     strategy exists to avoid;
+    ///   - each node fires its designated redex — the first fresh match
+    ///     in (rule, enumeration) order — and is consumed at that redex's
+    ///     rendered size (`fold_consumed`): the cascade continues through
+    ///     the result nodes the fold mints, and alternative pairings of a
+    ///     consumed shape never fire — that closure is exactly what a
+    ///     rewrite strategy exists to avoid. ONE relaxation: once fold
+    ///     rounds reach fixpoint, RE-FIRE rounds let a consumed app node
+    ///     fire again on a redex at most HALF its consumed size, which
+    ///     happens when the original fire anchored on an operand member
+    ///     that was later out-reduced (the reduced member did not exist
+    ///     yet, or a later-declared rule reads it while an earlier rule
+    ///     won on the unreduced one). Halving — not mere decrease — is
+    ///     the junk filter: on a self-containing class (a vacuous-sb
+    ///     member, Y-style unrolling) cycle artifacts shave only a node
+    ///     or two off the rendering, while a genuinely reduced anchor
+    ///     shrinks the redex substantially; geometric decrease also
+    ///     bounds a node's re-fires to log(size). Bags never re-fire —
+    ///     a bag's "smaller match" is a different sub-multiset pairing,
+    ///     the regrouping the ledger exists to refuse. A re-fire whose
+    ///     union already holds still records its rule edge as an
+    ///     alternate, giving extraction the forward route through
+    ///     reduced forms instead of a backward expansion through the
+    ///     stale anchor (each backward step breaks a big-step group);
     ///   - per round, each class fires at most once, and nodes scan in
     ///     ASCENDING id order over a round-start snapshot — the general
     ///     apply loop's orientation, which keeps recorded rule edges
@@ -1411,6 +1568,14 @@ pub const EGraph = struct {
         var fold_steps: usize = opts.ac_iter_step_budget;
         var dirty = false;
         var rounds: usize = 0;
+        // Fold rounds run the primary computation exactly as always
+        // (consumed nodes are skipped outright — no re-match cost while
+        // the cascade is still spending its budget). Only once they reach
+        // fixpoint do re-fire rounds sweep the consumed nodes for
+        // half-size-or-smaller redexes, spending leftover budget; a
+        // re-fire that MERGES can seed new designated fires, so it
+        // drops the loop back into fold mode.
+        var mode: enum { fold, refire } = .fold;
         round: while (rounds < opts.fold_round_budget) : (rounds += 1) {
             dedup.iter.clearRetainingCapacity();
             _ = scratch_state.reset(.retain_capacity);
@@ -1419,9 +1584,15 @@ pub const EGraph = struct {
             // `class_index`; every round's merges move nodes between
             // classes, so it must be fresh per round.
             try self.buildClassIndex();
+            // Round-start size table for the re-fire gate; mid-round
+            // fires leave it slightly stale, which only ever OVERSTATES a
+            // recorded measure — the decreasing gate stays well-founded
+            // either way.
+            const sizes = try self.computeFoldSizes(scratch);
             var fired_classes: std.AutoHashMapUnmanaged(EClassId, void) = .{};
             var avoid_cache: AvoidCache = .{};
             var fired = false;
+            var refired = false;
             // Round-start snapshot: nodes a fire mints wait for the next
             // round, so within one round every fire's binding classes are
             // in their pre-round state.
@@ -1434,8 +1605,24 @@ pub const EGraph = struct {
                 // every merge, so without this structural ledger a node
                 // would re-fire its consumed redex under a fresh key after
                 // every union touching its class — re-deriving exactly the
-                // regrouping junk the strategy avoids.
-                if (self.fold_consumed.contains(@intCast(node_id))) continue;
+                // regrouping junk the strategy avoids. Re-fire rounds
+                // reconsider a consumed node only when its operand
+                // classes prove a half-size redex could now render (the
+                // cheap bound spares the expensive re-match in the
+                // common case).
+                const consumed = self.fold_consumed.get(@intCast(node_id));
+                if (consumed) |past| {
+                    if (mode == .fold) continue;
+                    // App redexes only: an app re-fire is the same
+                    // structural redex evaluated on a more-reduced
+                    // operand member. A bag's "smaller match" is a
+                    // DIFFERENT sub-multiset pairing — the alternative
+                    // regrouping the consumed ledger exists to refuse.
+                    if (stored.node != .app) continue;
+                    if (self.foldNodeLowerBound(&sizes, stored.node) >
+                        past / 2)
+                        continue;
+                }
                 const root = self.find(stored.class);
                 if (fired_classes.contains(root)) continue;
                 var matches: std.ArrayListUnmanaged(Match) = .{};
@@ -1494,8 +1681,23 @@ pub const EGraph = struct {
                     }
                     if (matches.items.len == 0) continue;
                     // The node's designated redex: the first fresh match
-                    // in (rule, enumeration) order.
+                    // in (rule, enumeration) order — or, for a consumed
+                    // node, the first one at most half the size of the
+                    // fire already on the ledger.
                     for (matches.items) |m| {
+                        const measure =
+                            self.foldMatchMeasure(&sizes, rule, m);
+                        if (consumed) |past| {
+                            // Halving, not mere decrease: a genuinely
+                            // out-reduced anchor shrinks the redex
+                            // substantially, while a self-containing
+                            // class's cycle artifacts (a vacuous-sb or
+                            // Y-unrolling member) only shave a node or
+                            // two off the rendering. Geometric decrease
+                            // also bounds a node's re-fires to
+                            // log(size).
+                            if (measure > past / 2) continue;
+                        }
                         switch (try self.applyMatch(
                             rules,
                             m,
@@ -1507,7 +1709,7 @@ pub const EGraph = struct {
                                 try self.fold_consumed.put(
                                     self.allocator,
                                     @intCast(node_id),
-                                    {},
+                                    measure,
                                 );
                                 try fired_classes.put(scratch, root, {});
                                 fired = true;
@@ -1526,8 +1728,14 @@ pub const EGraph = struct {
                                 try self.fold_consumed.put(
                                     self.allocator,
                                     @intCast(node_id),
-                                    {},
+                                    measure,
                                 );
+                                // A no-op RE-fire still made progress —
+                                // it recorded the forward rule edge as an
+                                // alternate and shrank the ledger entry —
+                                // so keep re-fire rounds alive for the
+                                // even-smaller match it may have shadowed.
+                                if (consumed != null) refired = true;
                                 continue :scan;
                             },
                             .dep_deferred,
@@ -1537,13 +1745,24 @@ pub const EGraph = struct {
                     }
                 }
             }
-            if (out.capped or !fired) break;
-            _ = try self.rebuild();
-            dirty = false;
-            if (self.nodes.items.len > opts.max_nodes) {
-                out.node_capped = true;
-                return out;
+            if (out.capped) break;
+            if (fired) {
+                // A merge — fold or re-fire — can seed fresh designated
+                // fires; run fold rounds again.
+                mode = .fold;
+                _ = try self.rebuild();
+                dirty = false;
+                if (self.nodes.items.len > opts.max_nodes) {
+                    out.node_capped = true;
+                    return out;
+                }
+                continue;
             }
+            if (mode == .fold) {
+                mode = .refire;
+                continue;
+            }
+            if (!refired) break;
         }
         if (rounds >= opts.fold_round_budget) {
             out.capped = true;
