@@ -7807,13 +7807,14 @@ test "conversion? lifts a two-sorted chained De Morgan through eq_congr" {
     try std.testing.expectEqual(types.SearchStatus.found, found.status);
     const replacement = found.items[0].replacement;
     // Both De Morgan steps happen at sort bool; the inner one additionally
-    // lifts through and_congr, and every step crosses into iff land via
+    // lifts through and_congr. The steps compose with eq_trans at the
+    // bool level and the composed chain crosses into iff land once, via
     // the relation term's own congruence before the transport.
     try std.testing.expect(std.mem.indexOf(u8, replacement, "demorgan_or") != null);
     try std.testing.expect(std.mem.indexOf(u8, replacement, "demorgan_and") != null);
     try std.testing.expect(std.mem.indexOf(u8, replacement, "and_congr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "eq_trans") != null);
     try std.testing.expect(std.mem.indexOf(u8, replacement, "eq_congr") != null);
-    try std.testing.expect(std.mem.indexOf(u8, replacement, "iff_trans") != null);
     try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
     try std.testing.expect(std.mem.indexOf(u8, replacement, "#1") != null);
 
@@ -8294,10 +8295,11 @@ test "conversion? big-steps beta chains through @rewrite absorption" {
         "$ (λ w . S w) · S 0 = S S 0 $ by beta",
     ) != null);
     // Elementary lowering emits ~185 lines for this chain; grouping plus
-    // route/consolidation/dedup (#202) landed at ~34, and the fold's
-    // size-decreasing anchor re-fire (#203) at ~20 — a pure forward
-    // evaluation, no backward step anywhere.
-    try std.testing.expect(countLines(replacement) <= 30);
+    // route/consolidation/dedup (#202) landed at ~34, the fold's
+    // size-decreasing anchor re-fire (#203) at ~20, and transport-frame
+    // compression (#204) at ~16 — a pure forward evaluation, no backward
+    // step anywhere.
+    try std.testing.expect(countLines(replacement) <= 20);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
@@ -8324,11 +8326,11 @@ test "conversion? big-steps church addition (one plus one)" {
     const replacement = found.items[0].replacement;
     // Elementary lowering emits ~2160 lines here; grouping landed at
     // ~620, #202 (group consolidation + repeated-line dedup) at ~290,
-    // and the fold's size-decreasing anchor re-fire (#203) at ~190 —
-    // the re-fires give the recorded graph forward routes through
-    // reduced members where the original fires had anchored on
-    // unreduced ones.
-    try std.testing.expect(countLines(replacement) <= 250);
+    // the fold's size-decreasing anchor re-fire (#203) at ~190, and
+    // transport-frame compression (#204) at ~103 — steps compose with
+    // eq_trans at their deepest shared position and each run lifts
+    // through the enclosing congruences once.
+    try std.testing.expect(countLines(replacement) <= 140);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
@@ -8355,7 +8357,7 @@ test "conversion? big-steps the Y-combinator fixpoint equation" {
     ) != null);
     // Two beta stanzas, one symm-and-congr splice, and the equation
     // transport frame — the manual's hand-written y_reduce, mechanized.
-    try std.testing.expect(countLines(replacement) <= 20);
+    try std.testing.expect(countLines(replacement) <= 16);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 

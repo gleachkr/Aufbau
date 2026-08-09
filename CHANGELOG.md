@@ -18,11 +18,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   meanwhile out-reduced re-fires on the reduced form (gated to
   half-size-or-smaller redexes, so Y-style cyclic classes never
   churn), giving the recorded graph forward routes where it previously
-  forced backward detours. On the manual's lambda-calculus examples:
-  the Y-combinator fixpoint chain drops from 35 lines to 14 (the
-  hand-written proof's shape), Church `2·succ` application from ~185
-  to 20 (a pure forward evaluation), Church `1 + 1 = 2` from ~2160 to
-  ~190, and the 16-digit carry cascade from ~1670 to ~1070.
+  forced backward detours. The transport frame is compressed too:
+  instead of lifting every step to the formula root and joining with
+  the formula relation's `trans` there, consecutive steps compose
+  with their own sort's `trans` at the deepest position they share,
+  and each composed run lifts through the enclosing congruences once
+  — the way a person composes equalities with `eq_trans` and
+  transports the result once. On the manual's lambda-calculus
+  examples: the Y-combinator fixpoint chain drops from 35 lines to 12
+  (the hand-written proof's shape), Church `2·succ` application from
+  ~185 to 16 (a pure forward evaluation), Church `1 + 1 = 2` from
+  ~2160 to ~100, and the 16-digit carry cascade from ~1670 to ~600.
 
 ## [0.0.4] - 2026-08-06
 

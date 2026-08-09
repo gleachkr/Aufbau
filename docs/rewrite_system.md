@@ -532,20 +532,25 @@ the reducing direction and flipped with one `symm` at the end. Steps the `@rewri
 fold steps themselves, `@conversion` citations, pool equations) keep
 the elementary stanza form; mixed chains are fine.
 
-Four measures keep the emitted chain near the proof a person would
+Five measures keep the emitted chain near the proof a person would
 write. Extraction routes through the recorded equalities prefer
 traversing directed rules in their reducing direction — a backward
 step needs the relation's `symm` and ends any big-step group. The
 lowering reorders commuting steps (steps whose positions touch
 disjoint subtrees) so a driver's cascade is not split by a sibling
 subtree's own reduction. A line identical to one already emitted
-cites the earlier label instead of restating it. And once the
+cites the earlier label instead of restating it. Once the
 `@compute` fold reaches its fixpoint, a consumed redex whose operand
 was meanwhile out-reduced re-fires on the reduced form (only when the
 redex is at most half its original size — Y-combinator-style cyclic
 classes never qualify), so the recorded graph keeps forward routes
 through reduced members instead of forcing backward detours through
-stale ones.
+stale ones. And instead of lifting every step to the formula root and
+joining there, consecutive steps compose with their own sort's
+`trans` at the deepest position they share, and each composed run is
+lifted through the enclosing congruences once, when the chain leaves
+that subtree — two betas in the same redex cost one `eq_trans`, not
+two full congruence towers.
 
 Big-step collapsing needs the formula-level machinery the line check
 uses to accept the collapsed line: a `@relation` for the formula's

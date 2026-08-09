@@ -330,18 +330,20 @@ pub const Lowerer = struct {
     /// Emit the proof of `rel(current, next)` for one step: the rule
     /// instance, or the pool equation cited directly (through `symm` when
     /// traversed backwards), lifted through one `@congr` application per
-    /// enclosing level with `refl` siblings. Returns the label proving the
-    /// root-level relation. A big-step group passes the driving step with
-    /// `after` replaced by the group's final redex, so the rule line may
-    /// state a rewrite-normalized result side.
+    /// enclosing level with `refl` siblings, up to depth `lift_to` (0 =
+    /// the chain root). Returns the label proving the relation at that
+    /// level. A big-step group passes the driving step with `after`
+    /// replaced by the group's final redex, so the rule line may state a
+    /// rewrite-normalized result side.
     fn emitStep(
         self: *Lowerer,
         step: egraph.Step,
         full_before: *const egraph.Term,
         full_after: *const egraph.Term,
+        lift_to: usize,
     ) !?[]const u8 {
         if (step.bag != null) {
-            return try self.emitBagStep(step, full_before, full_after);
+            return try self.emitBagStep(step, full_before, full_after, lift_to);
         }
         const redex_relation = self.relationForTerm(step.before) orelse
             self.relationForTerm(step.after) orelse return null;
@@ -469,7 +471,7 @@ pub const Lowerer = struct {
 
         // Congruence lifting, innermost level first.
         var depth = step.position.len;
-        while (depth > 0) {
+        while (depth > lift_to) {
             depth -= 1;
             const before_parent = termAt(full_before, step.position[0..depth]) orelse
                 return null;
@@ -1233,6 +1235,7 @@ pub const Lowerer = struct {
         step: egraph.Step,
         full_before: *const egraph.Term,
         full_after: *const egraph.Term,
+        lift_to: usize,
     ) !?[]const u8 {
         const info = step.bag.?;
         const rule_id = step.source.rule;
@@ -1406,7 +1409,7 @@ pub const Lowerer = struct {
 
         // Lift through the enclosing structure.
         var depth = step.position.len;
-        while (depth > 0) {
+        while (depth > lift_to) {
             depth -= 1;
             const before_parent = termAt(
                 full_before,
@@ -1928,9 +1931,92 @@ pub const Lowerer = struct {
         failed,
     };
 
+    /// One open composition frame: the running trans-composed label at
+    /// `prefix`, spanning from the subterm as it stood when the frame
+    /// opened (rendered once as `start_expr`) to the running term's
+    /// subterm there. Frames stack strictly deeper, each prefix extending
+    /// the one below, and every step lands at or below the top frame's
+    /// prefix — so while a frame is open nothing above its prefix moves,
+    /// and lifting its label later needs only its own start snapshot.
+    const Frame = struct {
+        prefix: []const u32,
+        start_root: *const egraph.Term,
+        start_expr: ExprId,
+        label: ?[]const u8,
+    };
+
+    /// Lift a frame's label from its own prefix up to depth `target`,
+    /// one congruence per level, between the frame's start snapshot and
+    /// the running root.
+    fn liftFrameTo(
+        self: *Lowerer,
+        frame: Frame,
+        target: usize,
+        current: *const egraph.Term,
+    ) !?[]const u8 {
+        var label = frame.label.?;
+        var depth = frame.prefix.len;
+        while (depth > target) {
+            depth -= 1;
+            const before_parent = termAt(
+                frame.start_root,
+                frame.prefix[0..depth],
+            ) orelse return null;
+            const after_parent = termAt(
+                current,
+                frame.prefix[0..depth],
+            ) orelse return null;
+            label = (try self.emitParentCongruence(
+                before_parent,
+                after_parent,
+                frame.prefix[depth],
+                label,
+            )) orelse return null;
+        }
+        return label;
+    }
+
+    /// Trans-join a label proving the frame's subterm onward onto the
+    /// frame's running label. `current` is the running root after the
+    /// joined piece's last step.
+    fn joinAtFrame(
+        self: *Lowerer,
+        frame: *Frame,
+        label: []const u8,
+        current: *const egraph.Term,
+    ) !bool {
+        if (frame.label == null) {
+            frame.label = label;
+            return true;
+        }
+        const here = termAt(current, frame.prefix) orelse return false;
+        const relation = self.relationForTerm(here) orelse return false;
+        const end_expr = (try self.termToExpr(here)) orelse return false;
+        frame.label = (try self.emitLine(
+            try self.relIds(relation, frame.start_expr, end_expr),
+            relation.trans_id,
+            &.{ frame.label.?, label },
+        )) orelse return false;
+        return true;
+    }
+
+    /// A frame can open at `prefix` only if later joins there are
+    /// expressible: the subterm renders and its sort has a relation.
+    /// Returns the rendered start expression, null otherwise.
+    fn frameStartExpr(
+        self: *Lowerer,
+        root: *const egraph.Term,
+        prefix: []const u32,
+    ) !?ExprId {
+        const sub = termAt(root, prefix) orelse return null;
+        if (self.relationForTerm(sub) == null) return null;
+        return try self.termToExpr(sub);
+    }
+
     /// Emit the trans-composed conversion chain from `start_term` to
     /// `end_expr`: re-treeing seams at both ends, one stanza per step (with
-    /// big-step absorption), trans joins against the running prefix.
+    /// big-step absorption), trans joins at the deepest shared position
+    /// (see `Frame`).
     /// Reorder the extracted steps so each driver's in-redex `@rewrite`
     /// debris sits directly behind it. Extraction interleaves child
     /// alignments, so a driver's cascade is often split by steps in
@@ -2025,9 +2111,20 @@ pub const Lowerer = struct {
         var current_expr = (try self.termToExpr(start_term)) orelse {
             return .failed;
         };
-        var chain_label: ?[]const u8 = null;
+        // Composition frames: instead of lifting every stanza to the root
+        // and joining there, consecutive steps compose with the
+        // sub-relation's `trans` at their deepest shared position, and
+        // each composed run is lifted through the enclosing congruences
+        // once — when the chain leaves its subtree.
+        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        try frames.append(self.work, .{
+            .prefix = &.{},
+            .start_root = start_term,
+            .start_expr = start_expr,
+            .label = null,
+        });
         if (start_expr != current_expr) {
-            chain_label = (try self.alignEmit(
+            frames.items[0].label = (try self.alignEmit(
                 start_expr,
                 current_expr,
                 root_relation.sort_name,
@@ -2053,27 +2150,99 @@ pub const Lowerer = struct {
                 next = group.root;
                 consumed = group.consumed;
             }
+            // Fold frames the step's position has left behind: each is
+            // lifted to the deepest prefix it still shares with the step
+            // (and reopened there), or joined into the frame below.
+            while (true) {
+                const top = frames.items[frames.items.len - 1];
+                const lcp = lcpLen(top.prefix, step.position);
+                if (lcp == top.prefix.len) break;
+                const below_len =
+                    frames.items[frames.items.len - 2].prefix.len;
+                var target = @max(lcp, below_len);
+                var reopen_expr: ?ExprId = null;
+                while (target > below_len) : (target -= 1) {
+                    reopen_expr = try self.frameStartExpr(
+                        top.start_root,
+                        top.prefix[0..target],
+                    );
+                    if (reopen_expr != null) break;
+                }
+                const lifted = (try self.liftFrameTo(
+                    top,
+                    target,
+                    current,
+                )) orelse return .failed;
+                if (target > below_len) {
+                    frames.items[frames.items.len - 1] = .{
+                        .prefix = top.prefix[0..target],
+                        .start_root = top.start_root,
+                        .start_expr = reopen_expr.?,
+                        .label = lifted,
+                    };
+                    break;
+                }
+                frames.items.len -= 1;
+                if (!try self.joinAtFrame(
+                    &frames.items[frames.items.len - 1],
+                    lifted,
+                    current,
+                )) return .failed;
+            }
+            // Open a frame at the step's position (shortened past
+            // subterms whose sort has no joinable relation), or join in
+            // place when it lands on the top frame itself.
+            const top_len = frames.items[frames.items.len - 1].prefix.len;
+            var open_len = step.position.len;
+            var open_expr: ?ExprId = null;
+            while (open_len > top_len) : (open_len -= 1) {
+                open_expr = try self.frameStartExpr(
+                    current,
+                    step.position[0..open_len],
+                );
+                if (open_expr != null) break;
+            }
             const step_label = (try self.emitStep(
                 emit_step,
                 current,
                 next,
+                open_len,
             )) orelse return .failed;
-            const next_expr = (try self.termToExpr(next)) orelse {
-                return .failed;
-            };
-            if (chain_label) |prev| {
-                chain_label = (try self.emitLine(
-                    try self.relIds(root_relation, start_expr, next_expr),
-                    root_relation.trans_id,
-                    &.{ prev, step_label },
-                )) orelse return .failed;
+            if (open_len > top_len) {
+                try frames.append(self.work, .{
+                    .prefix = step.position[0..open_len],
+                    .start_root = current,
+                    .start_expr = open_expr.?,
+                    .label = step_label,
+                });
             } else {
-                chain_label = step_label;
+                if (!try self.joinAtFrame(
+                    &frames.items[frames.items.len - 1],
+                    step_label,
+                    next,
+                )) return .failed;
             }
             current = next;
-            current_expr = next_expr;
+            current_expr = (try self.termToExpr(next)) orelse return .failed;
             step_idx += consumed;
         }
+        // Fold everything still open down into the root frame.
+        while (frames.items.len > 1) {
+            const top = frames.items[frames.items.len - 1];
+            const below_len = frames.items[frames.items.len - 2].prefix.len;
+            const lifted = (try self.liftFrameTo(
+                top,
+                below_len,
+                current,
+            )) orelse return .failed;
+            frames.items.len -= 1;
+            if (!try self.joinAtFrame(
+                &frames.items[frames.items.len - 1],
+                lifted,
+                current,
+            )) return .failed;
+        }
+        var chain_label = frames.items[0].label;
         if (current_expr != end_expr) {
             const seam = (try self.alignEmit(
                 current_expr,
@@ -2124,6 +2293,13 @@ pub const Lowerer = struct {
         );
     }
 };
+
+fn lcpLen(a: []const u32, b: []const u32) usize {
+    const n = @min(a.len, b.len);
+    var i: usize = 0;
+    while (i < n and a[i] == b[i]) i += 1;
+    return i;
+}
 
 /// Neither position is a prefix of the other: the two rewrites touch
 /// disjoint subtrees and commute.
