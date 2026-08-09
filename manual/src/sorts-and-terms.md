@@ -2,8 +2,8 @@
 
 An `.mm0` file declares a theory: the syntax of its expressions, its axioms,
 and the theorems to be proved. A verifier checks the compiled `.mmb` proof
-against this declaration. The `.mm0` file is the specification that
-an `.auf` proof development must satisfy.
+against this declaration. The `.mm0` file is the specification that an `.auf` 
+proof development must satisfy.
 
 An `.mm0` file contains a sequence of statements, each ending in a semicolon.
 This chapter explains the statements that declare a theory's syntax.

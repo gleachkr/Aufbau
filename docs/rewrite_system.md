@@ -580,10 +580,10 @@ saturated `conversion?` miss never claims a forced negative when any
 `@compute` rule is enrolled: the fold is a strategy, not a closure.
 
 Zero/unit laws (`hZ + a = a`) belong in the compute set — carry rules
-accumulate zero atoms that the digit table alone cannot clear — and are
-best declared *after* the main table, so digit redexes reduce before
-debris clears and the emitted chain keeps the shape proof extraction
-re-trees most readily.
+accumulate zero atoms that the digit table alone cannot clear. Their
+position in the declaration order only picks which reduction order the
+fold commits to (zero laws first clear debris as it forms; last, after
+the digit redexes); either ordering extracts and lowers.
 
 ## `@congr`
 

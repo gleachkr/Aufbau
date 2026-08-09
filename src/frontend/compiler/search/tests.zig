@@ -8227,6 +8227,51 @@ test "@compute folds the carry cascade to a found chain at defaults" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "@compute carry cascade extracts with the zero laws declared first" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    // Declaration order is the fold's redex priority, and the fixture
+    // declares the zero laws last so digit pairs consume before hZ
+    // debris clears. The reversed ordering clears debris first, which
+    // nests the per-position {hZ, t} ladders the recorded chain must
+    // explain through — historically an honest convertible-but-unlowered
+    // miss in extraction's binder-residual decomposition (#149), gone
+    // since the fold moved to any-match scheduling. Splice the zero-law
+    // block ahead of the digit table and hold the reversed ordering to
+    // the same acceptance bar: FOUND at plain defaults, chain compiles.
+    const mm0_fixture = @embedFile("fixtures/carry_cascade_compute.mm0");
+    const proof_src = @embedFile("fixtures/carry_cascade_compute.auf");
+
+    const z_marker = "--| @compute ltr\naxiom add_zz";
+    const z_start = std.mem.indexOf(u8, mm0_fixture, z_marker).?;
+    const z_end_needle = "axiom add_z (a: bv): $ hZ + a = a $;\n";
+    const z_end = std.mem.indexOf(u8, mm0_fixture, z_end_needle).? +
+        z_end_needle.len;
+    const table_marker = "--| @compute ltr\naxiom addd_0_0";
+    const table_start = std.mem.indexOf(u8, mm0_fixture, table_marker).?;
+    const mm0_src = try std.mem.concat(allocator, u8, &.{
+        mm0_fixture[0..table_start],
+        mm0_fixture[z_start..z_end],
+        mm0_fixture[table_start..z_start],
+        mm0_fixture[z_end..],
+    });
+    // The splice must have MOVED the block, not duplicated it.
+    try std.testing.expectEqual(
+        std.mem.indexOf(u8, mm0_src, "axiom add_zz"),
+        std.mem.lastIndexOf(u8, mm0_src, "axiom add_zz"),
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, mm0_src, "axiom add_zz").? <
+            std.mem.indexOf(u8, mm0_src, "axiom addd_0_0").?,
+    );
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 test "conversion? big-steps beta chains through @rewrite absorption" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

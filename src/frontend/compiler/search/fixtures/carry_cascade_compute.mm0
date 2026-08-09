@@ -17,13 +17,14 @@
 -- `:x`-shaped members), so without the zero identity the correct sum
 -- is not derivable at all.
 --
--- `add_z` is declared AFTER the digit table on purpose. Declaration
--- order is the fold's redex priority: each class reduces its first
--- fresh match in rule order. With `add_z` last, digit pairs
--- consume before zero debris clears, and the recorded chain keeps the
--- shape proof extraction re-treeing handles; clearing debris first
--- nests {hZ, t} ladders whose extraction currently degrades to an
--- honest convertible-but-unlowered miss.
+-- Declaration order is the fold's redex priority: each class reduces
+-- its first fresh match in rule order. With `add_z` last (as here),
+-- digit pairs consume before zero debris clears; declared first, the
+-- per-position {hZ, t} ladders clear as they form and the recorded
+-- chain nests differently. Both orderings must extract and lower —
+-- the reversed ordering (once an honest convertible-but-unlowered
+-- miss, #149) is regression-guarded by a splice of this file in
+-- tests.zig.
 
 delimiter $ ( ) $;
 
