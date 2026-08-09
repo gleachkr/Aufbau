@@ -25,6 +25,12 @@
 -- the reversed ordering (once an honest convertible-but-unlowered
 -- miss, #149) is regression-guarded by a splice of this file in
 -- tests.zig.
+--
+-- `+` is also declared `@acui`, so the lowering elides every
+-- rearrangement proof (re-treeing seams, assoc/comm splices, hZ
+-- clears): the line check's normalized validation re-derives them
+-- wherever a join spans the gap, and the emitted chain is essentially
+-- just the digit folds.
 
 delimiter $ ( ) $;
 
@@ -39,6 +45,7 @@ infixl eq: $=$ prec 50;
 term hZ: bv;
 term hx (a d: bv): bv;
 infixl hx: $:x$ prec 100;
+--| @acui add_assoc add_comm hZ _
 term add (a b: bv): bv;
 infixl add: $+$ prec 64;
 

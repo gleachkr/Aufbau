@@ -1318,6 +1318,10 @@ pub const RewriteRegistry = struct {
         return self.acui_by_head.contains(head_term_id);
     }
 
+    pub fn hasStructuralCombiners(self: *const RewriteRegistry) bool {
+        return self.acui_by_head.count() != 0;
+    }
+
     pub fn resolveStructuralCombinerForSort(
         self: *RewriteRegistry,
         env: *const GlobalEnv,

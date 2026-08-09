@@ -423,7 +423,13 @@ pub const Lowerer = struct {
                 const after_expr = (try self.termToExpr(
                     step.after,
                 )) orelse return null;
-                if (before_expr != w_before) {
+                if (before_expr != w_before and
+                    !(try self.acuiAbsorbs(
+                        redex_relation.sort_name,
+                        before_expr,
+                        w_before,
+                    )))
+                {
                     const pre = (try self.alignEmit(
                         before_expr,
                         w_before,
@@ -435,7 +441,13 @@ pub const Lowerer = struct {
                         &.{ pre, label },
                     )) orelse return null;
                 }
-                if (w_after != after_expr) {
+                if (w_after != after_expr and
+                    !(try self.acuiAbsorbs(
+                        redex_relation.sort_name,
+                        w_after,
+                        after_expr,
+                    )))
+                {
                     const post = (try self.alignEmit(
                         w_after,
                         after_expr,
@@ -1382,7 +1394,13 @@ pub const Lowerer = struct {
             self.sortOfExpr(before_expr) orelse return null,
         ) orelse return null;
         var chain = step_label;
-        if (before_expr != x_before) {
+        if (before_expr != x_before and
+            !(try self.acuiAbsorbs(
+                seam_rel.sort_name,
+                before_expr,
+                x_before,
+            )))
+        {
             const pre = (try self.alignEmit(
                 before_expr,
                 x_before,
@@ -1394,7 +1412,13 @@ pub const Lowerer = struct {
                 &.{ pre, chain },
             )) orelse return null;
         }
-        if (x_after != after_expr) {
+        if (x_after != after_expr and
+            !(try self.acuiAbsorbs(
+                seam_rel.sort_name,
+                x_after,
+                after_expr,
+            )))
+        {
             const post = (try self.alignEmit(
                 x_after,
                 after_expr,
@@ -1770,6 +1794,57 @@ pub const Lowerer = struct {
         return norm_derived.result_expr == norm_stated.result_expr;
     }
 
+    /// True when the checker's own normalized validation closes the gap
+    /// between two renderings without an explicit seam proof: the theory
+    /// declares a structural (`@acui`) combiner, the formula relating the
+    /// sides resolves to a relation the checker can transport across, and
+    /// both sides share a normal form. Every line that spans a skipped
+    /// seam (a trans join, a congruence lift, the transported target)
+    /// binds its rule binders from cited references, so the stated-vs-
+    /// derived comparison is the only thing the checker must replay —
+    /// the same acceptance test `checkerAcceptsBigStep` mirrors.
+    fn acuiAbsorbs(
+        self: *Lowerer,
+        sort_hint: ?[]const u8,
+        from: ExprId,
+        to: ExprId,
+    ) !bool {
+        if (from == to) return true;
+        if (!self.context.registry.hasStructuralCombiners()) return false;
+        const relation = self.relationForSort(
+            self.sortOfExpr(from) orelse sort_hint orelse return false,
+        ) orelse return false;
+        const formula = try self.relIds(relation, from, to);
+        const state = try self.normState();
+        const line_relation = state.normalizer.resolveRelationForExpr(
+            formula,
+        ) orelse return false;
+        if (line_relation.transport_id == null) return false;
+        state.normalizer.step_count = 0;
+        const norm_from = try state.normalizer.normalize(from);
+        const norm_to = try state.normalizer.normalize(to);
+        return norm_from.result_expr == norm_to.result_expr;
+    }
+
+    /// A step whose redex endpoints share a normal form emits nothing:
+    /// AC re-tree splices and unit-law folds die here when the theory
+    /// declares the combiner `@acui`, and the checker re-derives the
+    /// rearrangement at whichever later line spans the gap.
+    fn stepAbsorbed(self: *Lowerer, step: egraph.Step) !bool {
+        if (!self.context.registry.hasStructuralCombiners()) return false;
+        const before_expr = (try self.termToExpr(step.before)) orelse {
+            return false;
+        };
+        const after_expr = (try self.termToExpr(step.after)) orelse {
+            return false;
+        };
+        const sort_hint = if (self.relationForTerm(step.before)) |relation|
+            relation.sort_name
+        else
+            null;
+        return self.acuiAbsorbs(sort_hint, before_expr, after_expr);
+    }
+
     /// Produce the replacement text for the whole placeholder line: the
     /// chain lines proving `rel(ref, goal)` followed by the original line
     /// transported from the ref. Null aborts this ref (clean miss). The
@@ -2123,7 +2198,13 @@ pub const Lowerer = struct {
             .start_expr = start_expr,
             .label = null,
         });
-        if (start_expr != current_expr) {
+        if (start_expr != current_expr and
+            !(try self.acuiAbsorbs(
+                root_relation.sort_name,
+                start_expr,
+                current_expr,
+            )))
+        {
             frames.items[0].label = (try self.alignEmit(
                 start_expr,
                 current_expr,
@@ -2139,16 +2220,23 @@ pub const Lowerer = struct {
                 step.before,
                 step.after,
             )) orelse return .failed;
+            // A step the checker will re-derive on its own emits nothing;
+            // frames are still folded down to its position first, so the
+            // silent replacement happens inside the top frame's subtree
+            // and later lifts pair spines whose gaps all normalize away.
+            const absorbed = try self.stepAbsorbed(step);
             // A driving rule step may absorb its rewrite cascade: the
             // emitted line then cites the rule with its result stated in
             // normalized form, and line-check conclusion normalization
             // re-derives the absorbed steps.
             var emit_step = step;
             var consumed: usize = 1;
-            if (try self.tryBigStep(steps, step_idx, next)) |group| {
-                emit_step.after = group.redex_after;
-                next = group.root;
-                consumed = group.consumed;
+            if (!absorbed) {
+                if (try self.tryBigStep(steps, step_idx, next)) |group| {
+                    emit_step.after = group.redex_after;
+                    next = group.root;
+                    consumed = group.consumed;
+                }
             }
             // Fold frames the step's position has left behind: each is
             // lifted to the deepest prefix it still shares with the step
@@ -2188,6 +2276,14 @@ pub const Lowerer = struct {
                     lifted,
                     current,
                 )) return .failed;
+            }
+            if (absorbed) {
+                current = next;
+                current_expr = (try self.termToExpr(next)) orelse {
+                    return .failed;
+                };
+                step_idx += 1;
+                continue;
             }
             // Open a frame at the step's position (shortened past
             // subterms whose sort has no joinable relation), or join in
@@ -2243,7 +2339,13 @@ pub const Lowerer = struct {
             )) return .failed;
         }
         var chain_label = frames.items[0].label;
-        if (current_expr != end_expr) {
+        if (current_expr != end_expr and
+            !(try self.acuiAbsorbs(
+                root_relation.sort_name,
+                current_expr,
+                end_expr,
+            )))
+        {
             const seam = (try self.alignEmit(
                 current_expr,
                 end_expr,

@@ -24,11 +24,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   with their own sort's `trans` at the deepest position they share,
   and each composed run lifts through the enclosing congruences once
   — the way a person composes equalities with `eq_trans` and
-  transports the result once. On the manual's lambda-calculus
-  examples: the Y-combinator fixpoint chain drops from 35 lines to 12
-  (the hand-written proof's shape), Church `2·succ` application from
-  ~185 to 16 (a pure forward evaluation), Church `1 + 1 = 2` from
-  ~2160 to ~100, and the 16-digit carry cascade from ~1670 to ~600.
+  transports the result once. And when the AC operator is also
+  declared `@acui`, rearrangement proofs are elided outright:
+  re-treeing seams, assoc/comm splices, and unit-law clears emit
+  nothing, because the line check's own normalized validation
+  re-derives them wherever a join or congruence spans the gap. On the
+  manual's lambda-calculus examples: the Y-combinator fixpoint chain
+  drops from 35 lines to 12 (the hand-written proof's shape), Church
+  `2·succ` application from ~185 to 16 (a pure forward evaluation),
+  Church `1 + 1 = 2` from ~2160 to ~100, and the 16-digit carry
+  cascade from ~1670 to ~120.
 
 ## [0.0.4] - 2026-08-06
 

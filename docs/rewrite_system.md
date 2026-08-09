@@ -532,7 +532,7 @@ the reducing direction and flipped with one `symm` at the end. Steps the `@rewri
 fold steps themselves, `@conversion` citations, pool equations) keep
 the elementary stanza form; mixed chains are fine.
 
-Five measures keep the emitted chain near the proof a person would
+Six measures keep the emitted chain near the proof a person would
 write. Extraction routes through the recorded equalities prefer
 traversing directed rules in their reducing direction — a backward
 step needs the relation's `symm` and ends any big-step group. The
@@ -550,7 +550,13 @@ joining there, consecutive steps compose with their own sort's
 `trans` at the deepest position they share, and each composed run is
 lifted through the enclosing congruences once, when the chain leaves
 that subtree — two betas in the same redex cost one `eq_trans`, not
-two full congruence towers.
+two full congruence towers. Finally, when the AC operator is also
+declared `@acui`, rearrangement proofs are elided outright: re-treeing
+seams, assoc/comm splices, and unit-law clears emit nothing, because
+the line check's own normalized validation re-derives them wherever a
+join or congruence spans the gap. The emitted chain then contains
+essentially just the computation — on the 16-digit carry cascade this
+cuts the emission from ~600 lines to ~120.
 
 Big-step collapsing needs the formula-level machinery the line check
 uses to accept the collapsed line: a `@relation` for the formula's

@@ -8225,6 +8225,20 @@ test "@compute folds the carry cascade to a found chain at defaults" {
     var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
     defer found.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    // The fixture declares `+` `@acui`, so every rearrangement is the
+    // checker's to re-derive: re-treeing seams, assoc/comm splices, and
+    // hZ unit clears emit nothing (#205). Elementary lowering emitted
+    // ~1670 lines here, chain-quality (#202) ~1074, transport frames
+    // (#204) ~604, and ACUI elision lands at ~118 — the digit folds,
+    // their lifts, and the joins that span them.
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "by add_comm") == null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, replacement, "by add_assoc") == null,
+    );
+    try std.testing.expect(countLines(replacement) <= 160);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
