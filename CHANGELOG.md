@@ -3,6 +3,22 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `conversion?` emits substantially shorter proof chains. Extraction
+  now prefers routes that traverse directed rules (`@compute`, or a
+  theorem enrolled in one direction) along their reducing direction;
+  the lowering reorders commuting steps so a rule's rewrite cascade is
+  not split by a sibling subtree's reduction, letting big-step groups
+  absorb whole cascades; and a line identical to one already emitted
+  cites the earlier label instead of restating it. On the manual's
+  lambda-calculus examples: the Y-combinator fixpoint chain drops from
+  35 lines to 14 (the hand-written proof's shape), Church `1 + 1 = 2`
+  from ~620 to ~290, and the 16-digit carry cascade from ~1670 to
+  ~1070.
+
 ## [0.0.4] - 2026-08-06
 
 ### Added

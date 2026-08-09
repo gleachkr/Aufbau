@@ -2868,9 +2868,10 @@ pub const ExplainOptions = struct {
     max_depth: usize = 64,
     /// Total route attempts across the extraction. Failed routes roll
     /// their steps back (so `max_steps` does not bound cumulative work),
-    /// and each failing pair retries one detour — an adversarial nest of
-    /// failing pairs could otherwise branch exponentially. Far above any
-    /// legitimate chain (which needs about one attempt per alignment).
+    /// and each failing pair retries up to two detours — an adversarial
+    /// nest of failing pairs could otherwise branch exponentially. Far
+    /// above any legitimate chain (which needs about one attempt per
+    /// alignment).
     max_routes: usize = 4096,
 };
 
@@ -2928,6 +2929,16 @@ const ExplainCtx = struct {
     /// Lazily built undirected adjacency over forest + alternate edges;
     /// see `routeAdj`.
     route_adj: ?[]std.ArrayListUnmanaged(RouteEdge) = null,
+    /// Lazily computed per-rule-slot single-orientation flags; see
+    /// `ruleDirected`.
+    rule_directed: ?[]const bool = null,
+    /// Reused `weightedPath` scratch (one distance/backlink slot per
+    /// node); allocated once, wiped per call — the weighted search runs
+    /// on every alignment.
+    dijkstra: ?struct {
+        dist: []usize,
+        prev: []?WeightedPrev,
+    } = null,
 
     fn allocator(self: *ExplainCtx) std.mem.Allocator {
         return self.eg.allocator;
@@ -3256,23 +3267,34 @@ const ExplainCtx = struct {
         try self.active.put(self.allocator(), key, {});
         defer _ = self.active.remove(key);
 
-        const path = (try self.forestPath(from.node, to.node)) orelse {
+        // Primary route: cheapest over the full recorded edge graph
+        // (forest + no-op alternates), where cost prefers traversing
+        // directed rules along their enrolled (reducing) direction. The
+        // union forest's tree route is union-recording order and can
+        // wander through expand/re-contract cycles the lowering then pays
+        // for line by line; the weighted route states the same conversion
+        // through the reductions the big-step grouping can absorb.
+        const path = (try self.weightedPath(from.node, to.node)) orelse {
             return false;
         };
         const mark = self.steps.items.len;
         if (try self.processPath(from, to, path, pos)) return true;
         self.steps.shrinkRetainingCapacity(mark);
 
-        // The forest's unique tree route can be inherently circular on a
-        // self-containing class: an edge on the path re-poses the path's
-        // own endpoints as its child obligation (e.g. an assoc instance
-        // whose subterm slot holds the very sum being aligned). Retry once
-        // with the BFS-shortest route over the full recorded edge graph
-        // (forest + no-op alternates) — the duplicate-congruence and
-        // re-derivation edges the forest drops are exactly the acyclic
-        // detours. Tree-first keeps successful extractions byte-identical.
+        // A route can be inherently circular on a self-containing class:
+        // an edge on the path re-poses the path's own endpoints as its
+        // child obligation (e.g. an assoc instance whose subterm slot
+        // holds the very sum being aligned). Retry with the forest's tree
+        // route, then the BFS-shortest route — a differently-shaped
+        // detour is exactly what escapes the circularity.
+        const tree = try self.forestPath(from.node, to.node);
+        if (tree != null and !sameRoute(path, tree.?)) {
+            if (try self.processPath(from, to, tree.?, pos)) return true;
+            self.steps.shrinkRetainingCapacity(mark);
+        }
         const alt = (try self.bfsPath(from.node, to.node)) orelse return false;
         if (sameRoute(path, alt)) return false;
+        if (tree != null and sameRoute(tree.?, alt)) return false;
         if (try self.processPath(from, to, alt, pos)) return true;
         self.steps.shrinkRetainingCapacity(mark);
         return false;
@@ -3387,6 +3409,123 @@ const ExplainCtx = struct {
         while (cursor != n1) {
             const link = prev[cursor].?;
             try route.append(self.allocator(), .{
+                .just = link.just,
+                .forward = link.forward,
+            });
+            cursor = link.from;
+        }
+        std.mem.reverse(Traversed, route.items);
+        return route.items;
+    }
+
+    /// Emission-cost heuristic for traversing one recorded edge. A
+    /// directed rule (a `@compute` fold or a theorem enrolled in a
+    /// single orientation) is cheap along its enrolled direction — a
+    /// reducing step the big-step lowering can group with the debris it
+    /// spawns — and expensive against it, where the lowering must
+    /// interpose the relation's `symm` and any big-step group breaks.
+    /// Everything else is plain route length.
+    fn edgeCost(self: *ExplainCtx, re: RouteEdge) error{OutOfMemory}!usize {
+        return switch (re.just) {
+            .congruence, .splice => 1,
+            .pool_equation => 2,
+            .rule => |r| blk: {
+                const directed = try self.ruleDirected();
+                if (!directed[r.rule_slot]) break :blk 2;
+                break :blk if (re.forward) 1 else 6;
+            },
+        };
+    }
+
+    /// Per rule slot: enrolled in one direction only. Both orientations
+    /// of a `both` enrollment land as two slots sharing a `rule_id`;
+    /// `@compute` rules are single-orientation by construction.
+    fn ruleDirected(self: *ExplainCtx) error{OutOfMemory}![]const bool {
+        if (self.rule_directed) |directed| return directed;
+        const directed = try self.allocator().alloc(bool, self.rules.len);
+        var counts: std.AutoHashMapUnmanaged(u32, u32) = .{};
+        defer counts.deinit(self.allocator());
+        for (self.rules) |rule| {
+            const gop = try counts.getOrPut(self.allocator(), rule.rule_id);
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+        }
+        for (self.rules, 0..) |rule, idx| {
+            directed[idx] = rule.compute or
+                counts.get(rule.rule_id).? == 1;
+        }
+        self.rule_directed = directed;
+        return directed;
+    }
+
+    const WeightedPrev = struct {
+        from: ENodeId,
+        just: Justification,
+        forward: bool,
+    };
+
+    const WeightedItem = struct {
+        cost: usize,
+        /// Monotone discovery counter: deterministic tie-break, and
+        /// equal-cost pops settle in discovery order.
+        seq: usize,
+        node: ENodeId,
+
+        fn order(_: void, a: @This(), b: @This()) std.math.Order {
+            if (a.cost != b.cost) return std.math.order(a.cost, b.cost);
+            return std.math.order(a.seq, b.seq);
+        }
+    };
+
+    /// Cheapest route between two same-class nodes over forest +
+    /// alternate edges under `edgeCost` (Dijkstra; deterministic:
+    /// adjacency in recording order, ties by discovery order). Null when
+    /// unreachable.
+    fn weightedPath(
+        self: *ExplainCtx,
+        n1: ENodeId,
+        n2: ENodeId,
+    ) error{OutOfMemory}!?[]const Traversed {
+        const adj = try self.routeAdj();
+        const alloc = self.allocator();
+        if (self.dijkstra == null) {
+            self.dijkstra = .{
+                .dist = try alloc.alloc(usize, adj.len),
+                .prev = try alloc.alloc(?WeightedPrev, adj.len),
+            };
+        }
+        const dist = self.dijkstra.?.dist;
+        @memset(dist, std.math.maxInt(usize));
+        const prev = self.dijkstra.?.prev;
+        @memset(prev, null);
+        var queue = std.PriorityQueue(WeightedItem, void, WeightedItem.order)
+            .init(alloc, {});
+        defer queue.deinit();
+        dist[n1] = 0;
+        var seq: usize = 0;
+        try queue.add(.{ .cost = 0, .seq = seq, .node = n1 });
+        while (queue.removeOrNull()) |item| {
+            if (item.cost > dist[item.node]) continue;
+            if (item.node == n2) break;
+            for (adj[item.node].items) |re| {
+                const cost = item.cost + try self.edgeCost(re);
+                if (cost >= dist[re.to]) continue;
+                dist[re.to] = cost;
+                prev[re.to] = .{
+                    .from = item.node,
+                    .just = re.just,
+                    .forward = re.forward,
+                };
+                seq += 1;
+                try queue.add(.{ .cost = cost, .seq = seq, .node = re.to });
+            }
+        }
+        if (n1 != n2 and prev[n2] == null) return null;
+        var route: std.ArrayListUnmanaged(Traversed) = .{};
+        var cursor = n2;
+        while (cursor != n1) {
+            const link = prev[cursor].?;
+            try route.append(alloc, .{
                 .just = link.just,
                 .forward = link.forward,
             });

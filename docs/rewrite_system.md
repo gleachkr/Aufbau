@@ -532,6 +532,15 @@ the reducing direction and flipped with one `symm` at the end. Steps the `@rewri
 fold steps themselves, `@conversion` citations, pool equations) keep
 the elementary stanza form; mixed chains are fine.
 
+Three measures keep the emitted chain near the proof a person would
+write. Extraction routes through the recorded equalities prefer
+traversing directed rules in their reducing direction — a backward
+step needs the relation's `symm` and ends any big-step group. The
+lowering reorders commuting steps (steps whose positions touch
+disjoint subtrees) so a driver's cascade is not split by a sibling
+subtree's own reduction. And a line identical to one already emitted
+cites the earlier label instead of restating it.
+
 Big-step collapsing needs the formula-level machinery the line check
 uses to accept the collapsed line: a `@relation` for the formula's
 sort with a non-`_` transport, and a `@congr` rule lifting the

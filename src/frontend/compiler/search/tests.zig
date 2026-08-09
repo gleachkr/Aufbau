@@ -8293,9 +8293,9 @@ test "conversion? big-steps beta chains through @rewrite absorption" {
         replacement,
         "$ (λ w . S w) · S 0 = S S 0 $ by beta",
     ) != null);
-    // Elementary lowering emits ~185 lines for this chain; grouping
-    // collapses it to one stanza per beta plus a few stragglers.
-    try std.testing.expect(countLines(replacement) <= 90);
+    // Elementary lowering emits ~185 lines for this chain; grouping plus
+    // route/consolidation/dedup (#202) lands at ~34.
+    try std.testing.expect(countLines(replacement) <= 45);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
@@ -8320,9 +8320,13 @@ test "conversion? big-steps church addition (one plus one)" {
     defer found.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, found.status);
     const replacement = found.items[0].replacement;
-    // Elementary lowering emits ~2160 lines here; grouping lands at ~620
-    // (the residue is extraction-route detours, not stanza overhead).
-    try std.testing.expect(countLines(replacement) <= 750);
+    // Elementary lowering emits ~2160 lines here; grouping landed at
+    // ~620, and #202 (group consolidation + repeated-line dedup) at ~290.
+    // The residue is fold-anchor detours: an outer substitution's
+    // `sb_app` fire committed to the unreduced app member of its body
+    // class, so the chain must expand through it (no forward route
+    // exists in the recorded graph).
+    try std.testing.expect(countLines(replacement) <= 350);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
@@ -8347,7 +8351,9 @@ test "conversion? big-steps the Y-combinator fixpoint equation" {
         "$ (λ f . (λ x . f · (x · x)) · (λ x . f · (x · x))) · g = " ++
             "(λ x . g · (x · x)) · (λ x . g · (x · x)) $ by beta",
     ) != null);
-    try std.testing.expect(countLines(replacement) <= 60);
+    // Two beta stanzas, one symm-and-congr splice, and the equation
+    // transport frame — the manual's hand-written y_reduce, mechanized.
+    try std.testing.expect(countLines(replacement) <= 20);
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 

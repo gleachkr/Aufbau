@@ -77,6 +77,9 @@ pub const Lowerer = struct {
     /// Lazily built checker-equivalent rewrite normalizer for big-step
     /// grouping (see `tryBigStep`).
     norm_state: ?*NormState = null,
+    /// Labels of already-emitted lines keyed by content (formula, rule,
+    /// references); see `emitLine`.
+    line_memo: std.StringHashMapUnmanaged([]const u8) = .{},
     out: std.ArrayListUnmanaged(u8) = .{},
 
     const NormState = struct {
@@ -251,12 +254,23 @@ pub const Lowerer = struct {
     }
 
     /// Emit `label: $ <formula> $ by <rule> [refs...]` and return the label.
+    /// A line identical to one already emitted (same formula, rule, and
+    /// references — chains repeat `refl` siblings and re-cite the same
+    /// rule instance at several positions) returns the earlier label
+    /// instead of re-emitting: a proof line is a fact any later line may
+    /// reference.
     fn emitLine(
         self: *Lowerer,
         formula: ExprId,
         rule_id: u32,
         ref_labels: []const []const u8,
     ) !?[]const u8 {
+        var key = std.ArrayListUnmanaged(u8){};
+        try key.writer(self.work).print("{d}:{d}", .{ formula, rule_id });
+        for (ref_labels) |ref_label| {
+            try key.writer(self.work).print(":{s}", .{ref_label});
+        }
+        if (self.line_memo.get(key.items)) |label| return label;
         self.lines_emitted += 1;
         if (self.lines_emitted > 4096) {
             self.cap_tripped = true;
@@ -280,6 +294,7 @@ pub const Lowerer = struct {
             try writer.writeAll("]");
         }
         try writer.writeAll("\n");
+        try self.line_memo.put(self.work, key.items, label);
         return label;
     }
 
@@ -1908,14 +1923,96 @@ pub const Lowerer = struct {
     /// Emit the trans-composed conversion chain from `start_term` to
     /// `end_expr`: re-treeing seams at both ends, one stanza per step (with
     /// big-step absorption), trans joins against the running prefix.
+    /// Reorder the extracted steps so each driver's in-redex `@rewrite`
+    /// debris sits directly behind it. Extraction interleaves child
+    /// alignments, so a driver's cascade is often split by steps in
+    /// sibling subtrees — which ends the big-step group early and
+    /// re-inflicts one full stanza per straggler. Steps at disjoint
+    /// positions commute (neither rewrites inside the other's redex), so
+    /// a debris step may move left across exactly those; a step at or
+    /// above a driver's redex replaces the subtree the group is
+    /// rewriting and ends its collection outright. Returns `steps`
+    /// itself when nothing moved.
+    fn consolidateGroups(
+        self: *Lowerer,
+        steps: []const egraph.Step,
+    ) ![]const egraph.Step {
+        if (steps.len < 3) return steps;
+        var out = try std.ArrayListUnmanaged(egraph.Step).initCapacity(
+            self.work,
+            steps.len,
+        );
+        const taken = try self.work.alloc(bool, steps.len);
+        @memset(taken, false);
+        var moved = false;
+        for (steps, 0..) |driver, i| {
+            if (taken[i]) continue;
+            out.appendAssumeCapacity(driver);
+            if (!(try self.canDriveBigStep(driver))) continue;
+            // Positions of scanned steps left in place; a later debris
+            // step may only cross steps it is disjoint with.
+            var blockers: std.ArrayListUnmanaged([]const u32) = .{};
+            scan: for (steps[i + 1 ..], i + 1..) |cand, j| {
+                if (taken[j]) continue;
+                if (self.isAbsorbableDebris(cand, driver.position)) {
+                    for (blockers.items) |pos| {
+                        if (!positionsDisjoint(cand.position, pos)) {
+                            try blockers.append(self.work, cand.position);
+                            continue :scan;
+                        }
+                    }
+                    out.appendAssumeCapacity(cand);
+                    taken[j] = true;
+                    moved = moved or blockers.items.len != 0;
+                    continue;
+                }
+                if (!positionsDisjoint(cand.position, driver.position) and
+                    cand.position.len <= driver.position.len)
+                {
+                    break;
+                }
+                try blockers.append(self.work, cand.position);
+            }
+        }
+        return if (moved) out.items else steps;
+    }
+
+    /// Dry-run a step order over the running term: every step's `before`
+    /// endpoint must match at its position. Guards `consolidateGroups`
+    /// against any reordering subtlety — an order that does not replay
+    /// is discarded, never emitted.
+    fn chainApplies(
+        self: *Lowerer,
+        start_term: *const egraph.Term,
+        steps: []const egraph.Step,
+    ) !bool {
+        var current = start_term;
+        for (steps) |step| {
+            current = (try self.replaceAt(
+                current,
+                step.position,
+                step.before,
+                step.after,
+            )) orelse return false;
+        }
+        return true;
+    }
+
     fn emitChain(
         self: *Lowerer,
         root_relation: ResolvedRelation,
         start_term: *const egraph.Term,
         start_expr: ExprId,
         end_expr: ExprId,
-        steps: []const egraph.Step,
+        raw_steps: []const egraph.Step,
     ) !Chain {
+        var steps = raw_steps;
+        const consolidated = try self.consolidateGroups(raw_steps);
+        if (consolidated.ptr != raw_steps.ptr and
+            try self.chainApplies(start_term, consolidated))
+        {
+            steps = consolidated;
+        }
         var current = start_term;
         var current_expr = (try self.termToExpr(start_term)) orelse {
             return .failed;
@@ -2019,6 +2116,16 @@ pub const Lowerer = struct {
         );
     }
 };
+
+/// Neither position is a prefix of the other: the two rewrites touch
+/// disjoint subtrees and commute.
+fn positionsDisjoint(a: []const u32, b: []const u32) bool {
+    const len = @min(a.len, b.len);
+    for (a[0..len], b[0..len]) |x, y| {
+        if (x != y) return true;
+    }
+    return false;
+}
 
 fn termAt(
     term: *const egraph.Term,
