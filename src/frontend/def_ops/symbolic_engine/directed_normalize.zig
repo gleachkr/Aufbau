@@ -53,7 +53,28 @@ pub fn normalizeSymbolicRewrites(
     outer: while (true) {
         const app = switch (current.*) {
             .app => |app| app,
-            .binder, .dummy, .fixed => return current,
+            .binder, .dummy => return current,
+            // Nested fixed subtrees (rule-rhs substitution entries, def
+            // expansions) can hold rewritable redexes; open and reduce them
+            // like `bigStepExpr` does at the root. Keep the original node
+            // when nothing fires so no-op passes preserve identity.
+            .fixed => |expr_id| {
+                const registry = self.shared.registry orelse return current;
+                const opened = (try openExprForNormalize(
+                    self,
+                    registry,
+                    expr_id,
+                )) orelse return current;
+                const fuel_before = fuel.remaining;
+                const reduced = try normalizeSymbolicRewrites(
+                    self,
+                    opened,
+                    state,
+                    fuel,
+                );
+                if (fuel.remaining == fuel_before) return current;
+                return reduced;
+            },
         };
 
         const new_args = try self.shared.scratch().alloc(

@@ -7,10 +7,6 @@ pub const StatementSink =
 pub const DebugConfig = @import("./frontend/debug.zig").DebugConfig;
 pub const advertised_channel_list =
     @import("./frontend/debug.zig").advertised_channel_list;
-pub const DefOpsTests = if (@import("builtin").is_test)
-    @import("./frontend/def_ops/tests/root.zig")
-else
-    struct {};
 const CompilerDiag = @import("./frontend/compiler/diag.zig");
 pub const CompilerDiagnostic = CompilerDiag.Diagnostic;
 pub const CompilerDiagnosticSeverity = CompilerDiag.DiagnosticSeverity;

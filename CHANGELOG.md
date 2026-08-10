@@ -45,6 +45,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   comparison, run cold per line — where it previously approximated it
   with a long-lived normalization cache that could accept a line the
   checker's per-line step budget would stop short of.
+- The big-step `@rewrite` normalization used by proof search's
+  definitional matching skipped redexes buried inside already-concrete
+  subtrees — the shape rule instantiation and definition unfolding
+  routinely produce — reporting "no reduction" on expressions it could
+  in fact reduce. Such subtrees are now opened and normalized like any
+  other.
 
 ## [0.0.4] - 2026-08-06
 

@@ -13,7 +13,11 @@ const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 const Expr = @import("../../../trusted/expressions.zig").Expr;
 
 pub const SessionWitnessFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    // Heap-allocated so the `arena.allocator()` values captured by the
+    // parser/env/theorem during init stay valid after the fixture struct is
+    // returned by value (an inline arena's captured self-pointer would
+    // dangle, leaving two live bump states over the same chunks).
+    arena: *std.heap.ArenaAllocator,
     env: GlobalEnv,
     theorem: TheoremContext,
     actual: ExprId,
@@ -36,7 +40,11 @@ pub const SessionWitnessFixture = struct {
             \\theorem host (f: mor): $ mono f $;
         ;
 
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        const arena = try std.testing.allocator.create(
+            std.heap.ArenaAllocator,
+        );
+        errdefer std.testing.allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(std.testing.allocator);
         errdefer arena.deinit();
 
         var parser = MM0Parser.init(src, arena.allocator());
@@ -99,11 +107,16 @@ pub const SessionWitnessFixture = struct {
     pub fn deinit(self: *SessionWitnessFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
+        std.testing.allocator.destroy(self.arena);
     }
 };
 
 pub const SemanticStepFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    // Heap-allocated so the `arena.allocator()` values captured by the
+    // parser/env/theorem during init stay valid after the fixture struct is
+    // returned by value (an inline arena's captured self-pointer would
+    // dangle, leaving two live bump states over the same chunks).
+    arena: *std.heap.ArenaAllocator,
     env: GlobalEnv,
     registry: RewriteRegistry,
     theorem: TheoremContext,
@@ -167,7 +180,11 @@ pub const SemanticStepFixture = struct {
             \\theorem host (f g alpha: mor) (p q: wff): $ g ~ g $;
         ;
 
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        const arena = try std.testing.allocator.create(
+            std.heap.ArenaAllocator,
+        );
+        errdefer std.testing.allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(std.testing.allocator);
         errdefer arena.deinit();
 
         var parser = MM0Parser.init(src, arena.allocator());
@@ -308,11 +325,16 @@ pub const SemanticStepFixture = struct {
     pub fn deinit(self: *SemanticStepFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
+        std.testing.allocator.destroy(self.arena);
     }
 };
 
 pub const SemanticAcuiExposureFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    // Heap-allocated so the `arena.allocator()` values captured by the
+    // parser/env/theorem during init stay valid after the fixture struct is
+    // returned by value (an inline arena's captured self-pointer would
+    // dangle, leaving two live bump states over the same chunks).
+    arena: *std.heap.ArenaAllocator,
     env: GlobalEnv,
     registry: RewriteRegistry,
     theorem: TheoremContext,
@@ -367,7 +389,11 @@ pub const SemanticAcuiExposureFixture = struct {
             \\
         ++ hidden_binder ++ host_decl;
 
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        const arena = try std.testing.allocator.create(
+            std.heap.ArenaAllocator,
+        );
+        errdefer std.testing.allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(std.testing.allocator);
         errdefer arena.deinit();
 
         var parser = MM0Parser.init(src, arena.allocator());
@@ -470,11 +496,16 @@ pub const SemanticAcuiExposureFixture = struct {
     pub fn deinit(self: *SemanticAcuiExposureFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
+        std.testing.allocator.destroy(self.arena);
     }
 };
 
 pub const SemanticWrappedAcuiDefFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    // Heap-allocated so the `arena.allocator()` values captured by the
+    // parser/env/theorem during init stay valid after the fixture struct is
+    // returned by value (an inline arena's captured self-pointer would
+    // dangle, leaving two live bump states over the same chunks).
+    arena: *std.heap.ArenaAllocator,
     env: GlobalEnv,
     registry: RewriteRegistry,
     theorem: TheoremContext,
@@ -554,7 +585,11 @@ pub const SemanticWrappedAcuiDefFixture = struct {
             \\
         ++ def_body ++ host;
 
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        const arena = try std.testing.allocator.create(
+            std.heap.ArenaAllocator,
+        );
+        errdefer std.testing.allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(std.testing.allocator);
         errdefer arena.deinit();
 
         var parser = MM0Parser.init(src, arena.allocator());
@@ -700,11 +735,16 @@ pub const SemanticWrappedAcuiDefFixture = struct {
     pub fn deinit(self: *SemanticWrappedAcuiDefFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
+        std.testing.allocator.destroy(self.arena);
     }
 };
 
 pub const SemanticQuantifiedAcuiDefFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    // Heap-allocated so the `arena.allocator()` values captured by the
+    // parser/env/theorem during init stay valid after the fixture struct is
+    // returned by value (an inline arena's captured self-pointer would
+    // dangle, leaving two live bump states over the same chunks).
+    arena: *std.heap.ArenaAllocator,
     env: GlobalEnv,
     registry: RewriteRegistry,
     theorem: TheoremContext,
@@ -752,7 +792,11 @@ pub const SemanticQuantifiedAcuiDefFixture = struct {
             \\
         ++ def_body ++ host;
 
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        const arena = try std.testing.allocator.create(
+            std.heap.ArenaAllocator,
+        );
+        errdefer std.testing.allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(std.testing.allocator);
         errdefer arena.deinit();
 
         var parser = MM0Parser.init(src, arena.allocator());
@@ -906,6 +950,7 @@ pub const SemanticQuantifiedAcuiDefFixture = struct {
     pub fn deinit(self: *SemanticQuantifiedAcuiDefFixture) void {
         self.theorem.deinit();
         self.arena.deinit();
+        std.testing.allocator.destroy(self.arena);
     }
 };
 

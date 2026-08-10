@@ -474,6 +474,15 @@ pub const Testing = struct {
         return try ctx.applyRewriteRuleToSymbolic(rule, symbolic, state);
     }
 
+    pub fn bigStepSymbolic(
+        ctx: *Context,
+        symbolic: *const Types.SymbolicExpr,
+        state: *MatchState.MatchSession,
+    ) anyerror!?*const Types.SymbolicExpr {
+        var symbolic_engine = ctx.symbolicEngine();
+        return try symbolic_engine.bigStepSymbolic(symbolic, state);
+    }
+
     pub fn matchSymbolicToExprSemantic(
         ctx: *Context,
         symbolic: *const Types.SymbolicExpr,
