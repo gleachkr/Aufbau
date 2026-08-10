@@ -35,6 +35,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   Church `1 + 1 = 2` from ~2160 to ~100, and the 16-digit carry
   cascade from ~1670 to ~120.
 
+### Fixed
+
+- A normalizer failure inside `conversion?`'s big-step commit gate (for
+  example, a `@rewrite` redex sitting under a term with no `@congr`)
+  killed the entire search instead of falling back to elementary proof
+  steps. The gate now declines the group on such failures, and it
+  replays the checker's acceptance test exactly — the same normalized
+  comparison, run cold per line — where it previously approximated it
+  with a long-lived normalization cache that could accept a line the
+  checker's per-line step budget would stop short of.
+
 ## [0.0.4] - 2026-08-06
 
 ### Added

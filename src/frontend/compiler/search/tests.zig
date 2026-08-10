@@ -6991,6 +6991,54 @@ test "conversion? equation goal big-steps an @rewrite-enrolled driver" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? survives a gate normalizer error (missing @congr)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The chain's one step lands on `h (0 + 0)`. The big-step residue
+    // probe normalizes that expression, add_z fires inside `h`, and
+    // lifting the child rewrite needs a @congr for h that the theory
+    // does not declare — error.MissingCongruenceRule. The gate must
+    // decline the group and keep the elementary stanza (which states
+    // the kr instance exactly, so the checker never normalizes it);
+    // this used to propagate and kill the entire search.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort tm;
+        \\term eq (a b: tm): wff;
+        \\infixl eq: $=$ prec 20;
+        \\term zero: tm; notation zero: tm = ($0$:max);
+        \\term add (m n: tm): tm; infixl add: $+$ prec 30;
+        \\term h (a: tm): tm;
+        \\term k: tm;
+        \\--| @relation tm eq eq_refl eq_trans eq_symm _
+        \\axiom eq_refl (a: tm): $ a = a $;
+        \\axiom eq_trans (a b c: tm) (h1: $ a = b $) (h2: $ b = c $): $ a = c $;
+        \\axiom eq_symm (a b: tm) (h: $ a = b $): $ b = a $;
+        \\--| @congr
+        \\axiom add_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a + c = b + d $;
+        \\--| @rewrite
+        \\axiom add_z (n: tm): $ 0 + n = n $;
+        \\--| @conversion ltr
+        \\axiom kr: $ k = h (0 + 0) $;
+        \\theorem t: $ k = h (0 + 0) $;
+    ;
+    const proof_src =
+        \\t
+        \\----
+        \\goal: $ k = h (0 + 0) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "by kr") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 test "conversion? equation goal subsumes the grounding refl-line idiom" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

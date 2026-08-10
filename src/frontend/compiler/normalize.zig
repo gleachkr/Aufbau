@@ -268,6 +268,50 @@ pub fn buildNormalizedConversionWithProviderAndDebug(
     };
 }
 
+/// Whether final validation would accept `stated` as the conclusion of a
+/// line that derives `derived`: the acceptance half of the normalized
+/// fallback in `check/matching.zig`, exposed for the conversion? lowerer's
+/// big-step commit gate so the gate cannot drift from the checker. Runs
+/// the same `buildNormalizedConversionWithProviderAndDebug` call the
+/// checker runs on this exact pair — a fresh normalizer per call, one
+/// step budget across both sides — and mirrors `emitTransport`'s
+/// requirement that a transport exist whenever a conversion line is
+/// produced. A normalizer failure (say, a missing `@congr` on a term the
+/// comparison must descend through) would surface as an error at check
+/// time, so it reports as a decline here rather than propagating.
+pub fn wouldAcceptStatedConclusion(
+    allocator: std.mem.Allocator,
+    theorem: *TheoremContext,
+    registry: *RewriteRegistry,
+    env: *const GlobalEnv,
+    derived: ExprId,
+    stated: ExprId,
+) error{OutOfMemory}!bool {
+    var checked = std.ArrayListUnmanaged(CheckedLine){};
+    defer checked.deinit(allocator);
+    var scratch = CompilerDiag.Scratch.init(allocator);
+    defer scratch.deinit();
+    const conversion = (buildNormalizedConversionWithProviderAndDebug(
+        allocator,
+        theorem,
+        registry,
+        env,
+        &checked,
+        &scratch,
+        derived,
+        stated,
+        null,
+        .none,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    }) orelse return false;
+    var conversion_mut = conversion;
+    conversion_mut.normalizer.cache.deinit();
+    return conversion_mut.conv_line_idx == null or
+        conversion_mut.relation.transport_id != null;
+}
+
 pub fn buildExpectedNormalizationWithDebug(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,

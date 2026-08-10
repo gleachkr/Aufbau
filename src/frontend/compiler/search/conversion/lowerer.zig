@@ -29,6 +29,7 @@ const AcCertMap = conversion.AcCertMap;
 const varIdForLeaf = conversion.varIdForLeaf;
 const flattenAcExpr = conversion.flattenAcExpr;
 const Normalizer = @import("../../../normalizer.zig").Normalizer;
+const Normalize = @import("../../normalize.zig");
 const CheckedLine = @import("../../checked_ir.zig").CheckedLine;
 
 /// A reference as it is written in a proof line: `#name`/`#index` for a
@@ -1605,11 +1606,22 @@ pub const Lowerer = struct {
         };
     }
 
-    /// Normal form under the checker's own line normalizer. The step
-    /// budget resets per call to mirror the checker's per-line budget.
-    fn rewriteNormalForm(self: *Lowerer, expr: ExprId) !ExprId {
+    /// The normalizer reset to a cold per-line state: empty cache and
+    /// zero step count, the way the checker starts every line. A warm
+    /// cache would hand back near-free normal forms the checker's own
+    /// budget could stop short of, so acceptance judged against one
+    /// long-lived cache can commit lines that later fail to check.
+    fn lineNormState(self: *Lowerer) !*NormState {
         const state = try self.normState();
+        state.normalizer.cache.clearRetainingCapacity();
         state.normalizer.step_count = 0;
+        return state;
+    }
+
+    /// Normal form under the checker's own line normalizer, replayed
+    /// cold (see `lineNormState`) to mirror the checker's per-line run.
+    fn rewriteNormalForm(self: *Lowerer, expr: ExprId) !ExprId {
+        const state = try self.lineNormState();
         const result = try state.normalizer.normalize(expr);
         return result.result_expr;
     }
@@ -1650,7 +1662,15 @@ pub const Lowerer = struct {
         const after_expr = (try self.termToExpr(step.after)) orelse {
             return false;
         };
-        return (try self.rewriteNormalForm(after_expr)) != after_expr;
+        // A normalizer failure here (say, a missing @congr on a term the
+        // residue probe descends through) would be an error at check
+        // time too — decline the group and keep the elementary stanza.
+        const normal_form = self.rewriteNormalForm(after_expr) catch |err|
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return false,
+            };
+        return normal_form != after_expr;
     }
 
     /// True when a step can fold into the enclosing big-step group: an
@@ -1748,12 +1768,10 @@ pub const Lowerer = struct {
     /// acceptance test on the rule line the group will emit. That line
     /// states the driving rule's conclusion with its result side replaced
     /// by the group's final redex, so line-check falls through to
-    /// normalized comparison — which needs a relation registered for the
-    /// formula's sort, a transport to rebase the proof onto the stated
-    /// form, and rewrite normalization that joins the stated and derived
-    /// conclusions (descent through the relation head needs a `@congr`
-    /// lifting it into the formula relation). Running the same comparison
-    /// here keeps groups from forming when the theory cannot replay them.
+    /// normalized comparison. `Normalize.wouldAcceptStatedConclusion`
+    /// runs the very builder the checker runs on this stated/derived
+    /// pair — fresh normalizer, one budget, transport requirement — so
+    /// groups cannot form when the theory cannot replay them.
     fn checkerAcceptsBigStep(
         self: *Lowerer,
         step: egraph.Step,
@@ -1781,17 +1799,14 @@ pub const Lowerer = struct {
             try self.relIds(relation, after_expr, before_expr)
         else
             try self.relIds(relation, before_expr, after_expr);
-        const state = try self.normState();
-        const line_relation = state.normalizer.resolveRelationForExpr(
+        return Normalize.wouldAcceptStatedConclusion(
+            self.work,
+            self.theorem,
+            self.context.registry,
+            self.context.env,
             derived,
-        ) orelse return false;
-        if (line_relation.transport_id == null) return false;
-        // One budget across both sides, as in the checker's
-        // buildNormalizedConversion.
-        state.normalizer.step_count = 0;
-        const norm_derived = try state.normalizer.normalize(derived);
-        const norm_stated = try state.normalizer.normalize(stated);
-        return norm_derived.result_expr == norm_stated.result_expr;
+            stated,
+        );
     }
 
     /// True when the checker's own normalized validation closes the gap
@@ -1815,14 +1830,25 @@ pub const Lowerer = struct {
             self.sortOfExpr(from) orelse sort_hint orelse return false,
         ) orelse return false;
         const formula = try self.relIds(relation, from, to);
-        const state = try self.normState();
+        // A cold per-call replay of the checker's per-line run (see
+        // `lineNormState`); a normalizer failure would be an error at
+        // check time too, so it declines the skip rather than killing
+        // the whole lowering.
+        const state = try self.lineNormState();
         const line_relation = state.normalizer.resolveRelationForExpr(
             formula,
         ) orelse return false;
         if (line_relation.transport_id == null) return false;
-        state.normalizer.step_count = 0;
-        const norm_from = try state.normalizer.normalize(from);
-        const norm_to = try state.normalizer.normalize(to);
+        const norm_from = state.normalizer.normalize(from) catch |err|
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return false,
+            };
+        const norm_to = state.normalizer.normalize(to) catch |err|
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return false,
+            };
         return norm_from.result_expr == norm_to.result_expr;
     }
 
