@@ -51,6 +51,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   routinely produce — reporting "no reduction" on expressions it could
   in fact reduce. Such subtrees are now opened and normalized like any
   other.
+- The def_ops unit-test suite runs under `zig build test` again. It had
+  silently run zero times since an April test reorganization routed it
+  through a cross-module reference the test runner never collects. The
+  accumulated rot is repaired: fixture theories updated to current
+  enrollment requirements, and expectations that predated the hidden-dummy
+  witness rules (bound, distinct, capture-free — matching MMB `UDummy`)
+  rewritten to pin the sound behavior instead.
 
 ## [0.0.4] - 2026-08-06
 

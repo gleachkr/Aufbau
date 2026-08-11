@@ -1,7 +1,4 @@
-//! Tests for the directed-rewrite big-step normalizer (task #196). Kept in
-//! their own file so `src/tests.zig` can run them while the rest of the
-//! def_ops suite (dark since the April 2026 test split — see the wiring
-//! comment in src/tests.zig) awaits repair.
+//! Tests for the directed-rewrite big-step normalizer (task #196).
 
 const std = @import("std");
 const DefOps = @import("../../def_ops.zig");

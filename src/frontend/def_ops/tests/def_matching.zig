@@ -164,6 +164,8 @@ test "transparent comparison unfolds bic and allc under coercion" {
         \\  $ all A · (λ x: A. t) $;
         \\notation allc {x: term} (A: type) (t: term x): term =
         \\  ($!$:20) x ($:$:2) A ($.$:0) t;
+        \\axiom all_bic_raw (A: type) {x: term} (t u: term x):
+        \\  $ ≃[𝔹] all A · (λ x: A. t) = all A · (λ x: A. u) $;
         \\theorem host (A: type) {x: term} (t u: term x):
         \\  $ (!x: A. t) ⇔ (!x: A. u) $;
     ;
@@ -241,6 +243,8 @@ test "normalized concrete comparison treats bic as bool equality" {
         \\term bool: type;
         \\notation bool: type = ($𝔹$:max);
         \\sort term;
+        \\term app: term > term > term;
+        \\infixl app: $·$ prec 1000;
         \\term eq: type > term;
         \\def eqc (A: type) (t u: term): term = $ eq A · t · u $;
         \\notation eqc (A: type) (t u: term): term =
@@ -614,14 +618,20 @@ test "semantic seeds reuse representative-aware matches" {
     try std.testing.expectEqual(@as(usize, 1), semantic_bindings.len);
     try std.testing.expectEqual(folded, semantic_bindings[0]);
 
+    // Exact seeds still match transparently (matching unfolds defs either
+    // way); exactness governs finalization, which keeps the raw seed value
+    // instead of the representative-folded form.
     var exact_session = try def_ops.beginRuleMatch(
         rule.args,
         &.{DefOps.BindingSeed{ .exact = raw }},
     );
     defer exact_session.deinit();
     try std.testing.expect(
-        !(try exact_session.matchTransparent(rule.concl, actual)),
+        try exact_session.matchTransparent(rule.concl, actual),
     );
+    const exact_bindings = try exact_session.finalizeConcreteBindings();
+    try std.testing.expectEqual(@as(usize, 1), exact_bindings.len);
+    try std.testing.expectEqual(raw, exact_bindings[0]);
 }
 
 test "finalization rejects unresolved hidden-dummy witnesses" {
@@ -1139,10 +1149,10 @@ test "transparent matching reuses resolved allc representatives" {
 
 test "failed transparent match rolls back binder state" {
     const src =
-        \\\provable sort obj;
-        \\\term pair (a b: obj): obj;
-        \\\axiom dup (x: obj): $ pair x x $ > $ pair x x $;
-        \\\theorem host (a b: obj): $ pair a b $;
+        \\provable sort obj;
+        \\term pair (a b: obj): obj;
+        \\axiom dup (x: obj): $ pair x x $ > $ pair x x $;
+        \\theorem host (a b: obj): $ pair a b $;
     ;
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

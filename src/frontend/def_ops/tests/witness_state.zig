@@ -53,6 +53,9 @@ test "fresh match sessions start with fresh witness namespaces" {
     );
     defer ctx.deinit();
 
+    const start_dummy_id = fixture.theorem.next_dummy_id;
+    const start_dummy_dep = fixture.theorem.next_dummy_dep;
+
     const seeds1 = try allocNoneSeeds(
         fixture.arena.allocator(),
         fixture.rule_args.len,
@@ -82,8 +85,8 @@ test "fresh match sessions start with fresh witness namespaces" {
         session2.state.symbolic_dummy_infos.items.len,
     );
     try std.testing.expectEqual(@as(usize, 0), session2.state.witnesses.count());
-    try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_id);
-    try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_dep);
+    try std.testing.expectEqual(start_dummy_id, fixture.theorem.next_dummy_id);
+    try std.testing.expectEqual(start_dummy_dep, fixture.theorem.next_dummy_dep);
 }
 
 test "representative selection treats placeholders distinctly from dummies" {
@@ -621,6 +624,9 @@ test "repeated sessions never allocate theorem dummies for hidden-dummy structur
     );
     defer ctx.deinit();
 
+    const start_dummy_id = fixture.theorem.next_dummy_id;
+    const start_dummy_dep = fixture.theorem.next_dummy_dep;
+
     for (0..40) |idx| {
         {
             const seeds = try allocNoneSeeds(
@@ -652,11 +658,11 @@ test "repeated sessions never allocate theorem dummies for hidden-dummy structur
             fixture.theorem.theorem_dummies.items.len,
         );
         try std.testing.expectEqual(
-            @as(u32, 0),
+            start_dummy_id,
             fixture.theorem.next_dummy_id,
         );
         try std.testing.expectEqual(
-            @as(u32, 0),
+            start_dummy_dep,
             fixture.theorem.next_dummy_dep,
         );
     }
@@ -713,6 +719,9 @@ test "transparent and normalized representative caches stay separate" {
     var state = try MatchSession.init(fixture.arena.allocator(), 0);
     defer state.deinit(fixture.arena.allocator());
 
+    const start_dummy_id = fixture.theorem.next_dummy_id;
+    const start_dummy_dep = fixture.theorem.next_dummy_dep;
+
     const transparent = try Testing.chooseRepresentativeSymbolic(
         &ctx,
         fixture.actual,
@@ -726,7 +735,9 @@ test "transparent and normalized representative caches stay separate" {
         .normalized,
     );
 
-    try std.testing.expect(transparent != normalized);
+    // Symbolic nodes are hash-consed, so two modes that compute the same
+    // representative content return the same pointer. Separation means each
+    // mode populates its own cache map, not that the pointers differ.
     try std.testing.expectEqual(
         transparent,
         state.transparent_representatives.get(fixture.actual).?,
@@ -735,6 +746,6 @@ test "transparent and normalized representative caches stay separate" {
         normalized,
         state.normalized_representatives.get(fixture.actual).?,
     );
-    try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_id);
-    try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_dep);
+    try std.testing.expectEqual(start_dummy_id, fixture.theorem.next_dummy_id);
+    try std.testing.expectEqual(start_dummy_dep, fixture.theorem.next_dummy_dep);
 }

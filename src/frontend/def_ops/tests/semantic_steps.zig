@@ -240,7 +240,12 @@ test "semantic step enumeration ignores placeholder roots" {
     try std.testing.expectEqual(@as(usize, 0), symbolic_steps.items.len);
 }
 
-test "semantic search matches def unfold then rewrite" {
+test "semantic search refuses unfold binding hidden dummies to theorem args" {
+    // The target pins mono's hidden dummies to the plain theorem args
+    // `g`/`alpha`. Hidden dummies are bound variables (MMB `UDummy`), so a
+    // non-bound witness would lower to an unfolding the verifier rejects —
+    // the semantic search must refuse the match, and the refusal must roll
+    // the session's witness state back.
     var fixture = try SemanticStepFixture.init();
     defer fixture.deinit();
 
@@ -266,7 +271,7 @@ test "semantic search matches def unfold then rewrite" {
     defer state.deinit(fixture.arena.allocator());
 
     try std.testing.expect(
-        try Testing.matchSymbolicToExprSemantic(
+        !try Testing.matchSymbolicToExprSemantic(
             &ctx,
             symbolic_mono,
             fixture.semantic_target_expr,
@@ -275,10 +280,6 @@ test "semantic search matches def unfold then rewrite" {
         ),
     );
     try std.testing.expectEqual(@as(usize, 0), state.witnesses.count());
-    try std.testing.expectEqual(
-        @as(usize, 2),
-        state.symbolic_dummy_infos.items.len,
-    );
     try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_id);
     try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_dep);
 }
@@ -326,7 +327,12 @@ test "semantic search budget failure restores state" {
     try std.testing.expectEqual(@as(u32, 0), fixture.theorem.next_dummy_dep);
 }
 
-test "semantic def exposure materializes witness toward rewrite target" {
+test "semantic def exposure refuses witnesses that capture def arguments" {
+    // The old target here required mono's hidden dummy `a` to be witnessed
+    // by `g`, which occurs in the def's own argument instantiation `g o f` —
+    // an unfolding MMB `UDummy` disjointness forbids (and `g` is not bound
+    // besides). instantiateDefTowardExpr must return null rather than mint
+    // an unverifiable witness.
     var fixture = try SemanticStepFixture.init();
     defer fixture.deinit();
 
@@ -338,36 +344,81 @@ test "semantic def exposure materializes witness toward rewrite target" {
     );
     defer ctx.deinit();
 
-    const witness = try ctx.instantiateDefTowardExpr(
-        fixture.mono_expr,
-        fixture.semantic_target_expr,
-    ) orelse return error.MissingWitness;
+    try std.testing.expectEqual(
+        @as(?ExprId, null),
+        try ctx.instantiateDefTowardExpr(
+            fixture.mono_expr,
+            fixture.semantic_target_expr,
+        ),
+    );
+}
+
+test "semantic def exposure materializes witness toward rewrite target" {
+    // Legal variant of the exposure: the hidden dummies are witnessed by
+    // fresh theorem dummies (bound, distinct, absent from the def's args —
+    // the same shape the @vars pool provides in production). The target's
+    // rhs is one comp_assoc step away from the unfolded body, so only the
+    // semantic tier can close it; the returned witness is the pre-rewrite
+    // body instantiation.
+    var fixture = try SemanticStepFixture.init();
+    defer fixture.deinit();
+
+    var ctx = Context.initWithRegistry(
+        fixture.arena.allocator(),
+        &fixture.theorem,
+        &fixture.env,
+        &fixture.registry,
+    );
+    defer ctx.deinit();
+
+    const u = try fixture.theorem.addDummyVarResolved(
+        "mor",
+        fixture.mor_sort_id,
+    );
+    const v = try fixture.theorem.addDummyVarResolved(
+        "mor",
+        fixture.mor_sort_id,
+    );
 
     const f = fixture.theorem.theorem_vars.items[0];
     const g = fixture.theorem.theorem_vars.items[1];
-    const alpha = fixture.theorem.theorem_vars.items[2];
     const gof = try fixture.theorem.interner.internApp(
         fixture.comp_term_id,
         &[_]ExprId{ g, f },
     );
     const lhs_inner = try fixture.theorem.interner.internApp(
         fixture.comp_term_id,
-        &[_]ExprId{ gof, g },
+        &[_]ExprId{ gof, u },
     );
     const lhs = try fixture.theorem.interner.internApp(
         fixture.comp_term_id,
-        &[_]ExprId{ lhs_inner, alpha },
+        &[_]ExprId{ lhs_inner, v },
     );
+    const mor_eq_term_id =
+        fixture.env.term_names.get("mor_eq") orelse return error.MissingTerm;
+    // Target rhs equals the target lhs; the unfolded body's rhs
+    // `(g o f) o (u o v)` reaches it through one comp_assoc application on
+    // the target side.
+    const target = try fixture.theorem.interner.internApp(
+        mor_eq_term_id,
+        &[_]ExprId{ lhs, lhs },
+    );
+
+    const witness = try ctx.instantiateDefTowardExpr(
+        fixture.mono_expr,
+        target,
+    ) orelse return error.MissingWitness;
+
     const rhs_inner = try fixture.theorem.interner.internApp(
         fixture.comp_term_id,
-        &[_]ExprId{ g, alpha },
+        &[_]ExprId{ u, v },
     );
     const rhs = try fixture.theorem.interner.internApp(
         fixture.comp_term_id,
         &[_]ExprId{ gof, rhs_inner },
     );
     const expected = try fixture.theorem.interner.internApp(
-        fixture.env.term_names.get("mor_eq") orelse return error.MissingTerm,
+        mor_eq_term_id,
         &[_]ExprId{ lhs, rhs },
     );
 

@@ -37,7 +37,7 @@ pub const SessionWitnessFixture = struct {
             \\term comp (f g: mor): mor; infixl comp: $o$ prec 35;
             \\def mono {.a .b: mor} (f: mor): wff =
             \\  $ A. a A. b ((f o a ~ f o b) -> (a ~ b)) $;
-            \\theorem host (f: mor): $ mono f $;
+            \\theorem host {x y: mor} (f: mor): $ mono f $;
         ;
 
         const arena = try std.testing.allocator.create(
@@ -510,6 +510,7 @@ pub const SemanticWrappedAcuiDefFixture = struct {
     registry: RewriteRegistry,
     theorem: TheoremContext,
     pre_ctx_expr: ExprId,
+    pre_ctx2_expr: ExprId,
     target_expr: ExprId,
     expected_witness: ExprId,
 
@@ -519,12 +520,22 @@ pub const SemanticWrappedAcuiDefFixture = struct {
         comptime host_u_bound: bool,
     ) !SemanticWrappedAcuiDefFixture {
         const hidden_binder = if (hidden_bound) "{.x: obj}" else "(.x: obj)";
+        // pre_ctx2 duplicates pre_ctx so tests can compare two independent
+        // expansions whose hidden dummies align without either being pinned
+        // to a concrete witness (the shape that consults a hidden-witness
+        // provider).
         const def_body = if (full_acui)
             "def pre_ctx (u: obj) (r: wff) " ++ hidden_binder ++ ": wff =\n" ++
+                "  $ ((emp , hyp (u = x)) , (hyp r , " ++
+                "(hyp (u = x) , emp))) |- (u = x) $;\n\n" ++
+                "def pre_ctx2 (u: obj) (r: wff) " ++ hidden_binder ++
+                ": wff =\n" ++
                 "  $ ((emp , hyp (u = x)) , (hyp r , " ++
                 "(hyp (u = x) , emp))) |- (u = x) $;\n\n"
         else
             "def pre_ctx (u: obj) " ++ hidden_binder ++ ": wff =\n" ++
+                "  $ (hyp (u = x) , emp) |- (u = x) $;\n\n" ++
+                "def pre_ctx2 (u: obj) " ++ hidden_binder ++ ": wff =\n" ++
                 "  $ (hyp (u = x) , emp) |- (u = x) $;\n\n";
         const host = if (full_acui)
             if (host_u_bound)
@@ -727,6 +738,22 @@ pub const SemanticWrappedAcuiDefFixture = struct {
             .registry = registry,
             .theorem = theorem,
             .pre_ctx_expr = pre_ctx_expr,
+            .pre_ctx2_expr = blk: {
+                const pre_ctx2_term_id =
+                    env.term_names.get("pre_ctx2") orelse {
+                        return error.MissingTerm;
+                    };
+                break :blk if (full_acui)
+                    try theorem.interner.internApp(
+                        pre_ctx2_term_id,
+                        &[_]ExprId{ u, r.? },
+                    )
+                else
+                    try theorem.interner.internApp(
+                        pre_ctx2_term_id,
+                        &[_]ExprId{u},
+                    );
+            },
             .target_expr = target_expr,
             .expected_witness = expected_witness,
         };
@@ -784,6 +811,11 @@ pub const SemanticQuantifiedAcuiDefFixture = struct {
             \\term nd (g: ctx) (a: wff): wff;
             \\infixl nd: $|-$ prec 0;
             \\
+            \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+            \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+            \\axiom ctx_trans (g h i: ctx):
+            \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+            \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
             \\axiom ctx_assoc (g h i: ctx):
             \\  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
             \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
