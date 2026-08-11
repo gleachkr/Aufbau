@@ -409,8 +409,10 @@ pub fn run(
         const term = maybe_term orelse continue;
         const app = switch (eg.nodes.items[term.node].node) {
             .app => |app| app,
-            // Relation heads are never AC-policied, so an equation's top
-            // node is always a plain application.
+            // Relation heads are never AC-policied (enrollment rejects a
+            // role certificate on a registered relation head with
+            // `ConversionRoleRelationHead`), so an equation's top node is
+            // always a plain application.
             .bag => continue,
             .leaf => continue,
         };
@@ -442,60 +444,6 @@ pub fn run(
         return result;
     }
 
-    // Saturate one iteration at a time and stop as soon as the goal shares
-    // a class with a pool entry. Absorption-style rules union a variable's
-    // class with a compound containing that same class, and such cyclic
-    // classes make AC rule sets generative up to any node cap — a found
-    // chain must not pay for that tail. Misses still saturate to fixpoint
-    // (or a cap), which the forced-negative report requires.
-    result.stats = .{ .outcome = .iteration_capped };
-    while (!poolConverged(&eg, goal_term, pool_terms) and
-        !eqSidesConverged(&eg, eq_sides))
-    {
-        if (result.stats.iterations >= opts.max_iterations) break;
-        const slice = try eg.saturate(rules.items, .{
-            .max_iterations = 1,
-            .max_nodes = opts.max_nodes,
-        });
-        result.stats.iterations += slice.iterations;
-        result.stats.unions_applied += slice.unions_applied;
-        result.stats.dep_deferred += slice.dep_deferred;
-        result.stats.ac_match_capped += slice.ac_match_capped;
-        result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
-        result.stats.fold_applied += slice.fold_applied;
-        if (slice.outcome != .iteration_capped) {
-            result.stats.outcome = slice.outcome;
-            break;
-        }
-    }
-    result.classes = eg.classCount();
-    result.nodes = eg.eNodeCount();
-
-    // Bags re-sort members as unions land, so the pre-saturation seed
-    // terms' children may no longer parallel their nodes. Rebuild them for
-    // extraction; no merges happen past this point, so they stay aligned.
-    var extract_goal = goal_term;
-    var extract_pool = pool_terms;
-    var extract_sides = eq_sides;
-    if (ac_certs.count() != 0) {
-        extract_goal = (try addExpr(&eg, context.env, theorem, goal)) orelse {
-            result.convertible_unlowered =
-                poolConverged(&eg, goal_term, pool_terms) or
-                eqSidesConverged(&eg, eq_sides);
-            return result;
-        };
-        extract_sides = goalEqSides(theorem, goal, &rel_heads, extract_goal);
-        const rebuilt = try work.alloc(?*const egraph.Term, pool.len);
-        for (pool_exprs, 0..) |maybe_expr, idx| {
-            rebuilt[idx] = if (maybe_expr) |expr|
-                try addExpr(&eg, context.env, theorem, expr)
-            else
-                null;
-        }
-        extract_pool = rebuilt;
-    }
-
-    const goal_class = termClass(&eg, extract_goal);
     // Prototype for every lowering attempt (pool references and the
     // equation fallback); nothing in it is attempt-specific, and every
     // mutable field is still at its empty default when the copies are
@@ -518,89 +466,184 @@ pub fn run(
         .target_line = target_line,
         .indent = proof_src[target_line.span.start..target_line.label_span.start],
     };
-    for (pool, extract_pool, pool_exprs, 0..) |entry, maybe_term, maybe_expr, idx| {
-        const ref_term = maybe_term orelse {
-            // The extraction rebuild failed (a written member's class
-            // spliced deeper than the written tree). If the seed-time
-            // term had converged, the goal is provably convertible —
-            // keep the failure report honest.
-            if (pool_terms[idx]) |seed| {
-                if (eg.sameClass(
-                    termClass(&eg, seed),
-                    termClass(&eg, goal_term),
-                )) {
-                    result.convertible_unlowered = true;
-                }
-            }
-            continue;
-        };
-        if (!eg.sameClass(termClass(&eg, ref_term), goal_class)) continue;
-        const steps = (try eg.explain(
-            rules.items,
-            ref_term,
-            extract_goal,
-            .{},
-        )) orelse {
-            result.convertible_unlowered = true;
-            continue;
-        };
-        const lowered = try lowerBothOrientations(
-            lowerer_proto,
-            block_lines,
-            .{ .pool = .{
-                .ref = entry.ref,
-                .ref_term = ref_term,
-                .goal_term = extract_goal,
-                .ref_expr = maybe_expr.?,
-            } },
-            steps,
-        );
-        if (lowered.best) |replacement| {
-            result.replacement = replacement;
-            result.via = try lowering.renderRefText(work, entry.ref);
-            return result;
-        }
-        result.convertible_unlowered = true;
-        if (lowered.any_cap) result.lower_capped = true;
-    }
 
-    // Equation fallback: no pool reference lowered, but the goal's own
-    // sides share a class — the line is provable outright. Ground the
-    // chain in `refl` (or one `symm` for the reversed orientation) and
-    // keep the shorter emission, mirroring the pool path's dual lowering.
-    if (extract_sides) |sides| {
-        if (eg.sameClass(
-            termClass(&eg, sides.lhs),
-            termClass(&eg, sides.rhs),
-        )) {
+    // Saturate one iteration at a time and stop as soon as the goal shares
+    // a class with a pool entry. Absorption-style rules union a variable's
+    // class with a compound containing that same class, and such cyclic
+    // classes make AC rule sets generative up to any node cap — a found
+    // chain must not pay for that tail. Misses still saturate to fixpoint
+    // (or a cap), which the forced-negative report requires.
+    //
+    // The equation-goal stop can halt saturation the pool path needs:
+    // sides joined by a pool-equation union converge before the first
+    // iteration runs. When the equation lowering then declines, the stop
+    // is lifted and the outer loop comes back around once — saturation
+    // resumes toward pool convergence on the same iteration budget.
+    result.stats = .{ .outcome = .iteration_capped };
+    var eq_stop_lifted = false;
+    while (true) {
+        while (!poolConverged(&eg, goal_term, pool_terms) and
+            (eq_stop_lifted or !eqSidesConverged(&eg, eq_sides)))
+        {
+            if (result.stats.iterations >= opts.max_iterations) break;
+            const slice = try eg.saturate(rules.items, .{
+                .max_iterations = 1,
+                .max_nodes = opts.max_nodes,
+            });
+            result.stats.iterations += slice.iterations;
+            result.stats.unions_applied += slice.unions_applied;
+            result.stats.dep_deferred += slice.dep_deferred;
+            result.stats.ac_match_capped += slice.ac_match_capped;
+            result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
+            result.stats.fold_applied += slice.fold_applied;
+            if (slice.outcome != .iteration_capped) {
+                result.stats.outcome = slice.outcome;
+                break;
+            }
+        }
+        result.classes = eg.classCount();
+        result.nodes = eg.eNodeCount();
+
+        // Bags re-sort members as unions land, so the pre-saturation seed
+        // terms' children may no longer parallel their nodes. Rebuild them
+        // for extraction; no merges land between here and the lowering
+        // attempts below, so they stay aligned (a lifted-stop pass
+        // rebuilds afresh).
+        var extract_goal = goal_term;
+        var extract_pool = pool_terms;
+        var extract_sides = eq_sides;
+        if (ac_certs.count() != 0) {
+            extract_goal = (try addExpr(
+                &eg,
+                context.env,
+                theorem,
+                goal,
+            )) orelse {
+                result.convertible_unlowered =
+                    poolConverged(&eg, goal_term, pool_terms) or
+                    eqSidesConverged(&eg, eq_sides);
+                return result;
+            };
+            extract_sides = goalEqSides(theorem, goal, &rel_heads, extract_goal);
+            const rebuilt = try work.alloc(?*const egraph.Term, pool.len);
+            for (pool_exprs, 0..) |maybe_expr, idx| {
+                rebuilt[idx] = if (maybe_expr) |expr|
+                    try addExpr(&eg, context.env, theorem, expr)
+                else
+                    null;
+            }
+            extract_pool = rebuilt;
+        }
+
+        const goal_class = termClass(&eg, extract_goal);
+        for (
+            pool,
+            extract_pool,
+            pool_exprs,
+            0..,
+        ) |entry, maybe_term, maybe_expr, idx| {
+            const ref_term = maybe_term orelse {
+                // The extraction rebuild failed (a written member's class
+                // spliced deeper than the written tree). If the seed-time
+                // term had converged, the goal is provably convertible —
+                // keep the failure report honest.
+                if (pool_terms[idx]) |seed| {
+                    if (eg.sameClass(
+                        termClass(&eg, seed),
+                        termClass(&eg, goal_term),
+                    )) {
+                        result.convertible_unlowered = true;
+                    }
+                }
+                continue;
+            };
+            if (!eg.sameClass(termClass(&eg, ref_term), goal_class)) continue;
             const steps = (try eg.explain(
                 rules.items,
-                sides.lhs,
-                sides.rhs,
+                ref_term,
+                extract_goal,
                 .{},
             )) orelse {
                 result.convertible_unlowered = true;
-                return result;
+                continue;
             };
             const lowered = try lowerBothOrientations(
                 lowerer_proto,
                 block_lines,
-                .{ .equation = sides },
+                .{ .pool = .{
+                    .ref = entry.ref,
+                    .ref_term = ref_term,
+                    .goal_term = extract_goal,
+                    .ref_expr = maybe_expr.?,
+                } },
                 steps,
             );
             if (lowered.best) |replacement| {
                 result.replacement = replacement;
+                result.via = try lowering.renderRefText(work, entry.ref);
                 return result;
             }
             result.convertible_unlowered = true;
             if (lowered.any_cap) result.lower_capped = true;
         }
-    } else if (eqSidesConverged(&eg, eq_sides)) {
-        // The extraction rebuild lost the sides (an AC splice); the goal
-        // is still provably convertible — keep the failure report honest.
-        result.convertible_unlowered = true;
+
+        // Equation fallback: no pool reference lowered, but the goal's own
+        // sides share a class — the line is provable outright. Ground the
+        // chain in `refl` (or one `symm` for the reversed orientation) and
+        // keep the shorter emission, mirroring the pool path's dual
+        // lowering.
+        if (extract_sides) |sides| {
+            if (eg.sameClass(
+                termClass(&eg, sides.lhs),
+                termClass(&eg, sides.rhs),
+            )) {
+                if (try eg.explain(
+                    rules.items,
+                    sides.lhs,
+                    sides.rhs,
+                    .{},
+                )) |steps| {
+                    const lowered = try lowerBothOrientations(
+                        lowerer_proto,
+                        block_lines,
+                        .{ .equation = sides },
+                        steps,
+                    );
+                    if (lowered.best) |replacement| {
+                        result.replacement = replacement;
+                        return result;
+                    }
+                    result.convertible_unlowered = true;
+                    if (lowered.any_cap) result.lower_capped = true;
+                } else {
+                    result.convertible_unlowered = true;
+                }
+            } else if (eqSidesConverged(&eg, eq_sides)) {
+                // The extraction rebuild re-spliced the sides into
+                // different classes, but the seed-time sides converged —
+                // the goal is provably convertible; keep the failure
+                // report honest.
+                result.convertible_unlowered = true;
+            }
+        } else if (eqSidesConverged(&eg, eq_sides)) {
+            // The extraction rebuild lost the sides (an AC splice); the
+            // goal is still provably convertible — keep the failure
+            // report honest.
+            result.convertible_unlowered = true;
+        }
+
+        // Nothing lowered. Lift the equation-goal stop and go around once
+        // more, unless it never fired (pool convergence or exhaustion
+        // ended the saturation loop) or the iteration budget is spent.
+        if (eq_stop_lifted or
+            poolConverged(&eg, goal_term, pool_terms) or
+            result.stats.outcome != .iteration_capped or
+            result.stats.iterations >= opts.max_iterations)
+        {
+            return result;
+        }
+        eq_stop_lifted = true;
     }
-    return result;
 }
 
 /// What one lowering attempt is grounded in: a pool reference the target
@@ -699,8 +742,12 @@ const EqSides = struct {
 };
 
 /// Equation-goal detection against a seeded goal term. The side terms are
-/// the goal term's children (relation heads are never AC-policied, so the
-/// top node is a plain application with both slots resolved).
+/// the goal term's children (relation heads are never AC-policied —
+/// enrollment rejects a role certificate on a registered relation head
+/// with `ConversionRoleRelationHead`, and a certificate's conclusion
+/// relation is the homogeneous head itself, so no declaration order
+/// evades the check — hence the top node is a plain application with
+/// both slots resolved).
 fn goalEqSides(
     theorem: *const TheoremContext,
     goal: ExprId,

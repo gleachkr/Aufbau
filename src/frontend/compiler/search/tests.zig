@@ -6832,6 +6832,37 @@ test "conversion? equation goal still prefers a converged pool reference" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? relation heads can never absorb AC roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The equation-goal path (and the pool-equation loop) pair a
+    // relation node's two children against the written argument order,
+    // which an AC bag's sorted member order would break. That is safe
+    // because enrollment rejects a role certificate on a registered
+    // relation head — and no declaration order evades it: an
+    // AC-absorbable head is sort-homogeneous, so its certificate's
+    // conclusion relation is the head itself, forcing registration
+    // before the certificate can enroll.
+    const mm0_src = conversion_prelude ++
+        \\--| @congr
+        \\axiom iff_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (iff a c) (iff b d) $;
+        \\--| @conversion comm
+        \\axiom iff_comm (a b: wff): $ iff (iff a b) (iff b a) $;
+        \\theorem conv_ac_rel (p q: wff): $ iff (an p q) (an q p) $;
+    ;
+    const proof_src =
+        \\conv_ac_rel
+        \\----
+        \\goal: $ iff (an p q) (an q p) $ by conversion?
+        \\
+    ;
+
+    try std.testing.expectError(
+        error.ConversionRoleRelationHead,
+        conversionSuggestions(&arena, mm0_src, proof_src, .{}),
+    );
+}
+
 test "conversion? equation goal folds a computation without a wff relation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

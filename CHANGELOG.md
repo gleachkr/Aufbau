@@ -51,6 +51,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   routinely produce — reporting "no reduction" on expressions it could
   in fact reduce. Such subtrees are now opened and normalized like any
   other.
+- Two gaps in `conversion?`'s equation-goal path. An equation goal
+  whose sides converged during seeding no longer stops saturation for
+  good: if the direct equation proof cannot be extracted or lowered, the
+  search now resumes saturating toward a pool reference on the same
+  iteration budget instead of reporting a miss. And a goal whose
+  seed-time sides converged but whose post-saturation extraction rebuild
+  degraded (an AC splice) is now reported as "conversion found, proof
+  not extracted" rather than as a flat miss.
 - The def_ops unit-test suite runs under `zig build test` again. It had
   silently run zero times since an April test reorganization routed it
   through a cross-module reference the test runner never collects. The
