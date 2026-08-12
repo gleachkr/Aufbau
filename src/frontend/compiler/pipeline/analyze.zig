@@ -400,7 +400,7 @@ fn analyzeLocalProofBlock(
             CompilerDiag.proofBlockDiagnostic(
                 block.name,
                 block.header_span,
-                err,
+                CompilerDiag.narrowDiagnosticError(err),
             ),
         );
         try proof.invalid_rules.put(block.name, {});
@@ -465,7 +465,7 @@ fn recordPrimaryLocalDefFailure(
 ) void {
     const diag = self.getDiagnostic() orelse Diagnostic{
         .kind = .generic,
-        .err = err,
+        .err = CompilerDiag.narrowDiagnosticError(err),
         .source = .proof,
         .name = def.name,
         .span = def.name_span,
@@ -909,7 +909,7 @@ fn analyzeTheoremProof(
                             CompilerDiag.proofBlockDiagnostic(
                                 block.name,
                                 block.header_span,
-                                err,
+                                CompilerDiag.narrowDiagnosticError(err),
                             ),
                         );
                         try proof.invalid_rules.put(block.name, {});
@@ -967,7 +967,7 @@ fn analyzeTheoremProof(
                             assertion.name,
                             block.name_span,
                             .proof,
-                            err,
+                            CompilerDiag.narrowDiagnosticError(err),
                         ),
                     );
                     return null;
@@ -1043,7 +1043,7 @@ fn analyzeExtraProofBlocks(
 fn recoverFromMm0ParseFailure(
     self: *CompilerContext,
     parser: *MM0Parser,
-    err: anyerror,
+    err: CompilerDiag.DiagnosticError,
 ) bool {
     self.addPrimaryDiagnostic(CompilerDiag.mm0ParserDiagnostic(parser, err));
     parser.discardPendingAnnotations();
@@ -1060,7 +1060,11 @@ fn recordPrimaryStatementFailure(
     err: anyerror,
 ) void {
     const diag = self.getDiagnostic() orelse
-        CompilerDiag.mm0StatementDiagnostic(parser, stmt, err);
+        CompilerDiag.mm0StatementDiagnostic(
+            parser,
+            stmt,
+            CompilerDiag.narrowDiagnosticError(err),
+        );
     self.restoreDiagnostic(null);
     self.addPrimaryDiagnostic(diag);
 }

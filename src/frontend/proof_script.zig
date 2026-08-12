@@ -130,7 +130,7 @@ pub const ProofLine = struct {
     /// The parse failure behind an `incomplete` line, so consumers that
     /// report diagnostics (the analyze path) can name the same error the
     /// strict parse would have. Null on complete lines.
-    parse_err: ?anyerror = null,
+    parse_err: ?ParseError = null,
 
     pub fn ruleApplicationSpan(self: ProofLine) Span {
         return self.application.ruleApplicationSpan();
@@ -139,6 +139,24 @@ pub const ProofLine = struct {
     pub fn refsOrRuleSpan(self: ProofLine) Span {
         return self.application.refsOrRuleSpan();
     }
+};
+
+/// Every error the proof-script parser can raise. Declared explicitly (not
+/// inferred) so the compiler's diagnostic error catalog can be checked to
+/// cover it at compile time.
+pub const ParseError = error{
+    OutOfMemory,
+    ExpectedBlockUnderline,
+    ExpectedBy,
+    ExpectedDefEquals,
+    ExpectedIdentifier,
+    ExpectedLineEnd,
+    ExpectedMathString,
+    ExpectedNumber,
+    ExpectedProofBlock,
+    NumberOutOfRange,
+    UnexpectedCharacter,
+    UnterminatedMathString,
 };
 
 pub const BlockKind = enum {
@@ -227,7 +245,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn nextItem(self: *Parser) !?TopLevelItem {
+    pub fn nextItem(self: *Parser) ParseError!?TopLevelItem {
         self.current_block_name = null;
         self.current_block_name_span = null;
         self.last_error_span = null;
@@ -255,7 +273,7 @@ pub const Parser = struct {
         ) };
     }
 
-    pub fn nextBlock(self: *Parser) !?ProofBlock {
+    pub fn nextBlock(self: *Parser) ParseError!?ProofBlock {
         const item = (try self.nextItem()) orelse return null;
         return switch (item) {
             .block => |block| block,
@@ -499,7 +517,7 @@ pub const Parser = struct {
         self: *Parser,
         line_start: usize,
         failure: Span,
-        parse_err: anyerror,
+        parse_err: ParseError,
     ) !ProofLine {
         const resume_pos = self.pos;
         const saved_error = self.last_error_span;
@@ -606,7 +624,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parseRuleApplication(self: *Parser) anyerror!RuleApplication {
+    fn parseRuleApplication(self: *Parser) ParseError!RuleApplication {
         self.skipProofWhitespace();
         const rule_start = self.pos;
         var rule_name = try self.parseIdentifier();
@@ -621,7 +639,7 @@ pub const Parser = struct {
         self: *Parser,
         rule_start: usize,
         rule_name: []const u8,
-    ) anyerror!RuleApplication {
+    ) ParseError!RuleApplication {
         const rule_span = Span{
             .start = rule_start,
             .end = rule_start + rule_name.len,
@@ -979,12 +997,13 @@ pub const Parser = struct {
         while (self.pos < self.src.len and
             std.ascii.isDigit(self.src[self.pos]))
         {
-            value = try std.math.mul(usize, value, 10);
-            value = try std.math.add(
+            value = std.math.mul(usize, value, 10) catch
+                return self.recordErrorAtPos(error.NumberOutOfRange);
+            value = std.math.add(
                 usize,
                 value,
                 self.src[self.pos] - '0',
-            );
+            ) catch return self.recordErrorAtPos(error.NumberOutOfRange);
             self.pos += 1;
         }
         return value;
@@ -1353,16 +1372,16 @@ pub const Parser = struct {
         };
     }
 
-    fn recordErrorAtPos(self: *Parser, err: anyerror) anyerror {
+    fn recordErrorAtPos(self: *Parser, err: ParseError) ParseError {
         self.last_error_span = self.tokenSpanAt(self.pos);
         return err;
     }
 
     fn recordErrorAtSpan(
         self: *Parser,
-        err: anyerror,
+        err: ParseError,
         span: Span,
-    ) anyerror {
+    ) ParseError {
         self.last_error_span = span;
         return err;
     }

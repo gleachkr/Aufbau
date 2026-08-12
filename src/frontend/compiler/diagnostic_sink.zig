@@ -138,7 +138,7 @@ pub const DiagnosticSink = struct {
                 return;
             }
         }
-        std.debug.print("error: {s}\n", .{@errorName(err)});
+        std.debug.print("error: {s}\n", .{CompilerDiag.errorSummary(err)});
     }
 
     pub fn promoteWarningsToErrors(self: *DiagnosticSink) !void {
@@ -256,7 +256,7 @@ pub const DiagnosticSink = struct {
         };
         var diag: Diagnostic = .{
             .kind = kind,
-            .err = err,
+            .err = CompilerDiag.narrowDiagnosticError(err),
             .theorem_name = theorem_name,
             .line_label = line_label,
             .rule_name = rule_name,

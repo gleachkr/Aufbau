@@ -172,10 +172,247 @@ pub const DiagnosticRelated = struct {
     span: Span,
 };
 
+/// Every error that may appear in a user-facing diagnostic. `Diagnostic.err`
+/// is typed with this set so that routing a new error into a diagnostic is a
+/// compile error until it is added here, and `compilerErrorSummary` switches
+/// over it exhaustively so that every member must have a rendered message.
+pub const DiagnosticError = error{
+    AbstractConflict,
+    AbstractNoPlugOccurrence,
+    AbstractPlugSortMismatch,
+    AbstractStructureMismatch,
+    AbstractTargetNotRuleBinder,
+    AbstractWithoutView,
+    AlphaConclusionMustBeBinaryRelation,
+    AlphaConclusionUnsupported,
+    AlphaRequiresBoundBinders,
+    AlphaRewriteSearchFailed,
+    AlphaRuleHasHypotheses,
+    AlphaSortMismatch,
+    AmbiguousAcuiMatch,
+    AmbiguousHypothesisRef,
+    AnonymousNotationBinder,
+    ArgCountMismatch,
+    ArgDependencyOnDummy,
+    BinderTokenCollision,
+    BoundnessMismatch,
+    CoercionCycle,
+    CoercionDiamond,
+    CoercionDiamondToProvable,
+    ComputeBareMatchSide,
+    ComputeBinderNotCovered,
+    ComputeConclusionNotRelation,
+    ComputeMissingRelation,
+    ComputeRuleHasHypotheses,
+    ConclusionMismatch,
+    CongruenceBinderMissingDeps,
+    CongruenceBinderOrderMismatch,
+    ConversionAssocRuleShape,
+    ConversionBareMatchSide,
+    ConversionBinderNotCovered,
+    ConversionCommRuleShape,
+    ConversionConclusionNotRelation,
+    ConversionDefUnfoldHiddenDummies,
+    ConversionMissingRelation,
+    ConversionRoleBoundBinder,
+    ConversionRoleRelationHead,
+    ConversionRuleHasHypotheses,
+    ConversionTermNotDef,
+    DepViolation,
+    DependencySlotExhausted,
+    DiagnosticsOmitted,
+    DummyAnnotationRemoved,
+    DummyHypothesisBinder,
+    DummyNotationBinder,
+    DuplicateBinderAssignment,
+    DuplicateComputeAnnotation,
+    DuplicateConversionAnnotation,
+    DuplicateConversionRoleForHead,
+    DuplicateFallbackAnnotation,
+    DuplicateFillerBinderName,
+    DuplicateFreshBinder,
+    DuplicateFreshenPair,
+    DuplicateHoleAnnotation,
+    DuplicateHoleToken,
+    DuplicateLabel,
+    DuplicateRuleName,
+    DuplicateSort,
+    DuplicateTermName,
+    DuplicateVarsToken,
+    DuplicateViewAnnotation,
+    EagerRuleDefersWitness,
+    EmptyProofBlock,
+    ExpectedBinaryOperator,
+    ExpectedBlockUnderline,
+    ExpectedBy,
+    ExpectedCloseParen,
+    ExpectedDefEquals,
+    ExpectedDefinitionBody,
+    ExpectedFormula,
+    ExpectedIdent,
+    ExpectedIdentifier,
+    ExpectedKeyword,
+    ExpectedLineEnd,
+    ExpectedMathStr,
+    ExpectedMathString,
+    ExpectedMathToken,
+    ExpectedNumber,
+    ExpectedProofBlock,
+    ExpectedString,
+    ExpectedTermApp,
+    ExpectedUnaryOperator,
+    ExtraProofBlock,
+    ExtraProofItem,
+    FallbackCycle,
+    FillerBinderMustBeDummy,
+    FinalLineMismatch,
+    FreshFreeSort,
+    FreshNoAvailableVar,
+    FreshRequiresBoundBinder,
+    FreshStrictSort,
+    FreshenBlockerMustBeBoundBinder,
+    FreshenMissingRelation,
+    FreshenTargetMustBeRegularBinder,
+    FreshenTransportFailed,
+    HiddenWitnessNoAvailableVar,
+    HoleConclusionMismatch,
+    HoleNotAllowedInTemplate,
+    HoleNotConcrete,
+    HoleTokenNameCollision,
+    HoleyInferenceMismatch,
+    HypCountMismatch,
+    HypothesisMismatch,
+    InfixPrecOutOfRange,
+    InvalidAbstractAnnotation,
+    InvalidAlphaAnnotation,
+    InvalidAutoAnnotation,
+    InvalidComputeAnnotation,
+    InvalidCongruenceAnnotation,
+    InvalidConversionAnnotation,
+    InvalidDefConversionAnnotation,
+    InvalidExprUseCount,
+    InvalidFallbackAnnotation,
+    InvalidFreshAnnotation,
+    InvalidFreshenAnnotation,
+    InvalidHoleAnnotation,
+    InvalidNotationToken,
+    InvalidNotationVariables,
+    InvalidRecoverAnnotation,
+    InvalidTriggerAnnotation,
+    InvalidVarsAnnotation,
+    InvalidViewAnnotation,
+    MissingBinderAssignment,
+    MissingCongruenceRule,
+    MissingProofBlock,
+    MissingPublicDefBody,
+    MultiCharacterDelimiter,
+    NoAlphaRewriteAvailable,
+    NotProvable,
+    NotationFirstTokenConflict,
+    NotationMismatch,
+    NumberOutOfRange,
+    OutOfMemory,
+    Overflow,
+    PlaceholderLeakage,
+    PrecMismatch,
+    PrecedenceAssocMismatch,
+    PrecedenceMismatch,
+    PublicDefBodyMustBeHeaderless,
+    PublicDefBodyNameMismatch,
+    RecoverConflict,
+    RecoverHoleNotFound,
+    RecoverSortMismatch,
+    RecoverStructureMismatch,
+    RecoverTargetNotRuleBinder,
+    RecoverWithoutView,
+    RefCountMismatch,
+    RelationBundleBoundBinder,
+    ResultDependencyOnDummy,
+    RuleNotYetAvailable,
+    SortMismatch,
+    TermMismatch,
+    TheoremNameMismatch,
+    TooManyBoundVars,
+    TooManyCompilerRules,
+    TooManyCompilerTerms,
+    TooManySorts,
+    TooManyTerms,
+    TooManyTheoremExprs,
+    TooManyTheoremVars,
+    TrailingMathTokens,
+    TriggerBinderNotGround,
+    TriggerBoundPosition,
+    TriggerRuleHasHypotheses,
+    TriggerSortMismatch,
+    UnboundExprVariable,
+    UnexpectedChar,
+    UnexpectedCharacter,
+    UnexpectedEOF,
+    UnexpectedHypothesisBinder,
+    UnexpectedInternalError,
+    UnexpectedKeyword,
+    UnexpectedProofDefItem,
+    UnexpectedTrailingInput,
+    UnifyMismatch,
+    UnifyStackNotEmpty,
+    UnknownAbstractBinder,
+    UnknownAlphaBinder,
+    UnknownBinderName,
+    UnknownDummyVar,
+    UnknownExprUseCount,
+    UnknownFallbackRule,
+    UnknownFreshBinder,
+    UnknownFreshenBinder,
+    UnknownHypothesisRef,
+    UnknownLabel,
+    UnknownMathToken,
+    UnknownPlaceholder,
+    UnknownRecoverBinder,
+    UnknownRule,
+    UnknownSort,
+    UnknownTemplateVariable,
+    UnknownTerm,
+    UnknownTermAnnotation,
+    UnknownTheoremVariable,
+    UnknownTriggerBinder,
+    UnknownTriggerTerm,
+    UnknownVariable,
+    UnnamedRuleBinder,
+    UnresolvedDummyWitness,
+    UnsolvedMetaLeakage,
+    UnsupportedProofDefAnnotation,
+    UnterminatedMathStr,
+    UnterminatedMathString,
+    UnterminatedString,
+    UnusedDefinitionParameter,
+    UnusedTheoremParameter,
+    VarsFreeSort,
+    VarsStrictSort,
+    VarsTokenCollision,
+    ViewBindingConflict,
+    ViewConclusionMismatch,
+    ViewHypCountMismatch,
+    ViewHypothesisMismatch,
+};
+
+/// Boundary conversion for code paths whose inferred error sets are erased
+/// (functions that break recursion cycles with `anyerror` return types).
+/// Catalogued names pass through unchanged; anything else degrades to
+/// `UnexpectedInternalError` instead of leaking a raw Zig identifier.
+pub fn narrowDiagnosticError(err: anyerror) DiagnosticError {
+    const info = @typeInfo(DiagnosticError).error_set.?;
+    inline for (info) |e| {
+        if (std.mem.eql(u8, e.name, @errorName(err))) {
+            return @errorCast(err);
+        }
+    }
+    return error.UnexpectedInternalError;
+}
+
 pub const Diagnostic = struct {
     severity: DiagnosticSeverity = .@"error",
     kind: DiagnosticKind,
-    err: anyerror,
+    err: DiagnosticError,
     source: DiagnosticSource = .mm0,
     phase: ?DiagnosticPhase = null,
     theorem_name: ?[]const u8 = null,
@@ -271,7 +508,7 @@ pub fn mathSpanToSpanOpt(span: ?MathSpan) ?Span {
 
 pub fn mm0ParserDiagnostic(
     parser: *const MM0Parser,
-    err: anyerror,
+    err: DiagnosticError,
 ) Diagnostic {
     var diag = mathErrorDiagnostic(.{
         .kind = .generic,
@@ -300,7 +537,7 @@ pub fn mm0ParserDiagnostic(
 pub fn mm0StatementDiagnostic(
     parser: *const MM0Parser,
     stmt: MM0Stmt,
-    err: anyerror,
+    err: DiagnosticError,
 ) Diagnostic {
     return .{
         .kind = .generic,
@@ -315,7 +552,7 @@ pub fn mm0StatementDiagnostic(
 pub fn proofParserDiagnostic(
     proofs: *const ProofScriptParser,
     fallback_theorem_name: ?[]const u8,
-    err: anyerror,
+    err: DiagnosticError,
 ) Diagnostic {
     return .{
         .kind = .generic,
@@ -487,7 +724,7 @@ pub fn theoremDiagnostic(
     theorem_name: []const u8,
     span: Span,
     source: DiagnosticSource,
-    err: anyerror,
+    err: DiagnosticError,
 ) Diagnostic {
     return .{
         .kind = .generic,
@@ -501,7 +738,7 @@ pub fn theoremDiagnostic(
 pub fn proofBlockDiagnostic(
     block_name: []const u8,
     span: Span,
-    err: anyerror,
+    err: DiagnosticError,
 ) Diagnostic {
     return .{
         .kind = .generic,
@@ -519,7 +756,7 @@ pub fn proofBlockDiagnostic(
 pub fn lemmaHeaderDiagnostic(
     block_name: []const u8,
     span: Span,
-    err: anyerror,
+    err: DiagnosticError,
 ) Diagnostic {
     return .{
         .kind = .parse_block_header,
@@ -575,7 +812,7 @@ pub fn proofMathTokenSpan(math_span: Span, token_span: MathSpan) Span {
 pub fn proofMathParseDiagnostic(
     parser: *MM0Parser,
     kind: DiagnosticKind,
-    err: anyerror,
+    err: DiagnosticError,
     theorem_name: []const u8,
     line_label: []const u8,
     rule_name: []const u8,
@@ -855,7 +1092,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
     };
 }
 
-fn definitionBodySummary(err: anyerror) []const u8 {
+fn definitionBodySummary(err: DiagnosticError) []const u8 {
     return switch (err) {
         error.DepViolation => "definition body has free variables that the result type does not declare",
         error.SortMismatch => "definition body sort does not match the declared result sort",
@@ -863,7 +1100,14 @@ fn definitionBodySummary(err: anyerror) []const u8 {
     };
 }
 
-fn compilerErrorSummary(err: anyerror) []const u8 {
+/// Render any error as a user-facing sentence: catalogued errors get their
+/// summary, unknown names degrade to the internal-error message. For paths
+/// that report an error with no recorded diagnostic.
+pub fn errorSummary(err: anyerror) []const u8 {
+    return compilerErrorSummary(narrowDiagnosticError(err));
+}
+
+fn compilerErrorSummary(err: DiagnosticError) []const u8 {
     return switch (err) {
         error.BoundnessMismatch => "binding does not satisfy the rule's " ++
             "bound-variable constraint",
@@ -1069,7 +1313,82 @@ fn compilerErrorSummary(err: anyerror) []const u8 {
         error.UnterminatedMathStr,
         => "unterminated $...$ math string",
         error.UnterminatedString => "unterminated string",
-        else => @errorName(err),
+        error.ExpectedDefEquals => "expected '=' in the proof-side definition body",
+        error.ExpectedProofBlock => "expected a proof block",
+        error.OutOfMemory => "the compiler ran out of memory",
+        error.UnexpectedInternalError => "unexpected internal error; please report this",
+        error.UnknownDummyVar => "internal error: unknown dummy variable; please report this",
+        error.UnknownPlaceholder => "internal error: unknown placeholder; please report this",
+        error.PlaceholderLeakage => "an unresolved search placeholder remains in this proof",
+        error.UnsolvedMetaLeakage => "an unsolved metavariable remains in this proof",
+        error.Overflow => "an internal limit overflowed; the theorem may be too large",
+        error.TooManyTheoremExprs => "theorem is too large (internal expression limit exceeded)",
+        error.HoleNotConcrete => "a proof hole is not allowed here",
+        error.HoleNotAllowedInTemplate => "a proof hole is not allowed in a rule statement",
+        error.TooManyCompilerRules => "too many rules declared",
+        error.TooManyCompilerTerms => "too many terms declared (compiler limit)",
+        error.UnknownTemplateVariable => "internal error: unknown template variable; " ++
+            "please report this",
+        error.InvalidExprUseCount,
+        error.UnknownExprUseCount,
+        error.UnboundExprVariable,
+        => "internal error in proof emission; please report this",
+        error.TooManyTheoremVars => "theorem has too many variables",
+        error.ExpectedDefinitionBody => "definition has no body",
+        error.ArgCountMismatch => "wrong number of arguments for term",
+        error.DummyHypothesisBinder => "hypothesis binders cannot be dummies",
+        error.DuplicateSort => "duplicate sort name",
+        error.DuplicateTermName => "duplicate term or definition name",
+        error.ExpectedFormula => "expected a formula",
+        error.TooManySorts => "too many sorts declared",
+        error.TooManyTerms => "too many terms declared",
+        error.UnexpectedHypothesisBinder => "hypothesis binders are not allowed " ++
+            "in this declaration",
+        error.UnexpectedTrailingInput => "unexpected input after the end of the statement",
+        error.UnexpectedEOF => "unexpected end of file",
+        error.NumberOutOfRange => "number is too large (at most 65535)",
+        error.MultiCharacterDelimiter => "delimiters must be single characters",
+        error.InvalidNotationToken => "'(' and ')' cannot be used as notation tokens",
+        error.PrecedenceMismatch => "token was already declared with a different precedence",
+        error.PrecedenceAssocMismatch => "this precedence level was already declared " ++
+            "with the opposite associativity",
+        error.NotationFirstTokenConflict => "a notation's first token cannot also be " ++
+            "a prefix or infix token",
+        error.ExpectedBinaryOperator => "infix notation requires a term with exactly two arguments",
+        error.ExpectedUnaryOperator => "prefix notation requires a term with exactly one argument",
+        error.InfixPrecOutOfRange => "infix operator precedence is out of range",
+        error.CoercionCycle => "coercion would create a cycle between sorts",
+        error.CoercionDiamond => "coercion would create a second route between two sorts " ++
+            "(coercion paths must be unique)",
+        error.CoercionDiamondToProvable => "coercion would create a second route " ++
+            "to a provable sort",
+        // Kind-owned errors: normally rendered via their `DiagnosticKind`
+        // summary, but every catalog member needs an arm here so that a
+        // missing message is a compile error. Texts mirror the kind summaries.
+        error.ConclusionMismatch => "proof line assertion does not match the rule conclusion",
+        error.DiagnosticsOmitted => "additional diagnostics omitted",
+        error.DuplicateBinderAssignment => "duplicate binder assignment in rule application",
+        error.DuplicateLabel => "duplicate proof line label",
+        error.EmptyProofBlock => "proof block is empty",
+        error.ExtraProofBlock => "extra proof block with no matching theorem",
+        error.FinalLineMismatch => "last proof line does not prove the theorem conclusion",
+        error.HypothesisMismatch => "a cited premise does not match the hypothesis " ++
+            "the rule expects there",
+        error.MissingBinderAssignment => "one of the rule's variables could not " ++
+            "be determined from the statement and cited premises",
+        error.MissingProofBlock => "missing proof block for theorem",
+        error.RefCountMismatch => "wrong number of references for rule application",
+        error.TheoremNameMismatch => "proof block name does not match the theorem",
+        error.UnknownBinderName => "unknown binder name in rule application",
+        error.UnknownLabel => "unknown proof line label",
+        error.UnknownRule => "unknown rule in proof line",
+        error.UnnamedRuleBinder => "binder assignment targets an unnamed rule binder",
+        error.UnknownHypothesisRef => "unknown theorem hypothesis reference",
+        error.AmbiguousHypothesisRef => "hypothesis name matches more than one hypothesis",
+        error.UnusedTheoremParameter => "theorem parameter is unused; if it is only " ++
+            "needed during proofs, use @vars and an explicit theorem-local dummy instead",
+        error.UnusedDefinitionParameter => "definition parameter is unused; " ++
+            "remove it if it is not part of the definition",
     };
 }
 

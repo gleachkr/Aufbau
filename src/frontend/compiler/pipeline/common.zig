@@ -291,7 +291,7 @@ pub fn fillFromFillerDefItem(
 pub fn fillerDummyDiagnostic(
     parser: *const MM0Parser,
     def: DefItem,
-    err: anyerror,
+    err: CompilerDiag.DiagnosticError,
 ) Diagnostic {
     return .{
         .kind = .generic,
@@ -313,7 +313,7 @@ pub fn proofMathTextSpan(span: Span) MathSpan {
 pub fn publicDefBodyParseDiagnostic(
     parser: *const MM0Parser,
     def: DefItem,
-    err: anyerror,
+    err: CompilerDiag.DiagnosticError,
 ) Diagnostic {
     var diag = Diagnostic{
         .kind = .generic,
@@ -638,7 +638,7 @@ pub fn rejectDefAnnotations(self: *CompilerContext, def: DefItem) !void {
 pub fn localDefParseDiagnostic(
     parser: *const MM0Parser,
     def: DefItem,
-    err: anyerror,
+    err: CompilerDiag.DiagnosticError,
 ) Diagnostic {
     var diag = Diagnostic{
         .kind = .generic,
@@ -737,7 +737,7 @@ pub fn processAssertion(
                     assertion.name,
                     block.name_span,
                     .proof,
-                    err,
+                    CompilerDiag.narrowDiagnosticError(err),
                 ),
             );
             return err;
@@ -764,7 +764,7 @@ pub fn processAssertion(
                         assertion.name,
                         block.name_span,
                         .proof,
-                        err,
+                        CompilerDiag.narrowDiagnosticError(err),
                     ),
                 );
                 return err;
@@ -1032,7 +1032,7 @@ pub fn processLocalProofBlock(
                 assertion.name,
                 block.header_span,
                 .proof,
-                err,
+                CompilerDiag.narrowDiagnosticError(err),
             ),
         );
         return err;
@@ -1060,7 +1060,7 @@ pub fn processLocalProofBlock(
                     assertion.name,
                     block.header_span,
                     .proof,
-                    err,
+                    CompilerDiag.narrowDiagnosticError(err),
                 ),
             );
             return err;
@@ -1116,7 +1116,7 @@ pub fn processLocalProofBlock(
             CompilerDiag.proofBlockDiagnostic(
                 block.name,
                 block.header_span,
-                err,
+                CompilerDiag.narrowDiagnosticError(err),
             ),
         );
         return err;

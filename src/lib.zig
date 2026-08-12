@@ -15,6 +15,7 @@ pub const CompilerDiagnosticPhase = CompilerDiag.DiagnosticPhase;
 pub const CompilerDiagnosticNote = CompilerDiag.DiagnosticNote;
 pub const CompilerDiagnosticRelated = CompilerDiag.DiagnosticRelated;
 pub const compilerDiagnosticSummary = CompilerDiag.diagnosticSummary;
+pub const compilerErrorSummary = CompilerDiag.errorSummary;
 pub const renderCompilerDiagnostic = CompilerDiag.renderDiagnostic;
 pub const writeCompilerMissingCongruenceRuleSummary =
     CompilerDiag.writeMissingCongruenceRuleSummary;

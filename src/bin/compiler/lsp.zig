@@ -1215,7 +1215,7 @@ pub const Handler = struct {
                     error.InvalidFormat => "document URI is not a valid URI",
                     UnsupportedUriScheme.UnsupportedUriScheme => "document URI must use the file scheme",
                     UnsupportedUriHost.UnsupportedUriHost => "file URI host must be empty or localhost",
-                    else => @errorName(err),
+                    else => mm0.compilerErrorSummary(err),
                 },
             );
             return;

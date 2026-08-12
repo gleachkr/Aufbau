@@ -16,6 +16,18 @@ pub const SortStmt = core.SortStmt;
 pub const TermStmt = core.TermStmt;
 pub const Notation = core.Notation;
 
+/// Every error the MM0 parser boundary can raise: the trusted core's
+/// declared contract (`core.ParseError`) plus the wrapper's own filler and
+/// local-def errors. Downstream, the compiler's diagnostic catalog
+/// (`DiagnosticError`) is checked to cover this set at compile time, so a
+/// new kernel parse error is a compile error until it has a summary.
+pub const ParseError = core.ParseError || error{
+    DuplicateTermName,
+    DuplicateFillerBinderName,
+    FillerBinderMustBeDummy,
+    PublicDefBodyMustBeHeaderless,
+};
+
 pub const MM0Parser = struct {
     core: core.MM0Parser,
     pending_annotations: std.ArrayListUnmanaged([]const u8) = .{},
@@ -36,14 +48,14 @@ pub const MM0Parser = struct {
         self.freeLastAnnotations();
     }
 
-    pub fn prepareNextPublicStatement(self: *MM0Parser) !void {
+    pub fn prepareNextPublicStatement(self: *MM0Parser) ParseError!void {
         self.clearDiagnosticOverrides();
         const start = self.core.pos;
         try self.core.prepareNextPublicStatement();
         try self.collectAnnotationsBetween(start, self.core.pos);
     }
 
-    pub fn next(self: *MM0Parser) !?MM0Stmt {
+    pub fn next(self: *MM0Parser) ParseError!?MM0Stmt {
         try self.prepareNextPublicStatement();
         if (self.core.pos >= self.core.src.len) return null;
         try self.flushAnnotations();
@@ -67,7 +79,7 @@ pub const MM0Parser = struct {
         return self.core.isCoercionTerm(term_id);
     }
 
-    pub fn recoverToStatementBoundary(self: *MM0Parser) !void {
+    pub fn recoverToStatementBoundary(self: *MM0Parser) ParseError!void {
         self.clearDiagnosticOverrides();
         const start = self.core.pos;
         try self.core.skipToSemicolon();
@@ -103,7 +115,7 @@ pub const MM0Parser = struct {
         src: []const u8,
         kind: AssertionKind,
         is_local: bool,
-    ) !AssertionStmt {
+    ) ParseError!AssertionStmt {
         self.clearDiagnosticOverrides();
         return try self.core.parseAssertionText(src, kind, is_local);
     }
@@ -113,7 +125,7 @@ pub const MM0Parser = struct {
         stmt: TermStmt,
         math: []const u8,
         math_span: ?MathSpan,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         self.clearDiagnosticOverrides();
         return try self.core.parsePublicDefBodyText(stmt, math, math_span);
     }
@@ -125,7 +137,7 @@ pub const MM0Parser = struct {
         header_tail: []const u8,
         body: []const u8,
         body_span: ?MathSpan,
-    ) anyerror!TermStmt {
+    ) ParseError!TermStmt {
         self.clearDiagnosticOverrides();
         if (self.core.term_names.contains(name)) {
             self.diagnostic_name_override = name;
@@ -173,7 +185,7 @@ pub const MM0Parser = struct {
         stmt: TermStmt,
         tail: []const u8,
         tail_start: usize,
-    ) anyerror!TermStmt {
+    ) ParseError!TermStmt {
         self.clearDiagnosticOverrides();
         self.diagnostic_name_override = stmt.name;
 
@@ -274,7 +286,7 @@ pub const MM0Parser = struct {
         tail: []const u8,
         tail_start: usize,
         out: *std.ArrayListUnmanaged(ScannedFillerDummy),
-    ) anyerror!void {
+    ) ParseError!void {
         var pos: usize = 0;
         while (true) {
             skipFillerSpace(tail, &pos);
@@ -364,10 +376,10 @@ pub const MM0Parser = struct {
 
     fn fillerError(
         self: *MM0Parser,
-        err: anyerror,
+        err: ParseError,
         tail_start: usize,
         rel_span: MathSpan,
-    ) anyerror {
+    ) ParseError {
         self.diagnostic_span_override = .{
             .start = tail_start + rel_span.start,
             .end = tail_start + rel_span.end,
@@ -379,7 +391,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         self.clearDiagnosticOverrides();
         return try self.core.parseFormulaText(math, vars);
     }
@@ -388,7 +400,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         self.clearDiagnosticOverrides();
         return try self.core.parseFormulaTextAllowHoles(math, vars);
     }
@@ -398,7 +410,7 @@ pub const MM0Parser = struct {
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
         arg: ArgInfo,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         self.clearDiagnosticOverrides();
         return try self.core.parseArgText(math, vars, arg);
     }
@@ -407,7 +419,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         self.clearDiagnosticOverrides();
         return try self.core.parseMathText(math, vars);
     }

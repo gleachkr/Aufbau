@@ -14,6 +14,69 @@ pub const APP_PRECEDENCE: u16 = 1024;
 const MAX_SORTS: usize = 128;
 const PROV_COERCION_IDX: usize = MAX_SORTS;
 
+/// Every error this parser can raise. Declared explicitly — rather than
+/// inferred — for two reasons: the recursive math-expression parser needs
+/// explicit return types to break its inference cycles anyway, and the
+/// declared set is the kernel's error contract, which the untrusted
+/// diagnostic layer checks its message catalog against at compile time.
+/// The kernel itself never renders these; it emits bare error codes.
+pub const ParseError = error{
+    AnonymousNotationBinder,
+    ArgCountMismatch,
+    BinderTokenCollision,
+    BoundnessMismatch,
+    CoercionCycle,
+    CoercionDiamond,
+    CoercionDiamondToProvable,
+    DummyHypothesisBinder,
+    DummyNotationBinder,
+    DuplicateHoleAnnotation,
+    DuplicateHoleToken,
+    DuplicateSort,
+    ExpectedBinaryOperator,
+    ExpectedCloseParen,
+    ExpectedFormula,
+    ExpectedIdent,
+    ExpectedKeyword,
+    ExpectedMathStr,
+    ExpectedMathToken,
+    ExpectedNumber,
+    ExpectedString,
+    ExpectedUnaryOperator,
+    HoleTokenNameCollision,
+    InfixPrecOutOfRange,
+    InvalidHoleAnnotation,
+    InvalidNotationToken,
+    InvalidNotationVariables,
+    MultiCharacterDelimiter,
+    NotProvable,
+    NotationFirstTokenConflict,
+    NotationMismatch,
+    NumberOutOfRange,
+    OutOfMemory,
+    Overflow,
+    PrecMismatch,
+    PrecedenceAssocMismatch,
+    PrecedenceMismatch,
+    ResultDependencyOnDummy,
+    SortMismatch,
+    TooManyBoundVars,
+    TooManySorts,
+    TooManyTerms,
+    TrailingMathTokens,
+    UnexpectedChar,
+    UnexpectedEOF,
+    UnexpectedHypothesisBinder,
+    UnexpectedKeyword,
+    UnexpectedTrailingInput,
+    UnknownMathToken,
+    UnknownSort,
+    UnknownTerm,
+    UnknownVariable,
+    UnterminatedMathStr,
+    UnterminatedString,
+};
+
 pub const MM0Stmt = union(enum) {
     sort: SortStmt,
     term: TermStmt,
@@ -1427,7 +1490,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         src: []const u8,
         is_def: bool,
-    ) anyerror!TermStmt {
+    ) ParseError!TermStmt {
         const saved_src = self.src;
         const saved_pos = self.pos;
         defer {
@@ -1452,7 +1515,7 @@ pub const MM0Parser = struct {
         stmt: TermStmt,
         math: []const u8,
         math_span: ?MathSpan,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         var vars = std.StringHashMap(*const Expr).init(self.allocator);
         defer vars.deinit();
         for (stmt.arg_names, stmt.arg_exprs) |maybe_name, expr| {
@@ -1484,7 +1547,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const expr = try self.parseMathText(math, vars);
         return try self.coerceExprToProvable(expr);
     }
@@ -1493,7 +1556,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const expr = try self.parseMathString(math, vars, true);
         return try self.coerceExprToProvable(expr);
     }
@@ -1503,7 +1566,7 @@ pub const MM0Parser = struct {
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
         arg: ArgInfo,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const expr = try self.parseMathText(math, vars);
         const sort = try self.lookupSortId(arg.sort_name);
         const coerced = try self.coerceExpr(expr, sort);
@@ -1519,7 +1582,7 @@ pub const MM0Parser = struct {
     fn parseFormulaMathString(
         self: *MM0Parser,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const math = try self.readMathString();
         return try self.parseFormulaText(math, vars);
     }
@@ -1528,7 +1591,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         return try self.parseMathString(math, vars, false);
     }
 
@@ -1537,7 +1600,7 @@ pub const MM0Parser = struct {
         math: []const u8,
         vars: *const std.StringHashMap(*const Expr),
         allow_holes: bool,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         var cursor = MathCursor{
             .src = math,
             .left_delims = self.left_delims,
@@ -1565,7 +1628,7 @@ pub const MM0Parser = struct {
         vars: *const std.StringHashMap(*const Expr),
         min_prec: u16,
         allow_holes: bool,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         var lhs = try self.parsePrefixExpr(
             cursor,
             vars,
@@ -1593,7 +1656,7 @@ pub const MM0Parser = struct {
         vars: *const std.StringHashMap(*const Expr),
         min_prec: u16,
         allow_holes: bool,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const token = cursor.next() orelse {
             self.last_math_error = .{
                 .unexpected_end = cursor.pos,
@@ -1732,7 +1795,7 @@ pub const MM0Parser = struct {
         vars: *const std.StringHashMap(*const Expr),
         prefix: PrefixEnv,
         allow_holes: bool,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const term = self.terms.items[prefix.term_id];
         const args = try self.allocator.alloc(?*const Expr, term.args.len);
         defer self.allocator.free(args);
@@ -1783,7 +1846,7 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         term_id: u32,
         raw_args: []const *const Expr,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const term = self.terms.items[term_id];
         if (raw_args.len != term.args.len) return error.ArgCountMismatch;
 
@@ -1812,14 +1875,14 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         expr: *const Expr,
         target: u7,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         return try self.followCoercionRoute(expr, target, error.SortMismatch);
     }
 
     fn coerceExprToProvable(
         self: *MM0Parser,
         expr: *const Expr,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         return try self.followCoercionRoute(
             expr,
             PROV_COERCION_IDX,
@@ -1831,8 +1894,8 @@ pub const MM0Parser = struct {
         self: *MM0Parser,
         expr: *const Expr,
         target_idx: usize,
-        empty_err: anyerror,
-    ) anyerror!*const Expr {
+        empty_err: ParseError,
+    ) ParseError!*const Expr {
         // The table stores either a direct term application, a transitive
         // hop via another sort, or the special provable target slot.
         if (target_idx < MAX_SORTS and expr.sort() == target_idx) return expr;
@@ -1856,7 +1919,7 @@ pub const MM0Parser = struct {
         sort_name: []const u8,
         bound: bool,
         deps: u55,
-    ) anyerror!*const Expr {
+    ) ParseError!*const Expr {
         const sort = try self.lookupSortId(sort_name);
         const expr = try self.allocator.create(Expr);
         expr.* = .{ .variable = .{ .sort = sort, .bound = bound, .deps = deps } };

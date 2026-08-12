@@ -383,7 +383,7 @@ pub fn checkTheoremBlock(
                 )) |detail| {
                     var diag = CompilerDiag.withPhase(.{
                         .kind = .generic,
-                        .err = err,
+                        .err = CompilerDiag.narrowDiagnosticError(err),
                         .theorem_name = assertion.name,
                         .line_label = last_label,
                         .span = last_span,
@@ -1030,7 +1030,7 @@ fn applyRuleCandidateCore(
                     ) catch |err| {
                         self.setProof(CompilerDiag.withPhase(.{
                             .kind = .generic,
-                            .err = err,
+                            .err = CompilerDiag.narrowDiagnosticError(err),
                             .theorem_name = assertion.name,
                             .line_label = line.label,
                             .rule_name = line.application.rule_name,
@@ -1301,7 +1301,7 @@ fn applyRuleCandidateCore(
             ) catch |fresh_err| {
                 var diag = CompilerDiag.withPhase(.{
                     .kind = .generic,
-                    .err = fresh_err,
+                    .err = CompilerDiag.narrowDiagnosticError(fresh_err),
                     .theorem_name = assertion.name,
                     .line_label = line.label,
                     .rule_name = application.rule_name,
@@ -1440,7 +1440,7 @@ fn applyRuleCandidateCore(
         ) catch |err| {
             self.setProof(CompilerDiag.withPhase(.{
                 .kind = .generic,
-                .err = err,
+                .err = CompilerDiag.narrowDiagnosticError(err),
                 .theorem_name = assertion.name,
                 .line_label = line.label,
                 .rule_name = line.application.rule_name,

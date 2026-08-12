@@ -159,7 +159,7 @@ fn writeCompileFailure(
         try out.writer.writeAll(",\"mmbLen\":0,\"diagnostic\":");
         try writeDiagnosticObject(&out.writer, diag);
     } else {
-        try writeJsonStringField(&out.writer, "message", @errorName(err));
+        try writeJsonStringField(&out.writer, "message", mm0.compilerErrorSummary(err));
         try out.writer.writeAll(",\"mmbLen\":0,\"diagnostic\":null");
     }
     try out.writer.writeByte(',');

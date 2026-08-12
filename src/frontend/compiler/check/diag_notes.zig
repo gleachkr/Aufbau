@@ -175,7 +175,7 @@ pub fn setHoleyInferenceDiagnostic(
         null;
     var diag = CompilerDiag.withPhase(.{
         .kind = kind,
-        .err = err,
+        .err = CompilerDiag.narrowDiagnosticError(err),
         .theorem_name = assertion.name,
         .line_label = line.label,
         .rule_name = line.application.rule_name,

@@ -234,7 +234,7 @@ pub fn run(
                         CompilerDiag.mm0StatementDiagnostic(
                             &parser,
                             MM0Stmt{ .term = term_stmt_copy },
-                            err,
+                            CompilerDiag.narrowDiagnosticError(err),
                         ),
                     );
                     return err;
@@ -260,7 +260,7 @@ pub fn run(
                         CompilerDiag.mm0StatementDiagnostic(
                             &parser,
                             MM0Stmt{ .assertion = assertion },
-                            err,
+                            CompilerDiag.narrowDiagnosticError(err),
                         ),
                     );
                     return err;
