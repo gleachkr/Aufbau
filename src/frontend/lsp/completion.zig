@@ -37,50 +37,112 @@ pub fn completionsAt(
     const text = self.textForDocument(document) orelse return &.{};
     const safe_offset = @min(offset, text.len);
     var list = std.ArrayListUnmanaged(CompletionItem){};
-    const replacement = completionReplacementRange(
-        self,
-        document,
-        text,
-        safe_offset,
-    );
-
     switch (document) {
-        .mm0 => try mm0CompletionsAt(
-            self,
-            allocator,
-            &list,
-            text,
-            safe_offset,
-            replacement,
-            options,
-        ),
-        .proof => try proofCompletionsAt(
-            self,
-            allocator,
-            &list,
-            text,
-            safe_offset,
-            replacement,
-            options,
-        ),
+        .mm0 => {
+            const math = mathStringAt(text, safe_offset);
+            const replacement = completionReplacementRange(
+                self,
+                .mm0,
+                text,
+                safe_offset,
+                math,
+                false,
+            );
+            try mm0CompletionsAt(
+                self,
+                allocator,
+                &list,
+                text,
+                safe_offset,
+                math,
+                replacement,
+                options,
+            );
+        },
+        .proof => {
+            const context = proofContextAt(self, text, safe_offset);
+            const math: ?SourceSpan = switch (context) {
+                .math => |span| span,
+                else => null,
+            };
+            const replacement = completionReplacementRange(
+                self,
+                .proof,
+                text,
+                safe_offset,
+                math,
+                placeholderPosition(context),
+            );
+            try proofCompletionsAt(
+                self,
+                allocator,
+                &list,
+                text,
+                safe_offset,
+                context,
+                replacement,
+                options,
+            );
+        },
     }
     return try list.toOwnedSlice(allocator);
 }
 
-/// Whether `offset` is in a proof-rule completion position. This follows the
-/// same context precedence as `proofCompletionsAt`, so callers do not mistake
-/// theorem headers, bindings, references, comments, or math for rule uses.
+/// The syntactic context of an offset in a proof script. Resolved once per
+/// request by `proofContextAt`; the replacement range and the completion
+/// branch both derive from it, so the two can never disagree about what the
+/// cursor is on.
+const ProofContext = union(enum) {
+    /// Inside a line comment.
+    comment,
+    /// Inside a math string (span includes the `$` delimiters).
+    math: SourceSpan,
+    /// On a theorem-header line.
+    header,
+    /// On the rule-name token of a parsed application.
+    rule_name: ProofApplicationInfo,
+    /// Inside a parsed application's binding list.
+    binding_slot: ProofApplicationInfo,
+    /// Inside a parsed application's reference list.
+    reference_slot: ProofApplicationInfo,
+    /// After `by` where no application has parsed yet; payload is the index
+    /// of the enclosing proof block.
+    rule_position: usize,
+    none,
+};
+
+/// Resolve the completion context at `offset`: comments and math and headers
+/// shadow the application slots, which shadow a bare rule position, so
+/// consumers do not mistake one for another.
+fn proofContextAt(self: anytype, text: []const u8, offset: usize) ProofContext {
+    if (lineCommentContextAt(text, offset)) return .comment;
+    if (mathStringAt(text, offset)) |math| return .{ .math = math };
+    if (proofHeaderContextAt(text, offset)) return .header;
+    if (proofRuleApplicationAt(self, offset)) |app| {
+        return .{ .rule_name = app };
+    }
+    if (proofBindingApplicationAt(self, offset)) |app| {
+        return .{ .binding_slot = app };
+    }
+    if (proofReferenceApplicationAt(self, offset)) |app| {
+        return .{ .reference_slot = app };
+    }
+    if (proofRuleContextAt(text, offset)) {
+        if (proofBlockNear(self, offset)) |block_index| {
+            return .{ .rule_position = block_index };
+        }
+    }
+    return .none;
+}
+
+/// Whether `offset` is in a proof-rule completion position.
 pub fn isProofRuleCompletionAt(self: anytype, offset: usize) bool {
     const text = self.textForDocument(.proof) orelse return false;
     const safe_offset = @min(offset, text.len);
-    if (lineCommentContextAt(text, safe_offset)) return false;
-    if (mathStringAt(text, safe_offset) != null) return false;
-    if (proofHeaderContextAt(text, safe_offset)) return false;
-    if (proofRuleApplicationAt(self, safe_offset) != null) return true;
-    if (proofBindingApplicationAt(self, safe_offset) != null) return false;
-    if (proofReferenceApplicationAt(self, safe_offset) != null) return false;
-    if (!proofRuleContextAt(text, safe_offset)) return false;
-    return proofBlockNear(self, safe_offset) != null;
+    return switch (proofContextAt(self, text, safe_offset)) {
+        .rule_name, .rule_position => true,
+        else => false,
+    };
 }
 
 fn completionReplacementRange(
@@ -88,12 +150,14 @@ fn completionReplacementRange(
     document: DocumentId,
     text: []const u8,
     offset: usize,
+    math: ?SourceSpan,
+    placeholder_position: bool,
 ) SourceRange {
-    if (mathStringAt(text, offset)) |math| {
+    if (math) |span| {
         return mathCompletionReplacementRange(
             document,
             text,
-            math,
+            span,
             offset,
             self.left_delims,
             self.right_delims,
@@ -103,22 +167,19 @@ fn completionReplacementRange(
         document,
         text,
         offset,
-        placeholderPositionAt(self, document, offset),
+        placeholder_position,
     );
 }
 
-/// Whether a `?` at `offset` would be the tail of a search placeholder — true in
-/// the two positions that accept one, a rule name and a reference slot. Nothing
-/// else in a proof script spells `?`, so there the character is part of the
-/// token being completed rather than a boundary.
-fn placeholderPositionAt(
-    self: anytype,
-    document: DocumentId,
-    offset: usize,
-) bool {
-    if (document != .proof) return false;
-    return isProofRuleCompletionAt(self, offset) or
-        proofReferenceApplicationAt(self, offset) != null;
+/// Whether a `?` in this context would be the tail of a search placeholder —
+/// true in the positions that accept one, a rule name and a reference slot.
+/// Nothing else in a proof script spells `?`, so elsewhere the character is
+/// part of the token being completed rather than a boundary.
+fn placeholderPosition(context: ProofContext) bool {
+    return switch (context) {
+        .rule_name, .rule_position, .reference_slot => true,
+        else => false,
+    };
 }
 
 fn mm0CompletionsAt(
@@ -127,6 +188,7 @@ fn mm0CompletionsAt(
     list: *std.ArrayListUnmanaged(CompletionItem),
     text: []const u8,
     offset: usize,
+    math: ?SourceSpan,
     replacement: SourceRange,
     options: CompletionOptions,
 ) !void {
@@ -135,7 +197,7 @@ fn mm0CompletionsAt(
         return;
     }
     if (lineCommentContextAt(text, offset)) return;
-    if (mathStringAt(text, offset) != null) {
+    if (math != null) {
         try appendCurrentDeclarationBinders(
             self,
             list,
@@ -184,44 +246,47 @@ fn proofCompletionsAt(
     list: *std.ArrayListUnmanaged(CompletionItem),
     text: []const u8,
     offset: usize,
+    context: ProofContext,
     replacement: SourceRange,
     options: CompletionOptions,
 ) !void {
-    const block = proofBlockNear(self, offset);
-    if (lineCommentContextAt(text, offset)) return;
-    if (mathStringAt(text, offset) != null) {
-        if (block) |block_index| {
-            try appendBlockBinders(
-                self,
-                list,
-                allocator,
-                block_index,
-                replacement,
-            );
-            if (proofLineMathContextAt(text, offset)) {
-                try appendSortVarCompletions(
+    switch (context) {
+        .comment, .none => {},
+        .math => {
+            const block = proofBlockNear(self, offset);
+            if (block) |block_index| {
+                try appendBlockBinders(
                     self,
                     list,
                     allocator,
+                    block_index,
                     replacement,
-                    self.proof_blocks[block_index].global_available_before,
                 );
+                if (proofLineMathContextAt(text, offset)) {
+                    try appendSortVarCompletions(
+                        self,
+                        list,
+                        allocator,
+                        replacement,
+                        self.proof_blocks[block_index].global_available_before,
+                    );
+                }
             }
-        }
-        try appendTermCompletions(
-            self,
-            list,
-            allocator,
-            replacement,
-            .proof,
-            offset,
-            if (block) |i| self.proof_blocks[i].global_available_before else null,
-            options,
-        );
-        return;
-    }
-    if (proofHeaderContextAt(text, offset)) {
-        try appendGlobalDeclarationCompletions(
+            try appendTermCompletions(
+                self,
+                list,
+                allocator,
+                replacement,
+                .proof,
+                offset,
+                if (block) |i|
+                    self.proof_blocks[i].global_available_before
+                else
+                    null,
+                options,
+            );
+        },
+        .header => try appendGlobalDeclarationCompletions(
             self,
             list,
             allocator,
@@ -230,56 +295,41 @@ fn proofCompletionsAt(
             .proof,
             offset,
             null,
-        );
-        return;
-    }
-    const placeholder_token = placeholderTokenAt(text, replacement);
-    if (proofRuleApplicationAt(self, offset)) |app| {
-        try appendProofRuleCompletions(
+        ),
+        .rule_name => |app| try appendProofRuleCompletions(
             self,
             list,
             allocator,
             app.block_index,
             offset,
             replacement,
-            placeholder_token,
-        );
-        return;
-    }
-    if (proofBindingApplicationAt(self, offset)) |app| {
-        try appendRuleBinderCompletions(
+            placeholderTokenAt(text, replacement),
+        ),
+        .binding_slot => |app| try appendRuleBinderCompletions(
             self,
             list,
             allocator,
             app,
             replacement,
-        );
-        return;
-    }
-    if (proofReferenceApplicationAt(self, offset)) |app| {
-        try appendProofReferenceCompletions(
+        ),
+        .reference_slot => |app| try appendProofReferenceCompletions(
             self,
             list,
             allocator,
             app.block_index,
             app.line_start,
             replacement,
-            placeholder_token,
-        );
-        return;
-    }
-    if (proofRuleContextAt(text, offset)) {
-        if (block) |block_index| {
-            try appendProofRuleCompletions(
-                self,
-                list,
-                allocator,
-                block_index,
-                offset,
-                replacement,
-                placeholder_token,
-            );
-        }
+            placeholderTokenAt(text, replacement),
+        ),
+        .rule_position => |block_index| try appendProofRuleCompletions(
+            self,
+            list,
+            allocator,
+            block_index,
+            offset,
+            replacement,
+            placeholderTokenAt(text, replacement),
+        ),
     }
 }
 
