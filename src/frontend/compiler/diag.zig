@@ -1092,7 +1092,7 @@ pub fn writeMissingCongruenceRuleSummary(
             if (info.arg_index) |arg_index| {
                 if (info.term_name) |term_name| {
                     try writer.print(
-                        "bound argument {d} of term {s} changed " ++
+                        "bound argument {0d} of term {1s} changed " ++
                             "during normalization",
                         .{ arg_index + 1, term_name },
                     );
@@ -1112,7 +1112,7 @@ pub fn writeMissingCongruenceRuleSummary(
             if (info.arg_index) |arg_index| {
                 if (info.term_name) |term_name| {
                     try writer.print(
-                        "missing relation for argument {d} of term {s}",
+                        "missing relation for argument {0d} of term {1s}",
                         .{ arg_index + 1, term_name },
                     );
                 } else {
@@ -1129,7 +1129,7 @@ pub fn writeMissingCongruenceRuleSummary(
             if (info.arg_index) |arg_index| {
                 if (info.term_name) |term_name| {
                     try writer.print(
-                        "argument {d} of term {s} changed without " ++
+                        "argument {0d} of term {1s} changed without " ++
                             "a congruence proof",
                         .{ arg_index + 1, term_name },
                     );
@@ -1182,50 +1182,37 @@ pub fn writeDepViolationSummary(
     writer: anytype,
     info: DepViolationDiagnosticDetail,
 ) !void {
-    if (info.first_rule_bound and info.second_rule_bound) {
-        try writer.writeAll("bound variables ");
-        try writeDepViolationArgLabel(
-            writer,
-            info.first_arg_name,
-            info.first_arg_idx,
-        );
-        try writer.writeAll(" and ");
-        try writeDepViolationArgLabel(
-            writer,
-            info.second_arg_name,
-            info.second_arg_idx,
-        );
-        try writer.writeAll(" must be assigned distinct variables");
-        return;
-    }
-    if (info.first_rule_bound != info.second_rule_bound) {
-        const bound_is_first = info.first_rule_bound;
-        try writer.writeAll("the rule does not allow ");
-        try writeDepViolationArgLabel(
-            writer,
-            if (bound_is_first) info.second_arg_name else info.first_arg_name,
-            if (bound_is_first) info.second_arg_idx else info.first_arg_idx,
-        );
-        try writer.writeAll(" to mention the variable assigned to ");
-        try writeDepViolationArgLabel(
-            writer,
-            if (bound_is_first) info.first_arg_name else info.second_arg_name,
-            if (bound_is_first) info.first_arg_idx else info.second_arg_idx,
-        );
-        return;
-    }
-    try writer.writeAll("conflicting binders ");
-    try writeDepViolationArgLabel(
-        writer,
+    var first_buf: DepViolationLabelBuf = undefined;
+    var second_buf: DepViolationLabelBuf = undefined;
+    const first = depViolationArgLabel(
+        &first_buf,
         info.first_arg_name,
         info.first_arg_idx,
     );
-    try writer.writeAll(" and ");
-    try writeDepViolationArgLabel(
-        writer,
+    const second = depViolationArgLabel(
+        &second_buf,
         info.second_arg_name,
         info.second_arg_idx,
     );
+    if (info.first_rule_bound and info.second_rule_bound) {
+        try writer.print(
+            "bound variables {0s} and {1s} must be assigned " ++
+                "distinct variables",
+            .{ first, second },
+        );
+        return;
+    }
+    if (info.first_rule_bound != info.second_rule_bound) {
+        const bound = if (info.first_rule_bound) first else second;
+        const regular = if (info.first_rule_bound) second else first;
+        try writer.print(
+            "the rule does not allow {0s} to mention the variable " ++
+                "assigned to {1s}",
+            .{ regular, bound },
+        );
+        return;
+    }
+    try writer.print("conflicting binders {0s} and {1s}", .{ first, second });
 }
 
 /// One "<arg> was assigned: <expr>" line, shared by the LSP and stderr
@@ -1236,21 +1223,23 @@ pub fn writeDepViolationAssignment(
     idx: usize,
     text: []const u8,
 ) !void {
-    try writeDepViolationArgLabel(writer, name, idx);
-    try writer.writeAll(" was assigned: ");
-    try writer.writeAll(text);
+    var label_buf: DepViolationLabelBuf = undefined;
+    try writer.print(
+        "{0s} was assigned: {1s}",
+        .{ depViolationArgLabel(&label_buf, name, idx), text },
+    );
 }
 
-fn writeDepViolationArgLabel(
-    writer: anytype,
+/// Room for the fallback "#N" label: '#' plus a full 64-bit index.
+const DepViolationLabelBuf = [21]u8;
+
+fn depViolationArgLabel(
+    buf: *DepViolationLabelBuf,
     name: ?[]const u8,
     idx: usize,
-) !void {
-    if (name) |actual_name| {
-        try writer.writeAll(actual_name);
-        return;
-    }
-    try writer.print("#{d}", .{idx + 1});
+) []const u8 {
+    if (name) |actual_name| return actual_name;
+    return std.fmt.bufPrint(buf, "#{d}", .{idx + 1}) catch unreachable;
 }
 
 pub fn buildCapturedDiagnosticDetail(
