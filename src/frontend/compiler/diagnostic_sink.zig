@@ -157,48 +157,10 @@ pub const DiagnosticSink = struct {
         diag: Diagnostic,
         label: []const u8,
     ) void {
-        if (diag.kind == .omitted_diagnostics) {
-            const detail = switch (diag.detail) {
-                .omitted_diagnostics => |info| info,
-                else => return,
-            };
-            std.debug.print("{s}: ", .{label});
-            CompilerDiag.writeOmittedDiagnosticsSummary(
-                std.fs.File.stderr().deprecatedWriter(),
-                detail.count,
-            ) catch return;
-            std.debug.print("\n", .{});
-            return;
-        }
-        std.debug.print(
-            "{s}: {s}\n",
-            .{ label, CompilerDiag.diagnosticSummary(diag) },
-        );
-        if (diag.theorem_name) |name| {
-            std.debug.print("  theorem: {s}\n", .{name});
-        }
-        if (diag.block_name) |name| {
-            std.debug.print("  proof block: {s}\n", .{name});
-        }
-        if (diag.line_label) |line_label| {
-            std.debug.print("  line: {s}\n", .{line_label});
-        }
-        if (diag.rule_name) |rule_name| {
-            std.debug.print("  rule: {s}\n", .{rule_name});
-        }
-        if (diag.name) |name| {
-            std.debug.print("  name: {s}\n", .{name});
-        }
-        if (diag.expected_name) |name| {
-            std.debug.print("  expected: {s}\n", .{name});
-        }
-        if (diag.phase) |phase| {
-            std.debug.print(
-                "  phase: {s}\n",
-                .{CompilerDiag.diagnosticPhaseName(phase)},
-            );
-        }
-        reportDiagnosticDetail(diag.detail);
+        const stderr = std.fs.File.stderr().deprecatedWriter();
+        stderr.print("{s}: ", .{label}) catch return;
+        CompilerDiag.renderDiagnostic(stderr, diag, "\n  ") catch return;
+        stderr.writeByte('\n') catch return;
         self.reportDiagnosticNotes(diag);
         self.reportDiagnosticRelated(diag);
         self.reportDiagnosticLocation(diag);
@@ -495,110 +457,6 @@ fn reportSpanLocation(
         std.debug.print("^", .{});
     }
     std.debug.print("\n", .{});
-}
-
-fn reportDiagnosticDetail(detail: DiagnosticDetail) void {
-    switch (detail) {
-        .none => {},
-        .omitted_diagnostics => {},
-        .unknown_math_token => |info| {
-            std.debug.print("  token: {s}\n", .{info.token});
-        },
-        .name_suggestion => |info| {
-            std.debug.print("  did you mean: {s}\n", .{info.suggestion});
-        },
-        .expected_char => |info| {
-            std.debug.print("  expected: '{c}'\n", .{info.ch});
-        },
-        .missing_binder_assignment => |info| {
-            std.debug.print(
-                "  missing binder: {s}\n",
-                .{info.binder_name},
-            );
-            std.debug.print(
-                "  inference path: {s}\n",
-                .{CompilerDiag.inferencePathName(info.path)},
-            );
-        },
-        .inference_failure => |info| {
-            std.debug.print(
-                "  inference path: {s}\n",
-                .{CompilerDiag.inferencePathName(info.path)},
-            );
-            if (info.first_unsolved_binder_name) |binder_name| {
-                std.debug.print(
-                    "  first unsolved binder: {s}\n",
-                    .{binder_name},
-                );
-            }
-        },
-        .dep_violation => |info| {
-            var stderr = std.fs.File.stderr().deprecatedWriter();
-            stderr.writeAll("  dependency violation: ") catch return;
-            CompilerDiag.writeDepViolationSummary(stderr, info) catch return;
-            stderr.writeByte('\n') catch return;
-            if (info.first_binding_text) |text| {
-                stderr.writeAll("  ") catch return;
-                CompilerDiag.writeDepViolationAssignment(
-                    stderr,
-                    info.first_arg_name,
-                    info.first_arg_idx,
-                    text,
-                ) catch return;
-                stderr.writeByte('\n') catch return;
-            }
-            if (info.second_binding_text) |text| {
-                stderr.writeAll("  ") catch return;
-                CompilerDiag.writeDepViolationAssignment(
-                    stderr,
-                    info.second_arg_name,
-                    info.second_arg_idx,
-                    text,
-                ) catch return;
-                stderr.writeByte('\n') catch return;
-            }
-        },
-        .definition_body => |info| {
-            std.debug.print(
-                "  declared sort: {s}\n",
-                .{info.declared_sort_name},
-            );
-            std.debug.print(
-                "  actual sort: {s}\n",
-                .{info.actual_sort_name},
-            );
-            std.debug.print(
-                "  body deps: 0x{x}\n",
-                .{info.body_deps},
-            );
-            std.debug.print(
-                "  hidden binders: {d}\n",
-                .{info.hidden_binder_count},
-            );
-        },
-        .missing_congruence_rule => |info| {
-            var stderr = std.fs.File.stderr().deprecatedWriter();
-            stderr.writeAll("  missing congruence: ") catch return;
-            CompilerDiag.writeMissingCongruenceRuleSummary(
-                stderr,
-                info,
-            ) catch return;
-            stderr.writeByte('\n') catch return;
-            if (info.sort_name) |sort_name| {
-                std.debug.print("  sort: {s}\n", .{sort_name});
-            }
-        },
-        .hypothesis_ref => |info| {
-            if (info.name) |name| {
-                std.debug.print("  hypothesis ref: #{s}\n", .{name});
-            } else {
-                std.debug.print("  hypothesis ref: #{d}\n", .{info.index});
-            }
-        },
-        .unused_parameter => |info| {
-            std.debug.print("  parameter: {s}\n", .{info.parameter_name});
-        },
-    }
 }
 
 const SourceInfo = struct {

@@ -1215,9 +1215,8 @@ pub fn writeDepViolationSummary(
     try writer.print("conflicting binders {0s} and {1s}", .{ first, second });
 }
 
-/// One "<arg> was assigned: <expr>" line, shared by the LSP and stderr
-/// renderers so the wording stays in one place.
-pub fn writeDepViolationAssignment(
+/// One "<arg> was assigned: <expr>" line of the dep-violation detail.
+fn writeDepViolationAssignment(
     writer: anytype,
     name: ?[]const u8,
     idx: usize,
@@ -1240,6 +1239,235 @@ fn depViolationArgLabel(
 ) []const u8 {
     if (name) |actual_name| return actual_name;
     return std.fmt.bufPrint(buf, "#{d}", .{idx + 1}) catch unreachable;
+}
+
+/// The single human-readable diagnostic renderer, shared by the CLI sink,
+/// the LSP message builder, and the wasm JSON message field. Writes the
+/// summary followed by one context line per populated field (theorem,
+/// proof block, line, rule, name, expected, phase) and the lines for
+/// `diag.detail`. `line_separator` is written before each context line;
+/// the frontends differ only in that framing (the CLI passes "\n  " and
+/// appends a final newline, LSP and wasm pass "\n").
+///
+/// Notes and related spans are not rendered here: the CLI interleaves
+/// them with source locations, LSP appends them as text, and the wasm
+/// JSON carries them structurally.
+pub fn renderDiagnostic(
+    writer: anytype,
+    diag: Diagnostic,
+    line_separator: []const u8,
+) !void {
+    if (diag.kind == .omitted_diagnostics and
+        diag.detail == .omitted_diagnostics)
+    {
+        try writeOmittedDiagnosticsSummary(
+            writer,
+            diag.detail.omitted_diagnostics.count,
+        );
+    } else {
+        try writer.writeAll(diagnosticSummary(diag));
+    }
+    try writeNamedContextLine(
+        writer,
+        line_separator,
+        "theorem",
+        diag.theorem_name,
+    );
+    try writeNamedContextLine(
+        writer,
+        line_separator,
+        "proof block",
+        diag.block_name,
+    );
+    try writeNamedContextLine(writer, line_separator, "line", diag.line_label);
+    try writeNamedContextLine(writer, line_separator, "rule", diag.rule_name);
+    try writeNamedContextLine(writer, line_separator, "name", diag.name);
+    try writeNamedContextLine(
+        writer,
+        line_separator,
+        "expected",
+        diag.expected_name,
+    );
+    if (diag.phase) |phase| {
+        try writeContextLine(
+            writer,
+            line_separator,
+            "phase: {s}",
+            .{diagnosticPhaseName(phase)},
+        );
+    }
+    try writeDetailContextLines(writer, diag.detail, line_separator);
+}
+
+fn writeDetailContextLines(
+    writer: anytype,
+    detail: DiagnosticDetail,
+    line_separator: []const u8,
+) !void {
+    switch (detail) {
+        .none => {},
+        .omitted_diagnostics => {},
+        .unknown_math_token => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "token: {s}",
+                .{info.token},
+            );
+        },
+        .name_suggestion => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "did you mean: {s}",
+                .{info.suggestion},
+            );
+        },
+        .expected_char => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "expected: '{c}'",
+                .{info.ch},
+            );
+        },
+        .missing_binder_assignment => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "missing binder: {s}",
+                .{info.binder_name},
+            );
+            try writeContextLine(
+                writer,
+                line_separator,
+                "inference path: {s}",
+                .{inferencePathName(info.path)},
+            );
+        },
+        .inference_failure => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "inference path: {s}",
+                .{inferencePathName(info.path)},
+            );
+            if (info.first_unsolved_binder_name) |binder_name| {
+                try writeContextLine(
+                    writer,
+                    line_separator,
+                    "first unsolved binder: {s}",
+                    .{binder_name},
+                );
+            }
+        },
+        .dep_violation => |info| {
+            try writer.writeAll(line_separator);
+            try writer.writeAll("dependency violation: ");
+            try writeDepViolationSummary(writer, info);
+            if (info.first_binding_text) |text| {
+                try writer.writeAll(line_separator);
+                try writeDepViolationAssignment(
+                    writer,
+                    info.first_arg_name,
+                    info.first_arg_idx,
+                    text,
+                );
+            }
+            if (info.second_binding_text) |text| {
+                try writer.writeAll(line_separator);
+                try writeDepViolationAssignment(
+                    writer,
+                    info.second_arg_name,
+                    info.second_arg_idx,
+                    text,
+                );
+            }
+        },
+        .definition_body => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "declared sort: {s}",
+                .{info.declared_sort_name},
+            );
+            try writeContextLine(
+                writer,
+                line_separator,
+                "actual sort: {s}",
+                .{info.actual_sort_name},
+            );
+            try writeContextLine(
+                writer,
+                line_separator,
+                "body deps: 0x{x}",
+                .{info.body_deps},
+            );
+            try writeContextLine(
+                writer,
+                line_separator,
+                "hidden binders: {d}",
+                .{info.hidden_binder_count},
+            );
+        },
+        .missing_congruence_rule => |info| {
+            try writer.writeAll(line_separator);
+            try writer.writeAll("missing congruence: ");
+            try writeMissingCongruenceRuleSummary(writer, info);
+            try writeNamedContextLine(
+                writer,
+                line_separator,
+                "sort",
+                info.sort_name,
+            );
+        },
+        .hypothesis_ref => |info| {
+            if (info.name) |name| {
+                try writeContextLine(
+                    writer,
+                    line_separator,
+                    "hypothesis ref: #{s}",
+                    .{name},
+                );
+            } else {
+                try writeContextLine(
+                    writer,
+                    line_separator,
+                    "hypothesis ref: #{d}",
+                    .{info.index},
+                );
+            }
+        },
+        .unused_parameter => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "parameter: {s}",
+                .{info.parameter_name},
+            );
+        },
+    }
+}
+
+fn writeContextLine(
+    writer: anytype,
+    line_separator: []const u8,
+    comptime fmt: []const u8,
+    args: anytype,
+) !void {
+    try writer.writeAll(line_separator);
+    try writer.print(fmt, args);
+}
+
+fn writeNamedContextLine(
+    writer: anytype,
+    line_separator: []const u8,
+    comptime label: []const u8,
+    value: ?[]const u8,
+) !void {
+    if (value) |actual| {
+        try writeContextLine(writer, line_separator, label ++ ": {s}", .{actual});
+    }
 }
 
 pub fn buildCapturedDiagnosticDetail(

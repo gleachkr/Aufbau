@@ -365,17 +365,6 @@ pub fn compilerDiagnosticRelatedInformation(
     return result;
 }
 
-pub fn diagnosticPhaseName(phase: mm0.CompilerDiagnosticPhase) []const u8 {
-    return switch (phase) {
-        .parse => "parse",
-        .inference => "inference",
-        .theorem_application => "theorem application",
-        .freshen => "freshen",
-        .normalization => "normalization",
-        .final_reconciliation => "final reconciliation",
-    };
-}
-
 pub fn compilerDiagnosticMessage(
     arena: std.mem.Allocator,
     diag: mm0.CompilerDiagnostic,
@@ -383,126 +372,7 @@ pub fn compilerDiagnosticMessage(
     var buf = std.ArrayListUnmanaged(u8){};
     var writer = buf.writer(arena);
 
-    if (diag.kind == .omitted_diagnostics) {
-        switch (diag.detail) {
-            .omitted_diagnostics => |detail| {
-                try mm0.writeCompilerOmittedDiagnosticsSummary(
-                    &writer,
-                    detail.count,
-                );
-            },
-            else => try writer.writeAll(mm0.compilerDiagnosticSummary(diag)),
-        }
-    } else {
-        try writer.writeAll(mm0.compilerDiagnosticSummary(diag));
-    }
-    try appendNamedLine(&writer, "theorem", diag.theorem_name);
-    try appendNamedLine(&writer, "proof block", diag.block_name);
-    try appendNamedLine(&writer, "line", diag.line_label);
-    try appendNamedLine(&writer, "rule", diag.rule_name);
-    try appendNamedLine(&writer, "name", diag.name);
-    try appendNamedLine(&writer, "expected", diag.expected_name);
-    if (diag.phase) |phase| {
-        try writer.print(
-            "\nphase: {s}",
-            .{diagnosticPhaseName(phase)},
-        );
-    }
-
-    switch (diag.detail) {
-        .none => {},
-        .omitted_diagnostics => {},
-        .unknown_math_token => |detail| {
-            try writer.print("\ntoken: {s}", .{detail.token});
-        },
-        .name_suggestion => |detail| {
-            try writer.print("\ndid you mean: {s}", .{detail.suggestion});
-        },
-        .expected_char => |detail| {
-            try writer.print("\nexpected: '{c}'", .{detail.ch});
-        },
-        .missing_binder_assignment => |detail| {
-            try writer.print(
-                "\nmissing binder: {s}",
-                .{detail.binder_name},
-            );
-            try writer.print(
-                "\ninference path: {s}",
-                .{mm0.compilerInferencePathName(detail.path)},
-            );
-        },
-        .inference_failure => |detail| {
-            try writer.print(
-                "\ninference path: {s}",
-                .{mm0.compilerInferencePathName(detail.path)},
-            );
-            if (detail.first_unsolved_binder_name) |binder_name| {
-                try writer.print(
-                    "\nfirst unsolved binder: {s}",
-                    .{binder_name},
-                );
-            }
-        },
-        .dep_violation => |detail| {
-            try writer.writeAll("\ndependency violation: ");
-            try mm0.writeCompilerDepViolationSummary(&writer, detail);
-            if (detail.first_binding_text) |text| {
-                try writer.writeAll("\n");
-                try mm0.writeCompilerDepViolationAssignment(
-                    &writer,
-                    detail.first_arg_name,
-                    detail.first_arg_idx,
-                    text,
-                );
-            }
-            if (detail.second_binding_text) |text| {
-                try writer.writeAll("\n");
-                try mm0.writeCompilerDepViolationAssignment(
-                    &writer,
-                    detail.second_arg_name,
-                    detail.second_arg_idx,
-                    text,
-                );
-            }
-        },
-        .definition_body => |detail| {
-            try writer.print(
-                "\ndeclared sort: {s}",
-                .{detail.declared_sort_name},
-            );
-            try writer.print(
-                "\nactual sort: {s}",
-                .{detail.actual_sort_name},
-            );
-            try writer.print(
-                "\nbody deps: 0x{x}",
-                .{detail.body_deps},
-            );
-            try writer.print(
-                "\nhidden binders: {d}",
-                .{detail.hidden_binder_count},
-            );
-        },
-        .missing_congruence_rule => |detail| {
-            try writer.writeAll("\nmissing congruence: ");
-            try mm0.writeCompilerMissingCongruenceRuleSummary(&writer, detail);
-            try appendNamedLine(&writer, "sort", detail.sort_name);
-        },
-        .hypothesis_ref => |detail| {
-            if (detail.name) |name| {
-                try writer.print("\nhypothesis ref: #{s}", .{name});
-            } else {
-                try writer.print("\nhypothesis ref: #{d}", .{detail.index});
-            }
-        },
-        .unused_parameter => |detail| {
-            try writer.print(
-                "\nparameter: {s}",
-                .{detail.parameter_name},
-            );
-        },
-    }
-
+    try mm0.renderCompilerDiagnostic(&writer, diag, "\n");
     for (diag.noteSlice()) |note| {
         try writer.print("\nnote: {s}", .{note.message});
     }
@@ -511,14 +381,4 @@ pub fn compilerDiagnosticMessage(
     }
 
     return buf.items;
-}
-
-fn appendNamedLine(
-    writer: anytype,
-    label: []const u8,
-    value: ?[]const u8,
-) !void {
-    if (value) |actual| {
-        try writer.print("\n{s}: {s}", .{ label, actual });
-    }
 }

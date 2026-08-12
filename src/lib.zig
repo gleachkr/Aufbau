@@ -15,16 +15,13 @@ pub const CompilerDiagnosticPhase = CompilerDiag.DiagnosticPhase;
 pub const CompilerDiagnosticNote = CompilerDiag.DiagnosticNote;
 pub const CompilerDiagnosticRelated = CompilerDiag.DiagnosticRelated;
 pub const compilerDiagnosticSummary = CompilerDiag.diagnosticSummary;
+pub const renderCompilerDiagnostic = CompilerDiag.renderDiagnostic;
 pub const writeCompilerMissingCongruenceRuleSummary =
-    @import("./frontend/compiler/diag.zig").writeMissingCongruenceRuleSummary;
+    CompilerDiag.writeMissingCongruenceRuleSummary;
 pub const writeCompilerDepViolationSummary =
-    @import("./frontend/compiler/diag.zig").writeDepViolationSummary;
-pub const writeCompilerDepViolationAssignment =
-    @import("./frontend/compiler/diag.zig").writeDepViolationAssignment;
+    CompilerDiag.writeDepViolationSummary;
 pub const writeCompilerOmittedDiagnosticsSummary =
-    @import("./frontend/compiler/diag.zig").writeOmittedDiagnosticsSummary;
-pub const compilerInferencePathName =
-    @import("./frontend/compiler/diag.zig").inferencePathName;
+    CompilerDiag.writeOmittedDiagnosticsSummary;
 pub const Frontend = struct {
     pub const Env = @import("./frontend/env.zig");
     pub const Expr = @import("./frontend/expr.zig");

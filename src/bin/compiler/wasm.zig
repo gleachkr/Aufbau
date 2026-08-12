@@ -279,12 +279,15 @@ fn writeDiagnosticObject(
     writer: anytype,
     diag: mm0.CompilerDiagnostic,
 ) !void {
+    // The shared renderer's full text (summary + context lines), matching
+    // what the CLI and LSP show. Rendered to a scratch buffer first so it
+    // can be JSON-escaped; notes/related stay in their structured arrays.
+    var message: std.io.Writer.Allocating = .init(allocator);
+    defer message.deinit();
+    try mm0.renderCompilerDiagnostic(&message.writer, diag, "\n");
+
     try writer.writeByte('{');
-    try writeJsonStringField(
-        writer,
-        "message",
-        mm0.compilerDiagnosticSummary(diag),
-    );
+    try writeJsonStringField(writer, "message", message.written());
     try writer.writeByte(',');
     try writeJsonStringField(writer, "severity", @tagName(diag.severity));
     try writer.writeByte(',');
