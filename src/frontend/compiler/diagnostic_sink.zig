@@ -179,8 +179,11 @@ pub const DiagnosticSink = struct {
         self: *const DiagnosticSink,
         diag: Diagnostic,
     ) void {
+        const stderr = std.fs.File.stderr().deprecatedWriter();
         for (diag.noteSlice()) |note| {
-            std.debug.print("  note: {s}\n", .{note.message});
+            stderr.writeAll("  note: ") catch return;
+            CompilerDiag.renderNoteMessage(stderr, note.message) catch return;
+            stderr.writeByte('\n') catch return;
             const span = note.span orelse continue;
             const source_info = self.sourceInfo(note.source) orelse continue;
             reportSpanLocation("note", source_info, span);
@@ -191,8 +194,12 @@ pub const DiagnosticSink = struct {
         self: *const DiagnosticSink,
         diag: Diagnostic,
     ) void {
+        const stderr = std.fs.File.stderr().deprecatedWriter();
         for (diag.relatedSlice()) |related| {
-            std.debug.print("  related: {s}\n", .{related.label});
+            stderr.writeAll("  related: ") catch return;
+            CompilerDiag.renderRelatedLabel(stderr, related.label) catch
+                return;
+            stderr.writeByte('\n') catch return;
             const source_info = self.sourceInfo(related.source) orelse continue;
             reportSpanLocation("related", source_info, related.span);
         }
@@ -292,19 +299,43 @@ pub const DiagnosticSink = struct {
         stable.detail = self.stableDiagnosticDetail(diag.detail);
         for (diag.noteSlice(), 0..) |note, idx| {
             stable.notes[idx] = .{
-                .message = self.stableRequiredString(note.message),
+                .message = self.stableNoteMessage(note.message),
                 .source = note.source,
                 .span = note.span,
             };
         }
         for (diag.relatedSlice(), 0..) |related, idx| {
-            stable.related[idx] = .{
-                .label = self.stableRequiredString(related.label),
-                .source = related.source,
-                .span = related.span,
-            };
+            stable.related[idx] = related;
         }
         return stable;
+    }
+
+    /// Stable-copies every string payload field of a note message, so new
+    /// `NoteMessage` variants get the copy for free.
+    fn stableNoteMessage(
+        self: *DiagnosticSink,
+        message: CompilerDiag.NoteMessage,
+    ) CompilerDiag.NoteMessage {
+        switch (message) {
+            inline else => |payload, tag| {
+                const Payload = @TypeOf(payload);
+                if (Payload == void) return message;
+                var stable_payload = payload;
+                inline for (@typeInfo(Payload).@"struct".fields) |field| {
+                    if (field.type == []const u8) {
+                        @field(stable_payload, field.name) =
+                            self.stableRequiredString(
+                                @field(payload, field.name),
+                            );
+                    }
+                }
+                return @unionInit(
+                    CompilerDiag.NoteMessage,
+                    @tagName(tag),
+                    stable_payload,
+                );
+            },
+        }
     }
 
     fn stableDiagnosticDetail(

@@ -255,18 +255,10 @@ pub fn checkTheoremBlock(
                 .rule_name = placeholder.rule_name,
                 .span = placeholder.rule_span,
             }, .theorem_application);
+            CompilerDiag.addNote(&diag, .search_placeholder_meaning, .proof, null);
             CompilerDiag.addNote(
                 &diag,
-                "search placeholders (auto?, exact?, apply?, conversion?) " ++
-                    "stand for a search that runs in the editor and is " ++
-                    "replaced by the proof it finds",
-                .proof,
-                null,
-            );
-            CompilerDiag.addNote(
-                &diag,
-                "the compiler only checks finished proofs; this search " ++
-                    "has not produced one yet",
+                .search_placeholder_unfinished,
                 .proof,
                 null,
             );
@@ -568,10 +560,8 @@ fn parseProofLineAssertion(
             null,
             line.assertion.span,
         );
-        var note_buf: [DiagNotes.sort_retry_note_buf_len]u8 = undefined;
         DiagNotes.attachSortRetryNote(
             &diag,
-            &note_buf,
             parser,
             theorem_vars,
             null,
@@ -1308,7 +1298,7 @@ fn applyRuleCandidateCore(
                     .span = application.ruleApplicationSpan(),
                     .detail = .{ .dep_violation = dep_detail },
                 }, .theorem_application);
-                try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
+                addFreshenAttemptNotes(&diag, rule, freshen_report);
                 self.setProof(diag);
                 return fresh_err;
             } orelse {
@@ -1324,7 +1314,7 @@ fn applyRuleCandidateCore(
                     .span = application.ruleApplicationSpan(),
                     .detail = .{ .dep_violation = dep_detail },
                 }, .theorem_application);
-                try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
+                addFreshenAttemptNotes(&diag, rule, freshen_report);
                 self.setProof(diag);
                 return error.AlphaRewriteSearchFailed;
             };
@@ -1359,7 +1349,7 @@ fn applyRuleCandidateCore(
                     .span = application.ruleApplicationSpan(),
                     .detail = .{ .dep_violation = dep_detail },
                 }, .theorem_application);
-                try addFreshenAttemptNotes(allocator, &diag, rule, freshen_report);
+                addFreshenAttemptNotes(&diag, rule, freshen_report);
                 self.setProof(diag);
                 return error.AlphaRewriteSearchFailed;
             }
@@ -2465,7 +2455,7 @@ fn validateHoleyAssertionAgainstCandidate(
         .span = concreteMatchFailureSpan(line, hole_report) orelse
             line.assertion_span,
     }, .theorem_application);
-    try addHoleConcreteMatchNotes(allocator, &diag, line, hole_report);
+    addHoleConcreteMatchNotes(&diag, line, hole_report);
     self.setProof(diag);
     return error.HoleConclusionMismatch;
 }
@@ -2770,15 +2760,10 @@ fn lookupRuleApplicationId(
                 .span = application.rule_span,
             };
             CompilerDiag.setPhase(&diag, .theorem_application);
-            CompilerDiag.addNote(
-                &diag,
-                "rule is declared later in the mm0 file",
-                .mm0,
-                null,
-            );
+            CompilerDiag.addNote(&diag, .rule_declared_later, .mm0, null);
             CompilerDiag.addRelated(
                 &diag,
-                "rule declaration is here",
+                .rule_declaration_here,
                 .mm0,
                 entry.name_span,
             );
@@ -2796,21 +2781,9 @@ fn lookupRuleApplicationId(
         .span = application.rule_span,
     }, .theorem_application);
     if (env.term_names.get(application.rule_name) != null) {
-        CompilerDiag.addNote(
-            &diag,
-            "this name is a term or definition; it can appear inside " ++
-                "formulas but cannot justify a proof line",
-            .proof,
-            null,
-        );
+        CompilerDiag.addNote(&diag, .name_is_term_not_rule, .proof, null);
     } else if (labels.contains(application.rule_name)) {
-        CompilerDiag.addNote(
-            &diag,
-            "this name is a proof line label, not a rule; earlier lines " ++
-                "are cited as premises in the brackets after a rule",
-            .proof,
-            null,
-        );
+        CompilerDiag.addNote(&diag, .name_is_label_not_rule, .proof, null);
     } else if (closestKeyName(
         &env.rule_names,
         application.rule_name,
@@ -3593,8 +3566,7 @@ fn elaborateRefs(
                     )) {
                         CompilerDiag.addNote(
                             &label_diag,
-                            "this label belongs to a later line; a line " ++
-                                "can only cite the lines above it",
+                            .label_belongs_to_later_line,
                             .proof,
                             null,
                         );
@@ -3882,10 +3854,8 @@ fn parseBindings(
                 binding.name,
                 binding.formula.span,
             );
-            var note_buf: [DiagNotes.sort_retry_note_buf_len]u8 = undefined;
             DiagNotes.attachSortRetryNote(
                 &diag,
-                &note_buf,
                 parser,
                 theorem_vars,
                 rule.args[arg_index],

@@ -619,11 +619,15 @@ fn writeDiagnosticNotesField(
     writer: anytype,
     diag: mm0.CompilerDiagnostic,
 ) !void {
+    var message: std.io.Writer.Allocating = .init(allocator);
+    defer message.deinit();
     try writer.writeAll("\"notes\":[");
     for (diag.noteSlice(), 0..) |note, idx| {
         if (idx != 0) try writer.writeByte(',');
+        message.clearRetainingCapacity();
+        try mm0.renderCompilerNoteMessage(&message.writer, note.message);
         try writer.writeAll("{");
-        try writeJsonStringField(writer, "message", note.message);
+        try writeJsonStringField(writer, "message", message.written());
         try writer.writeByte(',');
         try writeJsonStringField(writer, "source", @tagName(note.source));
         try writer.writeByte(',');
@@ -647,11 +651,15 @@ fn writeDiagnosticRelatedField(
     writer: anytype,
     diag: mm0.CompilerDiagnostic,
 ) !void {
+    var label: std.io.Writer.Allocating = .init(allocator);
+    defer label.deinit();
     try writer.writeAll("\"related\":[");
     for (diag.relatedSlice(), 0..) |related, idx| {
         if (idx != 0) try writer.writeByte(',');
+        label.clearRetainingCapacity();
+        try mm0.renderCompilerRelatedLabel(&label.writer, related.label);
         try writer.writeAll("{");
-        try writeJsonStringField(writer, "label", related.label);
+        try writeJsonStringField(writer, "label", label.written());
         try writer.writeByte(',');
         try writeJsonStringField(
             writer,

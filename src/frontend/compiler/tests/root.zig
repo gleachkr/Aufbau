@@ -2606,11 +2606,49 @@ test "compiler pinpoints nested binding validation failures" {
     );
 }
 
+fn renderedNoteText(
+    buf: *std.ArrayListUnmanaged(u8),
+    note: mm0.CompilerDiagnosticNote,
+) ![]const u8 {
+    var writer = buf.writer(std.testing.allocator);
+    try mm0.renderCompilerNoteMessage(&writer, note.message);
+    return buf.items;
+}
+
 fn expectHasNote(diag: anytype, expected: []const u8) !void {
     for (diag.notes[0..diag.note_count]) |note| {
-        if (std.mem.eql(u8, note.message, expected)) return;
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(std.testing.allocator);
+        if (std.mem.eql(u8, try renderedNoteText(&buf, note), expected)) {
+            return;
+        }
     }
     return error.MissingExpectedNote;
+}
+
+fn expectNoteText(
+    expected: []const u8,
+    note: mm0.CompilerDiagnosticNote,
+) !void {
+    var buf = std.ArrayListUnmanaged(u8){};
+    defer buf.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings(
+        expected,
+        try renderedNoteText(&buf, note),
+    );
+}
+
+fn expectNoteStartsWith(
+    prefix: []const u8,
+    note: mm0.CompilerDiagnosticNote,
+) !void {
+    var buf = std.ArrayListUnmanaged(u8){};
+    defer buf.deinit(std.testing.allocator);
+    try std.testing.expect(std.mem.startsWith(
+        u8,
+        try renderedNoteText(&buf, note),
+        prefix,
+    ));
 }
 
 test "binder assignment sort mismatch names both sorts" {
@@ -3126,17 +3164,17 @@ test "compiler distinguishes rules declared later in mm0 order" {
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings("second", proof_src[span.start..span.end]);
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "rule is declared later in the mm0 file",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
     try std.testing.expectEqual(@as(usize, 1), diag.relatedSlice().len);
     try std.testing.expectEqual(
         mm0.CompilerDiagnosticSource.mm0,
         diag.relatedSlice()[0].source,
     );
-    try std.testing.expectEqualStrings(
-        "rule declaration is here",
+    try std.testing.expectEqual(
+        mm0.CompilerRelatedLabel.rule_declaration_here,
         diag.relatedSlice()[0].label,
     );
     try std.testing.expectEqualStrings(
@@ -3206,23 +3244,21 @@ test "final mismatch reports reconciliation attempts" {
         diag.phase.?,
     );
     try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        diag.noteSlice()[0].message,
+    try expectNoteStartsWith(
         "the theorem concludes: ",
-    ));
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        diag.noteSlice()[1].message,
-        "the last line proves: ",
-    ));
-    try std.testing.expectEqualStrings(
-        "the two do not match, even with definitions unfolded",
-        diag.noteSlice()[2].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteStartsWith(
+        "the last line proves: ",
+        diag.noteSlice()[1],
+    );
+    try expectNoteText(
+        "the two do not match, even with definitions unfolded",
+        diag.noteSlice()[2],
+    );
+    try expectNoteText(
         "nor after normalization",
-        diag.noteSlice()[3].message,
+        diag.noteSlice()[3],
     );
 }
 
@@ -3291,13 +3327,13 @@ test "compiler preserves the first fallback failure diagnostic" {
     try std.testing.expectEqualStrings("l1", diag.line_label.?);
     try std.testing.expectEqualStrings("step_a", diag.rule_name.?);
     try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "expected: top",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "actual: mid",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
 }
 
@@ -3333,14 +3369,14 @@ test "compiler notes exhausted fallback chains for holey assertions" {
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
     try std.testing.expectEqual(error.HoleConclusionMismatch, diag.err);
     try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "hole _obj expected sort obj but matched wff",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "fallback chain exhausted for holey assertion; " ++
             "showing first candidate failure",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
     const note_span = diag.noteSlice()[1].span orelse {
         return error.ExpectedDiagnosticSpan;
@@ -3576,9 +3612,9 @@ test "compiler explains proof hole sort mismatches" {
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings("_obj", proof_src[span.start..span.end]);
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "hole _obj expected sort obj but matched wff",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
     const note_span = diag.noteSlice()[0].span orelse {
         return error.ExpectedDiagnosticSpan;
@@ -3627,10 +3663,10 @@ test "compiler explains proof hole visible structure mismatches" {
         proof_src[span.start..span.end],
     );
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the visible parts of the statement do not match " ++
             "the rule's conclusion",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
     try std.testing.expect(diag.noteSlice()[0].span == null);
 }
@@ -3673,9 +3709,9 @@ test "compiler explains proof holes that leave binders unsolved" {
         else => return error.ExpectedMissingBinderDetail,
     }
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "holey assertion left binder b unsolved",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
     const note_span = diag.noteSlice()[0].span orelse {
         return error.ExpectedDiagnosticSpan;
@@ -3729,9 +3765,9 @@ test "compiler reports which binder assignment is missing" {
         else => return error.ExpectedMissingBinderDetail,
     }
     try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "explicit bindings: a = a",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
 }
 
@@ -3769,13 +3805,13 @@ test "inference failure names the clashing operator in the conclusion" {
         mm0.compilerDiagnosticSummary(diag),
     );
     try std.testing.expect(diag.noteSlice().len >= 2);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the statement does not match the rule's conclusion",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the rule requires 'imp' at the mismatch, but found: a & b",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
 }
 
@@ -3811,21 +3847,21 @@ test "inference failure reports a rule variable needing two values" {
         mm0.compilerDiagnosticSummary(diag),
     );
     try std.testing.expect(diag.noteSlice().len >= 4);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the statement does not match the rule's conclusion",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "rule variable a would need two different values",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "already matched: p",
-        diag.noteSlice()[2].message,
+        diag.noteSlice()[2],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "at the mismatch: q",
-        diag.noteSlice()[3].message,
+        diag.noteSlice()[3],
     );
 }
 
@@ -3857,13 +3893,13 @@ test "inference failure names the mismatching cited premise" {
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
     try std.testing.expectEqual(error.TermMismatch, diag.err);
     try std.testing.expect(diag.noteSlice().len >= 2);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "cited premise 1 does not match hypothesis 1 of the rule",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the rule requires 'an' at the mismatch, but found: p -> p",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
 }
 
@@ -3937,13 +3973,13 @@ test "structural solver failure locates the conclusion clash" {
         else => return error.ExpectedInferenceFailureDetail,
     }
     try std.testing.expect(diag.noteSlice().len >= 2);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the statement does not match the rule's conclusion",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "no way of filling in the rule's variables makes them match",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
 }
 
@@ -3977,17 +4013,17 @@ test "structural solver failure names the mismatching cited premise" {
         else => return error.ExpectedInferenceFailureDetail,
     }
     try std.testing.expect(diag.noteSlice().len >= 3);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "cited premise 1 does not match hypothesis 1 of the rule",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "no way of filling in the rule's variables makes them match",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "the cited premise proves: x <-> x",
-        diag.noteSlice()[2].message,
+        diag.noteSlice()[2],
     );
 }
 
@@ -4186,14 +4222,14 @@ test "compiler rejects def bodies that leave hidden binders free" {
         else => return error.ExpectedDefinitionBodyDetail,
     }
     try std.testing.expectEqual(@as(usize, 2), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "definition bodies are checked before the def unify stream runs",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "every free variable of the body must be declared as a " ++
             "dependency of the result type",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
 }
 
@@ -4444,22 +4480,21 @@ test "compiler reports freshen attempt notes on failure" {
         diag.phase.?,
     );
     try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "attempted @freshen for target binder g",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "freshen blocker binder: x",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        diag.noteSlice()[2].message,
+    try expectNoteStartsWith(
         "chosen replacement binder:",
-    ));
-    try std.testing.expectEqualStrings(
+        diag.noteSlice()[2],
+    );
+    try expectNoteText(
         "rewritten target still depends on blocker binder x",
-        diag.noteSlice()[3].message,
+        diag.noteSlice()[3],
     );
 }
 
@@ -4779,23 +4814,21 @@ test "compiler reports structural ambiguity without ACUI-only wording" {
         else => return error.ExpectedInferenceFailureDetail,
     }
     try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "inference path: structural matching",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        diag.noteSlice()[1].message,
+    try expectNoteStartsWith(
         "chosen bindings: ",
-    ));
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        diag.noteSlice()[2].message,
+        diag.noteSlice()[1],
+    );
+    try expectNoteStartsWith(
         "alternative bindings: ",
-    ));
-    try std.testing.expectEqualStrings(
+        diag.noteSlice()[2],
+    );
+    try expectNoteText(
         "distinct solutions considered: 3",
-        diag.noteSlice()[3].message,
+        diag.noteSlice()[3],
     );
 }
 
@@ -5561,25 +5594,25 @@ test "compiler reports normalized comparison snapshots on mismatch" {
         diag.phase.?,
     );
     try std.testing.expectEqual(@as(usize, 5), diag.noteSlice().len);
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "expected: sb Q (P -> P)",
-        diag.noteSlice()[0].message,
+        diag.noteSlice()[0],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "actual: R -> R",
-        diag.noteSlice()[1].message,
+        diag.noteSlice()[1],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "attempted normalized comparison",
-        diag.noteSlice()[2].message,
+        diag.noteSlice()[2],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "normalized expected: Q -> Q",
-        diag.noteSlice()[3].message,
+        diag.noteSlice()[3],
     );
-    try std.testing.expectEqualStrings(
+    try expectNoteText(
         "normalized actual: R -> R",
-        diag.noteSlice()[4].message,
+        diag.noteSlice()[4],
     );
 }
 

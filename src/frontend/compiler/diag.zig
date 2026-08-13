@@ -160,14 +160,163 @@ pub const DiagnosticPhase = enum {
 pub const max_diagnostic_notes = 8;
 pub const max_diagnostic_related = 4;
 
+/// Structured content of a diagnostic note. Like `DiagnosticDetail`, notes
+/// store data rather than prose: every message template lives in
+/// `renderNoteMessage`, so a note cannot carry free-form English past the
+/// catalogue, and adding a variant without a template is a compile error.
+/// String payloads follow the same lifetime contract as note messages
+/// always have: alive through setProof/setDiagnostic, where the sink
+/// stable-copies them.
+pub const NoteMessage = union(enum) {
+    missing_semicolon_hint,
+    unknown_math_token_hint,
+    trailing_math_token_hint,
+    search_placeholder_meaning,
+    search_placeholder_unfinished,
+    rule_declared_later,
+    name_is_term_not_rule,
+    name_is_label_not_rule,
+    label_belongs_to_later_line,
+    def_body_result_sort,
+    def_body_checked_before_unify,
+    def_body_free_var_deps,
+    subexpression_sort_mismatch,
+    subexpression_needs_bound_var,
+    right_sort_but_needs_bound_var,
+    holey_fallback_exhausted,
+    visible_structure_mismatch,
+    unnamed_rule_var_two_values,
+    attempted_normalized_comparison,
+    boundary_mismatch_despite_unfolding,
+    boundary_mismatch_despite_normalization,
+    conclusion_replay_mismatch,
+    identical_positions_matched_differently,
+    no_rule_var_completion,
+    rule_requires_bound_var_here,
+    assignment_parses_as_sort: struct {
+        actual_sort: []const u8,
+        expected_sort: []const u8,
+    },
+    statement_not_provable_sort: struct {
+        actual_sort: []const u8,
+    },
+    /// 1-based display number; the premise and hypothesis positions are
+    /// always the same number.
+    premise_hypothesis_mismatch: struct {
+        number: usize,
+    },
+    cited_premise_proves: struct {
+        text: []const u8,
+    },
+    holey_unsolved_binder: struct {
+        binder_name: []const u8,
+    },
+    /// 1-based display number.
+    unsolved_binder_index: struct {
+        number: usize,
+    },
+    conclusion_head_clash: struct {
+        expected_term: []const u8,
+        actual_term: []const u8,
+    },
+    conclusion_head_clash_with_variable: struct {
+        expected_term: []const u8,
+    },
+    rule_var_two_values: struct {
+        binder_name: []const u8,
+    },
+    already_matched: struct {
+        text: []const u8,
+    },
+    in_the_statement: struct {
+        text: []const u8,
+    },
+    at_the_mismatch: struct {
+        text: []const u8,
+    },
+    hole_sort_mismatch: struct {
+        token: []const u8,
+        expected_sort: []const u8,
+        actual_sort: []const u8,
+    },
+    expected_expr: struct {
+        text: []const u8,
+    },
+    actual_expr: struct {
+        text: []const u8,
+    },
+    normalized_expected_expr: struct {
+        text: []const u8,
+    },
+    normalized_actual_expr: struct {
+        text: []const u8,
+    },
+    freshen_attempted_for_target: struct {
+        binder_name: []const u8,
+    },
+    freshen_blocker: struct {
+        binder_name: []const u8,
+    },
+    freshen_replacement: struct {
+        binder_name: []const u8,
+    },
+    freshen_still_depends_on_blocker: struct {
+        binder_name: []const u8,
+    },
+    freshen_no_longer_depends_on_blocker: struct {
+        binder_name: []const u8,
+    },
+    theorem_concludes: struct {
+        text: []const u8,
+    },
+    last_line_proves: struct {
+        text: []const u8,
+    },
+    explicit_bindings: struct {
+        summary: []const u8,
+    },
+    inferred_bindings_before_failure: struct {
+        summary: []const u8,
+    },
+    rule_requires_term_at_mismatch: struct {
+        term_name: []const u8,
+        found_text: []const u8,
+    },
+    chosen_bindings: struct {
+        summary: []const u8,
+    },
+    alternative_bindings: struct {
+        summary: []const u8,
+    },
+    distinct_solutions_considered: struct {
+        count: usize,
+    },
+    binder_resolved_to: struct {
+        text: []const u8,
+    },
+    binding_sort_mismatch: struct {
+        actual_sort: []const u8,
+        expected_sort: []const u8,
+    },
+    inference_path: struct {
+        path: InferencePath,
+    },
+};
+
+/// Label of a related-location entry, catalogued for the same reason as
+/// `NoteMessage`.
+pub const RelatedLabel = enum {
+    rule_declaration_here,
+};
+
 pub const DiagnosticNote = struct {
-    message: []const u8,
+    message: NoteMessage,
     source: DiagnosticSource,
     span: ?Span = null,
 };
 
 pub const DiagnosticRelated = struct {
-    label: []const u8,
+    label: RelatedLabel,
     source: DiagnosticSource,
     span: Span,
 };
@@ -449,7 +598,7 @@ pub fn withPhase(diag: Diagnostic, phase: DiagnosticPhase) Diagnostic {
 
 pub fn addNote(
     diag: *Diagnostic,
-    message: []const u8,
+    message: NoteMessage,
     source: DiagnosticSource,
     span: ?Span,
 ) void {
@@ -464,7 +613,7 @@ pub fn addNote(
 
 pub fn addRelated(
     diag: *Diagnostic,
-    label: []const u8,
+    label: RelatedLabel,
     source: DiagnosticSource,
     span: Span,
 ) void {
@@ -521,13 +670,7 @@ pub fn mm0ParserDiagnostic(
         if (parser.expectedChar()) |ch| {
             diag.detail = .{ .expected_char = .{ .ch = ch } };
             if (ch == ';') {
-                addNote(
-                    &diag,
-                    "usually a missing ';' at the end of the " ++
-                        "declaration before this point",
-                    .mm0,
-                    null,
-                );
+                addNote(&diag, .missing_semicolon_hint, .mm0, null);
             }
         }
     }
@@ -851,21 +994,14 @@ fn proofMathErrorDiagnostic(
     switch (math_err) {
         .unknown_token => |token| {
             result.span = proofMathTokenSpan(math_span, token.span);
-            addNote(
-                &result,
-                "the token is not a variable of this theorem, " ++
-                    "nor a term or notation of the theory",
-                result.source,
-                null,
-            );
+            addNote(&result, .unknown_math_token_hint, result.source, null);
         },
         .unexpected_token => |token| {
             result.span = proofMathTokenSpan(math_span, token.span);
             if (diag.err == error.TrailingMathTokens) {
                 addNote(
                     &result,
-                    "the expression to the left parses on its own; " ++
-                        "this token is not a notation that can extend it",
+                    .trailing_math_token_hint,
                     result.source,
                     null,
                 );
@@ -1568,6 +1704,253 @@ fn depViolationArgLabel(
 /// the frontends differ only in that framing (the CLI passes "\n  " and
 /// appends a final newline, LSP and wasm pass "\n").
 ///
+/// The note-message catalogue: one template per `NoteMessage` variant,
+/// switched exhaustively so a variant without a template is a compile
+/// error. Shared by the CLI sink, the LSP message builder, and the wasm
+/// JSON notes array.
+pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
+    switch (message) {
+        .missing_semicolon_hint => try writer.writeAll(
+            "usually a missing ';' at the end of the declaration " ++
+                "before this point",
+        ),
+        .unknown_math_token_hint => try writer.writeAll(
+            "the token is not a variable of this theorem, nor a term " ++
+                "or notation of the theory",
+        ),
+        .trailing_math_token_hint => try writer.writeAll(
+            "the expression to the left parses on its own; this token " ++
+                "is not a notation that can extend it",
+        ),
+        .search_placeholder_meaning => try writer.writeAll(
+            "search placeholders (auto?, exact?, apply?, conversion?) " ++
+                "stand for a search that runs in the editor and is " ++
+                "replaced by the proof it finds",
+        ),
+        .search_placeholder_unfinished => try writer.writeAll(
+            "the compiler only checks finished proofs; this search " ++
+                "has not produced one yet",
+        ),
+        .rule_declared_later => try writer.writeAll(
+            "rule is declared later in the mm0 file",
+        ),
+        .name_is_term_not_rule => try writer.writeAll(
+            "this name is a term or definition; it can appear inside " ++
+                "formulas but cannot justify a proof line",
+        ),
+        .name_is_label_not_rule => try writer.writeAll(
+            "this name is a proof line label, not a rule; earlier lines " ++
+                "are cited as premises in the brackets after a rule",
+        ),
+        .label_belongs_to_later_line => try writer.writeAll(
+            "this label belongs to a later line; a line can only cite " ++
+                "the lines above it",
+        ),
+        .def_body_result_sort => try writer.writeAll(
+            "the definition body must already have the declared " ++
+                "result sort",
+        ),
+        .def_body_checked_before_unify => try writer.writeAll(
+            "definition bodies are checked before the def unify " ++
+                "stream runs",
+        ),
+        .def_body_free_var_deps => try writer.writeAll(
+            "every free variable of the body must be declared as a " ++
+                "dependency of the result type",
+        ),
+        .subexpression_sort_mismatch => try writer.writeAll(
+            "a subexpression here is used where a different sort " ++
+                "is expected",
+        ),
+        .subexpression_needs_bound_var => try writer.writeAll(
+            "a position inside this expression requires a single " ++
+                "bound variable",
+        ),
+        .right_sort_but_needs_bound_var => try writer.writeAll(
+            "the assignment parses with the right sort, but this " ++
+                "binder requires a single bound variable",
+        ),
+        .holey_fallback_exhausted => try writer.writeAll(
+            "fallback chain exhausted for holey assertion; showing " ++
+                "first candidate failure",
+        ),
+        .visible_structure_mismatch => try writer.writeAll(
+            "the visible parts of the statement do not match the " ++
+                "rule's conclusion",
+        ),
+        .unnamed_rule_var_two_values => try writer.writeAll(
+            "one rule variable would need two different values",
+        ),
+        .attempted_normalized_comparison => try writer.writeAll(
+            "attempted normalized comparison",
+        ),
+        .boundary_mismatch_despite_unfolding => try writer.writeAll(
+            "the two do not match, even with definitions unfolded",
+        ),
+        .boundary_mismatch_despite_normalization => try writer.writeAll(
+            "nor after normalization",
+        ),
+        .conclusion_replay_mismatch => try writer.writeAll(
+            "the statement does not match the rule's conclusion",
+        ),
+        .identical_positions_matched_differently => try writer.writeAll(
+            "two positions the rule requires to be identical matched " ++
+                "different expressions",
+        ),
+        .no_rule_var_completion => try writer.writeAll(
+            "no way of filling in the rule's variables makes them match",
+        ),
+        .rule_requires_bound_var_here => try writer.writeAll(
+            "the rule requires a single bound variable here",
+        ),
+        .assignment_parses_as_sort => |info| try writer.print(
+            "the assignment parses, but as sort '{s}'; this binder " ++
+                "expects sort '{s}'",
+            .{ info.actual_sort, info.expected_sort },
+        ),
+        .statement_not_provable_sort => |info| try writer.print(
+            "the statement parses, but as sort '{s}', which is not a " ++
+                "provable sort",
+            .{info.actual_sort},
+        ),
+        .premise_hypothesis_mismatch => |info| try writer.print(
+            "cited premise {0d} does not match hypothesis {0d} of the rule",
+            .{info.number},
+        ),
+        .cited_premise_proves => |info| try writer.print(
+            "the cited premise proves: {s}",
+            .{info.text},
+        ),
+        .holey_unsolved_binder => |info| try writer.print(
+            "holey assertion left binder {s} unsolved",
+            .{info.binder_name},
+        ),
+        .unsolved_binder_index => |info| try writer.print(
+            "unsolved binder index: {d}",
+            .{info.number},
+        ),
+        .conclusion_head_clash => |info| try writer.print(
+            "the rule's conclusion has '{s}' where the statement " ++
+                "has '{s}'",
+            .{ info.expected_term, info.actual_term },
+        ),
+        .conclusion_head_clash_with_variable => |info| try writer.print(
+            "the rule's conclusion has '{s}' where the statement " ++
+                "has a variable",
+            .{info.expected_term},
+        ),
+        .rule_var_two_values => |info| try writer.print(
+            "rule variable {s} would need two different values",
+            .{info.binder_name},
+        ),
+        .already_matched => |info| try writer.print(
+            "already matched: {s}",
+            .{info.text},
+        ),
+        .in_the_statement => |info| try writer.print(
+            "in the statement: {s}",
+            .{info.text},
+        ),
+        .at_the_mismatch => |info| try writer.print(
+            "at the mismatch: {s}",
+            .{info.text},
+        ),
+        .hole_sort_mismatch => |info| try writer.print(
+            "hole {s} expected sort {s} but matched {s}",
+            .{ info.token, info.expected_sort, info.actual_sort },
+        ),
+        .expected_expr => |info| try writer.print(
+            "expected: {s}",
+            .{info.text},
+        ),
+        .actual_expr => |info| try writer.print(
+            "actual: {s}",
+            .{info.text},
+        ),
+        .normalized_expected_expr => |info| try writer.print(
+            "normalized expected: {s}",
+            .{info.text},
+        ),
+        .normalized_actual_expr => |info| try writer.print(
+            "normalized actual: {s}",
+            .{info.text},
+        ),
+        .freshen_attempted_for_target => |info| try writer.print(
+            "attempted @freshen for target binder {s}",
+            .{info.binder_name},
+        ),
+        .freshen_blocker => |info| try writer.print(
+            "freshen blocker binder: {s}",
+            .{info.binder_name},
+        ),
+        .freshen_replacement => |info| try writer.print(
+            "chosen replacement binder: {s}",
+            .{info.binder_name},
+        ),
+        .freshen_still_depends_on_blocker => |info| try writer.print(
+            "rewritten target still depends on blocker binder {s}",
+            .{info.binder_name},
+        ),
+        .freshen_no_longer_depends_on_blocker => |info| try writer.print(
+            "rewritten target no longer depends on blocker binder {s}",
+            .{info.binder_name},
+        ),
+        .theorem_concludes => |info| try writer.print(
+            "the theorem concludes: {s}",
+            .{info.text},
+        ),
+        .last_line_proves => |info| try writer.print(
+            "the last line proves: {s}",
+            .{info.text},
+        ),
+        .explicit_bindings => |info| try writer.print(
+            "explicit bindings: {s}",
+            .{info.summary},
+        ),
+        .inferred_bindings_before_failure => |info| try writer.print(
+            "inferred bindings before failure: {s}",
+            .{info.summary},
+        ),
+        .rule_requires_term_at_mismatch => |info| try writer.print(
+            "the rule requires '{s}' at the mismatch, but found: {s}",
+            .{ info.term_name, info.found_text },
+        ),
+        .chosen_bindings => |info| try writer.print(
+            "chosen bindings: {s}",
+            .{info.summary},
+        ),
+        .alternative_bindings => |info| try writer.print(
+            "alternative bindings: {s}",
+            .{info.summary},
+        ),
+        .distinct_solutions_considered => |info| try writer.print(
+            "distinct solutions considered: {d}",
+            .{info.count},
+        ),
+        .binder_resolved_to => |info| try writer.print(
+            "this binder was resolved to: {s}",
+            .{info.text},
+        ),
+        .binding_sort_mismatch => |info| try writer.print(
+            "it has sort '{s}', but the rule expects sort '{s}' here",
+            .{ info.actual_sort, info.expected_sort },
+        ),
+        .inference_path => |info| try writer.print(
+            "inference path: {s}",
+            .{inferencePathName(info.path)},
+        ),
+    }
+}
+
+/// The related-label catalogue, exhaustive like `renderNoteMessage`.
+pub fn renderRelatedLabel(writer: anytype, label: RelatedLabel) !void {
+    switch (label) {
+        .rule_declaration_here => try writer.writeAll(
+            "rule declaration is here",
+        ),
+    }
+}
+
 /// Notes and related spans are not rendered here: the CLI interleaves
 /// them with source locations, LSP appends them as text, and the wasm
 /// JSON carries them structurally.

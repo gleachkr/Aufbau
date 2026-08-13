@@ -610,13 +610,7 @@ pub fn inferBindings(
             return err;
         };
 
-        try maybeAddStructuralAmbiguityWarning(
-            self,
-            allocator,
-            assertion,
-            line,
-            &solver,
-        );
+        maybeAddStructuralAmbiguityWarning(self, assertion, line, &solver);
         return bindings;
     }
 

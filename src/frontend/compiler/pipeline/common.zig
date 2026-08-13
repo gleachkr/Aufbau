@@ -125,12 +125,7 @@ pub fn validateDefinitionBody(
                 .hidden_binder_count = term_stmt.dummy_args.len,
             } },
         };
-        CompilerDiag.addNote(
-            &diag,
-            "the definition body must already have the declared result sort",
-            .mm0,
-            null,
-        );
+        CompilerDiag.addNote(&diag, .def_body_result_sort, .mm0, null);
         self.setDiagnostic(diag);
         return error.SortMismatch;
     }
@@ -161,19 +156,8 @@ pub fn validateDefinitionBody(
                 .hidden_binder_count = term_stmt.dummy_args.len,
             } },
         };
-        CompilerDiag.addNote(
-            &diag,
-            "definition bodies are checked before the def unify stream runs",
-            .mm0,
-            null,
-        );
-        CompilerDiag.addNote(
-            &diag,
-            "every free variable of the body must be declared as a " ++
-                "dependency of the result type",
-            .mm0,
-            null,
-        );
+        CompilerDiag.addNote(&diag, .def_body_checked_before_unify, .mm0, null);
+        CompilerDiag.addNote(&diag, .def_body_free_var_deps, .mm0, null);
         self.setDiagnostic(diag);
         return error.DepViolation;
     }

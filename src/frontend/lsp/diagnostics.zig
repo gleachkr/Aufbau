@@ -343,7 +343,7 @@ pub fn compilerDiagnosticRelatedInformation(
                     encoding,
                 ),
             },
-            .message = note.message,
+            .message = try noteMessageText(arena, note.message),
         };
         idx += 1;
     }
@@ -358,11 +358,31 @@ pub fn compilerDiagnosticRelatedInformation(
                     encoding,
                 ),
             },
-            .message = related.label,
+            .message = try relatedLabelText(arena, related.label),
         };
         idx += 1;
     }
     return result;
+}
+
+fn noteMessageText(
+    arena: std.mem.Allocator,
+    message: mm0.CompilerNoteMessage,
+) ![]const u8 {
+    var buf = std.ArrayListUnmanaged(u8){};
+    var writer = buf.writer(arena);
+    try mm0.renderCompilerNoteMessage(&writer, message);
+    return buf.items;
+}
+
+fn relatedLabelText(
+    arena: std.mem.Allocator,
+    label: mm0.CompilerRelatedLabel,
+) ![]const u8 {
+    var buf = std.ArrayListUnmanaged(u8){};
+    var writer = buf.writer(arena);
+    try mm0.renderCompilerRelatedLabel(&writer, label);
+    return buf.items;
 }
 
 pub fn compilerDiagnosticMessage(
@@ -374,10 +394,12 @@ pub fn compilerDiagnosticMessage(
 
     try mm0.renderCompilerDiagnostic(&writer, diag, "\n");
     for (diag.noteSlice()) |note| {
-        try writer.print("\nnote: {s}", .{note.message});
+        try writer.writeAll("\nnote: ");
+        try mm0.renderCompilerNoteMessage(&writer, note.message);
     }
     for (diag.relatedSlice()) |related| {
-        try writer.print("\nrelated: {s}", .{related.label});
+        try writer.writeAll("\nrelated: ");
+        try mm0.renderCompilerRelatedLabel(&writer, related.label);
     }
 
     return buf.items;

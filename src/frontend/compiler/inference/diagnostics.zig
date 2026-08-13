@@ -178,14 +178,12 @@ fn addInferenceNotesNamed(
         .explicit,
         names_ptr,
     );
-    defer allocator.free(explicit_summary);
-    if (!std.mem.eql(u8, explicit_summary, "none")) {
-        try addFormattedInferenceNote(
-            allocator,
-            diag,
-            "explicit bindings: {s}",
-            .{explicit_summary},
-        );
+    if (std.mem.eql(u8, explicit_summary, "none")) {
+        allocator.free(explicit_summary);
+    } else {
+        addInferenceNote(diag, .{ .explicit_bindings = .{
+            .summary = explicit_summary,
+        } });
     }
 
     const inferred_summary = try buildBindingSummary(
@@ -198,14 +196,12 @@ fn addInferenceNotesNamed(
         .inferred,
         names_ptr,
     );
-    defer allocator.free(inferred_summary);
-    if (!std.mem.eql(u8, inferred_summary, "none")) {
-        try addFormattedInferenceNote(
-            allocator,
-            diag,
-            "inferred bindings before failure: {s}",
-            .{inferred_summary},
-        );
+    if (std.mem.eql(u8, inferred_summary, "none")) {
+        allocator.free(inferred_summary);
+    } else {
+        addInferenceNote(diag, .{ .inferred_bindings_before_failure = .{
+            .summary = inferred_summary,
+        } });
     }
 }
 
@@ -224,15 +220,10 @@ fn addReplayMismatchNotes(
     names_ptr: ?*const ViewTrace.DiagNames,
 ) !void {
     switch (mismatch.region) {
-        .conclusion => addStaticInferenceNote(
+        .conclusion => addInferenceNote(diag, .conclusion_replay_mismatch),
+        .hypothesis => |idx| addInferenceNote(
             diag,
-            "the statement does not match the rule's conclusion",
-        ),
-        .hypothesis => |idx| try addFormattedInferenceNote(
-            allocator,
-            diag,
-            "cited premise {d} does not match hypothesis {d} of the rule",
-            .{ idx + 1, idx + 1 },
+            .{ .premise_hypothesis_mismatch = .{ .number = idx + 1 } },
         ),
     }
     switch (mismatch.kind) {
@@ -248,13 +239,10 @@ fn addReplayMismatchNotes(
                 names_ptr,
                 shape.actual,
             );
-            defer allocator.free(actual_text);
-            try addFormattedInferenceNote(
-                allocator,
-                diag,
-                "the rule requires '{s}' at the mismatch, but found: {s}",
-                .{ term_name, truncateMismatchText(actual_text) },
-            );
+            addInferenceNote(diag, .{ .rule_requires_term_at_mismatch = .{
+                .term_name = term_name,
+                .found_text = truncateMismatchText(actual_text),
+            } });
         },
         .repeat_conflict => |conflict| {
             const first_text = try formatMismatchExpr(
@@ -264,7 +252,6 @@ fn addReplayMismatchNotes(
                 names_ptr,
                 conflict.first,
             );
-            defer allocator.free(first_text);
             const second_text = try formatMismatchExpr(
                 allocator,
                 theorem,
@@ -272,44 +259,30 @@ fn addReplayMismatchNotes(
                 names_ptr,
                 conflict.second,
             );
-            defer allocator.free(second_text);
             const binder_name: ?[]const u8 =
                 if (conflict.heap_id < rule.arg_names.len)
                     rule.arg_names[conflict.heap_id]
                 else
                     null;
             if (binder_name) |name| {
-                try addFormattedInferenceNote(
-                    allocator,
-                    diag,
-                    "rule variable {s} would need two different values",
-                    .{name},
-                );
+                addInferenceNote(diag, .{ .rule_var_two_values = .{
+                    .binder_name = name,
+                } });
             } else {
-                addStaticInferenceNote(
+                addInferenceNote(
                     diag,
-                    "two positions the rule requires to be identical " ++
-                        "matched different expressions",
+                    .identical_positions_matched_differently,
                 );
             }
-            try addFormattedInferenceNote(
-                allocator,
-                diag,
-                "already matched: {s}",
-                .{truncateMismatchText(first_text)},
-            );
-            try addFormattedInferenceNote(
-                allocator,
-                diag,
-                "at the mismatch: {s}",
-                .{truncateMismatchText(second_text)},
-            );
+            addInferenceNote(diag, .{ .already_matched = .{
+                .text = truncateMismatchText(first_text),
+            } });
+            addInferenceNote(diag, .{ .at_the_mismatch = .{
+                .text = truncateMismatchText(second_text),
+            } });
         },
         .no_completion => |info| {
-            addStaticInferenceNote(
-                diag,
-                "no way of filling in the rule's variables makes them match",
-            );
+            addInferenceNote(diag, .no_rule_var_completion);
             if (mismatch.region == .hypothesis) {
                 if (info.actual) |actual| {
                     const actual_text = try formatMismatchExpr(
@@ -319,13 +292,9 @@ fn addReplayMismatchNotes(
                         names_ptr,
                         actual,
                     );
-                    defer allocator.free(actual_text);
-                    try addFormattedInferenceNote(
-                        allocator,
-                        diag,
-                        "the cited premise proves: {s}",
-                        .{truncateMismatchText(actual_text)},
-                    );
+                    addInferenceNote(diag, .{ .cited_premise_proves = .{
+                        .text = truncateMismatchText(actual_text),
+                    } });
                 }
             }
         },
@@ -355,46 +324,29 @@ fn truncateMismatchText(text: []const u8) []const u8 {
     return text_util.truncateUtf8(text, 64);
 }
 
-fn addStaticInferenceNote(diag: *Diagnostic, message: []const u8) void {
-    CompilerDiag.addNote(diag, message, .proof, null);
-}
-
 pub fn addAmbiguityWarningNotes(
-    allocator: std.mem.Allocator,
     diag: *Diagnostic,
     report: @import("../../inference_solver.zig").AmbiguityReport,
-) !void {
+) void {
     if (report.chosen_bindings) |summary| {
-        try addFormattedInferenceNote(
-            allocator,
-            diag,
-            "chosen bindings: {s}",
-            .{summary},
-        );
+        addInferenceNote(diag, .{ .chosen_bindings = .{
+            .summary = summary,
+        } });
     }
     if (report.alternative_bindings) |summary| {
-        try addFormattedInferenceNote(
-            allocator,
-            diag,
-            "alternative bindings: {s}",
-            .{summary},
-        );
+        addInferenceNote(diag, .{ .alternative_bindings = .{
+            .summary = summary,
+        } });
     }
-    try addFormattedInferenceNote(
-        allocator,
-        diag,
-        "distinct solutions considered: {d}",
-        .{report.distinct_solution_count},
-    );
+    addInferenceNote(diag, .{ .distinct_solutions_considered = .{
+        .count = report.distinct_solution_count,
+    } });
 }
 
-pub fn addFormattedInferenceNote(
-    allocator: std.mem.Allocator,
+pub fn addInferenceNote(
     diag: *Diagnostic,
-    comptime fmt: []const u8,
-    args: anytype,
-) !void {
-    const message = try std.fmt.allocPrint(allocator, fmt, args);
+    message: CompilerDiag.NoteMessage,
+) void {
     CompilerDiag.addNote(diag, message, .proof, null);
 }
 

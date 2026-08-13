@@ -44,8 +44,7 @@ const buildMissingBinderDiagnostic =
 const buildInferenceFailureDiagnostic =
     InferenceDiagnostics.buildInferenceFailureDiagnostic;
 const addAmbiguityWarningNotes = InferenceDiagnostics.addAmbiguityWarningNotes;
-const addFormattedInferenceNote =
-    InferenceDiagnostics.addFormattedInferenceNote;
+const addInferenceNote = InferenceDiagnostics.addInferenceNote;
 const traceInferenceFailure = InferenceDiagnostics.traceInferenceFailure;
 
 const InferenceConclusion = union(enum) {
@@ -1100,23 +1099,16 @@ fn tryInferHoleyStructuralSolver(
         };
     };
 
-    try maybeAddStructuralAmbiguityWarning(
-        self,
-        allocator,
-        assertion,
-        line,
-        &solver,
-    );
+    maybeAddStructuralAmbiguityWarning(self, assertion, line, &solver);
     return bindings;
 }
 
 pub fn maybeAddStructuralAmbiguityWarning(
     self: *CompilerContext,
-    allocator: std.mem.Allocator,
     assertion: AssertionStmt,
     line: anytype,
     solver: *InferenceSolver,
-) !void {
+) void {
     if (!solver.hadAmbiguityWarning()) return;
     var diag = CompilerDiag.withPhase(.{
         .severity = .warning,
@@ -1132,14 +1124,11 @@ pub fn maybeAddStructuralAmbiguityWarning(
             .first_unsolved_binder_name = null,
         } },
     }, .inference);
-    try addFormattedInferenceNote(
-        allocator,
-        &diag,
-        "inference path: {s}",
-        .{CompilerDiag.inferencePathName(.structural_solver)},
-    );
+    addInferenceNote(&diag, .{ .inference_path = .{
+        .path = .structural_solver,
+    } });
     if (solver.getAmbiguityReport()) |report| {
-        try addAmbiguityWarningNotes(allocator, &diag, report);
+        addAmbiguityWarningNotes(&diag, report);
     }
     self.addWarning(diag);
 }
@@ -1235,13 +1224,7 @@ pub fn tryConcreteStructuralSolver(
         );
         return err;
     };
-    try maybeAddStructuralAmbiguityWarning(
-        self,
-        allocator,
-        assertion,
-        line,
-        &solver,
-    );
+    maybeAddStructuralAmbiguityWarning(self, assertion, line, &solver);
     return bindings;
 }
 

@@ -18,14 +18,13 @@ const TheoremBoundary = @import("../theorem_boundary.zig");
 const ViewTrace = @import("../../view_trace.zig");
 const text_util = @import("../../text_util.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
+const NoteMessage = CompilerDiag.NoteMessage;
 const HiddenWitnessFreshContext =
     @import("../inference/context.zig").HiddenWitnessFreshContext;
 const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 
 const SurfaceExpr = @import("../../surface_expr.zig");
 const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
-
-pub const sort_retry_note_buf_len = 192;
 
 /// A math string that failed sort-directed coercion (rather than parsing)
 /// gets a note naming the sort it actually has: re-parse it with no target
@@ -34,11 +33,10 @@ pub const sort_retry_note_buf_len = 192;
 /// the wrong sort) and the note says so instead — the trusted parser records
 /// no position for argument coercions, so no tighter span is available.
 /// `expected` carries the binder's ArgInfo, or null when the target is the
-/// provable-sort slot (line assertions). `buf` must stay alive through
-/// setProof; the sink stable-copies note strings at set time.
+/// provable-sort slot (line assertions). Sort names are parser/env-owned,
+/// so the note payload outlives setProof without a caller buffer.
 pub fn attachSortRetryNote(
     diag: *Diagnostic,
-    buf: []u8,
     parser: *MM0Parser,
     theorem_vars: *const std.StringHashMap(*const Expr),
     expected: ?ArgInfo,
@@ -53,42 +51,34 @@ pub fn attachSortRetryNote(
     }
     const expr = parser.parseMathText(math_text, theorem_vars) catch {
         switch (diag.err) {
-            error.SortMismatch => addStaticProofNote(
+            error.SortMismatch => addProofNote(
                 diag,
-                "a subexpression here is used where a different " ++
-                    "sort is expected",
+                .subexpression_sort_mismatch,
             ),
-            error.BoundnessMismatch => addStaticProofNote(
+            error.BoundnessMismatch => addProofNote(
                 diag,
-                "a position inside this expression requires a " ++
-                    "single bound variable",
+                .subexpression_needs_bound_var,
             ),
             else => {},
         }
         return;
     };
     const actual = SurfaceExpr.parserSortName(parser, expr.sort());
-    const message: []const u8 = switch (diag.err) {
+    const message: NoteMessage = switch (diag.err) {
         error.SortMismatch => blk: {
             const arg = expected orelse return;
-            break :blk std.fmt.bufPrint(
-                buf,
-                "the assignment parses, but as sort '{s}'; this " ++
-                    "binder expects sort '{s}'",
-                .{ actual, arg.sort_name },
-            ) catch return;
+            break :blk .{ .assignment_parses_as_sort = .{
+                .actual_sort = actual,
+                .expected_sort = arg.sort_name,
+            } };
         },
-        error.NotProvable => std.fmt.bufPrint(
-            buf,
-            "the statement parses, but as sort '{s}', which is " ++
-                "not a provable sort",
-            .{actual},
-        ) catch return,
-        error.BoundnessMismatch => "the assignment parses with the " ++
-            "right sort, but this binder requires a single bound variable",
+        error.NotProvable => .{ .statement_not_provable_sort = .{
+            .actual_sort = actual,
+        } },
+        error.BoundnessMismatch => .right_sort_but_needs_bound_var,
         else => unreachable,
     };
-    addStaticProofNote(diag, message);
+    addProofNote(diag, message);
 }
 
 pub fn addFallbackFailureNote(
@@ -99,10 +89,9 @@ pub fn addFallbackFailureNote(
     switch (line_assertion) {
         .concrete, .implicit_whole_conclusion => {},
         .holey => |holey| {
-            addStaticProofNoteSpan(
+            addProofNoteSpan(
                 diag,
-                "fallback chain exhausted for holey assertion; " ++
-                    "showing first candidate failure",
+                .holey_fallback_exhausted,
                 firstHoleProofSpan(line, holey),
             );
         },
@@ -230,12 +219,9 @@ fn addHoleyInferenceNotes(
 
     switch (failure) {
         .hypothesis_mismatch => |info| {
-            try addFormattedProofNote(
-                allocator,
-                diag,
-                "cited premise {d} does not match hypothesis {d} of the rule",
-                .{ info.index + 1, info.index + 1 },
-            );
+            addProofNote(diag, .{ .premise_hypothesis_mismatch = .{
+                .number = info.index + 1,
+            } });
             const ref_text = try formatNoteExpr(
                 allocator,
                 theorem,
@@ -243,21 +229,12 @@ fn addHoleyInferenceNotes(
                 names_ptr,
                 info.ref_expr,
             );
-            defer allocator.free(ref_text);
-            try addFormattedProofNote(
-                allocator,
-                diag,
-                "the cited premise proves: {s}",
-                .{truncateSnapshot(ref_text)},
-            );
+            addProofNote(diag, .{ .cited_premise_proves = .{
+                .text = truncateSnapshot(ref_text),
+            } });
         },
         .visible_structure_mismatch => |detail| {
-            addStaticProofNoteSpan(
-                diag,
-                "the visible parts of the statement do not match " ++
-                    "the rule's conclusion",
-                hole_span,
-            );
+            addProofNoteSpan(diag, .visible_structure_mismatch, hole_span);
             try addVisibleMismatchNotes(
                 allocator,
                 diag,
@@ -270,20 +247,13 @@ fn addHoleyInferenceNotes(
         },
         .missing_binder => |info| {
             const name = info.name orelse "_";
-            try addFormattedProofNoteSpan(
-                allocator,
-                diag,
-                "holey assertion left binder {s} unsolved",
-                .{name},
-                hole_span,
-            );
+            addProofNoteSpan(diag, .{ .holey_unsolved_binder = .{
+                .binder_name = name,
+            } }, hole_span);
             if (info.index < rule.arg_names.len and rule.arg_names[info.index] == null) {
-                try addFormattedProofNote(
-                    allocator,
-                    diag,
-                    "unsolved binder index: {d}",
-                    .{info.index + 1},
-                );
+                addProofNote(diag, .{ .unsolved_binder_index = .{
+                    .number = info.index + 1,
+                } });
             }
         },
     }
@@ -303,21 +273,16 @@ fn addVisibleMismatchNotes(
         .head_clash => |clash| {
             const expected_name = termNameById(env, clash.expected_term_id);
             if (clash.actual_term_id) |actual_id| {
-                try addFormattedProofNote(
-                    allocator,
-                    diag,
-                    "the rule's conclusion has '{s}' where the statement " ++
-                        "has '{s}'",
-                    .{ expected_name, termNameById(env, actual_id) },
-                );
+                addProofNote(diag, .{ .conclusion_head_clash = .{
+                    .expected_term = expected_name,
+                    .actual_term = termNameById(env, actual_id),
+                } });
             } else {
-                try addFormattedProofNote(
-                    allocator,
-                    diag,
-                    "the rule's conclusion has '{s}' where the statement " ++
-                        "has a variable",
-                    .{expected_name},
-                );
+                addProofNote(diag, .{
+                    .conclusion_head_clash_with_variable = .{
+                        .expected_term = expected_name,
+                    },
+                });
             }
         },
         .binder_conflict => |conflict| {
@@ -327,17 +292,11 @@ fn addVisibleMismatchNotes(
                 else
                     null;
             if (binder_name) |name| {
-                try addFormattedProofNote(
-                    allocator,
-                    diag,
-                    "rule variable {s} would need two different values",
-                    .{name},
-                );
+                addProofNote(diag, .{ .rule_var_two_values = .{
+                    .binder_name = name,
+                } });
             } else {
-                addStaticProofNote(
-                    diag,
-                    "one rule variable would need two different values",
-                );
+                addProofNote(diag, .unnamed_rule_var_two_values);
             }
             const existing_text = try formatNoteExpr(
                 allocator,
@@ -346,13 +305,9 @@ fn addVisibleMismatchNotes(
                 names_ptr,
                 conflict.existing,
             );
-            defer allocator.free(existing_text);
-            try addFormattedProofNote(
-                allocator,
-                diag,
-                "already matched: {s}",
-                .{truncateSnapshot(existing_text)},
-            );
+            addProofNote(diag, .{ .already_matched = .{
+                .text = truncateSnapshot(existing_text),
+            } });
             const actual_text = try formatNoteExpr(
                 allocator,
                 theorem,
@@ -360,13 +315,9 @@ fn addVisibleMismatchNotes(
                 names_ptr,
                 conflict.actual,
             );
-            defer allocator.free(actual_text);
-            try addFormattedProofNote(
-                allocator,
-                diag,
-                "in the statement: {s}",
-                .{truncateSnapshot(actual_text)},
-            );
+            addProofNote(diag, .{ .in_the_statement = .{
+                .text = truncateSnapshot(actual_text),
+            } });
         },
     }
 }
@@ -396,30 +347,22 @@ fn formatNoteExpr(
 }
 
 pub fn addHoleConcreteMatchNotes(
-    allocator: std.mem.Allocator,
     diag: *Diagnostic,
     line: anytype,
     report: Holes.ConcreteMatchReport,
-) !void {
+) void {
     const failure = report.failure orelse return;
     switch (failure) {
-        .visible_structure_mismatch => addStaticProofNote(
+        .visible_structure_mismatch => addProofNote(
             diag,
-            "the visible parts of the statement do not match " ++
-                "the rule's conclusion",
+            .visible_structure_mismatch,
         ),
         .hole_sort_mismatch => |mismatch| {
-            try addFormattedProofNoteSpan(
-                allocator,
-                diag,
-                "hole {s} expected sort {s} but matched {s}",
-                .{
-                    mismatch.token,
-                    mismatch.expected_sort_name,
-                    mismatch.actual_sort_name,
-                },
-                proofSpanForSourceSpan(line, mismatch.token_span),
-            );
+            addProofNoteSpan(diag, .{ .hole_sort_mismatch = .{
+                .token = mismatch.token,
+                .expected_sort = mismatch.expected_sort_name,
+                .actual_sort = mismatch.actual_sort_name,
+            } }, proofSpanForSourceSpan(line, mismatch.token_span));
         },
     }
 }
@@ -452,13 +395,9 @@ pub fn addComparisonSnapshotNotes(
         &names,
         expected,
     );
-    defer allocator.free(expected_text);
-    try addFormattedProofNote(
-        allocator,
-        diag,
-        "expected: {s}",
-        .{truncateSnapshot(expected_text)},
-    );
+    addProofNote(diag, .{ .expected_expr = .{
+        .text = truncateSnapshot(expected_text),
+    } });
 
     const actual_text = try ViewTrace.formatExprNamed(
         allocator,
@@ -467,13 +406,9 @@ pub fn addComparisonSnapshotNotes(
         &names,
         actual,
     );
-    defer allocator.free(actual_text);
-    try addFormattedProofNote(
-        allocator,
-        diag,
-        "actual: {s}",
-        .{truncateSnapshot(actual_text)},
-    );
+    addProofNote(diag, .{ .actual_expr = .{
+        .text = truncateSnapshot(actual_text),
+    } });
 
     if (!attempted_normalized) return;
 
@@ -493,7 +428,7 @@ pub fn addComparisonSnapshotNotes(
         return;
     }
 
-    addStaticProofNote(diag, "attempted normalized comparison");
+    addProofNote(diag, .attempted_normalized_comparison);
     if (snapshot.normalized_expected) |normalized_expected| {
         const normalized_expected_text = try ViewTrace.formatExprNamed(
             allocator,
@@ -502,13 +437,9 @@ pub fn addComparisonSnapshotNotes(
             &names,
             normalized_expected,
         );
-        defer allocator.free(normalized_expected_text);
-        try addFormattedProofNote(
-            allocator,
-            diag,
-            "normalized expected: {s}",
-            .{truncateSnapshot(normalized_expected_text)},
-        );
+        addProofNote(diag, .{ .normalized_expected_expr = .{
+            .text = truncateSnapshot(normalized_expected_text),
+        } });
     }
     if (snapshot.normalized_actual) |normalized_actual| {
         const normalized_actual_text = try ViewTrace.formatExprNamed(
@@ -518,13 +449,9 @@ pub fn addComparisonSnapshotNotes(
             &names,
             normalized_actual,
         );
-        defer allocator.free(normalized_actual_text);
-        try addFormattedProofNote(
-            allocator,
-            diag,
-            "normalized actual: {s}",
-            .{truncateSnapshot(normalized_actual_text)},
-        );
+        addProofNote(diag, .{ .normalized_actual_expr = .{
+            .text = truncateSnapshot(normalized_actual_text),
+        } });
     }
 }
 
@@ -533,50 +460,36 @@ fn truncateSnapshot(text: []const u8) []const u8 {
 }
 
 pub fn addFreshenAttemptNotes(
-    allocator: std.mem.Allocator,
     diag: *Diagnostic,
     rule: *const RuleDecl,
     report: AlphaRewrite.FreshenAttemptReport,
-) !void {
+) void {
     if (!report.attempted) return;
 
     const target_name = rule.arg_names[report.target_arg_idx] orelse "_";
     const blocker_name = rule.arg_names[report.blocker_arg_idx] orelse "_";
-    try addFormattedProofNote(
-        allocator,
-        diag,
-        "attempted @freshen for target binder {s}",
-        .{target_name},
-    );
-    try addFormattedProofNote(
-        allocator,
-        diag,
-        "freshen blocker binder: {s}",
-        .{blocker_name},
-    );
+    addProofNote(diag, .{ .freshen_attempted_for_target = .{
+        .binder_name = target_name,
+    } });
+    addProofNote(diag, .{ .freshen_blocker = .{
+        .binder_name = blocker_name,
+    } });
     if (report.replacement_name) |replacement_name| {
-        try addFormattedProofNote(
-            allocator,
-            diag,
-            "chosen replacement binder: {s}",
-            .{replacement_name},
-        );
+        addProofNote(diag, .{ .freshen_replacement = .{
+            .binder_name = replacement_name,
+        } });
     }
     if (report.blocker_dependency_remaining) |remaining| {
         if (remaining) {
-            try addFormattedProofNote(
-                allocator,
-                diag,
-                "rewritten target still depends on blocker binder {s}",
-                .{blocker_name},
-            );
+            addProofNote(diag, .{ .freshen_still_depends_on_blocker = .{
+                .binder_name = blocker_name,
+            } });
         } else {
-            try addFormattedProofNote(
-                allocator,
-                diag,
-                "rewritten target no longer depends on blocker binder {s}",
-                .{blocker_name},
-            );
+            addProofNote(diag, .{
+                .freshen_no_longer_depends_on_blocker = .{
+                    .binder_name = blocker_name,
+                },
+            });
         }
     }
 }
@@ -603,7 +516,7 @@ pub fn addBoundaryAttemptNotes(
     addRenderedExprNote(
         allocator,
         diag,
-        "the theorem concludes: {s}",
+        .theorem_concludes,
         theorem,
         env,
         names_ptr,
@@ -612,27 +525,24 @@ pub fn addBoundaryAttemptNotes(
     addRenderedExprNote(
         allocator,
         diag,
-        "the last line proves: {s}",
+        .last_line_proves,
         theorem,
         env,
         names_ptr,
         final_line,
     );
     if (report.attempted_transparent) {
-        addStaticProofNote(
-            diag,
-            "the two do not match, even with definitions unfolded",
-        );
+        addProofNote(diag, .boundary_mismatch_despite_unfolding);
     }
     if (report.attempted_normalized) {
-        addStaticProofNote(diag, "nor after normalization");
+        addProofNote(diag, .boundary_mismatch_despite_normalization);
     }
 }
 
 fn addRenderedExprNote(
     allocator: std.mem.Allocator,
     diag: *Diagnostic,
-    comptime fmt: []const u8,
+    comptime tag: std.meta.Tag(NoteMessage),
     theorem: *const TheoremContext,
     env: *const GlobalEnv,
     names_ptr: ?*const ViewTrace.DiagNames,
@@ -645,43 +555,19 @@ fn addRenderedExprNote(
         names_ptr,
         expr_id,
     ) catch return;
-    defer allocator.free(text);
-    addFormattedProofNote(
-        allocator,
-        diag,
-        fmt,
-        .{truncateSnapshot(text)},
-    ) catch return;
+    addProofNote(diag, @unionInit(NoteMessage, @tagName(tag), .{
+        .text = truncateSnapshot(text),
+    }));
 }
 
-fn addStaticProofNote(diag: *Diagnostic, message: []const u8) void {
-    addStaticProofNoteSpan(diag, message, null);
+fn addProofNote(diag: *Diagnostic, message: NoteMessage) void {
+    addProofNoteSpan(diag, message, null);
 }
 
-fn addStaticProofNoteSpan(
+fn addProofNoteSpan(
     diag: *Diagnostic,
-    message: []const u8,
+    message: NoteMessage,
     span: ?Span,
 ) void {
-    CompilerDiag.addNote(diag, message, .proof, span);
-}
-
-fn addFormattedProofNote(
-    allocator: std.mem.Allocator,
-    diag: *Diagnostic,
-    comptime fmt: []const u8,
-    args: anytype,
-) !void {
-    try addFormattedProofNoteSpan(allocator, diag, fmt, args, null);
-}
-
-fn addFormattedProofNoteSpan(
-    allocator: std.mem.Allocator,
-    diag: *Diagnostic,
-    comptime fmt: []const u8,
-    args: anytype,
-    span: ?Span,
-) !void {
-    const message = try std.fmt.allocPrint(allocator, fmt, args);
     CompilerDiag.addNote(diag, message, .proof, span);
 }

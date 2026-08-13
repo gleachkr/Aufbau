@@ -385,7 +385,6 @@ pub const binding_note_buf_len = 192;
 /// time).
 pub const BindingValidationNoteBufs = struct {
     resolved: [binding_note_buf_len]u8 = undefined,
-    sorts: [binding_note_buf_len]u8 = undefined,
 };
 
 /// Notes for an inferred binding that failed sort/boundness validation:
@@ -414,26 +413,25 @@ pub fn attachBindingValidationNotes(
     defer names.deinit(theorem.allocator);
     const names_ptr = names.ptr();
 
-    var scratch: [dep_violation_text_buf_len]u8 = undefined;
-    if (renderBoundedExpr(&scratch, env, theorem, names_ptr, expr_id)) |text| {
-        if (std.fmt.bufPrint(
-            &bufs.resolved,
-            "this binder was resolved to: {s}",
-            .{text},
-        )) |message| {
-            CompilerDiag.addNote(diag, message, .proof, null);
-        } else |_| {}
+    if (renderBoundedExpr(
+        &bufs.resolved,
+        env,
+        theorem,
+        names_ptr,
+        expr_id,
+    )) |text| {
+        CompilerDiag.addNote(diag, .{ .binder_resolved_to = .{
+            .text = text,
+        } }, .proof, null);
     }
 
     const info = exprInfo(env, theorem, theorem_args, expr_id) catch return;
-    const message: []const u8 = switch (err) {
-        error.SortMismatch => std.fmt.bufPrint(
-            &bufs.sorts,
-            "it has sort '{s}', but the rule expects sort '{s}' here",
-            .{ info.sort_name, expected.sort_name },
-        ) catch return,
-        error.BoundnessMismatch => "the rule requires a single bound " ++
-            "variable here",
+    const message: CompilerDiag.NoteMessage = switch (err) {
+        error.SortMismatch => .{ .binding_sort_mismatch = .{
+            .actual_sort = info.sort_name,
+            .expected_sort = expected.sort_name,
+        } },
+        error.BoundnessMismatch => .rule_requires_bound_var_here,
         else => return,
     };
     CompilerDiag.addNote(diag, message, .proof, null);

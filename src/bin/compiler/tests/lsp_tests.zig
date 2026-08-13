@@ -2200,12 +2200,12 @@ test "compiler diagnostics publish related information" {
     };
     diag.note_count = 1;
     diag.notes[0] = .{
-        .message = "rule is declared later in the mm0 file",
+        .message = .rule_declared_later,
         .source = .mm0,
     };
     diag.related_count = 1;
     diag.related[0] = .{
-        .label = "rule declaration is here",
+        .label = .rule_declaration_here,
         .source = .mm0,
         .span = .{
             .start = rule_start,
