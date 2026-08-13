@@ -12,8 +12,8 @@ const CliError = error{
 const usage_text =
     "Usage:\n" ++
     "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
-    "[--debug SYSTEMS] [-Werror]\n" ++
-    "  abc lsp\n" ++
+    "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
+    "  abc lsp [--lang LANG]\n" ++
     "  abc [--help | --version]\n" ++
     "\nOptions:\n" ++
     "  -h, --help       Show this help and exit\n" ++
@@ -22,7 +22,9 @@ const usage_text =
     "                   " ++
     mm0.advertised_channel_list ++
     ")\n" ++
-    "  -Werror          Treat compiler warnings as errors\n";
+    "  -Werror          Treat compiler warnings as errors\n" ++
+    "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
+    "                   the ABC_LANG environment variable\n";
 
 const version_text = "abc " ++ build_options.version ++ "\n";
 
@@ -195,11 +197,54 @@ fn runCompile(
     };
 }
 
+const LangSplit = struct {
+    rest: []const []const u8,
+    lang: ?mm0.CompilerLang,
+};
+
+/// Strip `--lang XX` (valid before any command) out of the argument list
+/// so the command parsers stay locale-agnostic.
+fn splitLangArgs(
+    argv: []const []const u8,
+    buf: [][]const u8,
+) !LangSplit {
+    var lang: ?mm0.CompilerLang = null;
+    var len: usize = 0;
+    var i: usize = 0;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], "--lang")) {
+            i += 1;
+            if (i >= argv.len) return CliError.InvalidUsage;
+            lang = mm0.parseCompilerLang(argv[i]) orelse
+                return CliError.InvalidUsage;
+        } else {
+            if (len >= buf.len) return CliError.InvalidUsage;
+            buf[len] = argv[i];
+            len += 1;
+        }
+    }
+    return .{ .rest = buf[0..len], .lang = lang };
+}
+
+fn applyEnvLang(allocator: std.mem.Allocator) void {
+    const value = std.process.getEnvVarOwned(allocator, "ABC_LANG") catch
+        return;
+    defer allocator.free(value);
+    if (mm0.parseCompilerLang(value)) |lang| mm0.setCompilerLang(lang);
+}
+
 pub fn run(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
 ) !void {
-    const cmd = try parseArgs(argv);
+    var lang_buf: [64][]const u8 = undefined;
+    const split = try splitLangArgs(argv, &lang_buf);
+    if (split.lang) |lang| {
+        mm0.setCompilerLang(lang);
+    } else {
+        applyEnvLang(allocator);
+    }
+    const cmd = try parseArgs(split.rest);
     switch (cmd) {
         .compile => |compile| try runCompile(allocator, compile),
         .lsp => try compiler_lsp.run(allocator),
@@ -289,6 +334,29 @@ test "parse compile command accepts aliases and Werror in any order" {
         },
         else => return error.TestUnexpectedCommand,
     }
+}
+
+test "split --lang out of the argument list" {
+    var buf: [8][]const u8 = undefined;
+    const split = try splitLangArgs(
+        &.{ "compile", "--lang", "de", "a.mm0", "a.auf", "a.mmb" },
+        &buf,
+    );
+    try std.testing.expectEqual(mm0.CompilerLang.de, split.lang.?);
+    try std.testing.expectEqual(@as(usize, 4), split.rest.len);
+    try std.testing.expectEqualStrings("a.mm0", split.rest[1]);
+
+    const without = try splitLangArgs(&.{"lsp"}, &buf);
+    try std.testing.expectEqual(@as(?mm0.CompilerLang, null), without.lang);
+
+    try std.testing.expectError(
+        CliError.InvalidUsage,
+        splitLangArgs(&.{ "lsp", "--lang", "xx" }, &buf),
+    );
+    try std.testing.expectError(
+        CliError.InvalidUsage,
+        splitLangArgs(&.{ "lsp", "--lang" }, &buf),
+    );
 }
 
 test "parse compile command rejects invalid debug flags" {

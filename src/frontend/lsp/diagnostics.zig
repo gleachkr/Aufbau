@@ -394,11 +394,11 @@ pub fn compilerDiagnosticMessage(
 
     try mm0.renderCompilerDiagnostic(&writer, diag, "\n");
     for (diag.noteSlice()) |note| {
-        try writer.writeAll("\nnote: ");
+        try writer.print("\n{s}: ", .{mm0.compilerNoteHeading()});
         try mm0.renderCompilerNoteMessage(&writer, note.message);
     }
     for (diag.relatedSlice()) |related| {
-        try writer.writeAll("\nrelated: ");
+        try writer.print("\n{s}: ", .{mm0.compilerRelatedHeading()});
         try mm0.renderCompilerRelatedLabel(&writer, related.label);
     }
 

@@ -27,6 +27,17 @@ pub export fn free(ptr: u32, len: u32) void {
     allocator.free(ptrToSlice(ptr, len));
 }
 
+/// Select the diagnostic locale ("en", "de") for all subsequent compiles.
+/// Returns 1 on success, 0 for an unknown locale name (the current locale
+/// is left unchanged). The embedding JS calls this once after
+/// instantiation; there is no environment in browser wasm.
+pub export fn set_locale(name_ptr: u32, name_len: u32) u32 {
+    const name = ptrToConstSlice(name_ptr, name_len);
+    const lang = mm0.parseCompilerLang(name) orelse return 0;
+    mm0.setCompilerLang(lang);
+    return 1;
+}
+
 pub export fn compile_sources(
     mm0_ptr: u32,
     mm0_len: u32,

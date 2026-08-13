@@ -49,6 +49,18 @@ export class LspServer {
     this.exports.reset_lsp_server();
   }
 
+  // Select the diagnostic language ("en", "de") for all subsequent requests.
+  // Unknown locales are ignored (the server stays on its current locale).
+  setLocale(locale) {
+    if (typeof this.exports.set_locale !== "function") return;
+    const input = writeBytes(this.exports, encoder.encode(String(locale)));
+    try {
+      this.exports.set_locale(input.ptr, input.len);
+    } finally {
+      freeBytes(this.exports, input);
+    }
+  }
+
   emit(message) {
     for (const handler of this.subscribers) {
       handler(message);
@@ -58,7 +70,9 @@ export class LspServer {
 
 export async function loadLspServer(options = {}) {
   const instance = await instantiateWasm(options, defaultWasmUrl);
-  return new LspServer(instance);
+  const server = new LspServer(instance);
+  if (options.locale) server.setLocale(options.locale);
+  return server;
 }
 
 // A drop-in `Transport` (send/subscribe/unsubscribe) for `@codemirror/lsp-client`
@@ -116,6 +130,10 @@ export class WorkerLspServer {
     this.worker.postMessage({ type: "reset" });
   }
 
+  setLocale(locale) {
+    this.worker.postMessage({ type: "locale", locale: String(locale) });
+  }
+
   emit(message) {
     for (const handler of this.subscribers) {
       handler(message);
@@ -138,6 +156,9 @@ export async function loadLspServerWorker(options = {}) {
     ? null
     : spawnWorker(options.workerUrl ?? defaultWorkerUrl);
   const server = new WorkerLspServer(options.worker ?? spawned.worker);
+  // Queued behind any earlier messages by the worker, so ordering holds
+  // even before the wasm finishes instantiating.
+  if (options.locale) server.setLocale(options.locale);
   try {
     await server.ready;
   } finally {

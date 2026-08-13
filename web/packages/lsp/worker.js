@@ -12,6 +12,7 @@
 //
 // Protocol (main thread <-> worker):
 //   main -> worker: { type: "send", message } | { type: "reset" }
+//                 | { type: "locale", locale }
 //   worker -> main: { type: "ready" } | { type: "message", message }
 //                 | { type: "error", error }
 
@@ -33,6 +34,9 @@ function handle(data) {
       break;
     case "reset":
       server.reset();
+      break;
+    case "locale":
+      server.setLocale(data.locale);
       break;
   }
 }

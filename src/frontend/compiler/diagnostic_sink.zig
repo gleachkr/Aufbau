@@ -121,24 +121,33 @@ pub const DiagnosticSink = struct {
 
     pub fn reportWarnings(self: *const DiagnosticSink) void {
         for (self.warningDiagnostics()) |diag| {
-            self.reportDiagnostic(diag, "warning");
+            self.reportDiagnostic(diag);
         }
         if (self.dropped_warning_count != 0) {
-            std.debug.print(
-                "warning: omitted {d} additional warning(s)\n",
-                .{self.dropped_warning_count},
-            );
+            const stderr = std.fs.File.stderr().deprecatedWriter();
+            stderr.print(
+                "{s}: ",
+                .{CompilerDiag.severityLabel(.warning)},
+            ) catch return;
+            CompilerDiag.writeOmittedWarningsSummary(
+                stderr,
+                self.dropped_warning_count,
+            ) catch return;
+            stderr.writeByte('\n') catch return;
         }
     }
 
     pub fn reportError(self: *const DiagnosticSink, err: anyerror) void {
         if (self.last_diagnostic) |diag| {
             if (diag.err == err) {
-                self.reportDiagnostic(diag, "error");
+                self.reportDiagnostic(diag);
                 return;
             }
         }
-        std.debug.print("error: {s}\n", .{CompilerDiag.errorSummary(err)});
+        std.debug.print("{s}: {s}\n", .{
+            CompilerDiag.severityLabel(.@"error"),
+            CompilerDiag.errorSummary(err),
+        });
     }
 
     pub fn promoteWarningsToErrors(self: *DiagnosticSink) !void {
@@ -155,10 +164,12 @@ pub const DiagnosticSink = struct {
     pub fn reportDiagnostic(
         self: *const DiagnosticSink,
         diag: Diagnostic,
-        label: []const u8,
     ) void {
         const stderr = std.fs.File.stderr().deprecatedWriter();
-        stderr.print("{s}: ", .{label}) catch return;
+        stderr.print(
+            "{s}: ",
+            .{CompilerDiag.severityLabel(diag.severity)},
+        ) catch return;
         CompilerDiag.renderDiagnostic(stderr, diag, "\n  ") catch return;
         stderr.writeByte('\n') catch return;
         self.reportDiagnosticNotes(diag);
@@ -181,12 +192,12 @@ pub const DiagnosticSink = struct {
     ) void {
         const stderr = std.fs.File.stderr().deprecatedWriter();
         for (diag.noteSlice()) |note| {
-            stderr.writeAll("  note: ") catch return;
+            stderr.print("  {s}: ", .{CompilerDiag.noteHeading()}) catch return;
             CompilerDiag.renderNoteMessage(stderr, note.message) catch return;
             stderr.writeByte('\n') catch return;
             const span = note.span orelse continue;
             const source_info = self.sourceInfo(note.source) orelse continue;
-            reportSpanLocation("note", source_info, span);
+            reportSpanLocation(CompilerDiag.noteHeading(), source_info, span);
         }
     }
 
@@ -196,12 +207,19 @@ pub const DiagnosticSink = struct {
     ) void {
         const stderr = std.fs.File.stderr().deprecatedWriter();
         for (diag.relatedSlice()) |related| {
-            stderr.writeAll("  related: ") catch return;
+            stderr.print(
+                "  {s}: ",
+                .{CompilerDiag.relatedHeading()},
+            ) catch return;
             CompilerDiag.renderRelatedLabel(stderr, related.label) catch
                 return;
             stderr.writeByte('\n') catch return;
             const source_info = self.sourceInfo(related.source) orelse continue;
-            reportSpanLocation("related", source_info, related.span);
+            reportSpanLocation(
+                CompilerDiag.relatedHeading(),
+                source_info,
+                related.span,
+            );
         }
     }
 

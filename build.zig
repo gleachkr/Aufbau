@@ -1053,8 +1053,8 @@ pub fn build(b: *std.Build) void {
     const abc_usage_text =
         "Usage:\n" ++
         "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
-        "[--debug SYSTEMS] [-Werror]\n" ++
-        "  abc lsp\n" ++
+        "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
+        "  abc lsp [--lang LANG]\n" ++
         "  abc [--help | --version]\n" ++
         "\nOptions:\n" ++
         "  -h, --help       Show this help and exit\n" ++
@@ -1062,7 +1062,9 @@ pub fn build(b: *std.Build) void {
         "  --debug SYSTEMS  Enable debug output (comma-separated:\n" ++
         "                   inference,views,dependency,freshen," ++
         "normalization,boundary,all)\n" ++
-        "  -Werror          Treat compiler warnings as errors\n";
+        "  -Werror          Treat compiler warnings as errors\n" ++
+        "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
+        "                   the ABC_LANG environment variable\n";
 
     const abc_help = b.addRunArtifact(compiler_exe);
     abc_help.addArg("--help");

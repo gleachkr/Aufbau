@@ -42,7 +42,20 @@ export class Compiler {
 
 export async function loadCompiler(options = {}) {
   const instance = await instantiateWasm(options, defaultWasmUrl);
+  if (options.locale) setLocale(instance.exports, options.locale);
   return new Compiler(instance);
+}
+
+// Select the diagnostic language ("en", "de") for all subsequent compiles.
+// Unknown locales are ignored (the compiler stays on its current locale).
+function setLocale(exports, locale) {
+  if (typeof exports.set_locale !== "function") return;
+  const input = writeBytes(exports, encoder.encode(String(locale)));
+  try {
+    exports.set_locale(input.ptr, input.len);
+  } finally {
+    freeBytes(exports, input);
+  }
 }
 
 async function instantiateWasm(options, fallbackUrl) {

@@ -8,6 +8,49 @@ const MathParseError = @import("../parse_recovery.zig").MathParseError;
 const MathSpan = @import("../parse_recovery.zig").MathSpan;
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
 const MM0Stmt = @import("../parse_recovery.zig").MM0Stmt;
+const locale_strings = @import("diag_strings.zig");
+
+pub const Lang = locale_strings.Lang;
+
+/// The active diagnostic locale, chosen once at startup/init (CLI flag or
+/// env var, wasm `set_locale` export). Every renderer in this file reads
+/// it, so all frontends switch together. Not synchronized: set it before
+/// compiling, not concurrently with it.
+var active_lang: Lang = .en;
+
+pub fn setLang(lang: Lang) void {
+    active_lang = lang;
+}
+
+pub fn activeLang() Lang {
+    return active_lang;
+}
+
+/// Parse a locale name ("en", "de"); null when unknown.
+pub fn parseLang(name: []const u8) ?Lang {
+    return std.meta.stringToEnum(Lang, name);
+}
+
+/// Look up a static catalogue string in the active locale. The `inline
+/// else` makes each locale's table a comptime constant, so the lookup is
+/// a field access, not a hash or scan.
+fn t(comptime name: []const u8) []const u8 {
+    return switch (active_lang) {
+        inline else => |lang| comptime @field(locale_strings.table(lang), name),
+    };
+}
+
+/// Print a catalogue template with `args` in the active locale. Each
+/// locale's template is comptime-known inside its branch, so `std.fmt`
+/// checks every translation's placeholders against the call site.
+fn printT(writer: anytype, comptime name: []const u8, args: anytype) !void {
+    switch (active_lang) {
+        inline else => |lang| try writer.print(
+            comptime @field(locale_strings.table(lang), name),
+            args,
+        ),
+    }
+}
 
 pub const DiagnosticKind = enum {
     generic,
@@ -628,22 +671,22 @@ pub fn addRelated(
 
 pub fn inferencePathName(path: InferencePath) []const u8 {
     return switch (path) {
-        .strict_replay => "exact match",
-        .transparent_fallback => "matching with definitions unfolded",
-        .normalized_session_fallback => "matching after normalization",
-        .structural_solver => "structural matching",
-        .holey_surface_match => "holey assertion match",
+        .strict_replay => t("path_strict_replay"),
+        .transparent_fallback => t("path_transparent_fallback"),
+        .normalized_session_fallback => t("path_normalized_session_fallback"),
+        .structural_solver => t("path_structural_solver"),
+        .holey_surface_match => t("path_holey_surface_match"),
     };
 }
 
 pub fn diagnosticPhaseName(phase: DiagnosticPhase) []const u8 {
     return switch (phase) {
-        .parse => "parse",
-        .inference => "inference",
-        .theorem_application => "theorem application",
-        .freshen => "freshen",
-        .normalization => "normalization",
-        .final_reconciliation => "final reconciliation",
+        .parse => t("phase_parse"),
+        .inference => t("phase_inference"),
+        .theorem_application => t("phase_theorem_application"),
+        .freshen => t("phase_freshen"),
+        .normalization => t("phase_normalization"),
+        .final_reconciliation => t("phase_final_reconciliation"),
     };
 }
 
@@ -1170,69 +1213,64 @@ fn annotationDiagnosticSpan(
 pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
     return switch (diag.kind) {
         .generic => compilerErrorSummary(diag.err),
-        .omitted_diagnostics => "additional diagnostics omitted",
-        .missing_proof_block => "missing proof block for theorem",
-        .extra_proof_block => "extra proof block with no matching theorem",
-        .extra_proof_def => "extra proof-side definition item",
-        .theorem_name_mismatch => "proof block name does not match the theorem",
-        .missing_public_def_body => "missing proof-side body for public definition",
-        .public_def_body_name_mismatch => "proof-side definition body targets a different public definition",
-        .public_def_body_header => "public definition body filler must not redeclare the signature (only dummy binders are allowed)",
-        .unexpected_proof_def => "unexpected proof-side definition item",
-        .unsupported_proof_def_annotation => "proof-side definition annotations are not supported yet",
-        .duplicate_rule_name => "duplicate rule name",
+        .omitted_diagnostics => t("kind_omitted_diagnostics"),
+        .missing_proof_block => t("kind_missing_proof_block"),
+        .extra_proof_block => t("kind_extra_proof_block"),
+        .extra_proof_def => t("kind_extra_proof_def"),
+        .theorem_name_mismatch => t("kind_theorem_name_mismatch"),
+        .missing_public_def_body => t("kind_missing_public_def_body"),
+        .public_def_body_name_mismatch => t("kind_public_def_body_name_mismatch"),
+        .public_def_body_header => t("kind_public_def_body_header"),
+        .unexpected_proof_def => t("kind_unexpected_proof_def"),
+        .unsupported_proof_def_annotation => t("kind_unsupported_proof_def_annotation"),
+        .duplicate_rule_name => t("kind_duplicate_rule_name"),
         .parse_assertion => switch (diag.err) {
-            error.NotProvable => "the statement is not of a provable sort",
-            error.SortMismatch => "a subexpression of the statement " ++
-                "has the wrong sort",
-            else => "could not parse proof line assertion",
+            error.NotProvable => t("kind_statement_not_provable"),
+            error.SortMismatch => t("kind_statement_subexpr_sort"),
+            else => t("kind_parse_assertion_fallback"),
         },
         .parse_binding => switch (diag.err) {
-            error.SortMismatch => "binder assignment has the wrong sort",
-            error.BoundnessMismatch => "binder assignment must be " ++
-                "a bound variable",
-            else => "could not parse binder assignment",
+            error.SortMismatch => t("kind_binding_sort_mismatch"),
+            error.BoundnessMismatch => t("kind_binding_boundness_mismatch"),
+            else => t("kind_parse_binding_fallback"),
         },
         .parse_block_header => switch (diag.err) {
-            error.NotProvable => "the statement is not of a provable sort",
-            error.SortMismatch => "a subexpression of the statement " ++
-                "has the wrong sort",
-            error.BoundnessMismatch => "the statement uses a compound " ++
-                "expression where a bound variable is required",
+            error.NotProvable => t("kind_statement_not_provable"),
+            error.SortMismatch => t("kind_statement_subexpr_sort"),
+            error.BoundnessMismatch => t("kind_block_header_boundness"),
             else => compilerErrorSummary(diag.err),
         },
         .parse_fresh => compilerErrorSummary(diag.err),
         .inference_failed => compilerErrorSummary(diag.err),
-        .unknown_rule => "unknown rule in proof line",
-        .unresolved_search_placeholder => "proof line is justified by a search placeholder, not a completed proof",
-        .rule_not_yet_available => "rule is declared later and is not yet available here",
-        .unknown_binder_name => "unknown binder name in rule application",
-        .duplicate_binder_assignment => "duplicate binder assignment in rule application",
-        .missing_binder_assignment => "one of the rule's variables could not " ++
-            "be determined from the statement and cited premises",
-        .ref_count_mismatch => "wrong number of references for rule application",
-        .unknown_hypothesis_ref => "unknown theorem hypothesis reference",
-        .ambiguous_hypothesis_ref => "hypothesis name matches more than one hypothesis",
-        .unknown_label => "unknown proof line label",
-        .hypothesis_mismatch => "a cited premise does not match the hypothesis the rule expects there",
+        .unknown_rule => t("kind_unknown_rule"),
+        .unresolved_search_placeholder => t("kind_unresolved_search_placeholder"),
+        .rule_not_yet_available => t("kind_rule_not_yet_available"),
+        .unknown_binder_name => t("kind_unknown_binder_name"),
+        .duplicate_binder_assignment => t("kind_duplicate_binder_assignment"),
+        .missing_binder_assignment => t("kind_missing_binder_assignment"),
+        .ref_count_mismatch => t("kind_ref_count_mismatch"),
+        .unknown_hypothesis_ref => t("kind_unknown_hypothesis_ref"),
+        .ambiguous_hypothesis_ref => t("kind_ambiguous_hypothesis_ref"),
+        .unknown_label => t("kind_unknown_label"),
+        .hypothesis_mismatch => t("kind_hypothesis_mismatch"),
         .conclusion_mismatch => if (diag.err == error.HoleConclusionMismatch)
             compilerErrorSummary(diag.err)
         else
-            "proof line assertion does not match the rule conclusion",
-        .duplicate_label => "duplicate proof line label",
-        .empty_proof_block => "proof block is empty",
-        .final_line_mismatch => "last proof line does not prove the theorem conclusion",
+            t("kind_conclusion_mismatch"),
+        .duplicate_label => t("kind_duplicate_label"),
+        .empty_proof_block => t("kind_empty_proof_block"),
+        .final_line_mismatch => t("kind_final_line_mismatch"),
         .invalid_definition_body => definitionBodySummary(diag.err),
-        .unused_theorem_parameter => "theorem parameter is unused; if it is only needed during proofs, use @vars and an explicit theorem-local dummy instead",
-        .unused_definition_parameter => "definition parameter is unused; remove it if it is not part of the definition",
+        .unused_theorem_parameter => t("kind_unused_theorem_parameter"),
+        .unused_definition_parameter => t("kind_unused_definition_parameter"),
     };
 }
 
 fn definitionBodySummary(err: DiagnosticError) []const u8 {
     return switch (err) {
-        error.DepViolation => "definition body has free variables that the result type does not declare",
-        error.SortMismatch => "definition body sort does not match the declared result sort",
-        else => "definition body does not satisfy the declared result",
+        error.DepViolation => t("defbody_dep_violation"),
+        error.SortMismatch => t("defbody_sort_mismatch"),
+        else => t("defbody_fallback"),
     };
 }
 
@@ -1245,286 +1283,229 @@ pub fn errorSummary(err: anyerror) []const u8 {
 
 fn compilerErrorSummary(err: DiagnosticError) []const u8 {
     return switch (err) {
-        error.BoundnessMismatch => "binding does not satisfy the rule's " ++
-            "bound-variable constraint",
-        error.SortMismatch => "binding does not satisfy the rule's sort constraint",
+        error.BoundnessMismatch => t("err_BoundnessMismatch"),
+        error.SortMismatch => t("err_SortMismatch"),
         error.UnifyMismatch,
         error.UnifyStackNotEmpty,
-        => "the statement and cited premises could not be matched " ++
-            "against this rule",
+        => t("err_UnifyMismatch"),
         error.TermMismatch,
         error.ExpectedTermApp,
-        => "the statement or a cited premise does not have the shape " ++
-            "this rule requires",
-        error.HypCountMismatch => "the number of cited premises does not " ++
-            "match the number of hypotheses this rule has",
-        error.HoleTokenNameCollision => "name conflicts with a proof hole token",
-        error.BinderTokenCollision => "binder name conflicts with a declared notation token",
-        error.ResultDependencyOnDummy => "a result type may only depend on " ++
-            "bound variables from the argument list, not hidden binders",
-        error.ArgDependencyOnDummy => "an argument type may only depend on " ++
-            "bound variables from the argument list, not hidden binders",
-        error.HoleyInferenceMismatch => "the visible parts of the statement " ++
-            "do not match what this rule proves",
-        error.HoleConclusionMismatch => "the visible parts of the statement " ++
-            "do not match the rule's conclusion",
-        // Legacy public error name. The repaired structural solver uses
-        // this for ambiguity across AU, ACU, AUI, and ACUI matching.
-        error.AmbiguousAcuiMatch => "the omitted parts of this rule " ++
-            "application can be completed in more than one way",
-        error.RuleNotYetAvailable => "rule is declared later and is not yet available here",
-        error.UnknownTheoremVariable => "binding refers to a theorem variable that is not in scope",
-        error.DuplicateRuleName => "duplicate rule name",
-        error.DuplicateViewAnnotation => "multiple @view annotations were attached to one rule",
-        error.InvalidViewAnnotation => "could not parse @view annotation",
-        error.ViewHypCountMismatch => "@view hypothesis count does not match the rule",
-        error.ViewConclusionMismatch => "@view conclusion does not match the proof line assertion",
-        error.ViewHypothesisMismatch => "@view hypotheses do not match the cited refs",
-        error.ViewBindingConflict => "@view inference conflicts with an explicit binding",
-        error.RecoverWithoutView => "@recover requires a preceding @view on the same rule",
-        error.InvalidRecoverAnnotation => "@recover expects four binder names: target source " ++
-            "pattern hole",
-        error.UnknownRecoverBinder => "@recover refers to a binder name not present in the view",
-        error.RecoverTargetNotRuleBinder => "@recover target must be a real rule binder",
-        error.RecoverSortMismatch => "@recover target and hole binders must have the same sort",
-        error.RecoverHoleNotFound => "@recover could not find the hole binder in the pattern expr",
-        error.RecoverConflict => "@recover found inconsistent candidates for the target " ++
-            "binder",
-        error.RecoverStructureMismatch => "@recover source expr does not match the pattern structure",
-        error.AbstractWithoutView => "@abstract requires a preceding @view on the same rule",
-        error.InvalidAbstractAnnotation => "@abstract expects six binder names: target left " ++
-            "right hole left_plug right_plug",
-        error.UnknownAbstractBinder => "@abstract refers to a binder name not present in the view",
-        error.AbstractTargetNotRuleBinder => "@abstract target must be a real rule binder",
-        error.AbstractPlugSortMismatch => "@abstract hole and plug binders must have the same sort",
-        error.AbstractNoPlugOccurrence => "@abstract could not find the plug pair in the source exprs",
-        error.AbstractConflict => "@abstract found a context that conflicts with the target binder",
-        error.AbstractStructureMismatch => "@abstract source exprs do not match outside the plug pair",
-        error.UnknownTermAnnotation => "unknown term-level annotation",
-        error.DummyAnnotationRemoved => "@dummy was removed; use @fresh instead",
-        error.InvalidFreshAnnotation => "@fresh expects exactly one real rule binder name",
-        error.InvalidFreshenAnnotation => "@freshen expects two binder names: target blocker",
-        error.InvalidAlphaAnnotation => "@alpha expects two bound binder names: old new",
-        error.InvalidFallbackAnnotation => "@fallback expects exactly one rule name",
-        error.DuplicateFallbackAnnotation => "multiple @fallback annotations were attached to one rule",
-        error.UnknownFallbackRule => "@fallback refers to a rule that is not available here",
-        error.InvalidAutoAnnotation => "@auto expects one mode: forward, backward, " ++
-            "eager [PRIORITY >= 1], or trigger PATTERN",
-        error.EagerRuleDefersWitness => "@auto eager rule must not defer a witness: " ++
-            "every hypothesis binder must appear in the conclusion",
-        error.InvalidTriggerAnnotation => "@auto trigger expects one parenthesized prefix " ++
-            "pattern: (term binder-or-_ ...)",
-        error.UnknownTriggerTerm => "@auto trigger names a term that is not available here",
-        error.UnknownTriggerBinder => "@auto trigger refers to a binder that is not on the rule",
-        error.TriggerRuleHasHypotheses => "@auto trigger rule must not have hypotheses",
-        error.TriggerBinderNotGround => "@auto trigger must name every rule binder that cannot " ++
-            "default to an ACUI unit",
-        error.TriggerSortMismatch => "@auto trigger pattern position has the wrong sort",
-        error.TriggerBoundPosition => "@auto trigger bound argument positions admit only _",
-        error.FallbackCycle => "@fallback chain contains a cycle",
-        error.UnknownFreshBinder => "@fresh target must be a real rule binder",
-        error.UnknownFreshenBinder => "@freshen refers to a binder that is not on the rule",
-        error.UnknownAlphaBinder => "@alpha refers to a binder that is not on the rule",
-        error.DuplicateFreshBinder => "multiple @fresh annotations were attached to one rule binder",
-        error.DuplicateFreshenPair => "multiple identical @freshen annotations were attached to one rule",
-        error.FreshRequiresBoundBinder => "@fresh target must be a bound rule binder",
-        error.FreshenTargetMustBeRegularBinder => "@freshen target must be a regular rule binder",
-        error.FreshenBlockerMustBeBoundBinder => "@freshen blocker must be a bound rule binder",
-        error.AlphaRequiresBoundBinders => "@alpha binders must both be bound rule binders",
-        error.AlphaSortMismatch => "@alpha binders must have the same sort",
-        error.AlphaConclusionMustBeBinaryRelation => "@alpha rule conclusion must be a binary relation",
-        error.AlphaConclusionUnsupported => "@alpha rule left-hand side must be a term application",
-        error.AlphaRuleHasHypotheses => "@alpha rule must not have hypotheses",
-        error.InvalidCongruenceAnnotation => "@congr rule does not have the expected congruence shape",
-        error.CongruenceBinderOrderMismatch => "@congr binders must be ordered old₀ new₀ old₁ new₁ ...",
-        error.CongruenceBinderMissingDeps => "@congr old/new binders must declare every dependency " ++
-            "the head term's argument permits (e.g. (p q: wff x))",
-        error.RelationBundleBoundBinder => "@relation bundle rules (refl/trans/symm/transport) " ++
-            "must not have bound binders",
-        error.InvalidConversionAnnotation => "@conversion expects one token: " ++
-            "ltr, rtl, both, assoc, or comm",
-        error.InvalidDefConversionAnnotation => "@conversion on a definition expects one " ++
-            "token: unfold, fold, or both",
-        error.ConversionTermNotDef => "@conversion on a term requires a definition " ++
-            "with a visible definiens",
-        error.ConversionDefUnfoldHiddenDummies => "@conversion unfold/both cannot enroll a " ++
-            "definition with hidden dummy binders: unfolding would have to " ++
-            "invent a dummy witness at every match; only fold is legal here",
-        error.DuplicateConversionAnnotation => "multiple @conversion annotations were attached to one rule",
-        error.ConversionRuleHasHypotheses => "@conversion rule must not have hypotheses",
-        error.ConversionCommRuleShape => "@conversion comm requires the conclusion " ++
-            "rel(t(a, b), t(b, a)) over exactly two distinct binders",
-        error.ConversionAssocRuleShape => "@conversion assoc requires the conclusion " ++
-            "rel(t(t(a, b), c), t(a, t(b, c))) (either orientation) over " ++
-            "exactly three distinct binders",
-        error.ConversionRoleBoundBinder => "@conversion assoc/comm rules must not have bound binders",
-        error.ConversionRoleRelationHead => "@conversion assoc/comm cannot certify a registered " ++
-            "@relation term: relation applications must stay plain so local " ++
-            "equations can be cited directly",
-        error.DuplicateConversionRoleForHead => "another @conversion rule already certifies " ++
-            "this law for the same operator",
-        error.ConversionConclusionNotRelation => "@conversion rule conclusion must have the shape " ++
-            "rel(lhs, rhs)",
-        error.ConversionMissingRelation => "@conversion rule conclusion head must be the registered " ++
-            "@relation term for its operand sort",
-        error.ConversionBareMatchSide => "@conversion match side must be a term application, " ++
-            "not a bare binder",
-        error.ConversionBinderNotCovered => "@conversion match side must bind every binder " ++
-            "the instantiate side uses",
-        error.InvalidComputeAnnotation => "@compute expects one token: ltr or rtl",
-        error.DuplicateComputeAnnotation => "this rule is already enrolled for conversion? " ++
-            "(one @compute/@conversion enrollment per rule)",
-        error.ComputeRuleHasHypotheses => "@compute rule must not have hypotheses",
-        error.ComputeConclusionNotRelation => "@compute rule conclusion must have the shape " ++
-            "rel(lhs, rhs)",
-        error.ComputeMissingRelation => "@compute rule conclusion head must be the registered " ++
-            "@relation term for its operand sort",
-        error.ComputeBareMatchSide => "@compute match side must be a term application, " ++
-            "not a bare binder",
-        error.ComputeBinderNotCovered => "@compute match side must bind every binder " ++
-            "the instantiate side uses",
-        error.FreshStrictSort => "@fresh cannot target a binder in a strict sort",
-        error.FreshFreeSort => "@fresh cannot target a binder in a free sort",
-        error.FreshNoAvailableVar => "@fresh could not find an available @vars token",
-        error.HiddenWitnessNoAvailableVar => "hidden def witness needed a fresh @vars token, but none was " ++
-            "available",
-        error.NoAlphaRewriteAvailable => "no matching @alpha rule was available for this @freshen step",
-        error.AlphaRewriteSearchFailed => "the available @alpha rules did not remove the blocker dependency",
-        error.DepViolation => "binder assignments violate the rule's dependency constraints",
-        error.FreshenMissingRelation => "freshening needs a registered relation on the affected sort",
-        error.FreshenTransportFailed => "freshening could not lift the alpha rewrite through the rule formula",
-        error.InvalidHoleAnnotation => "@hole expects exactly one raw math token",
-        error.DuplicateHoleAnnotation => "multiple @hole annotations were attached to one sort",
-        error.DuplicateHoleToken => "duplicate @hole token across sorts",
-        error.InvalidVarsAnnotation => "@vars expects one or more raw math tokens",
-        error.VarsStrictSort => "@vars cannot be used on a strict sort",
-        error.VarsFreeSort => "@vars cannot be used on a free sort",
-        error.DuplicateVarsToken => "duplicate @vars token across sorts",
-        error.VarsTokenCollision => "@vars token collides with an existing term, notation, " ++
-            "or formula marker",
-        error.DependencySlotExhausted => "theorem exceeded the 55 tracked bound-variable dependency slots",
-        error.UnresolvedDummyWitness => "matched rule through hidden def structure, but omitted " ++
-            "binders contain unresolved hidden-dummy witnesses",
-        error.MissingCongruenceRule => "missing congruence rule needed for normalization",
+        => t("err_TermMismatch"),
+        error.HypCountMismatch => t("err_HypCountMismatch"),
+        error.HoleTokenNameCollision => t("err_HoleTokenNameCollision"),
+        error.BinderTokenCollision => t("err_BinderTokenCollision"),
+        error.ResultDependencyOnDummy => t("err_ResultDependencyOnDummy"),
+        error.ArgDependencyOnDummy => t("err_ArgDependencyOnDummy"),
+        error.HoleyInferenceMismatch => t("err_HoleyInferenceMismatch"),
+        error.HoleConclusionMismatch => t("err_HoleConclusionMismatch"),
+        error.AmbiguousAcuiMatch => t("err_AmbiguousAcuiMatch"),
+        error.RuleNotYetAvailable => t("kind_rule_not_yet_available"),
+        error.UnknownTheoremVariable => t("err_UnknownTheoremVariable"),
+        error.DuplicateRuleName => t("kind_duplicate_rule_name"),
+        error.DuplicateViewAnnotation => t("err_DuplicateViewAnnotation"),
+        error.InvalidViewAnnotation => t("err_InvalidViewAnnotation"),
+        error.ViewHypCountMismatch => t("err_ViewHypCountMismatch"),
+        error.ViewConclusionMismatch => t("err_ViewConclusionMismatch"),
+        error.ViewHypothesisMismatch => t("err_ViewHypothesisMismatch"),
+        error.ViewBindingConflict => t("err_ViewBindingConflict"),
+        error.RecoverWithoutView => t("err_RecoverWithoutView"),
+        error.InvalidRecoverAnnotation => t("err_InvalidRecoverAnnotation"),
+        error.UnknownRecoverBinder => t("err_UnknownRecoverBinder"),
+        error.RecoverTargetNotRuleBinder => t("err_RecoverTargetNotRuleBinder"),
+        error.RecoverSortMismatch => t("err_RecoverSortMismatch"),
+        error.RecoverHoleNotFound => t("err_RecoverHoleNotFound"),
+        error.RecoverConflict => t("err_RecoverConflict"),
+        error.RecoverStructureMismatch => t("err_RecoverStructureMismatch"),
+        error.AbstractWithoutView => t("err_AbstractWithoutView"),
+        error.InvalidAbstractAnnotation => t("err_InvalidAbstractAnnotation"),
+        error.UnknownAbstractBinder => t("err_UnknownAbstractBinder"),
+        error.AbstractTargetNotRuleBinder => t("err_AbstractTargetNotRuleBinder"),
+        error.AbstractPlugSortMismatch => t("err_AbstractPlugSortMismatch"),
+        error.AbstractNoPlugOccurrence => t("err_AbstractNoPlugOccurrence"),
+        error.AbstractConflict => t("err_AbstractConflict"),
+        error.AbstractStructureMismatch => t("err_AbstractStructureMismatch"),
+        error.UnknownTermAnnotation => t("err_UnknownTermAnnotation"),
+        error.DummyAnnotationRemoved => t("err_DummyAnnotationRemoved"),
+        error.InvalidFreshAnnotation => t("err_InvalidFreshAnnotation"),
+        error.InvalidFreshenAnnotation => t("err_InvalidFreshenAnnotation"),
+        error.InvalidAlphaAnnotation => t("err_InvalidAlphaAnnotation"),
+        error.InvalidFallbackAnnotation => t("err_InvalidFallbackAnnotation"),
+        error.DuplicateFallbackAnnotation => t("err_DuplicateFallbackAnnotation"),
+        error.UnknownFallbackRule => t("err_UnknownFallbackRule"),
+        error.InvalidAutoAnnotation => t("err_InvalidAutoAnnotation"),
+        error.EagerRuleDefersWitness => t("err_EagerRuleDefersWitness"),
+        error.InvalidTriggerAnnotation => t("err_InvalidTriggerAnnotation"),
+        error.UnknownTriggerTerm => t("err_UnknownTriggerTerm"),
+        error.UnknownTriggerBinder => t("err_UnknownTriggerBinder"),
+        error.TriggerRuleHasHypotheses => t("err_TriggerRuleHasHypotheses"),
+        error.TriggerBinderNotGround => t("err_TriggerBinderNotGround"),
+        error.TriggerSortMismatch => t("err_TriggerSortMismatch"),
+        error.TriggerBoundPosition => t("err_TriggerBoundPosition"),
+        error.FallbackCycle => t("err_FallbackCycle"),
+        error.UnknownFreshBinder => t("err_UnknownFreshBinder"),
+        error.UnknownFreshenBinder => t("err_UnknownFreshenBinder"),
+        error.UnknownAlphaBinder => t("err_UnknownAlphaBinder"),
+        error.DuplicateFreshBinder => t("err_DuplicateFreshBinder"),
+        error.DuplicateFreshenPair => t("err_DuplicateFreshenPair"),
+        error.FreshRequiresBoundBinder => t("err_FreshRequiresBoundBinder"),
+        error.FreshenTargetMustBeRegularBinder => t("err_FreshenTargetMustBeRegularBinder"),
+        error.FreshenBlockerMustBeBoundBinder => t("err_FreshenBlockerMustBeBoundBinder"),
+        error.AlphaRequiresBoundBinders => t("err_AlphaRequiresBoundBinders"),
+        error.AlphaSortMismatch => t("err_AlphaSortMismatch"),
+        error.AlphaConclusionMustBeBinaryRelation => t("err_AlphaConclusionMustBeBinaryRelation"),
+        error.AlphaConclusionUnsupported => t("err_AlphaConclusionUnsupported"),
+        error.AlphaRuleHasHypotheses => t("err_AlphaRuleHasHypotheses"),
+        error.InvalidCongruenceAnnotation => t("err_InvalidCongruenceAnnotation"),
+        error.CongruenceBinderOrderMismatch => t("err_CongruenceBinderOrderMismatch"),
+        error.CongruenceBinderMissingDeps => t("err_CongruenceBinderMissingDeps"),
+        error.RelationBundleBoundBinder => t("err_RelationBundleBoundBinder"),
+        error.InvalidConversionAnnotation => t("err_InvalidConversionAnnotation"),
+        error.InvalidDefConversionAnnotation => t("err_InvalidDefConversionAnnotation"),
+        error.ConversionTermNotDef => t("err_ConversionTermNotDef"),
+        error.ConversionDefUnfoldHiddenDummies => t("err_ConversionDefUnfoldHiddenDummies"),
+        error.DuplicateConversionAnnotation => t("err_DuplicateConversionAnnotation"),
+        error.ConversionRuleHasHypotheses => t("err_ConversionRuleHasHypotheses"),
+        error.ConversionCommRuleShape => t("err_ConversionCommRuleShape"),
+        error.ConversionAssocRuleShape => t("err_ConversionAssocRuleShape"),
+        error.ConversionRoleBoundBinder => t("err_ConversionRoleBoundBinder"),
+        error.ConversionRoleRelationHead => t("err_ConversionRoleRelationHead"),
+        error.DuplicateConversionRoleForHead => t("err_DuplicateConversionRoleForHead"),
+        error.ConversionConclusionNotRelation => t("err_ConversionConclusionNotRelation"),
+        error.ConversionMissingRelation => t("err_ConversionMissingRelation"),
+        error.ConversionBareMatchSide => t("err_ConversionBareMatchSide"),
+        error.ConversionBinderNotCovered => t("err_ConversionBinderNotCovered"),
+        error.InvalidComputeAnnotation => t("err_InvalidComputeAnnotation"),
+        error.DuplicateComputeAnnotation => t("err_DuplicateComputeAnnotation"),
+        error.ComputeRuleHasHypotheses => t("err_ComputeRuleHasHypotheses"),
+        error.ComputeConclusionNotRelation => t("err_ComputeConclusionNotRelation"),
+        error.ComputeMissingRelation => t("err_ComputeMissingRelation"),
+        error.ComputeBareMatchSide => t("err_ComputeBareMatchSide"),
+        error.ComputeBinderNotCovered => t("err_ComputeBinderNotCovered"),
+        error.FreshStrictSort => t("err_FreshStrictSort"),
+        error.FreshFreeSort => t("err_FreshFreeSort"),
+        error.FreshNoAvailableVar => t("err_FreshNoAvailableVar"),
+        error.HiddenWitnessNoAvailableVar => t("err_HiddenWitnessNoAvailableVar"),
+        error.NoAlphaRewriteAvailable => t("err_NoAlphaRewriteAvailable"),
+        error.AlphaRewriteSearchFailed => t("err_AlphaRewriteSearchFailed"),
+        error.DepViolation => t("err_DepViolation"),
+        error.FreshenMissingRelation => t("err_FreshenMissingRelation"),
+        error.FreshenTransportFailed => t("err_FreshenTransportFailed"),
+        error.InvalidHoleAnnotation => t("err_InvalidHoleAnnotation"),
+        error.DuplicateHoleAnnotation => t("err_DuplicateHoleAnnotation"),
+        error.DuplicateHoleToken => t("err_DuplicateHoleToken"),
+        error.InvalidVarsAnnotation => t("err_InvalidVarsAnnotation"),
+        error.VarsStrictSort => t("err_VarsStrictSort"),
+        error.VarsFreeSort => t("err_VarsFreeSort"),
+        error.DuplicateVarsToken => t("err_DuplicateVarsToken"),
+        error.VarsTokenCollision => t("err_VarsTokenCollision"),
+        error.DependencySlotExhausted => t("err_DependencySlotExhausted"),
+        error.UnresolvedDummyWitness => t("err_UnresolvedDummyWitness"),
+        error.MissingCongruenceRule => t("err_MissingCongruenceRule"),
         error.ExpectedIdentifier,
         error.ExpectedIdent,
-        => "expected identifier",
-        error.ExpectedNumber => "expected number",
-        error.UnknownMathToken => "unknown token in math string",
-        error.ExpectedMathToken => "expected token in math string",
-        error.ExpectedCloseParen => "expected closing parenthesis in math string",
-        error.TrailingMathTokens => "unexpected trailing tokens in math string",
-        error.NotationMismatch => "token sequence does not match declared notation",
-        error.AnonymousNotationBinder => "anonymous binders are not permitted in notation declarations",
-        error.DummyNotationBinder => "dummy binders are not permitted in notation declarations",
-        error.InvalidNotationVariables => "notation must mention each declared argument exactly once",
-        error.PrecMismatch => "operator precedence does not allow this parse",
-        error.NotProvable => "math string does not have a provable sort",
+        => t("err_ExpectedIdentifier"),
+        error.ExpectedNumber => t("err_ExpectedNumber"),
+        error.UnknownMathToken => t("err_UnknownMathToken"),
+        error.ExpectedMathToken => t("err_ExpectedMathToken"),
+        error.ExpectedCloseParen => t("err_ExpectedCloseParen"),
+        error.TrailingMathTokens => t("err_TrailingMathTokens"),
+        error.NotationMismatch => t("err_NotationMismatch"),
+        error.AnonymousNotationBinder => t("err_AnonymousNotationBinder"),
+        error.DummyNotationBinder => t("err_DummyNotationBinder"),
+        error.InvalidNotationVariables => t("err_InvalidNotationVariables"),
+        error.PrecMismatch => t("err_PrecMismatch"),
+        error.NotProvable => t("err_NotProvable"),
         error.ExpectedMathString,
         error.ExpectedMathStr,
-        => "expected $...$ math string",
-        error.MissingPublicDefBody => "missing proof-side body for public definition",
-        error.PublicDefBodyNameMismatch => "proof-side definition body targets a different public definition",
-        error.PublicDefBodyMustBeHeaderless => "public definition body filler may declare only dummy binders before `=`",
-        error.FillerBinderMustBeDummy => "public definition body filler binders must be hidden dummies like (.x: s)",
-        error.DuplicateFillerBinderName => "filler dummy name is already bound by the definition",
-        error.TooManyBoundVars => "a declaration may bind at most 55 variables " ++
-            "(bound binders and hidden dummies together)",
-        error.UnexpectedProofDefItem => "unexpected proof-side definition item",
-        error.UnsupportedProofDefAnnotation => "proof-side definition annotations are not supported yet",
-        error.ExtraProofItem => "extra proof item with no matching declaration",
-        error.ExpectedBy => "expected 'by' after the proof line's statement",
-        error.ExpectedKeyword => "expected keyword",
-        error.ExpectedString => "expected quoted string",
-        error.UnknownTerm => "unknown term",
-        error.UnknownSort => "unknown sort",
-        error.UnknownVariable => "unknown variable",
-        error.UnexpectedKeyword => "unexpected keyword",
+        => t("err_ExpectedMathString"),
+        error.MissingPublicDefBody => t("kind_missing_public_def_body"),
+        error.PublicDefBodyNameMismatch => t("kind_public_def_body_name_mismatch"),
+        error.PublicDefBodyMustBeHeaderless => t("err_PublicDefBodyMustBeHeaderless"),
+        error.FillerBinderMustBeDummy => t("err_FillerBinderMustBeDummy"),
+        error.DuplicateFillerBinderName => t("err_DuplicateFillerBinderName"),
+        error.TooManyBoundVars => t("err_TooManyBoundVars"),
+        error.UnexpectedProofDefItem => t("kind_unexpected_proof_def"),
+        error.UnsupportedProofDefAnnotation => t("kind_unsupported_proof_def_annotation"),
+        error.ExtraProofItem => t("err_ExtraProofItem"),
+        error.ExpectedBy => t("err_ExpectedBy"),
+        error.ExpectedKeyword => t("err_ExpectedKeyword"),
+        error.ExpectedString => t("err_ExpectedString"),
+        error.UnknownTerm => t("err_UnknownTerm"),
+        error.UnknownSort => t("err_UnknownSort"),
+        error.UnknownVariable => t("err_UnknownVariable"),
+        error.UnexpectedKeyword => t("err_UnexpectedKeyword"),
         error.UnexpectedCharacter,
         error.UnexpectedChar,
-        => "unexpected character",
-        error.ExpectedLineEnd => "expected end of line",
-        error.ExpectedBlockUnderline => "expected underline after proof block header",
+        => t("err_UnexpectedCharacter"),
+        error.ExpectedLineEnd => t("err_ExpectedLineEnd"),
+        error.ExpectedBlockUnderline => t("err_ExpectedBlockUnderline"),
         error.UnterminatedMathString,
         error.UnterminatedMathStr,
-        => "unterminated $...$ math string",
-        error.UnterminatedString => "unterminated string",
-        error.ExpectedDefEquals => "expected '=' in the proof-side definition body",
-        error.ExpectedProofBlock => "expected a proof block",
-        error.OutOfMemory => "the compiler ran out of memory",
-        error.UnexpectedInternalError => "unexpected internal error; please report this",
-        error.UnknownDummyVar => "internal error: unknown dummy variable; please report this",
-        error.UnknownPlaceholder => "internal error: unknown placeholder; please report this",
-        error.PlaceholderLeakage => "an unresolved search placeholder remains in this proof",
-        error.UnsolvedMetaLeakage => "an unsolved metavariable remains in this proof",
-        error.Overflow => "an internal limit overflowed; the theorem may be too large",
-        error.TooManyTheoremExprs => "theorem is too large (internal expression limit exceeded)",
-        error.HoleNotConcrete => "a proof hole is not allowed here",
-        error.HoleNotAllowedInTemplate => "a proof hole is not allowed in a rule statement",
-        error.TooManyCompilerRules => "too many rules declared",
-        error.TooManyCompilerTerms => "too many terms declared (compiler limit)",
-        error.UnknownTemplateVariable => "internal error: unknown template variable; " ++
-            "please report this",
+        => t("err_UnterminatedMathString"),
+        error.UnterminatedString => t("err_UnterminatedString"),
+        error.ExpectedDefEquals => t("err_ExpectedDefEquals"),
+        error.ExpectedProofBlock => t("err_ExpectedProofBlock"),
+        error.OutOfMemory => t("err_OutOfMemory"),
+        error.UnexpectedInternalError => t("err_UnexpectedInternalError"),
+        error.UnknownDummyVar => t("err_UnknownDummyVar"),
+        error.UnknownPlaceholder => t("err_UnknownPlaceholder"),
+        error.PlaceholderLeakage => t("err_PlaceholderLeakage"),
+        error.UnsolvedMetaLeakage => t("err_UnsolvedMetaLeakage"),
+        error.Overflow => t("err_Overflow"),
+        error.TooManyTheoremExprs => t("err_TooManyTheoremExprs"),
+        error.HoleNotConcrete => t("err_HoleNotConcrete"),
+        error.HoleNotAllowedInTemplate => t("err_HoleNotAllowedInTemplate"),
+        error.TooManyCompilerRules => t("err_TooManyCompilerRules"),
+        error.TooManyCompilerTerms => t("err_TooManyCompilerTerms"),
+        error.UnknownTemplateVariable => t("err_UnknownTemplateVariable"),
         error.InvalidExprUseCount,
         error.UnknownExprUseCount,
         error.UnboundExprVariable,
-        => "internal error in proof emission; please report this",
-        error.TooManyTheoremVars => "theorem has too many variables",
-        error.ExpectedDefinitionBody => "definition has no body",
-        error.ArgCountMismatch => "wrong number of arguments for term",
-        error.DummyHypothesisBinder => "hypothesis binders cannot be dummies",
-        error.DuplicateSort => "duplicate sort name",
-        error.DuplicateTermName => "duplicate term or definition name",
-        error.ExpectedFormula => "expected a formula",
-        error.TooManySorts => "too many sorts declared",
-        error.TooManyTerms => "too many terms declared",
-        error.UnexpectedHypothesisBinder => "hypothesis binders are not allowed " ++
-            "in this declaration",
-        error.UnexpectedTrailingInput => "unexpected input after the end of the statement",
-        error.UnexpectedEOF => "unexpected end of file",
-        error.NumberOutOfRange => "number is too large (at most 65535)",
-        error.MultiCharacterDelimiter => "delimiters must be single characters",
-        error.InvalidNotationToken => "'(' and ')' cannot be used as notation tokens",
-        error.PrecedenceMismatch => "token was already declared with a different precedence",
-        error.PrecedenceAssocMismatch => "this precedence level was already declared " ++
-            "with the opposite associativity",
-        error.NotationFirstTokenConflict => "a notation's first token cannot also be " ++
-            "a prefix or infix token",
-        error.ExpectedBinaryOperator => "infix notation requires a term with exactly two arguments",
-        error.ExpectedUnaryOperator => "prefix notation requires a term with exactly one argument",
-        error.InfixPrecOutOfRange => "infix operator precedence is out of range",
-        error.CoercionCycle => "coercion would create a cycle between sorts",
-        error.CoercionDiamond => "coercion would create a second route between two sorts " ++
-            "(coercion paths must be unique)",
-        error.CoercionDiamondToProvable => "coercion would create a second route " ++
-            "to a provable sort",
-        // Kind-owned errors: normally rendered via their `DiagnosticKind`
-        // summary, but every catalog member needs an arm here so that a
-        // missing message is a compile error. Texts mirror the kind summaries.
-        error.ConclusionMismatch => "proof line assertion does not match the rule conclusion",
-        error.DiagnosticsOmitted => "additional diagnostics omitted",
-        error.DuplicateBinderAssignment => "duplicate binder assignment in rule application",
-        error.DuplicateLabel => "duplicate proof line label",
-        error.EmptyProofBlock => "proof block is empty",
-        error.ExtraProofBlock => "extra proof block with no matching theorem",
-        error.FinalLineMismatch => "last proof line does not prove the theorem conclusion",
-        error.HypothesisMismatch => "a cited premise does not match the hypothesis " ++
-            "the rule expects there",
-        error.MissingBinderAssignment => "one of the rule's variables could not " ++
-            "be determined from the statement and cited premises",
-        error.MissingProofBlock => "missing proof block for theorem",
-        error.RefCountMismatch => "wrong number of references for rule application",
-        error.TheoremNameMismatch => "proof block name does not match the theorem",
-        error.UnknownBinderName => "unknown binder name in rule application",
-        error.UnknownLabel => "unknown proof line label",
-        error.UnknownRule => "unknown rule in proof line",
-        error.UnnamedRuleBinder => "binder assignment targets an unnamed rule binder",
-        error.UnknownHypothesisRef => "unknown theorem hypothesis reference",
-        error.AmbiguousHypothesisRef => "hypothesis name matches more than one hypothesis",
-        error.UnusedTheoremParameter => "theorem parameter is unused; if it is only " ++
-            "needed during proofs, use @vars and an explicit theorem-local dummy instead",
-        error.UnusedDefinitionParameter => "definition parameter is unused; " ++
-            "remove it if it is not part of the definition",
+        => t("err_InvalidExprUseCount"),
+        error.TooManyTheoremVars => t("err_TooManyTheoremVars"),
+        error.ExpectedDefinitionBody => t("err_ExpectedDefinitionBody"),
+        error.ArgCountMismatch => t("err_ArgCountMismatch"),
+        error.DummyHypothesisBinder => t("err_DummyHypothesisBinder"),
+        error.DuplicateSort => t("err_DuplicateSort"),
+        error.DuplicateTermName => t("err_DuplicateTermName"),
+        error.ExpectedFormula => t("err_ExpectedFormula"),
+        error.TooManySorts => t("err_TooManySorts"),
+        error.TooManyTerms => t("err_TooManyTerms"),
+        error.UnexpectedHypothesisBinder => t("err_UnexpectedHypothesisBinder"),
+        error.UnexpectedTrailingInput => t("err_UnexpectedTrailingInput"),
+        error.UnexpectedEOF => t("err_UnexpectedEOF"),
+        error.NumberOutOfRange => t("err_NumberOutOfRange"),
+        error.MultiCharacterDelimiter => t("err_MultiCharacterDelimiter"),
+        error.InvalidNotationToken => t("err_InvalidNotationToken"),
+        error.PrecedenceMismatch => t("err_PrecedenceMismatch"),
+        error.PrecedenceAssocMismatch => t("err_PrecedenceAssocMismatch"),
+        error.NotationFirstTokenConflict => t("err_NotationFirstTokenConflict"),
+        error.ExpectedBinaryOperator => t("err_ExpectedBinaryOperator"),
+        error.ExpectedUnaryOperator => t("err_ExpectedUnaryOperator"),
+        error.InfixPrecOutOfRange => t("err_InfixPrecOutOfRange"),
+        error.CoercionCycle => t("err_CoercionCycle"),
+        error.CoercionDiamond => t("err_CoercionDiamond"),
+        error.CoercionDiamondToProvable => t("err_CoercionDiamondToProvable"),
+        error.ConclusionMismatch => t("kind_conclusion_mismatch"),
+        error.DiagnosticsOmitted => t("kind_omitted_diagnostics"),
+        error.DuplicateBinderAssignment => t("kind_duplicate_binder_assignment"),
+        error.DuplicateLabel => t("kind_duplicate_label"),
+        error.EmptyProofBlock => t("kind_empty_proof_block"),
+        error.ExtraProofBlock => t("kind_extra_proof_block"),
+        error.FinalLineMismatch => t("kind_final_line_mismatch"),
+        error.HypothesisMismatch => t("kind_hypothesis_mismatch"),
+        error.MissingBinderAssignment => t("kind_missing_binder_assignment"),
+        error.MissingProofBlock => t("kind_missing_proof_block"),
+        error.RefCountMismatch => t("kind_ref_count_mismatch"),
+        error.TheoremNameMismatch => t("kind_theorem_name_mismatch"),
+        error.UnknownBinderName => t("kind_unknown_binder_name"),
+        error.UnknownLabel => t("kind_unknown_label"),
+        error.UnknownRule => t("kind_unknown_rule"),
+        error.UnnamedRuleBinder => t("err_UnnamedRuleBinder"),
+        error.UnknownHypothesisRef => t("kind_unknown_hypothesis_ref"),
+        error.AmbiguousHypothesisRef => t("kind_ambiguous_hypothesis_ref"),
+        error.UnusedTheoremParameter => t("kind_unused_theorem_parameter"),
+        error.UnusedDefinitionParameter => t("kind_unused_definition_parameter"),
     };
 }
 
@@ -1535,93 +1516,88 @@ pub fn writeMissingCongruenceRuleSummary(
     switch (info.reason) {
         .missing_rule => {
             if (info.term_name) |term_name| {
-                try writer.print(
-                    "missing @congr for term {s}",
-                    .{term_name},
-                );
+                try printT(writer, "congr_missing_rule_for_term", .{term_name});
             } else {
-                try writer.writeAll("missing @congr rule");
+                try writer.writeAll(t("congr_missing_rule"));
             }
         },
         .changed_bound_arg => {
             if (info.arg_index) |arg_index| {
                 if (info.term_name) |term_name| {
-                    try writer.print(
-                        "bound argument {0d} of term {1s} changed " ++
-                            "during normalization",
+                    try printT(
+                        writer,
+                        "congr_changed_bound_arg_term",
                         .{ arg_index + 1, term_name },
                     );
                 } else {
-                    try writer.print(
-                        "bound argument {d} changed during normalization",
+                    try printT(
+                        writer,
+                        "congr_changed_bound_arg",
                         .{arg_index + 1},
                     );
                 }
             } else {
-                try writer.writeAll(
-                    "bound argument changed during normalization",
-                );
+                try writer.writeAll(t("congr_changed_bound_arg_generic"));
             }
         },
         .missing_child_relation => {
             if (info.arg_index) |arg_index| {
                 if (info.term_name) |term_name| {
-                    try writer.print(
-                        "missing relation for argument {0d} of term {1s}",
+                    try printT(
+                        writer,
+                        "congr_missing_child_relation_term",
                         .{ arg_index + 1, term_name },
                     );
                 } else {
-                    try writer.print(
-                        "missing relation for argument {d}",
+                    try printT(
+                        writer,
+                        "congr_missing_child_relation_arg",
                         .{arg_index + 1},
                     );
                 }
             } else {
-                try writer.writeAll("missing child relation");
+                try writer.writeAll(t("congr_missing_child_relation"));
             }
         },
         .missing_child_proof => {
             if (info.arg_index) |arg_index| {
                 if (info.term_name) |term_name| {
-                    try writer.print(
-                        "argument {0d} of term {1s} changed without " ++
-                            "a congruence proof",
+                    try printT(
+                        writer,
+                        "congr_missing_child_proof_term",
                         .{ arg_index + 1, term_name },
                     );
                 } else {
-                    try writer.print(
-                        "argument {d} changed without a congruence proof",
+                    try printT(
+                        writer,
+                        "congr_missing_child_proof_arg",
                         .{arg_index + 1},
                     );
                 }
             } else {
-                try writer.writeAll(
-                    "argument changed without a congruence proof",
-                );
+                try writer.writeAll(t("congr_missing_child_proof"));
             }
         },
         .missing_parent_relation => {
             if (info.term_name) |term_name| {
-                try writer.print(
-                    "missing parent relation for term {s}",
+                try printT(
+                    writer,
+                    "congr_missing_parent_relation_term",
                     .{term_name},
                 );
             } else {
-                try writer.writeAll("missing parent relation");
+                try writer.writeAll(t("congr_missing_parent_relation"));
             }
         },
         .malformed_rule => {
             if (info.term_name) |term_name| {
-                try writer.print(
-                    "malformed @congr rule for term {s}",
-                    .{term_name},
-                );
+                try printT(writer, "congr_malformed_rule_term", .{term_name});
             } else {
-                try writer.writeAll("malformed @congr rule");
+                try writer.writeAll(t("congr_malformed_rule"));
             }
         },
         .unknown_term => {
-            try writer.writeAll("normalization used an unknown term");
+            try writer.writeAll(t("congr_unknown_term"));
         },
     }
 }
@@ -1630,7 +1606,7 @@ pub fn writeOmittedDiagnosticsSummary(
     writer: anytype,
     count: usize,
 ) !void {
-    try writer.print("{d} more diagnostics omitted", .{count});
+    try printT(writer, "omitted_diagnostics_count", .{count});
 }
 
 pub fn writeDepViolationSummary(
@@ -1650,24 +1626,16 @@ pub fn writeDepViolationSummary(
         info.second_arg_idx,
     );
     if (info.first_rule_bound and info.second_rule_bound) {
-        try writer.print(
-            "bound variables {0s} and {1s} must be assigned " ++
-                "distinct variables",
-            .{ first, second },
-        );
+        try printT(writer, "dep_bound_distinct", .{ first, second });
         return;
     }
     if (info.first_rule_bound != info.second_rule_bound) {
         const bound = if (info.first_rule_bound) first else second;
         const regular = if (info.first_rule_bound) second else first;
-        try writer.print(
-            "the rule does not allow {0s} to mention the variable " ++
-                "assigned to {1s}",
-            .{ regular, bound },
-        );
+        try printT(writer, "dep_regular_mentions_bound", .{ regular, bound });
         return;
     }
-    try writer.print("conflicting binders {0s} and {1s}", .{ first, second });
+    try printT(writer, "dep_conflicting_binders", .{ first, second });
 }
 
 /// One "<arg> was assigned: <expr>" line of the dep-violation detail.
@@ -1678,8 +1646,9 @@ fn writeDepViolationAssignment(
     text: []const u8,
 ) !void {
     var label_buf: DepViolationLabelBuf = undefined;
-    try writer.print(
-        "{0s} was assigned: {1s}",
+    try printT(
+        writer,
+        "dep_assignment",
         .{ depViolationArgLabel(&label_buf, name, idx), text },
     );
 }
@@ -1710,235 +1679,64 @@ fn depViolationArgLabel(
 /// JSON notes array.
 pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
     switch (message) {
-        .missing_semicolon_hint => try writer.writeAll(
-            "usually a missing ';' at the end of the declaration " ++
-                "before this point",
-        ),
-        .unknown_math_token_hint => try writer.writeAll(
-            "the token is not a variable of this theorem, nor a term " ++
-                "or notation of the theory",
-        ),
-        .trailing_math_token_hint => try writer.writeAll(
-            "the expression to the left parses on its own; this token " ++
-                "is not a notation that can extend it",
-        ),
-        .search_placeholder_meaning => try writer.writeAll(
-            "search placeholders (auto?, exact?, apply?, conversion?) " ++
-                "stand for a search that runs in the editor and is " ++
-                "replaced by the proof it finds",
-        ),
-        .search_placeholder_unfinished => try writer.writeAll(
-            "the compiler only checks finished proofs; this search " ++
-                "has not produced one yet",
-        ),
-        .rule_declared_later => try writer.writeAll(
-            "rule is declared later in the mm0 file",
-        ),
-        .name_is_term_not_rule => try writer.writeAll(
-            "this name is a term or definition; it can appear inside " ++
-                "formulas but cannot justify a proof line",
-        ),
-        .name_is_label_not_rule => try writer.writeAll(
-            "this name is a proof line label, not a rule; earlier lines " ++
-                "are cited as premises in the brackets after a rule",
-        ),
-        .label_belongs_to_later_line => try writer.writeAll(
-            "this label belongs to a later line; a line can only cite " ++
-                "the lines above it",
-        ),
-        .def_body_result_sort => try writer.writeAll(
-            "the definition body must already have the declared " ++
-                "result sort",
-        ),
-        .def_body_checked_before_unify => try writer.writeAll(
-            "definition bodies are checked before the def unify " ++
-                "stream runs",
-        ),
-        .def_body_free_var_deps => try writer.writeAll(
-            "every free variable of the body must be declared as a " ++
-                "dependency of the result type",
-        ),
-        .subexpression_sort_mismatch => try writer.writeAll(
-            "a subexpression here is used where a different sort " ++
-                "is expected",
-        ),
-        .subexpression_needs_bound_var => try writer.writeAll(
-            "a position inside this expression requires a single " ++
-                "bound variable",
-        ),
-        .right_sort_but_needs_bound_var => try writer.writeAll(
-            "the assignment parses with the right sort, but this " ++
-                "binder requires a single bound variable",
-        ),
-        .holey_fallback_exhausted => try writer.writeAll(
-            "fallback chain exhausted for holey assertion; showing " ++
-                "first candidate failure",
-        ),
-        .visible_structure_mismatch => try writer.writeAll(
-            "the visible parts of the statement do not match the " ++
-                "rule's conclusion",
-        ),
-        .unnamed_rule_var_two_values => try writer.writeAll(
-            "one rule variable would need two different values",
-        ),
-        .attempted_normalized_comparison => try writer.writeAll(
-            "attempted normalized comparison",
-        ),
-        .boundary_mismatch_despite_unfolding => try writer.writeAll(
-            "the two do not match, even with definitions unfolded",
-        ),
-        .boundary_mismatch_despite_normalization => try writer.writeAll(
-            "nor after normalization",
-        ),
-        .conclusion_replay_mismatch => try writer.writeAll(
-            "the statement does not match the rule's conclusion",
-        ),
-        .identical_positions_matched_differently => try writer.writeAll(
-            "two positions the rule requires to be identical matched " ++
-                "different expressions",
-        ),
-        .no_rule_var_completion => try writer.writeAll(
-            "no way of filling in the rule's variables makes them match",
-        ),
-        .rule_requires_bound_var_here => try writer.writeAll(
-            "the rule requires a single bound variable here",
-        ),
-        .assignment_parses_as_sort => |info| try writer.print(
-            "the assignment parses, but as sort '{s}'; this binder " ++
-                "expects sort '{s}'",
-            .{ info.actual_sort, info.expected_sort },
-        ),
-        .statement_not_provable_sort => |info| try writer.print(
-            "the statement parses, but as sort '{s}', which is not a " ++
-                "provable sort",
-            .{info.actual_sort},
-        ),
-        .premise_hypothesis_mismatch => |info| try writer.print(
-            "cited premise {0d} does not match hypothesis {0d} of the rule",
-            .{info.number},
-        ),
-        .cited_premise_proves => |info| try writer.print(
-            "the cited premise proves: {s}",
-            .{info.text},
-        ),
-        .holey_unsolved_binder => |info| try writer.print(
-            "holey assertion left binder {s} unsolved",
-            .{info.binder_name},
-        ),
-        .unsolved_binder_index => |info| try writer.print(
-            "unsolved binder index: {d}",
-            .{info.number},
-        ),
-        .conclusion_head_clash => |info| try writer.print(
-            "the rule's conclusion has '{s}' where the statement " ++
-                "has '{s}'",
-            .{ info.expected_term, info.actual_term },
-        ),
-        .conclusion_head_clash_with_variable => |info| try writer.print(
-            "the rule's conclusion has '{s}' where the statement " ++
-                "has a variable",
-            .{info.expected_term},
-        ),
-        .rule_var_two_values => |info| try writer.print(
-            "rule variable {s} would need two different values",
-            .{info.binder_name},
-        ),
-        .already_matched => |info| try writer.print(
-            "already matched: {s}",
-            .{info.text},
-        ),
-        .in_the_statement => |info| try writer.print(
-            "in the statement: {s}",
-            .{info.text},
-        ),
-        .at_the_mismatch => |info| try writer.print(
-            "at the mismatch: {s}",
-            .{info.text},
-        ),
-        .hole_sort_mismatch => |info| try writer.print(
-            "hole {s} expected sort {s} but matched {s}",
-            .{ info.token, info.expected_sort, info.actual_sort },
-        ),
-        .expected_expr => |info| try writer.print(
-            "expected: {s}",
-            .{info.text},
-        ),
-        .actual_expr => |info| try writer.print(
-            "actual: {s}",
-            .{info.text},
-        ),
-        .normalized_expected_expr => |info| try writer.print(
-            "normalized expected: {s}",
-            .{info.text},
-        ),
-        .normalized_actual_expr => |info| try writer.print(
-            "normalized actual: {s}",
-            .{info.text},
-        ),
-        .freshen_attempted_for_target => |info| try writer.print(
-            "attempted @freshen for target binder {s}",
-            .{info.binder_name},
-        ),
-        .freshen_blocker => |info| try writer.print(
-            "freshen blocker binder: {s}",
-            .{info.binder_name},
-        ),
-        .freshen_replacement => |info| try writer.print(
-            "chosen replacement binder: {s}",
-            .{info.binder_name},
-        ),
-        .freshen_still_depends_on_blocker => |info| try writer.print(
-            "rewritten target still depends on blocker binder {s}",
-            .{info.binder_name},
-        ),
-        .freshen_no_longer_depends_on_blocker => |info| try writer.print(
-            "rewritten target no longer depends on blocker binder {s}",
-            .{info.binder_name},
-        ),
-        .theorem_concludes => |info| try writer.print(
-            "the theorem concludes: {s}",
-            .{info.text},
-        ),
-        .last_line_proves => |info| try writer.print(
-            "the last line proves: {s}",
-            .{info.text},
-        ),
-        .explicit_bindings => |info| try writer.print(
-            "explicit bindings: {s}",
-            .{info.summary},
-        ),
-        .inferred_bindings_before_failure => |info| try writer.print(
-            "inferred bindings before failure: {s}",
-            .{info.summary},
-        ),
-        .rule_requires_term_at_mismatch => |info| try writer.print(
-            "the rule requires '{s}' at the mismatch, but found: {s}",
-            .{ info.term_name, info.found_text },
-        ),
-        .chosen_bindings => |info| try writer.print(
-            "chosen bindings: {s}",
-            .{info.summary},
-        ),
-        .alternative_bindings => |info| try writer.print(
-            "alternative bindings: {s}",
-            .{info.summary},
-        ),
-        .distinct_solutions_considered => |info| try writer.print(
-            "distinct solutions considered: {d}",
-            .{info.count},
-        ),
-        .binder_resolved_to => |info| try writer.print(
-            "this binder was resolved to: {s}",
-            .{info.text},
-        ),
-        .binding_sort_mismatch => |info| try writer.print(
-            "it has sort '{s}', but the rule expects sort '{s}' here",
-            .{ info.actual_sort, info.expected_sort },
-        ),
-        .inference_path => |info| try writer.print(
-            "inference path: {s}",
-            .{inferencePathName(info.path)},
-        ),
+        .missing_semicolon_hint => try writer.writeAll(t("note_missing_semicolon_hint")),
+        .unknown_math_token_hint => try writer.writeAll(t("note_unknown_math_token_hint")),
+        .trailing_math_token_hint => try writer.writeAll(t("note_trailing_math_token_hint")),
+        .search_placeholder_meaning => try writer.writeAll(t("note_search_placeholder_meaning")),
+        .search_placeholder_unfinished => try writer.writeAll(t("note_search_placeholder_unfinished")),
+        .rule_declared_later => try writer.writeAll(t("note_rule_declared_later")),
+        .name_is_term_not_rule => try writer.writeAll(t("note_name_is_term_not_rule")),
+        .name_is_label_not_rule => try writer.writeAll(t("note_name_is_label_not_rule")),
+        .label_belongs_to_later_line => try writer.writeAll(t("note_label_belongs_to_later_line")),
+        .def_body_result_sort => try writer.writeAll(t("note_def_body_result_sort")),
+        .def_body_checked_before_unify => try writer.writeAll(t("note_def_body_checked_before_unify")),
+        .def_body_free_var_deps => try writer.writeAll(t("note_def_body_free_var_deps")),
+        .subexpression_sort_mismatch => try writer.writeAll(t("note_subexpression_sort_mismatch")),
+        .subexpression_needs_bound_var => try writer.writeAll(t("note_subexpression_needs_bound_var")),
+        .right_sort_but_needs_bound_var => try writer.writeAll(t("note_right_sort_but_needs_bound_var")),
+        .holey_fallback_exhausted => try writer.writeAll(t("note_holey_fallback_exhausted")),
+        .visible_structure_mismatch => try writer.writeAll(t("note_visible_structure_mismatch")),
+        .unnamed_rule_var_two_values => try writer.writeAll(t("note_unnamed_rule_var_two_values")),
+        .attempted_normalized_comparison => try writer.writeAll(t("note_attempted_normalized_comparison")),
+        .boundary_mismatch_despite_unfolding => try writer.writeAll(t("note_boundary_mismatch_despite_unfolding")),
+        .boundary_mismatch_despite_normalization => try writer.writeAll(t("note_boundary_mismatch_despite_normalization")),
+        .conclusion_replay_mismatch => try writer.writeAll(t("note_conclusion_replay_mismatch")),
+        .identical_positions_matched_differently => try writer.writeAll(t("note_identical_positions_matched_differently")),
+        .no_rule_var_completion => try writer.writeAll(t("note_no_rule_var_completion")),
+        .rule_requires_bound_var_here => try writer.writeAll(t("note_rule_requires_bound_var_here")),
+        .assignment_parses_as_sort => |info| try printT(writer, "note_assignment_parses_as_sort", .{ info.actual_sort, info.expected_sort }),
+        .statement_not_provable_sort => |info| try printT(writer, "note_statement_not_provable_sort", .{info.actual_sort}),
+        .premise_hypothesis_mismatch => |info| try printT(writer, "note_premise_hypothesis_mismatch", .{info.number}),
+        .cited_premise_proves => |info| try printT(writer, "note_cited_premise_proves", .{info.text}),
+        .holey_unsolved_binder => |info| try printT(writer, "note_holey_unsolved_binder", .{info.binder_name}),
+        .unsolved_binder_index => |info| try printT(writer, "note_unsolved_binder_index", .{info.number}),
+        .conclusion_head_clash => |info| try printT(writer, "note_conclusion_head_clash", .{ info.expected_term, info.actual_term }),
+        .conclusion_head_clash_with_variable => |info| try printT(writer, "note_conclusion_head_clash_with_variable", .{info.expected_term}),
+        .rule_var_two_values => |info| try printT(writer, "note_rule_var_two_values", .{info.binder_name}),
+        .already_matched => |info| try printT(writer, "note_already_matched", .{info.text}),
+        .in_the_statement => |info| try printT(writer, "note_in_the_statement", .{info.text}),
+        .at_the_mismatch => |info| try printT(writer, "note_at_the_mismatch", .{info.text}),
+        .hole_sort_mismatch => |info| try printT(writer, "note_hole_sort_mismatch", .{ info.token, info.expected_sort, info.actual_sort }),
+        .expected_expr => |info| try printT(writer, "note_expected_expr", .{info.text}),
+        .actual_expr => |info| try printT(writer, "note_actual_expr", .{info.text}),
+        .normalized_expected_expr => |info| try printT(writer, "note_normalized_expected_expr", .{info.text}),
+        .normalized_actual_expr => |info| try printT(writer, "note_normalized_actual_expr", .{info.text}),
+        .freshen_attempted_for_target => |info| try printT(writer, "note_freshen_attempted_for_target", .{info.binder_name}),
+        .freshen_blocker => |info| try printT(writer, "note_freshen_blocker", .{info.binder_name}),
+        .freshen_replacement => |info| try printT(writer, "note_freshen_replacement", .{info.binder_name}),
+        .freshen_still_depends_on_blocker => |info| try printT(writer, "note_freshen_still_depends_on_blocker", .{info.binder_name}),
+        .freshen_no_longer_depends_on_blocker => |info| try printT(writer, "note_freshen_no_longer_depends_on_blocker", .{info.binder_name}),
+        .theorem_concludes => |info| try printT(writer, "note_theorem_concludes", .{info.text}),
+        .last_line_proves => |info| try printT(writer, "note_last_line_proves", .{info.text}),
+        .explicit_bindings => |info| try printT(writer, "note_explicit_bindings", .{info.summary}),
+        .inferred_bindings_before_failure => |info| try printT(writer, "note_inferred_bindings_before_failure", .{info.summary}),
+        .rule_requires_term_at_mismatch => |info| try printT(writer, "note_rule_requires_term_at_mismatch", .{ info.term_name, info.found_text }),
+        .chosen_bindings => |info| try printT(writer, "note_chosen_bindings", .{info.summary}),
+        .alternative_bindings => |info| try printT(writer, "note_alternative_bindings", .{info.summary}),
+        .distinct_solutions_considered => |info| try printT(writer, "note_distinct_solutions_considered", .{info.count}),
+        .binder_resolved_to => |info| try printT(writer, "note_binder_resolved_to", .{info.text}),
+        .binding_sort_mismatch => |info| try printT(writer, "note_binding_sort_mismatch", .{ info.actual_sort, info.expected_sort }),
+        .inference_path => |info| try printT(writer, "note_inference_path", .{inferencePathName(info.path)}),
     }
 }
 
@@ -1946,9 +1744,31 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
 pub fn renderRelatedLabel(writer: anytype, label: RelatedLabel) !void {
     switch (label) {
         .rule_declaration_here => try writer.writeAll(
-            "rule declaration is here",
+            t("related_rule_declaration_here"),
         ),
     }
+}
+
+/// Localized frontend framing words ("error", "note", ...), for the
+/// prefixes the sink and LSP write around rendered diagnostics.
+pub fn severityLabel(severity: DiagnosticSeverity) []const u8 {
+    return switch (severity) {
+        .@"error" => t("label_error"),
+        .warning => t("label_warning"),
+    };
+}
+
+pub fn noteHeading() []const u8 {
+    return t("label_note");
+}
+
+pub fn relatedHeading() []const u8 {
+    return t("label_related");
+}
+
+/// The sink's "omitted N additional warning(s)" line body.
+pub fn writeOmittedWarningsSummary(writer: anytype, count: usize) !void {
+    try printT(writer, "omitted_warnings", .{count});
 }
 
 /// Notes and related spans are not rendered here: the CLI interleaves
@@ -1972,29 +1792,29 @@ pub fn renderDiagnostic(
     try writeNamedContextLine(
         writer,
         line_separator,
-        "theorem",
+        "ctx_theorem",
         diag.theorem_name,
     );
     try writeNamedContextLine(
         writer,
         line_separator,
-        "proof block",
+        "ctx_proof_block",
         diag.block_name,
     );
-    try writeNamedContextLine(writer, line_separator, "line", diag.line_label);
-    try writeNamedContextLine(writer, line_separator, "rule", diag.rule_name);
-    try writeNamedContextLine(writer, line_separator, "name", diag.name);
+    try writeNamedContextLine(writer, line_separator, "ctx_line", diag.line_label);
+    try writeNamedContextLine(writer, line_separator, "ctx_rule", diag.rule_name);
+    try writeNamedContextLine(writer, line_separator, "ctx_name", diag.name);
     try writeNamedContextLine(
         writer,
         line_separator,
-        "expected",
+        "ctx_expected",
         diag.expected_name,
     );
     if (diag.phase) |phase| {
         try writeContextLine(
             writer,
             line_separator,
-            "phase: {s}",
+            "ctx_phase",
             .{diagnosticPhaseName(phase)},
         );
     }
@@ -2013,7 +1833,7 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "token: {s}",
+                "detail_token",
                 .{info.token},
             );
         },
@@ -2021,7 +1841,7 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "did you mean: {s}",
+                "detail_did_you_mean",
                 .{info.suggestion},
             );
         },
@@ -2029,7 +1849,7 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "expected: '{c}'",
+                "detail_expected_char",
                 .{info.ch},
             );
         },
@@ -2037,13 +1857,13 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "missing binder: {s}",
+                "detail_missing_binder",
                 .{info.binder_name},
             );
             try writeContextLine(
                 writer,
                 line_separator,
-                "inference path: {s}",
+                "detail_inference_path",
                 .{inferencePathName(info.path)},
             );
         },
@@ -2051,21 +1871,21 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "inference path: {s}",
+                "detail_inference_path",
                 .{inferencePathName(info.path)},
             );
             if (info.first_unsolved_binder_name) |binder_name| {
                 try writeContextLine(
                     writer,
                     line_separator,
-                    "first unsolved binder: {s}",
+                    "detail_first_unsolved_binder",
                     .{binder_name},
                 );
             }
         },
         .dep_violation => |info| {
             try writer.writeAll(line_separator);
-            try writer.writeAll("dependency violation: ");
+            try writer.writeAll(t("detail_dep_violation_prefix"));
             try writeDepViolationSummary(writer, info);
             if (info.first_binding_text) |text| {
                 try writer.writeAll(line_separator);
@@ -2090,36 +1910,36 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "declared sort: {s}",
+                "detail_declared_sort",
                 .{info.declared_sort_name},
             );
             try writeContextLine(
                 writer,
                 line_separator,
-                "actual sort: {s}",
+                "detail_actual_sort",
                 .{info.actual_sort_name},
             );
             try writeContextLine(
                 writer,
                 line_separator,
-                "body deps: 0x{x}",
+                "detail_body_deps",
                 .{info.body_deps},
             );
             try writeContextLine(
                 writer,
                 line_separator,
-                "hidden binders: {d}",
+                "detail_hidden_binders",
                 .{info.hidden_binder_count},
             );
         },
         .missing_congruence_rule => |info| {
             try writer.writeAll(line_separator);
-            try writer.writeAll("missing congruence: ");
+            try writer.writeAll(t("detail_missing_congruence_prefix"));
             try writeMissingCongruenceRuleSummary(writer, info);
             try writeNamedContextLine(
                 writer,
                 line_separator,
-                "sort",
+                "ctx_sort",
                 info.sort_name,
             );
         },
@@ -2128,14 +1948,14 @@ fn writeDetailContextLines(
                 try writeContextLine(
                     writer,
                     line_separator,
-                    "hypothesis ref: #{s}",
+                    "detail_hypothesis_ref_name",
                     .{name},
                 );
             } else {
                 try writeContextLine(
                     writer,
                     line_separator,
-                    "hypothesis ref: #{d}",
+                    "detail_hypothesis_ref_index",
                     .{info.index},
                 );
             }
@@ -2144,7 +1964,7 @@ fn writeDetailContextLines(
             try writeContextLine(
                 writer,
                 line_separator,
-                "parameter: {s}",
+                "detail_parameter",
                 .{info.parameter_name},
             );
         },
@@ -2154,21 +1974,21 @@ fn writeDetailContextLines(
 fn writeContextLine(
     writer: anytype,
     line_separator: []const u8,
-    comptime fmt: []const u8,
+    comptime template: []const u8,
     args: anytype,
 ) !void {
     try writer.writeAll(line_separator);
-    try writer.print(fmt, args);
+    try printT(writer, template, args);
 }
 
 fn writeNamedContextLine(
     writer: anytype,
     line_separator: []const u8,
-    comptime label: []const u8,
+    comptime template: []const u8,
     value: ?[]const u8,
 ) !void {
     if (value) |actual| {
-        try writeContextLine(writer, line_separator, label ++ ": {s}", .{actual});
+        try writeContextLine(writer, line_separator, template, .{actual});
     }
 }
 

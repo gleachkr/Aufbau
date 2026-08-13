@@ -6935,3 +6935,34 @@ test "compiler analyze with proof ignores malformed blocks for blocked trailing 
     );
     try std.testing.expectEqualStrings("bad", diags[0].name.?);
 }
+
+test "runtime locale switch renders the German catalogue" {
+    mm0.setCompilerLang(.de);
+    defer mm0.setCompilerLang(.en);
+
+    try std.testing.expectEqualStrings(
+        "dem Compiler ist der Speicher ausgegangen",
+        mm0.compilerErrorSummary(error.OutOfMemory),
+    );
+
+    var buf = std.ArrayListUnmanaged(u8){};
+    defer buf.deinit(std.testing.allocator);
+    var writer = buf.writer(std.testing.allocator);
+    try mm0.renderCompilerNoteMessage(&writer, .{
+        .assignment_parses_as_sort = .{
+            .actual_sort = "wff",
+            .expected_sort = "nat",
+        },
+    });
+    try std.testing.expectEqualStrings(
+        "die Zuweisung parst, aber mit Sorte 'wff'; " ++
+            "dieser Binder erwartet Sorte 'nat'",
+        buf.items,
+    );
+}
+
+test "locale names parse and unknown names are rejected" {
+    try std.testing.expectEqual(mm0.CompilerLang.en, mm0.parseCompilerLang("en").?);
+    try std.testing.expectEqual(mm0.CompilerLang.de, mm0.parseCompilerLang("de").?);
+    try std.testing.expectEqual(@as(?mm0.CompilerLang, null), mm0.parseCompilerLang("xx"));
+}
