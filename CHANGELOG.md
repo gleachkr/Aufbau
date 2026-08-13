@@ -3,10 +3,34 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.5] - 2026-08-13
+
+### Added
+
+- Diagnostics in German. A single binary embeds a complete message
+  catalogue per language: select with `--lang de` (or the `ABC_LANG`
+  environment variable) on the CLI, or pass `locale: "de"` to
+  `loadCompiler`, `loadLspServer`, or `loadLspServerWorker` in the
+  WebAssembly packages — `setLocale` switches at runtime, and the
+  language-server worker transport forwards it. Everything the
+  compiler says is localized: error and note prose, context lines,
+  and the error/warning/note framing labels. An unknown locale name
+  leaves the language unchanged, and the JS loaders degrade silently
+  to English when paired with an older wasm build.
 
 ### Changed
 
+- Diagnostic text renders from one catalogue shared by the CLI, the
+  language server, and the WebAssembly compiler, so the frontends
+  can no longer drift. The WebAssembly compiler's JSON `message`
+  field now carries the fully rendered diagnostic; it was
+  summary-only, so detail lines never reached the web editor.
+- Every error that can reach a diagnostic now has a written,
+  catalogued message. Raw Zig error identifiers no longer leak into
+  diagnostics: user-reachable conditions that lacked prose (notation
+  precedence conflicts, coercion diamonds, sort-count limits, …) got
+  real messages, and internal conditions render as "internal error:
+  …; please report this" instead of a bare identifier.
 - `conversion?` emits substantially shorter proof chains. Extraction
   now prefers routes that traverse directed rules (`@compute`, or a
   theorem enrolled in one direction) along their reducing direction;

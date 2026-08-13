@@ -1,3 +1,81 @@
+# Aufbau 0.0.5
+
+Aufbau 0.0.5 makes `conversion?` write proofs the way a person would —
+chains that ran to hundreds of lines now come out at hand-written length —
+and teaches the compiler to speak German. The verifier and the trusted
+kernel are unchanged: everything new lowers through ordinary proof lines
+the 0.0.1 verifier already accepts.
+
+## Highlights
+
+### `conversion?` writes short chains
+
+Emitted conversion chains are dramatically shorter. Extraction prefers
+routes that traverse directed rules in their reducing direction; big-step
+groups absorb whole rewrite cascades instead of being split mid-cascade by
+a sibling subtree's reduction; a line identical to one already emitted
+cites the earlier label; consecutive steps compose with their own sort's
+transitivity at the deepest position they share and transport through the
+enclosing congruences once, the way a person composes equalities with
+`eq_trans`; and when an AC operator is also declared `@acui`, pure
+rearrangement steps are elided outright — the line check's normalized
+validation re-derives them. On the manual's lambda-calculus examples: the
+Y-combinator fixpoint chain drops from 35 lines to 12 (the hand-written
+proof's shape), Church `2·succ` application from ~185 to 16, Church
+`1 + 1 = 2` from ~2160 to ~100, and the 16-digit carry cascade from ~1670
+to ~120.
+
+### Diagnostics in German
+
+One binary embeds a complete message catalogue per language. Select with
+`--lang de` (or the `ABC_LANG` environment variable) on the CLI, or pass
+`locale: "de"` to `loadCompiler`, `loadLspServer`, or
+`loadLspServerWorker` in the WebAssembly packages; `setLocale` switches at
+runtime. Everything the compiler says is localized — error and note
+prose, context lines, and the error/warning/note framing labels. A
+missing translation is a compile error, so a locale cannot ship partially
+translated.
+
+Underneath, the diagnostic pipeline was reworked for the purpose: one
+renderer and one catalogue serve the CLI, the language server, and the
+WebAssembly compiler; the web compiler's JSON `message` field carries the
+fully rendered diagnostic (it was summary-only, so detail lines never
+reached the web editor); and every error that can reach a diagnostic now
+has written prose — raw Zig error identifiers no longer leak.
+
+### Fixes
+
+- A normalizer failure inside `conversion?`'s big-step commit gate no
+  longer kills the whole search: the gate declines the group and falls
+  back to elementary proof steps, and its acceptance test now replays the
+  checker's exactly.
+- Big-step `@rewrite` normalization opens redexes buried inside
+  already-concrete subtrees instead of reporting "no reduction" on
+  expressions it could reduce.
+- An equation goal whose sides converge during seeding no longer stops
+  saturation for good when the direct proof cannot be lowered, and a
+  degraded extraction is reported as "conversion found, proof not
+  extracted" rather than a flat miss.
+- The def_ops unit-test suite runs under `zig build test` again — it had
+  silently run zero times since an April test reorganization — with its
+  accumulated rot repaired.
+
+See the [changelog](CHANGELOG.md) for the complete list.
+
+## Compatibility
+
+The verifier and trusted kernel are unchanged; MMB files from earlier
+releases verify as before, and existing `.mm0`/`.auf` sources compile
+unchanged. Locale selection is opt-in and defaults to English. Embedders
+that display the WebAssembly compiler's JSON `message` field now receive
+the full rendered diagnostic rather than the summary line alone.
+`@aufbau/lsp`'s worker protocol gained a `locale` message type, backward
+compatibly. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.4
 
 Aufbau 0.0.4 ships the Aufbau Manual, lets proofs cite hypotheses by name,
