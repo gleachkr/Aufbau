@@ -6,9 +6,6 @@ computation.md cell1: error: error: proof line is justified by a search placehol
 computation.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof
 computation.md cell3: error: error: proof line is justified by a search placeholder, not a completed proof
 computation.md cell4: error: error: proof line is justified by a search placeholder, not a completed proof
-embedding.md cell1: ok
-embedding.md theory:hilbert: ok
-embedding.md doc:hilbert: ok
 equality-and-normalization.md cell1: ok
 equality-and-normalization.md cell2: ok
 equality-and-normalization.md cell3: ok
@@ -32,7 +29,6 @@ lemmas-defs-in-proofs.md cell4: ok
 natural-deduction.md doc:nd: ok
 notation.md doc:notation: ok
 notation.md doc:lambda: ok
-npm-packages.md theory:example: ok
 peano.md doc:peano: ok
 powering-search.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof
 powering-search.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof

@@ -109,7 +109,7 @@ function transform(markdown) {
 
   while (index < lines.length) {
     const line = lines[index];
-    const open = line.match(/^(\s*)(`{3,}|~{3,})\s*(aufbau-\S+)(.*)$/);
+    const open = line.match(/^(\s*)(`{3,}|~{3,})\s*(\S*)(.*)$/);
     if (!open) {
       out.push(line);
       index += 1;
@@ -118,6 +118,24 @@ function transform(markdown) {
 
     const [, indent, fence, lang, rest] = open;
     const closer = new RegExp(`^\\s*${fence[0]}{${fence.length},}\\s*$`);
+
+    if (!/^aufbau-\S/.test(lang)) {
+      // An ordinary fence (```html, ````markdown, …) may contain aufbau
+      // fences as literal examples; copy it through to its closer verbatim
+      // so they stay prose instead of becoming live cells.
+      out.push(line);
+      index += 1;
+      while (index < lines.length && !closer.test(lines[index])) {
+        out.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        out.push(lines[index]);
+        index += 1;
+      }
+      continue;
+    }
+
     const body = [];
     index += 1;
     while (index < lines.length && !closer.test(lines[index])) {

@@ -63,6 +63,18 @@ Most project-specific docs now live under `docs/`:
 - `docs/fresh_binders.md` for `@vars`, `@fresh`, and `@freshen`
 - `docs/holes.md` for proof-side holes (`@hole`)
 
+The user-facing manual is an mdbook under `manual/`:
+
+- `manual/src/` holds the chapters; `manual/preprocessor/aufbau-cells.mjs`
+  turns fenced `aufbau-*` blocks into live editor web components, inlining
+  shared theories from `manual/preludes/`
+- `manual/scripts/check-cells.mjs` compiles every live cell with the native
+  compiler and reports one line per document; CI diffs the report against
+  the `manual/cells.expected` baseline (regenerate with
+  `node manual/scripts/check-cells.mjs --abc zig-out/bin/abc > manual/cells.expected`)
+- CI wiring: `.github/workflows/test.yml` runs the cell check;
+  `.github/workflows/web-demo-pages.yml` builds and deploys the book
+
 Subsystem-level architecture notes live next to their code:
 
 - `src/frontend/compiler/search/ARCHITECTURE.md` for the `exact?` / `apply?` /
@@ -425,16 +437,21 @@ Proof-side def annotations are intentionally rejected for now; local def
 notation and term metadata are not part of the current format.
 
 The parser has two modes. `Parser.init` is strict — the first line it
-cannot read fails the whole item — and that is what everything which
-checks or compiles a proof uses. `Parser.initLenient` recovers per proof
-line instead, retaining the label and goal of a line whose rule
+cannot read fails the whole item. `Parser.initLenient` recovers per
+proof line instead, retaining the label and goal of a line whose rule
 application did not parse and marking it `ProofLine.incomplete`. Only
-the LSP indexer (`lsp/builder.zig`) parses leniently: a half-typed line
-is the normal state of a file being edited, and under the strict parser
-it costs the reader every completion, hover, and outline entry in the
-surrounding block rather than just that line's. Consumers that resolve
-a rule must skip `incomplete` lines; syntax diagnostics are unaffected,
-because they come from the pipeline's own strict parse.
+the batch compile path (`compiler/pipeline/run.zig`) still parses
+strictly; every interactive path is lenient — the LSP indexer
+(`lsp/builder.zig`), the pipeline's analyze entry
+(`compiler/pipeline/analyze.zig`), and the search-tactic sources
+(`compiler/search/source.zig`, `compiler/search/fixture.zig`). A
+half-typed line is the normal state of a file being edited, and under
+the strict parser it costs the reader every completion, hover, and
+outline entry in the surrounding block rather than just that line's.
+Consumers that resolve a rule must skip `incomplete` lines; on the
+lenient paths the incomplete-line syntax diagnostic comes from the gate
+at the top of `checkTheoremBlock` (`compiler/check.zig`), not from the
+parse itself.
 
 Local defs are inserted into the live parser and `GlobalEnv` immediately
 after they are checked. Later `.auf` math and later MM0 declarations can

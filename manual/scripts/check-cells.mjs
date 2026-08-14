@@ -53,29 +53,45 @@ for (const file of readdirSync(srcDir).sort()) {
   const html = JSON.parse(rendered).items[0].Chapter.content;
 
   // Documents in page order. Shared docs keep insertion order of their cells.
+  // Only cells the preprocessor generated count — it wraps each in
+  // <div class="aufbau-cell">. Literal <aufbau-*> tags in prose (e.g. inside
+  // ```html fences on the embedding page) are documentation, not cells.
   const documents = new Map(); // key -> {mm0: [], auf: []}
   let standalone = 0;
+  const wrapperRe = /^<div class="aufbau-cell">\n([\s\S]*?)\n<\/div>$/gm;
   const cellRe = /<(aufbau-proof|aufbau-theory)((?:\s+[-\w]+(?:="[^"]*")?)*)>([\s\S]*?)<\/\1>/g;
-  let m;
-  while ((m = cellRe.exec(html)) !== null) {
-    const [, tag, attrText, inner] = m;
-    if (tag === "aufbau-theory") continue; // hidden prelude holder; unused by compile
-    const attr = (name) => {
-      const hit = attrText.match(new RegExp(`\\s${name}="([^"]*)"`));
-      return hit ? hit[1] : null;
-    };
-    const key =
-      attr("theory") != null
-        ? `theory:${attr("theory")}`
-        : attr("doc") != null
-          ? `doc:${attr("doc")}`
-          : `cell${++standalone}`;
-    const doc = documents.get(key) ?? { mm0: [], auf: [] };
-    documents.set(key, doc);
-    const scriptRe = /<script type="text\/(mm0|auf)">\n([\s\S]*?)\n<\/script>/g;
-    let s;
-    while ((s = scriptRe.exec(inner)) !== null) {
-      (s[1] === "mm0" ? doc.mm0 : doc.auf).push(s[2]);
+  let w;
+  while ((w = wrapperRe.exec(html)) !== null) {
+    cellRe.lastIndex = 0;
+    let m;
+    while ((m = cellRe.exec(w[1])) !== null) {
+      const [, tag, attrText, inner] = m;
+      if (tag === "aufbau-theory") continue; // hidden prelude holder; unused by compile
+      const attr = (name) => {
+        const hit = attrText.match(new RegExp(`\\s${name}="([^"]*)"`));
+        return hit ? hit[1] : null;
+      };
+      // A src= cell's body lives behind a URL only the deployed site serves;
+      // there is nothing to compile here, so exclude it rather than record a
+      // vacuous ok for an empty pair.
+      if (attr("src") != null) continue;
+      // Grouping mirrors the editor coordinator's documentKeyFor
+      // (web/packages/editor/index.js) — keep the two ladders in sync.
+      const key =
+        attr("theory") != null
+          ? `theory:${attr("theory")}`
+          : attr("theory-src") != null
+            ? `theory-src:${attr("theory-src")}`
+            : attr("doc") != null
+              ? `doc:${attr("doc")}`
+              : `cell${++standalone}`;
+      const doc = documents.get(key) ?? { mm0: [], auf: [] };
+      documents.set(key, doc);
+      const scriptRe = /<script type="text\/(mm0|auf)">\n([\s\S]*?)\n<\/script>/g;
+      let s;
+      while ((s = scriptRe.exec(inner)) !== null) {
+        (s[1] === "mm0" ? doc.mm0 : doc.auf).push(s[2]);
+      }
     }
   }
 
