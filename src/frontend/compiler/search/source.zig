@@ -652,6 +652,7 @@ fn searchStatus(
     if (items_len > 0) return .found;
     if (counters.gen_budget_exhausted or
         counters.recursive_budget_exhausted or
+        counters.stack_guard_exhausted or
         counters.forward_saturation_exhausted)
     {
         return .budget_exhausted;
@@ -731,7 +732,23 @@ fn buildStatusDetail(
             }
         },
         .budget_exhausted => {
-            if (counters.gen_budget_exhausted) {
+            if (counters.stack_guard_exhausted) {
+                // No user-tunable parameter raises this bound (it protects
+                // the process stack itself), so the actionable advice is to
+                // shrink the search, not to grow a budget.
+                try w.print(
+                    "stopped by the call-stack guard during {s} at depth " ++
+                        "{d} of {d}: one search branch recursed deep " ++
+                        "enough to risk exhausting the process stack and " ++
+                        "was abandoned. A proof may still exist — try a " ++
+                        "smaller goal or prove an intermediate lemma first.",
+                    .{
+                        ladderPhaseName(counters.gen_last_phase),
+                        counters.gen_last_depth,
+                        gen.max_depth,
+                    },
+                );
+            } else if (counters.gen_budget_exhausted) {
                 // Whole-call weighted-tick cap: report consumption in the
                 // `budget` parameter's unit (billions of ticks ≈ seconds of
                 // calibrated work) and suggest roughly doubling it.

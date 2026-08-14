@@ -1642,6 +1642,38 @@ test "auto global fuel floor stops the search and reports exhaustion" {
     );
 }
 
+test "auto stack guard stops the search and reports exhaustion" {
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ R $ by auto?
+    ;
+    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // A 1-byte guard trips at the first recursive sub-solve: the honest-miss
+    // degradation path a real overflow-threatening descent would take.
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        auto_depth2_mm0,
+        proof_src,
+        offset,
+        .{
+            .counters = &counters,
+            .generate = .{ .enabled = true, .stack_guard_bytes = 1 },
+        },
+    );
+    defer suggestions.deinit();
+    // The guard is reported like a budget exhaustion, never a hard error.
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.stack_guard_exhausted);
+    try std.testing.expectEqual(
+        types.SearchStatus.budget_exhausted,
+        suggestions.status,
+    );
+}
+
 test "auto with ample fuel finds the chain without tripping the floor" {
     const proof_src =
         \\t
@@ -1668,6 +1700,8 @@ test "auto with ample fuel finds the chain without tripping the floor" {
     try std.testing.expect(found);
     // The default fuel floor is generous; a normal proof never trips it.
     try std.testing.expect(!counters.recursive_budget_exhausted);
+    // Same for the default call-stack guard.
+    try std.testing.expect(!counters.stack_guard_exhausted);
     try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
 }
 

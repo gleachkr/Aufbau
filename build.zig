@@ -270,6 +270,10 @@ pub fn build(b: *std.Build) void {
     compiler_wasm.entry = .disabled;
     compiler_wasm.rdynamic = true;
     compiler_wasm.export_memory = true;
+    // The default wasm shadow stack is far smaller than a native thread
+    // stack; the search's recursive descent overflows it into unrelated
+    // linear memory (no guard page in wasm). Match a native 8 MiB stack.
+    compiler_wasm.stack_size = 8 * 1024 * 1024;
 
     const verifier_wasm_module = b.createModule(.{
         .root_source_file = b.path("src/bin/verifier/wasm.zig"),
@@ -285,6 +289,7 @@ pub fn build(b: *std.Build) void {
     verifier_wasm.entry = .disabled;
     verifier_wasm.rdynamic = true;
     verifier_wasm.export_memory = true;
+    verifier_wasm.stack_size = 8 * 1024 * 1024;
 
     const lsp_server_wasm_module = b.createModule(.{
         .root_source_file = b.path("src/bin/compiler/lsp_wasm.zig"),
@@ -306,6 +311,7 @@ pub fn build(b: *std.Build) void {
     lsp_server_wasm.entry = .disabled;
     lsp_server_wasm.rdynamic = true;
     lsp_server_wasm.export_memory = true;
+    lsp_server_wasm.stack_size = 8 * 1024 * 1024;
 
     const web_demo_step = b.step("web-demo", "Build the browser demo");
     const web_packages_step = b.step(

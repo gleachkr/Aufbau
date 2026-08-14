@@ -94,6 +94,11 @@ const Driver = struct {
     scratch: std.mem.Allocator,
     options: GenerateOptions,
     counters: ?*SearchCounters,
+    /// `@frameAddress` at `generateTopLevel` entry: the zero point for the
+    /// call-stack guard (`checkStackGuard`). The stack grows downward on
+    /// every supported target (native and the wasm shadow stack), so
+    /// consumption is `stack_base -| @frameAddress()`.
+    stack_base: usize,
     /// Forward-saturation pool (null when the theory declares no
     /// `@auto forward` rules). Shared across every depth and sub-solve; uses
     /// are transient (solve, materialize, roll back).
@@ -407,6 +412,7 @@ pub fn generateTopLevel(
         .scratch = session.allocator,
         .options = options,
         .counters = gen_counters,
+        .stack_base = @frameAddress(),
         .derived = if (derived_pool) |*dpool| dpool else null,
         .fuel = .{ .remaining = options.fuel, .global = budget_ptr },
         .has_acui = session.context.registry.acui_by_head.count() > 0,
@@ -853,6 +859,13 @@ fn runDepthPass(
             if (driver.counters) |c| c.recursive_budget_exhausted = true;
             return true;
         },
+        // The call-stack guard tripped mid-descent. The stack has unwound
+        // safely; stop the ladder and report like a budget exhaustion —
+        // later cells would walk back into the same wall.
+        error.SearchStackExhausted => {
+            if (driver.counters) |c| c.stack_guard_exhausted = true;
+            return true;
+        },
         else => return err,
     };
     defer results.deinit();
@@ -869,6 +882,25 @@ fn runDepthPass(
         );
     }
     return false;
+}
+
+/// Call-stack guard, checked at the two recursion choke points (`solveProof`
+/// and `hookSolveOpen`). Measures real stack consumption below the driver's
+/// entry frame — which the logical bounds do not bound (eager steps are
+/// depth-exempt; one logical level costs many machine frames) — and abandons
+/// the search with a budget-like error before the descent can overflow the
+/// runtime stack (on wasm: silent linear-memory corruption, a dead instance).
+/// The frames *between* two checks (one backtracker level: enumeration,
+/// validation cascade, expression walks) are covered by the headroom between
+/// `stack_guard_bytes` and the linked stack size.
+fn checkStackGuard(driver: *Driver) error{SearchStackExhausted}!void {
+    const used = driver.stack_base -| @frameAddress();
+    if (driver.counters) |c| {
+        if (used > c.stack_high_water) c.stack_high_water = used;
+    }
+    if (used > driver.options.stack_guard_bytes) {
+        return error.SearchStackExhausted;
+    }
 }
 
 /// `GenerationHook.solveFn`: the backtracker calls this for a hypothesis slot it
@@ -930,6 +962,7 @@ fn hookSolveOpen(
     store: *MetaStore,
 ) anyerror!?types.GeneratedProof {
     const driver: *Driver = @ptrCast(@alignCast(ctx));
+    try checkStackGuard(driver);
 
     // Canonical visited key: metas numbered by first occurrence, so two
     // alpha-variant open targets (fresh meta ids each attempt) collide.
@@ -1483,6 +1516,7 @@ fn solveProof(
     target: ExprId,
     depth: usize,
 ) anyerror!?types.GeneratedProof {
+    try checkStackGuard(driver);
     // One canonical content key feeds both concrete memos. Two ACUI-equal
     // subgoals are equi-provable at a given depth (the proof compiler bridges
     // the reordering at compile time, costing no generation depth), so a

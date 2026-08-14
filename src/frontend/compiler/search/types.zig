@@ -590,6 +590,15 @@ pub const SearchCounters = struct {
     /// stopped early (distinct from an ordinary no-result miss). Observability
     /// for tests/bench; the authoritative signal is `GeneratedResults`.
     recursive_budget_exhausted: bool = false,
+    /// Set when the call-stack guard stopped the generation descent: one
+    /// branch recursed close enough to the runtime stack limit that
+    /// continuing would risk overflow (on wasm, silent linear-memory
+    /// corruption). Reported like a budget exhaustion, not a definitive miss.
+    stack_guard_exhausted: bool = false,
+    /// High-water mark of call-stack bytes consumed below the generation
+    /// driver's entry frame, sampled at the recursion choke points. For
+    /// calibrating `GenerateOptions.stack_guard_bytes` against real corpora.
+    stack_high_water: usize = 0,
     accepted_candidates: usize = 0,
     rejected_candidates_after_validation: usize = 0,
     hyp_match_syntactic: usize = 0,
@@ -1284,6 +1293,23 @@ pub const GenerateOptions = struct {
     /// persistence cutting wall-per-tick on miss-heavy workloads (fail-max
     /// dropped despite the raise). Null disables the cap.
     global_budget: ?u64 = 6_300_000_000,
+    /// Call-stack guard for the recursive descent: the deepest point (in
+    /// stack bytes below the driver's entry frame, measured via
+    /// `@frameAddress`) the search may recurse to before the branch is
+    /// abandoned with an honest exhaustion report. A safety bound, not a
+    /// search parameter: the logical bounds (`max_depth`, nodes, fuel) do not
+    /// bound *native* call depth — `@auto eager` steps are depth-exempt and
+    /// each logical level costs many machine frames — and on wasm a stack
+    /// overflow is not a crash but silent linear-memory corruption that
+    /// poisons the allocator for the rest of the session (the instance is
+    /// dead until page reload). Sized far above anything real proofs reach
+    /// (the tait depth corpus — the deepest known workload — peaks at
+    /// ~430 KiB native high-water, observable via
+    /// `SearchCounters.stack_high_water`) and comfortably under the 8 MiB
+    /// stack the wasm executables link with (`build.zig` `stack_size`),
+    /// leaving headroom for the frames between two check points (one full
+    /// backtracker level plus expression walks). Overridable only for tests.
+    stack_guard_bytes: usize = 4 * 1024 * 1024,
 };
 
 pub const SourceSuggestionOptions = struct {
