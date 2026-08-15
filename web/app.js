@@ -139,6 +139,11 @@ const examples = {
     mm0: "./fixtures/hoare.mm0",
     proof: "./fixtures/hoare.auf",
   },
+  diaconescu: {
+    label: "diaconescu",
+    mm0: "./fixtures/diaconescu.mm0",
+    proof: "./fixtures/diaconescu.auf",
+  },
   herbrand: {
     label: "herbrand",
     mm0: "./fixtures/herbrand.mm0",
