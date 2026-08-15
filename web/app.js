@@ -18,138 +18,12 @@ const themeKey = "aufbau-theme";
 const mm0Uri = "file:///demo/current.mm0";
 const proofUri = "file:///demo/current.auf";
 
-const examples = {
-  hilbert: {
-    label: "hilbert",
-    mm0: "./fixtures/hilbert.mm0",
-    proof: "./fixtures/hilbert.auf",
-  },
-  russell: {
-    label: "russell",
-    mm0: "./fixtures/russell.mm0",
-    proof: "./fixtures/russell.auf",
-  },
-  tseitin: {
-    label: "tseitin",
-    mm0: "./fixtures/tseitin.mm0",
-    proof: "./fixtures/tseitin.auf",
-  },
-  robinson: {
-    label: "robinson",
-    mm0: "./fixtures/robinson.mm0",
-    proof: "./fixtures/robinson.auf",
-  },
-  aristotle: {
-    label: "aristotle",
-    mm0: "./fixtures/aristotle.mm0",
-    proof: "./fixtures/aristotle.auf",
-  },
-  peirce: {
-    label: "peirce",
-    mm0: "./fixtures/peirce.mm0",
-    proof: "./fixtures/peirce.auf",
-  },
-  gentzen: {
-    label: "gentzen",
-    mm0: "./fixtures/gentzen.mm0",
-    proof: "./fixtures/gentzen.auf",
-  },
-  prawitz: {
-    label: "prawitz",
-    mm0: "./fixtures/prawitz.mm0",
-    proof: "./fixtures/prawitz.auf",
-  },
-  barcan: {
-    label: "barcan",
-    mm0: "./fixtures/barcan.mm0",
-    proof: "./fixtures/barcan.auf",
-  },
-  prior: {
-    label: "prior",
-    mm0: "./fixtures/prior.mm0",
-    proof: "./fixtures/prior.auf",
-  },
-  pnueli: {
-    label: "pnueli",
-    mm0: "./fixtures/pnueli.mm0",
-    proof: "./fixtures/pnueli.auf",
-  },
-  barwise: {
-    label: "barwise",
-    mm0: "./fixtures/barwise.mm0",
-    proof: "./fixtures/barwise.auf",
-  },
-  loeb: {
-    label: "loeb",
-    mm0: "./fixtures/loeb.mm0",
-    proof: "./fixtures/loeb.auf",
-  },
-  church: {
-    label: "church",
-    mm0: "./fixtures/church.mm0",
-    proof: "./fixtures/church.auf",
-  },
-  leibniz: {
-    label: "leibniz",
-    mm0: "./fixtures/leibniz.mm0",
-    proof: "./fixtures/leibniz.auf",
-  },
-  mac_lane: {
-    label: "mac lane",
-    mm0: "./fixtures/mac_lane.mm0",
-    proof: "./fixtures/mac_lane.auf",
-  },
-  martin_lof: {
-    label: "martin-löf",
-    mm0: "./fixtures/martin_lof.mm0",
-    proof: "./fixtures/martin_lof.auf",
-  },
-  peano: {
-    label: "peano",
-    mm0: "./fixtures/peano.mm0",
-    proof: "./fixtures/peano.auf",
-  },
-  euclid: {
-    label: "euclid",
-    mm0: "./fixtures/euclid.mm0",
-    proof: "./fixtures/euclid.auf",
-  },
-  smullyan: {
-    label: "smullyan",
-    mm0: "./fixtures/smullyan.mm0",
-    proof: "./fixtures/smullyan.auf",
-  },
-  zermelo: {
-    label: "zermelo",
-    mm0: "./fixtures/zermelo.mm0",
-    proof: "./fixtures/zermelo.auf",
-  },
-  tait: {
-    label: "tait",
-    mm0: "./fixtures/tait.mm0",
-    proof: "./fixtures/tait.auf",
-  },
-  pratt: {
-    label: "pratt",
-    mm0: "./fixtures/pratt.mm0",
-    proof: "./fixtures/pratt.auf",
-  },
-  hoare: {
-    label: "hoare",
-    mm0: "./fixtures/hoare.mm0",
-    proof: "./fixtures/hoare.auf",
-  },
-  diaconescu: {
-    label: "diaconescu",
-    mm0: "./fixtures/diaconescu.mm0",
-    proof: "./fixtures/diaconescu.auf",
-  },
-  herbrand: {
-    label: "herbrand",
-    mm0: "./fixtures/herbrand.mm0",
-    proof: "./fixtures/herbrand.auf",
-  },
-};
+const fixtureRoot = "./fixtures";
+const manifestUrl = `${fixtureRoot}/manifest.json`;
+
+// Populated from the build-generated manifest; `build.zig`'s
+// WEB_DEMO_FIXTURES is the single roster of demo examples.
+const examples = {};
 
 const editorTheme = EditorView.theme({
   "&": {
@@ -238,7 +112,8 @@ const ui = {
   proofEditor: document.querySelector("#proof-editor"),
   panes: [...document.querySelectorAll(".pane")],
   tabs: [...document.querySelectorAll("[data-pane-tab]")],
-  exampleButtons: [...document.querySelectorAll("[data-example]")],
+  exampleButtons: [],
+  exampleList: document.querySelector("#example-list"),
   mm0Meta: document.querySelector("#mm0-meta"),
   proofMeta: document.querySelector("#proof-meta"),
   compileStatus: document.querySelector("#compile-status"),
@@ -313,7 +188,7 @@ function routeFromHash() {
   const name = safeDecode(rawExample);
   const theorem = rawTheorem ? safeDecode(rawTheorem) : null;
   return {
-    example: examples[name] ? name : "hilbert",
+    example: examples[name] ? name : Object.keys(examples)[0],
     theorem,
   };
 }
@@ -340,6 +215,9 @@ function pushRoute(name, theorem) {
 }
 
 async function main() {
+  await loadExampleManifest();
+  renderExampleButtons();
+
   const initialRoute = routeFromHash();
   const initial = initialRoute.example;
   const [compiler, verifier, server, mm0Text, proofText] = await Promise.all([
@@ -386,10 +264,6 @@ async function main() {
 
   updateSourceMeta();
 
-  for (const btn of ui.exampleButtons) {
-    btn.addEventListener("click", () => loadExample(btn.dataset.example));
-  }
-
   currentExample = initial;
   currentRouteKey = routeHash(initial, initialRoute.theorem);
   markActiveExample(initial);
@@ -399,6 +273,31 @@ async function main() {
 
   warmUpAnalysis(mm0Text, proofText);
   await runAnalysis();
+}
+
+async function loadExampleManifest() {
+  const entries = JSON.parse(await fetchText(manifestUrl));
+  for (const entry of entries) {
+    examples[entry.name] = {
+      label: entry.label,
+      mm0: `${fixtureRoot}/${entry.name}.mm0`,
+      proof: `${fixtureRoot}/${entry.name}.auf`,
+    };
+  }
+}
+
+function renderExampleButtons() {
+  ui.exampleButtons = Object.entries(examples).map(([name, example]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "example-button";
+    button.dataset.example = name;
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = example.label;
+    button.addEventListener("click", () => loadExample(name));
+    return button;
+  });
+  ui.exampleList.replaceChildren(...ui.exampleButtons);
 }
 
 function markActiveExample(name) {

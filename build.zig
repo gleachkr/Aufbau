@@ -33,33 +33,43 @@ fn readProjectVersion(b: *std.Build) []const u8 {
     return version;
 }
 
-const WEB_DEMO_FIXTURES = [_][]const u8{
-    "hilbert",
-    "russell",
-    "tseitin",
-    "robinson",
-    "aristotle",
-    "peirce",
-    "gentzen",
-    "prawitz",
-    "barcan",
-    "prior",
-    "pnueli",
-    "barwise",
-    "loeb",
-    "church",
-    "leibniz",
-    "mac_lane",
-    "martin_lof",
-    "peano",
-    "euclid",
-    "smullyan",
-    "zermelo",
-    "tait",
-    "pratt",
-    "hoare",
-    "diaconescu",
-    "herbrand",
+/// The one roster of web-demo examples.  Each entry ships
+/// `tests/proof_cases/{name}.{mm0,auf}` and is listed in the generated
+/// `fixtures/manifest.json`, which is what the demo page builds its example
+/// picker from — so adding an example is a single edit here.
+const WebDemoFixture = struct {
+    name: []const u8,
+    /// Display name in the picker; defaults to `name`.
+    label: ?[]const u8 = null,
+};
+
+const WEB_DEMO_FIXTURES = [_]WebDemoFixture{
+    .{ .name = "hilbert" },
+    .{ .name = "russell" },
+    .{ .name = "tseitin" },
+    .{ .name = "robinson" },
+    .{ .name = "aristotle" },
+    .{ .name = "peirce" },
+    .{ .name = "gentzen" },
+    .{ .name = "prawitz" },
+    .{ .name = "barcan" },
+    .{ .name = "prior" },
+    .{ .name = "pnueli" },
+    .{ .name = "barwise" },
+    .{ .name = "loeb" },
+    .{ .name = "church" },
+    .{ .name = "leibniz" },
+    .{ .name = "mac_lane", .label = "mac lane" },
+    .{ .name = "martin_lof", .label = "martin-löf" },
+    .{ .name = "peano" },
+    .{ .name = "euclid" },
+    .{ .name = "smullyan" },
+    .{ .name = "zermelo" },
+    .{ .name = "tait" },
+    .{ .name = "pratt" },
+    .{ .name = "hoare" },
+    .{ .name = "diaconescu" },
+    .{ .name = "herbrand" },
 };
 
 fn installWebPackageSet(
@@ -136,19 +146,40 @@ fn installWebDemoFixtures(b: *std.Build, step: *std.Build.Step) void {
     });
     step.dependOn(&install_web_fonts.step);
 
-    for (WEB_DEMO_FIXTURES) |fixture| {
+    var manifest: std.ArrayList(u8) = .empty;
+    manifest.append(b.allocator, '[') catch @panic("OOM");
+
+    for (WEB_DEMO_FIXTURES, 0..) |fixture, index| {
         const install_mm0 = b.addInstallFile(
-            b.path(b.fmt("tests/proof_cases/{s}.mm0", .{fixture})),
-            b.fmt("web-demo/fixtures/{s}.mm0", .{fixture}),
+            b.path(b.fmt("tests/proof_cases/{s}.mm0", .{fixture.name})),
+            b.fmt("web-demo/fixtures/{s}.mm0", .{fixture.name}),
         );
         step.dependOn(&install_mm0.step);
 
         const install_proof = b.addInstallFile(
-            b.path(b.fmt("tests/proof_cases/{s}.auf", .{fixture})),
-            b.fmt("web-demo/fixtures/{s}.auf", .{fixture}),
+            b.path(b.fmt("tests/proof_cases/{s}.auf", .{fixture.name})),
+            b.fmt("web-demo/fixtures/{s}.auf", .{fixture.name}),
         );
         step.dependOn(&install_proof.step);
+
+        // Names and labels are hand-written identifiers, so a plain quoted
+        // form is enough — no JSON escaping is needed.
+        manifest.print(b.allocator, "{s}{{\"name\":\"{s}\",\"label\":\"{s}\"}}", .{
+            if (index == 0) "" else ",",
+            fixture.name,
+            fixture.label orelse fixture.name,
+        }) catch @panic("OOM");
     }
+
+    manifest.appendSlice(b.allocator, "]\n") catch @panic("OOM");
+
+    const write_manifest = b.addWriteFiles();
+    const manifest_file = write_manifest.add("manifest.json", manifest.items);
+    const install_manifest = b.addInstallFile(
+        manifest_file,
+        "web-demo/fixtures/manifest.json",
+    );
+    step.dependOn(&install_manifest.step);
 }
 
 fn addSearchBuildOptions(
