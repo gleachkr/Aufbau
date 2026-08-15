@@ -1,0 +1,170 @@
+-- Intuitionistic linear logic: multiplicatives, additives, exponentials.
+--
+-- The point of contrast with the other sequent demos (aristotle, peirce, tait)
+-- is the context annotation.  Those declare `@acui ... ctx_idem`, which makes
+-- a context a *set*: `g , a , a` and `g , a` are the same object, so a
+-- hypothesis may be used as many times as you like.  Here the idempotence slot
+-- is `_`, so a context is a *multiset* and every hypothesis is consumed exactly
+-- once.  Weakening and contraction are not admissible; they come back only
+-- under the exponential `!`.
+
+delimiter $ ( ) , ! $;
+
+provable sort wff;
+sort ctx;
+
+-- Multiplicatives: tensor is "both, using disjoint resources", and linear
+-- implication consumes its argument.  `1` is the unit of tensor.
+term tensor (a b: wff): wff;
+infixr tensor: $⊗$ prec 35;
+infixr tensor: $**$ prec 35;
+term lolli (a b: wff): wff;
+infixr lolli: $⊸$ prec 25;
+infixr lolli: $-o$ prec 25;
+term one: wff;
+notation one: wff = ($1$:max);
+
+-- Additives: `with` is "either one, your choice, from the same resources",
+-- and `plus` is "one of the two, not your choice".
+term with_ (a b: wff): wff;
+infixr with_: $&$ prec 33;
+term plus (a b: wff): wff;
+infixr plus: $⊕$ prec 31;
+infixr plus: $++$ prec 31;
+term top: wff;
+notation top: wff = ($⊤$:max);
+term zero: wff;
+notation zero: wff = ($0$:max);
+
+-- The exponential: `! a` is a licence to use `a` any number of times,
+-- including zero.
+term bang (a: wff): wff;
+prefix bang: $!$ prec 40;
+
+term iff (a b: wff): wff;
+infixr iff: $↔$ prec 20;
+infixr iff: $<->$ prec 20;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term seq (g: ctx) (a: wff): wff;
+infixl seq: $==>$ prec 0;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a ↔ a $;
+axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+
+--| @congr
+axiom seq_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ==> a) ↔ (h ==> b) $;
+
+-- Identity.  Note the bare context: `g , a ==> a` would be the axiom rule of a
+-- logic with weakening, and it is not available here.
+axiom ax (a: wff): $ a ==> a $;
+
+-- Multiplicative rules.  Every two-premise multiplicative rule *splits* the
+-- context between its premises rather than sharing it.
+axiom tensor_right (g d: ctx) (a b: wff):
+  $ g ==> a $ > $ d ==> b $ > $ g , d ==> a ⊗ b $;
+axiom tensor_left (g: ctx) (a b c: wff):
+  $ g , a , b ==> c $ > $ g , a ⊗ b ==> c $;
+axiom one_right: $ emp ==> 1 $;
+axiom one_left (g: ctx) (c: wff): $ g ==> c $ > $ g , 1 ==> c $;
+
+axiom lolli_right (g: ctx) (a b: wff): $ g , a ==> b $ > $ g ==> a ⊸ b $;
+axiom lolli_left (g d: ctx) (a b c: wff):
+  $ g ==> a $ > $ d , b ==> c $ > $ g , d , a ⊸ b ==> c $;
+
+-- Additive rules.  `with_right` *shares* its context between the premises,
+-- which is exactly why `&` is not `⊗`.
+axiom with_right (g: ctx) (a b: wff):
+  $ g ==> a $ > $ g ==> b $ > $ g ==> a & b $;
+axiom with_left1 (g: ctx) (a b c: wff): $ g , a ==> c $ > $ g , a & b ==> c $;
+axiom with_left2 (g: ctx) (a b c: wff): $ g , b ==> c $ > $ g , a & b ==> c $;
+axiom top_right (g: ctx): $ g ==> ⊤ $;
+
+axiom plus_right1 (g: ctx) (a b: wff): $ g ==> a $ > $ g ==> a ⊕ b $;
+axiom plus_right2 (g: ctx) (a b: wff): $ g ==> b $ > $ g ==> a ⊕ b $;
+axiom plus_left (g: ctx) (a b c: wff):
+  $ g , a ==> c $ > $ g , b ==> c $ > $ g , a ⊕ b ==> c $;
+axiom zero_left (g: ctx) (c: wff): $ g , 0 ==> c $;
+
+-- Exponential rules.  Dereliction spends the licence, weakening throws it
+-- away, contraction copies it: the structural rules, quarantined behind `!`.
+axiom bang_derelict (g: ctx) (a c: wff): $ g , a ==> c $ > $ g , ! a ==> c $;
+axiom bang_weaken (g: ctx) (a c: wff): $ g ==> c $ > $ g , ! a ==> c $;
+axiom bang_contract (g: ctx) (a c: wff):
+  $ g , ! a , ! a ==> c $ > $ g , ! a ==> c $;
+
+-- Promotion may only fire when the whole context is already banged, so
+-- `banged` is a predicate on contexts rather than a side condition.
+term banged (g: ctx): wff;
+axiom banged_emp: $ banged emp $;
+axiom banged_bang (a: wff): $ banged (! a) $;
+axiom banged_join (g h: ctx):
+  $ banged g $ > $ banged h $ > $ banged (g , h) $;
+
+--| @congr
+axiom banged_congr (g h: ctx): $ ctx_eq g h $ > $ banged g ↔ banged h $;
+
+axiom bang_promote (g: ctx) (a: wff):
+  $ banged g $ > $ g ==> a $ > $ g ==> ! a $;
+
+-- Multiplicative rearrangement: tensor is commutative up to provability.
+theorem tensor_comm (a b: wff): $ emp ==> (a ⊗ b) ⊸ (b ⊗ a) $;
+
+-- Composition of linear functions: each argument is used exactly once.
+theorem lolli_comp (a b c: wff):
+  $ emp ==> (a ⊸ b) ⊸ ((b ⊸ c) ⊸ (a ⊸ c)) $;
+
+-- Currying holds in both directions: `⊗` is left adjoint to `⊸`.
+theorem curry (a b c: wff): $ emp ==> ((a ⊗ b) ⊸ c) ⊸ (a ⊸ (b ⊸ c)) $;
+theorem uncurry (a b c: wff): $ emp ==> (a ⊸ (b ⊸ c)) ⊸ ((a ⊗ b) ⊸ c) $;
+
+-- `1` is the unit of `⊗`.
+theorem tensor_one (a: wff): $ emp ==> (a ⊗ 1) ⊸ a $;
+
+-- Tensor distributes over plus.  The mirror statement for `&` is *not*
+-- provable: it would need two copies of `a`.
+theorem tensor_plus (a b c: wff):
+  $ emp ==> (a ⊗ (b ⊕ c)) ⊸ ((a ⊗ b) ⊕ (a ⊗ c)) $;
+
+-- `⊤` absorbs any resource; `0` justifies anything.
+theorem additive_units (a: wff): $ emp ==> (a ⊸ ⊤) & (0 ⊸ a) $;
+
+-- The headline pair.  Neither `a ⊸ (a ⊗ a)` nor `a ⊸ (b ⊸ b)` is derivable:
+-- duplicating and discarding both require the exponential.
+theorem bang_dup (a: wff): $ emp ==> (! a) ⊸ (a ⊗ a) $;
+theorem bang_discard (a b: wff): $ emp ==> (! a) ⊸ (b ⊸ b) $;
+
+-- `!` turns an additive choice into a multiplicative pair.
+theorem bang_with (a b: wff): $ emp ==> ! (a & b) ⊸ (! a ⊗ ! b) $;
+
+-- Girard's translation reads intuitionistic `a → b` as `! a ⊸ b`.  This is
+-- the contraction that makes the translated implication behave: with `!` in
+-- front of the antecedent, two uses collapse back into one.
+theorem translated_contraction (a b: wff):
+  $ emp ==> (! a ⊸ (! a ⊸ b)) ⊸ (! a ⊸ b) $;

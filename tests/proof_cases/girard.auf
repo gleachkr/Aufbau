@@ -1,0 +1,119 @@
+tensor_comm
+-----------
+
+l1: $ a ==> a $ by ax
+l2: $ b ==> b $ by ax
+l3: $ b , a ==> b ⊗ a $ by tensor_right [l2, l1]
+l4: $ a ⊗ b ==> b ⊗ a $ by tensor_left [l3]
+l5: $ _ ==> (a ⊗ b) ⊸ (b ⊗ a) $ by lolli_right [l4]
+
+lolli_comp
+----------
+
+l1: $ a ==> a $ by ax
+l2: $ b ==> b $ by ax
+l3: $ c ==> c $ by ax
+l4: $ b , b ⊸ c ==> c $ by lolli_left [l2, l3]
+l5: $ a , b ⊸ c , a ⊸ b ==> c $ by lolli_left [l1, l4]
+l6: $ b ⊸ c , a ⊸ b ==> a ⊸ c $ by lolli_right [l5]
+l7: $ a ⊸ b ==> (b ⊸ c) ⊸ (a ⊸ c) $ by lolli_right [l6]
+l8: $ _ ==> (a ⊸ b) ⊸ ((b ⊸ c) ⊸ (a ⊸ c)) $ by lolli_right [l7]
+
+curry
+-----
+
+l1: $ a ==> a $ by ax
+l2: $ b ==> b $ by ax
+l3: $ c ==> c $ by ax
+l4: $ a , b ==> a ⊗ b $ by tensor_right [l1, l2]
+l5: $ a , b , (a ⊗ b) ⊸ c ==> c $ by lolli_left [l4, l3]
+l6: $ a , (a ⊗ b) ⊸ c ==> b ⊸ c $ by lolli_right [l5]
+l7: $ (a ⊗ b) ⊸ c ==> a ⊸ (b ⊸ c) $ by lolli_right [l6]
+l8: $ _ ==> ((a ⊗ b) ⊸ c) ⊸ (a ⊸ (b ⊸ c)) $ by lolli_right [l7]
+
+uncurry
+-------
+
+l1: $ a ==> a $ by ax
+l2: $ b ==> b $ by ax
+l3: $ c ==> c $ by ax
+l4: $ b , b ⊸ c ==> c $ by lolli_left [l2, l3]
+l5: $ a , b , a ⊸ (b ⊸ c) ==> c $ by lolli_left [l1, l4]
+l6: $ a ⊗ b , a ⊸ (b ⊸ c) ==> c $ by tensor_left [l5]
+l7: $ a ⊸ (b ⊸ c) ==> (a ⊗ b) ⊸ c $ by lolli_right [l6]
+l8: $ _ ==> (a ⊸ (b ⊸ c)) ⊸ ((a ⊗ b) ⊸ c) $ by lolli_right [l7]
+
+tensor_one
+----------
+
+l1: $ a ==> a $ by ax
+l2: $ a , 1 ==> a $ by one_left [l1]
+l3: $ a ⊗ 1 ==> a $ by tensor_left [l2]
+l4: $ _ ==> (a ⊗ 1) ⊸ a $ by lolli_right [l3]
+
+tensor_plus
+-----------
+
+l1: $ a ==> a $ by ax
+l2: $ b ==> b $ by ax
+l3: $ c ==> c $ by ax
+l4: $ a , b ==> a ⊗ b $ by tensor_right [l1, l2]
+l5: $ a , b ==> (a ⊗ b) ⊕ (a ⊗ c) $ by plus_right1 [l4]
+l6: $ a , c ==> a ⊗ c $ by tensor_right [l1, l3]
+l7: $ a , c ==> (a ⊗ b) ⊕ (a ⊗ c) $ by plus_right2 [l6]
+l8: $ a , b ⊕ c ==> (a ⊗ b) ⊕ (a ⊗ c) $ by plus_left [l5, l7]
+l9: $ a ⊗ (b ⊕ c) ==> (a ⊗ b) ⊕ (a ⊗ c) $ by tensor_left [l8]
+l10: $ _ ==> (a ⊗ (b ⊕ c)) ⊸ ((a ⊗ b) ⊕ (a ⊗ c)) $ by lolli_right [l9]
+
+additive_units
+--------------
+
+l1: $ a ==> ⊤ $ by top_right
+l2: $ _ ==> a ⊸ ⊤ $ by lolli_right [l1]
+l3: $ 0 ==> a $ by zero_left
+l4: $ _ ==> 0 ⊸ a $ by lolli_right [l3]
+l5: $ _ ==> (a ⊸ ⊤) & (0 ⊸ a) $ by with_right [l2, l4]
+
+bang_dup
+--------
+
+l1: $ a ==> a $ by ax
+l2: $ ! a ==> a $ by bang_derelict [l1]
+l3: $ ! a , ! a ==> a ⊗ a $ by tensor_right [l2, l2]
+l4: $ ! a ==> a ⊗ a $ by bang_contract [l3]
+l5: $ _ ==> (! a) ⊸ (a ⊗ a) $ by lolli_right [l4]
+
+bang_discard
+------------
+
+l1: $ b ==> b $ by ax
+l2: $ b , ! a ==> b $ by bang_weaken [l1]
+l3: $ ! a ==> b ⊸ b $ by lolli_right [l2]
+l4: $ _ ==> (! a) ⊸ (b ⊸ b) $ by lolli_right [l3]
+
+bang_with
+---------
+
+l1: $ a ==> a $ by ax
+l2: $ a & b ==> a $ by with_left1 [l1]
+l3: $ ! (a & b) ==> a $ by bang_derelict [l2]
+l4: $ banged (! (a & b)) $ by banged_bang
+l5: $ ! (a & b) ==> ! a $ by bang_promote [l4, l3]
+l6: $ b ==> b $ by ax
+l7: $ a & b ==> b $ by with_left2 [l6]
+l8: $ ! (a & b) ==> b $ by bang_derelict [l7]
+l9: $ ! (a & b) ==> ! b $ by bang_promote [l4, l8]
+l10: $ ! (a & b) , ! (a & b) ==> ! a ⊗ ! b $ by tensor_right [l5, l9]
+l11: $ ! (a & b) ==> ! a ⊗ ! b $ by bang_contract [l10]
+l12: $ _ ==> ! (a & b) ⊸ (! a ⊗ ! b) $ by lolli_right [l11]
+
+translated_contraction
+----------------------
+
+l1: $ b ==> b $ by ax
+l2: $ ! a ==> ! a $ by ax
+l3: $ ! a , ! a ⊸ b ==> b $ by lolli_left [l2, l1]
+l4: $ ! a , ! a , ! a ⊸ (! a ⊸ b) ==> b $ by lolli_left [l2, l3]
+l5: $ ! a , ! a ⊸ (! a ⊸ b) ==> b $ by bang_contract [l4]
+l6: $ ! a ⊸ (! a ⊸ b) ==> ! a ⊸ b $ by lolli_right [l5]
+l7: $ _ ==> (! a ⊸ (! a ⊸ b)) ⊸ (! a ⊸ b) $ by lolli_right [l6]

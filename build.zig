@@ -70,6 +70,8 @@ const WEB_DEMO_FIXTURES = [_]WebDemoFixture{
     .{ .name = "hoare" },
     .{ .name = "diaconescu" },
     .{ .name = "herbrand" },
+    .{ .name = "girard" },
+    .{ .name = "reynolds" },
 };
 
 fn installWebPackageSet(

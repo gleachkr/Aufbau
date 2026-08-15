@@ -1,0 +1,378 @@
+-- System F: the polymorphic lambda calculus, as typing rules.
+--
+-- Two binder levels.  `λ x : A. t` binds a term variable, `Λ a. t` binds a
+-- *type* variable, and the two eliminators are ordinary application `f · u`
+-- and type application `f @ A`.  The side condition on ∀-introduction — the
+-- abstracted type variable must not occur free in the context — is not a
+-- side condition here at all: it falls out of MM0's dependency tracking,
+-- because `t_tlam` declares its context binder `g` with no dependency on the
+-- bound type variable `a`.
+--
+-- ∀-elimination substitutes a type into a type, so the file also carries a
+-- small explicit-substitution layer.  Its `@rewrite` axioms are what let the
+-- proofs below state the *computed* instance type rather than a stack of
+-- pending substitutions.
+--
+-- Delimiters split left and right so that bracketed substitution syntax
+-- `[a/S] B` tokenizes alongside the notation for arrows and binders.
+delimiter $ ( [ / $ $ / . : , ) ] ~ @ $;
+
+strict provable sort jdg;
+sort ctx;
+--| @vars a b c d
+sort ty;
+--| @vars x y z f n
+sort tm;
+
+-- ==================================================================
+-- SECTION 1: judgements and the equality layer
+-- ==================================================================
+
+term jiff (J K: jdg): jdg;
+infixr jiff: $<=>$ prec 20;
+
+--| @relation jdg jiff jiff_refl jiff_trans jiff_sym jiff_mp
+axiom jiff_refl (J: jdg): $ J <=> J $;
+axiom jiff_trans (J K L: jdg): $ J <=> K $ > $ K <=> L $ > $ J <=> L $;
+axiom jiff_sym (J K: jdg): $ J <=> K $ > $ K <=> J $;
+axiom jiff_mp (J K: jdg): $ J <=> K $ > $ J $ > $ K $;
+
+term eq_ctx (g h: ctx): jdg;
+infixl eq_ctx: $≋$ prec 15;
+term eq_ty (A B: ty): jdg;
+infixl eq_ty: $~$ prec 15;
+term eq_tm (s t: tm): jdg;
+infixl eq_tm: $≈$ prec 15;
+
+--| @relation ctx eq_ctx eq_ctx_refl eq_ctx_trans eq_ctx_sym _
+axiom eq_ctx_refl (g: ctx): $ g ≋ g $;
+axiom eq_ctx_trans (g h i: ctx): $ g ≋ h $ > $ h ≋ i $ > $ g ≋ i $;
+axiom eq_ctx_sym (g h: ctx): $ g ≋ h $ > $ h ≋ g $;
+
+--| @relation ty eq_ty eq_ty_refl eq_ty_trans eq_ty_sym _
+axiom eq_ty_refl (A: ty): $ A ~ A $;
+axiom eq_ty_trans (A B C: ty): $ A ~ B $ > $ B ~ C $ > $ A ~ C $;
+axiom eq_ty_sym (A B: ty): $ A ~ B $ > $ B ~ A $;
+
+--| @relation tm eq_tm eq_tm_refl eq_tm_trans eq_tm_sym _
+axiom eq_tm_refl (s: tm): $ s ≈ s $;
+axiom eq_tm_trans (s t u: tm): $ s ≈ t $ > $ t ≈ u $ > $ s ≈ u $;
+axiom eq_tm_sym (s t: tm): $ s ≈ t $ > $ t ≈ s $;
+
+term has_ty (t: tm) (A: ty): jdg;
+infixl has_ty: $:$ prec 12;
+term nd (g: ctx) (J: jdg): jdg;
+infixl nd: $⊢$ prec 0;
+
+--| @congr
+axiom has_ty_congr (s t: tm) (A B: ty):
+  $ s ≈ t $ > $ A ~ B $ > $ (s : A) <=> (t : B) $;
+
+--| @congr
+axiom nd_congr (g h: ctx) (J K: jdg):
+  $ g ≋ h $ > $ J <=> K $ > $ (g ⊢ J) <=> (h ⊢ K) $;
+
+--| @congr
+axiom jiff_congr (J1 J2 K1 K2: jdg):
+  $ J1 <=> J2 $ > $ K1 <=> K2 $ > $ (J1 <=> K1) <=> (J2 <=> K2) $;
+
+-- ==================================================================
+-- SECTION 2: contexts
+-- ==================================================================
+--
+-- A typing context is a set of `x : A` hypotheses.  Declaring the join
+-- associative, commutative, unital and idempotent supports weakening,
+-- exchange and contraction.
+
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui eq_ctx_assoc eq_ctx_comm emp eq_ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (J: jdg): ctx;
+coercion hyp: jdg > ctx;
+
+axiom eq_ctx_assoc (g h i: ctx): $ ((g , h) , i) ≋ (g , (h , i)) $;
+axiom eq_ctx_comm (g h: ctx): $ (g , h) ≋ (h , g) $;
+axiom eq_ctx_idem (g: ctx): $ (g , g) ≋ g $;
+axiom eq_ctx_unit (g: ctx): $ (emp , g) ≋ g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ g1 ≋ g2 $ > $ h1 ≋ h2 $ > $ (g1 , h1) ≋ (g2 , h2) $;
+
+--| @congr
+axiom hyp_congr (J K: jdg): $ J <=> K $ > $ hyp J ≋ hyp K $;
+
+-- ==================================================================
+-- SECTION 3: types, terms, and type substitution
+-- ==================================================================
+
+term arr (A B: ty): ty;
+infixr arr: $→$ prec 25;
+infixr arr: $->$ prec 25;
+term all {a: ty} (B: ty a): ty;
+notation all {a: ty} (B: ty a): ty = ($∀$:20) a ($.$:0) B;
+
+term lam (A: ty) {x: tm} (t: tm x): tm;
+notation lam (A: ty) {x: tm} (t: tm x): tm =
+  ($λ$:20) x ($:$:12) A ($.$:0) t;
+term app (f u: tm): tm;
+infixl app: $·$ prec 70;
+term tlam {a: ty} (t: tm a): tm;
+notation tlam {a: ty} (t: tm a): tm = ($Λ$:20) a ($.$:0) t;
+term tapp (f: tm) (A: ty): tm;
+infixl tapp: $@$ prec 70;
+
+--| @congr
+axiom arr_congr (A1 A2 B1 B2: ty):
+  $ A1 ~ A2 $ > $ B1 ~ B2 $ > $ (A1 → B1) ~ (A2 → B2) $;
+
+--| @congr
+axiom all_congr {a: ty} (A B: ty a): $ A ~ B $ > $ (∀ a. A) ~ (∀ a. B) $;
+
+--| @congr
+axiom lam_congr (A B: ty) {x: tm} (t u: tm x):
+  $ A ~ B $ > $ t ≈ u $ > $ (λ x : A. t) ≈ (λ x : B. u) $;
+
+--| @congr
+axiom app_congr (f1 f2 u v: tm): $ f1 ≈ f2 $ > $ u ≈ v $ > $ (f1 · u) ≈ (f2 · v) $;
+
+--| @congr
+axiom tlam_congr {a: ty} (t u: tm a): $ t ≈ u $ > $ (Λ a. t) ≈ (Λ a. u) $;
+
+--| @congr
+axiom tapp_congr (f1 f2: tm) (A B: ty):
+  $ f1 ≈ f2 $ > $ A ~ B $ > $ (f1 @ A) ≈ (f2 @ B) $;
+
+-- Explicit type-in-type substitution, written `[a/S] B`.
+term sb_ty {a: ty} (S: ty) (B: ty a): ty;
+notation sb_ty {a: ty} (S: ty) (B: ty a): ty =
+  ($[$:41) a ($/$:0) S ($]$:0) B;
+
+--| @congr
+axiom sb_ty_congr {a: ty} (S1 S2: ty) (A B: ty a):
+  $ S1 ~ S2 $ > $ A ~ B $ > $ [a/S1] A ~ [a/S2] B $;
+
+-- The substituted variable itself.
+--| @rewrite
+axiom sb_ty_hit {a: ty} (S: ty): $ [a/S] a ~ S $;
+
+-- `A: ty` carries no dependency on `a`, so this is exactly the "`a` is not
+-- free in `A`" case.
+--| @rewrite
+axiom sb_ty_free {a: ty} (S: ty) (A: ty): $ [a/S] A ~ A $;
+
+--| @rewrite
+axiom sb_ty_arr {a: ty} (S: ty) (A B: ty a):
+  $ [a/S] (A → B) ~ ([a/S] A → [a/S] B) $;
+
+-- `S: ty` carries no dependency on `b`, which is the capture-avoidance
+-- condition on pushing a substitution under a ∀.
+--| @rewrite
+axiom sb_ty_all {a b: ty} (S: ty) (A: ty a b):
+  $ [a/S] (∀ b. A) ~ (∀ b. [a/S] A) $;
+
+-- ==================================================================
+-- SECTION 4: the typing rules
+-- ==================================================================
+
+axiom t_var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
+
+axiom t_weak (g d: ctx) (J: jdg): $ g ⊢ J $ > $ g , d ⊢ J $;
+
+axiom t_lam (g: ctx) (A B: ty) {x: tm} (t: tm x):
+  $ g , x : A ⊢ t : B $
+  > $ g ⊢ (λ x : A. t) : A → B $;
+
+axiom t_app (g: ctx) (A B: ty) (f u: tm):
+  $ g ⊢ f : A → B $
+  > $ g ⊢ u : A $
+  > $ g ⊢ f · u : B $;
+
+axiom t_tlam (g: ctx) {a: ty} (t: tm a) (B: ty a):
+  $ g ⊢ t : B $
+  > $ g ⊢ (Λ a. t) : ∀ a. B $;
+
+axiom t_tapp {a: ty} (g: ctx a) (f: tm a) (B: ty a) (S: ty):
+  $ g ⊢ f : ∀ a. B $
+  > $ g ⊢ f @ S : [a/S] B $;
+
+-- ==================================================================
+-- SECTION 5: worked derivations
+-- ==================================================================
+
+-- The polymorphic identity.
+theorem poly_id (g: ctx) {a: ty} {x: tm}:
+  $ g ⊢ (Λ a. λ x : a. x) : ∀ a. a → a $;
+
+-- Instantiating it at an arbitrary type.  The stated conclusion is the
+-- *computed* substitution instance; the rewrite layer does the computing.
+theorem poly_id_inst (g: ctx) (A: ty) {a: ty} {x: tm}:
+  $ g ⊢ (Λ a. λ x : a. x) @ A : A → A $;
+
+-- Impredicativity: the identity may be instantiated at its own type.  This
+-- is the step that has no counterpart in the simply typed calculus.
+theorem poly_id_self (g: ctx) {a b: ty} {x: tm}:
+  $ g ⊢ (Λ a. λ x : a. x) @ (∀ b. b → b) : (∀ b. b → b) → (∀ b. b → b) $;
+
+-- Polymorphic composition.
+theorem poly_compose (g: ctx) {a b c: ty} {x f n: tm}:
+  $ g ⊢ (Λ a. Λ b. Λ c. λ f : b → c. λ n : a → b. λ x : a. f · (n · x))
+      : ∀ a. ∀ b. ∀ c. (b → c) → (a → b) → a → c $;
+
+-- Church booleans and numerals.  With no base types in the signature, the
+-- data types *are* polymorphic types.
+def Bool {.a: ty}: ty = $ ∀ a. a → a → a $;
+def Nat {.a: ty}: ty = $ ∀ a. (a → a) → a → a $;
+
+theorem church_true (g: ctx) {a: ty} {x y: tm}:
+  $ g ⊢ (Λ a. λ x : a. λ y : a. x) : Bool $;
+
+theorem church_false (g: ctx) {a: ty} {x y: tm}:
+  $ g ⊢ (Λ a. λ x : a. λ y : a. y) : Bool $;
+
+-- Using an encoded boolean: instantiate at the result type, then apply it to
+-- the two branches.
+theorem church_if (g: ctx) (A: ty) (u v: tm) {a: ty} {x y: tm}:
+  $ g ⊢ u : A $
+  > $ g ⊢ v : A $
+  > $ g ⊢ (Λ a. λ x : a. λ y : a. x) @ A · u · v : A $;
+
+theorem church_zero (g: ctx) {a: ty} {f x: tm}:
+  $ g ⊢ (Λ a. λ f : a → a. λ x : a. x) : Nat $;
+
+theorem church_two (g: ctx) {a: ty} {f x: tm}:
+  $ g ⊢ (Λ a. λ f : a → a. λ x : a. f · (f · x)) : Nat $;
+
+-- Successor.  The bound `n : Nat` is itself instantiated at `a` inside the
+-- body, so this derivation uses ∀-elimination on a variable.
+theorem church_succ (g: ctx) {a: ty} {n f x: tm}:
+  $ g ⊢ (λ n : Nat. Λ a. λ f : a → a. λ x : a. f · (n @ a · f · x))
+      : Nat → Nat $;
+
+-- ==================================================================
+-- SECTION 6: arithmetic on the numerals
+-- ==================================================================
+--
+-- A Church numeral is its own iterator, so the elimination rule for `Nat`
+-- is a derived theorem rather than a primitive: instantiate the numeral at
+-- the result type and feed it the step and the base.
+theorem t_iter (g: ctx) (A: ty) (n f x: tm):
+  $ g ⊢ n : Nat $
+  > $ g ⊢ f : A → A $
+  > $ g ⊢ x : A $
+  > $ g ⊢ n @ A · f · x : A $;
+
+-- Addition iterates `f` `m` times starting from the `n`-fold iterate.
+theorem church_add (g: ctx) {a: ty} {m n f x: tm}:
+  $ g ⊢ (λ m : Nat. λ n : Nat. Λ a. λ f : a → a. λ x : a.
+           m @ a · f · (n @ a · f · x))
+      : Nat → Nat → Nat $;
+
+-- Multiplication needs no base case at all: it iterates *`n`'s iterator*.
+theorem church_mult (g: ctx) {a: ty} {m n f: tm}:
+  $ g ⊢ (λ m : Nat. λ n : Nat. Λ a. λ f : a → a. m @ a · (n @ a · f))
+      : Nat → Nat → Nat $;
+
+-- Exponentiation is the one that shows off impredicativity: `n` is
+-- instantiated at the *function* type `a → a`, not at `a`.
+theorem church_exp (g: ctx) {a: ty} {m n: tm}:
+  $ g ⊢ (λ m : Nat. λ n : Nat. Λ a. n @ (a → a) · (m @ a))
+      : Nat → Nat → Nat $;
+
+-- ==================================================================
+-- SECTION 7: existential types
+-- ==================================================================
+--
+-- System F has no primitive existential, and needs none.  A value of type
+-- `∃ b. B` is a package that, handed any continuation able to consume a `B`
+-- *uniformly in `b`*, produces the continuation's answer:
+--
+--   ∃ b. B  :=  ∀ c. (∀ b. B → c) → c
+--
+-- The abstraction property comes out of the encoding rather than being
+-- imposed: `t_unpack` declares its answer type `(C: ty)` with no dependency
+-- on `b`, so the representation type cannot escape the package.  That is the
+-- same dependency mechanism as the eigenvariable condition on `t_tlam`.
+def ex {b: ty} (B: ty b) {.c: ty}: ty = $ ∀ c. (∀ b. B → c) → c $;
+notation ex {b: ty} (B: ty b): ty = ($∃$:20) b ($.$:0) B;
+
+-- Packing: hand over a witness type `S` and a value of the instance type.
+--| @view (g: ctx) {b: ty} (B: ty b) (S: ty) (e: tm) {c: ty} {k: tm} (q: ty): $ g ⊢ e : q $ > $ g ⊢ (Λ c. λ k : (∀ b. B → c). k @ S · e) : ∃ b. B $
+theorem t_pack (g: ctx) {b: ty} (B: ty b) (S: ty) (e: tm) {c: ty} {k: tm}:
+  $ g ⊢ e : [b/S] B $
+  > $ g ⊢ (Λ c. λ k : (∀ b. B → c). k @ S · e) : ∃ b. B $;
+
+-- Unpacking: apply the package to the answer type and the continuation.
+theorem t_unpack (g: ctx) {b: ty} (B: ty b) (C: ty) (e k: tm):
+  $ g ⊢ e : ∃ b. B $
+  > $ g ⊢ k : ∀ b. B → C $
+  > $ g ⊢ e @ C · k : C $;
+
+-- A package hiding `Nat` behind `∃ b. b → b`.
+theorem pack_id_nat (g: ctx) {a b c: ty} {x k: tm}:
+  $ g ⊢ (Λ c. λ k : (∀ b. (b → b) → c). k @ Nat · ((Λ a. λ x : a. x) @ Nat))
+      : ∃ b. b → b $;
+
+-- Consuming one.  The answer is a `Bool`, and nothing in the statement can
+-- name the representation the package chose.
+theorem unpack_abstract (g: ctx) (p k: tm) {b: ty}:
+  $ g ⊢ p : ∃ b. b → b $
+  > $ g ⊢ k : ∀ b. (b → b) → Bool $
+  > $ g ⊢ p @ Bool · k : Bool $;
+
+-- ==================================================================
+-- SECTION 8: higher-rank types
+-- ==================================================================
+--
+-- Nothing so far has put a `∀` to the *left* of an arrow.  Support for higher
+-- rank types like this is what separates System F from Hindley-Milner: `p`
+-- below is used at `Nat`, but its declared type quantifies over `a`, so the
+-- argument must arrive already polymorphic.
+--
+-- Note the numeral binds `b`, not `a`.  The hypothesis `p : ∀ a. a → a` sits
+-- in the context when `t_tlam` fires, and MM0 counts the `∀ a` inside it as a
+-- mention of `a` — so reusing `a` would trip the eigenvariable condition.
+theorem rank2_apply (g: ctx) {a b: ty} {p f x: tm}:
+  $ g ⊢ (λ p : (∀ a. a → a). p @ Nat · (Λ b. λ f : b → b. λ x : b. x))
+      : (∀ a. a → a) → Nat $;
+
+-- ==================================================================
+-- SECTION 9: lists
+-- ==================================================================
+--
+-- `List` is the first *parameterised* definition here: `Bool` and `Nat` are
+-- closed, but a list type is a function of its element type.  The encoding is
+-- the fold — a list is exactly what you can do with a cons-step and a base:
+--
+--   List A  :=  ∀ c. (A → c → c) → c → c
+--
+-- so `nil` returns the base, `cons` applies the step, and every consumer is
+-- an instantiation at its own answer type.
+def List (A: ty) {.c: ty}: ty = $ ∀ c. (A → c → c) → c → c $;
+
+theorem list_nil (g: ctx) (A: ty) {c: ty} {f x: tm}:
+  $ g ⊢ (Λ c. λ f : A → c → c. λ x : c. x) : List A $;
+
+theorem list_cons (g: ctx) (A: ty) {c: ty} {h t f x: tm}:
+  $ g ⊢ (λ h : A. λ t : List A. Λ c. λ f : A → c → c. λ x : c.
+           f · h · (t @ c · f · x))
+      : A → List A → List A $;
+
+-- The payoff: `map` is polymorphic in both element types, and its body
+-- instantiates the list at the *answer* type `d` rather than at either
+-- element type.
+--
+-- This is why the `ty` pool above lists four tokens for a theorem that binds
+-- only three.  Matching `l @ d` against `t_tapp` has to unfold `List b` and
+-- materialize the `∀`'s hidden dummy as a real theorem-local variable, and
+-- the only names available for that are the sort's `@vars` pool.  Every pool
+-- token already bound by this theorem is unusable, so the pool needs at least
+-- one spare.  Which names are spare does not matter; `--| @vars a b c` here
+-- fails no matter how the three are spelled.
+theorem list_map (g: ctx) {b c d: ty} {f l k x h r: tm}:
+  $ g ⊢ (Λ b. Λ c. λ f : b → c. λ l : List b. Λ d. λ k : c → d → d. λ x : d.
+           l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x)
+      : ∀ b. ∀ c. (b → c) → List b → List c $;
