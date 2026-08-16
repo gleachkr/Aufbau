@@ -227,7 +227,12 @@ The four names are positional:
 | 4 | `hole` | The binder that marks where `target` should be found |
 
 All four names refer to view binders. The target must map to a real rule
-binder. The target and hole must have the same sort.
+binder. The target and hole must have the same sort, or sorts that share a
+coercion target (reflexively). Cross-sort recovery supports theories that
+split a syntactic category into several sorts joined by coercions — for
+example quantifier-bound variables (`var`) and proof names (`name`) both
+coercing into terms (`tm`): the hole is a `var` binder while the recovered
+witness is a `name` or a `tm`.
 
 ### Structural algorithm
 
@@ -260,6 +265,18 @@ The compiler walks the current resolved expressions for `source` and
 7. If the structures diverge in any other way, recovery fails.
 8. If no occurrence of `hole`, skipped bound-slot occurrence, identical
    source/pattern evidence, or wrapper candidate is found, recovery fails.
+
+For cross-sort enrollments there is one additional candidate site: a pattern
+node that is a chain of one or more coercion applications terminating in
+exactly `hole` (e.g. the parser-inserted `v2t x` inside a quantifier body).
+The whole source subtree at that position is re-sorted to the target's sort —
+taken as-is when the sorts already agree, or stripped of its own leading
+coercion chain when a prefix strip lands exactly at the target sort (so
+`n2t b` recovers the name `b` for a `name`-sorted target). If no prefix
+strips to the target sort, recovery fails; this is what rejects a compound
+term where an eigenvariable is required. The wrapper guess in step 6 gets the
+same treatment: an argument that coercion-strips to the target sort
+qualifies, but only when no argument has the target sort outright.
 
 If `target` already has an explicit binding, recovery is skipped for that
 binder.
@@ -413,8 +430,12 @@ The six names are positional:
 | 6 | `right_plug` | The corresponding expression on the right |
 
 All six names refer to view binders. The target must map to a real rule
-binder. The target and hole must have the same sort. The hole and both plug
-binders must also have the same sort.
+binder. The target and hole must have the same sort. The hole and each plug
+binder must have the same sort, or sorts that share a coercion target
+(reflexively). For cross-sort plugs, the hole is wrapped in the coercion
+route up to the plugs' sort before it is substituted at plug sites, so the
+constructed context stays well-sorted (e.g. a `var` hole substituted at `tm`
+positions becomes `v2t x`).
 
 ### Structural algorithm
 

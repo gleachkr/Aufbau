@@ -77,13 +77,17 @@ pub fn run(
             emit,
         );
 
-        const stmt = parser.next() catch |err| {
+        const maybe_stmt = parser.next() catch |err| {
             self.setDiagnostic(CompilerDiag.mm0ParserDiagnostic(
                 &parser,
                 err,
             ));
             return err;
-        } orelse break;
+        };
+        // The parser consumes coercion statements silently while scanning to
+        // the next public statement; keep the env's mirror in lockstep.
+        try env.syncCoercionsFromParser(&parser);
+        const stmt = maybe_stmt orelse break;
         last_stmt = stmt;
         CompilerVars.validateSortVarCollisions(&parser, &sort_vars) catch |err| {
             self.setIfMissing(

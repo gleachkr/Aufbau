@@ -298,6 +298,7 @@ pub fn seedRecoverHolesFromVarsPool(
     binder_map: []const ?usize,
     arg_infos: []const ArgInfo,
     conclusion: TemplateExpr,
+    hyps: []const TemplateExpr,
     derived_bindings: []const DerivedBinding,
 ) ![]DefOps.BindingSeed {
     const seeds = try allocator.alloc(DefOps.BindingSeed, num_binders);
@@ -317,6 +318,10 @@ pub fn seedRecoverHolesFromVarsPool(
     defer allocator.free(seeded_holes);
     @memset(seeded_holes, false);
 
+    // A hole the view matcher can determine from the goal or a cited premise
+    // must not be pool-seeded — the seed would contradict the matched
+    // variable. Pool invention is only for holes genuinely erased from the
+    // instance (a vacuous quantifier).
     const visible_conclusion_binders = try allocator.alloc(bool, num_binders);
     defer allocator.free(visible_conclusion_binders);
     @memset(visible_conclusion_binders, false);
@@ -326,6 +331,15 @@ pub fn seedRecoverHolesFromVarsPool(
         theorem,
         visible_conclusion_binders,
     );
+    const paired_hyps = @min(hyps.len, ref_exprs.len);
+    for (hyps[0..paired_hyps], ref_exprs[0..paired_hyps]) |hyp, ref_expr| {
+        markVisibleTemplateBinders(
+            hyp,
+            ref_expr,
+            theorem,
+            visible_conclusion_binders,
+        );
+    }
 
     for (derived_bindings) |binding| {
         const recover = switch (binding) {

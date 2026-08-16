@@ -1,0 +1,5 @@
+smuggle
+-------
+
+l1: $ F b ⊢ F b $ by ax
+l2: $ F b ⊢ ∀ x (F x) $ by all_intro [l1]

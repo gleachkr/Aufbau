@@ -79,6 +79,15 @@ pub const MM0Parser = struct {
         return self.core.isCoercionTerm(term_id);
     }
 
+    /// The set of declared coercion term ids, for mirroring into the
+    /// compiler's `GlobalEnv` (the parser consumes `coercion` statements
+    /// without emitting them).
+    pub fn coercionTermIds(
+        self: *const MM0Parser,
+    ) *const std.AutoHashMap(u32, void) {
+        return &self.core.coercion_terms;
+    }
+
     pub fn recoverToStatementBoundary(self: *MM0Parser) ParseError!void {
         self.clearDiagnosticOverrides();
         const start = self.core.pos;

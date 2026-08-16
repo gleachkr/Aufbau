@@ -118,6 +118,7 @@ pub fn processViewAnnotations(
                     ann[recover_prefix.len..],
                     sig,
                     view.binder_map,
+                    env,
                 ) },
             );
             continue;
@@ -132,6 +133,7 @@ pub fn processViewAnnotations(
                     ann[abstract_prefix.len..],
                     sig,
                     view.binder_map,
+                    env,
                 ) },
             );
         }
@@ -757,6 +759,22 @@ fn matchViewAgainstConclusionDebug(
                 .{},
             );
             try session.restoreFromSeedState(&state);
+            {
+                const restored_bindings =
+                    try session.materializeOptionalBindings();
+                defer allocator.free(restored_bindings);
+                const restored_seeds = try session.resolveBindingSeeds();
+                defer allocator.free(restored_seeds);
+                try ViewTrace.printViewBindings(
+                    allocator,
+                    theorem,
+                    env,
+                    view.arg_names,
+                    "after retry restore",
+                    restored_bindings,
+                    restored_seeds,
+                );
+            }
             matchViewHypsAgainstConcreteExprsDebug(
                 allocator,
                 theorem,
@@ -1185,6 +1203,7 @@ fn parseRecoverAnnotation(
     text: []const u8,
     sig: ViewSignature,
     binder_map: []const ?usize,
+    env: *const GlobalEnv,
 ) !RecoverDecl {
     var it = std.mem.tokenizeAny(
         u8,
@@ -1213,8 +1232,10 @@ fn parseRecoverAnnotation(
     if (binder_map[target_view_idx] == null) {
         return error.RecoverTargetNotRuleBinder;
     }
-    if (!std.mem.eql(
-        u8,
+    // Cross-sort recovery is allowed when the two sorts meet in the
+    // coercion graph: the walk then treats a coercion chain around the
+    // hole as the recovery site and re-sorts the source subtree.
+    if (!env.sortsShareCoercionTarget(
         sig.arg_infos[target_view_idx].sort_name,
         sig.arg_infos[hole_view_idx].sort_name,
     )) {
@@ -1226,6 +1247,7 @@ fn parseRecoverAnnotation(
         .source_view_idx = source_view_idx,
         .pattern_view_idx = pattern_view_idx,
         .hole_view_idx = hole_view_idx,
+        .target_sort_name = sig.arg_infos[target_view_idx].sort_name,
     };
 }
 
@@ -1233,6 +1255,7 @@ fn parseAbstractAnnotation(
     text: []const u8,
     sig: ViewSignature,
     binder_map: []const ?usize,
+    env: *const GlobalEnv,
 ) !AbstractDecl {
     var it = std.mem.tokenizeAny(
         u8,
@@ -1269,12 +1292,13 @@ fn parseAbstractAnnotation(
     if (binder_map[target_view_idx] == null) {
         return error.AbstractTargetNotRuleBinder;
     }
-    if (!std.mem.eql(
-        u8,
+    // Cross-sort plugs are allowed when the sorts meet in the coercion
+    // graph: the walk then wraps the hole in the coercion route up to the
+    // plugs' sort before substituting it at plug sites.
+    if (!env.sortsShareCoercionTarget(
         sig.arg_infos[hole_view_idx].sort_name,
         sig.arg_infos[left_plug_view_idx].sort_name,
-    ) or !std.mem.eql(
-        u8,
+    ) or !env.sortsShareCoercionTarget(
         sig.arg_infos[hole_view_idx].sort_name,
         sig.arg_infos[right_plug_view_idx].sort_name,
     )) {

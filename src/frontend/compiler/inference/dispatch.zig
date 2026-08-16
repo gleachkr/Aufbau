@@ -345,6 +345,7 @@ fn inferOptionalBindingsFromViewSeed(
                 view.binder_map,
                 view.arg_infos,
                 view.concl,
+                view.hyps,
                 view.derived_bindings,
             );
     }
@@ -431,6 +432,7 @@ pub fn inferBindings(
                     view.binder_map,
                     view.arg_infos,
                     view.concl,
+                    view.hyps,
                     view.derived_bindings,
                 );
         }

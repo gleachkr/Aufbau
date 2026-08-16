@@ -17,6 +17,10 @@ pub const RecoverDecl = struct {
     source_view_idx: usize,
     pattern_view_idx: usize,
     hole_view_idx: usize,
+    /// Declared sort of the target binder. Equal to the hole binder's sort
+    /// for classic enrollments; for cross-sort enrollments (sorts meeting in
+    /// the coercion graph) the walk re-sorts recovered subtrees to this sort.
+    target_sort_name: []const u8,
 };
 
 pub const AbstractDecl = struct {
@@ -152,6 +156,7 @@ fn applyRecoverBinding(
                 source_expr,
                 pattern_expr,
                 concrete_hole_expr,
+                recover.target_sort_name,
                 &candidate,
                 &skipped_equal_hole,
             ) catch |err| switch (err) {
@@ -194,6 +199,7 @@ fn applyRecoverBinding(
                 aligned_source,
                 aligned_pattern,
                 concrete_hole_expr,
+                recover.target_sort_name,
                 &candidate,
                 &skipped_equal_hole,
             ) catch |err| switch (err) {
@@ -255,6 +261,7 @@ fn applyRecoverBinding(
         recover.hole_view_idx,
         hole_expr,
         seeds[recover.hole_view_idx],
+        recover.target_sort_name,
         view_bindings,
         seeds,
         &dummy_bindings,
@@ -308,6 +315,7 @@ fn recoverBindingCandidateFromSeed(
     hole_view_idx: usize,
     hole_expr: ?ExprId,
     hole_seed: BindingSeed,
+    target_sort: []const u8,
     view_bindings: []const ?ExprId,
     view_seeds: []const BindingSeed,
     dummy_bindings: *std.AutoHashMapUnmanaged(usize, ExprId),
@@ -324,6 +332,7 @@ fn recoverBindingCandidateFromSeed(
                 source_expr,
                 expr_id,
                 concrete_hole_expr,
+                target_sort,
                 candidate,
                 skipped_equal_hole,
             );
@@ -336,6 +345,7 @@ fn recoverBindingCandidateFromSeed(
                 source_expr,
                 semantic.expr_id,
                 concrete_hole_expr,
+                target_sort,
                 candidate,
                 skipped_equal_hole,
             );
@@ -349,6 +359,7 @@ fn recoverBindingCandidateFromSeed(
             hole_view_idx,
             hole_expr,
             hole_seed,
+            target_sort,
             view_bindings,
             view_seeds,
             dummy_bindings,
@@ -367,6 +378,7 @@ fn recoverBindingCandidateFromBoundValue(
     hole_view_idx: usize,
     hole_expr: ?ExprId,
     hole_seed: BindingSeed,
+    target_sort: []const u8,
     view_bindings: []const ?ExprId,
     view_seeds: []const BindingSeed,
     dummy_bindings: *std.AutoHashMapUnmanaged(usize, ExprId),
@@ -382,6 +394,7 @@ fn recoverBindingCandidateFromBoundValue(
                 source_expr,
                 concrete.raw,
                 concrete_hole_expr,
+                target_sort,
                 candidate,
                 skipped_equal_hole,
             );
@@ -395,6 +408,7 @@ fn recoverBindingCandidateFromBoundValue(
             hole_view_idx,
             hole_expr,
             hole_seed,
+            target_sort,
             view_bindings,
             view_seeds,
             dummy_bindings,
@@ -413,6 +427,7 @@ fn recoverBindingCandidateSymbolic(
     hole_view_idx: usize,
     hole_expr: ?ExprId,
     hole_seed: BindingSeed,
+    target_sort: []const u8,
     view_bindings: []const ?ExprId,
     view_seeds: []const BindingSeed,
     dummy_bindings: *std.AutoHashMapUnmanaged(usize, ExprId),
@@ -438,6 +453,7 @@ fn recoverBindingCandidateSymbolic(
                         source_expr,
                         expr_id,
                         concrete_hole_expr,
+                        target_sort,
                         candidate,
                         skipped_equal_hole,
                     );
@@ -453,6 +469,7 @@ fn recoverBindingCandidateSymbolic(
                 hole_view_idx,
                 hole_expr,
                 hole_seed,
+                target_sort,
                 view_bindings,
                 view_seeds,
                 dummy_bindings,
@@ -468,6 +485,7 @@ fn recoverBindingCandidateSymbolic(
                 source_expr,
                 expr_id,
                 concrete_hole_expr,
+                target_sort,
                 candidate,
                 skipped_equal_hole,
             );
@@ -514,6 +532,24 @@ fn recoverBindingCandidateSymbolic(
             break :blk false;
         },
         .app => |pattern_app| blk: {
+            // A coercion chain around exactly the hole is a cross-sort
+            // recovery site: re-sort the whole source subtree instead of
+            // matching the coercion heads structurally (the source side
+            // carries the *other* sort's chain).
+            if (symbolicCoercionChainHole(env, symbolic, hole_view_idx)) {
+                const recovered = resortExprToSort(
+                    theorem,
+                    env,
+                    source_expr,
+                    target_sort,
+                ) orelse return error.RecoverStructureMismatch;
+                if (candidate.*) |existing| {
+                    if (existing != recovered) return error.RecoverConflict;
+                } else {
+                    candidate.* = recovered;
+                }
+                break :blk true;
+            }
             const source_node = theorem.interner.node(source_expr);
             const source_app = switch (source_node.*) {
                 .variable => return error.RecoverStructureMismatch,
@@ -551,6 +587,7 @@ fn recoverBindingCandidateSymbolic(
                     hole_view_idx,
                     hole_expr,
                     hole_seed,
+                    target_sort,
                     view_bindings,
                     view_seeds,
                     dummy_bindings,
@@ -561,6 +598,31 @@ fn recoverBindingCandidateSymbolic(
             break :blk found;
         },
     };
+}
+
+/// Whether `symbolic` is a chain of one or more coercion applications whose
+/// innermost argument is exactly the hole binder.
+fn symbolicCoercionChainHole(
+    env: *const GlobalEnv,
+    symbolic: *const SymbolicExpr,
+    hole_view_idx: usize,
+) bool {
+    var current = symbolic;
+    while (true) {
+        const app = switch (current.*) {
+            .app => |a| a,
+            else => return false,
+        };
+        if (app.args.len != 1 or !env.isCoercionTerm(app.term_id)) {
+            return false;
+        }
+        const arg = app.args[0];
+        switch (arg.*) {
+            .binder => |idx| return idx == hole_view_idx,
+            .app => current = arg,
+            else => return false,
+        }
+    }
 }
 
 fn holeSeedMatchesDummy(seed: BindingSeed, slot: usize) bool {
@@ -582,6 +644,7 @@ fn recoverBindingCandidate(
     source_expr: ExprId,
     pattern_expr: ExprId,
     hole_expr: ExprId,
+    target_sort: []const u8,
     candidate: *?ExprId,
     skipped_equal_hole: *bool,
 ) !bool {
@@ -590,6 +653,26 @@ fn recoverBindingCandidate(
             if (existing != source_expr) return error.RecoverConflict;
         } else {
             candidate.* = source_expr;
+        }
+        return true;
+    }
+    // A coercion chain around exactly the hole is a cross-sort recovery
+    // site: the source side carries the other sort's chain (or none), so
+    // re-sort the whole source subtree instead of matching the coercion
+    // heads structurally. Failure to re-sort correctly rejects sources
+    // whose subtree is not coercion-reachable from the target sort (e.g. a
+    // compound term where an eigenvariable is required).
+    if (concreteCoercionChainHole(theorem, env, pattern_expr, hole_expr)) {
+        const recovered = resortExprToSort(
+            theorem,
+            env,
+            source_expr,
+            target_sort,
+        ) orelse return error.RecoverStructureMismatch;
+        if (candidate.*) |existing| {
+            if (existing != recovered) return error.RecoverConflict;
+        } else {
+            candidate.* = recovered;
         }
         return true;
     }
@@ -606,6 +689,7 @@ fn recoverBindingCandidate(
                 source_app,
                 pattern_expr,
                 hole_expr,
+                target_sort,
                 candidate,
             ),
         },
@@ -618,6 +702,7 @@ fn recoverBindingCandidate(
                 source_app,
                 pattern_expr,
                 hole_expr,
+                target_sort,
                 candidate,
             ),
         },
@@ -652,6 +737,7 @@ fn recoverBindingCandidate(
                         source_arg,
                         pattern_arg,
                         hole_expr,
+                        target_sort,
                         candidate,
                         skipped_equal_hole,
                     )) or found;
@@ -662,23 +748,72 @@ fn recoverBindingCandidate(
     };
 }
 
+/// Whether `pattern_expr` is a chain of one or more coercion applications
+/// whose innermost argument is exactly `hole_expr`.
+fn concreteCoercionChainHole(
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    pattern_expr: ExprId,
+    hole_expr: ExprId,
+) bool {
+    var current = pattern_expr;
+    while (true) {
+        const app = switch (theorem.interner.node(current).*) {
+            .app => |a| a,
+            else => return false,
+        };
+        if (app.args.len != 1 or !env.isCoercionTerm(app.term_id)) {
+            return false;
+        }
+        current = app.args[0];
+        if (current == hole_expr) return true;
+    }
+}
+
+/// Re-sort `expr_id` to `target_sort` by stripping leading coercion
+/// applications: the identity when the sorts already agree, the coercion
+/// argument (recursively) otherwise. Null when no prefix strip lands at the
+/// target sort — the subtree genuinely has a different sort.
+fn resortExprToSort(
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    expr_id: ExprId,
+    target_sort: []const u8,
+) ?ExprId {
+    var current = expr_id;
+    while (true) {
+        const info = BindingValidation.currentExprInfo(
+            env,
+            theorem,
+            current,
+        ) catch return null;
+        if (std.mem.eql(u8, info.sort_name, target_sort)) return current;
+        const app = switch (theorem.interner.node(current).*) {
+            .app => |a| a,
+            else => return null,
+        };
+        if (app.args.len != 1 or !env.isCoercionTerm(app.term_id)) {
+            return null;
+        }
+        current = app.args[0];
+    }
+}
+
 fn recoverBindingFromSourceWrapper(
     theorem: *const TheoremContext,
     env: *const GlobalEnv,
     source_app: ExprNode.App,
     pattern_expr: ExprId,
     hole_expr: ExprId,
+    target_sort: []const u8,
     candidate: *?ExprId,
 ) !bool {
     // This is intentionally heuristic: when the source has one extra wrapper
     // around a leaf pattern, choose the unique direct wrapper argument that
-    // has the hole/target sort and is not obviously the hole or pattern
-    // itself.
-    const hole_info = try BindingValidation.currentExprInfo(
-        env,
-        theorem,
-        hole_expr,
-    );
+    // has the target sort and is not obviously the hole or pattern itself.
+    // Cross-sort enrollments get a second tier: a unique argument whose
+    // coercion chain strips to the target sort, considered only when no
+    // argument has the target sort outright.
     var wrapper_candidate: ?ExprId = null;
     for (source_app.args) |source_arg| {
         if (source_arg == hole_expr or source_arg == pattern_expr) continue;
@@ -687,13 +822,31 @@ fn recoverBindingFromSourceWrapper(
             theorem,
             source_arg,
         );
-        if (!std.mem.eql(u8, arg_info.sort_name, hole_info.sort_name)) {
+        if (!std.mem.eql(u8, arg_info.sort_name, target_sort)) {
             continue;
         }
         if (wrapper_candidate != null) {
             return error.RecoverStructureMismatch;
         }
         wrapper_candidate = source_arg;
+    }
+    if (wrapper_candidate == null) {
+        for (source_app.args) |source_arg| {
+            if (source_arg == hole_expr or source_arg == pattern_expr) {
+                continue;
+            }
+            const resorted = resortExprToSort(
+                theorem,
+                env,
+                source_arg,
+                target_sort,
+            ) orelse continue;
+            if (resorted == source_arg) continue;
+            if (wrapper_candidate != null) {
+                return error.RecoverStructureMismatch;
+            }
+            wrapper_candidate = resorted;
+        }
     }
     const recovered = wrapper_candidate orelse {
         return error.RecoverStructureMismatch;
@@ -764,7 +917,7 @@ fn applyAbstractBinding(
     const right_expr = view_bindings[abstract.right_view_idx] orelse {
         return .no_progress;
     };
-    const hole_expr = view_bindings[abstract.hole_view_idx] orelse {
+    const raw_hole_expr = view_bindings[abstract.hole_view_idx] orelse {
         return .no_progress;
     };
     const left_plug = view_bindings[abstract.left_plug_view_idx] orelse {
@@ -773,6 +926,15 @@ fn applyAbstractBinding(
     const right_plug = view_bindings[abstract.right_plug_view_idx] orelse {
         return .no_progress;
     };
+    // Cross-sort plugs: plug sites sit at the plugs' sort, so substitute
+    // the hole wrapped in the coercion route up to that sort, keeping the
+    // constructed context well-sorted.
+    const hole_expr = (try abstractWrapHoleToPlugSort(
+        theorem,
+        env,
+        raw_hole_expr,
+        left_plug,
+    )) orelse return .no_progress;
 
     var found_plug = false;
     const raw_candidate = abstractContextExpr(
@@ -841,6 +1003,46 @@ fn applyAbstractBinding(
     }
     view_bindings[abstract.target_view_idx] = candidate;
     return .progress;
+}
+
+/// Wrap `hole_expr` in the coercion route up to the plug's sort (the
+/// identity when the sorts already agree). Null when no route exists: the
+/// cross-sort enrollment only guaranteed a common target, not that the hole
+/// is coercible up to the plugs.
+fn abstractWrapHoleToPlugSort(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    hole_expr: ExprId,
+    plug_expr: ExprId,
+) !?ExprId {
+    const hole_info = try BindingValidation.currentExprInfo(
+        env,
+        theorem,
+        hole_expr,
+    );
+    const plug_info = try BindingValidation.currentExprInfo(
+        env,
+        theorem,
+        plug_expr,
+    );
+    if (std.mem.eql(u8, hole_info.sort_name, plug_info.sort_name)) {
+        return hole_expr;
+    }
+    var route: std.ArrayListUnmanaged(u32) = .empty;
+    defer route.deinit(theorem.allocator);
+    if (!try env.coercionRoute(
+        hole_info.sort_name,
+        plug_info.sort_name,
+        theorem.allocator,
+        &route,
+    )) {
+        return null;
+    }
+    var current = hole_expr;
+    for (route.items) |term_id| {
+        current = try theorem.interner.internApp(term_id, &.{current});
+    }
+    return current;
 }
 
 fn abstractContextExpr(

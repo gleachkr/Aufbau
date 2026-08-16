@@ -343,18 +343,21 @@ test "recover-hole seeding allocates distinct vars per omitted hole" {
             .{ .sort_name = "obj", .bound = true, .deps = 2 },
         },
         .{ .app = .{ .term_id = 0, .args = &.{} } },
+        &[_]TemplateExpr{},
         &[_]DerivedBinding{
             .{ .recover = .{
                 .target_view_idx = 0,
                 .source_view_idx = 2,
                 .pattern_view_idx = 2,
                 .hole_view_idx = 1,
+                .target_sort_name = "obj",
             } },
             .{ .recover = .{
                 .target_view_idx = 0,
                 .source_view_idx = 2,
                 .pattern_view_idx = 2,
                 .hole_view_idx = 3,
+                .target_sort_name = "obj",
             } },
         },
     );
@@ -403,11 +406,13 @@ test "recover-hole seeding skips holes visible in the conclusion" {
             .term_id = hold_id,
             .args = &[_]TemplateExpr{.{ .binder = 1 }},
         } },
+        &[_]TemplateExpr{},
         &[_]DerivedBinding{.{ .recover = .{
             .target_view_idx = 0,
             .source_view_idx = 0,
             .pattern_view_idx = 0,
             .hole_view_idx = 1,
+            .target_sort_name = "obj",
         } }},
     );
     defer std.testing.allocator.free(seeds);
@@ -448,11 +453,13 @@ test "recover-hole seeding skips non-bound holes" {
             .{ .sort_name = "obj", .bound = false, .deps = 0 },
         },
         .{ .app = .{ .term_id = 0, .args = &.{} } },
+        &[_]TemplateExpr{},
         &[_]DerivedBinding{.{ .recover = .{
             .target_view_idx = 0,
             .source_view_idx = 0,
             .pattern_view_idx = 0,
             .hole_view_idx = 1,
+            .target_sort_name = "obj",
         } }},
     );
     defer std.testing.allocator.free(seeds);

@@ -184,6 +184,9 @@ fn analyzeInternal(
             }
             continue :parse_loop;
         };
+        // The parser consumes coercion statements silently while scanning to
+        // the next public statement; keep the env's mirror in lockstep.
+        try state.env.syncCoercionsFromParser(&state.parser);
         const stmt = next_stmt orelse break;
         state.last_stmt = stmt;
 

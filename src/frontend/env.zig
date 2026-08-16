@@ -27,6 +27,15 @@ pub const TermDecl = struct {
     available: bool = true,
 };
 
+/// A declared coercion edge, mirrored from the trusted parser. The parser
+/// consumes `coercion` statements silently (they are notation-layer), so the
+/// frontend re-derives src/dst from the coercion term's own signature.
+pub const CoercionDecl = struct {
+    term_id: u32,
+    src_sort: []const u8,
+    dst_sort: []const u8,
+};
+
 pub const RuleDecl = struct {
     name: []const u8,
     args: []const ArgInfo,
@@ -44,6 +53,8 @@ pub const GlobalEnv = struct {
     rule_names: std.StringHashMap(u32),
     terms: std.ArrayListUnmanaged(TermDecl) = .{},
     rules: std.ArrayListUnmanaged(RuleDecl) = .{},
+    coercions: std.ArrayListUnmanaged(CoercionDecl) = .{},
+    coercion_term_ids: std.AutoHashMapUnmanaged(u32, void) = .{},
 
     pub fn init(allocator: std.mem.Allocator) GlobalEnv {
         return .{
@@ -152,6 +163,128 @@ pub const GlobalEnv = struct {
         std.debug.assert(rule_id == last_idx);
         _ = self.rule_names.remove(name);
         self.rules.items.len = last_idx;
+    }
+
+    /// Mirror the parser's coercion registrations. Called after each parsed
+    /// statement; the parser has already validated the declaration (unary
+    /// term, unique routes), so unseen ids are simply appended. Terms that
+    /// recovery invalidated are skipped via the signature guard.
+    pub fn syncCoercionsFromParser(self: *GlobalEnv, parser: anytype) !void {
+        var it = parser.coercionTermIds().keyIterator();
+        while (it.next()) |term_id| try self.addCoercion(term_id.*);
+    }
+
+    pub fn addCoercion(self: *GlobalEnv, term_id: u32) !void {
+        if (self.coercion_term_ids.contains(term_id)) return;
+        if (term_id >= self.terms.items.len) return;
+        const term = &self.terms.items[term_id];
+        if (!term.available or term.args.len != 1) return;
+        try self.coercion_term_ids.put(self.allocator, term_id, {});
+        try self.coercions.append(self.allocator, .{
+            .term_id = term_id,
+            .src_sort = term.args[0].sort_name,
+            .dst_sort = term.ret_sort_name,
+        });
+    }
+
+    pub fn isCoercionTerm(self: *const GlobalEnv, term_id: u32) bool {
+        return self.coercion_term_ids.contains(term_id);
+    }
+
+    /// Whether `src` reaches `dst` through the declared coercion graph
+    /// (reflexively). The parser guarantees unique routes, hence no cycles;
+    /// the fuel bound is a backstop, not a semantic limit.
+    pub fn coercionPathExists(
+        self: *const GlobalEnv,
+        src: []const u8,
+        dst: []const u8,
+    ) bool {
+        return self.coercionPathFuel(src, dst, self.coercions.items.len + 1);
+    }
+
+    fn coercionPathFuel(
+        self: *const GlobalEnv,
+        src: []const u8,
+        dst: []const u8,
+        fuel: usize,
+    ) bool {
+        if (std.mem.eql(u8, src, dst)) return true;
+        if (fuel == 0) return false;
+        for (self.coercions.items) |edge| {
+            if (!std.mem.eql(u8, edge.src_sort, src)) continue;
+            if (self.coercionPathFuel(edge.dst_sort, dst, fuel - 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether some sort is coercion-reachable from both `a` and `b`
+    /// (reflexively). This is the enrollment condition for cross-sort
+    /// derived bindings.
+    pub fn sortsShareCoercionTarget(
+        self: *const GlobalEnv,
+        a: []const u8,
+        b: []const u8,
+    ) bool {
+        if (self.coercionPathExists(a, b)) return true;
+        if (self.coercionPathExists(b, a)) return true;
+        // A strictly-common target must be the destination of some edge.
+        for (self.coercions.items) |edge| {
+            if (self.coercionPathExists(a, edge.dst_sort) and
+                self.coercionPathExists(b, edge.dst_sort))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Append the coercion term ids along the unique route `src` → `dst` to
+    /// `out` (source-side first; empty when the sorts are equal). Returns
+    /// false when no route exists, leaving `out` unchanged.
+    pub fn coercionRoute(
+        self: *const GlobalEnv,
+        src: []const u8,
+        dst: []const u8,
+        allocator: std.mem.Allocator,
+        out: *std.ArrayListUnmanaged(u32),
+    ) !bool {
+        const start_len = out.items.len;
+        if (try self.coercionRouteFuel(
+            src,
+            dst,
+            allocator,
+            out,
+            self.coercions.items.len + 1,
+        )) return true;
+        out.items.len = start_len;
+        return false;
+    }
+
+    fn coercionRouteFuel(
+        self: *const GlobalEnv,
+        src: []const u8,
+        dst: []const u8,
+        allocator: std.mem.Allocator,
+        out: *std.ArrayListUnmanaged(u32),
+        fuel: usize,
+    ) !bool {
+        if (std.mem.eql(u8, src, dst)) return true;
+        if (fuel == 0) return false;
+        for (self.coercions.items) |edge| {
+            if (!std.mem.eql(u8, edge.src_sort, src)) continue;
+            try out.append(allocator, edge.term_id);
+            if (try self.coercionRouteFuel(
+                edge.dst_sort,
+                dst,
+                allocator,
+                out,
+                fuel - 1,
+            )) return true;
+            out.items.len -= 1;
+        }
+        return false;
     }
 
     pub fn getRuleId(self: *const GlobalEnv, name: []const u8) ?u32 {
