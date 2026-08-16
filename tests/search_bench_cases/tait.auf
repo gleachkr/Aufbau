@@ -549,3 +549,40 @@ l4: $ ⊢ (∃ x (P x ∧ Q x)) , ¬ P C , ¬ Q C $ by rex [l3]
 l5: $ ⊢ (¬ P C ∨ ¬ Q C) , (∃ x (P x ∧ Q x)) $ by ror [l4]
 l6: $ ⊢ ¬ (P C ∧ Q C) , (∃ x (P x ∧ Q x)) $ by rdm_an [l5]
 l7: $ ⊢ (P C ∧ Q C) → (∃ x (P x ∧ Q x)) $ by rim [l6]
+
+vac_intro
+---------
+l1: $ ⊢ s0 , ¬ s0 $ by ax
+l2: $ ⊢ (∀ x s0) , ¬ s0 $ by rall [l1]
+l3: $ ⊢ s0 → ∀ x s0 $ by rim [l2]
+
+vac_ex
+------
+l1: $ ⊢ ¬ s0 , s0 $ by ax
+l2: $ ⊢ (∀ x (¬ s0)) , s0 $ by rall [l1]
+l3: $ ⊢ ¬ (∃ x s0) , s0 $ by rdm_ex [l2]
+l4: $ ⊢ (∃ x s0) → s0 $ by rim [l3]
+
+vac_all
+-------
+l1: $ ⊢ ¬ s0 , (∃ x (¬ s0)) , s0 $ by ax
+l2: $ ⊢ (∃ x (¬ s0)) , s0 $ by rex (t := $ u $) [l1]
+l3: $ ⊢ ¬ (∀ x s0) , s0 $ by rdm_all [l2]
+l4: $ ⊢ (∀ x s0) → s0 $ by rim [l3]
+
+vac_all_p
+---------
+l1: $ ⊢ ¬ P C , (∃ x (¬ P C)) , P C $ by ax
+l2: $ ⊢ (∃ x (¬ P C)) , P C $ by rex (t := $ u $) [l1]
+l3: $ ⊢ ¬ (∀ x P C) , P C $ by rdm_all [l2]
+l4: $ ⊢ (∀ x P C) → P C $ by rim [l3]
+
+vac_all_or
+----------
+l1: $ ⊢ ¬ s0 , (∃ x (¬ (s0 ∨ s0))) , s0 $ by ax
+l2: $ ⊢ ¬ s0 , (∃ x (¬ (s0 ∨ s0))) , s0 $ by ax
+l3: $ ⊢ (¬ s0 ∧ ¬ s0) , (∃ x (¬ (s0 ∨ s0))) , s0 $ by rand [l1, l2]
+l4: $ ⊢ ¬ (s0 ∨ s0) , (∃ x (¬ (s0 ∨ s0))) , s0 $ by rdm_or [l3]
+l5: $ ⊢ (∃ x (¬ (s0 ∨ s0))) , s0 $ by rex (t := $ u $) [l4]
+l6: $ ⊢ ¬ (∀ x (s0 ∨ s0)) , s0 $ by rdm_all [l5]
+l7: $ ⊢ (∀ x (s0 ∨ s0)) → s0 $ by rim [l6]

@@ -1926,6 +1926,7 @@ fn emitOpenTarget(
     const reduced_target = try Redex.reduceRedexOnly(slot.context, theorem, raw_target_in);
     const raw_target = try normalizeAcuiUnits(slot.context, theorem, reduced_target);
     if (slot.store.isFullySolved(theorem, raw_target)) {
+        const solved_before = slot.candidates.items.len;
         // Bound-witness enumeration closed every open binder: this is an
         // ordinary concrete generated slot (for view rules, a concrete
         // view-surface target the validator reconciles through the view
@@ -1955,6 +1956,34 @@ fn emitOpenTarget(
             slot.candidates,
             raw_target,
         );
+        if (slot.candidates.items.len != solved_before) return;
+        // A witness meta can be *erased* from a fully-solved target: a vacuous
+        // `@recover` body makes the leaf swap `p[x ↦ ?t]` a no-op, and redex
+        // reduction can likewise collapse `[x/?t]p` to `p` when `x` is not
+        // free in `p`. The minted meta then dangles in the bindings while the
+        // target mentions it nowhere, so the concrete route above carried the
+        // branch to validation with the witness binder undeterminable and
+        // produced nothing. Such a witness is genuinely unconstrained — exactly
+        // the invention rung's charter ("invent it, last — only for a witness
+        // nothing else determines") — so as the last resort ground it from the
+        // `@vars` pool and continue through the solved-target pinning path,
+        // which renders the explicit binding the validator requires. If no
+        // meta dangles, or the pool cannot supply the sort, this is inert and
+        // the branch fails as before.
+        if (slot.mode == .witness and slot.hook.allow_invent_witness) {
+            const mark2 = slot.store.mark();
+            defer slot.store.rollbackTo(mark2);
+            if (try groundDanglingWitnessMetas(slot, unknowns, view_bindings)) {
+                try continueOpenTargetSolved(
+                    slot,
+                    raw_target,
+                    unknowns,
+                    view,
+                    if (view_bindings) |vb| vb else null,
+                    null,
+                );
+            }
+        }
         return;
     }
     // Steps 4–5: reject bare-meta targets and targets with no rigid root (the
@@ -2524,6 +2553,37 @@ fn tryVarPoolWitnesses(
         null,
     );
     slot.store.rollbackTo(mark);
+}
+
+/// Collect witness metas that dangle in the slot's bindings after the open
+/// target came out fully solved (an erased witness: the instance does not
+/// mention it), and ground each from the `@vars` pool. Returns true iff at
+/// least one dangling meta existed and every one was grounded; on any failure
+/// the caller's rollback restores the store untouched.
+fn groundDanglingWitnessMetas(
+    slot: *OpenSlot,
+    unknowns: []const ?ExprId,
+    view_bindings: ?[]?ExprId,
+) !bool {
+    const theorem = &slot.candidate.theorem;
+    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+    defer unsolved.deinit(slot.allocator);
+    if (view_bindings) |vb| {
+        for (vb) |maybe| {
+            const b = maybe orelse continue;
+            try slot.store.collectUnsolved(theorem, b, &unsolved);
+        }
+    }
+    for (unknowns) |maybe| {
+        const b = maybe orelse continue;
+        try slot.store.collectUnsolved(theorem, b, &unsolved);
+    }
+    if (unsolved.items.len == 0) return false;
+    for (unsolved.items) |meta_id| {
+        const meta = slot.store.info(meta_id) orelse return false;
+        if (!assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) return false;
+    }
+    return true;
 }
 
 /// Assign `meta_id` a `@vars`-pool dummy of `sort_name`, trying tokens in sorted

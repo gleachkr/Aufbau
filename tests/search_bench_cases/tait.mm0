@@ -470,3 +470,21 @@ theorem ex_not_to_not_all {x y: obj}: $ ⊢ (∃ x (¬ P x)) → ¬ ∀ y P y $;
 theorem all_not_to_not_ex {x y: obj}: $ ⊢ (∀ x (¬ P x)) → ¬ ∃ y P y $;
 theorem ex_conj_weak {x y: obj}: $ ⊢ (∃ x (P x ∧ Q x)) → (∃ y P y) $;
 theorem ex_witness_conj {x: obj}: $ ⊢ (P C ∧ Q C) → (∃ x (P x ∧ Q x)) $;
+
+-- Vacuous quantification: the erased-witness invention path.  `s0` is a
+-- closed atomic formula, so eliminating a vacuously quantified formula by
+-- `rex` mints a witness the instance never mentions — the `@recover` leaf
+-- swap `p[x ↦ ?t]` is a no-op, the view premise comes out fully concrete,
+-- and nothing downstream determines `t`.  The three `vac_all*` goals pin the
+-- erased-witness fallback in `emitOpenTarget` (search/backward/backtrack.zig),
+-- which grounds the dangling meta from the `@vars` pool and renders the
+-- explicit `(t := …)` binding; they were clean MISSes without it.
+-- `vac_intro`/`vac_ex` are the eigenvariable-direction controls (no witness,
+-- never affected).
+term s0: wff;
+
+theorem vac_intro {x: obj}: $ ⊢ s0 → ∀ x s0 $;
+theorem vac_ex {x: obj}: $ ⊢ (∃ x s0) → s0 $;
+theorem vac_all {x: obj}: $ ⊢ (∀ x s0) → s0 $;
+theorem vac_all_p {x: obj}: $ ⊢ (∀ x P C) → P C $;
+theorem vac_all_or {x: obj}: $ ⊢ (∀ x (s0 ∨ s0)) → s0 $;
