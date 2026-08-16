@@ -1,3 +1,57 @@
+# Aufbau 0.0.6
+
+Aufbau 0.0.6 is a small release with two `auto?` fixes and two new demo
+theories. The verifier and the trusted kernel are unchanged.
+
+## Highlights
+
+### `auto?` finds witnesses the instance erases
+
+A vacuous quantifier elimination, e.g. `⊢ (∀ x s0) → s0`, where the bound
+variable does not occur in the body, needs a witness term, and nothing
+about the goal can determine which one, precisely because substituting it
+changes nothing. The search minted the witness metavariable, observed that
+the resulting goal was already fully solved without it, and then carried
+every branch into a validation failure for the binder it had never
+assigned; the goal missed at any budget. Such a witness is now recognized
+as genuinely underdetermined and taken from the theory's `@vars` pool. 
+
+### Searches cannot take down the WebAssembly instance
+
+The three wasm executables link with an 8 MiB stack, matching a native
+thread, and the search's recursive descent carries a call-stack guard: a
+branch that recurses close to the limit is abandoned and reported as an
+exhaustion, naming the ladder phase and depth it stopped in and advising a
+smaller goal or an intermediate lemma, since no search parameter raises
+this bound. Previously a branching search could overrun the much smaller
+default wasm stack. The guard is set above what real proofs reach; the deepest 
+corpus in the test suite peaks at roughly a tenth of it.
+
+### Linear logic and System F join the demos
+
+`girard` is intuitionistic linear logic. It turns on the contrast the other 
+sequent demos leave implicit: leaving the context's idempotence slot empty 
+makes a context a multiset rather than a set, so every hypothesis is consumed 
+exactly once, weakening and contraction are inadmissible, and they come back 
+only under `!`. `reynolds` is System F as typing rules. Both are in the browser 
+demo's theory picker, as is `diaconescu` (choice implies excluded middle), 
+which the corpus already carried.
+
+See the [changelog](CHANGELOG.md) for the complete list.
+
+## Compatibility
+
+The verifier and trusted kernel are unchanged; MMB files from earlier
+releases verify as before, and existing `.mm0`/`.auf` sources compile
+unchanged. The `auto?` change only adds proofs where the search
+previously reported a miss, and a search stopped by the new call-stack
+guard reports a budget-style exhaustion rather than a definitive negative.
+Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.5
 
 Aufbau 0.0.5 makes `conversion?` write proofs the way a person would —

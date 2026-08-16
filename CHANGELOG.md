@@ -3,6 +3,56 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.6] - 2026-08-16
+
+### Added
+
+- Two demo theories. `girard` is intuitionistic linear logic —
+  multiplicatives, additives, and the exponentials — and turns on the
+  contrast the other sequent demos leave implicit: its context
+  annotation omits the idempotence slot, so a context is a multiset
+  rather than a set, weakening and contraction are not admissible, and
+  they return only under `!`. `reynolds` is System F as typing rules,
+  with two binder levels and a small explicit type-substitution layer;
+  the familiar side condition on ∀-introduction (the abstracted type
+  variable must not occur free in the context) is not stated as a side
+  condition at all — it falls out of MM0's dependency tracking. Both
+  join the browser demo's theory picker, as does `diaconescu` (choice
+  implies excluded middle), which the corpus already carried.
+
+### Fixed
+
+- `auto?` proves goals whose witness the proved instance erases.
+  Eliminating a vacuous quantifier — `⊢ (∀ x s0) → s0`, where the bound
+  variable does not occur in the body — needs a witness term that
+  nothing about the goal can determine, precisely because substituting
+  it changes nothing. The search minted the witness metavariable, found
+  the resulting goal already fully solved without it, and then drove
+  every branch into a validation failure for the unassigned binder, so
+  such goals missed no matter how much budget they were given. A
+  witness erased that way is now recognized as genuinely
+  underdetermined and taken from the theory's `@vars` pool — the same
+  last-resort invention the search already applies to witnesses that
+  survive into the instance — and the emitted proof states the choice
+  explicitly, as `by rex (t := $ u $)`.
+- A deep `auto?` search no longer kills the WebAssembly instance. The
+  three wasm executables now link with an 8 MiB stack, matching a
+  native thread, and the search's recursive descent carries a
+  call-stack guard: a branch that recurses close to the limit is
+  abandoned and reported as an exhaustion, naming the ladder phase and
+  depth it stopped in and advising a smaller goal (no search parameter
+  raises this bound). Previously the descent could overrun the far
+  smaller default wasm stack, which is not a trap but a silent write
+  into linear memory — it corrupted the allocator, so every later
+  compile in that session failed until the page was reloaded. The
+  guard sits far above what real proofs reach: the deepest corpus in
+  the test suite peaks at roughly a tenth of it.
+- The manual's embedding chapter rendered its literal `aufbau-…`
+  examples as live editor cells instead of showing them as markup. An
+  ordinary code fence that contains an `aufbau-…` fence is now copied
+  through as prose, and the CI check that compiles every live cell
+  counts only cells the preprocessor actually generated.
+
 ## [0.0.5] - 2026-08-13
 
 ### Added
