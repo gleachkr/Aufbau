@@ -1,0 +1,65 @@
+-- #216 review: residual completion for a NONCOMMUTATIVE (AU) combiner must
+-- preserve the goal's member order. With g and h bound by the premises to
+-- PA and PB, the slack binder i must receive PC , PD in that order; an
+-- order-scrambling subtraction rebuilds PD , PC and the validating re-match
+-- rejects the view application (the structural tier then papers over it).
+-- The two-ground-member template bag is what forces the residual pass: with
+-- a single bound member the semantic matcher extracts the open binder
+-- directly and the pass never runs.
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+
+term PP: wff;
+term QQ: wff;
+term PA: wff;
+term PB: wff;
+term PC: wff;
+term PD: wff;
+
+term iff (p q: wff): wff;
+infixr iff: $↔$ prec 20;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui seq_assoc _ emp _
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (p: wff): $ p ↔ p $;
+axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation ctx ctx_eq seq_refl seq_trans seq_sym _
+axiom seq_refl (g: ctx): $ ctx_eq g g $;
+axiom seq_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom seq_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom seq_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom seq_unitl (g: ctx): $ ctx_eq (emp , g) g $;
+axiom seq_unitr (g: ctx): $ ctx_eq (g , emp) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (g h: ctx) (p q: wff):
+  $ ctx_eq g h $ > $ p ↔ q $ > $ (g ⊢ p) ↔ (h ⊢ q) $;
+
+axiom ax1: $ PA ⊢ PP $;
+axiom ax2: $ PB ⊢ QQ $;
+
+--| @view (g h i: ctx) (p q: wff): $ g ⊢ p $ > $ h ⊢ q $ > $ g , h , i ⊢ p $
+axiom weak (g h i: ctx) (p q: wff): $ g ⊢ p $ > $ h ⊢ q $ > $ g , h , i ⊢ p $;
+
+theorem weak_tail: $ PA , PB , PC , PD ⊢ PP $;

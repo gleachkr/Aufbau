@@ -148,77 +148,16 @@ fn applyRecoverBinding(
 
     if (view_bindings[recover.pattern_view_idx]) |pattern_expr| {
         if (hole_expr) |concrete_hole_expr| {
-            var candidate: ?ExprId = null;
-            var skipped_equal_hole = false;
-            const found = recoverBindingCandidate(
-                theorem,
-                env,
-                source_expr,
-                pattern_expr,
-                concrete_hole_expr,
-                recover.target_sort_name,
-                &candidate,
-                &skipped_equal_hole,
-            ) catch |err| switch (err) {
-                error.RecoverStructureMismatch => blk: {
-                    skipped_equal_hole = false;
-                    break :blk false;
-                },
-                else => return err,
-            };
-            if (found or skipped_equal_hole or source_expr == pattern_expr) {
-                if (!found) candidate = concrete_hole_expr;
-                if (debug_views) {
-                    ViewTrace.printMessage(
-                        "raw recover matched concrete pattern",
-                        .{},
-                    );
-                }
-                view_bindings[recover.target_view_idx] = candidate;
-                return .progress;
-            }
-
-            const aligned_source = try preprocessDerivedExpr(
+            if (try concreteRecoverCandidate(
                 theorem,
                 env,
                 registry,
                 source_expr,
-            );
-            const aligned_pattern = try preprocessDerivedExpr(
-                theorem,
-                env,
-                registry,
                 pattern_expr,
-            );
-
-            candidate = null;
-            skipped_equal_hole = false;
-            const aligned_found = recoverBindingCandidate(
-                theorem,
-                env,
-                aligned_source,
-                aligned_pattern,
                 concrete_hole_expr,
                 recover.target_sort_name,
-                &candidate,
-                &skipped_equal_hole,
-            ) catch |err| switch (err) {
-                error.RecoverStructureMismatch => blk: {
-                    skipped_equal_hole = false;
-                    break :blk false;
-                },
-                else => return err,
-            };
-            if (aligned_found or skipped_equal_hole or
-                aligned_source == aligned_pattern)
-            {
-                if (!aligned_found) candidate = concrete_hole_expr;
-                if (debug_views) {
-                    ViewTrace.printMessage(
-                        "aligned recover matched concrete pattern",
-                        .{},
-                    );
-                }
+                debug_views,
+            )) |candidate| {
                 view_bindings[recover.target_view_idx] = candidate;
                 return .progress;
             }
@@ -636,6 +575,99 @@ fn holeSeedMatchesDummy(seed: BindingSeed, slot: usize) bool {
         },
         else => false,
     };
+}
+
+/// The concrete acceptance relation for a recover source: the raw
+/// structural walk, then the aligned (preprocessed) retry — the same two
+/// paths `applyRecoverBinding` tries before falling back to symbolic
+/// seeds. Returns the recovered target candidate on acceptance, null when
+/// neither concrete path accepts. Only a structural mismatch means "no";
+/// other errors propagate. Also used read-only by the view matcher to
+/// judge trial context splits, so the filter and the committing pass
+/// cannot drift apart.
+pub fn concreteRecoverCandidate(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    source_expr: ExprId,
+    pattern_expr: ExprId,
+    hole_expr: ExprId,
+    target_sort: []const u8,
+    debug_views: bool,
+) !?ExprId {
+    var candidate: ?ExprId = null;
+    var skipped_equal_hole = false;
+    const found = recoverBindingCandidate(
+        theorem,
+        env,
+        source_expr,
+        pattern_expr,
+        hole_expr,
+        target_sort,
+        &candidate,
+        &skipped_equal_hole,
+    ) catch |err| switch (err) {
+        error.RecoverStructureMismatch => blk: {
+            skipped_equal_hole = false;
+            break :blk false;
+        },
+        else => return err,
+    };
+    if (found or skipped_equal_hole or source_expr == pattern_expr) {
+        if (debug_views) {
+            ViewTrace.printMessage(
+                "raw recover matched concrete pattern",
+                .{},
+            );
+        }
+        if (!found) candidate = hole_expr;
+        return candidate orelse hole_expr;
+    }
+
+    const aligned_source = try preprocessDerivedExpr(
+        theorem,
+        env,
+        registry,
+        source_expr,
+    );
+    const aligned_pattern = try preprocessDerivedExpr(
+        theorem,
+        env,
+        registry,
+        pattern_expr,
+    );
+
+    candidate = null;
+    skipped_equal_hole = false;
+    const aligned_found = recoverBindingCandidate(
+        theorem,
+        env,
+        aligned_source,
+        aligned_pattern,
+        hole_expr,
+        target_sort,
+        &candidate,
+        &skipped_equal_hole,
+    ) catch |err| switch (err) {
+        error.RecoverStructureMismatch => blk: {
+            skipped_equal_hole = false;
+            break :blk false;
+        },
+        else => return err,
+    };
+    if (aligned_found or skipped_equal_hole or
+        aligned_source == aligned_pattern)
+    {
+        if (debug_views) {
+            ViewTrace.printMessage(
+                "aligned recover matched concrete pattern",
+                .{},
+            );
+        }
+        if (!aligned_found) candidate = hole_expr;
+        return candidate orelse hole_expr;
+    }
+    return null;
 }
 
 fn recoverBindingCandidate(

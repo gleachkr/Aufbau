@@ -1,0 +1,7 @@
+ex_open
+-------
+
+l1: $ ∃ x (F x) ⊢ ∃ x (F x) $ by ax
+l2: $ F b ⊢ F b $ by ax
+l3: $ F b ⊢ ∃ x (F x) $ by ex_intro [l2]
+l4: $ ∃ x (F x) ⊢ ∃ x (F x) $ by ex_elim [l1, l3]

@@ -1,0 +1,7 @@
+ex_rename
+---------
+
+l1: $ ∃ x (F x) ⊢ ∃ x (F x) $ by ax
+l2: $ F u ⊢ F u $ by ax
+l3: $ F u ⊢ ∃ y (F y) $ by ex_intro [l2]
+l4: $ ∃ x (F x) ⊢ ∃ y (F y) $ by ex_elim [l1, l3]

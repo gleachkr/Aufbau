@@ -485,6 +485,39 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },
     },
+    // #216 battery: premise-side eigenvariable inference for two-premise
+    // (∃-elimination shaped) rules. The witness appears only inside the
+    // second premise's [x/u] p instance, so line-check inference must
+    // recover it from a premise rather than the conclusion.
+    .{ .stem = "pass_ex_elim_infer_witness", .outcome = .pass },
+    .{ .stem = "pass_ex_elim_infer_split", .outcome = .pass },
+    .{ .stem = "pass_ex_elim_infer_two_sort", .outcome = .pass },
+    .{ .stem = "pass_ex_elim_infer_slack", .outcome = .pass },
+    .{ .stem = "pass_ex_elim_infer_slack_atom", .outcome = .pass },
+    .{ .stem = "pass_ex_elim_infer_slack_one_sort", .outcome = .pass },
+    // Order variants: the assumed instance is listed FIRST in the second
+    // premise's context, so a positional h , q split commits wrongly; the
+    // split is resolved by trialing each candidate member transactionally.
+    .{ .stem = "pass_ex_elim_infer_slack_order", .outcome = .pass },
+    .{ .stem = "pass_ex_elim_infer_slack_atom_order", .outcome = .pass },
+    // The rule discharges the premise rest binder (conclusion g , i ⊢ c),
+    // so no conclusion reasoning can pick the split — only the recover
+    // pattern separates the assumed instance from the ∀ side hypothesis.
+    .{ .stem = "pass_ex_elim_infer_discharge", .outcome = .pass },
+    // A recover-pattern conflict (R x x against R b c) must reject that
+    // candidate only — the valid R b b member listed after it still wins.
+    .{ .stem = "pass_ex_elim_infer_conflict_first", .outcome = .pass },
+    // Residual-completion semantics for @acui subsets: a noncommutative
+    // (AU) residual must keep the goal's member order, and a commutative
+    // non-idempotent (ACU) residual subtracts as a multiset.
+    .{ .stem = "pass_acui_residual_noncomm", .outcome = .pass },
+    .{ .stem = "pass_acui_residual_multiset", .outcome = .pass },
+    // The ∃E eigencondition must refuse an INFERRED eigenvariable exactly
+    // as it refuses an explicit one.
+    .{
+        .stem = "fail_two_sort_ex_elim_smuggle",
+        .outcome = .{ .fail = error.DepViolation },
+    },
     .{
         .stem = "fail_missing_binding",
         .outcome = .{ .fail = error.MissingBinderAssignment },

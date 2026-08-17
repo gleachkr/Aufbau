@@ -4,6 +4,9 @@ const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
+const ResolvedStructuralCombiner =
+    @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
+const AcuiSupport = @import("../acui_support.zig");
 const DefOps = @import("../def_ops.zig");
 const DerivedBindings = @import("./derived_bindings.zig");
 const BindingValidation = @import("../binding_validation.zig");
@@ -659,11 +662,16 @@ fn matchViewAgainstConclusion(
                 view,
                 actual_conclusion,
                 ref_exprs,
+                false,
             )) return;
             return error.ViewConclusionMismatch;
         }
     }
-    matchViewHypsAgainstConcreteExprs(session, view, ref_exprs) catch |err| {
+    matchViewHypsAgainstConcreteExprs(
+        session,
+        view,
+        ref_exprs,
+    ) catch |err| {
         if (err != error.ViewHypothesisMismatch) return err;
         const state = initial_state orelse return err;
         try session.restoreFromSeedState(&state);
@@ -673,6 +681,7 @@ fn matchViewAgainstConclusion(
             view,
             conclusion.?,
             ref_exprs,
+            false,
         )) return;
         return err;
     };
@@ -692,12 +701,451 @@ fn matchViewHypsBeforeConclusion(
     view: *const ViewDecl,
     conclusion: ViewConclusion,
     ref_exprs: []const ExprId,
+    trace: bool,
 ) !bool {
-    matchViewHypsAgainstConcreteExprs(session, view, ref_exprs) catch |err| {
-        if (err == error.ViewHypothesisMismatch) return false;
-        return err;
-    };
+    return try matchHypsThenConclusion(
+        env,
+        session,
+        view,
+        conclusion,
+        ref_exprs,
+        0,
+        trace,
+    );
+}
+
+/// Hypothesis-first matching from `start_idx` on: match each remaining
+/// hypothesis in order, then the conclusion. A hypothesis whose context
+/// bag contains an undetermined recover-source split is resolved by
+/// evaluating each candidate member transactionally — seed it, then run
+/// this same procedure to the end — and committing only a unique
+/// survivor; with no unique survivor the ordinary positional match
+/// proceeds unseeded.
+fn matchHypsThenConclusion(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    conclusion: ViewConclusion,
+    ref_exprs: []const ExprId,
+    start_idx: usize,
+    trace: bool,
+) anyerror!bool {
+    var idx = start_idx;
+    while (idx < view.hyps.len) : (idx += 1) {
+        const hyp_template = view.hyps[idx];
+        const ref_expr = ref_exprs[idx];
+        if (try planRecoverSourceSplit(
+            env,
+            session,
+            view,
+            hyp_template,
+            ref_expr,
+        )) |found_plan| {
+            var plan = found_plan;
+            defer plan.deinit(session.shared.allocator);
+            if (try trialSplitCandidates(
+                env,
+                session,
+                view,
+                conclusion,
+                ref_exprs,
+                idx,
+                &plan,
+                trace,
+            )) |committed| {
+                return committed;
+            }
+        }
+        if (!try matchHypRef(
+            env,
+            session,
+            hyp_template,
+            ref_expr,
+            idx,
+            trace,
+        )) {
+            return false;
+        }
+    }
+    return try matchConclusionAfterHyps(env, session, view, conclusion, trace);
+}
+
+fn matchConclusionAfterHyps(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    conclusion: ViewConclusion,
+    trace: bool,
+) !bool {
+    if (trace) {
+        const allocator = session.shared.allocator;
+        const bindings = try session.materializeOptionalBindings();
+        defer allocator.free(bindings);
+        const seeds = try session.resolveBindingSeeds();
+        defer allocator.free(seeds);
+        try ViewTrace.printViewBindings(
+            allocator,
+            session.shared.theorem,
+            env,
+            view.arg_names,
+            "before conclusion match",
+            bindings,
+            seeds,
+        );
+    }
+    if (try matchConclusionMaybeTraced(
+        env,
+        session,
+        view,
+        conclusion,
+        trace,
+    )) {
+        return true;
+    }
+    if (conclusion == .concrete and try assignConclusionAcuiResiduals(
+        env,
+        session,
+        view,
+        conclusion.concrete,
+    )) {
+        if (trace) {
+            ViewTrace.printMessage(
+                "assigned conclusion bag residual; re-matching",
+                .{},
+            );
+        }
+        return try matchConclusionMaybeTraced(
+            env,
+            session,
+            view,
+            conclusion,
+            trace,
+        );
+    }
+    return false;
+}
+
+fn matchConclusionMaybeTraced(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    conclusion: ViewConclusion,
+    trace: bool,
+) !bool {
+    if (trace) {
+        return try matchViewConclusionDebug(
+            session.shared.allocator,
+            session.shared.theorem,
+            env,
+            session,
+            view,
+            conclusion,
+            null,
+        );
+    }
     return try matchViewConclusion(env, session, view, conclusion, null);
+}
+
+fn matchHypRef(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    hyp_template: TemplateExpr,
+    ref_expr: ExprId,
+    hyp_idx: usize,
+    trace: bool,
+) !bool {
+    if (!trace) {
+        return try session.matchTransparentOrSemantic(hyp_template, ref_expr);
+    }
+    const allocator = session.shared.allocator;
+    const ref_text = try ViewTrace.formatExpr(
+        allocator,
+        session.shared.theorem,
+        env,
+        ref_expr,
+    );
+    defer allocator.free(ref_text);
+    if (try session.matchTransparent(hyp_template, ref_expr)) {
+        ViewTrace.printMessage(
+            "hyps-first: hyp {d} matched transparently: {s}",
+            .{ hyp_idx, ref_text },
+        );
+        return true;
+    }
+    if (try session.matchSemantic(
+        hyp_template,
+        ref_expr,
+        DefOps.default_semantic_match_budget,
+    )) {
+        ViewTrace.printMessage(
+            "hyps-first: hyp {d} matched semantically: {s}",
+            .{ hyp_idx, ref_text },
+        );
+        return true;
+    }
+    ViewTrace.printMessage(
+        "hyps-first: hyp {d} mismatch: {s}",
+        .{ hyp_idx, ref_text },
+    );
+    return false;
+}
+
+/// After the hypotheses have matched, a conclusion-only slack context binder
+/// (the `i` in `g , h , i ⊢ c`) can still be unassigned: no hypothesis
+/// mentions it, and the matcher never assigns a bag binder its residual. For
+/// each @acui-headed conclusion subtree whose members are all plain binders
+/// with exactly one of them unassigned, assign that binder the goal members
+/// the resolved siblings do not cover (the combiner unit when nothing is
+/// left over). This pass only guesses — callers re-run the conclusion match,
+/// which validates the assignment.
+fn assignConclusionAcuiResiduals(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    line_expr: ExprId,
+) !bool {
+    const registry = session.shared.registry orelse return false;
+    const bindings = try session.materializeOptionalBindings();
+    defer session.shared.allocator.free(bindings);
+    var assigned = false;
+    try assignAcuiResidualRec(
+        env,
+        session,
+        registry,
+        bindings,
+        view.concl,
+        line_expr,
+        &assigned,
+    );
+    return assigned;
+}
+
+fn assignAcuiResidualRec(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    registry: *RewriteRegistry,
+    bindings: []const ?ExprId,
+    template: TemplateExpr,
+    actual: ExprId,
+    assigned: *bool,
+) anyerror!void {
+    const app = switch (template) {
+        .app => |app| app,
+        .binder => return,
+    };
+    if (try registry.resolveStructuralCombiner(env, app.term_id)) |acui| {
+        try assignAcuiResidualBag(
+            env,
+            session,
+            registry,
+            bindings,
+            template,
+            acui,
+            actual,
+            assigned,
+        );
+        return;
+    }
+    const theorem = session.shared.theorem;
+    const actual_app = switch (theorem.interner.node(actual).*) {
+        .app => |value| value,
+        else => return,
+    };
+    if (actual_app.term_id != app.term_id or
+        actual_app.args.len != app.args.len)
+    {
+        return;
+    }
+    for (app.args, actual_app.args) |tmpl_arg, actual_arg| {
+        try assignAcuiResidualRec(
+            env,
+            session,
+            registry,
+            bindings,
+            tmpl_arg,
+            actual_arg,
+            assigned,
+        );
+    }
+}
+
+fn collectTemplateBagLeaves(
+    allocator: std.mem.Allocator,
+    template: TemplateExpr,
+    head_term_id: u32,
+    out: *std.ArrayListUnmanaged(TemplateExpr),
+) anyerror!void {
+    if (template == .app and template.app.term_id == head_term_id and
+        template.app.args.len == 2)
+    {
+        try collectTemplateBagLeaves(
+            allocator,
+            template.app.args[0],
+            head_term_id,
+            out,
+        );
+        try collectTemplateBagLeaves(
+            allocator,
+            template.app.args[1],
+            head_term_id,
+            out,
+        );
+        return;
+    }
+    try out.append(allocator, template);
+}
+
+fn containsEqualExpr(
+    theorem: *const TheoremContext,
+    items: []const ExprId,
+    needle: ExprId,
+) bool {
+    for (items) |item| {
+        if (AcuiSupport.compareExprIds(theorem, item, needle) == .eq) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Bag subtraction with explicit semantics. Without `set_semantics`,
+/// multiset subtraction removing one occurrence per covered member; the
+/// order of the remaining items is preserved because noncommutative
+/// combiners have sequence semantics and the validating re-match rejects
+/// any reordering. With `set_semantics` (idempotent combiners), covered
+/// members absorb every equal occurrence. Returns null when `strict` and
+/// a covered member has no occurrence in `items`. The caller owns the
+/// returned list. Pub for the unit tests — end-to-end fixtures cannot
+/// observe the subtraction semantics because the structural tier rescues a
+/// failed view match.
+pub fn subtractMembers(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    items: []const ExprId,
+    covered: []const ExprId,
+    set_semantics: bool,
+    strict: bool,
+) !?std.ArrayListUnmanaged(ExprId) {
+    var residual: std.ArrayListUnmanaged(ExprId) = .empty;
+    errdefer residual.deinit(allocator);
+    if (set_semantics) {
+        if (strict) for (covered) |member| {
+            if (!containsEqualExpr(theorem, items, member)) {
+                residual.deinit(allocator);
+                return null;
+            }
+        };
+        for (items) |item| {
+            if (!containsEqualExpr(theorem, covered, item)) {
+                try residual.append(allocator, item);
+            }
+        }
+        return residual;
+    }
+    try residual.appendSlice(allocator, items);
+    for (covered) |member| {
+        const found = for (residual.items, 0..) |item, idx| {
+            if (AcuiSupport.compareExprIds(
+                theorem,
+                item,
+                member,
+            ) == .eq) break idx;
+        } else {
+            if (strict) {
+                residual.deinit(allocator);
+                return null;
+            }
+            continue;
+        };
+        _ = residual.orderedRemove(found);
+    }
+    return residual;
+}
+
+fn assignAcuiResidualBag(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    registry: *RewriteRegistry,
+    bindings: []const ?ExprId,
+    template: TemplateExpr,
+    acui: ResolvedStructuralCombiner,
+    actual: ExprId,
+    assigned: *bool,
+) anyerror!void {
+    const allocator = session.shared.allocator;
+    const theorem = session.shared.theorem;
+
+    var leaves: std.ArrayListUnmanaged(TemplateExpr) = .empty;
+    defer leaves.deinit(allocator);
+    try collectTemplateBagLeaves(
+        allocator,
+        template,
+        acui.head_term_id,
+        &leaves,
+    );
+
+    var resolved: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer resolved.deinit(allocator);
+    var open_binder: ?usize = null;
+    for (leaves.items) |leaf| switch (leaf) {
+        .binder => |idx| {
+            if (bindings[idx]) |expr_id| {
+                try resolved.append(allocator, expr_id);
+            } else {
+                // Two open bag binders make the residual split ambiguous.
+                if (open_binder != null) return;
+                open_binder = idx;
+            }
+        },
+        // A structured member would need matching, not residual assignment.
+        .app => return,
+    };
+    const target_idx = open_binder orelse return;
+
+    var support = AcuiSupport.Context.init(
+        allocator,
+        theorem,
+        env,
+        registry,
+    );
+    defer support.deinit();
+
+    var goal_items: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer goal_items.deinit(allocator);
+    try support.collectConcreteSetItems(actual, acui, &goal_items);
+
+    var covered: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer covered.deinit(allocator);
+    for (resolved.items) |expr_id| {
+        try support.collectConcreteSetItems(expr_id, acui, &covered);
+    }
+
+    // A covered member missing from the goal makes the conclusion
+    // unmatchable no matter what the open binder gets (strict subtraction).
+    var residual = (try subtractMembers(
+        allocator,
+        theorem,
+        goal_items.items,
+        covered.items,
+        acui.idem_id != null,
+        true,
+    )) orelse return;
+    defer residual.deinit(allocator);
+    if (residual.items.len == 0 and
+        !(acui.supportsLeftUnit() and acui.supportsRightUnit()))
+    {
+        return;
+    }
+    // Goal order is kept so combiners without commutativity still line up;
+    // the validating re-match canonicalizes when commutativity is available.
+    const value = try support.rebuildAcuiTree(
+        residual.items,
+        acui.head_term_id,
+        acui.unit_term_id,
+    );
+    if (try session.matchTransparent(.{ .binder = target_idx }, value)) {
+        assigned.* = true;
+    }
 }
 
 fn matchViewConclusion(
@@ -775,28 +1223,13 @@ fn matchViewAgainstConclusionDebug(
                     restored_seeds,
                 );
             }
-            matchViewHypsAgainstConcreteExprsDebug(
-                allocator,
-                theorem,
-                env,
-                session,
-                view,
-                ref_exprs,
-                "hypothesis-first retry",
-            ) catch |err| {
-                if (err == error.ViewHypothesisMismatch) {
-                    return error.ViewConclusionMismatch;
-                }
-                return err;
-            };
-            if (try matchViewConclusionDebug(
-                allocator,
-                theorem,
+            if (try matchViewHypsBeforeConclusion(
                 env,
                 session,
                 view,
                 actual_conclusion,
-                null,
+                ref_exprs,
+                true,
             )) return;
             return error.ViewConclusionMismatch;
         }
@@ -823,27 +1256,14 @@ fn matchViewAgainstConclusionDebug(
             .{},
         );
         try session.restoreFromSeedState(&state);
-        matchViewHypsAgainstConcreteExprsDebug(
-            allocator,
-            theorem,
-            env,
-            session,
-            view,
-            ref_exprs,
-            "hypothesis-first retry",
-        ) catch |retry_err| {
-            if (retry_err == error.ViewHypothesisMismatch) return err;
-            return retry_err;
-        };
         const actual_conclusion = conclusion orelse return err;
-        if (try matchViewConclusionDebug(
-            allocator,
-            theorem,
+        if (try matchViewHypsBeforeConclusion(
             env,
             session,
             view,
             actual_conclusion,
-            null,
+            ref_exprs,
+            true,
         )) return;
         return err;
     };
@@ -1105,6 +1525,450 @@ fn matchViewHypsAgainstConcreteExprs(
         )) {
             return error.ViewHypothesisMismatch;
         }
+    }
+}
+
+const AcuiBagPair = struct {
+    template: TemplateExpr,
+    actual: ExprId,
+    acui: ResolvedStructuralCombiner,
+};
+
+/// Descend template and concrete expression in lockstep and return the
+/// first @acui-headed template subtree with its concrete counterpart.
+fn findAcuiBagPair(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    registry: *RewriteRegistry,
+    template: TemplateExpr,
+    actual: ExprId,
+) anyerror!?AcuiBagPair {
+    const app = switch (template) {
+        .app => |app| app,
+        .binder => return null,
+    };
+    if (try registry.resolveStructuralCombiner(env, app.term_id)) |acui| {
+        return .{ .template = template, .actual = actual, .acui = acui };
+    }
+    const theorem = session.shared.theorem;
+    const actual_app = switch (theorem.interner.node(actual).*) {
+        .app => |value| value,
+        else => return null,
+    };
+    if (actual_app.term_id != app.term_id or
+        actual_app.args.len != app.args.len)
+    {
+        return null;
+    }
+    for (app.args, actual_app.args) |tmpl_arg, actual_arg| {
+        if (try findAcuiBagPair(
+            env,
+            session,
+            registry,
+            tmpl_arg,
+            actual_arg,
+        )) |pair| {
+            return pair;
+        }
+    }
+    return null;
+}
+
+/// A recognized recover-source context split awaiting trial resolution:
+/// the hypothesis bag's members are the already-bound binders, at most one
+/// open rest binder, and exactly one open recover-source slot (a bare
+/// binder or a single coercion around one).
+const SplitPlan = struct {
+    bag: AcuiBagPair,
+    src_leaf: TemplateExpr,
+    recover: RecoverDecl,
+    rest_idx: ?usize,
+    /// Concrete bag members minus one occurrence per bound member — the
+    /// pool split between the source slot and the rest binder.
+    pool: []ExprId,
+    /// Pool members shaped to fill the source slot.
+    candidates: []ExprId,
+
+    fn deinit(self: *SplitPlan, allocator: std.mem.Allocator) void {
+        allocator.free(self.pool);
+        allocator.free(self.candidates);
+    }
+};
+
+/// Recognize a recover-source context split in a view hypothesis.
+///
+/// A view hypothesis like `h , q ⊢ c` is matched positionally, but the
+/// `@recover a q p x` annotation fixes what `q` means independent of
+/// position, so the positional pairing is not a correct implementation of
+/// the hypothesis' semantics. Returns the candidate pool for the source
+/// slot, or null for any other bag shape — those stay with the ordinary
+/// positional match.
+fn planRecoverSourceSplit(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    hyp_template: TemplateExpr,
+    ref_expr: ExprId,
+) !?SplitPlan {
+    const registry = session.shared.registry orelse return null;
+    const theorem = session.shared.theorem;
+    const allocator = session.shared.allocator;
+
+    const bag = try findAcuiBagPair(
+        env,
+        session,
+        registry,
+        hyp_template,
+        ref_expr,
+    ) orelse return null;
+
+    const bindings = try session.materializeOptionalBindings();
+    defer allocator.free(bindings);
+
+    var leaves: std.ArrayListUnmanaged(TemplateExpr) = .empty;
+    defer leaves.deinit(allocator);
+    try collectTemplateBagLeaves(
+        allocator,
+        bag.template,
+        bag.acui.head_term_id,
+        &leaves,
+    );
+
+    var ground: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer ground.deinit(allocator);
+    var rest_idx: ?usize = null;
+    var source_leaf: ?TemplateExpr = null;
+    var source_view_idx: ?usize = null;
+    for (leaves.items) |leaf| switch (leaf) {
+        .binder => |idx| {
+            if (bindings[idx]) |expr_id| {
+                try ground.append(allocator, expr_id);
+            } else if (findRecoverDeclForSource(view, idx) != null) {
+                if (source_leaf != null) return null;
+                source_leaf = leaf;
+                source_view_idx = idx;
+            } else {
+                if (rest_idx != null) return null;
+                rest_idx = idx;
+            }
+        },
+        .app => |app| {
+            if (app.args.len != 1 or !env.isCoercionTerm(app.term_id)) {
+                return null;
+            }
+            const inner = app.args[0];
+            const idx = switch (inner) {
+                .binder => |value| value,
+                .app => return null,
+            };
+            if (bindings[idx] != null or
+                findRecoverDeclForSource(view, idx) == null)
+            {
+                return null;
+            }
+            if (source_leaf != null) return null;
+            source_leaf = leaf;
+            source_view_idx = idx;
+        },
+    };
+    const src_leaf = source_leaf orelse return null;
+    const src_idx = source_view_idx orelse return null;
+    const recover = findRecoverDeclForSource(view, src_idx) orelse return null;
+
+    var support = AcuiSupport.Context.init(allocator, theorem, env, registry);
+    defer support.deinit();
+
+    var members: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer members.deinit(allocator);
+    try support.collectConcreteSetItems(bag.actual, bag.acui, &members);
+
+    var covered: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer covered.deinit(allocator);
+    for (ground.items) |ground_expr| {
+        try support.collectConcreteSetItems(ground_expr, bag.acui, &covered);
+    }
+    var pool = (try subtractMembers(
+        allocator,
+        theorem,
+        members.items,
+        covered.items,
+        false,
+        true,
+    )) orelse return null;
+    errdefer pool.deinit(allocator);
+
+    var candidates: std.ArrayListUnmanaged(ExprId) = .empty;
+    errdefer candidates.deinit(allocator);
+    for (pool.items) |member| {
+        if (sourceValueOfMember(theorem, src_leaf, member) != null) {
+            try candidates.append(allocator, member);
+        }
+    }
+    if (candidates.items.len == 0) {
+        pool.deinit(allocator);
+        candidates.deinit(allocator);
+        return null;
+    }
+    const pool_slice = try pool.toOwnedSlice(allocator);
+    errdefer allocator.free(pool_slice);
+    const candidate_slice = try candidates.toOwnedSlice(allocator);
+    return .{
+        .bag = bag,
+        .src_leaf = src_leaf,
+        .recover = recover,
+        .rest_idx = rest_idx,
+        .pool = pool_slice,
+        .candidates = candidate_slice,
+    };
+}
+
+/// Resolve a recover-source split by trial: evaluate each candidate under
+/// a saved match state — seed it, then run the remaining hypotheses, the
+/// conclusion, and the recover-pattern acceptance check to completion —
+/// and commit only a unique survivor. Several materially different
+/// survivors, or none, leave the match state untouched (null) and the
+/// caller falls back to the positional match. Returns the committed match
+/// result otherwise.
+fn trialSplitCandidates(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    conclusion: ViewConclusion,
+    ref_exprs: []const ExprId,
+    hyp_idx: usize,
+    plan: *const SplitPlan,
+    trace: bool,
+) anyerror!?bool {
+    const allocator = session.shared.allocator;
+    const theorem = session.shared.theorem;
+
+    var state = try saveViewMatchState(session);
+    defer state.deinit(allocator);
+
+    var survivor: ?ExprId = null;
+    for (plan.candidates) |member| {
+        const ok = trialCandidate(
+            env,
+            session,
+            view,
+            conclusion,
+            ref_exprs,
+            hyp_idx,
+            plan,
+            member,
+        ) catch |err| {
+            // Operational errors abort the search, but the trial's partial
+            // seeds must still not outlive it.
+            try session.restoreFromSeedState(&state);
+            return err;
+        };
+        try session.restoreFromSeedState(&state);
+        if (!ok) continue;
+        if (survivor) |previous| {
+            if (AcuiSupport.compareExprIds(
+                theorem,
+                previous,
+                member,
+            ) != .eq) {
+                if (trace) {
+                    ViewTrace.printMessage(
+                        "recover-source split ambiguous; " ++
+                            "leaving to the positional match",
+                        .{},
+                    );
+                }
+                return null;
+            }
+            continue;
+        }
+        survivor = member;
+    }
+    const member = survivor orelse return null;
+    if (trace) {
+        ViewTrace.printMessage(
+            "committing unique recover-source split candidate",
+            .{},
+        );
+    }
+    if (!try seedSplitCandidate(env, session, plan, member)) {
+        // The survivor validated under this same state, so replay cannot
+        // fail; restore anyway so a partial seed never escapes.
+        try session.restoreFromSeedState(&state);
+        return null;
+    }
+    if (!try matchHypRef(
+        env,
+        session,
+        view.hyps[hyp_idx],
+        ref_exprs[hyp_idx],
+        hyp_idx,
+        trace,
+    )) {
+        return false;
+    }
+    return try matchHypsThenConclusion(
+        env,
+        session,
+        view,
+        conclusion,
+        ref_exprs,
+        hyp_idx + 1,
+        trace,
+    );
+}
+
+fn trialCandidate(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    view: *const ViewDecl,
+    conclusion: ViewConclusion,
+    ref_exprs: []const ExprId,
+    hyp_idx: usize,
+    plan: *const SplitPlan,
+    member: ExprId,
+) anyerror!bool {
+    if (!try seedSplitCandidate(env, session, plan, member)) return false;
+    if (!try matchHypRef(
+        env,
+        session,
+        view.hyps[hyp_idx],
+        ref_exprs[hyp_idx],
+        hyp_idx,
+        false,
+    )) {
+        return false;
+    }
+    if (!try matchHypsThenConclusion(
+        env,
+        session,
+        view,
+        conclusion,
+        ref_exprs,
+        hyp_idx + 1,
+        false,
+    )) {
+        return false;
+    }
+    return try recoverAcceptsSource(env, session, plan, member);
+}
+
+/// Seed one candidate: the source slot takes `member`, and the rest binder
+/// (when present) takes the remaining pool members in pool order. Callers
+/// run this under a saved match state so a partial seed never outlives the
+/// trial.
+fn seedSplitCandidate(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    plan: *const SplitPlan,
+    member: ExprId,
+) !bool {
+    if (!try session.matchTransparent(plan.src_leaf, member)) return false;
+    const rest_binder = plan.rest_idx orelse return true;
+    const registry = session.shared.registry orelse return false;
+    const theorem = session.shared.theorem;
+    const allocator = session.shared.allocator;
+    var remaining = (try subtractMembers(
+        allocator,
+        theorem,
+        plan.pool,
+        &.{member},
+        false,
+        true,
+    )) orelse return false;
+    defer remaining.deinit(allocator);
+    var support = AcuiSupport.Context.init(allocator, theorem, env, registry);
+    defer support.deinit();
+    const rest_value = try support.rebuildAcuiTree(
+        remaining.items,
+        plan.bag.acui.head_term_id,
+        plan.bag.acui.unit_term_id,
+    );
+    return try session.matchTransparent(.{ .binder = rest_binder }, rest_value);
+}
+
+/// A trial candidate must also satisfy the recover declaration when its
+/// pattern and hole are concretely determined after the trial match —
+/// judged by the same concrete acceptance relation the derived-binding
+/// pass applies after commit. An undetermined pattern or hole cannot veto.
+fn recoverAcceptsSource(
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    plan: *const SplitPlan,
+    member: ExprId,
+) !bool {
+    const registry = session.shared.registry orelse return true;
+    const theorem = session.shared.theorem;
+    const allocator = session.shared.allocator;
+    const bindings = try session.materializeOptionalBindings();
+    defer allocator.free(bindings);
+    const pattern_expr = bindings[plan.recover.pattern_view_idx] orelse
+        return true;
+    const hole_expr = bindings[plan.recover.hole_view_idx] orelse return true;
+    const source_value = sourceValueOfMember(
+        theorem,
+        plan.src_leaf,
+        member,
+    ) orelse return false;
+    const accepted = DerivedBindings.concreteRecoverCandidate(
+        theorem,
+        env,
+        registry,
+        source_value,
+        pattern_expr,
+        hole_expr,
+        plan.recover.target_sort_name,
+        false,
+    ) catch |err| switch (err) {
+        // A conflict — the pattern maps one hole to two different values in
+        // THIS member — is a property of the candidate, not of the whole
+        // split: reject the candidate and keep trying the others.
+        error.RecoverConflict => return false,
+        else => return err,
+    };
+    return accepted != null;
+}
+
+fn findRecoverDeclForSource(
+    view: *const ViewDecl,
+    source_view_idx: usize,
+) ?RecoverDecl {
+    for (view.derived_bindings) |binding| {
+        switch (binding) {
+            .recover => |recover| {
+                if (recover.source_view_idx == source_view_idx) {
+                    return recover;
+                }
+            },
+            .abstract => {},
+        }
+    }
+    return null;
+}
+
+/// The recover-source value a concrete bag member would give the source
+/// slot: the member itself for a bare-binder slot, or the coercion argument
+/// when the slot is a single coercion around the binder (`hyp q`) and the
+/// member carries the same coercion head. Null when the member cannot fill
+/// the slot.
+fn sourceValueOfMember(
+    theorem: *const TheoremContext,
+    source_leaf: TemplateExpr,
+    member: ExprId,
+) ?ExprId {
+    switch (source_leaf) {
+        .binder => return member,
+        .app => |leaf_app| {
+            const member_app = switch (theorem.interner.node(member).*) {
+                .app => |value| value,
+                else => return null,
+            };
+            if (member_app.term_id != leaf_app.term_id or
+                member_app.args.len != 1)
+            {
+                return null;
+            }
+            return member_app.args[0];
+        },
     }
 }
 

@@ -1,0 +1,7 @@
+ex_open
+-------
+
+l1: $ ∃ x (R x x) ⊢ ∃ x (R x x) $ by ax
+l2: $ R a c , R b b ⊢ R b b $ by ax
+l3: $ R a c , R b b ⊢ ∃ x (R x x) $ by ex_intro [l2]
+l4: $ ∃ x (R x x) ⊢ ∃ x (R x x) $ by ex_elim [l1, l3]

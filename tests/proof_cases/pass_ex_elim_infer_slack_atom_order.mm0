@@ -1,0 +1,108 @@
+-- #216 order variant of pass_ex_elim_infer_slack_atom: the assumed instance
+-- comes FIRST in the second premise's context, and the side hypothesis F c
+-- is recover-legal (a := c would pass the pattern), so the pattern filter
+-- alone cannot decide. What forces the split is conclusion coverage: F b
+-- does not appear in the goal, so it cannot be absorbed by the rest binder
+-- and must be the assumed instance q.
+delimiter $ ( ) [ / ] $;
+provable sort wff;
+sort ctx;
+
+--| @vars x y z
+sort var;
+--| @vars a b c
+sort name;
+sort tm;
+
+term v2t (x: var): tm;
+coercion v2t: var > tm;
+term n2t (a: name): tm;
+coercion n2t: name > tm;
+
+term iff (p q: wff): wff;
+infixr iff: $↔$ prec 20;
+
+term ex {x: var} (p: wff x): wff;
+prefix ex: $∃$ prec 46;
+
+term eq (s t: tm): wff;
+infixl eq: $=$ prec 50;
+
+term F (t: tm): wff;
+
+term sb_t {x: var} (t: tm x) (s: tm x): tm;
+notation sb_t {x: var} (t: tm x) (s: tm x): tm =
+  ($subst$:41) x ($/$:0) t s;
+term sb_f {x: var} (t: tm x) (p: wff x): wff;
+notation sb_f {x: var} (t: tm x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+term nd (g: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (p: wff): $ p ↔ p $;
+axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @relation tm eq eq_refl eq_trans eq_sym _
+axiom eq_refl (s: tm): $ s = s $;
+axiom eq_trans (s t u: tm): $ s = t $ > $ t = u $ > $ s = u $;
+axiom eq_sym (s t: tm): $ s = t $ > $ t = s $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (g h: ctx) (p q: wff):
+  $ ctx_eq g h $ > $ p ↔ q $ > $ (g ⊢ p) ↔ (h ⊢ q) $;
+--| @congr
+axiom F_congr (s t: tm): $ s = t $ > $ F s ↔ F t $;
+--| @congr
+axiom ex_congr {x: var} (p q: wff x): $ p ↔ q $ > $ ∃ x p ↔ ∃ x q $;
+
+--| @rewrite
+axiom sb_f_F {x: var} (t: tm x) (s: tm x):
+  $ [x/t] (F s) ↔ F (subst x / t s) $;
+--| @rewrite
+axiom sb_f_irrel {x: var} (t: tm x) (p: wff): $ [x/t] p ↔ p $;
+--| @rewrite
+axiom sb_t_var {x: var} (t: tm x): $ (subst x / t x) = t $;
+--| @rewrite
+axiom sb_t_irrel {x: var} (t: tm x) (s: tm): $ (subst x / t s) = s $;
+
+axiom ax (g: ctx) (p: wff): $ g , p ⊢ p $;
+
+--| @view {x: var} (g h: ctx x) (t: tm) (p: wff x) (q: wff): $ g ⊢ q $ > $ g , h ⊢ ∃ x p $
+--| @recover t q p x
+axiom ex_intro {x: var} (g h: ctx x) (t: tm) (p: wff x):
+  $ g ⊢ [x/t] p $ > $ g , h ⊢ ∃ x p $;
+
+--| @view {x: var} {a: name} (g h i: ctx x) (p: wff x) (q: wff) (c: wff x): $ g ⊢ ∃ x p $ > $ h , q ⊢ c $ > $ g , h , i ⊢ c $
+--| @recover a q p x
+axiom ex_elim {x: var} {a: name} (g h i: ctx x) (p: wff x) (c: wff x):
+  $ g ⊢ ∃ x p $ > $ h , [x/a] p ⊢ c $ > $ g , h , i ⊢ c $;
+
+theorem ex_open {x: var} (c: name): $ ∃ x (F x) , F c ⊢ ∃ x (F x) $;

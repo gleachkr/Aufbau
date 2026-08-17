@@ -1,0 +1,6 @@
+weak_tail
+---------
+
+l1: $ PA ⊢ PP $ by ax1
+l2: $ PB ⊢ QQ $ by ax2
+l3: $ PA , PB , PC , PD ⊢ PP $ by weak [l1, l2]

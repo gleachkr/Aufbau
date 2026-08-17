@@ -1,0 +1,7 @@
+ex_side
+-------
+
+l1: $ ∃ x (F x) , ∀ x (F x) ⊢ ∃ x (F x) $ by ax
+l2: $ ∀ x (F x) , F u ⊢ F u $ by ax
+l3: $ ∀ x (F x) , F u ⊢ ∃ x (F x) $ by ex_intro [l2]
+l4: $ ∃ x (F x) , ∀ x (F x) ⊢ ∃ x (F x) $ by ex_elim [l1, l3]

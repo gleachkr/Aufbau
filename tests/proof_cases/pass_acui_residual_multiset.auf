@@ -1,0 +1,5 @@
+weak_dup
+--------
+
+l1: $ PA ⊢ PP $ by ax1
+l2: $ PA , PA , PB ⊢ PP $ by weak [l1]

@@ -1,13 +1,13 @@
--- Witness/eigenvariable bindings: all_elim needs no explicit witness (the
--- instantiating term sits in the user's own line, and normalization-aware
--- inference recovers it through the name/var coercions). all_intro and
--- ex_intro carry cross-sort @recover annotations: the walk compares the
+-- No explicit witness/eigenvariable bindings anywhere: all_elim's
+-- instantiating term sits in the user's own line (normalization-aware
+-- inference recovers it through the name/var coercions); all_intro and
+-- ex_intro carry cross-sort @recover annotations, whose walk compares the
 -- quantifier body (var side) against the concrete instance (name/tm side)
--- and re-sorts the recovered subtree through the coercion graph, so their
--- lines need no bindings either. ex_elim still takes an explicit
--- eigenvariable: its recover pattern and hole live only in the premises,
--- and premise-side witness inference for two-premise rules is not yet
--- supported.
+-- and re-sorts the recovered subtree through the coercion graph; and
+-- ex_elim's eigenvariable — living only in the second premise — is found by
+-- the view path: hypothesis-first matching splits the premise context, the
+-- slack conclusion binder is assigned its bag residual, and the @recover
+-- reads b back out of the assumed instance.
 
 all_mono
 --------
@@ -35,4 +35,4 @@ l3: $ ∀ x (F x → G x) , F b ⊢ F b $ by ax
 l4: $ ∀ x (F x → G x) , F b ⊢ F b → G b $ by all_elim [l2]
 l5: $ ∀ x (F x → G x) , F b ⊢ G b $ by imp_elim [l4, l3]
 l6: $ ∀ x (F x → G x) , F b ⊢ ∃ x (G x) $ by ex_intro [l5]
-l7: $ ∃ x (F x) , ∀ x (F x → G x) ⊢ ∃ x (G x) $ by ex_elim (a := $ b $) [l1, l6]
+l7: $ ∃ x (F x) , ∀ x (F x → G x) ⊢ ∃ x (G x) $ by ex_elim [l1, l6]

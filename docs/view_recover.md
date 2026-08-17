@@ -584,6 +584,45 @@ those are needed to relate the view shape to the concrete proof expression.
 So, for example, a view can match a user-facing expression that only appears
 *after* a def body is unfolded and a rewrite is applied.
 
+When the conclusion cannot be matched first (typically because a conclusion
+binder's dependency on a still-unassigned bound binder blocks it), the matcher
+retries with the hypotheses first and the conclusion afterwards. Two
+completion mechanisms support that retry; both only *guess* bindings — the
+ordinary matching still validates everything downstream.
+
+The first resolves recover-source context splits by trial. A hypothesis like
+`h , q ⊢ c` is matched positionally, but `@recover a q p x` fixes what `q`
+means independent of position, so the positional pairing is not a correct
+implementation of the hypothesis' semantics. When such a hypothesis' context
+bag has exactly one open recover-source slot (bare, or under one coercion)
+and at most one open rest binder, each remaining concrete member is evaluated
+as a candidate for the slot under a saved match state: it is seeded together
+with the rest binder, the remaining hypotheses and the conclusion are matched
+to completion, and — when the recover pattern and hole are concretely
+determined by then — the seeded source must pass the same concrete acceptance
+walk the derived `@recover` pass applies after commit. A pattern conflict
+(one hole mapped to two different values) rejects only that candidate, not
+the whole split. A split is committed
+only when exactly one candidate survives; with several materially different
+survivors or none, the state is restored and the positional behavior stands.
+This is what lets a proof list the assumed instance anywhere in the premise
+context, including rules that discharge the rest binder from the conclusion.
+
+The second runs if the conclusion still fails after the hypotheses match: for
+each @acui-headed conclusion subtree whose members are all plain binders with
+exactly one left unassigned — a conclusion-only slack context binder like the
+`i` in `g , h , i ⊢ c` — that binder is assigned the goal-side members its
+resolved siblings do not cover, or the combiner unit when nothing is left
+over, and the conclusion is re-matched in full. The subtraction honors the
+combiner's declared laws: idempotent combiners subtract as sets, others as
+multisets, and the goal's member order is preserved so noncommutative (AU)
+combiners keep their sequence semantics.
+
+Together these are what let two-premise rules like ∃-elimination infer
+everything from the premises: trial validation pins the context split, the
+slack binder takes its residual, and the derived `@recover` pass then reads
+the eigenvariable out of the assumed instance.
+
 ### 3. Bindings stay on a resolved, non-escaping path during view reuse
 
 After the initial view match, the compiler resolves the current optional view

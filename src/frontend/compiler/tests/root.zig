@@ -6966,3 +6966,133 @@ test "locale names parse and unknown names are rejected" {
     try std.testing.expectEqual(mm0.CompilerLang.de, mm0.parseCompilerLang("de").?);
     try std.testing.expectEqual(@as(?mm0.CompilerLang, null), mm0.parseCompilerLang("xx"));
 }
+
+// The residual-completion fixtures cannot observe the subtraction semantics
+// end-to-end (the structural tier rescues a failed view match), so the
+// operation is locked here directly.
+test "subtractMembers: multiset order, duplicates, set semantics, strictness" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    const mm0_src =
+        "provable sort wff; term PA: wff; term PB: wff; term PC: wff;";
+    var parser = MM0Parser.init(mm0_src, allocator);
+    var theorem = FrontendExpr.TheoremContext.init(allocator);
+    defer theorem.deinit();
+    var theorem_vars = std.StringHashMap(*const Expr).init(allocator);
+    defer theorem_vars.deinit();
+    while (try parser.next()) |_| {}
+
+    const pa = try theorem.internParsedExpr(
+        try parser.parseFormulaText(" PA ", &theorem_vars),
+    );
+    const pb = try theorem.internParsedExpr(
+        try parser.parseFormulaText(" PB ", &theorem_vars),
+    );
+    const pc = try theorem.internParsedExpr(
+        try parser.parseFormulaText(" PC ", &theorem_vars),
+    );
+    const Subtract = CompilerViews.subtractMembers;
+
+    // Multiset subtraction preserves the order of the remaining items —
+    // an order-scrambling removal breaks noncommutative (AU) combiners.
+    {
+        var residual = (try Subtract(
+            allocator,
+            &theorem,
+            &.{ pa, pb, pc },
+            &.{pa},
+            false,
+            true,
+        )).?;
+        defer residual.deinit(allocator);
+        try std.testing.expectEqualSlices(
+            FrontendExpr.ExprId,
+            &.{ pb, pc },
+            residual.items,
+        );
+    }
+    // Duplicates around the removal boundary: exactly one (the first)
+    // occurrence is removed and the rest keep their positions.
+    {
+        var residual = (try Subtract(
+            allocator,
+            &theorem,
+            &.{ pa, pb, pa, pc },
+            &.{pa},
+            false,
+            true,
+        )).?;
+        defer residual.deinit(allocator);
+        try std.testing.expectEqualSlices(
+            FrontendExpr.ExprId,
+            &.{ pb, pa, pc },
+            residual.items,
+        );
+    }
+    // Multiset counting: one occurrence per covered occurrence, so a
+    // duplicated goal member survives a single subtraction (set-diff would
+    // wrongly drop both).
+    {
+        var residual = (try Subtract(
+            allocator,
+            &theorem,
+            &.{ pa, pa, pb },
+            &.{pa},
+            false,
+            true,
+        )).?;
+        defer residual.deinit(allocator);
+        try std.testing.expectEqualSlices(
+            FrontendExpr.ExprId,
+            &.{ pa, pb },
+            residual.items,
+        );
+    }
+    // Set semantics (idempotent combiners): a covered member absorbs every
+    // equal occurrence.
+    {
+        var residual = (try Subtract(
+            allocator,
+            &theorem,
+            &.{ pa, pb, pa },
+            &.{pa},
+            true,
+            true,
+        )).?;
+        defer residual.deinit(allocator);
+        try std.testing.expectEqualSlices(
+            FrontendExpr.ExprId,
+            &.{pb},
+            residual.items,
+        );
+    }
+    // Strict subtraction: a covered member with no occurrence means no
+    // residual exists, in both semantics.
+    try std.testing.expectEqual(
+        @as(?std.ArrayListUnmanaged(FrontendExpr.ExprId), null),
+        try Subtract(allocator, &theorem, &.{pa}, &.{pb}, false, true),
+    );
+    try std.testing.expectEqual(
+        @as(?std.ArrayListUnmanaged(FrontendExpr.ExprId), null),
+        try Subtract(allocator, &theorem, &.{pa}, &.{pb}, true, true),
+    );
+    // Non-strict subtraction skips missing covered members.
+    {
+        var residual = (try Subtract(
+            allocator,
+            &theorem,
+            &.{pa},
+            &.{pb},
+            false,
+            false,
+        )).?;
+        defer residual.deinit(allocator);
+        try std.testing.expectEqualSlices(
+            FrontendExpr.ExprId,
+            &.{pa},
+            residual.items,
+        );
+    }
+}
