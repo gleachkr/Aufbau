@@ -88,7 +88,7 @@ term join (g h: ctx): ctx;
 ### `@conversion` on an assertion
 
 ```text
---| @conversion ltr|rtl|both|comm|assoc
+--| @conversion ltr|rtl|both|comm|assoc|alpha
 ```
 
 Enrolls a hypothesis-free equation `rel lhs rhs` as a saturation rule for
@@ -96,8 +96,12 @@ Enrolls a hypothesis-free equation `rel lhs rhs` as a saturation rule for
 (and so which new terms the e-graph may build). `comm` and `assoc` are role
 certificates instead: the conclusion must be exactly that law, and an operator
 certified both (with `@congr` coverage) is absorbed into the e-graph's AC
-representation at no saturation cost. A rule cannot carry both `@conversion`
-and `@compute`.
+representation at no saturation cost. `alpha` enrolls an alpha-renaming lemma
+(`rel (all x p) (all y (sb x y p))`): a pairing scheduler fires it between
+same-head binder instances that already exist, with the fresh binder taken
+from the partner instance, and the enrolled substitution rules close the gap —
+requires those substitution rules to also be enrolled. A rule cannot carry
+both `@conversion` and `@compute`.
 
 ### `@conversion` on a definition
 

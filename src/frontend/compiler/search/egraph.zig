@@ -13,8 +13,12 @@
 //!   graph is extractable by construction.
 //! - Bound-binder argument positions store the atom directly
 //!   (`Child.bound`) and never enter union-find: MM0 bound binders are
-//!   rigid atoms (no alpha), and the `@congr` lemmas require them
-//!   identical on both sides.
+//!   rigid atoms, and the `@congr` lemmas require them identical on both
+//!   sides. Alpha-equivalence is NOT primitive; `@conversion alpha`
+//!   rules close specific renamings as ordinary theorem-instance unions
+//!   via the pairing scheduler (`collectAlphaMatches`), so a class MAY
+//!   hold binder nodes with different bound atoms once such a rule
+//!   fires — code may not assume one bound atom per class.
 //!
 //! Every union records a justification edge (`unions`) for explanation
 //! extraction. The whole structure lives for one search call and MUST be
@@ -103,6 +107,18 @@ pub const Rule = struct {
     /// side binds every binder, so a fold never mints a fresh one); a
     /// dep-deferred designated redex stays unconsumed.
     compute: bool = false,
+    /// True for a `@conversion alpha` enrollment: excluded from the
+    /// general match loop (the target uses a binder the match side does
+    /// not bind) and driven by the alpha pairing scheduler, which
+    /// completes the substitution with an existing binder atom instead
+    /// of inventing one. See `collectAlphaMatches`.
+    alpha: bool = false,
+    /// For an alpha rule: binder slot of the renamed (match-side) bound
+    /// binder.
+    alpha_old_slot: u32 = 0,
+    /// For an alpha rule: binder slot of the fresh (target-only) bound
+    /// binder the scheduler supplies.
+    alpha_new_slot: u32 = 0,
 };
 
 /// Why two classes were unioned. Consumed by explanation extraction. The
@@ -266,6 +282,21 @@ pub const SaturateStats = struct {
     /// subset of `unions_applied`). Zero with compute rules enrolled
     /// means the fold never found a redex.
     fold_applied: usize = 0,
+    /// Unions applied from alpha-scheduler matches this run (a subset of
+    /// `unions_applied`). Each is a literal instance of an `alpha` rule;
+    /// the enrolled substitution rules and gated congruence close the
+    /// rest of the renaming.
+    alpha_applied: usize = 0,
+    /// Alpha pairing-filter comparisons the run's FINAL collection pass
+    /// resolved approximately (cycle-conservative memo reads, greedy bag
+    /// alignment failures, truncated instance enumeration). Earlier
+    /// passes don't count: collection is deterministic and re-runs in
+    /// full each iteration, so a saturated fixpoint's final pass speaks
+    /// for the whole run. Zero on a saturated outcome means the alpha
+    /// filter was exact and the miss is a forced negative (within the
+    /// enrolled rule closure); nonzero means renaming opportunities may
+    /// have been skipped.
+    alpha_filter_skips: usize = 0,
 };
 
 pub const SaturateOptions = struct {
@@ -487,6 +518,13 @@ pub const EGraph = struct {
     /// Total cyclic bag-index entries dropped (monotone; `saturate`
     /// reports deltas).
     ac_cyclic_dropped_total: usize = 0,
+    /// Alpha pairing-filter comparisons the CURRENT collection pass
+    /// resolved approximately (cycle-conservative memo reads, greedy bag
+    /// alignment failures, truncated instance enumeration). Reset at the
+    /// start of each `collectAlphaMatches` call, so after a saturated
+    /// fixpoint it describes exactly the final (complete, deterministic)
+    /// pass: zero means the filter was exact at fixpoint.
+    alpha_filter_skips: usize = 0,
     /// Proof-forest edges, one per effective union, in union order.
     unions: std.ArrayListUnmanaged(UnionEdge) = .{},
     /// Creating node of each class (parallel to `parents`). Every class is
@@ -1102,11 +1140,10 @@ pub const EGraph = struct {
         const capped_start = self.ac_match_capped_total;
         const cyclic_start = self.ac_cyclic_dropped_total;
         var has_compute = false;
+        var has_alpha = false;
         for (rules) |rule| {
-            if (rule.compute) {
-                has_compute = true;
-                break;
-            }
+            if (rule.compute) has_compute = true;
+            if (rule.alpha) has_alpha = true;
         }
         // Match-phase scratch: pattern pairs, substitution probes, and
         // candidate lists are garbage the moment one (node, rule) match
@@ -1158,11 +1195,30 @@ pub const EGraph = struct {
             var matches: std.ArrayListUnmanaged(Match) = .{};
             var iter_steps: usize = opts.ac_iter_step_budget;
             const matched_nodes = self.nodes.items.len;
+            // Alpha scheduler first: it creates no nodes, only retained
+            // matches. It draws from its OWN step pool (sized like the
+            // general one) so heavy pairing scans can never starve the
+            // ordinary rule loop of its whole iteration budget; a trip
+            // still marks the iteration capped, keeping fixpoint claims
+            // honest.
+            if (has_alpha) {
+                var alpha_steps: usize = opts.ac_iter_step_budget;
+                _ = scratch_state.reset(.retain_capacity);
+                try self.collectAlphaMatches(
+                    rules,
+                    opts,
+                    &matches,
+                    dedup,
+                    &alpha_steps,
+                    &iter_capped,
+                    scratch_state.allocator(),
+                );
+            }
             collect: for (0..matched_nodes) |node_id| {
                 switch (self.nodes.items[node_id].node) {
                     .leaf => {},
                     .app => |app| for (rules, 0..) |rule, rule_slot| {
-                        if (rule.compute) continue;
+                        if (rule.compute or rule.alpha) continue;
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != app.term_id) continue;
                         if (pattern.args.len != app.children.len) continue;
@@ -1192,7 +1248,7 @@ pub const EGraph = struct {
                         }
                     },
                     .bag => |bag| for (rules, 0..) |rule, rule_slot| {
-                        if (rule.compute) continue;
+                        if (rule.compute or rule.alpha) continue;
                         const pattern = rule.match_side.app;
                         if (pattern.term_id != bag.term_id) continue;
                         const allotted = @min(
@@ -1296,6 +1352,7 @@ pub const EGraph = struct {
         var out = stats;
         out.ac_match_capped = self.ac_match_capped_total - capped_start;
         out.ac_cyclic_dropped = self.ac_cyclic_dropped_total - cyclic_start;
+        out.alpha_filter_skips = self.alpha_filter_skips;
         return out;
     }
 
@@ -1365,7 +1422,10 @@ pub const EGraph = struct {
                 .extension = m.extension,
             },
         });
-        if (merged) stats.unions_applied += 1;
+        if (merged) {
+            stats.unions_applied += 1;
+            if (rules[m.rule_slot].alpha) stats.alpha_applied += 1;
+        }
         try dedup.applied.put(self.allocator, m.key, {});
         return if (merged) .merged else .noop;
     }
@@ -1881,17 +1941,29 @@ pub const EGraph = struct {
             switch (term_binding) {
                 .bound => |leaf| if (leaf == atom) return false,
                 .class => |c| {
-                    const gop = try cache.getOrPut(self.allocator, atom);
-                    if (!gop.found_existing) {
-                        gop.value_ptr.* = try self.computeAvoidable(atom);
+                    if (!try self.classAvoids(self.find(c), atom, cache)) {
+                        return false;
                     }
-                    const avoid = gop.value_ptr.*;
-                    const root = self.find(c);
-                    if (root >= avoid.len or !avoid[root]) return false;
                 },
             }
         }
         return true;
+    }
+
+    /// Cached `avoidable(class, atom)` lookup (see `computeAvoidable`).
+    /// `root` must be a canonical class id.
+    fn classAvoids(
+        self: *EGraph,
+        root: EClassId,
+        atom: LeafId,
+        cache: *AvoidCache,
+    ) !bool {
+        const gop = try cache.getOrPut(self.allocator, atom);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = try self.computeAvoidable(atom);
+        }
+        const avoid = gop.value_ptr.*;
+        return root < avoid.len and avoid[root];
     }
 
     fn canonicalize(self: *const EGraph, node: ENode) !ENode {
@@ -2215,6 +2287,460 @@ pub const EGraph = struct {
                 .key = key,
             });
         }
+    }
+
+    /// One matched instance of an alpha rule's match side: the anchor
+    /// node, its solved substitution (fresh slot still null), and the
+    /// bound atom at the renamed slot.
+    const AlphaInstance = struct {
+        node: ENodeId,
+        root: EClassId,
+        subst: []const ?Child,
+        atom: LeafId,
+    };
+
+    /// `renamedEq` memo keyed by canonical class pair PLUS the rename's
+    /// atom pair, one collection pass long (no unions land while
+    /// collecting, so roots are stable). The atoms are part of the key
+    /// because the same class pair can correspond under one rename and
+    /// not another — an atom-blind key would let a decoy instance pair
+    /// poison a later valid pair's verdict. An in-progress entry reads
+    /// as `false`: cycles resolve conservatively (counted in
+    /// `alpha_filter_skips`).
+    const RenameVerdict = enum { in_progress, no, yes };
+    const RenameMemo = std.AutoHashMapUnmanaged(u128, RenameVerdict);
+
+    /// Alpha scheduler: pair up match-side instances of each `alpha` rule
+    /// whose bodies correspond under renaming one bound atom to the
+    /// other, and retain a match that fires the GENERIC rule with the
+    /// fresh binder slot completed by the partner's atom. The applied
+    /// union is a literal theorem instance (`A x p ~ A z ([x/z] p)`);
+    /// the enrolled substitution rules plus gated congruence close the
+    /// remaining gap to the partner, so extraction sees only ordinary
+    /// edges. The correspondence check is a firing FILTER for economy,
+    /// never for soundness — the dep gate refuses capture at apply time
+    /// regardless — and it is approximate by design (greedy bag
+    /// alignment, cycle-conservative, budget-bounded). Approximate
+    /// resolutions are counted in `alpha_filter_skips` (reset here, so
+    /// the count always describes the latest pass): a saturated miss is
+    /// a forced negative only when the final pass counted none.
+    fn collectAlphaMatches(
+        self: *EGraph,
+        rules: []const Rule,
+        opts: SaturateOptions,
+        matches: *std.ArrayListUnmanaged(Match),
+        dedup: *MatchDedup,
+        iter_steps: *usize,
+        iter_capped: *bool,
+        scratch: std.mem.Allocator,
+    ) !void {
+        var avoid_cache: AvoidCache = .{};
+        self.alpha_filter_skips = 0;
+        for (rules, 0..) |rule, rule_slot| {
+            if (!rule.alpha) continue;
+            if (rule.match_side != .app) continue;
+            const pattern = rule.match_side.app;
+
+            var instances: std.ArrayListUnmanaged(AlphaInstance) = .{};
+            for (self.nodes.items, 0..) |stored, node_id| {
+                const app = switch (stored.node) {
+                    .app => |a| a,
+                    else => continue,
+                };
+                if (app.term_id != pattern.term_id) continue;
+                if (app.children.len != pattern.args.len) continue;
+                if (!self.chargeAlphaStep(iter_steps, iter_capped)) return;
+                const pairs = try scratch.alloc(
+                    PatternPair,
+                    pattern.args.len,
+                );
+                for (pattern.args, app.children, 0..) |p, c, idx| {
+                    pairs[idx] = .{ .pattern = p, .child = c };
+                }
+                const subst = try scratch.alloc(?Child, rule.num_binders);
+                @memset(subst, null);
+                const allotted = @min(opts.ac_match_budget, iter_steps.*);
+                self.ac_budget_remaining = allotted;
+                self.ac_budget_hit = false;
+                var solutions: std.ArrayListUnmanaged([]const ?Child) = .{};
+                try self.solvePairs(
+                    pairs,
+                    0,
+                    subst,
+                    &solutions,
+                    scratch,
+                    scratch,
+                );
+                iter_steps.* -= allotted - self.ac_budget_remaining;
+                if (self.ac_budget_hit) {
+                    self.ac_match_capped_total += 1;
+                    // A truncated enumeration may have dropped instances,
+                    // so this pass's verdicts are no longer exact.
+                    self.alpha_filter_skips += 1;
+                }
+                for (solutions.items) |sol| {
+                    const binding = sol[rule.alpha_old_slot] orelse continue;
+                    if (binding != .bound) continue;
+                    try instances.append(scratch, .{
+                        .node = @intCast(node_id),
+                        .root = self.find(stored.class),
+                        .subst = sol,
+                        .atom = binding.bound,
+                    });
+                }
+            }
+
+            var memo: RenameMemo = .{};
+            for (instances.items, 0..) |a, i| {
+                for (instances.items[i + 1 ..]) |b| {
+                    if (a.atom == b.atom) continue;
+                    if (a.root == b.root) continue;
+                    if (!self.chargeAlphaStep(iter_steps, iter_capped)) {
+                        return;
+                    }
+                    if (!try self.alphaInstancesCorrespond(
+                        rule,
+                        a,
+                        b,
+                        &memo,
+                        &avoid_cache,
+                        iter_steps,
+                        iter_capped,
+                        scratch,
+                    )) continue;
+                    try self.appendAlphaMatch(
+                        rule,
+                        @intCast(rule_slot),
+                        a,
+                        b,
+                        matches,
+                        dedup,
+                        &avoid_cache,
+                    );
+                    if (matches.items.len >= opts.ac_iter_match_budget) {
+                        iter_capped.* = true;
+                        self.ac_match_capped_total += 1;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Charge one unit of the shared iteration step budget; a trip caps
+    /// the collection pass (counted like every other budget trip).
+    fn chargeAlphaStep(
+        self: *EGraph,
+        iter_steps: *usize,
+        iter_capped: *bool,
+    ) bool {
+        if (iter_steps.* == 0) {
+            iter_capped.* = true;
+            self.ac_match_capped_total += 1;
+            return false;
+        }
+        iter_steps.* -= 1;
+        return true;
+    }
+
+    /// Do two instances' substitutions correspond under renaming
+    /// `a.atom` to `b.atom`? Bound slots other than the renamed one must
+    /// bind identical atoms distinct from both rename endpoints; term
+    /// slots must satisfy `renamedEq`.
+    fn alphaInstancesCorrespond(
+        self: *EGraph,
+        rule: Rule,
+        a: AlphaInstance,
+        b: AlphaInstance,
+        memo: *RenameMemo,
+        avoid_cache: *AvoidCache,
+        iter_steps: *usize,
+        iter_capped: *bool,
+        scratch: std.mem.Allocator,
+    ) error{OutOfMemory}!bool {
+        for (a.subst, b.subst, 0..) |ea, eb, slot| {
+            if (slot == rule.alpha_old_slot) continue;
+            if (slot == rule.alpha_new_slot) continue;
+            const ca = ea orelse {
+                if (eb == null) continue;
+                return false;
+            };
+            const cb = eb orelse return false;
+            switch (ca) {
+                .bound => |la| {
+                    if (cb != .bound) return false;
+                    // A second bound slot touching either rename endpoint
+                    // is doomed at the distinctness gate anyway.
+                    if (la == a.atom or cb.bound == b.atom) return false;
+                    if (cb.bound != la) return false;
+                },
+                .class => |cc| {
+                    if (cb != .class) return false;
+                    if (!try self.renamedEq(
+                        cc,
+                        cb.class,
+                        a.atom,
+                        b.atom,
+                        memo,
+                        avoid_cache,
+                        iter_steps,
+                        iter_capped,
+                        scratch,
+                    )) return false;
+                },
+            }
+        }
+        return true;
+    }
+
+    /// Approximate check that class `d` denotes `c` with atom `x`
+    /// renamed to `z`. Equal classes correspond when they can avoid `x`
+    /// (an identity rename); the atoms' own leaf classes correspond to
+    /// each other; otherwise some member-node pair must correspond
+    /// structurally. False negatives skip a fire; false positives cost
+    /// one refused-or-useless (but sound) instance.
+    fn renamedEq(
+        self: *EGraph,
+        c: EClassId,
+        d: EClassId,
+        x: LeafId,
+        z: LeafId,
+        memo: *RenameMemo,
+        avoid_cache: *AvoidCache,
+        iter_steps: *usize,
+        iter_capped: *bool,
+        scratch: std.mem.Allocator,
+    ) error{OutOfMemory}!bool {
+        const rc = self.find(c);
+        const rd = self.find(d);
+        if (rc == rd) return self.classAvoids(rc, x, avoid_cache);
+        if (self.leaf_classes.get(x)) |xc| {
+            if (self.leaf_classes.get(z)) |zc| {
+                if (self.find(xc) == rc and self.find(zc) == rd) return true;
+            }
+        }
+        const key = (@as(u128, rc) << 96) | (@as(u128, rd) << 64) |
+            (@as(u128, x) << 32) | z;
+        if (memo.get(key)) |cached| switch (cached) {
+            .yes => return true,
+            .no => return false,
+            // In-progress pairs read false: a correspondence may not
+            // assume itself on a cyclic class. That verdict is
+            // conservative, not exact — count it.
+            .in_progress => {
+                self.alpha_filter_skips += 1;
+                return false;
+            },
+        };
+        try memo.put(scratch, key, .in_progress);
+        var result = false;
+        if (self.class_index.get(rc)) |ca| {
+            if (self.class_index.get(rd)) |cb| {
+                outer: for (ca.items) |na| {
+                    for (cb.items) |nb| {
+                        if (!self.chargeAlphaStep(iter_steps, iter_capped)) {
+                            break :outer;
+                        }
+                        if (try self.renamedNodeEq(
+                            na,
+                            nb,
+                            x,
+                            z,
+                            memo,
+                            avoid_cache,
+                            iter_steps,
+                            iter_capped,
+                            scratch,
+                        )) {
+                            result = true;
+                            break :outer;
+                        }
+                    }
+                }
+            }
+        }
+        try memo.put(scratch, key, if (result) RenameVerdict.yes else .no);
+        return result;
+    }
+
+    fn renamedNodeEq(
+        self: *EGraph,
+        na: ENodeId,
+        nb: ENodeId,
+        x: LeafId,
+        z: LeafId,
+        memo: *RenameMemo,
+        avoid_cache: *AvoidCache,
+        iter_steps: *usize,
+        iter_capped: *bool,
+        scratch: std.mem.Allocator,
+    ) error{OutOfMemory}!bool {
+        const a = self.nodes.items[na].node;
+        const b = self.nodes.items[nb].node;
+        switch (a) {
+            // Equal leaves share a class and never reach here; the only
+            // cross-class leaf correspondence is the rename itself.
+            .leaf => |la| return la == x and b == .leaf and b.leaf == z,
+            .app => |aa| {
+                if (b != .app) return false;
+                const ba = b.app;
+                if (aa.term_id != ba.term_id) return false;
+                if (aa.children.len != ba.children.len) return false;
+                for (aa.children, ba.children) |ac, bc| {
+                    switch (ac) {
+                        .bound => |la| {
+                            if (bc != .bound) return false;
+                            if (la == x) {
+                                if (bc.bound != z) return false;
+                            } else if (bc.bound != la) return false;
+                        },
+                        .class => |cc| {
+                            if (bc != .class) return false;
+                            if (!try self.renamedEq(
+                                cc,
+                                bc.class,
+                                x,
+                                z,
+                                memo,
+                                avoid_cache,
+                                iter_steps,
+                                iter_capped,
+                                scratch,
+                            )) return false;
+                        },
+                    }
+                }
+                return true;
+            },
+            .bag => |ab| {
+                if (b != .bag) return false;
+                const bb = b.bag;
+                if (ab.term_id != bb.term_id) return false;
+                if (ab.members.len != bb.members.len) return false;
+                // Greedy multiset alignment: consume equal x-avoiding
+                // roots first, then first-fit renamed partners. Greedy
+                // failures are affordable false negatives.
+                const used = try scratch.alloc(bool, bb.members.len);
+                @memset(used, false);
+                for (ab.members) |ma| {
+                    const ra = self.find(ma);
+                    var placed = false;
+                    for (bb.members, 0..) |mb, idx| {
+                        if (used[idx]) continue;
+                        if (self.find(mb) != ra) continue;
+                        if (!try self.classAvoids(ra, x, avoid_cache)) {
+                            continue;
+                        }
+                        used[idx] = true;
+                        placed = true;
+                        break;
+                    }
+                    if (placed) continue;
+                    for (bb.members, 0..) |mb, idx| {
+                        if (used[idx]) continue;
+                        if (try self.renamedEq(
+                            ma,
+                            mb,
+                            x,
+                            z,
+                            memo,
+                            avoid_cache,
+                            iter_steps,
+                            iter_capped,
+                            scratch,
+                        )) {
+                            used[idx] = true;
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if (!placed) {
+                        // A greedy failure may be a false negative (an
+                        // earlier first-fit placement can consume this
+                        // member's only partner) — count it.
+                        self.alpha_filter_skips += 1;
+                        return false;
+                    }
+                }
+                return true;
+            },
+        }
+    }
+
+    /// Retain one direction of a corresponding pair: fire anchored at
+    /// `a` renaming toward `b`'s atom when the dep gate admits it now,
+    /// else the reverse anchor (capture can be one-sided). A pair the
+    /// gate refuses both ways is still retained forward: gating is
+    /// monotone, so the deferred match retries like any other.
+    fn appendAlphaMatch(
+        self: *EGraph,
+        rule: Rule,
+        rule_slot: u32,
+        a: AlphaInstance,
+        b: AlphaInstance,
+        matches: *std.ArrayListUnmanaged(Match),
+        dedup: *MatchDedup,
+        avoid_cache: *AvoidCache,
+    ) !void {
+        const forward = try self.completeAlphaSubst(rule, a, b.atom);
+        if (try self.depGateAllows(rule, forward, avoid_cache)) {
+            return self.retainAlphaMatch(
+                rule_slot,
+                a.node,
+                forward,
+                matches,
+                dedup,
+            );
+        }
+        const reverse = try self.completeAlphaSubst(rule, b, a.atom);
+        if (try self.depGateAllows(rule, reverse, avoid_cache)) {
+            return self.retainAlphaMatch(
+                rule_slot,
+                b.node,
+                reverse,
+                matches,
+                dedup,
+            );
+        }
+        return self.retainAlphaMatch(
+            rule_slot,
+            a.node,
+            forward,
+            matches,
+            dedup,
+        );
+    }
+
+    fn completeAlphaSubst(
+        self: *EGraph,
+        rule: Rule,
+        inst: AlphaInstance,
+        fresh: LeafId,
+    ) ![]?Child {
+        const subst = try self.allocator.dupe(?Child, inst.subst);
+        subst[rule.alpha_new_slot] = .{ .bound = fresh };
+        return subst;
+    }
+
+    /// Same retained-match dedup as `matchRule`'s tail.
+    fn retainAlphaMatch(
+        self: *EGraph,
+        rule_slot: u32,
+        node: ENodeId,
+        subst: []const ?Child,
+        matches: *std.ArrayListUnmanaged(Match),
+        dedup: *MatchDedup,
+    ) !void {
+        const key = self.matchEffectKey(rule_slot, node, subst, &.{});
+        if (dedup.applied.contains(key)) return;
+        const gop = try dedup.iter.getOrPut(self.allocator, key);
+        if (gop.found_existing) return;
+        try matches.append(self.allocator, .{
+            .rule_slot = rule_slot,
+            .root_node = node,
+            .subst = subst,
+            .key = key,
+        });
     }
 
     const PatternPair = struct {

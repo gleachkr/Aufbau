@@ -75,9 +75,13 @@ pub const RewriteRule = struct {
 /// tokens (`ltr`/`rtl`/`both`) enroll ordinary saturation rules; the role
 /// tokens `assoc`/`comm` instead certify the conclusion head's algebraic
 /// law, letting `conversion?` absorb it into term representation (see
-/// `docs/design_notes/ac_representation.md`). Role-annotated theorems are
+/// `docs/design_notes/ac_representation.md`). The `alpha` role enrolls an
+/// alpha-renaming lemma (`rel(A x p, A y ([x/y] p))`) for the egraph's
+/// pairing scheduler, which supplies the fresh binder from existing
+/// instances instead of saturating it blindly (see
+/// `docs/design_notes/conversion_alpha.md`). Role-annotated theorems are
 /// validated against the exact law shape at annotation time.
-pub const ConversionRole = enum { none, assoc, comm };
+pub const ConversionRole = enum { none, assoc, comm, alpha };
 
 /// A `@conversion` rule: a hypothesis-free theorem concluding `rel(lhs, rhs)`
 /// for a registered `@relation`, enrolled for egraph saturation in
@@ -101,6 +105,10 @@ pub const ConversionRule = struct {
     role: ConversionRole = .none,
     /// The certified operator for a role rule; null for direction rules.
     head_term_id: ?u32 = null,
+    /// For an `alpha` role rule: binder slots of the renamed (lhs) and
+    /// fresh (rhs-only) bound binder. Meaningless for other roles.
+    alpha_old_slot: u32 = 0,
+    alpha_new_slot: u32 = 0,
 };
 
 /// A `@conversion`-enrolled definition: the def's own equation
@@ -382,6 +390,8 @@ pub const RewriteRegistry = struct {
             .assoc
         else if (std.mem.eql(u8, token, "comm"))
             .comm
+        else if (std.mem.eql(u8, token, "alpha"))
+            .alpha
         else
             .none;
         const both = std.mem.eql(u8, token, "both");
@@ -390,8 +400,12 @@ pub const RewriteRegistry = struct {
         // plus @congr is absorbed into bag interning at search time and
         // skipped from enrollment there, but a single-certificate head
         // relies on these flags to saturate as an ordinary rule.
+        // Exception: `alpha` enrolls only the lhs-match orientation — the
+        // pairing scheduler supplies the fresh binder the rhs needs, so
+        // no generic reverse orientation exists.
         const ltr = both or role != .none or std.mem.eql(u8, token, "ltr");
-        const rtl = both or role != .none or std.mem.eql(u8, token, "rtl");
+        const rtl = role != .alpha and
+            (both or role != .none or std.mem.eql(u8, token, "rtl"));
         if (!ltr and !rtl) return error.InvalidConversionAnnotation;
 
         const rule = &env.rules.items[rule_id];
@@ -426,7 +440,11 @@ pub const RewriteRegistry = struct {
         // (before the generic orientation checks, whose validity the shape
         // implies — the role-specific diagnostic is the useful one).
         var head_term_id: ?u32 = null;
-        if (role != .none) {
+        var alpha_slots: [2]u32 = .{ 0, 0 };
+        if (role == .alpha) {
+            alpha_slots = try validateAlphaConversionShape(env, rule, lhs, rhs);
+            head_term_id = lhs.app.term_id;
+        } else if (role != .none) {
             // A representation-level law cannot carry dependency side
             // conditions, so the certificate must be binder-clean.
             for (rule.args) |arg| {
@@ -435,7 +453,7 @@ pub const RewriteRegistry = struct {
             const head = switch (role) {
                 .comm => try validateCommShape(rule, lhs, rhs),
                 .assoc => try validateAssocShape(rule, lhs, rhs),
-                .none => unreachable,
+                .none, .alpha => unreachable,
             };
             // A registered @relation head must stay a plain application:
             // local equations cite `rel(lhs, rhs)` nodes directly, and an
@@ -458,8 +476,12 @@ pub const RewriteRegistry = struct {
             head_term_id = head;
         }
 
-        if (ltr) try validateConversionOrientation(lhs, rhs);
-        if (rtl) try validateConversionOrientation(rhs, lhs);
+        // An alpha rule fails generic coverage by design (the fresh binder
+        // is rhs-only); its shape validation above stands in.
+        if (role != .alpha) {
+            if (ltr) try validateConversionOrientation(lhs, rhs);
+            if (rtl) try validateConversionOrientation(rhs, lhs);
+        }
 
         try self.conversions.append(self.allocator, .{
             .rule_id = rule_id,
@@ -470,6 +492,8 @@ pub const RewriteRegistry = struct {
             .rtl = rtl,
             .role = role,
             .head_term_id = head_term_id,
+            .alpha_old_slot = alpha_slots[0],
+            .alpha_new_slot = alpha_slots[1],
         });
     }
 
@@ -1742,6 +1766,68 @@ fn validateConversionOrientation(
     if ((target_mask.mask & ~match_mask.mask) != 0) {
         return error.ConversionBinderNotCovered;
     }
+}
+
+/// `@conversion alpha` certificate: both sides applications of one head,
+/// with exactly one argument position holding two DIFFERENT bound binders
+/// (the renamed binder on the left, the fresh one on the right); the
+/// position must be a bound argument position of the head term, and the
+/// fresh binder must not occur anywhere on the left and must share the
+/// renamed binder's sort. The right side's remaining structure (the
+/// substitution image) is deliberately NOT validated: every scheduler fire
+/// is a literal instance of the theorem, so a non-alpha-shaped rule is
+/// merely useless, never unsound. Returns `.{ old_slot, new_slot }`.
+fn validateAlphaConversionShape(
+    env: *const GlobalEnv,
+    rule: *const RuleDecl,
+    lhs: TemplateExpr,
+    rhs: TemplateExpr,
+) ![2]u32 {
+    if (lhs != .app or rhs != .app) return error.ConversionAlphaRuleShape;
+    const la = lhs.app;
+    const ra = rhs.app;
+    if (la.term_id != ra.term_id) return error.ConversionAlphaRuleShape;
+    if (la.args.len != ra.args.len) return error.ConversionAlphaRuleShape;
+    var old_slot: ?u32 = null;
+    var new_slot: u32 = 0;
+    var diff_pos: usize = 0;
+    for (la.args, ra.args, 0..) |left, right, pos| {
+        if (left != .binder or right != .binder) continue;
+        if (left.binder == right.binder) continue;
+        if (left.binder >= rule.args.len or right.binder >= rule.args.len) {
+            return error.ConversionAlphaRuleShape;
+        }
+        if (!rule.args[left.binder].bound or !rule.args[right.binder].bound) {
+            return error.ConversionAlphaRuleShape;
+        }
+        if (old_slot != null) return error.ConversionAlphaRuleShape;
+        old_slot = @intCast(left.binder);
+        new_slot = @intCast(right.binder);
+        diff_pos = pos;
+    }
+    // The renamed position must be a bound argument position of the head
+    // term: the egraph stores other positions as classes, so the pairing
+    // scheduler could never collect an instance — the rule would enroll
+    // but stay permanently inert.
+    const head = env.terms.items[la.term_id];
+    if (diff_pos >= head.args.len or !head.args[diff_pos].bound) {
+        return error.ConversionAlphaRuleShape;
+    }
+    const old = old_slot orelse return error.ConversionAlphaRuleShape;
+    if (!std.mem.eql(
+        u8,
+        rule.args[old].sort_name,
+        rule.args[new_slot].sort_name,
+    )) {
+        return error.ConversionAlphaRuleShape;
+    }
+    const lhs_mask = templateBinderMask(lhs);
+    if (lhs_mask.overflow or new_slot >= 64 or
+        (lhs_mask.mask >> @intCast(new_slot)) & 1 != 0)
+    {
+        return error.ConversionAlphaRuleShape;
+    }
+    return .{ old, new_slot };
 }
 
 fn isBinder(template: TemplateExpr, expected_idx: usize) bool {

@@ -8,8 +8,10 @@
 --
 -- Applied left-to-right they drive every quantifier to the front (prenex
 -- normal form); right-to-left they miniscope. This fixture states the full
--- set as `@conversion` axioms and proves a battery of prenexifications and
--- reverse prenexifications whose proofs were each produced by a single
+-- set as `@conversion` axioms — plus an alpha-conversion battery over an
+-- object-level substitution calculus (`@conversion alpha`, below) — and
+-- proves prenexifications, reverse prenexifications, and bound-variable
+-- renamings whose proofs were each produced by a single
 -- `conversion?` search — the egraph explores the passage laws in both
 -- directions at once and emits the ordinary rewrite chain you see in
 -- herbrand.auf. In the web editor, replace any proof body with its
@@ -145,6 +147,51 @@ axiom an_comm (a b: form): $ (a ∧ b) ↔ (b ∧ a) $;
 axiom or_comm (a b: form): $ (a ∨ b) ↔ (b ∨ a) $;
 
 -- ============================================================
+-- Alpha conversion. `sb x y p` is object-level substitution of y
+-- for x in p; the calculus below pushes it through every
+-- connective, and the two alpha laws relate a quantifier to its
+-- renamed image. `@conversion alpha` cannot enroll for ordinary
+-- saturation (y appears only on the right); instead the pairing
+-- scheduler fires a literal instance whenever two same-head
+-- binder e-nodes look like renamings of each other, and the sb
+-- rules reduce the substitution image until congruence closes
+-- the gap. The freshness side condition is, once again, just the
+-- dependency discipline: `p: form x` cannot mention y.
+-- ============================================================
+
+term sb {x: obj} (y: obj) (p: form x): form;
+
+--| @conversion alpha
+axiom all_alpha {x y: obj} (p: form x):
+  $ (∀ x p) ↔ (∀ y (sb x y p)) $;
+--| @conversion alpha
+axiom ex_alpha {x y: obj} (p: form x):
+  $ (∃ x p) ↔ (∃ y (sb x y p)) $;
+
+-- The substitution calculus, enrolled left-to-right only: each
+-- right-hand side merely rearranges material the match side
+-- already binds. `sb_const` carries the classical "x not free in
+-- a" proviso the same way the passage laws do.
+--| @conversion ltr
+axiom sb_p {x: obj} (y: obj): $ (sb x y (P x)) ↔ (P y) $;
+--| @conversion ltr
+axiom sb_q {x: obj} (y: obj): $ (sb x y (Q x)) ↔ (Q y) $;
+--| @conversion ltr
+axiom sb_an {x: obj} (y: obj) (a b: form x):
+  $ (sb x y (a ∧ b)) ↔ ((sb x y a) ∧ (sb x y b)) $;
+--| @conversion ltr
+axiom sb_or {x: obj} (y: obj) (a b: form x):
+  $ (sb x y (a ∨ b)) ↔ ((sb x y a) ∨ (sb x y b)) $;
+--| @conversion ltr
+axiom sb_im {x: obj} (y: obj) (a b: form x):
+  $ (sb x y (a → b)) ↔ ((sb x y a) → (sb x y b)) $;
+--| @conversion ltr
+axiom sb_not {x: obj} (y: obj) (a: form x):
+  $ (sb x y (¬ a)) ↔ (¬ (sb x y a)) $;
+--| @conversion ltr
+axiom sb_const {x: obj} (y: obj) (a: form): $ (sb x y a) ↔ a $;
+
+-- ============================================================
 -- The battery. Every proof in herbrand.auf is `conversion?` output.
 -- ============================================================
 
@@ -182,3 +229,50 @@ theorem prenex_deep {x y: obj} (q: form)
 -- representative `p` inside the quantifier, never `P x` itself.
 theorem constant_gen {x: obj} (p: form) (h1: $ (P x) ↔ p $)
   (h2: $ P x $): $ ∀ x (P x) $;
+
+-- ============================================================
+-- Alpha battery. As above, every proof is a single `conversion?`
+-- search; the chains cite the alpha law, the sb calculus, and
+-- congruence — no bespoke machinery in the emitted proof.
+-- ============================================================
+
+-- The minimal renames, one per quantifier.
+theorem rename_all {x y: obj} (h: $ ∀ x (P x) $): $ ∀ y (P y) $;
+theorem rename_ex {x y: obj} (h: $ ∃ x (P x) $): $ ∃ y (P y) $;
+
+-- The same gap as an equation goal (no hypothesis to transport).
+theorem rename_iff {x y: obj}: $ (∀ x (P x)) ↔ (∀ y (P y)) $;
+
+-- Renaming through a connective with an x-free operand: the sb
+-- image splits under ∧ and `sb_const` discharges the q half.
+theorem rename_mixed {x y: obj} (q: form) (h: $ ∀ x ((P x) ∧ q) $):
+  $ ∀ y ((P y) ∧ q) $;
+
+-- Renaming past a genuinely free variable: z stays fixed, and the
+-- capture gate keeps the scheduler from ever renaming toward it.
+theorem rename_free {x y z: obj} (h: $ ∃ x ((P x) → (Q z)) $):
+  $ ∃ y ((P y) → (Q z)) $;
+
+-- Passage and alpha in one search: the quantifier must first leave
+-- the disjunction (commute, pass ∀ out), and only then does the
+-- renamed pair exist for the scheduler to find — the alpha partner
+-- is an e-node minted mid-saturation, not a seeded term.
+theorem rename_prenex {x y: obj} (q: form) (h: $ ∀ x ((P x) ∨ q) $):
+  $ (∀ y (P y)) ∨ q $;
+
+-- Negation passage plus a rename through ¬.
+theorem rename_neg {x y: obj} (h: $ ¬ (∃ x (P x)) $):
+  $ ∀ y (¬ (P y)) $;
+
+-- Both operands depend on x, so no passage law applies: the only
+-- route is the alpha law followed by the sb calculus splitting the
+-- substitution image under →.
+theorem rename_im {x y: obj} (h: $ ∃ x ((P x) → (Q x)) $):
+  $ ∃ y ((P y) → (Q y)) $;
+
+-- A deeper substitution image: sb pushes through ¬, ∧ and ∨ before
+-- `sb_const` discharges the x-free leaf. Again no passage law can
+-- move the quantifier — both conjuncts mention x.
+theorem rename_deep {x y: obj} (q: form)
+  (h: $ ∀ x ((¬ (P x)) ∧ ((Q x) ∨ q)) $):
+  $ ∀ y ((¬ (P y)) ∧ ((Q y) ∨ q)) $;

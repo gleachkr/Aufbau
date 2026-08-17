@@ -779,6 +779,76 @@ test "compiler rejects conversion rules with hypotheses" {
     );
 }
 
+// Prelude for the `@conversion alpha` enrollment tests: a binder head, a
+// substitution term, plus decoy heads for the negative shapes (a term
+// with a REGULAR nat position and a term with two bound positions).
+const alpha_annotation_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort nat;
+    \\term iff (p q: wff): wff;
+    \\term all {x: nat} (p: wff x): wff;
+    \\term ex {x: nat} (p: wff x): wff;
+    \\term sb {x: nat} (a: nat) (p: wff x): wff;
+    \\term at (a: nat) (p: wff): wff;
+    \\term pr2 {x y: nat} (p: wff): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\
+;
+
+test "compiler stores a valid alpha conversion annotation with its slots" {
+    const mm0_src = alpha_annotation_prelude ++
+        \\--| @conversion alpha
+        \\axiom all_alpha {x y: nat} (p: wff x): $ iff (all x p) (all y (sb x y p)) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rules = metadata.registry.conversionRules();
+    try std.testing.expectEqual(@as(usize, 1), rules.len);
+    try std.testing.expect(rules[0].role == .alpha);
+    try std.testing.expectEqual(@as(u32, 0), rules[0].alpha_old_slot);
+    try std.testing.expectEqual(@as(u32, 1), rules[0].alpha_new_slot);
+}
+
+test "compiler rejects malformed alpha conversion annotations" {
+    const cases = [_][]const u8{
+        // The renamed pair sits at a REGULAR argument position of the
+        // head: the egraph stores that position as a class, so the
+        // pairing scheduler could never collect an instance — the rule
+        // would enroll but stay permanently inert.
+        "axiom bad_pos {x y: nat} (p: wff): $ iff (at x p) (at y p) $;",
+        // The fresh binder already occurs on the left.
+        "axiom bad_left {x y: nat} (p: wff x): " ++
+            "$ iff (all x (sb x y p)) (all y (sb x y p)) $;",
+        // A bare-binder side (no head application).
+        "axiom bad_bare (a: wff): $ iff a a $;",
+        // The two sides have different heads.
+        "axiom bad_heads {x y: nat} (p: wff x): " ++
+            "$ iff (all x p) (ex y (sb x y p)) $;",
+        // No renamed position at all.
+        "axiom bad_same {x: nat} (p: wff x): $ iff (all x p) (all x p) $;",
+        // Two renamed positions.
+        "axiom bad_two {x y z w: nat} (p: wff): " ++
+            "$ iff (pr2 x y p) (pr2 z w p) $;",
+    };
+    for (cases) |axiom_line| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+            alpha_annotation_prelude,
+            "--| @conversion alpha\n",
+            axiom_line,
+            "\n",
+        });
+        try std.testing.expectError(
+            error.ConversionAlphaRuleShape,
+            processAnnotatedMetadata(arena.allocator(), mm0_src),
+        );
+    }
+}
+
 test "compiler rejects conversion orientations that cannot match or cover" {
     // ltr on `iff a (an a a)`: the match side is a bare binder.
     const bare_src = conversion_mm0_prelude ++

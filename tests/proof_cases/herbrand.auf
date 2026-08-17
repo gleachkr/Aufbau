@@ -85,3 +85,167 @@ goal_4: $ p ↔ P x $ by bi_symm [#1]
 goal_5: $ ∀ x p ↔ ∀ x P x $ by all_congr [goal_4]
 goal_6: $ P x ↔ ∀ x P x $ by bi_trans [goal_3, goal_5]
 goal: $ ∀ x (P x) $ by mpbi [goal_6, #2]
+
+-- goal: $ ∀ y (P y) $ by conversion?
+rename_all
+----------
+goal_1: $ sb y x (P y) ↔ P x $ by sb_p
+goal_2: $ P x ↔ sb y x (P y) $ by bi_symm [goal_1]
+goal_3: $ ∀ x P x ↔ ∀ x sb y x (P y) $ by all_congr [goal_2]
+goal_4: $ ∀ y P y ↔ ∀ x sb y x (P y) $ by all_alpha
+goal_5: $ ∀ x sb y x (P y) ↔ ∀ y P y $ by bi_symm [goal_4]
+goal_6: $ ∀ x P x ↔ ∀ y P y $ by bi_trans [goal_3, goal_5]
+goal: $ ∀ y (P y) $ by mpbi [goal_6, #1]
+
+-- goal: $ ∃ y (P y) $ by conversion?
+rename_ex
+---------
+goal_1: $ sb y x (P y) ↔ P x $ by sb_p
+goal_2: $ P x ↔ sb y x (P y) $ by bi_symm [goal_1]
+goal_3: $ ∃ x P x ↔ ∃ x sb y x (P y) $ by ex_congr [goal_2]
+goal_4: $ ∃ y P y ↔ ∃ x sb y x (P y) $ by ex_alpha
+goal_5: $ ∃ x sb y x (P y) ↔ ∃ y P y $ by bi_symm [goal_4]
+goal_6: $ ∃ x P x ↔ ∃ y P y $ by bi_trans [goal_3, goal_5]
+goal: $ ∃ y (P y) $ by mpbi [goal_6, #1]
+
+-- goal: $ (∀ x (P x)) ↔ (∀ y (P y)) $ by conversion?
+rename_iff
+----------
+goal_1: $ ∀ x P x ↔ ∀ y sb x y (P x) $ by all_alpha
+goal_2: $ sb x y (P x) ↔ P y $ by sb_p
+goal_3: $ ∀ y sb x y (P x) ↔ ∀ y P y $ by all_congr [goal_2]
+goal_4: $ ∀ x P x ↔ ∀ y P y $ by bi_trans [goal_1, goal_3]
+goal_5: $ ∀ x P x ↔ ∀ x P x $ by bi_refl
+goal: $ (∀ x (P x)) ↔ (∀ y (P y)) $ by bi_trans [goal_5, goal_4]
+
+-- goal: $ ∀ y ((P y) ∧ q) $ by conversion?
+rename_mixed
+------------
+goal_1: $ P x ∧ q ↔ q ∧ P x $ by an_comm
+goal_2: $ ∀ x (P x ∧ q) ↔ ∀ x (q ∧ P x) $ by all_congr [goal_1]
+goal_3: $ ∀ x (q ∧ P x) ↔ q ∧ ∀ x P x $ by pass_al_an
+goal_4: $ ∀ x (P x ∧ q) ↔ q ∧ ∀ x P x $ by bi_trans [goal_2, goal_3]
+goal_5: $ sb y x (P y) ↔ P x $ by sb_p
+goal_6: $ P x ↔ sb y x (P y) $ by bi_symm [goal_5]
+goal_7: $ ∀ x P x ↔ ∀ x sb y x (P y) $ by all_congr [goal_6]
+goal_8: $ ∀ y P y ↔ ∀ x sb y x (P y) $ by all_alpha
+goal_9: $ ∀ x sb y x (P y) ↔ ∀ y P y $ by bi_symm [goal_8]
+goal_10: $ ∀ x P x ↔ ∀ y P y $ by bi_trans [goal_7, goal_9]
+goal_11: $ q ↔ q $ by bi_refl
+goal_12: $ q ∧ ∀ x P x ↔ q ∧ ∀ y P y $ by an_congr [goal_11, goal_10]
+goal_13: $ ∀ x (P x ∧ q) ↔ q ∧ ∀ y P y $ by bi_trans [goal_4, goal_12]
+goal_14: $ ∀ y (q ∧ P y) ↔ q ∧ ∀ y P y $ by pass_al_an
+goal_15: $ q ∧ ∀ y P y ↔ ∀ y (q ∧ P y) $ by bi_symm [goal_14]
+goal_16: $ ∀ x (P x ∧ q) ↔ ∀ y (q ∧ P y) $ by bi_trans [goal_13, goal_15]
+goal_17: $ P y ∧ q ↔ q ∧ P y $ by an_comm
+goal_18: $ q ∧ P y ↔ P y ∧ q $ by bi_symm [goal_17]
+goal_19: $ ∀ y (q ∧ P y) ↔ ∀ y (P y ∧ q) $ by all_congr [goal_18]
+goal_20: $ ∀ x (P x ∧ q) ↔ ∀ y (P y ∧ q) $ by bi_trans [goal_16, goal_19]
+goal: $ ∀ y ((P y) ∧ q) $ by mpbi [goal_20, #1]
+
+-- goal: $ ∃ y ((P y) → (Q z)) $ by conversion?
+rename_free
+-----------
+goal_1: $ ∀ x P x → Q z ↔ ∃ x (P x → Q z) $ by pass_im_ante_al
+goal_2: $ ∃ x (P x → Q z) ↔ ∀ x P x → Q z $ by bi_symm [goal_1]
+goal_3: $ sb y x (P y) ↔ P x $ by sb_p
+goal_4: $ P x ↔ sb y x (P y) $ by bi_symm [goal_3]
+goal_5: $ ∀ x P x ↔ ∀ x sb y x (P y) $ by all_congr [goal_4]
+goal_6: $ ∀ y P y ↔ ∀ x sb y x (P y) $ by all_alpha
+goal_7: $ ∀ x sb y x (P y) ↔ ∀ y P y $ by bi_symm [goal_6]
+goal_8: $ ∀ x P x ↔ ∀ y P y $ by bi_trans [goal_5, goal_7]
+goal_9: $ Q z ↔ Q z $ by bi_refl
+goal_10: $ ∀ x P x → Q z ↔ ∀ y P y → Q z $ by im_congr [goal_8, goal_9]
+goal_11: $ ∃ x (P x → Q z) ↔ ∀ y P y → Q z $ by bi_trans [goal_2, goal_10]
+goal_12: $ ∀ y P y → Q z ↔ ∃ y (P y → Q z) $ by pass_im_ante_al
+goal_13: $ ∃ x (P x → Q z) ↔ ∃ y (P y → Q z) $ by bi_trans [goal_11, goal_12]
+goal: $ ∃ y ((P y) → (Q z)) $ by mpbi [goal_13, #1]
+
+-- goal: $ (∀ y (P y)) ∨ q $ by conversion?
+rename_prenex
+-------------
+goal_1: $ P x ∨ q ↔ q ∨ P x $ by or_comm
+goal_2: $ ∀ x (P x ∨ q) ↔ ∀ x (q ∨ P x) $ by all_congr [goal_1]
+goal_3: $ ∀ x (q ∨ P x) ↔ q ∨ ∀ x P x $ by pass_al_or
+goal_4: $ ∀ x (P x ∨ q) ↔ q ∨ ∀ x P x $ by bi_trans [goal_2, goal_3]
+goal_5: $ ∀ x P x ∨ q ↔ q ∨ ∀ x P x $ by or_comm
+goal_6: $ q ∨ ∀ x P x ↔ ∀ x P x ∨ q $ by bi_symm [goal_5]
+goal_7: $ ∀ x (P x ∨ q) ↔ ∀ x P x ∨ q $ by bi_trans [goal_4, goal_6]
+goal_8: $ sb y x (P y) ↔ P x $ by sb_p
+goal_9: $ P x ↔ sb y x (P y) $ by bi_symm [goal_8]
+goal_10: $ ∀ x P x ↔ ∀ x sb y x (P y) $ by all_congr [goal_9]
+goal_11: $ ∀ y P y ↔ ∀ x sb y x (P y) $ by all_alpha
+goal_12: $ ∀ x sb y x (P y) ↔ ∀ y P y $ by bi_symm [goal_11]
+goal_13: $ ∀ x P x ↔ ∀ y P y $ by bi_trans [goal_10, goal_12]
+goal_14: $ q ↔ q $ by bi_refl
+goal_15: $ ∀ x P x ∨ q ↔ ∀ y P y ∨ q $ by or_congr [goal_13, goal_14]
+goal_16: $ ∀ x (P x ∨ q) ↔ ∀ y P y ∨ q $ by bi_trans [goal_7, goal_15]
+goal: $ (∀ y (P y)) ∨ q $ by mpbi [goal_16, #1]
+
+-- goal: $ ∀ y (¬ (P y)) $ by conversion?
+rename_neg
+----------
+goal_1: $ ∃ x P x ↔ ∃ y sb x y (P x) $ by ex_alpha
+goal_2: $ sb x y (P x) ↔ P y $ by sb_p
+goal_3: $ ∃ y sb x y (P x) ↔ ∃ y P y $ by ex_congr [goal_2]
+goal_4: $ ∃ x P x ↔ ∃ y P y $ by bi_trans [goal_1, goal_3]
+goal_5: $ ¬ ∃ x P x ↔ ¬ ∃ y P y $ by not_congr [goal_4]
+goal_6: $ ¬ ∃ y P y ↔ ∀ y (¬ P y) $ by neg_ex
+goal_7: $ ¬ ∃ x P x ↔ ∀ y (¬ P y) $ by bi_trans [goal_5, goal_6]
+goal: $ ∀ y (¬ (P y)) $ by mpbi [goal_7, #1]
+
+-- goal: $ ∃ y ((P y) → (Q y)) $ by conversion?
+rename_im
+---------
+goal_1: $ sb y x (P y) ↔ P x $ by sb_p
+goal_2: $ P x ↔ sb y x (P y) $ by bi_symm [goal_1]
+goal_3: $ Q x ↔ Q x $ by bi_refl
+goal_4: $ P x → Q x ↔ sb y x (P y) → Q x $ by im_congr [goal_2, goal_3]
+goal_5: $ sb y x (Q y) ↔ Q x $ by sb_q
+goal_6: $ Q x ↔ sb y x (Q y) $ by bi_symm [goal_5]
+goal_7: $ sb y x (P y) ↔ sb y x (P y) $ by bi_refl
+goal_8: $ sb y x (P y) → Q x ↔ sb y x (P y) → sb y x (Q y) $ by im_congr [goal_7, goal_6]
+goal_9: $ P x → Q x ↔ sb y x (P y) → sb y x (Q y) $ by bi_trans [goal_4, goal_8]
+goal_10: $ sb y x (P y → Q y) ↔ sb y x (P y) → sb y x (Q y) $ by sb_im
+goal_11: $ sb y x (P y) → sb y x (Q y) ↔ sb y x (P y → Q y) $ by bi_symm [goal_10]
+goal_12: $ P x → Q x ↔ sb y x (P y → Q y) $ by bi_trans [goal_9, goal_11]
+goal_13: $ ∃ x (P x → Q x) ↔ ∃ x sb y x (P y → Q y) $ by ex_congr [goal_12]
+goal_14: $ ∃ y (P y → Q y) ↔ ∃ x sb y x (P y → Q y) $ by ex_alpha
+goal_15: $ ∃ x sb y x (P y → Q y) ↔ ∃ y (P y → Q y) $ by bi_symm [goal_14]
+goal_16: $ ∃ x (P x → Q x) ↔ ∃ y (P y → Q y) $ by bi_trans [goal_13, goal_15]
+goal: $ ∃ y ((P y) → (Q y)) $ by mpbi [goal_16, #1]
+
+-- goal: $ ∀ y ((¬ (P y)) ∧ ((Q y) ∨ q)) $ by conversion?
+rename_deep
+-----------
+goal_1: $ sb y x (P y) ↔ P x $ by sb_p
+goal_2: $ P x ↔ sb y x (P y) $ by bi_symm [goal_1]
+goal_3: $ ¬ P x ↔ ¬ sb y x (P y) $ by not_congr [goal_2]
+goal_4: $ sb y x (¬ P y) ↔ ¬ sb y x (P y) $ by sb_not
+goal_5: $ ¬ sb y x (P y) ↔ sb y x (¬ P y) $ by bi_symm [goal_4]
+goal_6: $ ¬ P x ↔ sb y x (¬ P y) $ by bi_trans [goal_3, goal_5]
+goal_7: $ Q x ∨ q ↔ Q x ∨ q $ by bi_refl
+goal_8: $ ¬ P x ∧ (Q x ∨ q) ↔ sb y x (¬ P y) ∧ (Q x ∨ q) $ by an_congr [goal_6, goal_7]
+goal_9: $ sb y x (Q y) ↔ Q x $ by sb_q
+goal_10: $ Q x ↔ sb y x (Q y) $ by bi_symm [goal_9]
+goal_11: $ q ↔ q $ by bi_refl
+goal_12: $ Q x ∨ q ↔ sb y x (Q y) ∨ q $ by or_congr [goal_10, goal_11]
+goal_13: $ sb y x q ↔ q $ by sb_const
+goal_14: $ q ↔ sb y x q $ by bi_symm [goal_13]
+goal_15: $ sb y x (Q y) ↔ sb y x (Q y) $ by bi_refl
+goal_16: $ sb y x (Q y) ∨ q ↔ sb y x (Q y) ∨ sb y x q $ by or_congr [goal_15, goal_14]
+goal_17: $ Q x ∨ q ↔ sb y x (Q y) ∨ sb y x q $ by bi_trans [goal_12, goal_16]
+goal_18: $ sb y x (Q y ∨ q) ↔ sb y x (Q y) ∨ sb y x q $ by sb_or
+goal_19: $ sb y x (Q y) ∨ sb y x q ↔ sb y x (Q y ∨ q) $ by bi_symm [goal_18]
+goal_20: $ Q x ∨ q ↔ sb y x (Q y ∨ q) $ by bi_trans [goal_17, goal_19]
+goal_21: $ sb y x (¬ P y) ↔ sb y x (¬ P y) $ by bi_refl
+goal_22: $ sb y x (¬ P y) ∧ (Q x ∨ q) ↔ sb y x (¬ P y) ∧ sb y x (Q y ∨ q) $ by an_congr [goal_21, goal_20]
+goal_23: $ ¬ P x ∧ (Q x ∨ q) ↔ sb y x (¬ P y) ∧ sb y x (Q y ∨ q) $ by bi_trans [goal_8, goal_22]
+goal_24: $ sb y x (¬ P y ∧ (Q y ∨ q)) ↔ sb y x (¬ P y) ∧ sb y x (Q y ∨ q) $ by sb_an
+goal_25: $ sb y x (¬ P y) ∧ sb y x (Q y ∨ q) ↔ sb y x (¬ P y ∧ (Q y ∨ q)) $ by bi_symm [goal_24]
+goal_26: $ ¬ P x ∧ (Q x ∨ q) ↔ sb y x (¬ P y ∧ (Q y ∨ q)) $ by bi_trans [goal_23, goal_25]
+goal_27: $ ∀ x (¬ P x ∧ (Q x ∨ q)) ↔ ∀ x sb y x (¬ P y ∧ (Q y ∨ q)) $ by all_congr [goal_26]
+goal_28: $ ∀ y (¬ P y ∧ (Q y ∨ q)) ↔ ∀ x sb y x (¬ P y ∧ (Q y ∨ q)) $ by all_alpha
+goal_29: $ ∀ x sb y x (¬ P y ∧ (Q y ∨ q)) ↔ ∀ y (¬ P y ∧ (Q y ∨ q)) $ by bi_symm [goal_28]
+goal_30: $ ∀ x (¬ P x ∧ (Q x ∨ q)) ↔ ∀ y (¬ P y ∧ (Q y ∨ q)) $ by bi_trans [goal_27, goal_29]
+goal: $ ∀ y ((¬ (P y)) ∧ ((Q y) ∨ q)) $ by mpbi [goal_30, #1]

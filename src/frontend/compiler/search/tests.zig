@@ -9056,3 +9056,136 @@ test "conversion? folds a bag-shaped definiens on the AC path" {
 
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
+
+// --- conversion? alpha ----------------------------------------------------
+
+const alpha_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort nat;
+    \\term iff (p q: wff): wff;
+    \\term all {x: nat} (p: wff x): wff;
+    \\term sb {x: nat} (a: nat) (p: wff x): wff;
+    \\term F (a: nat): wff;
+    \\term R (a b: nat): wff;
+    \\--| @relation wff iff iff_refl iff_trans iff_symm mpbi
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff) (h1: $ iff a b $) (h2: $ iff b c $): $ iff a c $;
+    \\axiom iff_symm (a b: wff) (h: $ iff a b $): $ iff b a $;
+    \\axiom mpbi (a b: wff) (h1: $ iff a b $) (h2: $ a $): $ b $;
+    \\--| @congr
+    \\axiom all_congr {x: nat} (p q: wff x) (h: $ iff p q $): $ iff (all x p) (all x q) $;
+    \\--| @conversion ltr
+    \\axiom sb_f_var {x: nat} (a: nat): $ iff (sb x a (F x)) (F a) $;
+    \\--| @conversion alpha
+    \\axiom all_alpha {x y: nat} (p: wff x): $ iff (all x p) (all y (sb x y p)) $;
+    \\
+;
+
+test "conversion? alpha proves a bound-variable renaming equation goal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = alpha_prelude ++
+        \\theorem alpha_eq {x y: nat}: $ iff (all x (F x)) (all y (F y)) $;
+    ;
+    const proof_src =
+        \\alpha_eq
+        \\----
+        \\goal: $ iff (all x (F x)) (all y (F y)) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    // The chain cites the alpha lemma and reduces its substitution image
+    // through the enrolled sb rule.
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "sb_f_var") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? alpha transports a goal from a renamed hypothesis" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = alpha_prelude ++
+        \\theorem alpha_use {x y: nat} (h: $ all x (F x) $): $ all y (F y) $;
+    ;
+    const proof_src =
+        \\alpha_use
+        \\----
+        \\goal: $ all y (F y) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "mpbi") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? alpha refuses a capturing rename" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Renaming x -> c in (R x c) captures the free c, and the reverse
+    // rename c -> x yields a different body (R x x). The goal must MISS,
+    // and because the alpha filter resolved every comparison exactly
+    // (no cyclic classes, bags, or budget trips), the saturated outcome
+    // IS a forced negative: merely enrolling alpha rules must not
+    // degrade the honest miss to budget_exhausted.
+    const capture_mm0 = alpha_prelude ++
+        \\theorem alpha_cap {x c: nat}: $ iff (all x (R x c)) (all c (R c c)) $;
+    ;
+    const proof_src =
+        \\alpha_cap
+        \\----
+        \\goal: $ iff (all x (R x c)) (all c (R c c)) $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, capture_mm0, proof_src, .{});
+    defer miss.deinit();
+    try std.testing.expect(miss.status != types.SearchStatus.found);
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+}
+
+test "conversion? alpha pairs a partner minted mid-saturation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Neither seeded side contains the alpha pair: `all x (F x)` only
+    // comes to exist when the passage law fires on the seeded lhs, and
+    // the scheduler must then pair it with the rhs's `all y (F y)` on a
+    // later iteration.
+    const mm0_src = alpha_prelude ++
+        \\term or (p q: wff): wff;
+        \\--| @congr
+        \\axiom or_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $):
+        \\  $ iff (or a c) (or b d) $;
+        \\--| @conversion ltr
+        \\axiom pass_al_or {x: nat} (p: wff x) (q: wff):
+        \\  $ iff (all x (or p q)) (or (all x p) q) $;
+        \\theorem alpha_mid {x y: nat} (q: wff):
+        \\  $ iff (all x (or (F x) q)) (or (all y (F y)) q) $;
+    ;
+    const proof_src =
+        \\alpha_mid
+        \\----
+        \\goal: $ iff (all x (or (F x) q)) (or (all y (F y)) q) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "pass_al_or") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}

@@ -1356,3 +1356,167 @@ test "pool-equation bag terms explain through a splice twin" {
     try testing.expect(saw_h1);
     try testing.expect(saw_h2);
 }
+
+// --- alpha scheduler ------------------------------------------------------
+
+const SB: u32 = 40;
+
+fn app3(
+    comptime term_id: u32,
+    comptime a: TemplateExpr,
+    comptime b: TemplateExpr,
+    comptime c: TemplateExpr,
+) TemplateExpr {
+    return .{ .app = .{ .term_id = term_id, .args = &.{ a, b, c } } };
+}
+
+// rel(ALL x p, ALL y (SB x y p)) with binder 0 = x (bound), 1 = p,
+// 2 = y (bound, target-only). Restriction: y must avoid p (the capture
+// side condition, derived from p's absent y-dep at enrollment).
+const ALPHA_RULE = Rule{
+    .rule_id = 0,
+    .reversed = false,
+    .match_side = app2(ALL, BINDER_A, BINDER_B),
+    .target_side = app2(ALL, BINDER_C, app3(SB, BINDER_A, BINDER_C, BINDER_B)),
+    .num_binders = 3,
+    .bound_slots = &.{ 0, 2 },
+    .restrictions = &.{.{ .bound_slot = 2, .term_slot = 1 }},
+    .alpha = true,
+    .alpha_old_slot = 0,
+    .alpha_new_slot = 2,
+};
+
+// rel(SB x a (F x), F a): reduces the substitution image the alpha fire
+// mints. Binder 0 = x (bound), 1 = a.
+const SB_F_RULE = Rule{
+    .rule_id = 1,
+    .reversed = false,
+    .match_side = app3(SB, BINDER_A, BINDER_B, .{ .app = .{
+        .term_id = F,
+        .args = &.{BINDER_A},
+    } }),
+    .target_side = .{ .app = .{ .term_id = F, .args = &.{BINDER_B} } },
+    .num_binders = 2,
+    .bound_slots = &.{0},
+};
+
+fn alphaTestGraph(arena: std.mem.Allocator) !EGraph {
+    var eg = EGraph.init(arena);
+    try eg.congr_heads.put(eg.allocator, ALL, {});
+    try eg.bound_masks.put(eg.allocator, ALL, 1);
+    try eg.bound_masks.put(eg.allocator, SB, 1);
+    return eg;
+}
+
+fn addUnary(eg: *EGraph, term_id: u32, child: Child) !EClassId {
+    return eg.add(.{ .app = .{ .term_id = term_id, .children = &.{child} } });
+}
+
+test "alpha scheduler merges renamed binder instances" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+
+    const x: LeafId = 1;
+    const z: LeafId = 2;
+    const xl = try eg.add(.{ .leaf = x });
+    const zl = try eg.add(.{ .leaf = z });
+    const fx = try addUnary(&eg, F, .{ .class = xl });
+    const fz = try addUnary(&eg, F, .{ .class = zl });
+    const all_x = try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = fx });
+    const all_z = try testAdd2(&eg, ALL, .{ .bound = z }, .{ .class = fz });
+    try testing.expect(!eg.sameClass(all_x, all_z));
+
+    const rules = [_]Rule{ ALPHA_RULE, SB_F_RULE };
+    const stats = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(stats.alpha_applied >= 1);
+    try testing.expect(eg.sameClass(all_x, all_z));
+}
+
+test "alpha scheduler never merges a capturing rename" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+
+    // ALL x (add x c) vs ALL c (add c c): renaming x -> c captures the
+    // free c, so the dep gate refuses that direction. The reverse fire
+    // (c -> x) is sound but mints ALL x ([c/x](add c c)), whose body is
+    // (add x x) once reduced — a different formula. Either way the two
+    // seeded instances must stay separate.
+    const x: LeafId = 1;
+    const c: LeafId = 2;
+    const xl = try eg.add(.{ .leaf = x });
+    const cl = try eg.add(.{ .leaf = c });
+    const add_xc = try testAdd2(&eg, ADD, .{ .class = xl }, .{ .class = cl });
+    const add_cc = try testAdd2(&eg, ADD, .{ .class = cl }, .{ .class = cl });
+    const all_x = try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = add_xc });
+    const all_c = try testAdd2(&eg, ALL, .{ .bound = c }, .{ .class = add_cc });
+
+    const rules = [_]Rule{ ALPHA_RULE, SB_F_RULE };
+    const stats = try eg.saturate(&rules, .{});
+    _ = stats;
+    try testing.expect(!eg.sameClass(all_x, all_c));
+}
+
+// rel(SB x a (ADD p q), ADD (SB x a p) (SB x a q)): distributes the
+// substitution image through ADD so a fired rename over an ADD body can
+// reduce to its partner. Binder 0 = x (bound), 1 = a, 2/3 = the operands.
+const SB_ADD_RULE = Rule{
+    .rule_id = 2,
+    .reversed = false,
+    .match_side = app3(SB, BINDER_A, BINDER_B, app2(ADD, BINDER_C, .{
+        .binder = 3,
+    })),
+    .target_side = app2(
+        ADD,
+        app3(SB, BINDER_A, BINDER_B, BINDER_C),
+        app3(SB, BINDER_A, BINDER_B, .{ .binder = 3 }),
+    ),
+    .num_binders = 4,
+    .bound_slots = &.{0},
+};
+
+test "alpha rename memo is atom-sensitive (decoy pair cannot poison a later valid pair)" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+
+    // The decoy ALL y (add (F w) (F x)) is inserted FIRST, so the pair
+    // (decoy, ALL w (add (F w) (F w))) is compared before the valid
+    // pair. Walking the decoy pair's second operand compares body
+    // classes (F x, F w) under y -> w — false. The valid pair
+    // (ALL x (add (F x) (F x)), ALL w (add (F w) (F w))) then compares
+    // the SAME class pair under x -> w, which is true; an atom-blind
+    // memo key inherited the decoy's false verdict and silently killed
+    // the fire. The decoy corresponds with neither instance (its free
+    // x resp. free w blocks every rename), so no alternate route can
+    // mask the miss.
+    const x: LeafId = 1;
+    const y: LeafId = 2;
+    const w: LeafId = 3;
+    const xl = try eg.add(.{ .leaf = x });
+    const wl = try eg.add(.{ .leaf = w });
+    const fx = try addUnary(&eg, F, .{ .class = xl });
+    const fw = try addUnary(&eg, F, .{ .class = wl });
+    const decoy_body =
+        try testAdd2(&eg, ADD, .{ .class = fw }, .{ .class = fx });
+    const body_x =
+        try testAdd2(&eg, ADD, .{ .class = fx }, .{ .class = fx });
+    const body_w =
+        try testAdd2(&eg, ADD, .{ .class = fw }, .{ .class = fw });
+    const decoy =
+        try testAdd2(&eg, ALL, .{ .bound = y }, .{ .class = decoy_body });
+    const all_x =
+        try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = body_x });
+    const all_w =
+        try testAdd2(&eg, ALL, .{ .bound = w }, .{ .class = body_w });
+
+    const rules = [_]Rule{ ALPHA_RULE, SB_F_RULE, SB_ADD_RULE };
+    const stats = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(eg.sameClass(all_x, all_w));
+    try testing.expect(!eg.sameClass(decoy, all_x));
+    try testing.expect(!eg.sameClass(decoy, all_w));
+}

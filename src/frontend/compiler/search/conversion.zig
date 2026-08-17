@@ -53,7 +53,7 @@ fn buildAcCerts(
     };
     var partial: std.AutoArrayHashMapUnmanaged(u32, Partial) = .{};
     for (context.registry.conversionRules()) |conv| {
-        if (conv.role == .none) continue;
+        if (conv.role == .none or conv.role == .alpha) continue;
         const head = conv.head_term_id orelse continue;
         const gop = try partial.getOrPut(work, head);
         if (!gop.found_existing) gop.value_ptr.* = .{};
@@ -65,7 +65,7 @@ fn buildAcCerts(
                 gop.value_ptr.assoc_forward = conv.lhs == .app and
                     conv.lhs.app.args[0] == .app;
             },
-            .none => unreachable,
+            .none, .alpha => unreachable,
         }
     }
     var certs: AcCertMap = .{};
@@ -164,7 +164,7 @@ pub fn run(
     // matches the verifier's disjointness conditions can accept.
     var rules: std.ArrayListUnmanaged(egraph.Rule) = .{};
     for (context.registry.conversionRules()) |conv| {
-        if (conv.role != .none) {
+        if (conv.role != .none and conv.role != .alpha) {
             const head = conv.head_term_id orelse continue;
             if (ac_certs.contains(head)) continue;
         }
@@ -185,6 +185,26 @@ pub fn run(
                 }
             }
             bound_ordinal += 1;
+        }
+        // Alpha rules enroll their match orientation only, flagged for
+        // the pairing scheduler (the general loop skips them: their
+        // target uses the fresh binder the match side never binds). The
+        // capture side condition is exactly the restriction row derived
+        // above from the fresh binder's absent dep bit.
+        if (conv.role == .alpha) {
+            try rules.append(work, .{
+                .rule_id = conv.rule_id,
+                .reversed = false,
+                .match_side = conv.lhs,
+                .target_side = conv.rhs,
+                .num_binders = conv.num_binders,
+                .bound_slots = bound_slots.items,
+                .restrictions = restrictions.items,
+                .alpha = true,
+                .alpha_old_slot = conv.alpha_old_slot,
+                .alpha_new_slot = conv.alpha_new_slot,
+            });
+            continue;
         }
         if (conv.ltr) try rules.append(work, .{
             .rule_id = conv.rule_id,
@@ -304,7 +324,7 @@ pub fn run(
     {
         var partial: std.AutoArrayHashMapUnmanaged(u32, void) = .{};
         for (context.registry.conversionRules()) |conv| {
-            if (conv.role == .none) continue;
+            if (conv.role == .none or conv.role == .alpha) continue;
             const head = conv.head_term_id orelse continue;
             if (ac_certs.contains(head)) continue;
             try partial.put(work, head, {});
@@ -496,6 +516,7 @@ pub fn run(
             result.stats.ac_match_capped += slice.ac_match_capped;
             result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
             result.stats.fold_applied += slice.fold_applied;
+            result.stats.alpha_applied += slice.alpha_applied;
             if (slice.outcome != .iteration_capped) {
                 result.stats.outcome = slice.outcome;
                 break;

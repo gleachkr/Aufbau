@@ -385,6 +385,37 @@ A registered `@relation` term itself cannot take a role certificate (a
 hard error): local equations cite `rel(lhs, rhs)` applications directly,
 and an absorbed relation would intern them as multisets instead.
 
+A third role token, `alpha`, enrolls an alpha-renaming lemma:
+
+```
+--| @conversion alpha
+axiom all_alpha {x y: nat} (p: wff x): $ (all x p) <-> (all y (sb x y p)) $;
+```
+
+The fresh binder `y` appears only on the right, so the lemma cannot
+enroll as an ordinary rule (the match side must bind every binder the
+target uses). Instead a pairing scheduler compares same-head binder
+instances already in the egraph and, when one looks like the other with a
+single bound atom renamed, fires the lemma with `y` instantiated to the
+partner's atom — a literal theorem instance; the enrolled substitution
+rules and gated congruence close the remaining gap. Nothing is ever
+invented: `y` always comes from an existing instance, so alpha
+enrollment cannot flood the graph the way blind saturation of a fresh
+binder would. The capture side condition is the lemma's own dependency
+restriction (`p` independent of `y`), enforced by the usual dep gate.
+Requirements: both conclusion sides apply one head, with exactly one
+argument position — a bound argument position of that head — holding two
+different bound binders of the same sort, and the right-hand binder
+absent from the left side. Alpha closure is only as complete as the
+enrolled substitution calculus — if the `sb` image cannot reduce, the
+instances simply never merge. The scheduler's firing filter is exact in
+the common case; when a pass actually resolves a comparison
+approximately (cyclic classes, multiset alignment under an AC head, or a
+budget cap), a saturated miss is reported as `budget_exhausted` rather
+than a forced negative. Single renames only: instances differing in two
+nested binders at once are out of scope (see
+`docs/design_notes/conversion_alpha.md` for the planned nested upgrade).
+
 ### Requirements
 
 Checked at annotation time (unlike `@rewrite`, malformed `@conversion`

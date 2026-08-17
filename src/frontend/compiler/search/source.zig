@@ -349,10 +349,15 @@ pub fn suggestionsAtSourceOffset(
         } else {
             conv_suggestions.status = switch (conv_result.stats.outcome) {
                 // A saturated miss is a forced negative ONLY without
-                // `@compute` rules: the directed fold reduces each redex
-                // once in one order, so its fixpoint never certifies that
-                // no chain exists.
-                .saturated => if (conv_result.compute_rule_count != 0)
+                // `@compute` rules (the directed fold reduces each redex
+                // once in one order, so its fixpoint certifies nothing)
+                // and with an exact alpha pass (the pairing filter is
+                // approximate only when it actually resolved a comparison
+                // conservatively — `alpha_filter_skips` counts those in
+                // the final pass; merely enrolling an alpha rule does not
+                // weaken a miss).
+                .saturated => if (conv_result.compute_rule_count != 0 or
+                    conv_result.stats.alpha_filter_skips != 0)
                     types.SearchStatus.budget_exhausted
                 else
                     types.SearchStatus.miss,
@@ -568,6 +573,17 @@ fn buildConversionDetail(
                         "orders were never explored, so this is NOT a " ++
                         "forced negative.",
                     .{result.compute_rule_count},
+                );
+            }
+            if (result.stats.alpha_filter_skips != 0) {
+                try w.print(
+                    " The alpha pairing scheduler resolved {d} candidate " ++
+                        "comparison(s) approximately (cyclic classes, " ++
+                        "greedy bag alignment, or truncated instance " ++
+                        "enumeration) — some renaming opportunities may " ++
+                        "have been skipped, so this is NOT a forced " ++
+                        "negative.",
+                    .{result.stats.alpha_filter_skips},
                 );
             }
             if (result.stats.ac_match_capped != 0) {
