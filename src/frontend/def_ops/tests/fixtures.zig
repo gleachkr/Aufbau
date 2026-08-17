@@ -731,6 +731,24 @@ pub const SemanticWrappedAcuiDefFixture = struct {
                 pre_ctx_term_id,
                 &[_]ExprId{u},
             );
+        // All interning must happen BEFORE the return literal below: the
+        // literal copies `theorem` by value field-by-field, so an initializer
+        // that interns into the local `theorem` after that copy produces an
+        // ExprId beyond the copied interner's node range (Debug: index trap;
+        // ReleaseFast: accidental read through the shared buffer).
+        const pre_ctx2_term_id = env.term_names.get("pre_ctx2") orelse {
+            return error.MissingTerm;
+        };
+        const pre_ctx2_expr = if (full_acui)
+            try theorem.interner.internApp(
+                pre_ctx2_term_id,
+                &[_]ExprId{ u, r.? },
+            )
+        else
+            try theorem.interner.internApp(
+                pre_ctx2_term_id,
+                &[_]ExprId{u},
+            );
 
         return .{
             .arena = arena,
@@ -738,22 +756,7 @@ pub const SemanticWrappedAcuiDefFixture = struct {
             .registry = registry,
             .theorem = theorem,
             .pre_ctx_expr = pre_ctx_expr,
-            .pre_ctx2_expr = blk: {
-                const pre_ctx2_term_id =
-                    env.term_names.get("pre_ctx2") orelse {
-                        return error.MissingTerm;
-                    };
-                break :blk if (full_acui)
-                    try theorem.interner.internApp(
-                        pre_ctx2_term_id,
-                        &[_]ExprId{ u, r.? },
-                    )
-                else
-                    try theorem.interner.internApp(
-                        pre_ctx2_term_id,
-                        &[_]ExprId{u},
-                    );
-            },
+            .pre_ctx2_expr = pre_ctx2_expr,
             .target_expr = target_expr,
             .expected_witness = expected_witness,
         };
