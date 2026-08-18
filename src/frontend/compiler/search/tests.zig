@@ -9155,6 +9155,39 @@ test "conversion? alpha refuses a capturing rename" {
     try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
 }
 
+test "conversion? alpha approximate filter degrades a saturated miss to budget_exhausted" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The pool equations make p and q CYCLIC classes (p ~ an p p). The
+    // alpha pair (all x (an (F x) p), all y (an (F y) q)) then walks
+    // renamedEq(p, q) into itself, and the cycle-conservative in-progress
+    // memo read resolves the comparison approximately. The goal still
+    // misses (p and q never correspond), but this saturated miss is NOT a
+    // forced negative — the other half of the precise-honesty gate: with
+    // alpha_filter_skips != 0 the status must be budget_exhausted, never
+    // a bare miss.
+    const mm0_src = alpha_prelude ++
+        \\term an (p q: wff): wff;
+        \\theorem alpha_cyc {x y: nat} (p q: wff)
+        \\  (h1: $ iff p (an p p) $) (h2: $ iff q (an q q) $):
+        \\  $ iff (all x (an (F x) p)) (all y (an (F y) q)) $;
+    ;
+    const proof_src =
+        \\alpha_cyc
+        \\----
+        \\goal: $ iff (all x (an (F x) p)) (all y (an (F y) q)) $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer miss.deinit();
+    try std.testing.expect(miss.status != types.SearchStatus.found);
+    try std.testing.expectEqual(
+        types.SearchStatus.budget_exhausted,
+        miss.status,
+    );
+}
+
 test "conversion? alpha pairs a partner minted mid-saturation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

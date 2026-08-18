@@ -1520,3 +1520,90 @@ test "alpha rename memo is atom-sensitive (decoy pair cannot poison a later vali
     try testing.expect(!eg.sameClass(decoy, all_x));
     try testing.expect(!eg.sameClass(decoy, all_w));
 }
+
+test "alpha scan is incremental: an unchanged egraph re-saturates without pair comparisons" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+
+    const x: LeafId = 1;
+    const z: LeafId = 2;
+    const xl = try eg.add(.{ .leaf = x });
+    const zl = try eg.add(.{ .leaf = z });
+    const fx = try addUnary(&eg, F, .{ .class = xl });
+    const fz = try addUnary(&eg, F, .{ .class = zl });
+    const all_x = try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = fx });
+    const all_z = try testAdd2(&eg, ALL, .{ .bound = z }, .{ .class = fz });
+
+    const rules = [_]Rule{ ALPHA_RULE, SB_F_RULE };
+    const first = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, first.outcome);
+    try testing.expect(first.alpha_pairs_compared > 0);
+    try testing.expect(eg.sameClass(all_x, all_z));
+
+    // Nothing changed: every pair verdict is answered by the settled
+    // cache, so a repeat saturation compares zero pairs.
+    const second = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, second.outcome);
+    try testing.expectEqual(@as(usize, 0), second.alpha_pairs_compared);
+
+    // A later-inserted instance is still discovered against the settled
+    // population and joined — the watermark scan is not a one-shot.
+    const w: LeafId = 3;
+    const wl = try eg.add(.{ .leaf = w });
+    const fw = try addUnary(&eg, F, .{ .class = wl });
+    const all_w = try testAdd2(&eg, ALL, .{ .bound = w }, .{ .class = fw });
+    const third = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, third.outcome);
+    try testing.expect(third.alpha_pairs_compared > 0);
+    try testing.expect(eg.sameClass(all_w, all_x));
+}
+
+// rel(F a, ADD a a): a head-distinct ordinary rewrite the fairness test
+// below can watch make progress. Binder 0 = a.
+const F_DOUBLE_RULE = Rule{
+    .rule_id = 3,
+    .reversed = false,
+    .match_side = .{ .app = .{ .term_id = F, .args = &.{BINDER_A} } },
+    .target_side = app2(ADD, BINDER_A, BINDER_A),
+    .num_binders = 1,
+};
+
+test "alpha pairing draws from its own pool: ordinary rules fire under heavy alpha load" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+
+    // Ordinary work, seeded FIRST so the node-ordered rule loop reaches
+    // it inside its own budget: F a0 must join ADD a0 a0.
+    const a0: LeafId = 100;
+    const a0l = try eg.add(.{ .leaf = a0 });
+    const fa0 = try addUnary(&eg, F, .{ .class = a0l });
+    const add_a0 = try testAdd2(&eg, ADD, .{ .class = a0l }, .{ .class = a0l });
+    try testing.expect(!eg.sameClass(fa0, add_a0));
+
+    // Fourteen binder instances whose bodies never correspond (each pairs
+    // a bound xi with a distinct free ci): the pairing scan alone
+    // overruns a 40-step iteration budget every pass and never makes
+    // progress. The rewrite above must fire anyway, because the alpha
+    // scheduler draws from its OWN copy of the step pool.
+    var i: u32 = 0;
+    while (i < 14) : (i += 1) {
+        const xi: LeafId = @intCast(1 + i * 2);
+        const ci: LeafId = @intCast(2 + i * 2);
+        const xil = try eg.add(.{ .leaf = xi });
+        const cil = try eg.add(.{ .leaf = ci });
+        const fxi = try addUnary(&eg, F, .{ .class = xil });
+        const fci = try addUnary(&eg, F, .{ .class = cil });
+        const body =
+            try testAdd2(&eg, ADD, .{ .class = fxi }, .{ .class = fci });
+        _ = try testAdd2(&eg, ALL, .{ .bound = xi }, .{ .class = body });
+    }
+
+    const rules = [_]Rule{ ALPHA_RULE, F_DOUBLE_RULE };
+    const stats = try eg.saturate(&rules, .{ .ac_iter_step_budget = 40 });
+    // The alpha pool tripped (counted like every budget trip)...
+    try testing.expect(stats.ac_match_capped > 0);
+    // ...and the ordinary loop still got its whole budget.
+    try testing.expect(eg.sameClass(fa0, add_a0));
+}

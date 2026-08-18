@@ -517,6 +517,11 @@ pub fn run(
             result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
             result.stats.fold_applied += slice.fold_applied;
             result.stats.alpha_applied += slice.alpha_applied;
+            result.stats.alpha_pairs_compared += slice.alpha_pairs_compared;
+            // A final-pass property, not a running total: the LAST
+            // call's collection pass says whether the filter was exact
+            // at the state the miss report describes.
+            result.stats.alpha_filter_skips = slice.alpha_filter_skips;
             if (slice.outcome != .iteration_capped) {
                 result.stats.outcome = slice.outcome;
                 break;

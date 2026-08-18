@@ -290,13 +290,19 @@ pub const SaturateStats = struct {
     /// Alpha pairing-filter comparisons the run's FINAL collection pass
     /// resolved approximately (cycle-conservative memo reads, greedy bag
     /// alignment failures, truncated instance enumeration). Earlier
-    /// passes don't count: collection is deterministic and re-runs in
-    /// full each iteration, so a saturated fixpoint's final pass speaks
-    /// for the whole run. Zero on a saturated outcome means the alpha
-    /// filter was exact and the miss is a forced negative (within the
-    /// enrolled rule closure); nonzero means renaming opportunities may
-    /// have been skipped.
+    /// passes don't count: an approximate or capped pass never commits
+    /// to the settled cache, so its whole delta is re-derived — with
+    /// fresh budget — by the next pass, and a saturated fixpoint's final
+    /// pass (its own comparisons plus the exact committed verdicts it
+    /// reuses) speaks for the whole run. Zero on a saturated outcome
+    /// means the alpha filter was exact and the miss is a forced
+    /// negative (within the enrolled rule closure); nonzero means
+    /// renaming opportunities may have been skipped.
     alpha_filter_skips: usize = 0,
+    /// Alpha instance-pair comparisons this run. Pairs whose verdict the
+    /// settled cache already holds are skipped and never count, so on an
+    /// unchanged egraph a repeat saturation reports zero.
+    alpha_pairs_compared: usize = 0,
 };
 
 pub const SaturateOptions = struct {
@@ -556,6 +562,25 @@ pub const EGraph = struct {
     /// re-collects the same no-op effects, caps, and starves the matches
     /// past the cut — a livelock at a node fixpoint that never saturates.
     match_dedup: MatchDedup = .{},
+    /// Incremental alpha scan state: per alpha rule slot, the instances
+    /// discovered by the last COMMITTED collection pass (substs owned by
+    /// the egraph allocator, node-ordered). A pass commits only when it
+    /// ran to completion with zero approximate resolutions, so committed
+    /// pair verdicts are exact; they stay valid until structure reachable
+    /// downward from an instance's class changes, which the pass detects
+    /// via the union-log delta (see `collectAlphaMatches`). The
+    /// watermarks name the node / union-log prefixes the last committed
+    /// pass accounted for.
+    alpha_settled: std.AutoHashMapUnmanaged(
+        u32,
+        std.ArrayListUnmanaged(AlphaInstance),
+    ) = .{},
+    alpha_node_watermark: usize = 0,
+    alpha_union_watermark: usize = 0,
+    /// Total alpha instance-pair comparisons (monotone; `saturate`
+    /// reports deltas). Clean pairs answered by the settled cache never
+    /// count — the measure of what incrementality saves.
+    alpha_pairs_compared_total: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) EGraph {
         return .{ .allocator = allocator };
@@ -1139,6 +1164,7 @@ pub const EGraph = struct {
         var stats = SaturateStats{ .outcome = .iteration_capped };
         const capped_start = self.ac_match_capped_total;
         const cyclic_start = self.ac_cyclic_dropped_total;
+        const pairs_start = self.alpha_pairs_compared_total;
         var has_compute = false;
         var has_alpha = false;
         for (rules) |rule| {
@@ -1161,7 +1187,7 @@ pub const EGraph = struct {
         while (stats.iterations < opts.max_iterations) {
             if (self.budget_fixpoint) {
                 stats.outcome = .budget_fixpoint;
-                return self.finishStats(stats, capped_start, cyclic_start);
+                return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
             }
             stats.iterations += 1;
             dedup.iter.clearRetainingCapacity();
@@ -1184,7 +1210,7 @@ pub const EGraph = struct {
                 if (fold.node_capped) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
-                    return self.finishStats(stats, capped_start, cyclic_start);
+                    return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
                 }
                 if (fold.capped) iter_capped = true;
                 if (fold.changed) changed = true;
@@ -1282,7 +1308,7 @@ pub const EGraph = struct {
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
-                    return self.finishStats(stats, capped_start, cyclic_start);
+                    return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
                 }
                 // Per-iteration retained-match budget: on a dense frontier
                 // (AC bags, or AC-style laws enrolled as plain tree
@@ -1314,7 +1340,7 @@ pub const EGraph = struct {
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
                     stats.outcome = .node_capped;
-                    return self.finishStats(stats, capped_start, cyclic_start);
+                    return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
                 }
             }
 
@@ -1324,7 +1350,7 @@ pub const EGraph = struct {
             // matches may remain even when the collected ones all no-oped.
             if (!changed and !grew and !congr_changed and !iter_capped) {
                 stats.outcome = .saturated;
-                return self.finishStats(stats, capped_start, cyclic_start);
+                return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
             }
             // Deterministic no-progress under a budget cap: nothing this
             // iteration changed — no union, no node, no congruence repair,
@@ -1337,10 +1363,10 @@ pub const EGraph = struct {
             {
                 self.budget_fixpoint = true;
                 stats.outcome = .budget_fixpoint;
-                return self.finishStats(stats, capped_start, cyclic_start);
+                return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
             }
         }
-        return self.finishStats(stats, capped_start, cyclic_start);
+        return self.finishStats(stats, capped_start, cyclic_start, pairs_start);
     }
 
     fn finishStats(
@@ -1348,11 +1374,14 @@ pub const EGraph = struct {
         stats: SaturateStats,
         capped_start: usize,
         cyclic_start: usize,
+        pairs_start: usize,
     ) SaturateStats {
         var out = stats;
         out.ac_match_capped = self.ac_match_capped_total - capped_start;
         out.ac_cyclic_dropped = self.ac_cyclic_dropped_total - cyclic_start;
         out.alpha_filter_skips = self.alpha_filter_skips;
+        out.alpha_pairs_compared =
+            self.alpha_pairs_compared_total - pairs_start;
         return out;
     }
 
@@ -2324,6 +2353,25 @@ pub const EGraph = struct {
     /// resolutions are counted in `alpha_filter_skips` (reset here, so
     /// the count always describes the latest pass): a saturated miss is
     /// a forced negative only when the final pass counted none.
+    ///
+    /// The scan is INCREMENTAL across passes. Every semantic change to
+    /// the egraph flows through the union log (nodes are append-only and
+    /// a new node starts its own class), so a pass first derives the set
+    /// of DIRTY roots — classes whose downward-reachable structure
+    /// changed since the last committed pass — by seeding from the
+    /// union-log delta and propagating upward through node children to a
+    /// fixpoint. A committed verdict depends only on structure reachable
+    /// downward from the pair's instances (correspondence walk, dep
+    /// gate, and `classAvoids` alike), so instances on clean classes
+    /// keep their committed verdicts: only new/dirty nodes are
+    /// re-solved, and only pairs with a fresh side are re-compared.
+    /// Verdict-stable skipped pairs also need no retry for firing: an
+    /// applied pair is in the dedup ledger, and a dep-deferred pair's
+    /// gate can only open when its structure changes, which dirties it.
+    /// A pass COMMITS (advances the watermarks and the settled cache)
+    /// only when it ran to completion with zero approximate resolutions;
+    /// otherwise the next pass re-derives the same delta with fresh
+    /// budget — exactly the retry the full rescan used to provide.
     fn collectAlphaMatches(
         self: *EGraph,
         rules: []const Rule,
@@ -2336,12 +2384,36 @@ pub const EGraph = struct {
     ) !void {
         var avoid_cache: AvoidCache = .{};
         self.alpha_filter_skips = 0;
-        for (rules, 0..) |rule, rule_slot| {
+        const node_mark = self.nodes.items.len;
+        const union_mark = self.unions.items.len;
+        const dirty = try self.collectDirtyRoots(scratch);
+
+        // Scratch entry: an instance plus whether this pass solved it
+        // (fresh) or the settled cache supplied it (clean).
+        const Entry = struct { inst: AlphaInstance, fresh: bool };
+        const Pending = struct {
+            rule_slot: u32,
+            entries: []const Entry,
+        };
+        var pending: std.ArrayListUnmanaged(Pending) = .{};
+        var complete = true;
+
+        collect: for (rules, 0..) |rule, rule_slot| {
             if (!rule.alpha) continue;
             if (rule.match_side != .app) continue;
             const pattern = rule.match_side.app;
 
-            var instances: std.ArrayListUnmanaged(AlphaInstance) = .{};
+            // Settled instances on clean classes keep their verdicts;
+            // ones on dirty classes are superseded by the re-solve below.
+            var clean: std.ArrayListUnmanaged(AlphaInstance) = .{};
+            if (self.alpha_settled.get(@intCast(rule_slot))) |cached| {
+                for (cached.items) |inst| {
+                    if (dirty.contains(self.find(inst.root))) continue;
+                    try clean.append(scratch, inst);
+                }
+            }
+
+            var fresh: std.ArrayListUnmanaged(AlphaInstance) = .{};
             for (self.nodes.items, 0..) |stored, node_id| {
                 const app = switch (stored.node) {
                     .app => |a| a,
@@ -2349,7 +2421,13 @@ pub const EGraph = struct {
                 };
                 if (app.term_id != pattern.term_id) continue;
                 if (app.children.len != pattern.args.len) continue;
-                if (!self.chargeAlphaStep(iter_steps, iter_capped)) return;
+                const root = self.find(stored.class);
+                if (node_id < self.alpha_node_watermark and
+                    !dirty.contains(root)) continue;
+                if (!self.chargeAlphaStep(iter_steps, iter_capped)) {
+                    complete = false;
+                    break :collect;
+                }
                 const pairs = try scratch.alloc(
                     PatternPair,
                     pattern.args.len,
@@ -2381,23 +2459,62 @@ pub const EGraph = struct {
                 for (solutions.items) |sol| {
                     const binding = sol[rule.alpha_old_slot] orelse continue;
                     if (binding != .bound) continue;
-                    try instances.append(scratch, .{
+                    try fresh.append(scratch, .{
                         .node = @intCast(node_id),
-                        .root = self.find(stored.class),
+                        .root = root,
                         .subst = sol,
                         .atom = binding.bound,
                     });
                 }
             }
 
+            // Merge clean and fresh by node id (both are node-ordered)
+            // so pair enumeration order matches the full rescan's.
+            var entries = try scratch.alloc(
+                Entry,
+                clean.items.len + fresh.items.len,
+            );
+            {
+                var ci: usize = 0;
+                var fi: usize = 0;
+                for (entries) |*slot| {
+                    const take_clean = fi >= fresh.items.len or
+                        (ci < clean.items.len and
+                            clean.items[ci].node < fresh.items[fi].node);
+                    if (take_clean) {
+                        slot.* = .{ .inst = clean.items[ci], .fresh = false };
+                        ci += 1;
+                    } else {
+                        slot.* = .{ .inst = fresh.items[fi], .fresh = true };
+                        fi += 1;
+                    }
+                }
+            }
+
+            if (fresh.items.len == 0) {
+                // No fresh side means no comparable pair; keep the
+                // settled entries for the commit below.
+                try pending.append(scratch, .{
+                    .rule_slot = @intCast(rule_slot),
+                    .entries = entries,
+                });
+                continue;
+            }
             var memo: RenameMemo = .{};
-            for (instances.items, 0..) |a, i| {
-                for (instances.items[i + 1 ..]) |b| {
+            for (entries, 0..) |ea, i| {
+                for (entries[i + 1 ..]) |eb| {
+                    // Both sides clean: the verdict was committed by an
+                    // exact pass and nothing it depends on changed.
+                    if (!ea.fresh and !eb.fresh) continue;
+                    const a = ea.inst;
+                    const b = eb.inst;
                     if (a.atom == b.atom) continue;
                     if (a.root == b.root) continue;
                     if (!self.chargeAlphaStep(iter_steps, iter_capped)) {
-                        return;
+                        complete = false;
+                        break :collect;
                     }
+                    self.alpha_pairs_compared_total += 1;
                     if (!try self.alphaInstancesCorrespond(
                         rule,
                         a,
@@ -2420,11 +2537,90 @@ pub const EGraph = struct {
                     if (matches.items.len >= opts.ac_iter_match_budget) {
                         iter_capped.* = true;
                         self.ac_match_capped_total += 1;
-                        return;
+                        complete = false;
+                        break :collect;
                     }
                 }
             }
+
+            try pending.append(scratch, .{
+                .rule_slot = @intCast(rule_slot),
+                .entries = entries,
+            });
         }
+
+        if (!complete or self.alpha_filter_skips != 0) return;
+        // Commit: with the watermarks advanced, the merged entry lists
+        // become the settled caches. Clean substs already live on the
+        // egraph allocator; fresh ones move off the pass scratch here.
+        for (pending.items) |p| {
+            const gop = try self.alpha_settled.getOrPut(
+                self.allocator,
+                p.rule_slot,
+            );
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            const list = gop.value_ptr;
+            list.clearRetainingCapacity();
+            for (p.entries) |entry| {
+                var inst = entry.inst;
+                if (entry.fresh) {
+                    inst.subst = try self.allocator.dupe(?Child, inst.subst);
+                }
+                try list.append(self.allocator, inst);
+            }
+        }
+        self.alpha_node_watermark = node_mark;
+        self.alpha_union_watermark = union_mark;
+    }
+
+    /// Roots whose downward-reachable structure changed since
+    /// `alpha_union_watermark`: seeded from the union-log delta (every
+    /// class-content change is a union; new nodes start fresh classes),
+    /// then propagated upward through node children until a fixpoint.
+    /// Like `rebuild`, this is a repeated full-node scan — each round
+    /// marks at least one new root or stops, and rounds are bounded by
+    /// the term dag's height.
+    fn collectDirtyRoots(
+        self: *EGraph,
+        scratch: std.mem.Allocator,
+    ) !std.AutoHashMapUnmanaged(EClassId, void) {
+        var dirty: std.AutoHashMapUnmanaged(EClassId, void) = .{};
+        for (self.unions.items[self.alpha_union_watermark..]) |edge| {
+            try dirty.put(scratch, self.find(edge.a), {});
+        }
+        if (dirty.count() == 0) return dirty;
+        var spread = true;
+        while (spread) {
+            spread = false;
+            for (self.nodes.items) |stored| {
+                const root = self.find(stored.class);
+                if (dirty.contains(root)) continue;
+                const touches = switch (stored.node) {
+                    .leaf => false,
+                    .app => |app| blk: {
+                        for (app.children) |child| switch (child) {
+                            .class => |c| if (dirty.contains(
+                                self.find(c),
+                            )) break :blk true,
+                            .bound => {},
+                        };
+                        break :blk false;
+                    },
+                    .bag => |bag| blk: {
+                        for (bag.members) |member| {
+                            if (dirty.contains(self.find(member))) {
+                                break :blk true;
+                            }
+                        }
+                        break :blk false;
+                    },
+                };
+                if (!touches) continue;
+                try dirty.put(scratch, root, {});
+                spread = true;
+            }
+        }
+        return dirty;
     }
 
     /// Charge one unit of the shared iteration step budget; a trip caps
