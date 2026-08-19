@@ -1607,3 +1607,266 @@ test "alpha pairing draws from its own pool: ordinary rules fire under heavy alp
     // ...and the ordinary loop still got its whole budget.
     try testing.expect(eg.sameClass(fa0, add_a0));
 }
+
+// rel(SB x a (ALL y p), ALL y (SB x a p)): pushes a substitution image
+// through an inner binder — the commutation prerequisite for nested
+// renames. The dep gate's distinctness half refuses x = y (where the
+// substitution must instead stop at the shadowing binder), and the
+// restrictions mirror the MM0 axiom's dependency rows: a regular `a`
+// may be neither binder. Binder 0 = x (bound), 1 = a, 2 = y (bound),
+// 3 = p.
+const SB_ALL_RULE = Rule{
+    .rule_id = 4,
+    .reversed = false,
+    .match_side = app3(SB, BINDER_A, BINDER_B, app2(ALL, BINDER_C, .{
+        .binder = 3,
+    })),
+    .target_side = app2(ALL, BINDER_C, app3(SB, BINDER_A, BINDER_B, .{
+        .binder = 3,
+    })),
+    .num_binders = 4,
+    .bound_slots = &.{ 0, 2 },
+    .restrictions = &.{
+        .{ .bound_slot = 0, .term_slot = 1 },
+        .{ .bound_slot = 2, .term_slot = 1 },
+    },
+};
+
+// rel(SB x a p, p) for x-avoiding p: erases a vacuous substitution.
+// Binder 0 = x (bound), 1 = a, 2 = p; the restriction row IS the rule
+// (without it every substitution image would collapse unconditionally).
+const SB_CONST_RULE = Rule{
+    .rule_id = 5,
+    .reversed = false,
+    .match_side = app3(SB, BINDER_A, BINDER_B, BINDER_C),
+    .target_side = BINDER_C,
+    .num_binders = 3,
+    .bound_slots = &.{0},
+    .restrictions = &.{.{ .bound_slot = 0, .term_slot = 2 }},
+};
+
+const nested_alpha_rules = [_]Rule{
+    ALPHA_RULE, SB_F_RULE, SB_ADD_RULE, SB_ALL_RULE, SB_CONST_RULE,
+};
+
+/// ALL a (ALL b (ADD (F a) (F b))): the standard two-level nested body,
+/// referencing the outer and the inner binder side by side.
+fn addNestedPair(eg: *EGraph, outer: LeafId, inner: LeafId) !EClassId {
+    const ol = try eg.add(.{ .leaf = outer });
+    const il = try eg.add(.{ .leaf = inner });
+    const fo = try addUnary(eg, F, .{ .class = ol });
+    const fi = try addUnary(eg, F, .{ .class = il });
+    const body = try testAdd2(eg, ADD, .{ .class = fo }, .{ .class = fi });
+    const in_all = try testAdd2(eg, ALL, .{ .bound = inner }, .{
+        .class = body,
+    });
+    return testAdd2(eg, ALL, .{ .bound = outer }, .{ .class = in_all });
+}
+
+test "alpha comparator renames two nested binders outside-in" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+
+    // ALL x (ALL y (ADD (F x) (F y))) vs ALL z (ALL w (ADD (F z) (F w))):
+    // the body references BOTH binders, so no single rename closes the
+    // pair. The comparator accepts it under the environment [x→z, y→w];
+    // only the OUTER lemma instance fires, commutation pushes the image
+    // through the inner binder, and a later pass pairs the materialized
+    // ALL y (ADD (F z) (F y)) with ALL w (ADD (F z) (F w)) as an
+    // ordinary depth-one candidate.
+    const lhs = try addNestedPair(&eg, 1, 2);
+    const rhs = try addNestedPair(&eg, 3, 4);
+    try testing.expect(!eg.sameClass(lhs, rhs));
+
+    const stats = try eg.saturate(&nested_alpha_rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(stats.alpha_applied >= 2);
+    try testing.expect(eg.sameClass(lhs, rhs));
+}
+
+test "alpha nested rename stalls soundly without commutation" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+
+    // Same pair, but no SB_ALL_RULE enrolled: the outer fire's image
+    // cannot cross the inner binder, so the classes never merge —
+    // sound, incomplete, exactly the documented theory-prerequisite
+    // failure mode. The filter itself stays exact.
+    const lhs = try addNestedPair(&eg, 1, 2);
+    const rhs = try addNestedPair(&eg, 3, 4);
+
+    const rules = [_]Rule{ ALPHA_RULE, SB_F_RULE, SB_ADD_RULE, SB_CONST_RULE };
+    const stats = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expectEqual(@as(usize, 0), stats.alpha_filter_skips);
+    try testing.expect(!eg.sameClass(lhs, rhs));
+}
+
+test "alpha comparator iterates three nested binders outside-in" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+
+    // ALL a (ALL b (ALL c (ADD (F a) (ADD (F b) (F c))))) against its
+    // full u/v/t renaming: three environment entries in the comparator,
+    // three separate outside-in firings in the schedule.
+    const build = struct {
+        fn go(g: *EGraph, a: LeafId, b: LeafId, c: LeafId) !EClassId {
+            const al = try g.add(.{ .leaf = a });
+            const bl = try g.add(.{ .leaf = b });
+            const cl = try g.add(.{ .leaf = c });
+            const fa = try addUnary(g, F, .{ .class = al });
+            const fb = try addUnary(g, F, .{ .class = bl });
+            const fc = try addUnary(g, F, .{ .class = cl });
+            const bc = try testAdd2(g, ADD, .{ .class = fb }, .{ .class = fc });
+            const body = try testAdd2(g, ADD, .{ .class = fa }, .{ .class = bc });
+            const all_c = try testAdd2(g, ALL, .{ .bound = c }, .{ .class = body });
+            const all_b = try testAdd2(g, ALL, .{ .bound = b }, .{ .class = all_c });
+            return testAdd2(g, ALL, .{ .bound = a }, .{ .class = all_b });
+        }
+    };
+    const lhs = try build.go(&eg, 1, 2, 3);
+    const rhs = try build.go(&eg, 4, 5, 6);
+
+    const stats = try eg.saturate(&nested_alpha_rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(stats.alpha_applied >= 3);
+    try testing.expect(eg.sameClass(lhs, rhs));
+}
+
+test "alpha nested rename never captures a free atom" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+
+    // ALL x (ALL y (ADD (F y) (F c))) vs ALL z (ALL c (ADD (F c) (F c))):
+    // renaming the INNER binder y to the free atom c would capture the
+    // body's free c. The comparator may pass the pair (its equal-class
+    // rule deliberately ignores capture), but the dep gate must refuse
+    // the capturing fire, and the reverse fire's image reduces to a
+    // different body — either way the classes stay separate.
+    const x: LeafId = 1;
+    const y: LeafId = 2;
+    const z: LeafId = 3;
+    const c: LeafId = 4;
+    const cl = try eg.add(.{ .leaf = c });
+    const fc = try addUnary(&eg, F, .{ .class = cl });
+    const yl = try eg.add(.{ .leaf = y });
+    const fy = try addUnary(&eg, F, .{ .class = yl });
+    const lhs_body = try testAdd2(&eg, ADD, .{ .class = fy }, .{ .class = fc });
+    const lhs_in = try testAdd2(&eg, ALL, .{ .bound = y }, .{ .class = lhs_body });
+    const lhs = try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = lhs_in });
+    const rhs_body = try testAdd2(&eg, ADD, .{ .class = fc }, .{ .class = fc });
+    const rhs_in = try testAdd2(&eg, ALL, .{ .bound = c }, .{ .class = rhs_body });
+    const rhs = try testAdd2(&eg, ALL, .{ .bound = z }, .{ .class = rhs_in });
+
+    const stats = try eg.saturate(&nested_alpha_rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(!eg.sameClass(lhs, rhs));
+    try testing.expect(!eg.sameClass(lhs_in, rhs_in));
+}
+
+test "alpha comparator scopes shadowed rebindings lexically" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+
+    // ALL x (ALL x (F x)): the inner binding of x shadows the outer.
+    const x: LeafId = 1;
+    const z: LeafId = 2;
+    const w: LeafId = 3;
+    const xl = try eg.add(.{ .leaf = x });
+    const fx = try addUnary(&eg, F, .{ .class = xl });
+    const shadow_in = try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = fx });
+    const shadow = try testAdd2(&eg, ALL, .{ .bound = x }, .{ .class = shadow_in });
+
+    // Renaming only the OUTER binder is vacuous (the body avoids it once
+    // the inner rebinding shadows): the identity entry pushed for the
+    // inner pair (x→x) must shadow the outer (x→z) in the equal-class
+    // rule, or the comparator wrongly refuses.
+    const rhs_same = try testAdd2(&eg, ALL, .{ .bound = z }, .{
+        .class = shadow_in,
+    });
+    // The fully renamed partner ALL z (ALL w (F w)) closes through a
+    // vacuous outer image (SB_CONST) plus an ordinary inner fire.
+    const wl = try eg.add(.{ .leaf = w });
+    const fw = try addUnary(&eg, F, .{ .class = wl });
+    const rhs_in = try testAdd2(&eg, ALL, .{ .bound = w }, .{ .class = fw });
+    const rhs_full = try testAdd2(&eg, ALL, .{ .bound = z }, .{ .class = rhs_in });
+
+    const stats = try eg.saturate(&nested_alpha_rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(eg.sameClass(shadow, rhs_same));
+    try testing.expect(eg.sameClass(shadow, rhs_full));
+}
+
+test "alpha comparator refuses an aliased rename into a shadowing binder" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try alphaTestGraph(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+
+    // ALL x (ALL y (ADD (F x) (F y))) vs ALL z (ALL z (ADD (F z) (F z))):
+    // mapping both binders to the same atom z is not a renaming — on the
+    // right, the inner z shadows the outer, so F z twice reads both
+    // occurrences as the INNER binder while the left body references
+    // both. The environment's one-sided triggers must refuse x→z once
+    // the inner entry y→z claims z.
+    const lhs = try addNestedPair(&eg, 1, 2);
+    const z: LeafId = 3;
+    const zl = try eg.add(.{ .leaf = z });
+    const fz = try addUnary(&eg, F, .{ .class = zl });
+    const rhs_body = try testAdd2(&eg, ADD, .{ .class = fz }, .{ .class = fz });
+    const rhs_in = try testAdd2(&eg, ALL, .{ .bound = z }, .{ .class = rhs_body });
+    const rhs = try testAdd2(&eg, ALL, .{ .bound = z }, .{ .class = rhs_in });
+
+    const stats = try eg.saturate(&nested_alpha_rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(!eg.sameClass(lhs, rhs));
+}
+
+// rel(H (F a) b, b): an ordinary projection whose match side nests a
+// structured subpattern. Binder 0 = a, 1 = b.
+const H: u32 = 41;
+const H_PROJ_RULE = Rule{
+    .rule_id = 6,
+    .reversed = false,
+    .match_side = app2(H, .{ .app = .{
+        .term_id = F,
+        .args = &.{BINDER_A},
+    } }, BINDER_B),
+    .target_side = BINDER_B,
+    .num_binders = 2,
+};
+
+test "cycle guard still matches finite members of a self-containing class" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+
+    // A pool-style union can merge a term with its own subterm:
+    // H (F x) y ~ F x leaves the merged class holding an H node built
+    // over the class itself. Matching H (F a) b anchors on that H node
+    // and descends into the anchor's own class for the F subpattern —
+    // the cycle guard must not refuse the whole descent, because the
+    // pre-existing F x member is finite and matches legitimately (the
+    // age filter only skips members minted after the anchor node).
+    const xl = try eg.add(.{ .leaf = 1 });
+    const yl = try eg.add(.{ .leaf = 2 });
+    const fx = try addUnary(&eg, F, .{ .class = xl });
+    const h = try testAdd2(&eg, H, .{ .class = fx }, .{ .class = yl });
+    try testing.expect(!eg.sameClass(h, yl));
+    _ = try eg.merge(h, fx, .{ .congruence = .{ .left = 0, .right = 1 } });
+    _ = try eg.rebuild();
+
+    const rules = [_]Rule{H_PROJ_RULE};
+    const stats = try eg.saturate(&rules, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
+    try testing.expect(eg.sameClass(fx, yl));
+}

@@ -395,26 +395,36 @@ axiom all_alpha {x y: nat} (p: wff x): $ (all x p) <-> (all y (sb x y p)) $;
 The fresh binder `y` appears only on the right, so the lemma cannot
 enroll as an ordinary rule (the match side must bind every binder the
 target uses). Instead a pairing scheduler compares same-head binder
-instances already in the egraph and, when one looks like the other with a
-single bound atom renamed, fires the lemma with `y` instantiated to the
-partner's atom — a literal theorem instance; the enrolled substitution
-rules and gated congruence close the remaining gap. Nothing is ever
-invented: `y` always comes from an existing instance, so alpha
+instances already in the egraph and, when one denotes the other under a
+lexical renaming of bound atoms, fires the lemma with `y` instantiated to
+the partner's atom — a literal theorem instance; the enrolled
+substitution rules and gated congruence close the remaining gap. Nothing
+is ever invented: `y` always comes from an existing instance, so alpha
 enrollment cannot flood the graph the way blind saturation of a fresh
 binder would. The capture side condition is the lemma's own dependency
 restriction (`p` independent of `y`), enforced by the usual dep gate.
 Requirements: both conclusion sides apply one head, with exactly one
 argument position — a bound argument position of that head — holding two
 different bound binders of the same sort, and the right-hand binder
-absent from the left side. Alpha closure is only as complete as the
-enrolled substitution calculus — if the `sb` image cannot reduce, the
-instances simply never merge. The scheduler's firing filter is exact in
-the common case; when a pass actually resolves a comparison
-approximately (cyclic classes, multiset alignment under an AC head, or a
-budget cap), a saturated miss is reported as `budget_exhausted` rather
-than a forced negative. Single renames only: instances differing in two
-nested binders at once are out of scope (see
-`docs/design_notes/conversion_alpha.md` for the planned nested upgrade).
+absent from the left side.
+
+Nested renames close outside-in. A pair differing at several binder
+depths (`∀x ∀y (R x y)` against `∀z ∀w (R z w)`) fires only the
+outermost lemma instance; once a binder-commutation rule
+(`[x/a](∀y p) ↔ ∀y ([x/a] p)`, enrolled `@conversion ltr` like any other
+substitution rule) pushes the image through the inner binder, a later
+pass discovers the materialized inner pair as an ordinary one-level
+candidate. Shadowing is lexical: an atom rebound inside its own scope
+refers to the inner binder, and the comparator tracks that explicitly.
+Alpha closure is only as complete as the enrolled substitution
+calculus — without commutation for a nestable binder head the image
+stalls at the inner binder and the pair simply never merges; with no
+`sb`-erasure rule for vacuous images, likewise. The scheduler's firing
+filter is exact in the common case; when a pass actually resolves a
+comparison approximately (cyclic classes, multiset alignment under an AC
+head, renaming environments nested past the depth cap, or a budget cap),
+a saturated miss is reported as `budget_exhausted` rather than a forced
+negative.
 
 ### Requirements
 
@@ -435,6 +445,11 @@ egraph is *gated* on the rewritten positions' head terms having `@congr`
 rules, because those rules are exactly the proof steps the extracted chain
 emits. A sort or connective without `@congr` coverage simply contributes no
 congruence merges — the search stays sound but finds fewer conversions.
+When a conversion is found but its chain rewrites under an operator with
+no `@congr` rule, the failure report names that operator; the fix is to
+annotate a congruence theorem for it (which may first require a
+`@relation` on an argument's sort, so the unchanged slots can discharge
+by that relation's `refl`).
 
 One rewrite source needs no annotation at all: a hypothesis or earlier
 proof line whose formula is `rel(lhs, rhs)` for a registered `@relation`

@@ -534,6 +534,15 @@ fn buildConversionDetail(
                     "cap — the conversion is proven, its re-treeing proof " ++
                     "is too large to write out.",
             );
+        } else if (result.missing_congr_name) |name| {
+            try w.print(
+                "a conversion proving this goal was found, but its proof " ++
+                    "chain rewrites under '{s}', which has no @congr rule — " ++
+                    "the rewrite cannot be lifted through that operator " ++
+                    "into a proof line. Annotate a congruence theorem for " ++
+                    "'{s}' with @congr to let the chain lower.",
+                .{ name, name },
+            );
         } else {
             try w.writeAll(
                 "a conversion proving this goal was found, but a proof " ++

@@ -75,6 +75,13 @@ pub const Lowerer = struct {
     /// Set when a null return came from an emission cap rather than a
     /// structural gap — the driver reports the two differently.
     cap_tripped: bool = false,
+    /// Set when a null return came from a chain step under a head term
+    /// with no registered `@congr` rule: the term id of that head. The
+    /// driver names it in the failure report — a rewrite under an
+    /// operator with no congruence rule can never be lifted into a
+    /// proof line, and the fix (annotate a congruence theorem) is the
+    /// theory author's, not the search's.
+    missing_congr: ?u32 = null,
     /// Lazily built checker-equivalent rewrite normalizer for big-step
     /// grouping (see `tryBigStep`).
     norm_state: ?*NormState = null,
@@ -514,8 +521,10 @@ pub const Lowerer = struct {
             .leaf => return null,
             .bag => return null,
         };
-        const congr = self.context.registry.congr_by_head.get(app.term_id) orelse
+        const congr = self.context.registry.congr_by_head.get(app.term_id) orelse {
+            self.missing_congr = app.term_id;
             return null;
+        };
         const decl = &self.context.env.terms.items[app.term_id];
 
         var ref_labels: std.ArrayListUnmanaged([]const u8) = .{};
@@ -694,7 +703,10 @@ pub const Lowerer = struct {
         );
         const congr = self.context.registry.congr_by_head.get(
             app.term_id,
-        ) orelse return null;
+        ) orelse {
+            self.missing_congr = app.term_id;
+            return null;
+        };
         const decl = &self.context.env.terms.items[app.term_id];
         var ref_labels: std.ArrayListUnmanaged([]const u8) = .{};
         for (decl.args, app.args, 0..) |arg_info, old_arg, i| {
@@ -1010,7 +1022,10 @@ pub const Lowerer = struct {
         // Congruent descent: one @congr line over child alignments.
         const congr = self.context.registry.congr_by_head.get(
             fa.term_id,
-        ) orelse return null;
+        ) orelse {
+            self.missing_congr = fa.term_id;
+            return null;
+        };
         const decl = &self.context.env.terms.items[fa.term_id];
         if (decl.args.len != fa.args.len or fa.args.len != ta.args.len) {
             return null;
@@ -1365,7 +1380,10 @@ pub const Lowerer = struct {
             );
             const congr = self.context.registry.congr_by_head.get(
                 head,
-            ) orelse return null;
+            ) orelse {
+                self.missing_congr = head;
+                return null;
+            };
             const ext_rel = self.relationForSort(
                 self.sortOfExpr(ext_comb) orelse return null,
             ) orelse return null;
@@ -1493,7 +1511,10 @@ pub const Lowerer = struct {
         const head = bag.term_id;
         const congr = self.context.registry.congr_by_head.get(
             head,
-        ) orelse return null;
+        ) orelse {
+            self.missing_congr = head;
+            return null;
+        };
         const count = before_parent.children.len;
         if (after_parent.children.len != count) return null;
         if (changed_idx >= count) return null;

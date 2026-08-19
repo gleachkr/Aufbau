@@ -100,7 +100,10 @@ representation at no saturation cost. `alpha` enrolls an alpha-renaming lemma
 (`rel (all x p) (all y (sb x y p))`): a pairing scheduler fires it between
 same-head binder instances that already exist, with the fresh binder taken
 from the partner instance, and the enrolled substitution rules close the gap —
-requires those substitution rules to also be enrolled. A rule cannot carry
+requires those substitution rules to also be enrolled. Nested renames close
+outside-in, one binder level per firing, and additionally need the
+binder-commutation substitution rule (`sb x a (all y p)` to
+`all y (sb x a p)`) enrolled for each binder head that can nest. A rule cannot carry
 both `@conversion` and `@compute`.
 
 ### `@conversion` on a definition

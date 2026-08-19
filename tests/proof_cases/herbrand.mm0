@@ -161,6 +161,24 @@ axiom or_comm (a b: form): $ (a ∨ b) ↔ (b ∨ a) $;
 
 term sb {x: obj} (y: obj) (p: form x): form;
 
+-- `sb` is a first-class operator, so chains must be able to rewrite
+-- INSIDE a substitution image — which takes a @congr rule for sb, and
+-- stating one requires a relation on obj for the variable slot. `=o`
+-- is equality of object variables; the emitted chains only ever cite
+-- `eqo_refl` (the variable slots themselves never rewrite), but the
+-- bundle is what lets `sb_congr` enroll.
+term eqo (a b: obj): form;
+infixl eqo: $=o$ prec 50;
+--| @relation obj eqo eqo_refl eqo_trans eqo_symm _
+axiom eqo_refl (a: obj): $ a =o a $;
+axiom eqo_trans (a b c: obj) (h1: $ a =o b $) (h2: $ b =o c $):
+  $ a =o c $;
+axiom eqo_symm (a b: obj) (h: $ a =o b $): $ b =o a $;
+
+--| @congr
+axiom sb_congr {x: obj} (y z: obj) (a b: form x)
+  (hy: $ y =o z $) (h: $ a ↔ b $): $ (sb x y a) ↔ (sb x z b) $;
+
 --| @conversion alpha
 axiom all_alpha {x y: obj} (p: form x):
   $ (∀ x p) ↔ (∀ y (sb x y p)) $;
@@ -190,6 +208,21 @@ axiom sb_not {x: obj} (y: obj) (a: form x):
   $ (sb x y (¬ a)) ↔ (¬ (sb x y a)) $;
 --| @conversion ltr
 axiom sb_const {x: obj} (y: obj) (a: form): $ (sb x y a) ↔ a $;
+
+-- Binder commutation: pushes a substitution image through an inner
+-- quantifier. The comparator recognizes a two-binder rename
+-- outside-in: only the outer alpha instance fires, the inner pair is
+-- closed on a later pass once the image has crossed the inner
+-- binder — via these laws, or (in this theory) via a passage detour
+-- rewritten under sb through sb_congr. The z ≠ y proviso is the
+-- dependency discipline yet again: z (a regular variable) can never
+-- be instantiated with a bound variable of the instance.
+--| @conversion ltr
+axiom sb_all {x y: obj} (z: obj) (p: form x y):
+  $ (sb x z (∀ y p)) ↔ (∀ y (sb x z p)) $;
+--| @conversion ltr
+axiom sb_ex {x y: obj} (z: obj) (p: form x y):
+  $ (sb x z (∃ y p)) ↔ (∃ y (sb x z p)) $;
 
 -- ============================================================
 -- The battery. Every proof in herbrand.auf is `conversion?` output.
@@ -233,25 +266,20 @@ theorem constant_gen {x: obj} (p: form) (h1: $ (P x) ↔ p $)
 -- ============================================================
 -- Alpha battery. As above, every proof is a single `conversion?`
 -- search; the chains cite the alpha law, the sb calculus, and
--- congruence — no bespoke machinery in the emitted proof.
+-- congruence — no bespoke machinery in the emitted proof. Most
+-- goals mix alpha with the passage laws in one search; only the
+-- first two are renames alone.
 -- ============================================================
 
--- The minimal renames, one per quantifier.
-theorem rename_all {x y: obj} (h: $ ∀ x (P x) $): $ ∀ y (P y) $;
-theorem rename_ex {x y: obj} (h: $ ∃ x (P x) $): $ ∃ y (P y) $;
-
--- The same gap as an equation goal (no hypothesis to transport).
+-- A pure rename as an equation goal (no hypothesis to transport).
 theorem rename_iff {x y: obj}: $ (∀ x (P x)) ↔ (∀ y (P y)) $;
 
--- Renaming through a connective with an x-free operand: the sb
--- image splits under ∧ and `sb_const` discharges the q half.
-theorem rename_mixed {x y: obj} (q: form) (h: $ ∀ x ((P x) ∧ q) $):
-  $ ∀ y ((P y) ∧ q) $;
-
--- Renaming past a genuinely free variable: z stays fixed, and the
--- capture gate keeps the scheduler from ever renaming toward it.
-theorem rename_free {x y z: obj} (h: $ ∃ x ((P x) → (Q z)) $):
-  $ ∃ y ((P y) → (Q z)) $;
+-- A pure rename with a deep substitution image: sb pushes through
+-- ¬, ∧ and ∨ before `sb_const` discharges the x-free leaf. No
+-- passage law can move the quantifier — both conjuncts mention x.
+theorem rename_deep {x y: obj} (q: form)
+  (h: $ ∀ x ((¬ (P x)) ∧ ((Q x) ∨ q)) $):
+  $ ∀ y ((¬ (P y)) ∧ ((Q y) ∨ q)) $;
 
 -- Passage and alpha in one search: the quantifier must first leave
 -- the disjunction (commute, pass ∀ out), and only then does the
@@ -264,15 +292,25 @@ theorem rename_prenex {x y: obj} (q: form) (h: $ ∀ x ((P x) ∨ q) $):
 theorem rename_neg {x y: obj} (h: $ ¬ (∃ x (P x)) $):
   $ ∀ y (¬ (P y)) $;
 
--- Both operands depend on x, so no passage law applies: the only
--- route is the alpha law followed by the sb calculus splitting the
--- substitution image under →.
-theorem rename_im {x y: obj} (h: $ ∃ x ((P x) → (Q x)) $):
-  $ ∃ y ((P y) → (Q y)) $;
+-- A nested rename: both quantifiers change and the body mentions
+-- both, so no single alpha instance closes the gap. The outer
+-- rename fires first, `sb_ex` pushes its image through the inner
+-- binder, and the inner pair — which only exists once that image
+-- reduces — is found on a later pass. `sb_const` discharges each
+-- leaf the substitution cannot touch.
+theorem rename_nested {x y u v: obj}
+  (h: $ ∀ x (∃ y ((P x) ∧ (Q y))) $):
+  $ ∀ u (∃ v ((P u) ∧ (Q v))) $;
 
--- A deeper substitution image: sb pushes through ¬, ∧ and ∨ before
--- `sb_const` discharges the x-free leaf. Again no passage law can
--- move the quantifier — both conjuncts mention x.
-theorem rename_deep {x y: obj} (q: form)
-  (h: $ ∀ x ((¬ (P x)) ∧ ((Q x) ∨ q)) $):
-  $ ∀ y ((¬ (P y)) ∧ ((Q y) ∨ q)) $;
+-- Prenexification straight into a renamed binder: the ∃ flips
+-- across the implication as a ∀, whose bound variable then has to
+-- be renamed to reach the goal.
+theorem prenex_rename {x u: obj} (q: form) (h: $ (∃ x (P x)) → q $):
+  $ ∀ u ((P u) → q) $;
+
+-- The prenex_two goal with both prenexed binders renamed: two
+-- passage laws pull the quantifiers out, then a nested rename
+-- rewrites both bound variables through the commutation rule.
+theorem prenex_rename_two {x y u v: obj}
+  (h: $ (∀ x (P x)) → (∃ y (Q y)) $):
+  $ ∃ u (∃ v ((P u) → (Q v))) $;

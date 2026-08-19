@@ -289,7 +289,8 @@ pub const SaturateStats = struct {
     alpha_applied: usize = 0,
     /// Alpha pairing-filter comparisons the run's FINAL collection pass
     /// resolved approximately (cycle-conservative memo reads, greedy bag
-    /// alignment failures, truncated instance enumeration). Earlier
+    /// alignment failures, truncated instance enumeration, renaming
+    /// environments past `max_rename_depth`). Earlier
     /// passes don't count: an approximate or capped pass never commits
     /// to the settled cache, so its whole delta is re-derived — with
     /// fresh budget — by the next pass, and a saturated fixpoint's final
@@ -519,6 +520,11 @@ pub const EGraph = struct {
     /// matchRule/matchRuleBag call); consulted by the residual-only binder
     /// cut (`binderResidualOnly`).
     ac_active_target: ?TemplateExpr = null,
+    /// Node `matchRule` is currently anchored on and its canonical class;
+    /// when a structured subpattern descends back into that class,
+    /// `solvePairs` skips members younger than the anchor node (the
+    /// self-containing-class cycle guard — see the descent site).
+    match_anchor: ?MatchAnchor = null,
     /// Total bag-match budget trips (monotone; `saturate` reports deltas).
     ac_match_capped_total: usize = 0,
     /// Total cyclic bag-index entries dropped (monotone; `saturate`
@@ -2280,6 +2286,9 @@ pub const EGraph = struct {
         iter: std.AutoHashMapUnmanaged(u64, void) = .{},
     };
 
+    /// Anchor of a `matchRule` call in progress (see `match_anchor`).
+    const MatchAnchor = struct { root: EClassId, node: ENodeId };
+
     fn matchRule(
         self: *EGraph,
         rule: Rule,
@@ -2293,6 +2302,11 @@ pub const EGraph = struct {
         const node = self.nodes.items[root_node].node.app;
         self.ac_active_target = rule.target_side;
         defer self.ac_active_target = null;
+        self.match_anchor = .{
+            .root = self.find(self.nodes.items[root_node].class),
+            .node = root_node,
+        };
+        defer self.match_anchor = null;
         const pairs = try scratch.alloc(PatternPair, pattern.args.len);
         for (pattern.args, node.children, 0..) |p, c, idx| {
             pairs[idx] = .{ .pattern = p, .child = c };
@@ -2328,25 +2342,75 @@ pub const EGraph = struct {
         atom: LeafId,
     };
 
-    /// `renamedEq` memo keyed by canonical class pair PLUS the rename's
-    /// atom pair, one collection pass long (no unions land while
-    /// collecting, so roots are stable). The atoms are part of the key
-    /// because the same class pair can correspond under one rename and
-    /// not another — an atom-blind key would let a decoy instance pair
-    /// poison a later valid pair's verdict. An in-progress entry reads
-    /// as `false`: cycles resolve conservatively (counted in
-    /// `alpha_filter_skips`).
+    /// One lexical rename binding: descending through a pair of
+    /// corresponding binder positions maps the left atom to the right
+    /// one for the subtrees in scope.
+    const RenamePair = struct { old: LeafId, new: LeafId };
+
+    /// Nesting bound for the renaming environment. Ordinary terms stay
+    /// within their binder depth; only a binder cycle through a class (a
+    /// self-referential union) can grow the environment past it, where
+    /// the walk would otherwise extend it forever. A trip is an
+    /// approximate refusal, counted in `alpha_filter_skips`.
+    const max_rename_depth = 32;
+
+    /// `renamedEq` memo keyed by canonical class pair PLUS the full
+    /// renaming environment, one collection pass long (no unions land
+    /// while collecting, so roots are stable). The environment is part
+    /// of the key because the same class pair can correspond under one
+    /// renaming and not another — an environment-blind key would let a
+    /// decoy instance pair poison a later valid pair's verdict. An
+    /// in-progress entry reads as `false`: cycles resolve conservatively
+    /// (counted in `alpha_filter_skips`). Key environments alias
+    /// pass-scratch slices, so the memo must not outlive the pass.
     const RenameVerdict = enum { in_progress, no, yes };
-    const RenameMemo = std.AutoHashMapUnmanaged(u128, RenameVerdict);
+    const RenameKey = struct {
+        c: EClassId,
+        d: EClassId,
+        env: []const RenamePair,
+    };
+    const RenameKeyContext = struct {
+        pub fn hash(_: RenameKeyContext, key: RenameKey) u64 {
+            var h = std.hash.Wyhash.init(0x9e3779b97f4a7c15);
+            h.update(std.mem.asBytes(&key.c));
+            h.update(std.mem.asBytes(&key.d));
+            for (key.env) |e| {
+                h.update(std.mem.asBytes(&e.old));
+                h.update(std.mem.asBytes(&e.new));
+            }
+            return h.final();
+        }
+        pub fn eql(_: RenameKeyContext, a: RenameKey, b: RenameKey) bool {
+            if (a.c != b.c or a.d != b.d) return false;
+            if (a.env.len != b.env.len) return false;
+            for (a.env, b.env) |ea, eb| {
+                if (ea.old != eb.old or ea.new != eb.new) return false;
+            }
+            return true;
+        }
+    };
+    const RenameMemo = std.HashMapUnmanaged(
+        RenameKey,
+        RenameVerdict,
+        RenameKeyContext,
+        std.hash_map.default_max_load_percentage,
+    );
 
     /// Alpha scheduler: pair up match-side instances of each `alpha` rule
-    /// whose bodies correspond under renaming one bound atom to the
-    /// other, and retain a match that fires the GENERIC rule with the
-    /// fresh binder slot completed by the partner's atom. The applied
-    /// union is a literal theorem instance (`A x p ~ A z ([x/z] p)`);
-    /// the enrolled substitution rules plus gated congruence close the
-    /// remaining gap to the partner, so extraction sees only ordinary
-    /// edges. The correspondence check is a firing FILTER for economy,
+    /// whose bodies correspond under a lexical renaming — the anchor
+    /// atom pair, extended through nested binder pairs as the walk
+    /// descends — and retain a match that fires the GENERIC rule with
+    /// the fresh binder slot completed by the partner's atom. The
+    /// applied union is a literal theorem instance (`A x p ~ A z
+    /// ([x/z] p)`); the enrolled substitution rules plus gated
+    /// congruence close the remaining gap to the partner, so extraction
+    /// sees only ordinary edges. A pair differing at SEVERAL binder
+    /// depths closes outside-in: only the outermost instance fires now;
+    /// once substitution commutation (an enrolled sb rule per nestable
+    /// binder head — a documented theory prerequisite) pushes the image
+    /// through the inner binder, a later pass discovers the materialized
+    /// inner pair as an ordinary depth-one candidate.
+    /// The correspondence check is a firing FILTER for economy,
     /// never for soundness — the dep gate refuses capture at apply time
     /// regardless — and it is approximate by design (greedy bag
     /// alignment, cycle-conservative, budget-bounded). Approximate
@@ -2642,7 +2706,8 @@ pub const EGraph = struct {
     /// Do two instances' substitutions correspond under renaming
     /// `a.atom` to `b.atom`? Bound slots other than the renamed one must
     /// bind identical atoms distinct from both rename endpoints; term
-    /// slots must satisfy `renamedEq`.
+    /// slots must satisfy `renamedEq` under the singleton environment —
+    /// the body walk extends it lexically at nested binder pairs.
     fn alphaInstancesCorrespond(
         self: *EGraph,
         rule: Rule,
@@ -2654,6 +2719,10 @@ pub const EGraph = struct {
         iter_capped: *bool,
         scratch: std.mem.Allocator,
     ) error{OutOfMemory}!bool {
+        // Scratch-allocated (not stack): memo keys alias this slice and
+        // outlive the call.
+        const env = try scratch.alloc(RenamePair, 1);
+        env[0] = .{ .old = a.atom, .new = b.atom };
         for (a.subst, b.subst, 0..) |ea, eb, slot| {
             if (slot == rule.alpha_old_slot) continue;
             if (slot == rule.alpha_new_slot) continue;
@@ -2675,8 +2744,7 @@ pub const EGraph = struct {
                     if (!try self.renamedEq(
                         cc,
                         cb.class,
-                        a.atom,
-                        b.atom,
+                        env,
                         memo,
                         avoid_cache,
                         iter_steps,
@@ -2689,18 +2757,57 @@ pub const EGraph = struct {
         return true;
     }
 
-    /// Approximate check that class `d` denotes `c` with atom `x`
-    /// renamed to `z`. Equal classes correspond when they can avoid `x`
-    /// (an identity rename); the atoms' own leaf classes correspond to
-    /// each other; otherwise some member-node pair must correspond
-    /// structurally. False negatives skip a fire; false positives cost
-    /// one refused-or-useless (but sound) instance.
+    /// Lexical atom correspondence under a renaming environment: the
+    /// innermost entry mentioning the left atom on its old side or the
+    /// right atom on its new side decides; atoms no entry mentions must
+    /// be equal. The one-sided triggers are what make shadowing
+    /// explicit — an atom rebound further in refers to the inner
+    /// binder, and a right atom equal to some entry's new side is bound
+    /// there, never free.
+    fn atomsCorrespond(env: []const RenamePair, a: LeafId, b: LeafId) bool {
+        var i = env.len;
+        while (i > 0) {
+            i -= 1;
+            const e = env[i];
+            if (e.old == a or e.new == b) return e.old == a and e.new == b;
+        }
+        return a == b;
+    }
+
+    /// Equal classes correspond under `env` exactly when the renaming
+    /// is the identity on them: the class must avoid every effectively
+    /// renamed atom (innermost entry per old atom decides; identity
+    /// entries rename nothing). The entries' new sides are deliberately
+    /// ignored, mirroring the single-rename rule: a capture this admits
+    /// is refused by the dep gate at fire time.
+    fn classAvoidsEnv(
+        self: *EGraph,
+        root: EClassId,
+        env: []const RenamePair,
+        cache: *AvoidCache,
+    ) !bool {
+        outer: for (env, 0..) |e, i| {
+            if (e.old == e.new) continue;
+            for (env[i + 1 ..]) |inner| {
+                if (inner.old == e.old) continue :outer;
+            }
+            if (!try self.classAvoids(root, e.old, cache)) return false;
+        }
+        return true;
+    }
+
+    /// Approximate check that class `d` denotes `c` renamed per `env`
+    /// (innermost entry last). Equal classes correspond when the
+    /// renaming is the identity on them; a mapped atom's own leaf class
+    /// corresponds to its image's; otherwise some member-node pair must
+    /// correspond structurally, extending the environment through
+    /// nested binder pairs. False negatives skip a fire; false
+    /// positives cost one refused-or-useless (but sound) instance.
     fn renamedEq(
         self: *EGraph,
         c: EClassId,
         d: EClassId,
-        x: LeafId,
-        z: LeafId,
+        env: []const RenamePair,
         memo: *RenameMemo,
         avoid_cache: *AvoidCache,
         iter_steps: *usize,
@@ -2709,14 +2816,19 @@ pub const EGraph = struct {
     ) error{OutOfMemory}!bool {
         const rc = self.find(c);
         const rd = self.find(d);
-        if (rc == rd) return self.classAvoids(rc, x, avoid_cache);
-        if (self.leaf_classes.get(x)) |xc| {
-            if (self.leaf_classes.get(z)) |zc| {
-                if (self.find(xc) == rc and self.find(zc) == rd) return true;
+        if (rc == rd) return self.classAvoidsEnv(rc, env, avoid_cache);
+        {
+            var i = env.len;
+            while (i > 0) {
+                i -= 1;
+                const e = env[i];
+                const xc = self.leaf_classes.get(e.old) orelse continue;
+                const zc = self.leaf_classes.get(e.new) orelse continue;
+                if (self.find(xc) == rc and self.find(zc) == rd and
+                    atomsCorrespond(env, e.old, e.new)) return true;
             }
         }
-        const key = (@as(u128, rc) << 96) | (@as(u128, rd) << 64) |
-            (@as(u128, x) << 32) | z;
+        const key = RenameKey{ .c = rc, .d = rd, .env = env };
         if (memo.get(key)) |cached| switch (cached) {
             .yes => return true,
             .no => return false,
@@ -2740,8 +2852,7 @@ pub const EGraph = struct {
                         if (try self.renamedNodeEq(
                             na,
                             nb,
-                            x,
-                            z,
+                            env,
                             memo,
                             avoid_cache,
                             iter_steps,
@@ -2763,8 +2874,7 @@ pub const EGraph = struct {
         self: *EGraph,
         na: ENodeId,
         nb: ENodeId,
-        x: LeafId,
-        z: LeafId,
+        env: []const RenamePair,
         memo: *RenameMemo,
         avoid_cache: *AvoidCache,
         iter_steps: *usize,
@@ -2774,37 +2884,61 @@ pub const EGraph = struct {
         const a = self.nodes.items[na].node;
         const b = self.nodes.items[nb].node;
         switch (a) {
-            // Equal leaves share a class and never reach here; the only
-            // cross-class leaf correspondence is the rename itself.
-            .leaf => |la| return la == x and b == .leaf and b.leaf == z,
+            // Equal leaves share a class and never reach here; a
+            // cross-class leaf pair corresponds only through the
+            // environment.
+            .leaf => |la| return b == .leaf and
+                atomsCorrespond(env, la, b.leaf),
             .app => |aa| {
                 if (b != .app) return false;
                 const ba = b.app;
                 if (aa.term_id != ba.term_id) return false;
                 if (aa.children.len != ba.children.len) return false;
+                // Binder positions are BINDING occurrences: each pair
+                // extends the lexical environment for every child of
+                // this node — including equal-atom pairs, whose entries
+                // shadow any outer entry touching either atom. Scope is
+                // over-approximated to all siblings; an argument outside
+                // the binder's real scope cannot contain it, so the
+                // extra entry is vacuous there.
+                var bound_pairs: usize = 0;
                 for (aa.children, ba.children) |ac, bc| {
-                    switch (ac) {
-                        .bound => |la| {
-                            if (bc != .bound) return false;
-                            if (la == x) {
-                                if (bc.bound != z) return false;
-                            } else if (bc.bound != la) return false;
-                        },
-                        .class => |cc| {
-                            if (bc != .class) return false;
-                            if (!try self.renamedEq(
-                                cc,
-                                bc.class,
-                                x,
-                                z,
-                                memo,
-                                avoid_cache,
-                                iter_steps,
-                                iter_capped,
-                                scratch,
-                            )) return false;
-                        },
+                    if ((ac == .bound) != (bc == .bound)) return false;
+                    if (ac == .bound) bound_pairs += 1;
+                }
+                var inner = env;
+                if (bound_pairs != 0) {
+                    if (env.len + bound_pairs > max_rename_depth) {
+                        // Only a binder cycle through a class nests this
+                        // deep; refuse approximately.
+                        self.alpha_filter_skips += 1;
+                        return false;
                     }
+                    const ext = try scratch.alloc(
+                        RenamePair,
+                        env.len + bound_pairs,
+                    );
+                    @memcpy(ext[0..env.len], env);
+                    var at = env.len;
+                    for (aa.children, ba.children) |ac, bc| {
+                        if (ac != .bound) continue;
+                        ext[at] = .{ .old = ac.bound, .new = bc.bound };
+                        at += 1;
+                    }
+                    inner = ext;
+                }
+                for (aa.children, ba.children) |ac, bc| {
+                    if (ac != .class) continue;
+                    if (!try self.renamedEq(
+                        ac.class,
+                        bc.class,
+                        inner,
+                        memo,
+                        avoid_cache,
+                        iter_steps,
+                        iter_capped,
+                        scratch,
+                    )) return false;
                 }
                 return true;
             },
@@ -2813,7 +2947,7 @@ pub const EGraph = struct {
                 const bb = b.bag;
                 if (ab.term_id != bb.term_id) return false;
                 if (ab.members.len != bb.members.len) return false;
-                // Greedy multiset alignment: consume equal x-avoiding
+                // Greedy multiset alignment: consume equal rename-inert
                 // roots first, then first-fit renamed partners. Greedy
                 // failures are affordable false negatives.
                 const used = try scratch.alloc(bool, bb.members.len);
@@ -2824,7 +2958,7 @@ pub const EGraph = struct {
                     for (bb.members, 0..) |mb, idx| {
                         if (used[idx]) continue;
                         if (self.find(mb) != ra) continue;
-                        if (!try self.classAvoids(ra, x, avoid_cache)) {
+                        if (!try self.classAvoidsEnv(ra, env, avoid_cache)) {
                             continue;
                         }
                         used[idx] = true;
@@ -2837,8 +2971,7 @@ pub const EGraph = struct {
                         if (try self.renamedEq(
                             ma,
                             mb,
-                            x,
-                            z,
+                            env,
                             memo,
                             avoid_cache,
                             iter_steps,
@@ -3396,6 +3529,31 @@ pub const EGraph = struct {
                 .bound => return,
                 .class => |class| {
                     const root = self.find(class);
+                    // Cycle guard: a structured subpattern descending
+                    // into the ANCHOR's own class is matching the
+                    // anchor inside itself — only possible once a class
+                    // contains a node built over the class (a vacuous
+                    // substitution image `[x/z]p ~ p`, or a pool
+                    // equation merging a term with its own subterm).
+                    // Such a class can still hold finite members that
+                    // legitimately match, so the descent proceeds — but
+                    // only over members OLDER than the anchor node.
+                    // Anything the current saturation's own fires mint
+                    // through this anchor is appended later, so the age
+                    // filter breaks the debris loop where each pass
+                    // re-derives a one-level-deeper image of the
+                    // previous mint (the mint outruns the collapse that
+                    // proves it redundant by one iteration). Skipping a
+                    // younger candidate is conservative, so it counts
+                    // as a budget-style trip against forced negatives.
+                    const anchor_cap: ?ENodeId = cap: {
+                        const anchor = self.match_anchor orelse
+                            break :cap null;
+                        break :cap if (root == anchor.root)
+                            anchor.node
+                        else
+                            null;
+                    };
                     const members = self.class_index.get(root) orelse return;
                     for (members.items) |member_id| {
                         switch (self.nodes.items[member_id].node) {
@@ -3408,6 +3566,12 @@ pub const EGraph = struct {
                                     pattern_app.args.len)
                                 {
                                     continue;
+                                }
+                                if (anchor_cap) |cap_node| {
+                                    if (member_id >= cap_node) {
+                                        self.ac_match_capped_total += 1;
+                                        continue;
+                                    }
                                 }
                                 // Per-candidate charge (the tree analogue
                                 // of the bag arms' enumeration charges):
@@ -3461,6 +3625,12 @@ pub const EGraph = struct {
                                     pattern_app.term_id)
                                 {
                                     continue;
+                                }
+                                if (anchor_cap) |cap_node| {
+                                    if (member_id >= cap_node) {
+                                        self.ac_match_capped_total += 1;
+                                        continue;
+                                    }
                                 }
                                 // Same per-candidate charge as the app
                                 // arm; the bag assignment below charges

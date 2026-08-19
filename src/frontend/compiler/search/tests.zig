@@ -9130,6 +9130,35 @@ test "conversion? alpha transports a goal from a renamed hypothesis" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? alpha renames a binder the body never mentions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Binder-free body: both instances hold the SAME body class q, so the
+    // comparator takes the equal-class branch (correspond iff the class
+    // avoids the renamed atom) rather than walking any structure. The
+    // fired image `sb x y q` then discharges through sb_const alone.
+    const mm0_src = alpha_prelude ++
+        \\--| @conversion ltr
+        \\axiom sb_const {x: nat} (a: nat) (q: wff): $ iff (sb x a q) q $;
+        \\theorem alpha_vac {x y: nat} (q: wff) (h: $ all x q $): $ all y q $;
+    ;
+    const proof_src =
+        \\alpha_vac
+        \\----
+        \\goal: $ all y q $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "sb_const") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
 test "conversion? alpha refuses a capturing rename" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -9221,4 +9250,183 @@ test "conversion? alpha pairs a partner minted mid-saturation" {
     try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
 
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+// A theory where the winning chain must rewrite INSIDE a substitution
+// image: pass_ex_an gives the quantified class an `an`-shaped second
+// member, and the extracted route reaches the goal by swapping the sb
+// argument's representative — a step that only lowers through a @congr
+// rule for sb (which in turn needs a relation on the variable sort).
+const alpha_sb_interior_prelude = alpha_prelude ++
+    \\term ex {x: nat} (p: wff x): wff;
+    \\term an (p q: wff): wff;
+    \\term G (a: nat): wff;
+    \\--| @congr
+    \\axiom ex_congr {x: nat} (p q: wff x) (h: $ iff p q $): $ iff (ex x p) (ex x q) $;
+    \\--| @congr
+    \\axiom an_congr (a b c d: wff) (h1: $ iff a b $) (h2: $ iff c d $): $ iff (an a c) (an b d) $;
+    \\--| @conversion ltr
+    \\axiom sb_g_var {x: nat} (a: nat): $ iff (sb x a (G x)) (G a) $;
+    \\--| @conversion ltr
+    \\axiom sb_an {x: nat} (a: nat) (p q: wff x): $ iff (sb x a (an p q)) (an (sb x a p) (sb x a q)) $;
+    \\--| @conversion ltr
+    \\axiom sb_const {x: nat} (a: nat) (q: wff): $ iff (sb x a q) q $;
+    \\--| @conversion ltr
+    \\axiom sb_ex {x y: nat} (a: nat) (p: wff x y):
+    \\  $ iff (sb x a (ex y p)) (ex y (sb x a p)) $;
+    \\--| @conversion both
+    \\axiom pass_ex_an {x: nat} (a: wff) (b: wff x):
+    \\  $ iff (ex x (an a b)) (an a (ex x b)) $;
+    \\
+;
+
+const alpha_sb_congr_rules =
+    \\term nat_eq (a b: nat): wff;
+    \\--| @relation nat nat_eq neq_refl neq_trans neq_sym _
+    \\axiom neq_refl (a: nat): $ nat_eq a a $;
+    \\axiom neq_trans (a b c: nat) (h1: $ nat_eq a b $) (h2: $ nat_eq b c $): $ nat_eq a c $;
+    \\axiom neq_sym (a b: nat) (h: $ nat_eq a b $): $ nat_eq b a $;
+    \\--| @congr
+    \\axiom sb_congr {x: nat} (y z: nat) (a b: wff x)
+    \\  (hy: $ nat_eq y z $) (h: $ iff a b $): $ iff (sb x y a) (sb x z b) $;
+    \\
+;
+
+const alpha_sb_interior_theorem =
+    \\theorem sb_int {x y u: nat} (h: $ all x (ex y (an (F x) (G y))) $):
+    \\  $ all u (ex y (an (F u) (G y))) $;
+;
+
+const alpha_sb_interior_proof =
+    \\sb_int
+    \\----
+    \\goal: $ all u (ex y (an (F u) (G y))) $ by conversion?
+    \\
+;
+
+test "conversion? alpha rewrites inside a substitution image via sb's @congr" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = alpha_sb_interior_prelude ++ alpha_sb_congr_rules ++
+        alpha_sb_interior_theorem;
+
+    var found = try conversionSuggestions(
+        &arena,
+        mm0_src,
+        alpha_sb_interior_proof,
+        .{},
+    );
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
+
+    try expectConversionCompiles(
+        &arena,
+        mm0_src,
+        alpha_sb_interior_proof,
+        found.items[0],
+    );
+}
+
+test "conversion? names the congruence-less head blocking extraction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Identical theory, no sb_congr: the classes still merge, but no
+    // chain the extractor picks can be lifted through sb — the failure
+    // report must name the missing @congr head instead of the generic
+    // could-not-extract text.
+    const mm0_src = alpha_sb_interior_prelude ++ alpha_sb_interior_theorem;
+
+    var miss = try conversionSuggestions(
+        &arena,
+        mm0_src,
+        alpha_sb_interior_proof,
+        .{ .status_detail = true },
+    );
+    defer miss.deinit();
+    try std.testing.expect(miss.status != types.SearchStatus.found);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "'sb'") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "@congr") != null,
+    );
+}
+
+// sb rules over R for the nested-rename tests: reduce a substitution
+// image at either argument position.
+const alpha_sb_r_rules =
+    \\--| @conversion ltr
+    \\axiom sb_r1 {x: nat} (a b: nat): $ iff (sb x a (R x b)) (R a b) $;
+    \\--| @conversion ltr
+    \\axiom sb_r2 {x: nat} (a b: nat): $ iff (sb x a (R b x)) (R b a) $;
+    \\
+;
+
+// Binder commutation: pushes a substitution image through an inner
+// `all`. The theory prerequisite for nested renames — without it the
+// image stalls at the inner binder and the pair soundly fails to merge.
+const alpha_sb_all_rule =
+    \\--| @conversion ltr
+    \\axiom sb_all {x y: nat} (a: nat) (p: wff x y):
+    \\  $ iff (sb x a (all y p)) (all y (sb x a p)) $;
+    \\
+;
+
+test "conversion? alpha renames nested binders through substitution commutation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Both binders differ and the body references both, so no single
+    // rename closes the goal. The nested comparator accepts the pair;
+    // only the OUTER lemma instance fires, sb_all pushes the image
+    // through the inner binder, and a later pass closes the
+    // materialized inner pair — outside-in, one literal lemma instance
+    // per level.
+    const mm0_src = alpha_prelude ++ alpha_sb_r_rules ++ alpha_sb_all_rule ++
+        \\theorem alpha_nest {x y z w: nat}:
+        \\  $ iff (all x (all y (R x y))) (all z (all w (R z w))) $;
+    ;
+    const proof_src =
+        \\alpha_nest
+        \\----
+        \\goal: $ iff (all x (all y (R x y))) (all z (all w (R z w))) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "all_alpha") != null);
+    try std.testing.expect(std.mem.indexOf(u8, replacement, "sb_all") != null);
+
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? alpha nested rename misses honestly without commutation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Identical goal, but sb_all is not enrolled: the outer image
+    // cannot cross the inner binder, so saturation stalls the fired
+    // instance and the goal misses. The comparator itself resolved
+    // every comparison exactly, so this is a plain miss — the
+    // documented sound-but-incomplete failure mode of a missing
+    // commutation rule, not a budget artifact.
+    const mm0_src = alpha_prelude ++ alpha_sb_r_rules ++
+        \\theorem alpha_nest {x y z w: nat}:
+        \\  $ iff (all x (all y (R x y))) (all z (all w (R z w))) $;
+    ;
+    const proof_src =
+        \\alpha_nest
+        \\----
+        \\goal: $ iff (all x (all y (R x y))) (all z (all w (R z w))) $ by conversion?
+        \\
+    ;
+
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer miss.deinit();
+    try std.testing.expect(miss.status != types.SearchStatus.found);
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
 }

@@ -107,6 +107,11 @@ pub const Result = struct {
     replacement: ?[]const u8 = null,
     /// The cited reference's source text (`#N` or a line label) on success.
     via: ?[]const u8 = null,
+    /// Name of a head term with no `@congr` rule that blocked lowering a
+    /// found conversion (see `Lowerer.missing_congr`); named in the
+    /// failure report so the theory author knows which congruence
+    /// annotation is missing.
+    missing_congr_name: ?[]const u8 = null,
     /// A pool formula shares the goal's e-class, but no proof chain could
     /// be extracted or lowered from it. Keeps the failure report honest: a
     /// saturated outcome with this flag set is NOT a forced negative.
@@ -611,6 +616,10 @@ pub fn run(
             }
             result.convertible_unlowered = true;
             if (lowered.any_cap) result.lower_capped = true;
+            if (lowered.missing_congr) |term_id| {
+                result.missing_congr_name =
+                    context.env.terms.items[term_id].name;
+            }
         }
 
         // Equation fallback: no pool reference lowered, but the goal's own
@@ -641,6 +650,10 @@ pub fn run(
                     }
                     result.convertible_unlowered = true;
                     if (lowered.any_cap) result.lower_capped = true;
+                    if (lowered.missing_congr) |term_id| {
+                        result.missing_congr_name =
+                            context.env.terms.items[term_id].name;
+                    }
                 } else {
                     result.convertible_unlowered = true;
                 }
@@ -691,6 +704,10 @@ const DualLowering = struct {
     /// Set when either orientation aborted on an emission cap rather than a
     /// structural gap — the driver reports the two differently.
     any_cap: bool = false,
+    /// Head term with no `@congr` rule that blocked a chain step, when
+    /// that is why an orientation failed to lower (forward orientation's
+    /// finding preferred). The failure report names it.
+    missing_congr: ?u32 = null,
 };
 
 /// Lower one explanation in both orientations and keep the shorter emission.
@@ -728,6 +745,7 @@ fn lowerBothOrientations(
         },
         .any_cap = lowerer.cap_tripped,
     };
+    if (result.best == null) result.missing_congr = lowerer.missing_congr;
     if (!proto.context.registry.hasRewriteRules()) return result;
 
     var reversed_lowerer = proto;
@@ -755,6 +773,10 @@ fn lowerBothOrientations(
         result.best = reversed;
     }
     result.any_cap = result.any_cap or reversed_lowerer.cap_tripped;
+    if (result.best == null) {
+        result.missing_congr =
+            lowerer.missing_congr orelse reversed_lowerer.missing_congr;
+    }
     return result;
 }
 
