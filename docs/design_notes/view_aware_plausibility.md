@@ -1,7 +1,7 @@
 # View-aware conclusion plausibility (unblunt the view-rule bail)
 
 Status: **LANDED (first cut, conclusion side).** Grounded in `docs/view_recover.md` +
-`src/frontend/compiler/views.zig` + `exact_plausible.zig`. Background: the
+`src/frontend/views.zig` + `exact_plausible.zig`. Background: the
 `auto?` worst-case latency thread ([[project_latency_budget_floor]],
 [[project_symbolic_interning]]) — after the interning/hash levers took the worst
 case 31.9s→20s, the remaining worst cases are doomed reject-*floods*, and the
@@ -141,7 +141,7 @@ it does not aim to find new proofs.
 
 - `src/frontend/compiler/search/exact_plausible.zig` — `finalConclusionPlausible`
   (the bail at ~192), `conclusionTemplatePlausible`, `templateDefiniteMismatch`.
-- `src/frontend/compiler/views.zig` — `ViewDecl` (`concl`, `binder_map`,
+- `src/frontend/views.zig` — `ViewDecl` (`concl`, `binder_map`,
   `num_binders`).
 - `tests/search_bench_cases/zermelo_frontier.mm0` — `sep_intro` (@view @recover,
   ~590), the comprehension defs `setdiff`/`image`/`diag`, `cb_bijection_maps_domain`.

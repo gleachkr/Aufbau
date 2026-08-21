@@ -169,10 +169,8 @@ Theorem checking and emission:
 - `compiler/normalize.zig`
 - `compiler/emit.zig`
 - `compiler/metadata.zig`
-- `compiler/views.zig`
 - `compiler/fresh_select.zig`
 - `compiler/holes.zig`
-- `compiler/derived_bindings.zig`
 
 `compiler/holes.zig` owns proof-side hole elaboration: parsing a
 holey assertion via the trusted hole-aware parser entry point,
@@ -181,6 +179,14 @@ positions, materializing filled surface lines from selected candidates,
 and validating them against the candidate's concrete conclusion (with
 sort checks at every hole). Holes never reach the theorem-local DAG, the
 checked IR, or the MMB emitter.
+
+View, recover, and derived-binding vocabulary (shared by the compiler
+pipeline and the standalone inference solver, so it lives at frontend
+level next to `view_trace.zig` and `binding_validation.zig`):
+
+- `views.zig`
+- `derived_bindings.zig`
+- `idents.zig`
 
 Definition-aware matching and normalization support:
 
@@ -915,9 +921,12 @@ construction details directly into the line checker.
 
 ## Views, fresh binders, and derived bindings
 
-`src/frontend/compiler/views.zig`, `src/frontend/compiler/fresh_select.zig`, and
-`src/frontend/compiler/derived_bindings.zig` handle source-level annotations that
-sit on top of ordinary theorem application.
+`src/frontend/views.zig`, `src/frontend/compiler/fresh_select.zig`, and
+`src/frontend/derived_bindings.zig` handle source-level annotations that
+sit on top of ordinary theorem application. `views.zig` and
+`derived_bindings.zig` live at frontend level (not under `compiler/`)
+because the standalone inference solver consumes the same `ViewDecl` /
+`DerivedBinding` vocabulary and derived-binding replay.
 
 Views are stored as their own binder-indexed templates, together with a
 map from view binders back to rule binders and any `@recover` or

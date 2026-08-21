@@ -12,7 +12,7 @@ const ResolvedStructuralCombiner =
     @import("../../rewrite_registry.zig").ResolvedStructuralCombiner;
 const InferenceSolver = @import("../../inference_solver.zig").Solver;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
-const CompilerViews = @import("../views.zig");
+const CompilerViews = @import("../../views.zig");
 const ViewDecl = CompilerViews.ViewDecl;
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;

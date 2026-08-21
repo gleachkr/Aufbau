@@ -12,7 +12,7 @@ const RuleDecl = @import("../env.zig").RuleDecl;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
 const CompilerVars = @import("./vars.zig");
-const Idents = @import("./idents.zig");
+const Idents = @import("../idents.zig");
 
 const annotationMatchesTag = Idents.annotationMatchesTag;
 

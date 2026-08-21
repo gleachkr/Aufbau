@@ -45,7 +45,7 @@ pub const CompilerSupport = struct {
     pub const CheckedIr = @import("./frontend/checked_ir.zig");
     pub const Context = @import("./frontend/compiler/context.zig");
     pub const DerivedBindings =
-        @import("./frontend/compiler/derived_bindings.zig");
+        @import("./frontend/derived_bindings.zig");
     pub const DiagnosticSink =
         @import("./frontend/compiler/diagnostic_sink.zig");
     pub const Holes = @import("./frontend/compiler/holes.zig");
@@ -55,7 +55,7 @@ pub const CompilerSupport = struct {
     pub const Search = @import("./frontend/compiler/search.zig");
     pub const Unpack = @import("./frontend/unpack.zig");
     pub const Vars = @import("./frontend/compiler/vars.zig");
-    pub const Views = @import("./frontend/compiler/views.zig");
+    pub const Views = @import("./frontend/views.zig");
 };
 pub const DefOps = @import("./frontend/def_ops.zig");
 pub const Normalizer = @import("./frontend/normalizer.zig");

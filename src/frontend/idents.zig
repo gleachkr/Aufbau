@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const RuleDecl = @import("../env.zig").RuleDecl;
+const RuleDecl = @import("./env.zig").RuleDecl;
 
 pub fn annotationMatchesTag(ann: []const u8, tag: []const u8) bool {
     if (!std.mem.startsWith(u8, ann, tag)) return false;

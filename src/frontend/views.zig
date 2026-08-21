@@ -1,21 +1,21 @@
 const std = @import("std");
-const GlobalEnv = @import("../env.zig").GlobalEnv;
-const ExprId = @import("../expr.zig").ExprId;
-const TheoremContext = @import("../expr.zig").TheoremContext;
-const TemplateExpr = @import("../rules.zig").TemplateExpr;
-const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
+const GlobalEnv = @import("./env.zig").GlobalEnv;
+const ExprId = @import("./expr.zig").ExprId;
+const TheoremContext = @import("./expr.zig").TheoremContext;
+const TemplateExpr = @import("./rules.zig").TemplateExpr;
+const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
 const ResolvedStructuralCombiner =
-    @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
-const AcuiSupport = @import("../acui_support.zig");
-const DefOps = @import("../def_ops.zig");
+    @import("./rewrite_registry.zig").ResolvedStructuralCombiner;
+const AcuiSupport = @import("./acui_support.zig");
+const DefOps = @import("./def_ops.zig");
 const DerivedBindings = @import("./derived_bindings.zig");
-const BindingValidation = @import("../binding_validation.zig");
-const Expr = @import("../../trusted/expressions.zig").Expr;
-const SurfaceExpr = @import("../surface_expr.zig");
-const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
-const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
-const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
-const ViewTrace = @import("../view_trace.zig");
+const BindingValidation = @import("./binding_validation.zig");
+const Expr = @import("../trusted/expressions.zig").Expr;
+const SurfaceExpr = @import("./surface_expr.zig");
+const ArgInfo = @import("./parse_recovery.zig").ArgInfo;
+const AssertionStmt = @import("./parse_recovery.zig").AssertionStmt;
+const MM0Parser = @import("./parse_recovery.zig").MM0Parser;
+const ViewTrace = @import("./view_trace.zig");
 const Idents = @import("./idents.zig");
 
 const findRuleArgIndex = Idents.findRuleArgIndex;
