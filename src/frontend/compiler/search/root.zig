@@ -48,6 +48,6 @@ pub const ref_index = @import("./ref_index.zig");
 
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("./tests.zig");
+        _ = @import("./tests/root.zig");
     }
 }

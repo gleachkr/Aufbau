@@ -969,4 +969,4 @@ width is real.
 | `egraph/tests.zig` | egraph unit tests (public-API only) |
 | `conversion.zig` | `conversion?` driver: `@conversion` enrollment, pool/goal seeding, absorbed AC certificates, forced-negative reporting |
 | `conversion/lowerer.zig` | `Lowerer`: explanation chain → proof-script lines (AC re-treeing seams, congruence descent, pool-equation citation) |
-| `tests.zig` | subsystem unit tests |
+| `tests/` | subsystem unit tests, split by topic (`source`, `auto`, `apply`, `prune`, `forward`, `tunables`, `conversion`, `compute`, `alpha`); shared fixtures in `tests/helpers.zig` |
