@@ -162,7 +162,7 @@ last-resort materialization path for bound hidden-dummy witnesses.
 
 Theorem checking and emission:
 
-- `compiler/check.zig`
+- `compiler/check.zig` (facade; submodules under `compiler/check/`)
 - `compiler/check/matching.zig`
 - `compiler/theorem_boundary.zig`
 - `compiler/inference.zig`
@@ -481,7 +481,17 @@ binders that can be inferred".
 ## Theorem checking pipeline
 
 `src/frontend/compiler/check.zig` is the center of theorem-block
-checking.
+checking. It is a facade: the block/line driver (`checkTheoremBlock`)
+lives in `check.zig` itself, and the machinery lives in `compiler/check/`
+submodules that it re-exports where they form the public checking API —
+`types.zig` (shared context/assertion/probe types), `apply.zig` (the
+rule-application core and ref elaboration, plus the conclusion/ref probes
+used by the search frontends), `bindings.zig` (explicit-binding parsing,
+binder inference, candidate elaboration/validation), `inline_hints.zig`
+(expected-ref inference for inline minors and ACUI-spine hint demotion),
+`suggest.zig` (diagnostic name suggestions and label lookup),
+`checked_range.zig` (checked-IR ownership/leak validation), plus the
+older `matching.zig`, `diag_notes.zig`, and `freshen_retry.zig`.
 
 For each proof line it does roughly this:
 
@@ -525,8 +535,8 @@ script AST by the recursive `Ref.application` case, not by text-level
 desugaring. Top-level proof lines and inline applications share the same
 `RuleApplication` node shape.
 
-`compiler/check.zig` handles both forms through a shared application
-entry point. Top-level lines pass a concrete or holey assertion mode from
+`compiler/check/apply.zig` handles both forms through a shared
+application entry point. Top-level lines pass a concrete or holey assertion mode from
 the user-written formula. Inline applications pass
 `implicit_whole_conclusion`, which accepts the selected candidate rule's
 instantiated conclusion as the hidden line's assertion.
