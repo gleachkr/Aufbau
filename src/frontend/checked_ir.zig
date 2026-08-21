@@ -1,10 +1,10 @@
 const std = @import("std");
-const ExprId = @import("../expr.zig").ExprId;
-const PlaceholderId = @import("../expr.zig").PlaceholderId;
-const TheoremContext = @import("../expr.zig").TheoremContext;
-const GlobalEnv = @import("../env.zig").GlobalEnv;
-const BindingValidation = @import("../binding_validation.zig");
-const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
+const ExprId = @import("./expr.zig").ExprId;
+const PlaceholderId = @import("./expr.zig").PlaceholderId;
+const TheoremContext = @import("./expr.zig").TheoremContext;
+const GlobalEnv = @import("./env.zig").GlobalEnv;
+const BindingValidation = @import("./binding_validation.zig");
+const ArgInfo = @import("./parse_recovery.zig").ArgInfo;
 const CompilerDiag = @import("./diag.zig");
 
 pub const CheckedRef = union(enum) {

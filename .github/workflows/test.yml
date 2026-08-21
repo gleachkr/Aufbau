@@ -65,6 +65,12 @@ jobs:
       - name: Check release versions
         run: nix develop .#ci --command node scripts/check-version.mjs
 
+      - name: Check doc paths match the tree
+        run: nix develop .#ci --command node scripts/check-doc-paths.mjs
+
+      - name: Check test files are wired into a test root
+        run: nix develop .#ci --command node scripts/check-test-wiring.mjs
+
       - name: Check formatting
         run: nix develop .#ci --command zig fmt --check build.zig src
 

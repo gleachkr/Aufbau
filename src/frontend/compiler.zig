@@ -1,6 +1,6 @@
 const std = @import("std");
 const MmbWriter = @import("./compiler/mmb_writer.zig");
-const CompilerDiag = @import("./compiler/diag.zig");
+const CompilerDiag = @import("./diag.zig");
 const Pipeline = @import("./compiler/pipeline.zig");
 const DiagnosticSink = @import("./compiler/diagnostic_sink.zig")
     .DiagnosticSink;

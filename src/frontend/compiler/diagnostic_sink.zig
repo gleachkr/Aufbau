@@ -1,5 +1,5 @@
 const std = @import("std");
-const CompilerDiag = @import("./diag.zig");
+const CompilerDiag = @import("../diag.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticDetail = CompilerDiag.DiagnosticDetail;
 const DiagnosticPhase = CompilerDiag.DiagnosticPhase;

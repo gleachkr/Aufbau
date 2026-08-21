@@ -1,13 +1,13 @@
 const std = @import("std");
-const Span = @import("../proof_script.zig").Span;
-const ProofLine = @import("../proof_script.zig").ProofLine;
-const ProofScriptParser = @import("../proof_script.zig").Parser;
-const GlobalEnv = @import("../env.zig").GlobalEnv;
-const DiagScratch = @import("../diag_scratch.zig");
-const MathParseError = @import("../parse_recovery.zig").MathParseError;
-const MathSpan = @import("../parse_recovery.zig").MathSpan;
-const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
-const MM0Stmt = @import("../parse_recovery.zig").MM0Stmt;
+const Span = @import("./proof_script.zig").Span;
+const ProofLine = @import("./proof_script.zig").ProofLine;
+const ProofScriptParser = @import("./proof_script.zig").Parser;
+const GlobalEnv = @import("./env.zig").GlobalEnv;
+const DiagScratch = @import("./diag_scratch.zig");
+const MathParseError = @import("./parse_recovery.zig").MathParseError;
+const MathSpan = @import("./parse_recovery.zig").MathSpan;
+const MM0Parser = @import("./parse_recovery.zig").MM0Parser;
+const MM0Stmt = @import("./parse_recovery.zig").MM0Stmt;
 const locale_strings = @import("diag_strings.zig");
 
 pub const Lang = locale_strings.Lang;

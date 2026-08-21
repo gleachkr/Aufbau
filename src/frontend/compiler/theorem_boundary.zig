@@ -5,10 +5,10 @@ const GlobalEnv = @import("../env.zig").GlobalEnv;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const Inference = @import("./inference.zig");
 const Normalize = @import("./normalize.zig");
-const CompilerDiag = @import("./diag.zig");
+const CompilerDiag = @import("../diag.zig");
 const DebugConfig = @import("../debug.zig").DebugConfig;
 const DebugTrace = @import("../debug.zig");
-const CheckedIr = @import("./checked_ir.zig");
+const CheckedIr = @import("../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
 const appendTransportLine = CheckedIr.appendTransportLine;
 

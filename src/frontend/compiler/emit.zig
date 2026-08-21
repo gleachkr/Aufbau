@@ -14,7 +14,7 @@ const TermStmt = @import("../parse_recovery.zig").TermStmt;
 const ProofCmd = @import("../../trusted/proof.zig").ProofCmd;
 const UnifyCmd = @import("../../trusted/proof.zig").UnifyCmd;
 const Arg = @import("../../trusted/args.zig").Arg;
-const CheckedIr = @import("./checked_ir.zig");
+const CheckedIr = @import("../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
 const CheckedRef = CheckedIr.CheckedRef;
 

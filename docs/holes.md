@@ -329,7 +329,7 @@ The trust boundary holds:
 
 - the theorem-local DAG is concrete; only the surface `Expr` carries
   `.hole`;
-- `compiler/checked_ir.zig` and `compiler/emit.zig` reject any leftover
+- `checked_ir.zig` and `compiler/emit.zig` reject any leftover
   surface placeholder, so a bug that lets a hole survive surfaces as a
   loud frontend error rather than as suspect MMB output;
 - the trusted MMB verifier and MM0/MMB cross-checker are unchanged.

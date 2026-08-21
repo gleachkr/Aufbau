@@ -7,7 +7,7 @@ pub const StatementSink =
 pub const DebugConfig = @import("./frontend/debug.zig").DebugConfig;
 pub const advertised_channel_list =
     @import("./frontend/debug.zig").advertised_channel_list;
-const CompilerDiag = @import("./frontend/compiler/diag.zig");
+const CompilerDiag = @import("./frontend/diag.zig");
 pub const CompilerDiagnostic = CompilerDiag.Diagnostic;
 pub const CompilerDiagnosticSeverity = CompilerDiag.DiagnosticSeverity;
 pub const CompilerDiagnosticSource = CompilerDiag.DiagnosticSource;
@@ -42,7 +42,7 @@ pub const Frontend = struct {
 };
 
 pub const CompilerSupport = struct {
-    pub const CheckedIr = @import("./frontend/compiler/checked_ir.zig");
+    pub const CheckedIr = @import("./frontend/checked_ir.zig");
     pub const Context = @import("./frontend/compiler/context.zig");
     pub const DerivedBindings =
         @import("./frontend/compiler/derived_bindings.zig");

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const DebugConfig = @import("../debug.zig").DebugConfig;
 const DiagnosticSink = @import("./diagnostic_sink.zig").DiagnosticSink;
-const CompilerDiag = @import("./diag.zig");
+const CompilerDiag = @import("../diag.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticPhase = CompilerDiag.DiagnosticPhase;
 const GlobalEnv = @import("../env.zig").GlobalEnv;

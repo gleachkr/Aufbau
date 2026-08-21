@@ -1,7 +1,7 @@
 const std = @import("std");
 const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
-const CompilerDiag = @import("./diag.zig");
+const CompilerDiag = @import("../diag.zig");
 const Span = @import("../proof_script.zig").Span;
 
 pub const Entry = struct {

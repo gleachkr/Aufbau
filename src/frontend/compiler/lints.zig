@@ -6,8 +6,8 @@ const RuleDecl = @import("../env.zig").RuleDecl;
 const TermDecl = @import("../env.zig").TermDecl;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const Span = @import("../proof_script.zig").Span;
-const DiagnosticDetail = @import("./diag.zig").DiagnosticDetail;
-const DiagnosticSource = @import("./diag.zig").DiagnosticSource;
+const DiagnosticDetail = @import("../diag.zig").DiagnosticDetail;
+const DiagnosticSource = @import("../diag.zig").DiagnosticSource;
 const CompilerContext = @import("./context.zig").CompilerContext;
 
 const UseState = struct {

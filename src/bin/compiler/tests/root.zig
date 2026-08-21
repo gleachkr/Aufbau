@@ -3,6 +3,7 @@ const json_out = @import("../json_out.zig");
 
 comptime {
     _ = @import("./lsp_tests.zig");
+    _ = @import("../diag_json.zig");
 }
 
 // Regression: a diagnostic echoes an offending source token verbatim into its

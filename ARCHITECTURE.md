@@ -137,7 +137,7 @@ Compiler API and orchestration:
 
 - `compiler.zig`
 - `compiler/pipeline.zig`
-- `compiler/diag.zig`
+- `diag.zig` and `diag_strings.zig`
 - `debug.zig`
 
 Compiler data models and theorem-local state:
@@ -146,7 +146,7 @@ Compiler data models and theorem-local state:
 - `expr.zig`
 - `rules.zig`
 - `surface_expr.zig`
-- `compiler/checked_ir.zig`
+- `checked_ir.zig`
 - `compiler/vars.zig`
 
 `surface_expr.zig` provides helpers for the surface `Expr` tree that
@@ -170,9 +170,9 @@ Theorem checking and emission:
 - `compiler/emit.zig`
 - `compiler/metadata.zig`
 - `compiler/views.zig`
-- `compiler/fresh.zig`
+- `compiler/fresh_select.zig`
 - `compiler/holes.zig`
-- `derived_bindings.zig`
+- `compiler/derived_bindings.zig`
 
 `compiler/holes.zig` owns proof-side hole elaboration: parsing a
 holey assertion via the trusted hole-aware parser entry point,
@@ -197,18 +197,22 @@ Definition-aware matching and normalization support:
 - `canonicalizer.zig`
 - `acui_support.zig`
 - `rewrite_registry.zig`
+- `normalized_compare.zig`
 - `normalizer.zig`
 - `normalizer/`
 
 Parsing, output, and debug helpers:
 
+- `parse_recovery.zig`
 - `proof_script.zig`
-- `mmb_writer.zig`
+- `compiler/mmb_writer.zig`
 - `view_trace.zig`
-- `term_annotations.zig`
 
-`term_annotations.zig` is still mostly a placeholder. Right now it only
-recognizes `@acui` and rejects unknown term-level annotations.
+`parse_recovery.zig` is the frontend's facade over the trusted MM0
+parser: it re-exports the core statement types, collects annotations,
+carries diagnostic span/name overrides, and adds the wrapper-level
+parse errors (fillers, local defs) that the diagnostic catalog is
+checked to cover at compile time.
 
 ### Wiring: `src/lib.zig` and `src/bin/`
 
@@ -592,7 +596,7 @@ cross-checker do not know holes exist.
 
 ### Checked-line IR and emission boundary
 
-`src/frontend/compiler/checked_ir.zig` defines the checked theorem IR.
+`src/frontend/checked_ir.zig` defines the checked theorem IR.
 
 The theorem checker records two kinds of checked lines:
 
@@ -901,8 +905,8 @@ construction details directly into the line checker.
 
 ## Views, fresh binders, and derived bindings
 
-`src/frontend/compiler/views.zig`, `src/frontend/compiler/fresh.zig`, and
-`src/frontend/derived_bindings.zig` handle source-level annotations that
+`src/frontend/compiler/views.zig`, `src/frontend/compiler/fresh_select.zig`, and
+`src/frontend/compiler/derived_bindings.zig` handle source-level annotations that
 sit on top of ordinary theorem application.
 
 Views are stored as their own binder-indexed templates, together with a
@@ -936,7 +940,7 @@ normalization proof lines.
 ## Backend emission
 
 `src/frontend/compiler/emit.zig` lowers checked frontend IR to actual MMB
-bytes. `src/frontend/mmb_writer.zig` then serializes the final file
+bytes. `src/frontend/compiler/mmb_writer.zig` then serializes the final file
 layout.
 
 Important pieces are:

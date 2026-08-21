@@ -7,7 +7,7 @@ const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 const Expr = @import("../../../trusted/expressions.zig").Expr;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
-const CompilerDiag = @import("../diag.zig");
+const CompilerDiag = @import("../../diag.zig");
 const CompilerVars = @import("../vars.zig");
 const Emit = @import("../emit.zig");
 

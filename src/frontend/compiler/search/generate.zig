@@ -1814,7 +1814,7 @@ fn acceptedConclusion(
 fn viewSurfaceConclusion(
     driver: *Driver,
     theorem: *TheoremContext,
-    rule_line: @import("../checked_ir.zig").CheckedLine.RuleLine,
+    rule_line: @import("../../checked_ir.zig").CheckedLine.RuleLine,
 ) anyerror!?ExprId {
     const view = driver.context.views.get(rule_line.rule_id) orelse return null;
     const view_bindings = try driver.scratch.alloc(?ExprId, view.num_binders);

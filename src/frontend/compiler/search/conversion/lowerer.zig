@@ -30,7 +30,7 @@ const varIdForLeaf = conversion.varIdForLeaf;
 const flattenAcExpr = conversion.flattenAcExpr;
 const Normalizer = @import("../../../normalizer.zig").Normalizer;
 const Normalize = @import("../../normalize.zig");
-const CheckedLine = @import("../../checked_ir.zig").CheckedLine;
+const CheckedLine = @import("../../../checked_ir.zig").CheckedLine;
 
 /// A reference as it is written in a proof line: `#name`/`#index` for a
 /// hypothesis, the label for an earlier line. Depends on nothing but the

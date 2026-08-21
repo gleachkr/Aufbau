@@ -1,13 +1,13 @@
 const std = @import("std");
 
-const DefOps = @import("../def_ops.zig");
-const Expr = @import("../../trusted/expressions.zig").Expr;
-const ExprId = @import("../expr.zig").ExprId;
-const GlobalEnv = @import("../env.zig").GlobalEnv;
-const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
-const TemplateExpr = @import("../rules.zig").TemplateExpr;
-const Normalizer = @import("../normalizer.zig").Normalizer;
-const Canonicalizer = @import("../canonicalizer.zig").Canonicalizer;
+const DefOps = @import("./def_ops.zig");
+const Expr = @import("../trusted/expressions.zig").Expr;
+const ExprId = @import("./expr.zig").ExprId;
+const GlobalEnv = @import("./env.zig").GlobalEnv;
+const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
+const TemplateExpr = @import("./rules.zig").TemplateExpr;
+const Normalizer = @import("./normalizer.zig").Normalizer;
+const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
 const CheckedLine = @import("./checked_ir.zig").CheckedLine;
 const CompilerDiag = @import("./diag.zig");
 

@@ -10,7 +10,7 @@ const MissingCongruenceReason = DiagScratch.MissingCongruenceReason;
 const ResolvedRelation = @import("../rewrite_registry.zig").ResolvedRelation;
 const ResolvedStructuralCombiner =
     @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
-const CheckedIr = @import("../compiler/checked_ir.zig");
+const CheckedIr = @import("../checked_ir.zig");
 const DebugTrace = @import("../debug.zig");
 const ViewTrace = @import("../view_trace.zig");
 const Support = @import("./support.zig");
