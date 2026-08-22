@@ -965,7 +965,9 @@ width is real.
 | `ref_index.zig` / `refs.zig` / `rule_index.zig` | candidate/ref indexing |
 | `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome) + `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics) |
 | `rank.zig` | candidate ranking |
-| `egraph.zig` | `conversion?` e-graph: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation, explanation extraction |
+| `egraph.zig` | `conversion?` e-graph core: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation |
+| `egraph/alpha.zig` | alpha pairing scheduler (`collectAlphaMatches`): pairs `@conversion alpha` rule instances under a lexical renaming; its settled cache and watermarks live on the `EGraph` |
+| `egraph/explain.zig` | explanation extraction (`ExplainCtx`) + the `Term`/`Step` vocabulary, re-exported through `egraph.zig` |
 | `egraph/tests.zig` | egraph unit tests (public-API only) |
 | `conversion.zig` | `conversion?` driver: `@conversion` enrollment, pool/goal seeding, absorbed AC certificates, forced-negative reporting |
 | `conversion/lowerer.zig` | `Lowerer`: explanation chain → proof-script lines (AC re-treeing seams, congruence descent, pool-equation citation) |
