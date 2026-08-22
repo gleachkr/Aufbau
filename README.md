@@ -46,7 +46,12 @@ WebAssembly and browser packages are published on npm:
 
 Each package README contains a minimal usage example.
 
-## Documentation
+## User Documentation
+
+A manual with some interactive examples is available at 
+<https://grahamlk.me/Aufbau/manual>
+
+## Developer Documentation
 
 - [`CHANGELOG.md`](CHANGELOG.md) — release history and unreleased changes
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — structure and trust boundary

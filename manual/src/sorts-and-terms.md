@@ -47,7 +47,7 @@ $ imp a (imp b a) $
 
 Constructors and variables are the only syntactic forms that MM0 supports.
 The `->` in earlier chapters was notation for the `imp` constructor. Here is
-the theory from the introduction without that notation.
+the implication fragment from earlier chapters without that notation.
 
 ```aufbau-proof doc=prefix
 @@mm0

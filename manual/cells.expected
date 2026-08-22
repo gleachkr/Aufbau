@@ -18,7 +18,6 @@ first-proof.md doc:hilbert: ok
 hilbert-calculus.md doc:hilbert: ok
 holes.md cell1: ok
 holes.md cell2: ok
-introduction.md cell1: ok
 lambda-calculus.md doc:lam: ok
 lambda-calculus.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof
 lambda-calculus.md cell2: error: error: proof line is justified by a search placeholder, not a completed proof

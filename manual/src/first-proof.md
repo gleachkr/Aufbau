@@ -1,11 +1,12 @@
 # Your first proof
 
-The proof in the introduction had no hypotheses. This chapter adds *modus
-ponens* and proves a result from an assumed proposition.
+This chapter shows how proofs and theories work with a minimal theory 
+containing *weakening* and *modus ponens* and a proof that applies these axioms 
+to an assumed proposition.
 
 ## The theory
 
-This time the theory sits in its own editable cell.
+The theory sits in its own editable cell.
 
 ```aufbau-proof doc=hilbert
 @@mm0
@@ -16,16 +17,17 @@ axiom h1 (a b: wff): $ a -> (b -> a) $;
 axiom mp (a b: wff): $ a $ > $ a -> b $ > $ b $;
 ```
 
-The new axiom is `mp`: given a proof of `a` and a proof of `a -> b`, you may
-conclude `b`. In a declaration, `>` separates hypotheses from what follows,
-so `mp` has two hypotheses and the conclusion `b`. The binder list
-`(a b: wff)` states the axiom for any two propositions.
+The first axiom is `h1`. It's a single proposition scheme that says any 
+proposition of the form `a -> (b -> a)` is true. The second axiom is `mp`: 
+given a proof of `a` and a proof of `a -> b`, you may conclude `b`. In a 
+declaration, `>` separates hypotheses from what follows, so `mp` has two 
+hypotheses and the conclusion `b`. The binder list `(a b: wff)` states the 
+axiom for any two propositions.
 
 ## Using it
 
-Now a lemma in that theory. Because the cell below is marked as part of the
-same document as the theory cell, it is checked against those axioms. From a
-hypothesis `p`, we prove `q -> p`: first weaken with `h1`, then apply `mp`.
+Now, a lemma. From a hypothesis `p`, we prove `q -> p`: first weaken with `h1`, 
+then apply `mp`.
 
 ```aufbau-proof doc=hilbert
 lemma weaken_under (p q: wff): $ p $ > $ q -> p $
