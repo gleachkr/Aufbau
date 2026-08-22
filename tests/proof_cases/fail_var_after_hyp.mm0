@@ -1,0 +1,6 @@
+provable sort wff;
+sort obj;
+term eq (a b: obj): wff;
+-- mm0-c rejects hypothesis binders that precede variable binders
+-- ("hypotheses must follow variables"); abc must match.
+axiom bad (y z: obj) (hy: $ eq y z $) (a b: obj): $ eq a b $;

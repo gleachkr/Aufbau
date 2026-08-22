@@ -703,6 +703,93 @@ test "MM0 parser rejects unknown sorts in theorem binders" {
     try std.testing.expectError(error.UnknownSort, parser.next());
 }
 
+test "MM0 parser rejects variable binders after a hypothesis binder" {
+    // mm0-c: "hypotheses must follow variables" (parser.c:414).
+    const src =
+        \\provable sort wff;
+        \\sort obj;
+        \\term eq (a b: obj): wff;
+        \\axiom bad (y z: obj) (hy: $ eq y z $) (a b: obj): $ eq a b $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    try std.testing.expectError(error.VariableAfterHypothesis, parser.next());
+}
+
+test "MM0 parser rejects arrow-tail variables after hypotheses" {
+    // Same rule in the arrow tail (mm0-c parser.c:466), for a hypothesis
+    // that appeared as an earlier tail formula...
+    {
+        const src =
+            \\provable sort wff;
+            \\sort obj;
+            \\term eq (a b: obj): wff;
+            \\axiom bad (y z: obj): $ eq y z $ > obj > $ eq z y $;
+        ;
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var parser = MM0Parser.init(src, arena.allocator());
+        _ = (try parser.next()).?;
+        _ = (try parser.next()).?;
+        _ = (try parser.next()).?;
+        try std.testing.expectError(
+            error.VariableAfterHypothesis,
+            parser.next(),
+        );
+    }
+
+    // ...and for one that appeared as a binder.
+    {
+        const src =
+            \\provable sort wff;
+            \\sort obj;
+            \\term eq (a b: obj): wff;
+            \\axiom bad (y z: obj) (hy: $ eq y z $): obj > $ eq z y $;
+        ;
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var parser = MM0Parser.init(src, arena.allocator());
+        _ = (try parser.next()).?;
+        _ = (try parser.next()).?;
+        _ = (try parser.next()).?;
+        try std.testing.expectError(
+            error.VariableAfterHypothesis,
+            parser.next(),
+        );
+    }
+}
+
+test "MM0 parser accepts hypotheses after all variables" {
+    const src =
+        \\provable sort wff;
+        \\sort obj;
+        \\term eq (a b: obj): wff;
+        \\axiom good {x: obj} (y z: obj) (hy: $ eq y z $):
+        \\  $ eq z y $ > $ eq y z $;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    const stmt = (try parser.next()).?;
+    try std.testing.expectEqual(@as(usize, 3), stmt.assertion.args.len);
+    try std.testing.expectEqual(@as(usize, 2), stmt.assertion.hyps.len);
+}
+
 test "MM0 parser rejects unknown sorts in defs and coercions" {
     {
         const src =

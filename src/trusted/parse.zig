@@ -75,6 +75,7 @@ pub const ParseError = error{
     UnknownVariable,
     UnterminatedMathStr,
     UnterminatedString,
+    VariableAfterHypothesis,
 };
 
 pub const MM0Stmt = union(enum) {
@@ -921,6 +922,14 @@ pub const MM0Parser = struct {
                 return formula;
             }
 
+            // Arrow-tail face of the same mm0-c rule (parser.c:466): once a
+            // hypothesis has appeared — as a binder or an earlier tail
+            // formula — only formulas may follow.
+            if (hyps_rev.items.len != 0) {
+                self.recordCurrentTokenError();
+                return error.VariableAfterHypothesis;
+            }
+
             const arg = try self.parseSortExpr(ctx.bound_names.items);
             const expr = try self.makeVariable(arg.sort_name, arg.bound, arg.deps);
             try ctx.arg_infos.append(self.allocator, arg);
@@ -958,12 +967,14 @@ pub const MM0Parser = struct {
 
             var names: std.ArrayListUnmanaged([]const u8) = .{};
             var is_dummy_buf: std.ArrayListUnmanaged(bool) = .{};
+            var first_name_span: ?MathSpan = null;
             while (true) {
                 self.skipWhitespaceAndComments();
                 if (self.peek() == ':') break;
                 const is_dummy = self.peek() == '.';
                 if (is_dummy) self.pos += 1;
                 const ident_info = try self.consumeRequiredIdentInfo();
+                if (first_name_span == null) first_name_span = ident_info.span;
                 if (self.isRegisteredHoleToken(ident_info.text)) {
                     self.last_error_span = ident_info.span;
                     return error.HoleTokenNameCollision;
@@ -994,6 +1005,15 @@ pub const MM0Parser = struct {
                 }
                 self.skipWhitespaceAndComments();
                 continue;
+            }
+
+            // mm0-c requires every hypothesis to come after all variable
+            // binders ("hypotheses must follow variables", parser.c:414);
+            // accepting the interleaved form here would produce .mm0 files
+            // other verifiers reject.
+            if (hyps_rev.items.len != 0) {
+                self.last_error_span = first_name_span;
+                return error.VariableAfterHypothesis;
             }
 
             const arg = try self.parseBinderType(ctx.bound_names.items, is_bound);
