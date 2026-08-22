@@ -12,27 +12,54 @@
 all_mono
 --------
 
-l1: $ ∀ x (F x → G x) , ∀ x (F x) ⊢ ∀ x (F x → G x) $ by ax
-l2: $ ∀ x (F x → G x) , ∀ x (F x) ⊢ ∀ x (F x) $ by ax
-l3: $ ∀ x (F x → G x) , ∀ x (F x) ⊢ F a → G a $ by all_elim [l1]
-l4: $ ∀ x (F x → G x) , ∀ x (F x) ⊢ F a $ by all_elim [l2]
-l5: $ ∀ x (F x → G x) , ∀ x (F x) ⊢ G a $ by imp_elim [l3, l4]
-l6: $ ∀ x (F x → G x) , ∀ x (F x) ⊢ ∀ x (G x) $ by all_intro [l5]
+l1: $ ∀ x (F(x) → G(x)) ; ∀ x F(x) ⊢ ∀ x (F(x) → G(x)) $ by ax
+l2: $ ∀ x (F(x) → G(x)) ; ∀ x F(x) ⊢ ∀ x F(x) $ by ax
+l3: $ ∀ x (F(x) → G(x)) ; ∀ x F(x) ⊢ F(a) → G(a) $ by all_elim [l1]
+l4: $ ∀ x (F(x) → G(x)) ; ∀ x F(x) ⊢ F(a) $ by all_elim [l2]
+l5: $ ∀ x (F(x) → G(x)) ; ∀ x F(x) ⊢ G(a) $ by imp_elim [l3, l4]
+l6: $ ∀ x (F(x) → G(x)) ; ∀ x F(x) ⊢ ∀ x G(x) $ by all_intro [l5]
 
 all_to_ex
 ---------
 
-l1: $ ∀ x (F x) ⊢ ∀ x (F x) $ by ax
-l2: $ ∀ x (F x) ⊢ F a $ by all_elim [l1]
-l3: $ ∀ x (F x) ⊢ ∃ x (F x) $ by ex_intro [l2]
+l1: $ ∀ x F(x) ⊢ ∀ x F(x) $ by ax
+l2: $ ∀ x F(x) ⊢ F(a) $ by all_elim [l1]
+l3: $ ∀ x F(x) ⊢ ∃ x F(x) $ by ex_intro [l2]
 
 ex_mono
 -------
 
-l1: $ ∃ x (F x) , ∀ x (F x → G x) ⊢ ∃ x (F x) $ by ax
-l2: $ ∀ x (F x → G x) , F b ⊢ ∀ x (F x → G x) $ by ax
-l3: $ ∀ x (F x → G x) , F b ⊢ F b $ by ax
-l4: $ ∀ x (F x → G x) , F b ⊢ F b → G b $ by all_elim [l2]
-l5: $ ∀ x (F x → G x) , F b ⊢ G b $ by imp_elim [l4, l3]
-l6: $ ∀ x (F x → G x) , F b ⊢ ∃ x (G x) $ by ex_intro [l5]
-l7: $ ∃ x (F x) , ∀ x (F x → G x) ⊢ ∃ x (G x) $ by ex_elim [l1, l6]
+l1: $ ∃ x F(x) ; ∀ x (F(x) → G(x)) ⊢ ∃ x F(x) $ by ax
+l2: $ ∀ x (F(x) → G(x)) ; F(b) ⊢ ∀ x (F(x) → G(x)) $ by ax
+l3: $ ∀ x (F(x) → G(x)) ; F(b) ⊢ F(b) $ by ax
+l4: $ ∀ x (F(x) → G(x)) ; F(b) ⊢ F(b) → G(b) $ by all_elim [l2]
+l5: $ ∀ x (F(x) → G(x)) ; F(b) ⊢ G(b) $ by imp_elim [l4, l3]
+l6: $ ∀ x (F(x) → G(x)) ; F(b) ⊢ ∃ x G(x) $ by ex_intro [l5]
+l7: $ ∃ x F(x) ; ∀ x (F(x) → G(x)) ⊢ ∃ x G(x) $ by ex_elim [l1, l6]
+
+-- Two-place atomic sentences. Instantiating ∀x R(x,x) substitutes into both
+-- arguments at once; ∀x R(x,e) substitutes into the first and leaves the
+-- name e alone, which is where sb_s_comma / sb_s_var / sb_s_irrel divide the
+-- work between them.
+
+r_diag
+------
+
+l1: $ ∀ x R(x,x) ⊢ ∀ x R(x,x) $ by ax
+l2: $ ∀ x R(x,x) ⊢ R(a,a) $ by all_elim [l1]
+l3: $ ∀ x R(x,x) ⊢ ∃ x R(x,x) $ by ex_intro [l2]
+
+r_inst
+------
+
+l1: $ ∀ x R(x,e) ⊢ ∀ x R(x,e) $ by ax
+l2: $ ∀ x R(x,e) ⊢ R(a,e) $ by all_elim [l1]
+l3: $ ∀ x R(x,e) ⊢ ∃ x R(x,e) $ by ex_intro [l2]
+
+-- The parser reads R(u,v,w) left-associated, but @acui seq_assoc makes the
+-- argument sequence flat, so the assertion may group it any way it likes.
+
+r_assoc
+-------
+
+l1: $ R(u,v,w) ⊢ R(u,(v,w)) $ by ax
