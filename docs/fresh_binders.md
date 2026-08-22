@@ -273,9 +273,9 @@ application.
 
 For more background, see section 2.3 of Mario Carneiro's *Metamath
 Zero: The Cartesian Theorem Prover*, and the MM0 specs in Mario's repo:
-[`mm0.md`, under
+[the MM0 spec, under
 "Verification"](https://github.com/digama0/mm0/blob/master/mm0.md#verification)
-and [`mmb.md`, under
+and [the MMB spec, under
 "Proof Checking"](https://github.com/digama0/mm0/blob/master/mm0-c/mmb.md#proof-checking).
 
 If a regular rule argument still depends on a bound binder, the

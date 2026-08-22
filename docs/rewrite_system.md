@@ -374,8 +374,7 @@ canonical form meets a written one (the goal, the reference, a rule
 instance's own shape). This is what keeps large conjunctions tractable:
 the tree representation's AC closure grows as `3^n` e-nodes and starts
 losing forced negatives around seven atoms, where the absorbed
-representation stays linear (see
-`docs/design_notes/ac_representation.md`). An operator with only one of
+representation stays linear. An operator with only one of
 the two certificates (or without `@congr` coverage) enrolls for ordinary
 `both`-ways saturation, unchanged — note this enables *both* orientations
 even if the law was previously annotated with a single direction token;

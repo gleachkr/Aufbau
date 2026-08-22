@@ -212,9 +212,7 @@ consequent from the line goal). If the outer rule leaves the slot's *own*
 goal undetermined — a witness argument the rule's conclusion doesn't pin —
 an inline `auto?` falls back to `exact?`-style direct matching for that
 slot rather than generating. When you need generation there, lift the
-sub-goal onto its own top-level `auto?` line and reference it. (See
-`docs/design_notes/inline_auto_open_slot_existential_gap.md` for the
-details of this boundary.)
+sub-goal onto its own top-level `auto?` line and reference it.
 
 ## The editing workflow
 
@@ -621,8 +619,7 @@ extra references and the search runs once more. In effect the annotations
 let the author enumerate the *analytic leaf set* of the theory — the
 context members, implication antecedents, and disjuncts that its
 elimination rules move around — so the search has the raw material it
-needs. See `docs/design_notes/trigger_seeding.md` for guidance on what to
-enumerate.
+needs.
 
 ## A worked example
 
