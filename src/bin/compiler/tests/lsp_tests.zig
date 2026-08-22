@@ -895,6 +895,11 @@ test "LSP placeholder status diagnostics report a search miss as error" {
         "auto? can additionally synthesize sub-proofs",
     ));
     try std.testing.expect(transport_state.containsMessage("\"severity\":1"));
+    // The code is how a client running its own compile (the browser editor)
+    // tells search status apart from the diagnostics it already has.
+    try std.testing.expect(transport_state.containsMessage(
+        "\"code\":\"search-status\"",
+    ));
 }
 
 test "LSP placeholder diagnostics report invalid search parameters" {

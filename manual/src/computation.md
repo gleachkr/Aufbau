@@ -151,7 +151,9 @@ look the same.
 ## Reading a miss
 
 A failed `conversion?` says how it failed, which sometimes conveys useful
-information. This cell asks for a conversion that does not exist:
+information. This cell asks for a conversion that does not exist; put the
+cursor on the `conversion?` to run the search, and the report appears under
+the placeholder:
 
 ```aufbau-proof prelude=nd-base,fol-base
 @@mm0

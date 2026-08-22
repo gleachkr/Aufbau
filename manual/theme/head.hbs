@@ -37,11 +37,31 @@
 <style>
   .aufbau-cell {
     margin: 1.2rem 0;
+    /* Proof lines run much longer than a line of prose, so let cells spill
+       out of the 750px reading column when the window has room to spare.
+       The spill is end-side only: that margin is ragged anyway, and every
+       cell keeps the same start edge as the prose. The breakpoints stay
+       inside the free space beside `.content main` on that one side, with
+       the 300px sidebar open; below 1200px there is none, so the cell sits
+       in the column and the editor falls back to wrapping. */
+    margin-inline-end: calc(-1 * var(--aufbau-cell-bleed, 0px));
+  }
+  @media only screen and (min-width: 1200px) {
+    .aufbau-cell { --aufbau-cell-bleed: 4rem; }
+  }
+  @media only screen and (min-width: 1500px) {
+    .aufbau-cell { --aufbau-cell-bleed: 11rem; }
+  }
+  @media only screen and (min-width: 1800px) {
+    .aufbau-cell { --aufbau-cell-bleed: 18rem; }
   }
   aufbau-proof,
   aufbau-theory,
   aufbau-index {
     display: block;
     margin: 0.6rem 0;
+    /* Match the size mdbook gives its code blocks (--code-font-size); the
+       cells inherit the prose size otherwise, which is a fifth wider. */
+    font-size: var(--code-font-size, 0.875em);
   }
 </style>

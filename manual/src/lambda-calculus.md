@@ -179,52 +179,40 @@ is emitted explicitly.
 ## The Y combinator
 
 The fixed-point combinator `Y = λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))`
-satisfies `Y · g = g · (Y · g)` for any `g`. The term `Y · g` has no normal
-form, but the proof needs no limit of reductions: writing `ω` for `λ x. g · (x
-· x)`, one beta step takes `Y · g` to `ω · ω`, and one more takes `ω · ω` to `g
-· (ω · ω)` — so both sides of the fixed-point equation reduce to the same
-thing:
-
-```aufbau-proof doc=lam
-@@mm0
-theorem y_reduce {f x: tm} (g: tm):
-  $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $;
-@@auf
-y_reduce
---------
-l1: $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = (λ x. g · (x · x)) · (λ x. g · (x · x)) $ by beta
-l2: $ (λ x. g · (x · x)) · (λ x. g · (x · x)) = g · ((λ x. g · (x · x)) · (λ x. g · (x · x))) $ by beta
-l3: $ g = g $ by eq_refl
-l4: $ (λ x. g · (x · x)) · (λ x. g · (x · x)) = (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g $ by eq_symm [l1]
-l5: $ g · ((λ x. g · (x · x)) · (λ x. g · (x · x))) = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $ by app_congr [l3, l4]
-l6: $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ x. g · (x · x)) · (λ x. g · (x · x))) $ by eq_trans [l1, l2]
-l7: $ (λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g = g · ((λ f. (λ x. f · (x · x)) · (λ x. f · (x · x))) · g) $ by eq_trans [l6, l5]
-```
-
-`conversion?` also finds this equation. Unlike one-way normalization, e-graph
-saturation records the term and `g · (itself)` in one equivalence class and
-extracts a finite chain between them.
-
-The term can be named by a definition whose bound variables become dummy
-binders:
+satisfies `Y · g = g · (Y · g)` for any `g`. Name it with a definition, whose
+bound variables become dummy binders:
 
 ```aufbau-theory doc=lam
 def Y {.f .x: tm}: tm = $ λ f. (λ x. f · (x · x)) · (λ x. f · (x · x)) $;
 ```
 
-The fixed-point equation can now be stated the way one would want to cite it.
-The compiler matches `y_reduce` through the hidden definition structure,
-drawing the variables that stand in for `Y`'s dummy binders from the sort's
-`@vars` pool:
+Writing `ω` for `λ u. g · (u · u)`, one beta step takes `Y · g` to `ω · ω`,
+and one more takes `ω · ω` to `g · (ω · ω)`, so both sides of the fixed-point
+equation reduce to a common term.
 
 ```aufbau-proof doc=lam
 @@mm0
-theorem y_fixpoint (g: tm): $ Y · g = g · (Y · g) $;
+theorem y_reduce (g: tm): $ Y · g = g · (Y · g) $;
 @@auf
-y_fixpoint
-----------
-l1: $ Y · g = g · (Y · g) $ by y_reduce
+y_reduce
+--------
+l1: $ Y · g = (λ u. g · (u · u)) · (λ u. g · (u · u)) $ by beta
+l2: $ (λ u. g · (u · u)) · (λ u. g · (u · u)) = g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) $ by beta
+l3: $ g = g $ by eq_refl
+l4: $ (λ u. g · (u · u)) · (λ u. g · (u · u)) = Y · g $ by eq_symm [l1]
+l5: $ g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) = g · (Y · g) $ by app_congr [l3, l4]
+l6: $ Y · g = g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) $ by eq_trans [l1, l2]
+l7: $ Y · g = g · (Y · g) $ by eq_trans [l6, l5]
 ```
+
+`l1` applies `beta` to a goal whose left side is `Y`, not a visible 
+abstraction; the compiler unfolds the definition to find the redex.
+
+`conversion?` can find this equation, but only when the definition of `Y` is 
+used rather than the defined term `Y`. Only annotated definitions take part in 
+conversion, and a definition with hidden dummy binders can be folded but never 
+unfolded during conversion (see [Computation](computation.md)), so `Y` is 
+opaque to that search method.
 
 ## The whole page
 

@@ -76,6 +76,7 @@ class LspRpc {
     this.server = server;
     this.nextId = 1;
     this.pending = new Map();
+    this.listeners = new Set();
     server.subscribe((raw) => {
       let msg;
       try {
@@ -83,12 +84,23 @@ class LspRpc {
       } catch {
         return;
       }
+      if (msg.id == null && msg.method) {
+        for (const listener of this.listeners) listener(msg);
+        return;
+      }
       const waiter = msg.id != null && this.pending.get(msg.id);
-      if (!waiter) return; // a notification (e.g. publishDiagnostics)
+      if (!waiter) return;
       this.pending.delete(msg.id);
       if (msg.error) waiter.reject(new Error(msg.error.message ?? "LSP error"));
       else waiter.resolve(msg.result ?? null);
     });
+  }
+
+  // Server-initiated notifications. One server instance is shared by every
+  // document on the page, so a listener must filter on the uri it cares about.
+  onNotification(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   request(method, params) {
@@ -131,6 +143,11 @@ function loadLspOnce() {
 }
 
 let lspDocSeq = 0;
+
+// `Diagnostic.code` the server puts on placeholder search-status entries. They
+// are the one thing publishDiagnostics carries that the compiler path cannot
+// produce, since running the search is an editor-session act.
+const SEARCH_STATUS_CODE = "search-status";
 
 // Completion fragments: a word (rule/term names, `auto?`), or a run of
 // notation-symbol characters (`->`, `∀`, `∧`, `==>`, …) — everything except
@@ -550,6 +567,10 @@ class AufbauDocument {
       documentRegistry.get(this.key) === this
     ) {
       documentRegistry.delete(this.key);
+      // The language server outlives this document; drop our subscription so
+      // a retired coordinator isn't kept alive by the listener set.
+      this._lspUnsubscribe?.();
+      this._lspUnsubscribe = null;
     }
   }
 
@@ -690,7 +711,18 @@ class AufbauDocument {
         aufVersion: 0,
         lastMm0: null,
         lastAuf: null,
+        aufRanges: [],
       };
+      // The server republishes the proof document's diagnostics whenever a
+      // placeholder search concludes, and that publish is the only place the
+      // failure reason for a missed search exists — a failed search returns no
+      // code actions at all. Compile feedback still comes from the compiler
+      // path; only the search-status entries are taken from here.
+      this._lspUnsubscribe = rpc.onNotification((msg) => {
+        if (msg.method !== "textDocument/publishDiagnostics") return;
+        if (msg.params?.uri !== this._lsp?.aufUri) return;
+        this.applySearchDiagnostics(msg.params.diagnostics ?? []);
+      });
     }
     const s = this._lsp;
     // The mm0 must be synced first: analyzing a proof reads its sibling .mm0.
@@ -700,6 +732,7 @@ class AufbauDocument {
     }
     if (s.lastAuf !== auf.text) {
       s.lastAuf = auf.text;
+      s.aufRanges = auf.ranges;
       syncLspDoc(rpc, s.aufUri, "aufbau", ++s.aufVersion, auf.text);
     }
 
@@ -716,6 +749,36 @@ class AufbauDocument {
     const bodyCharStart =
       byteToCharIndex(auf.text, range.start) + cell.prefixText().length;
     return { rpc, uri: s.aufUri, lineDelta: lineDeltaAt(auf.text, bodyCharStart) };
+  }
+
+  // Hand each cell the search-status diagnostics that fall inside its body.
+  // Ranges arrive in stitched-document coordinates; a cell owns the stitched
+  // lines its editable body spans, which is what disambiguates two cells whose
+  // body-local line numbers coincide.
+  applySearchDiagnostics(diagnostics) {
+    const s = this._lsp;
+    if (!s?.lastAuf) return;
+    // Errors only. A search-status error is a search that ran and failed (or a
+    // rejected `(iters: …)` parameter) — the reason exists nowhere else. The
+    // info and warning entries restate what the compiler path already says
+    // about a placeholder, so taking them would only duplicate the squiggle.
+    const search = diagnostics.filter(
+      (d) => d.code === SEARCH_STATUS_CODE && d.severity === 1,
+    );
+    // Theory cells contribute no auf text, so `stitch` leaves them out of the
+    // ranges entirely and every range here owns a proof body.
+    for (const range of s.aufRanges) {
+      const cell = range.id;
+      const bodyCharStart =
+        byteToCharIndex(s.lastAuf, range.start) + cell.prefixText().length;
+      const lineDelta = lineDeltaAt(s.lastAuf, bodyCharStart);
+      const endLine = lineDeltaAt(s.lastAuf, byteToCharIndex(s.lastAuf, range.end));
+      const mine = search.filter((d) => {
+        const line = d.range?.start?.line;
+        return line != null && line >= lineDelta && line <= endLine;
+      });
+      cell.applySearchDiagnostics(mine, lineDelta);
+    }
   }
 }
 
@@ -1341,6 +1404,50 @@ class AufbauProof extends HTMLElement {
     return { from, to };
   }
 
+  // Search-status diagnostics for this cell's body, in body-local positions.
+  // They arrive out of band (whenever a placeholder search concludes), so keep
+  // them and re-render; an edit invalidates them, since the recorded outcome is
+  // keyed by document state and the server will not republish until the next
+  // search runs.
+  applySearchDiagnostics(list, lineDelta) {
+    if (!this._view) return;
+    const mapped = [];
+    for (const d of list) {
+      const range = this._rangeFromStitched(d.range, lineDelta);
+      if (!range) continue;
+      mapped.push({
+        from: range.from,
+        to: Math.max(range.from, range.to),
+        severity: "error",
+        message: d.message,
+      });
+    }
+    this._searchDiags = mapped;
+    this._searchDiagsDoc = this._view.state.doc.toString();
+    this.renderDiagnostics();
+    // The compile path only knows the placeholder is unfilled, and rates that a
+    // warning. A search that ran and failed is a stronger verdict; say so, until
+    // the next compile recomputes the status from scratch.
+    if (mapped.length) this.setStatus("err", "search failed");
+  }
+
+  // The lint set CodeMirror shows: the compile path's diagnostics for this
+  // cell, plus any search-status entry. Where both land on the same span the
+  // search entry wins — it says *why* the search did not fill the placeholder,
+  // which is strictly more than the compiler's "still a placeholder".
+  renderDiagnostics() {
+    if (!this._view) return;
+    const body = this._view.state.doc.toString();
+    const search = this._searchDiagsDoc === body ? (this._searchDiags ?? []) : [];
+    const covered = new Set(search.map((d) => `${d.from}:${d.to}`));
+    const cm = (this._compileDiags ?? []).filter(
+      (d) => !covered.has(`${d.from}:${d.to}`),
+    );
+    this._view.dispatch(
+      setDiagnostics(this._view.state, [...cm, ...search].sort((a, b) => a.from - b.from)),
+    );
+  }
+
   // Apply the document's routing result to this cell: in-body squiggles, a
   // banner for header/mm0/theory errors, and a status line.
   applyRouting(entry, { ok, durationMs, theoryDiags }) {
@@ -1356,9 +1463,8 @@ class AufbauProof extends HTMLElement {
         message: diag.message + (diag.lineLabel ? ` (at ${diag.lineLabel})` : ""),
       });
     }
-    if (this._view) {
-      this._view.dispatch(setDiagnostics(this._view.state, cm));
-    }
+    this._compileDiags = cm;
+    this.renderDiagnostics();
 
     const errors = entry.proof.filter((p) => p.diag.severity === "error");
     const bannerDiag =
@@ -1743,6 +1849,15 @@ const STYLE = `
   max-height: var(--editor-max-height, none);
 }
 .editor .cm-scroller { overflow: auto; font-family: inherit; }
+/* Proof lines are long and the view wraps them. A hanging indent keeps a
+   wrapped continuation visibly subordinate to the line it belongs to, so a
+   two-row line does not read as two lines. The negative text-indent cancels
+   the padding on the first row, leaving it where CodeMirror's own theme
+   (padding: 0 2px 0 6px) puts it. */
+.editor .cm-line {
+  padding-left: calc(6px + var(--wrap-indent, 4ch));
+  text-indent: calc(-1 * var(--wrap-indent, 4ch));
+}
 /* Keep the lint gutter invisible until it holds an error marker. The
    !important beats CodeMirror's own gutter theme, injected into the shadow
    root after this stylesheet at equal specificity. */

@@ -21,6 +21,12 @@ const sourceRangesToLocations = lsp_diagnostics.sourceRangesToLocations;
 const completionsToLsp = lsp_diagnostics.completionsToLsp;
 const outlineSymbolsToLsp = lsp_diagnostics.outlineSymbolsToLsp;
 const CodeActionResult = lsp.ResultType("textDocument/codeAction");
+
+/// `Diagnostic.code` on everything `searchStatusDiagnostics` builds. These are
+/// the only diagnostics the compile pipeline does not also produce, so a client
+/// that runs its own compile (the browser editor does) needs a way to pick them
+/// out of a `publishDiagnostics` set and merge just those.
+const SEARCH_STATUS_CODE = "search-status";
 const CodeActionItems = @typeInfo(CodeActionResult).optional.child;
 const CodeActionItem = @typeInfo(CodeActionItems).pointer.child;
 
@@ -1511,6 +1517,7 @@ pub const Handler = struct {
                 ),
                 .severity = severity,
                 .source = LSP_SERVER_NAME,
+                .code = .{ .string = SEARCH_STATUS_CODE },
                 .message = message,
             });
             // Per-parameter validation (typo'd names, out-of-range values,
@@ -1536,6 +1543,7 @@ pub const Handler = struct {
                     ),
                     .severity = .Error,
                     .source = LSP_SERVER_NAME,
+                    .code = .{ .string = SEARCH_STATUS_CODE },
                     .message = issue.message,
                 });
             }
