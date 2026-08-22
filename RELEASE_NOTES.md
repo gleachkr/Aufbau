@@ -1,3 +1,66 @@
+# Aufbau 0.0.7
+
+Aufbau 0.0.7 adds alpha renaming to `conversion?`, closes the
+last places where a binder had to be supplied by hand in a theory that
+distinguishes variables from names, and publishes the manual. The
+verifier is unchanged; the MM0 parser is stricter in one respect, noted
+under compatibility.
+
+## Highlights
+
+### `conversion?` renames bound variables
+
+A `@conversion` annotation takes a third role token, `alpha`, which enrolls
+an alpha-renaming lemma:
+
+```
+--| @conversion alpha
+axiom all_alpha {x y: nat} (p: wff x): $ (all x p) <-> (all y (sb x y p)) $;
+```
+
+A pairing scheduler compares same-head binder instances already in the egraph 
+and, when one denotes the other under a lexical renaming of bound atoms, fires 
+the lemma with `y` instantiated to the partner's atom. `y` always comes from an 
+instance already present, so the egraph doesn't blow up too badly. Renamings 
+nested several binders deep close outside-in, as substitution rules push each 
+image through the next binder; alpha closure is only as complete as the 
+enrolled substitution calculus, and where the image stalls the search reports a 
+saturated miss rather than a forced negative. The `herbrand` fixture now proves 
+bound-variable renamings next to its rules of passage, each from a one-line 
+`conversion?` goal.
+
+### Variables and names as separate sorts
+
+A theory can keep quantifiable variables and proper names in distinct sorts
+that both coerce into terms. `@recover` and `@abstract` hoist terms through the 
+coercion: the recovery walk compares a quantifier body on the variable side 
+against a concrete instance on the name side and re-sorts what it finds through 
+the coercion graph. And the eigenvariable of a two-premise elimination, which 
+occurs only in the discharged premise and never in the conclusion, is recovered 
+from the premise's context split rather than guessed.
+
+The new `zach` theory demonstrates this capability: first-order natural 
+deduction after *forallx: Calgary*, which distinguished bound and eigenvariable 
+sorts.
+
+### The manual is online
+
+The user manual is published at <https://grahamlk.me/Aufbau/manual>. 
+
+## Compatibility
+
+The MM0 parser is slightly stricter: hypothesis binders must now
+follow all variable binders. This follows a convention that mm0-c enforces.
+
+Everything else is additive: `@conversion alpha` is a new role token, and
+the coercion-aware recovery and eigenvariable inference only supply
+bindings that previously had to be written out — proofs that write them
+still compile. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.6
 
 Aufbau 0.0.6 is a small release with two `auto?` fixes and two new demo

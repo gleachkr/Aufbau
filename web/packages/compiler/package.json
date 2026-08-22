@@ -1,6 +1,6 @@
 {
   "name": "@aufbau/compiler",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Aufbau proof compiler for browsers and JavaScript runtimes.",
   "license": "Apache-2.0",
   "repository": {

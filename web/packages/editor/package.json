@@ -1,6 +1,6 @@
 {
   "name": "@aufbau/editor",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Embeddable interactive Aufbau proof editor as a web component.",
   "license": "Apache-2.0",
   "repository": {

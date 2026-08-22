@@ -3,6 +3,72 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.7] - 2026-08-22
+
+### Added
+
+- `conversion?` can now perform alpha conversion. `@conversion alpha`, enrolls 
+  an alpha-renaming lemma like `(all x p) <-> (all y (sb x y p))`. a pairing
+  scheduler compares same-head binder instances already in the egraph
+  and, when one denotes the other under a lexical renaming of bound
+  atoms, fires the lemma with the fresh binder instantiated to the
+  partner's atom. Renamings nested several binders deep close outside-in, once 
+  the enrolled substitution calculus can push an image through an inner binder; 
+  where it cannot, the pair simply never merges and the search reports a
+  saturated miss rather than a forced negative. The `herbrand` fixture
+  carries the battery, alongside its rules of passage. See
+  `docs/rewrite_system.md`.
+- `@recover` and `@abstract` can now hoist terms through sort coercions. A 
+  theory may keep quantifiable variables and proper names in separate sorts, 
+  both coercing into terms; the recovery walk now compares a quantifier body
+  on the variable side against a concrete instance on the name side and
+  re-sorts the recovered subtree through the coercion graph, instead of
+  refusing the cross-sort correspondence.
+- Eigenvariables of two-premise elimination rules are inferred from the
+  premise context split. An existential elimination's eigenvariable
+  occurs only in its second premise, never in the conclusion, so nothing
+  in the goal determines it: hypothesis-first matching splits the
+  premise's context, the slack conclusion binder is assigned the
+  residual, and the rule's `@recover` reads the name back out of the
+  assumed instance. Such proofs no longer need explicit bindings.
+- `zach`, a two-variable-sort first-order natural deduction theory after
+  the proof system of *forallx: Calgary*. Quantifiable variables and
+  names are distinct sorts that both coerce into terms, and the
+  eigenvariable provisos on generalization and existential elimination
+  are not side conditions but MM0 dependency typing — the context and
+  conclusion binders simply may not depend on the name. Predicates take
+  an argument sequence rather than a single term, so `F(a)`, `R(a,b)`,
+  and `R(a,b,c)` are all well-formed with one predicate letter: the
+  sequence combiner is declared associative and nothing else, since
+  argument order and multiplicity are meaning-bearing, while contexts
+  keep the full `@acui` treatment. No proof in the fixture carries an
+  explicit witness or eigenvariable binding.
+- The manual is published at <https://grahamlk.me/Aufbau/manual> and
+  linked from the README.
+
+### Changed
+
+- Hypothesis binders must follow all variable binders in a `.mm0`
+  source. mm0-c enforces this ("hypotheses must follow variables") and
+  the grammar in the specification does not, so the interleaved form
+  compiled here and was then rejected by the reference verifier. It is
+  now a parse error naming the offending binder group; reordering the
+  binders is always possible and never changes what the declaration
+  means.
+- A failed search explains itself in a browser proof cell. The
+  language server's search-status diagnostics carry the diagnostic code
+  `search-status`, which lets an editor that runs its own compile — the
+  embedded cell does — pick them out of a published set and merge just
+  those, so an `auto?` miss reports its reason where the reader can see
+  it.
+
+### Fixed
+
+- Manual proof cells are wider than the prose column on wide screens and
+  keep their left edge aligned with it, so long proof lines wrap less
+  often and the page does not lose its margin. Two chapters that had
+  drifted from what their cells actually do were corrected.
+
 ## [0.0.6] - 2026-08-16
 
 ### Added
@@ -604,6 +670,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.7]: https://github.com/gleachkr/Aufbau/compare/v0.0.6...v0.0.7
+[0.0.6]: https://github.com/gleachkr/Aufbau/compare/v0.0.5...v0.0.6
+[0.0.5]: https://github.com/gleachkr/Aufbau/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/gleachkr/Aufbau/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/gleachkr/Aufbau/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/gleachkr/Aufbau/compare/v0.0.1...v0.0.2
