@@ -148,10 +148,12 @@ pub fn processAnnotatedMetadata(
             .term => |term_stmt| {
                 try result.env.addStmt(stmt);
                 try CompilerMetadata.processTermMetadata(
+                    null,
                     &result.env,
                     &result.registry,
                     term_stmt,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
                 );
             },
             .assertion => |assertion| {

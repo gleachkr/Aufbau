@@ -229,10 +229,12 @@ pub fn run(
                     );
                 }
                 Metadata.processTermMetadata(
+                    self,
                     &env,
                     &registry,
                     filled_term_stmt,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
                 ) catch |err| {
                     self.setIfMissing(
                         CompilerDiag.mm0StatementDiagnostic(

@@ -268,10 +268,12 @@ fn fixtureForSearchPoint(
             .term => |term_stmt| {
                 try fixture.env.addStmt(stmt);
                 try Metadata.processTermMetadata(
+                    null,
                     &fixture.env,
                     &fixture.registry,
                     term_stmt,
                     fixture.parser.last_annotations,
+                    fixture.parser.last_annotation_spans,
                 );
             },
             .assertion => |assertion| {
@@ -467,10 +469,12 @@ fn processSearchTermStmt(
     );
     try fixture.env.addStmt(.{ .term = filled_term_stmt });
     try Metadata.processTermMetadata(
+        compiler,
         &fixture.env,
         &fixture.registry,
         filled_term_stmt,
         fixture.parser.last_annotations,
+        fixture.parser.last_annotation_spans,
     );
 }
 

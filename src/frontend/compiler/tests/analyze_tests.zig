@@ -635,7 +635,7 @@ test "compiler analyze mm0 suppresses blocked term follow-ons" {
     const mm0_src =
         \\delimiter $ ( ) $;
         \\sort nat;
-        \\--| @bogus
+        \\--| @conversion
         \\term bad: nat;
         \\def alias: nat = $ bad $;
         \\term good: nat;
@@ -646,7 +646,7 @@ test "compiler analyze mm0 suppresses blocked term follow-ons" {
 
     const diags = compiler.primaryDiagnostics();
     try std.testing.expectEqual(@as(usize, 1), diags.len);
-    try std.testing.expectEqual(error.UnknownTermAnnotation, diags[0].err);
+    try std.testing.expectEqual(error.InvalidConversionAnnotation, diags[0].err);
     try std.testing.expectEqualStrings("bad", diags[0].name.?);
 }
 
@@ -753,7 +753,7 @@ test "compiler analyze with proof stops after unrecoverable mm0 parse failure" {
 test "compiler analyze with proof suppresses malformed blocks for blocked theorems" {
     const mm0_src =
         \\provable sort wff;
-        \\--| @bogus
+        \\--| @conversion
         \\term bad: wff;
         \\term good: wff;
         \\theorem blocked: $ bad $;
@@ -778,7 +778,7 @@ test "compiler analyze with proof suppresses malformed blocks for blocked theore
 
     const diags = compiler.primaryDiagnostics();
     try std.testing.expectEqual(@as(usize, 2), diags.len);
-    try std.testing.expectEqual(error.UnknownTermAnnotation, diags[0].err);
+    try std.testing.expectEqual(error.InvalidConversionAnnotation, diags[0].err);
     try std.testing.expectEqualStrings("bad", diags[0].name.?);
     try std.testing.expectEqual(error.UnknownRule, diags[1].err);
     try std.testing.expectEqual(
@@ -791,7 +791,7 @@ test "compiler analyze with proof suppresses malformed blocks for blocked theore
 test "compiler analyze with proof ignores malformed blocks for blocked trailing theorems" {
     const mm0_src =
         \\provable sort wff;
-        \\--| @bogus
+        \\--| @conversion
         \\term bad: wff;
         \\theorem blocked: $ bad $;
     ;
@@ -810,7 +810,7 @@ test "compiler analyze with proof ignores malformed blocks for blocked trailing 
 
     const diags = compiler.primaryDiagnostics();
     try std.testing.expectEqual(@as(usize, 1), diags.len);
-    try std.testing.expectEqual(error.UnknownTermAnnotation, diags[0].err);
+    try std.testing.expectEqual(error.InvalidConversionAnnotation, diags[0].err);
     try std.testing.expectEqual(
         mm0.CompilerDiagnosticSource.mm0,
         diags[0].source,

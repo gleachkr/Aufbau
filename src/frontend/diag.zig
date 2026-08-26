@@ -732,7 +732,7 @@ pub fn mm0StatementDiagnostic(
         .err = err,
         .source = .mm0,
         .name = mm0StmtName(stmt),
-        .span = annotationDiagnosticSpan(parser, stmt, err) orelse
+        .span = annotationDiagnosticSpan(parser, err) orelse
             mm0StmtNameSpan(stmt),
     };
 }
@@ -1103,33 +1103,11 @@ fn firstAnnotationSpan(parser: *const MM0Parser) ?Span {
     return mathSpanToSpan(parser.last_annotation_spans[0]);
 }
 
-fn annotationDirective(ann: []const u8) ?[]const u8 {
-    if (ann.len == 0 or ann[0] != '@') return null;
-
-    var iter = std.mem.tokenizeAny(u8, ann, " \t\r\n");
-    return iter.next();
-}
-
-fn unknownTermAnnotationSpan(parser: *const MM0Parser) ?Span {
-    for (parser.last_annotations, parser.last_annotation_spans) |ann, span| {
-        const directive = annotationDirective(ann) orelse continue;
-        if (std.mem.eql(u8, directive, "@acui")) continue;
-        if (std.mem.eql(u8, directive, "@conversion")) continue;
-        return mathSpanToSpan(span);
-    }
-    return firstAnnotationSpan(parser);
-}
-
 fn annotationDiagnosticSpan(
     parser: *const MM0Parser,
-    stmt: MM0Stmt,
     err: anyerror,
 ) ?Span {
     return switch (err) {
-        error.UnknownTermAnnotation => switch (stmt) {
-            .term => unknownTermAnnotationSpan(parser),
-            else => firstAnnotationSpan(parser),
-        },
         error.DummyAnnotationRemoved,
         error.InvalidFreshAnnotation,
         error.InvalidFreshenAnnotation,

@@ -48,7 +48,7 @@ test "compiler ignores plain doc comments on terms" {
     try compiler.check();
 }
 
-test "compiler rejects unknown term annotations" {
+test "compiler warns on unknown term annotations" {
     const mm0_src =
         \\sort nat;
         \\--| @bogus
@@ -56,14 +56,35 @@ test "compiler rejects unknown term annotations" {
     ;
 
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(error.UnknownTermAnnotation, compiler.check());
+    try compiler.check();
 
-    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    const warnings = compiler.diagnostics.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    const diag = warnings[0];
     try std.testing.expectEqual(error.UnknownTermAnnotation, diag.err);
+    try std.testing.expectEqual(
+        mm0.CompilerDiagnosticSeverity.warning,
+        diag.severity,
+    );
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
     try std.testing.expectEqualStrings("zero", diag.name.?);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings("@bogus", mm0_src[span.start..span.end]);
+}
+
+test "compiler accepts @syntax annotations without warning" {
+    const mm0_src =
+        \\sort nat;
+        \\--| @syntax elided
+        \\term zero: nat;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.check();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        compiler.diagnostics.warningDiagnostics().len,
+    );
 }
 
 test "compiler pinpoints invalid fallback annotations" {
@@ -1213,10 +1234,12 @@ test "auto forward annotation is unavailable before its rule" {
             },
             .term => |term_stmt| {
                 try CompilerMetadata.processTermMetadata(
+                    null,
                     &env,
                     &registry,
                     term_stmt,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
                 );
             },
             .assertion => |assertion| {

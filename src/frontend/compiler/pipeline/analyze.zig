@@ -584,10 +584,12 @@ fn analyzeTermStatement(
     }
 
     Metadata.processTermMetadata(
+        self,
         &state.env,
         &state.registry,
         actual_stmt,
         state.parser.last_annotations,
+        state.parser.last_annotation_spans,
     ) catch |err| {
         warnings.restore(self);
         snapshot.restore(state);

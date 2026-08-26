@@ -1,11 +1,14 @@
 const std = @import("std");
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
+const CompilerDiag = @import("../diag.zig");
 const FreshSelect = @import("./fresh_select.zig");
 const CompilerHoles = @import("./holes.zig");
 const CompilerViews = @import("../views.zig");
 const CompilerVars = @import("./vars.zig");
+const CompilerContext = @import("./context.zig").CompilerContext;
 const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
+const MathSpan = @import("../parse_recovery.zig").MathSpan;
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
 const SortStmt = @import("../parse_recovery.zig").SortStmt;
 const TermStmt = @import("../parse_recovery.zig").TermStmt;
@@ -38,21 +41,39 @@ pub fn processSortMetadata(
 }
 
 pub fn processTermMetadata(
+    ctx: ?*CompilerContext,
     env: *GlobalEnv,
     registry: *RewriteRegistry,
     term_stmt: TermStmt,
     annotations: []const []const u8,
+    annotation_spans: []const MathSpan,
 ) !void {
-    try processTermAnnotations(annotations);
-    try registry.processAnnotations(env, term_stmt.name, annotations);
-}
-
-fn processTermAnnotations(annotations: []const []const u8) !void {
-    for (annotations) |ann| {
+    for (annotations, 0..) |ann, idx| {
         const directive = annotationDirective(ann) orelse continue;
-        if (std.mem.eql(u8, directive, "@acui")) continue;
-        if (std.mem.eql(u8, directive, "@conversion")) continue;
-        return error.UnknownTermAnnotation;
+        if (std.mem.eql(u8, directive, "@acui") or
+            std.mem.eql(u8, directive, "@conversion"))
+        {
+            try registry.processAnnotations(
+                env,
+                term_stmt.name,
+                annotations[idx .. idx + 1],
+            );
+            continue;
+        }
+        // @syntax lines carry grammar metadata for external front ends
+        // (aufbau-syntax); the compiler accepts them without reading them.
+        if (std.mem.eql(u8, directive, "@syntax")) continue;
+        const compiler = ctx orelse continue;
+        compiler.addWarning(.{
+            .kind = .generic,
+            .err = error.UnknownTermAnnotation,
+            .source = .mm0,
+            .name = term_stmt.name,
+            .span = if (idx < annotation_spans.len)
+                CompilerDiag.mathSpanToSpan(annotation_spans[idx])
+            else
+                null,
+        });
     }
 }
 
