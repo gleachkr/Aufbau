@@ -139,9 +139,11 @@ pub fn processAnnotatedMetadata(
             .sort => |sort_stmt| {
                 try result.env.addStmt(stmt);
                 try CompilerMetadata.processSortMetadata(
+                    null,
                     &parser,
                     sort_stmt,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
                     &result.sort_vars,
                 );
             },
@@ -160,6 +162,7 @@ pub fn processAnnotatedMetadata(
                 try result.env.addStmt(stmt);
                 try CompilerMetadata.processAssertionMetadata(
                     allocator,
+                    null,
                     &parser,
                     &result.env,
                     &result.registry,
@@ -168,6 +171,9 @@ pub fn processAnnotatedMetadata(
                     &result.views,
                     assertion,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
+                    .mm0,
+                    null,
                 );
             },
         }

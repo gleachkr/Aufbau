@@ -791,6 +791,7 @@ pub fn processAssertion(
     );
     try Metadata.processAssertionMetadata(
         allocator,
+        self,
         parser,
         env,
         registry,
@@ -799,6 +800,9 @@ pub fn processAssertion(
         views,
         assertion,
         parser.last_annotations,
+        parser.last_annotation_spans,
+        .mm0,
+        null,
     );
 }
 
@@ -862,6 +866,7 @@ pub fn processNonTheoremAssertion(
     );
     try Metadata.processAssertionMetadata(
         allocator,
+        self,
         parser,
         env,
         registry,
@@ -870,6 +875,9 @@ pub fn processNonTheoremAssertion(
         views,
         assertion,
         parser.last_annotations,
+        parser.last_annotation_spans,
+        .mm0,
+        null,
     );
 }
 
@@ -1086,6 +1094,7 @@ pub fn processLocalProofBlock(
     );
     Metadata.processAssertionMetadata(
         allocator,
+        self,
         parser,
         env,
         registry,
@@ -1094,6 +1103,9 @@ pub fn processLocalProofBlock(
         views,
         assertion,
         block.annotations,
+        &.{},
+        .proof,
+        block.name_span,
     ) catch |err| {
         env.removeLastRule(assertion.name);
         self.setIfMissing(

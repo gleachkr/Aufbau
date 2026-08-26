@@ -87,6 +87,7 @@ pub fn run(
         // The parser consumes coercion statements silently while scanning to
         // the next public statement; keep the env's mirror in lockstep.
         try env.syncCoercionsFromParser(&parser);
+        Metadata.warnDroppedAnnotations(self, &parser);
         const stmt = maybe_stmt orelse break;
         last_stmt = stmt;
         CompilerVars.validateSortVarCollisions(&parser, &sort_vars) catch |err| {
@@ -117,9 +118,11 @@ pub fn run(
                     return err;
                 };
                 Metadata.processSortMetadata(
+                    self,
                     &parser,
                     sort_stmt,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
                     &sort_vars,
                 ) catch |err| {
                     self.setIfMissing(

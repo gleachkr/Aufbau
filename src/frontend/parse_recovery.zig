@@ -34,6 +34,12 @@ pub const MM0Parser = struct {
     pending_annotation_spans: std.ArrayListUnmanaged(MathSpan) = .{},
     last_annotations: []const []const u8 = &.{},
     last_annotation_spans: []const MathSpan = &.{},
+    // Annotations discarded because a statement the parser consumes silently
+    // (a notation declaration, typically) intervened before the next public
+    // statement. Accumulated so the compiler can warn instead of losing them
+    // without a trace; consumers clear via clearDroppedAnnotations.
+    dropped_annotations: std.ArrayListUnmanaged([]const u8) = .{},
+    dropped_annotation_spans: std.ArrayListUnmanaged(MathSpan) = .{},
     diagnostic_name_override: ?[]const u8 = null,
     diagnostic_span_override: ?MathSpan = null,
     math_span_override: ?MathSpan = null,
@@ -45,6 +51,8 @@ pub const MM0Parser = struct {
     pub fn deinit(self: *MM0Parser) void {
         self.pending_annotations.deinit(self.core.allocator);
         self.pending_annotation_spans.deinit(self.core.allocator);
+        self.dropped_annotations.deinit(self.core.allocator);
+        self.dropped_annotation_spans.deinit(self.core.allocator);
         self.freeLastAnnotations();
     }
 
@@ -52,7 +60,7 @@ pub const MM0Parser = struct {
         self.clearDiagnosticOverrides();
         const start = self.core.pos;
         try self.core.prepareNextPublicStatement();
-        try self.collectAnnotationsBetween(start, self.core.pos);
+        try self.collectAnnotationsBetween(start, self.core.pos, true);
     }
 
     pub fn next(self: *MM0Parser) ParseError!?MM0Stmt {
@@ -61,7 +69,7 @@ pub const MM0Parser = struct {
         try self.flushAnnotations();
         const start = self.core.pos;
         const stmt = try self.core.next();
-        try self.collectAnnotationsBetween(start, self.core.pos);
+        try self.collectAnnotationsBetween(start, self.core.pos, true);
         return stmt;
     }
 
@@ -92,7 +100,9 @@ pub const MM0Parser = struct {
         self.clearDiagnosticOverrides();
         const start = self.core.pos;
         try self.core.skipToSemicolon();
-        try self.collectAnnotationsBetween(start, self.core.pos);
+        // No drop recording: this region is a malformed statement's tail, and
+        // its diagnostic already covers everything written there.
+        try self.collectAnnotationsBetween(start, self.core.pos, false);
     }
 
     pub fn discardPendingAnnotations(self: *MM0Parser) void {
@@ -481,10 +491,16 @@ pub const MM0Parser = struct {
         }
     }
 
+    pub fn clearDroppedAnnotations(self: *MM0Parser) void {
+        self.dropped_annotations.clearRetainingCapacity();
+        self.dropped_annotation_spans.clearRetainingCapacity();
+    }
+
     fn collectAnnotationsBetween(
         self: *MM0Parser,
         start: usize,
         end: usize,
+        record_drops: bool,
     ) !void {
         var pos = start;
         while (pos < end) {
@@ -533,6 +549,16 @@ pub const MM0Parser = struct {
                     while (pos < end and self.core.src[pos] != '\n') pos += 1;
                 }
             } else if (ch == ';') {
+                if (record_drops) {
+                    try self.dropped_annotations.appendSlice(
+                        self.core.allocator,
+                        self.pending_annotations.items,
+                    );
+                    try self.dropped_annotation_spans.appendSlice(
+                        self.core.allocator,
+                        self.pending_annotation_spans.items,
+                    );
+                }
                 self.pending_annotations.clearRetainingCapacity();
                 self.pending_annotation_spans.clearRetainingCapacity();
                 pos += 1;

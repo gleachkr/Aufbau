@@ -61,7 +61,7 @@ test "compiler warns on unknown term annotations" {
     const warnings = compiler.diagnostics.warningDiagnostics();
     try std.testing.expectEqual(@as(usize, 1), warnings.len);
     const diag = warnings[0];
-    try std.testing.expectEqual(error.UnknownTermAnnotation, diag.err);
+    try std.testing.expectEqual(error.UnknownAnnotation, diag.err);
     try std.testing.expectEqual(
         mm0.CompilerDiagnosticSeverity.warning,
         diag.severity,
@@ -77,6 +77,87 @@ test "compiler accepts @syntax annotations without warning" {
         \\sort nat;
         \\--| @syntax elided
         \\term zero: nat;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.check();
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        compiler.diagnostics.warningDiagnostics().len,
+    );
+}
+
+test "compiler warns on unknown sort annotations" {
+    const mm0_src =
+        \\--| @bogus
+        \\sort nat;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.check();
+
+    const warnings = compiler.diagnostics.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.UnknownAnnotation, warnings[0].err);
+    try std.testing.expectEqualStrings("nat", warnings[0].name.?);
+    const span = warnings[0].span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("@bogus", mm0_src[span.start..span.end]);
+}
+
+test "compiler warns on unknown assertion annotations" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @bogus hello
+        \\axiom top_i: $ top $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.check();
+
+    const warnings = compiler.diagnostics.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.UnknownAnnotation, warnings[0].err);
+    try std.testing.expectEqualStrings("top_i", warnings[0].name.?);
+    const span = warnings[0].span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(
+        "@bogus hello",
+        mm0_src[span.start..span.end],
+    );
+}
+
+test "compiler warns on annotations dropped before notation declarations" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term top_note (p: wff): wff;
+        \\--| @auto backward
+        \\prefix top_note: $!!$ prec 40;
+        \\axiom top_i: $ top $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.check();
+
+    const warnings = compiler.diagnostics.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.UnattachedAnnotation, warnings[0].err);
+    try std.testing.expect(warnings[0].name == null);
+    const span = warnings[0].span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(
+        "@auto backward",
+        mm0_src[span.start..span.end],
+    );
+}
+
+test "compiler accepts @syntax before notation declarations without warning" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term top_note (p: wff): wff;
+        \\--| @syntax brackets
+        \\prefix top_note: $!!$ prec 40;
+        \\axiom top_i: $ top $;
     ;
 
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
@@ -1226,9 +1307,11 @@ test "auto forward annotation is unavailable before its rule" {
         switch (stmt) {
             .sort => |sort_stmt| {
                 try CompilerMetadata.processSortMetadata(
+                    null,
                     &parser,
                     sort_stmt,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
                     &sort_vars,
                 );
             },
@@ -1245,6 +1328,7 @@ test "auto forward annotation is unavailable before its rule" {
             .assertion => |assertion| {
                 try CompilerMetadata.processAssertionMetadata(
                     allocator,
+                    null,
                     &parser,
                     &env,
                     &registry,
@@ -1253,6 +1337,9 @@ test "auto forward annotation is unavailable before its rule" {
                     &views,
                     assertion,
                     parser.last_annotations,
+                    parser.last_annotation_spans,
+                    .mm0,
+                    null,
                 );
                 if (std.mem.eql(u8, assertion.name, "early")) {
                     const early = env.getRuleId("early") orelse {

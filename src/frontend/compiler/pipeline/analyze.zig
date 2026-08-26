@@ -187,6 +187,10 @@ fn analyzeInternal(
         // The parser consumes coercion statements silently while scanning to
         // the next public statement; keep the env's mirror in lockstep.
         try state.env.syncCoercionsFromParser(&state.parser);
+        // Before the per-statement warning snapshot: dropped-annotation
+        // warnings belong to the gap, not to the statement that follows, so
+        // a failing statement must not roll them back.
+        Metadata.warnDroppedAnnotations(self, &state.parser);
         const stmt = next_stmt orelse break;
         state.last_stmt = stmt;
 
@@ -490,9 +494,11 @@ fn analyzeSortStatement(
         &state.sort_vars,
     );
     Metadata.processSortMetadata(
+        self,
         &state.parser,
         sort_stmt,
         state.parser.last_annotations,
+        state.parser.last_annotation_spans,
         &state.sort_vars,
     ) catch |err| {
         warnings.restore(self);
@@ -726,6 +732,7 @@ fn analyzeAssertionStatement(
 
             Metadata.processAssertionMetadata(
                 allocator,
+                self,
                 &state.parser,
                 &state.env,
                 &state.registry,
@@ -734,6 +741,9 @@ fn analyzeAssertionStatement(
                 &state.views,
                 assertion,
                 state.parser.last_annotations,
+                state.parser.last_annotation_spans,
+                .mm0,
+                null,
             ) catch |err| {
                 theorem_warnings.restore(self);
                 snapshot.restore(state);

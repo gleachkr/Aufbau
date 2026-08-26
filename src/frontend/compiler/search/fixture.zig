@@ -259,9 +259,11 @@ fn fixtureForSearchPoint(
             .sort => |sort_stmt| {
                 try fixture.env.addStmt(stmt);
                 try Metadata.processSortMetadata(
+                    null,
                     &fixture.parser,
                     sort_stmt,
                     fixture.parser.last_annotations,
+                    fixture.parser.last_annotation_spans,
                     &fixture.sort_vars,
                 );
             },
@@ -290,6 +292,7 @@ fn fixtureForSearchPoint(
                 try fixture.env.addStmt(stmt);
                 try Metadata.processAssertionMetadata(
                     allocator,
+                    null,
                     &fixture.parser,
                     &fixture.env,
                     &fixture.registry,
@@ -298,6 +301,9 @@ fn fixtureForSearchPoint(
                     &fixture.views,
                     assertion,
                     fixture.parser.last_annotations,
+                    fixture.parser.last_annotation_spans,
+                    .mm0,
+                    null,
                 );
             },
         }
@@ -430,9 +436,11 @@ fn processSearchSortStmt(
 ) !void {
     try fixture.env.addStmt(stmt);
     try Metadata.processSortMetadata(
+        null,
         &fixture.parser,
         sort_stmt,
         fixture.parser.last_annotations,
+        fixture.parser.last_annotation_spans,
         &fixture.sort_vars,
     );
 }
@@ -486,6 +494,7 @@ fn processSearchAssertionStmt(
     try fixture.env.addStmt(.{ .assertion = assertion });
     try Metadata.processAssertionMetadata(
         fixture.env.allocator,
+        null,
         &fixture.parser,
         &fixture.env,
         &fixture.registry,
@@ -494,6 +503,9 @@ fn processSearchAssertionStmt(
         &fixture.views,
         assertion,
         fixture.parser.last_annotations,
+        fixture.parser.last_annotation_spans,
+        .mm0,
+        null,
     );
     consumeMatchingPublicProofBlock(proof_stream, assertion) catch {};
 }

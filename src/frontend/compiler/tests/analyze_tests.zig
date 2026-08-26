@@ -116,6 +116,35 @@ test "compiler analyze mm0 discards annotations from malformed statements" {
     try std.testing.expectEqualStrings("bad", diags[0].name.?);
 }
 
+test "compiler analyze mm0 records unknown-annotation warning" {
+    const mm0_src =
+        \\provable sort wff;
+        \\--| @bogus hello
+        \\term top: wff;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.analyzeMm0();
+
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        compiler.primaryDiagnostics().len,
+    );
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.UnknownAnnotation, warnings[0].err);
+    try std.testing.expectEqual(
+        mm0.CompilerDiagnosticSeverity.warning,
+        warnings[0].severity,
+    );
+    try std.testing.expectEqualStrings("top", warnings[0].name.?);
+    const span = warnings[0].span orelse return error.ExpectedSpan;
+    try std.testing.expectEqualStrings(
+        "@bogus hello",
+        mm0_src[span.start..span.end],
+    );
+}
+
 test "compiler analyze mm0 ignores semicolons in comments" {
     const mm0_src =
         \\provable sort wff;
