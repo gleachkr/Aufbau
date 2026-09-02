@@ -51,7 +51,12 @@ A stored bag node's member multiset is stable for life: when a member class
 later denotes a same-head bag, rebuild mints the flattened form as a twin
 node behind a `.splice` explanation edge rather than re-splicing in place —
 explanation edges render against the shapes recorded at union time, and the
-lowering crosses the twin with a pure AC re-tree (`.ac_flatten` step). See
+lowering crosses the twin with a pure AC re-tree (`.ac_flatten` step). The
+same pair is minted at intern time when the canonical splice dissolves a
+member class that also carries other structure (a leaf, an application, or a
+bag of another head): the nested node is stored beside the flat one so
+patterns and rule targets keep the member-level view, while a pure AC
+regrouping still interns to the single flat node (`EGraph.nestedView`). See
 `docs/rewrite_system.md` for the user-facing surface.
 
 ## The pipeline (one `exactWithSession` call)

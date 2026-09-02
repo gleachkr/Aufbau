@@ -548,6 +548,11 @@ pub const EGraph = struct {
     /// residual-binder rendering must see every same-head bag a class
     /// denotes, even where the canonical form keeps the class atomic.
     bag_node_index: std.AutoArrayHashMapUnmanaged(u64, ENodeId) = .{},
+    /// Per class root: the node kinds it holds — whether any leaf or
+    /// plain application, and the distinct bag heads. Maintained on
+    /// insert and merge; `nestedView` reads it to decide whether an
+    /// intern-time splice loses a view worth keeping.
+    class_kinds: std.AutoHashMapUnmanaged(EClassId, ClassKinds) = .{},
     /// Nodes whose fully spliced form was minted as a twin node (nested
     /// node id -> twin node id). A twinned node's own shape is final;
     /// further member expansion deepens through the twin's chain.
@@ -620,7 +625,8 @@ pub const EGraph = struct {
     /// Proof-forest edges, one per effective union, in union order.
     unions: std.ArrayListUnmanaged(UnionEdge) = .{},
     /// Creating node of each class (parallel to `parents`). Every class is
-    /// born in `add` with exactly one node, so this always names a member.
+    /// born in `add` with this node (its flat twin may join it in the same
+    /// call, see `nestedView`), so this always names a member.
     class_node: std.ArrayListUnmanaged(ENodeId) = .{},
     /// Explanation forest (Nieuwenhuis–Oliveras): per-node parent link
     /// carrying the union justification. Distinct from the fast union-find:
@@ -770,37 +776,148 @@ pub const EGraph = struct {
         scratch: std.mem.Allocator,
     ) !EClassId {
         const canon = try self.canonicalizeOrCap(node, null, scratch);
-        if (self.memo.get(canon)) |node_id| {
-            return self.find(self.nodes.items[node_id].class);
+        // A bag whose interning spliced through a member class that holds
+        // more than same-head bags keeps BOTH views (see `nestedView`):
+        // the nested node (members as given) is stored alongside the flat
+        // canonical form and linked to it by a splice edge, the same
+        // shape later acquisitions get from `rebuild`. Rule targets and
+        // seed terms then anchor on the pattern-shaped node, and the
+        // matcher sees the member classes the flat form dissolved.
+        const nested = try self.nestedView(node, canon, scratch);
+        if (nested) |shape| {
+            if (self.memo.get(shape)) |node_id| {
+                return self.find(self.nodes.items[node_id].class);
+            }
         }
-        const owned = try self.ownNode(canon);
+        if (self.memo.get(canon)) |flat_id| {
+            const class = self.find(self.nodes.items[flat_id].class);
+            if (nested) |shape| {
+                const nested_id = try self.insertNode(shape, class);
+                try self.linkInternTwin(nested_id, flat_id, scratch);
+            }
+            return class;
+        }
         self.budget_fixpoint = false;
         const class: EClassId = @intCast(self.parents.items.len);
         try self.parents.append(self.allocator, class);
+        const first = try self.insertNode(nested orelse canon, class);
+        try self.class_node.append(self.allocator, first);
+        if (self.nodes.items[first].node == .bag) {
+            const key = bagKey(self.nodes.items[first].node.bag.term_id, class);
+            try self.bag_in_class.put(self.allocator, key, first);
+            try self.bag_node_index.put(self.allocator, key, first);
+        }
+        if (nested != null) {
+            const flat_id = try self.insertNode(canon, class);
+            try self.linkInternTwin(first, flat_id, scratch);
+        }
+        return class;
+    }
+
+    /// The unspliced view of a bag-shaped node (member classes as given,
+    /// find-updated and sorted), or null when the node is not a bag, its
+    /// canonical form already IS that view (nothing spliced), or the
+    /// splice loses nothing: a member class that holds only same-head
+    /// bags is fully represented by its members, so the flat form alone
+    /// serves every pattern (sub-bag bindings cover the groupings) — a
+    /// pure AC regrouping must not mint a second node. The nested view is
+    /// kept when a spliced-away member class also holds a leaf, an
+    /// application, or a bag of another head — structure a pattern can
+    /// only see through the member (`a * (b + c)` against a product whose
+    /// factor class holds a sum). The leaf/application case arises only
+    /// between rebuilds: `refreshBagIndex` exempts such classes from
+    /// splicing, but a union since the last pass can have given an
+    /// indexed class its atomic member.
+    fn nestedView(
+        self: *const EGraph,
+        node: ENode,
+        canon: ENode,
+        scratch: std.mem.Allocator,
+    ) !?ENode {
+        if (canon != .bag) return null;
+        const nested = switch (node) {
+            .leaf => return null,
+            .app => |app| blk: {
+                const members: [2]EClassId = .{
+                    app.children[0].class,
+                    app.children[1].class,
+                };
+                break :blk try self.sortMembersOnly(.{
+                    .term_id = app.term_id,
+                    .members = &members,
+                }, scratch);
+            },
+            .bag => |bag| try self.sortMembersOnly(bag, scratch),
+        };
+        if (nodeEql(nested, canon)) return null;
+        const term_id = nested.bag.term_id;
+        for (nested.bag.members) |member| {
+            const root = self.find(member);
+            if (self.bag_in_class.get(bagKey(term_id, root)) == null) continue;
+            const kinds = self.class_kinds.get(root) orelse continue;
+            if (kinds.atomic) return nested;
+            for (kinds.heads.items) |head| {
+                if (head != term_id) return nested;
+            }
+        }
+        return null;
+    }
+
+    /// Append one node into `class` (memo, leaf index, explanation-forest
+    /// leaf). The caller owns class bookkeeping.
+    fn insertNode(self: *EGraph, shape: ENode, class: EClassId) !ENodeId {
+        const owned = try self.ownNode(shape);
+        self.budget_fixpoint = false;
         const node_id: ENodeId = @intCast(self.nodes.items.len);
         try self.nodes.append(self.allocator, .{
             .node = owned,
             .class = class,
         });
-        try self.class_node.append(self.allocator, node_id);
         try self.expl_parent.append(self.allocator, null);
         try self.memo.put(self.allocator, owned, node_id);
         if (owned == .leaf) {
             try self.leaf_classes.put(self.allocator, owned.leaf, class);
         }
-        if (owned == .bag) {
-            try self.bag_in_class.put(
-                self.allocator,
-                bagKey(owned.bag.term_id, class),
-                node_id,
-            );
-            try self.bag_node_index.put(
-                self.allocator,
-                bagKey(owned.bag.term_id, class),
-                node_id,
-            );
+        try self.noteNodeKind(self.find(class), owned);
+        return node_id;
+    }
+
+    /// Hang the splice edge between a nested node minted at intern time
+    /// and its flat form. Exactly one of the two is the fresh node (an
+    /// explanation-forest leaf), so the edge hangs off that side with no
+    /// re-rooting. The justification mirrors the canonical (exempted)
+    /// splice the intern just performed, with no self-class seed — the
+    /// same state `canonicalizeOrCap` ran under.
+    fn linkInternTwin(
+        self: *EGraph,
+        nested_id: ENodeId,
+        flat_id: ENodeId,
+        scratch: std.mem.Allocator,
+    ) !void {
+        var just = try self.buildSpliceJust(
+            nested_id,
+            &self.bag_in_class,
+            null,
+            scratch,
+        );
+        just.splice.to = flat_id;
+        const age: u32 = @intCast(self.unions.items.len);
+        if (nested_id > flat_id) {
+            self.expl_parent.items[nested_id] = .{
+                .to = flat_id,
+                .just = just,
+                .forward = true,
+                .age = age,
+            };
+        } else {
+            self.expl_parent.items[flat_id] = .{
+                .to = nested_id,
+                .just = just,
+                .forward = false,
+                .age = age,
+            };
         }
-        return class;
+        try self.splice_twin.put(self.allocator, nested_id, flat_id);
     }
 
     /// Duplicate a (possibly scratch-backed) canonical node's slices into
@@ -823,6 +940,9 @@ pub const EGraph = struct {
     /// Drivers use this to anchor seed expressions for `explain`.
     pub fn lookupNode(self: *EGraph, node: ENode) !?ENodeId {
         const canon = try self.canonicalizeOrCap(node, null, self.allocator);
+        if (try self.nestedView(node, canon, self.allocator)) |nested| {
+            if (self.memo.get(nested)) |node_id| return node_id;
+        }
         return self.memo.get(canon);
     }
 
@@ -860,6 +980,20 @@ pub const EGraph = struct {
         }
         self.parents.items[root_a] = root_b;
         self.budget_fixpoint = false;
+        if (self.class_kinds.fetchRemove(root_a)) |kv| {
+            const gop = try self.class_kinds.getOrPut(self.allocator, root_b);
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            if (kv.value.atomic) gop.value_ptr.atomic = true;
+            for (kv.value.heads.items) |head| {
+                if (std.mem.indexOfScalar(
+                    u32,
+                    gop.value_ptr.heads.items,
+                    head,
+                ) == null) {
+                    try gop.value_ptr.heads.append(self.allocator, head);
+                }
+            }
+        }
         // Proven-ness is a class property: carry the absorbed root's
         // fact to the new root (older fact wins a collision).
         if (self.proven.fetchRemove(root_a)) |kv| {
@@ -985,6 +1119,8 @@ pub const EGraph = struct {
                                         .flat = full,
                                         .just = try self.buildSpliceJust(
                                             @intCast(idx),
+                                            &self.bag_node_index,
+                                            stored.class,
                                             scratch,
                                         ),
                                     });
@@ -1056,6 +1192,35 @@ pub const EGraph = struct {
         return any;
     }
 
+    pub const ClassKinds = struct {
+        atomic: bool = false,
+        heads: std.ArrayListUnmanaged(u32) = .{},
+    };
+
+    fn noteNodeKind(
+        self: *EGraph,
+        root: EClassId,
+        node: ENode,
+    ) !void {
+        const gop = try self.class_kinds.getOrPut(self.allocator, root);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        switch (node) {
+            .leaf, .app => gop.value_ptr.atomic = true,
+            .bag => |bag| {
+                if (std.mem.indexOfScalar(
+                    u32,
+                    gop.value_ptr.heads.items,
+                    bag.term_id,
+                ) == null) {
+                    try gop.value_ptr.heads.append(
+                        self.allocator,
+                        bag.term_id,
+                    );
+                }
+            },
+        }
+    }
+
     const PendingTwin = struct {
         from: ENodeId,
         /// Scratch-backed fully spliced shape.
@@ -1078,21 +1243,24 @@ pub const EGraph = struct {
         return .{ .bag = .{ .term_id = bag.term_id, .members = members } };
     }
 
-    /// Record the splice justification for `from` against the current
-    /// bag-index state — the same state `canonicalizeInto` just spliced
-    /// with. All slices land in the egraph arena (the justification
-    /// outlives the pass).
+    /// Record the splice justification for `from` against `index` — the
+    /// same view the splice being justified ran over (the full view for
+    /// rebuild twins, the canonical one for intern-time twins) — seeding
+    /// the cycle guard with `self_class` exactly as that splice did. All
+    /// slices land in the egraph arena (the justification outlives the
+    /// pass).
     fn buildSpliceJust(
         self: *EGraph,
         from: ENodeId,
+        index: *const std.AutoArrayHashMapUnmanaged(u64, ENodeId),
+        self_class: ?EClassId,
         scratch: std.mem.Allocator,
     ) !Justification {
         const bag = self.nodes.items[from].node.bag;
         var visited: std.ArrayListUnmanaged(EClassId) = .{};
-        try visited.append(
-            scratch,
-            self.find(self.nodes.items[from].class),
-        );
+        if (self_class) |class| {
+            try visited.append(scratch, self.find(class));
+        }
         const members = try self.allocator.alloc(
             EClassId,
             bag.members.len,
@@ -1104,6 +1272,7 @@ pub const EGraph = struct {
         for (bag.members, 0..) |member, idx| {
             members[idx] = self.find(member);
             expansion[idx] = try self.buildSpliceExpansion(
+                index,
                 bag.term_id,
                 members[idx],
                 &visited,
@@ -1125,14 +1294,13 @@ pub const EGraph = struct {
     /// keeps the class atomic (no same-head bag, or the cycle guard).
     fn buildSpliceExpansion(
         self: *EGraph,
+        index: *const std.AutoArrayHashMapUnmanaged(u64, ENodeId),
         term_id: u32,
         root: EClassId,
         visited: *std.ArrayListUnmanaged(EClassId),
         scratch: std.mem.Allocator,
     ) error{OutOfMemory}!?*const SpliceExpansion {
-        const bag_node = self.bag_node_index.get(
-            bagKey(term_id, root),
-        ) orelse return null;
+        const bag_node = index.get(bagKey(term_id, root)) orelse return null;
         if (std.mem.indexOfScalar(
             EClassId,
             visited.items,
@@ -1152,6 +1320,7 @@ pub const EGraph = struct {
         for (sub.members, 0..) |member, idx| {
             members[idx] = self.find(member);
             entries[idx] = try self.buildSpliceExpansion(
+                index,
                 term_id,
                 members[idx],
                 visited,
@@ -1545,10 +1714,10 @@ pub const EGraph = struct {
         /// class holds because an earlier fold put it there — so the
         /// union would unite a node with itself. Nothing was computed;
         /// the fold must not treat the redex as consumed. (The gate is a
-        /// consequence of flattening through a designated same-head
-        /// member: a class holding both a product and a sum shows only
-        /// one of them to its parents, so the matcher cannot see the
-        /// other view and the residual binding has to do the work.)
+        /// consequence of splicing through a designated same-head
+        /// member: the wrapped target's canonical flat form can be the
+        /// matched node's own shape — the pre-fire form the class already
+        /// holds — so the union has nothing to add.)
         self_loop,
         dep_deferred,
         /// A conditional rule's premises did not all discharge.
@@ -3392,6 +3561,40 @@ pub const EGraph = struct {
                 return .{ .class = root, .node = self.class_node.items[root] };
             },
             .app => |app| {
+                if (app.args.len == 2 and self.ac_heads.contains(app.term_id)) {
+                    // An AC-headed target is a bag pattern: its same-head
+                    // spine flattens (as `flattenPattern` does for the
+                    // matched side), and the instance is the bag of the
+                    // flattened members' instances — the pattern-shaped
+                    // node explain lays the pattern back over. Spine-
+                    // internal applications are not subterms in the bag
+                    // view and get no node of their own.
+                    var flat: std.ArrayListUnmanaged(TemplateExpr) = .{};
+                    try self.flattenPattern(
+                        self.allocator,
+                        app.term_id,
+                        pattern,
+                        &flat,
+                    );
+                    const members = try self.allocator.alloc(
+                        EClassId,
+                        flat.items.len,
+                    );
+                    for (flat.items, 0..) |member, idx| {
+                        const inst = (try self.instantiate(
+                            member,
+                            subst,
+                        )) orelse return null;
+                        members[idx] = inst.class;
+                    }
+                    const shape = ENode{ .bag = .{
+                        .term_id = app.term_id,
+                        .members = members,
+                    } };
+                    const class = try self.add(shape);
+                    const node = (try self.lookupNode(shape)).?;
+                    return .{ .class = class, .node = node };
+                }
                 const mask = self.bound_masks.get(app.term_id) orelse 0;
                 const children = try self.allocator.alloc(
                     Child,

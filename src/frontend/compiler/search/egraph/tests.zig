@@ -2094,3 +2094,131 @@ test "premise explanation is age-bounded: never through a younger route" {
     }
     try expectValidChain(&eg, premise.from, premise.to, premise.steps);
 }
+
+// --- intern-time splice twins ---------------------------------------------
+
+const MUL_T: u32 = 42;
+
+/// A term over a bag node, children in the node's member order (sorted by
+/// class root).
+fn bagTerm(
+    eg: *EGraph,
+    node: egraph.ENodeId,
+    members: []const *const Term,
+) !*const Term {
+    const sorted = try eg.allocator.dupe(*const Term, members);
+    std.mem.sort(*const Term, sorted, eg, termClassLess);
+    const children = try eg.allocator.alloc(?*const Term, sorted.len);
+    for (sorted, 0..) |member, idx| children[idx] = member;
+    const term = try eg.allocator.create(Term);
+    term.* = .{ .node = node, .children = children };
+    return term;
+}
+
+/// The two terms explain into each other by AC re-trees alone.
+fn expectAcRetree(eg: *EGraph, from: *const Term, to: *const Term) !void {
+    const steps = (try eg.explain(&.{}, from, to, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try expectValidChain(eg, from, to, steps);
+    try testing.expect(steps.len != 0);
+    for (steps) |step| try testing.expect(step.source == .ac_flatten);
+}
+
+test "intern-time splice keeps the nested view only where a member class carries other structure" {
+    // A member class that denotes only same-head bags is fully represented
+    // by its members: a pure AC regrouping interns to the one flat bag.
+    // A member class that ALSO holds a leaf, an application, or a bag of
+    // another head loses that view under the flat form, so the nested
+    // node (members as given) is kept beside its flat twin — one class,
+    // linked by a splice edge the explanation crosses as a pure AC
+    // re-tree, the shape rebuild gives later acquisitions.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+    try eg.ac_heads.put(eg.allocator, ADD, {});
+    try eg.congr_heads.put(eg.allocator, MUL_T, {});
+    try eg.ac_heads.put(eg.allocator, MUL_T, {});
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const z = try tLeaf(&eg, 3);
+    const a = try tLeaf(&eg, 4);
+    const b = try tLeaf(&eg, 5);
+
+    // Pure regrouping: (x + y) + z is the one node {x, y, z}.
+    const xy = try tAc2(&eg, ADD, x, y);
+    const pure_before = eg.eNodeCount();
+    _ = try tAc2(&eg, ADD, xy, z);
+    try testing.expectEqual(pure_before + 1, eg.eNodeCount());
+
+    // x * y = a + b: the product's class also denotes a sum.
+    const xy_mul = try tAc2(&eg, MUL_T, x, y);
+    const ab = try tAc2(&eg, ADD, a, b);
+    _ = try eg.merge(
+        termClassOf(&eg, xy_mul),
+        termClassOf(&eg, ab),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = xy_mul, .rhs = ab } },
+    );
+    _ = try eg.saturate(&.{}, .{});
+
+    // (x * y) * z: the flat product {x, y, z} dissolves the sum the
+    // factor class holds, so both views are kept.
+    const mixed_before = eg.eNodeCount();
+    const nested_shape = ENode{ .app = .{ .term_id = MUL_T, .children = &.{
+        .{ .class = termClassOf(&eg, xy_mul) },
+        .{ .class = termClassOf(&eg, z) },
+    } } };
+    const class = try eg.add(nested_shape);
+    try testing.expectEqual(mixed_before + 2, eg.eNodeCount());
+    const nested_id = (try eg.lookupNode(nested_shape)).?;
+    const flat_shape = ENode{ .bag = .{ .term_id = MUL_T, .members = &.{
+        termClassOf(&eg, x),
+        termClassOf(&eg, y),
+        termClassOf(&eg, z),
+    } } };
+    const flat_id = (try eg.lookupNode(flat_shape)).?;
+    try testing.expect(nested_id != flat_id);
+    try testing.expectEqual(
+        @as(usize, 2),
+        eg.nodes.items[nested_id].node.bag.members.len,
+    );
+    try testing.expectEqual(
+        @as(usize, 3),
+        eg.nodes.items[flat_id].node.bag.members.len,
+    );
+    try testing.expect(eg.sameClass(class, eg.nodes.items[flat_id].class));
+    // Re-interning either view is a memo hit.
+    _ = try eg.add(nested_shape);
+    _ = try eg.add(flat_shape);
+    try testing.expectEqual(mixed_before + 2, eg.eNodeCount());
+
+    // The views explain into each other across the intern-time splice
+    // edge, in both directions.
+    const nested_term = try bagTerm(&eg, nested_id, &.{ xy_mul, z });
+    const flat_term = try bagTerm(&eg, flat_id, &.{ x, y, z });
+    try expectAcRetree(&eg, nested_term, flat_term);
+    try expectAcRetree(&eg, flat_term, nested_term);
+
+    // Between rebuilds the splice index still lists a class a union just
+    // gave a leaf; the leaf view is exactly what the flat form would
+    // dissolve, so the nested node is kept there too ...
+    const c = try tLeaf(&eg, 6);
+    const w = try tLeaf(&eg, 7);
+    _ = try eg.merge(
+        termClassOf(&eg, c),
+        termClassOf(&eg, xy),
+        .{ .pool_equation = .{ .pool_index = 1, .lhs = c, .rhs = xy } },
+    );
+    const stale_before = eg.eNodeCount();
+    _ = try tAc2(&eg, ADD, xy, w);
+    try testing.expectEqual(stale_before + 2, eg.eNodeCount());
+    // ... and once the rebuild exempts the class from splicing (atomic
+    // representative), the nested shape is the canonical one.
+    _ = try eg.saturate(&.{}, .{});
+    const v = try tLeaf(&eg, 8);
+    const exempt_before = eg.eNodeCount();
+    _ = try tAc2(&eg, ADD, xy, v);
+    try testing.expectEqual(exempt_before + 1, eg.eNodeCount());
+}

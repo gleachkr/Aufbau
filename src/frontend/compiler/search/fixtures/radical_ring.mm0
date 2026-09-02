@@ -1,0 +1,94 @@
+delimiter $ ( ) - / $;
+
+provable sort wff;
+sort R;
+
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+term eq (a b: R): wff;
+infixl eq: $=$ prec 50;
+term ne (a b: R): wff;
+infixl ne: $≠$ prec 50;
+
+term zero: R;
+notation zero: R = ($0$:max);
+term one: R;
+notation one: R = ($1$:max);
+term two: R;
+notation two: R = ($2$:max);
+--| @acui add_assoc add_comm zero _
+term add (a b: R): R;
+infixl add: $+$ prec 64;
+--| @acui mul_assoc mul_comm one _
+term mul (a b: R): R;
+infixl mul: $*$ prec 70;
+term neg (a: R): R;
+prefix neg: $-$ prec 90;
+term inv (a: R): R;
+
+--| @relation wff bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: wff): $ a ↔ a $;
+axiom bi_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bi_symm (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation R eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: R): $ a = a $;
+axiom eq_trans (a b c: R): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_symm (a b: R): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: R): $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+--| @congr
+axiom add_congr (a b c d: R): $ a = b $ > $ c = d $ > $ a + c = b + d $;
+--| @congr
+axiom mul_congr (a b c d: R): $ a = b $ > $ c = d $ > $ a * c = b * d $;
+--| @congr
+axiom neg_congr (a b: R): $ a = b $ > $ -a = -b $;
+--| @congr
+axiom inv_congr (a b: R): $ a = b $ > $ inv a = inv b $;
+--| @congr
+axiom ne_congr (a b c d: R): $ a = b $ > $ c = d $ > $ (a ≠ c) ↔ (b ≠ d) $;
+
+--| @conversion assoc
+axiom add_assoc (a b c: R): $ (a + b) + c = a + (b + c) $;
+--| @conversion comm
+axiom add_comm (a b: R): $ a + b = b + a $;
+--| @conversion assoc
+axiom mul_assoc (a b c: R): $ (a * b) * c = a * (b * c) $;
+--| @conversion comm
+axiom mul_comm (a b: R): $ a * b = b * a $;
+
+--| @compute ltr
+axiom add_zero (a: R): $ a + 0 = a $;
+--| @compute ltr
+axiom mul_zero (a: R): $ a * 0 = 0 $;
+--| @compute ltr
+axiom mul_one (a: R): $ a * 1 = a $;
+--| @compute ltr
+axiom add_neg (a: R): $ a + -a = 0 $;
+--| @compute ltr
+axiom distrib (a b c: R): $ a * (b + c) = a * b + a * c $;
+--| @compute ltr
+axiom neg_mul (a b: R): $ (-a) * b = -(a * b) $;
+
+--| @conversion unfold
+def three: R = $ 1 + 1 + 1 $;
+notation three: R = ($3$:max);
+
+
+--| @compute ltr
+axiom neg_neg (a: R): $ -(-a) = a $;
+--| @conversion ltr
+axiom mul_inv (a: R): $ a ≠ 0 $ > $ a * inv a = 1 $;
+axiom two_ne_zero: $ 2 ≠ 0 $;
+axiom three_ne_zero: $ 3 ≠ 0 $;
+
+--| @conversion unfold
+def div (a b: R): R = $ a * inv b $;
+infixl div: $/$ prec 70;
+
+-- Provable from mul_inv and distrib; an axiom here to keep the theory small.
+-- `neg_add` is left out on purpose: the tests enroll it themselves.
+--| @compute ltr
+axiom halves (a: R): $ -(a / 2) + -(a / 2) = -a $;

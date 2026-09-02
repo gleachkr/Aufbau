@@ -15,13 +15,30 @@ const expectConversionCompiles = helpers.expectConversionCompiles;
 
 const theory = @embedFile("../fixtures/commutative_ring.mm0");
 
+/// The ring theory extended with inverses and division (`def div`
+/// unfolds, `mul_inv` fires under `a ≠ 0`), for Cardano's formula in
+/// radical form. `neg_add` is left out so a test can enroll it its own
+/// way: as `@conversion ltr` it costs nothing (6 ms, 150 lines for the
+/// theorem below), as a `@compute` fold it distributes every negated
+/// sum and builds mutually negated classes the extraction then has to
+/// route through (0.55 s, 275 lines).
+const radical_theory = @embedFile("../fixtures/radical_ring.mm0");
+
 fn expectFoundAndCompiles(
+    comptime statement: []const u8,
+    comptime goal: []const u8,
+) !void {
+    try expectFoundAndCompilesIn(theory, statement, goal);
+}
+
+fn expectFoundAndCompilesIn(
+    comptime base: []const u8,
     comptime statement: []const u8,
     comptime goal: []const u8,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const mm0_src = theory ++ statement;
+    const mm0_src = base ++ statement;
     const proof_src = "thm\n---\ngoal: $ " ++ goal ++ " $ by conversion?\n";
     var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{
         .status_detail = true,
@@ -105,5 +122,47 @@ test "ring conversion?: residual binder skips a sub-bag that starves later patte
         \\  $ u * u * u + v * v * v + w * w * w = 3 * q $;
     ,
         \\u * u * u + v * v * v + w * w * w = 3 * q
+    );
+}
+
+// Cardano's formula in radical form: the cubes of `u` and `v` are given
+// as `-(q/2) ± s`, so their classes hold a product bag AND a sum. A
+// product of such factors used to intern straight to its flat member
+// list, and a `distrib` target whose summand class already held a sum
+// was recorded as a flat sum too; the 2-member pattern then had no node
+// to lay over and the conversion was found but never extracted.
+// Intern-time splicing now keeps the nested node beside the flat twin.
+test "ring conversion?: radical Cardano (nested node kept at intern-time splicing)" {
+    try expectFoundAndCompilesIn(radical_theory,
+        \\theorem thm (u v p q s: R)
+        \\  (hp: $ p = -(3 * u * v) $)
+        \\  (hu: $ u * u * u = -(q / 2) + s $)
+        \\  (hv: $ v * v * v = -(q / 2) + -s $):
+        \\  $ (u + v) * (u + v) * (u + v) + p * (u + v) = -q $;
+    ,
+        \\(u + v) * (u + v) * (u + v) + p * (u + v) = -q
+    );
+}
+
+// The same theorem with `neg_add` enrolled as a FOLD. Its firings leave
+// the goal class self-containing (`-q = 3uv² + vp + 0 + (-q)` after `add_neg`),
+// and an `add_zero` edge whose binder is bound to that very class then
+// rendered its bare-binder side over the creating node: the binder took
+// the self member and the rest passed as leftovers the other side did
+// not state, so the lowering declined the step. Both sides must now
+// agree on their extension, and a binder bound to the bag's own class
+// tries the sub-bag decompositions before the self member. About half a
+// second in ReleaseFast.
+test "ring conversion?: radical Cardano with neg_add (self-containing goal class)" {
+    try expectFoundAndCompilesIn(radical_theory,
+        \\--| @compute ltr
+        \\axiom neg_add (a b: R): $ -(a + b) = -a + -b $;
+        \\theorem thm (u v p q s: R)
+        \\  (hp: $ p = -(3 * u * v) $)
+        \\  (hu: $ u * u * u = -(q / 2) + s $)
+        \\  (hv: $ v * v * v = -(q / 2) + -s $):
+        \\  $ (u + v) * (u + v) * (u + v) + p * (u + v) = -q $;
+    ,
+        \\(u + v) * (u + v) * (u + v) + p * (u + v) = -q
     );
 }

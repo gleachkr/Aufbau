@@ -1026,6 +1026,7 @@ pub const ExplainCtx = struct {
                         binder_masks,
                         if (current.node == before_node) current else null,
                         attempt == 1,
+                        rule_just.extension.len != 0,
                     )) orelse return null;
                     if (try self.explainTerms(current, rendered.lhs, pos)) {
                         break :aligned;
@@ -1505,12 +1506,19 @@ pub const ExplainCtx = struct {
         flat: *const Term,
         claimed: []bool,
     ) error{OutOfMemory}!?*const Term {
+        // Children parallel the node's CURRENT member order, as every
+        // other term over it does (member lists re-sort as unions land;
+        // the snapshot only classifies which members expanded).
+        const members = self.eg.nodes.items[exp.node].node.bag.members;
+        const map = (try self.pairSnapshot(members, exp.members)) orelse {
+            return null;
+        };
         const children = try self.allocator().alloc(
             ?*const Term,
-            exp.members.len,
+            members.len,
         );
-        for (exp.members, exp.entries, 0..) |member, entry, idx| {
-            children[idx] = if (entry) |deeper|
+        for (members, 0..) |member, idx| {
+            children[idx] = if (exp.entries[map[idx]]) |deeper|
                 (try self.regroupExpansion(deeper, flat, claimed)) orelse {
                     return null;
                 }
@@ -1551,6 +1559,65 @@ pub const ExplainCtx = struct {
         overrides: []?*const Term,
     };
 
+    /// A bare-binder side of an extension-free firing rendered as the
+    /// binding's term itself, off anchor. The recorded node is the
+    /// class's creating node, which may be a self-containing bag (`-q =
+    /// 3uv² + vp + 0 + (-q)` after a cancellation); laid over it the
+    /// binder claims the member of its own class and the rest passes as
+    /// leftovers the other endpoint does not mirror — a term the rule
+    /// instance does not state. The next edge's anchoring re-aligns the
+    /// binding's term to the recorded node. This is a fallback, not the
+    /// default rendering of such a side: the anchored rendering keeps
+    /// the chain in node-identity lockstep, while every off-anchor
+    /// endpoint costs an alignment route — rendering bare-binder sides
+    /// this way unconditionally exhausts the route budget on the Cardano
+    /// substitution regression (`ring_tests`).
+    fn bareBinderSide(
+        self: *ExplainCtx,
+        node_id: ENodeId,
+        binder: usize,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+    ) error{OutOfMemory}!?RenderedBag {
+        const term = (try self.binderTerm(
+            binder,
+            subst,
+            binder_masks,
+        )) orelse return null;
+        const head = self.eg.nodes.items[node_id].node.bag.term_id;
+        const matched: []const u32 = switch (self.eg.nodes.items[term.node].node) {
+            .bag => |bag| if (bag.term_id == head) blk: {
+                const all = try self.allocator().alloc(u32, term.children.len);
+                for (all, 0..) |*slot, idx| slot.* = @intCast(idx);
+                break :blk all;
+            } else &.{},
+            else => &.{},
+        };
+        return .{ .term = term, .matched = matched };
+    }
+
+    /// Multiset of member class roots a rendered bag side leaves
+    /// unmatched — the extension it states.
+    fn leftoverRoots(
+        self: *ExplainCtx,
+        term: *const Term,
+        matched: []const u32,
+    ) ![]EClassId {
+        var out: std.ArrayListUnmanaged(EClassId) = .{};
+        for (term.children, 0..) |maybe_child, idx| {
+            const child = maybe_child orelse continue;
+            if (std.mem.indexOfScalar(u32, matched, @intCast(idx)) != null) {
+                continue;
+            }
+            try out.append(
+                self.allocator(),
+                self.eg.find(self.eg.nodes.items[child.node].class),
+            );
+        }
+        std.mem.sort(EClassId, out.items, {}, std.sort.asc(EClassId));
+        return out.items;
+    }
+
     /// Render both endpoints of a rule edge, each anchored at the edge's
     /// exact recorded node (bag endpoints because the extension members
     /// live there; tree endpoints so edge processing stays in node-identity
@@ -1569,6 +1636,7 @@ pub const ExplainCtx = struct {
         binder_masks: []const u32,
         seed: ?*const Term,
         prefer_newest_self_ref: bool,
+        has_extension: bool,
     ) error{OutOfMemory}!?RenderedEndpoints {
         const overrides = try self.allocator().alloc(
             ?*const Term,
@@ -1629,6 +1697,7 @@ pub const ExplainCtx = struct {
                         subst,
                         binder_masks,
                         true,
+                        !has_extension,
                     )) orelse return null;
                     lhs = rendered.term;
                     matched_before = rendered.matched;
@@ -1647,6 +1716,7 @@ pub const ExplainCtx = struct {
                         subst,
                         binder_masks,
                         true,
+                        !has_extension,
                     )) orelse return null;
                     rhs = rendered.term;
                     matched_after = rendered.matched;
@@ -1657,6 +1727,48 @@ pub const ExplainCtx = struct {
                         subst,
                         binder_masks,
                     )) orelse return null;
+                }
+                // Both endpoints must state the same extension: the
+                // lowering rejoins the before side's leftovers onto the
+                // rule instance and expects the after side to be exactly
+                // that. A bare-binder side of an extension-free firing
+                // that disagrees renders as the binding itself instead
+                // (see `bareBinderSide`), and the invariant is checked
+                // again on the result; any remaining disagreement is an
+                // unexplainable edge.
+                if (before_is_bag and after_is_bag) {
+                    var agree = std.mem.eql(
+                        EClassId,
+                        try self.leftoverRoots(lhs, matched_before),
+                        try self.leftoverRoots(rhs, matched_after),
+                    );
+                    if (!agree and !has_extension) {
+                        if (pattern_out == .binder) {
+                            const side = (try self.bareBinderSide(
+                                after_node,
+                                pattern_out.binder,
+                                subst,
+                                binder_masks,
+                            )) orelse return null;
+                            rhs = side.term;
+                            matched_after = side.matched;
+                        } else if (pattern_in == .binder) {
+                            const side = (try self.bareBinderSide(
+                                before_node,
+                                pattern_in.binder,
+                                subst,
+                                binder_masks,
+                            )) orelse return null;
+                            lhs = side.term;
+                            matched_before = side.matched;
+                        }
+                        agree = std.mem.eql(
+                            EClassId,
+                            try self.leftoverRoots(lhs, matched_before),
+                            try self.leftoverRoots(rhs, matched_after),
+                        );
+                    }
+                    if (!agree) return null;
                 }
                 bag_info = .{
                     .matched_before = matched_before,
@@ -1729,7 +1841,10 @@ pub const ExplainCtx = struct {
     /// denotes (a binder bound to a sub-bag claims each of that sub-bag's
     /// members individually), and leftover members — the extension —
     /// render as mask-0 representatives. `allow_leftover` is false below
-    /// the rewrite root, where a pattern must cover its bag exactly.
+    /// the rewrite root, where a pattern must cover its bag exactly;
+    /// `whole` says the firing carried no extension, so a binder bound to
+    /// the bag's own class prefers a sub-bag decomposition over the bag's
+    /// self member (see `claimBagMembers`).
     fn renderBag(
         self: *ExplainCtx,
         bag_node: ENodeId,
@@ -1737,6 +1852,7 @@ pub const ExplainCtx = struct {
         subst: []const ?Child,
         binder_masks: []const u32,
         allow_leftover: bool,
+        whole: bool,
     ) error{OutOfMemory}!?RenderedBag {
         const bag = self.eg.nodes.items[bag_node].node.bag;
         var flat: std.ArrayListUnmanaged(TemplateExpr) = .{};
@@ -1747,15 +1863,18 @@ pub const ExplainCtx = struct {
         );
         @memset(children, null);
         var matched: std.ArrayListUnmanaged(u32) = .{};
+        const bag_root = self.eg.find(self.eg.nodes.items[bag_node].class);
         for (flat.items, 0..) |pm, pm_idx| {
             if (!try self.claimBagMembers(
                 bag,
+                bag_root,
                 children,
                 &matched,
                 pm,
                 subst,
                 binder_masks,
                 flat.items.len - pm_idx - 1,
+                whole,
             )) {
                 return null;
             }
@@ -1776,17 +1895,38 @@ pub const ExplainCtx = struct {
     fn claimBagMembers(
         self: *ExplainCtx,
         bag: ENode.Bag,
+        bag_root: EClassId,
         children: []?*const Term,
         matched: *std.ArrayListUnmanaged(u32),
         pm: TemplateExpr,
         subst: []const ?Child,
         binder_masks: []const u32,
         reserve: usize,
+        whole: bool,
     ) error{OutOfMemory}!bool {
         const inst = (try self.eg.instantiate(pm, subst)) orelse {
             return false;
         };
         const root = self.eg.find(inst.class);
+        // A binder bound to the enclosing bag's own class is ambiguous
+        // between the bag's self member (a self-containing node after a
+        // cancellation: `-q = 3uv² + vp + 0 + (-q)`) and a sub-bag that
+        // denotes the class. When the firing carried no extension the
+        // pattern covers the whole bag, so the sub-bag decompositions
+        // come first and the self member is the fallback.
+        const self_member_last = pm == .binder and whole and
+            root == bag_root;
+        if (self_member_last) {
+            if (try self.claimResidualBinder(
+                bag,
+                children,
+                matched,
+                pm.binder,
+                binder_masks,
+                reserve,
+                root,
+            )) return true;
+        }
         for (bag.members, 0..) |member, idx| {
             if (children[idx] != null) continue;
             if (self.eg.find(member) != root) continue;
@@ -1832,16 +1972,38 @@ pub const ExplainCtx = struct {
             }
             return false;
         }
-        // A binder bound to a sub-bag (residual binding) spans several
-        // members; claim each individually with the binder's mask. The
-        // class may hold several same-head bag nodes (splice twins at
-        // different depths); try each against the enclosing bag's members
-        // and keep the first full claim. The winning decomposition is
-        // recorded as the binder's edge-scoped term so every other
-        // rendering of the binder in this edge matches it member-wise.
-        const mask_id = binder_masks[pm.binder];
+        if (self_member_last) return false;
+        return try self.claimResidualBinder(
+            bag,
+            children,
+            matched,
+            pm.binder,
+            binder_masks,
+            reserve,
+            root,
+        );
+    }
+
+    /// A binder bound to a sub-bag (residual binding) spans several
+    /// members; claim each individually with the binder's mask. The
+    /// class may hold several same-head bag nodes (splice twins at
+    /// different depths); try each against the enclosing bag's members
+    /// and keep the first full claim. The winning decomposition is
+    /// recorded as the binder's edge-scoped term so every other
+    /// rendering of the binder in this edge matches it member-wise.
+    fn claimResidualBinder(
+        self: *ExplainCtx,
+        bag: ENode.Bag,
+        children: []?*const Term,
+        matched: *std.ArrayListUnmanaged(u32),
+        binder: usize,
+        binder_masks: []const u32,
+        reserve: usize,
+        root: EClassId,
+    ) error{OutOfMemory}!bool {
+        const mask_id = binder_masks[binder];
         if (self.rule_binder_terms) |overrides| {
-            if (overrides[pm.binder]) |term| {
+            if (overrides[binder]) |term| {
                 return try self.claimTermMembers(bag, children, matched, term);
             }
         }
@@ -1895,7 +2057,7 @@ pub const ExplainCtx = struct {
             if (self.rule_binder_terms) |overrides| {
                 const term = try self.allocator().create(Term);
                 term.* = .{ .node = cand_id, .children = sub_terms };
-                overrides[pm.binder] = term;
+                overrides[binder] = term;
             }
             return true;
         }
@@ -1994,6 +2156,7 @@ pub const ExplainCtx = struct {
                     subst,
                     binder_masks,
                     false,
+                    true,
                 )) orelse return null;
                 return rendered.term;
             },
