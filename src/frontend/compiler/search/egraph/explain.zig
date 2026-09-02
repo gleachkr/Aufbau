@@ -1747,7 +1747,7 @@ pub const ExplainCtx = struct {
         );
         @memset(children, null);
         var matched: std.ArrayListUnmanaged(u32) = .{};
-        for (flat.items) |pm| {
+        for (flat.items, 0..) |pm, pm_idx| {
             if (!try self.claimBagMembers(
                 bag,
                 children,
@@ -1755,6 +1755,7 @@ pub const ExplainCtx = struct {
                 pm,
                 subst,
                 binder_masks,
+                flat.items.len - pm_idx - 1,
             )) {
                 return null;
             }
@@ -1780,6 +1781,7 @@ pub const ExplainCtx = struct {
         pm: TemplateExpr,
         subst: []const ?Child,
         binder_masks: []const u32,
+        reserve: usize,
     ) error{OutOfMemory}!bool {
         const inst = (try self.eg.instantiate(pm, subst)) orelse {
             return false;
@@ -1846,12 +1848,21 @@ pub const ExplainCtx = struct {
         const class_members = self.eg.class_index.get(root) orelse {
             return false;
         };
+        // Every later pattern member still needs a slot: a sub-bag that
+        // would swallow them all is not this binder's decomposition
+        // however early the class lists it. (After `a + 0 = a` the
+        // enclosing bag itself sits in the binder's class.)
+        var unclaimed: usize = 0;
+        for (children) |child| {
+            if (child == null) unclaimed += 1;
+        }
         candidate: for (class_members.items) |cand_id| {
             const sub = switch (self.eg.nodes.items[cand_id].node) {
                 .bag => |sub| sub,
                 else => continue,
             };
             if (sub.term_id != bag.term_id) continue;
+            if (sub.members.len + reserve > unclaimed) continue;
             const mark = matched.items.len;
             const sub_terms = try self.allocator().alloc(
                 ?*const Term,

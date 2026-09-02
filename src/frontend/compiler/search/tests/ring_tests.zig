@@ -90,3 +90,20 @@ test "ring conversion?: Cardano substitution (extraction from the refreshed seed
     );
 }
 
+// Hypotheses spliced into the goal sum, then `add_neg` and `add_zero`
+// on the debris. `add_zero` (`a + 0 = a`) puts `{q, q, q, 0}` and its
+// residual `{q, q, q}` in one class, and the debris bag is the older
+// node. Rendering the binder `a` as a sub-bag used to keep the first
+// candidate that claimed fully — the enclosing bag itself — leaving no
+// member for the pattern's `0`; the chain then failed to extract.
+test "ring conversion?: residual binder skips a sub-bag that starves later pattern members" {
+    try expectFoundAndCompiles(
+        \\theorem thm (u v w q s: R)
+        \\  (hu: $ u * u * u = q + s $)
+        \\  (hv: $ v * v * v = q + -s $)
+        \\  (hw: $ w * w * w = q $):
+        \\  $ u * u * u + v * v * v + w * w * w = 3 * q $;
+    ,
+        \\u * u * u + v * v * v + w * w * w = 3 * q
+    );
+}
