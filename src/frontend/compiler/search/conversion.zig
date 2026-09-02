@@ -554,34 +554,30 @@ pub fn run(
         result.nodes = eg.eNodeCount();
 
         // Bags re-sort members as unions land, so the pre-saturation seed
-        // terms' children may no longer parallel their nodes. Rebuild them
-        // for extraction; no merges land between here and the lowering
-        // attempts below, so they stay aligned (a lifted-stop pass
-        // rebuilds afresh).
+        // terms' children may no longer parallel their nodes. Re-pair
+        // them to the current member order for extraction (children are
+        // reused verbatim; only bag-level pairing moves). No merges land
+        // between here and the lowering attempts below, so they stay
+        // aligned (a lifted-stop pass refreshes afresh).
         var extract_goal = goal_term;
         var extract_pool = pool_terms;
         var extract_sides = eq_sides;
         if (ac_certs.count() != 0) {
-            extract_goal = (try addExpr(
-                &eg,
-                context.env,
-                theorem,
-                goal,
-            )) orelse {
+            extract_goal = (try eg.refreshTerm(goal_term)) orelse {
                 result.convertible_unlowered =
                     poolConverged(&eg, goal_term, pool_terms) or
                     eqSidesConverged(&eg, eq_sides);
                 return result;
             };
             extract_sides = goalEqSides(theorem, goal, &rel_heads, extract_goal);
-            const rebuilt = try work.alloc(?*const egraph.Term, pool.len);
-            for (pool_exprs, 0..) |maybe_expr, idx| {
-                rebuilt[idx] = if (maybe_expr) |expr|
-                    try addExpr(&eg, context.env, theorem, expr)
+            const refreshed = try work.alloc(?*const egraph.Term, pool.len);
+            for (pool_terms, 0..) |maybe_seed, idx| {
+                refreshed[idx] = if (maybe_seed) |seed|
+                    try eg.refreshTerm(seed)
                 else
                     null;
             }
-            extract_pool = rebuilt;
+            extract_pool = refreshed;
         }
 
         const goal_class = termClass(&eg, extract_goal);
@@ -592,10 +588,10 @@ pub fn run(
             0..,
         ) |entry, maybe_term, maybe_expr, idx| {
             const ref_term = maybe_term orelse {
-                // The extraction rebuild failed (a written member's class
-                // spliced deeper than the written tree). If the seed-time
-                // term had converged, the goal is provably convertible —
-                // keep the failure report honest.
+                // The seed term could not be re-paired (a member's class
+                // drifted away from every child). If the seed-time term
+                // had converged, the goal is provably convertible — keep
+                // the failure report honest.
                 if (pool_terms[idx]) |seed| {
                     if (eg.sameClass(
                         termClass(&eg, seed),

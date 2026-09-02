@@ -506,7 +506,7 @@ pub const ExplainCtx = struct {
     /// only the bag-level pairing moves. Null when no pairing exists: a
     /// splice changed the member count, or a member's class drifted away
     /// from every child (the caller treats the edge as unexplainable).
-    fn refreshSeedTerm(
+    pub fn refreshSeedTerm(
         self: *ExplainCtx,
         term: *const Term,
     ) error{OutOfMemory}!?*const Term {

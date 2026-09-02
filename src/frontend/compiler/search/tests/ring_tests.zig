@@ -73,3 +73,20 @@ test "ring conversion?: pre-bound binder cancels a sub-sum without enumerating s
         \\    = m + n
     );
 }
+
+// Cardano's substitution in textbook form. The written goal `(u+v)^3 +
+// p*(u+v)` is a sum whose first member's class acquires the expanded
+// product, so re-adding the written formula after saturation splices
+// past the written tree and interns to the flat sum: extraction must
+// start from the seed-time term re-paired to the current member order.
+test "ring conversion?: Cardano substitution (extraction from the refreshed seed term)" {
+    try expectFoundAndCompiles(
+        \\theorem thm (u v p q: R)
+        \\  (hp: $ p = -(3 * u * v) $)
+        \\  (hq: $ u * u * u + v * v * v = -q $):
+        \\  $ (u + v) * (u + v) * (u + v) + p * (u + v) = -q $;
+    ,
+        \\(u + v) * (u + v) * (u + v) + p * (u + v) = -q
+    );
+}
+

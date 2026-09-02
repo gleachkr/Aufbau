@@ -3464,6 +3464,26 @@ pub const EGraph = struct {
         if (!try ctx.explainTerms(from, to, &.{})) return null;
         return ctx.steps.items;
     }
+
+    /// Re-pair a seed-time term's bag children with its nodes' current
+    /// member order (members re-sort as unions land). Children are
+    /// reused verbatim; only the bag-level pairing moves. Null when no
+    /// pairing exists. The driver refreshes the goal and pool seed terms
+    /// once saturation stops, so that extraction and lowering both start
+    /// from the same aligned term. (Re-adding the written formula instead
+    /// would intern straight to canonical form and lose the written tree
+    /// whenever a member's class has meanwhile acquired a same-head bag.)
+    pub fn refreshTerm(
+        self: *EGraph,
+        term: *const Term,
+    ) error{OutOfMemory}!?*const Term {
+        var ctx = explain_mod.ExplainCtx{
+            .eg = self,
+            .rules = &.{},
+            .opts = .{},
+        };
+        return try ctx.refreshSeedTerm(term);
+    }
 };
 
 test {
