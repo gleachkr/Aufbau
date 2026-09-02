@@ -1,15 +1,18 @@
--- Proofs for the conditional-conversion battery. Each body is the
--- intended lowering of a single `conversion?` search on the goal line
--- kept in the comment above it: the rule fires with its premise cited
--- as a label, and a fact carried across an e-class is lifted through
--- `ne_congr` and transported with `mpbi`.
+-- Proofs for the conditional-conversion battery. Each body is what a
+-- single `conversion?` search on the goal line kept in the comment above
+-- it emits: the rule fires with its premise cited as a label, a fact
+-- carried across an e-class is lifted through `ne_congr` and transported
+-- with `mpbi`, and the equation goal closes with the `eq_refl`/`eq_trans`
+-- coda every equation-goal lowering ends in.
 
 -- goal: $ a / a + 0 = 1 $ by conversion?
 direct_fact
 -----------
-goal_1: $ a / a = 1 $ by div_self [#1]
-goal_2: $ a / a + 0 = a / a $ by add_zero
-goal: $ a / a + 0 = 1 $ by eq_trans [goal_2, goal_1]
+goal_1: $ a / a + 0 = a / a $ by add_zero
+goal_2: $ a / a = 1 $ by div_self [#1]
+goal_3: $ a / a + 0 = 1 $ by eq_trans [goal_1, goal_2]
+goal_4: $ a / a + 0 = a / a + 0 $ by eq_refl
+goal: $ a / a + 0 = 1 $ by eq_trans [goal_4, goal_3]
 
 -- goal: $ b / b = 1 $ by conversion?
 class_transport
@@ -17,13 +20,17 @@ class_transport
 goal_1: $ 0 = 0 $ by eq_refl
 goal_2: $ a ≠ 0 ↔ b ≠ 0 $ by ne_congr [#2, goal_1]
 goal_3: $ b ≠ 0 $ by mpbi [goal_2, #1]
-goal: $ b / b = 1 $ by div_self [goal_3]
+goal_4: $ b / b = 1 $ by div_self [goal_3]
+goal_5: $ b / b = b / b $ by eq_refl
+goal: $ b / b = 1 $ by eq_trans [goal_5, goal_4]
 
 -- goal: $ max a b = b $ by conversion?
 chained_equation
 ----------------
 goal_1: $ min a b = a $ by min_le [#1]
-goal: $ max a b = b $ by max_of_min [goal_1]
+goal_2: $ max a b = b $ by max_of_min [goal_1]
+goal_3: $ max a b = max a b $ by eq_refl
+goal: $ max a b = b $ by eq_trans [goal_3, goal_2]
 
 -- goal: $ a / a = 1 $ by conversion?
 deferred_firing
@@ -32,10 +39,14 @@ goal_1: $ a * 1 = a $ by mul_one
 goal_2: $ 0 = 0 $ by eq_refl
 goal_3: $ a * 1 ≠ 0 ↔ a ≠ 0 $ by ne_congr [goal_1, goal_2]
 goal_4: $ a ≠ 0 $ by mpbi [goal_3, #1]
-goal: $ a / a = 1 $ by div_self [goal_4]
+goal_5: $ a / a = 1 $ by div_self [goal_4]
+goal_6: $ a / a = a / a $ by eq_refl
+goal: $ a / a = 1 $ by eq_trans [goal_6, goal_5]
 
 -- goal: $ (a * 1) / 1 = a $ by conversion?
 line_premise
 ------------
 fact: $ 1 ≠ 0 $ by one_ne_zero
-goal: $ (a * 1) / 1 = a $ by mul_div [fact]
+goal_1: $ a * 1 / 1 = a $ by mul_div [fact]
+goal_2: $ a * 1 / 1 = a * 1 / 1 $ by eq_refl
+goal: $ (a * 1) / 1 = a $ by eq_trans [goal_2, goal_1]

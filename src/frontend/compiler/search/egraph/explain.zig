@@ -21,6 +21,7 @@ const Justification = eg_mod.Justification;
 const SpliceJust = eg_mod.SpliceJust;
 const SpliceExpansion = eg_mod.SpliceExpansion;
 const ExplEdge = eg_mod.ExplEdge;
+const PremiseJust = eg_mod.PremiseJust;
 const justEndpoints = eg_mod.justEndpoints;
 
 /// A resolved term: a concrete tree of graph nodes, one representative per
@@ -158,6 +159,25 @@ pub const Step = struct {
     /// Indexed by rule binder; entries the rule never bound are null.
     bindings: []const ?BindingValue,
     bag: ?BagInfo = null,
+    /// For a `.rule` step of a conditional rule: one proof per premise,
+    /// in the rule's hypothesis order. Empty for an unconditional rule.
+    premises: []const PremiseProof = &.{},
+
+    /// How one premise of a conditional-rule step is established. A
+    /// `.fact` premise is proven by the pool entry at `pool_index`:
+    /// `steps` convert the entry's written formula (`from`) into the
+    /// premise instance (`to`), and the lowering carries the fact across
+    /// with the sort's transport (an empty chain with identical
+    /// endpoints cites the entry directly). An `.equation` premise
+    /// `rel(from, to)` is proven by `steps` alone (an empty chain is a
+    /// `refl`).
+    pub const PremiseProof = struct {
+        kind: Rule.Premise.Kind,
+        pool_index: u32,
+        from: *const Term,
+        to: *const Term,
+        steps: []const Step,
+    };
 };
 
 pub const ExplainOptions = struct {
@@ -190,6 +210,11 @@ pub const ExplainCtx = struct {
     eg: *EGraph,
     rules: []const Rule,
     opts: ExplainOptions,
+    /// Set for a premise sub-explanation: only union edges of age below
+    /// this (recorded before the conditional rule fired) may be
+    /// traversed, so a premise is never proven through the union it
+    /// licensed or anything later. Null = the whole forest.
+    age_bound: ?u32 = null,
     steps: std.ArrayListUnmanaged(Step) = .{},
     depth: usize = 0,
     /// Route attempts consumed (successful and rolled-back alike); see
@@ -416,6 +441,9 @@ pub const ExplainCtx = struct {
             try positions.put(alloc, current, chain1_nodes.items.len);
             try chain1_nodes.append(alloc, current);
             const edge = self.eg.expl_parent.items[current] orelse break;
+            // An over-age edge ends the usable ancestor chain: whatever
+            // lies above it was joined too late for this explanation.
+            if (!self.edgeInAge(edge.age)) break;
             try chain1_edges.append(alloc, edge);
             current = edge.to;
         }
@@ -431,6 +459,7 @@ pub const ExplainCtx = struct {
             const edge = self.eg.expl_parent.items[current] orelse {
                 return null;
             };
+            if (!self.edgeInAge(edge.age)) return null;
             try chain2_edges.append(alloc, edge);
             current = edge.to;
         }
@@ -549,7 +578,19 @@ pub const ExplainCtx = struct {
         defer self.depth -= 1;
 
         if (nodeShapeEql(self.eg, from.node, to.node)) {
-            return try self.alignChildren(from, to, pos);
+            if (self.age_bound == null) {
+                return try self.alignChildren(from, to, pos);
+            }
+            // Shape equality reads the FINAL union-find, which an
+            // age-bounded explanation may not use: two nodes whose child
+            // classes joined only after the bound still align through
+            // an older direct route (a pool equation between the
+            // formulas themselves). Try the aligned form, then fall
+            // through to the bounded route search.
+            const mark = self.steps.items.len;
+            if (try self.alignChildren(from, to, pos)) return true;
+            self.steps.shrinkRetainingCapacity(mark);
+            if (from.node == to.node) return false;
         }
 
         // Guard against re-entering the same node-pair alignment while it is
@@ -643,20 +684,29 @@ pub const ExplainCtx = struct {
         @memset(adj, .{});
         for (self.eg.expl_parent.items) |maybe_edge| {
             const edge = maybe_edge orelse continue;
-            try self.addRouteEdge(adj, edge.just);
+            try self.addRouteEdge(adj, edge.just, edge.age);
         }
-        for (self.eg.alt_edges.items) |just| {
-            try self.addRouteEdge(adj, just);
+        for (self.eg.alt_edges.items) |alt| {
+            try self.addRouteEdge(adj, alt.just, alt.age);
         }
         self.route_adj = adj;
         return adj;
+    }
+
+    /// Whether an edge recorded at union index `age` may be traversed
+    /// under this context's age bound.
+    fn edgeInAge(self: *const ExplainCtx, age: u32) bool {
+        const bound = self.age_bound orelse return true;
+        return age < bound;
     }
 
     fn addRouteEdge(
         self: *ExplainCtx,
         adj: []std.ArrayListUnmanaged(RouteEdge),
         just: Justification,
+        age: u32,
     ) error{OutOfMemory}!void {
+        if (!self.edgeInAge(age)) return;
         const ends = justEndpoints(just);
         try adj[ends.a].append(self.allocator(), .{
             .just = just,
@@ -1010,6 +1060,17 @@ pub const ExplainCtx = struct {
                     };
                 }
                 const bag_info = rendered.bag_info;
+                // A conditional rule's premises are explained under the
+                // step's own bindings, so the premise lines state the
+                // same instance the rule line cites.
+                const premises = (try self.explainPremises(
+                    rule,
+                    rule_just.premises,
+                    rule_just.fired_at,
+                    rule_just.subst,
+                    binder_masks,
+                    bindings,
+                )) orelse return null;
                 try self.steps.append(self.allocator(), .{
                     .source = .{ .rule = rule.rule_id },
                     .needs_symm = needs_symm,
@@ -1018,6 +1079,7 @@ pub const ExplainCtx = struct {
                     .after = rhs,
                     .bindings = bindings,
                     .bag = bag_info,
+                    .premises = premises,
                 });
                 return rhs;
             },
@@ -1049,6 +1111,150 @@ pub const ExplainCtx = struct {
             },
             .splice => |sp| {
                 return try self.processSplice(current, sp, edge.forward, pos);
+            },
+        }
+    }
+
+    /// Sub-explanations for a fired conditional rule's premises, one per
+    /// hypothesis. Each runs in a fresh context bounded by the firing's
+    /// union age (`fired_at`): the premise held BEFORE the rule fired, so
+    /// its proof may not route through the union the firing produced —
+    /// the final forest would otherwise happily prove a premise from its
+    /// own conclusion. Representatives still extract over the final
+    /// graph; an alignment that needs a younger edge fails the route and
+    /// the caller's route-level retries take over. Null when any premise
+    /// has no bounded explanation.
+    fn explainPremises(
+        self: *ExplainCtx,
+        rule: Rule,
+        justs: []const PremiseJust,
+        fired_at: u32,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+        bindings: []const ?BindingValue,
+    ) error{OutOfMemory}!?[]const Step.PremiseProof {
+        if (rule.premises.len == 0) return &.{};
+        if (justs.len != rule.premises.len) return null;
+        const out = try self.allocator().alloc(
+            Step.PremiseProof,
+            rule.premises.len,
+        );
+        for (rule.premises, justs, 0..) |premise, just, idx| {
+            var from: *const Term = undefined;
+            var to: *const Term = undefined;
+            var pool_index: u32 = 0;
+            switch (premise.kind) {
+                .equation => {
+                    if (just != .equation) return null;
+                    const app = premise.template.app;
+                    from = (try self.renderPremiseTerm(
+                        app.args[0],
+                        just.equation.lhs_node,
+                        subst,
+                        binder_masks,
+                        bindings,
+                    )) orelse return null;
+                    to = (try self.renderPremiseTerm(
+                        app.args[1],
+                        just.equation.rhs_node,
+                        subst,
+                        binder_masks,
+                        bindings,
+                    )) orelse return null;
+                },
+                .fact => {
+                    if (just != .fact) return null;
+                    const fact = self.eg.facts.get(just.fact.fact_node) orelse {
+                        return null;
+                    };
+                    pool_index = fact.pool_index;
+                    // The seeded term verbatim (re-paired for bag
+                    // re-sorts): the lowering cites the entry's written
+                    // formula, exactly as a pool-equation step does.
+                    from = (try self.refreshSeedTerm(fact.term)) orelse {
+                        return null;
+                    };
+                    to = (try self.renderPremiseTerm(
+                        premise.template,
+                        just.fact.premise_node,
+                        subst,
+                        binder_masks,
+                        bindings,
+                    )) orelse return null;
+                },
+            }
+            var child = ExplainCtx{
+                .eg = self.eg,
+                .rules = self.rules,
+                .opts = self.opts,
+                .age_bound = fired_at,
+            };
+            if (!try child.explainTerms(from, to, &.{})) return null;
+            out[idx] = .{
+                .kind = premise.kind,
+                .pool_index = pool_index,
+                .from = from,
+                .to = to,
+                .steps = child.steps.items,
+            };
+        }
+        return out;
+    }
+
+    /// Render a premise template (or one side of an equational premise)
+    /// as the term the step's bindings denote: a bare binder is its
+    /// binding's rendered term; an application anchors at the premise
+    /// instance node recorded at firing time, with the step's binding
+    /// terms pinned as binder overrides so every binder renders exactly
+    /// as it does on the rule line.
+    fn renderPremiseTerm(
+        self: *ExplainCtx,
+        template: TemplateExpr,
+        node: ENodeId,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+        bindings: []const ?BindingValue,
+    ) error{OutOfMemory}!?*const Term {
+        switch (template) {
+            .binder => |b| {
+                const binding = bindings[b] orelse return null;
+                return switch (binding) {
+                    .term => |term| term,
+                    .bound => |leaf| try self.bindingTerm(
+                        .{ .bound = leaf },
+                        0,
+                    ),
+                };
+            },
+            .app => {
+                const overrides = try self.allocator().alloc(
+                    ?*const Term,
+                    bindings.len,
+                );
+                for (bindings, 0..) |maybe_binding, idx| {
+                    overrides[idx] = if (maybe_binding) |binding| switch (binding) {
+                        .term => |term| term,
+                        .bound => null,
+                    } else null;
+                }
+                const saved = self.rule_binder_terms;
+                self.rule_binder_terms = overrides;
+                defer self.rule_binder_terms = saved;
+                if (try self.renderPatternAt(
+                    node,
+                    template,
+                    subst,
+                    binder_masks,
+                )) |term| return term;
+                // The recorded node may have been superseded by a
+                // congruent duplicate; any member of its class that
+                // instantiates the template denotes the same premise.
+                return try self.renderPattern(
+                    self.eg.nodes.items[node].class,
+                    template,
+                    subst,
+                    binder_masks,
+                );
             },
         }
     }

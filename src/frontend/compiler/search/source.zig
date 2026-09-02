@@ -656,6 +656,16 @@ fn buildConversionDetail(
                 "check the binders' declared dependencies.",
         );
     }
+    if (goal_concrete and result.stats.premise_deferred != 0) {
+        try w.writeAll(
+            " Some conditional-rule matches stayed deferred: their " ++
+                "hypotheses never became provable from the pool (an " ++
+                "equational premise needs its sides to convert; any other " ++
+                "premise needs a hypothesis or earlier line in its " ++
+                "e-class, which takes @congr coverage on the premise's " ++
+                "head), so those rewrites were never licensed.",
+        );
+    }
     if (goal_concrete and result.partial_ac_heads != 0) {
         try w.print(
             " {d} operator(s) hold an assoc/comm certificate without the " ++

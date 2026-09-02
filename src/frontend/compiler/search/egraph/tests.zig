@@ -1870,3 +1870,227 @@ test "cycle guard still matches finite members of a self-containing class" {
     try testing.expectEqual(SaturateOutcome.saturated, stats.outcome);
     try testing.expect(eg.sameClass(fx, yl));
 }
+
+// ---------------------------------------------------------------------
+// Conditional rules (premises discharged at match time; #237).
+
+/// Unary predicate / function heads for the conditional-rule tests.
+const P: u32 = 4;
+const G: u32 = 5;
+const EQ: u32 = 6;
+
+fn app1(comptime term_id: u32, comptime a: TemplateExpr) TemplateExpr {
+    return .{ .app = .{ .term_id = term_id, .args = &.{a} } };
+}
+
+fn tApp1(eg: *EGraph, term_id: u32, a: *const Term) !*const Term {
+    const shape = ENode{ .app = .{ .term_id = term_id, .children = &.{
+        .{ .class = termClassOf(eg, a) },
+    } } };
+    _ = try eg.add(shape);
+    const node = (try eg.lookupNode(shape)).?;
+    const children = try eg.allocator.alloc(?*const Term, 1);
+    children[0] = a;
+    const term = try eg.allocator.create(Term);
+    term.* = .{ .node = node, .children = children };
+    return term;
+}
+
+// f(a) ~ a  if  P(a)
+const COND_FACT = [_]Rule{.{
+    .rule_id = 200,
+    .reversed = false,
+    .match_side = app1(F, BINDER_A),
+    .target_side = BINDER_A,
+    .num_binders = 1,
+    .premises = &.{.{ .template = app1(P, BINDER_A), .kind = .fact }},
+}};
+
+// g(a) ~ a  if  eq(f(a), a)
+const COND_EQUATION = [_]Rule{.{
+    .rule_id = 201,
+    .reversed = false,
+    .match_side = app1(G, BINDER_A),
+    .target_side = BINDER_A,
+    .num_binders = 1,
+    .premises = &.{.{
+        .template = app2(EQ, app1(F, BINDER_A), BINDER_A),
+        .kind = .equation,
+    }},
+}};
+
+test "conditional rule defers until its fact premise is proven, then fires" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, P, {});
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const fy = try tApp1(&eg, F, y);
+    const px = try tApp1(&eg, P, x);
+
+    // No fact anywhere: the match is deferred (not consumed) and
+    // saturation still reaches a fixpoint — a permanently deferred
+    // match is not a budget event.
+    const first = try eg.saturate(&COND_FACT, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, first.outcome);
+    try testing.expectEqual(@as(usize, 0), first.unions_applied);
+    try testing.expect(first.premise_deferred > 0);
+    try testing.expect(!eg.sameClass(termClassOf(&eg, fy), termClassOf(&eg, y)));
+    // The premise instance P(y) was materialized so congruence can
+    // reach it later.
+    const py_shape = ENode{ .app = .{ .term_id = P, .children = &.{
+        .{ .class = termClassOf(&eg, y) },
+    } } };
+    try testing.expect((try eg.lookupNode(py_shape)) != null);
+
+    // Seed P(x) as a pool fact and union x ~ y: rebuild merges P(y)
+    // into the proven class, and the deferred match fires.
+    try eg.addFact(px, 7);
+    _ = try eg.merge(
+        termClassOf(&eg, x),
+        termClassOf(&eg, y),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = x, .rhs = y } },
+    );
+    const second = try eg.saturate(&COND_FACT, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, second.outcome);
+    try testing.expectEqual(@as(usize, 1), second.unions_applied);
+    try testing.expect(eg.sameClass(termClassOf(&eg, fy), termClassOf(&eg, y)));
+
+    // The step carries the premise proof: the fact P(x) converts to the
+    // instance P(y) by the pool equation at the argument position.
+    const steps = (try eg.explain(&COND_FACT, fy, y, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try testing.expectEqual(@as(usize, 1), steps.len);
+    try testing.expectEqual(@as(u32, 200), steps[0].source.rule);
+    try testing.expectEqual(@as(usize, 1), steps[0].premises.len);
+    const premise = steps[0].premises[0];
+    try testing.expectEqual(Rule.Premise.Kind.fact, premise.kind);
+    try testing.expectEqual(@as(u32, 7), premise.pool_index);
+    try testing.expectEqual(@as(usize, 1), premise.steps.len);
+    try testing.expectEqual(@as(u32, 0), premise.steps[0].source.pool_equation);
+    try testing.expectEqual(@as(usize, 1), premise.steps[0].position.len);
+    try expectValidChain(&eg, premise.from, premise.to, premise.steps);
+    try expectValidChain(&eg, fy, y, steps);
+}
+
+test "conditional rule discharges an equational premise by class equality" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+
+    const x = try tLeaf(&eg, 1);
+    const fx = try tApp1(&eg, F, x);
+    const gx = try tApp1(&eg, G, x);
+
+    const first = try eg.saturate(&COND_EQUATION, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, first.outcome);
+    try testing.expectEqual(@as(usize, 0), first.unions_applied);
+    try testing.expect(first.premise_deferred > 0);
+
+    // f(x) ~ x from the pool licenses g(x) ~ x. No fact seeding is
+    // involved: the premise is a relation statement, discharged by the
+    // union alone.
+    _ = try eg.merge(
+        termClassOf(&eg, fx),
+        termClassOf(&eg, x),
+        .{ .pool_equation = .{ .pool_index = 4, .lhs = fx, .rhs = x } },
+    );
+    const second = try eg.saturate(&COND_EQUATION, .{});
+    try testing.expectEqual(SaturateOutcome.saturated, second.outcome);
+    try testing.expectEqual(@as(usize, 1), second.unions_applied);
+    try testing.expect(eg.sameClass(termClassOf(&eg, gx), termClassOf(&eg, x)));
+
+    const steps = (try eg.explain(&COND_EQUATION, gx, x, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try testing.expectEqual(@as(usize, 1), steps.len);
+    try testing.expectEqual(@as(usize, 1), steps[0].premises.len);
+    const premise = steps[0].premises[0];
+    try testing.expectEqual(Rule.Premise.Kind.equation, premise.kind);
+    try testing.expectEqual(@as(usize, 1), premise.steps.len);
+    try testing.expectEqual(@as(u32, 4), premise.steps[0].source.pool_equation);
+    try testing.expectEqual(@as(usize, 0), premise.steps[0].position.len);
+    try expectValidChain(&eg, premise.from, premise.to, premise.steps);
+}
+
+test "premise explanation is age-bounded: never through a younger route" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, P, {});
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const z = try tLeaf(&eg, 3);
+    const px = try tApp1(&eg, P, x);
+    const pz = try tApp1(&eg, P, z);
+    const fz = try tApp1(&eg, F, z);
+    try eg.addFact(px, 7);
+
+    // x ~ y ~ z through two pool equations (ages 0 and 1); rebuild
+    // merges P(z) into P(x)'s proven class.
+    _ = try eg.merge(
+        termClassOf(&eg, x),
+        termClassOf(&eg, y),
+        .{ .pool_equation = .{ .pool_index = 1, .lhs = x, .rhs = y } },
+    );
+    _ = try eg.merge(
+        termClassOf(&eg, y),
+        termClassOf(&eg, z),
+        .{ .pool_equation = .{ .pool_index = 2, .lhs = y, .rhs = z } },
+    );
+    _ = try eg.saturate(&.{}, .{});
+    try testing.expectEqual(px.node, eg.provenNode(termClassOf(&eg, pz)).?);
+
+    // Fire the conditional rule by hand, exactly as the apply path
+    // records it: P(z) discharged through the class, dated now.
+    const fired_at: u32 = @intCast(eg.unions.items.len);
+    const subst = [_]?Child{.{ .class = termClassOf(&eg, z) }};
+    try testing.expect(try eg.merge(
+        termClassOf(&eg, fz),
+        termClassOf(&eg, z),
+        .{ .rule = .{
+            .rule_slot = 0,
+            .from_node = fz.node,
+            .to_node = z.node,
+            .subst = &subst,
+            .premises = &.{.{ .fact = .{
+                .premise_node = pz.node,
+                .fact_node = px.node,
+            } }},
+            .fired_at = fired_at,
+        } },
+    ));
+    // A younger shortcut: a direct x ~ z pool equation recorded AFTER
+    // the firing (a no-op union, kept as an alternate route edge).
+    try testing.expect(!try eg.merge(
+        termClassOf(&eg, x),
+        termClassOf(&eg, z),
+        .{ .pool_equation = .{ .pool_index = 3, .lhs = x, .rhs = z } },
+    ));
+
+    // Unbounded, the shortcut IS the preferred route from x to z...
+    const direct = (try eg.explain(&COND_FACT, x, z, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try testing.expectEqual(@as(usize, 1), direct.len);
+    try testing.expectEqual(@as(u32, 3), direct[0].source.pool_equation);
+
+    // ...but the premise proof inside the rule step may only use edges
+    // older than the firing: P(x) -> P(z) goes x ~ y ~ z.
+    const steps = (try eg.explain(&COND_FACT, fz, z, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try testing.expectEqual(@as(usize, 1), steps.len);
+    try testing.expectEqual(@as(usize, 1), steps[0].premises.len);
+    const premise = steps[0].premises[0];
+    try testing.expectEqual(@as(usize, 2), premise.steps.len);
+    for (premise.steps) |step| {
+        const idx = step.source.pool_equation;
+        try testing.expect(idx == 1 or idx == 2);
+    }
+    try expectValidChain(&eg, premise.from, premise.to, premise.steps);
+}

@@ -9,11 +9,10 @@
 //! saturated miss stays a forced negative, and a premise-bound binder is
 //! an enrollment error.
 //!
-//! Until #237 lands the registry rejects every hyps rule at enrollment
-//! (`ConversionRuleHasHypotheses`), so the fixture cannot even load. The
-//! gate test below pins that state; the target tests skip behind
-//! `conditional_rules_enrolled`. #237 flips the flag and the gate test
-//! inverts on its own.
+//! Before #237 the registry rejected every hyps rule at enrollment
+//! (`ConversionRuleHasHypotheses`), so the fixture could not even load.
+//! The gate test below pins whichever state `conditional_rules_enrolled`
+//! names; the target tests skip while it is false.
 
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
@@ -23,10 +22,9 @@ const expectConversionCompiles = helpers.expectConversionCompiles;
 
 const theory = @embedFile("../fixtures/conditional_cancel.mm0");
 
-/// Flip to `true` in #237. Every target test skips while this is false;
-/// the gate test asserts the opposite behavior so the flip is not
-/// forgotten.
-const conditional_rules_enrolled = false;
+/// Flipped by #237. Every target test skips while this is false; the
+/// gate test asserts the opposite behavior so the flip is not forgotten.
+const conditional_rules_enrolled = true;
 
 fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;

@@ -131,6 +131,50 @@ pub const Rule = struct {
     /// For an alpha rule: binder slot of the fresh (target-only) bound
     /// binder the scheduler supplies.
     alpha_new_slot: u32 = 0,
+    /// Side conditions the match must discharge before its union is
+    /// applied (a conditional `@conversion` rule's hypotheses). Enrollment
+    /// guarantees the match side binds every premise binder, so each
+    /// premise is ground after the match and discharge is a lookup. A
+    /// match whose premises do not all discharge is deferred: not
+    /// applied, not recorded as applied, re-checked next iteration.
+    premises: []const Premise = &.{},
+
+    pub const Premise = struct {
+        template: TemplateExpr,
+        kind: Kind,
+        /// Fact premises only: discharge when the instantiated premise's
+        /// CLASS holds a pool fact (true), or only when the instantiated
+        /// node IS a pool fact (false — the premise sort's relation has
+        /// no transport, so the lowering could not carry the fact across
+        /// the class).
+        class_level: bool = true,
+
+        pub const Kind = enum {
+            /// `rel(s, t)` for the operand sort's registered `@relation`:
+            /// discharged iff `find(s) == find(t)`; the proof is the
+            /// explanation of that union.
+            equation,
+            /// Any other formula: discharged iff its class is proven
+            /// (holds a seeded pool fact); the proof cites the fact and
+            /// carries it across the class through `@congr` + transport.
+            fact,
+        };
+    };
+};
+
+/// How one premise of a fired conditional rule was discharged. Node ids
+/// are the instances as they stood at firing time; explanation renders
+/// the premise from the rule's template and the step's bindings, and
+/// looks the fact node up in `EGraph.facts`.
+pub const PremiseJust = union(enum) {
+    fact: struct {
+        premise_node: ENodeId,
+        fact_node: ENodeId,
+    },
+    equation: struct {
+        lhs_node: ENodeId,
+        rhs_node: ENodeId,
+    },
 };
 
 /// Why two classes were unioned. Consumed by explanation extraction. The
@@ -151,6 +195,14 @@ pub const Justification = union(enum) {
         /// For an AC bag match that covered only a sub-multiset: the
         /// unmatched member classes rejoined around the rewrite target.
         extension: []const EClassId = &.{},
+        /// Discharge records parallel to the rule's `premises` (empty for
+        /// an unconditional rule).
+        premises: []const PremiseJust = &.{},
+        /// The union-log length when this rule fired. A premise was
+        /// established BEFORE the firing, so its sub-explanation may use
+        /// only edges of age below this — never the union it justifies,
+        /// nor anything later.
+        fired_at: u32 = 0,
     },
     congruence: struct {
         left: ENodeId,
@@ -254,6 +306,16 @@ pub const ExplEdge = struct {
     /// True when the justification's semantic direction (endpoint a -> b)
     /// runs child -> parent along this link.
     forward: bool,
+    /// Index of the union that recorded this edge (its position in
+    /// `unions`); premise sub-explanations are age-bounded by it.
+    age: u32,
+};
+
+/// A recorded no-op justification (see `EGraph.alt_edges`), stamped with
+/// the union-log length at recording time like a forest edge.
+pub const AltEdge = struct {
+    just: Justification,
+    age: u32,
 };
 
 pub const SaturateOutcome = enum {
@@ -277,6 +339,12 @@ pub const SaturateStats = struct {
     /// saturated miss means dependency constraints (not rule coverage)
     /// blocked at least one candidate union.
     dep_deferred: usize = 0,
+    /// Conditional-rule matches whose premises did not all discharge
+    /// this run (each deferred check counts once per iteration it was
+    /// retried). A saturated miss with a nonzero count is STILL a forced
+    /// negative: the premises never became provable from the pool, so
+    /// the closure is exact — those rewrites are simply not licensed.
+    premise_deferred: usize = 0,
     /// Match enumerations (tree `solvePairs` walks and AC bag
     /// assignments alike) truncated by the per-match or per-iteration
     /// budget this run, plus bag splices abandoned at
@@ -566,8 +634,19 @@ pub const EGraph = struct {
     /// class (an edge on the path re-poses the path's own endpoints as a
     /// child obligation). These edges give extraction acyclic detours;
     /// they are never primary. Deduplicated per endpoint node-pair.
-    alt_edges: std.ArrayListUnmanaged(Justification) = .{},
+    alt_edges: std.ArrayListUnmanaged(AltEdge) = .{},
     alt_seen: std.AutoHashMapUnmanaged(u64, void) = .{},
+    /// Seeded pool facts by node (see `addFact`): the reference-pool
+    /// formula each proven class ultimately cites, with its seed-time
+    /// term (the lowering cites the entry's exact written formula, so the
+    /// term is kept verbatim like a pool equation's sides).
+    facts: std.AutoArrayHashMapUnmanaged(ENodeId, Fact) = .{},
+    /// Root class -> the oldest seeded fact node it holds. A class is
+    /// PROVEN when it has an entry; congruence spreads the property (a
+    /// premise instance `P b` is proven once it merges with a hypothesis
+    /// `P a`). Maintained by `merge`, which carries the entry to the new
+    /// root and keeps the older fact on a collision.
+    proven: std.AutoHashMapUnmanaged(EClassId, ENodeId) = .{},
     /// Root class -> member node ids; rebuilt per saturation iteration.
     class_index: std.AutoArrayHashMapUnmanaged(
         EClassId,
@@ -617,6 +696,36 @@ pub const EGraph = struct {
     /// slices.
     pub fn add(self: *EGraph, node: ENode) !EClassId {
         return self.addWith(node, self.allocator);
+    }
+
+    pub const Fact = struct {
+        pool_index: u32,
+        term: *const Term,
+    };
+
+    /// Seed a reference-pool formula as a proven fact: its class (and
+    /// every class it later merges into) discharges fact premises. The
+    /// driver seeds EVERY pool term — a hypothesis or earlier line is a
+    /// proven formula whatever its shape.
+    pub fn addFact(
+        self: *EGraph,
+        term: *const Term,
+        pool_index: u32,
+    ) !void {
+        const node = term.node;
+        const gop = try self.facts.getOrPut(self.allocator, node);
+        if (gop.found_existing) return;
+        gop.value_ptr.* = .{ .pool_index = pool_index, .term = term };
+        const root = self.find(self.nodes.items[node].class);
+        const proven = try self.proven.getOrPut(self.allocator, root);
+        if (!proven.found_existing or node < proven.value_ptr.*) {
+            proven.value_ptr.* = node;
+        }
+    }
+
+    /// The seeded fact node proving `class`, if the class is proven.
+    pub fn provenNode(self: *const EGraph, class: EClassId) ?ENodeId {
+        return self.proven.get(self.find(class));
     }
 
     /// `add` with canonicalization scratch supplied by the caller: the
@@ -751,6 +860,15 @@ pub const EGraph = struct {
         }
         self.parents.items[root_a] = root_b;
         self.budget_fixpoint = false;
+        // Proven-ness is a class property: carry the absorbed root's
+        // fact to the new root (older fact wins a collision).
+        if (self.proven.fetchRemove(root_a)) |kv| {
+            const gop = try self.proven.getOrPut(self.allocator, root_b);
+            if (!gop.found_existing or kv.value < gop.value_ptr.*) {
+                gop.value_ptr.* = kv.value;
+            }
+        }
+        const age: u32 = @intCast(self.unions.items.len);
         try self.unions.append(self.allocator, .{
             .a = a,
             .b = b,
@@ -762,6 +880,7 @@ pub const EGraph = struct {
             .to = ends.b,
             .just = just,
             .forward = true,
+            .age = age,
         };
         return true;
     }
@@ -773,7 +892,10 @@ pub const EGraph = struct {
         const key = nodePairKey(ends.a, ends.b);
         const gop = try self.alt_seen.getOrPut(self.allocator, key);
         if (gop.found_existing) return;
-        try self.alt_edges.append(self.allocator, just);
+        try self.alt_edges.append(self.allocator, .{
+            .just = just,
+            .age = @intCast(self.unions.items.len),
+        });
     }
 
     /// Reverse the explanation-forest parent chain above `node` so it
@@ -789,6 +911,7 @@ pub const EGraph = struct {
                 .to = current,
                 .just = edge.just,
                 .forward = !edge.forward,
+                .age = edge.age,
             };
             current = edge.to;
         }
@@ -1063,6 +1186,10 @@ pub const EGraph = struct {
             // Semantic direction (from -> to) runs parent -> child along
             // this link, so the child -> parent traversal is reversed.
             .forward = false,
+            // Not a union: dated by the union log as it stands, so a
+            // premise explanation bounded at an earlier firing cannot
+            // route through a twin minted afterwards.
+            .age = @intCast(self.unions.items.len),
         });
         try self.splice_twin.put(self.allocator, mint.from, node_id);
     }
@@ -1354,7 +1481,11 @@ pub const EGraph = struct {
                     &avoid_cache,
                 )) {
                     .merged => changed = true,
-                    .noop, .dep_deferred, .instantiation_failed => {},
+                    .noop,
+                    .dep_deferred,
+                    .premise_deferred,
+                    .instantiation_failed,
+                    => {},
                 }
                 if (self.nodes.items.len > opts.max_nodes) {
                     _ = try self.rebuild();
@@ -1408,6 +1539,8 @@ pub const EGraph = struct {
         merged,
         noop,
         dep_deferred,
+        /// A conditional rule's premises did not all discharge.
+        premise_deferred,
         instantiation_failed,
     };
 
@@ -1416,9 +1549,9 @@ pub const EGraph = struct {
     /// general apply loop and the fold scheduler so both record
     /// identical explanation edges and dedup state. The union holds after
     /// `merged`/`noop` (so identical-effect matches are dropped at
-    /// collection from then on); dep-deferred and instantiation-failed
-    /// matches are NOT recorded and stay eligible for retry. Node-cap
-    /// policing stays with the callers.
+    /// collection from then on); dep-deferred, premise-deferred, and
+    /// instantiation-failed matches are NOT recorded and stay eligible
+    /// for retry. Node-cap policing stays with the callers.
     fn applyMatch(
         self: *EGraph,
         rules: []const Rule,
@@ -1435,6 +1568,16 @@ pub const EGraph = struct {
             stats.dep_deferred += 1;
             return .dep_deferred;
         }
+        // Premises before the target: a deferred match must not mint the
+        // target instance (it would count against the node cap and feed
+        // congruence with an unlicensed term).
+        const premises = (try self.dischargePremises(
+            rules[m.rule_slot],
+            m.subst,
+        )) orelse {
+            stats.premise_deferred += 1;
+            return .premise_deferred;
+        };
         const target = (try self.instantiate(
             rules[m.rule_slot].target_side,
             m.subst,
@@ -1468,6 +1611,8 @@ pub const EGraph = struct {
                 .to_node = to_node,
                 .subst = m.subst,
                 .extension = m.extension,
+                .premises = premises,
+                .fired_at = @intCast(self.unions.items.len),
             },
         });
         if (merged) {
@@ -1476,6 +1621,64 @@ pub const EGraph = struct {
         }
         try dedup.applied.put(self.allocator, m.key, {});
         return if (merged) .merged else .noop;
+    }
+
+    /// Check a matched conditional rule's premises against the current
+    /// graph. Every premise is instantiated under the substitution
+    /// (adding its nodes — required, not incidental: a fact premise
+    /// `P b` can only be found proven through the class a hypothesis
+    /// `P a` lives in once rebuild congruence-merges the two, and that
+    /// needs the `P b` node to exist). Returns the discharge records, or
+    /// null when any premise is not (yet) established — the caller
+    /// defers the match. An unconditional rule discharges trivially.
+    fn dischargePremises(
+        self: *EGraph,
+        rule: Rule,
+        subst: []const ?Child,
+    ) !?[]const PremiseJust {
+        if (rule.premises.len == 0) return &.{};
+        const out = try self.allocator.alloc(PremiseJust, rule.premises.len);
+        for (rule.premises, 0..) |premise, idx| {
+            switch (premise.kind) {
+                .equation => {
+                    const app = premise.template.app;
+                    const lhs = (try self.instantiate(
+                        app.args[0],
+                        subst,
+                    )) orelse return null;
+                    const rhs = (try self.instantiate(
+                        app.args[1],
+                        subst,
+                    )) orelse return null;
+                    if (self.find(lhs.class) != self.find(rhs.class)) {
+                        return null;
+                    }
+                    out[idx] = .{ .equation = .{
+                        .lhs_node = lhs.node,
+                        .rhs_node = rhs.node,
+                    } };
+                },
+                .fact => {
+                    const inst = (try self.instantiate(
+                        premise.template,
+                        subst,
+                    )) orelse return null;
+                    const fact_node = if (premise.class_level)
+                        self.proven.get(self.find(inst.class)) orelse {
+                            return null;
+                        }
+                    else blk: {
+                        if (!self.facts.contains(inst.node)) return null;
+                        break :blk inst.node;
+                    };
+                    out[idx] = .{ .fact = .{
+                        .premise_node = inst.node,
+                        .fact_node = fact_node,
+                    } };
+                },
+            }
+        }
+        return out;
     }
 
     const FoldOutcome = struct {
@@ -1847,6 +2050,7 @@ pub const EGraph = struct {
                                 continue :scan;
                             },
                             .dep_deferred,
+                            .premise_deferred,
                             .instantiation_failed,
                             => continue,
                         }

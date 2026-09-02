@@ -433,11 +433,71 @@ annotations are hard errors):
 - The conclusion has the shape `rel(lhs, rhs)` where `rel` is the
   registered `@relation` term for its operand sort (extraction needs the
   bundle's `refl`/`trans`/`symm`/transport vocabulary).
-- The rule has no hypotheses (conditional conversion rules would need
-  side-condition discharge during saturation; not supported).
 - For each enrolled orientation, the matched side must be a term
   application and must bind every binder the instantiated side uses (an
-  egraph rule cannot invent fresh variables).
+  egraph rule cannot invent fresh variables) and every binder a
+  hypothesis uses (a premise is checked by lookup once the match is in
+  hand, never searched for — see *Conditional rules* below).
+- A role certificate (`assoc`/`comm`/`alpha`) has no hypotheses: it
+  describes term representation, which cannot carry a side condition.
+
+### Conditional rules
+
+A direction-annotated theorem may have hypotheses. They enroll as
+*premises*, and a match fires only once every premise is already
+established in the egraph — the egglog discipline, so saturation stays a
+fixpoint computation rather than a proof search, and a saturated miss is
+still a forced negative. Two premise kinds:
+
+- An **equational premise** — `rel(s, t)` for the operand sort's
+  registered `@relation` — is discharged when `s` and `t` share an
+  e-class. Its proof is the extracted conversion chain between them (a
+  `refl` when they already coincide).
+- Any other **fact premise** is discharged when its e-class is *proven*:
+  every hypothesis and earlier proof line seeds its own class as proven,
+  and congruence spreads the property, so under `h1: a ≠ 0` and
+  `h2: a = b` the premise `b ≠ 0` counts as proven the moment `@congr` on
+  `≠` merges it with `a ≠ 0`. The lowering carries the fact across the
+  class exactly as `conversion?` closes any provable-sort goal from the
+  pool — lift the conversion through `@congr`, then transport with the
+  sort's `mpbi`-style rule — and cites the entry directly when the
+  instance is the hypothesis verbatim.
+
+A match whose premises do not all hold is *deferred*, not consumed: it is
+re-checked on later iterations as more unions land, so a premise that
+becomes provable only after another rule fires still licenses the
+rewrite. Premise instances are added to the egraph (they count against
+the node cap), because class-level discharge needs the instance node to
+exist for congruence to reach it.
+
+Consequences worth knowing:
+
+- The real gate is `@congr` coverage. Without a `@congr` rule for the
+  premise's head, `P a` and `P b` never merge and the premise discharges
+  only against a syntactically identical pool entry.
+- A sort whose bundle declares `_` for transport discharges fact
+  premises by exact node only — there is no way to carry a fact across
+  the class.
+- A premise is explained with edges recorded *before* the rule fired, so
+  a rule never discharges its premise through its own conclusion.
+- Conditional steps are never absorbed into big-step groups; each lowers
+  as its own line group (premise lines, then the rule line citing them).
+- A binder occurring only in a hypothesis (`a * b = e ⊢ inv a = b`) is
+  rejected at enrollment: after the match the premise would not be
+  ground, and discharging it would be a join. Such rules remain usable by
+  `auto?`/`exact?`, whose backward unification handles them natively.
+
+For example, with `--| @conversion ltr` on `div_self (x: nat): $ x ≠ 0 $
+> $ x / x = 1 $` and hypotheses `h1: a ≠ 0`, `h2: a = b`, the goal
+`b / b = 1` lowers to
+
+```
+goal_1: $ 0 = 0 $ by eq_refl
+goal_2: $ a ≠ 0 ↔ b ≠ 0 $ by ne_congr [#2, goal_1]
+goal_3: $ b ≠ 0 $ by mpbi [goal_2, #1]
+goal_4: $ b / b = 1 $ by div_self [goal_3]
+...
+```
 
 `conversion?` proofs also lean on `@congr`: congruence closure inside the
 egraph is *gated* on the rewritten positions' head terms having `@congr`
@@ -627,7 +687,8 @@ the redex. There is no `both`: a fold is directed by definition.
 
 - The conclusion must be `rel(lhs, rhs)` for a registered `@relation`
   on the operand sort.
-- No hypotheses (same as `@conversion`).
+- No hypotheses (unlike a direction-annotated `@conversion` rule, a fold
+  cannot carry a side condition yet).
 - The match side must be a term application binding every binder the
   target side uses (same coverage rule as `@conversion`). Bound binders
   are allowed under that rule — a fold direction may consume a binder

@@ -695,15 +695,42 @@ test "compiler rejects conversion conclusions that are not a relation" {
     );
 }
 
-test "compiler rejects conversion rules with hypotheses" {
+test "compiler enrolls conversion rules with hypotheses as premises" {
     const mm0_src = conversion_mm0_prelude ++
         \\--| @conversion ltr
         \\axiom an_cond (a b: wff) (h: $ a $): $ iff (an a b) (an b a) $;
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rules = metadata.registry.conversionRules();
+    try std.testing.expectEqual(@as(usize, 1), rules.len);
+    try std.testing.expectEqual(@as(usize, 1), rules[0].premises.len);
+    try std.testing.expect(rules[0].premises[0] == .binder);
+}
+
+test "compiler rejects a conversion role certificate with hypotheses" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion comm
+        \\axiom an_cond (a b: wff) (h: $ a $): $ iff (an a b) (an b a) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
     try std.testing.expectError(
         error.ConversionRuleHasHypotheses,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler rejects a conversion premise binder the match side never binds" {
+    const mm0_src = conversion_mm0_prelude ++
+        \\--| @conversion ltr
+        \\axiom an_cond (a b c: wff) (h: $ c $): $ iff (an a b) (an b a) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.ConversionPremiseBinderNotCovered,
         processAnnotatedMetadata(arena.allocator(), mm0_src),
     );
 }

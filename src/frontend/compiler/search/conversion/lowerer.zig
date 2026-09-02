@@ -384,9 +384,14 @@ pub const Lowerer = struct {
                         thm_lhs,
                         thm_rhs,
                     )) orelse return null;
-                    label = (try self.emitLine(instance, rule_id, &.{})) orelse {
+                    const premise_labels = (try self.emitPremises(step)) orelse {
                         return null;
                     };
+                    label = (try self.emitLine(
+                        instance,
+                        rule_id,
+                        premise_labels,
+                    )) orelse return null;
                     if (step.needs_symm) {
                         const flipped = (try self.relExpr(
                             redex_relation,
@@ -505,6 +510,88 @@ pub const Lowerer = struct {
             )) orelse return null;
         }
         return label;
+    }
+
+    /// Lines proving a conditional-rule step's premises, one label per
+    /// hypothesis in rule order, for the rule line's reference list. A
+    /// fact premise is the pool entry carried across its e-class: the
+    /// sub-chain proves `rel(written entry, premise instance)` (the same
+    /// chain-and-lift emission as the main proof), then the sort's
+    /// transport turns the entry into the instance; an identical instance
+    /// cites the entry outright. An equational premise is its sub-chain
+    /// alone (`refl` when the sides already coincide). Null aborts the
+    /// step (a cap or an unliftable sub-step).
+    fn emitPremises(
+        self: *Lowerer,
+        step: egraph.Step,
+    ) EmitError!?[]const []const u8 {
+        if (step.premises.len == 0) return &.{};
+        const labels = try self.work.alloc([]const u8, step.premises.len);
+        for (step.premises, 0..) |premise, idx| {
+            const to_expr = (try self.termToExpr(premise.to)) orelse {
+                return null;
+            };
+            switch (premise.kind) {
+                .fact => {
+                    const ref = self.pool[premise.pool_index].ref;
+                    const ref_label = try renderRefText(self.work, ref);
+                    const written = Refs.sourceRefExpr(
+                        self.context,
+                        self.theorem,
+                        ref,
+                    ) catch return null;
+                    const relation = self.relationForSort(
+                        self.sortOfExpr(to_expr) orelse return null,
+                    ) orelse return null;
+                    const chain = switch (try self.emitChain(
+                        relation,
+                        premise.from,
+                        written,
+                        to_expr,
+                        premise.steps,
+                    )) {
+                        .label => |label| label,
+                        .empty => {
+                            labels[idx] = ref_label;
+                            continue;
+                        },
+                        .failed => return null,
+                    };
+                    const transport_id = relation.transport_id orelse {
+                        return null;
+                    };
+                    labels[idx] = (try self.emitLine(
+                        to_expr,
+                        transport_id,
+                        &.{ chain, ref_label },
+                    )) orelse return null;
+                },
+                .equation => {
+                    const from_expr = (try self.termToExpr(premise.from)) orelse {
+                        return null;
+                    };
+                    const relation = self.relationForTerm(premise.from) orelse {
+                        return null;
+                    };
+                    labels[idx] = switch (try self.emitChain(
+                        relation,
+                        premise.from,
+                        from_expr,
+                        to_expr,
+                        premise.steps,
+                    )) {
+                        .label => |label| label,
+                        .empty => (try self.emitLine(
+                            try self.relIds(relation, from_expr, from_expr),
+                            relation.refl_id,
+                            &.{},
+                        )) orelse return null,
+                        .failed => return null,
+                    };
+                },
+            }
+        }
+        return labels;
     }
 
     /// One `@congr` application: `rel(f(..a..), f(..b..))` from the child
@@ -1307,10 +1394,13 @@ pub const Lowerer = struct {
                 &.{},
             )) orelse return null;
         } else {
+            const premise_labels = (try self.emitPremises(step)) orelse {
+                return null;
+            };
             label = (try self.emitLine(
                 try self.relIds(redex_relation, lhs_inst, rhs_inst),
                 rule_id,
-                &.{},
+                premise_labels,
             )) orelse return null;
             if (step.needs_symm) {
                 label = (try self.emitLine(
@@ -1669,6 +1759,10 @@ pub const Lowerer = struct {
         // The reversed dual lowering sees the same group forward, so
         // nothing is lost by keeping the elementary stanza here.
         if (step.needs_symm) return false;
+        // A conditional step lowers as its own line group in v1: its
+        // premise lines precede the rule line, and grouping would have
+        // to carry them onto the group's driver (see #240).
+        if (step.premises.len != 0) return false;
         const conv = self.conversionRuleById(rule_id) orelse return false;
         const intact = conv.lhs;
         const reduced = conv.rhs;
@@ -2214,6 +2308,14 @@ pub const Lowerer = struct {
         return true;
     }
 
+    /// Explicit error type for the chain emitter: a conditional step's
+    /// premise sub-chains recurse `emitChain -> emitStep -> emitPremises
+    /// -> emitChain`, which an inferred set cannot resolve. It is the
+    /// global set because every line goes through `ppExpr`, whose
+    /// formatter (`ViewTrace.formatExprNamed`) is `anyerror`-typed — the
+    /// inferred set was already that wide.
+    const EmitError = anyerror;
+
     fn emitChain(
         self: *Lowerer,
         root_relation: ResolvedRelation,
@@ -2221,7 +2323,7 @@ pub const Lowerer = struct {
         start_expr: ExprId,
         end_expr: ExprId,
         raw_steps: []const egraph.Step,
-    ) !Chain {
+    ) EmitError!Chain {
         var steps = raw_steps;
         const consolidated = try self.consolidateGroups(raw_steps);
         if (consolidated.ptr != raw_steps.ptr and

@@ -163,6 +163,20 @@ pub fn run(
     // being enrolled for saturation.
     var ac_certs = try buildAcCerts(work, context);
 
+    // Registered relation heads: pool entries with one of these at the top
+    // are proven `rel(lhs, rhs)` facts whose sides may be unioned, and a
+    // rule hypothesis with one at the top is an equational premise. Set
+    // semantics, so hash-map iteration order is fine.
+    var rel_heads: std.AutoArrayHashMapUnmanaged(u32, void) = .{};
+    var sort_it = context.registry.relations.keyIterator();
+    while (sort_it.next()) |sort_name| {
+        const relation = context.registry.resolveRelation(
+            context.env,
+            sort_name.*,
+        ) orelse continue;
+        try rel_heads.put(work, relation.rel_term_id, {});
+    }
+
     // Rules: one egraph orientation per enrolled direction, declaration
     // order (deterministic). Bound-binder slots and dep restrictions are
     // shared by both orientations; the dep gate uses them to admit only
@@ -174,6 +188,16 @@ pub fn run(
             if (ac_certs.contains(head)) continue;
         }
         const decl = &context.env.rules.items[conv.rule_id];
+        // Conditional rules: each hypothesis is a premise the egraph
+        // discharges at match time — by e-class equality when it is a
+        // registered relation statement, else by its class being proven
+        // from the pool (and only by the exact fact node when the
+        // premise sort's relation has no transport to carry a fact
+        // across the class). Shared by both orientations.
+        const premises = try work.alloc(egraph.Rule.Premise, conv.premises.len);
+        for (conv.premises, 0..) |hyp, idx| {
+            premises[idx] = premiseFor(context, &rel_heads, decl, hyp);
+        }
         var bound_slots: std.ArrayListUnmanaged(u32) = .{};
         var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
         var bound_ordinal: u6 = 0;
@@ -219,6 +243,7 @@ pub fn run(
             .num_binders = conv.num_binders,
             .bound_slots = bound_slots.items,
             .restrictions = restrictions.items,
+            .premises = premises,
         });
         if (conv.rtl) try rules.append(work, .{
             .rule_id = conv.rule_id,
@@ -228,6 +253,7 @@ pub fn run(
             .num_binders = conv.num_binders,
             .bound_slots = bound_slots.items,
             .restrictions = restrictions.items,
+            .premises = premises,
         });
     }
     // Enrolled defs: the def's own equation `rel(definiens, head args)` as
@@ -387,19 +413,6 @@ pub fn run(
             );
         }
     }
-    // Registered relation heads: pool entries with one of these at the top
-    // are proven `rel(lhs, rhs)` facts whose sides may be unioned. Set
-    // semantics, so hash-map iteration order is fine.
-    var rel_heads: std.AutoArrayHashMapUnmanaged(u32, void) = .{};
-    var sort_it = context.registry.relations.keyIterator();
-    while (sort_it.next()) |sort_name| {
-        const relation = context.registry.resolveRelation(
-            context.env,
-            sort_name.*,
-        ) orelse continue;
-        try rel_heads.put(work, relation.rel_term_id, {});
-    }
-
     const goal_term = (try addExpr(&eg, context.env, theorem, goal)) orelse {
         return result;
     };
@@ -424,6 +437,10 @@ pub fn run(
         };
         pool_exprs[idx] = expr;
         pool_terms[idx] = try addExpr(&eg, context.env, theorem, expr);
+        // Every pool entry is a proven formula: its class discharges
+        // fact premises of conditional rules, and congruence spreads
+        // that to every formula the class comes to hold.
+        if (pool_terms[idx]) |term| try eg.addFact(term, @intCast(idx));
     }
 
     // Local equations: a pool entry shaped `rel(lhs, rhs)` is itself a
@@ -518,6 +535,7 @@ pub fn run(
             result.stats.iterations += slice.iterations;
             result.stats.unions_applied += slice.unions_applied;
             result.stats.dep_deferred += slice.dep_deferred;
+            result.stats.premise_deferred += slice.premise_deferred;
             result.stats.ac_match_capped += slice.ac_match_capped;
             result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
             result.stats.fold_applied += slice.fold_applied;
@@ -849,9 +867,43 @@ fn reverseSteps(
                 .matched_before = bag.matched_after,
                 .matched_after = bag.matched_before,
             } else null,
+            // Premise proofs are orientation-free: the rule line cites
+            // them the same way whichever way the chain runs.
+            .premises = step.premises,
         };
     }
     return out;
+}
+
+/// Classify one hypothesis of a conditional `@conversion` rule for the
+/// egraph (see `egraph.Rule.Premise`).
+fn premiseFor(
+    context: *const Context,
+    rel_heads: *const std.AutoArrayHashMapUnmanaged(u32, void),
+    decl: *const @import("../../env.zig").RuleDecl,
+    hyp: TemplateExpr,
+) egraph.Rule.Premise {
+    const sort_name: ?[]const u8 = switch (hyp) {
+        .app => |app| blk: {
+            if (rel_heads.contains(app.term_id) and app.args.len == 2) {
+                return .{ .template = hyp, .kind = .equation };
+            }
+            if (app.term_id >= context.env.terms.items.len) break :blk null;
+            break :blk context.env.terms.items[app.term_id].ret_sort_name;
+        },
+        .binder => |idx| if (idx < decl.args.len)
+            decl.args[idx].sort_name
+        else
+            null,
+    };
+    const class_level = if (sort_name) |name| blk: {
+        const relation = context.registry.resolveRelation(
+            context.env,
+            name,
+        ) orelse break :blk false;
+        break :blk relation.transport_id != null;
+    } else false;
+    return .{ .template = hyp, .kind = .fact, .class_level = class_level };
 }
 
 fn termClass(eg: *const egraph.EGraph, term: *const egraph.Term) egraph.EClassId {

@@ -59,11 +59,18 @@ in the other direction it will tend to fruitlessly explore lots of `p ∧ p`
 instances derived from existing formulas.
 
 Enrollment is checked at annotation time. The conclusion must be `rel lhs rhs`
-for the operand sort's registered relation, the rule must have no hypotheses,
-and the matched side must be a term application that binds every binder the
-built side uses. Rules with bound binders and dependency restrictions are
-fine, the search is sensitive to whether the dependency constraints of
-conversion rules can be satisfied.
+for the operand sort's registered relation, and the matched side must be a
+term application that binds every binder the built side uses. Rules with
+bound binders and dependency restrictions are fine, the search is sensitive
+to whether the dependency constraints of conversion rules can be satisfied.
+
+A rule may have hypotheses. For example an equation `a / a = 1` might have the 
+hypothesis that `a ≠ 0`. A rule with hypotheses fires only once every 
+hypothesis is already established in the egraph: a relation statement once its 
+two sides share a class, any other formula once its class has incorporated a 
+hypothesis or an earlier line. A match whose hypotheses are not yet established 
+is retried on later iterations. The matched side must bind every binder a 
+hypothesis uses, and a saturated miss remains a definitive negative.
 
 ## Associativity and commutativity: role certificates
 

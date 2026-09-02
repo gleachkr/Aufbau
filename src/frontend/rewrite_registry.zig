@@ -83,13 +83,21 @@ pub const RewriteRule = struct {
 /// validated against the exact law shape at annotation time.
 pub const ConversionRole = enum { none, assoc, comm, alpha };
 
-/// A `@conversion` rule: a hypothesis-free theorem concluding `rel(lhs, rhs)`
-/// for a registered `@relation`, enrolled for egraph saturation in
-/// `conversion?` search. `ltr`/`rtl` record which orientations may be
-/// e-matched (the matched side's binders instantiate the other side); a
-/// `both` annotation sets both flags. Unlike `@rewrite` rules these never
-/// feed the normalizer, so enrollment cannot change any existing search or
+/// A `@conversion` rule: a theorem concluding `rel(lhs, rhs)` for a
+/// registered `@relation`, enrolled for egraph saturation in `conversion?`
+/// search. `ltr`/`rtl` record which orientations may be e-matched (the
+/// matched side's binders instantiate the other side); a `both` annotation
+/// sets both flags. Unlike `@rewrite` rules these never feed the
+/// normalizer, so enrollment cannot change any existing search or
 /// compilation behavior.
+///
+/// A direction rule may carry hypotheses: they enroll as `premises` (same
+/// binder indexing as the conclusion) that the egraph discharges at match
+/// time — an equational premise by e-class equality, any other by the
+/// premise class being proven from the reference pool. Enrollment requires
+/// every premise binder to be bound by the matched side, so a discharge
+/// is a lookup, never a join (see
+/// `docs/design_notes/conversion_conditional_rules.md`).
 ///
 /// A role-annotated theorem (`role != .none`) records `head_term_id` — the
 /// binary operator whose law it certifies. Until the bag representation
@@ -109,6 +117,9 @@ pub const ConversionRule = struct {
     /// fresh (rhs-only) bound binder. Meaningless for other roles.
     alpha_old_slot: u32 = 0,
     alpha_new_slot: u32 = 0,
+    /// The theorem's hypotheses, in declaration order (the rule's `hyps`
+    /// slice; always empty for a role rule).
+    premises: []const TemplateExpr = &.{},
 };
 
 /// A `@conversion`-enrolled definition: the def's own equation
@@ -422,9 +433,13 @@ pub const RewriteRegistry = struct {
             }
         }
 
-        // Conditional conversion rules would need side-condition discharge
-        // during egraph saturation; not supported.
-        if (rule.hyps.len != 0) return error.ConversionRuleHasHypotheses;
+        // Hypotheses enroll as premises the egraph discharges at match
+        // time. A role certificate is representational (assoc/comm are
+        // absorbed into bag interning, alpha drives the pairing
+        // scheduler) and cannot carry a side condition.
+        if (rule.hyps.len != 0 and role != .none) {
+            return error.ConversionRuleHasHypotheses;
+        }
 
         const app = switch (rule.concl) {
             .app => |value| value,
@@ -479,8 +494,8 @@ pub const RewriteRegistry = struct {
         // An alpha rule fails generic coverage by design (the fresh binder
         // is rhs-only); its shape validation above stands in.
         if (role != .alpha) {
-            if (ltr) try validateConversionOrientation(lhs, rhs);
-            if (rtl) try validateConversionOrientation(rhs, lhs);
+            if (ltr) try validateConversionOrientation(lhs, rhs, rule.hyps);
+            if (rtl) try validateConversionOrientation(rhs, lhs, rule.hyps);
         }
 
         try self.conversions.append(self.allocator, .{
@@ -494,6 +509,7 @@ pub const RewriteRegistry = struct {
             .head_term_id = head_term_id,
             .alpha_old_slot = alpha_slots[0],
             .alpha_new_slot = alpha_slots[1],
+            .premises = rule.hyps,
         });
     }
 
@@ -553,13 +569,15 @@ pub const RewriteRegistry = struct {
         const lhs = app.args[0];
         const rhs = app.args[1];
         const orient_err = if (ltr)
-            validateConversionOrientation(lhs, rhs)
+            validateConversionOrientation(lhs, rhs, &.{})
         else
-            validateConversionOrientation(rhs, lhs);
+            validateConversionOrientation(rhs, lhs, &.{});
         orient_err catch |err| {
             return switch (err) {
                 error.ConversionBareMatchSide => error.ComputeBareMatchSide,
                 error.ConversionBinderNotCovered => error.ComputeBinderNotCovered,
+                // No premises were passed.
+                error.ConversionPremiseBinderNotCovered => unreachable,
             };
         };
 
@@ -630,8 +648,8 @@ pub const RewriteRegistry = struct {
         // be an application binding every binder the target instantiates
         // (fold additionally requires the definiens to mention every arg —
         // an egraph rule cannot invent the dropped ones).
-        if (fold) try validateConversionOrientation(body, head);
-        if (unfold) try validateConversionOrientation(head, body);
+        if (fold) try validateConversionOrientation(body, head, &.{});
+        if (unfold) try validateConversionOrientation(head, body, &.{});
 
         try self.def_conversions.append(self.allocator, .{
             .term_id = term_id,
@@ -1753,9 +1771,15 @@ fn bareBinder(template: TemplateExpr) ?usize {
     };
 }
 
+/// One enrolled orientation must bind, on its matched side, every binder
+/// the instantiated side uses (an egraph rule cannot invent variables)
+/// and every binder a premise uses (a premise is checked by lookup after
+/// the match, never joined; a premise-only binder is #239's multi-pattern
+/// case and a hard error until then).
 fn validateConversionOrientation(
     match: TemplateExpr,
     target: TemplateExpr,
+    premises: []const TemplateExpr,
 ) !void {
     if (match != .app) return error.ConversionBareMatchSide;
     const match_mask = templateBinderMask(match);
@@ -1765,6 +1789,14 @@ fn validateConversionOrientation(
     }
     if ((target_mask.mask & ~match_mask.mask) != 0) {
         return error.ConversionBinderNotCovered;
+    }
+    for (premises) |premise| {
+        const premise_mask = templateBinderMask(premise);
+        if (premise_mask.overflow or
+            (premise_mask.mask & ~match_mask.mask) != 0)
+        {
+            return error.ConversionPremiseBinderNotCovered;
+        }
     }
 }
 

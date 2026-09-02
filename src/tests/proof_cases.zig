@@ -23,15 +23,7 @@ const ProofCaseMetadata = struct {
     reason: []const u8,
 };
 
-const known_proof_case_failures = [_]ProofCaseMetadata{
-    // #236/#237: the theory enrolls `@conversion` rules with hypotheses,
-    // which the registry rejects until conditional conversion lands. The
-    // .auf holds the intended lowerings; flip to `.pass` in #237.
-    .{
-        .stem = "pass_conversion_conditional",
-        .reason = "@conversion rules with premises await #237 (ConversionRuleHasHypotheses at enrollment)",
-    },
-};
+const known_proof_case_failures = [_]ProofCaseMetadata{};
 
 const unsupported_proof_cases = [_]ProofCaseMetadata{};
 
@@ -493,7 +485,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "hoare", .outcome = .pass },
     .{ .stem = "diaconescu", .outcome = .pass },
     .{ .stem = "herbrand", .outcome = .pass },
-    .{ .stem = "pass_conversion_conditional", .outcome = .known_fail },
+    .{ .stem = "pass_conversion_conditional", .outcome = .pass },
     .{ .stem = "girard", .outcome = .pass },
     .{ .stem = "reynolds", .outcome = .pass },
     .{ .stem = "zach", .outcome = .pass },
