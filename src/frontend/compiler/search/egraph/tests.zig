@@ -2222,3 +2222,90 @@ test "intern-time splice keeps the nested view only where a member class carries
     _ = try tAc2(&eg, ADD, xy, v);
     try testing.expectEqual(exempt_before + 1, eg.eNodeCount());
 }
+
+// --- sub-bag claims -----------------------------------------------------
+
+const NEG_T: u32 = 43;
+const Z_T: u32 = 44;
+
+test "sub-bag claim: a structured pattern member folds a rewritten sub-sum back into one member" {
+    // add(a, neg(a)) ~ z(a) over the flat sum {x, y, w, v} after the pool
+    // union x + y = neg(w). The sum was seeded before the union, so `x + y`
+    // is two of its members and `neg(a)` has no member to match: the
+    // class of `x + y` holds `neg(w)`, which the flat member list
+    // dissolved. The structured member claims the {x, y} sub-bag, the
+    // union anchors on the regrouped twin {(x + y), w, v}, and the
+    // explanation crosses the twin as a pure AC re-tree before the rule.
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = EGraph.init(arena_state.allocator());
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+    try eg.ac_heads.put(eg.allocator, ADD, {});
+    try eg.congr_heads.put(eg.allocator, NEG_T, {});
+    try eg.congr_heads.put(eg.allocator, Z_T, {});
+
+    const cancel = [_]Rule{.{
+        .rule_id = 246,
+        .reversed = false,
+        .match_side = app2(ADD, BINDER_A, app1(NEG_T, BINDER_A)),
+        .target_side = app1(Z_T, BINDER_A),
+        .num_binders = 1,
+    }};
+
+    const x = try tLeaf(&eg, 1);
+    const y = try tLeaf(&eg, 2);
+    const w = try tLeaf(&eg, 3);
+    const v = try tLeaf(&eg, 4);
+    const xy = try tAc2(&eg, ADD, x, y);
+    const sum = try tAc2(&eg, ADD, try tAc2(&eg, ADD, xy, w), v);
+    try testing.expectEqual(
+        @as(usize, 4),
+        eg.nodes.items[sum.node].node.bag.members.len,
+    );
+
+    // Nothing to claim yet: the sub-sum's class holds only its own bag.
+    const before_union = eg.eNodeCount();
+    var stats = try eg.saturate(&cancel, .{});
+    try testing.expectEqual(@as(usize, 0), stats.unions_applied);
+    try testing.expectEqual(before_union, eg.eNodeCount());
+
+    const neg_w = try tApp1(&eg, NEG_T, w);
+    _ = try eg.merge(
+        termClassOf(&eg, xy),
+        termClassOf(&eg, neg_w),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = xy, .rhs = neg_w } },
+    );
+    stats = try eg.saturate(&cancel, .{});
+    try testing.expect(stats.subbag_applied >= 1);
+    const target = try tAc2(&eg, ADD, try tApp1(&eg, Z_T, w), v);
+    try testing.expect(eg.sameClass(termClassOf(&eg, sum), termClassOf(&eg, target)));
+
+    // The regrouped twin sits in the sum's class with the sub-sum as ONE
+    // member.
+    const twin_shape = ENode{ .bag = .{ .term_id = ADD, .members = &.{
+        termClassOf(&eg, xy),
+        termClassOf(&eg, w),
+        termClassOf(&eg, v),
+    } } };
+    const twin = (try eg.lookupNode(twin_shape)).?;
+    try testing.expect(twin != sum.node);
+    try testing.expectEqual(@as(usize, 3), eg.nodes.items[twin].node.bag.members.len);
+    try testing.expect(eg.sameClass(termClassOf(&eg, sum), eg.nodes.items[twin].class));
+
+    // Flat seed -> AC re-tree onto the twin -> the rule; replays exactly.
+    const steps = (try eg.explain(&cancel, sum, target, .{})) orelse {
+        return error.ExpectedExplanation;
+    };
+    try expectValidChain(&eg, sum, target, steps);
+    var saw_retree = false;
+    var saw_rule = false;
+    for (steps) |step| switch (step.source) {
+        .ac_flatten => saw_retree = true,
+        .rule => |id| if (id == 246) {
+            saw_rule = true;
+        },
+        else => {},
+    };
+    try testing.expect(saw_retree);
+    try testing.expect(saw_rule);
+}

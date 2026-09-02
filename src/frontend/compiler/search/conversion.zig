@@ -539,6 +539,7 @@ pub fn run(
             result.stats.ac_match_capped += slice.ac_match_capped;
             result.stats.ac_cyclic_dropped += slice.ac_cyclic_dropped;
             result.stats.fold_applied += slice.fold_applied;
+            result.stats.subbag_applied += slice.subbag_applied;
             result.stats.alpha_applied += slice.alpha_applied;
             result.stats.alpha_pairs_compared += slice.alpha_pairs_compared;
             // A final-pass property, not a running total: the LAST

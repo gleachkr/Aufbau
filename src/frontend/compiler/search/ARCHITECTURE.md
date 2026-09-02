@@ -56,8 +56,14 @@ same pair is minted at intern time when the canonical splice dissolves a
 member class that also carries other structure (a leaf, an application, or a
 bag of another head): the nested node is stored beside the flat one so
 patterns and rule targets keep the member-level view, while a pure AC
-regrouping still interns to the single flat node (`EGraph.nestedView`). See
-`docs/rewrite_system.md` for the user-facing surface.
+regrouping still interns to the single flat node (`EGraph.nestedView`). The
+matcher has the dual move: a structured pattern member that finds no member
+of a bag may claim a sub-multiset of its members covering a same-head bag
+of such a mixed class (`EGraph.assignSubBagMember`, candidates from the
+graph's own bags), and the union then anchors on the regrouped twin the
+claim folds the node back into (`EGraph.regroupTwin`) — a node the intern
+would have kept had the class held that structure when the bag was seeded.
+See `docs/rewrite_system.md` for the user-facing surface.
 
 ## The pipeline (one `exactWithSession` call)
 

@@ -166,3 +166,38 @@ test "ring conversion?: radical Cardano with neg_add (self-containing goal class
         \\(u + v) * (u + v) * (u + v) + p * (u + v) = -q
     );
 }
+
+// A hypothesis that rewrites a PROPER sub-sum of the goal into structure a
+// rule needs as one member. The goal is seeded flat before the pool union
+// lands, so `x + y` is two members of `{x, y, w, v}`; its class holds
+// `-w`, but `add_neg`'s `-a` matched members only. The structured member
+// now claims the sub-bag covering that class's own sum, and the union
+// anchors on the regrouped twin `{(x + y), w, v}`.
+test "ring conversion?: sub-bag claim cancels a hypothesis-rewritten sub-sum" {
+    try expectFoundAndCompiles(
+        \\theorem thm (x y w v: R) (h: $ x + y = -w $): $ x + y + w + v = v $;
+    ,
+        \\x + y + w + v = v
+    );
+}
+
+// The zero instance: `add_zero`'s `0` claims the sub-sum whose class holds
+// `0`. A tiny graph — the zero-class blow-up (#244) needs a bag with a
+// zero-valued MEMBER, which folds create inside larger sums.
+test "ring conversion?: sub-bag claim absorbs a sub-sum equal to zero" {
+    try expectFoundAndCompiles(
+        \\theorem thm (x y v: R) (h: $ x + y = 0 $): $ x + y + v = v $;
+    ,
+        \\x + y + v = v
+    );
+}
+
+// A product whose factor class acquired a sum: `distrib`'s `(b + c)`
+// claims the `u * u` sub-product and matches the sum its class holds.
+test "ring conversion?: sub-bag claim distributes through a hypothesis-rewritten sub-product" {
+    try expectFoundAndCompiles(
+        \\theorem thm (u q s: R) (h: $ u * u = -q + s $): $ u * u * u = -q * u + s * u $;
+    ,
+        \\u * u * u = -q * u + s * u
+    );
+}

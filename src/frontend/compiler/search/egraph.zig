@@ -250,6 +250,16 @@ pub const SpliceExpansion = struct {
     entries: []const ?*const SpliceExpansion,
 };
 
+/// One structured pattern member's claim on a sub-multiset of a bag's
+/// members (see `EGraph.assignSubBagMember`): the member class the claimed
+/// positions regroup into, and the same-head bag node of that class whose
+/// members they covered. `applyMatch` folds the claims back into the
+/// matched node's nested twin before recording the union.
+pub const SubBagClaim = struct {
+    class: EClassId,
+    node: ENodeId,
+};
+
 /// Does `binder_idx` occur in `pattern` at a position that does NOT splice
 /// into an enclosing `term_id` bag? Positions on the same-head binary spine
 /// (starting `spliceable`) flatten away under bag interning; any other
@@ -362,6 +372,10 @@ pub const SaturateStats = struct {
     /// subset of `unions_applied`). Zero with compute rules enrolled
     /// means the fold never found a redex.
     fold_applied: usize = 0,
+    /// Unions applied from AC matches that claimed a sub-bag for a
+    /// structured pattern member (a subset of `unions_applied`; see
+    /// `assignSubBagMember`).
+    subbag_applied: usize = 0,
     /// Unions applied from alpha-scheduler matches this run (a subset of
     /// `unions_applied`). Each is a literal instance of an `alpha` rule;
     /// the enrolled substitution rules and gated congruence close the
@@ -435,6 +449,12 @@ pub const max_splice_members: usize = 256;
 const StoredNode = struct {
     node: ENode,
     class: EClassId,
+};
+
+/// A span of `EGraph.subbag_nodes`.
+const SubBagSpan = struct {
+    start: u32,
+    len: u32,
 };
 
 const NodeCtx = struct {
@@ -549,9 +569,10 @@ pub const EGraph = struct {
     /// denotes, even where the canonical form keeps the class atomic.
     bag_node_index: std.AutoArrayHashMapUnmanaged(u64, ENodeId) = .{},
     /// Per class root: the node kinds it holds — whether any leaf or
-    /// plain application, and the distinct bag heads. Maintained on
-    /// insert and merge; `nestedView` reads it to decide whether an
-    /// intern-time splice loses a view worth keeping.
+    /// plain application, and the distinct application and bag heads.
+    /// Maintained on insert and merge; `nestedView` reads it to decide
+    /// whether an intern-time splice loses a view worth keeping, and the
+    /// sub-bag matcher to skip classes the pattern head cannot match.
     class_kinds: std.AutoHashMapUnmanaged(EClassId, ClassKinds) = .{},
     /// Nodes whose fully spliced form was minted as a twin node (nested
     /// node id -> twin node id). A twinned node's own shape is final;
@@ -565,6 +586,23 @@ pub const EGraph = struct {
     /// sort). The trip was counted in `ac_match_capped_total` once, when
     /// it first happened.
     splice_capped_nodes: std.AutoHashMapUnmanaged(ENodeId, void) = .{},
+    /// Sub-bag claim candidates for structured pattern members:
+    /// `(term_id, least member root)` -> a span of `subbag_nodes` listing
+    /// the same-head bag nodes with that least member whose class ALSO
+    /// holds other structure (a leaf, an application, or a bag of another
+    /// head). These are the classes `nestedView` keeps a nested node for,
+    /// seen from the matcher's side: a pattern member can only match
+    /// such a class through structure the flat member list dissolved.
+    /// Rebuilt with `bag_node_index` each rebuild pass; staleness only
+    /// defers a claim.
+    subbag_index: std.AutoArrayHashMapUnmanaged(u64, SubBagSpan) = .{},
+    subbag_nodes: std.ArrayListUnmanaged(ENodeId) = .{},
+    /// Sub-bag claims of the bag assignment in progress (pushed and
+    /// popped by `assignSubBagMember`); reset per `matchRuleBag` call.
+    subbag_stack: std.ArrayListUnmanaged(SubBagClaim) = .{},
+    /// The bag node a `matchRuleBag` call is matching, for the duration
+    /// of the call.
+    match_bag: ?ENodeId = null,
     /// Declared bound-atom dependencies per leaf, supplied by the driver
     /// from the theorem's binder list. A theorem variable `(m: tm y)`
     /// depends on `y` with no structural occurrence the graph could see,
@@ -1192,6 +1230,11 @@ pub const EGraph = struct {
         return any;
     }
 
+    /// The node kinds one class holds: `atomic` when it has a leaf or a
+    /// plain application; `heads` lists the distinct term ids of its
+    /// applications and bags (an application's head never coincides with
+    /// a bag's — AC heads intern as bags — so a head other than a given
+    /// bag head is structure that bag's flat form would dissolve).
     pub const ClassKinds = struct {
         atomic: bool = false,
         heads: std.ArrayListUnmanaged(u32) = .{},
@@ -1204,20 +1247,23 @@ pub const EGraph = struct {
     ) !void {
         const gop = try self.class_kinds.getOrPut(self.allocator, root);
         if (!gop.found_existing) gop.value_ptr.* = .{};
-        switch (node) {
-            .leaf, .app => gop.value_ptr.atomic = true,
-            .bag => |bag| {
-                if (std.mem.indexOfScalar(
-                    u32,
-                    gop.value_ptr.heads.items,
-                    bag.term_id,
-                ) == null) {
-                    try gop.value_ptr.heads.append(
-                        self.allocator,
-                        bag.term_id,
-                    );
-                }
+        const head: u32 = switch (node) {
+            .leaf => {
+                gop.value_ptr.atomic = true;
+                return;
             },
+            .app => |app| blk: {
+                gop.value_ptr.atomic = true;
+                break :blk app.term_id;
+            },
+            .bag => |bag| bag.term_id,
+        };
+        if (std.mem.indexOfScalar(
+            u32,
+            gop.value_ptr.heads.items,
+            head,
+        ) == null) {
+            try gop.value_ptr.heads.append(self.allocator, head);
         }
     }
 
@@ -1432,6 +1478,74 @@ pub const EGraph = struct {
             _ = self.bag_node_index.swapRemove(key);
         }
         self.ac_cyclic_dropped_total += cyclic.items.len;
+        try self.refreshSubBagIndex(scratch);
+    }
+
+    /// Rebuild `subbag_index` (see the field): every same-head bag node of
+    /// two or more members whose class also carries other structure,
+    /// listed under its least member root so a bag assignment visits each
+    /// candidate once, at that root's leftmost unused occurrence. A bag
+    /// that contains its own class is skipped (folding through it would
+    /// re-enter the class, the same corner the splice index drops).
+    fn refreshSubBagIndex(self: *EGraph, scratch: std.mem.Allocator) !void {
+        const Entry = struct {
+            key: u64,
+            node: ENodeId,
+
+            fn less(_: void, a: @This(), b: @This()) bool {
+                if (a.key != b.key) return a.key < b.key;
+                return a.node < b.node;
+            }
+        };
+        var entries: std.ArrayListUnmanaged(Entry) = .{};
+        for (self.nodes.items, 0..) |stored, idx| {
+            const bag = switch (stored.node) {
+                .bag => |bag| bag,
+                else => continue,
+            };
+            if (bag.members.len < 2) continue;
+            const root = self.find(stored.class);
+            const kinds = self.class_kinds.get(root) orelse continue;
+            if (!kinds.atomic and !classHasOtherHead(kinds, bag.term_id)) {
+                continue;
+            }
+            var least = self.find(bag.members[0]);
+            var self_member = false;
+            for (bag.members) |member| {
+                const member_root = self.find(member);
+                if (member_root == root) self_member = true;
+                if (member_root < least) least = member_root;
+            }
+            if (self_member) continue;
+            try entries.append(scratch, .{
+                .key = bagKey(bag.term_id, least),
+                .node = @intCast(idx),
+            });
+        }
+        std.mem.sort(Entry, entries.items, {}, Entry.less);
+        self.subbag_index.clearRetainingCapacity();
+        self.subbag_nodes.clearRetainingCapacity();
+        for (entries.items) |entry| {
+            const gop = try self.subbag_index.getOrPut(
+                self.allocator,
+                entry.key,
+            );
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{
+                    .start = @intCast(self.subbag_nodes.items.len),
+                    .len = 0,
+                };
+            }
+            gop.value_ptr.len += 1;
+            try self.subbag_nodes.append(self.allocator, entry.node);
+        }
+    }
+
+    fn classHasOtherHead(kinds: ClassKinds, term_id: u32) bool {
+        for (kinds.heads.items) |head| {
+            if (head != term_id) return true;
+        }
+        return false;
     }
 
     /// True when the transitive same-head member expansion of `root`'s
@@ -1655,6 +1769,7 @@ pub const EGraph = struct {
                     .dep_deferred,
                     .premise_deferred,
                     .instantiation_failed,
+                    .regroup_deferred,
                     => {},
                 }
                 if (self.nodes.items.len > opts.max_nodes) {
@@ -1723,6 +1838,11 @@ pub const EGraph = struct {
         /// A conditional rule's premises did not all discharge.
         premise_deferred,
         instantiation_failed,
+        /// The regrouped twin a sub-bag match anchors on already exists
+        /// in ANOTHER class (interned there before the union that makes
+        /// the two one). Not recorded; the next rebuild joins the classes
+        /// through the twin's own flat form and the match is retried.
+        regroup_deferred,
     };
 
     /// Apply one collected match: dep gate, target instantiation,
@@ -1784,7 +1904,16 @@ pub const EGraph = struct {
             to_class = try self.add(shape);
             to_node = (try self.lookupNode(shape)).?;
         }
-        if (to_node == m.root_node) {
+        // A sub-bag match anchors on the regrouped twin: the node whose
+        // member list shows the claimed classes as single members, which
+        // is what the rule's match side was laid over.
+        const anchor = if (m.subbags.len == 0)
+            m.root_node
+        else
+            (try self.regroupTwin(m.root_node, m.subbags)) orelse {
+                return .regroup_deferred;
+            };
+        if (to_node == anchor) {
             try dedup.applied.put(self.allocator, m.key, {});
             return .self_loop;
         }
@@ -1792,7 +1921,7 @@ pub const EGraph = struct {
         const merged = try self.merge(from, to_class, .{
             .rule = .{
                 .rule_slot = m.rule_slot,
-                .from_node = m.root_node,
+                .from_node = anchor,
                 .to_node = to_node,
                 .subst = m.subst,
                 .extension = m.extension,
@@ -1803,9 +1932,101 @@ pub const EGraph = struct {
         if (merged) {
             stats.unions_applied += 1;
             if (rules[m.rule_slot].alpha) stats.alpha_applied += 1;
+            if (m.subbags.len != 0) stats.subbag_applied += 1;
         }
         try dedup.applied.put(self.allocator, m.key, {});
         return if (merged) .merged else .noop;
+    }
+
+    /// The nested twin a sub-bag match anchors on: `flat_id`'s members
+    /// with each claim's covered positions folded back into the claimed
+    /// class, minted into the node's class behind a splice edge whose
+    /// expansion is exactly the claimed bag — one level, never the full
+    /// view, because the twin must flatten to THIS node. A shape the
+    /// graph already holds is reused when it sits in the class; one that
+    /// lives elsewhere defers the match (null).
+    fn regroupTwin(
+        self: *EGraph,
+        flat_id: ENodeId,
+        claims: []const SubBagClaim,
+    ) !?ENodeId {
+        const flat = self.nodes.items[flat_id].node.bag;
+        const flat_root = self.find(self.nodes.items[flat_id].class);
+        var members: std.ArrayListUnmanaged(EClassId) = .{};
+        try members.ensureTotalCapacity(self.allocator, flat.members.len);
+        for (flat.members) |member| {
+            members.appendAssumeCapacity(self.find(member));
+        }
+        for (claims) |claim| {
+            const sub = self.nodes.items[claim.node].node.bag;
+            for (sub.members) |sub_member| {
+                const at = std.mem.indexOfScalar(
+                    EClassId,
+                    members.items,
+                    self.find(sub_member),
+                ) orelse return null;
+                _ = members.swapRemove(at);
+            }
+            try members.append(self.allocator, self.find(claim.class));
+        }
+        std.mem.sort(EClassId, members.items, {}, std.sort.asc(EClassId));
+        const shape = ENode{ .bag = .{
+            .term_id = flat.term_id,
+            .members = members.items,
+        } };
+        if (self.memo.get(shape)) |existing| {
+            const existing_root = self.find(self.nodes.items[existing].class);
+            return if (existing_root == flat_root) existing else null;
+        }
+        // Expansion parallel to the sorted member list: each claimed
+        // class expands through its claimed bag, with the bag's members
+        // kept atomic.
+        const expansion = try self.allocator.alloc(
+            ?*const SpliceExpansion,
+            members.items.len,
+        );
+        @memset(expansion, null);
+        for (claims) |claim| {
+            const root = self.find(claim.class);
+            const slot = for (members.items, 0..) |member, idx| {
+                if (expansion[idx] == null and member == root) break idx;
+            } else return null;
+            const sub = self.nodes.items[claim.node].node.bag;
+            const sub_members = try self.allocator.alloc(
+                EClassId,
+                sub.members.len,
+            );
+            for (sub.members, 0..) |sub_member, idx| {
+                sub_members[idx] = self.find(sub_member);
+            }
+            const entries = try self.allocator.alloc(
+                ?*const SpliceExpansion,
+                sub.members.len,
+            );
+            @memset(entries, null);
+            const exp = try self.allocator.create(SpliceExpansion);
+            exp.* = .{
+                .node = claim.node,
+                .members = sub_members,
+                .entries = entries,
+            };
+            expansion[slot] = exp;
+        }
+        const nested = try self.insertNode(shape, flat_root);
+        self.expl_parent.items[nested] = .{
+            .to = flat_id,
+            .just = .{ .splice = .{
+                .from = nested,
+                .to = flat_id,
+                .members = self.nodes.items[nested].node.bag.members,
+                .expansion = expansion,
+            } },
+            // Semantic direction nested -> flat runs along this link.
+            .forward = true,
+            .age = @intCast(self.unions.items.len),
+        };
+        try self.splice_twin.put(self.allocator, nested, flat_id);
+        return nested;
     }
 
     /// Check a matched conditional rule's premises against the current
@@ -2242,6 +2463,7 @@ pub const EGraph = struct {
                             .dep_deferred,
                             .premise_deferred,
                             .instantiation_failed,
+                            .regroup_deferred,
                             => continue,
                         }
                     }
@@ -2635,6 +2857,9 @@ pub const EGraph = struct {
         /// Unmatched bag members (canonical roots at match time) of an AC
         /// match; the apply loop wraps the target with them.
         extension: []const EClassId = &.{},
+        /// Sub-bag claims of an AC match (see `assignSubBagMember`); the
+        /// apply loop anchors the union on the regrouped twin they name.
+        subbags: []const SubBagClaim = &.{},
         /// Effect key at collection time (see `matchEffectKey`).
         key: u64,
     };
@@ -2747,6 +2972,7 @@ pub const EGraph = struct {
     const BagSolution = struct {
         subst: []const ?Child,
         extension: []const EClassId,
+        subbags: []const SubBagClaim = &.{},
     };
 
     /// Flatten a rule side over an AC head into its member patterns:
@@ -2811,6 +3037,9 @@ pub const EGraph = struct {
         const bag = self.nodes.items[root_node].node.bag;
         self.ac_active_target = rule.target_side;
         defer self.ac_active_target = null;
+        self.subbag_stack.clearRetainingCapacity();
+        self.match_bag = root_node;
+        defer self.match_bag = null;
         var pattern_members: std.ArrayListUnmanaged(TemplateExpr) = .{};
         try self.flattenPattern(
             scratch,
@@ -2860,6 +3089,10 @@ pub const EGraph = struct {
                     EClassId,
                     solution.extension,
                 ),
+                .subbags = try self.allocator.dupe(
+                    SubBagClaim,
+                    solution.subbags,
+                ),
                 .key = key,
             });
         }
@@ -2901,6 +3134,12 @@ pub const EGraph = struct {
             try solutions.append(dest, .{
                 .subst = try dest.dupe(?Child, subst),
                 .extension = try dest.dupe(EClassId, extension.items),
+                // Claims belong to the top-level assignment (an exact-cover
+                // sub-assignment never makes any, see the `.app` arm).
+                .subbags = if (allow_extension)
+                    try dest.dupe(SubBagClaim, self.subbag_stack.items)
+                else
+                    &.{},
             });
             return;
         }
@@ -2956,6 +3195,22 @@ pub const EGraph = struct {
                         );
                     }
                     used[idx] = false;
+                }
+                // Then the members a splice dissolved: only at the
+                // top level, where the claim can be folded back into
+                // the matched node itself (an exact-cover sub-assignment
+                // has no node of its own to regroup).
+                if (allow_extension) {
+                    try self.assignSubBagMember(
+                        bag,
+                        pattern_members,
+                        p_idx,
+                        subst,
+                        used,
+                        solutions,
+                        dest,
+                        scratch,
+                    );
                 }
             },
             .binder => |binder_idx| {
@@ -3146,6 +3401,168 @@ pub const EGraph = struct {
                 dest,
                 scratch,
             );
+        }
+    }
+
+    const Slot = struct {
+        root: EClassId,
+        pos: usize,
+
+        fn less(_: void, a: Slot, b: Slot) bool {
+            if (a.root != b.root) return a.root < b.root;
+            return a.pos < b.pos;
+        }
+    };
+
+    /// Leftmost unused position of `root` in a root-sorted slot table.
+    fn firstUnusedSlot(slots: []const Slot, root: EClassId, used: []const bool) ?usize {
+        var lo: usize = 0;
+        var hi: usize = slots.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (slots[mid].root < root) lo = mid + 1 else hi = mid;
+        }
+        while (lo < slots.len and slots[lo].root == root) : (lo += 1) {
+            if (!used[slots[lo].pos]) return slots[lo].pos;
+        }
+        return null;
+    }
+
+    /// The match-time dual of splicing. Interning dissolves a member
+    /// class's same-head bag into the enclosing bag, so a structured
+    /// pattern member no longer sees that class as ONE member: with the
+    /// hypothesis `x + y = -w` over the seeded sum `x + y + w + v`, `-a`
+    /// of `a + -a = 0` has nothing to match although the class of
+    /// `x + y` holds `-w`. Here the member may instead claim a
+    /// sub-multiset of the unused positions that covers a same-head bag
+    /// of such a class and match the pattern against the class. The
+    /// candidates are the graph's own bags (`subbag_index`: classes that
+    /// also hold other structure, the ones `nestedView` keeps a nested
+    /// node for), never an enumeration of subsets; a class that holds
+    /// no application or bag of the pattern head is skipped before any
+    /// solve, and each remaining candidate is charged like any other
+    /// assignment step. The claim is recorded with the
+    /// solution; `applyMatch` folds it back into the matched node's
+    /// nested twin and anchors the union there, so the explanation reads
+    /// exactly as for a rule fired on a nested node the intern kept.
+    fn assignSubBagMember(
+        self: *EGraph,
+        bag: ENode.Bag,
+        pattern_members: []const TemplateExpr,
+        p_idx: usize,
+        subst: []?Child,
+        used: []bool,
+        solutions: *std.ArrayListUnmanaged(BagSolution),
+        dest: std.mem.Allocator,
+        scratch: std.mem.Allocator,
+    ) error{OutOfMemory}!void {
+        const pattern = pattern_members[p_idx];
+        const head = pattern.app.term_id;
+        // Unused positions by root (root-sorted, positions ascending
+        // within a root): a candidate's cover is a lookup per member
+        // instead of a member scan, and the leftmost unused occurrence
+        // of each root — the one the direct arm's dedup claims — is the
+        // first entry of its run.
+        var slots: std.ArrayListUnmanaged(Slot) = .{};
+        for (bag.members, 0..) |member, idx| {
+            if (used[idx]) continue;
+            try slots.append(scratch, .{
+                .root = self.find(member),
+                .pos = idx,
+            });
+        }
+        if (slots.items.len < 2) return;
+        std.mem.sort(Slot, slots.items, {}, Slot.less);
+        const bag_root: ?EClassId = if (self.match_bag) |node_id|
+            self.find(self.nodes.items[node_id].class)
+        else
+            null;
+        var run_start: usize = 0;
+        while (run_start < slots.items.len) {
+            const root = slots.items[run_start].root;
+            var run_end = run_start + 1;
+            while (run_end < slots.items.len and
+                slots.items[run_end].root == root) : (run_end += 1)
+            {}
+            defer run_start = run_end;
+            // A candidate is listed under its least member root, so it
+            // is visited once, at that root's run.
+            const span = self.subbag_index.get(
+                bagKey(bag.term_id, root),
+            ) orelse continue;
+            for (self.subbag_nodes.items[span.start..][0..span.len]) |cand_id| {
+                const sub = self.nodes.items[cand_id].node.bag;
+                if (sub.members.len > slots.items.len) continue;
+                const cand_root = self.find(self.nodes.items[cand_id].class);
+                // Folding the bag into a member of its own class would
+                // make the twin self-containing — the mirror image of
+                // the cyclic entries the splice index drops.
+                if (cand_root == bag_root) continue;
+                // The class must hold an application or a bag of the
+                // pattern head, or the solve below cannot succeed.
+                const kinds = self.class_kinds.get(cand_root) orelse continue;
+                if (std.mem.indexOfScalar(
+                    u32,
+                    kinds.heads.items,
+                    head,
+                ) == null) continue;
+                if (self.ac_budget_remaining == 0) {
+                    self.ac_budget_hit = true;
+                    return;
+                }
+                self.ac_budget_remaining -= 1;
+                // Cover the candidate's members from the unused positions.
+                var chosen: std.ArrayListUnmanaged(usize) = .{};
+                defer for (chosen.items) |i| {
+                    used[i] = false;
+                };
+                var covered = true;
+                for (sub.members) |sub_member| {
+                    const want = self.find(sub_member);
+                    const pos = firstUnusedSlot(slots.items, want, used) orelse {
+                        covered = false;
+                        break;
+                    };
+                    used[pos] = true;
+                    try chosen.append(scratch, pos);
+                }
+                if (!covered) continue;
+                const pairs = try scratch.alloc(PatternPair, 1);
+                pairs[0] = .{
+                    .pattern = pattern,
+                    .child = .{ .class = cand_root },
+                };
+                const probe = try scratch.dupe(?Child, subst);
+                var partial: std.ArrayListUnmanaged([]const ?Child) = .{};
+                try self.solvePairs(
+                    pairs,
+                    0,
+                    probe,
+                    &partial,
+                    scratch,
+                    scratch,
+                );
+                if (partial.items.len == 0) continue;
+                try self.subbag_stack.append(self.allocator, .{
+                    .class = cand_root,
+                    .node = cand_id,
+                });
+                defer _ = self.subbag_stack.pop();
+                for (partial.items) |candidate| {
+                    const next = try scratch.dupe(?Child, candidate);
+                    try self.assignBagMembers(
+                        bag,
+                        pattern_members,
+                        p_idx + 1,
+                        next,
+                        used,
+                        true,
+                        solutions,
+                        dest,
+                        scratch,
+                    );
+                }
+            }
         }
     }
 
