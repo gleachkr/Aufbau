@@ -2769,6 +2769,27 @@ pub const EGraph = struct {
                 }
             },
             .binder => |binder_idx| {
+                // A binder the structured members already bound can only
+                // take a sub-multiset that denotes its class: enumerate
+                // those from the class itself rather than every subset
+                // (each of which would be materialized just to be
+                // rejected — exponential node growth on long sums).
+                if (subst[binder_idx]) |existing| {
+                    try self.assignPreboundBinder(
+                        bag,
+                        pattern_members,
+                        p_idx,
+                        subst,
+                        used,
+                        allow_extension,
+                        solutions,
+                        binder_idx,
+                        existing,
+                        dest,
+                        scratch,
+                    );
+                    return;
+                }
                 // A sole trailing unbound binder takes the full residual
                 // outright when subset choices are provably redundant: an
                 // exact-cover match (no extension) leaves it no other
@@ -2823,6 +2844,118 @@ pub const EGraph = struct {
                     scratch,
                 );
             },
+        }
+    }
+
+    /// Assign a binder member whose binding is already fixed. A single
+    /// unused member matches when its class is compatible; a multi-member
+    /// sub-multiset matches only when the bound class already holds a
+    /// same-head bag node over exactly those members (a sub-bag not yet
+    /// in the graph cannot be equal to anything), so the candidates are
+    /// the bound class's bag nodes, covered from the unused positions.
+    /// `class_index` is round-start state: a candidate minted mid-round
+    /// is simply picked up next round.
+    fn assignPreboundBinder(
+        self: *EGraph,
+        bag: ENode.Bag,
+        pattern_members: []const TemplateExpr,
+        p_idx: usize,
+        subst: []?Child,
+        used: []bool,
+        allow_extension: bool,
+        solutions: *std.ArrayListUnmanaged(BagSolution),
+        binder_idx: usize,
+        existing: Child,
+        dest: std.mem.Allocator,
+        scratch: std.mem.Allocator,
+    ) error{OutOfMemory}!void {
+        for (0..bag.members.len) |idx| {
+            if (used[idx]) continue;
+            // Occurrence dedup, as in enumerateBinderSubsets.
+            if (idx > 0 and !used[idx - 1] and
+                self.find(bag.members[idx - 1]) == self.find(bag.members[idx]))
+            {
+                continue;
+            }
+            if (!self.bindingsCompatible(
+                existing,
+                .{ .class = bag.members[idx] },
+            )) continue;
+            if (self.ac_budget_remaining == 0) {
+                self.ac_budget_hit = true;
+                return;
+            }
+            self.ac_budget_remaining -= 1;
+            used[idx] = true;
+            defer used[idx] = false;
+            try self.applyBinderSubset(
+                bag,
+                pattern_members,
+                p_idx,
+                subst,
+                used,
+                allow_extension,
+                solutions,
+                binder_idx,
+                &.{idx},
+                dest,
+                scratch,
+            );
+        }
+        const class = switch (existing) {
+            .class => |c| c,
+            .bound => return,
+        };
+        const candidates = self.class_index.get(self.find(class)) orelse
+            return;
+        for (candidates.items) |node_id| {
+            const sub = switch (self.nodes.items[node_id].node) {
+                .bag => |b| b,
+                else => continue,
+            };
+            if (sub.term_id != bag.term_id) continue;
+            if (sub.members.len < 2 or sub.members.len > bag.members.len)
+                continue;
+            var chosen: std.ArrayListUnmanaged(usize) = .{};
+            defer for (chosen.items) |idx| {
+                used[idx] = false;
+            };
+            var covered = true;
+            for (sub.members) |sub_member| {
+                const want = self.find(sub_member);
+                var found = false;
+                for (0..bag.members.len) |idx| {
+                    if (used[idx]) continue;
+                    if (self.find(bag.members[idx]) != want) continue;
+                    used[idx] = true;
+                    try chosen.append(scratch, idx);
+                    found = true;
+                    break;
+                }
+                if (!found) {
+                    covered = false;
+                    break;
+                }
+            }
+            if (!covered) continue;
+            if (self.ac_budget_remaining == 0) {
+                self.ac_budget_hit = true;
+                return;
+            }
+            self.ac_budget_remaining -= 1;
+            try self.applyBinderSubset(
+                bag,
+                pattern_members,
+                p_idx,
+                subst,
+                used,
+                allow_extension,
+                solutions,
+                binder_idx,
+                chosen.items,
+                dest,
+                scratch,
+            );
         }
     }
 

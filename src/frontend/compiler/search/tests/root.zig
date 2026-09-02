@@ -14,4 +14,5 @@ comptime {
     _ = @import("./conversion_defs_tests.zig");
     _ = @import("./alpha_tests.zig");
     _ = @import("./conditional_tests.zig");
+    _ = @import("./ring_tests.zig");
 }
