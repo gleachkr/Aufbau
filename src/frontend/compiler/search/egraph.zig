@@ -1482,6 +1482,7 @@ pub const EGraph = struct {
                 )) {
                     .merged => changed = true,
                     .noop,
+                    .self_loop,
                     .dep_deferred,
                     .premise_deferred,
                     .instantiation_failed,
@@ -1538,6 +1539,17 @@ pub const EGraph = struct {
     const MatchApplyOutcome = enum {
         merged,
         noop,
+        /// The (extension-wrapped) target interned to the matched node
+        /// itself: bag canonicalization flattened the target's class
+        /// through a same-head member — typically the pre-fire shape the
+        /// class holds because an earlier fold put it there — so the
+        /// union would unite a node with itself. Nothing was computed;
+        /// the fold must not treat the redex as consumed. (The gate is a
+        /// consequence of flattening through a designated same-head
+        /// member: a class holding both a product and a sum shows only
+        /// one of them to its parents, so the matcher cannot see the
+        /// other view and the residual binding has to do the work.)
+        self_loop,
         dep_deferred,
         /// A conditional rule's premises did not all discharge.
         premise_deferred,
@@ -1602,6 +1614,10 @@ pub const EGraph = struct {
             } };
             to_class = try self.add(shape);
             to_node = (try self.lookupNode(shape)).?;
+        }
+        if (to_node == m.root_node) {
+            try dedup.applied.put(self.allocator, m.key, {});
+            return .self_loop;
         }
         const from = self.find(self.nodes.items[m.root_node].class);
         const merged = try self.merge(from, to_class, .{
@@ -2049,6 +2065,11 @@ pub const EGraph = struct {
                                 if (consumed != null) refired = true;
                                 continue :scan;
                             },
+                            // A self-loop is not a reduction: keep
+                            // scanning this node's matches for one that
+                            // actually rewrites (typically the residual
+                            // sub-bag binding of the same rule).
+                            .self_loop,
                             .dep_deferred,
                             .premise_deferred,
                             .instantiation_failed,

@@ -2,7 +2,10 @@
 //! on `+` and `*`, `@compute ltr` for the ring identities, and `@congr`
 //! plumbing. The theory is `fixtures/commutative_ring.mm0`; each test
 //! appends one theorem and drives a single `conversion?` search over it.
-//! The cases pin the egraph fixes the Cardano spike needed.
+//! The cases pin the two egraph fixes the Cardano spike needed: a fold
+//! whose target re-interns to the folded node must not consume the redex,
+//! and a binder already bound by a structured pattern member must not
+//! enumerate every sub-multiset of a long bag.
 
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
@@ -32,6 +35,24 @@ fn expectFoundAndCompiles(
         return error.ConversionMiss;
     }
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+// Binomial cube. After `distrib` fires once on `(u + v) * ((u + v) * (u
+// + v))`, the product class also holds the expanded sum, and the next
+// `distrib` match with `a` bound to a single factor and the rest as
+// extension flattens back to the very node it fired on. Before the
+// self-loop outcome that no-op counted as the node's one reduction and
+// the fold stalled after two rounds.
+test "ring conversion?: binomial cube (fold self-loop is not a reduction)" {
+    try expectFoundAndCompiles(
+        \\theorem thm (u v: R): $ (u + v) * (u + v) * (u + v)
+        \\  = u * u * u + u * u * v + u * u * v + u * u * v
+        \\  + u * v * v + u * v * v + u * v * v + v * v * v $;
+    ,
+        \\(u + v) * (u + v) * (u + v)
+        \\  = u * u * u + u * u * v + u * u * v + u * u * v
+        \\  + u * v * v + u * v * v + u * v * v + v * v * v
+    );
 }
 
 // `add_neg` (`a + -a = 0`) on a fourteen-member sum: `-a` binds `a` to
