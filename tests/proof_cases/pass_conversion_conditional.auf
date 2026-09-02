@@ -1,0 +1,41 @@
+-- Proofs for the conditional-conversion battery. Each body is the
+-- intended lowering of a single `conversion?` search on the goal line
+-- kept in the comment above it: the rule fires with its premise cited
+-- as a label, and a fact carried across an e-class is lifted through
+-- `ne_congr` and transported with `mpbi`.
+
+-- goal: $ a / a + 0 = 1 $ by conversion?
+direct_fact
+-----------
+goal_1: $ a / a = 1 $ by div_self [#1]
+goal_2: $ a / a + 0 = a / a $ by add_zero
+goal: $ a / a + 0 = 1 $ by eq_trans [goal_2, goal_1]
+
+-- goal: $ b / b = 1 $ by conversion?
+class_transport
+---------------
+goal_1: $ 0 = 0 $ by eq_refl
+goal_2: $ a ≠ 0 ↔ b ≠ 0 $ by ne_congr [#2, goal_1]
+goal_3: $ b ≠ 0 $ by mpbi [goal_2, #1]
+goal: $ b / b = 1 $ by div_self [goal_3]
+
+-- goal: $ max a b = b $ by conversion?
+chained_equation
+----------------
+goal_1: $ min a b = a $ by min_le [#1]
+goal: $ max a b = b $ by max_of_min [goal_1]
+
+-- goal: $ a / a = 1 $ by conversion?
+deferred_firing
+---------------
+goal_1: $ a * 1 = a $ by mul_one
+goal_2: $ 0 = 0 $ by eq_refl
+goal_3: $ a * 1 ≠ 0 ↔ a ≠ 0 $ by ne_congr [goal_1, goal_2]
+goal_4: $ a ≠ 0 $ by mpbi [goal_3, #1]
+goal: $ a / a = 1 $ by div_self [goal_4]
+
+-- goal: $ (a * 1) / 1 = a $ by conversion?
+line_premise
+------------
+fact: $ 1 ≠ 0 $ by one_ne_zero
+goal: $ (a * 1) / 1 = a $ by mul_div [fact]

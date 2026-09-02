@@ -1,0 +1,124 @@
+-- Conditional cancellation arithmetic (task #236): the target theory for
+-- `@conversion` rules with premises (#237).
+--
+-- Every interesting equation here carries a side condition — `x ≠ 0`
+-- before `x / x = 1`, `a ≤ b` before `min a b = a` — so nothing in the
+-- battery is reachable by unconditional rewriting. The intended model is
+-- egglog's: a rule fires once its premises are already established in
+-- the egraph (a hypothesis, an earlier line, or an equality the egraph
+-- has closed), and the conclusion feeds back as a union so later rules
+-- can discharge against it. Two premise kinds are exercised:
+--
+--   * fact premises (`x ≠ 0`, `a ≤ b`): discharged when the instantiated
+--     premise's e-class is proven — class-level, so `b ≠ 0` counts once
+--     congruence merges it with a hypothesis `a ≠ 0` under `a = b`. The
+--     lowering then cites `ne_congr` + `mpbi`, the same move that closes
+--     a provable-sort goal from a pool fact today.
+--   * equational premises (`min a b = a`): discharged when both sides
+--     share an e-class; the proof is that union's explanation.
+--
+-- The theory is declared alone here; the search tests append one theorem
+-- per goal (pattern: compute_tests.zig). The end-to-end pair
+-- tests/proof_cases/pass_conversion_conditional.{mm0,auf} repeats this
+-- theory with the whole battery and its lowered proofs.
+--
+-- Basic algebraic facts only: every axiom is a textbook identity.
+
+delimiter $ ( ) $;
+
+provable sort wff;
+sort nat;
+
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+
+term eq (a b: nat): wff;
+infixl eq: $=$ prec 50;
+term ne (a b: nat): wff;
+infixl ne: $≠$ prec 50;
+term le (a b: nat): wff;
+infixl le: $≤$ prec 50;
+
+term zero: nat;
+notation zero: nat = ($0$:max);
+term one: nat;
+notation one: nat = ($1$:max);
+term add (a b: nat): nat;
+infixl add: $+$ prec 64;
+term mul (a b: nat): nat;
+infixl mul: $*$ prec 70;
+term div (a b: nat): nat;
+infixl div: $/$ prec 70;
+term min (a b: nat): nat;
+term max (a b: nat): nat;
+
+-- ============================================================
+-- Relation bundles. The wff bundle supplies `mpbi`, the transport
+-- a fact premise crosses an e-class with; the nat bundle uses `=`
+-- itself as the relation (no transport at a term sort).
+-- ============================================================
+
+--| @relation wff bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: wff): $ a ↔ a $;
+axiom bi_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bi_symm (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation nat eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: nat): $ a = a $;
+axiom eq_trans (a b c: nat): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_symm (a b: nat): $ a = b $ > $ b = a $;
+
+-- ============================================================
+-- Congruence. The nat→wff rules (`ne_congr`, `le_congr`) are what
+-- make fact premises class-level: without `ne_congr`, `a ≠ 0` and
+-- `b ≠ 0` never merge and discharge degrades to exact-node matching.
+-- ============================================================
+
+--| @congr
+axiom add_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ a + c = b + d $;
+--| @congr
+axiom mul_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ a * c = b * d $;
+--| @congr
+axiom div_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ a / c = b / d $;
+--| @congr
+axiom min_congr (a b c d: nat):
+  $ a = b $ > $ c = d $ > $ min a c = min b d $;
+--| @congr
+axiom max_congr (a b c d: nat):
+  $ a = b $ > $ c = d $ > $ max a c = max b d $;
+--| @congr
+axiom eq_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+--| @congr
+axiom ne_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ (a ≠ c) ↔ (b ≠ d) $;
+--| @congr
+axiom le_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ (a ≤ c) ↔ (b ≤ d) $;
+
+-- ============================================================
+-- The rules. Two unconditional identities, then the side-conditioned
+-- ones. Every premise is ground once the match side is bound
+-- (lhs-only coverage): `x ≠ 0` mentions only `x`, which `x / x`
+-- binds; `min a b = a` mentions only `a b`, which `max a b` binds.
+-- ============================================================
+
+--| @conversion ltr
+axiom add_zero (x: nat): $ x + 0 = x $;
+--| @conversion ltr
+axiom mul_one (x: nat): $ x * 1 = x $;
+
+-- Fact premise.
+--| @conversion ltr
+axiom div_self (x: nat): $ x ≠ 0 $ > $ x / x = 1 $;
+--| @conversion ltr
+axiom mul_div (x y: nat): $ y ≠ 0 $ > $ (x * y) / y = x $;
+--| @conversion ltr
+axiom min_le (a b: nat): $ a ≤ b $ > $ min a b = a $;
+
+-- Equational premise: discharged by e-class equality, so it can be
+-- fed by `min_le` firing earlier in the same saturation.
+--| @conversion ltr
+axiom max_of_min (a b: nat): $ min a b = a $ > $ max a b = b $;
+
+-- A closed fact for the line-premise goal: the proof cites it on a
+-- line, and the premise is discharged from that line, not the axiom.
+axiom one_ne_zero: $ 1 ≠ 0 $;

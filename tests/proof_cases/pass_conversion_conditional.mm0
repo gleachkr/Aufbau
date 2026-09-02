@@ -1,0 +1,136 @@
+-- Conditional cancellation arithmetic (task #236): end-to-end pair for
+-- `@conversion` rules with premises (#237). The theory duplicates
+-- src/frontend/compiler/search/fixtures/conditional_cancel.mm0 (the
+-- search-test prelude); this pair adds the goal battery and commits the
+-- lowered proofs, so the spliced output compiles and verifies like any
+-- hand-written proof. See the fixture header for the premise model.
+--
+-- Every proof in pass_conversion_conditional.auf is the intended
+-- `conversion?` output for the goal line kept in the comment above it.
+delimiter $ ( ) $;
+
+provable sort wff;
+sort nat;
+
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+
+term eq (a b: nat): wff;
+infixl eq: $=$ prec 50;
+term ne (a b: nat): wff;
+infixl ne: $≠$ prec 50;
+term le (a b: nat): wff;
+infixl le: $≤$ prec 50;
+
+term zero: nat;
+notation zero: nat = ($0$:max);
+term one: nat;
+notation one: nat = ($1$:max);
+term add (a b: nat): nat;
+infixl add: $+$ prec 64;
+term mul (a b: nat): nat;
+infixl mul: $*$ prec 70;
+term div (a b: nat): nat;
+infixl div: $/$ prec 70;
+term min (a b: nat): nat;
+term max (a b: nat): nat;
+
+-- ============================================================
+-- Relation bundles. The wff bundle supplies `mpbi`, the transport
+-- a fact premise crosses an e-class with; the nat bundle uses `=`
+-- itself as the relation (no transport at a term sort).
+-- ============================================================
+
+--| @relation wff bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: wff): $ a ↔ a $;
+axiom bi_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bi_symm (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation nat eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: nat): $ a = a $;
+axiom eq_trans (a b c: nat): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_symm (a b: nat): $ a = b $ > $ b = a $;
+
+-- ============================================================
+-- Congruence. The nat→wff rules (`ne_congr`, `le_congr`) are what
+-- make fact premises class-level: without `ne_congr`, `a ≠ 0` and
+-- `b ≠ 0` never merge and discharge degrades to exact-node matching.
+-- ============================================================
+
+--| @congr
+axiom add_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ a + c = b + d $;
+--| @congr
+axiom mul_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ a * c = b * d $;
+--| @congr
+axiom div_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ a / c = b / d $;
+--| @congr
+axiom min_congr (a b c d: nat):
+  $ a = b $ > $ c = d $ > $ min a c = min b d $;
+--| @congr
+axiom max_congr (a b c d: nat):
+  $ a = b $ > $ c = d $ > $ max a c = max b d $;
+--| @congr
+axiom eq_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+--| @congr
+axiom ne_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ (a ≠ c) ↔ (b ≠ d) $;
+--| @congr
+axiom le_congr (a b c d: nat): $ a = b $ > $ c = d $ > $ (a ≤ c) ↔ (b ≤ d) $;
+
+-- ============================================================
+-- The rules. Two unconditional identities, then the side-conditioned
+-- ones. Every premise is ground once the match side is bound
+-- (lhs-only coverage): `x ≠ 0` mentions only `x`, which `x / x`
+-- binds; `min a b = a` mentions only `a b`, which `max a b` binds.
+-- ============================================================
+
+--| @conversion ltr
+axiom add_zero (x: nat): $ x + 0 = x $;
+--| @conversion ltr
+axiom mul_one (x: nat): $ x * 1 = x $;
+
+-- Fact premise.
+--| @conversion ltr
+axiom div_self (x: nat): $ x ≠ 0 $ > $ x / x = 1 $;
+--| @conversion ltr
+axiom mul_div (x y: nat): $ y ≠ 0 $ > $ (x * y) / y = x $;
+--| @conversion ltr
+axiom min_le (a b: nat): $ a ≤ b $ > $ min a b = a $;
+
+-- Equational premise: discharged by e-class equality, so it can be
+-- fed by `min_le` firing earlier in the same saturation.
+--| @conversion ltr
+axiom max_of_min (a b: nat): $ min a b = a $ > $ max a b = b $;
+
+-- A closed fact for the line-premise goal: the proof cites it on a
+-- line, and the premise is discharged from that line, not the axiom.
+axiom one_ne_zero: $ 1 ≠ 0 $;
+
+-- ============================================================
+-- The battery. One goal per premise mechanism.
+-- ============================================================
+
+-- Direct fact premise: `div_self` cites the hypothesis; `add_zero`
+-- joins the same chain.
+theorem direct_fact (a: nat) (h: $ a ≠ 0 $): $ a / a + 0 = 1 $;
+
+-- Class-level discharge: the hypothesis is `a ≠ 0`, the premise
+-- instance is `b ≠ 0`, and `a = b` merges their classes. The lowering
+-- must carry the fact across with `ne_congr` + `mpbi`.
+theorem class_transport (a b: nat) (h1: $ a ≠ 0 $) (h2: $ a = b $):
+  $ b / b = 1 $;
+
+-- Chained equational premise: `min_le` fires on the fact `a ≤ b`, and
+-- its conclusion `min a b = a` is exactly the premise `max_of_min`
+-- needs — discharged by e-class equality, not by a pool lookup.
+theorem chained_equation (a b: nat) (h: $ a ≤ b $): $ max a b = b $;
+
+-- Deferred firing: `a ≠ 0` is not in the pool. It becomes proven only
+-- after `mul_one` unions `a * 1 ~ a` and congruence merges the `≠`
+-- nodes, so `div_self` fires on a later iteration than its match.
+theorem deferred_firing (a: nat) (h: $ a * 1 ≠ 0 $): $ a / a = 1 $;
+
+-- Premise from a proof line rather than a hypothesis: the fact
+-- `1 ≠ 0` is stated on an earlier line, and `mul_div` discharges
+-- against that line.
+theorem line_premise (a: nat): $ (a * 1) / 1 = a $;
