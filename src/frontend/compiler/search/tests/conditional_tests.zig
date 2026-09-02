@@ -7,7 +7,11 @@
 //! the bundle's transport), equational premises discharge by e-class
 //! equality, a non-discharging match is deferred rather than consumed, a
 //! saturated miss stays a forced negative, and a premise-bound binder is
-//! an enrollment error.
+//! an enrollment error. A second group of `mul_div` cases stresses the
+//! same mechanisms: stacked firings, a materialized compound premise
+//! node, a backwards pool equation, a premise proven by another
+//! conditional firing (nested premise chains), a two-sided equation
+//! goal, and a fact about the wrong term.
 //!
 //! Before #237 the registry rejected every hyps rule at enrollment
 //! (`ConversionRuleHasHypotheses`), so the fixture could not even load.
@@ -182,6 +186,175 @@ test "conditional @conversion: premise discharged from an earlier proof line" {
     const replacement = found.items[0].replacement;
     try std.testing.expect(contains(replacement, "by mul_div [fact]"));
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conditional @conversion: stacked cancellations, outer match opened by the inner union" {
+    if (!conditional_rules_enrolled) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `mul_div` first fires on the inner `((a * b) * c) / c ~ a * b`; only
+    // then does the outer node `(… / c) / b` match `(x * y) / y`, through
+    // the class that now contains `a * b`. Two firings, two distinct
+    // premises, both cited from hypotheses.
+    const mm0_src = theory ++
+        \\theorem stacked_cancel (a b c: nat) (hb: $ b ≠ 0 $) (hc: $ c ≠ 0 $):
+        \\  $ ((a * b) * c) / c / b = a $;
+    ;
+    const proof_src =
+        \\stacked_cancel
+        \\----
+        \\goal: $ ((a * b) * c) / c / b = a $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(contains(replacement, "by mul_div [#2]"));
+    try std.testing.expect(contains(replacement, "by mul_div [#1]"));
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conditional @conversion: premise instance materialized as a node and merged by rebuild" {
+    if (!conditional_rules_enrolled) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The match binds `y := b + 0`, so the premise instance is
+    // `b + 0 ≠ 0` — a node nothing in the pool states. It must be
+    // added to the egraph on the deferred match so that, once
+    // `add_zero` unions `b + 0 ~ b`, rebuild congruence merges it with
+    // the hypothesis `b ≠ 0`.
+    const mm0_src = theory ++
+        \\theorem compound_divisor (a b: nat) (h: $ b ≠ 0 $):
+        \\  $ (a * (b + 0)) / (b + 0) = a $;
+    ;
+    const proof_src =
+        \\compound_divisor
+        \\----
+        \\goal: $ (a * (b + 0)) / (b + 0) = a $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(contains(replacement, "by add_zero"));
+    try std.testing.expect(contains(replacement, "by ne_congr"));
+    try std.testing.expect(contains(replacement, "by mul_div"));
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conditional @conversion: premise carried across a pool equation stated backwards" {
+    if (!conditional_rules_enrolled) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The fact is `c ≠ 0`, the premise instance is `b ≠ 0`, and the
+    // pool equation is `b = c` — oriented against the lift `ne_congr`
+    // needs, so the premise chain has to flip it with `eq_symm`.
+    const mm0_src = theory ++
+        \\theorem backwards_equation (a b c: nat) (h1: $ c ≠ 0 $) (h2: $ b = c $):
+        \\  $ (a * b) / b = a $;
+    ;
+    const proof_src =
+        \\backwards_equation
+        \\----
+        \\goal: $ (a * b) / b = a $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(contains(replacement, "by eq_symm [#2]"));
+    try std.testing.expect(contains(replacement, "by ne_congr"));
+    try std.testing.expect(contains(replacement, "by mul_div"));
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conditional @conversion: a conditional firing proves another rule's premise" {
+    if (!conditional_rules_enrolled) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The divisor is `b / b`, so `mul_div` needs `b / b ≠ 0`. That is
+    // proven only because `div_self` (itself conditional, premise
+    // `b ≠ 0`) unions `b / b ~ 1` and congruence merges the premise
+    // node with the line `1 ≠ 0`. The premise chain therefore contains
+    // a conditional step of its own: premises nest.
+    const mm0_src = theory ++
+        \\theorem nested_premise (a b: nat) (h: $ b ≠ 0 $):
+        \\  $ (a * (b / b)) / (b / b) = a $;
+    ;
+    const proof_src =
+        \\nested_premise
+        \\----
+        \\fact: $ 1 ≠ 0 $ by one_ne_zero
+        \\goal: $ (a * (b / b)) / (b / b) = a $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(contains(replacement, "by div_self [#1]"));
+    try std.testing.expect(contains(replacement, "by ne_congr"));
+    try std.testing.expect(contains(replacement, "fact]"));
+    try std.testing.expect(contains(replacement, "by mul_div"));
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conditional @conversion: equation goal closed by a reversed conditional step" {
+    if (!conditional_rules_enrolled) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Both sides cancel to `a`, with different premises. The lowering
+    // walks lhs → a → rhs, so the second `mul_div` step is emitted
+    // reversed and must still carry its premise label.
+    const mm0_src = theory ++
+        \\theorem both_sides (a c d: nat) (hc: $ c ≠ 0 $) (hd: $ d ≠ 0 $):
+        \\  $ (a * c) / c = (a * d) / d $;
+    ;
+    const proof_src =
+        \\both_sides
+        \\----
+        \\goal: $ (a * c) / c = (a * d) / d $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    const replacement = found.items[0].replacement;
+    try std.testing.expect(contains(replacement, "by mul_div [#1]"));
+    try std.testing.expect(contains(replacement, "by mul_div [#2]"));
+    try std.testing.expect(contains(replacement, "by eq_symm"));
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conditional @conversion: a fact about the wrong term does not discharge" {
+    if (!conditional_rules_enrolled) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `mul_div` needs `b ≠ 0`; the pool proves `a ≠ 0`, a different
+    // class. Class-level discharge must not confuse the two: the match
+    // stays deferred, saturation reaches fixpoint, and the report says
+    // the premise was never licensed.
+    const mm0_src = theory ++
+        \\theorem wrong_fact (a b: nat) (h: $ a ≠ 0 $): $ (a * b) / b = a $;
+    ;
+    const proof_src =
+        \\wrong_fact
+        \\----
+        \\goal: $ (a * b) / b = a $ by conversion?
+        \\
+    ;
+    var miss = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer miss.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
+    const detail = miss.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(contains(detail, "the egraph saturated"));
+    try std.testing.expect(contains(detail, "conditional-rule matches stayed deferred"));
+    try std.testing.expect(!contains(detail, "NOT a forced negative"));
 }
 
 test "conditional @conversion: undischargeable premise is a forced negative" {

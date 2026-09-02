@@ -107,7 +107,8 @@ axiom max_of_min (a b: nat): $ min a b = a $ > $ max a b = b $;
 axiom one_ne_zero: $ 1 ≠ 0 $;
 
 -- ============================================================
--- The battery. One goal per premise mechanism.
+-- The battery. One goal per premise mechanism, then harder `mul_div`
+-- cases below.
 -- ============================================================
 
 -- Direct fact premise: `div_self` cites the hypothesis; `add_zero`
@@ -134,3 +135,36 @@ theorem deferred_firing (a: nat) (h: $ a * 1 ≠ 0 $): $ a / a = 1 $;
 -- `1 ≠ 0` is stated on an earlier line, and `mul_div` discharges
 -- against that line.
 theorem line_premise (a: nat): $ (a * 1) / 1 = a $;
+
+-- ============================================================
+-- Harder `mul_div` cases: the same two mechanisms under nesting,
+-- compound divisors, backwards pool equations, a premise proven by
+-- another conditional firing, and a two-sided equation goal.
+-- ============================================================
+
+-- Stacked cancellations: the inner `mul_div` unions `(a*b)*c/c ~ a*b`,
+-- and only then does the outer node match `(x * y) / y`.
+theorem stacked_cancel (a b c: nat) (hb: $ b ≠ 0 $) (hc: $ c ≠ 0 $):
+  $ ((a * b) * c) / c / b = a $;
+
+-- Compound divisor: the premise instance `b + 0 ≠ 0` is a node nothing
+-- states; it is materialized on the deferred match and merged with
+-- `b ≠ 0` by rebuild once `add_zero` fires.
+theorem compound_divisor (a b: nat) (h: $ b ≠ 0 $):
+  $ (a * (b + 0)) / (b + 0) = a $;
+
+-- Pool equation stated backwards: the premise chain flips `b = c`
+-- with `eq_symm` before lifting it through `ne_congr`.
+theorem backwards_equation (a b c: nat) (h1: $ c ≠ 0 $) (h2: $ b = c $):
+  $ (a * b) / b = a $;
+
+-- A conditional firing proves another rule's premise: `div_self`
+-- unions `b / b ~ 1`, so `b / b ≠ 0` merges with the line `1 ≠ 0`,
+-- and the premise chain for `mul_div` contains `div_self [h]`.
+theorem nested_premise (a b: nat) (h: $ b ≠ 0 $):
+  $ (a * (b / b)) / (b / b) = a $;
+
+-- Two-sided equation goal: both sides cancel to `a`; the second
+-- `mul_div` step is emitted reversed and still carries its premise.
+theorem both_sides (a c d: nat) (hc: $ c ≠ 0 $) (hd: $ d ≠ 0 $):
+  $ (a * c) / c = (a * d) / d $;

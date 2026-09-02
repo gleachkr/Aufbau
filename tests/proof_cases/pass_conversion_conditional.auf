@@ -50,3 +50,60 @@ fact: $ 1 ≠ 0 $ by one_ne_zero
 goal_1: $ a * 1 / 1 = a $ by mul_div [fact]
 goal_2: $ a * 1 / 1 = a * 1 / 1 $ by eq_refl
 goal: $ (a * 1) / 1 = a $ by eq_trans [goal_2, goal_1]
+
+-- goal: $ ((a * b) * c) / c / b = a $ by conversion?
+stacked_cancel
+--------------
+goal_1: $ a * b * c / c = a * b $ by mul_div [#2]
+goal_2: $ b = b $ by eq_refl
+goal_3: $ a * b * c / c / b = a * b / b $ by div_congr [goal_1, goal_2]
+goal_4: $ a * b / b = a $ by mul_div [#1]
+goal_5: $ a * b * c / c / b = a $ by eq_trans [goal_3, goal_4]
+goal_6: $ a * b * c / c / b = a * b * c / c / b $ by eq_refl
+goal: $ ((a * b) * c) / c / b = a $ by eq_trans [goal_6, goal_5]
+
+-- goal: $ (a * (b + 0)) / (b + 0) = a $ by conversion?
+compound_divisor
+----------------
+goal_1: $ b + 0 = b $ by add_zero
+goal_2: $ b = b + 0 $ by eq_symm [goal_1]
+goal_3: $ 0 = 0 $ by eq_refl
+goal_4: $ b ≠ 0 ↔ b + 0 ≠ 0 $ by ne_congr [goal_2, goal_3]
+goal_5: $ b + 0 ≠ 0 $ by mpbi [goal_4, #1]
+goal_6: $ a * (b + 0) / (b + 0) = a $ by mul_div [goal_5]
+goal_7: $ a * (b + 0) / (b + 0) = a * (b + 0) / (b + 0) $ by eq_refl
+goal: $ (a * (b + 0)) / (b + 0) = a $ by eq_trans [goal_7, goal_6]
+
+-- goal: $ (a * b) / b = a $ by conversion?
+backwards_equation
+------------------
+goal_1: $ c = b $ by eq_symm [#2]
+goal_2: $ 0 = 0 $ by eq_refl
+goal_3: $ c ≠ 0 ↔ b ≠ 0 $ by ne_congr [goal_1, goal_2]
+goal_4: $ b ≠ 0 $ by mpbi [goal_3, #1]
+goal_5: $ a * b / b = a $ by mul_div [goal_4]
+goal_6: $ a * b / b = a * b / b $ by eq_refl
+goal: $ (a * b) / b = a $ by eq_trans [goal_6, goal_5]
+
+-- goal: $ (a * (b / b)) / (b / b) = a $ by conversion?
+nested_premise
+--------------
+fact: $ 1 ≠ 0 $ by one_ne_zero
+goal_1: $ b / b = 1 $ by div_self [#1]
+goal_2: $ 1 = b / b $ by eq_symm [goal_1]
+goal_3: $ 0 = 0 $ by eq_refl
+goal_4: $ 1 ≠ 0 ↔ b / b ≠ 0 $ by ne_congr [goal_2, goal_3]
+goal_5: $ b / b ≠ 0 $ by mpbi [goal_4, fact]
+goal_6: $ a * (b / b) / (b / b) = a $ by mul_div [goal_5]
+goal_7: $ a * (b / b) / (b / b) = a * (b / b) / (b / b) $ by eq_refl
+goal: $ (a * (b / b)) / (b / b) = a $ by eq_trans [goal_7, goal_6]
+
+-- goal: $ (a * c) / c = (a * d) / d $ by conversion?
+both_sides
+----------
+goal_1: $ a * c / c = a $ by mul_div [#1]
+goal_2: $ a * d / d = a $ by mul_div [#2]
+goal_3: $ a = a * d / d $ by eq_symm [goal_2]
+goal_4: $ a * c / c = a * d / d $ by eq_trans [goal_1, goal_3]
+goal_5: $ a * c / c = a * c / c $ by eq_refl
+goal: $ (a * c) / c = (a * d) / d $ by eq_trans [goal_5, goal_4]
