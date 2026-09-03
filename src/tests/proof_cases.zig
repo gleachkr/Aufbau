@@ -489,6 +489,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_conversion_conditional", .outcome = .pass },
     .{ .stem = "girard", .outcome = .pass },
     .{ .stem = "reynolds", .outcome = .pass },
+    .{ .stem = "cardano", .outcome = .pass },
     .{ .stem = "zach", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
