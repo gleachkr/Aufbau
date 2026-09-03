@@ -250,6 +250,26 @@ pub const ExplainCtx = struct {
     /// (null outside `renderRuleEndpoints`). Bindings that land in this
     /// class are self-referential — see `selfRefBindingTerm`.
     edge_self_root: ?EClassId = null,
+    /// Second-pass extraction (see `EGraph.explain`): the destination of
+    /// the alignment in flight stands in for every member of a
+    /// self-containing class rendered under it (`memberTerm`). Off in
+    /// the first pass, so every chain the default representatives can
+    /// extract stays identical.
+    destination_mode: bool = false,
+    /// Destination term of the alignment in flight on a self-containing
+    /// class, by class root; see `memberTerm`.
+    route_targets: std.AutoHashMapUnmanaged(EClassId, *const Term) = .{},
+    /// Memo for `classSelfContaining`, by class root.
+    self_containing: std.AutoHashMapUnmanaged(EClassId, bool) = .{},
+    /// Lazily built child-class adjacency (root -> roots of every member
+    /// node's children), for `classSelfContaining`.
+    class_children: ?std.AutoHashMapUnmanaged(
+        EClassId,
+        std.ArrayListUnmanaged(EClassId),
+    ) = null,
+    /// Set when a rendering took a route target: such a term is not the
+    /// class representative and must not be memoized as one.
+    route_target_used: bool = false,
     /// Lazily built undirected adjacency over forest + alternate edges;
     /// see `routeAdj`.
     route_adj: ?[]std.ArrayListUnmanaged(RouteEdge) = null,
@@ -375,9 +395,103 @@ pub const ExplainCtx = struct {
         const key = maskedKey(self.eg.find(class), mask_id);
         if (self.class_term.get(key)) |term| return term;
         const best = self.class_best.get(key) orelse return null;
+        const outer_used = self.route_target_used;
+        self.route_target_used = false;
         const term = (try self.termForNode(best, mask_id)) orelse return null;
-        try self.class_term.put(self.allocator(), key, term);
+        const used = self.route_target_used;
+        self.route_target_used = outer_used or used;
+        if (!used) try self.class_term.put(self.allocator(), key, term);
         return term;
+    }
+
+    /// The rendering of a class in a member position: the destination of
+    /// the alignment in flight on that class when one is registered (a
+    /// self-containing class, see `explainTerms`), else the class
+    /// representative. The representative of a self-containing class is
+    /// the chain's own source; rendering it inside a route endpoint
+    /// re-poses the alignment one position deeper, which the active
+    /// guard then kills. The destination is where the chain ends anyway,
+    /// so the residual obligation at that position is trivial.
+    fn memberTerm(
+        self: *ExplainCtx,
+        class: EClassId,
+        mask_id: u32,
+    ) error{OutOfMemory}!?*const Term {
+        if (self.route_targets.get(self.eg.find(class))) |target| {
+            if (self.termAvoidsAtoms(target, self.maskAtoms(mask_id))) {
+                self.route_target_used = true;
+                return target;
+            }
+        }
+        return try self.classTerm(class, mask_id);
+    }
+
+    /// Whether a member node's subtree reaches the class itself
+    /// (`-(p/3)³ = (q/2)² + -(q/2)² + -(p/3)³` after a cancellation).
+    /// Memoized per root over a lazily built child-class adjacency; the
+    /// graph is fixed during extraction.
+    fn classSelfContaining(
+        self: *ExplainCtx,
+        root: EClassId,
+    ) error{OutOfMemory}!bool {
+        if (self.self_containing.get(root)) |known| return known;
+        const adj = try self.classChildren();
+        const alloc = self.allocator();
+        var seen: std.AutoHashMapUnmanaged(EClassId, void) = .{};
+        defer seen.deinit(alloc);
+        var stack: std.ArrayListUnmanaged(EClassId) = .{};
+        defer stack.deinit(alloc);
+        if (adj.get(root)) |children| {
+            try stack.appendSlice(alloc, children.items);
+        }
+        var found = false;
+        while (stack.pop()) |class| {
+            if (class == root) {
+                found = true;
+                break;
+            }
+            if ((try seen.getOrPut(alloc, class)).found_existing) continue;
+            if (adj.get(class)) |children| {
+                try stack.appendSlice(alloc, children.items);
+            }
+        }
+        try self.self_containing.put(alloc, root, found);
+        return found;
+    }
+
+    fn classChildren(
+        self: *ExplainCtx,
+    ) error{OutOfMemory}!*std.AutoHashMapUnmanaged(
+        EClassId,
+        std.ArrayListUnmanaged(EClassId),
+    ) {
+        if (self.class_children == null) {
+            const alloc = self.allocator();
+            var adj: std.AutoHashMapUnmanaged(
+                EClassId,
+                std.ArrayListUnmanaged(EClassId),
+            ) = .{};
+            for (self.eg.nodes.items) |stored| {
+                const root = self.eg.find(stored.class);
+                const gop = try adj.getOrPut(alloc, root);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                switch (stored.node) {
+                    .leaf => {},
+                    .app => |app| for (app.children) |child| switch (child) {
+                        .bound => {},
+                        .class => |c| try gop.value_ptr.append(
+                            alloc,
+                            self.eg.find(c),
+                        ),
+                    },
+                    .bag => |bag| for (bag.members) |member| {
+                        try gop.value_ptr.append(alloc, self.eg.find(member));
+                    },
+                }
+            }
+            self.class_children = adj;
+        }
+        return &self.class_children.?;
     }
 
     /// A resolved term with `node` at the top and extracted representatives
@@ -396,7 +510,7 @@ pub const ExplainCtx = struct {
                     bag.members.len,
                 );
                 for (bag.members, 0..) |member, idx| {
-                    children[idx] = (try self.classTerm(
+                    children[idx] = (try self.memberTerm(
                         member,
                         mask_id,
                     )) orelse return null;
@@ -411,7 +525,7 @@ pub const ExplainCtx = struct {
                 for (app.children, 0..) |child, idx| {
                     children[idx] = switch (child) {
                         .bound => null,
-                        .class => |c| (try self.classTerm(c, mask_id)) orelse {
+                        .class => |c| (try self.memberTerm(c, mask_id)) orelse {
                             return null;
                         },
                     };
@@ -607,6 +721,31 @@ pub const ExplainCtx = struct {
         try self.active.put(self.allocator(), key, {});
         defer _ = self.active.remove(key);
 
+        // In destination mode, the outermost alignment on a
+        // self-containing class registers its destination for every
+        // member of the class rendered while it is in flight (see
+        // `memberTerm`); nested alignments on the class are route
+        // endpoints on the way to that destination.
+        const route_root = self.eg.find(self.eg.nodes.items[to.node].class);
+        const registers_target = self.destination_mode and
+            !self.route_targets.contains(route_root) and
+            try self.classSelfContaining(route_root);
+        if (registers_target) {
+            try self.route_targets.put(self.allocator(), route_root, to);
+        }
+        defer if (registers_target) {
+            _ = self.route_targets.remove(route_root);
+        };
+        return try self.explainRoutes(from, to, pos);
+    }
+
+    /// The three route attempts of an alignment, in order.
+    fn explainRoutes(
+        self: *ExplainCtx,
+        from: *const Term,
+        to: *const Term,
+        pos: []const u32,
+    ) error{OutOfMemory}!bool {
         // Primary route: cheapest over the full recorded edge graph
         // (forest + no-op alternates), where cost prefers traversing
         // directed rules along their enrolled (reducing) direction. The
@@ -1050,7 +1189,7 @@ pub const ExplainCtx = struct {
                     };
                     bindings[idx] = switch (binding) {
                         .class => |c| .{
-                            .term = (try self.classTerm(
+                            .term = (try self.memberTerm(
                                 c,
                                 binder_masks[idx],
                             )) orelse {
@@ -1189,6 +1328,7 @@ pub const ExplainCtx = struct {
                 .rules = self.rules,
                 .opts = self.opts,
                 .age_bound = fired_at,
+                .destination_mode = self.destination_mode,
             };
             if (!try child.explainTerms(from, to, &.{})) return null;
             out[idx] = .{
@@ -1431,7 +1571,7 @@ pub const ExplainCtx = struct {
             children[idx] = if (exp.entries[map[idx]]) |deeper|
                 (try self.expansionTerm(deeper)) orelse return null
             else
-                (try self.classTerm(member, 0)) orelse return null;
+                (try self.memberTerm(member, 0)) orelse return null;
         }
         const term = try self.allocator().create(Term);
         term.* = .{ .node = exp.node, .children = children };
@@ -1882,7 +2022,7 @@ pub const ExplainCtx = struct {
         for (children, bag.members) |*child, member| {
             if (child.* != null) continue;
             if (!allow_leftover) return null;
-            child.* = (try self.classTerm(member, 0)) orelse return null;
+            child.* = (try self.memberTerm(member, 0)) orelse return null;
         }
         const term = try self.allocator().create(Term);
         term.* = .{ .node = bag_node, .children = children };
@@ -2036,7 +2176,7 @@ pub const ExplainCtx = struct {
                 for (bag.members, 0..) |member, idx| {
                     if (children[idx] != null) continue;
                     if (self.eg.find(member) != sub_root) continue;
-                    const term = (try self.classTerm(
+                    const term = (try self.memberTerm(
                         sub_member,
                         mask_id,
                     )) orelse return false;
@@ -2461,6 +2601,9 @@ pub const ExplainCtx = struct {
     ) error{OutOfMemory}!?*const Term {
         switch (binding) {
             .class => |c| {
+                if (self.route_targets.contains(self.eg.find(c))) {
+                    return try self.memberTerm(c, mask_id);
+                }
                 if (self.edge_self_root) |root| {
                     if (self.eg.find(c) == root) {
                         return try self.selfRefBindingTerm(c, mask_id);

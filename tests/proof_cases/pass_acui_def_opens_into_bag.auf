@@ -1,0 +1,7 @@
+acui_def_opens_into_bag_concl
+-----------------------------
+l1: $ 2 * (q / 2) = q * 1 $ by two_half (q := $ q $) []
+
+acui_def_opens_into_bag_hyp
+---------------------------
+l1: $ q = 2 * (q / 2) $ by half_sym (a := $ 2 $, b := $ q $) [#1]

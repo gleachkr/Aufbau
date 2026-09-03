@@ -115,6 +115,30 @@ fn instantiateDefTowardAcuiItemUncached(
     );
 }
 
+/// The body of a concrete def application with its arguments
+/// substituted: the one unfolding a def without hidden dummies has. Null
+/// for a non-def head or a def whose unfolding would have to invent a
+/// dummy witness.
+pub fn unfoldConcreteDef(
+    self: anytype,
+    def_expr: ExprId,
+) anyerror!?ExprId {
+    const def = getConcreteDef(self, def_expr) orelse return null;
+    if (def.term.dummy_args.len != 0) return null;
+    var session = try MatchSession.init(self.shared.allocator, 0);
+    defer session.deinit(self.shared.allocator);
+    const symbolic = try expandConcreteDef(
+        self,
+        def_expr,
+        &session,
+    ) orelse return null;
+    return try WitnessState.materializeFinalSymbolic(
+        self,
+        symbolic,
+        &session,
+    );
+}
+
 pub fn planDefToTarget(
     self: anytype,
     def_expr: ExprId,

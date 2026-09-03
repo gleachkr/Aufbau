@@ -140,6 +140,15 @@ pub const Context = struct {
         );
     }
 
+    /// See `SymbolicEngine.unfoldConcreteDef`.
+    pub fn unfoldConcreteDef(
+        self: *Context,
+        def_expr: ExprId,
+    ) anyerror!?ExprId {
+        var symbolic_engine = self.symbolicEngine();
+        return try symbolic_engine.unfoldConcreteDef(def_expr);
+    }
+
     pub fn instantiateDefTowardAcuiItem(
         self: *Context,
         def_expr: ExprId,

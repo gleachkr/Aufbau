@@ -31,6 +31,7 @@ pub const SymbolicEngine = struct {
     pub const instantiateDefTowardExprWithProvider =
         TransparentMatch.instantiateDefTowardExprWithProvider;
     pub const expandConcreteDef = TransparentMatch.expandConcreteDef;
+    pub const unfoldConcreteDef = TransparentMatch.unfoldConcreteDef;
     pub const matchTemplateRecState =
         TransparentMatch.matchTemplateRecState;
     pub const tryMatchTemplateStateDirect =

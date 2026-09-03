@@ -219,3 +219,47 @@ test "ring conversion?: Cardano substitution as a goal equal to zero" {
         \\(u + v) * (u + v) * (u + v) + p * (u + v) + q = 0
     );
 }
+
+// The Cardano resolvent: `u³v³ = (-(p/3))³` from `s² = (q/2)² + (p/3)³` and
+// the two cubes, with `neg_add` as `@conversion ltr`. Cancelling `(q/2)²`
+// against `-(q/2)²` leaves the goal class self-containing (`-(p/3)³ =
+// (q/2)² + -(q/2)² + -(p/3)³`), and its representative is the chain's
+// own source `u³v³`: rendered inside a route endpoint it re-posed the
+// alignment in flight and the active guard killed every route. A member
+// of a self-containing class now renders as the destination of the
+// alignment in flight on that class (`memberTerm`). The chain also
+// crosses a `div` opening into a product bag, which the checker's ACUI
+// comparison has to see through (`normalizer/acui/target.zig`).
+test "ring conversion?: resolvent (destination rendering on a self-containing class)" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = radical_theory ++
+        \\--| @conversion ltr
+        \\axiom neg_add (a b: R): $ -(a + b) = -a + -b $;
+        \\theorem resolvent (u v p q s: R)
+        \\  (hs: $ s * s = (q / 2) * (q / 2) + (p / 3) * (p / 3) * (p / 3) $)
+        \\  (hu: $ u * u * u = -(q / 2) + s $)
+        \\  (hv: $ v * v * v = -(q / 2) + -s $):
+        \\  $ (u * u * u) * (v * v * v) = -(p / 3) * -(p / 3) * -(p / 3) $;
+        \\
+    ;
+    const proof_src =
+        \\resolvent
+        \\---------
+        \\prod: $ (u * u * u) * (v * v * v) = (-(q / 2) + s) * (-(q / 2) + -s) $ by mul_congr [#2, #3]
+        \\goal: $ (u * u * u) * (v * v * v) = -(p / 3) * -(p / 3) * -(p / 3) $ by conversion?
+        \\
+    ;
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{
+        .status_detail = true,
+    });
+    defer found.deinit();
+    if (found.status != .found) {
+        std.debug.print("status: {s}\n{s}\n", .{
+            @tagName(found.status),
+            found.status_detail orelse "",
+        });
+        return error.ConversionMiss;
+    }
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}

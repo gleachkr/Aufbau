@@ -5,11 +5,14 @@ const compareExprIds = AcuiSupport.compareExprIds;
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const Support = @import("../support.zig");
 const NonAcuiTarget = @import("../non_acui_target.zig");
+const ProofEmit = @import("../proof_emit.zig");
+const DefOps = @import("../../def_ops.zig");
 const Cover = @import("./cover.zig");
 const Normalize = @import("./normalize.zig");
 const Types = @import("../types.zig");
 
 const CommonTargetResult = Types.CommonTargetResult;
+const NormalizeResult = Types.NormalizeResult;
 const AcuiLeaf = Types.AcuiLeaf;
 
 pub fn buildAcuiCommonTarget(
@@ -85,6 +88,27 @@ pub fn buildAcuiCommonTarget(
         acui,
     );
 
+    // A def leaf nobody covered cannot be matched leaf-for-leaf when its
+    // body is itself a bag of this head: `q / 2` beside `q` and `inv 2`.
+    // Open every such def and compare the opened bags instead.
+    if (hasUncoveredDef(lhs_leaves.items, lhs_exact, lhs_claimed) or
+        hasUncoveredDef(rhs_leaves.items, rhs_exact, rhs_claimed))
+    {
+        return try buildOpenedDefCommonTarget(
+            self,
+            lhs,
+            rhs,
+            relation,
+            acui,
+            lhs_leaves.items,
+            lhs_exact,
+            lhs_claimed,
+            rhs_leaves.items,
+            rhs_exact,
+            rhs_claimed,
+        );
+    }
+
     var target_items = std.ArrayListUnmanaged(ExprId){};
     defer target_items.deinit(self.allocator);
     try target_items.appendSlice(self.allocator, common_items.items);
@@ -92,7 +116,6 @@ pub fn buildAcuiCommonTarget(
     for (lhs_leaves.items, 0..) |leaf, idx| {
         if (lhs_exact[idx]) continue;
         if (leaf.is_def) {
-            if (!lhs_claimed[idx]) return null;
             try target_items.append(self.allocator, leaf.old_expr);
             continue;
         }
@@ -101,7 +124,6 @@ pub fn buildAcuiCommonTarget(
     for (rhs_leaves.items, 0..) |leaf, idx| {
         if (rhs_exact[idx]) continue;
         if (leaf.is_def) {
-            if (!rhs_claimed[idx]) return null;
             try target_items.append(self.allocator, leaf.old_expr);
             continue;
         }
@@ -139,6 +161,127 @@ pub fn buildAcuiCommonTarget(
         .lhs_conv_line_idx = lhs_result.conv_line_idx,
         .rhs_conv_line_idx = rhs_result.conv_line_idx,
     };
+}
+
+fn hasUncoveredDef(
+    leaves: []const AcuiLeaf,
+    exact: []const bool,
+    claimed: []const bool,
+) bool {
+    for (leaves, 0..) |leaf, idx| {
+        if (leaf.is_def and !exact[idx] and !claimed[idx]) return true;
+    }
+    return false;
+}
+
+/// The comparison rerun with every uncovered concrete def leaf replaced
+/// by its unfolding. The opened side is rebuilt through the ordinary
+/// leaf-rewrite path, so the unfolding's own leaves flatten into the bag
+/// and the def's transport rides the same congruence lift as a claimed
+/// leaf. Null when no uncovered def can be opened (a hidden-dummy def
+/// stays a leaf); the recursion ends because each round opens at least
+/// one def and def bodies are well-founded.
+fn buildOpenedDefCommonTarget(
+    self: anytype,
+    lhs: ExprId,
+    rhs: ExprId,
+    relation: ResolvedRelation,
+    acui: anytype,
+    lhs_leaves: []const AcuiLeaf,
+    lhs_exact: []const bool,
+    lhs_claimed: []const bool,
+    rhs_leaves: []const AcuiLeaf,
+    rhs_exact: []const bool,
+    rhs_claimed: []const bool,
+) anyerror!?CommonTargetResult {
+    const lhs_opened = try openUncoveredDefs(
+        self,
+        lhs,
+        relation,
+        acui,
+        lhs_leaves,
+        lhs_exact,
+        lhs_claimed,
+    );
+    const rhs_opened = try openUncoveredDefs(
+        self,
+        rhs,
+        relation,
+        acui,
+        rhs_leaves,
+        rhs_exact,
+        rhs_claimed,
+    );
+    if (lhs_opened == null and rhs_opened == null) return null;
+    const lhs_next = if (lhs_opened) |opened| opened.result_expr else lhs;
+    const rhs_next = if (rhs_opened) |opened| opened.result_expr else rhs;
+    const common = try buildAcuiCommonTarget(self, lhs_next, rhs_next) orelse {
+        return null;
+    };
+    return .{
+        .target_expr = common.target_expr,
+        .lhs_conv_line_idx = try ProofEmit.composeTransitivity(
+            self,
+            relation,
+            lhs,
+            lhs_next,
+            common.target_expr,
+            if (lhs_opened) |opened| opened.conv_line_idx else null,
+            common.lhs_conv_line_idx,
+        ),
+        .rhs_conv_line_idx = try ProofEmit.composeTransitivity(
+            self,
+            relation,
+            rhs,
+            rhs_next,
+            common.target_expr,
+            if (rhs_opened) |opened| opened.conv_line_idx else null,
+            common.rhs_conv_line_idx,
+        ),
+    };
+}
+
+fn openUncoveredDefs(
+    self: anytype,
+    expr_id: ExprId,
+    relation: ResolvedRelation,
+    acui: anytype,
+    leaves: []const AcuiLeaf,
+    exact: []const bool,
+    claimed: []const bool,
+) anyerror!?NormalizeResult {
+    var def_ops = DefOps.Context.initWithRegistry(
+        self.allocator,
+        self.theorem,
+        self.env,
+        self.registry,
+    );
+    defer def_ops.deinit();
+
+    const opened = try self.allocator.alloc(AcuiLeaf, leaves.len);
+    defer self.allocator.free(opened);
+    var any_opened = false;
+    for (leaves, 0..) |leaf, idx| {
+        opened[idx] = .{
+            .old_expr = leaf.old_expr,
+            .new_expr = leaf.old_expr,
+            .is_def = leaf.is_def,
+        };
+        if (!leaf.is_def or exact[idx] or claimed[idx]) continue;
+        const body = try def_ops.unfoldConcreteDef(leaf.old_expr) orelse {
+            continue;
+        };
+        opened[idx].new_expr = body;
+        any_opened = true;
+    }
+    if (!any_opened) return null;
+    return try Normalize.buildAcuiRewriteConversion(
+        self,
+        expr_id,
+        relation,
+        acui,
+        opened,
+    );
 }
 
 pub fn pairCommonAcuiLeaves(

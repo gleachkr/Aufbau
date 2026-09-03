@@ -71,6 +71,20 @@ Otherwise every twin would fire its own copy of the redex in a different
 pair order, and each intermediate of a cancellation cascade would spawn a
 second chain that is twinned in turn — the alternative-order closure the
 ledger exists to refuse (the zero-class blow-up of #244).
+Extraction (`egraph/explain.zig`) renders every class position as the
+class's minimal representative and runs twice at most: a cancellation can
+leave a class containing itself (`-(p/3)³ = (q/2)² + -(q/2)² + -(p/3)³`),
+and that class's representative is the chain's own source, which inside a
+route endpoint re-poses the alignment in flight until the active guard
+kills every route. The second pass (`ExplainCtx.destination_mode`, taken
+only when the default pass fails so every chain it can extract stays
+identical) lets the outermost alignment on a self-containing class register
+its destination, and every member of that class rendered while it is in
+flight takes the destination instead (`memberTerm`; representatives built
+under it are not memoized). The lowered chain then crosses a def opening
+into a bag (`q / 2` beside `q` and `inv 2`), which the checker's ACUI
+comparison closes by opening the uncovered def leaf
+(`normalizer/acui/target.zig`; see `docs/transparent_defs.md`).
 See `docs/rewrite_system.md` for the user-facing surface.
 
 ## The pipeline (one `exactWithSession` call)

@@ -1,0 +1,57 @@
+delimiter $ ( ) / $;
+
+provable sort wff;
+sort R;
+
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+term eq (a b: R): wff;
+infixl eq: $=$ prec 50;
+
+term one: R;
+notation one: R = ($1$:max);
+term two: R;
+notation two: R = ($2$:max);
+--| @acui mul_assoc mul_comm one _
+term mul (a b: R): R;
+infixl mul: $*$ prec 70;
+term inv (a: R): R;
+
+--| @relation wff bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: wff): $ a ↔ a $;
+axiom bi_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bi_symm (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation R eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: R): $ a = a $;
+axiom eq_trans (a b c: R): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_symm (a b: R): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: R): $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+--| @congr
+axiom mul_congr (a b c d: R): $ a = b $ > $ c = d $ > $ a * c = b * d $;
+--| @congr
+axiom inv_congr (a b: R): $ a = b $ > $ inv a = inv b $;
+
+--| @conversion assoc
+axiom mul_assoc (a b c: R): $ (a * b) * c = a * (b * c) $;
+--| @conversion comm
+axiom mul_comm (a b: R): $ a * b = b * a $;
+axiom mul_one (a: R): $ a * 1 = a $;
+
+def div (a b: R): R = $ a * inv b $;
+infixl div: $/$ prec 70;
+
+axiom two_half (q: R): $ 2 * inv 2 * q = 1 * q $;
+axiom half_sym (a b: R): $ a * (b / a) = b $ > $ b = a * (b / a) $;
+
+-- A def member of an ACUI bag whose body is itself a bag of that head:
+-- `2 * (q / 2)` beside `2 * inv 2 * q`. The def has to open into the
+-- surrounding product before the bags agree, on the stated conclusion of
+-- a line and on a cited hypothesis alike.
+theorem acui_def_opens_into_bag_concl (q: R): $ 2 * (q / 2) = q * 1 $;
+
+theorem acui_def_opens_into_bag_hyp (q: R) (h: $ 2 * inv 2 * q = q $):
+  $ q = 2 * (q / 2) $;

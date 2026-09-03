@@ -345,6 +345,14 @@ is enough. For conclusions, it can also build a folded intermediate first:
 selected raw subterms are folded toward the user assertion, then ordinary
 normalization / ACUI cleanup proves the remaining difference.
 
+Inside an `@acui` bag the two also meet at the member level. A def member is
+normally kept folded, and a member of the other side is converted toward it
+(`a , a` beside `dbl a`). When no single member covers the def, because its
+body is itself a bag of the same head, the comparison opens that def and
+re-runs on the opened bag: `2 * (q / 2)` beside `2 * inv 2 * q` agrees once
+`q / 2` becomes `q * inv 2` and its factors join the product. Only concrete
+defs open this way; a def with hidden dummies stays a member.
+
 There is one further conclusion-only path. If semantic def exposure and
 rewrite matching succeed but an erased bound hidden witness remains symbolic,
 proof-producing conclusion normalization may materialize it from the sort's

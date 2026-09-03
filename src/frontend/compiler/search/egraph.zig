@@ -4111,8 +4111,22 @@ pub const EGraph = struct {
             .rules = rules,
             .opts = opts,
         };
-        if (!try ctx.explainTerms(from, to, &.{})) return null;
-        return ctx.steps.items;
+        if (try ctx.explainTerms(from, to, &.{})) return ctx.steps.items;
+        // A self-containing class (a cancellation leaves `-(p/3)³ =
+        // (q/2)² + -(q/2)² + -(p/3)³` in one class) renders its members
+        // as the class representative, which is the chain's own source;
+        // inside a route endpoint that re-poses the alignment in flight.
+        // Second pass: the destination stands in for such members. Only
+        // after the default pass failed, so every chain the default
+        // representatives extract stays identical.
+        var retry = explain_mod.ExplainCtx{
+            .eg = self,
+            .rules = rules,
+            .opts = opts,
+            .destination_mode = true,
+        };
+        if (!try retry.explainTerms(from, to, &.{})) return null;
+        return retry.steps.items;
     }
 
     /// Re-pair a seed-time term's bag children with its nodes' current

@@ -38,6 +38,8 @@ axiom eq_trans (a b c: R): $ a = b $ > $ b = c $ > $ a = c $;
 axiom eq_symm (a b: R): $ a = b $ > $ b = a $;
 
 --| @congr
+axiom bi_congr (a b c d: wff): $ a ↔ b $ > $ c ↔ d $ > $ (a ↔ c) ↔ (b ↔ d) $;
+--| @congr
 axiom eq_congr (a b c d: R): $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
 --| @congr
 axiom add_congr (a b c d: R): $ a = b $ > $ c = d $ > $ a + c = b + d $;
