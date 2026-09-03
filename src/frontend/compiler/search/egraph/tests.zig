@@ -2309,3 +2309,89 @@ test "sub-bag claim: a structured pattern member folds a rewritten sub-sum back 
     try testing.expect(saw_retree);
     try testing.expect(saw_rule);
 }
+
+// --- fold sinks and twins -------------------------------------------------
+
+const ZERO_T: u32 = 45;
+const ZERO = TemplateExpr{ .app = .{ .term_id = ZERO_T, .args = &.{} } };
+
+fn tApp0(eg: *EGraph, term_id: u32) !*const Term {
+    const shape = ENode{ .app = .{ .term_id = term_id, .children = &.{} } };
+    _ = try eg.add(shape);
+    const node = (try eg.lookupNode(shape)).?;
+    const term = try eg.allocator.create(Term);
+    term.* = .{ .node = node, .children = &.{} };
+    return term;
+}
+
+// add(a, neg(a)) ~ zero and add(a, zero) ~ a as `@compute` folds.
+const CANCEL_FOLDS = [_]Rule{
+    .{
+        .rule_id = 244,
+        .reversed = false,
+        .match_side = app2(ADD, BINDER_A, ZERO),
+        .target_side = BINDER_A,
+        .num_binders = 1,
+        .compute = true,
+    },
+    .{
+        .rule_id = 245,
+        .reversed = false,
+        .match_side = app2(ADD, BINDER_A, app1(NEG_T, BINDER_A)),
+        .target_side = ZERO,
+        .num_binders = 1,
+        .compute = true,
+    },
+};
+
+fn cancelGraph(arena: std.mem.Allocator) !EGraph {
+    var eg = EGraph.init(arena);
+    try eg.congr_heads.put(eg.allocator, ADD, {});
+    try eg.ac_heads.put(eg.allocator, ADD, {});
+    try eg.congr_heads.put(eg.allocator, NEG_T, {});
+    try eg.congr_heads.put(eg.allocator, ZERO_T, {});
+    return eg;
+}
+
+test "a splice twin shares its node's fold ledger entry" {
+    // `c + t + -t` is seeded before the pool union c = a + b, so rebuild
+    // mints its flat twin {a, b, t, -t}. Both hold the redex `t + -t`;
+    // they are one redex in two groupings, and only the node fires it.
+    // With a ledger entry per NODE the twin fired its own copy — in a
+    // different pair order, since the expansion re-sorts the members —
+    // and every intermediate of a cancellation cascade spawned a second
+    // chain that was twinned in turn (#244).
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try cancelGraph(arena_state.allocator());
+
+    const a = try tLeaf(&eg, 1);
+    const b = try tLeaf(&eg, 2);
+    const c = try tLeaf(&eg, 3);
+    const t = try tLeaf(&eg, 4);
+    const sum = try tAc2(&eg, ADD, try tAc2(&eg, ADD, c, t), try tApp1(&eg, NEG_T, t));
+    const ab = try tAc2(&eg, ADD, a, b);
+    _ = try eg.merge(
+        termClassOf(&eg, c),
+        termClassOf(&eg, ab),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = c, .rhs = ab } },
+    );
+    _ = try eg.rebuild();
+    const twin_shape = ENode{ .bag = .{ .term_id = ADD, .members = &.{
+        termClassOf(&eg, a),
+        termClassOf(&eg, b),
+        termClassOf(&eg, t),
+        termClassOf(&eg, try tApp1(&eg, NEG_T, t)),
+    } } };
+    const twin = (try eg.lookupNode(twin_shape)).?;
+    try testing.expect(twin != sum.node);
+    try testing.expectEqual(sum.node, eg.twin_of.get(twin).?);
+
+    const stats = try eg.saturate(&CANCEL_FOLDS, .{});
+    try testing.expect(eg.sameClass(termClassOf(&eg, sum), termClassOf(&eg, c)));
+    // add_neg on the node, then add_zero on its result — and nothing on
+    // the twin.
+    try testing.expectEqual(@as(usize, 2), stats.fold_applied);
+    try testing.expect(eg.fold_consumed.contains(sum.node));
+    try testing.expect(!eg.fold_consumed.contains(twin));
+}

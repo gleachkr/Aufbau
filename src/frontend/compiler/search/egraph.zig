@@ -625,7 +625,20 @@ pub const EGraph = struct {
     /// reads a member the designated fire ignored) — geometric decrease,
     /// so never a livelock, and near-size regroupings stay dead. See
     /// `foldCompute`.
+    /// Keyed by TWIN COMPONENT (`twinRoot`): a node and its splice
+    /// twins are one redex in different groupings, so they share one
+    /// ledger entry. Without that, a twin fires its own designated redex
+    /// — typically a different pair of the same multiset, since the
+    /// expansion changes the member order — and every intermediate of a
+    /// cascade spawns a second reduction chain that is twinned in turn:
+    /// the alternative-order closure this ledger exists to refuse (the
+    /// zero-class blow-up of #244).
     fold_consumed: std.AutoHashMapUnmanaged(ENodeId, usize) = .{},
+    /// Splice-twin parentage: a node minted as the twin of an existing
+    /// node (rebuild flattening, the intern-time nested view, a sub-bag
+    /// regrouping) points at that node. Chains lead to the component's
+    /// oldest member, the key the fold ledger uses.
+    twin_of: std.AutoHashMapUnmanaged(ENodeId, ENodeId) = .{},
     /// Set when a saturation iteration was budget-capped yet changed
     /// nothing (see `SaturateOutcome.budget_fixpoint`); later `saturate`
     /// calls return immediately instead of re-running the identical
@@ -956,6 +969,11 @@ pub const EGraph = struct {
             };
         }
         try self.splice_twin.put(self.allocator, nested_id, flat_id);
+        try self.twin_of.put(
+            self.allocator,
+            @max(nested_id, flat_id),
+            @min(nested_id, flat_id),
+        );
     }
 
     /// Duplicate a (possibly scratch-backed) canonical node's slices into
@@ -1407,6 +1425,7 @@ pub const EGraph = struct {
             .age = @intCast(self.unions.items.len),
         });
         try self.splice_twin.put(self.allocator, mint.from, node_id);
+        try self.twin_of.put(self.allocator, node_id, mint.from);
     }
 
     /// Rebuild the splice index from scratch: lowest bag node id per
@@ -1479,6 +1498,13 @@ pub const EGraph = struct {
         }
         self.ac_cyclic_dropped_total += cyclic.items.len;
         try self.refreshSubBagIndex(scratch);
+    }
+
+    /// The oldest node of `node`'s splice-twin component (see `twin_of`).
+    fn twinRoot(self: *const EGraph, node: ENodeId) ENodeId {
+        var current = node;
+        while (self.twin_of.get(current)) |older| current = older;
+        return current;
     }
 
     /// Rebuild `subbag_index` (see the field): every same-head bag node of
@@ -2026,6 +2052,7 @@ pub const EGraph = struct {
             .age = @intCast(self.unions.items.len),
         };
         try self.splice_twin.put(self.allocator, nested, flat_id);
+        try self.twin_of.put(self.allocator, nested, flat_id);
         return nested;
     }
 
@@ -2230,7 +2257,9 @@ pub const EGraph = struct {
     ///
     ///   - each node fires its designated redex — the first fresh match
     ///     in (rule, enumeration) order — and is consumed at that redex's
-    ///     rendered size (`fold_consumed`): the cascade continues through
+    ///     rendered size (`fold_consumed`, one entry per splice-twin
+    ///     component: a twin is the same redex regrouped, and fires only
+    ///     what its node cannot see): the cascade continues through
     ///     the result nodes the fold mints, and alternative pairings of a
     ///     consumed shape never fire — that closure is exactly what a
     ///     rewrite strategy exists to avoid. ONE relaxation: once fold
@@ -2327,7 +2356,8 @@ pub const EGraph = struct {
                 // classes prove a half-size redex could now render (the
                 // cheap bound spares the expensive re-match in the
                 // common case).
-                const consumed = self.fold_consumed.get(@intCast(node_id));
+                const ledger_key = self.twinRoot(@intCast(node_id));
+                const consumed = self.fold_consumed.get(ledger_key);
                 if (consumed) |past| {
                     if (mode == .fold) continue;
                     // App redexes only: an app re-fire is the same
@@ -2425,7 +2455,7 @@ pub const EGraph = struct {
                             .merged => {
                                 try self.fold_consumed.put(
                                     self.allocator,
-                                    @intCast(node_id),
+                                    ledger_key,
                                     measure,
                                 );
                                 try fired_classes.put(scratch, root, {});
@@ -2444,7 +2474,7 @@ pub const EGraph = struct {
                                 // just as reduced as after a real merge.
                                 try self.fold_consumed.put(
                                     self.allocator,
-                                    @intCast(node_id),
+                                    ledger_key,
                                     measure,
                                 );
                                 // A no-op RE-fire still made progress —

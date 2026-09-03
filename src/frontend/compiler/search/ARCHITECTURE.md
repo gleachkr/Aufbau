@@ -63,6 +63,14 @@ of such a mixed class (`EGraph.assignSubBagMember`, candidates from the
 graph's own bags), and the union then anchors on the regrouped twin the
 claim folds the node back into (`EGraph.regroupTwin`) — a node the intern
 would have kept had the class held that structure when the bag was seeded.
+A node and its splice twins are one redex in different groupings, so the
+`@compute` fold ledger is keyed by twin component (`EGraph.twinRoot`): the
+node that fires consumes its twins with it, and a twin only fires a redex
+its node cannot see (the expansion exposing `2 * inv 2` inside `2 * (q / 2)`).
+Otherwise every twin would fire its own copy of the redex in a different
+pair order, and each intermediate of a cancellation cascade would spawn a
+second chain that is twinned in turn — the alternative-order closure the
+ledger exists to refuse (the zero-class blow-up of #244).
 See `docs/rewrite_system.md` for the user-facing surface.
 
 ## The pipeline (one `exactWithSession` call)

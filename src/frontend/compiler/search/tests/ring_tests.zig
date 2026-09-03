@@ -201,3 +201,21 @@ test "ring conversion?: sub-bag claim distributes through a hypothesis-rewritten
         \\u * u * u = -q * u + s * u
     );
 }
+
+// A goal equal to zero (#244). Once the cancellation cascade joins the
+// left side with zero's class, each `0 + rest` intermediate is twinned
+// through the classes the hypotheses put sums into, and a twin used to
+// fire its own copy of the cascade's redex in a different pair order —
+// every intermediate spawned a second chain, twinned in turn: thousands
+// of nodes, eleven seconds. A node and its twins now share one fold
+// ledger entry.
+test "ring conversion?: Cardano substitution as a goal equal to zero" {
+    try expectFoundAndCompiles(
+        \\theorem thm (u v p q: R)
+        \\  (hp: $ p = -(3 * u * v) $)
+        \\  (hq: $ q = -(u * u * u + v * v * v) $):
+        \\  $ (u + v) * (u + v) * (u + v) + p * (u + v) + q = 0 $;
+    ,
+        \\(u + v) * (u + v) * (u + v) + p * (u + v) + q = 0
+    );
+}
