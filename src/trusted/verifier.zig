@@ -197,7 +197,6 @@ pub const Verifier = struct {
             def_expr,
             .defn,
         );
-        if (self.sorry_used) return error.SorryUsed;
     }
 
     fn verifyAxiom(
@@ -935,23 +934,23 @@ pub const Verifier = struct {
     }
 
     fn opSorry(self: *Verifier) !void {
-        // Sorry is not a valid proof command but we handle it gracefully
-        // Check what's on top and either push a proof or discharge an obligation
-        const stack = &self.stack;
-        if (stack.top > 0) {
-            const top = try stack.peek();
-            if (top == .conv_obligation) {
-                _ = try stack.pop();
-                return;
-            }
+        // Sorry: S, e -> S, |- e
+        // ConvSorry: S, e1 =?= e2 -> S
+        // Either form makes the statement fail verification; the flag is
+        // recorded up front so the conversion form cannot slip past it.
+        switch (self.proof_context orelse return error.InvalidProofContext) {
+            .axiom, .theorem => {},
+            .defn => return error.SorryNotAllowed,
         }
+        self.sorry_used = true;
+        const stack = &self.stack;
         const entry = try stack.pop();
         const expr = switch (entry) {
             .expr => |e| e,
+            .conv_obligation => return,
             else => return error.ExpectedExpr,
         };
         try stack.push(.{ .proof = expr });
-        self.sorry_used = true;
     }
 
     fn opCong(self: *Verifier) !void {

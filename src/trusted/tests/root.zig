@@ -2242,3 +2242,72 @@ test "Verifier rejects a definition whose value mentions itself" {
         verifier.verifyProofStream(0, checker),
     );
 }
+
+test "Verifier reports sorry used for a proof-side sorry" {
+    // theorem (a: wff): a, proved by `Sorry` on the expression a.
+    const args = [_]Arg{wff_arg};
+    const unify = [_]u8{ 0x72, 0x00, 0x00 };
+    const body = [_]u8{ 0x52, 0x00, 0x20 };
+    try std.testing.expectError(
+        error.SorryUsed,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier reports sorry used for a conversion-side sorry" {
+    // theorem (a: wff) (h: a): a, where the hypothesis is transported by
+    // `Conv` and the conversion obligation is discharged with `Sorry`.
+    const args = [_]Arg{wff_arg};
+    const unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x00, 0x00 };
+    // Ref a; Hyp; Ref a; Ref (|- a); Conv; Sorry
+    const body = [_]u8{ 0x52, 0x00, 0x16, 0x52, 0x00, 0x52, 0x01, 0x17, 0x20 };
+    try std.testing.expectError(
+        error.SorryUsed,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects sorry on an empty stack" {
+    const args = [_]Arg{wff_arg};
+    const unify = [_]u8{ 0x72, 0x00, 0x00 };
+    const body = [_]u8{0x20};
+    try std.testing.expectError(
+        error.StackUnderflow,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects sorry inside a definition" {
+    // def d (x: wff): wff, whose value stream applies `Sorry` to x.
+    const checker = NoopChecker{};
+    const sorts = [_]Sort{.{}};
+    const args = [_]Arg{wff_arg};
+    var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        &args,
+        wff_arg,
+        &.{ 0x72, 0x00, 0x00 },
+        &.{ 0x52, 0x00, 0x20 },
+    );
+    const terms = [_]Term{.{
+        .num_args = 1,
+        .ret_sort = .{ .sort = 0, .is_def = true },
+        .reserved = 0,
+        .p_data = 32,
+    }};
+    const theorems = [_]Theorem{};
+
+    const verifier = try Verifier.init(
+        std.testing.allocator,
+        proof[0..],
+        &sorts,
+        &terms,
+        &theorems,
+        null,
+    );
+    defer verifier.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.SorryNotAllowed,
+        verifier.verifyProofStream(0, checker),
+    );
+}
