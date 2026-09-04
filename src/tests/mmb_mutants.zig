@@ -48,3 +48,12 @@ test "mmb mutants: a proof of the wrong conclusion is rejected" {
         verifyMutant("wrong_conclusion.mmb"),
     );
 }
+
+test "mmb mutants: a proof that cites its own theorem is rejected" {
+    // a1i's body ends with `Thm 6`, a1i's own index (mm0-c: "theorem out
+    // of range"). A statement becomes available only after it verifies.
+    try std.testing.expectError(
+        error.ForwardTheoremRef,
+        verifyMutant("circular_proof.mmb"),
+    );
+}

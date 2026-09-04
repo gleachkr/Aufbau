@@ -350,6 +350,10 @@ pub const Verifier = struct {
                     sort_count += 1;
                     pos = stmt_end;
                 },
+                // A statement's proof may only cite declarations that
+                // precede it: the available counts passed below exclude the
+                // statement's own index, which is bumped only after it
+                // verifies (mm0-c bumps g_num_terms/g_num_thms the same way).
                 .TermDef => {
                     const stmt_end = try self.beginStatement(
                         .term,
@@ -372,7 +376,7 @@ pub const Verifier = struct {
                             @intCast(pos),
                             @intCast(stmt_end),
                             sort_count,
-                            term_count + 1,
+                            term_count,
                             thm_count,
                         );
                     } else if (stmt_end != pos) {
@@ -397,7 +401,7 @@ pub const Verifier = struct {
                         @intCast(stmt_end),
                         sort_count,
                         term_count,
-                        thm_count + 1,
+                        thm_count,
                     );
                     thm_count += 1;
                     pos = stmt_end;
@@ -418,7 +422,7 @@ pub const Verifier = struct {
                         @intCast(stmt_end),
                         sort_count,
                         term_count,
-                        thm_count + 1,
+                        thm_count,
                     );
                     thm_count += 1;
                     pos = stmt_end;
@@ -438,7 +442,7 @@ pub const Verifier = struct {
                         @intCast(pos),
                         @intCast(stmt_end),
                         sort_count,
-                        term_count + 1,
+                        term_count,
                         thm_count,
                     );
                     term_count += 1;
@@ -458,7 +462,7 @@ pub const Verifier = struct {
                         @intCast(stmt_end),
                         sort_count,
                         term_count,
-                        thm_count + 1,
+                        thm_count,
                     );
                     thm_count += 1;
                     pos = stmt_end;

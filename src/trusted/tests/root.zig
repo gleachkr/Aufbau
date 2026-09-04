@@ -1895,23 +1895,48 @@ test "Verifier checks definition return dependencies" {
 }
 
 test "Verifier replays definition unify streams" {
+    // def d (x y: wff): wff = x, with a unify stream claiming the value is y.
     const checker = NoopChecker{};
     const sorts = [_]Sort{.{}};
-    const args = [_]Arg{.{
-        .deps = 0,
-        .reserved = 0,
-        .sort = 0,
-        .bound = false,
-    }};
-    const ret = Arg{
-        .deps = 0,
-        .reserved = 0,
-        .sort = 0,
-        .bound = false,
-    };
+    const args = [_]Arg{ wff_arg, wff_arg };
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
         &args,
-        ret,
+        wff_arg,
+        &.{ 0x72, 0x01, 0x00 },
+        &.{ 0x52, 0x00 },
+    );
+    const terms = [_]Term{.{
+        .num_args = 2,
+        .ret_sort = .{ .sort = 0, .is_def = true },
+        .reserved = 0,
+        .p_data = 32,
+    }};
+    const theorems = [_]Theorem{};
+
+    const verifier = try Verifier.init(
+        std.testing.allocator,
+        proof[0..],
+        &sorts,
+        &terms,
+        &theorems,
+        null,
+    );
+    defer verifier.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        verifier.verifyProofStream(0, checker),
+    );
+}
+
+test "Verifier rejects a definition whose unify stream mentions itself" {
+    // def d (x: wff): wff = x, with a unify stream beginning `UTerm d`.
+    const checker = NoopChecker{};
+    const sorts = [_]Sort{.{}};
+    const args = [_]Arg{wff_arg};
+    var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        &args,
+        wff_arg,
         &.{ 0x70, 0x00, 0x00 },
         &.{ 0x52, 0x00 },
     );
@@ -1934,7 +1959,7 @@ test "Verifier replays definition unify streams" {
     defer verifier.deinit(std.testing.allocator);
 
     try std.testing.expectError(
-        error.ExpectedTermApp,
+        error.ForwardTermRef,
         verifier.verifyProofStream(0, checker),
     );
 }
@@ -2165,5 +2190,55 @@ test "Verifier rejects an axiom whose statement mismatches its declaration" {
     try std.testing.expectError(
         error.UnifyMismatch,
         runStatementFixture(stmt_axiom, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects a theorem that cites itself" {
+    // theorem (a: wff): a, proved by applying theorem 0 (itself): the
+    // statement being verified is not yet available to its own proof.
+    const args = [_]Arg{wff_arg};
+    const unify = [_]u8{ 0x72, 0x00, 0x00 };
+    // Ref a (arg); Ref a (conclusion); Thm 0
+    const body = [_]u8{ 0x52, 0x00, 0x52, 0x00, 0x54, 0x00 };
+    try std.testing.expectError(
+        error.ForwardTheoremRef,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects a definition whose value mentions itself" {
+    // def d (x: wff): wff = d x
+    const checker = NoopChecker{};
+    const sorts = [_]Sort{.{}};
+    const args = [_]Arg{wff_arg};
+    var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        &args,
+        wff_arg,
+        // UTerm d; URef x; End
+        &.{ 0x70, 0x00, 0x72, 0x00, 0x00 },
+        // Ref x; Term d
+        &.{ 0x52, 0x00, 0x50, 0x00 },
+    );
+    const terms = [_]Term{.{
+        .num_args = 1,
+        .ret_sort = .{ .sort = 0, .is_def = true },
+        .reserved = 0,
+        .p_data = 32,
+    }};
+    const theorems = [_]Theorem{};
+
+    const verifier = try Verifier.init(
+        std.testing.allocator,
+        proof[0..],
+        &sorts,
+        &terms,
+        &theorems,
+        null,
+    );
+    defer verifier.deinit(std.testing.allocator);
+
+    try std.testing.expectError(
+        error.ForwardTermRef,
+        verifier.verifyProofStream(0, checker),
     );
 }
