@@ -2034,3 +2034,136 @@ test "MM0 parser preserves binder names and assertion kind" {
         else => return error.UnexpectedStatementKind,
     }
 }
+
+// Statement-end unification fixtures: a leading Sort statement, then a
+// single axiom/theorem statement whose arguments live at `p_data` and whose
+// unify stream follows them directly (the MMB layout).
+const stmt_fixture_p_data: usize = 40;
+
+fn buildStatementFixture(
+    stmt_op: u8,
+    args: []const Arg,
+    unify: []const u8,
+    body: []const u8,
+) align(@alignOf(Arg)) [128]u8 {
+    var bytes: [128]u8 align(@alignOf(Arg)) = std.mem.zeroes([128]u8);
+    // Sort statement (u8 length 2).
+    bytes[0] = 0x44;
+    bytes[1] = 0x02;
+    const proof = buildSingleStmtProof(stmt_op, body);
+    @memcpy(bytes[2 .. 2 + proof.len], proof[0..]);
+
+    for (args, 0..) |arg, i| {
+        writeArg(bytes[0..], stmt_fixture_p_data + i * @sizeOf(Arg), arg);
+    }
+    const unify_offset = stmt_fixture_p_data + args.len * @sizeOf(Arg);
+    @memcpy(bytes[unify_offset..][0..unify.len], unify);
+    return bytes;
+}
+
+const wff_arg = Arg{ .deps = 0, .reserved = 0, .sort = 0, .bound = false };
+
+fn runStatementFixture(
+    stmt_op: u8,
+    args: []const Arg,
+    unify: []const u8,
+    body: []const u8,
+) !void {
+    const checker = NoopChecker{};
+    const sorts = [_]Sort{.{ .provable = true }};
+    var proof: [128]u8 align(@alignOf(Arg)) =
+        buildStatementFixture(stmt_op, args, unify, body);
+    const terms = [_]Term{};
+    const theorems = [_]Theorem{.{
+        .num_args = @intCast(args.len),
+        .reserved = 0,
+        .p_data = stmt_fixture_p_data,
+    }};
+
+    const verifier = try Verifier.init(
+        std.testing.allocator,
+        proof[0..],
+        &sorts,
+        &terms,
+        &theorems,
+        null,
+    );
+    defer verifier.deinit(std.testing.allocator);
+    try verifier.verifyProofStream(0, checker);
+}
+
+const stmt_axiom: u8 = 0x02;
+const stmt_theorem: u8 = 0x06;
+
+test "Verifier accepts a theorem whose proof matches its declaration" {
+    // theorem (a b: wff) (h1: b) (h2: a): a
+    // Stream: conclusion first, then hypotheses in reverse order.
+    const args = [_]Arg{ wff_arg, wff_arg };
+    const unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x00, 0x36, 0x72, 0x01, 0x00 };
+    // Ref b; Hyp; Ref a; Hyp; Ref (|- a)
+    const body = [_]u8{ 0x52, 0x01, 0x16, 0x52, 0x00, 0x16, 0x52, 0x03 };
+    try runStatementFixture(stmt_theorem, &args, &unify, &body);
+}
+
+test "Verifier rejects a theorem proving the wrong conclusion" {
+    // theorem (a b: wff) (h: b): a, proved by returning the hypothesis |- b.
+    const args = [_]Arg{ wff_arg, wff_arg };
+    const unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x01, 0x00 };
+    const body = [_]u8{ 0x52, 0x01, 0x16, 0x52, 0x02 };
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects a theorem proved from an undeclared hypothesis" {
+    // theorem (a b: wff): a, proved by assuming a.
+    const args = [_]Arg{ wff_arg, wff_arg };
+    const unify = [_]u8{ 0x72, 0x00, 0x00 };
+    const body = [_]u8{ 0x52, 0x00, 0x16, 0x52, 0x02 };
+    try std.testing.expectError(
+        error.HypStackNotEmpty,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects a theorem whose hypothesis mismatches its declaration" {
+    // theorem (a b: wff) (h: b): a, proved from a hypothesis a instead.
+    const args = [_]Arg{ wff_arg, wff_arg };
+    const unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x01, 0x00 };
+    const body = [_]u8{ 0x52, 0x00, 0x16, 0x52, 0x02 };
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier rejects a theorem introducing fewer hypotheses than declared" {
+    // theorem (a: wff) (h1: a) (h2: a): a, with only one Hyp in the proof.
+    const args = [_]Arg{wff_arg};
+    const unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x00, 0x36, 0x72, 0x00, 0x00 };
+    const body = [_]u8{ 0x52, 0x00, 0x16, 0x52, 0x01 };
+    try std.testing.expectError(
+        error.HypStackUnderflow,
+        runStatementFixture(stmt_theorem, &args, &unify, &body),
+    );
+}
+
+test "Verifier accepts an axiom whose statement matches its declaration" {
+    // axiom (a b: wff) (h: b): a
+    const args = [_]Arg{ wff_arg, wff_arg };
+    const unify = [_]u8{ 0x72, 0x00, 0x36, 0x72, 0x01, 0x00 };
+    const body = [_]u8{ 0x52, 0x01, 0x16, 0x52, 0x00 };
+    try runStatementFixture(stmt_axiom, &args, &unify, &body);
+}
+
+test "Verifier rejects an axiom whose statement mismatches its declaration" {
+    // axiom (a b: wff): a, with statement b.
+    const args = [_]Arg{ wff_arg, wff_arg };
+    const unify = [_]u8{ 0x72, 0x00, 0x00 };
+    const body = [_]u8{ 0x52, 0x01 };
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        runStatementFixture(stmt_axiom, &args, &unify, &body),
+    );
+}

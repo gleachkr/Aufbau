@@ -26,9 +26,18 @@ const ProofContext = enum {
     theorem,
 };
 
+// Which unify-stream reading we are performing. Mirrors mm0-c's
+// UDef / UThm / UThmEnd modes: the opcodes are shared, but UDummy and
+// UHyp mean different things in each.
 const UnifyContext = enum {
+    // A definition header (verifyDef) or an Unfold step.
     defn,
+    // Applying a theorem (Thm): UHyp pops `|- e` from the main stack.
     theorem,
+    // Checking a theorem/axiom statement at the end of its proof stream:
+    // UHyp pops the next hypothesis from the hypothesis list (LIFO, which
+    // matches the reversed hypothesis order in the stream).
+    theorem_end,
 };
 
 const StatementRef = union(enum) {
@@ -134,7 +143,26 @@ pub const Verifier = struct {
         };
         if (!self.sort_table[proof_expr.sort()].provable) return error.NotProvable;
         if (stack.top != 0) return error.StackNotEmpty;
+        try self.unifyStatement(thm, proof_expr);
         if (self.sorry_used) return error.SorryUsed;
+    }
+
+    // Check the proved (or asserted) statement against the declaration:
+    // replay the theorem's own unify stream against `concl`, consuming the
+    // hypotheses introduced by `Hyp` in reverse order. This is mm0-c's
+    // UThmEnd pass. Without it the proof result is never compared to the
+    // declared statement, and any theorem would be provable.
+    fn unifyStatement(
+        self: *Verifier,
+        thm: Theorem,
+        concl: *const Expr,
+    ) !void {
+        try self.initUHeapFromHeapArgs(thm.num_args);
+        try self.runUnifyStream(
+            try thm.getUnifyPtrChecked(self.file_bytes),
+            concl,
+            .theorem_end,
+        );
     }
 
     fn verifyDef(
@@ -196,6 +224,7 @@ pub const Verifier = struct {
         };
         if (!self.sort_table[concl_expr.sort()].provable) return error.NotProvable;
         if (stack.top != 0) return error.StackNotEmpty;
+        try self.unifyStatement(thm, concl_expr);
         if (self.sorry_used) return error.SorryUsed;
     }
 
@@ -719,7 +748,7 @@ pub const Verifier = struct {
     pub fn uopDummy(self: *Verifier, sort_id: u32) !void {
         switch (self.unify_context orelse return error.InvalidUnifyContext) {
             .defn => {},
-            .theorem => return error.UDummyNotAllowed,
+            .theorem, .theorem_end => return error.UDummyNotAllowed,
         }
         if (sort_id >= self.available_sorts) return error.InvalidSort;
 
@@ -749,17 +778,26 @@ pub const Verifier = struct {
 
     pub fn uopHyp(self: *Verifier) !void {
         switch (self.unify_context orelse return error.InvalidUnifyContext) {
-            .theorem => {},
+            .theorem => {
+                // Applying a theorem: pop |- e from the main stack, push e
+                // onto the unify stack.
+                const entry = try self.stack.pop();
+                const expr = switch (entry) {
+                    .proof => |e| e,
+                    else => return error.ExpectedProof,
+                };
+                try self.ustack.push(expr);
+            },
+            .theorem_end => {
+                // Checking a statement: the previous conclusion/hypothesis
+                // must be fully matched before the next hypothesis starts,
+                // and the hypothesis comes from the list built by `Hyp`.
+                if (self.ustack.top != 0) return error.UnifyStackNotEmpty;
+                const expr = try self.hyps.pop();
+                try self.ustack.push(expr);
+            },
             .defn => return error.UHypNotAllowed,
         }
-
-        // Pop |- e from main stack, push e onto unify stack
-        const entry = try self.stack.pop();
-        const expr = switch (entry) {
-            .proof => |e| e,
-            else => return error.ExpectedProof,
-        };
-        try self.ustack.push(expr);
     }
 
     fn opRef(self: *Verifier, heap_id: u32) !void {
@@ -990,6 +1028,8 @@ pub const Verifier = struct {
         defer self.unify_context = prev_context;
 
         try UnifyReplay.run(self.file_bytes, start_pos, self);
+        if (context == .theorem_end and self.hyps.len != 0)
+            return error.HypStackNotEmpty;
         if (self.ustack.top != 0) return error.UnifyStackNotEmpty;
     }
 

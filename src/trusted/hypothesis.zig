@@ -13,6 +13,12 @@ pub const HypList = struct {
         self.len += 1;
     }
 
+    pub fn pop(self: *HypList) !*const Expr {
+        if (self.len == 0) return error.HypStackUnderflow;
+        self.len -= 1;
+        return self.entries[self.len];
+    }
+
     pub fn get(self: *HypList, index: usize) !*const Expr {
         if (index >= self.len) return error.HypOutOfBounds;
         return self.entries[index];

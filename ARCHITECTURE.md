@@ -271,6 +271,15 @@ module boundary simple without changing the trust story.
 stack-machine program over arena-allocated expression nodes. This is the
 implementation of MMB semantics proper.
 
+Unify streams are read in three contexts, mirroring mm0-c's `UDef`,
+`UThm`, and `UThmEnd` modes: checking a definition header or an `Unfold`
+step, applying a theorem with `Thm`, and checking an axiom or theorem
+statement once its proof stream has run. In the last context `UHyp`
+consumes the hypotheses introduced by `Hyp` in reverse order, and the
+stream must leave both the unify stack and the hypothesis list empty.
+This statement-end pass is what ties a proof result to the declaration
+in the theorem table; without it any statement would be provable.
+
 A useful way to think about the trusted core is:
 
 - `mmb.zig` checks file layout
