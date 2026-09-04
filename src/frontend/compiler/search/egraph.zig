@@ -1939,7 +1939,15 @@ pub const EGraph = struct {
             (try self.regroupTwin(m.root_node, m.subbags)) orelse {
                 return .regroup_deferred;
             };
-        if (to_node == anchor) {
+        // A bare-binder target with no extension is not built: its node
+        // is the binding class's designated node, which can be the
+        // matched node itself when the class already holds it (`x + 0`
+        // after `add_zero` put `{x, 0}` in `x`'s class). That is not a
+        // self-loop — the union already holds and the redex is reduced —
+        // so it falls through to the no-op below and consumes the node.
+        const target_built = m.extension.len != 0 or
+            rules[m.rule_slot].target_side != .binder;
+        if (to_node == anchor and target_built) {
             try dedup.applied.put(self.allocator, m.key, {});
             return .self_loop;
         }

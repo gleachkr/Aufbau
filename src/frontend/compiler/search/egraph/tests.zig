@@ -2395,3 +2395,33 @@ test "a splice twin shares its node's fold ledger entry" {
     try testing.expect(eg.fold_consumed.contains(sum.node));
     try testing.expect(!eg.fold_consumed.contains(twin));
 }
+
+// `add_zero` on `y + 0` after `y`'s class was absorbed into the sum's:
+// the target is the bare binder `y`, whose designated class node is now
+// the sum itself. That is not a self-loop (nothing was built and the
+// union already holds); it is a no-op that consumes the node. Classified
+// as a self-loop, the node stayed unconsumed and its dedup key blocked
+// the fold on every splice twin, which then fired an inner cancellation
+// instead and minted a fresh `{0, 0, ...}` twin per round — a 20x
+// slowdown on the radical Cardano search.
+test "a bare-binder fold target already in the node's class is a no-op, not a self-loop" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var eg = try cancelGraph(arena_state.allocator());
+
+    const y = try tLeaf(&eg, 1);
+    const zero = try tApp0(&eg, ZERO_T);
+    const sum = try tAc2(&eg, ADD, y, zero);
+    // `merge(a, b)` keeps b's root: the sum's class survives, and its
+    // designated node is the sum.
+    _ = try eg.merge(
+        termClassOf(&eg, y),
+        termClassOf(&eg, sum),
+        .{ .pool_equation = .{ .pool_index = 0, .lhs = y, .rhs = sum } },
+    );
+    _ = try eg.rebuild();
+
+    const stats = try eg.saturate(&CANCEL_FOLDS, .{});
+    try testing.expectEqual(@as(usize, 0), stats.fold_applied);
+    try testing.expect(eg.fold_consumed.contains(sum.node));
+}
