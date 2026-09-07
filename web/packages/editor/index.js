@@ -1884,6 +1884,9 @@ const STYLE = `
   border: 1px solid var(--line); border-radius: 6px;
 }
 .editor .cm-tooltip.cm-tooltip-autocomplete > ul { font-family: inherit; }
+/* The compiler separates a diagnostic's context lines (theorem, line, rule,
+   inference path) with newlines; without this they collapse into one run-on. */
+.editor .cm-diagnostic { white-space: pre-line; }
 .action-bulb {
   cursor: pointer; margin-left: .75ch; color: var(--bulb);
   opacity: .85; user-select: none;
