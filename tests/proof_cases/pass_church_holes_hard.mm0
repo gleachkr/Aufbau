@@ -81,7 +81,7 @@ coercion thm: term > wff;
 
 def bic (p q: term): term = $ ≃[𝔹] p = q $;
 infixr bic: $⇔$ prec 20;
-infixr bic: $<->$ prec 20;
+infixr bic: $<=>$ prec 20;
 
 -- Raw term-level equality used by the normalization machinery.
 

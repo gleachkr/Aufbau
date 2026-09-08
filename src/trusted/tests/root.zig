@@ -1076,6 +1076,51 @@ test "MM0 parser rejects notation first-token vs infixy conflicts" {
     }
 }
 
+test "MM0 parser rejects a second infix declaration of one token" {
+    const src =
+        \\sort wff;
+        \\sort num;
+        \\term im: wff > wff > wff;
+        \\term ad: num > num > num;
+        \\infixr im: $<->$ prec 20;
+        \\infixr ad: $<->$ prec 20;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    try std.testing.expectError(
+        error.DuplicateInfixToken,
+        parser.next(),
+    );
+}
+
+test "MM0 parser still allows an infixy constant inside several notations" {
+    // Interior `notation` constants are matched positionally, not dispatched
+    // on, so sharing one across notations stays legal (as in mm0-c/mm0-rs).
+    const src =
+        \\sort wff;
+        \\term a: wff > wff > wff;
+        \\term b: wff > wff > wff;
+        \\notation a (x y: wff): wff = ($[$: 20) x ($+$: 5) y;
+        \\notation b (x y: wff): wff = ($<$: 20) x ($+$: 5) y;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    _ = (try parser.next()).?;
+    try std.testing.expect((try parser.next()) == null);
+}
+
 test "MM0 parser rejects coercion cycles" {
     const src =
         \\sort a;

@@ -32,6 +32,7 @@ pub const ParseError = error{
     DummyNotationBinder,
     DuplicateHoleAnnotation,
     DuplicateHoleToken,
+    DuplicateInfixToken,
     DuplicateSort,
     ExpectedBinaryOperator,
     ExpectedCloseParen,
@@ -1466,6 +1467,14 @@ pub const MM0Parser = struct {
         prec: u16,
         right_assoc: bool,
     ) !void {
+        // Two `infixl`/`infixr` declarations of one token would generate two
+        // productions differing only in the term constructor, so a math string
+        // using it has two parses. mm0-rs rejects the collision.
+        // Interior `notation` constants are not affected: they stay reusable,
+        // because they are matched positionally rather than dispatched on.
+        if (self.infix_notations.contains(token)) {
+            return error.DuplicateInfixToken;
+        }
         try self.infix_notations.put(token, .{
             .term_id = term_id,
             .prec = prec,
