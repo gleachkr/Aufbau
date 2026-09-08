@@ -1,3 +1,96 @@
+# Aufbau 0.0.8
+
+Aufbau 0.0.8 closes three soundness holes in the verifier, makes
+`@conversion` rules conditional, and adds Cardano's formula to the demo
+zoo.
+
+## Highlights
+
+### The verifier checks the statement it was given
+
+`verifyThm` ran a theorem's proof stream and confirmed the result was a
+proof of *something*, but never replayed the theorem's own unify stream
+against it. The conclusion was therefore never compared with the one the
+`.mm0` file declares, and `Hyp`-introduced hypotheses were never
+compared with the declared hypotheses. Both `verifyThm` and
+`verifyAxiom` now run a statement-end unification pass mirroring mm0-c's
+`UThmEnd` mode: `UHyp` pops the hypothesis list LIFO, `UDummy` is
+rejected, and the stream must leave both the hypothesis list and the
+unify stack empty.
+
+Two smaller holes closed with it. A statement could cite itself, because the
+loop passed the current term and theorem counts plus one as the
+available count. mm0-c bumps its counters only after a statement verifies, and 
+now so does this verifier. And `sorry` in a conversion position passed 
+unrecorded: `ConvSorry` discharged its obligation without setting the flag that
+fails the statement, so an admitted conversion could complete a proof
+that then verified. The flag is now set before the stack is touched,
+and `sorry` in a definition is rejected outright.
+
+Each fix carries synthetic stream tests plus a hand-mutated MMB fixture
+under `tests/mmb_mutants/`, paired with the `.mm0` it claims to prove
+and with mm0-c as the oracle for the verdict.
+
+### `@conversion` rules may be conditional
+
+A direction-annotated theorem can now carry hypotheses:
+
+```
+--| @conversion ltr
+axiom div_self (x: nat): $ x ≠ 0 $ > $ x / x = 1 $;
+```
+
+A match fires only once every premise is already established in the egraph, 
+similar to egglog, so saturation stays a fixpoint computation rather than a 
+proof search and a saturated miss is still a forced negative. An equational 
+premise discharges when its two sides share an e-class, with the extracted 
+chain as its proof. Any other premise discharges when its class is *proven*. 
+`@congr` propagates provability, so under `a ≠ 0` and `a = b` the premise `b ≠ 
+0` counts as proven once congruence on `≠` merges the two.
+
+### Cardano's formula
+
+The new `cardano` theory proves Cardano's formula for the depressed
+cubic, with `conversion?` doing the algebra. There are no
+root-extraction operations (the radicals are variables pinned by
+hypotheses) so what the theorems check is the algebra behind the
+formula: the sum of cubes, the resolvent product, and the formula
+itself. Every proof body came from a one-line `conversion?` goal, which
+each block keeps in a comment. The fixture ships in the web demo.
+
+This showcases some low-level egraph improvements. Routes are now rendered 
+through classes that contain themselves, def leaves open into ACUI bags during 
+line checking, structured pattern members claim sub-bags of a seeded bag, and a 
+bare-binder fold target is no longer misclassified as a self-loop that consumes 
+its own redex.
+
+### Annotations from other tools pass through
+
+An unrecognized annotation is now a warning rather than an error. `@syntax` is 
+accepted everywhere without being read, so grammar metadata for an external 
+front end travels with the file. Only `@acui` and `@conversion` reach the
+rewrite registry.
+
+## Compatibility
+
+Because of improvements to the verifier, an MMB file that a previous release 
+accepted may in princple be rejected by this one. Proofs the compiler produced 
+are not affected.
+
+One source-level change: a token may be declared infix only once.  A `.mm0` 
+file that reuses an infix token needs one of the two renamed — the `church` 
+fixture's `bic` alias moved from `<->` to `<=>`. Constants shared between 
+`notation` commands are unaffected, since interior constants are matched 
+positionally rather than dispatched on.
+
+Everything else is additive: conditional `@conversion` rules are a
+relaxed enrollment check, and unrecognized annotations that were errors
+are now warnings. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.7
 
 Aufbau 0.0.7 adds alpha renaming to `conversion?`, closes the

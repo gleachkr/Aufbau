@@ -3,6 +3,95 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.8] - 2026-09-08
+
+### Added
+
+- `@conversion` rules may be conditional. A direction-annotated theorem
+  can now carry hypotheses; they enroll as premises, and a match fires
+  only once every premise is already established in the egraph, so
+  saturation remains a fixpoint computation rather than a proof search
+  and a saturated miss is still a forced negative. An equational premise
+  discharges when its two sides share an e-class, and its proof is the
+  extracted chain between them. Any other premise discharges when its
+  class is *proven*: every hypothesis and earlier proof line seeds its
+  own class, and `@congr` spreads the property, so `b ≠ 0` counts as
+  proven under `a ≠ 0` and `a = b`. A match whose premises do not yet
+  hold is deferred rather than consumed, so a premise that becomes
+  provable only after another rule fires still licenses the rewrite. A
+  binder occurring only in a hypothesis is rejected at enrollment —
+  after the match the premise would not be ground, and discharging it by
+  lookup would be a join. See `docs/rewrite_system.md`.
+- `cardano`, a demo theory that proves Cardano's formula for the
+  depressed cubic with `conversion?` doing the algebra. The theory is a
+  field written for the egraph: `@acui` on `+` and `*`, the ring
+  identities as `@compute` folds, division as an unfolding definition,
+  `mul_inv` conditional on `a ≠ 0`, and the numeral `3` transparent as
+  `1 + 1 + 1` so the three cross terms of a cube collect against `3uv`.
+  There are no root-extraction operations: the radicals are variables
+  pinned by hypotheses, and the theorems check the algebra behind the
+  formula. Every proof body was produced by a one-line `conversion?`
+  goal, kept in a comment beside it. The fixture ships in the web demo.
+- `tests/mmb_mutants/`, a fixture directory of hand-mutated MMB files
+  paired with the `.mm0` they claim to prove. These pin verifier
+  verdicts that only a malformed binary can exercise, with mm0-c as the
+  oracle for each.
+
+### Changed
+
+- An unrecognized annotation is a warning rather than an error, and is
+  reported at every attachment site — sorts, terms, and assertions, and
+  also where an intervening notation command drops it. Only `@acui` and
+  `@conversion` reach the rewrite registry. `@syntax` is accepted
+  everywhere without being read, so grammar metadata for an external
+  front end passes through cleanly. A file annotated for another tool
+  now compiles with warnings instead of failing.
+- A token may be declared infix only once. Two `infixl`/`infixr`
+  declarations of one token generate grammar productions differing only
+  in the term constructor, so a math string using it has two parses. The parser 
+  now rejects this type of ambiguity. A constant shared between `notation` 
+  commands is unaffected: interior constants are matched positionally, not 
+  dispatched on.
+
+### Fixed
+
+- The verifier accepted a proof of any provable statement for any
+  declaration. A theorem's proof stream ran, but its own unify stream
+  was never replayed against the result, so neither the conclusion nor
+  the `Hyp`-introduced hypotheses were checked against what the `.mm0`
+  file declared. Both `verifyThm` and `verifyAxiom` now run a
+  statement-end unification pass mirroring mm0-c's `UThmEnd` mode, in
+  which `UHyp` pops the hypothesis list LIFO, `UDummy` is rejected, and
+  the stream must leave both the hypothesis list and the unify stack
+  empty.
+- The verifier let a statement cite itself. The statement loop passed
+  the current term and theorem counts plus one as the available count,
+  so a theorem could prove itself with `Thm self` and a definition could
+  mention itself in its value or unify stream. mm0-c bumps its counters
+  only after a statement verifies and rejects both; the counts are no
+  longer incremented early.
+- `sorry` in a conversion position passed unrecorded. `ConvSorry`
+  discharged its obligation without setting the flag that fails the
+  statement, so a proof could be completed by an admitted conversion and
+  still verify; `sorry` in a definition is now rejected outright rather
+  than checked after the fact.
+- `conversion?` extracts through classes that contain themselves, which
+  the Cardano resolvent needs: a route whose destination is inside the
+  goal's own class is rendered in a second pass, taken only after the
+  default extraction fails. Alongside it, a def leaf opens into an ACUI
+  bag during line checking, structured pattern members claim sub-bags of
+  a seeded bag, a bag binder reserves slots for later pattern members
+  and enumerates from its class's bag nodes, a nested view survives an
+  intern-time splice that dissolves a mixed class, chains extract from
+  the refreshed seed term, and the `@compute` fold ledger is keyed by
+  splice-twin component.
+- A bare-binder fold target is no longer misclassified as a self-loop
+  and allowed to consume its own redex, which had let splice twins
+  multiply and made one Cardano goal roughly twenty times slower than it
+  needed to be.
+- Multi-line compiler diagnostics keep their line breaks in a browser
+  proof cell instead of collapsing into one run-on line.
+
 ## [0.0.7] - 2026-08-22
 
 ### Added
@@ -670,6 +759,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.8]: https://github.com/gleachkr/Aufbau/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/gleachkr/Aufbau/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/gleachkr/Aufbau/compare/v0.0.5...v0.0.6
 [0.0.5]: https://github.com/gleachkr/Aufbau/compare/v0.0.4...v0.0.5
