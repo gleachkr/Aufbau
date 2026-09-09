@@ -1466,3 +1466,16 @@ test "compression cannot assign sibling dummies the same concrete witness" {
         "q x (q x (rel x x))",
     );
 }
+
+test "compression cannot capture a def argument in a hidden binder" {
+    const src =
+        \\delimiter $ ( ) $;
+        \\sort obj;
+        \\provable sort wff;
+        \\term rel (a b: obj): wff;
+        \\term q {x: obj} (p: wff x): wff;
+        \\def d (a: obj) (.x: obj): wff = $ q x (rel a x) $;
+        \\theorem host {y: obj}: $ rel y y $;
+    ;
+    try expectRepresentative(src, "q y (rel y y)", "q y (rel y y)");
+}

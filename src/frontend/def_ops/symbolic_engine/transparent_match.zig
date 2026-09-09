@@ -1138,7 +1138,7 @@ pub fn matchSymbolicAcuiLeafToExprState(
 /// dummies contribute nothing: this is a stable under-approximation used for
 /// capture masks — it must only contain bits that are certainly part of the
 /// argument instantiation, whatever the rest resolves to later.
-fn fixedSymbolicDeps(
+pub fn fixedSymbolicDeps(
     self: anytype,
     symbolic: *const SymbolicExpr,
 ) anyerror!u55 {

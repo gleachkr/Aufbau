@@ -158,7 +158,10 @@ writing `ex u (eq u u)` for `somesame u` where
 `def somesame {.w: obj} (a: obj): form = $ ex w (eq w a) $;` — is a capture,
 not an unfolding. The two expressions are simply not definitionally equal, and
 the compiler rejects the line with an ordinary conclusion mismatch instead of
-emitting a proof the verifier would refuse.
+emitting a proof the verifier would refuse. Definition compression is held to
+the same rule, one step later: the arguments a candidate fold would pass are
+only known once matching has bound them, so disjointness is re-checked against
+those arguments before the fold is accepted.
 
 Hidden bound binders from the same expansion must also remain **distinct**.
 Matching may align corresponding binders across two expansions, but cannot

@@ -273,6 +273,7 @@ pub fn compressRepresentativeToDef(
         for (template_args, 0..) |*arg, idx| {
             arg.* = try self.allocSymbolic(.{ .binder = idx });
         }
+        const dummy_base = temp.symbolic_dummy_infos.items.len;
         const symbolic_template = (try TransparentMatch.expandSymbolicApp(
             self,
             .{ .term_id = term_id, .args = template_args },
@@ -327,6 +328,18 @@ pub fn compressRepresentativeToDef(
             }
         }
 
+        if (!try compressionKeepsDummiesFresh(
+            self,
+            args,
+            dummy_base,
+            term.dummy_args.len,
+            &temp,
+        )) {
+            self.shared.allocator.free(args);
+            self.shared.allocator.free(plain_args);
+            continue :term_loop;
+        }
+
         if (all_plain) {
             self.shared.allocator.free(args);
             const rebuilt = try self.shared.theorem.interner.internAppOwned(
@@ -342,6 +355,37 @@ pub fn compressRepresentativeToDef(
         } });
     }
     return null;
+}
+
+/// A def's hidden binders must be fresh with respect to the arguments the
+/// fold would pass, or the folded expression is not def-equal to the one it
+/// replaces (MMB `UDummy` disjointness) and the verifier rejects the
+/// conversion the compiler emits from it.
+///
+/// `matchSymbolicDummyState` normally enforces this eagerly off each dummy's
+/// `forbidden_deps`, but the compression template is applied to bare binders:
+/// at expansion time `fixedSymbolicDeps` has nothing concrete to forbid, so
+/// every hidden dummy is minted with an empty mask. Matching has since bound
+/// those binders, so run the deferred check here, against the arguments the
+/// fold actually carries.
+fn compressionKeepsDummiesFresh(
+    self: anytype,
+    args: []const *const SymbolicExpr,
+    dummy_base: usize,
+    dummy_count: usize,
+    state: *const MatchSession,
+) anyerror!bool {
+    if (dummy_count == 0) return true;
+    var arg_deps: u55 = 0;
+    for (args) |arg| {
+        arg_deps |= try TransparentMatch.fixedSymbolicDeps(self, arg);
+    }
+    if (arg_deps == 0) return true;
+    for (dummy_base..dummy_base + dummy_count) |slot| {
+        const witness = Root.currentWitnessExpr(slot, state) orelse continue;
+        if (try Root.exprDeps(self, witness) & arg_deps != 0) return false;
+    }
+    return true;
 }
 
 fn exportCompressedArgFromTempState(
