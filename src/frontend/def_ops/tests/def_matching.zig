@@ -353,6 +353,7 @@ test "def matcher binds quantified templates through hidden dummies" {
         rule.hyps[0],
         actual,
         bindings,
+        null,
     ));
 
     // Public template matching now stays on the resolved, non-escaping path.

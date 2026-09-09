@@ -18,6 +18,7 @@ pub const InlineConclusionSink = Context.InlineConclusionSink;
 pub const StatementSink = @import("./statement_sink.zig").StatementSink;
 
 pub const Compiler = struct {
+    pub const InferenceStatsSink = Context.InferenceStatsSink;
     pub const max_warnings = DiagnosticSink.max_warnings;
     pub const max_primary_diagnostics =
         DiagnosticSink.max_primary_diagnostics;
@@ -31,6 +32,7 @@ pub const Compiler = struct {
     hole_inference_sink: ?*HoleInferenceSink,
     inline_conclusion_sink: ?*InlineConclusionSink,
     statement_sink: ?*StatementSink,
+    inference_stats_sink: ?*InferenceStatsSink,
 
     const PipelineOutput = Pipeline.Output;
 
@@ -64,6 +66,7 @@ pub const Compiler = struct {
             .hole_inference_sink = null,
             .inline_conclusion_sink = null,
             .statement_sink = null,
+            .inference_stats_sink = null,
         };
     }
 
@@ -191,6 +194,7 @@ pub const Compiler = struct {
         result.hole_inference_sink = self.hole_inference_sink;
         result.inline_conclusion_sink = self.inline_conclusion_sink;
         result.statement_sink = self.statement_sink;
+        result.inference_stats_sink = self.inference_stats_sink;
         return result;
     }
 };

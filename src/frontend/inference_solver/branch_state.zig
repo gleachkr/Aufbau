@@ -48,6 +48,7 @@ pub fn initState(
         null;
     return .{
         .rule_bindings = rule_bindings,
+        .rule_match_state = null,
         .view_bindings = view_bindings,
         .view_match_state = view_match_state,
         .rule_structural_intervals = rule_structural_intervals,
@@ -65,6 +66,50 @@ pub fn getBindings(
         .rule => state.rule_bindings,
         .view => state.view_bindings.?,
     };
+}
+
+pub fn bindingsForSpace(
+    state: *BranchState,
+    space: BinderSpace,
+) ?[]?ExprId {
+    return switch (space) {
+        .rule => state.rule_bindings,
+        .view => state.view_bindings,
+    };
+}
+
+pub fn matchState(
+    state: *const BranchState,
+    space: BinderSpace,
+) ?*const DefOps.MatchSeedState {
+    return switch (space) {
+        .rule => if (state.rule_match_state) |*saved| saved else null,
+        .view => if (state.view_match_state) |*saved| saved else null,
+    };
+}
+
+pub fn matchStateMut(
+    state: *BranchState,
+    space: BinderSpace,
+) ?*DefOps.MatchSeedState {
+    return switch (space) {
+        .rule => if (state.rule_match_state) |*saved| saved else null,
+        .view => if (state.view_match_state) |*saved| saved else null,
+    };
+}
+
+pub fn setMatchState(
+    allocator: std.mem.Allocator,
+    state: *BranchState,
+    space: BinderSpace,
+    new_state: DefOps.MatchSeedState,
+) void {
+    const slot: *?DefOps.MatchSeedState = switch (space) {
+        .rule => &state.rule_match_state,
+        .view => &state.view_match_state,
+    };
+    if (slot.*) |*old| old.deinit(allocator);
+    slot.* = new_state;
 }
 
 pub fn getStructuralIntervals(
@@ -104,6 +149,10 @@ pub fn cloneState(
 ) anyerror!BranchState {
     return .{
         .rule_bindings = try self.allocator.dupe(?ExprId, state.rule_bindings),
+        .rule_match_state = if (state.rule_match_state) |*match_state|
+            try cloneMatchSeedState(self.allocator, match_state)
+        else
+            null,
         .view_bindings = if (state.view_bindings) |bindings|
             try self.allocator.dupe(?ExprId, bindings)
         else

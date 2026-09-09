@@ -573,6 +573,7 @@ pub fn inferBindings(
             self.debug,
         );
         defer solver.deinit();
+        defer self.recordSolverBranches(solver.peak_branches);
         const solver_bindings = if (seed_setup.seeded_bindings) |stored|
             stored
         else

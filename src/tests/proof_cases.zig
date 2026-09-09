@@ -49,6 +49,8 @@ const proof_case_ext = "auf";
 
 const proof_cases = [_]ProofCase{
     .{ .stem = "pass_rule_symbolic_witness", .outcome = .pass },
+    .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
+    .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },
     .{ .stem = "pass_keep", .outcome = .pass },
     .{ .stem = "pass_label", .outcome = .pass },
     .{ .stem = "pass_chained_alpha", .outcome = .pass },

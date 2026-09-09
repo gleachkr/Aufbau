@@ -91,6 +91,12 @@ pub const StructuralInterval = struct {
 
 pub const BranchState = struct {
     rule_bindings: []?ExprId,
+    /// Exported rule-match session state, present once a rule-space match
+    /// assigned a binder to something plain bindings cannot hold (a value
+    /// still referring to a hidden def dummy). From then on the branch's
+    /// rule-space matching replays from this state, the way view matching
+    /// always does, so the witness relationship survives later constraints.
+    rule_match_state: ?DefOps.MatchSeedState,
     view_bindings: ?[]?ExprId,
     view_match_state: ?DefOps.MatchSeedState,
     rule_structural_intervals: []?StructuralInterval,

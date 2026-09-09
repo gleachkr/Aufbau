@@ -75,6 +75,19 @@ pub const InlineConclusionSink = struct {
     }
 };
 
+/// Observability counters from binder inference, collected across every
+/// solver the run constructs. Threaded like `HoleInferenceSink`: paths that
+/// do not attach one pay nothing.
+pub const InferenceStatsSink = struct {
+    /// Largest branch population any single constraint left behind in any
+    /// structural solve of the run.
+    peak_solver_branches: usize = 0,
+
+    pub fn recordSolver(self: *InferenceStatsSink, peak_branches: usize) void {
+        self.peak_solver_branches = @max(self.peak_solver_branches, peak_branches);
+    }
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
@@ -84,6 +97,12 @@ pub const CompilerContext = struct {
     hole_inference_sink: ?*HoleInferenceSink = null,
     inline_conclusion_sink: ?*InlineConclusionSink = null,
     statement_sink: ?*StatementSink = null,
+    inference_stats_sink: ?*InferenceStatsSink = null,
+
+    pub fn recordSolverBranches(self: *CompilerContext, peak_branches: usize) void {
+        const sink = self.inference_stats_sink orelse return;
+        sink.recordSolver(peak_branches);
+    }
 
     pub fn init(
         source: []const u8,

@@ -247,6 +247,7 @@ pub fn matchTemplateTransparent(
     template: TemplateExpr,
     actual: ExprId,
     bindings: []?ExprId,
+    residue: ?*bool,
 ) anyerror!bool {
     var state = try MatchSession.init(self.shared.allocator, bindings.len);
     defer state.deinit(self.shared.allocator);
@@ -270,6 +271,15 @@ pub fn matchTemplateTransparent(
         return false;
     }
     try WitnessState.representResolvedBindings(self, &state, bindings);
+    if (residue) |out| {
+        out.* = false;
+        for (state.bindings, bindings) |bound, materialized| {
+            if (bound != null and materialized == null) {
+                out.* = true;
+                break;
+            }
+        }
+    }
     return true;
 }
 

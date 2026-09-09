@@ -1085,3 +1085,24 @@ test "symbolic rule inference respects an explicit witness constraint" {
         compiler.compileMmb(allocator),
     );
 }
+
+test "kept symbolic match state extends a branch rather than duplicating it" {
+    // Once the first premise leaves `p` mentioning the hidden witness, each
+    // later bare-binder premise is matched through the kept session state.
+    // Sixteen such premises must leave the branch population flat; a second
+    // whole-constraint match per premise would double it every time.
+    const allocator = std.testing.allocator;
+    const stem = "pass_symbolic_witness_repeated_premises";
+    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    defer allocator.free(proof_src);
+
+    var stats = Compiler.InferenceStatsSink{};
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    compiler.inference_stats_sink = &stats;
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+    try std.testing.expectEqual(@as(usize, 2), stats.peak_solver_branches);
+}

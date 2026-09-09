@@ -1073,6 +1073,7 @@ fn tryInferHoleyStructuralSolver(
         self.debug,
     );
     defer solver.deinit();
+    defer self.recordSolverBranches(solver.peak_branches);
 
     const bindings = solver.solveHoleyConclusion(
         partial_bindings,
@@ -1190,6 +1191,7 @@ pub fn tryConcreteStructuralSolver(
         self.debug,
     );
     defer solver.deinit();
+    defer self.recordSolverBranches(solver.peak_branches);
     const bindings = solver.solve(
         partial_bindings,
         ref_exprs,

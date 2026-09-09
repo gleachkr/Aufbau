@@ -182,17 +182,23 @@ pub const Context = struct {
         return try symbolic_engine.compareTransparent(lhs, rhs);
     }
 
+    /// Plain transparent match into `bindings`. `residue`, when given, is set
+    /// if the match assigned a binder that `bindings` cannot hold (its value
+    /// still refers to a hidden def dummy without a witness), so the caller
+    /// can keep session state instead of losing that assignment.
     pub fn matchTemplateTransparent(
         self: *Context,
         template: TemplateExpr,
         actual: ExprId,
         bindings: []?ExprId,
+        residue: ?*bool,
     ) anyerror!bool {
         var symbolic_engine = self.symbolicEngine();
         return try symbolic_engine.matchTemplateTransparent(
             template,
             actual,
             bindings,
+            residue,
         );
     }
 

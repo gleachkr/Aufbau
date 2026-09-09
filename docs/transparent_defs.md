@@ -288,21 +288,35 @@ using `@view` or normalization does not have to live or die by raw unify
 replay: the compiler may switch to a `RuleMatchSession`-based path that can
 compare through defs when that is part of the intended rule behavior.
 
+### Same def, clashing arguments
+
+Structural inference walks a rule template and the cited expression in
+parallel. When both sides apply the same def but an argument clashes, say
+`wrap p q` with `q` already bound to `d` against `wrap p e`, the walk fails
+even though a def may erase that argument. In that case the solver falls
+back to a transparent match of the whole application, so the two sides are
+still recognized as the same wff after unfolding. The fallback is taken only
+for def heads, so ordinary term clashes cost nothing extra.
+
 ### Symbolic witnesses across structural premises
 
 Ordinary rules do not need an identity `@view` annotation just to retain a
-hidden witness across premises. If concrete structural inference cannot
-finish, the solver retries its existing symbolic view machinery with the
-rule's own signature and an identity binder map. This preserves symbolic
-bindings and witness relationships across context splits without changing
-the rule or allocating theorem-local dummies.
+hidden witness across premises. Structural inference matches through plain
+concrete bindings, which is the cheap path. When one of those matches
+assigns a binder to a value plain bindings cannot hold, because it still
+refers to a hidden def dummy without a witness, the branch keeps the
+match session's exported state instead of dropping the assignment, and
+from then on that branch replays its matching from that state exactly as
+`@view` matching does. Branches that never meet such a value never pay for
+the session machinery, and no theorem-local dummies are allocated.
 
-For example, matching `∃ x p` against a definition of `∃ u (F u)` may leave
+For example, matching `∃ x p` against a definition of `∃ u (F u)` leaves
 both `x` and `p` symbolic. A later premise containing the discharged
-assumption `F a` can then determine `x = a`. Projecting the first match to
-concrete bindings alone would lose that relationship. The cheaper concrete
-path remains first, and successful inference still goes through ordinary
-application checking and proof-producing conversion.
+assumption `F a` then determines `x = a`, and a competing context split
+that would pick `F b` is rejected by the conclusion in its own branch.
+Projecting the first match to concrete bindings alone would lose that
+relationship. Successful inference still goes through ordinary application
+checking and proof-producing conversion.
 
 ### Ambiguity is still constrained
 

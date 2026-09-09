@@ -8,6 +8,7 @@ const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
 const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
 const CompilerDiag = @import("./diag.zig");
+const ArgInfo = @import("./parse_recovery.zig").ArgInfo;
 const ViewDecl = @import("./views.zig").ViewDecl;
 const DerivedBinding = @import("./views.zig").DerivedBinding;
 const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
@@ -21,7 +22,7 @@ const SemanticCompare = @import("./inference_solver/semantic_compare.zig");
 const StructuralIntervals =
     @import("./inference_solver/intervals.zig");
 const StructuralMatcher = @import("./inference_solver/matcher.zig");
-const ViewState = @import("./inference_solver/view_state.zig");
+const SessionSync = @import("./inference_solver/session_sync.zig");
 const StructuralObligationSolver =
     @import("./inference_solver/obligation_solver.zig");
 const StructuralStateUpdates =
@@ -89,6 +90,11 @@ pub const Solver = struct {
     ambiguity_warning: bool = false,
     ambiguity_report: AmbiguityReport = .{},
     failure: ?SolveFailure = null,
+    /// Largest branch population any single constraint left behind during
+    /// this solve. Observability only: an `InferenceStatsSink` reads it so a
+    /// test can pin that a premise extends the population instead of
+    /// multiplying it.
+    peak_branches: usize = 0,
     // Reusable def_ops contexts, created lazily and torn down in `deinit`.
     // One solve fans out into many short-lived match attempts that each used
     // to build a fresh context — discarding the symbolic hash-cons table and
@@ -264,73 +270,6 @@ pub const Solver = struct {
         ref_exprs: []const ExprId,
         conclusion: ConclusionConstraint,
     ) anyerror![]const ExprId {
-        return self.solveWithConclusionImpl(
-            partial_bindings,
-            ref_exprs,
-            conclusion,
-        ) catch |err| {
-            if (self.view != null) return err;
-            switch (err) {
-                error.MissingBinderAssignment, error.UnifyMismatch => {},
-                else => return err,
-            }
-
-            // The concrete attempt's clash site is usually the more specific
-            // one, and `solveWithConclusionImpl` clears `failure` on entry.
-            // Hold on to both so a retry that also fails reports the first
-            // diagnosis rather than the fallback's. `SolveFailure` is plain
-            // data, so it survives the arena reset the retry performs.
-            const first_failure = self.failure;
-
-            // The concrete-only path is cheaper and can choose compact
-            // representatives eagerly. If it stalls, reuse the symbolic
-            // view solver with the rule's own signature. Its snapshots keep
-            // hidden-witness relationships alive across premises and ACUI
-            // branches. No user metadata or theorem dummies are needed.
-            const binder_map = try self.real_allocator.alloc(
-                ?usize,
-                self.rule.args.len,
-            );
-            defer self.real_allocator.free(binder_map);
-            for (binder_map, 0..) |*entry, idx| entry.* = idx;
-            const identity_view: ViewDecl = .{
-                .hyps = self.rule.hyps,
-                .concl = self.rule.concl,
-                .num_binders = self.rule.args.len,
-                .arg_names = self.rule.arg_names,
-                .arg_infos = self.rule.args,
-                .binder_map = binder_map,
-                .derived_bindings = &.{},
-            };
-            // `identity_view` and `binder_map` are block-locals; nothing may
-            // retain `self.view` past the retry below.
-            const prev_view = self.view;
-            self.view = &identity_view;
-            defer self.view = prev_view;
-            DebugTrace.traceInference(
-                self.debug,
-                "structural inference: retrying with symbolic rule state\n",
-                .{},
-            );
-            return self.solveWithConclusionImpl(
-                partial_bindings,
-                ref_exprs,
-                conclusion,
-            ) catch {
-                // The retry's own verdict is dropped: the concrete path's is
-                // the one callers turn into a diagnostic.
-                self.failure = first_failure;
-                return err;
-            };
-        };
-    }
-
-    fn solveWithConclusionImpl(
-        self: *Solver,
-        partial_bindings: []const ?ExprId,
-        ref_exprs: []const ExprId,
-        conclusion: ConclusionConstraint,
-    ) anyerror![]const ExprId {
         // Route the throwaway BranchState generations through the per-solve
         // arena; def_ops contexts are pinned to `real_allocator` separately so
         // the interner contract still holds. Restore before we build the result.
@@ -372,6 +311,7 @@ pub const Solver = struct {
                 conclusion,
                 .rule,
             );
+            states = try self.materializeMatchStates(states.items, .rule);
             states = try self.finalizeStructuralStates(states.items, .rule);
         }
 
@@ -404,10 +344,10 @@ pub const Solver = struct {
         view: *const ViewDecl,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
         var next = try self.finalizeStructuralStates(states, .view);
-        next = try self.materializeViewMatchStates(next.items);
+        next = try self.materializeMatchStates(next.items, .view);
         next = try self.applyDerivedBindings(next.items, view.derived_bindings);
         next = try self.finalizeStructuralStates(next.items, .view);
-        next = try self.materializeViewMatchStates(next.items);
+        next = try self.materializeMatchStates(next.items, .view);
         try self.propagateViewBindings(next.items, view);
         next = try self.finalizeStructuralStates(next.items, .rule);
         return next;
@@ -486,21 +426,24 @@ pub const Solver = struct {
                     state,
                 );
                 try next.appendSlice(self.allocator, matches);
-                const may_need_symbolic_view = space == .view and
-                    !try self.templateContainsStructuralCombiner(
-                        constraint.template,
-                    );
-                if ((matches.len == 0 or may_need_symbolic_view) and
-                    space == .view)
+                // When structural matching finds nothing, a branch carrying
+                // session state tries the whole constraint symbolically.
+                // A structural success is not re-derived here: for a bare
+                // binder it already ran the same session match, and a
+                // second copy per premise doubles the branch population.
+                if (matches.len == 0 and
+                    BranchStateOps.matchState(&state, space) != null)
                 {
-                    if (try self.matchViewConstraintSymbolically(
+                    if (try self.matchConstraintSymbolically(
                         state,
                         constraint,
+                        space,
                     )) |new_state| {
                         try next.append(self.allocator, new_state);
                     }
                 }
             }
+            self.peak_branches = @max(self.peak_branches, next.items.len);
             if (next.items.len == 0) {
                 self.failure = .{
                     .region = switch (region) {
@@ -605,42 +548,31 @@ pub const Solver = struct {
         };
     }
 
-    fn templateContainsStructuralCombiner(
-        self: *Solver,
-        template: TemplateExpr,
-    ) anyerror!bool {
-        return switch (template) {
-            .binder => false,
-            .app => |app| blk: {
-                if ((try self.registry.resolveStructuralCombiner(
-                    self.env,
-                    app.term_id,
-                )) != null) {
-                    break :blk true;
-                }
-                for (app.args) |arg| {
-                    if (try self.templateContainsStructuralCombiner(arg)) {
-                        break :blk true;
-                    }
-                }
-                break :blk false;
-            },
+    pub fn argInfosForSpace(
+        self: *const Solver,
+        space: BinderSpace,
+    ) []const ArgInfo {
+        return switch (space) {
+            .rule => self.rule.args,
+            .view => self.view.?.arg_infos,
         };
     }
 
-    fn matchViewConstraintSymbolically(
+    fn matchConstraintSymbolically(
         self: *Solver,
         state: BranchState,
         constraint: MatchConstraint,
+        space: BinderSpace,
     ) anyerror!?BranchState {
-        const seed_state = state.view_match_state orelse return null;
-        const view = self.view orelse return null;
+        const seed_state = BranchStateOps.matchState(&state, space) orelse {
+            return null;
+        };
 
         const def_ops = self.defOpsContext();
 
         var session = try def_ops.beginRuleMatchFromSeedState(
-            view.arg_infos,
-            &seed_state,
+            self.argInfosForSpace(space),
+            seed_state,
         );
         defer session.deinit();
 
@@ -652,43 +584,56 @@ pub const Solver = struct {
         }
 
         var new_state = try BranchStateOps.cloneState(self, state);
-        try ViewState.syncFromSession(self.allocator, &new_state, &session);
+        try SessionSync.syncFromSession(
+            self.allocator,
+            &new_state,
+            space,
+            &session,
+        );
         return new_state;
     }
 
-    fn materializeViewMatchStates(
+    /// Push each branch's concrete bindings into its session state (if it
+    /// has one) and read back whatever that state now resolves.
+    fn materializeMatchStates(
         self: *Solver,
         states: []const BranchState,
+        space: BinderSpace,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
         var next = std.ArrayListUnmanaged(BranchState){};
         for (states) |state| {
+            if (BranchStateOps.matchState(&state, space) == null) {
+                try next.append(self.allocator, state);
+                continue;
+            }
             var new_state = try BranchStateOps.cloneState(self, state);
-            ViewState.syncConcreteBindingsIntoSeedState(
+            SessionSync.syncConcreteBindingsIntoSeedState(
                 self.allocator,
                 &new_state,
+                space,
             );
-            try self.materializeViewMatchState(&new_state);
+            try self.materializeMatchState(&new_state, space);
             try next.append(self.allocator, new_state);
         }
         return next;
     }
 
-    fn materializeViewMatchState(
+    fn materializeMatchState(
         self: *Solver,
         state: *BranchState,
+        space: BinderSpace,
     ) anyerror!void {
-        const seed_state = state.view_match_state orelse return;
-        const view = self.view orelse return;
+        const seed_state = BranchStateOps.matchState(state, space) orelse return;
 
         const def_ops = self.defOpsContext();
 
         var session = try def_ops.beginRuleMatchFromSeedState(
-            view.arg_infos,
-            &seed_state,
+            self.argInfosForSpace(space),
+            seed_state,
         );
         defer session.deinit();
 
-        try ViewState.syncFromSession(self.allocator, state, &session);
+        try SessionSync.syncFromSession(self.allocator, state, space, &session);
     }
 
     fn applyDerivedBindings(
@@ -723,9 +668,10 @@ pub const Solver = struct {
                     continue;
                 };
             }
-            ViewState.syncConcreteBindingsIntoSeedState(
+            SessionSync.syncConcreteBindingsIntoSeedState(
                 self.allocator,
                 &new_state,
+                .view,
             );
             try next.append(self.allocator, new_state);
         }
