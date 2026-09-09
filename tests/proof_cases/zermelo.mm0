@@ -1,13 +1,10 @@
--- A natural-deduction port of the Zermelo proof case.
---
--- Step 1 keeps the object language and metadata from zermelo.mm0, then adds
--- the Prawitz-style ACUI context layer.  Step 2 adds the primitive logical
--- ND rules that will replace the old Hilbert implication plumbing.
+-- Natural-deduction proofs of Cantor, Cantor–Bernstein, and König.
+-- The Prawitz-style context layer uses ACUI sets of assumptions.
 
 delimiter $ ( ) { } [ / ] , | $;
 
 strict provable sort wff;
---| @vars x y z u v w X Y a b c d
+--| @vars x y z u v w X Y a b c d i f g
 sort set;
 sort ctx;
 
@@ -271,16 +268,8 @@ def setdiff (A B: set) (.x: set): set = $ {x ∈ A | x ∉ B} $;
 infixl setdiff: $∖$ prec 60;
 infixl setdiff: $\\$ prec 60;
 
-def in_all_subsets (S x: set) (.X: set): wff =
-  $ ∀ X (X ∈ S → x ∈ X) $;
-
---| @congr
-axiom in_all_subsets_congr (S T x y: set):
-  $ S = T $ > $ x = y $ >
-  $ in_all_subsets S x ↔ in_all_subsets T y $;
-
-def inter_subsets (A S: set) (.x: set): set =
-  $ {x ∈ A | in_all_subsets S x} $;
+def inter_subsets (A S: set) (.x .X: set): set =
+  $ {x ∈ A | ∀ X (X ∈ S → x ∈ X)} $;
 
 def singleton (a: set): set = $ pairset a a $;
 def opair (a b: set): set = $ pairset (singleton a) (pairset a b) $;
@@ -348,10 +337,8 @@ def bijective (f A B: set): wff =
 -- Cantor and Cantor-Bernstein object-language definitions
 -- --------------------------------------------------------------------------
 
-def misses (f x: set) (.y: set): wff =
-  $ ∀ y (maps f x y → x ∉ y) $;
-
-def diag (A f: set) (.x: set): set = $ {x ∈ A | misses f x} $;
+def diag (A f: set) (.x .y: set): set =
+  $ {x ∈ A | ∀ y (maps f x y → x ∉ y)} $;
 
 def cb_step (A B f g X: set): set =
   $ A ∖ image g (B ∖ image f X B) A $;
@@ -399,9 +386,7 @@ axiom cb_branch_congr (A C B D f h g k x u y v: set):
 def cb_bijection (A B f g: set) (.p .x .y: set): set =
   $ {p ∈ pair_carrier A B |
       ∃ x ∃ y
-        (p = ⟨ x , y ⟩ ∧
-          ((x ∈ cb_core A B f g ∧ maps f x y) ∨
-           (x ∉ cb_core A B f g ∧ maps g y x)))} $;
+        (p = ⟨ x , y ⟩ ∧ cb_branch A B f g x y)} $;
 
 -- --------------------------------------------------------------------------
 -- Substitution rewrites
@@ -497,15 +482,6 @@ axiom sb_f_has_preimage {x: set} (t f X y: set x):
     has_preimage (⟦ x / t ⟧ f) (⟦ x / t ⟧ X) (⟦ x / t ⟧ y) $;
 
 --| @rewrite
-axiom sb_f_in_all_subsets {x: set} (t S a: set x):
-  $ [x/t] (in_all_subsets S a) ↔
-    in_all_subsets (⟦ x / t ⟧ S) (⟦ x / t ⟧ a) $;
-
---| @rewrite
-axiom sb_f_misses_self {x: set} (t f: set):
-  $ [x/t] (misses f x) ↔ misses f t $;
-
---| @rewrite
 axiom sb_f_cb_prefixed {x: set} (t A B f g X: set x):
   $ [x/t] (cb_prefixed A B f g X) ↔
     cb_prefixed (⟦ x / t ⟧ A) (⟦ x / t ⟧ B) (⟦ x / t ⟧ f)
@@ -569,18 +545,20 @@ axiom power_intro (G: ctx) (A B: set):
 axiom power_elim (G: ctx) (A B: set):
   $ G ⊢ B ∈ 𝒫 A $ > $ G ⊢ B ⊆ A $;
 
---| @view {x:set}(G H:ctx x)(t A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
+-- The comprehension binds x in p, not in the element t. Allow t to
+-- mention x, even as a binder inside an inline comprehension.
+--| @view {x:set}(G H:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
 --| @recover t q p x
-axiom sep_intro {x: set} (G H: ctx x) (t A: set) (p: wff x):
+axiom sep_intro {x: set} (G H: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ A $ > $ H ⊢ [x/t] p $ >
   $ G , H ⊢ t ∈ {x ∈ A | p} $;
 
-axiom sep_elim_left {x: set} (G: ctx x) (t A: set) (p: wff x):
+axiom sep_elim_left {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ t ∈ A $;
 
---| @view {x:set}(G:ctx x)(t A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ q $
+--| @view {x:set}(G:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ q $
 --| @recover t q p x
-axiom sep_elim_right {x: set} (G: ctx x) (t A: set) (p: wff x):
+axiom sep_elim_right {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ [x/t] p $;
 
 axiom sep_subset {x: set} (G: ctx) (A: set) (p: wff x):
@@ -637,14 +615,18 @@ theorem nd_power_elim_imp (A B: set):
 theorem nd_ext_imp (A B: set):
   $ emp ⊢ (A ⊆ B) → ((B ⊆ A) → A = B) $;
 
-theorem nd_sep_intro_imp {x: set} (a A: set) (p: wff x):
+theorem nd_sep_intro_imp {x: set} (a: set x) (A: set) (p: wff x):
   $ emp ⊢ a ∈ A → ([x/a] p → a ∈ {x ∈ A | p}) $;
 
-theorem nd_sep_elim_left_imp {x: set} (a A: set) (p: wff x):
+theorem nd_sep_elim_left_imp {x: set} (a: set x) (A: set) (p: wff x):
   $ emp ⊢ a ∈ {x ∈ A | p} → a ∈ A $;
 
-theorem nd_sep_elim_right_imp {x: set} (a A: set) (p: wff x):
+theorem nd_sep_elim_right_imp {x: set} (a: set x) (A: set) (p: wff x):
   $ emp ⊢ a ∈ {x ∈ A | p} → [x/a] p $;
+
+-- The element may be the very variable bound by the comprehension.
+theorem nd_sep_self {x: set} (A: set) (p: wff x):
+  $ emp ⊢ x ∈ {x ∈ A | p} ↔ (x ∈ A ∧ p) $;
 
 theorem nd_sep_subset (A: set) {x: set} (p: wff x):
   $ emp ⊢ {x ∈ A | p} ⊆ A $;
@@ -788,15 +770,13 @@ theorem surj_has_preimage (G H: ctx) (f A B y: set) {x: set}:
 theorem diag_subset (G: ctx) (A f: set):
   $ G ⊢ diag A f ⊆ A $;
 
-theorem diag_misses (G: ctx) (A f a: set):
-  $ G ⊢ a ∈ diag A f $ > $ G ⊢ misses f a $;
+theorem diag_elim (G H: ctx) (A f a b: set):
+  $ G ⊢ a ∈ diag A f $ > $ H ⊢ maps f a b $ >
+  $ G , H ⊢ a ∉ b $;
 
-theorem diag_intro (G H: ctx) (A f a: set):
-  $ G ⊢ a ∈ A $ > $ H ⊢ misses f a $ >
+theorem diag_intro (G H: ctx) (A f a: set) {y: set}:
+  $ G ⊢ a ∈ A $ > $ H ⊢ ∀ y (maps f a y → a ∉ y) $ >
   $ G , H ⊢ a ∈ diag A f $;
-
-theorem misses_elim (G H: ctx) (f x y: set):
-  $ G ⊢ misses f x $ > $ H ⊢ maps f x y $ > $ G , H ⊢ x ∉ y $;
 
 theorem cantor_in_case (G H: ctx) (A f a: set):
   $ G ⊢ maps f a (diag A f) $ > $ H ⊢ a ∈ diag A f $ >
@@ -923,18 +903,12 @@ theorem cb_bijection_maps_pair_mem (G: ctx) (A B f g x y: set):
 theorem cb_bijection_maps_cases (G: ctx) (A B f g x y: set) {u v: set}:
   $ G ⊢ maps (cb_bijection A B f g) x y $ >
   $ G ⊢ ∃ u ∃ v
-      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧
-        ((u ∈ cb_core A B f g ∧ maps f u v) ∨
-         (u ∉ cb_core A B f g ∧ maps g v u))) $;
+      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v) $;
 
-theorem cb_bijection_maps_intro
-    (G H: ctx) (A B f g x y: set) {u v: set}:
-  $ G ⊢ ⟨ x , y ⟩ ∈ pair_carrier A B $ >
-  $ H ⊢ ∃ u ∃ v
-      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧
-        ((u ∈ cb_core A B f g ∧ maps f u v) ∨
-         (u ∉ cb_core A B f g ∧ maps g v u))) $ >
-  $ G , H ⊢ maps (cb_bijection A B f g) x y $;
+theorem cb_bijection_maps_intro (G H K: ctx) (A B f g x y: set):
+  $ G ⊢ x ∈ A $ > $ H ⊢ y ∈ B $ >
+  $ K ⊢ cb_branch A B f g x y $ >
+  $ G , H , K ⊢ maps (cb_bijection A B f g) x y $;
 
 theorem cb_bijection_f_branch_maps (G H K: ctx) (A B f g x y: set):
   $ G ⊢ x ∈ A $ > $ H ⊢ y ∈ B $ >
@@ -1122,3 +1096,368 @@ theorem cb_bijection_surj (F G: ctx) (A B f g: set):
 theorem cantor_bernstein (G H: ctx) (A B f g: set):
   $ G ⊢ injective f A B $ > $ H ⊢ injective g B A $ >
   $ G , H ⊢ bijective (cb_bijection A B f g) A B $;
+
+-- --------------------------------------------------------------------------
+-- Bounded families and explicit choice principles
+-- --------------------------------------------------------------------------
+-- A family R is a relation: maps R i a means a belongs to its i-th fibre.
+-- U bounds the values. Products contain only bounded function graphs.
+
+def fibre (R U i: set) (.a: set): set =
+  $ {a ∈ U | maps R i a} $;
+
+def selection (f R I U: set) (.i .a: set): wff =
+  $ function f I U ∧ ∀ i ∀ a (maps f i a → maps R i a) $;
+
+-- The coarse pair_carrier also contains non-pairs. Restrict it here
+-- so indexed products contain genuine graphs, not graphs with junk entries.
+def cartesian_product (A B: set) (.p .x .y: set): set =
+  $ {p ∈ pair_carrier A B | ∃ x ∃ y
+      (p = ⟨ x , y ⟩ ∧ (x ∈ A ∧ y ∈ B))} $;
+
+def indexed_product (I U R: set) (.f: set): set =
+  $ {f ∈ 𝒫 (cartesian_product I U) | selection f R I U} $;
+
+def card_le (A B: set) (.f: set): wff =
+  $ ∃ f (injective f A B) $;
+
+def card_lt (A B: set): wff =
+  $ card_le A B ∧ ¬ (card_le B A) $;
+
+-- These are two standard forms of AC, kept as explicit hypotheses.
+-- Their equivalence is not formalized here. No choice axiom is added.
+-- Bounded choice supplies the diagonal; comparison supplies the lower bound.
+def bounded_choice (.I .U .R .i .a .f: set): wff =
+  $ ∀ I ∀ U ∀ R
+      ((∀ i (i ∈ I → ∃ a (a ∈ U ∧ maps R i a))) →
+       ∃ f (f ∈ indexed_product I U R)) $;
+
+def cardinal_comparison (.A .B: set): wff =
+  $ ∀ A ∀ B (card_le A B ∨ card_le B A) $;
+
+def inverse (R A B: set) (.p .x .y: set): set =
+  $ {p ∈ pair_carrier B A | ∃ x ∃ y
+      (p = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧
+        maps R y x))} $;
+
+def indexed_sum (I U R: set) (.p .i .a: set): set =
+  $ {p ∈ pair_carrier I U | ∃ i ∃ a
+      (p = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a))} $;
+
+-- A trace sends a to b when F sends some f in P to the tag ⟨i,a⟩
+-- and f sends i to b. For an injection F on a product, it is functional,
+-- but need not be total: a tag may have no preimage under F.
+def koenig_trace (F P U V i: set) (.p .a .b .f: set): set =
+  $ {p ∈ pair_carrier U V | ∃ a ∃ b
+      (p = ⟨ a , b ⟩ ∧ ((a ∈ U ∧ b ∈ V) ∧
+        ∃ f (f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b))))} $;
+
+-- At each index, retain the large-fibre values missed by the trace
+-- restricted to the small fibre. Bounded choice selects the diagonal.
+def koenig_omissions (F P I U V R T: set) (.p .i .b: set): set =
+  $ {p ∈ pair_carrier I V | ∃ i ∃ b
+      (p = ⟨ i , b ⟩ ∧ ((i ∈ I ∧ b ∈ V) ∧
+        (maps T i b ∧
+          ¬ (has_preimage (koenig_trace F P U V i) (fibre R U i) b))))} $;
+
+--| @congr
+axiom injective_congr (a b c d e f: set):
+  $ a = b $ >
+  $ c = d $ >
+  $ e = f $ >
+  $ injective a c e ↔ injective b d f $;
+
+--| @rewrite
+axiom sb_f_injective {z: set} (t a c e: set z):
+  $ [z/t] (injective a c e) ↔ injective (⟦ z / t ⟧ a) (⟦ z / t ⟧ c) (⟦ z / t ⟧
+  e) $;
+
+--| @congr
+axiom fibre_congr (a b c d e f: set):
+  $ a = b $ >
+  $ c = d $ >
+  $ e = f $ >
+  $ fibre a c e = fibre b d f $;
+
+--| @rewrite
+axiom sb_s_fibre {z: set} (t a c e: set z):
+  $ (⟦ z / t ⟧ (fibre a c e)) = fibre (⟦ z / t ⟧ a) (⟦ z / t ⟧ c) (⟦ z / t ⟧
+  e) $;
+
+--| @congr
+axiom selection_congr (a b c d e f g h: set):
+  $ a = b $ >
+  $ c = d $ >
+  $ e = f $ >
+  $ g = h $ >
+  $ selection a c e g ↔ selection b d f h $;
+
+--| @rewrite
+axiom sb_f_selection {z: set} (t a c e g: set z):
+  $ [z/t] (selection a c e g) ↔ selection (⟦ z / t ⟧ a) (⟦ z / t ⟧ c) (⟦ z / t
+  ⟧ e) (⟦ z / t ⟧ g) $;
+
+--| @congr
+axiom indexed_product_congr (a b c d e f: set):
+  $ a = b $ >
+  $ c = d $ >
+  $ e = f $ >
+  $ indexed_product a c e = indexed_product b d f $;
+
+--| @rewrite
+axiom sb_s_indexed_product {z: set} (t a c e: set z):
+  $ (⟦ z / t ⟧ (indexed_product a c e)) = indexed_product (⟦ z / t ⟧ a) (⟦ z /
+  t ⟧ c) (⟦ z / t ⟧ e) $;
+
+--| @congr
+axiom card_le_congr (a b c d: set):
+  $ a = b $ >
+  $ c = d $ >
+  $ card_le a c ↔ card_le b d $;
+
+--| @rewrite
+axiom sb_f_card_le {z: set} (t a c: set z):
+  $ [z/t] (card_le a c) ↔ card_le (⟦ z / t ⟧ a) (⟦ z / t ⟧ c) $;
+
+--| @congr
+axiom koenig_trace_congr (a b c d e f g h j k: set):
+  $ a = b $ >
+  $ c = d $ >
+  $ e = f $ >
+  $ g = h $ >
+  $ j = k $ >
+  $ koenig_trace a c e g j = koenig_trace b d f h k $;
+
+--| @rewrite
+axiom sb_s_koenig_trace {z: set} (t a c e g j: set z):
+  $ (⟦ z / t ⟧ (koenig_trace a c e g j)) = koenig_trace (⟦ z / t ⟧ a) (⟦ z / t
+  ⟧ c) (⟦ z / t ⟧ e) (⟦ z / t ⟧ g) (⟦ z / t ⟧ j) $;
+
+theorem fibre_intro (G H: ctx) (R U i a: set):
+  $ G ⊢ a ∈ U $ >
+  $ H ⊢ maps R i a $ >
+  $ G , H ⊢ a ∈ fibre R U i $;
+
+theorem fibre_mem (G: ctx) (R U i a: set):
+  $ G ⊢ a ∈ fibre R U i $ >
+  $ G ⊢ a ∈ U $;
+
+theorem fibre_maps (G: ctx) (R U i a: set):
+  $ G ⊢ a ∈ fibre R U i $ >
+  $ G ⊢ maps R i a $;
+
+theorem product_selection (G: ctx) (f I U R: set):
+  $ G ⊢ f ∈ indexed_product I U R $ >
+  $ G ⊢ selection f R I U $;
+
+theorem product_function (G: ctx) (f I U R: set):
+  $ G ⊢ f ∈ indexed_product I U R $ >
+  $ G ⊢ function f I U $;
+
+theorem product_maps (G H: ctx) (f I U R i a: set):
+  $ G ⊢ f ∈ indexed_product I U R $ >
+  $ H ⊢ maps f i a $ >
+  $ G , H ⊢ maps R i a $;
+
+theorem choice_apply (G H: ctx) (I U R: set) {i a f: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ ∀ i (i ∈ I → ∃ a (a ∈ U ∧ maps R i a)) $ >
+  $ G , H ⊢ ∃ f (f ∈ indexed_product I U R) $;
+
+theorem inverse_intro (G H K: ctx) (R A B a b: set):
+  $ G ⊢ a ∈ B $ >
+  $ H ⊢ b ∈ A $ >
+  $ K ⊢ maps R b a $ >
+  $ G , H , K ⊢ maps (inverse R A B) a b $;
+
+theorem inverse_elim (G: ctx) (R A B a b: set):
+  $ G ⊢ maps (inverse R A B) a b $ >
+  $ G ⊢ ((a ∈ B ∧ b ∈ A) ∧ maps R b a) $;
+
+-- Choice turns a functional covering relation into a reverse injection.
+theorem inverse_selection_injective (G H: ctx) (f R A B: set):
+  $ G ⊢ functional R $ >
+  $ H ⊢ f ∈ indexed_product B A (inverse R A B) $ >
+  $ G , H ⊢ injective f B A $;
+
+--| @freshen K b
+theorem choice_cover_injection (G H K: ctx) (R A B: set) {b: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ functional R $ >
+  $ K ⊢ ∀ b (b ∈ B → has_preimage R A b) $ >
+  $ G , H , K ⊢ card_le B A $;
+
+-- A small partial function misses a value in the larger set.
+theorem not_all_preimage_exists_miss (G: ctx) (R A B: set) {x: set}:
+  $ G ⊢ ¬ (∀ x (x ∈ B → has_preimage R A x)) $ >
+  $ G ⊢ ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) $;
+
+theorem partial_function_misses (G H K: ctx) (R A B: set) {b: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ functional R $ >
+  $ K ⊢ ¬ (card_le B A) $ >
+  $ G , H , K ⊢ ∃ b (b ∈ B ∧ ¬ (has_preimage R A b)) $;
+
+theorem product_graph_subset (G: ctx) (f I U R: set):
+  $ G ⊢ f ∈ indexed_product I U R $ >
+  $ G ⊢ f ⊆ cartesian_product I U $;
+
+theorem product_member_cases (G H: ctx) (f I U R p: set) {i a: set}:
+  $ G ⊢ f ∈ indexed_product I U R $ >
+  $ H ⊢ p ∈ f $ >
+  $ G , H ⊢ ∃ i ∃ a (p = ⟨ i , a ⟩ ∧ (i ∈ I ∧ a ∈ U)) $;
+
+-- General surjection and cardinal-order rules.
+theorem surj_function (G: ctx) (f A B: set):
+  $ G ⊢ surj f A B $ >
+  $ G ⊢ function f A B $;
+
+theorem surj_covers (G: ctx) (f A B: set) {b: set}:
+  $ G ⊢ surj f A B $ >
+  $ G ⊢ ∀ b (b ∈ B → has_preimage f A b) $;
+
+theorem surj_reverse_card_le (G H: ctx) (f A B: set):
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ surj f A B $ >
+  $ G , H ⊢ card_le B A $;
+
+theorem not_reverse_no_surj (G H: ctx) (f A B: set):
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ ¬ (card_le B A) $ >
+  $ G , H ⊢ ¬ (surj f A B) $;
+
+theorem cardinal_comparison_elim (G: ctx) (A B: set):
+  $ G ⊢ cardinal_comparison $ >
+  $ G ⊢ card_le A B ∨ card_le B A $;
+
+theorem card_lt_from_comparison (G H: ctx) (A B: set):
+  $ G ⊢ ¬ (card_le B A) $ >
+  $ H ⊢ card_le A B ∨ card_le B A $ >
+  $ G , H ⊢ card_lt A B $;
+
+-- Tagged sums and the coordinate trace of a reverse injection.
+theorem indexed_sum_intro (G H K: ctx) (I U R a b: set):
+  $ G ⊢ a ∈ I $ >
+  $ H ⊢ b ∈ U $ >
+  $ K ⊢ maps R a b $ >
+  $ G , H , K ⊢ maps (indexed_sum I U R) a b $;
+
+theorem indexed_sum_elim (G: ctx) (I U R a b: set):
+  $ G ⊢ maps (indexed_sum I U R) a b $ >
+  $ G ⊢ ((a ∈ I ∧ b ∈ U) ∧ maps R a b) $;
+
+theorem koenig_trace_intro (G H K: ctx) (F P U V i a b: set) {f: set}:
+  $ G ⊢ a ∈ U $ >
+  $ H ⊢ b ∈ V $ >
+  $ K ⊢ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b))) $ >
+  $ G , H , K ⊢ maps (koenig_trace F P U V i) a b $;
+
+theorem koenig_trace_elim (G: ctx) (F P U V i a b: set) {f: set}:
+  $ G ⊢ maps (koenig_trace F P U V i) a b $ >
+  $ G ⊢ ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b))))
+  $;
+
+theorem koenig_omissions_intro (G H K: ctx) (F P I U V R T a b: set):
+  $ G ⊢ a ∈ I $ >
+  $ H ⊢ b ∈ V $ >
+  $ K ⊢ (maps T a b ∧ ¬ (has_preimage (koenig_trace F P U V a) (fibre R U a)
+  b)) $ >
+  $ G , H , K ⊢ maps (koenig_omissions F P I U V R T) a b $;
+
+theorem koenig_omissions_elim (G: ctx) (F P I U V R T a b: set):
+  $ G ⊢ maps (koenig_omissions F P I U V R T) a b $ >
+  $ G ⊢ ((a ∈ I ∧ b ∈ V) ∧ (maps T a b ∧ ¬ (has_preimage (koenig_trace F P U V
+  a) (fibre R U a) b))) $;
+
+theorem indexed_sum_cases (G: ctx) (I U R q: set) {i a: set}:
+  $ G ⊢ q ∈ indexed_sum I U R $ >
+  $ G ⊢ ∃ i ∃ a (q = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) $;
+
+theorem koenig_trace_witness (G: ctx) (F P U V i a b: set) {f: set}:
+  $ G ⊢ maps (koenig_trace F P U V i) a b $ >
+  $ G ⊢ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b))) $;
+
+theorem koenig_trace_unique (G H K: ctx) (F I U V T S i a b c: set):
+  $ G ⊢ injective F (indexed_product I V T) S $ >
+  $ H ⊢ maps (koenig_trace F (indexed_product I V T) U V i) a b $ >
+  $ K ⊢ maps (koenig_trace F (indexed_product I V T) U V i) a c $ >
+  $ G , H , K ⊢ b = c $;
+
+theorem koenig_trace_functional (G: ctx) (F I U V T S i: set):
+  $ G ⊢ injective F (indexed_product I V T) S $ >
+  $ G ⊢ functional (koenig_trace F (indexed_product I V T) U V i) $;
+
+-- Choose a missed value at every coordinate.
+theorem koenig_coordinate_miss (G H K L: ctx) (F I U V R T S i: set) {b: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ injective F (indexed_product I V T) S $ >
+  $ K ⊢ card_lt (fibre R U i) (fibre T V i) $ >
+  $ L ⊢ i ∈ I $ >
+  $ G , H , K , L ⊢ ∃ b (b ∈ V ∧ maps (koenig_omissions F (indexed_product I V
+  T) I U V R T) i b) $;
+
+theorem koenig_omission_selected (G H: ctx) (f F P I U V R T i a: set):
+  $ G ⊢ f ∈ indexed_product I V (koenig_omissions F P I U V R T) $ >
+  $ H ⊢ maps f i a $ >
+  $ G , H ⊢ (maps T i a ∧ ¬ (has_preimage (koenig_trace F P U V i) (fibre R U
+  i) a)) $;
+
+theorem koenig_omission_product (G: ctx) (f F P I U V R T: set):
+  $ G ⊢ f ∈ indexed_product I V (koenig_omissions F P I U V R T) $ >
+  $ G ⊢ f ∈ indexed_product I V T $;
+
+--| @freshen K i
+theorem koenig_diagonal_exists (G H K: ctx) (F I U V R T S: set) {i f: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ injective F (indexed_product I V T) S $ >
+  $ K ⊢ ∀ i (i ∈ I → card_lt (fibre R U i) (fibre T V i)) $ >
+  $ G , H , K ⊢ ∃ f (f ∈ indexed_product I V (koenig_omissions F
+  (indexed_product I V T) I U V R T)) $;
+
+-- The diagonal cannot be assigned any tag in the sum.
+theorem koenig_tag_absurd (G H J K: ctx) (F I U V R T d i a: set):
+  $ G ⊢ d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T) I
+  U V R T) $ >
+  $ H ⊢ i ∈ I $ >
+  $ J ⊢ a ∈ fibre R U i $ >
+  $ K ⊢ maps F d ⟨ i , a ⟩ $ >
+  $ G , H , J , K ⊢ ⊥ $;
+
+--| @freshen H i
+theorem koenig_reverse_injection_absurd
+    (G H K: ctx) (F I U V R T: set) {i: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ ∀ i (i ∈ I → card_lt (fibre R U i) (fibre T V i)) $ >
+  $ K ⊢ injective F (indexed_product I V T) (indexed_sum I U R) $ >
+  $ G , H , K ⊢ ⊥ $;
+
+--| @freshen H i
+theorem koenig_no_reverse_injection (G H: ctx) (I U V R T: set) {i: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ ∀ i (i ∈ I → card_lt (fibre R U i) (fibre T V i)) $ >
+  $ G , H ⊢ ¬ (card_le (indexed_product I V T) (indexed_sum I U R)) $;
+
+-- König: the diagonal obstruction and the full strict inequality.
+--| @freshen H i
+theorem koenig_no_surjection (G H: ctx) (F I U V R T: set) {i: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ ∀ i (i ∈ I → card_lt (fibre R U i) (fibre T V i)) $ >
+  $ G , H ⊢ ¬ (surj F (indexed_sum I U R) (indexed_product I V T)) $;
+
+-- Write A_i = fibre R U i and B_i = fibre T V i.
+-- If |A_i| < |B_i| at every index, then |Σ A_i| < |Π B_i|.
+-- The upper obstruction uses bounded_choice; cardinal_comparison then
+-- supplies an injection in the forward direction. No equivalence of
+-- these two choice principles is assumed as a theorem of this fixture.
+--| @freshen K i
+theorem koenig (G H K: ctx) (I U V R T: set) {i: set}:
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ cardinal_comparison $ >
+  $ K ⊢ ∀ i (i ∈ I → card_lt (fibre R U i) (fibre T V i)) $ >
+  $ G , H , K ⊢ card_lt (indexed_sum I U R) (indexed_product I V T) $;
+
+-- The empty index set is allowed: the fibrewise hypothesis is vacuous.
+theorem koenig_empty_index (G H: ctx) (U V R T: set):
+  $ G ⊢ bounded_choice $ >
+  $ H ⊢ cardinal_comparison $ >
+  $ G , H ⊢ card_lt (indexed_sum ∅ U R) (indexed_product ∅ V T) $;

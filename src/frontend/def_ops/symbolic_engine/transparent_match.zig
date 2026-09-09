@@ -1173,11 +1173,13 @@ pub fn expandTemplateApp(
         subst[idx] = try symbolicFromTemplate(self, arg);
         forbidden_deps |= try fixedSymbolicDeps(self, subst[idx]);
     }
+    const distinct_group = state.symbolic_dummy_infos.items.len;
     for (term.dummy_args, 0..) |dummy_arg, idx| {
         const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
             .forbidden_deps = forbidden_deps,
+            .distinct_group = if (dummy_arg.bound) distinct_group else null,
         });
         subst[term.args.len + idx] = try self.allocSymbolic(
             .{ .dummy = slot },
@@ -1202,11 +1204,13 @@ pub fn expandConcreteDef(
         subst[idx] = try self.allocSymbolic(.{ .fixed = arg });
         forbidden_deps |= try WitnessState.exprDeps(self, arg);
     }
+    const distinct_group = state.symbolic_dummy_infos.items.len;
     for (def.term.dummy_args, 0..) |dummy_arg, idx| {
         const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
             .forbidden_deps = forbidden_deps,
+            .distinct_group = if (dummy_arg.bound) distinct_group else null,
         });
         subst[def.term.args.len + idx] = try self.allocSymbolic(
             .{ .dummy = slot },
@@ -1232,11 +1236,13 @@ pub fn expandSymbolicApp(
     for (app.args) |arg| {
         forbidden_deps |= try fixedSymbolicDeps(self, arg);
     }
+    const distinct_group = state.symbolic_dummy_infos.items.len;
     for (term.dummy_args, 0..) |dummy_arg, idx| {
         const slot = try state.addDummyInfo(self.shared.allocator, .{
             .sort_name = dummy_arg.sort_name,
             .bound = dummy_arg.bound,
             .forbidden_deps = forbidden_deps,
+            .distinct_group = if (dummy_arg.bound) distinct_group else null,
         });
         subst[term.args.len + idx] = try self.allocSymbolic(
             .{ .dummy = slot },

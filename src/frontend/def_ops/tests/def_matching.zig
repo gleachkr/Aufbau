@@ -1366,3 +1366,103 @@ test "def expansion memo discriminates dummy slot bases across sessions" {
     )) orelse return error.ExpectedExpansion;
     try std.testing.expect(shifted != first);
 }
+
+fn expectRepresentative(
+    src: []const u8,
+    actual_text: []const u8,
+    expected_text: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    var env = FrontendEnv.GlobalEnv.init(arena.allocator());
+    var theorem = FrontendExpr.TheoremContext.init(arena.allocator());
+    defer theorem.deinit();
+    var theorem_vars = std.StringHashMap(*const Expr).init(arena.allocator());
+    defer theorem_vars.deinit();
+    var found_theorem = false;
+    while (try parser.next()) |stmt| {
+        try env.addStmt(stmt);
+        switch (stmt) {
+            .assertion => |value| {
+                if (value.kind != .theorem or found_theorem) continue;
+                try theorem.seedAssertion(value);
+                for (value.arg_names, value.arg_exprs) |name, expr| {
+                    if (name) |actual_name| {
+                        try theorem_vars.put(actual_name, expr);
+                    }
+                }
+                found_theorem = true;
+            },
+            else => {},
+        }
+    }
+    if (!found_theorem) return error.MissingAssertion;
+
+    const actual_expr = try parser.parseFormulaText(
+        actual_text,
+        &theorem_vars,
+    );
+    const expected_expr = try parser.parseFormulaText(
+        expected_text,
+        &theorem_vars,
+    );
+    const actual = try theorem.internParsedExpr(actual_expr);
+    const expected = try theorem.internParsedExpr(expected_expr);
+    const start_dummy_id = theorem.next_dummy_id;
+    const start_dummy_dep = theorem.next_dummy_dep;
+
+    var def_ops = DefOps.Context.init(arena.allocator(), &theorem, &env);
+    defer def_ops.deinit();
+    for ([_]BindingMode{ .transparent, .normalized }) |mode| {
+        const repr = try def_ops.chooseRepresentative(actual, mode);
+        try std.testing.expectEqual(expected, repr);
+    }
+    try std.testing.expectEqual(start_dummy_id, theorem.next_dummy_id);
+    try std.testing.expectEqual(start_dummy_dep, theorem.next_dummy_dep);
+}
+
+test "compression preserves distinct hidden binders" {
+    const src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term shape {x y: obj} (a b: obj x y): wff;
+        \\def backward (.x .y: obj): wff = $ shape x y y x $;
+        \\def forward (.x .y: obj): wff = $ shape x y x y $;
+        \\theorem host: $ forward $;
+    ;
+    try expectRepresentative(src, "forward", "forward");
+    try expectRepresentative(src, "backward", "backward");
+}
+
+test "compression still folds alpha equivalent hidden binders" {
+    const src =
+        \\sort obj;
+        \\provable sort wff;
+        \\term shape {x y: obj} (a b: obj x y): wff;
+        \\def forward (.x .y: obj): wff = $ shape x y x y $;
+        \\def renamed (.u .v: obj): wff = $ shape u v u v $;
+        \\theorem host {x y: obj}: $ renamed $;
+    ;
+    try expectRepresentative(src, "renamed", "forward");
+    try expectRepresentative(src, "shape x y x y", "forward");
+}
+
+test "compression cannot assign sibling dummies the same concrete witness" {
+    const src =
+        \\delimiter $ ( ) $;
+        \\sort obj;
+        \\provable sort wff;
+        \\term rel (a b: obj): wff;
+        \\term q {x: obj} (p: wff x): wff;
+        \\def binary (.x .y: obj): wff = $ q x (q y (rel x y)) $;
+        \\theorem host {x y: obj}: $ binary $;
+    ;
+    try expectRepresentative(src, "q x (q y (rel x y))", "binary");
+    try expectRepresentative(
+        src,
+        "q x (q x (rel x x))",
+        "q x (q x (rel x x))",
+    );
+}

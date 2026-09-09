@@ -14,7 +14,8 @@ const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
 const AcuiSupport = @import("./acui_support.zig");
 const DerivedBindings = @import("./derived_bindings.zig");
 const DefOps = @import("./def_ops.zig");
-const DebugConfig = @import("./debug.zig").DebugConfig;
+const DebugTrace = @import("./debug.zig");
+const DebugConfig = DebugTrace.DebugConfig;
 const BranchStateOps = @import("./inference_solver/branch_state.zig");
 const SemanticCompare = @import("./inference_solver/semantic_compare.zig");
 const StructuralIntervals =
@@ -258,6 +259,73 @@ pub const Solver = struct {
     }
 
     fn solveWithConclusion(
+        self: *Solver,
+        partial_bindings: []const ?ExprId,
+        ref_exprs: []const ExprId,
+        conclusion: ConclusionConstraint,
+    ) anyerror![]const ExprId {
+        return self.solveWithConclusionImpl(
+            partial_bindings,
+            ref_exprs,
+            conclusion,
+        ) catch |err| {
+            if (self.view != null) return err;
+            switch (err) {
+                error.MissingBinderAssignment, error.UnifyMismatch => {},
+                else => return err,
+            }
+
+            // The concrete attempt's clash site is usually the more specific
+            // one, and `solveWithConclusionImpl` clears `failure` on entry.
+            // Hold on to both so a retry that also fails reports the first
+            // diagnosis rather than the fallback's. `SolveFailure` is plain
+            // data, so it survives the arena reset the retry performs.
+            const first_failure = self.failure;
+
+            // The concrete-only path is cheaper and can choose compact
+            // representatives eagerly. If it stalls, reuse the symbolic
+            // view solver with the rule's own signature. Its snapshots keep
+            // hidden-witness relationships alive across premises and ACUI
+            // branches. No user metadata or theorem dummies are needed.
+            const binder_map = try self.real_allocator.alloc(
+                ?usize,
+                self.rule.args.len,
+            );
+            defer self.real_allocator.free(binder_map);
+            for (binder_map, 0..) |*entry, idx| entry.* = idx;
+            const identity_view: ViewDecl = .{
+                .hyps = self.rule.hyps,
+                .concl = self.rule.concl,
+                .num_binders = self.rule.args.len,
+                .arg_names = self.rule.arg_names,
+                .arg_infos = self.rule.args,
+                .binder_map = binder_map,
+                .derived_bindings = &.{},
+            };
+            // `identity_view` and `binder_map` are block-locals; nothing may
+            // retain `self.view` past the retry below.
+            const prev_view = self.view;
+            self.view = &identity_view;
+            defer self.view = prev_view;
+            DebugTrace.traceInference(
+                self.debug,
+                "structural inference: retrying with symbolic rule state\n",
+                .{},
+            );
+            return self.solveWithConclusionImpl(
+                partial_bindings,
+                ref_exprs,
+                conclusion,
+            ) catch {
+                // The retry's own verdict is dropped: the concrete path's is
+                // the one callers turn into a diagnostic.
+                self.failure = first_failure;
+                return err;
+            };
+        };
+    }
+
+    fn solveWithConclusionImpl(
         self: *Solver,
         partial_bindings: []const ?ExprId,
         ref_exprs: []const ExprId,

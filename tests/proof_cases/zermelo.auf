@@ -1,3 +1,8 @@
+-- Natural-deduction proofs of Cantor, Cantor–Bernstein, and König.
+-- Contexts are sets of assumptions: ACUI removes duplicates and emp.
+
+-- Elementary natural deduction and separation.
+
 nd_imp_id
 ---------
 l1: $ p ⊢ p $ by ax
@@ -137,9 +142,25 @@ l1: $ a ∈ {x ∈ A | p} ⊢ a ∈ {x ∈ A | p} $ by ax
 l2: $ a ∈ {x ∈ A | p} ⊢ [x/a] p $ by sep_elim_right [l1]
 l3: $ _ ⊢ a ∈ {x ∈ A | p} → [x/a] p $ by imp_intro [l2]
 
+nd_sep_self
+-----------
+l1: $ x ∈ {x ∈ A | p} ⊢ x ∈ {x ∈ A | p} $ by ax
+l2: $ x ∈ {x ∈ A | p} ⊢ x ∈ A $ by sep_elim_left [l1]
+l3: $ x ∈ {x ∈ A | p} ⊢ p $ by sep_elim_right [l1]
+l4: $ x ∈ {x ∈ A | p} ⊢ x ∈ A ∧ p $ by and_intro [l2, l3]
+l5: $ _ ⊢ x ∈ {x ∈ A | p} → (x ∈ A ∧ p) $ by imp_intro [l4]
+l6: $ x ∈ A ∧ p ⊢ x ∈ A ∧ p $ by ax
+l7: $ x ∈ A ∧ p ⊢ x ∈ A $ by and_elim_l [l6]
+l8: $ x ∈ A ∧ p ⊢ p $ by and_elim_r [l6]
+l9: $ x ∈ A ∧ p ⊢ x ∈ {x ∈ A | p} $ by sep_intro [l7, l8]
+l10: $ _ ⊢ (x ∈ A ∧ p) → x ∈ {x ∈ A | p} $ by imp_intro [l9]
+l11: $ _ ⊢ x ∈ {x ∈ A | p} ↔ (x ∈ A ∧ p) $ by bi_intro [l5, l10]
+
 nd_sep_subset
 -------------
 l1: $ _ ⊢ {x ∈ A | p} ⊆ A $ by sep_subset
+
+-- Subset, difference, and image rules.
 
 subset_intro
 ------------
@@ -199,6 +220,8 @@ image_intro
 l1: $ H , K ⊢ has_preimage f X y $ by has_preimage_intro [#2, #3]
 l2: $ G , H , K ⊢ y ∈ image f X B $ by sep_intro [#1, l1]
 
+-- Equality and function rules.
+
 mem_eq_right
 ------------
 l1: $ G , H ⊢ x ∈ B $ by eq_replace [#1, #2]
@@ -206,7 +229,7 @@ l1: $ G , H ⊢ x ∈ B $ by eq_replace [#1, #2]
 set_sym
 -------
 l1: $ G ⊢ a = a $ by eq_intro
-l2: $ G , G ⊢ b = a $ by eq_replace [#1, l1]
+l2: $ G ⊢ b = a $ by eq_replace [#1, l1]
 
 mem_arg_eq
 ----------
@@ -310,7 +333,7 @@ injective_elim_auto
 -------------------
 l1: $ G , H ⊢ x ∈ A $ by injective_maps_domain [#1, #2]
 l2: $ G , K ⊢ y ∈ A $ by injective_maps_domain [#1, #3]
-l3: $ G , H , G , K , H , K ⊢ x = y $
+l3: $ G , H , K ⊢ x = y $
   by injective_elim [#1, l1, l2, #2, #3]
 
 domain_on_has_maps
@@ -352,28 +375,26 @@ l1: $ G ⊢ ∀ u (u ∈ B → has_preimage f A u) $ by and_elim_r [#1]
 l2: $ G ⊢ y ∈ B → has_preimage f A y $ by all_elim [l1]
 l3: $ G , H ⊢ has_preimage f A y $ by imp_elim [l2, #2]
 
+-- Cantor: no function from A can surject onto its power set.
+
 diag_subset
 -----------
 l1: $ G ⊢ diag A f ⊆ A $ by sep_subset
 
-diag_misses
------------
-l1: $ G ⊢ misses f a $ by sep_elim_right [#1]
+diag_elim
+---------
+l1: $ G ⊢ ∀ y (maps f a y → a ∉ y) $ by sep_elim_right [#1]
+l2: $ G ⊢ maps f a b → a ∉ b $ by all_elim [l1]
+l3: $ G , H ⊢ a ∉ b $ by imp_elim [l2, #2]
 
 diag_intro
 ----------
 l1: $ G , H ⊢ a ∈ diag A f $ by sep_intro [#1, #2]
 
-misses_elim
------------
-l1: $ G ⊢ maps f x y → x ∉ y $ by all_elim [#1]
-l2: $ G , H ⊢ x ∉ y $ by imp_elim [l1, #2]
-
 cantor_in_case
 --------------
-l1: $ H ⊢ misses f a $ by diag_misses [#2]
-l2: $ G , H ⊢ a ∉ diag A f $ by misses_elim [l1, #1]
-l3: $ G , H ⊢ ⊥ $ by not_elim [l2, #2]
+l1: $ H , G ⊢ a ∉ diag A f $ by diag_elim [#2, #1]
+l2: $ G , H ⊢ ⊥ $ by not_elim [l1, #2]
 
 cantor_out_case
 ---------------
@@ -385,7 +406,7 @@ l2: $ G , K , maps f a y , a ∈ y ⊢ a ∈ diag A f $
 l3: $ G , K , L , maps f a y , a ∈ y ⊢ ⊥ $ by not_elim [#4, l2]
 l4: $ G , K , L , maps f a y ⊢ a ∉ y $ by not_intro [l3]
 l5: $ G , K , L ⊢ maps f a y → a ∉ y $ by imp_intro [l4]
-l6: $ G , K , L ⊢ misses f a $ by all_intro [l5]
+l6: $ G , K , L ⊢ ∀ y (maps f a y → a ∉ y) $ by all_intro [l5]
 l7: $ H , G , K , L ⊢ a ∈ diag A f $ by diag_intro [#2, l6]
 l8: $ G , H , K , L ⊢ ⊥ $ by not_elim [#4, l7]
 
@@ -409,6 +430,8 @@ l8: $ a ∈ A ∧ maps f a (diag A f) , a ∉ diag A f ⊢ ⊥ $
   by cantor_out_case [#1, l4, l5, l0c]
 l9: $ a ∈ A ∧ maps f a (diag A f) ⊢ ⊥ $ by or_elim [l6, l7, l8]
 l10: $ emp ⊢ ⊥ $ by ex_elim [l3, l9]
+
+-- Cantor–Bernstein: a fixed point of the step operator.
 
 subset_not_mem
 --------------
@@ -448,7 +471,7 @@ l1: $ G ⊢ inter_subsets A S ⊆ A $
 
 inter_subsets_elim
 ------------------
-l1: $ G ⊢ in_all_subsets S x $ by sep_elim_right [#1]
+l1: $ G ⊢ ∀ Y (Y ∈ S → x ∈ Y) $ by sep_elim_right [#1]
 l2: $ G ⊢ X ∈ S → x ∈ X $ by all_elim [l1]
 l3: $ G , H ⊢ x ∈ X $ by imp_elim [l2, #2]
 
@@ -544,7 +567,7 @@ l1: $ G ⊢ cb_core A B f g ⊆ X $ by cb_core_subset_prefixed [#1]
 l2: $ G ⊢ cb_step A B f g (cb_core A B f g) ⊆ cb_step A B f g X $
   by cb_step_mono [l1]
 l3: $ G , H ⊢ x ∈ cb_step A B f g X $ by subset_elim [l2, #2]
-l4: $ G , G , H ⊢ x ∈ X $ by cb_prefixed_elim [#1, l3]
+l4: $ G , H ⊢ x ∈ X $ by cb_prefixed_elim [#1, l3]
 
 cb_core_prefixed
 ----------------
@@ -597,8 +620,10 @@ l1: $ G ⊢ cb_core A B f g ⊆ cb_step A B f g (cb_core A B f g) $
   by cb_core_subset_step_core
 l2: $ G ⊢ cb_step A B f g (cb_core A B f g) ⊆ cb_core A B f g $
   by cb_step_core_subset_core
-l3: $ G , G ⊢ cb_core A B f g = cb_step A B f g (cb_core A B f g) $
+l3: $ G ⊢ cb_core A B f g = cb_step A B f g (cb_core A B f g) $
   by ext [l1, l2]
+
+-- The piecewise bijection and its two branches.
 
 cb_bijection_maps_pair_mem
 --------------------------
@@ -608,61 +633,36 @@ l1: $ G ⊢ ⟨ x , y ⟩ ∈ pair_carrier A B $
 cb_bijection_maps_cases
 -----------------------
 l1: $ G ⊢ ∃ u ∃ v
-      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧
-        ((u ∈ cb_core A B f g ∧ maps f u v) ∨
-         (u ∉ cb_core A B f g ∧ maps g v u))) $
+      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v) $
   by sep_elim_right [#1]
 
 cb_bijection_maps_intro
 -----------------------
-l1: $ G , H ⊢ maps (cb_bijection A B f g) x y $
-  by sep_intro [#1, #2]
+l1: $ G , H ⊢ ⟨ x , y ⟩ ∈ pair_carrier A B $
+  by opair_mem_pair_carrier [#1, #2]
+l2: $ K ⊢ ⟨ x , y ⟩ = ⟨ x , y ⟩ $ by eq_intro
+l3: $ K ⊢ ⟨ x , y ⟩ = ⟨ x , y ⟩ ∧ cb_branch A B f g x y $
+  by and_intro [l2, #3]
+l4: $ K ⊢ ∃ v
+      (⟨ x , y ⟩ = ⟨ x , v ⟩ ∧ cb_branch A B f g x v) $
+  by ex_intro [l3]
+l5: $ K ⊢ ∃ u ∃ v
+      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v) $
+  by ex_intro [l4]
+l6: $ G , H , K ⊢ maps (cb_bijection A B f g) x y $
+  by sep_intro [l1, l5]
 
 cb_bijection_f_branch_maps
 --------------------------
-l1: $ G , H ⊢ ⟨ x , y ⟩ ∈ pair_carrier A B $
-  by opair_mem_pair_carrier [#1, #2]
-l2: $ K ⊢ ⟨ x , y ⟩ = ⟨ x , y ⟩ $ by eq_intro
-l3: $ K ⊢
-      (x ∈ cb_core A B f g ∧ maps f x y) ∨
-      (x ∉ cb_core A B f g ∧ maps g y x) $ by or_intro_l [#3]
-l4: $ K , K ⊢
-      ⟨ x , y ⟩ = ⟨ x , y ⟩ ∧
-      ((x ∈ cb_core A B f g ∧ maps f x y) ∨
-       (x ∉ cb_core A B f g ∧ maps g y x)) $ by and_intro [l2, l3]
-l5: $ K , K ⊢ ∃ v
-      (⟨ x , y ⟩ = ⟨ x , v ⟩ ∧
-        ((x ∈ cb_core A B f g ∧ maps f x v) ∨
-         (x ∉ cb_core A B f g ∧ maps g v x))) $ by ex_intro [l4]
-l6: $ K , K ⊢ ∃ u ∃ v
-      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧
-        ((u ∈ cb_core A B f g ∧ maps f u v) ∨
-         (u ∉ cb_core A B f g ∧ maps g v u))) $ by ex_intro [l5]
-l7: $ G , H , K ⊢ maps (cb_bijection A B f g) x y $
-  by cb_bijection_maps_intro [l1, l6]
+l1: $ K ⊢ cb_branch A B f g x y $ by or_intro_l [#3]
+l2: $ G , H , K ⊢ maps (cb_bijection A B f g) x y $
+  by cb_bijection_maps_intro [#1, #2, l1]
 
 cb_bijection_g_branch_maps
 --------------------------
-l1: $ G , H ⊢ ⟨ x , y ⟩ ∈ pair_carrier A B $
-  by opair_mem_pair_carrier [#1, #2]
-l2: $ K ⊢ ⟨ x , y ⟩ = ⟨ x , y ⟩ $ by eq_intro
-l3: $ K ⊢
-      (x ∈ cb_core A B f g ∧ maps f x y) ∨
-      (x ∉ cb_core A B f g ∧ maps g y x) $ by or_intro_r [#3]
-l4: $ K , K ⊢
-      ⟨ x , y ⟩ = ⟨ x , y ⟩ ∧
-      ((x ∈ cb_core A B f g ∧ maps f x y) ∨
-       (x ∉ cb_core A B f g ∧ maps g y x)) $ by and_intro [l2, l3]
-l5: $ K , K ⊢ ∃ v
-      (⟨ x , y ⟩ = ⟨ x , v ⟩ ∧
-        ((x ∈ cb_core A B f g ∧ maps f x v) ∨
-         (x ∉ cb_core A B f g ∧ maps g v x))) $ by ex_intro [l4]
-l6: $ K , K ⊢ ∃ u ∃ v
-      (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧
-        ((u ∈ cb_core A B f g ∧ maps f u v) ∨
-         (u ∉ cb_core A B f g ∧ maps g v u))) $ by ex_intro [l5]
-l7: $ G , H , K ⊢ maps (cb_bijection A B f g) x y $
-  by cb_bijection_maps_intro [l1, l6]
+l1: $ K ⊢ cb_branch A B f g x y $ by or_intro_r [#3]
+l2: $ G , H , K ⊢ maps (cb_bijection A B f g) x y $
+  by cb_bijection_maps_intro [#1, #2, l1]
 
 cb_f_branch_core
 ----------------
@@ -710,9 +710,7 @@ l4: $ ⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v ⊢ x = u $
   by opair_eq_left [l2]
 l5: $ ⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v ⊢ y = v $
   by opair_eq_right [l2]
-l6: $ ⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v ,
-      ⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v ,
-      ⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v ⊢
+l6: $ ⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v ⊢
       cb_branch A B f g x y $ by cb_branch_eq [l4, l5, l3]
 l6a: $ ∃ v (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v) ⊢
        ∃ v (⟨ x , y ⟩ = ⟨ u , v ⟩ ∧ cb_branch A B f g u v) $ by ax
@@ -733,7 +731,7 @@ l4: $ cb_f_branch A B f g x y ⊢ x ∈ A $ by subset_elim [l3, l2]
 l5: $ cb_g_branch A B f g x y ⊢ maps g y x $ by cb_g_branch_maps [l0g]
 l6: $ G , cb_g_branch A B f g x y ⊢ x ∈ A $
   by injective_maps_range [#1, l5]
-l7: $ H , emp , G ⊢ x ∈ A $ by or_elim [l1, l4, l6]
+l7: $ H , G ⊢ x ∈ A $ by or_elim [l1, l4, l6]
 
 cb_bijection_maps_range
 -----------------------
@@ -780,7 +778,7 @@ cb_core_not_mem_image
 ---------------------
 l1: $ H ⊢ cb_core A B f g = cb_step A B f g (cb_core A B f g) $
   by cb_core_fixed
-l2: $ H , H ⊢ x ∉ cb_step A B f g (cb_core A B f g) $
+l2: $ H ⊢ x ∉ cb_step A B f g (cb_core A B f g) $
   by not_mem_eq_right [l1, #2]
 l3: $ G , H ⊢ x ∈ image g (B ∖ image f (cb_core A B f g) B) A $
   by setdiff_missing [#1, l2]
@@ -790,7 +788,7 @@ cb_f_branch_image
 l1: $ G ⊢ x ∈ cb_core A B f g $ by cb_f_branch_core [#2]
 l2: $ G ⊢ maps f x y $ by cb_f_branch_maps [#2]
 l3: $ F , G ⊢ y ∈ B $ by injective_maps_range [#1, l2]
-l4: $ F , G , G ⊢ y ∈ image f (cb_core A B f g) B $
+l4: $ F , G ⊢ y ∈ image f (cb_core A B f g) B $
   by image_intro [l3, l1, l2]
 
 cb_branch_fg_injective_mixed
@@ -816,19 +814,19 @@ l9: $ a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y ⊢ a ∈ B $
 l10: $ a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y ⊢
        a ∉ image f (cb_core A B f g) B $ by setdiff_elim_right [l7]
 l11: $ G , I ⊢ z ∈ B $ by injective_maps_domain [#2, l3]
-l12: $ G , G , I ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , I ⊢ z = a $
+l12: $ G , I ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y ⊢ z = a $
   by injective_elim [#2, l11, l9, l3, l8]
-l13: $ G , G , I ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , I , F , H ⊢
+l13: $ G , I ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , F , H ⊢
        a ∈ image f (cb_core A B f g) B $ by mem_arg_eq [l12, l1]
-l14: $ G , G , I ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , I , F , H ⊢ ⊥ $
+l14: $ G , I ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , F , H ⊢ ⊥ $
   by not_elim [l10, l13]
-l15: $ G , G , I ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , I , F , H ⊢
+l15: $ G , I ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a y , F , H ⊢
        x = y $ by bot_elim [l14]
-l16: $ G , I , G , I , F , H ⊢ x = y $ by ex_elim [l6, l15]
+l16: $ G , I , F , H ⊢ x = y $ by ex_elim [l6, l15]
 
 cb_branch_gf_injective_mixed
 ----------------------------
@@ -853,19 +851,19 @@ l9: $ a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x ⊢ a ∈ B $
 l10: $ a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x ⊢
        a ∉ image f (cb_core A B f g) B $ by setdiff_elim_right [l7]
 l11: $ G , H ⊢ z ∈ B $ by injective_maps_domain [#2, l3]
-l12: $ G , G , H ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , H ⊢ z = a $
+l12: $ G , H ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x ⊢ z = a $
   by injective_elim [#2, l11, l9, l3, l8]
-l13: $ G , G , H ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , H , F , I ⊢
+l13: $ G , H ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , F , I ⊢
        a ∈ image f (cb_core A B f g) B $ by mem_arg_eq [l12, l1]
-l14: $ G , G , H ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , H , F , I ⊢ ⊥ $
+l14: $ G , H ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , F , I ⊢ ⊥ $
   by not_elim [l10, l13]
-l15: $ G , G , H ,
-       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , H , F , I ⊢
+l15: $ G , H ,
+       a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x , F , I ⊢
        x = y $ by bot_elim [l14]
-l16: $ G , H , G , H , F , I ⊢ x = y $ by ex_elim [l6, l15]
+l16: $ G , H , F , I ⊢ x = y $ by ex_elim [l6, l15]
 
 cb_branch_ff_injective
 ----------------------
@@ -936,6 +934,8 @@ l2: $ I ⊢ cb_branch A B f g y z $
   by cb_bijection_maps_branch [#4]
 l3: $ F , G , H , I ⊢ x = y $ by cb_branch_injective [#1, #2, l1, l2]
 
+-- Assemble the function, injectivity, and surjectivity proofs.
+
 cb_bijection_has_value_from_injections
 --------------------------------------
 l0c: $ x ∈ cb_core A B f g ⊢ x ∈ cb_core A B f g $ by ax
@@ -980,11 +980,11 @@ l7f: $ H ,
        a ∈ B ∖ image f (cb_core A B f g) B ∧ maps g a x ,
        x ∉ cb_core A B f g ⊢
        ∃ y (maps (cb_bijection A B f g) x y) $ by ex_intro [l7e]
-l7g: $ H , x ∉ cb_core A B f g , H ⊢
+l7g: $ H , x ∉ cb_core A B f g ⊢
        ∃ y (maps (cb_bijection A B f g) x y) $ by ex_elim [l6, l7f]
 l8: $ emp ⊢ x ∈ cb_core A B f g ∨ x ∉ cb_core A B f g $
   by excluded_middle_nd
-l9: $ emp , F , H , H ⊢
+l9: $ F , H ⊢
       ∃ y (maps (cb_bijection A B f g) x y) $
   by or_elim [l8, l4f, l7g]
 
@@ -1005,7 +1005,7 @@ l4: $ ∃ y (maps (cb_bijection A B f g) x y) , G ⊢ x ∈ A $
   by ex_elim [l4a, l3]
 l5: $ G ⊢ (∃ y (maps (cb_bijection A B f g) x y)) → x ∈ A $
   by imp_intro [l4]
-l6: $ F , G , G ⊢
+l6: $ F , G ⊢
       x ∈ A ↔ ∃ y (maps (cb_bijection A B f g) x y) $
   by bi_intro [l2, l5]
 l7: $ F , G ⊢ domain_on (cb_bijection A B f g) A $
@@ -1055,7 +1055,7 @@ l2: $ F , G ⊢ domain_on (cb_bijection A B f g) A $
   by cb_bijection_domain_on_from_injections [#1, #2]
 l3: $ F , G ⊢ range_sub (cb_bijection A B f g) B $
   by cb_bijection_range_sub_from_injections [#1, #2]
-l4: $ F , G , F , G , F , G ⊢ function (cb_bijection A B f g) A B $
+l4: $ F , G ⊢ function (cb_bijection A B f g) A B $
   by function_intro [l1, l2, l3]
 
 cb_g_setdiff_maps_not_core
@@ -1066,14 +1066,14 @@ l2: $ G , I , H ⊢ x ∈ image g (B ∖ image f (cb_core A B f g) B) A $
   by image_intro [l1, #2, #3]
 l3: $ emp ⊢ cb_core A B f g ⊆ cb_step A B f g (cb_core A B f g) $
   by cb_core_subset_step_core
-l4: $ x ∈ cb_core A B f g , emp ⊢
+l4: $ x ∈ cb_core A B f g ⊢
       x ∈ cb_step A B f g (cb_core A B f g) $ by subset_elim [l3, l0]
-l5: $ x ∈ cb_core A B f g , emp ⊢
+l5: $ x ∈ cb_core A B f g ⊢
       x ∉ image g (B ∖ image f (cb_core A B f g) B) A $
   by cb_step_elim_right [l4]
-l6: $ x ∈ cb_core A B f g , emp , G , I , H ⊢ ⊥ $
+l6: $ x ∈ cb_core A B f g , G , I , H ⊢ ⊥ $
   by not_elim [l5, l2]
-l7: $ emp , G , I , H ⊢ x ∉ cb_core A B f g $ by not_intro [l6]
+l7: $ G , I , H ⊢ x ∉ cb_core A B f g $ by not_intro [l6]
 
 cb_bijection_has_preimage_image
 -------------------------------
@@ -1086,19 +1086,17 @@ l2: $ x ∈ cb_core A B f g ∧ maps f x y ⊢ x ∈ cb_core A B f g $
 l3: $ x ∈ cb_core A B f g ∧ maps f x y ⊢ maps f x y $
   by and_elim_r [l0]
 l4: $ emp ⊢ cb_core A B f g ⊆ A $ by cb_core_subset
-l5: $ x ∈ cb_core A B f g ∧ maps f x y , emp ⊢ x ∈ A $
+l5: $ x ∈ cb_core A B f g ∧ maps f x y ⊢ x ∈ A $
   by subset_elim [l4, l2]
 l6: $ F , x ∈ cb_core A B f g ∧ maps f x y ⊢ y ∈ B $
   by injective_maps_range [#1, l3]
-l7: $ x ∈ cb_core A B f g ∧ maps f x y , emp , F ,
-      x ∈ cb_core A B f g ∧ maps f x y ⊢
+l7: $ x ∈ cb_core A B f g ∧ maps f x y , F ⊢
       maps (cb_bijection A B f g) x y $
   by cb_bijection_f_branch_maps [l5, l6, l0]
-l8: $ x ∈ cb_core A B f g ∧ maps f x y , emp , F ,
-      x ∈ cb_core A B f g ∧ maps f x y ⊢
+l8: $ x ∈ cb_core A B f g ∧ maps f x y , F ⊢
       has_preimage (cb_bijection A B f g) A y $
   by has_preimage_intro [l5, l7]
-l9: $ H , emp , F ⊢ has_preimage (cb_bijection A B f g) A y $
+l9: $ H , F ⊢ has_preimage (cb_bijection A B f g) A y $
   by ex_elim [l1, l8]
 
 cb_bijection_has_preimage_setdiff
@@ -1114,13 +1112,13 @@ l6: $ G , H , maps g y x ⊢ x ∉ cb_core A B f g $
   by cb_g_setdiff_maps_not_core [#1, #2, l5a]
 l7: $ G , H , maps g y x ⊢
       x ∉ cb_core A B f g ∧ maps g y x $ by and_intro [l6, l5a]
-l8: $ G , maps g y x , H , G , H , maps g y x ⊢
+l8: $ G , maps g y x , H ⊢
       maps (cb_bijection A B f g) x y $
   by cb_bijection_g_branch_maps [l5, l3, l7]
-l9: $ G , maps g y x , H , G , H , maps g y x ⊢
+l9: $ G , maps g y x , H ⊢
       has_preimage (cb_bijection A B f g) A y $
   by has_preimage_intro [l5, l8]
-l10: $ G , H , G , H ⊢ has_preimage (cb_bijection A B f g) A y $
+l10: $ G , H ⊢ has_preimage (cb_bijection A B f g) A y $
   by ex_elim [l4, l9]
 
 cb_bijection_injective_body
@@ -1167,24 +1165,21 @@ l0n: $ y ∉ image f (cb_core A B f g) B ⊢
        y ∉ image f (cb_core A B f g) B $ by ax
 l1: $ F , y ∈ image f (cb_core A B f g) B ⊢
       has_preimage (cb_bijection A B f g) A y $
-  by cb_bijection_has_preimage_image
-    [#1, l0i]
+  by cb_bijection_has_preimage_image [#1, l0i]
 l2: $ y ∈ B , y ∉ image f (cb_core A B f g) B ⊢
       y ∈ B ∖ image f (cb_core A B f g) B $ by setdiff_intro [l0y, l0n]
 l3: $ G , y ∈ B , y ∉ image f (cb_core A B f g) B ⊢
       has_preimage (cb_bijection A B f g) A y $
-  by cb_bijection_has_preimage_setdiff
-   
-    [#2, l2]
+  by cb_bijection_has_preimage_setdiff [#2, l2]
 l4: $ emp ⊢ y ∈ image f (cb_core A B f g) B ∨
       y ∉ image f (cb_core A B f g) B $ by excluded_middle_nd
-l5: $ emp , F , G , y ∈ B ⊢
+l5: $ F , G , y ∈ B ⊢
       has_preimage (cb_bijection A B f g) A y $
   by or_elim [l4, l1, l3]
-l6: $ emp , F , G ⊢
+l6: $ F , G ⊢
       y ∈ B → has_preimage (cb_bijection A B f g) A y $
   by imp_intro [l5]
-l7: $ emp , F , G ⊢ ∀ y
+l7: $ F , G ⊢ ∀ y
       (y ∈ B → has_preimage (cb_bijection A B f g) A y) $
   by all_intro [l6]
 
@@ -1197,7 +1192,7 @@ l2: $ F , G ⊢ ∀ x ∀ y ∀ z
         (maps (cb_bijection A B f g) x z ∧
          maps (cb_bijection A B f g) y z)) → x = y) $
   by cb_bijection_injective_body [#1, #2]
-l3: $ F , G , F , G ⊢ injective (cb_bijection A B f g) A B $
+l3: $ F , G ⊢ injective (cb_bijection A B f g) A B $
   by injective_intro [l1, l2]
 
 cb_bijection_surj
@@ -1207,7 +1202,7 @@ l1: $ F , G ⊢ function (cb_bijection A B f g) A B $
 l2: $ F , G ⊢ ∀ y
       (y ∈ B → has_preimage (cb_bijection A B f g) A y) $
   by cb_bijection_surj_body [#1, #2]
-l3: $ F , G , F , G ⊢ surj (cb_bijection A B f g) A B $
+l3: $ F , G ⊢ surj (cb_bijection A B f g) A B $
   by surj_intro [l1, l2]
 
 cantor_bernstein
@@ -1216,5 +1211,910 @@ l1: $ G , H ⊢ injective (cb_bijection A B f g) A B $
   by cb_bijection_injective [#1, #2]
 l2: $ G , H ⊢ surj (cb_bijection A B f g) A B $
   by cb_bijection_surj [#1, #2]
-l3: $ G , H , G , H ⊢ bijective (cb_bijection A B f g) A B $
+l3: $ G , H ⊢ bijective (cb_bijection A B f g) A B $
   by bijective_intro [l1, l2]
+
+-- König: bounded families, choice, and cardinal comparison.
+-- The earlier results remain choice-free.
+--
+-- Assume an injection F from the product to the tagged sum. At index i,
+-- trace the values of those product elements sent to tags of the form
+-- ⟨i,a⟩. Injectivity makes this a partial function of a. Since the i-th
+-- small fibre is strictly smaller, the trace misses a large-fibre value.
+-- Bounded choice assembles these misses into a product element that F
+-- cannot send to any tag. Cardinal comparison gives the lower inequality.
+
+fibre_intro
+-----------
+l1: $ G , H ⊢ a ∈ fibre R U i $ by sep_intro [#1, #2]
+
+fibre_mem
+---------
+l1: $ G ⊢ a ∈ U $ by sep_elim_left [#1]
+
+fibre_maps
+----------
+l1: $ G ⊢ maps R i a $ by sep_elim_right [#1]
+
+product_selection
+-----------------
+l1: $ G ⊢ selection f R I U $ by sep_elim_right [#1]
+
+product_function
+----------------
+l1: $ G ⊢ selection f R I U $ by product_selection [#1]
+l2: $ G ⊢ function f I U $ by and_elim_l [l1]
+
+product_maps
+------------
+l1: $ G ⊢ selection f R I U $ by product_selection [#1]
+l2: $ G ⊢ ∀ x ∀ y (maps f x y → maps R x y) $ by and_elim_r [l1]
+l3: $ G ⊢ ∀ y (maps f i y → maps R i y) $ by all_elim [l2]
+l4: $ G ⊢ maps f i a → maps R i a $ by all_elim [l3]
+l5: $ G , H ⊢ maps R i a $ by imp_elim [l4, #2]
+
+choice_apply
+------------
+l1: $ G ⊢
+      ∀ Y ∀ X ((∀ i (i ∈ I → ∃ a (a ∈ Y ∧ maps X i a))) → ∃ f (f ∈
+      indexed_product I Y X)) $
+  by all_elim [#1]
+l2: $ G ⊢
+      ∀ X ((∀ i (i ∈ I → ∃ a (a ∈ U ∧ maps X i a))) → ∃ f (f ∈ indexed_product
+      I U X)) $
+  by all_elim [l1]
+l3: $ G ⊢
+      (∀ i (i ∈ I → ∃ a (a ∈ U ∧ maps R i a))) → ∃ f (f ∈ indexed_product I U
+      R) $
+  by all_elim [l2]
+l4: $ G , H ⊢ ∃ f (f ∈ indexed_product I U R) $ by imp_elim [l3, #2]
+
+inverse_intro
+-------------
+l1: $ G , H ⊢ ⟨ a , b ⟩ ∈ pair_carrier B A $
+  by opair_mem_pair_carrier [#1, #2]
+l2: $ emp ⊢ ⟨ a , b ⟩ = ⟨ a , b ⟩ $ by eq_intro
+l3: $ G , H ⊢ (a ∈ B ∧ b ∈ A) $ by and_intro [#1, #2]
+l4: $ G , H , K ⊢ ((a ∈ B ∧ b ∈ A) ∧ maps R b a) $ by and_intro [l3, #3]
+l5: $ G , H , K ⊢ (⟨ a , b ⟩ = ⟨ a , b ⟩ ∧ ((a ∈ B ∧ b ∈ A) ∧ maps R b a)) $
+  by and_intro [l2, l4]
+l6: $ G , H , K ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ a , y ⟩ ∧ ((a ∈ B ∧ y ∈ A) ∧ maps R y a))) $
+  by ex_intro [l5]
+l7: $ G , H , K ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)))) $
+  by ex_intro [l6]
+l8: $ G , H , K ⊢
+      ⟨ a , b ⟩ ∈ {w ∈ pair_carrier B A | ∃ x ∃ y (w = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y
+      ∈ A) ∧ maps R y x))} $
+  by sep_intro [l1, l7]
+
+inverse_elim
+------------
+l1: $ G ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)))) $
+  by sep_elim_right [#1]
+l2: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x))) ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x))) $
+  by ax
+l3: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢
+      (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) $
+  by ax
+l4: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢
+      ⟨ a , b ⟩ = ⟨ x , y ⟩ $
+  by and_elim_l [l3]
+l5: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢
+      ((x ∈ B ∧ y ∈ A) ∧ maps R y x) $
+  by and_elim_r [l3]
+l6: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢ a = x $
+  by opair_eq_left [l4]
+l7: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢ x = a $
+  by set_sym [l6]
+l8: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢ b = y $
+  by opair_eq_right [l4]
+l9: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢ y = b $
+  by set_sym [l8]
+l10: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢
+      ((a ∈ B ∧ y ∈ A) ∧ maps R y a) $
+  by eq_replace [l7, l5]
+l11: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x)) ⊢
+      ((a ∈ B ∧ b ∈ A) ∧ maps R b a) $
+  by eq_replace [l9, l10]
+l12: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ B ∧ y ∈ A) ∧ maps R y x))) ⊢
+      ((a ∈ B ∧ b ∈ A) ∧ maps R b a) $
+  by ex_elim [l2, l11]
+l13: $ G ⊢ ((a ∈ B ∧ b ∈ A) ∧ maps R b a) $ by ex_elim [l1, l12]
+
+-- Choice turns a functional covering relation into a reverse injection.
+
+inverse_selection_injective
+---------------------------
+l1: $ H ⊢ function f B A $ by product_function [#2]
+l2: $ ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢
+      ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) $
+  by ax
+l3: $ ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢
+      (maps f x z ∧ maps f y z) $
+  by and_elim_r [l2]
+l4: $ ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢ maps f x z $
+  by and_elim_l [l3]
+l5: $ ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢ maps f y z $
+  by and_elim_r [l3]
+l6: $ H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢
+      maps (inverse R A B) x z $
+  by product_maps [#2, l4]
+l7: $ H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢
+      maps (inverse R A B) y z $
+  by product_maps [#2, l5]
+l8: $ H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢
+      ((x ∈ B ∧ z ∈ A) ∧ maps R z x) $
+  by inverse_elim [l6]
+l9: $ H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢
+      ((y ∈ B ∧ z ∈ A) ∧ maps R z y) $
+  by inverse_elim [l7]
+l10: $ H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢ maps R z x $
+  by and_elim_r [l8]
+l11: $ H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢ maps R z y $
+  by and_elim_r [l9]
+l12: $ G , H , ((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) ⊢ x = y $
+  by functional_elim [#1, l10, l11]
+l13: $ G , H ⊢ (((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) → x = y) $
+  by imp_intro [l12]
+l14: $ G , H ⊢ ∀ z ((((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) → x = y)) $
+  by all_intro [l13]
+l15: $ G , H ⊢
+      ∀ y (∀ z ((((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) → x = y))) $
+  by all_intro [l14]
+l16: $ G , H ⊢
+      ∀ x (∀ y (∀ z ((((x ∈ B ∧ y ∈ B) ∧ (maps f x z ∧ maps f y z)) → x =
+      y)))) $
+  by all_intro [l15]
+l17: $ H , G ⊢ injective f B A $ by injective_intro [l1, l16]
+
+choice_cover_injection
+----------------------
+l1: $ b ∈ B ⊢ b ∈ B $ by ax
+l2: $ K ⊢ b ∈ B → has_preimage R A b $ by all_elim [#3]
+l3: $ K , b ∈ B ⊢ has_preimage R A b $ by imp_elim [l2, l1]
+l4: $ (a ∈ A ∧ maps R a b) ⊢ (a ∈ A ∧ maps R a b) $ by ax
+l5: $ (a ∈ A ∧ maps R a b) ⊢ a ∈ A $ by and_elim_l [l4]
+l6: $ (a ∈ A ∧ maps R a b) ⊢ maps R a b $ by and_elim_r [l4]
+l7: $ b ∈ B , (a ∈ A ∧ maps R a b) ⊢ maps (inverse R A B) b a $
+  by inverse_intro [l1, l5, l6]
+l8: $ (a ∈ A ∧ maps R a b) , b ∈ B ⊢ (a ∈ A ∧ maps (inverse R A B) b a) $
+  by and_intro [l5, l7]
+l9: $ (a ∈ A ∧ maps R a b) , b ∈ B ⊢
+      ∃ v ((v ∈ A ∧ maps (inverse R A B) b v)) $
+  by ex_intro [l8]
+l10: $ K , b ∈ B ⊢ ∃ v ((v ∈ A ∧ maps (inverse R A B) b v)) $
+  by ex_elim [l3, l9]
+l11: $ K ⊢ (b ∈ B → ∃ v ((v ∈ A ∧ maps (inverse R A B) b v))) $
+  by imp_intro [l10]
+l12: $ K ⊢ ∀ b ((b ∈ B → ∃ v ((v ∈ A ∧ maps (inverse R A B) b v)))) $
+  by all_intro [l11]
+l13: $ G , K ⊢ ∃ f (f ∈ indexed_product B A (inverse R A B)) $
+  by choice_apply [#1, l12]
+l14: $ f ∈ indexed_product B A (inverse R A B) ⊢
+      f ∈ indexed_product B A (inverse R A B) $
+  by ax
+l15: $ H , f ∈ indexed_product B A (inverse R A B) ⊢ injective f B A $
+  by inverse_selection_injective [#2, l14]
+l16: $ H , f ∈ indexed_product B A (inverse R A B) ⊢ ∃ v (injective v B A) $
+  by ex_intro [l15]
+l17: $ G , K , H ⊢ ∃ v (injective v B A) $ by ex_elim [l13, l16]
+
+-- A small partial function misses a value in the larger set.
+
+not_all_preimage_exists_miss
+----------------------------
+l1: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) ⊢
+      ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) $
+  by ax
+l2: $ y ∈ B ⊢ y ∈ B $ by ax
+l3: $ ¬ (has_preimage R A y) ⊢ ¬ (has_preimage R A y) $ by ax
+l4: $ y ∈ B , ¬ (has_preimage R A y) ⊢ (y ∈ B ∧ ¬ (has_preimage R A y)) $
+  by and_intro [l2, l3]
+l5: $ y ∈ B , ¬ (has_preimage R A y) ⊢ ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) $
+  by ex_intro [l4]
+l6: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) , y ∈ B , ¬ (has_preimage R A
+      y) ⊢
+      ⊥ $
+  by not_elim [l1, l5]
+l7: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) , y ∈ B , ¬ (has_preimage R A
+      y) ⊢
+      has_preimage R A y $
+  by bot_elim [l6]
+l8: $ has_preimage R A y ⊢ has_preimage R A y $ by ax
+l9: $ emp ⊢ has_preimage R A y ∨ ¬ (has_preimage R A y) $
+  by excluded_middle_nd
+l10: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) , y ∈ B ⊢ has_preimage R A y $
+  by or_elim [l9, l8, l7]
+l11: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) ⊢
+      (y ∈ B → has_preimage R A y) $
+  by imp_intro [l10]
+l12: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) ⊢
+      ∀ y ((y ∈ B → has_preimage R A y)) $
+  by all_intro [l11]
+l13: $ ∀ y ((y ∈ B → has_preimage R A y)) ↔ ∀ x (x ∈ B → has_preimage R A x) $
+  by all_alpha
+l14: $ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) ⊢
+      ∀ x (x ∈ B → has_preimage R A x) $
+  by mpbi [nd_congr [ctx_refl [], l13], l12]
+l15: $ G , ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) ⊢ ⊥ $
+  by not_elim [#1, l14]
+l16: $ G , ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R A x))) ⊢
+      ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) $
+  by bot_elim [l15]
+l17: $ ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) ⊢
+      ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) $
+  by ax
+l18: $ emp ⊢
+      ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) ∨ ¬ (∃ x (x ∈ B ∧ ¬ (has_preimage R
+      A x))) $
+  by excluded_middle_nd
+l19: $ G ⊢ ∃ x (x ∈ B ∧ ¬ (has_preimage R A x)) $ by or_elim [l18, l17, l16]
+
+partial_function_misses
+-----------------------
+l1: $ ∀ b (b ∈ B → has_preimage R A b) ⊢ ∀ b (b ∈ B → has_preimage R A b) $
+  by ax
+l2: $ G , H , ∀ b (b ∈ B → has_preimage R A b) ⊢ card_le B A $
+  by choice_cover_injection [#1, #2, l1]
+l3: $ K , G , H , ∀ b (b ∈ B → has_preimage R A b) ⊢ ⊥ $ by not_elim [#3, l2]
+l4: $ K , G , H ⊢ ¬ (∀ b (b ∈ B → has_preimage R A b)) $ by not_intro [l3]
+l5: $ K , G , H ⊢ ∃ b (b ∈ B ∧ ¬ (has_preimage R A b)) $
+  by not_all_preimage_exists_miss [l4]
+
+product_graph_subset
+--------------------
+l1: $ G ⊢ f ∈ 𝒫 (cartesian_product I U) $ by sep_elim_left [#1]
+l2: $ G ⊢ f ⊆ cartesian_product I U $ by power_elim [l1]
+
+product_member_cases
+--------------------
+l1: $ G ⊢ f ⊆ cartesian_product I U $ by product_graph_subset [#1]
+l2: $ G , H ⊢ p ∈ cartesian_product I U $ by subset_elim [l1, #2]
+l3: $ G , H ⊢ ∃ i ∃ a (p = ⟨ i , a ⟩ ∧ (i ∈ I ∧ a ∈ U)) $
+  by sep_elim_right [l2]
+
+-- General surjection and cardinal-order rules.
+
+surj_function
+-------------
+l1: $ G ⊢ function f A B $ by and_elim_l [#1]
+
+surj_covers
+-----------
+l1: $ G ⊢ ∀ b (b ∈ B → has_preimage f A b) $ by and_elim_r [#1]
+
+surj_reverse_card_le
+--------------------
+l1: $ H ⊢ function f A B $ by surj_function [#2]
+l2: $ H ⊢ functional f $ by function_functional [l1]
+l3: $ H ⊢ ∀ b (b ∈ B → has_preimage f A b) $ by surj_covers [#2]
+l4: $ G , H ⊢ card_le B A $ by choice_cover_injection [#1, l2, l3]
+
+not_reverse_no_surj
+-------------------
+l1: $ surj f A B ⊢ surj f A B $ by ax
+l2: $ G , surj f A B ⊢ card_le B A $ by surj_reverse_card_le [#1, l1]
+l3: $ H , G , surj f A B ⊢ ⊥ $ by not_elim [#2, l2]
+l4: $ H , G ⊢ ¬ (surj f A B) $ by not_intro [l3]
+
+cardinal_comparison_elim
+------------------------
+l1: $ G ⊢ ∀ Y (card_le A Y ∨ card_le Y A) $ by all_elim [#1]
+l2: $ G ⊢ card_le A B ∨ card_le B A $ by all_elim [l1]
+
+card_lt_from_comparison
+-----------------------
+l1: $ card_le A B ⊢ card_le A B $ by ax
+l2: $ card_le B A ⊢ card_le B A $ by ax
+l3: $ G , card_le B A ⊢ ⊥ $ by not_elim [#1, l2]
+l4: $ G , card_le B A ⊢ card_le A B $ by bot_elim [l3]
+l5: $ H , G ⊢ card_le A B $ by or_elim [#2, l1, l4]
+l6: $ H , G ⊢ (card_le A B ∧ ¬ (card_le B A)) $ by and_intro [l5, #1]
+
+-- Tagged sums and the coordinate trace of a reverse injection.
+
+indexed_sum_intro
+-----------------
+l1: $ G , H ⊢ ⟨ a , b ⟩ ∈ pair_carrier I U $
+  by opair_mem_pair_carrier [#1, #2]
+l2: $ emp ⊢ ⟨ a , b ⟩ = ⟨ a , b ⟩ $ by eq_intro
+l3: $ G , H ⊢ (a ∈ I ∧ b ∈ U) $ by and_intro [#1, #2]
+l4: $ G , H , K ⊢ ((a ∈ I ∧ b ∈ U) ∧ maps R a b) $ by and_intro [l3, #3]
+l5: $ G , H , K ⊢ (⟨ a , b ⟩ = ⟨ a , b ⟩ ∧ ((a ∈ I ∧ b ∈ U) ∧ maps R a b)) $
+  by and_intro [l2, l4]
+l6: $ G , H , K ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ a , y ⟩ ∧ ((a ∈ I ∧ y ∈ U) ∧ maps R a y))) $
+  by ex_intro [l5]
+l7: $ G , H , K ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)))) $
+  by ex_intro [l6]
+l8: $ G , H , K ⊢
+      ⟨ a , b ⟩ ∈ {w ∈ pair_carrier I U | ∃ x (∃ y ((w = ⟨ x , y ⟩ ∧ ((x ∈ I ∧
+      y ∈ U) ∧ maps R x y))))} $
+  by sep_intro [l1, l7]
+
+indexed_sum_elim
+----------------
+l1: $ G ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)))) $
+  by sep_elim_right [#1]
+l2: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y))) ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y))) $
+  by ax
+l3: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢
+      (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) $
+  by ax
+l4: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢
+      ⟨ a , b ⟩ = ⟨ x , y ⟩ $
+  by and_elim_l [l3]
+l5: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢
+      ((x ∈ I ∧ y ∈ U) ∧ maps R x y) $
+  by and_elim_r [l3]
+l6: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢ a = x $
+  by opair_eq_left [l4]
+l7: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢ x = a $
+  by set_sym [l6]
+l8: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢ b = y $
+  by opair_eq_right [l4]
+l9: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢ y = b $
+  by set_sym [l8]
+l10: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢
+      ((a ∈ I ∧ y ∈ U) ∧ maps R a y) $
+  by eq_replace [l7, l5]
+l11: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y)) ⊢
+      ((a ∈ I ∧ b ∈ U) ∧ maps R a b) $
+  by eq_replace [l9, l10]
+l12: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ U) ∧ maps R x y))) ⊢
+      ((a ∈ I ∧ b ∈ U) ∧ maps R a b) $
+  by ex_elim [l2, l11]
+l13: $ G ⊢ ((a ∈ I ∧ b ∈ U) ∧ maps R a b) $ by ex_elim [l1, l12]
+
+koenig_trace_intro
+------------------
+l1: $ G , H ⊢ ⟨ a , b ⟩ ∈ pair_carrier U V $
+  by opair_mem_pair_carrier [#1, #2]
+l2: $ emp ⊢ ⟨ a , b ⟩ = ⟨ a , b ⟩ $ by eq_intro
+l3: $ G , H ⊢ (a ∈ U ∧ b ∈ V) $ by and_intro [#1, #2]
+l4: $ G , H , K ⊢
+      ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))) $
+  by and_intro [l3, #3]
+l5: $ G , H , K ⊢
+      (⟨ a , b ⟩ = ⟨ a , b ⟩ ∧ ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , a ⟩ ∧ maps f i b))))) $
+  by and_intro [l2, l4]
+l6: $ G , H , K ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ a , y ⟩ ∧ ((a ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f
+      ⟨ i , a ⟩ ∧ maps f i y)))))) $
+  by ex_intro [l5]
+l7: $ G , H , K ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧
+      (maps F f ⟨ i , x ⟩ ∧ maps f i y))))))) $
+  by ex_intro [l6]
+l8: $ G , H , K ⊢
+      ⟨ a , b ⟩ ∈ {w ∈ pair_carrier U V | ∃ x (∃ y ((w = ⟨ x , y ⟩ ∧ ((x ∈ U ∧
+      y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , x ⟩ ∧ maps f i y)))))))} $
+  by sep_intro [l1, l7]
+
+koenig_trace_elim
+-----------------
+l1: $ G ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧
+      (maps F f ⟨ i , x ⟩ ∧ maps f i y))))))) $
+  by sep_elim_right [#1]
+l2: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f
+      ⟨ i , x ⟩ ∧ maps f i y)))))) ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f
+      ⟨ i , x ⟩ ∧ maps f i y)))))) $
+  by ax
+l3: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) $
+  by ax
+l4: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      ⟨ a , b ⟩ = ⟨ x , y ⟩ $
+  by and_elim_l [l3]
+l5: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , x ⟩ ∧ maps f i y)))) $
+  by and_elim_r [l3]
+l6: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      a = x $
+  by opair_eq_left [l4]
+l7: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      x = a $
+  by set_sym [l6]
+l8: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      b = y $
+  by opair_eq_right [l4]
+l9: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      y = b $
+  by set_sym [l8]
+l10: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      ((a ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i y)))) $
+  by eq_replace [l7, l5]
+l11: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i
+      , x ⟩ ∧ maps f i y))))) ⊢
+      ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))) $
+  by eq_replace [l9, l10]
+l12: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ U ∧ y ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F
+      f ⟨ i , x ⟩ ∧ maps f i y)))))) ⊢
+      ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))) $
+  by ex_elim [l2, l11]
+l13: $ G ⊢
+      ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))) $
+  by ex_elim [l1, l12]
+
+koenig_omissions_intro
+----------------------
+l1: $ G , H ⊢ ⟨ a , b ⟩ ∈ pair_carrier I V $
+  by opair_mem_pair_carrier [#1, #2]
+l2: $ emp ⊢ ⟨ a , b ⟩ = ⟨ a , b ⟩ $ by eq_intro
+l3: $ G , H ⊢ (a ∈ I ∧ b ∈ V) $ by and_intro [#1, #2]
+l4: $ G , H , K ⊢
+      ((a ∈ I ∧ b ∈ V) ∧ (maps T a b ∧ ¬ (has_preimage (koenig_trace F P U V
+      a) (fibre R U a) b))) $
+  by and_intro [l3, #3]
+l5: $ G , H , K ⊢
+      (⟨ a , b ⟩ = ⟨ a , b ⟩ ∧ ((a ∈ I ∧ b ∈ V) ∧ (maps T a b ∧ ¬
+      (has_preimage (koenig_trace F P U V a) (fibre R U a) b)))) $
+  by and_intro [l2, l4]
+l6: $ G , H , K ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ a , y ⟩ ∧ ((a ∈ I ∧ y ∈ V) ∧ (maps T a y ∧ ¬
+      (has_preimage (koenig_trace F P U V a) (fibre R U a) y))))) $
+  by ex_intro [l5]
+l7: $ G , H , K ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))))) $
+  by ex_intro [l6]
+l8: $ G , H , K ⊢
+      ⟨ a , b ⟩ ∈ {w ∈ pair_carrier I V | ∃ x (∃ y ((w = ⟨ x , y ⟩ ∧ ((x ∈ I ∧
+      y ∈ V) ∧ (maps T x y ∧ ¬ (has_preimage (koenig_trace F P U V x) (fibre R
+      U x) y))))))} $
+  by sep_intro [l1, l7]
+
+koenig_omissions_elim
+---------------------
+l1: $ G ⊢
+      ∃ x (∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))))) $
+  by sep_elim_right [#1]
+l2: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y))))) ⊢
+      ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y))))) $
+  by ax
+l3: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) $
+  by ax
+l4: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      ⟨ a , b ⟩ = ⟨ x , y ⟩ $
+  by and_elim_l [l3]
+l5: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬ (has_preimage (koenig_trace F P U V
+      x) (fibre R U x) y))) $
+  by and_elim_r [l3]
+l6: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      a = x $
+  by opair_eq_left [l4]
+l7: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      x = a $
+  by set_sym [l6]
+l8: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      b = y $
+  by opair_eq_right [l4]
+l9: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      y = b $
+  by set_sym [l8]
+l10: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      ((a ∈ I ∧ y ∈ V) ∧ (maps T a y ∧ ¬ (has_preimage (koenig_trace F P U V
+      a) (fibre R U a) y))) $
+  by eq_replace [l7, l5]
+l11: $ (⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y)))) ⊢
+      ((a ∈ I ∧ b ∈ V) ∧ (maps T a b ∧ ¬ (has_preimage (koenig_trace F P U V
+      a) (fibre R U a) b))) $
+  by eq_replace [l9, l10]
+l12: $ ∃ y ((⟨ a , b ⟩ = ⟨ x , y ⟩ ∧ ((x ∈ I ∧ y ∈ V) ∧ (maps T x y ∧ ¬
+      (has_preimage (koenig_trace F P U V x) (fibre R U x) y))))) ⊢
+      ((a ∈ I ∧ b ∈ V) ∧ (maps T a b ∧ ¬ (has_preimage (koenig_trace F P U V
+      a) (fibre R U a) b))) $
+  by ex_elim [l2, l11]
+l13: $ G ⊢
+      ((a ∈ I ∧ b ∈ V) ∧ (maps T a b ∧ ¬ (has_preimage (koenig_trace F P U V
+      a) (fibre R U a) b))) $
+  by ex_elim [l1, l12]
+
+indexed_sum_cases
+-----------------
+l1: $ G ⊢ ∃ i ∃ a (q = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) $
+  by sep_elim_right [#1]
+
+koenig_trace_witness
+--------------------
+l1: $ G ⊢
+      ((a ∈ U ∧ b ∈ V) ∧ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))) $
+  by koenig_trace_elim [#1]
+l2: $ G ⊢ ∃ f ((f ∈ P ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b))) $
+  by and_elim_r [l1]
+
+koenig_trace_unique
+-------------------
+l1: $ H ⊢
+      ∃ f ((f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))
+      $
+  by koenig_trace_witness [#2]
+l2: $ K ⊢
+      ∃ g ((g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)))
+      $
+  by koenig_trace_witness [#3]
+l3: $ (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ⊢
+      (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) $
+  by ax
+l4: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) $
+  by ax
+l5: $ (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ⊢
+      f ∈ (indexed_product I V T) $
+  by and_elim_l [l3]
+l6: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      g ∈ (indexed_product I V T) $
+  by and_elim_l [l4]
+l7: $ (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ⊢
+      (maps F f ⟨ i , a ⟩ ∧ maps f i b) $
+  by and_elim_r [l3]
+l8: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      (maps F g ⟨ i , a ⟩ ∧ maps g i c) $
+  by and_elim_r [l4]
+l9: $ (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ⊢
+      maps F f ⟨ i , a ⟩ $
+  by and_elim_l [l7]
+l10: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      maps F g ⟨ i , a ⟩ $
+  by and_elim_l [l8]
+l11: $ (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ⊢
+      maps f i b $
+  by and_elim_r [l7]
+l12: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      maps g i c $
+  by and_elim_r [l8]
+l13: $ G , (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ,
+      (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      f = g $
+  by injective_elim_auto [#1, l9, l10]
+l14: $ G , (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ,
+      (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      maps g i b $
+  by eq_replace [l13, l11]
+l15: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) ⊢
+      function g I V $
+  by product_function [l6]
+l16: $ (g ∈ (indexed_product I V T) ∧ (maps F g ⟨ i , a ⟩ ∧ maps g i c)) , G ,
+      (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)) ⊢
+      b = c $
+  by function_unique [l15, l14, l12]
+l17: $ K , G , (f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i
+      b)) ⊢
+      b = c $
+  by ex_elim [l2, l16]
+l18: $ H , K , G ⊢ b = c $ by ex_elim [l1, l17]
+
+koenig_trace_functional
+-----------------------
+l1: $ (maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) ⊢
+      (maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) $
+  by ax
+l2: $ (maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) ⊢
+      maps (koenig_trace F (indexed_product I V T) U V i) a b $
+  by and_elim_l [l1]
+l3: $ (maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) ⊢
+      maps (koenig_trace F (indexed_product I V T) U V i) a c $
+  by and_elim_r [l1]
+l4: $ G , (maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) ⊢
+      b = c $
+  by koenig_trace_unique [#1, l2, l3]
+l5: $ G ⊢
+      ((maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) → b = c) $
+  by imp_intro [l4]
+l6: $ G ⊢
+      ∀ c (((maps (koenig_trace F (indexed_product I V T) U V i) a b ∧ maps
+      (koenig_trace F (indexed_product I V T) U V i) a c) → b = c)) $
+  by all_intro [l5]
+l7: $ G ⊢
+      ∀ b (∀ c (((maps (koenig_trace F (indexed_product I V T) U V i) a b ∧
+      maps (koenig_trace F (indexed_product I V T) U V i) a c) → b = c))) $
+  by all_intro [l6]
+l8: $ G ⊢
+      ∀ a (∀ b (∀ c (((maps (koenig_trace F (indexed_product I V T) U V i) a b
+      ∧ maps (koenig_trace F (indexed_product I V T) U V i) a c) → b = c)))) $
+  by all_intro [l7]
+
+-- Choose a missed value at every coordinate.
+
+koenig_coordinate_miss
+----------------------
+l1: $ H ⊢ functional (koenig_trace F (indexed_product I V T) U V i) $
+  by koenig_trace_functional [#2]
+l2: $ K ⊢ ¬ (card_le (fibre T V i) (fibre R U i)) $ by and_elim_r [#3]
+l3: $ G , H , K ⊢
+      ∃ a ((a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F
+      (indexed_product I V T) U V i) (fibre R U i) a))) $
+  by partial_function_misses [#1, l1, l2]
+l4: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) ⊢
+      (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) $
+  by ax
+l5: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) ⊢
+      a ∈ (fibre T V i) $
+  by and_elim_l [l4]
+l6: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) ⊢
+      ¬ (has_preimage (koenig_trace F (indexed_product I V T) U V i) (fibre R
+      U i) a) $
+  by and_elim_r [l4]
+l7: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) ⊢
+      a ∈ V $
+  by fibre_mem [l5]
+l8: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) ⊢
+      maps T i a $
+  by fibre_maps [l5]
+l9: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) ⊢
+      (maps T i a ∧ ¬ (has_preimage (koenig_trace F (indexed_product I V T) U
+      V i) (fibre R U i) a)) $
+  by and_intro [l8, l6]
+l10: $ L , (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F
+      (indexed_product I V T) U V i) (fibre R U i) a)) ⊢
+      maps (koenig_omissions F (indexed_product I V T) I U V R T) i a $
+  by koenig_omissions_intro [#4, l7, l9]
+l11: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) , L ⊢
+      (a ∈ V ∧ maps (koenig_omissions F (indexed_product I V T) I U V R T) i
+      a) $
+  by and_intro [l7, l10]
+l12: $ (a ∈ (fibre T V i) ∧ ¬ (has_preimage (koenig_trace F (indexed_product I
+      V T) U V i) (fibre R U i) a)) , L ⊢
+      ∃ b ((b ∈ V ∧ maps (koenig_omissions F (indexed_product I V T) I U V R
+      T) i b)) $
+  by ex_intro [l11]
+l13: $ G , H , K , L ⊢
+      ∃ b ((b ∈ V ∧ maps (koenig_omissions F (indexed_product I V T) I U V R
+      T) i b)) $
+  by ex_elim [l3, l12]
+
+koenig_omission_selected
+------------------------
+l1: $ G , H ⊢ maps (koenig_omissions F P I U V R T) i a $
+  by product_maps [#1, #2]
+l2: $ G , H ⊢
+      ((i ∈ I ∧ a ∈ V) ∧ (maps T i a ∧ ¬ (has_preimage (koenig_trace F P U V
+      i) (fibre R U i) a))) $
+  by koenig_omissions_elim [l1]
+l3: $ G , H ⊢
+      (maps T i a ∧ ¬ (has_preimage (koenig_trace F P U V i) (fibre R U i) a))
+      $
+  by and_elim_r [l2]
+
+koenig_omission_product
+-----------------------
+l1: $ G ⊢ f ∈ 𝒫 (cartesian_product I V) $ by sep_elim_left [#1]
+l2: $ G ⊢ function f I V $ by product_function [#1]
+l3: $ maps f i a ⊢ maps f i a $ by ax
+l4: $ G , maps f i a ⊢
+      (maps T i a ∧ ¬ (has_preimage (koenig_trace F P U V i) (fibre R U i) a))
+      $
+  by koenig_omission_selected [#1, l3]
+l5: $ G , maps f i a ⊢ maps T i a $ by and_elim_l [l4]
+l6: $ G ⊢ (maps f i a → maps T i a) $ by imp_intro [l5]
+l7: $ G ⊢ ∀ a ((maps f i a → maps T i a)) $ by all_intro [l6]
+l8: $ G ⊢ ∀ i (∀ a ((maps f i a → maps T i a))) $ by all_intro [l7]
+l9: $ G ⊢ selection f T I V $ by and_intro [l2, l8]
+l10: $ G ⊢ f ∈ indexed_product I V T $ by sep_intro [l1, l9]
+
+koenig_diagonal_exists
+----------------------
+l1: $ i ∈ I ⊢ i ∈ I $ by ax
+l2: $ K ⊢ i ∈ I → card_lt (fibre R U i) (fibre T V i) $ by all_elim [#3]
+l3: $ K , i ∈ I ⊢ card_lt (fibre R U i) (fibre T V i) $ by imp_elim [l2, l1]
+l4: $ G , H , K , i ∈ I ⊢
+      ∃ a ((a ∈ V ∧ maps (koenig_omissions F (indexed_product I V T) I U V R
+      T) i a)) $
+  by koenig_coordinate_miss [#1, #2, l3, l1]
+l5: $ G , H , K ⊢
+      (i ∈ I → ∃ a ((a ∈ V ∧ maps (koenig_omissions F (indexed_product I V T)
+      I U V R T) i a))) $
+  by imp_intro [l4]
+l6: $ G , H , K ⊢
+      ∀ i ((i ∈ I → ∃ a ((a ∈ V ∧ maps (koenig_omissions F (indexed_product I
+      V T) I U V R T) i a)))) $
+  by all_intro [l5]
+l7: $ G , H , K ⊢
+      ∃ f (f ∈ indexed_product I V (koenig_omissions F (indexed_product I V T)
+      I U V R T)) $
+  by choice_apply [#1, l6]
+
+-- The diagonal cannot be assigned any tag in the sum.
+
+koenig_tag_absurd
+-----------------
+l1: $ G ⊢ d ∈ (indexed_product I V T) $ by koenig_omission_product [#1]
+l2: $ G ⊢ function d I V $ by product_function [l1]
+l3: $ G ⊢ domain_on d I $ by function_domain_on [l2]
+l4: $ G , H ⊢ ∃ b (maps d i b) $ by domain_on_has_maps [l3, #2]
+l5: $ maps d i b ⊢ maps d i b $ by ax
+l6: $ G , maps d i b ⊢ b ∈ V $ by function_maps_range [l2, l5]
+l7: $ J ⊢ a ∈ U $ by fibre_mem [#3]
+l8: $ K , maps d i b ⊢ (maps F d ⟨ i , a ⟩ ∧ maps d i b) $
+  by and_intro [#4, l5]
+l9: $ G , K , maps d i b ⊢
+      (d ∈ (indexed_product I V T) ∧ (maps F d ⟨ i , a ⟩ ∧ maps d i b)) $
+  by and_intro [l1, l8]
+l10: $ G , K , maps d i b ⊢
+      ∃ f ((f ∈ (indexed_product I V T) ∧ (maps F f ⟨ i , a ⟩ ∧ maps f i b)))
+      $
+  by ex_intro [l9]
+l11: $ J , G , maps d i b , K ⊢
+      maps (koenig_trace F (indexed_product I V T) U V i) a b $
+  by koenig_trace_intro [l7, l6, l10]
+l12: $ J , G , maps d i b , K ⊢
+      has_preimage (koenig_trace F (indexed_product I V T) U V i) (fibre R U
+      i) b $
+  by has_preimage_intro [#3, l11]
+l13: $ G , maps d i b ⊢
+      (maps T i b ∧ ¬ (has_preimage (koenig_trace F (indexed_product I V T) U
+      V i) (fibre R U i) b)) $
+  by koenig_omission_selected [#1, l5]
+l14: $ G , maps d i b ⊢
+      ¬ (has_preimage (koenig_trace F (indexed_product I V T) U V i) (fibre R
+      U i) b) $
+  by and_elim_r [l13]
+l15: $ G , maps d i b , J , K ⊢ ⊥ $ by not_elim [l14, l12]
+l16: $ G , H , J , K ⊢ ⊥ $ by ex_elim [l4, l15]
+
+koenig_reverse_injection_absurd
+-------------------------------
+l1: $ G , K , H ⊢
+      ∃ d (d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T)
+      I U V R T)) $
+  by koenig_diagonal_exists [#1, #3, #2]
+l2: $ d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T) I U
+      V R T) ⊢
+      d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T) I U
+      V R T) $
+  by ax
+l3: $ d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T) I U
+      V R T) ⊢
+      d ∈ (indexed_product I V T) $
+  by koenig_omission_product [l2]
+l4: $ K ⊢ function F (indexed_product I V T) (indexed_sum I U R) $
+  by injective_function [#3]
+l5: $ K ⊢ domain_on F (indexed_product I V T) $ by function_domain_on [l4]
+l6: $ K , d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T)
+      I U V R T) ⊢
+      ∃ c (maps F d c) $
+  by domain_on_has_maps [l5, l3]
+l7: $ maps F d c ⊢ maps F d c $ by ax
+l8: $ K , maps F d c ⊢ c ∈ (indexed_sum I U R) $
+  by injective_maps_range [#3, l7]
+l9: $ K , maps F d c ⊢
+      ∃ i (∃ a ((c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)))) $
+  by indexed_sum_cases [l8]
+l10: $ ∃ a ((c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a))) ⊢
+      ∃ a ((c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a))) $
+  by ax
+l11: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢
+      (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) $
+  by ax
+l12: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢ c = ⟨ i , a ⟩ $
+  by and_elim_l [l11]
+l13: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢
+      ((i ∈ I ∧ a ∈ U) ∧ maps R i a) $
+  by and_elim_r [l11]
+l14: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢ (i ∈ I ∧ a ∈ U) $
+  by and_elim_l [l13]
+l15: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢ i ∈ I $
+  by and_elim_l [l14]
+l16: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢ a ∈ U $
+  by and_elim_r [l14]
+l17: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢ maps R i a $
+  by and_elim_r [l13]
+l18: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) ⊢ a ∈ fibre R U i $
+  by fibre_intro [l16, l17]
+l19: $ (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) , maps F d c ⊢
+      maps F d ⟨ i , a ⟩ $
+  by eq_replace [l12, l7]
+l20: $ d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T) I U
+      V R T) , (c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a)) , maps F d c ⊢
+      ⊥ $
+  by koenig_tag_absurd [l2, l15, l18, l19]
+l21: $ ∃ a ((c = ⟨ i , a ⟩ ∧ ((i ∈ I ∧ a ∈ U) ∧ maps R i a))) , d ∈
+      indexed_product I V (koenig_omissions F (indexed_product I V T) I U V R
+      T) , maps F d c ⊢
+      ⊥ $
+  by ex_elim [l10, l20]
+l22: $ K , maps F d c , d ∈ indexed_product I V (koenig_omissions F
+      (indexed_product I V T) I U V R T) ⊢
+      ⊥ $
+  by ex_elim [l9, l21]
+l23: $ K , d ∈ indexed_product I V (koenig_omissions F (indexed_product I V T)
+      I U V R T) ⊢
+      ⊥ $
+  by ex_elim [l6, l22]
+l24: $ G , K , H ⊢ ⊥ $ by ex_elim [l1, l23]
+
+koenig_no_reverse_injection
+---------------------------
+l1: $ card_le (indexed_product I V T) (indexed_sum I U R) ⊢
+      card_le (indexed_product I V T) (indexed_sum I U R) $
+  by ax
+l2: $ injective f (indexed_product I V T) (indexed_sum I U R) ⊢
+      injective f (indexed_product I V T) (indexed_sum I U R) $
+  by ax
+l3: $ G , H , injective f (indexed_product I V T) (indexed_sum I U R) ⊢ ⊥ $
+  by koenig_reverse_injection_absurd [#1, #2, l2]
+l4: $ card_le (indexed_product I V T) (indexed_sum I U R) , G , H ⊢ ⊥ $
+  by ex_elim [l1, l3]
+l5: $ G , H ⊢ ¬ (card_le (indexed_product I V T) (indexed_sum I U R)) $
+  by not_intro [l4]
+
+-- König: the diagonal obstruction and the full strict inequality.
+
+koenig_no_surjection
+--------------------
+l1: $ G , H ⊢ ¬ (card_le (indexed_product I V T) (indexed_sum I U R)) $
+  by koenig_no_reverse_injection [#1, #2]
+l2: $ G , H ⊢ ¬ (surj F (indexed_sum I U R) (indexed_product I V T)) $
+  by not_reverse_no_surj [#1, l1]
+
+koenig
+------
+l1: $ G , K ⊢ ¬ (card_le (indexed_product I V T) (indexed_sum I U R)) $
+  by koenig_no_reverse_injection [#1, #3]
+l2: $ H ⊢
+      card_le (indexed_sum I U R) (indexed_product I V T) ∨ card_le
+      (indexed_product I V T) (indexed_sum I U R) $
+  by cardinal_comparison_elim [#2]
+l3: $ G , K , H ⊢ card_lt (indexed_sum I U R) (indexed_product I V T) $
+  by card_lt_from_comparison [l1, l2]
+
+-- The empty index set is allowed: the fibrewise hypothesis is vacuous.
+
+koenig_empty_index
+------------------
+l1: $ i ∈ ∅ ⊢ i ∈ ∅ $ by ax
+l2: $ i ∈ ∅ ⊢ ⊥ $ by empty_elim [l1]
+l3: $ i ∈ ∅ ⊢ card_lt (fibre R U i) (fibre T V i) $ by bot_elim [l2]
+l4: $ emp ⊢ (i ∈ ∅ → card_lt (fibre R U i) (fibre T V i)) $ by imp_intro [l3]
+l5: $ emp ⊢ ∀ i ((i ∈ ∅ → card_lt (fibre R U i) (fibre T V i))) $
+  by all_intro [l4]
+l6: $ G , H ⊢ card_lt (indexed_sum ∅ U R) (indexed_product ∅ V T) $
+  by koenig [#1, #2, l5]

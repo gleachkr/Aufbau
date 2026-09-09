@@ -1047,3 +1047,41 @@ test "compiler points binding validation errors at explicit assignments" {
         "it has sort 'wff', but the rule expects sort 'obj' here",
     );
 }
+
+test "ordinary structural inference retains witnesses without views" {
+    const allocator = std.testing.allocator;
+    const stem = "pass_rule_symbolic_witness";
+    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    defer allocator.free(proof_src);
+    try std.testing.expect(std.mem.indexOf(u8, mm0_src, "@view") == null);
+    try std.testing.expect(std.mem.indexOf(u8, mm0_src, "@vars") == null);
+    try std.testing.expect(std.mem.indexOf(u8, proof_src, ":=") == null);
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+}
+
+test "symbolic rule inference respects an explicit witness constraint" {
+    const allocator = std.testing.allocator;
+    const stem = "pass_rule_symbolic_witness";
+    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    defer allocator.free(proof_src);
+    const wrong_witness = try replaceOnceOwned(
+        allocator,
+        proof_src,
+        "by ex_elim",
+        "by ex_elim (x := $ b $)",
+    );
+    defer allocator.free(wrong_witness);
+    var compiler = Compiler.initWithProof(allocator, mm0_src, wrong_witness);
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        compiler.compileMmb(allocator),
+    );
+}

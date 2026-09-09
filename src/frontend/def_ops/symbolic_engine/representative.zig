@@ -258,14 +258,26 @@ pub fn compressRepresentativeToDef(
         var temp = try cloneRepresentativeState(
             self,
             state,
-            term.args.len + term.dummy_args.len,
+            term.args.len,
         );
         defer temp.deinit(self.shared.allocator);
 
-        const symbolic_template = try TransparentMatch.symbolicFromTemplate(
-            self,
-            term.body.?,
+        // Ordinary arguments are inference binders, but hidden arguments
+        // are bound dummies, not unrestricted pattern variables. Use the
+        // normal expansion machinery so their distinctness is enforced
+        // while matching, before accepting a fold.
+        const template_args = try self.shared.scratch().alloc(
+            *const SymbolicExpr,
+            term.args.len,
         );
+        for (template_args, 0..) |*arg, idx| {
+            arg.* = try self.allocSymbolic(.{ .binder = idx });
+        }
+        const symbolic_template = (try TransparentMatch.expandSymbolicApp(
+            self,
+            .{ .term_id = term_id, .args = template_args },
+            &temp,
+        )) orelse continue;
         const matched = if (plain_symbolic) |plain|
             try TransparentMatch.matchExprToSymbolic(
                 self,

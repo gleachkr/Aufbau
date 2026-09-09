@@ -272,6 +272,11 @@ pub fn applyMaterializedDummyAssignments(
     for (assignments) |assignment| {
         const root = try resolveDummySlot(assignment.root_slot, state);
         const info = state.symbolic_dummy_infos.items[root];
+        if (!try Root.witnessRespectsDistinctness(
+            root,
+            assignment.expr_id,
+            state,
+        )) return error.UnifyMismatch;
         if (state.witnesses.get(root)) |existing| {
             if (existing != assignment.expr_id) return error.UnifyMismatch;
         }

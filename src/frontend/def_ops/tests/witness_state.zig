@@ -749,3 +749,94 @@ test "transparent and normalized representative caches stay separate" {
     try std.testing.expectEqual(start_dummy_id, fixture.theorem.next_dummy_id);
     try std.testing.expectEqual(start_dummy_dep, fixture.theorem.next_dummy_dep);
 }
+
+test "hidden dummy distinctness survives alignment and rollback" {
+    const Slots = @import("../symbolic_engine/dummy_slots.zig");
+    const Snapshots = @import("../symbolic_engine/match_snapshot.zig");
+    const Engine = @import("../symbolic_engine.zig").SymbolicEngine;
+    var fixture = try SessionWitnessFixture.init();
+    defer fixture.deinit();
+    const allocator = fixture.arena.allocator();
+    var ctx = Context.init(allocator, &fixture.theorem, &fixture.env);
+    defer ctx.deinit();
+    var engine: Engine = .{ .shared = &ctx.shared };
+    var state = try MatchSession.init(allocator, 0);
+    defer state.deinit(allocator);
+
+    // Two copies of the two-binder mono definition. Cross-expansion alpha
+    // alignment is legal; identifying siblings (even indirectly) is not.
+    try std.testing.expectEqual(@as(usize, 2), fixture.dummy_arg_count);
+    _ = try Testing.expandConcreteDef(&ctx, fixture.actual, &state);
+    _ = try Testing.expandConcreteDef(&ctx, fixture.actual, &state);
+    var snapshot = try Snapshots.saveMatchSnapshot(&engine, &state);
+    defer Snapshots.deinitMatchSnapshot(&engine, &snapshot);
+    try std.testing.expect(try Slots.alignDummySlots(&engine, 0, 2, &state));
+    try std.testing.expect(try Slots.alignDummySlots(&engine, 1, 3, &state));
+    try std.testing.expect(!try Slots.alignDummySlots(&engine, 0, 1, &state));
+    try std.testing.expect(!try Slots.alignDummySlots(&engine, 0, 3, &state));
+
+    try Snapshots.restoreMatchSnapshot(&engine, &snapshot, &state);
+    try std.testing.expectEqual(@as(usize, 0), state.dummy_aliases.count());
+    try std.testing.expect(try Slots.alignDummySlots(&engine, 0, 3, &state));
+    try std.testing.expect(try Slots.alignDummySlots(&engine, 1, 2, &state));
+    try std.testing.expect(!try Slots.alignDummySlots(&engine, 0, 2, &state));
+}
+
+test "hidden dummy distinctness survives seed export and witness alignment" {
+    const Slots = @import("../symbolic_engine/dummy_slots.zig");
+    const Match = @import("../symbolic_engine/bound_value_match.zig");
+    const Engine = @import("../symbolic_engine.zig").SymbolicEngine;
+    var fixture = try SessionWitnessFixture.init();
+    defer fixture.deinit();
+    const allocator = fixture.arena.allocator();
+    var ctx = Context.init(allocator, &fixture.theorem, &fixture.env);
+    defer ctx.deinit();
+    var engine: Engine = .{ .shared = &ctx.shared };
+    const seeds = try allocNoneSeeds(allocator, fixture.rule_args.len);
+    var session = try ctx.beginRuleMatch(fixture.rule_args, seeds);
+    defer session.deinit();
+    const state = &session.state;
+    _ = try Testing.expandConcreteDef(&ctx, fixture.actual, state);
+    _ = try Testing.expandConcreteDef(&ctx, fixture.actual, state);
+    const x = fixture.theorem.theorem_vars.items[0];
+
+    // Independent expansions may share x. Aligning the second expansion's
+    // root with x's sibling in the first must still fail.
+    for ([_]usize{ 0, 2 }) |slot| {
+        try std.testing.expect(try Match.matchSymbolicDummyState(
+            &engine,
+            slot,
+            state.symbolic_dummy_infos.items[slot],
+            x,
+            state,
+        ));
+    }
+    try std.testing.expect(!try Slots.alignDummySlots(&engine, 1, 2, state));
+    try std.testing.expectError(
+        error.UnifyMismatch,
+        session.applyMaterializedDummyAssignments(&.{.{
+            .root_slot = 1,
+            .expr_id = x,
+        }}),
+    );
+
+    var snapshot = try session.exportOptionalBindingSnapshot();
+    defer snapshot.deinit(allocator);
+    var restored = try ctx.beginRuleMatchFromSeedState(
+        fixture.rule_args,
+        &snapshot.seed_state,
+    );
+    defer restored.deinit();
+    try std.testing.expect(!try Slots.alignDummySlots(
+        &engine,
+        1,
+        2,
+        &restored.state,
+    ));
+    try std.testing.expect(try Slots.alignDummySlots(
+        &engine,
+        0,
+        2,
+        &restored.state,
+    ));
+}

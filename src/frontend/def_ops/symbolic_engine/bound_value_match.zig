@@ -235,6 +235,9 @@ pub fn matchSymbolicDummyState(
     actual: ExprId,
     state: *MatchSession,
 ) anyerror!bool {
+    // Callers pass the slot's own info; everything here is a property of the
+    // union-find root, which may have moved since.
+    _ = info;
     const root = try resolveDummySlot(slot, state);
     const root_info = state.symbolic_dummy_infos.items[root];
 
@@ -250,7 +253,11 @@ pub fn matchSymbolicDummyState(
     // would be captured by the unfolding (MMB `UDummy` disjointness), so the
     // exprs are not def-equal: plain mismatch.
     if (actual_info.deps & root_info.forbidden_deps != 0) return false;
-    _ = info;
+    if (!try Root.witnessRespectsDistinctness(
+        root,
+        actual,
+        state,
+    )) return false;
 
     if (currentWitnessExpr(root, state)) |existing| {
         if (existing == actual) return true;

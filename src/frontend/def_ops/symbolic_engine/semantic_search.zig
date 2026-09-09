@@ -956,6 +956,10 @@ pub fn hashMatchSessionForSearch(
         h = Types.mixHashBytes(h, info.sort_name);
         h = Types.mixHash(h, @intFromBool(info.bound));
         h = Types.mixHash(h, info.forbidden_deps);
+        h = Types.mixHash(
+            h,
+            if (info.distinct_group) |group| group + 1 else 0,
+        );
     }
 
     h = hashWitnessMapForSearch(h, state.witnesses);

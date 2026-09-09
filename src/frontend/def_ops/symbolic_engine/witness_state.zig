@@ -38,6 +38,8 @@ pub const slotForWitness = DummySlots.slotForWitness;
 pub const resolveDummySlot = DummySlots.resolveDummySlot;
 pub const putWitnessForDummySlot = DummySlots.putWitnessForDummySlot;
 pub const alignDummySlots = DummySlots.alignDummySlots;
+pub const witnessRespectsDistinctness =
+    DummySlots.witnessRespectsDistinctness;
 pub const saveMatchSnapshot = MatchSnapshot.saveMatchSnapshot;
 pub const restoreMatchSnapshot = MatchSnapshot.restoreMatchSnapshot;
 pub const deinitMatchSnapshot = MatchSnapshot.deinitMatchSnapshot;

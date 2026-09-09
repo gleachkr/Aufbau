@@ -160,6 +160,13 @@ not an unfolding. The two expressions are simply not definitionally equal, and
 the compiler rejects the line with an ordinary conclusion mismatch instead of
 emitting a proof the verifier would refuse.
 
+Hidden bound binders from the same expansion must also remain **distinct**.
+Matching may align corresponding binders across two expansions, but cannot
+identify two siblings, directly or through an alias chain. This constraint
+stays in the match-local state through snapshots and witness assignment.
+Definition compression uses the same expansion machinery, so it cannot fold
+an expression into a definition by collapsing distinct hidden binders.
+
 ---
 
 ## Omitted-binder inference
@@ -277,6 +284,22 @@ declared fragment semantics: AU, ACU, AUI, or ACUI. In particular, a rule
 using `@view` or normalization does not have to live or die by raw unify
 replay: the compiler may switch to a `RuleMatchSession`-based path that can
 compare through defs when that is part of the intended rule behavior.
+
+### Symbolic witnesses across structural premises
+
+Ordinary rules do not need an identity `@view` annotation just to retain a
+hidden witness across premises. If concrete structural inference cannot
+finish, the solver retries its existing symbolic view machinery with the
+rule's own signature and an identity binder map. This preserves symbolic
+bindings and witness relationships across context splits without changing
+the rule or allocating theorem-local dummies.
+
+For example, matching `∃ x p` against a definition of `∃ u (F u)` may leave
+both `x` and `p` symbolic. A later premise containing the discharged
+assumption `F a` can then determine `x = a`. Projecting the first match to
+concrete bindings alone would lose that relationship. The cheaper concrete
+path remains first, and successful inference still goes through ordinary
+application checking and proof-producing conversion.
 
 ### Ambiguity is still constrained
 

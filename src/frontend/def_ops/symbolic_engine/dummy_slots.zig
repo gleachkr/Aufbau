@@ -87,6 +87,9 @@ pub fn alignDummySlots(
         return false;
     }
 
+    // After the cheap filters: this one scans every slot twice.
+    if (try rootsMustStayDistinct(lhs_root, rhs_root, state)) return false;
+
     const lhs_witness = currentWitnessExpr(lhs_root, state);
     const rhs_witness = currentWitnessExpr(rhs_root, state);
     if (lhs_witness != null and rhs_witness != null and
@@ -104,6 +107,11 @@ pub fn alignDummySlots(
         const witness = maybe_witness orelse continue;
         const deps = try Root.exprDeps(self, witness);
         if (deps & merged_forbidden != 0) return false;
+        if (!try witnessRespectsDistinctness(lhs_root, witness, state) or
+            !try witnessRespectsDistinctness(rhs_root, witness, state))
+        {
+            return false;
+        }
     }
 
     const winner = if (lhs_witness != null)
@@ -149,5 +157,51 @@ pub fn alignDummySlots(
     );
     try state.putDummyAlias(self.shared.allocator, loser, winner);
     invalidateRepresentativeCaches(state);
+    return true;
+}
+
+/// Inspect the original slots, not just the union-find roots: a root can
+/// stand for dummies from several expansions after valid cross-expansion
+/// alignment. Merging it must not identify siblings indirectly.
+fn rootsMustStayDistinct(
+    lhs_root: usize,
+    rhs_root: usize,
+    state: *const MatchSession,
+) anyerror!bool {
+    for (state.symbolic_dummy_infos.items, 0..) |lhs_info, lhs_slot| {
+        const group = lhs_info.distinct_group orelse continue;
+        if (try resolveDummySlot(lhs_slot, state) != lhs_root) continue;
+        for (state.symbolic_dummy_infos.items, 0..) |rhs_info, rhs_slot| {
+            if (rhs_info.distinct_group != group) continue;
+            if (try resolveDummySlot(rhs_slot, state) == rhs_root) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Reject `actual` as a witness for `root` when some other root already
+/// holds it and the two must stay distinct. Driving the scan off the witness
+/// maps (usually a handful of entries) rather than off every slot keeps the
+/// common case cheap; `rootsMustStayDistinct` still scans all slots per
+/// candidate conflict.
+pub fn witnessRespectsDistinctness(
+    root: usize,
+    actual: ExprId,
+    state: *const MatchSession,
+) anyerror!bool {
+    for ([_]Types.WitnessMap{
+        state.witnesses,
+        state.materialized_witnesses,
+    }) |witnesses| {
+        var it = witnesses.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* != actual) continue;
+            const other = try resolveDummySlot(entry.key_ptr.*, state);
+            if (other == root) continue;
+            if (try rootsMustStayDistinct(root, other, state)) return false;
+        }
+    }
     return true;
 }

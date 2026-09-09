@@ -27,6 +27,16 @@ pub const SymbolicDummyInfo = struct {
     /// Zero for witness-first slots (`slotForWitness`), which never lower
     /// through an `Unfold`/`UDummy` of their own.
     forbidden_deps: u55 = 0,
+    /// First slot of the expansion that minted this bound dummy. Distinct
+    /// bound dummies in one expansion must stay distinct, even before either
+    /// has a concrete witness. Slot indices survive snapshots and exports.
+    /// Witness-first slots have no expansion group.
+    ///
+    /// Ids are unique among *live* slots only: `restoreMatchSnapshot` shrinks
+    /// `symbolic_dummy_infos`, so a later expansion reuses a rolled-back id —
+    /// safe precisely because that rollback also dropped every slot carrying
+    /// it. Any change that retains slots past a rollback must revisit this.
+    distinct_group: ?usize = null,
 };
 
 pub const SymbolicExpr = union(enum) {

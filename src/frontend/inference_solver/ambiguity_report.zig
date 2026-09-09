@@ -161,6 +161,17 @@ fn captureAmbiguityReport(
     distinct_idxs: []const usize,
     chosen_distinct_idx: usize,
 ) !void {
+    // A Solver can solve more than once (the holey->plain fallback, and the
+    // symbolic-rule retry), and the summaries live on `real_allocator` with a
+    // single free in `deinit`. Drop any previous pair before overwriting.
+    if (self.ambiguity_report.chosen_bindings) |summary| {
+        self.real_allocator.free(summary);
+        self.ambiguity_report.chosen_bindings = null;
+    }
+    if (self.ambiguity_report.alternative_bindings) |summary| {
+        self.real_allocator.free(summary);
+        self.ambiguity_report.alternative_bindings = null;
+    }
     self.ambiguity_report.distinct_solution_count = distinct_idxs.len;
     if (distinct_idxs.len == 0) return;
 

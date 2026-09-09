@@ -250,21 +250,18 @@ term sep (A: set) {x: set} (p: wff x): set;
 notation sep (A: set) {x: set} (p: wff x): set =
   (${$:max) x ($∈$:50) A ($|$:0) p ($}$:0);
 
---| @view {x:set}(G H:ctx x)(t A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
+-- The comprehension binds x in p, not in the element t. So t is allowed to
+-- mention x, even as a binder inside an inline comprehension. This lets
+-- choice read out the predicate for ch {x ∈ … } without a wrapper def.
+--| @view {x:set}(G H:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
 --| @recover t q p x
-axiom sep_intro {x: set} (G H: ctx x) (t A: set) (p: wff x):
+axiom sep_intro {x: set} (G H: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ A $ > $ H ⊢ [x/t] p $ >
   $ G , H ⊢ t ∈ {x ∈ A | p} $;
 
-axiom sep_elim_left {x: set} (G: ctx x) (t A: set) (p: wff x):
+axiom sep_elim_left {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ t ∈ A $;
 
--- Note `t: set x`: the element read out MAY mention x.  Semantically this is
--- always sound — `t ∈ {x ∈ A | p} ⊢ p[x:=t]` holds for any t, since the x's in
--- t are free (t sits outside the comprehension) while the x's captured by the
--- binder are only those in p.  This is exactly what lets `ch {x ∈ … }` (the
--- chosen element, which names the set it lives in) be read out without hiding
--- the comprehension behind a def.
 --| @view {x:set}(G:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ q $
 --| @recover t q p x
 axiom sep_elim_right {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):

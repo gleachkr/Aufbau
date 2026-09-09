@@ -1,0 +1,3 @@
+hidden_witness
+--------------
+l1: $ G , H , F b ⊢ c $ by ex_elim [#1, #2]
