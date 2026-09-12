@@ -99,3 +99,89 @@ l9: $ _ctx ⊢ bot $ by bot_intro [l8, l6]
 -- Step 3: discharge H to obtain the empty-context refutation.
 -- Alice cannot say "I am a knave."
 l10: $ _ ⊢ ¬ says ka "¬ ka" $ by neg_intro [l9]
+
+imp_from_truth
+--------------
+
+-- Add the assumption explicitly, then discharge it. Context union alone
+-- does not let us silently weaken the hypothesis hb.
+a: $ a ⊢ a $ by ax
+pair: $ _ctx ⊢ a ∧ b $ by and_intro [a, #hb]
+b: $ _ctx ⊢ b $ by and_elim_r [pair]
+goal: $ g ⊢ a → b $ by imp_intro [b]
+
+imp_from_falsehood
+------------------
+
+-- From a false antecedent, derive any consequent. Explosion is proved
+-- here using negation introduction and DNE, not postulated as an axiom.
+a: $ a ⊢ a $ by ax
+absurd: $ _ctx ⊢ bot $ by bot_intro [a, #hna]
+nb: $ ¬ b ⊢ ¬ b $ by ax
+pair: $ _ctx ⊢ bot ∧ ¬ b $ by and_intro [absurd, nb]
+absurd_b: $ _ctx ⊢ bot $ by and_elim_l [pair]
+nnb: $ _ctx ⊢ ¬ ¬ b $ by neg_intro [absurd_b]
+b: $ _ctx ⊢ b $ by dne [nnb]
+goal: $ g ⊢ a → b $ by imp_intro [b]
+
+one_question_yes
+----------------
+
+-- Write S = (ka ↔ p), the content of the question. A yes answer gives
+-- H = (ka ↔ S). Assume the road is unsafe and derive a contradiction.
+h: $ says ka "(says ka "p")" ⊢ says ka "(says ka "p")" $ by ax
+ks: $ _ctx ⊢ ka → (says ka "p") $ by and_elim_l [h]
+sk: $ _ctx ⊢ (says ka "p") → ka $ by and_elim_r [h]
+np: $ ¬ p ⊢ ¬ p $ by ax
+
+-- A knight's yes would give S, then p. So under ¬ p the speaker must
+-- be a knave. Discharge ka before using this fact in the next step.
+k: $ ka ⊢ ka $ by ax
+s: $ _ctx ⊢ says ka "p" $ by imp_elim [ks, k]
+kp: $ _ctx ⊢ ka → p $ by and_elim_l [s]
+p: $ _ctx ⊢ p $ by imp_elim [kp, k]
+bad_k: $ _ctx ⊢ bot $ by bot_intro [p, np]
+nk: $ _ctx ⊢ ¬ ka $ by neg_intro [bad_k]
+
+-- But if both ka and p are false, their biconditional S is true.
+-- H then makes ka true after all, contradicting the inferred ¬ ka.
+kp_false: $ _ctx ⊢ ka → p $ by imp_from_falsehood [nk]
+pk_false: $ _ctx ⊢ p → ka $ by imp_from_falsehood [np]
+s_false: $ _ctx ⊢ says ka "p" $ by and_intro [kp_false, pk_false]
+k_again: $ _ctx ⊢ ka $ by imp_elim [sk, s_false]
+bad: $ _ctx ⊢ bot $ by bot_intro [k_again, nk]
+nnp: $ _ctx ⊢ ¬ ¬ p $ by neg_intro [bad]
+goal: $ says ka "(says ka "p")" ⊢ p $ by dne [nnp]
+
+one_question_no
+---------------
+
+-- A no answer asserts ¬ S, so H = (ka ↔ ¬ S). Assume the road is safe.
+h: $ says ka "¬ (says ka "p")" ⊢ says ka "¬ (says ka "p")" $
+  by ax
+kns: $ _ctx ⊢ ka → ¬ (says ka "p") $ by and_elim_l [h]
+nsk: $ _ctx ⊢ ¬ (says ka "p") → ka $ by and_elim_r [h]
+p: $ p ⊢ p $ by ax
+
+-- If the speaker were a knave, S would imply ka (because p is true),
+-- contradicting ¬ ka. Thus ¬ S; but H turns that back into ka. Negation
+-- introduction and DNE rule out this case: the speaker is a knight.
+nk: $ ¬ ka ⊢ ¬ ka $ by ax
+s: $ says ka "p" ⊢ says ka "p" $ by ax
+pk: $ _ctx ⊢ p → ka $ by and_elim_r [s]
+k: $ _ctx ⊢ ka $ by imp_elim [pk, p]
+bad_s: $ _ctx ⊢ bot $ by bot_intro [k, nk]
+ns: $ _ctx ⊢ ¬ (says ka "p") $ by neg_intro [bad_s]
+k_again: $ _ctx ⊢ ka $ by imp_elim [nsk, ns]
+bad_k: $ _ctx ⊢ bot $ by bot_intro [k_again, nk]
+nnk: $ _ctx ⊢ ¬ ¬ ka $ by neg_intro [bad_k]
+knight: $ _ctx ⊢ ka $ by dne [nnk]
+
+-- Now ka and p are both true, so S is true. A knight's no asserts ¬ S.
+-- The contradiction discharges p and leaves only the no-answer premise.
+kp_true: $ _ctx ⊢ ka → p $ by imp_from_truth [p]
+pk_true: $ _ctx ⊢ p → ka $ by imp_from_truth [knight]
+s_true: $ _ctx ⊢ says ka "p" $ by and_intro [kp_true, pk_true]
+ns_true: $ _ctx ⊢ ¬ (says ka "p") $ by imp_elim [kns, knight]
+bad: $ _ctx ⊢ bot $ by bot_intro [s_true, ns_true]
+goal: $ says ka "¬ (says ka "p")" ⊢ ¬ p $ by neg_intro [bad]

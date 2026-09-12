@@ -11,12 +11,12 @@
 --
 --     says kx "s"  =  (kx → s) ∧ (s → kx)
 --
--- Each puzzle below takes one such "says" hypothesis and pins down
--- both islanders' types. The reasoning is pure classical propositional
--- logic; the only real cleverness is choosing the right contradiction
--- to chase.
+-- The first puzzles identify islanders or refute an impossible utterance.
+-- The final puzzle uses the same encoding to choose a safe road without
+-- learning the speaker's type. The reasoning is classical propositional
+-- logic; all helper rules below are derived, not additional axioms.
 --
--- Four classics follow:
+-- Four classics, followed by a reusable questioning strategy:
 --
 --   1. alice_imp        — Alice: "If I'm a knight, so is Bob."
 --                         ⇒ both are knights.
@@ -30,6 +30,14 @@
 --   4. alice_liar       — Alice: "I am a knave."
 --                         ⇒ ⊢ ¬ says ka "¬ ka": no islander can
 --                         actually utter this sentence.
+
+--   5. one_question_yes / one_question_no
+--      Ask: "Is this road safe if and only if you are a knight?"
+--      Yes implies safe; no implies unsafe, for either kind of islander.
+--      Here p means "this road is safe", and says ka "p" encodes the
+--      question's content ka ↔ p. Answering yes asserts that content;
+--      answering no asserts its negation. This assumes a truthful/lying
+--      yes-or-no answer, not silence or an arbitrary utterance.
 
 delimiter $ ( ) , " $;
 provable sort wff;
@@ -143,3 +151,20 @@ theorem alice_one_knave (ka kb: wff):
 -- neg_intro yields ⊢ ¬ says ka "¬ ka" — Alice cannot say this.
 theorem alice_liar (ka: wff):
   $ _ ⊢ ¬ says ka "¬ ka" $;
+
+-- Two derived implication rules, useful when both sides of the question
+-- are true or both are false. Their proofs make weakening and explosion
+-- explicit in the multiplicative context calculus.
+theorem imp_from_truth (g: ctx) (a b: wff)
+  (hb: $ g ⊢ b $): $ g ⊢ a → b $;
+theorem imp_from_falsehood (g: ctx) (a b: wff)
+  (hna: $ g ⊢ ¬ a $): $ g ⊢ a → b $;
+
+-- Puzzle 5. The outer says describes the answer; the inner says is just
+-- the biconditional in the question, not a second actual utterance.
+-- Neither theorem assumes ka or ¬ ka, so the strategy works without
+-- identifying the speaker. There is no axiom about roads or questions.
+theorem one_question_yes (ka p: wff):
+  $ says ka "(says ka "p")" ⊢ p $;
+theorem one_question_no (ka p: wff):
+  $ says ka "¬ (says ka "p")" ⊢ ¬ p $;
