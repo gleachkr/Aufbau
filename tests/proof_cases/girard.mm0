@@ -1,12 +1,18 @@
 -- Intuitionistic linear logic: multiplicatives, additives, exponentials.
 --
--- The point of contrast with the other sequent demos (aristotle, peirce, tait)
--- is the context annotation.  Those declare `@acui ... ctx_idem`, which makes
+-- Unlike the other sequent demos (aristotle, peirce, tait), this uses
+-- multiset contexts.  Those demos declare `@acui ... ctx_idem`, which makes
 -- a context a *set*: `g , a , a` and `g , a` are the same object, so a
--- hypothesis may be used as many times as you like.  Here the idempotence slot
--- is `_`, so a context is a *multiset* and every hypothesis is consumed exactly
--- once.  Weakening and contraction are not admissible; they come back only
+-- hypothesis may be used as many times as you like.  Here the idempotence
+-- slot is `_`, so repeated hypotheses remain distinct resources.  General
+-- weakening and contraction are not admissible; they come back only
 -- under the exponential `!`.
+--
+-- The additive/multiplicative contrast is visible in `with_dup` and
+-- `tensor_with`: alternative branches share resources, simultaneous
+-- outputs split them.  `bang_with` and `bang_with_reverse` then show both
+-- directions of the exponential law ! (a & b) ≃ ! a ⊗ ! b, expressed as
+-- linear implications rather than as the meta-level rewrite relation.
 
 delimiter $ ( ) , ! $;
 
@@ -81,8 +87,8 @@ axiom join_congr (g1 g2 h1 h2: ctx):
 axiom seq_congr (g h: ctx) (a b: wff):
   $ ctx_eq g h $ > $ a ↔ b $ > $ (g ==> a) ↔ (h ==> b) $;
 
--- Identity.  Note the bare context: `g , a ==> a` would be the axiom rule of a
--- logic with weakening, and it is not available here.
+-- Identity has a bare context: `g , a ==> a` would be the axiom rule of
+-- a logic with weakening, and it is not available here.
 axiom ax (a: wff): $ a ==> a $;
 
 -- Multiplicative rules.  Every two-premise multiplicative rule *splits* the
@@ -147,10 +153,20 @@ theorem uncurry (a b c: wff): $ emp ==> (a ⊸ (b ⊸ c)) ⊸ ((a ⊗ b) ⊸ c) 
 -- `1` is the unit of `⊗`.
 theorem tensor_one (a: wff): $ emp ==> (a ⊗ 1) ⊸ a $;
 
--- Tensor distributes over plus.  The mirror statement for `&` is *not*
--- provable: it would need two copies of `a`.
+-- Tensor distributes over plus.  Only the chosen branch consumes `a`.
 theorem tensor_plus (a b c: wff):
   $ emp ==> (a ⊗ (b ⊕ c)) ⊸ ((a ⊗ b) ⊕ (a ⊗ c)) $;
+
+-- Tensor also distributes over `&` in this direction: with_right shares
+-- the context, so each alternative gets the same single copy of `a`.
+-- The reverse implication is not generally derivable: choosing one side
+-- of (a ⊗ b) & (a ⊗ c) does not supply both alternatives b & c.
+theorem tensor_with (a b c: wff):
+  $ emp ==> (a ⊗ (b & c)) ⊸ ((a ⊗ b) & (a ⊗ c)) $;
+
+-- Additive duplication offers a choice of two identical outputs, not two
+-- simultaneous copies.  Compare `bang_dup`, where the output is a tensor.
+theorem with_dup (a: wff): $ emp ==> a ⊸ (a & a) $;
 
 -- `⊤` absorbs any resource; `0` justifies anything.
 theorem additive_units (a: wff): $ emp ==> (a ⊸ ⊤) & (0 ⊸ a) $;
@@ -162,6 +178,12 @@ theorem bang_discard (a b: wff): $ emp ==> (! a) ⊸ (b ⊸ b) $;
 
 -- `!` turns an additive choice into a multiplicative pair.
 theorem bang_with (a b: wff): $ emp ==> ! (a & b) ⊸ (! a ⊗ ! b) $;
+
+-- Conversely, two reusable resources provide a reusable additive choice.
+-- Promotion happens BEFORE tensor_left: ! a , ! b is a banged context,
+-- whereas the single formula ! a ⊗ ! b is not syntactically banged.
+theorem bang_with_reverse (a b: wff):
+  $ emp ==> (! a ⊗ ! b) ⊸ ! (a & b) $;
 
 -- Girard's translation reads intuitionistic `a → b` as `! a ⊸ b`.  This is
 -- the contraction that makes the translated implication behave: with `!` in

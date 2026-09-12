@@ -65,6 +65,31 @@ l8: $ a , b ⊕ c ==> (a ⊗ b) ⊕ (a ⊗ c) $ by plus_left [l5, l7]
 l9: $ a ⊗ (b ⊕ c) ==> (a ⊗ b) ⊕ (a ⊗ c) $ by tensor_left [l8]
 l10: $ _ ==> (a ⊗ (b ⊕ c)) ⊸ ((a ⊗ b) ⊕ (a ⊗ c)) $ by lolli_right [l9]
 
+tensor_with
+-----------
+
+-- Each projection uses `a` once.  with_right shares, not joins, the
+-- contexts of these two alternative computations.
+l1: $ a ==> a $ by ax
+l2: $ b ==> b $ by ax
+l3: $ b & c ==> b $ by with_left1 [l2]
+l4: $ a , b & c ==> a ⊗ b $ by tensor_right [l1, l3]
+l5: $ c ==> c $ by ax
+l6: $ b & c ==> c $ by with_left2 [l5]
+l7: $ a , b & c ==> a ⊗ c $ by tensor_right [l1, l6]
+l8: $ a , b & c ==> (a ⊗ b) & (a ⊗ c) $ by with_right [l4, l7]
+l9: $ a ⊗ (b & c) ==> (a ⊗ b) & (a ⊗ c) $ by tensor_left [l8]
+l10: $ _ ==> (a ⊗ (b & c)) ⊸ ((a ⊗ b) & (a ⊗ c)) $ by lolli_right [l9]
+
+with_dup
+--------
+
+-- Reusing a proof label does not silently contract its resources:
+-- with_right shares the premise context; tensor_right would produce a , a.
+l1: $ a ==> a $ by ax
+l2: $ a ==> a & a $ by with_right [l1, l1]
+l3: $ _ ==> a ⊸ (a & a) $ by lolli_right [l2]
+
 additive_units
 --------------
 
@@ -106,6 +131,25 @@ l9: $ ! (a & b) ==> ! b $ by bang_promote [l4, l8]
 l10: $ ! (a & b) , ! (a & b) ==> ! a ⊗ ! b $ by tensor_right [l5, l9]
 l11: $ ! (a & b) ==> ! a ⊗ ! b $ by bang_contract [l10]
 l12: $ _ ==> ! (a & b) ⊸ (! a ⊗ ! b) $ by lolli_right [l11]
+
+bang_with_reverse
+-----------------
+
+-- Either projection may discard the unused resource because it is banged.
+l1: $ a ==> a $ by ax
+l2: $ ! a ==> a $ by bang_derelict [l1]
+l3: $ ! a , ! b ==> a $ by bang_weaken [l2]
+l4: $ b ==> b $ by ax
+l5: $ ! b ==> b $ by bang_derelict [l4]
+l6: $ ! a , ! b ==> b $ by bang_weaken [l5]
+l7: $ ! a , ! b ==> a & b $ by with_right [l3, l6]
+-- Certify the entire joined context before promoting the result.
+l8: $ banged (! a) $ by banged_bang
+l9: $ banged (! b) $ by banged_bang
+l10: $ banged (! a , ! b) $ by banged_join [l8, l9]
+l11: $ ! a , ! b ==> ! (a & b) $ by bang_promote [l10, l7]
+l12: $ ! a ⊗ ! b ==> ! (a & b) $ by tensor_left [l11]
+l13: $ _ ==> (! a ⊗ ! b) ⊸ ! (a & b) $ by lolli_right [l12]
 
 translated_contraction
 ----------------------
