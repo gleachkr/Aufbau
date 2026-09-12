@@ -3,16 +3,16 @@
 An `.auf` file supplies the proofs for the theorems declared in an `.mm0`
 file. The Proving chapters introduced proof scripts by example; this part of
 the manual describes the format itself. An `.auf` file is a sequence of
-top-level items: *proof blocks*, which discharge the declared theorems, plus
-the `lemma` blocks and `def` items described in
-[Lemmas and definitions in proofs](lemmas-defs-in-proofs.md). This chapter
-covers proof blocks and the exact form of a proof line.
+top-level items: *proof blocks*, which prove the declared theorems, plus the
+`lemma` blocks and `def` items described in [Lemmas and definitions in
+proofs](lemmas-defs-in-proofs.md). This chapter covers proof blocks and the
+exact form of a proof line.
 
 ## Declaration and proof ordering
 
 The compiler reads the `.mm0` and `.auf` files together, in statement order.
-Each theorem declaration it reaches in the `.mm0` file must be discharged by
-the next proof block in the `.auf` file.
+Each theorem declaration in the `.mm0` file must be proved by the next
+theorem proof block in the `.auf` file.
 
 ```aufbau-proof doc=blocks
 @@mm0
@@ -36,10 +36,9 @@ l2: $ (r -> p) -> (q -> (r -> p)) $ by h1
 l3: $ q -> (r -> p) $ by mp [l1, l2]
 ```
 
-Because checking makes a single pass over both files, blocks must appear in
-the order of the declarations they discharge. If the two blocks above are
-swapped, the compiler finds `weaken_twice` where it expects `weaken` and rejects
-the file.
+Proof blocks must appear in the same order as the corresponding theorem 
+declarations. If the two blocks above are swapped, the compiler finds 
+`weaken_twice` where it expects `weaken` and rejects the file.
 
 Declaration order also determines what a proof may cite: any axiom, any public
 theorem already proved, and any earlier lemma or proof-local definition.
@@ -107,8 +106,8 @@ preceding proof.
 ## Proof conclusions
 
 A block is accepted only if its final line proves the theorem's declared
-conclusion, so a conclusion proved on an earlier line must still be the last
-line's goal. The match need not be verbatim: a final line that differs from
-the declaration only by transparent definitions or by registered normalization
-is reconciled automatically, with the compiler emitting the bridging conversion
-steps itself. Lemma blocks are checked the same way against their own headers.
+conclusion. Proving that conclusion on an earlier line is not enough. The
+final line need not use exactly the same expression as the declaration: the
+compiler can expand definitions and apply registered normalization rules to
+match them. It includes the necessary conversion steps in the binary proof.
+Lemma blocks are checked against their headers in the same way.

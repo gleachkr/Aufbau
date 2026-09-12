@@ -54,9 +54,9 @@ dummy-identifier ::= '.' identifier | identifier_
 Curly binders `{x: s}` are bound (binding) variables; parenthesized binders
 `(a: s)` are regular variables, with trailing identifiers in the type naming
 the bound variables the term may depend on. `.`-prefixed binders on a `def`
-are hidden dummies. A `def` without `= $ ... $` is bodyless. Its definiens
-is supplied by the `.auf` file. See [Sorts and terms](sorts-and-terms.md) and
-[Variables, binders, and dependencies](variables-and-binders.md).
+are hidden dummy variables. A `def` without `= $ ... $` leaves its body to
+be supplied by the `.auf` file. See [Sorts and terms](sorts-and-terms.md)
+and [Variables, binders, and dependencies](variables-and-binders.md).
 
 ```text
 notation-stmt        ::= delimiter-stmt | simple-notation-stmt

@@ -1,11 +1,10 @@
 # Peano arithmetic
 
-This chapter builds a small theory of first-order arithmetic, including
-classical propositional logic, equality and the successor axioms, quantifiers
-with explicit substitution, and induction, with the addition laws proved from
-the axioms. Unlike the sequent system of the previous chapter, this theory is
-in Hilbert style, so formulas are themselves the judgments and `wff` is the
-provable sort.
+This chapter develops a small first-order arithmetic theory. We add
+equality, successor, quantifiers, substitution, and induction to classical
+propositional logic, then prove an addition law and a concrete sum. Unlike
+the sequent system of the previous chapter, this theory uses Hilbert style:
+formulas are themselves assertions, and `wff` is the provable sort.
 
 ## The propositional skeleton
 
@@ -31,8 +30,8 @@ axiom ax_mp (a b: wff): $ a → b $ > $ a $ > $ b $;
 This is the same Łukasiewicz system as the
 [Hilbert calculus](hilbert-calculus.md) chapter.
 
-Hilbert-style proofs lean constantly on a few small combinators, so we derive
-them once.
+Hilbert-style proofs repeatedly use a few short derived rules. We prove them
+once so later proofs can cite them.
 
 ```aufbau-proof doc=peano
 @@mm0
@@ -167,10 +166,11 @@ axiom ax_4 {x: nat} (p q: wff x):
 axiom ax_5 {x: nat} (p: wff): $ p → ∀ x p $;
 ```
 
-For quantifiers, we have generalization, distribution of `∀` over implication,
-and vacuous quantification (note that `ax_5`'s `p` does not depend on `x`).
-Generalization is the one rule-form member, since it must apply only to
-theorems, not hypotheses:
+For quantifiers, we have generalization, distribution of `∀` over
+implication, and vacuous quantification (note that `ax_5`'s `p` does not
+depend on `x`). Generalization is written in rule form: it takes a proof of
+`p` and produces a proof of `∀ x p`. Here we apply it to an equality proved
+without hypotheses:
 
 ```aufbau-proof doc=peano
 @@mm0
@@ -325,10 +325,10 @@ l12: $ suc (suc (suc 0) + suc 0) = suc (suc (suc (suc 0))) → suc (suc 0) + suc
 l13: $ suc (suc 0) + suc (suc 0) = suc (suc (suc (suc 0))) $ by ax_mp [l12, l10]
 ```
 
-That's a rather long proof (shorter than the Principia, but still). To avoid 
-that kind of tedium, a theory that expects to compute can enroll its recursion 
-equations as `@compute` rules and lets `conversion?` run them. The [The lambda 
-calculus](lambda-calculus.md) chapter illustrates this pattern.
+Even this small sum needs several congruence and transitivity steps. To
+automate such proofs, register the recursion equations with `@compute` and
+use `conversion?`. The [lambda calculus](lambda-calculus.md) chapter
+demonstrates this approach.
 
 ## The whole page
 

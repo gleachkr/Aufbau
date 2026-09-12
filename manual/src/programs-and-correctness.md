@@ -1,11 +1,14 @@
 # Programs and correctness
 
-This chapter shows how to verify small imperative programs. It builds
-first-order dynamic logic in a world-labelled sequent calculus, derives the
-rules of Hoare logic as theorems, and then verifies an assignment sequence and
-a while loop. The Floyd assignment axiom is used as a `@rewrite`, so the
-rewrite engine computes weakest preconditions and no substitution step is ever
-written by hand.
+This chapter verifies two small imperative programs: an assignment sequence
+and a while loop. We build a fragment of dynamic logic, which expresses how
+programs affect states, then derive rules of Hoare logic for reasoning about
+preconditions and postconditions.
+
+Registering the Floyd assignment axiom with `@rewrite` lets the compiler
+compute assignment preconditions by substitution. The examples prove
+*partial correctness*: if a program terminates, its result satisfies the
+postcondition. They do not prove termination.
 
 ## Formulas and programs
 
@@ -39,10 +42,10 @@ term eq (a b: obj): form;
 infixl eq: $=$ prec 50;
 ```
 
-There are two base sorts of data: `obj` for the values program variables hold
-(with just `0` and `pred` — deliberately, almost no arithmetic), and `world`
-for program states. Formulas are a separate syntactic sort `form`, since the
-provable sort `wff` is reserved for judgments about them.
+Two sorts represent data: `obj` for program-variable values and `world` for
+program states. The object syntax has only `0` and `pred`; this example
+needs no arithmetic laws. Formulas are a separate syntactic sort `form`,
+since the provable sort `wff` is reserved for judgments about them.
 
 ```aufbau-theory doc=hoare
 term sq (a b: prog): prog;
@@ -67,10 +70,13 @@ notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
   ($subst$:41) x ($/$:0) t a;
 ```
 
-Programs are: sequencing `a ⨟ b`, iteration `⋆ a`, tests `? p`, and assignment.
-`[ a ] p` says `p` holds after every terminating run of the program `a`.
-Finally `⟨ x ≔ e ⟩` is assignment of the value of the expression `e` to the
-variable `x`.
+Programs use four constructs. Sequencing `a ⨟ b` runs `a` then `b`.
+Iteration `⋆ a` runs `a` zero or more times. A test `? p` leaves the state
+unchanged if `p` holds and cannot proceed otherwise. Assignment `⟨ x ≔ e ⟩`
+stores the value of `e` in `x`.
+
+The formula `[ a ] p` says that `p` holds after every terminating run of
+`a`.
 
 ## Judgments
 
@@ -113,9 +119,11 @@ notation ht (p: form) (a: prog) (q: form): wff =
 
 The basic judgment is world-labelled truth: `w : p` says the formula `p`
 holds at state `w`, and `step w a v` says program `a` can move state `w` to
-state `v`. Sequents `g ⊢ w : p` carry labelled facts in an ACUI context, as
-in the [Natural deduction](natural-deduction.md) chapter. We also have validity
-`⊨ p` (truth at every state) and the Hoare triple `⦃ p ⦄ a ⟦ q ⟧`.
+state `v`. Sequents `g ⊢ w : p` collect labelled assumptions in a context
+that behaves as a set, as in [Natural deduction](natural-deduction.md). `⊨
+p` asserts truth at every state. The Hoare triple `⦃ p ⦄ a ⟦ q ⟧` says that
+every terminating run of `a` from a state satisfying `p` ends in a state
+satisfying `q`.
 
 ## Equivalence infrastructure
 
@@ -166,7 +174,8 @@ axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
 axiom ctx_unit (g: ctx): $ ctx_eq (∅ , g) g $;
 ```
 
-Every constructor gets a congruence, so rewriting can reach any position.
+Congruence rules let rewriting pass through the surrounding constructors
+used in these proofs.
 
 ```aufbau-theory doc=hoare
 --| @congr
@@ -307,9 +316,11 @@ axiom box_elim (g h: ctx) (w v: world) (a: prog) (p: form):
   $ g ⊢ w : ([ a ] p) $ > $ h ⊢ step w a v $ > $ g , h ⊢ v : p $;
 ```
 
-`box_intro` is the labelled introduction rule: to show `[ a ] p` at `w`,
-assume an arbitrary state `v` reached by `a` — the binder `{v: world}` makes
-`v` an eigenvariable — and show `p` there.
+To prove `[ a ] p` at `w`, `box_intro` assumes that `a` reaches an arbitrary
+state `v` and proves `p` is true in that state. The bound binder `{v: world}` 
+makes `v` an *eigenvariable*: the rule's dependency lists keep it out of the 
+other arguments, so the proof cannot depend on a particular choice of 
+destination state.
 
 ## Reduction axioms
 
@@ -364,10 +375,10 @@ axiom ht_elim (p q: form) (a: prog):
 def while (b: form) (a: prog): prog = $ ⋆ (? b ⨟ a) ⨟ ? (¬ b) $;
 ```
 
-A formula is valid when it is provable at an eigenstate from no assumptions,
-and `⦃ p ⦄ a ⟦ q ⟧` is interconvertible with `⊨ (p → ([ a ] q))`. The while
-loop is a definition, not a primitive: iterate the guarded body, then exit
-through the failed guard.
+`valid_intro` proves validity by proving the formula at an arbitrary state
+from an empty context. The two `ht` rules convert between a Hoare triple `⦃
+p ⦄ a ⟦ q ⟧` and `⊨ (p → ([ a ] q))`. The while loop is a definition, not a
+primitive: iterate the guarded body, then exit through the failed guard.
 
 ## The modal toolkit
 
@@ -453,7 +464,8 @@ Note the pool worlds: `imp_refl_valid` has no `world` binder of its own, so
 
 ## Hoare logic, derived
 
-Every rule of Hoare logic is now a theorem.
+We can now derive Hoare rules for consequence, sequencing, assignment, and
+while loops.
 
 ```aufbau-proof doc=hoare
 @@mm0
@@ -489,8 +501,8 @@ l6: $ ⊨ (p → ([ a ⨟ b ] r)) $ by valid_intro [l5]
 l7: $ ⦃ p ⦄ (a ⨟ b) ⟦ r ⟧ $ by ht_intro [l6]
 ```
 
-Assignment comes in two forms. The Floyd/Hoare rule falls out of `red_assign`
-in five lines:
+Assignment comes in two forms. The Floyd–Hoare assignment rule follows from
+`red_assign`:
 
 ```aufbau-proof doc=hoare
 @@mm0
@@ -520,11 +532,11 @@ l5: $ ⊨ (q → ([ ⟨ x ≔ e ⟩ ] p)) $ by valid_intro [l4]
 l6: $ ⦃ q ⦄ ⟨ x ≔ e ⟩ ⟦ p ⟧ $ by ht_intro [l5]
 ```
 
-The `@view` described in
-[Views and recovery](views-and-recovery.md) avoids writing
-`⌊ x / b ⌋ (x = b)`. Its phantom binder `q` occupies the precondition, while
-the assignment and postcondition determine `x`, `e`, and `p`. The rewrite rules
-then compute the substitution `⌊ x / e ⌋ p`.
+The `@view` described in [Views and recovery](views-and-recovery.md) lets
+proof lines omit the explicit substitution `⌊ x / e ⌋ p`. Its phantom binder
+`q` occupies the precondition, while the assignment and postcondition
+determine `x`, `e`, and `p`. The rewrite rules then compute the substitution
+`⌊ x / e ⌋ p`.
 
 `hoare_assign_wp` builds in precondition *strengthening*. Read its
 hypothesis as "`q` implies the weakest precondition". Its view again lets us
@@ -570,8 +582,9 @@ against `l20`'s unfolded form through the definition.
 
 ## Verified programs
 
-First, last write wins. Note the first write's verification condition is just
-reflexivity, the formal trace of the write being dead:
+The first program assigns `a` to `x`, then overwrites it with `b`. The first
+assignment has no effect on the final result. Its verification condition
+reduces to the reflexive equality `b = b`:
 
 ```aufbau-proof doc=hoare
 @@mm0
@@ -588,10 +601,14 @@ l5: $ ⦃ ⊤ ⦄ ⟨ x ≔ a ⟩ ⟦ b = b ⟧ $ by hoare_assign_wp [l4]
 l6: $ ⦃ ⊤ ⦄ (⟨ x ≔ a ⟩ ⨟ ⟨ x ≔ b ⟩) ⟦ x = b ⟧ $ by hoare_seq [l5, l1]
 ```
 
-Finally, a loop: decrement `x` until it hits zero. The invariant is the
-trivial `⊤`; `hoare_while` returns the invariant conjoined with the failed
-guard `¬ ¬ (x = 0)`, and `hoare_conseq` cleans up the double
-negation classically:
+The final program repeatedly assigns `pred x` to `x` while `x ≠ 0`. Its loop
+invariant is `⊤`, which holds in every state. `hoare_while` proves that, on
+exit, the invariant holds and the guard is false: `⊤ ∧ ¬ ¬ (x = 0)`.
+`hoare_conseq` then uses classical double-negation elimination to obtain `x
+= 0`.
+
+This does not show that the loop reaches zero. We have given `pred` no
+arithmetic axioms, and the proof establishes only the state on termination.
 
 ```aufbau-proof doc=hoare
 @@mm0

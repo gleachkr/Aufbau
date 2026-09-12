@@ -30,11 +30,11 @@ term suc (n: tm): tm; prefix suc: $S$ prec 70;
 term add (m n: tm): tm; infixl add: $+$ prec 30;
 ```
 
-We have one syntactic sort of terms, with a `@vars` pool so proofs can invent
-variables on demand. Abstractions are `λ x. e`, applications are `f · a`, and
-explicit substitution is `[x := a] e`, governed by the reduction rules below.
-The numerals are unary (`0`, `S0`, `SS0`, with `S` in the delimiter set so the
-compact form parses), and `+` is their addition.
+The sort `tm` contains terms. Its `@vars` pool supplies variables when a
+proof needs them. Abstractions are `λ x. e`, applications are `f · a`, and
+explicit substitution is `[x := a] e`, governed by the reduction rules
+below. The numerals are unary (`0`, `S0`, `SS0`, with `S` in the delimiter
+set so the compact form parses), and `+` is their addition.
 
 ## The equational layer
 
@@ -103,10 +103,9 @@ axiom add_z (n: tm): $ 0 + n = n $;
 axiom add_s (m n: tm): $ S m + n = S (m + n) $;
 ```
 
-Capture avoidance is via restriction on substitutions. In `sb_lam`, the
-substituted term `a` is declared `(a: tm x)` (it may mention `x` but not `y`)
-so a substitution only crosses a binder that cannot capture anything in the
-substituted term.
+Dependency restrictions prevent variable capture. In `sb_lam`, the
+declaration `(a: tm x)` permits `a` to mention `x` but not `y`. Moving `a`
+under the binder for `y` therefore cannot capture a variable in `a`.
 
 The substitution rules carry two annotations. `@rewrite` lets the compiler run
 substitutions whenever it checks an ordinary line, so a cited rule whose
@@ -117,8 +116,9 @@ computation rules for `conversion?` (see [Computation](computation.md)).
 ## Single steps
 
 `@rewrite` normalization alone is enough to make one beta step a one-line
-proof. The raw conclusion of `beta` here is `[x := 0] (S x)`; the line states
-the reduced form and the compiler emits the conversion:
+proof. The right-hand side of `beta`'s instantiated conclusion is `[x := 0]
+(S x)`. The line states the reduced form, and the compiler emits the
+conversion:
 
 ```aufbau-proof doc=lam
 @@mm0
@@ -152,8 +152,9 @@ come straight from the binder declarations of the theorem.
 
 ## Evaluation
 
-A Church numeral is a function iterator so applying one to the successor
-function and `0` should evaluate it:
+A *Church numeral* represents a number by repeated function application. The
+numeral for two applies its function twice. Giving it the successor function
+and `0` therefore produces `S S 0`:
 
 ```aufbau-proof prelude=lam-base,lam-rules
 lemma two_apply {f x w: tm}: $ (λ f. λ x. f · (f · x)) · (λ w. S w) · 0 = S S 0 $
@@ -205,8 +206,8 @@ l6: $ Y · g = g · ((λ u. g · (u · u)) · (λ u. g · (u · u))) $ by eq_tra
 l7: $ Y · g = g · (Y · g) $ by eq_trans [l6, l5]
 ```
 
-`l1` applies `beta` to a goal whose left side is `Y`, not a visible 
-abstraction; the compiler unfolds the definition to find the redex.
+On `l1`, the function being applied is `Y`, not a visible abstraction. The
+compiler unfolds `Y` to find the β-reduction step.
 
 `conversion?` can find this equation, but only when the definition of `Y` is 
 used rather than the defined term `Y`. Only annotated definitions take part in 

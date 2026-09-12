@@ -1,6 +1,6 @@
 # Powering search
 
-[Proof Search](proof-search.md) introduced `auto?` and `conversion?`. This
+[Proof search](proof-search.md) introduced `auto?` and `conversion?`. This
 chapter describes the `@auto` annotations that control `auto?`. Unannotated
 rules remain searchable; annotations opt particular rules into additional,
 more expensive strategies.
@@ -21,18 +21,18 @@ l1: $ _ ⊢ c $ by auto?
 
 The suggestion is `and_elim_r (a := $ b $) [and_elim_r [#1]]`.
 
-- Backward from the goal, `and_elim_r`'s conclusion `g ⊢ b` pins the context `g
-  := _` and the wff `b := c`; the premise becomes the pattern `_ ⊢ ?t ∧ c`,
-  with the conjunct `a` undetermined, and `?t` an *existential metavariable*
-  that stands for the unknown `wff`.
+- Matching `and_elim_r`'s conclusion `g ⊢ b` against the goal determines `g
+  := _` and `b := c`. Its premise becomes `_ ⊢ ?t ∧ c`, where `?t` stands
+  for the still-unknown conjunct `a`.
 - The pattern becomes a sub-goal.
-- The inner `and_elim_r`, applied to `#1`, concludes `_ ⊢ b ∧ c`: it fits the
-  pattern, and the match pins `a := b`.
+- The inner `and_elim_r`, applied to `#1`, concludes `_ ⊢ b ∧ c`: it fits
+  the pattern, and matching determines `a := b`.
 
-Ordinary search is primarily *concrete*. A binder need not be determined the 
-instant its rule is applied (it can be carried into a sub-search as a 
-metavariable) but only with some limitations (described below), and only after
-ordinary candidates fail.
+Ordinary search prefers applications whose bindings it can determine
+immediately. If those candidates fail, it may leave a binder unresolved
+while searching for a premise. A *metavariable*, such as `?t`, represents
+that unknown expression. The annotations below control when search uses this
+strategy.
 
 ## `@auto backward`: witnesses as metavariables
 
@@ -56,17 +56,16 @@ entirely within the proof.
 
 ### Scheduling
 
-Ordinarily, search runs in several phases, each phase exploring the proof as
-deeply as it can with a different set of increasingly expensive strategies.
-Metavariable introduction only occurs in a late phase as a last resort. For an
-`@auto backward` rule, though, metavariable introduction is an ordinary move,
-and instead of being deferred by the phase structure, it's deferred only by
-ordinary rule scheduling within a phase at each depth. At each search depth
-(i.e. one rule application, two rule applications...), unannotated rules are
-tried first, then `@auto backward` rules whose conclusions determine all of
-their binders, and `@auto backward` rules with underdetermined binders last. So
-even with `@auto backward`, a metavariable is never created if there are
-cheaper approaches (at a given depth) remaining to explore.
+Search runs in phases that use increasingly expensive strategies. Each phase
+searches for a proof sequentially at increasing depths, iteratively deepening 
+the search space and caching partial results for future phases. For unannotated 
+rules, introducing metavariables is a last resort, available only in a late 
+phase.
+
+`@auto backward` makes metavariable introduction available in earlier
+phases. At each depth, search still tries cheaper candidates first:
+unannotated rules, then annotated rules whose conclusions determine all
+their binders, then annotated rules with unresolved binders.
 
 ### Nested deferrals
 
@@ -95,21 +94,20 @@ ex_intro (t := $ c $, p := $ E. y (P x /\ Q y) $)
 
 Here's how we get there:
 
-- The outer `ex_intro` creates a metavariable `?s` and sets the sub-goal
-`_ ⊢ ∃ y (P ?s ∧ Q y)`
-- The inner one, applied to that pattern, creates a second `?t` and leaves `_ ⊢
-  P ?s ∧ Q ?t`.
-- `and_intro` splits it,
-- `#1` pins `?s := c`, `#2` pins `?t := d`, and each value flows back up to the
-  rule that opened it.
+The outer `ex_intro` creates a metavariable `?s` and the subgoal `_ ⊢ ∃ y (P
+?s ∧ Q y)`. The inner `ex_intro` creates another metavariable, `?t`, leaving
+`_ ⊢ P ?s ∧ Q ?t`. Then `and_intro` splits the conjunction. Matching `#1`
+determines `?s := c`, and matching `#2` determines `?t := d`. Search uses
+these values to complete both `ex_intro` applications.
 
 Opening `?t` with `?s` unsolved required `@auto backward`. Without the
 annotation the proof hits the search limit, trying rules other than `ex_intro`
 for the inner search.
 
-### Invention
+### Choosing an arbitrary witness
 
-Sometimes there is nothing to pin the witness: any instance will do.
+Sometimes the proof does not determine a witness because any variable will
+do.
 
 ```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
 lemma wit {x: obj}: $ _ ⊢ ∃ x (P x → P x) $
@@ -147,25 +145,26 @@ axiom or_elim (g h i: ctx) (a b c: wff):
   $ g ⊢ a ∨ b $ > $ h , a ⊢ c $ > $ i , b ⊢ c $ > $ g , h , i ⊢ c $;
 ```
 
-Any concrete goal can match `… ⊢ c`, and `a, b` appear only in a premise. That 
-potentially introduces three new goals with metavariables and very little 
-discriminating structure, creating a fan-out that takes away time that would 
-probably be better spent on rules that are actually indicated by the concrete 
-goal you're trying to prove.
+Any sequent goal can match `… ⊢ c`, but the goal does not determine `a` or
+`b`. Applying this rule backward can create three poorly constrained
+subgoals. Exploring them may use the budget before search reaches rules
+better suited to the goal.
 
 ## `@auto forward`: enrich the pool first
 
-`@auto forward` is the dual: put it on **elimination and destructor** rules,
-rules that consume facts and yield something smaller or more concrete.
-Before backward search begins, the engine fires forward rules over the
-reference pool, saturates, and adds everything derived as extra references.
+Use `@auto forward` for **elimination rules** and other rules that extract
+simpler facts from known ones. Before backward search begins, the engine
+repeatedly applies these rules to the reference pool and adds the derived
+facts as extra references, subject to its search limits.
 
-A forward rule need not fully determine its own output. Fired forward on a pool
-fact `∀ x p`, ∀-elimination produces an instance that depends on a `t` its
-premise does not pin down. Forward saturation does not guess it: it records
-`?t` as a universal metavariable, instantiated at the point of use, when
-another fact **joins** against the family and reads off the instance it needs.
-A Hilbert-style quantifier theory shows how this works:
+A forward rule need not determine its entire output. Applying ∀-elimination
+to `∀ x p` produces an instance of `p`, but the premise does not determine
+the substituted term `t`. Rather than guess, search records `?t` as a
+*universal metavariable*: it represents a family of instances. Another rule
+can combine this family with a known fact to determine the needed instance.
+This matching operation is called a *join*.
+
+A Hilbert-style quantifier theory shows how it works:
 
 ```aufbau-proof
 @@mm0
@@ -225,13 +224,12 @@ lemma anchor {x y: obj}: $ ∀ x (P x → Q x) $ > $ P c $ > $ ∃ y (Q y) $
 l1: $ ∃ y (Q y) $ by auto?
 ```
 
-Nothing concludes a `Q`-fact here, so the existential has exactly one route:
-derive `Q c` from the universal and the anchor `P c`. Forward saturation
-can find that route: `all_elim` turns `#1` into the family `P ?t → Q ?t`, and
-`mp` (enrolled forward as well as backward) joins the family with `P c`,
-instantiating `t := c`. The derived `Q c` then pins the metavariable that
-backward `ex_intro` opened, and the suggestion comes back as a three-step
-chain:
+The useful route to the existential goal is to derive `Q c` from `∀ x (P x →
+Q x)` and `P c`. Forward saturation can find that route: `all_elim` turns
+`#1` into the family `P ?t → Q ?t`, and `mp` (enrolled forward as well as
+backward) joins the family with `P c`, instantiating `t := c`. The derived
+`Q c` determines the metavariable introduced by backward `ex_intro`. Search
+suggests a three-step chain:
 
 ```
 ex_intro [mp (a := $ P c $, b := $ Q c $)
@@ -240,16 +238,16 @@ ex_intro [mp (a := $ P c $, b := $ Q c $)
 
 If you delete the two `@auto forward` lines, the same search reports an
 exhausted space at depth 6 even though the proof we're looking for is only
-three applications deep. Backward, the route that uses `P c` runs through `mp`
-with both premises open: `?a → Q ?t` and a bare `?a`, which ends up too
-underdiscriminating to find `t := c`. Forward, the same step is a join of two
-concrete pool facts, and the match is forced.
+three applications deep. Backward search reaches `mp` with two unresolved
+premises, `?a → Q ?t` and `?a`. These patterns do not constrain the search
+enough to find `t := c`. Forward search instead matches the derived
+implication family against the known fact `P c`, which determines the
+bindings.
 
-Contrast a *free* witness: `∀ x (P x) > ∃ y (P y)` needs no join, because
-any instance closes it. As a result backward search alone proves it, inventing
-the witness from the sort's `@vars` pool. A join is needed when a specific
-instance is needed and the evidence for the choice of instance exists in the
-reference pool.
+By contrast, `∀ x (P x) > ∃ y (P y)` needs no join: any instance proves the
+goal. Backward search alone can prove it by choosing a witness from the
+sort's `@vars` pool. Joins help when the proof needs a specific instance
+determined by another fact in the pool.
 
 `@auto forward` does not belong on most introduction rules, since backward
 search uses them more effectively and indiscriminate application wastes
@@ -273,21 +271,22 @@ axiom rand (d: ctx) (a b: wff):
   $ ⊢ a , d $ > $ ⊢ b , d $ > $ ⊢ (a ∧ b) , d $;
 ```
 
-An eager rule (implicitly `@auto backward` as well) has three extra properties:
-it is *scheduled* ahead of all other enrolled rules, ordered by the optional
-priority (1 is earliest and the default; the classic discipline puts the
-non-branching rules at 1 and the branching ones at 2); once it has applied,
-the search *commits*  (invertibility means that if the decomposition fails,
-the goal fails, so non-eager alternatives are not retried at that node); and
-its applications are *exempt from search depth limits*, so a tall deterministic
-decomposition ladder costs one depth level rather than fifteen.
+An eager rule also has the effect of `@auto backward`. It is tried before
+other registered rules, in priority order. Priority 1 is the default and
+runs first.
 
-The compiler cannot check invertibility, so the invertible rules need to be
-annotated manually. The compiler does have two safety features though: a rule
-whose premises mention a binder its conclusion does not is rejected for `eager`
-outright, and if a search comes up empty without hitting its budget, it
-retries once with the commitment disabled (the scheduling and the depth
-exemption effects remain active).
+Once an eager rule applies, search commits to it: if its premises cannot be
+proved, search does not try non-eager alternatives at that node. Eager
+applications do not count toward the search depth limit, so a long sequence
+of these steps does not require a greater depth setting. So eager rules should 
+generally be "invertible" rules that can safely be applied without producing 
+unprovable goals.
+
+The compiler cannot prove that a rule is invertible; the annotation is the
+theory author's choice. It does reject `@auto eager` if a premise mentions a
+binder absent from the conclusion. If search fails without reaching its
+budget, it also retries once without committing to eager rules. Priority
+ordering and the depth exemption still apply on that retry.
 
 ## `@auto trigger`: seed leaf facts
 
@@ -301,9 +300,9 @@ the rule's binders, and `_`:
 axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
 ```
 
-When a search would otherwise come up empty, the engine matches each trigger
-pattern against the goal's subterms, mints an instance of the rule for every
-match, and retries with those seeds in the pool. The pattern has to name every
-binder of the rule except those that default to the unit of an `@acui`
+When search would otherwise fail, the engine matches each trigger pattern
+against the goal's subterms. It creates a rule instance for each match and
+retries with those facts in the reference pool. The pattern has to name
+every binder of the rule except those that default to the unit of an `@acui`
 combiner. `g` above defaults to the empty context, and the annotation is
 rejected if a binder is unresolvable.

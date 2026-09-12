@@ -7,8 +7,8 @@ build, or verify an MMB file independently.
 
 ## With Nix
 
-If you use Nix with flakes enabled, you don't need to build anything. Drop
-into a shell with both tools on your `PATH`:
+With Nix and flakes enabled, you can let Nix obtain or build the tools. Open
+a shell with both commands on your `PATH`:
 
 ```sh
 nix shell github:gleachkr/Aufbau
@@ -23,8 +23,8 @@ nix profile install github:gleachkr/Aufbau
 Either way you get the `abc` and `mm0-zig` commands directly — where the
 rest of this chapter writes `zig-out/bin/abc`, just type `abc`. The
 repository's flake also provides a development shell (`nix develop`) with
-the right Zig version and the rest of the toolchain, if you'd rather build
-from source as described next.
+the required Zig version and other build tools. Use it if you prefer to
+build from source, as described below.
 
 ## Requirements
 

@@ -1,9 +1,9 @@
 # Lemmas and definitions in proofs
 
-An `.auf` file is a sequence of top-level items: proof blocks, `lemma` blocks,
-and `def` items. Proof blocks discharge the theorems declared in the `.mm0`
-file. `lemma` and `def` items extend the theory without adding unproved
-assumptions.
+An `.auf` file is a sequence of top-level items: proof blocks, `lemma`
+blocks, and `def` items. Proof blocks prove the theorems declared in the
+`.mm0` file. `lemma` and `def` items extend the theory without adding
+unproved assumptions.
 
 ## Proof blocks
 
@@ -22,10 +22,9 @@ l2: $ g ⊢ a $ by and_elim_l [#1]
 l3: $ g ⊢ b ∧ a $ by and_intro [l1, l2]
 ```
 
-Blocks appear in the order of the declarations they discharge. The compiler
-streams through the `.mm0` and `.auf` files together rather than building a
-global proof database, so each block must match the next public declaration,
-and forward references are rejected.
+Theorem proof blocks appear in the same order as their declarations. The
+compiler reads the `.mm0` and `.auf` files together, so a proof can cite
+only declarations already in scope. Forward references are rejected.
 
 ## Lemma blocks
 
@@ -87,9 +86,9 @@ l1: $ h ⊢ a ∧ b $ by and_intro [#2, #3]
 l2: $ g , h ⊢ ⊥ $ by not_elim [#1, l1]
 ```
 
-A body filler has no return sort, which is what distinguishes it from the local
-definitions below, and it must appear at the point in the proof file where the
-bodyless declaration is reached. The definition it fills is public: it is
+This form is called a *body filler*. It has no return sort, unlike a
+proof-local definition. It must appear where the compiler reaches the
+corresponding bodyless declaration. The definition it fills is public: it is
 emitted as an ordinary term definition and checked against the `.mm0`
 declaration, so it can carry notation, and `a ⊼ b` is available in proofs.
 
@@ -126,8 +125,8 @@ l1: $ h ⊢ a ∧ b $ by and_intro [#2, #3]
 l2: $ g , h ⊢ ⊥ $ by not_elim [#1, l1]
 ```
 
-Proof-side definitions cannot carry notation yet, which is why `nand a b` here
-is written in application form where the previous version could write `a ⊼ b`.
+Proof-local definitions cannot have notation declarations. This example
+therefore uses `nand a b` where the previous version used `a ⊼ b`.
 
 Like ordinary definitions, proof-local definitions are transparent at rule
 applications: the folded and unfolded forms are interchangeable, and each line

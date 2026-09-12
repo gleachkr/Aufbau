@@ -1,7 +1,9 @@
 # Variables, binders, and dependencies
 
-Term declarations require a binder list, like `(a b: wff)`, `{x: tm}` and `(e:
-tm x)`.
+A *binder* declares a variable and its sort. Declarations use binder lists
+such as `(a b: wff)`, `{x: tm}`, and `(e: tm x)`. Parentheses and braces
+distinguish the kinds of variable; variable names after the sort (as in `tm x`) 
+specify dependencies.
 
 ## Regular variables
 
@@ -14,14 +16,14 @@ axiom h1 (a b: wff): $ imp a (imp b a) $;
 
 ## Bound variables
 
-A binder in curly braces declares a **bound variable** (this is perhaps 
-regrettable terminology on the part of the metamath zero standard. It might be 
-more helpful to think of it as a schematic *bindable* variable, as 
-distinguished from a regular variable which is more like an ordinary schematic 
-variable).
+A binder in braces declares a **bound variable**. This is MM0's terminology for 
+a variable that must be instantiated with another bound variable, (for example, 
+a bound variable from the theorem declaration or one designated with the `@var` 
+annotation) not an arbitrary expression. It need not occur under a binding 
+operator.
 
-Bound variables are, for example, how a theory declares that a constructor is  
-variable-binding:
+Bound variables let a theory declare binding constructors, such as lambda
+abstraction:
 
 ```mm0
 term lam {x: tm} (e: tm x): tm;
@@ -93,10 +95,11 @@ Distinct bound binders must stand for distinct variables. A rule declaring `{x
 y: tm}`, as `sb_lam` does, cannot be applied with both slots filled by one
 variable, and reports that `x` and `y` must be assigned distinct variables.
 
-A constructor's result sort can carry dependencies as well: `term fresh {x: tm}
-(e: tm): tm x;` declares that `fresh x e` mentions `x` however `e` is
-instantiated. This affects which variables a compound expression counts as
-mentioning, which is relevant to how it can function in a definition.
+A constructor's result sort can carry dependencies as well: `term fresh {x:
+tm} (e: tm): tm x;` declares that `fresh x e` mentions `x` however `e` is
+instantiated. This dependency matters when checking the free variables in a
+definition's body, as explained in [Definition
+checking](axioms-theorems-definitions.md#definition-checking).
 
 ## Dummy variables
 

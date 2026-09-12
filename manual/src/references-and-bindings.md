@@ -106,10 +106,11 @@ against the rule's hypotheses. Both proofs above check with their binding
 lists deleted, so you can hover a line once its cell checks to see what was
 inferred.
 
-When the goal is written out and every reference is a hypothesis or an earlier
-line, the match is against fully concrete formulas and ordinarily determines
-every variable the rule mentions. Undetermined binders arise mainly with
-inline applications, whose goals are not explicitly written down.
+When the goal is written out and every reference is a hypothesis or an
+earlier line, the compiler matches complete formulas. This usually
+determines every variable the rule mentions. Undetermined binders arise
+mainly with inline applications, whose goals are not explicitly written
+down.
 
 ## Inline applications
 
@@ -134,18 +135,17 @@ This is `weaken` from above with the `h1` instance applied in place. Inline
 applications nest, and mix freely with the other reference kinds.
 
 An inline application has no written goal, so the compiler must infer its
-entire conclusion. It is handed the hypothesis it is expected to prove,
-computed from everything else the enclosing application knows: the stated
-goal, any explicit bindings, and the other references. In `weaken_inline`,
-the goal and `#1` fix both variables of `mp`, so `h1` is asked to prove
-`p -> (q -> p)` and its own variables are forced.
+entire conclusion. The enclosing application supplies the expected
+conclusion from the stated goal, explicit bindings, and other references. In
+`weaken_inline`, the goal and `#1` fix both variables of `mp`, so `h1` is
+asked to prove `p -> (q -> p)` and its own variables are forced.
 
 The expected conclusion need not be complete. A variable of the enclosing
 rule that is still unknown is left open in the hint, to be settled by the
 inline application's own conclusion or by another reference — including one
-further to the right. What is required is that every variable be determined
-by *something* in the line. When one is not the line is rejected, and the fix
-is a binding list on the inline application itself:
+further to the right. Every variable must be determined somewhere in the
+line. If one remains unknown, the compiler rejects the line. Supply the
+missing value with a binding list on the inline application:
 
 ```aufbau-proof doc=refs
 lemma weaken_pinned (p q: wff): $ p $ > $ q -> p $
@@ -153,9 +153,9 @@ lemma weaken_pinned (p q: wff): $ p $ > $ q -> p $
 l1: $ q -> p $ by mp [#1, h1 (a := $ p $, b := $ q $)]
 ```
 
-Each inline application must elaborate to a single concrete hidden line before
-the enclosing application can finish. The inline application mechanism does not
-attempt multiple disambiguations if it cannot resolve a binder.
+The compiler must resolve every binding in an inline application before it
+can finish checking the enclosing application. It does not try several
+possible values for an unresolved binder.
 
 The unpack action described in
 [The parts of a proof line](proof-line.md#packing-and-unpacking) reverses this

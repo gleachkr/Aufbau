@@ -29,10 +29,11 @@ prefix not: $~$ prec 40;
 term bot: wff; notation bot: wff = ($⊥$:max);
 ```
 
-This theory has three sorts. Only `seq`, the sort of sequents,
-is provable. Formulas and contexts are pure syntax: nothing ever proves a bare
-`wff`. Ungrammatical combinations like the conjunction of two sequents will not
-parse. Each connective carries an ASCII alias alongside its Unicode notation.
+This theory has three sorts. Only `seq`, the sort of sequents, is provable.
+Formulas and contexts are syntax, not assertions: a proof cannot assert a
+bare `wff`. The sort system also rejects combinations such as a conjunction
+of two sequents. Each connective carries an ASCII alias alongside its
+Unicode notation.
 
 ## Sequents and contexts
 
@@ -55,11 +56,11 @@ infixl seq_eq: $<==>$ prec 1;
 ```
 
 This cell declares judgment forms. A sequent like `g ⊢ a` is what deduction
-rules actually derive. The other three are equivalence judgments — `↔` on
-formulas, `ctx_eq` on contexts, `⟚` on sequents — that exist to carry the
-equational layer. Since `↔` produces a judgment (of sort `seq`) rather than a
-formula, an equivalence can never be embedded under a connective: it is
-metatheory, not object language.
+rules actually derive. The other three judgments express equivalence: `↔`
+for formulas, `ctx_eq` for contexts, and `⟚` for sequents. The compiler uses
+them to justify normalization. Because `↔` produces a `seq`, not a `wff`,
+this theory cannot place an equivalence inside a formula such as a
+conjunction or implication.
 
 Contexts are built from single formulas (hence the coercion from `wff` to
 `ctx`) with the join `,`, whose `@acui` annotation makes them behave as sets:
@@ -129,10 +130,10 @@ axiom not_elim (g h: ctx) (a: wff): $ g ⊢ ¬ a $ > $ h ⊢ a $ > $ g , h ⊢ �
 axiom bot_elim (g: ctx) (a: wff): $ g ⊢ ⊥ $ > $ g ⊢ a $;
 ```
 
-The system is intuitionistic. Rules with two major premises join their contexts
-multiplicatively in the conclusion. The `ax` axiom is the only "leaf" axiom
-with no hypotheses. Since the `g` in `ax` is arbitrary, weakening happens at
-the leaves rather than by a structural rule.
+The system is intuitionistic. Rules such as `imp_elim` combine the contexts
+of their premises; `and_intro` uses the same context for both. `ax` is the
+only deduction rule with no hypotheses. Its arbitrary context `g` permits
+extra assumptions, so proofs do not need a separate weakening step.
 
 A first proof, elimination followed by re-introduction:
 
@@ -148,9 +149,9 @@ l3: $ a ∧ b ⊢ a $ by and_elim_l [l1]
 l4: $ a ∧ b ⊢ b ∧ a $ by and_intro [l2, l3]
 ```
 
-Currying shows the context machinery working. The `ax` leaves on `l2` and
-`l3` build in the needed weakening, and the three-part context that
-`imp_elim` produces on `l5` is peeled back off one hypothesis at a time:
+The currying proof illustrates context handling. Lines `l2` and `l3` use
+`ax` with extra assumptions. `imp_elim` combines contexts on `l5`, then each
+`imp_intro` step moves one assumption into the conclusion:
 
 ```aufbau-proof doc=nd
 @@mm0

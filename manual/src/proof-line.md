@@ -6,9 +6,9 @@ label: $ GOAL $ by rule (bindings) [references]
 ```
 The label names the line. The goal, between `$` signs, is what the line
 asserts. Everything after `by` is the justification for the line: the rule
-being applied, optional *bindings* in parentheses that pin down the rule's
-variables, and optional *references* in brackets that supply the rule's
-hypotheses.
+being applied, optional *bindings* in parentheses that assign expressions to
+the rule's variables, and optional *references* in brackets that supply the
+rule's hypotheses.
 
 We'll work in the Hilbert system from the last chapter, extended with the
 distribution axiom `h2`:
@@ -52,8 +52,8 @@ It checks, but `l3` transcribes an axiom instance that the compiler can infer.
 
 ## Inline applications
 
-When a premise is a one-shot rule application, you can write it directly in
-the reference list. For example:
+When a premise needs only one rule application, you can write that
+application directly in the reference list. For example:
 
 ```aufbau-proof doc=hilbert
 lemma weaken_under (p q: wff): $ p $ > $ q -> p $
@@ -82,8 +82,9 @@ This version omits the explicit `h2` line from the first proof.
 
 ## When chaining fails
 
-Folding every application into one line loses information needed for
-inference. The following cell is intentionally invalid:
+Combining every application into one line can remove formulas that the
+compiler needs in order to infer bindings. The following cell is intentionally
+invalid:
 
 ```aufbau-proof
 @@mm0
@@ -107,7 +108,8 @@ forces a choice of instance for the first `h1 []`.
 If a variable cannot be determined, you can give the premise its own labeled
 line, as in `imp_refl_chained` above, or state the instances yourself with
 bindings, which work on inline applications the same way they work after
-`by`. The one-liner does check with both `h1`s pinned down:
+`by`. The single-line proof checks when both `h1` applications have explicit
+bindings:
 
 ```
 l1: $ p -> p $ by mp [h1 (a := $ p $, b := $ p $) [],
@@ -116,7 +118,7 @@ l1: $ p -> p $ by mp [h1 (a := $ p $, b := $ p $) [],
 
 ## Packing and unpacking
 
-Chains can be unpacked. Put your caret on the last line of `imp_refl_chained`
-and pause: the lightbulb offers an *unpack* action that rewrites the line as
-separate labeled lines, one per inline application, with each goal filled in
-from what the compiler checked.
+Chains can be unpacked. Place the text cursor on the last line of
+`imp_refl_chained` and pause: the lightbulb offers an *unpack* action that
+rewrites the line as separate labeled lines, one per inline application,
+with each goal filled in by the compiler.

@@ -25,9 +25,10 @@ provable sort wff;
 ```
 
 `provable` means expressions of this sort can be asserted: they may appear
-between `$` signs as an axiom's conclusion, a theorem's statement, or a proof
-line's goal. Most theories have exactly one provable sort. The propositional
-theories of the last part had `wff` and nothing else.
+between `$` signs as an axiom's conclusion, a theorem's statement, or a
+proof line's goal. Most theories have exactly one provable sort. The opening
+Hilbert theory used `wff` as its only sort. The natural deduction examples
+also used sorts for contexts and sequents.
 
 ## Term constructors
 
@@ -37,9 +38,9 @@ A `term` statement declares a way to build expressions.
 term imp (a b: wff): wff;
 ```
 
-`imp` takes two `wff`s and produces a `wff`. In a math string a term
-constructor is applied prefix, and an argument that is itself an application is
-parenthesized:
+`imp` takes two expressions of sort `wff` and produces another `wff`. Within
+a *math string* (text between `$` signs), write the constructor before its
+arguments. Parenthesize any argument that is itself an application:
 
 ```
 $ imp a (imp b a) $
@@ -82,11 +83,11 @@ Theories generally open with something like this:
 delimiter $ ( ) $;
 ```
 
-Math strings are normally lexed (broken up into lexical tokens) by splitting on
-whitespace. However, each character listed in a `delimiter` statement splits as
-well, wherever it occurs. Drop the statement and `(imp` becomes a single token,
-which the compiler reports as unknown. The rest of what `delimiter` controls
-belongs with notation, two chapters on.
+The parser normally splits math strings into tokens at whitespace.
+Characters listed in this form of `delimiter` also create token boundaries
+wherever they occur. Without this declaration, `(imp` is one unknown token
+rather than `(` followed by `imp`. [Notation](notation.md#delimiters)
+explains the other delimiter options.
 
 ## Several sorts
 
@@ -125,9 +126,9 @@ Sorts also provide the signatures for constructors. For example `eq` takes two
 
 ## Coercions
 
-However, a sort mismatch does not have to be an error. A `coercion` nominates a
-one-argument constructor to be inserted silently wherever an expression of the
-source sort turns up where the target sort is wanted.
+A *coercion* lets the parser convert an expression from one sort to another.
+It names a one-argument constructor that the parser inserts when the
+surrounding expression requires the target sort.
 
 ```aufbau-proof doc=coercion
 @@mm0
@@ -140,10 +141,10 @@ term nd (g: ctx) (a: wff): wff;
 axiom ax (a: wff): $ nd a a $;
 ```
 
-`hyp` wraps a formula as a one-element context, and the coercion means it is
-never written. `ax` is stated as `nd a a` even though `nd` wants a `ctx` on the
-left; the elaborated axiom is `nd (hyp a) a`. Writing the constructor out gives
-the same expression:
+`hyp` turns a formula into a one-element context. The coercion lets us omit
+it: `ax` is written `nd a a`, although `nd` requires a `ctx` as its first
+argument. After the parser inserts the coercion, this is `nd (hyp a) a`.
+Writing the constructor out gives the same expression:
 
 ```aufbau-proof doc=coercion
 lemma trivial (p: wff): $ nd p p $
@@ -158,10 +159,9 @@ A coercion may also be what makes a sort assertable. If the arithmetic theory
 above declared `term holds (t: tm): wff;` and coerced `tm > wff`, then `$ suc
 zero $` would be a statement after all, meaning `holds (suc zero)`.
 
-Coercions compose: a route through several of them is followed if one exists.
-To keep any expression from having two readings, the sorts and coercions must
-form a graph that is acyclic even ignoring direction, which leaves at most one
-route between any two sorts.
+The parser can chain coercions when several conversions are needed. To
+prevent ambiguity, there must be at most one path between any two sorts,
+even when the direction of each coercion is ignored.
 
 ## Sort modifiers
 

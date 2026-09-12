@@ -1,7 +1,9 @@
 # The npm packages
 
-Aufbau ships four npm packages. Each wraps the same Zig code that the CLI uses,
-compiled to WebAssembly for use in JS environments.
+Aufbau provides four npm packages. The verifier, compiler, and language
+server use the same Zig code as the command-line tools, compiled to
+WebAssembly for JavaScript environments. The editor provides browser
+components built on those packages.
 
 | Package | Contents | Runs in |
 |---|---|---|
@@ -10,9 +12,11 @@ compiled to WebAssembly for use in JS environments.
 | `@aufbau/lsp` | the language server (hover, completion, proof search) | browsers and Node |
 | `@aufbau/editor` | the `<aufbau-*>` web components | browsers only |
 
-All four are ES modules with no install-time dependencies, usable from a
-bundler, from plain Node, or straight from a CDN import map (see [Embedding
-the editor](embedding.md) for the CDN setup).
+All four use ES modules. The verifier, compiler, and language server work in
+browsers and Node; the editor requires a browser and the peer dependencies
+listed below. Browser applications can use a bundler or a content delivery
+network (CDN) with an import map. See [Embedding the editor](embedding.md)
+for the CDN setup.
 
 ## `@aufbau/verifier`
 
@@ -68,9 +72,9 @@ Long proof searches block the calling thread, so browser pages should prefer
 messages through `server.subscribe(callback)`. The worker transport is
 browser-only; Node applications should use `loadLspServer()` directly.
 
-One deployment wrinkle: browsers refuse to build a Worker from a cross-origin
-script. When the package is served from a CDN, `loadLspServerWorker()`
-transparently boots the worker through a same-origin `blob:` URL. Pages with a
+Browsers cannot start a worker directly from a script hosted on another
+origin. When the package loads from a CDN, `loadLspServerWorker()` starts
+the worker through a local `blob:` URL instead. Pages with a
 Content-Security-Policy must allow this:
 
 ```

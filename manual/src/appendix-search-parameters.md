@@ -1,16 +1,16 @@
 # Appendix: search parameters
 
-Reference for proof-search invocation parameters. Concepts and
-workflow are in [Proof search](proof-search.md); `conversion?` itself is
-covered in [Computation](computation.md).
+This appendix lists proof-search commands and their parameters. [Proof
+search](proof-search.md) explains how to use them;
+[Computation](computation.md) covers `conversion?` in detail.
 
 ## The search commands
 
 | Command | What it does |
 |---|---|
 | `exact?` | Close the goal with **one** rule application whose hypotheses are all discharged by existing references (theorem hypotheses, earlier lines). |
-| `apply?` | Like `exact?`, oriented at discovering *which* rules could produce the goal. |
-| `auto?` | `exact?` plus recursive generation of missing sub-proofs, under iterative deepening and a work budget. The only generating search. |
+| `apply?` | List rules whose conclusions match the goal, even if some hypotheses are not available. |
+| `auto?` | `exact?` plus recursive generation of missing sub-proofs, under iterative deepening and a work budget. Builds proofs from rule applications. |
 | `conversion?` | Equality saturation: is the goal convertible, by `@conversion`/`@compute` rewrites and local equations, to a hypothesis, earlier line, or instance of a reflexivity law? |
 
 A search command can be used on a proof line after `by`, or inside a reference
@@ -23,8 +23,8 @@ that contain unexpanded search commands.
 
 ## Parameter syntax
 
-Parameters go in the same parenthesized list as explicit bindings, as
-`name: INTEGER` entries (a plain colon, against `:=` for bindings). The two
+Parameters go in the same parenthesized list as explicit bindings, as `name:
+INTEGER` entries (a plain colon, rather than `:=` for bindings). The two
 kinds can be mixed:
 
 ```
@@ -40,8 +40,8 @@ repeated, the last occurrence wins.
 | Parameter | Default | Range | Meaning |
 |---|---|---|---|
 | `depth` | 6 | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. Deepening stops at the shallowest depth that closes the goal, so raising it never changes a proof that was already found. `@auto eager` steps are exempt. |
-| `nodes` | 256 | 1–1 000 000 | Per-depth budget of distinct generated sub-goal solves, reset at each deepening pass. Rarely needs touching. |
-| `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget for the whole search |
+| `nodes` | 256 | 1–1 000 000 | Per-depth budget of distinct generated sub-goal solves, reset at each deepening pass. Usually needs no adjustment. |
+| `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase |
 | `budget` | ≈6 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 6.3 units). `budget: 0` is legal and disables the cap entirely. |
 
 When `auto?` fails, the failure report says which limit it hit and suggests a
@@ -60,7 +60,7 @@ for `conversion?`.
 
 ## `exact?` and `apply?`
 
-Take no parameters.
+`exact?` and `apply?` take no search parameters.
 
 ## What search reads from the theory
 

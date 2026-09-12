@@ -1,13 +1,13 @@
 # A Hilbert calculus
 
-The chapters in this part each build a complete theory, in a literate
-programming style (with the prose between the theory code). All cells on a page
-form one document: theory cells contribute MM0 declarations, proof cells
-contribute theorems and their proofs, and an edit to any cell rechecks the
-whole page. A later cell can use anything an earlier cell declares.
+Each chapter in this part develops a theory, alternating declarations and
+proofs with explanations. Cells with the same document name share one
+theory: theory cells add MM0 declarations, and proof cells add theorems and
+proofs. Editing a cell rechecks its document. Later cells can use earlier
+declarations in that document.
 
-We start with the smallest classical system: a Hilbert calculus for
-propositional logic.
+We start with a small classical system: a Hilbert calculus for propositional
+logic.
 
 ## The signature
 
@@ -30,8 +30,8 @@ and implication associates to the right.
 
 ## The axioms
 
-A Hilbert calculus concentrates its deductive strength in the (hypothesis-free)
-axiom schemes. We use three such schemes and one rule:
+A Hilbert calculus uses axiom schemes with few inference rules. This theory
+has three schemes with no hypotheses and one inference rule:
 
 ```aufbau-theory doc=hilbert
 axiom h1 (a b: wff): $ a → (b → a) $;
@@ -42,8 +42,8 @@ axiom mp (a b: wff): $ a $ > $ a → b $ > $ b $;
 ```
 
 `h1` and `h2` are the K and S schemes, and `h3` is classical contraposition.
-Modus ponens is the only rule proper; MM0 does not distinguish rules from
-axioms, so it is simply an axiom with hypotheses.
+Modus ponens is the only inference rule. MM0 represents it as an axiom with
+hypotheses.
 
 ## Implication is reflexive
 
@@ -81,7 +81,7 @@ l5: $ a → c $ by mp [#1, l4]
 
 ## Negation
 
-The double negation laws need one more scheme:
+To shorten the double-negation proofs, we add one more axiom scheme:
 
 ```aufbau-theory doc=hilbert
 axiom con2 (a b: wff): $ (a → ¬ b) → (b → ¬ a) $;

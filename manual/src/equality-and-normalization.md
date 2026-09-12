@@ -16,11 +16,12 @@ the `.auf` file, where it takes effect once the lemma is proved.
 
 ## Relation bundles
 
-When the compiler reconciles two forms of an expression—a raw instantiated
-conclusion against what the user wrote, say—it builds a proof that the two
-are equivalent. To do that it has to know which relation plays the role of
-equivalence for each sort, and which rules provide reflexivity, transitivity,
-symmetry, and transport. A `@relation` annotation declares this bundle:
+When a rule's instantiated conclusion differs from the written goal, the
+compiler can prove that the two are equivalent. It needs an equivalence
+relation for the sort and rules for reflexivity, transitivity, symmetry, and
+transport. *Transport* uses an equivalence to turn a proof of one expression
+into a proof of the other. A `@relation` annotation registers this group of
+rules, called a *relation bundle*:
 
 ```
 --| @relation <sort> <relation-term> <refl> <trans> <symm> <transport>
@@ -89,9 +90,9 @@ the corresponding argument. A sort with no registered relation is simply left
 alone: children of that sort are never rewritten, and no congruence proof is
 required for them.
 
-For a binder-headed constructor, the changing argument appears once as a
-bound binder and the before/after pair must declare every dependency the
-constructor permits:
+For a binding constructor, the bound argument appears once and stays
+unchanged. Each before/after pair of regular arguments must declare every
+dependency the constructor permits:
 
 ```mm0
 --| @congr
@@ -105,9 +106,10 @@ plugs in arbitrary bodies, which may mention `x`.
 
 `@rewrite` marks an axiom or theorem as an oriented rewrite equation. The
 conclusion must have the form `rel lhs rhs` for a registered relation. The
-compiler reads it left to right. Wherever an expression matches the left-hand
-side, replace it with the right-hand side. The substitution equations of the
-lambda calculus chapter are an example of a useful set of rewrite rules:
+compiler applies the equation from left to right, replacing a matching
+expression with the corresponding instance of the right-hand side. The
+substitution equations of the lambda calculus chapter are an example of a
+useful set of rewrite rules:
 
 ```mm0
 --| @rewrite
@@ -119,7 +121,7 @@ axiom sb_add {x: tm} (f g: tm x) (a: tm x):
   $ [x := a] (f + g) = ([x := a] f) + ([x := a] g) $;
 ```
 
-These fire during ordinary line checking. When a rule application's
+These rules apply during ordinary line checking. When a rule application's
 instantiated conclusion or hypothesis does not match the corresponding
 expression exactly, the compiler normalizes both sides with the registered
 rewrites and compares the results, emitting every step it takes. That is why
@@ -135,25 +137,24 @@ l1: $ (λ x. S (x + 0)) · S0 = S (S0 + 0) $ by beta
 The raw right-hand side is `[x := S0] (S (x + 0))`. The compiler reduces it
 with `sb_suc`, `sb_add`, `sb_var`, and `sb_vac`, lifts the steps through `S`
 and `+` with the congruence rules, joins them with transitivity, and
-transports the raw conclusion to the stated one. All of that lands in the
-binary as ordinary rule applications.
+transports the raw conclusion to the stated one. The binary proof records
+each of these steps as an ordinary rule application.
 
-Some mechanics worth knowing when curating a rewrite set:
+When choosing rewrite rules, keep these constraints in mind:
 
 - Rules are indexed by the head constructor of their left-hand side. When
   several rules share a head, they are tried in declaration order and the
-  first match fires, with no backtracking — so put specific rules before
-  general ones.
-- Rewriting attempts to normalize expressions completely, and nothing stops
-  you from registering a looping pair. A step limit cuts runaway
-  normalization off, after which the line fails with an ordinary mismatch.
-- Matching works on visible syntax. A rewrite does not fire inside a folded
+  first matching rule applies, with no backtracking. Put specific rules
+  before general ones.
+- Rules that undo one another can cause normalization to loop. A step limit
+  stops the loop, after which the line fails with a mismatch.
+- Matching works on visible syntax. A rewrite does not apply inside a folded
   definition; transparent definitions are a separate mechanism.
 
 Orientation matters: a rewrite set should reduce toward a normal form.
-Equations that cannot be oriented, like commutativity, belong to
-`conversion?`'s `@conversion` enrollment instead, covered later in the
-manual.
+Equations such as commutativity do not give a useful left-to-right normal
+form. Register them for `conversion?` instead, as described in
+[Computation](computation.md).
 
 ## Substitution
 
@@ -178,15 +179,11 @@ instead of the literal instance
 
 Rewrite rules perform the reduction between these forms.
 
-The only way that a raw MM0 proof is allowed to perform substitution is by
-instantiating the binders in a rule. Applying a rule assigns each of its
-binders one expression, the same at every occurrence. There is no operation
-that opens up an expression and replaces a variable inside that expression. So
-there's no way, in the raw formalism, to write "p, with t in place of x" in a
-statement. Many inferences nevertheless need this operation: β-reduction,
-quantifier instantiation, Leibniz's law, and induction
-schemes all need to talk about generic terms with a substitution applied to
-them.
+MM0 has built-in substitution only for a rule's binders: applying a rule
+assigns one expression to each binder and uses it at every occurrence. It
+has no built-in operation for replacing `x` with `t` inside an arbitrary
+expression `p`. Rules such as β-reduction, quantifier instantiation, and
+induction still need to express this operation.
 
 Following Metamath, an MM0 theory that needs substitution defines it *within
 the logic*. The `fol-base` prelude extends the natural-deduction theory with
@@ -198,9 +195,9 @@ notation sb {x: obj} (t: obj x) (p: wff x): wff =
   ($[$:41) x ($:=$:0) t ($]$:0) p;
 ```
 
-`sb` is an ordinary term constructor wearing a suggestive notation, not an
-operation the compiler knows about: `[x := y] (P x)` and `P y` are distinct
-expressions. The substitution relation is axiomatized:
+`sb` is an ordinary term constructor, not a built-in compiler operation: `[x
+:= y] (P x)` and `P y` are distinct expressions. The substitution relation
+is axiomatized:
 
 ```mm0
 --| @rewrite
@@ -218,17 +215,16 @@ axiom sb_all {x y: obj} (t: obj x) (p: wff x y):
 Registering the substitution axioms as rewrite rules makes the operator
 practical to use. Read together, the rules define its behavior:
 
-- `sb_vac`: a vacuous substitution vanishes. Its proviso, "x not free in
-  p", is expressed by the absence of `x` from the dependency list in
-  `(p: wff)`.
-- `sb_P`: at an atom, the replacement actually happens: assign `y` to `t` and
-  the right-hand side reads `P y`. Each atomic predicate gets one such
+- `sb_vac`: a vacuous substitution vanishes. The declaration `(p: wff)`
+  excludes `x` from `p`'s dependencies. This requires that `p` not mention
+  `x` at all, even under a binder.
+- `sb_P`: at an atom, the replacement actually happens: assign `y` to `t`
+  and the right-hand side reads `P y`. Each atomic predicate gets one such
   equation.
 - `sb_imp`: substitution distributes through a constructor.
-- `sb_all`: the substitution moves under another binder. The capture
-  proviso, "t is free for x in p", is again captured by a dependency list: `(t:
-  obj x)` may mention `x` but not `y`, so the term carried under `∀ y` can
-  never contain the variable it binds.
+- `sb_all`: the substitution moves under another binder. The dependency list
+  prevents capture: `(t: obj x)` permits `t` to mention `x` but not `y`, so
+  moving it under `∀ y` cannot bind a variable in `t`.
 
 With the operator and its equations in place, quantifier rules can be
 stated, and (as with `beta`) used without `sb` ever needing to be written
@@ -248,18 +244,18 @@ l2: $ ∀ x (P x → P x) ⊢ P y → P y $ by all_elim [l1]
 
 The raw conclusion of `l2` is `∀ x (P x → P x) ⊢ [x := y] (P x → P x)`:
 `sb_imp` splits the substitution, `sb_P` finishes each side, congruence
-lifts the steps through `→` and `⊢`, and transport lands on the stated
-line. A complete equation set keeps `sb` confined to rule statements this
-way, with proof lines stating only substituted results.[^1]
+lifts the steps through `→` and `⊢`, and transport produces the stated
+conclusion. A complete equation set keeps `sb` confined to rule statements
+this way, with proof lines stating only substituted results.[^1]
 
 [^1]: The compiler recovers `y` as the substituted term through the `@view`
     annotations described in [Views and recovery](views-and-recovery.md).
 
-The lambda calculus equations earlier in the chapter use the same approach for
-substituting a term into a term: the recursion bottoms out at the variable
-itself, `sb_var`, in place of the per-atom equations, and `sb_lam` plays
-`sb_all`'s role, blocking capture the same way, by omitting `y` from the
-dependency list of the replacement `a`.
+The lambda calculus equations earlier in the chapter use the same approach
+for substituting a term into a term: `sb_var` handles the variable itself in
+place of the per-atom equations, and `sb_lam` plays `sb_all`'s role,
+blocking capture the same way, by omitting `y` from the dependency list of
+the replacement `a`.
 
 ## Structural combiners
 
@@ -276,8 +272,9 @@ The four fields are the associativity axiom, the commutativity axiom (or
 canonicalizes any expression built from the combiner (flattening nested
 joins, dropping units, sorting members when commutativity is declared,
 merging duplicates when idempotence is) and proves the canonical form equal
-to the original using exactly the cited axioms. Two contexts that differ only
-as collections are then interchangeable anywhere:
+to the original using exactly the cited axioms. With all four properties
+registered, contexts containing the same formulas are interchangeable
+regardless of order, grouping, or duplicates:
 
 ```aufbau-proof prelude=nd-base,nd-rules
 lemma pick (a b c: wff): $ c , b , a ⊢ b $
@@ -308,10 +305,11 @@ Here `g , a` can only match the raw tree `(c , b) , a`, so the rule proves
 `c , b , a ⊢ a` and the line fails with a conclusion mismatch.
 
 Associativity is mandatory; the other properties are independent. A
-non-commutative monoid like function composition declares `--| @acui comp_assoc
-_ id _` and gets flattening and unit elimination while preserving order. Unit
-elimination additionally requires the matching unit laws (like `ctx_unit`
-above) to be in scope, since each dropped unit must be justified by a proof.
+non-commutative monoid like function composition declares `--| @acui
+comp_assoc _ id _` and gets flattening and unit elimination while preserving
+order. Unit elimination also requires the matching unit laws to be in scope,
+such as `ctx_eq (emp , g) g` in the natural deduction theory. Each removed
+unit needs a proof.
 
 An `@acui` combiner needs its companions: a `@relation` bundle for its sort,
 and a `@congr` rule for the combiner, so the structural steps can be proved

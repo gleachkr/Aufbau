@@ -47,10 +47,10 @@ hypotheses (`>`, not object-level implications) and have no bound binders.
 --| @rewrite
 ```
 
-No arguments. The associated assertion's conclusion must be `rel lhs rhs` for a
-registered relation; it is indexed by the head term of `lhs` and applied left
-to right during normalization. Rules sharing a head fire in declaration
-order, first match wins.
+No arguments. The associated assertion's conclusion must be `rel lhs rhs`
+for a registered relation; it is indexed by the head term of `lhs` and
+applied left to right during normalization. Rules with the same head are
+tried in declaration order; the first matching rule applies.
 
 ### `@congr`
 
@@ -91,20 +91,25 @@ term join (g h: ctx): ctx;
 --| @conversion ltr|rtl|both|comm|assoc|alpha
 ```
 
-Enrolls a hypothesis-free equation `rel lhs rhs` as a saturation rule for
-`conversion?`. A direction token `rtl|ltr|both` picks which side is matched
-(and so which new terms the e-graph may build). `comm` and `assoc` are role
-certificates instead: the conclusion must be exactly that law, and an operator
-certified both (with `@congr` coverage) is absorbed into the e-graph's AC
-representation at no saturation cost. `alpha` enrolls an alpha-renaming lemma
-(`rel (all x p) (all y (sb x y p))`): a pairing scheduler fires it between
-same-head binder instances that already exist, with the fresh binder taken
-from the partner instance, and the enrolled substitution rules close the gap —
-requires those substitution rules to also be enrolled. Nested renames close
-outside-in, one binder level per firing, and additionally need the
-binder-commutation substitution rule (`sb x a (all y p)` to
-`all y (sb x a p)`) enrolled for each binder head that can nest. A rule cannot carry
-both `@conversion` and `@compute`.
+Registers an equation `rel lhs rhs` for saturation in `conversion?`. `ltr`,
+`rtl`, and `both` select the direction of matching. A rule may have
+hypotheses, which must already be established in the e-graph before it
+applies. The matched side must determine every binder used in the other side
+or in a hypothesis.
+
+`comm` and `assoc` identify commutativity and associativity laws. With both
+annotations and a `@congr` rule, search represents nested applications as
+multisets rather than exploring each ordering and grouping.
+
+`alpha` registers a renaming equation such as `rel (all x p) (all y (sb x y
+p))`. Search applies it between existing expressions with the same binding
+constructor, taking the new binder from the other expression. The
+substitution rules needed to reduce the renamed body must also be registered
+for conversion. Nested renaming proceeds from the outside inward and needs
+substitution rules that move under each relevant binder, such as `sb x a
+(all y p)` to `all y (sb x a p)`.
+
+A rule cannot carry both `@conversion` and `@compute`.
 
 ### `@conversion` on a definition
 
@@ -112,11 +117,11 @@ both `@conversion` and `@compute`.
 --| @conversion fold|unfold|both
 ```
 
-Enrolls the definition's own equation for `conversion?`: `fold` matches the
-definiens and folds it to the head, `unfold` expands applications of the
-head. Unannotated definitions are invisible to `conversion?`. A definition
-with hidden dummy binders may enroll `fold` only. (Ordinary transparent-def
-unfolding during line checking needs no annotation at all.)
+Enrolls the definition's own equation for `conversion?`: `fold` replaces an
+instance of the body with the defined term; `unfold` replaces the defined
+term with its body. Unannotated definitions are invisible to `conversion?`.
+A definition with hidden dummy binders may enroll `fold` only. (Ordinary
+transparent-def unfolding during line checking needs no annotation at all.)
 
 ### `@compute`
 
@@ -124,10 +129,11 @@ unfolding during line checking needs no annotation at all.)
 --| @compute ltr|rtl
 ```
 
-Enrolls a hypothesis-free equation in `conversion?`'s *directed* scheduler —
-applied as a terminating, in-order fold rather than undirected saturation. This
-is the appropriate enrollment for recursion equations and arithmetic tables;
-see the evaluation examples in [Computation](computation.md) and [The lambda
+Registers a hypothesis-free equation for directed computation in
+`conversion?`. Rules apply in declaration order rather than by general
+saturation. The annotation does not guarantee termination. This is the
+appropriate enrollment for recursion equations and arithmetic tables; see
+the evaluation examples in [Computation](computation.md) and [The lambda
 calculus](lambda-calculus.md).
 
 ## Search
@@ -143,15 +149,19 @@ calculus](lambda-calculus.md).
 
 One mode per line; a rule may carry several lines. `forward` runs the rule
 over the reference pool before backward search (elimination rules);
-`backward` lets the rule apply when the goal leaves binders undetermined,
-opening them as witnesses drawn from the `@vars` pool (introduction rules).
-`eager` declares the rule invertible: scheduled first (priority `N` ≥ 1,
-default 1, lower is earlier), committed to once applied, exempt from the
-depth budget; it implies `backward` and statically requires an invertible
-shape. `trigger` attaches a pattern (a parenthesized prefix tree over term
-names, the rule's binder names, and `_`) matched against the goal's
-subterms as a last resort to mint ground instances of a hypothesis-free
-rule.
+`backward` allows unresolved binders to remain as metavariables while search
+proves premises. If a successful proof still needs an arbitrary witness,
+search chooses one from the `@vars` pool.
+
+`eager` marks a rule as invertible. Search tries it first, commits to it
+once applied, and does not count its applications toward the depth limit.
+The optional priority `N` is at least 1, defaults to 1, and runs earlier
+when smaller. It implies `backward`. The compiler checks that premises use
+only binders present in the conclusion, but cannot verify invertibility.
+
+`trigger` supplies a parenthesized prefix pattern over term names, rule
+binders, and `_`. As a last resort, search matches it against subterms of
+the goal to create fully instantiated facts from a hypothesis-free rule.
 
 More details are available in [Powering search](powering-search.md).
 
@@ -185,10 +195,11 @@ reads the corresponding `SOURCE` subtree off as the value of `TARGET`.
 --| @abstract TARGET LEFT RIGHT HOLE LEFT-PLUG RIGHT-PLUG
 ```
 
-Six view-binder names; must follow a `@view`. Recovers a one-hole *context*:
-walks `LEFT` and `RIGHT` in parallel, replacing occurrences of the plug pair
-by `HOLE`, and binds the resulting context to `TARGET`. Several `@recover`
-and `@abstract` lines may follow one `@view`; they run to a fixed point.
+Six view-binder names; must follow a `@view`. Recovers a surrounding
+expression, or *context*, with one variable marking replacement positions.
+It compares `LEFT` and `RIGHT`, replaces each occurrence of the plug pair
+with `HOLE`, and assigns the result to `TARGET`. Several `@recover` and
+`@abstract` lines may follow one `@view`; they run to a fixed point.
 
 ## Variables, freshness, and repair
 

@@ -15,9 +15,9 @@ sort ctx;
 ```
 
 The natural deduction theory from the last chapter includes both of these
-annotations. So `_wff` stands for an omitted formula and `_ctx` for an omitted
-context. Contexts are the tedious part of a natural deduction proof; you can
-use holes to mostly leave them out.
+annotations. So `_wff` stands for an omitted formula and `_ctx` for an
+omitted context. Contexts can be long and repetitive. Holes let you omit
+them when the rest of the line determines them.
 
 ```aufbau-proof prelude=nd-base,nd-rules
 lemma dm1 (a b: wff): $ ¬ a ∧ ¬ b ⊢ ¬ (a ∨ b) $
@@ -56,8 +56,8 @@ l1: $ _ctx ⊢ _wff $ by ax []
 The diagnostic reports the undetermined variable, exactly as it would for a line
 whose bindings could not be inferred for any other reason.
 
-Holes are only allowed in the assertion of a proof line. They are rejected in
-`.mm0` files, in reference lists, in explicit bindings, and in the
+Holes are allowed only in the assertion of a proof line. They are rejected
+in `.mm0` files, in reference lists, in explicit bindings, and in the
 bound-variable position of a binder.
 
 ## Chains of equations
@@ -66,10 +66,10 @@ Holes are useful for equational reasoning. A chain of `eq_trans` steps, for
 example, keeps its left-hand side fixed. A hole avoids repeating that side on
 every line.
 
-Here is the lambda calculus of the last chapter, with the goal `conversion?`
-was asked to prove there, done by hand. `beta` and `add_s` are rules listed in
-that chapter; `eq_trans` and the congruence rules that lift an equality into a
-surrounding term come from the theory's equality bundle.
+Here is a step-by-step proof of the lambda-calculus equation that
+`conversion?` proved in the previous chapter. `beta` and `add_s` are rules
+listed in that chapter; `eq_trans` and the congruence rules that lift an
+equality into a surrounding term come from the theory's equality bundle.
 
 ```aufbau-proof prelude=lam-base,lam-rules
 lemma add_two {x y: tm}: $ (λ x. λ y. (x + y)) · S0 · SS0 = SSS0 $
@@ -86,10 +86,11 @@ c3: $ _tm = S (0 + SS0) $ by eq_trans [c2, s3]
 c4: $ _tm = SSS0 $ by eq_trans [c3, s4]
 ```
 
-The `s` lines prove individual equalities. The last four chain them together,
-with each line extending by one step and stating only the new right-hand side.
-Every `_tm` is the goal's left-hand side, `(λ x. λ y. (x + y)) · S0 · SS0`,
-which `eq_trans` recovers from the chain so far.
+The `s` lines prove individual equalities. The last four chain them
+together, with each line extending by one step and stating only the new
+right-hand side. Every `_tm` is the goal's left-hand side, `(λ x. λ y. (x +
+y)) · S0 · SS0`. The compiler infers it from `app_congr` on `c1` and from
+the preceding equality on each `eq_trans` line.
 
 Substitution stays out of the proof entirely, although `beta` produces it:
 `s1` cites a rule concluding `[x := S0] (λ y. (x + y))` but states the result

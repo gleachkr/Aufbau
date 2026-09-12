@@ -4,9 +4,9 @@ The last two chapters wrote expressions by applying constructors, as in `imp a
 (imp b a)`. A notation declaration lets that same expression be written `a -> (b
 -> a)`.
 
-Notation is used for parsing, and (in `abc`) for formatting strings when
-displaying them to a user. It changes how a math string may be written, but the
-result is still a tree of term constructors. In a theory that declares a
+The parser uses notation to read expressions. Aufbau also uses it to format
+expressions for display. It changes how a math string may be written, but
+the result is still a tree of term constructors. In a theory that declares a
 notation, the notation and constructor-application forms are interchangeable
 everywhere.
 
@@ -49,18 +49,18 @@ lemma tighter_binds_first (a b c: wff): $ (a /\ b -> c) <-> (imp (and a b) c) $
 l1: $ (a /\ b -> c) <-> (imp (and a b) c) $ by iff_refl
 ```
 
-An infix precedence must be below max, and a token may be declared at only one
-precedence. If two infix operators have the same precedence, they must
+An infix precedence must be below `max`, and a token may be declared at only
+one precedence. If two infix operators have the same precedence, they must
 associate the same way. An `infixl` and an `infixr` declared at the same
-precedence will be rejected. Operators sharing an associativity and precedence
-level can be mixed freely, so with `/\` and `\/` both `infixl` at 30, `a /\ b
-\/ c` is `(a /\ b) \/ c`.
+precedence will be rejected. Operators sharing an associativity and
+precedence level can be mixed freely, so with `/\` and `\/` both `infixl` at
+30, `a /\ b \/ c` is `(a /\ b) \/ c`.
 
 ## Prefix operators
 
-`prefix` creates an operator whose token comes ahead of its argument. Prefix
-operators also get a precedence, so `~` at 40 outranks `/\` at 30 and applies
-only to the formula immediately next to it.
+`prefix` creates an operator written before its argument. Prefix operators
+also have a precedence: `~` at 40 binds more tightly than `/\` at 30, so `~
+a /\ b` means `(~ a) /\ b`.
 
 ```aufbau-proof doc=notation
 lemma prefix_is_tight (a b: wff): $ (~ a /\ b) <-> (and (not a) b) $
@@ -92,15 +92,16 @@ character in the one-list form does both. Grouping therefore needs `(` on the
 left and `)` on the right. Declaring them the other way round leaves something
 like `(imp` a single token.
 
-Delimiters must be a single byte. `delimiter $ ( ) λ $;` is rejected, which is
-why a lambda is written `λ x. e` and not `λx. e` — `λ` cannot be made to split
-a token it is glued to.
+Delimiters must be a single byte. `delimiter $ ( ) λ $;` is rejected, which
+is why a lambda is written `λ x. e` and not `λx. e` — `λ` cannot be declared
+a delimiter to separate it from adjacent text.
 
 ## Notation for everything else
 
-`notation` covers more complicated notations: bare constants, mixfix operators,
-and binders. It lists the declaration's variables interleaved with constants,
-each constant written `(token:prec)`.
+`notation` covers constants, binders, and *mixfix* operators, whose notation
+places fixed tokens before, between, or after arguments. It lists the
+declaration's variables interleaved with constants, each constant written
+`(token:prec)`.
 
 ```aufbau-proof doc=lambda
 @@mm0
@@ -130,9 +131,9 @@ l1: $ eq (λ x. x + x) (add (lam x x) x) $ by eq_refl
 ```
 
 `+` has precedence 30, which is less than the leading constant's 41, so the
-body is just `x` and the sum is formed around the lambda rather than inside it.
-The `($.$:0)` in the declaration is the precedence of the `.` token and does
-not make the body greedy. Parentheses give the intended reading:
+body is just `x` and the sum is formed around the lambda rather than inside
+it. The `($.$:0)` in the declaration is the precedence of the `.` token and
+does not extend the body past `+`. Parentheses give the intended reading:
 
 ```aufbau-proof doc=lambda
 lemma parens_fix {x: tm}: $ eq (λ x. (x + x)) (lam x (add x x)) $

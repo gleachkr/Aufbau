@@ -1,8 +1,8 @@
-# Ergonomics: variables, freshening, holes, fallbacks
+# Ergonomics: variables, freshness, holes, fallbacks
 
 This chapter covers four annotation families that help make proofs easier to
-write: hole tokens, variable pools, freshness machinery that repairs binder
-clashes, and rule fallbacks.
+write: hole tokens, variable pools, renaming to avoid variable clashes, and
+alternative rules to try when an application fails.
 
 As a running example we extend the natural deduction theory with quantifiers.
 The extension lives in two prelude files, `fol-base` (syntax, substitution,
@@ -13,10 +13,10 @@ from the second.
 ```aufbau-listing prelude=fol-base
 ```
 
-There is nothing new in the second half of the file: `[x := t] p` is the
-substitution operator of the last chapter, with `@congr` and `@rewrite`
-supplying its normalization behavior. The `@vars` and `@alpha` annotations
-are new, and the quantifier rules will lean on all of it.
+The second half of the file uses the substitution operator `[x := t] p` from
+the previous chapter. Its `@congr` and `@rewrite` annotations let the
+compiler normalize substitutions. This chapter introduces `@vars` and
+`@alpha`, which support variable selection and renaming.
 
 ## Hole tokens
 
@@ -68,10 +68,11 @@ there is an unknown token. The annotation is rejected on `strict` and `free`
 sorts, which forbid theorem-local dummies. A token that collides with another
 pool, a term name, or a notation token is also rejected.
 
-`@vars` pools are also where the compiler gets a variable when *it* needs one,
-e.g. for witnesses that surface during definition unfolding and can't be
-determined by the unfold target. A sort whose rules use these features needs a
-`@vars` pool even if proof authors never write the tokens themselves.
+The compiler also uses `@vars` pools when it needs a variable that the proof
+does not specify. For example, unfolding a definition may require a dummy
+variable that the target expression does not determine. A sort whose rules
+use these features needs a `@vars` pool even if proof authors never write
+the tokens themselves.
 
 ## Freshness: `@freshen` and `@alpha`
 
@@ -125,13 +126,13 @@ axiom all_intro (g: ctx) {x: obj} (p: wff x):
 ```
 
 `@alpha old new` registers a proved renaming equivalence for one binding
-constructor. `@freshen g x` names an alpha repair the compiler may attempt: if
-applying the rule fails only because the value of `g` depends on the value of
-`x`, rename the offending part of `g` to a fresh variable (chosen from the
-`@vars` pool) using a registered `@alpha` rule, and retry. The renamed
-application then proves an alpha-variant of the user's line, and the ordinary
-congruence and transport machinery returns it to the stated form. With the
-annotated rule from `fol-rules`, the same proof checks:
+constructor. `@freshen g x` allows the compiler to try renaming when the
+value of `g` violates the dependency restriction for `x`. It uses a
+registered `@alpha` rule and a fresh variable from the `@vars` pool to
+rename the conflicting bound occurrence, then retries the application. The
+renamed application then proves an alpha-variant of the user's line, and the
+ordinary congruence and transport machinery returns it to the stated form.
+With the annotated rule from `fol-rules`, the same proof checks:
 
 ```aufbau-proof prelude=nd-base,nd-rules,fol-base,fol-rules
 lemma vac_gen {a b: obj}: $ ∀ a (P a) , P b ⊢ ∀ a (P b) $
@@ -140,10 +141,11 @@ l1: $ ∀ a (P a) , P b ⊢ P b $ by ax
 l2: $ ∀ a (P a) , P b ⊢ ∀ a (P b) $ by all_intro [l1]
 ```
 
-The repair fires only for the declared argument pair, chooses one fresh
-variable, and tries the registered alpha rules for the constructor at hand. It
-is a targeted fix for the dependency check's over-approximation, not a general
-modulo-alpha matching mode.
+The repair applies only to the declared argument pair. It chooses one fresh
+variable and tries the registered alpha rules for that constructor. This
+handles some cases where MM0's occurrence check is stricter than a
+free-variable check. It does not make matching generally ignore bound
+variable names.
 
 A `@freshen` repair requires: a `@vars` pool on the binder's sort, an `@alpha`
 rule for each binding constructor that may head the offending subexpression,
@@ -160,8 +162,8 @@ elimination names. `@fallback` connects the members of such a family:
 axiom and_elim (g: ctx) (a b: wff): $ g ⊢ a ∧ b $ > $ g ⊢ a $;
 ```
 
-When a proof line cites `and_elim` and the application fails the compiler
-discards the attempt and retries the identical line with `and_elim_r`.
+If a proof line cites `and_elim` and the application fails, the compiler
+retries the same line with `and_elim_r`.
 
 ```aufbau-proof prelude=nd-base,nd-rules
 @@mm0
@@ -176,9 +178,9 @@ l3: $ _ ⊢ b ∧ a $ by and_intro [l1, l2]
 ```
 
 `l2` is an ordinary `and_elim` application. `l1` checks through the
-fallback: matching `and_elim`'s own conclusion against the line pins
-`a := b`, after which `#1` cannot fill the premise, so the attempt fails and
-the retry with `and_elim_r` proves the line.
+fallback: matching `and_elim`'s conclusion against the line determines `a :=
+b`, after which `#1` cannot supply the premise, so the attempt fails and the
+retry with `and_elim_r` proves the line.
 
 Fallbacks chain: the target rule may carry a `@fallback` of its own. The
 candidates are tried in chain order. When every candidate fails, the current
