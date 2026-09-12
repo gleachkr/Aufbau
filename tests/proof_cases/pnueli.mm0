@@ -1,3 +1,12 @@
+-- Linear-time temporal logic: safety and liveness of a sticky-bit server.
+--
+-- G p means p holds now and forever; F p includes the current instant.
+-- The server laws are an explicit assumption, not logical axioms.
+-- First derive reusable invariant rules, then eventual joint response,
+-- persistence of a joint response, and the combined safety/liveness claim.
+-- This is a propositional abstraction: it does not model resetting bits,
+-- individual request identities, or a bound on response time.
+
 delimiter $ ( ) $;
 provable sort wff;
 sort ctx;
@@ -124,12 +133,12 @@ axiom gop_ind (g: ctx) (a: wff):
 axiom fop_pair (g: ctx) (a b: wff):
   $ g ⊢ F a $ > $ g ⊢ G (a → b) $ > $ g ⊢ F (b ∧ a) $;
 
--- Server specification: request/response with sticky bits, eventual
--- response, and causality.
-axiom sr_req_sticky (g: ctx): $ g ⊢ G (req → ○ req) $;
-axiom sr_res_sticky (g: ctx): $ g ⊢ G (res → ○ res) $;
-axiom sr_responsive (g: ctx): $ g ⊢ G (req → F res) $;
-axiom sr_causal (g: ctx): $ g ⊢ G (res → req) $;
+-- Server specification: two safety laws, liveness, and causality.
+-- This transparent definition asserts nothing by itself. Only the final
+-- server theorems assume it; the generic LTL rules above do not need it.
+def server_spec: wff =
+  $ G (req → ○ req) ∧ G (res → ○ res) ∧
+    G (req → F res) ∧ G (res → req) $;
 
 -- Pnueli's induction principle, stated as a wff implication.
 theorem gop_ind_thm (p: wff):
@@ -139,13 +148,30 @@ theorem gop_ind_thm (p: wff):
 theorem gop_K_thm (p q: wff):
   $ emp ⊢ ((G (p → q)) → ((G p) → G q)) $;
 
--- Safety: a request, once issued, persists forever.
-theorem stick_req: $ emp ⊢ (req → G req) $;
+-- Two inductive invariants can be maintained simultaneously.
+theorem invariant_pair (g: ctx) (p q: wff):
+  $ g ⊢ G (p → ○ p) $ > $ g ⊢ G (q → ○ q) $ >
+  $ g ⊢ p ∧ q $ > $ g ⊢ G (p ∧ q) $;
 
--- Safety: a response, once issued, persists forever.
-theorem stick_res: $ emp ⊢ (res → G res) $;
+-- Safety: persistence requires both the step law and the current bit.
+theorem stick_req (g: ctx):
+  $ g ⊢ G (req → ○ req) $ > $ g ⊢ req $ > $ g ⊢ G req $;
 
--- Punchline. Combined safety + liveness for the server: every request
--- eventually reaches a moment at which the request and the response
--- both hold.
-theorem req_response: $ emp ⊢ (req → F (req ∧ res)) $;
+theorem stick_res (g: ctx):
+  $ g ⊢ G (res → ○ res) $ > $ g ⊢ res $ > $ g ⊢ G res $;
+
+-- Liveness plus causality suffices for an eventual joint response.
+-- Neither sticky-bit law is needed for this weaker claim.
+theorem req_response (g: ctx):
+  $ g ⊢ G (req → F res) $ > $ g ⊢ G (res → req) $ >
+  $ g ⊢ req $ > $ g ⊢ F (req ∧ res) $;
+
+-- Once both bits hold, both persist: an application of invariant_pair.
+theorem response_stable:
+  $ server_spec ⊢ (req ∧ res) → G (req ∧ res) $;
+
+-- Combined safety and liveness: under the explicit server specification,
+-- every request persists forever and eventually meets a response.
+-- This is NOT G (req ∧ res): a response need not hold immediately.
+theorem req_response_safe:
+  $ server_spec ⊢ req → (G req ∧ F (req ∧ res)) $;

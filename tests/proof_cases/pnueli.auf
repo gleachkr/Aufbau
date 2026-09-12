@@ -1,3 +1,6 @@
+-- Proofs use ordinary LTL rules only. Server behavior enters through
+-- theorem hypotheses or the explicit server_spec assumption.
+
 gop_ind_thm
 -----------
 
@@ -16,34 +19,72 @@ l3: $ G (p → q) , G p ⊢ G q $ by gop_K [l1, l2]
 l4: $ G (p → q) ⊢ G p → G q $ by imp_intro [l3]
 l5: $ _ ⊢ (G (p → q)) → (G p → G q) $ by imp_intro [l4]
 
+invariant_pair
+--------------
+
+-- Split the base case, induct on each component, then combine under G.
+l1: $ g ⊢ p $ by and_elim_l [#3]
+l2: $ g ⊢ q $ by and_elim_r [#3]
+l3: $ g ⊢ G p $ by gop_ind [#1, l1]
+l4: $ g ⊢ G q $ by gop_ind [#2, l2]
+l5: $ g ⊢ G (p ∧ q) $ by gop_and [l3, l4]
+
 stick_req
 ---------
 
-l1: $ req ⊢ G (req → ○ req) $ by sr_req_sticky
-l2: $ req ⊢ req $ by ax
-l3: $ req ⊢ G req $ by gop_ind [l1, l2]
-l4: $ _ ⊢ req → G req $ by imp_intro [l3]
+l1: $ g ⊢ G req $ by gop_ind [#1, #2]
 
 stick_res
 ---------
 
-l1: $ res ⊢ G (res → ○ res) $ by sr_res_sticky
-l2: $ res ⊢ res $ by ax
-l3: $ res ⊢ G res $ by gop_ind [l1, l2]
-l4: $ _ ⊢ res → G res $ by imp_intro [l3]
+l1: $ g ⊢ G res $ by gop_ind [#1, #2]
 
 req_response
 ------------
 
--- Take the responsiveness axiom and instantiate it at the current
--- world via gop_T to obtain the local implication req → F res.
-l1: $ req ⊢ G (req → F res) $ by sr_responsive
-l2: $ req ⊢ req → F res $ by gop_T [l1]
-l3: $ req ⊢ req $ by ax
-l4: $ req ⊢ F res $ by imp_elim [l2, l3]
--- Combine the eventual response with causality (G(res → req)) using
--- fop_pair: at the future res-state, req must also hold by sr_causal,
--- so req ∧ res is reachable.
-l5: $ req ⊢ G (res → req) $ by sr_causal
-l6: $ req ⊢ F (req ∧ res) $ by fop_pair [l4, l5]
-l7: $ _ ⊢ req → F (req ∧ res) $ by imp_intro [l6]
+-- Specialize responsiveness to now, then obtain an eventual response.
+l1: $ g ⊢ req → F res $ by gop_T [#1]
+l2: $ g ⊢ F res $ by imp_elim [l1, #3]
+-- Causality holds at that future response-state, not merely now.
+l3: $ g ⊢ F (req ∧ res) $ by fop_pair [l2, #2]
+
+response_stable
+---------------
+
+-- Opening the transparent specification exposes the two step laws.
+l1: $ server_spec , (req ∧ res) ⊢ server_spec $ by ax
+l2: $ server_spec , (req ∧ res) ⊢ G (req → ○ req) $
+  by and_elim_l [l1]
+l3: $ server_spec , (req ∧ res) ⊢
+  G (res → ○ res) ∧ G (req → F res) ∧ G (res → req) $
+  by and_elim_r [l1]
+l4: $ server_spec , (req ∧ res) ⊢ G (res → ○ res) $
+  by and_elim_l [l3]
+l5: $ server_spec , (req ∧ res) ⊢ req ∧ res $ by ax
+l6: $ server_spec , (req ∧ res) ⊢ G (req ∧ res) $
+  by invariant_pair [l2, l4, l5]
+l7: $ server_spec ⊢ (req ∧ res) → G (req ∧ res) $
+  by imp_intro [l6]
+
+req_response_safe
+-----------------
+
+-- Extract the laws in the context of a current request.
+l1: $ server_spec , req ⊢ server_spec $ by ax
+l2: $ server_spec , req ⊢ G (req → ○ req) $ by and_elim_l [l1]
+l3: $ server_spec , req ⊢
+  G (res → ○ res) ∧ G (req → F res) ∧ G (res → req) $
+  by and_elim_r [l1]
+l4: $ server_spec , req ⊢ G (req → F res) ∧ G (res → req) $
+  by and_elim_r [l3]
+l5: $ server_spec , req ⊢ G (req → F res) $ by and_elim_l [l4]
+l6: $ server_spec , req ⊢ G (res → req) $ by and_elim_r [l4]
+l7: $ server_spec , req ⊢ req $ by ax
+-- Safety and liveness are separate derivations, then joined explicitly.
+l8: $ server_spec , req ⊢ G req $ by stick_req [l2, l7]
+l9: $ server_spec , req ⊢ F (req ∧ res) $
+  by req_response [l5, l6, l7]
+l10: $ server_spec , req ⊢ G req ∧ F (req ∧ res) $
+  by and_intro [l8, l9]
+l11: $ server_spec ⊢ req → (G req ∧ F (req ∧ res)) $
+  by imp_intro [l10]
