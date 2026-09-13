@@ -1104,7 +1104,11 @@ pub fn build(b: *std.Build) void {
         "normalization,boundary,all)\n" ++
         "  -Werror          Treat compiler warnings as errors\n" ++
         "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
-        "                   the ABC_LANG environment variable\n";
+        "                   the ABC_LANG environment variable\n" ++
+        "\nExit status:\n" ++
+        "  0  compiled\n" ++
+        "  1  failed\n" ++
+        "  3  compiled, but a proof line is admitted with sorry!\n";
 
     const abc_help = b.addRunArtifact(compiler_exe);
     abc_help.addArg("--help");

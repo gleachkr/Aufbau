@@ -1,3 +1,85 @@
+# Aufbau 0.0.9
+
+Aufbau 0.0.9 adds `sorry!` for admitting a proof line, lets the plugs of an
+`@abstract` annotation be patterns, and revises the manual's prose
+throughout.
+
+## Highlights
+
+### Admitting a line with `sorry!`
+
+A proof line may be justified by `sorry!` instead of a rule. Given
+`theorem admitted (p q: wff): $ p $ > $ q $;`:
+
+```
+admitted
+----
+l1: $ p -> q $ by sorry!
+l2: $ q $ by mp [#1, l1]
+```
+
+The goal is accepted without proof, and the block is otherwise checked as
+usual: later lines may cite the admitted line, and the last line must
+still match the declared conclusion. The compiler reports a warning at
+each `sorry!`, so `-Werror` refuses the build, and `abc` exits with status
+3 after writing the output. The MMB carries a `Sorry` instruction at that
+line only, so the verifier checks every other step. `sorry!` takes no
+bindings or references, and its goal may not contain holes.
+
+The verifier no longer stops at the first admitted statement. It checks
+every other statement, then names each admitted theorem and exits with
+status 3, as mm0-c does. In the browser, a cell with an admitted line is
+marked "admitted with sorry! · not verified" in place of its seal, and the
+language server hovers `sorry!` and offers it alongside the search
+tactics.
+
+### Plugs as patterns
+
+The two plug slots of `@abstract` accept a `$ … $` pattern over the view
+binders in place of a bare binder name. A replacement rule with no
+equivalence premise, such as De Morgan's law applied anywhere in a
+formula, can then find its own site:
+
+```
+--| @view {x: wff} (A B: wff) (r: wff x) (p q: wff): $ p $ > $ q $
+--| @abstract r p q x $ ¬ (A ∧ B) $ $ ¬ A ∨ ¬ B $
+--| @fresh x
+axiom DeM {x: wff} (A B: wff) (r: wff x):
+  $ sb (¬ (A ∧ B)) x r $ > $ sb (¬ A ∨ ¬ B) x r $;
+```
+
+The walk tries the plug pair at each position before descending, so the
+outermost site wins, and one substitution is shared by every site. The
+binders the patterns solve are committed to the view state and carried
+to the rule binders as usual. A bare name is the trivial pattern of one
+already-solved binder, so existing `@abstract` rules behave as before.
+
+### Manual
+
+The manual's prose was revised throughout, and it documents `sorry!`
+under "Admitting a line" and pattern plugs under "Plugs as patterns".
+
+## Compatibility
+
+Two exit statuses change. `abc` exits with status 3, after writing its
+output, when a proof line is admitted with `sorry!`; a build without
+`sorry!` is unaffected. `mm0-zig` exits with status 3 rather than 1 on an
+MMB whose only defect is an admitted statement, and it now reports every
+admitted theorem rather than the first. A malformed proof still exits 1.
+
+The compiler package's result now includes warnings in `diagnostics` on a
+successful compile, where the field was previously empty. The verifier
+package reports an admitted statement as `ok: false` with `error:
+"SorryUsed"` and a `sorry` count, where it previously reported the same
+error without the count.
+
+Everything else is additive. `!` is not an identifier character, so no
+existing rule name is shadowed by `sorry!`, and a bare-name `@abstract`
+plug is unchanged. The MMB format and the MM0 parser are unchanged. Source
+builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
 # Aufbau 0.0.8
 
 Aufbau 0.0.8 closes three soundness holes in the verifier, makes

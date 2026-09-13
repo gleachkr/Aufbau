@@ -3,6 +3,59 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.9] - 2026-09-13
+
+### Added
+
+- `sorry!` as a proof-line justification. `l1: $ p -> q $ by sorry!`
+  admits the goal without a rule; later lines may cite the admitted line,
+  and the block is otherwise checked as usual, including the final match
+  against the declared conclusion. The compiler reports a warning at each
+  admitted line, so `-Werror` refuses the build, and `abc` exits with
+  status 3 after writing the output. The MMB carries a `Sorry` instruction
+  at that line only, so the verifier checks every other step. `sorry!`
+  takes no bindings, references, or holes, and it is not accepted in a
+  reference slot. The editor withholds its seal on a cell with an admitted
+  line and marks it "admitted with sorry! · not verified"; the language
+  server hovers `sorry!` and offers it alongside the search tactics. See
+  the manual's "Admitting a line".
+- Pattern plugs for `@abstract`. The two plug slots accept a `$ … $`
+  pattern over the view binders in place of a bare binder name, so a
+  replacement rule with no equivalence premise, such as De Morgan's law
+  applied anywhere in a formula, can find its own site:
+  `--| @abstract r p q x $ ¬ (A ∧ B) $ $ ¬ A ∨ ¬ B $`. The walk tries
+  the plug pair at each position before descending, so the outermost site
+  wins; one substitution is shared by every site, and the binders the
+  patterns solve are committed to the view state. A bare name is the
+  trivial pattern of one already-solved binder, so existing rules behave
+  as before. Two diagnostics come with it: `AbstractPatternNoSite` when
+  the walk finds no site, and `AbstractPatternConflict` when two sites
+  disagree. See `docs/view_recover.md` and the manual's "Plugs as
+  patterns".
+
+### Changed
+
+- The verifier continues past a statement admitted with `sorry` instead
+  of stopping at it. Every other statement is checked, and `mm0-zig` then
+  names each admitted theorem and exits with status 3, as mm0-c does; a
+  malformed statement after an admitted one is still reported as the
+  error. The verifier package reports the same outcome as `SorryUsed`
+  with a count of admitted statements, which the web demo shows as a
+  warning rather than a failure.
+- The compiler package's result carries warnings in `diagnostics` on a
+  successful compile as well as on a failed one.
+- The manual's prose was revised throughout.
+
+### Fixed
+
+- When a `@view` rule's plain match succeeded modulo rewrites but left
+  binders unsolved, the inference ladder reported a bare missing-binder
+  error instead of the view's more specific derived-binding error. The
+  derived error now wins.
+- The editor's hanging indent for wrapped proof lines lost to
+  CodeMirror's theme stylesheet, which pulled the first row of a wrapped
+  line out of the editor and clipped it.
+
 ## [0.0.8] - 2026-09-08
 
 ### Added
@@ -759,6 +812,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.9]: https://github.com/gleachkr/Aufbau/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/gleachkr/Aufbau/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/gleachkr/Aufbau/compare/v0.0.6...v0.0.7
 [0.0.6]: https://github.com/gleachkr/Aufbau/compare/v0.0.5...v0.0.6
