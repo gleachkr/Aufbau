@@ -39,8 +39,8 @@ the statement and cited premises could not be matched against this rule
 first unsolved binder: x
 ```
 
-The goal determines `p := P x`. But the witness `t` occurs only inside `[x
-:= t] p`, which doesn't occur in the written line (instead, the cited line
+The goal determines `p := P x`. But the witness `t` occurs inside `[x := t] p`, 
+which doesn't occur in the written line (instead, the cited line
 shows the substitution already carried out: `P y`). The line does check with
 the bindings spelled out, `(x := $ x $, t := $ y $, p := $ P x $)`, but
 repeating these bindings is unnecessary work: the cited line already shows
