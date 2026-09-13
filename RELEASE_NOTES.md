@@ -1,3 +1,64 @@
+# Aufbau 0.0.10
+
+Aufbau 0.0.10 adds doc comments, shows a declaration's annotations in full
+when it is hovered, and fixes an ACUI canonicalization bug that could make
+an `@abstract` pattern plug miss its site.
+
+## Highlights
+
+### Doc comments
+
+A `--|` line that does not start with `@` is a doc comment for the associated
+declaration:
+
+```
+--| Existential introduction: a formula proved of a particular term
+--| `t` holds of something.
+--| @auto backward
+axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
+  $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
+```
+
+Doc lines and annotations may be mixed in any order. Consecutive doc lines
+form one paragraph, and an empty `--|` line starts a new paragraph. Backticks
+mark code spans; other markdown is shown as written. The language server
+shows the doc comment when the name is hovered and in completion lists,
+and the editor's statement popover renders it above the signature.
+
+### Annotations in hovers
+
+Hovering a declaration now shows every `--|` annotation attached to it
+ahead of its signature, where earlier releases echoed only `@view` lines
+and reduced the rest to a list of names. The `@rewrite`, `@auto`,
+`@abstract`, and `@fresh` lines that decide how a rule behaves under
+search are visible at the point of use.
+
+### ACUI canonicalization
+
+The ACUI canonicalizer assumed its two operands were already canonical.
+A right-associated but unsorted tree, such as the one an `@abstract`
+view produces when its context split lands on a unit, could then
+canonicalize to a non-canonical result. The representative comparison
+that follows would fail, and the pattern-plug walk reported a missing
+binder assignment for a site that was present. Both operands are now
+canonicalized before they are merged.
+
+### Releases
+
+A `vX.Y.Z` tag now publishes a GitHub release with that version's
+section of the release notes.
+
+## Compatibility
+
+Everything is additive. A `--|` line without a leading `@` was already
+accepted silently, so existing files keep compiling, and any such lines
+now appear as documentation. The MMB format, the MM0 parser, and the
+package APIs are unchanged. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.9
 
 Aufbau 0.0.9 adds `sorry!` for admitting a proof line, lets the plugs of an

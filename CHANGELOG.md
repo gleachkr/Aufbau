@@ -3,6 +3,38 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.10] - 2026-09-13
+
+### Added
+
+- Doc comments. `--|` can be used to write documetnation. Doc lines and `@` 
+  annotations may be mixed in any order; consecutive doc lines form one 
+  paragraph, and an empty `--|` line starts a new paragraph. The language 
+  server shows the doc comment when the name is hovered and in completion 
+  lists. The editor web component's statement popover renders it above the 
+  signature, with backticks as code spans. Proof-side definitions accept doc 
+  comments.
+- GitHub releases are published from a version tag, with the body taken
+  from that version's section of `RELEASE_NOTES.md`.
+
+### Changed
+
+- Hovers show every `--|` annotation of a declaration ahead of its
+  signature, where they previously echoed only `@view` lines and summarized
+  the rest by name.
+- The editor draws the premises and conclusion of a goal row as boxed
+  formulas separated by `▸`, in the cell header, the index panel, and the
+  statement popover alike.
+
+### Fixed
+
+- ACUI canonicalization assumed its operands were already canonical, so a
+  right-associated but unsorted tree could canonicalize to a non-canonical
+  one. An `@abstract` pattern plug matching over an ACUI operator whose
+  canonical order differed from the source order then failed its
+  representative comparison and reported a missing binder assignment. Both
+  operands are now canonicalized before merging.
+
 ## [0.0.9] - 2026-09-13
 
 ### Added
@@ -812,6 +844,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.10]: https://github.com/gleachkr/Aufbau/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/gleachkr/Aufbau/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/gleachkr/Aufbau/compare/v0.0.7...v0.0.8
 [0.0.7]: https://github.com/gleachkr/Aufbau/compare/v0.0.6...v0.0.7
