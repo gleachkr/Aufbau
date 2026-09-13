@@ -1853,9 +1853,13 @@ const STYLE = `
    wrapped continuation visibly subordinate to the line it belongs to, so a
    two-row line does not read as two lines. The negative text-indent cancels
    the padding on the first row, leaving it where CodeMirror's own theme
-   (padding: 0 2px 0 6px) puts it. */
+   (padding: 0 2px 0 6px) puts it. The padding needs !important for the same
+   reason the gutter rule below does: CodeMirror's theme is an adopted
+   stylesheet, which cascades after this <style> at equal specificity, and
+   without it the base padding wins while the negative indent still applies,
+   pulling the first row 4ch out of the editor and clipping it. */
 .editor .cm-line {
-  padding-left: calc(6px + var(--wrap-indent, 4ch));
+  padding-left: calc(6px + var(--wrap-indent, 4ch)) !important;
   text-indent: calc(-1 * var(--wrap-indent, 4ch));
 }
 /* Keep the lint gutter invisible until it holds an error marker. The
