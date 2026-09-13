@@ -1,0 +1,5 @@
+-- sorry! is a line justification only; a reference slot has no stated goal
+-- to admit, so this is a parse error at the `!`.
+keep_label
+----------
+l1: $ a -> b -> a $ by ax_echo [sorry!]

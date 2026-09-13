@@ -1,5 +1,6 @@
 const std = @import("std");
 const proof_script = @import("../proof_script.zig");
+const markdown = @import("markdown.zig");
 const source = @import("source.zig");
 const Types = @import("types.zig");
 const model = @import("model.zig");
@@ -639,22 +640,41 @@ comptime {
     }
 }
 
+/// `sorry!` is offered after the search tactics: it is the other non-rule
+/// justification a line can carry. Only in rule-name position (a reference
+/// slot has no goal to admit), and not for a token already holding a `?`.
+const sorry_completion = SearchTactic{
+    .label = proof_script.sorry_name,
+    .detail = "admit this line without a proof",
+    .sort_text = sort_group_search_tactic ++ " 10",
+    .markdown = markdown.sorry_markdown,
+};
+
 fn appendSearchTacticCompletions(
     list: *std.ArrayListUnmanaged(CompletionItem),
     allocator: std.mem.Allocator,
     replacement: SourceRange,
 ) !void {
     for (search_tactics) |tactic| {
-        try list.append(allocator, .{
-            .label = tactic.label,
-            .kind = .keyword,
-            .detail = tactic.detail,
-            .documentation_markdown = tactic.markdown,
-            .replacement = replacement,
-            .replacement_text = tactic.label,
-            .sort_text = tactic.sort_text,
-        });
+        try appendTacticCompletion(list, allocator, replacement, tactic);
     }
+}
+
+fn appendTacticCompletion(
+    list: *std.ArrayListUnmanaged(CompletionItem),
+    allocator: std.mem.Allocator,
+    replacement: SourceRange,
+    tactic: SearchTactic,
+) !void {
+    try list.append(allocator, .{
+        .label = tactic.label,
+        .kind = .keyword,
+        .detail = tactic.detail,
+        .documentation_markdown = tactic.markdown,
+        .replacement = replacement,
+        .replacement_text = tactic.label,
+        .sort_text = tactic.sort_text,
+    });
 }
 
 /// Whether the token being completed already holds a `?`. No rule name can
@@ -679,6 +699,7 @@ fn appendProofRuleCompletions(
 ) !void {
     try appendSearchTacticCompletions(list, allocator, replacement);
     if (placeholder_token) return;
+    try appendTacticCompletion(list, allocator, replacement, sorry_completion);
     var seen = std.StringHashMapUnmanaged(void){};
     for (self.proof_rules) |rule| {
         if (rule.available_start > use_start) continue;

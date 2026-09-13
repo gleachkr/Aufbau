@@ -88,6 +88,8 @@ pub const DiagnosticKind = enum {
     invalid_definition_body,
     unused_theorem_parameter,
     unused_definition_parameter,
+    sorry_line,
+    sorry_line_arguments,
 };
 
 pub const Scratch = DiagScratch.Scratch;
@@ -526,6 +528,8 @@ pub const DiagnosticError = error{
     RelationBundleBoundBinder,
     ResultDependencyOnDummy,
     RuleNotYetAvailable,
+    SorryLine,
+    SorryLineArguments,
     SortMismatch,
     TermMismatch,
     TheoremNameMismatch,
@@ -1250,6 +1254,8 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .invalid_definition_body => definitionBodySummary(diag.err),
         .unused_theorem_parameter => t("kind_unused_theorem_parameter"),
         .unused_definition_parameter => t("kind_unused_definition_parameter"),
+        .sorry_line => t("kind_sorry_line"),
+        .sorry_line_arguments => t("kind_sorry_line_arguments"),
     };
 }
 
@@ -1500,6 +1506,8 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.AmbiguousHypothesisRef => t("kind_ambiguous_hypothesis_ref"),
         error.UnusedTheoremParameter => t("kind_unused_theorem_parameter"),
         error.UnusedDefinitionParameter => t("kind_unused_definition_parameter"),
+        error.SorryLine => t("kind_sorry_line"),
+        error.SorryLineArguments => t("kind_sorry_line_arguments"),
     };
 }
 

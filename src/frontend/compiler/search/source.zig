@@ -157,6 +157,25 @@ pub fn suggestionsAtSourceOffset(
         {
             break;
         }
+        // An admitted line (`by sorry!`) has no rule to run either, but it
+        // does name a proved goal: keep it in the context so a later search
+        // can cite it, as the checker does.
+        if (ProofScript.isSorryRuleName(line.application.rule_name)) {
+            const goal = parseGoal(
+                &fixture,
+                &theorem,
+                &theorem_vars,
+                line.assertion.text,
+            ) catch return .{ .allocator = allocator, .items = &.{} };
+            const expr = switch (goal) {
+                .concrete => |expr| expr,
+                else => break,
+            };
+            const line_idx = CheckedIr.appendSorryLine(&checked, work, expr) catch
+                return error.OutOfMemory;
+            labels.put(line.label, line_idx) catch return error.OutOfMemory;
+            continue;
+        }
         var result = runSearchLine(
             work,
             &compiler,

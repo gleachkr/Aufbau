@@ -1,0 +1,11 @@
+-- A sorry'd line is a proof of its goal for the rest of the block: a later
+-- line cites it, and the final conclusion is matched as usual.
+admit_mid
+---------
+l1: $ a -> b -> a $ by sorry!
+l2: $ a -> b -> a $ by ax_echo [l1]
+
+-- The admitted line may also be the conclusion itself.
+admit_last
+----------
+l1: $ a -> b -> a $ by sorry!

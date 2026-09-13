@@ -5,6 +5,8 @@ const mm0 = @import("mm0");
 const CliError = error{
     InvalidUsage,
     Reported,
+    /// Verified except for statements admitted with sorry (exit 3).
+    Sorry,
 };
 
 const usage_text =
@@ -117,6 +119,12 @@ fn runVerify(allocator: std.mem.Allocator, mmb_path: []const u8) !void {
     defer session.deinit();
 
     session.verify() catch |err| {
+        if (err == error.SorryUsed) {
+            // Every statement verified except the admitted ones: report
+            // them and exit 3, as mm0-c does.
+            session.verifier.reportSorry();
+            return CliError.Sorry;
+        }
         session.verifier.reportError(err);
         return CliError.Reported;
     };
@@ -152,6 +160,7 @@ pub fn main() !void {
             std.process.exit(1);
         },
         CliError.Reported => std.process.exit(1),
+        CliError.Sorry => std.process.exit(3),
         else => {
             std.debug.print("mm0-zig: {s}\n", .{@errorName(err)});
             std.process.exit(1);

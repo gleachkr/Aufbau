@@ -26,8 +26,21 @@ pub export fn verify_pair(
 
     const mm0_src = ptrToConstSlice(mm0_ptr, mm0_len);
     const mmb_bytes = ptrToConstSlice(mmb_ptr, mmb_len);
-    mm0.verifyPair(allocator, mm0_src, mmb_bytes) catch |err| {
+    var session = mm0.VerificationSession.init(
+        allocator,
+        mm0_src,
+        mmb_bytes,
+    ) catch |err| {
         writeVerifyFailure(err) catch clearState();
+        return 0;
+    };
+    defer session.deinit();
+    session.verify() catch |err| {
+        if (err == error.SorryUsed) {
+            writeVerifySorry(session.verifier.sorry_count) catch clearState();
+        } else {
+            writeVerifyFailure(err) catch clearState();
+        }
         return 0;
     };
     writeVerifySuccess() catch {
@@ -73,6 +86,25 @@ fn writeVerifySuccess() !void {
     try out.writer.writeAll("\"phase\":\"verify\",");
     try out.writer.writeAll("\"message\":\"ok\",");
     try out.writer.writeAll("\"error\":null}");
+
+    result_json = try out.toOwnedSlice();
+}
+
+/// The stream verified except for `count` statements admitted with sorry:
+/// not ok, but distinguishable from a malformed proof.
+fn writeVerifySorry(count: usize) !void {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+
+    try out.writer.writeAll("{");
+    try out.writer.writeAll("\"ok\":false,");
+    try out.writer.writeAll("\"phase\":\"verify\",");
+    try out.writer.writeAll("\"error\":\"SorryUsed\",");
+    try out.writer.print("\"sorry\":{d},", .{count});
+    try out.writer.print(
+        "\"message\":\"incomplete: {d} statement(s) use sorry\"}}",
+        .{count},
+    );
 
     result_json = try out.toOwnedSlice();
 }

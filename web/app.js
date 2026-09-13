@@ -590,10 +590,13 @@ async function runAnalysis() {
 
   const verifyMeta = verifyResult.meta;
   const verifyOkay = Boolean(verifyMeta?.ok);
+  // Admitted statements (`sorry!`) verify everything else: a warning, not
+  // a malformed proof.
+  const verifySorry = !verifyOkay && verifyMeta?.error === "SorryUsed";
   setStatus(
     ui.verifyStatus,
     verifyOkay ? "ok" : verifyMeta?.message || "verify failed",
-    verifyOkay ? "ok" : "err",
+    verifyOkay ? "ok" : verifySorry ? "warn" : "err",
   );
   ui.verifyTime.textContent = formatApproxMs(verifyResult.durationMs);
 }

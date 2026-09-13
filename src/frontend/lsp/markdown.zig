@@ -239,6 +239,15 @@ pub fn binderMarkdown(
     );
 }
 
+/// Hover text for the `sorry!` justification, which resolves to no rule.
+pub const sorry_markdown =
+    \\`sorry!` admits this line: the goal is accepted without a proof.
+    \\
+    \\The rest of the block is checked as usual and later lines may cite
+    \\this one, but the theorem is not verified — the compiler reports a
+    \\warning here, and the verifier rejects the output.
+;
+
 pub fn unknownRuleMarkdown(
     allocator: std.mem.Allocator,
     name: []const u8,

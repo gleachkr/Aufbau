@@ -7,6 +7,9 @@ const DebugConfig = mm0.DebugConfig;
 const CliError = error{
     InvalidUsage,
     Reported,
+    /// The output was written, but a proof line is admitted with
+    /// `sorry!`; the build is not verified (exit status 3, as mm0-c).
+    Sorry,
 };
 
 const usage_text =
@@ -24,7 +27,11 @@ const usage_text =
     ")\n" ++
     "  -Werror          Treat compiler warnings as errors\n" ++
     "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
-    "                   the ABC_LANG environment variable\n";
+    "                   the ABC_LANG environment variable\n" ++
+    "\nExit status:\n" ++
+    "  0  compiled\n" ++
+    "  1  failed\n" ++
+    "  3  compiled, but a proof line is admitted with sorry!\n";
 
 const version_text = "abc " ++ build_options.version ++ "\n";
 
@@ -195,6 +202,10 @@ fn runCompile(
         reportFileError("write", cmd.paths.output, err);
         return CliError.Reported;
     };
+
+    for (compiler.warningDiagnostics()) |diag| {
+        if (diag.err == error.SorryLine) return CliError.Sorry;
+    }
 }
 
 const LangSplit = struct {
@@ -267,6 +278,7 @@ pub fn main() !void {
             std.process.exit(1);
         },
         CliError.Reported => std.process.exit(1),
+        CliError.Sorry => std.process.exit(3),
         else => {
             std.debug.print("abc: {s}\n", .{@errorName(err)});
             std.process.exit(1);

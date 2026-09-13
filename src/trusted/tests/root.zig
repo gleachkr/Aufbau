@@ -2312,6 +2312,79 @@ test "Verifier reports sorry used for a conversion-side sorry" {
     );
 }
 
+// Two theorem statements, both `theorem (a: wff): a` sharing one argument
+// list and unify stream at `stmt_fixture_p_data`, with independent bodies.
+fn runTwoTheoremFixture(
+    verifier_out: **Verifier,
+    body_a: []const u8,
+    body_b: []const u8,
+) !void {
+    const checker = NoopChecker{};
+    const sorts = [_]Sort{.{ .provable = true }};
+    var bytes: [128]u8 align(@alignOf(Arg)) = std.mem.zeroes([128]u8);
+    bytes[0] = 0x44;
+    bytes[1] = 0x02;
+    var pos: usize = 2;
+    for ([_][]const u8{ body_a, body_b }) |body| {
+        bytes[pos] = 0x40 | stmt_theorem;
+        bytes[pos + 1] = @intCast(2 + body.len + 1);
+        @memcpy(bytes[pos + 2 ..][0..body.len], body);
+        pos += 2 + body.len + 1;
+    }
+    const args = [_]Arg{wff_arg};
+    writeArg(bytes[0..], stmt_fixture_p_data, args[0]);
+    const unify = [_]u8{ 0x72, 0x00, 0x00 };
+    @memcpy(bytes[stmt_fixture_p_data + @sizeOf(Arg) ..][0..unify.len], &unify);
+    const terms = [_]Term{};
+    const theorem = Theorem{
+        .num_args = 1,
+        .reserved = 0,
+        .p_data = stmt_fixture_p_data,
+    };
+    const theorems = [_]Theorem{ theorem, theorem };
+
+    const verifier = try Verifier.init(
+        std.testing.allocator,
+        bytes[0..],
+        &sorts,
+        &terms,
+        &theorems,
+        null,
+    );
+    verifier_out.* = verifier;
+    try verifier.verifyProofStream(0, checker);
+}
+
+test "Verifier continues past an admitted statement and reports it at the end" {
+    // Theorem 0 is admitted (`Ref a; Sorry`); theorem 1 proves `a` by citing
+    // it (`Ref a; Ref a; Thm 0`). The stream ends with SorryUsed, the
+    // admitted theorem is recorded, and theorem 1 was still verified.
+    var verifier: *Verifier = undefined;
+    const result = runTwoTheoremFixture(
+        &verifier,
+        &.{ 0x52, 0x00, 0x20 },
+        &.{ 0x52, 0x00, 0x52, 0x00, 0x54, 0x00 },
+    );
+    defer verifier.deinit(std.testing.allocator);
+    try std.testing.expectError(error.SorryUsed, result);
+    try std.testing.expectEqual(@as(usize, 1), verifier.sorry_count);
+    try std.testing.expectEqualSlices(u32, &.{0}, verifier.sorryTheorems());
+}
+
+test "Verifier still rejects a malformed statement after an admitted one" {
+    // Same admitted theorem 0; theorem 1 leaves an expression, not a proof.
+    // The malformed statement wins over the deferred SorryUsed verdict.
+    var verifier: *Verifier = undefined;
+    const result = runTwoTheoremFixture(
+        &verifier,
+        &.{ 0x52, 0x00, 0x20 },
+        &.{ 0x52, 0x00 },
+    );
+    defer verifier.deinit(std.testing.allocator);
+    try std.testing.expectError(error.ExpectedProof, result);
+    try std.testing.expectEqual(@as(usize, 1), verifier.sorry_count);
+}
+
 test "Verifier rejects sorry on an empty stack" {
     const args = [_]Arg{wff_arg};
     const unify = [_]u8{ 0x72, 0x00, 0x00 };

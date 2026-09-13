@@ -107,9 +107,14 @@ for (const file of readdirSync(srcDir).sort()) {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
-      const firstLine = (err.stderr?.toString() ?? "").split("\n").find((l) => l.includes("error")) ?? "compile failed";
-      status = `error: ${firstLine.trim()}`;
-      failures += 1;
+      if (err.status === 3) {
+        // Compiled, but a line is admitted with `sorry!` (abc's exit 3).
+        status = "sorry";
+      } else {
+        const firstLine = (err.stderr?.toString() ?? "").split("\n").find((l) => l.includes("error")) ?? "compile failed";
+        status = `error: ${firstLine.trim()}`;
+        failures += 1;
+      }
     }
     console.log(`${file} ${key}: ${status}`);
   }

@@ -241,6 +241,50 @@ test "proof script parser reads search parameters on placeholders" {
     try std.testing.expectEqual(@as(u64, 400), nested.search_params[0].value);
 }
 
+test "proof script parser lexes sorry! as a line justification" {
+    const src =
+        \\demo
+        \\----
+        \\l1: $ c $ by sorry!
+        \\l2: $ c $ by sorry
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), block.lines.len);
+    const admitted = block.lines[0].application;
+    try std.testing.expectEqualStrings("sorry!", admitted.rule_name);
+    try std.testing.expect(ProofScript.isSorryRuleName(admitted.rule_name));
+    try std.testing.expectEqualStrings(
+        "sorry!",
+        src[admitted.rule_span.start..admitted.rule_span.end],
+    );
+    // Without the `!` it is an ordinary rule name, resolved like any other.
+    const plain = block.lines[1].application;
+    try std.testing.expectEqualStrings("sorry", plain.rule_name);
+    try std.testing.expect(!ProofScript.isSorryRuleName(plain.rule_name));
+}
+
+test "proof script parser does not lex sorry! in a reference slot" {
+    const src =
+        \\demo
+        \\----
+        \\l1: $ c $ by rule1 [sorry!]
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    try std.testing.expectError(
+        error.UnexpectedCharacter,
+        parser.nextBlock(),
+    );
+}
+
 test "proof script parser rejects the parameter form on real rules" {
     // Only search placeholders accept `name: INTEGER`; a real rule keeps the
     // strict `name := $ math $` grammar.

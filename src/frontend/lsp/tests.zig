@@ -2759,3 +2759,56 @@ test "global hover includes selected metadata summaries" {
         "Metadata: `@rewrite`.",
     ));
 }
+
+test "sorry! hovers as an admitted line and is offered with the tactics" {
+    const mm0_text =
+        \\provable sort wff;
+        \\axiom use (p: wff): $ p $;
+        \\theorem main (p: wff): $ p $ > $ p $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ p $ by sorry!
+        \\l2: $ p $ by so
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const sorry_offset =
+        (std.mem.indexOf(u8, proof_text, "sorry!") orelse unreachable) + 1;
+    const hover = snapshot.hoverAt(.proof, sorry_offset) orelse {
+        return error.MissingSorryHover;
+    };
+    try std.testing.expectEqualStrings(
+        "sorry!",
+        snapshot.proof_text.?[hover.range.start..hover.range.end],
+    );
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        hover.markdown,
+        1,
+        "admits this line",
+    ));
+
+    const stem_offset = std.mem.indexOf(u8, proof_text, "by so") orelse {
+        return error.MissingRuleContext;
+    };
+    const items = try snapshot.completionsAt(
+        std.testing.allocator,
+        .proof,
+        stem_offset + "by so".len,
+        .{},
+    );
+    defer std.testing.allocator.free(items);
+    const sorry = completionNamed(items, "sorry!") orelse {
+        return error.MissingSorryCompletion;
+    };
+    try std.testing.expectEqual(Index.CompletionKind.keyword, sorry.kind);
+    try std.testing.expectEqualStrings("sorry!", sorry.replacement_text);
+}

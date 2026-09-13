@@ -631,6 +631,12 @@ pub const Parser = struct {
         if (isSearchPlaceholderBase(rule_name) and self.peek() == '?') {
             self.pos += 1;
             rule_name = self.src[rule_start..self.pos];
+        } else if (std.mem.eql(u8, rule_name, sorry_base) and self.peek() == '!') {
+            // `sorry!` is a line-level justification only: a reference slot
+            // has no stated goal to admit, so the reference path below does
+            // not lex it and `[sorry!]` fails on the `!`.
+            self.pos += 1;
+            rule_name = self.src[rule_start..self.pos];
         }
         return try self.parseRuleApplicationAfterName(rule_start, rule_name);
     }
@@ -1439,6 +1445,17 @@ pub const search_placeholder_names = blk: {
     }
     break :blk names;
 };
+
+/// The admitted-line justification, `by sorry!`: the line is accepted as a
+/// proof of its goal with no rule, and the MMB carries a `Sorry` opcode at
+/// that line. The `!` is not an identifier character, so a theory cannot
+/// declare a rule of this name.
+pub const sorry_base = "sorry";
+pub const sorry_name = sorry_base ++ "!";
+
+pub fn isSorryRuleName(name: []const u8) bool {
+    return std.mem.eql(u8, name, sorry_name);
+}
 
 fn isSearchPlaceholderBase(name: []const u8) bool {
     for (search_placeholder_bases) |base| {

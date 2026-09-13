@@ -18,6 +18,8 @@ const Expr = @import("./expressions.zig").Expr;
 const Arg = @import("./args.zig").Arg;
 const HEAP_SIZE = @import("./constants.zig").HEAP_SIZE;
 const ARENA_SIZE = @import("./constants.zig").ARENA_SIZE;
+/// How many admitted statements are remembered by index for reporting.
+const max_sorry_report = 64;
 const MAX_BOUND_VARS = @import("./constants.zig").MAX_BOUND_VARS;
 
 const ProofContext = enum {
@@ -68,6 +70,15 @@ pub const Verifier = struct {
     proof_context: ?ProofContext,
     unify_context: ?UnifyContext,
     current_statement: StatementRef,
+
+    // Statements whose proof used `Sorry`. Verification continues past an
+    // admitted statement (its conclusion is still checked against the
+    // declaration and every other step is verified); the stream is reported
+    // as `SorryUsed` once it ends, as mm0-c does. Session state: set at init,
+    // not touched by `reset`.
+    sorry_count: usize,
+    sorry_thms: [max_sorry_report]u32,
+    sorry_report_len: usize,
     index: ?Index,
 
     // Arena for expression nodes - reset between theorems
@@ -95,6 +106,8 @@ pub const Verifier = struct {
         v.thm_table = thm_table;
         v.index = index;
         v.current_statement = .none;
+        v.sorry_count = 0;
+        v.sorry_report_len = 0;
         v.reset(); // XXX is this actually needed?
         return v;
     }
@@ -144,7 +157,7 @@ pub const Verifier = struct {
         if (!self.sort_table[proof_expr.sort()].provable) return error.NotProvable;
         if (stack.top != 0) return error.StackNotEmpty;
         try self.unifyStatement(thm, proof_expr);
-        if (self.sorry_used) return error.SorryUsed;
+        if (self.sorry_used) self.recordSorry();
     }
 
     // Check the proved (or asserted) statement against the declaration:
@@ -224,7 +237,25 @@ pub const Verifier = struct {
         if (!self.sort_table[concl_expr.sort()].provable) return error.NotProvable;
         if (stack.top != 0) return error.StackNotEmpty;
         try self.unifyStatement(thm, concl_expr);
-        if (self.sorry_used) return error.SorryUsed;
+        if (self.sorry_used) self.recordSorry();
+    }
+
+    fn recordSorry(self: *Verifier) void {
+        self.sorry_count += 1;
+        const id = switch (self.current_statement) {
+            .theorem => |id| id,
+            else => return,
+        };
+        if (self.sorry_report_len < self.sorry_thms.len) {
+            self.sorry_thms[self.sorry_report_len] = @intCast(id);
+            self.sorry_report_len += 1;
+        }
+    }
+
+    /// Theorem indices of the admitted statements, in stream order (the
+    /// first `max_sorry_report` of them; `sorry_count` is the full count).
+    pub fn sorryTheorems(self: *const Verifier) []const u32 {
+        return self.sorry_thms[0..self.sorry_report_len];
     }
 
     fn runProofStream(self: *Verifier, start_pos: u32, end_pos: u32) !void {
@@ -473,6 +504,27 @@ pub const Verifier = struct {
         if (sort_count != self.sort_table.len) return error.SortCountMismatch;
         if (term_count != self.term_table.len) return error.TermCountMismatch;
         if (thm_count != self.thm_table.len) return error.TheoremCountMismatch;
+        if (self.sorry_count != 0) return error.SorryUsed;
+    }
+
+    /// One line per admitted statement, then the count; the CLI prints this
+    /// in place of `reportError` when the stream ends with `SorryUsed`.
+    pub fn reportSorry(self: *const Verifier) void {
+        var name_buf: [32]u8 = undefined;
+        for (self.sorryTheorems()) |id| {
+            std.debug.print("theorem {s} uses sorry\n", .{
+                self.theoremName(id, &name_buf),
+            });
+        }
+        if (self.sorry_count > self.sorry_report_len) {
+            std.debug.print("... and {d} more\n", .{
+                self.sorry_count - self.sorry_report_len,
+            });
+        }
+        std.debug.print(
+            "Verification incomplete: {d} statement(s) use sorry\n",
+            .{self.sorry_count},
+        );
     }
 
     pub fn reportError(self: *const Verifier, err: anyerror) void {

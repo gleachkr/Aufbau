@@ -1480,6 +1480,10 @@ class AufbauProof extends HTMLElement {
           ? `theory error: ${bannerDiag.message}`
           : `${n || "compile"} error${n === 1 ? "" : "s"}`,
       );
+    } else if (ok && entry.proof.some((p) => p.diag.error === "SorryLine")) {
+      // The document compiled, but this cell admits a line with `sorry!`:
+      // no seal, the proof is incomplete by its own admission.
+      this.setStatus("note", "admitted with sorry! · not verified");
     } else if (ok) {
       this.setStatus("ok", `✓ verified · ${durationMs} ms`);
     } else {

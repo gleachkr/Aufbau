@@ -327,6 +327,24 @@ pub const TheoremProofEmitter = struct {
                     0,
                 );
             },
+            .sorry => {
+                // Mid-stream form: `Sorry: S, e -> S, |- e`. The admitted
+                // proof is saved like any other line so later references
+                // reach it through the heap.
+                try self.emitExpr(line.expr);
+                try MmbWriter.appendCmd(
+                    &self.bytes,
+                    self.allocator,
+                    ProofCmd.Sorry,
+                    0,
+                );
+                try MmbWriter.appendCmd(
+                    &self.bytes,
+                    self.allocator,
+                    ProofCmd.Save,
+                    0,
+                );
+            },
         }
         self.line_slots[line_idx] = self.heap_len;
         self.heap_len = try std.math.add(u32, self.heap_len, 1);

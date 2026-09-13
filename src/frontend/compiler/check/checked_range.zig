@@ -74,7 +74,7 @@ pub fn checkedRangeOwnsRefs(
                     return true;
                 }
             },
-            .transport => {},
+            .transport, .sorry => {},
         }
     }
     return false;
@@ -93,7 +93,7 @@ pub fn checkedRangeOwnsBindings(
                     return true;
                 }
             },
-            .transport => {},
+            .transport, .sorry => {},
         }
     }
     return false;
@@ -137,7 +137,7 @@ pub fn ensureConcreteCheckedIrRange(
                 rule_line.bindings[detail.first_arg_idx],
                 rule_line.bindings[detail.second_arg_idx],
             ),
-            .transport => {},
+            .transport, .sorry => {},
         }
         self.setProof(CompilerDiag.withPhase(.{
             .kind = .generic,

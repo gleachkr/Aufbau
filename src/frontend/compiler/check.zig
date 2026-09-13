@@ -178,6 +178,23 @@ pub fn checkTheoremBlock(
         );
         const line_assertion = LineAssertion.fromParsed(parsed_assertion);
 
+        if (ProofScript.isSorryRuleName(line.application.rule_name)) {
+            const line_idx = try admitSorryLine(
+                self,
+                allocator,
+                &checked,
+                assertion,
+                line,
+                parsed_assertion,
+            );
+            try labels.put(line.label, line_idx);
+            last_line = checked.items[line_idx].expr;
+            last_line_idx = line_idx;
+            last_label = line.label;
+            last_span = line.span;
+            continue;
+        }
+
         const apply_context: RuleApplyContext = .{
             .allocator = allocator,
             .parser = parser,
@@ -421,6 +438,50 @@ fn collectHoleInferencesRecursive(
             }
         },
     }
+}
+
+/// `by sorry!`: admit the stated goal with no rule. The line joins the
+/// checked IR as a `.sorry` line, so later references and the final
+/// conclusion check see it like any other, and a warning marks the theorem
+/// as not verified. The goal must be concrete and the application bare: a
+/// sorry has nothing to infer a hole from and no hypotheses to discharge.
+fn admitSorryLine(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    assertion: AssertionStmt,
+    line: ProofLine,
+    parsed_assertion: Holes.ParsedAssertion,
+) !usize {
+    const app = line.application;
+    const goal: ?ExprId = switch (parsed_assertion) {
+        .concrete => |expr_id| expr_id,
+        .holey => null,
+    };
+    if (goal == null or app.arg_bindings.len != 0 or
+        app.search_params.len != 0 or app.refs.len != 0)
+    {
+        self.setProof(CompilerDiag.withPhase(.{
+            .kind = .sorry_line_arguments,
+            .err = error.SorryLineArguments,
+            .theorem_name = assertion.name,
+            .line_label = line.label,
+            .rule_name = app.rule_name,
+            .span = if (goal == null) line.assertion.span else app.span,
+        }, .theorem_application));
+        return error.SorryLineArguments;
+    }
+    const line_idx = try CheckedIr.appendSorryLine(checked, allocator, goal.?);
+    self.addWarning(.{
+        .kind = .sorry_line,
+        .err = error.SorryLine,
+        .source = .proof,
+        .theorem_name = assertion.name,
+        .line_label = line.label,
+        .rule_name = app.rule_name,
+        .span = app.rule_span,
+    });
+    return line_idx;
 }
 
 fn parseProofLineAssertion(

@@ -35,6 +35,7 @@ powering-search.md cell3: error: error: proof line is justified by a search plac
 powering-search.md cell4: error: error: proof line is justified by a search placeholder, not a completed proof
 programs-and-correctness.md doc:hoare: ok
 proof-blocks-and-lines.md doc:blocks: ok
+proof-blocks-and-lines.md cell1: sorry
 proof-line.md doc:hilbert: ok
 proof-line.md cell1: error: error: one of the rule's variables could not be determined from the statement and cited premises
 proof-search.md cell1: error: error: proof line is justified by a search placeholder, not a completed proof

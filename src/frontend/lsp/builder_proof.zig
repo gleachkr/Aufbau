@@ -225,6 +225,14 @@ pub fn indexRuleApplication(
         .use_start = app.rule_span.start,
         .line_start = line_start,
     });
+    if (proof_script.isSorryRuleName(app.rule_name)) {
+        try self.addSymbol(.{
+            .source_range = proofSpanRange(app.rule_span),
+            .target_range = null,
+            .markdown = markdown.sorry_markdown,
+        });
+        return;
+    }
     const maybe_rule = self.resolveRule(
         block_index,
         app.rule_name,

@@ -129,5 +129,9 @@ Notes:
 - `rule-name` may also be a search command (`exact?`, `apply?`, `auto?`,
   `conversion?`); the `name: number` parameter form is accepted only there
   ([search parameters](appendix-search-parameters.md)).
+- On a proof line, `rule-name` may be `sorry!`, which admits the goal with no
+  bindings or references ([Admitting a
+  line](proof-blocks-and-lines.md#admitting-a-line)). It is not accepted as
+  an inline application.
 - `$ ... $` formulas may contain `@hole` tokens where the theory declares
   them ([Holes](holes.md)).

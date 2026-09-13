@@ -7,6 +7,9 @@ const Mmb = mm0.Mmb;
 const ProofCaseOutcome = union(enum) {
     pass,
     fail: anyerror,
+    // Compiles with a `sorry!` warning; the MMB is well-formed but the
+    // verifier reports the admitted statement (and mm0-c exits 3).
+    sorry,
     // Expected-failure cases for known frontend bugs.
     known_fail,
     // Explicitly unsupported cases whose semantics need a broader design.
@@ -705,6 +708,15 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_vars_free_sort",
         .outcome = .{ .fail = error.VarsFreeSort },
     },
+    .{ .stem = "pass_sorry_line", .outcome = .sorry },
+    .{
+        .stem = "fail_sorry_line_arguments",
+        .outcome = .{ .fail = error.SorryLineArguments },
+    },
+    .{
+        .stem = "fail_sorry_inline",
+        .outcome = .{ .fail = error.UnexpectedCharacter },
+    },
 };
 
 fn readProofCaseFile(
@@ -742,7 +754,12 @@ fn mm0cExists() bool {
     };
 }
 
-fn verifyWithMm0c(mm0_src: []const u8, mmb: []const u8, stem: []const u8) !void {
+fn verifyWithMm0c(
+    mm0_src: []const u8,
+    mmb: []const u8,
+    stem: []const u8,
+    expected_code: u8,
+) !void {
     var path_buf: [256]u8 = undefined;
     const mmb_path = std.fmt.bufPrint(&path_buf, mm0c_cache_dir ++ "/{s}.mmb", .{stem}) catch mm0c_cache_dir ++ "/out.mmb";
     std.fs.cwd().makePath(mm0c_cache_dir) catch |err| {
@@ -781,8 +798,8 @@ fn verifyWithMm0c(mm0_src: []const u8, mmb: []const u8, stem: []const u8) !void 
 
     switch (term) {
         .Exited => |code| {
-            if (code != 0) {
-                std.debug.print("FAIL (mm0-c) exit code {d}\n{s}\n", .{ code, stderr });
+            if (code != expected_code) {
+                std.debug.print("FAIL (mm0-c) exit code {d}, expected {d}\n{s}\n", .{ code, expected_code, stderr });
                 return error.Mm0cVerificationFailed;
             }
         },
@@ -889,7 +906,52 @@ test "compiler proof cases from files" {
                     continue;
                 };
                 if (have_mm0c) {
-                    verifyWithMm0c(mm0_src, mmb, case.stem) catch {
+                    verifyWithMm0c(mm0_src, mmb, case.stem, 0) catch {
+                        std.debug.print("FAIL (mm0-c) case={s}\n", .{case.stem});
+                        failed_cases[failure_count] = case.stem;
+                        failure_count += 1;
+                        continue;
+                    };
+                }
+            },
+            .sorry => {
+                const mmb = compiler.compileMmb(allocator) catch |err| {
+                    std.debug.print("FAIL (compile) case={s} err={}\n", .{ case.stem, err });
+                    failed_cases[failure_count] = case.stem;
+                    failure_count += 1;
+                    continue;
+                };
+                defer allocator.free(mmb);
+                var sorry_warnings: usize = 0;
+                for (compiler.diagnostics.warningDiagnostics()) |diag| {
+                    if (diag.err == error.SorryLine) sorry_warnings += 1;
+                }
+                if (sorry_warnings == 0) {
+                    std.debug.print("FAIL (no sorry warning) case={s}\n", .{case.stem});
+                    failed_cases[failure_count] = case.stem;
+                    failure_count += 1;
+                    continue;
+                }
+                // Every other step must verify: the only complaint the
+                // kernel may have is the admitted statements, one per
+                // sorry'd line, reported once the stream ends.
+                var session = try mm0.VerificationSession.init(allocator, mm0_src, mmb);
+                defer session.deinit();
+                if (session.verify()) |_| {
+                    std.debug.print("FAIL (verified despite sorry) case={s}\n", .{case.stem});
+                    failed_cases[failure_count] = case.stem;
+                    failure_count += 1;
+                    continue;
+                } else |verify_err| if (verify_err != error.SorryUsed or
+                    session.verifier.sorry_count != sorry_warnings)
+                {
+                    std.debug.print("FAIL (verify) case={s} err={} sorry_count={d}\n", .{ case.stem, verify_err, session.verifier.sorry_count });
+                    failed_cases[failure_count] = case.stem;
+                    failure_count += 1;
+                    continue;
+                }
+                if (have_mm0c) {
+                    verifyWithMm0c(mm0_src, mmb, case.stem, 3) catch {
                         std.debug.print("FAIL (mm0-c) case={s}\n", .{case.stem});
                         failed_cases[failure_count] = case.stem;
                         failure_count += 1;

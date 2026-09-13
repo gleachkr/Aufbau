@@ -86,7 +86,7 @@ pub export fn compile_sources(
         ) catch clearState();
         return 0;
     };
-    writeCompileSuccess(result_mmb.len, &statements) catch {
+    writeCompileSuccess(&compiler, result_mmb.len, &statements) catch {
         clearState();
         return 0;
     };
@@ -131,6 +131,7 @@ fn slicePtr(bytes: []const u8) u32 {
 }
 
 fn writeCompileSuccess(
+    compiler: *const mm0.Compiler,
     mmb_len: usize,
     statements: *const mm0.StatementSink,
 ) !void {
@@ -145,7 +146,9 @@ fn writeCompileSuccess(
     try out.writer.writeAll("\"mmbLen\":");
     try out.writer.print("{d}", .{mmb_len});
     try out.writer.writeAll(",\"diagnostic\":null,");
-    try writeDiagnosticsField(&out.writer, null, null);
+    // A clean compile still carries warnings — an admitted line (`sorry!`)
+    // above all, which the editor must see to withhold its seal.
+    try writeDiagnosticsField(&out.writer, compiler, null);
     try out.writer.writeByte(',');
     try writeStatementsField(&out.writer, statements);
     try out.writer.writeByte('}');

@@ -71,6 +71,33 @@ bracketed list must supply exactly as many references as the rule has
 hypotheses — omitting the brackets is the same as writing `[]`. Rule references
 and bindings are the subject of the next chapter.
 
+## Admitting a line
+
+A line may be justified by `sorry!` instead of a rule. The goal is accepted
+without proof, and the block is otherwise checked as usual: later lines may
+cite the admitted line, and the last line must still match the declared
+conclusion.
+
+```aufbau-proof
+@@mm0
+delimiter $ ( ) $;
+provable sort wff;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+axiom mp (a b: wff): $ a $ > $ a -> b $ > $ b $;
+theorem admitted (p q: wff): $ p $ > $ q $;
+@@auf
+admitted
+----
+l1: $ p -> q $ by sorry!
+l2: $ q $ by mp [#1, l1]
+```
+
+The compiler reports a warning at each `sorry!` and, from the command line,
+exits with status 3 after writing the output. The MMB carries a `Sorry`
+instruction at that line only, so the verifier checks every other step; it
+names each admitted theorem and exits with status 3 as well. `sorry!` takes
+no bindings or references, and its goal may not contain holes.
+
 ## Layout and comments
 
 Within a proof line, line breaks may fall before or after `by`, inside binding

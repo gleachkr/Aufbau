@@ -17,6 +17,10 @@ pub const CheckedLine = struct {
     data: union(enum) {
         rule: RuleLine,
         transport: TransportLine,
+        /// `by sorry!`: the goal is admitted without a rule. Emission puts a
+        /// `Sorry` opcode at this line, so the verifier still checks every
+        /// other step and reports the statement as sorry'd.
+        sorry,
     },
 
     pub const RuleLine = struct {
@@ -139,6 +143,7 @@ pub fn validateLine(
             theorem,
             transport.source_expr,
         ),
+        .sorry => {},
     }
 }
 
@@ -166,6 +171,7 @@ pub fn validateLinesCached(
                 theorem,
                 transport.source_expr,
             ),
+            .sorry => {},
         }
     }
 }
@@ -201,7 +207,7 @@ fn firstDepViolationImpl(
     for (lines, 0..) |line, line_idx| {
         const rule = switch (line.data) {
             .rule => |rule| rule,
-            .transport => continue,
+            .transport, .sorry => continue,
         };
         if (rule.rule_id >= env.rules.items.len) return error.UnknownRule;
 
@@ -302,6 +308,16 @@ pub fn appendTransportLine(
     return idx;
 }
 
+pub fn appendSorryLine(
+    lines: *std.ArrayListUnmanaged(CheckedLine),
+    allocator: std.mem.Allocator,
+    expr: ExprId,
+) !usize {
+    const idx = lines.items.len;
+    try lines.append(allocator, .{ .expr = expr, .data = .sorry });
+    return idx;
+}
+
 pub fn deinitLine(
     allocator: std.mem.Allocator,
     line: CheckedLine,
@@ -311,7 +327,7 @@ pub fn deinitLine(
             allocator.free(rule.bindings);
             allocator.free(rule.refs);
         },
-        .transport => {},
+        .transport, .sorry => {},
     }
 }
 

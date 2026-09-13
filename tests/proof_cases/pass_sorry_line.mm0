@@ -1,0 +1,6 @@
+delimiter $ ( ) $;
+provable sort wff;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+axiom ax_echo (a b: wff): $ a -> b -> a $ > $ a -> b -> a $;
+theorem admit_mid (a b: wff): $ a $ > $ a -> b -> a $;
+theorem admit_last (a b: wff): $ a $ > $ a -> b -> a $;
