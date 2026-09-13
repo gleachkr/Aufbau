@@ -1,0 +1,43 @@
+name: GitHub release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: >-
+          Space-separated tags to release; blank backfills every version
+          tag that has no release yet
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: github-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The script reads RELEASE_NOTES.md at each tag.
+          fetch-depth: 0
+
+      - name: Create releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ github.event.inputs.tags }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            scripts/github-release.sh "${GITHUB_REF_NAME}"
+          else
+            # shellcheck disable=SC2086
+            scripts/github-release.sh ${TAGS}
+          fi

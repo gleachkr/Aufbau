@@ -80,6 +80,8 @@ builds still require Zig 0.15.2.
 
 Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
 
+---
+
 # Aufbau 0.0.8
 
 Aufbau 0.0.8 closes three soundness holes in the verifier, makes
