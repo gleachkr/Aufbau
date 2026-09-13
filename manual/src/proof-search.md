@@ -81,9 +81,9 @@ Working backward, `imp_intro` moves the antecedent into the context. `ax`
 proves it from that context, the two elimination rules extract its
 conjuncts, and `and_intro` combines them in the opposite order. These six
 rule applications prove the goal without additional references. The explicit
-bindings supply variables that inference cannot determine, as in the
-previous chapter. If you would rather read the result as separate lines,
-accept it and use the *unpack* action.
+bindings supply variables that cannot be inferred, as in the previous chapter. 
+If you would rather read the result as separate lines, accept it and use the 
+*unpack* action.
 
 `auto?`'s search runs under a work budget and a depth limit, so it always
 stops. Its results are deterministic — the same goal, theory, and pool always

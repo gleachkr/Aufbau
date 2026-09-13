@@ -186,12 +186,86 @@ with:
 --| @abstract <target> <left> <right> <hole> <left-plug> <right-plug>
 ```
 
-The six names are view binders: walk `left` and `right` in parallel, and
+The names are view binders: walk `left` and `right` in parallel, and
 wherever the pair is exactly `(left-plug, right-plug)`, put `hole`;
 everything else must agree on both sides and is kept. In `repl_demo` the
 walk of `a → ⊤` against `b → ⊤` finds the plug pair on the left-hand side of
 the arrow and recovers `r := x → ⊤`. Several occurrences of the pair are fine.
 `repl_two` recovers `r := x → x`, replacing both at once.
+
+### Plugs as patterns
+
+`replace` reads its plugs off the premise `a ↔ b`. A rule without such a
+premise has nothing to read them off. For example, De Morgan's law might 
+rewrite `¬ (A ∧ B)` to `¬ A ∨ ¬ B` anywhere in a formula, and `A` and `B` are 
+only known once the site is found. In this situation, a plug can be a pattern 
+in `$ … $` over the view binders:
+
+```aufbau-proof
+@@mm0
+delimiter $ ( ) $;
+--| @vars z
+provable sort wff;
+term and (a b: wff): wff; infixl and: $∧$ prec 35;
+term or (a b: wff): wff; infixl or: $∨$ prec 30;
+term not (a: wff): wff; prefix not: $¬$ prec 40;
+term iff (a b: wff): wff; infixr iff: $↔$ prec 20;
+term sb (t: wff) {x: wff} (r: wff x): wff;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a ↔ a $;
+axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @congr
+axiom and_congr (a b c d: wff): $ a ↔ b $ > $ c ↔ d $ > $ (a ∧ c) ↔ (b ∧ d) $;
+--| @congr
+axiom or_congr (a b c d: wff): $ a ↔ b $ > $ c ↔ d $ > $ (a ∨ c) ↔ (b ∨ d) $;
+--| @congr
+axiom not_congr (a b: wff): $ a ↔ b $ > $ ¬ a ↔ ¬ b $;
+
+--| @rewrite
+axiom sb_var (t: wff) {x: wff}: $ sb t x x ↔ t $;
+--| @rewrite
+axiom sb_vac (t: wff) {x: wff} (a: wff): $ sb t x a ↔ a $;
+--| @rewrite
+axiom sb_and (t: wff) {x: wff} (a b: wff x): $ sb t x (a ∧ b) ↔ (sb t x a ∧ sb t x b) $;
+--| @rewrite
+axiom sb_or (t: wff) {x: wff} (a b: wff x): $ sb t x (a ∨ b) ↔ (sb t x a ∨ sb t x b) $;
+--| @rewrite
+axiom sb_not (t: wff) {x: wff} (a: wff x): $ sb t x (¬ a) ↔ ¬ (sb t x a) $;
+
+--| @view {x: wff} (A B: wff) (r: wff x) (p q: wff): $ p $ > $ q $
+--| @abstract r p q x $ ¬ A ∨ ¬ B $ $ ¬ (A ∧ B) $
+--| @fresh x
+axiom DeM_rev {x: wff} (A B: wff) (r: wff x): $ sb (¬ A ∨ ¬ B) x r $ > $ sb (¬ (A ∧ B)) x r $;
+--| @view {x: wff} (A B: wff) (r: wff x) (p q: wff): $ p $ > $ q $
+--| @abstract r p q x $ ¬ (A ∧ B) $ $ ¬ A ∨ ¬ B $
+--| @fresh x
+--| @fallback DeM_rev
+axiom DeM {x: wff} (A B: wff) (r: wff x): $ sb (¬ (A ∧ B)) x r $ > $ sb (¬ A ∨ ¬ B) x r $;
+
+theorem dem_demo (p q s: wff): $ s ∨ ¬ (p ∧ q) $ > $ s ∨ (¬ p ∨ ¬ q) $;
+theorem dem_back (p q s: wff): $ s ∧ (¬ p ∨ ¬ q) $ > $ s ∧ ¬ (p ∧ q) $;
+@@auf
+dem_demo
+----
+l1: $ s ∨ (¬ p ∨ ¬ q) $ by DeM [#1]
+
+dem_back
+----
+l1: $ s ∧ ¬ (p ∧ q) $ by DeM [#1]
+```
+
+The walk now looks for a position where the left side matches `¬ (A ∧ B)`
+and the right side matches `¬ A ∨ ¬ B`. Subtrees that are identical on both
+sides are never sites, the outermost matching position wins, and one
+assignment of `A` and `B` serves every site. `A` and `B` are declared in the
+`@view` line so that the walk's solution reaches the rule binders of the
+same name. `DeM_rev` is the other direction, reached through `@fallback`.
+Search does not use `@abstract`, so a rule like `DeM` is only applied when
+a line cites it.
 
 ## `@fresh`, completing the picture
 

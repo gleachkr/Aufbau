@@ -490,6 +490,12 @@ pub fn inferBindings(
                 partial_bindings,
                 null,
             )) catch |err| {
+            // A binder the view was meant to solve is unsolved because the
+            // view's derived binding failed; that failure is the diagnosis.
+            const reported = if (err == error.MissingBinderAssignment)
+                seed_setup.derived_error orelse err
+            else
+                err;
             try traceInferenceFailure(
                 self.debug,
                 allocator,
@@ -497,13 +503,30 @@ pub fn inferBindings(
                 env,
                 rule,
                 .structural_solver,
-                err,
+                reported,
                 partial_bindings,
-                if (seed_setup.seeded_bindings) |stored|
-                    stored
-                else
-                    partial_bindings,
+                seed_setup.diagnosticBindings(partial_bindings),
             );
+            if (reported != err) {
+                scratch.discard(match_mark);
+                self.setProof(
+                    try buildInferenceFailureDiagnostic(
+                        allocator,
+                        env,
+                        theorem,
+                        assertion,
+                        rule,
+                        line,
+                        .structural_solver,
+                        reported,
+                        partial_bindings,
+                        seed_setup.diagnosticBindings(partial_bindings),
+                        fresh_context,
+                        null,
+                    ),
+                );
+                return reported;
+            }
             if (self.setProofScratchDiagnosticIfPresent(
                 scratch,
                 match_mark,

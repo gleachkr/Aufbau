@@ -1,0 +1,27 @@
+dem_root
+--------
+l1: $ ~ p \/ ~ q $ by DeM [#1]
+
+dem_nested
+----------
+l1: $ s -> ~ p \/ ~ q $ by DeM [#1]
+
+dem_rev
+-------
+l1: $ ~ (p /\ q) -> s $ by DeM [#1]
+
+dem_two_sites
+-------------
+l1: $ (~ p \/ ~ q) -> (~ p \/ ~ q) $ by DeM [#1]
+
+dem_explicit
+------------
+l1: $ ~ p \/ ~ q $ by DeM (A := $ p $) [#1]
+
+assoc_root
+----------
+l1: $ p /\ (q /\ s) $ by Assoc [#1]
+
+assoc_nested
+------------
+l1: $ t \/ (p /\ (q /\ s)) $ by Assoc [#1]

@@ -1,0 +1,39 @@
+delimiter $ ( ) $;
+--| @vars z
+provable sort wff;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+term and (a b: wff): wff; infixl and: $/\$ prec 35;
+term or (a b: wff): wff; infixl or: $\/$ prec 30;
+term not (a: wff): wff; prefix not: $~$ prec 40;
+term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
+term sb (t: wff) {x: wff} (r: wff x): wff;
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+--| @congr
+axiom imp_congr (a b c d: wff): $ a <-> b $ > $ c <-> d $ > $ (a -> c) <-> (b -> d) $;
+--| @congr
+axiom and_congr (a b c d: wff): $ a <-> b $ > $ c <-> d $ > $ (a /\ c) <-> (b /\ d) $;
+--| @congr
+axiom or_congr (a b c d: wff): $ a <-> b $ > $ c <-> d $ > $ (a \/ c) <-> (b \/ d) $;
+--| @congr
+axiom not_congr (a b: wff): $ a <-> b $ > $ ~ a <-> ~ b $;
+--| @rewrite
+axiom sb_var (t: wff) {x: wff}: $ sb t x x <-> t $;
+--| @rewrite
+axiom sb_vac (t: wff) {x: wff} (a: wff): $ sb t x a <-> a $;
+--| @rewrite
+axiom sb_imp (t: wff) {x: wff} (a b: wff x): $ sb t x (a -> b) <-> (sb t x a -> sb t x b) $;
+--| @rewrite
+axiom sb_and (t: wff) {x: wff} (a b: wff x): $ sb t x (a /\ b) <-> (sb t x a /\ sb t x b) $;
+--| @rewrite
+axiom sb_or (t: wff) {x: wff} (a b: wff x): $ sb t x (a \/ b) <-> (sb t x a \/ sb t x b) $;
+--| @rewrite
+axiom sb_not (t: wff) {x: wff} (a: wff x): $ sb t x (~ a) <-> ~ (sb t x a) $;
+--| @view {x: wff} (A B: wff) (r: wff x) (p q: wff): $ p $ > $ q $
+--| @abstract r p q x $ ~ (A /\ B) $ $ ~ A \/ ~ B $
+--| @fresh x
+axiom DeM {x: wff} (A B: wff) (r: wff x): $ sb (~ (A /\ B)) x r $ > $ sb (~ A \/ ~ B) x r $;
+theorem dem_conflict (p q: wff): $ ~ (p /\ q) -> ~ (q /\ p) $ > $ (~ p \/ ~ q) -> (~ q \/ ~ p) $;

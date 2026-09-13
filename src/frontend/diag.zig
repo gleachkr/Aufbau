@@ -371,6 +371,8 @@ pub const DiagnosticRelated = struct {
 pub const DiagnosticError = error{
     AbstractConflict,
     AbstractNoPlugOccurrence,
+    AbstractPatternConflict,
+    AbstractPatternNoSite,
     AbstractPlugSortMismatch,
     AbstractStructureMismatch,
     AbstractTargetNotRuleBinder,
@@ -1308,6 +1310,8 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.AbstractPlugSortMismatch => t("err_AbstractPlugSortMismatch"),
         error.AbstractNoPlugOccurrence => t("err_AbstractNoPlugOccurrence"),
         error.AbstractConflict => t("err_AbstractConflict"),
+        error.AbstractPatternConflict => t("err_AbstractPatternConflict"),
+        error.AbstractPatternNoSite => t("err_AbstractPatternNoSite"),
         error.AbstractStructureMismatch => t("err_AbstractStructureMismatch"),
         error.UnknownAnnotation => t("err_UnknownAnnotation"),
         error.UnattachedAnnotation => t("err_UnattachedAnnotation"),

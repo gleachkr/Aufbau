@@ -32,6 +32,7 @@ const ViewSignature = struct {
 
 pub const RecoverDecl = DerivedBindings.RecoverDecl;
 pub const AbstractDecl = DerivedBindings.AbstractDecl;
+pub const AbstractPlug = DerivedBindings.AbstractPlug;
 pub const DerivedBinding = DerivedBindings.DerivedBinding;
 
 pub const ViewDecl = struct {
@@ -133,6 +134,8 @@ pub fn processViewAnnotations(
             try derived_bindings.append(
                 allocator,
                 .{ .abstract = try parseAbstractAnnotation(
+                    allocator,
+                    parser,
                     ann[abstract_prefix.len..],
                     sig,
                     view.binder_map,
@@ -478,13 +481,16 @@ fn applyViewBindingsWithConclusion(
         );
     defer allocator.free(projected_view_bindings);
 
-    for (view.derived_bindings) |binding| {
-        const target_view_idx = switch (binding) {
-            .recover => |recover| recover.target_view_idx,
-            .abstract => |abstract| abstract.target_view_idx,
-        };
-        if (view_snapshot.view_bindings[target_view_idx]) |binding_expr| {
-            projected_view_bindings[target_view_idx] = binding_expr;
+    // Binders the derived loop solved (targets and pattern-plug binders)
+    // come from the snapshot, not from the session's own view match.
+    const derived_targets = try allocator.alloc(bool, view.num_binders);
+    defer allocator.free(derived_targets);
+    @memset(derived_targets, false);
+    DerivedBindings.markSolvedBinders(view.derived_bindings, derived_targets);
+    for (derived_targets, 0..) |is_derived, vi| {
+        if (!is_derived) continue;
+        if (view_snapshot.view_bindings[vi]) |binding_expr| {
+            projected_view_bindings[vi] = binding_expr;
         }
     }
 
@@ -493,17 +499,6 @@ fn applyViewBindingsWithConclusion(
     // binders should be re-inferred by ordinary rule matching unless they
     // already became concrete in partial_bindings.
     if (exported_state) |out_state| {
-        const derived_targets = try allocator.alloc(bool, view.num_binders);
-        defer allocator.free(derived_targets);
-        @memset(derived_targets, false);
-        for (view.derived_bindings) |binding| {
-            const target_view_idx = switch (binding) {
-                .recover => |recover| recover.target_view_idx,
-                .abstract => |abstract| abstract.target_view_idx,
-            };
-            derived_targets[target_view_idx] = true;
-        }
-
         const rule_seeds = try allocator.alloc(
             DefOps.BindingSeed,
             partial_bindings.len,
@@ -1391,50 +1386,70 @@ fn applySurfaceDerivedBindings(
         const hole_expr = view_bindings[abstract.hole_view_idx] orelse {
             continue;
         };
-        const left_plug = view_bindings[abstract.left_plug_view_idx] orelse {
-            continue;
-        };
-        const right_plug = view_bindings[abstract.right_plug_view_idx] orelse {
-            continue;
-        };
+        if (abstract.left_plug.bareBinder()) |idx| {
+            if (view_bindings[idx] == null) continue;
+        }
+        if (abstract.right_plug.bareBinder()) |idx| {
+            if (view_bindings[idx] == null) continue;
+        }
 
-        var found_plug = false;
+        const allocator = theorem.allocator;
+        const working = try allocator.dupe(?ExprId, view_bindings);
+        defer allocator.free(working);
+        const base = try allocator.dupe(?ExprId, view_bindings);
+        defer allocator.free(base);
+        const scratch = try allocator.alloc(?ExprId, view_bindings.len);
+        defer allocator.free(scratch);
+        var walk = DerivedBindings.PlugWalk{
+            .theorem = theorem,
+            .abstract = abstract,
+            .hole_expr = hole_expr,
+            .bindings = working,
+            .base = base,
+            .scratch = scratch,
+        };
         const candidate = abstractContextSurface(
-            theorem,
+            &walk,
             env,
             left_expr,
             right_surface,
-            hole_expr,
-            left_plug,
-            right_plug,
-            &found_plug,
         ) catch |err| switch (err) {
             error.AbstractStructureMismatch => continue,
             else => return err,
         };
-        if (!found_plug) continue;
+        if (!walk.found_plug) continue;
         view_bindings[abstract.target_view_idx] = candidate;
+        for (working, 0..) |value, idx| {
+            if (view_bindings[idx] != null) continue;
+            if (value) |solved| view_bindings[idx] = solved;
+        }
     }
 }
 
 fn abstractContextSurface(
-    theorem: *TheoremContext,
+    walk: *DerivedBindings.PlugWalk,
     env: *const GlobalEnv,
     left_expr: ExprId,
     right_surface: *const Expr,
-    hole_expr: ExprId,
-    left_plug: ExprId,
-    right_plug: ExprId,
-    found_plug: *bool,
 ) !ExprId {
-    if (left_expr == left_plug and
-        try surfaceMatchesConcrete(theorem, env, right_surface, right_plug))
-    {
-        found_plug.* = true;
-        return hole_expr;
-    }
-
+    const theorem = walk.theorem;
     if (right_surface.* == .hole) {
+        // A hole of the right plug's sort is a plug site for the bare form.
+        if (walk.abstract.left_plug.bareBinder()) |left_idx| {
+            if (walk.abstract.right_plug.bareBinder()) |right_idx| {
+                if (left_expr == walk.bindings[left_idx].? and
+                    try surfaceMatchesConcrete(
+                        theorem,
+                        env,
+                        right_surface,
+                        walk.bindings[right_idx].?,
+                    ))
+                {
+                    walk.found_plug = true;
+                    return walk.hole_expr;
+                }
+            }
+        }
         if (!try surfaceMatchesConcrete(
             theorem,
             env,
@@ -1442,6 +1457,20 @@ fn abstractContextSurface(
             left_expr,
         )) return error.AbstractStructureMismatch;
         return left_expr;
+    }
+
+    if (!SurfaceExpr.containsHole(right_surface)) {
+        const maybe_right = theorem.internParsedExpr(right_surface) catch |err|
+            switch (err) {
+                error.UnknownTheoremVariable => null,
+                else => return err,
+            };
+        if (maybe_right) |right_expr| {
+            if (walk.identityFirst() and left_expr == right_expr) {
+                return left_expr;
+            }
+            if (walk.trySite(left_expr, right_expr)) return walk.hole_expr;
+        }
     }
 
     const left_node = theorem.interner.node(left_expr);
@@ -1474,14 +1503,10 @@ fn abstractContextSurface(
                 idx,
             | {
                 args[idx] = try abstractContextSurface(
-                    theorem,
+                    walk,
                     env,
                     left_arg,
                     right_arg,
-                    hole_expr,
-                    left_plug,
-                    right_plug,
-                    found_plug,
                 );
             }
             break :blk try theorem.interner.internAppOwned(
@@ -2116,23 +2141,26 @@ fn parseRecoverAnnotation(
 }
 
 fn parseAbstractAnnotation(
+    allocator: std.mem.Allocator,
+    parser: *const MM0Parser,
     text: []const u8,
     sig: ViewSignature,
     binder_map: []const ?usize,
     env: *const GlobalEnv,
 ) !AbstractDecl {
-    var it = std.mem.tokenizeAny(
-        u8,
-        std.mem.trimRight(u8, text, " \t\r\n;"),
-        " \t\r\n",
-    );
+    var it = AbstractTokenizer{
+        .text = std.mem.trimRight(u8, text, " \t\r\n;"),
+    };
     const target_name = it.next() orelse return error.InvalidAbstractAnnotation;
     const left_name = it.next() orelse return error.InvalidAbstractAnnotation;
     const right_name = it.next() orelse return error.InvalidAbstractAnnotation;
     const hole_name = it.next() orelse return error.InvalidAbstractAnnotation;
-    const left_plug_name = it.next() orelse return error.InvalidAbstractAnnotation;
-    const right_plug_name = it.next() orelse return error.InvalidAbstractAnnotation;
+    const left_plug_token = it.next() orelse return error.InvalidAbstractAnnotation;
+    const right_plug_token = it.next() orelse return error.InvalidAbstractAnnotation;
     if (it.next() != null) return error.InvalidAbstractAnnotation;
+    for ([_][]const u8{ target_name, left_name, right_name, hole_name }) |name| {
+        if (name[0] == '$') return error.InvalidAbstractAnnotation;
+    }
 
     const target_view_idx = findViewBinderIndex(sig, target_name) orelse {
         return error.UnknownAbstractBinder;
@@ -2146,12 +2174,20 @@ fn parseAbstractAnnotation(
     const hole_view_idx = findViewBinderIndex(sig, hole_name) orelse {
         return error.UnknownAbstractBinder;
     };
-    const left_plug_view_idx = findViewBinderIndex(sig, left_plug_name) orelse {
-        return error.UnknownAbstractBinder;
-    };
-    const right_plug_view_idx = findViewBinderIndex(sig, right_plug_name) orelse {
-        return error.UnknownAbstractBinder;
-    };
+    const left_plug = try parseAbstractPlug(
+        allocator,
+        parser,
+        left_plug_token,
+        sig,
+        env,
+    );
+    const right_plug = try parseAbstractPlug(
+        allocator,
+        parser,
+        right_plug_token,
+        sig,
+        env,
+    );
 
     if (binder_map[target_view_idx] == null) {
         return error.AbstractTargetNotRuleBinder;
@@ -2161,10 +2197,10 @@ fn parseAbstractAnnotation(
     // plugs' sort before substituting it at plug sites.
     if (!env.sortsShareCoercionTarget(
         sig.arg_infos[hole_view_idx].sort_name,
-        sig.arg_infos[left_plug_view_idx].sort_name,
+        left_plug.sort_name,
     ) or !env.sortsShareCoercionTarget(
         sig.arg_infos[hole_view_idx].sort_name,
-        sig.arg_infos[right_plug_view_idx].sort_name,
+        right_plug.sort_name,
     )) {
         return error.AbstractPlugSortMismatch;
     }
@@ -2174,9 +2210,106 @@ fn parseAbstractAnnotation(
         .left_view_idx = left_view_idx,
         .right_view_idx = right_view_idx,
         .hole_view_idx = hole_view_idx,
-        .left_plug_view_idx = left_plug_view_idx,
-        .right_plug_view_idx = right_plug_view_idx,
+        .left_plug = left_plug,
+        .right_plug = right_plug,
     };
+}
+
+/// Splits an `@abstract` line into binder names and `$ … $` patterns.
+const AbstractTokenizer = struct {
+    text: []const u8,
+    pos: usize = 0,
+
+    fn next(self: *AbstractTokenizer) ?[]const u8 {
+        while (self.pos < self.text.len and
+            std.ascii.isWhitespace(self.text[self.pos])) self.pos += 1;
+        if (self.pos >= self.text.len) return null;
+        const start = self.pos;
+        if (self.text[start] == '$') {
+            const close = std.mem.indexOfScalarPos(
+                u8,
+                self.text,
+                start + 1,
+                '$',
+            ) orelse self.text.len - 1;
+            self.pos = close + 1;
+            return self.text[start..self.pos];
+        }
+        while (self.pos < self.text.len and
+            !std.ascii.isWhitespace(self.text[self.pos])) self.pos += 1;
+        return self.text[start..self.pos];
+    }
+};
+
+/// A plug slot: a bare view-binder name, or a `$ … $` pattern parsed in the
+/// view signature's scope.
+fn parseAbstractPlug(
+    allocator: std.mem.Allocator,
+    parser: *const MM0Parser,
+    token: []const u8,
+    sig: ViewSignature,
+    env: *const GlobalEnv,
+) !AbstractPlug {
+    if (token[0] != '$') {
+        const idx = findViewBinderIndex(sig, token) orelse {
+            return error.UnknownAbstractBinder;
+        };
+        return .{
+            .template = .{ .binder = idx },
+            .pattern = false,
+            .sort_name = sig.arg_infos[idx].sort_name,
+        };
+    }
+    if (token.len < 2 or token[token.len - 1] != '$') {
+        return error.InvalidAbstractAnnotation;
+    }
+
+    var vars = std.StringHashMap(*const Expr).init(allocator);
+    defer vars.deinit();
+    for (sig.arg_names, sig.arg_exprs) |maybe_name, expr| {
+        if (maybe_name) |name| try vars.put(name, expr);
+    }
+    var plug_parser = MM0Parser.init("", allocator);
+    cloneParserEnv(&plug_parser, parser);
+    const expr = plug_parser.parseMathText(
+        token[1 .. token.len - 1],
+        &vars,
+    ) catch |err| switch (err) {
+        error.UnknownMathToken => return error.UnknownAbstractBinder,
+        else => return error.InvalidAbstractAnnotation,
+    };
+    const template = TemplateExpr.fromExpr(
+        allocator,
+        expr,
+        sig.arg_exprs,
+    ) catch return error.InvalidAbstractAnnotation;
+    return .{
+        .template = template,
+        .pattern = true,
+        .sort_name = try surfaceSortName(env, sig, expr),
+    };
+}
+
+fn surfaceSortName(
+    env: *const GlobalEnv,
+    sig: ViewSignature,
+    expr: *const Expr,
+) ![]const u8 {
+    switch (expr.*) {
+        .term => |term| {
+            if (term.id >= env.terms.items.len) {
+                return error.InvalidAbstractAnnotation;
+            }
+            return env.terms.items[term.id].ret_sort_name;
+        },
+        .variable => {
+            for (sig.arg_exprs, 0..) |binder, idx| {
+                if (binder == expr) return sig.arg_infos[idx].sort_name;
+            }
+            return error.UnknownAbstractBinder;
+        },
+        .hole => return error.InvalidAbstractAnnotation,
+    }
 }
 
 fn findViewBinderIndex(sig: ViewSignature, name: []const u8) ?usize {

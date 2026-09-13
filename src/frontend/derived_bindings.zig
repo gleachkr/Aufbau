@@ -11,6 +11,7 @@ const BindingSeed = DefOps.BindingSeed;
 const BoundValue = @import("./def_ops/types.zig").BoundValue;
 const SymbolicExpr = @import("./def_ops/types.zig").SymbolicExpr;
 const ViewTrace = @import("./view_trace.zig");
+const TemplateExpr = @import("./rules.zig").TemplateExpr;
 
 pub const RecoverDecl = struct {
     target_view_idx: usize,
@@ -23,19 +24,83 @@ pub const RecoverDecl = struct {
     target_sort_name: []const u8,
 };
 
+/// One plug slot of `@abstract`. A bare binder name is the trivial template
+/// `.binder`; a `$ … $` pattern is a template over the view binders.
+pub const AbstractPlug = struct {
+    template: TemplateExpr,
+    /// True for a `$ … $` pattern: it is matched at walk sites and may solve
+    /// the view binders it mentions. False for a bare name: the binder's
+    /// resolved value is the plug and must be solved before the walk runs.
+    pattern: bool,
+    /// Declared sort of the plug: the binder's sort, or the pattern's sort.
+    sort_name: []const u8,
+
+    /// The view binder index of a bare-name plug.
+    pub fn bareBinder(self: AbstractPlug) ?usize {
+        if (self.pattern) return null;
+        return self.template.binder;
+    }
+};
+
 pub const AbstractDecl = struct {
     target_view_idx: usize,
     left_view_idx: usize,
     right_view_idx: usize,
     hole_view_idx: usize,
-    left_plug_view_idx: usize,
-    right_plug_view_idx: usize,
+    left_plug: AbstractPlug,
+    right_plug: AbstractPlug,
+
+    pub fn hasPattern(self: AbstractDecl) bool {
+        return self.left_plug.pattern or self.right_plug.pattern;
+    }
 };
 
 pub const DerivedBinding = union(enum) {
     recover: RecoverDecl,
     abstract: AbstractDecl,
 };
+
+/// Marks every view binder the derived bindings may solve: each target, plus
+/// the binders an `@abstract` plug pattern mentions (solved at its sites).
+pub fn markSolvedBinders(bindings: []const DerivedBinding, out: []bool) void {
+    for (bindings) |binding| switch (binding) {
+        .recover => |recover| out[recover.target_view_idx] = true,
+        .abstract => |abstract| {
+            out[abstract.target_view_idx] = true;
+            if (abstract.left_plug.pattern) {
+                markTemplateBinders(abstract.left_plug.template, out);
+            }
+            if (abstract.right_plug.pattern) {
+                markTemplateBinders(abstract.right_plug.template, out);
+            }
+        },
+    };
+}
+
+/// A runtime failure of `@recover` / `@abstract`: the view matched, but the
+/// derived binding could not be read off the solved expressions. Such a
+/// failure names the real cause of a binder the view was meant to solve.
+pub fn isDerivedBindingFailure(err: anyerror) bool {
+    return switch (err) {
+        error.AbstractConflict,
+        error.AbstractNoPlugOccurrence,
+        error.AbstractPatternConflict,
+        error.AbstractPatternNoSite,
+        error.AbstractStructureMismatch,
+        error.RecoverConflict,
+        error.RecoverHoleNotFound,
+        error.RecoverStructureMismatch,
+        => true,
+        else => false,
+    };
+}
+
+fn markTemplateBinders(template: TemplateExpr, out: []bool) void {
+    switch (template) {
+        .binder => |idx| out[idx] = true,
+        .app => |app| for (app.args) |arg| markTemplateBinders(arg, out),
+    }
+}
 
 const ApplyResult = enum {
     no_progress,
@@ -952,43 +1017,64 @@ fn applyAbstractBinding(
     const raw_hole_expr = view_bindings[abstract.hole_view_idx] orelse {
         return .no_progress;
     };
-    const left_plug = view_bindings[abstract.left_plug_view_idx] orelse {
-        return .no_progress;
-    };
-    const right_plug = view_bindings[abstract.right_plug_view_idx] orelse {
-        return .no_progress;
-    };
+    // A bare-name plug is its binder's resolved value; a pattern plug is
+    // matched at the sites and needs nothing solved up front.
+    if (abstract.left_plug.bareBinder()) |idx| {
+        if (view_bindings[idx] == null) return .no_progress;
+    }
+    if (abstract.right_plug.bareBinder()) |idx| {
+        if (view_bindings[idx] == null) return .no_progress;
+    }
     // Cross-sort plugs: plug sites sit at the plugs' sort, so substitute
     // the hole wrapped in the coercion route up to that sort, keeping the
     // constructed context well-sorted.
+    const plug_sort_name = if (abstract.left_plug.bareBinder()) |idx| blk: {
+        const info = try BindingValidation.currentExprInfo(
+            env,
+            theorem,
+            view_bindings[idx].?,
+        );
+        break :blk info.sort_name;
+    } else abstract.left_plug.sort_name;
     const hole_expr = (try abstractWrapHoleToPlugSort(
         theorem,
         env,
         raw_hole_expr,
-        left_plug,
+        plug_sort_name,
     )) orelse return .no_progress;
 
-    var found_plug = false;
+    const allocator = theorem.allocator;
+    const working = try allocator.dupe(?ExprId, view_bindings);
+    defer allocator.free(working);
+    const base = try allocator.dupe(?ExprId, view_bindings);
+    defer allocator.free(base);
+    const scratch = try allocator.alloc(?ExprId, view_bindings.len);
+    defer allocator.free(scratch);
+
+    var walk = PlugWalk{
+        .theorem = theorem,
+        .abstract = abstract,
+        .hole_expr = hole_expr,
+        .bindings = working,
+        .base = base,
+        .scratch = scratch,
+    };
     const raw_candidate = abstractContextExpr(
-        theorem,
+        &walk,
         left_expr,
         right_expr,
-        hole_expr,
-        left_plug,
-        right_plug,
-        &found_plug,
     ) catch |err| switch (err) {
         error.AbstractStructureMismatch => null,
         else => return err,
     };
     if (raw_candidate) |candidate| {
-        if (found_plug) {
-            if (view_bindings[abstract.target_view_idx]) |existing| {
-                if (existing != candidate) return error.AbstractConflict;
-                return .no_progress;
-            }
-            view_bindings[abstract.target_view_idx] = candidate;
-            return .progress;
+        if (walk.found_plug) {
+            return try commitAbstractResult(
+                view_bindings,
+                working,
+                abstract.target_view_idx,
+                candidate,
+            );
         }
     }
 
@@ -1004,40 +1090,173 @@ fn applyAbstractBinding(
         registry,
         right_expr,
     );
-    const aligned_left_plug = try preprocessDerivedExpr(
+    // The retry matches the plugs against the preprocessed sides, so every
+    // solved binder a plug mentions is preprocessed the same way; pattern
+    // structure itself is left alone.
+    @memcpy(working, view_bindings);
+    try preprocessPlugBindings(
         theorem,
         env,
         registry,
-        left_plug,
+        abstract.left_plug.template,
+        working,
     );
-    const aligned_right_plug = try preprocessDerivedExpr(
+    try preprocessPlugBindings(
         theorem,
         env,
         registry,
-        right_plug,
+        abstract.right_plug.template,
+        working,
     );
+    @memcpy(base, working);
 
-    found_plug = false;
-    const candidate = try abstractContextExpr(
-        theorem,
+    walk = PlugWalk{
+        .theorem = theorem,
+        .abstract = abstract,
+        .hole_expr = hole_expr,
+        .bindings = working,
+        .base = base,
+        .scratch = scratch,
+    };
+    const candidate = abstractContextExpr(
+        &walk,
         aligned_left,
         aligned_right,
-        hole_expr,
-        aligned_left_plug,
-        aligned_right_plug,
-        &found_plug,
-    );
-    if (!found_plug) return error.AbstractNoPlugOccurrence;
-
-    if (view_bindings[abstract.target_view_idx]) |existing| {
-        if (existing != candidate) return error.AbstractConflict;
-        return .no_progress;
+    ) catch |err| switch (err) {
+        error.AbstractStructureMismatch => {
+            if (walk.disagreement) return error.AbstractPatternConflict;
+            return err;
+        },
+        else => return err,
+    };
+    if (!walk.found_plug) {
+        if (walk.disagreement) return error.AbstractPatternConflict;
+        if (abstract.hasPattern()) return error.AbstractPatternNoSite;
+        return error.AbstractNoPlugOccurrence;
     }
-    view_bindings[abstract.target_view_idx] = candidate;
-    return .progress;
+    return try commitAbstractResult(
+        view_bindings,
+        working,
+        abstract.target_view_idx,
+        candidate,
+    );
 }
 
-/// Wrap `hole_expr` in the coercion route up to the plug's sort (the
+/// Record the walk's result: the target context, plus every view binder the
+/// plug patterns solved at their sites. An explicit target that differs from
+/// the recovered context is a conflict.
+fn commitAbstractResult(
+    view_bindings: []?ExprId,
+    working: []const ?ExprId,
+    target_view_idx: usize,
+    candidate: ExprId,
+) !ApplyResult {
+    var progress = false;
+    if (view_bindings[target_view_idx]) |existing| {
+        if (existing != candidate) return error.AbstractConflict;
+    } else {
+        view_bindings[target_view_idx] = candidate;
+        progress = true;
+    }
+    for (working, 0..) |value, idx| {
+        if (view_bindings[idx] != null) continue;
+        if (value) |solved| {
+            view_bindings[idx] = solved;
+            progress = true;
+        }
+    }
+    return if (progress) .progress else .no_progress;
+}
+
+fn preprocessPlugBindings(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    template: TemplateExpr,
+    bindings: []?ExprId,
+) !void {
+    switch (template) {
+        .binder => |idx| {
+            if (bindings[idx]) |value| {
+                bindings[idx] = try preprocessDerivedExpr(
+                    theorem,
+                    env,
+                    registry,
+                    value,
+                );
+            }
+        },
+        .app => |app| for (app.args) |arg| {
+            try preprocessPlugBindings(theorem, env, registry, arg, bindings);
+        },
+    }
+}
+
+/// State of one `@abstract` walk. The plugs are matched as templates over the
+/// view binders against `bindings`, which starts as the solved view state
+/// and accumulates the binders solved at accepted sites, so every site shares
+/// one substitution. A bare-name plug is the trivial template `.binder` whose
+/// binder is already solved, so matching it is the exact-value check the
+/// bare form has always made.
+pub const PlugWalk = struct {
+    theorem: *TheoremContext,
+    abstract: AbstractDecl,
+    hole_expr: ExprId,
+    /// Working substitution: committed view bindings plus site solutions.
+    bindings: []?ExprId,
+    /// The substitution before any site was accepted.
+    base: []const ?ExprId,
+    /// Rollback buffer for a failed site attempt.
+    scratch: []?ExprId,
+    found_plug: bool = false,
+    /// A later site fit the plug shapes on its own but disagreed with an
+    /// earlier site's solution. Turns the walk's failure into a conflict
+    /// report rather than a structure mismatch.
+    disagreement: bool = false,
+
+    /// Pattern plugs never match a subtree that is identical on both sides:
+    /// nothing is replaced there, and a spurious site would only constrain
+    /// the shared substitution.
+    pub fn identityFirst(self: *const PlugWalk) bool {
+        return self.abstract.hasPattern();
+    }
+
+    /// Try the pair as a plug site. On success the binders the plugs solved
+    /// stay in `bindings`; on failure `bindings` is unchanged.
+    pub fn trySite(self: *PlugWalk, left_expr: ExprId, right_expr: ExprId) bool {
+        @memcpy(self.scratch, self.bindings);
+        if (self.theorem.matchTemplate(
+            self.abstract.left_plug.template,
+            left_expr,
+            self.bindings,
+        ) and self.theorem.matchTemplate(
+            self.abstract.right_plug.template,
+            right_expr,
+            self.bindings,
+        )) {
+            self.found_plug = true;
+            return true;
+        }
+        @memcpy(self.bindings, self.scratch);
+        if (self.found_plug and !self.disagreement) {
+            @memcpy(self.scratch, self.base);
+            if (self.theorem.matchTemplate(
+                self.abstract.left_plug.template,
+                left_expr,
+                self.scratch,
+            ) and self.theorem.matchTemplate(
+                self.abstract.right_plug.template,
+                right_expr,
+                self.scratch,
+            )) {
+                self.disagreement = true;
+            }
+        }
+        return false;
+    }
+};
+
+/// Wrap `hole_expr` in the coercion route up to the plugs' sort (the
 /// identity when the sorts already agree). Null when no route exists: the
 /// cross-sort enrollment only guaranteed a common target, not that the hole
 /// is coercible up to the plugs.
@@ -1045,26 +1264,21 @@ fn abstractWrapHoleToPlugSort(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     hole_expr: ExprId,
-    plug_expr: ExprId,
+    plug_sort_name: []const u8,
 ) !?ExprId {
     const hole_info = try BindingValidation.currentExprInfo(
         env,
         theorem,
         hole_expr,
     );
-    const plug_info = try BindingValidation.currentExprInfo(
-        env,
-        theorem,
-        plug_expr,
-    );
-    if (std.mem.eql(u8, hole_info.sort_name, plug_info.sort_name)) {
+    if (std.mem.eql(u8, hole_info.sort_name, plug_sort_name)) {
         return hole_expr;
     }
     var route: std.ArrayListUnmanaged(u32) = .empty;
     defer route.deinit(theorem.allocator);
     if (!try env.coercionRoute(
         hole_info.sort_name,
-        plug_info.sort_name,
+        plug_sort_name,
         theorem.allocator,
         &route,
     )) {
@@ -1078,47 +1292,26 @@ fn abstractWrapHoleToPlugSort(
 }
 
 fn abstractContextExpr(
-    theorem: *TheoremContext,
+    walk: *PlugWalk,
     left_expr: ExprId,
     right_expr: ExprId,
-    hole_expr: ExprId,
-    left_plug: ExprId,
-    right_plug: ExprId,
-    found_plug: *bool,
 ) !ExprId {
-    if (left_expr == left_plug and right_expr == right_plug) {
-        found_plug.* = true;
-        return hole_expr;
-    }
+    if (walk.identityFirst() and left_expr == right_expr) return left_expr;
+    if (walk.trySite(left_expr, right_expr)) return walk.hole_expr;
 
+    const theorem = walk.theorem;
     const left_node = theorem.interner.node(left_expr);
     const right_node = theorem.interner.node(right_expr);
     return switch (left_node.*) {
-        .variable => switch (right_node.*) {
-            .variable => {
-                if (left_expr != right_expr) return error.AbstractStructureMismatch;
-                return left_expr;
-            },
-            .placeholder => {
-                if (left_expr != right_expr) return error.AbstractStructureMismatch;
-                return left_expr;
-            },
-            .app => return error.AbstractStructureMismatch,
-        },
-        .placeholder => switch (right_node.*) {
-            .variable => {
-                if (left_expr != right_expr) return error.AbstractStructureMismatch;
-                return left_expr;
-            },
-            .placeholder => {
+        .variable, .placeholder => switch (right_node.*) {
+            .variable, .placeholder => {
                 if (left_expr != right_expr) return error.AbstractStructureMismatch;
                 return left_expr;
             },
             .app => return error.AbstractStructureMismatch,
         },
         .app => |left_app| switch (right_node.*) {
-            .variable => return error.AbstractStructureMismatch,
-            .placeholder => return error.AbstractStructureMismatch,
+            .variable, .placeholder => return error.AbstractStructureMismatch,
             .app => |right_app| blk: {
                 if (left_app.term_id != right_app.term_id) {
                     return error.AbstractStructureMismatch;
@@ -1129,15 +1322,7 @@ fn abstractContextExpr(
                 const args = try theorem.allocator.alloc(ExprId, left_app.args.len);
                 errdefer theorem.allocator.free(args);
                 for (left_app.args, right_app.args, 0..) |left_arg, right_arg, idx| {
-                    args[idx] = try abstractContextExpr(
-                        theorem,
-                        left_arg,
-                        right_arg,
-                        hole_expr,
-                        left_plug,
-                        right_plug,
-                        found_plug,
-                    );
+                    args[idx] = try abstractContextExpr(walk, left_arg, right_arg);
                 }
                 break :blk try theorem.interner.internAppOwned(
                     left_app.term_id,

@@ -139,8 +139,12 @@ fn declInfeasible(
 ) bool {
     const left = pinned(bindings, conflicted, abstract.left_view_idx) orelse return false;
     const right = pinned(bindings, conflicted, abstract.right_view_idx) orelse return false;
-    const left_plug = pinned(bindings, conflicted, abstract.left_plug_view_idx) orelse return false;
-    const right_plug = pinned(bindings, conflicted, abstract.right_plug_view_idx) orelse return false;
+    // Pattern plugs are solved by the walk itself, so nothing is pinned to
+    // prune against.
+    const left_plug_idx = abstract.left_plug.bareBinder() orelse return false;
+    const right_plug_idx = abstract.right_plug.bareBinder() orelse return false;
+    const left_plug = pinned(bindings, conflicted, left_plug_idx) orelse return false;
+    const right_plug = pinned(bindings, conflicted, right_plug_idx) orelse return false;
     // The hole is detected by raw-ExprId equality with the plug pair, which is
     // exact only when the plugs are rigid. The real `@abstract` derivation
     // (`applyAbstractBinding`) preprocesses BOTH plugs alongside left/right before

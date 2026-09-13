@@ -1,0 +1,9 @@
+delimiter $ ( ) $;
+provable sort wff;
+term and (a b: wff): wff; infixl and: $/\$ prec 35;
+term or (a b: wff): wff; infixl or: $\/$ prec 30;
+term not (a: wff): wff; prefix not: $~$ prec 40;
+term sb (t: wff) {x: wff} (r: wff x): wff;
+--| @view {x: wff} (A B: wff) (r: wff x) (p q: wff): $ p $ > $ q $
+--| @abstract r p q x $ ~ (A /\ C) $ $ ~ A \/ ~ C $
+axiom DeM {x: wff} (A B: wff) (r: wff x): $ sb (~ (A /\ B)) x r $ > $ sb (~ A \/ ~ B) x r $;

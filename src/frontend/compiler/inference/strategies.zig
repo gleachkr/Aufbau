@@ -13,6 +13,7 @@ const ResolvedStructuralCombiner =
 const InferenceSolver = @import("../../inference_solver.zig").Solver;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const CompilerViews = @import("../../views.zig");
+const DerivedBindings = @import("../../derived_bindings.zig");
 const ViewDecl = CompilerViews.ViewDecl;
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
@@ -56,6 +57,10 @@ pub const ViewSeedSetup = struct {
     seeded_bindings: ?[]?ExprId = null,
     view_seed_state: ?DefOps.MatchSeedState = null,
     session_seeds: ?[]DefOps.BindingSeed = null,
+    /// The `@recover` / `@abstract` failure that made the view application
+    /// fall back to plain seeds, if that is what happened. A later tier that
+    /// merely reports the binder as unsolved should report this instead.
+    derived_error: ?anyerror = null,
 
     pub fn deinit(self: *ViewSeedSetup, allocator: std.mem.Allocator) void {
         if (self.seeded_bindings) |bindings| allocator.free(bindings);
@@ -131,12 +136,13 @@ fn derivedViewRuleSeedMask(
 ) ![]bool {
     const mask = try allocator.alloc(bool, rule_arg_len);
     @memset(mask, false);
-    for (view.derived_bindings) |binding| {
-        const target_view_idx = switch (binding) {
-            .recover => |recover| recover.target_view_idx,
-            .abstract => |abstract| abstract.target_view_idx,
-        };
-        const rule_idx = view.binder_map[target_view_idx] orelse continue;
+    const derived = try allocator.alloc(bool, view.num_binders);
+    defer allocator.free(derived);
+    @memset(derived, false);
+    DerivedBindings.markSolvedBinders(view.derived_bindings, derived);
+    for (derived, 0..) |is_derived, vi| {
+        if (!is_derived) continue;
+        const rule_idx = view.binder_map[vi] orelse continue;
         mask[rule_idx] = true;
     }
     return mask;
@@ -223,6 +229,9 @@ pub fn buildViewSeedSetup(
                     "applyViewBindings failed for rule {s}: {s}",
                     .{ rule.name, @errorName(err) },
                 );
+                if (DerivedBindings.isDerivedBindingFailure(err)) {
+                    setup.derived_error = err;
+                }
                 allocator.free(seeded);
                 seeded_owned = false;
                 setup.session_seeds =
@@ -252,6 +261,9 @@ pub fn buildViewSeedSetup(
                     "applyViewBindings failed for rule {s}: {s}",
                     .{ rule.name, @errorName(err) },
                 );
+                if (DerivedBindings.isDerivedBindingFailure(err)) {
+                    setup.derived_error = err;
+                }
                 allocator.free(seeded);
                 seeded_owned = false;
                 setup.session_seeds =

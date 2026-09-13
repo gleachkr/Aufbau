@@ -267,6 +267,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_abstract_explicit_target", .outcome = .pass },
     .{ .stem = "pass_abstract_chain_recover", .outcome = .pass },
     .{ .stem = "pass_abstract_normalize", .outcome = .pass },
+    .{ .stem = "pass_abstract_pattern_dem", .outcome = .pass },
+    .{ .stem = "pass_abstract_pattern_under_binder", .outcome = .pass },
     .{ .stem = "pass_fresh_hole", .outcome = .pass },
     .{ .stem = "pass_fresh_explicit_override", .outcome = .pass },
     .{ .stem = "pass_fresh_reuse", .outcome = .pass },
@@ -631,6 +633,22 @@ const proof_cases = [_]ProofCase{
     .{
         .stem = "fail_abstract_without_view",
         .outcome = .{ .fail = error.AbstractWithoutView },
+    },
+    .{
+        .stem = "fail_abstract_pattern_conflict",
+        .outcome = .{ .fail = error.AbstractPatternConflict },
+    },
+    .{
+        .stem = "fail_abstract_pattern_no_site",
+        .outcome = .{ .fail = error.AbstractPatternNoSite },
+    },
+    .{
+        .stem = "fail_abstract_pattern_unknown_binder",
+        .outcome = .{ .fail = error.UnknownAbstractBinder },
+    },
+    .{
+        .stem = "fail_abstract_pattern_sort_mismatch",
+        .outcome = .{ .fail = error.AbstractPlugSortMismatch },
     },
     .{
         .stem = "fail_fresh_unknown_binder",

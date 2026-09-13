@@ -1,0 +1,7 @@
+dem_under_all
+-------------
+l1: $ ! y (~ F y \/ ~ G y) $ by DeM [#1]
+
+dem_beside_all
+--------------
+l1: $ ! y (F y) /\ (~ p \/ ~ q) $ by DeM [#1]

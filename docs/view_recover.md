@@ -418,7 +418,7 @@ axiom ax_ctx {x: wff} (a b: wff) (r: wff x):
   $ a <-> b $ > $ sb a x r $ > $ sb b x r $;
 ```
 
-The six names are positional:
+The six slots are positional:
 
 | Position | Name | Meaning |
 |----------|------|---------|
@@ -429,13 +429,16 @@ The six names are positional:
 | 5 | `left_plug` | The expression abstracted to `hole` on the left |
 | 6 | `right_plug` | The corresponding expression on the right |
 
-All six names refer to view binders. The target must map to a real rule
-binder. The target and hole must have the same sort. The hole and each plug
-binder must have the same sort, or sorts that share a coercion target
-(reflexively). For cross-sort plugs, the hole is wrapped in the coercion
-route up to the plugs' sort before it is substituted at plug sites, so the
-constructed context stays well-sorted (e.g. a `var` hole substituted at `tm`
-positions becomes `v2t x`).
+The first four are view binder names. Each plug is either a view binder
+name, whose resolved value is the plug, or a `$ … $` pattern over the view
+binders (see [Pattern plugs](#pattern-plugs)). The target must map to a real
+rule binder. The target and hole must have the same sort. The hole and each
+plug must have the same sort, or sorts that share a coercion target
+(reflexively); a pattern's sort is the sort of the expression it parses to.
+For cross-sort plugs, the hole is wrapped in the coercion route up to the
+plugs' sort before it is substituted at plug sites, so the constructed
+context stays well-sorted (e.g. a `var` hole substituted at `tm` positions
+becomes `v2t x`).
 
 ### Structural algorithm
 
@@ -454,12 +457,59 @@ At least one occurrence of the plug pair must be found. Multiple occurrences
 are allowed; each becomes a separate use of the hole binder in the recovered
 context, which is the correct behavior for multi-hole substitution.
 
+### Pattern plugs
+
+A rule with no equivalence premise has nothing to read its plugs off. De
+Morgan's law rewrites `¬ (A ∧ B)` to `¬ A ∨ ¬ B` anywhere in a formula, and
+`A`, `B` are only known once the site is found. A plug may then be written as
+a pattern:
+
+```
+--| @view {x: wff} (A B: wff) (r: wff x) (p q: wff): $ p $ > $ q $
+--| @abstract r p q x $ ¬ (A ∧ B) $ $ ¬ A ∨ ¬ B $
+--| @fresh x
+axiom DeM {x: wff} (A B: wff) (r: wff x):
+  $ sb (¬ (A ∧ B)) x r $ > $ sb (¬ A ∨ ¬ B) x r $;
+```
+
+Each pattern is parsed in the view signature's scope, so every variable in
+it must be a view binder. `A` and `B` are declared in the `@view` line
+because view binders reach rule binders by name; they are solved only by the
+walk. A bare name is the trivial pattern consisting of one already-solved
+binder, so the bare form behaves exactly as before.
+
+With a pattern plug the walk changes in one respect: a pair of subtrees that
+are identical on both sides is kept as-is and never tried as a site, since
+nothing is replaced there and a spurious match would only constrain the
+substitution. Otherwise the order is the same — the plug pair is tried at
+the current position before the walk descends — so the outermost site wins,
+and the walk never backtracks. At a site both patterns are matched
+first-order against the two subtrees; view binders already solved act as
+constants, and one substitution is shared by every site, so several sites
+must agree on `A` and `B`. On success the target and every binder the
+patterns solved are committed to the view state, and the ordinary
+view-to-rule mapping carries them to the rule binders.
+
+Pattern plugs have their own diagnostics: `AbstractPatternNoSite` when the
+walk completes without a site, and `AbstractPatternConflict` when a later
+position fits the patterns on its own but disagrees with an earlier site's
+solution. (Whether the mismatch surfaced as a structure error or as a
+missing site, the conflict verdict wins once such a position was seen.)
+
+The preprocess retry described below matches the patterns against the
+preprocessed sides; the patterns themselves are not preprocessed, only the
+solved binders they mention.
+
+Search does not use `@abstract`: `auto?` and `apply?` skip rules carrying
+it, so a DeM-style rule has to be cited explicitly.
+
 ### What `@abstract` can and cannot do
 
 The same operational limits apply here:
 
-- `@abstract` only runs once `left`, `right`, `hole`, and both plug binders
-  are already solved in the view state.
+- `@abstract` only runs once `left`, `right`, `hole`, and every bare-name
+  plug binder are already solved in the view state. Pattern plugs need
+  nothing solved up front.
 - It works from the current resolved view expressions, not from eagerly-
   finalized theorem expressions.
 - It first tries direct structural comparison. If that fails, it retries after

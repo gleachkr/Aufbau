@@ -195,11 +195,13 @@ reads the corresponding `SOURCE` subtree off as the value of `TARGET`.
 --| @abstract TARGET LEFT RIGHT HOLE LEFT-PLUG RIGHT-PLUG
 ```
 
-Six view-binder names; must follow a `@view`. Recovers a surrounding
-expression, or *context*, with one variable marking replacement positions.
-It compares `LEFT` and `RIGHT`, replaces each occurrence of the plug pair
-with `HOLE`, and assigns the result to `TARGET`. Several `@recover` and
-`@abstract` lines may follow one `@view`; they run to a fixed point.
+Four view-binder names and two plugs; must follow a `@view`. Each plug is
+a view-binder name or a `$ … $` pattern over the view binders. Recovers a
+surrounding expression, or *context*, with one variable marking replacement
+positions. It compares `LEFT` and `RIGHT`, replaces each occurrence of the
+plug pair with `HOLE`, and assigns the result to `TARGET`; binders solved by
+a pattern are assigned as well. Several `@recover` and `@abstract` lines may
+follow one `@view`; they run to a fixed point.
 
 ## Variables, freshness, and repair
 
