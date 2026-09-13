@@ -112,7 +112,10 @@ fn appendSemanticHeadStepCandidates(
     )) |acui| {
         try out.append(self.shared.allocator, .{ .acui = acui });
     }
-    if (rules.len != 0) {
+    // The big-step reduces the whole subtree, not just this head. In
+    // particular, def bodies can put rewrites beneath non-rewriting heads
+    // and binders, beyond the small-step search's descent budget.
+    if (registry.rewrites_by_head.count() != 0) {
         try out.append(self.shared.allocator, .normalize_rewrites);
     }
 }

@@ -272,6 +272,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_abstract_normalize", .outcome = .pass },
     .{ .stem = "pass_abstract_pattern_dem", .outcome = .pass },
     .{ .stem = "pass_abstract_pattern_under_binder", .outcome = .pass },
+    .{ .stem = "pass_abstract_pattern_acui", .outcome = .pass },
     .{ .stem = "pass_fresh_hole", .outcome = .pass },
     .{ .stem = "pass_fresh_explicit_override", .outcome = .pass },
     .{ .stem = "pass_fresh_reuse", .outcome = .pass },

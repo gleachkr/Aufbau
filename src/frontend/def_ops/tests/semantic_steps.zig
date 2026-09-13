@@ -56,8 +56,8 @@ test "semantic step enumeration finds root def rewrite and acui moves" {
         mono_steps.items,
         fixture.join_term_id,
     ));
-    // The big-step is offered only where the head has rewrite rules.
-    try std.testing.expect(!hasNormalizeBigStep(mono_steps.items));
+    // Non-rewriting heads can contain rewritable subtrees too.
+    try std.testing.expect(hasNormalizeBigStep(mono_steps.items));
 
     var comp_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
     defer comp_steps.deinit(fixture.arena.allocator());

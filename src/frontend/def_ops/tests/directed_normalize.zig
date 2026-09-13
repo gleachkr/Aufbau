@@ -78,4 +78,27 @@ test "big-step normalization opens nested fixed subtrees" {
         &state,
         0,
     ));
+
+    // The semantic search must OFFER that big-step at mor_eq, despite
+    // mor_eq itself having no rewrite rules. One step cannot both descend
+    // into its child and rewrite there. Cover symbolic and fixed roots.
+    const concrete = try fixture.theorem.interner.internApp(
+        mor_eq_term_id,
+        &.{ fixture.comp_expr, g },
+    );
+    const fixed = try Testing.allocSymbolic(&ctx, .{ .fixed = concrete });
+    for ([_]*const SymbolicExpr{ symbolic, fixed }) |original| {
+        var search_state = try MatchSession.init(
+            fixture.arena.allocator(),
+            0,
+        );
+        defer search_state.deinit(fixture.arena.allocator());
+        try std.testing.expect(try Testing.matchSymbolicToExprSemantic(
+            &ctx,
+            original,
+            expected,
+            &search_state,
+            1,
+        ));
+    }
 }

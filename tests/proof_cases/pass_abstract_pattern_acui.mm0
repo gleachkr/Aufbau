@@ -1,0 +1,97 @@
+delimiter $ ( ) $;
+--| @vars z0 z1
+provable sort wff;
+sort ctx;
+provable sort judgement;
+term and (a b: wff): wff; infixl and: $/\$ prec 35;
+term or (a b: wff): wff; infixl or: $\/$ prec 30;
+term not (a: wff): wff; prefix not: $~$ prec 40;
+term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
+term P: wff;
+term Q: wff;
+term S: wff;
+
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g d: ctx): ctx; infixl join: $;$ prec 5;
+term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+term nd (g: ctx) (a: wff): judgement; infixl nd: $|-$ prec 0;
+
+term weq (a b: wff): judgement; infixl weq: $<=>$ prec 1;
+term ceq (g d: ctx): judgement;
+term jeq (j k: judgement): judgement; infixl jeq: $<==>$ prec 1;
+
+--| @relation wff weq weq_refl weq_trans weq_sym _
+axiom weq_refl (a: wff): $ a <=> a $;
+axiom weq_trans (a b c: wff): $ a <=> b $ > $ b <=> c $ > $ a <=> c $;
+axiom weq_sym (a b: wff): $ a <=> b $ > $ b <=> a $;
+--| @relation ctx ceq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ceq g g $;
+axiom ctx_trans (g d e: ctx): $ ceq g d $ > $ ceq d e $ > $ ceq g e $;
+axiom ctx_sym (g d: ctx): $ ceq g d $ > $ ceq d g $;
+axiom ctx_assoc (g d e: ctx): $ ceq ((g ; d) ; e) (g ; (d ; e)) $;
+axiom ctx_comm (g d: ctx): $ ceq (g ; d) (d ; g) $;
+axiom ctx_idem (g: ctx): $ ceq (g ; g) g $;
+axiom ctx_unit (g: ctx): $ ceq (emp ; g) g $;
+--| @relation judgement jeq jeq_refl jeq_trans jeq_sym jeq_mp
+axiom jeq_refl (j: judgement): $ j <==> j $;
+axiom jeq_trans (j k l: judgement): $ j <==> k $ > $ k <==> l $ > $ j <==> l $;
+axiom jeq_sym (j k: judgement): $ j <==> k $ > $ k <==> j $;
+axiom jeq_mp (j k: judgement): $ j <==> k $ > $ j $ > $ k $;
+--| @congr
+axiom join_congr (g d e f: ctx): $ ceq g d $ > $ ceq e f $ > $ ceq (g ; e) (d ; f) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a <=> b $ > $ ceq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g d: ctx) (a b: wff): $ ceq g d $ > $ a <=> b $ > $ (g |- a) <==> (d |- b) $;
+--| @congr
+axiom and_congr (a b c d: wff): $ a <=> b $ > $ c <=> d $ > $ (a /\ c) <=> (b /\ d) $;
+--| @congr
+axiom or_congr (a b c d: wff): $ a <=> b $ > $ c <=> d $ > $ (a \/ c) <=> (b \/ d) $;
+--| @congr
+axiom iff_congr (a b c d: wff): $ a <=> b $ > $ c <=> d $ > $ (a <-> c) <=> (b <-> d) $;
+--| @congr
+axiom not_congr (a b: wff): $ a <=> b $ > $ ~ a <=> ~ b $;
+
+axiom AS (g: ctx) (a: wff): $ g ; a |- a $;
+
+-- Substitution into a hole; `@fresh h` draws the hole from wff's @vars pool.
+term sb (t: wff) {h: wff} (r: wff h): wff;
+--| @rewrite
+axiom sb_var (t: wff) {h: wff}: $ sb t h h <=> t $;
+--| @rewrite
+axiom sb_vac (t: wff) {h: wff} (a: wff): $ sb t h a <=> a $;
+--| @rewrite
+axiom sb_and (t: wff) {h: wff} (a b: wff h): $ sb t h (a /\ b) <=> (sb t h a /\ sb t h b) $;
+--| @rewrite
+axiom sb_or (t: wff) {h: wff} (a b: wff h): $ sb t h (a \/ b) <=> (sb t h a \/ sb t h b) $;
+--| @rewrite
+axiom sb_not (t: wff) {h: wff} (a: wff h): $ sb t h (~ a) <=> ~ (sb t h a) $;
+
+-- De Morgan inside a sentence, over a slack context: the shape every
+-- natural-deduction rule of the theory has (`g |- ... > g ; d |- ...`).
+--| @view (g d: ctx) {h: wff} (A B: wff) (r: wff h) (p q: wff): $ g |- p $ > $ g ; d |- q $
+--| @abstract r p q h $ ~ (A /\ B) $ $ ~ A \/ ~ B $
+--| @fresh h
+axiom DeM (g d: ctx) {h: wff} (A B: wff) (r: wff h):
+  $ g |- sb (~ (A /\ B)) h r $ > $ g ; d |- sb (~ A \/ ~ B) h r $;
+
+-- The same shape with bare-name plugs, read off an equivalence premise:
+-- passes with two hypotheses.
+--| @view (g d: ctx) {h: wff} (A B: wff) (r: wff h) (p q: wff): $ g |- A <-> B $ > $ g |- p $ > $ g ; d |- q $
+--| @abstract r p q h A B
+--| @fresh h
+axiom replace (g d: ctx) {h: wff} (A B: wff) (r: wff h):
+  $ g |- A <-> B $ > $ g |- sb A h r $ > $ g ; d |- sb B h r $;
+
+-- Regression: splitting g ; d with d := emp adds a trailing unit to a
+-- two-member context. Canonicalization must normalize the rebuilt tail;
+-- otherwise the pattern-plug representative comparison fails and reports
+-- MissingBinderAssignment. Bare-name plugs and one-member contexts are
+-- controls for the same rule shape.
+
+-- One hypothesis in the context.
+theorem one_hyp: $ ~ (P /\ Q) |- ~ P \/ ~ Q $;
+-- Two hypotheses, unchanged between the lines: the original regression.
+theorem two_hyps: $ ~ (P /\ Q) ; S |- ~ P \/ ~ Q $;
+theorem two_hyps_bare: $ P <-> Q ; S /\ P |- S /\ Q $;

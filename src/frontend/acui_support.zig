@@ -819,7 +819,12 @@ pub const Context = struct {
         if (app.term_id != acui.head_term_id or app.args.len != 2) {
             return expr_id;
         }
-        return try self.mergeCanonicalExact(app.args[0], app.args[1], acui);
+        // Merging requires canonical operands, not merely a right-associated
+        // tree. Callers can supply rebuilt leaves or raw def witnesses;
+        // neither guarantees sorted, unit-free, deduplicated children.
+        const left = try self.canonicalizeAcuiExact(app.args[0], acui);
+        const right = try self.canonicalizeAcuiExact(app.args[1], acui);
+        return try self.mergeCanonicalExact(left, right, acui);
     }
 
     fn mergeCanonicalExact(
@@ -988,4 +993,105 @@ fn compareVarIds(lhs: anytype, rhs: @TypeOf(lhs)) std.math.Order {
             .dummy_var => |rhs_id| std.math.order(lhs_id, rhs_id),
         },
     };
+}
+
+test "ACUI canonicalization normalizes arbitrary trees and law subsets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    var env = GlobalEnv.init(allocator);
+    var registry = RewriteRegistry.init(allocator);
+    var support = Context.init(allocator, &theorem, &env, &registry);
+    defer support.deinit();
+
+    const join = struct {
+        fn make(t: *TheoremContext, a: ExprId, b: ExprId) !ExprId {
+            return t.interner.internApp(0, &.{ a, b });
+        }
+    }.make;
+    const unit = try theorem.interner.internApp(1, &.{});
+    const a = try theorem.interner.internApp(2, &.{});
+    const b = try theorem.interner.internApp(3, &.{});
+    const c = try theorem.interner.internApp(4, &.{});
+    const atoms = [_]ExprId{ a, b, c, unit };
+
+    // Exhaust all four-leaf words and all five binary tree shapes. The
+    // independent flat oracle applies only the declared laws: ACUI sorts
+    // and deduplicates, ACU sorts, and AU preserves order and multiplicity.
+    for (0..3) |mode| {
+        const acui: ResolvedStructuralCombiner = .{
+            .head_term_id = 0,
+            .unit_term_id = 1,
+            .assoc_id = 0,
+            .comm_id = if (mode < 2) 1 else null,
+            .idem_id = if (mode == 0) 2 else null,
+            .left_unit_rule_id = 3,
+            .left_unit_rule_reversed = false,
+            .right_unit_rule_id = 4,
+            .right_unit_rule_reversed = false,
+        };
+        for (0..256) |word| {
+            var leaves: [4]ExprId = undefined;
+            var code = word;
+            for (&leaves) |*leaf| {
+                leaf.* = atoms[code % atoms.len];
+                code /= atoms.len;
+            }
+            var expected_items: [4]ExprId = undefined;
+            var len: usize = 0;
+            if (acui.comm_id != null) {
+                for (atoms[0..3]) |atom| {
+                    for (leaves) |leaf| {
+                        if (leaf != atom) continue;
+                        expected_items[len] = atom;
+                        len += 1;
+                        if (acui.idem_id != null) break;
+                    }
+                }
+            } else {
+                for (leaves) |leaf| {
+                    if (leaf == unit) continue;
+                    expected_items[len] = leaf;
+                    len += 1;
+                }
+            }
+            const expected = try support.rebuildAcuiTree(
+                expected_items[0..len],
+                acui.head_term_id,
+                acui.unit_term_id,
+            );
+            const w = leaves[0];
+            const x = leaves[1];
+            const y = leaves[2];
+            const z = leaves[3];
+            const wx = try join(&theorem, w, x);
+            const xy = try join(&theorem, x, y);
+            const yz = try join(&theorem, y, z);
+            const trees = [_]ExprId{
+                try join(&theorem, try join(&theorem, wx, y), z),
+                try join(&theorem, try join(&theorem, w, xy), z),
+                try join(&theorem, wx, yz),
+                try join(&theorem, w, try join(&theorem, xy, z)),
+                try join(&theorem, w, try join(&theorem, x, yz)),
+            };
+            for (trees) |tree| {
+                // Check the exact entry point too: def witnesses and set
+                // collection do not go through the public flatten/rebuild.
+                try std.testing.expectEqual(
+                    expected,
+                    try support.canonicalizeAcuiExact(tree, acui),
+                );
+                try std.testing.expectEqual(
+                    expected,
+                    try support.canonicalizeAcui(tree, acui),
+                );
+            }
+            try std.testing.expectEqual(
+                expected,
+                try support.canonicalizeAcui(expected, acui),
+            );
+        }
+    }
 }

@@ -1,0 +1,15 @@
+one_hyp
+-------
+l1: $ ~ (P /\ Q) |- ~ (P /\ Q) $ by AS []
+l2: $ ~ (P /\ Q) |- ~ P \/ ~ Q $ by DeM [l1]
+
+two_hyps
+--------
+l1: $ ~ (P /\ Q) ; S |- ~ (P /\ Q) $ by AS []
+l2: $ ~ (P /\ Q) ; S |- ~ P \/ ~ Q $ by DeM [l1]
+
+two_hyps_bare
+-------------
+l1: $ P <-> Q ; S /\ P |- P <-> Q $ by AS []
+l2: $ P <-> Q ; S /\ P |- S /\ P $ by AS []
+l3: $ P <-> Q ; S /\ P |- S /\ Q $ by replace [l1, l2]
