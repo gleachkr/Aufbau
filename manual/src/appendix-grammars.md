@@ -17,8 +17,9 @@ number        ::= 0 | [1-9][0-9]*
 math-string   ::= '$' [^\$]* '$'
 ```
 
-Comments starting `--|` are *annotation comments*: Aufbau attaches them as
-metadata to the next statement (`@relation`, `@rewrite`, `@auto`, …). See the
+Comments starting `--|` are *annotation comments*: Aufbau attaches them to the
+next statement, as metadata when the line starts with `@` (`@relation`,
+`@rewrite`, `@auto`, …) and as a doc comment otherwise. See the
 [annotation reference](appendix-annotations.md).
 
 ## MM0 statements

@@ -29,11 +29,12 @@ pub fn sortMarkdown(
 ) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     var writer = buf.writer(allocator);
+    try writer.print("Sort `{s}`.\n\n", .{sort.name});
     try writer.writeAll("```mm0\n");
+    try writeAnnotationLines(&writer, annotations);
     try writeSortModifiers(&writer, sort.modifiers);
     try writer.print("sort {s};\n```", .{sort.name});
-    try writer.print("\n\nSort `{s}`.", .{sort.name});
-    try writeMetadataSummary(&writer, annotations);
+    try writeDocComment(&writer, annotations);
     return try buf.toOwnedSlice(allocator);
 }
 
@@ -51,7 +52,7 @@ pub fn termMarkdown(
         term.ret_sort_name,
     });
     try writer.writeAll("```mm0\n");
-    try writeSignatureAnnotations(&writer, annotations);
+    try writeAnnotationLines(&writer, annotations);
     try writer.print("{s} {s}", .{
         if (term.is_def) "def" else "term",
         term.name,
@@ -68,7 +69,7 @@ pub fn termMarkdown(
         }
     }
     try writer.writeAll(";\n```");
-    try writeMetadataSummary(&writer, annotations);
+    try writeDocComment(&writer, annotations);
     return try buf.toOwnedSlice(allocator);
 }
 
@@ -97,7 +98,7 @@ pub fn assertionMarkdown(
     try writer.writeAll(".");
     if (assertion.is_local) try writer.writeAll(" Local assertion.");
     try writer.writeAll("\n\n```mm0\n");
-    try writeSignatureAnnotations(&writer, annotations);
+    try writeAnnotationLines(&writer, annotations);
     try writer.print("{s} {s}", .{ kind.label(), assertion.name });
     try writeCompactArgList(&writer, assertion.arg_names, assertion.args);
     try writer.writeAll(":\n");
@@ -125,7 +126,7 @@ pub fn assertionMarkdown(
     } else {
         try writer.writeAll("  …;\n```");
     }
-    try writeMetadataSummary(&writer, annotations);
+    try writeDocComment(&writer, annotations);
     return try buf.toOwnedSlice(allocator);
 }
 
@@ -137,21 +138,21 @@ pub fn lemmaMarkdown(
 ) ![]const u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     var writer = buf.writer(allocator);
-    try writer.writeAll("```auf\n");
-    try writeSignatureAnnotations(&writer, block.annotations);
-    try writer.print("lemma {s}", .{block.name});
-    if (block.header_tail.len != 0) {
-        try writer.print(" {s}", .{block.header_tail});
-    }
-    try writer.writeAll("\n```");
-    try writer.print("\n\nLocal lemma `{s}`.", .{block.name});
+    try writer.print("Local lemma `{s}`.", .{block.name});
     if (hyp_count_known) {
         try writer.print(" {d} {s}.", .{
             hyp_count,
             if (hyp_count == 1) "hypothesis" else "hypotheses",
         });
     }
-    try writeMetadataSummary(&writer, block.annotations);
+    try writer.writeAll("\n\n```auf\n");
+    try writeAnnotationLines(&writer, block.annotations);
+    try writer.print("lemma {s}", .{block.name});
+    if (block.header_tail.len != 0) {
+        try writer.print(" {s}", .{block.header_tail});
+    }
+    try writer.writeAll("\n```");
+    try writeDocComment(&writer, block.annotations);
     return try buf.toOwnedSlice(allocator);
 }
 
@@ -342,53 +343,6 @@ fn writeSortModifiers(writer: anytype, modifiers: anytype) !void {
     if (modifiers.free) try writer.writeAll("free ");
 }
 
-fn writeMetadataSummary(
-    writer: anytype,
-    annotations: []const []const u8,
-) !void {
-    var wrote_header = false;
-    for (annotations) |annotation| {
-        const directive = annotationDirective(annotation) orelse continue;
-        if (!isSelectedMetadataDirective(directive)) continue;
-        if (!wrote_header) {
-            try writer.writeAll("\n\nMetadata:");
-            wrote_header = true;
-        }
-        try writer.print(" `{s}`", .{directive});
-    }
-    if (wrote_header) try writer.writeAll(".");
-}
-
-fn annotationDirective(annotation: []const u8) ?[]const u8 {
-    var it = std.mem.tokenizeAny(u8, annotation, " \t\r\n");
-    return it.next();
-}
-
-fn isSelectedMetadataDirective(directive: []const u8) bool {
-    const selected = [_][]const u8{
-        "@relation",
-        "@rewrite",
-        "@congr",
-        "@acui",
-        "@view",
-        "@recover",
-        "@abstract",
-        "@fresh",
-        "@freshen",
-        "@vars",
-        "@hole",
-        "@fallback",
-        "@auto",
-        "@alpha",
-        "@conversion",
-        "@compute",
-    };
-    for (selected) |tag| {
-        if (std.mem.eql(u8, directive, tag)) return true;
-    }
-    return false;
-}
-
 fn declarationTitle(kind: DeclarationKind) []const u8 {
     return switch (kind) {
         .sort => "Sort",
@@ -402,14 +356,50 @@ fn declarationTitle(kind: DeclarationKind) []const u8 {
     };
 }
 
-fn writeSignatureAnnotations(
+/// Every hover has the same shape: a one-line summary, the declaration in a
+/// code fence with its `@directive` annotations, then the doc comment as
+/// markdown prose. A `--|` line is a directive when it starts with `@` and
+/// doc text otherwise (the mm0-rs doc-comment convention, which the MM0 spec
+/// calls a "special comment"); the two are interleaved freely in the source
+/// and split here.
+fn isDirective(annotation: []const u8) bool {
+    return annotation.len != 0 and annotation[0] == '@';
+}
+
+/// The declaration's directives, one `--| …` line each, exactly as they
+/// precede it in the source. They are part of what the declaration means
+/// (`@rewrite` makes an axiom a rewrite rule, `@view`/`@recover` decide how
+/// a rule's binders get inferred), so the hover shows them in full rather
+/// than summarising their names.
+fn writeAnnotationLines(
     writer: anytype,
     annotations: []const []const u8,
 ) !void {
     for (annotations) |annotation| {
-        const directive = annotationDirective(annotation) orelse continue;
-        if (!std.mem.eql(u8, directive, "@view")) continue;
+        if (!isDirective(annotation)) continue;
         try writer.print("--| {s}\n", .{annotation});
+    }
+}
+
+/// The doc comment, appended after the code fence as markdown paragraphs.
+/// Consecutive prose lines form one paragraph; a blank `--|` line separates
+/// paragraphs. Leading, trailing, and repeated blanks are dropped.
+fn writeDocComment(
+    writer: anytype,
+    annotations: []const []const u8,
+) !void {
+    var wrote_any = false;
+    var pending_break = false;
+    for (annotations) |annotation| {
+        if (isDirective(annotation)) continue;
+        if (annotation.len == 0) {
+            pending_break = wrote_any;
+            continue;
+        }
+        try writer.writeAll(if (!wrote_any or pending_break) "\n\n" else "\n");
+        try writer.writeAll(annotation);
+        wrote_any = true;
+        pending_break = false;
     }
 }
 

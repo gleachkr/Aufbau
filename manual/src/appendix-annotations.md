@@ -7,6 +7,23 @@ may precede a `lemma` block, giving the local rule the same metadata as an
 ordinary assertion. (Annotations on proof-side `def` items are currently
 rejected.)
 
+A `--|` line that does not start with `@` is a *doc comment*. Doc lines and
+annotations may be mixed in any order; consecutive doc lines form one
+paragraph, and an empty `--|` line starts a new one. The doc comment is shown
+when the declaration's name is hovered, and in completion lists. Backticks
+mark code spans; other markdown is shown as written.
+
+```text
+--| Existential introduction: a formula proved of a particular term
+--| `t` holds of something.
+--| @auto backward
+axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
+  $ g ⊢ [x := t] p $ > $ g ⊢ ∃ x p $;
+```
+
+This is the same doc-comment convention as mm0-rs, so tools that read MM0
+files without Aufbau's annotations still show the text.
+
 | Annotation | Attaches to | Purpose | Chapter |
 |---|---|---|---|
 | `@relation` | assertion | register an equivalence bundle for a sort | [Equality and normalization](equality-and-normalization.md) |

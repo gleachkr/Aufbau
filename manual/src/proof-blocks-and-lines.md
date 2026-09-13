@@ -126,7 +126,9 @@ attach rule metadata — `@rewrite`, `@view`, and the annotations in the
 [annotation reference](appendix-annotations.md) — to the item that follows, just
 as in an `.mm0` file. In an `.auf` file they
 may only precede `lemma` blocks; a public theorem's metadata belongs on its
-`.mm0` declaration, not on its proof block. A standalone `--|` line also ends
+`.mm0` declaration, not on its proof block. A `--|` line that does not start
+with `@` is a doc comment, shown when the item's name is hovered; those may
+precede any item. A standalone `--|` line also ends
 the current block, so it may be written directly after the last line of the
 preceding proof.
 

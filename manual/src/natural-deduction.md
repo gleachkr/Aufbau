@@ -270,19 +270,25 @@ axiom ex_alpha {x y: obj} (p: wff x y): $ ∃ x p ↔ ∃ y ([x := y] p) $;
 The four quantifier rules have several additional annotations: `@freshen`
 repairs from [Ergonomics](ergonomics.md), `@view`/`@recover` pairs from [Views
 and recovery](views-and-recovery.md), and `@auto` enrollments from [Powering
-search](powering-search.md):
+search](powering-search.md). Plain `--|` lines are doc comments; hover a
+rule's name to read them:
 
 ```aufbau-theory doc=nd
+--| Universal introduction. The eigenvariable `x` must not occur free in
+--| the context `g`.
 --| @freshen g x
 axiom all_intro (g: ctx) {x: obj} (p: wff x):
   $ g ⊢ p $ > $ g ⊢ ∀ x p $;
 
+--| Universal elimination: instantiate `x` with any term `t`.
 --| @auto forward
 --| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ ∀ x p $ > $ g ⊢ q $
 --| @recover t q p x
 axiom all_elim {x: obj} (g: ctx x) (t: obj x) (p: wff x):
   $ g ⊢ ∀ x p $ > $ g ⊢ [x := t] p $;
 
+--| Existential introduction: a formula proved of a particular term `t`
+--| holds of something.
 --| @auto backward
 --| @view {x: obj} (g: ctx) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
 --| @recover t q p x

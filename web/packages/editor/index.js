@@ -1734,10 +1734,14 @@ function buildGoalRow(goal, { noDefineLabel = false } = {}) {
   }
   for (const h of goal.hyps) g.append(formulaChip(h, "hyp"));
   if (goal.hyps.length && goal.concl) {
-    const turnstile = document.createElement("span");
-    turnstile.className = "turnstile";
-    turnstile.textContent = "⊢";
-    g.append(turnstile);
+    // Not `⊢`: sequent-style theories put a turnstile inside the formulas
+    // themselves, and a second one between the chips read as part of the
+    // logic. The boxes make each formula one unit; this is just a small
+    // "yields" marker between the premises and the conclusion.
+    const sep = document.createElement("span");
+    sep.className = "turnstile";
+    sep.textContent = "▸";
+    g.append(sep);
   }
   if (goal.concl) g.append(formulaChip(goal.concl, "concl"));
   return g;
@@ -1780,32 +1784,109 @@ function statementHoverDom(stmt) {
   return dom;
 }
 
-// Append the prose parts (everything outside code fences) of a hover markdown
-// below the statement chips — the server's kind/hypothesis-count summary and
-// annotation metadata, without repeating the statement in source form.
+// Append the rest of a hover markdown below the statement chips. The server's
+// declaration hover has a fixed shape: a one-line summary, the declaration in
+// a code fence with its `@directive` lines ahead of the signature, then the
+// doc comment (the plain `--|` prose) as markdown paragraphs. The signature
+// itself is skipped — the chips above already show the statement — and the
+// rest is laid out as doc, directives, summary: the doc is what a reader
+// wants first; the summary only repeats the caption. Directive lines drop
+// the `--|` comment marker: it is source syntax, and most monospace fonts
+// ligature it into an arrow-like glyph; each one is its own line so a long
+// `@view` wraps with a hanging indent instead of running off the popover.
 function appendHoverProse(dom, markdown) {
   const parts = markdown.split(/```[^\n]*\n?/);
-  for (let i = 0; i < parts.length; i += 2) {
-    const text = parts[i].trim();
-    if (!text) continue;
+  const annotations = [];
+  const paragraphs = [];
+  let summary = "";
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) {
+      for (const line of part.split("\n")) {
+        const m = /^--\|\s*(.*)$/.exec(line);
+        if (m && m[1]) annotations.push(m[1]);
+      }
+    } else if (i === 0) {
+      summary = part.trim();
+    } else {
+      for (const para of part.split(/\n[ \t]*\n/)) {
+        if (para.trim()) paragraphs.push(para.trim());
+      }
+    }
+  });
+  if (paragraphs.length) {
+    const doc = document.createElement("div");
+    doc.className = "stmt-doc";
+    for (const para of paragraphs) {
+      const p = document.createElement("p");
+      appendInlineMarkdown(p, para);
+      doc.append(p);
+    }
+    dom.append(doc);
+  }
+  if (annotations.length) {
+    const list = document.createElement("div");
+    list.className = "stmt-annotations";
+    for (const text of annotations) {
+      const el = document.createElement("div");
+      el.className = "stmt-annotation";
+      // The directive (`@view`, `@rewrite`, …) is what the reader scans for;
+      // set it apart from its arguments.
+      const m = /^(@\S+)(.*)$/s.exec(text);
+      if (m) {
+        const directive = document.createElement("span");
+        directive.className = "stmt-annotation-directive";
+        directive.textContent = m[1];
+        el.append(directive, m[2]);
+      } else {
+        el.textContent = text;
+      }
+      list.append(el);
+    }
+    dom.append(list);
+  }
+  if (summary) {
     const el = document.createElement("div");
-    el.textContent = text;
+    appendInlineMarkdown(el, summary);
     dom.append(el);
   }
 }
 
+// The only inline markdown the server's prose uses: `code` spans. Everything
+// else is plain text (doc comments are shown as written, not rendered).
+function appendInlineMarkdown(el, text) {
+  text.split("`").forEach((piece, i) => {
+    if (i % 2 === 1) {
+      const code = document.createElement("code");
+      code.textContent = piece;
+      el.append(code);
+    } else if (piece) {
+      el.append(piece);
+    }
+  });
+}
+
 // Minimal markdown for hover contents: fenced code blocks become <pre>, the
-// prose between them plain text (the server's hover markdown is just those two).
+// prose between them paragraphs with `code` spans (the server's hover
+// markdown is just those two).
 function hoverDom(markdown) {
   const dom = document.createElement("div");
   dom.className = "lsp-hover";
   const parts = markdown.split(/```[^\n]*\n?/);
   parts.forEach((part, i) => {
-    const text = i % 2 === 1 ? part.replace(/\n$/, "") : part.trim();
-    if (!text) return;
-    const el = document.createElement(i % 2 === 1 ? "pre" : "div");
-    el.textContent = text;
-    dom.append(el);
+    if (i % 2 === 1) {
+      const text = part.replace(/\n$/, "");
+      if (!text) return;
+      const el = document.createElement("pre");
+      el.textContent = text;
+      dom.append(el);
+      return;
+    }
+    for (const para of part.split(/\n[ \t]*\n/)) {
+      if (!para.trim()) continue;
+      const el = document.createElement("div");
+      appendInlineMarkdown(el, para.trim());
+      dom.append(el);
+    }
   });
   return dom;
 }
@@ -1844,6 +1925,15 @@ const STYLE = `
 }
 .goal-name { color: var(--muted); font-weight: 600; margin-right: .3rem; }
 .turnstile { color: var(--muted); }
+/* Premises and conclusion as boxes on a neutral ground, so each formula
+   reads as one unit and the split survives a theory whose own formulas
+   contain a turnstile. Deliberately no tint on the conclusion: the
+   separator marks it, and the gray is calmer. */
+.goal .formula {
+  padding: .1em .45em; border-radius: 4px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--fg) 4%, var(--bg));
+}
 .banner {
   padding: .4rem .7rem; font-size: .85em; color: var(--err);
   background: var(--warnbg); border-bottom: 1px solid var(--line);
@@ -1873,7 +1963,7 @@ const STYLE = `
   background: var(--bg) !important;
   border-right: none !important;
 }
-.lsp-hover { max-width: 32rem; padding: .3rem .5rem; font-size: .85em; }
+.lsp-hover { max-width: 36rem; padding: .3rem .5rem; font-size: .85em; }
 .stmt-kind {
   color: var(--muted); font-size: .72em;
   text-transform: uppercase; letter-spacing: .05em;
@@ -1882,6 +1972,31 @@ const STYLE = `
   border-bottom: none; background: none; color: var(--fg);
   padding: .15rem 0 .1rem;
 }
+/* The declaration's annotations, one per line. Each line wraps with a
+   hanging indent so a long @view signature stays one visual item. The
+   color rule outranks the muted .lsp-hover div rule below: annotations
+   are content, not commentary. */
+/* The doc comment reads as prose, so it gets the page's text face rather
+   than the editor's monospace; code spans drop back to monospace. */
+.lsp-hover .stmt-doc {
+  color: var(--fg); margin: .15rem 0 .45rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1.05em; line-height: 1.4;
+}
+.stmt-doc p { margin: 0; }
+.stmt-doc p + p { margin-top: .4em; }
+.stmt-doc code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .9em;
+  padding: 0 .2em; border-radius: 3px;
+  background: color-mix(in srgb, var(--fg) 6%, var(--bg));
+}
+.stmt-annotations { margin: .1rem 0 .25rem; }
+.lsp-hover .stmt-annotation {
+  color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere;
+  padding-left: 2ch; text-indent: -2ch;
+}
+.stmt-annotation-directive { font-weight: 600; }
 .lsp-hover pre {
   margin: .2rem 0; padding: .25rem .4rem; overflow-x: auto;
   background: color-mix(in srgb, var(--fg) 5%, var(--bg)); border-radius: 4px;

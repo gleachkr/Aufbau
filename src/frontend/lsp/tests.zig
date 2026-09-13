@@ -2734,11 +2734,98 @@ test "proof @vars dummies hover and jump to pool token" {
     ));
 }
 
-test "global hover includes selected metadata summaries" {
+test "global hover shows the declaration's annotations in full" {
     const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @vars u v
+        \\provable sort wff;
+        \\sort ctx;
+        \\term top: wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term seq (g: ctx) (a: wff): wff;
+        \\infixl seq: $|-$ prec 10;
+        \\--| @rewrite
+        \\axiom top_i: $ top $;
+        \\--| @view (g: ctx) (p q: wff): $ g |- p $ > $ g |- q $
+        \\--| @abstract p q $ top $ $ top -> top $
+        \\--| @auto forward
+        \\axiom weaken (g: ctx) (p: wff): $ g |- p $ > $ g |- top -> p $;
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+    });
+    defer snapshot.deinit();
+
+    // A single annotation sits on the line above the declaration, exactly as
+    // in the source; the old "Metadata: `@rewrite`." name-only summary is gone.
+    const rewrite_offset =
+        (std.mem.indexOf(u8, mm0_text, "top_i") orelse unreachable) + 1;
+    const rewrite_hover = snapshot.hoverAt(.mm0, rewrite_offset) orelse {
+        return error.MissingAnnotatedHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        rewrite_hover.markdown,
+        1,
+        "```mm0\n--| @rewrite\naxiom top_i:",
+    ));
+    try std.testing.expect(!std.mem.containsAtLeast(
+        u8,
+        rewrite_hover.markdown,
+        1,
+        "Metadata:",
+    ));
+
+    // Several annotations keep their source order and their full text — the
+    // view signature and the abstract patterns are what explain the rule.
+    const view_offset =
+        (std.mem.indexOf(u8, mm0_text, "axiom weaken") orelse unreachable) +
+        "axiom ".len + 1;
+    const view_hover = snapshot.hoverAt(.mm0, view_offset) orelse {
+        return error.MissingViewHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        view_hover.markdown,
+        1,
+        "```mm0\n" ++
+            "--| @view (g: ctx) (p q: wff): $ g |- p $ > $ g |- q $\n" ++
+            "--| @abstract p q $ top $ $ top -> top $\n" ++
+            "--| @auto forward\n" ++
+            "axiom weaken (g: ctx) (p: wff):",
+    ));
+
+    // Sorts carry theirs too.
+    const sort_offset =
+        (std.mem.indexOf(u8, mm0_text, "sort wff") orelse unreachable) +
+        "sort ".len + 1;
+    const sort_hover = snapshot.hoverAt(.mm0, sort_offset) orelse {
+        return error.MissingSortHover;
+    };
+    try std.testing.expect(std.mem.containsAtLeast(
+        u8,
+        sort_hover.markdown,
+        1,
+        "```mm0\n--| @vars u v\nprovable sort wff;",
+    ));
+}
+
+test "global hover renders prose annotations as a doc comment" {
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| The sort of propositions.
+        \\--| @vars u v
         \\provable sort wff;
         \\term top: wff;
+        \\--| Truth is provable outright.
+        \\--|
+        \\--|
+        \\--| Enrolled as a rewrite so `top` folds away.
         \\--| @rewrite
+        \\--| Prose may follow a directive too.
+        \\--|
         \\axiom top_i: $ top $;
     ;
     var snapshot = try Snapshot.build(std.testing.allocator, .{
@@ -2747,17 +2834,48 @@ test "global hover includes selected metadata summaries" {
     });
     defer snapshot.deinit();
 
-    const offset =
+    // Directives stay in the code fence; the prose becomes markdown
+    // paragraphs after it. A blank `--|` line is a paragraph break (repeated
+    // and trailing blanks collapse), and prose lines separated only by a
+    // directive join into one paragraph.
+    const axiom_offset =
         (std.mem.indexOf(u8, mm0_text, "top_i") orelse unreachable) + 1;
-    const hover = snapshot.hoverAt(.mm0, offset) orelse {
-        return error.MissingMetadataHover;
+    const axiom_hover = snapshot.hoverAt(.mm0, axiom_offset) orelse {
+        return error.MissingAxiomHover;
     };
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        hover.markdown,
+        axiom_hover.markdown,
         1,
-        "Metadata: `@rewrite`.",
+        "```mm0\n--| @rewrite\naxiom top_i:",
     ));
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        axiom_hover.markdown,
+        "$ top $;\n```\n\n" ++
+            "Truth is provable outright.\n\n" ++
+            "Enrolled as a rewrite so `top` folds away.\n" ++
+            "Prose may follow a directive too.",
+    ));
+    try std.testing.expect(!std.mem.containsAtLeast(
+        u8,
+        axiom_hover.markdown,
+        1,
+        "--| Truth",
+    ));
+
+    // Sorts: summary line, fence, doc.
+    const sort_offset =
+        (std.mem.indexOf(u8, mm0_text, "sort wff") orelse unreachable) +
+        "sort ".len + 1;
+    const sort_hover = snapshot.hoverAt(.mm0, sort_offset) orelse {
+        return error.MissingSortHover;
+    };
+    try std.testing.expectEqualStrings(
+        "Sort `wff`.\n\n```mm0\n--| @vars u v\nprovable sort wff;\n```\n\n" ++
+            "The sort of propositions.",
+        sort_hover.markdown,
+    );
 }
 
 test "sorry! hovers as an admitted line and is offered with the tactics" {

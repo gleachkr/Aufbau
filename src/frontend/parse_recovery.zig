@@ -535,16 +535,18 @@ pub const MM0Parser = struct {
                     {
                         ann_end -= 1;
                     }
-                    if (ann_end > ann_start) {
-                        try self.pending_annotations.append(
-                            self.core.allocator,
-                            self.core.src[ann_start..ann_end],
-                        );
-                        try self.pending_annotation_spans.append(
-                            self.core.allocator,
-                            .{ .start = ann_start, .end = ann_end },
-                        );
-                    }
+                    // A blank `--|` line is kept: prose annotations are
+                    // doc comments, and an empty one is a paragraph break
+                    // (the mm0-rs convention). Directive consumers see an
+                    // empty string and skip it.
+                    try self.pending_annotations.append(
+                        self.core.allocator,
+                        self.core.src[ann_start..ann_end],
+                    );
+                    try self.pending_annotation_spans.append(
+                        self.core.allocator,
+                        .{ .start = ann_start, .end = ann_end },
+                    );
                 } else {
                     while (pos < end and self.core.src[pos] != '\n') pos += 1;
                 }

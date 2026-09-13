@@ -610,13 +610,17 @@ pub fn processLocalDefItem(
     );
 }
 
+/// Proof-side defs take no `@directive` metadata yet. Plain `--|` prose is a
+/// doc comment and is fine anywhere.
 pub fn rejectDefAnnotations(self: *CompilerContext, def: DefItem) !void {
-    if (def.annotations.len == 0) return;
-    self.setDiagnostic(CompilerDiag.unsupportedProofDefAnnotationDiagnostic(
-        def.name,
-        def.name_span,
-    ));
-    return error.UnsupportedProofDefAnnotation;
+    for (def.annotations) |ann| {
+        if (!std.mem.startsWith(u8, ann, "@")) continue;
+        self.setDiagnostic(CompilerDiag.unsupportedProofDefAnnotationDiagnostic(
+            def.name,
+            def.name_span,
+        ));
+        return error.UnsupportedProofDefAnnotation;
+    }
 }
 
 pub fn localDefParseDiagnostic(

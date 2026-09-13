@@ -1160,10 +1160,12 @@ pub const Parser = struct {
                 break;
             }
             if (self.lineStartsAnnotation(self.pos)) {
-                const text = self.annotationTextFromLine(self.pos);
-                if (text.len > 0) {
-                    try annotations.append(self.allocator, text);
-                }
+                // Blank `--|` lines are kept as paragraph breaks in the
+                // item's doc comment; directive consumers skip them.
+                try annotations.append(
+                    self.allocator,
+                    self.annotationTextFromLine(self.pos),
+                );
             }
             self.pos = self.nextLineStart(self.pos);
         }
