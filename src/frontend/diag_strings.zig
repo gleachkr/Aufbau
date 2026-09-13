@@ -34,6 +34,7 @@ pub const Strings = struct {
     kind_public_def_body_header: []const u8,
     kind_unexpected_proof_def: []const u8,
     kind_unsupported_proof_def_annotation: []const u8,
+    kind_local_term_in_mm0: []const u8,
     kind_duplicate_rule_name: []const u8,
     kind_statement_not_provable: []const u8,
     kind_statement_subexpr_sort: []const u8,
@@ -371,6 +372,7 @@ pub const Strings = struct {
     detail_hypothesis_ref_name: []const u8,
     detail_hypothesis_ref_index: []const u8,
     detail_parameter: []const u8,
+    detail_local_term: []const u8,
 
     // Inference-path names.
     path_strict_replay: []const u8,
@@ -407,7 +409,8 @@ pub const en: Strings = .{
     .kind_public_def_body_name_mismatch = "proof-side definition body targets a different public definition",
     .kind_public_def_body_header = "public definition body filler must not redeclare the signature (only dummy binders are allowed)",
     .kind_unexpected_proof_def = "unexpected proof-side definition item",
-    .kind_unsupported_proof_def_annotation = "proof-side definition annotations are not supported yet",
+    .kind_unsupported_proof_def_annotation = "a public definition's body filler takes no annotations; put them on the .mm0 declaration",
+    .kind_local_term_in_mm0 = "the .mm0 file names a proof-local definition; a standalone MM0 reader has no declaration for it",
     .kind_duplicate_rule_name = "duplicate rule name",
     .kind_statement_not_provable = "the statement is not of a provable sort",
     .kind_statement_subexpr_sort = "a subexpression of the statement has the wrong sort",
@@ -745,6 +748,7 @@ pub const en: Strings = .{
     .detail_hypothesis_ref_name = "hypothesis ref: #{s}",
     .detail_hypothesis_ref_index = "hypothesis ref: #{d}",
     .detail_parameter = "parameter: {s}",
+    .detail_local_term = "local definition: {s}",
 
     // Inference-path names.
     .path_strict_replay = "exact match",
@@ -781,7 +785,8 @@ pub const de: Strings = .{
     .kind_public_def_body_name_mismatch = "der beweisseitige Definitionsrumpf gehört zu einer anderen öffentlichen Definition",
     .kind_public_def_body_header = "die Ergänzung eines öffentlichen Definitionsrumpfs darf die Signatur nicht wiederholen (nur Dummy-Binder sind erlaubt)",
     .kind_unexpected_proof_def = "unerwartetes beweisseitiges Definitionselement",
-    .kind_unsupported_proof_def_annotation = "beweisseitige Definitions-Annotationen werden noch nicht unterstützt",
+    .kind_unsupported_proof_def_annotation = "der Rumpf einer öffentlichen Definition nimmt keine Annotationen an; sie gehören an die .mm0-Deklaration",
+    .kind_local_term_in_mm0 = "die .mm0-Datei nennt eine beweislokale Definition; ein eigenständiger MM0-Leser kennt keine Deklaration dafür",
     .kind_duplicate_rule_name = "doppelter Regelname",
     .kind_statement_not_provable = "die Aussage hat keine beweisbare Sorte",
     .kind_statement_subexpr_sort = "ein Teilausdruck der Aussage hat die falsche Sorte",
@@ -1119,6 +1124,7 @@ pub const de: Strings = .{
     .detail_hypothesis_ref_name = "Hypothesenreferenz: #{s}",
     .detail_hypothesis_ref_index = "Hypothesenreferenz: #{d}",
     .detail_parameter = "Parameter: {s}",
+    .detail_local_term = "lokale Definition: {s}",
 
     // Inference-path names.
     .path_strict_replay = "exakte Übereinstimmung",

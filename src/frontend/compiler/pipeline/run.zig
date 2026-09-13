@@ -25,6 +25,8 @@ const drainAnchoredLocalProofItems = Common.drainAnchoredLocalProofItems;
 const drainTrailingLocalProofItems = Common.drainTrailingLocalProofItems;
 const fillPublicDefBody = Common.fillPublicDefBody;
 const processAssertion = Common.processAssertion;
+const rejectLocalTermNotation = Common.rejectLocalTermNotation;
+const rejectLocalTermReferences = Common.rejectLocalTermReferences;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
 pub fn run(
@@ -88,6 +90,7 @@ pub fn run(
         // the next public statement; keep the env's mirror in lockstep.
         try env.syncCoercionsFromParser(&parser);
         Metadata.warnDroppedAnnotations(self, &parser);
+        try rejectLocalTermNotation(self, &parser, &env, maybe_stmt);
         const stmt = maybe_stmt orelse break;
         last_stmt = stmt;
         CompilerVars.validateSortVarCollisions(&parser, &sort_vars) catch |err| {
@@ -96,6 +99,7 @@ pub fn run(
             );
             return err;
         };
+        try rejectLocalTermReferences(self, &env, stmt);
         switch (stmt) {
             .sort => |sort_stmt| {
                 const sort_stmt_copy = sort_stmt;

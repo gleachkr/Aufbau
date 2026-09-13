@@ -3,9 +3,9 @@
 Annotations are `--|` comment lines immediately before a declaration. Each
 annotation occupies exactly one line, and only one annotation is allowed per
 line. In `.mm0` files they attach to the next statement; in `.auf` files they
-may precede a `lemma` block, giving the local rule the same metadata as an
-ordinary assertion. (Annotations on proof-side `def` items are currently
-rejected.)
+may precede a `lemma` block or a proof-local `def`, giving the local rule or
+term the same metadata as an ordinary assertion or term. A public definition's
+body filler takes no annotations; they belong on its `.mm0` declaration.
 
 A `--|` line that does not start with `@` is a *doc comment*. Doc lines and
 annotations may be mixed in any order; consecutive doc lines form one

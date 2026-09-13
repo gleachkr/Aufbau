@@ -293,9 +293,16 @@ the MM0 and `.auf` streams together so that later declarations see the
 same term IDs that the MMB writer emits.
 
 Local defs may be used by later proof lines, later local lemmas, later
-local defs, later public body fillers, and later MM0 math parsed after
-the local def has entered the stream. They are not available before their
-declaration, and forward references are rejected.
+local defs, and later public body fillers. They are not available before
+their declaration, and forward references are rejected.
+
+The `.mm0` file may not name a local def. A standalone MM0 reader sees only
+the `.mm0` file, which carries no declaration for the name, so an `.mm0`
+statement, notation declaration, or coercion that mentions a local def is
+rejected at that statement. A name defined on the proof side is visible to
+the `.mm0` file only when the `.mm0` file itself declares it, as with a
+bodyless public `def` and its filler. The filler's body is exempt: it is
+emitted only into the MMB, so it may use local defs freely.
 
 Local defs may use ordinary and hidden dummy binders in their header, for
 example:
@@ -308,9 +315,11 @@ As with MM0 definitions, the body is checked against the declared result
 sort before the def unify stream is used. A body that leaves hidden dummy
 binders free in the result is rejected.
 
-Proof-side notation declarations are not supported yet. Term metadata on
-proof-side defs, such as `@acui`, is also not supported yet. Put
-notations and term-level annotations on public MM0 declarations for now.
+Local defs take the same `--|` annotations as an MM0 term, such as
+`@acui` and `@conversion`, and the laws an annotation names may be local
+lemmas. Public body fillers take no annotations; those belong on the
+public MM0 declaration. Proof-side notation declarations are not
+supported yet.
 
 ## Proof lines
 

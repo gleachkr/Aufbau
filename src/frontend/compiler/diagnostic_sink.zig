@@ -421,6 +421,9 @@ pub const DiagnosticSink = struct {
                     info.parameter_name,
                 ),
             } },
+            .local_term_reference => |info| .{ .local_term_reference = .{
+                .term_name = self.stableRequiredString(info.term_name),
+            } },
             .expected_char => |info| .{ .expected_char = info },
         };
     }

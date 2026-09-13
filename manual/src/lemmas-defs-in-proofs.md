@@ -109,7 +109,10 @@ def NAME (binders): sort = $ body $
 
 Like a lemma, it is a top-level item rather than a proof line. It takes no
 underline, and is available to later proof lines, lemmas, and definitions but
-not before its own declaration.
+not before its own declaration. The `.mm0` file may not mention it: the
+theory must stand on its own for any MM0 verifier, and nothing there declares
+the name. A statement in the `.mm0` file that names a proof-local definition
+is an error.
 
 ```aufbau-proof prelude=nd-base,nd-rules
 def nand (a b: wff): wff = $ ¬ (a ∧ b) $
@@ -126,7 +129,10 @@ l2: $ g , h ⊢ ⊥ $ by not_elim [#1, l1]
 ```
 
 Proof-local definitions cannot have notation declarations. This example
-therefore uses `nand a b` where the previous version used `a ⊼ b`.
+therefore uses `nand a b` where the previous version used `a ⊼ b`. They do
+take the same `--|` annotations as an `.mm0` term, so a local operator can be
+declared `@acui` with its laws proved as lemmas alongside it (see the
+[annotation reference](appendix-annotations.md)).
 
 Like ordinary definitions, proof-local definitions are transparent at rule
 applications: the folded and unfolded forms are interchangeable, and each line

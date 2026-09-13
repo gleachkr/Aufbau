@@ -80,6 +80,31 @@ pub fn processTermMetadata(
     annotations: []const []const u8,
     annotation_spans: []const MathSpan,
 ) !void {
+    try processTermMetadataAt(
+        ctx,
+        env,
+        registry,
+        term_stmt,
+        annotations,
+        annotation_spans,
+        .mm0,
+        null,
+    );
+}
+
+/// `processTermMetadata` with the attachment site spelled out: proof-local
+/// defs carry no per-annotation spans, so unknown-directive warnings fall
+/// back to `fallback_span` (the def's name) under the `.proof` source.
+pub fn processTermMetadataAt(
+    ctx: ?*CompilerContext,
+    env: *GlobalEnv,
+    registry: *RewriteRegistry,
+    term_stmt: TermStmt,
+    annotations: []const []const u8,
+    annotation_spans: []const MathSpan,
+    source: DiagnosticSource,
+    fallback_span: ?Span,
+) !void {
     for (annotations, 0..) |ann, idx| {
         const directive = annotationDirective(ann) orelse continue;
         if (std.mem.eql(u8, directive, "@acui") or
@@ -95,11 +120,11 @@ pub fn processTermMetadata(
     warnUnknownAnnotations(
         ctx,
         &known_term_directives,
-        .mm0,
+        source,
         term_stmt.name,
         annotations,
         annotation_spans,
-        null,
+        fallback_span,
     );
 }
 

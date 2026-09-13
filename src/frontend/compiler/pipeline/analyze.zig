@@ -40,6 +40,8 @@ const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
 const processLocalProofBlock = Common.processLocalProofBlock;
+const rejectLocalTermNotation = Common.rejectLocalTermNotation;
+const rejectLocalTermReferences = Common.rejectLocalTermReferences;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
 const FilledPublicDef = Common.FilledPublicDef;
@@ -191,6 +193,20 @@ fn analyzeInternal(
         // warnings belong to the gap, not to the statement that follows, so
         // a failing statement must not roll them back.
         Metadata.warnDroppedAnnotations(self, &state.parser);
+        rejectLocalTermNotation(
+            self,
+            &state.parser,
+            &state.env,
+            next_stmt,
+        ) catch |err| {
+            if (next_stmt) |stmt| {
+                recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+                continue;
+            }
+            self.addPrimaryDiagnostic(self.getDiagnostic().?);
+            self.restoreDiagnostic(null);
+            break;
+        };
         const stmt = next_stmt orelse break;
         state.last_stmt = stmt;
 
@@ -200,6 +216,11 @@ fn analyzeInternal(
             &state.parser,
             &state.sort_vars,
         ) catch |err| {
+            warnings.restore(self);
+            recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+            continue;
+        };
+        rejectLocalTermReferences(self, &state.env, stmt) catch |err| {
             warnings.restore(self);
             recordPrimaryStatementFailure(self, &state.parser, stmt, err);
             continue;
@@ -431,6 +452,7 @@ fn analyzeLocalDefItem(
         allocator,
         &state.parser,
         &state.env,
+        &state.registry,
         def,
         null,
     ) catch |err| {

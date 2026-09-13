@@ -3,6 +3,23 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Proof-local definitions take the same `--|` directives as an `.mm0` term
+  (`@acui`, `@conversion`), so a local operator can carry its own ACUI
+  bundle with the laws proved as lemmas beside it. A public definition's
+  body filler still takes none; those belong on the `.mm0` declaration.
+
+### Fixed
+
+- An `.mm0` statement, notation declaration, or coercion that named a
+  proof-local definition was accepted by the compiler, so the `.mm0` file
+  no longer verified on its own. It is now rejected at that statement with
+  the local definition named. A public definition's filler body may still
+  use local definitions; it never appears in the `.mm0` file.
+
 ## [0.0.10] - 2026-09-13
 
 ### Added

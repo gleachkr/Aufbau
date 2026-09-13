@@ -1,0 +1,5 @@
+provable sort wff;
+term top: wff;
+def alias: wff;
+axiom ax_top: $ top $;
+theorem pass_local_def_in_filler: $ alias $;

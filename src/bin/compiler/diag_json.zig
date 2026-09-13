@@ -253,6 +253,13 @@ pub fn writeDetailField(
             );
             try writer.writeAll("}");
         },
+        .local_term_reference => |info| {
+            try writer.writeAll("{");
+            try writeJsonStringField(writer, "kind", "local_term_reference");
+            try writer.writeByte(',');
+            try writeJsonStringField(writer, "term", info.term_name);
+            try writer.writeAll("}");
+        },
     }
 }
 

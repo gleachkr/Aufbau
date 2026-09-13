@@ -895,20 +895,23 @@ test "compiler analyze does not cascade a broken predecessor onto dependents" {
     try std.testing.expectEqualStrings("helper", diags[0].theorem_name.?);
 }
 
-test "compiler rejects annotations on proof-side local defs" {
+test "compiler rejects annotations on public def body fillers" {
+    // The .mm0 declaration carries a public def's annotations; a directive
+    // on the .auf filler has nowhere to attach.
     const mm0_src =
         \\provable sort wff;
         \\term top: wff;
+        \\def alias: wff;
         \\axiom ax_top: $ top $;
-        \\theorem thm: $ top $;
+        \\theorem thm: $ alias $;
     ;
     const proof_src =
         \\--| @rewrite
-        \\def alias: wff = $ top $
+        \\def alias = $ top $
         \\
         \\thm
         \\---
-        \\p: $ top $ by ax_top []
+        \\p: $ alias $ by ax_top []
     ;
 
     var compiler = Compiler.initWithProof(
@@ -925,6 +928,136 @@ test "compiler rejects annotations on proof-side local defs" {
         diags[0].err,
     );
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
+}
+
+test "compiler accepts term directives on proof-side local defs" {
+    // A local def takes the same directives as an .mm0 term. An unknown one
+    // warns at the def's name under the proof source, as on a lemma.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem thm: $ top $;
+    ;
+    const proof_src =
+        \\--| Documented and annotated.
+        \\--| @syntax keyword
+        \\--| @bogus thing
+        \\def alias: wff = $ top $
+        \\
+        \\thm
+        \\---
+        \\p: $ alias $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.UnknownAnnotation, warnings[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, warnings[0].source);
+    try std.testing.expectEqualStrings("alias", warnings[0].name.?);
+}
+
+test "compiler rejects .mm0 statements that name a proof-local def" {
+    // The .mm0 file must stand on its own: a standalone MM0 reader has no
+    // declaration for a proof-local def, so a later .mm0 statement naming
+    // one is rejected at that statement, in both pipeline paths.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem use_local: $ top $;
+        \\theorem leak: $ local_top $;
+    ;
+    const proof_src =
+        \\def local_top: wff = $ top $
+        \\
+        \\use_local
+        \\---------
+        \\p: $ local_top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.LocalTermInMm0, diags[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diags[0].source);
+    try std.testing.expectEqualStrings("leak", diags[0].name.?);
+    try std.testing.expectEqualStrings(
+        "local_top",
+        diags[0].detail.local_term_reference.term_name,
+    );
+
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.LocalTermInMm0,
+        compile.compileMmb(std.testing.allocator),
+    );
+}
+
+test "compiler rejects .mm0 notation declared on a proof-local def" {
+    // The parser consumes notation silently, so the violation is reported
+    // on the statement that follows the declaration.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term imp (a b: wff): wff;
+        \\axiom ax_top: $ top $;
+        \\theorem use_local: $ top $;
+        \\infixl local_imp: $->$ prec 25;
+        \\theorem after: $ top $;
+    ;
+    const proof_src =
+        \\def local_imp (a b: wff): wff = $ imp a b $
+        \\
+        \\use_local
+        \\---------
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.LocalTermInMm0, diags[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diags[0].source);
+    try std.testing.expectEqualStrings("after", diags[0].name.?);
+    try std.testing.expectEqualStrings(
+        "local_imp",
+        diags[0].detail.local_term_reference.term_name,
+    );
+
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.LocalTermInMm0,
+        compile.compileMmb(std.testing.allocator),
+    );
 }
 
 test "compiler analyze accepts trailing local defs after proof blocks" {

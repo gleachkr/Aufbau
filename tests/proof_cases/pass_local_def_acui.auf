@@ -1,0 +1,30 @@
+--| Context concatenation as a proof-local head with its own ACUI bundle.
+--| The bundle's laws are lemmas proved by unfolding `cat` to `join`.
+--| @acui cat_assoc cat_comm emp cat_idem
+def cat (g h: ctx): ctx = $ g , h $
+
+lemma cat_assoc (g h i: ctx): $ ctx_eq (cat (cat g h) i) (cat g (cat h i)) $
+----
+l1: $ ctx_eq (cat (cat g h) i) (cat g (cat h i)) $ by ctx_assoc
+
+lemma cat_comm (g h: ctx): $ ctx_eq (cat g h) (cat h g) $
+----
+l1: $ ctx_eq (cat g h) (cat h g) $ by ctx_comm
+
+lemma cat_idem (g: ctx): $ ctx_eq (cat g g) g $
+----
+l1: $ ctx_eq (cat g g) g $ by ctx_idem
+
+--| @congr
+lemma cat_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (cat g1 h1) (cat g2 h2) $
+----
+l1: $ ctx_eq (cat g1 h1) (cat g2 h2) $ by join_congr [#1, #2]
+
+lemma dup (g: ctx) (a: wff): $ cat (cat g a) a ⇒ a $
+----
+l1: $ cat (cat g a) a ⇒ a $ by dup_ax
+
+pass_local_def_acui
+----
+l1: $ cat a (cat emp a) ⇒ a $ by dup (g := $ emp $, a := $ a $) []

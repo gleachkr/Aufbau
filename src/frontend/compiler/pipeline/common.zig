@@ -522,9 +522,76 @@ pub fn processLocalProofItem(
             allocator,
             parser,
             env,
+            registry,
             def,
             emit,
         ),
+    }
+}
+
+/// A proof-local definition has no `.mm0` declaration, so the `.mm0` stream
+/// must never name it: the file has to stand on its own for any MM0 reader.
+/// The shared parser cannot tell the two streams apart, so the reference is
+/// rejected after the statement parses, anchored on that statement. A public
+/// def's filler body may still use local defs; it never appears in the `.mm0`.
+pub fn rejectLocalTermReferences(
+    self: *CompilerContext,
+    env: *const GlobalEnv,
+    stmt: MM0Stmt,
+) error{LocalTermInMm0}!void {
+    const found: ?u32 = switch (stmt) {
+        .sort => null,
+        .term => |term| if (term.body) |body|
+            firstLocalTerm(env, body)
+        else
+            null,
+        .assertion => |assertion| blk: {
+            for (assertion.hyps) |hyp| {
+                if (firstLocalTerm(env, hyp)) |id| break :blk id;
+            }
+            break :blk firstLocalTerm(env, assertion.concl);
+        },
+    };
+    const term_id = found orelse return;
+    self.setDiagnostic(CompilerDiag.localTermInMm0Diagnostic(
+        stmt,
+        env.terms.items[term_id].name,
+    ));
+    return error.LocalTermInMm0;
+}
+
+fn firstLocalTerm(env: *const GlobalEnv, expr: *const Expr) ?u32 {
+    switch (expr.*) {
+        .variable, .hole => return null,
+        .term => |app| {
+            if (env.isLocalTerm(app.id)) return app.id;
+            for (app.args) |arg| {
+                if (firstLocalTerm(env, arg)) |id| return id;
+            }
+            return null;
+        },
+    }
+}
+
+/// Notation and coercion declarations are consumed silently while the parser
+/// scans to the next public statement, so a local term that now carries
+/// notation or a coercion was named by one of them. Each local term is
+/// reported once, anchored on the statement that follows the declaration.
+pub fn rejectLocalTermNotation(
+    self: *CompilerContext,
+    parser: *const MM0Parser,
+    env: *GlobalEnv,
+    next_stmt: ?MM0Stmt,
+) error{LocalTermInMm0}!void {
+    for (env.local_term_ids.items, 0..) |term_id, index| {
+        if (parser.notationForTerm(term_id) == null and
+            !parser.isCoercionTerm(term_id)) continue;
+        _ = env.local_term_ids.orderedRemove(index);
+        self.setDiagnostic(CompilerDiag.localTermInMm0Diagnostic(
+            next_stmt,
+            env.terms.items[term_id].name,
+        ));
+        return error.LocalTermInMm0;
     }
 }
 
@@ -533,11 +600,10 @@ pub fn processLocalDefItem(
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
     env: *GlobalEnv,
+    registry: *RewriteRegistry,
     def: DefItem,
     emit: ?*Output,
 ) !void {
-    try rejectDefAnnotations(self, def);
-
     // Covers both a missing tail and a dummy-only filler tail: neither
     // declares the signature a local def needs.
     if (!def.isLocalDef()) {
@@ -601,6 +667,7 @@ pub fn processLocalDefItem(
     const term_id = env.term_names.get(term_stmt.name) orelse {
         return error.UnknownTerm;
     };
+    try env.markTermLocal(term_id);
     try CompilerLints.lintUnusedDefinitionParameters(
         self,
         allocator,
@@ -608,10 +675,33 @@ pub fn processLocalDefItem(
         def.name_span,
         .proof,
     );
+
+    // Same directives as an .mm0 term (@acui, @conversion); the registry
+    // looks the head up by name, so this runs after the term is in `env`.
+    Metadata.processTermMetadataAt(
+        self,
+        env,
+        registry,
+        term_stmt,
+        def.annotations,
+        &.{},
+        .proof,
+        def.name_span,
+    ) catch |err| {
+        self.setIfMissing(.{
+            .kind = .generic,
+            .err = CompilerDiag.narrowDiagnosticError(err),
+            .source = .proof,
+            .name = def.name,
+            .span = def.name_span,
+        });
+        return err;
+    };
 }
 
-/// Proof-side defs take no `@directive` metadata yet. Plain `--|` prose is a
-/// doc comment and is fine anywhere.
+/// A public def's body filler takes no `@directive` metadata: the directives
+/// belong on the `.mm0` declaration, which already carries them. Plain `--|`
+/// prose is a doc comment and is fine anywhere.
 pub fn rejectDefAnnotations(self: *CompilerContext, def: DefItem) !void {
     for (def.annotations) |ann| {
         if (!std.mem.startsWith(u8, ann, "@")) continue;

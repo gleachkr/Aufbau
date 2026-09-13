@@ -1,0 +1,9 @@
+-- A public def's filler body never appears in the .mm0 file, so it may use
+-- a proof-local def even though the .mm0 statements themselves may not.
+def local_top: wff = $ top $
+
+def alias = $ local_top $
+
+pass_local_def_in_filler
+------------------------
+p: $ alias $ by ax_top []

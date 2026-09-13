@@ -20,6 +20,10 @@ pub const TermDecl = struct {
     ret_deps: u55 = 0,
     is_def: bool,
     body: ?TemplateExpr,
+    /// Declared by a `.auf` `def` item rather than the `.mm0` file. The
+    /// `.mm0` stream must never mention it: a standalone MM0 reader has no
+    /// declaration for the name (see `Common.rejectLocalTermReferences`).
+    is_local: bool = false,
     // In recovery mode we sometimes keep a placeholder here for a parsed
     // term that failed semantic validation. The parser bakes term ids into
     // later expressions, so the `terms` array must stay aligned with parser
@@ -55,6 +59,9 @@ pub const GlobalEnv = struct {
     rules: std.ArrayListUnmanaged(RuleDecl) = .{},
     coercions: std.ArrayListUnmanaged(CoercionDecl) = .{},
     coercion_term_ids: std.AutoHashMapUnmanaged(u32, void) = .{},
+    /// Term ids flagged `is_local`, in declaration order, so the per-statement
+    /// notation check does not rescan the whole term table.
+    local_term_ids: std.ArrayListUnmanaged(u32) = .{},
 
     pub fn init(allocator: std.mem.Allocator) GlobalEnv {
         return .{
@@ -189,6 +196,17 @@ pub const GlobalEnv = struct {
 
     pub fn isCoercionTerm(self: *const GlobalEnv, term_id: u32) bool {
         return self.coercion_term_ids.contains(term_id);
+    }
+
+    /// Flag a term that entered the environment from a `.auf` `def` item.
+    pub fn markTermLocal(self: *GlobalEnv, term_id: u32) !void {
+        self.terms.items[term_id].is_local = true;
+        try self.local_term_ids.append(self.allocator, term_id);
+    }
+
+    pub fn isLocalTerm(self: *const GlobalEnv, term_id: u32) bool {
+        return term_id < self.terms.items.len and
+            self.terms.items[term_id].is_local;
     }
 
     /// Whether `src` reaches `dst` through the declared coercion graph

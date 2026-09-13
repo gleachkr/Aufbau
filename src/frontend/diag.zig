@@ -64,6 +64,7 @@ pub const DiagnosticKind = enum {
     public_def_body_header,
     unexpected_proof_def,
     unsupported_proof_def_annotation,
+    local_term_in_mm0,
     duplicate_rule_name,
     parse_assertion,
     parse_binding,
@@ -169,6 +170,10 @@ pub const DiagnosticDetail = union(enum) {
     },
     unused_parameter: struct {
         parameter_name: []const u8,
+    },
+    /// The `.mm0` stream named a proof-local definition.
+    local_term_reference: struct {
+        term_name: []const u8,
     },
     /// A close-by known name for an unknown rule or line-label reference.
     /// The slice must outlive the diagnostic (rule/label names stored in
@@ -500,6 +505,7 @@ pub const DiagnosticError = error{
     InvalidTriggerAnnotation,
     InvalidVarsAnnotation,
     InvalidViewAnnotation,
+    LocalTermInMm0,
     MissingBinderAssignment,
     MissingCongruenceRule,
     MissingProofBlock,
@@ -903,6 +909,23 @@ pub fn unsupportedProofDefAnnotationDiagnostic(
     };
 }
 
+/// The `.mm0` stream named a proof-local definition `term_name`. Anchored on
+/// the offending statement, or on the statement following a notation or
+/// coercion declaration (which the parser consumes without surfacing).
+pub fn localTermInMm0Diagnostic(
+    stmt: ?MM0Stmt,
+    term_name: []const u8,
+) Diagnostic {
+    return .{
+        .kind = .local_term_in_mm0,
+        .err = error.LocalTermInMm0,
+        .source = .mm0,
+        .name = if (stmt) |s| mm0StmtName(s) else null,
+        .span = if (stmt) |s| mm0StmtNameSpan(s) else null,
+        .detail = .{ .local_term_reference = .{ .term_name = term_name } },
+    };
+}
+
 pub fn duplicateRuleNameDiagnostic(
     name: []const u8,
     span: ?Span,
@@ -1214,6 +1237,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .public_def_body_header => t("kind_public_def_body_header"),
         .unexpected_proof_def => t("kind_unexpected_proof_def"),
         .unsupported_proof_def_annotation => t("kind_unsupported_proof_def_annotation"),
+        .local_term_in_mm0 => t("kind_local_term_in_mm0"),
         .duplicate_rule_name => t("kind_duplicate_rule_name"),
         .parse_assertion => switch (diag.err) {
             error.NotProvable => t("kind_statement_not_provable"),
@@ -1424,6 +1448,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.TooManyBoundVars => t("err_TooManyBoundVars"),
         error.UnexpectedProofDefItem => t("kind_unexpected_proof_def"),
         error.UnsupportedProofDefAnnotation => t("kind_unsupported_proof_def_annotation"),
+        error.LocalTermInMm0 => t("kind_local_term_in_mm0"),
         error.ExtraProofItem => t("err_ExtraProofItem"),
         error.ExpectedBy => t("err_ExpectedBy"),
         error.ExpectedKeyword => t("err_ExpectedKeyword"),
@@ -1968,6 +1993,14 @@ fn writeDetailContextLines(
                 line_separator,
                 "detail_parameter",
                 .{info.parameter_name},
+            );
+        },
+        .local_term_reference => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "detail_local_term",
+                .{info.term_name},
             );
         },
     }
