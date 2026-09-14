@@ -90,6 +90,8 @@ pub const Builder = struct {
     pub const resolveLine = proof.resolveLine;
 
     pub const collectMm0Notation = notation_builder.collectMm0Notation;
+    pub const collectNotationStatement =
+        notation_builder.collectNotationStatement;
     pub const collectDelimiterStatement =
         notation_builder.collectDelimiterStatement;
     pub const registerDelimiterMath = notation_builder.registerDelimiterMath;
@@ -153,6 +155,10 @@ pub const Builder = struct {
                     self.globalAvailabilityForProofItem(items.items, i),
                 ),
                 .def => |def| try self.addProofDefItem(text, def),
+                .notation => |local_notation| try self.addProofNotationItem(
+                    text,
+                    local_notation,
+                ),
             }
         }
     }
@@ -169,14 +175,14 @@ pub const Builder = struct {
                     return self.theoremAvailabilityBound(block.name);
                 }
             },
-            .def => {},
+            .def, .notation => {},
         }
 
         var i = index + 1;
         while (i < items.len) : (i += 1) {
             const block = switch (items[i]) {
                 .block => |block| block,
-                .def => continue,
+                .def, .notation => continue,
             };
             if (block.kind != .theorem) continue;
             return self.theoremAvailabilityBound(block.name);
@@ -435,7 +441,17 @@ pub const Builder = struct {
         name: []const u8,
         decl_index: usize,
     ) !void {
-        const range = sourceRangeFromSlice(.mm0, text, name) orelse return;
+        try self.addDeclarationNameUseIn(.mm0, text, name, decl_index);
+    }
+
+    pub fn addDeclarationNameUseIn(
+        self: *Builder,
+        document: DocumentId,
+        text: []const u8,
+        name: []const u8,
+        decl_index: usize,
+    ) !void {
+        const range = sourceRangeFromSlice(document, text, name) orelse return;
         const decl = self.declarations.items[decl_index];
         try self.addSymbol(.{
             .source_range = range,
@@ -466,6 +482,46 @@ pub const Builder = struct {
         } else {
             try self.addPublicDefBodyItem(def);
         }
+    }
+
+    /// A proof-side notation item on a proof-local def. Registered with the
+    /// shared parser so later proof math parses the token, and indexed like
+    /// an `.mm0` notation statement but against the proof document, which is
+    /// what keeps it out of `.mm0` completions. The item's own position
+    /// bounds the token's availability: the def may be declared well before
+    /// its notation.
+    fn addProofNotationItem(
+        self: *Builder,
+        text: []const u8,
+        item: proof_script.NotationItem,
+    ) !void {
+        const decl_index = self.decl_by_name.get(item.name) orelse return;
+        const decl = self.declarations.items[decl_index];
+        if (decl.kind != .def or decl.name_range.document != .proof) return;
+
+        const parser = if (self.mm0_parser) |*parser| parser else return;
+        const term_id = parser.lookupTermId(item.name) orelse return;
+        _ = parser.parseLocalNotationText(
+            item.text,
+            item.span.start,
+            term_id,
+        ) catch |err| {
+            if (isFatalIndexError(err)) return err;
+            return;
+        };
+
+        const stmt = source.SourceSpan{
+            .start = item.span.start,
+            .end = item.span.start + item.text.len,
+        };
+        const header = source.statementHeader(text, stmt) orelse return;
+        try self.collectNotationStatement(
+            text,
+            stmt,
+            header,
+            .proof,
+            item.span.start,
+        );
     }
 
     fn addPublicDefBodyItem(

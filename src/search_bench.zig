@@ -2768,7 +2768,7 @@ const BlockIterator = struct {
             } orelse return null;
             switch (item) {
                 .block => |block| return block,
-                .def => continue,
+                .def, .notation => continue,
             }
         }
     }

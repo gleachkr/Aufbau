@@ -1,0 +1,8 @@
+delimiter $ ( ) $;
+provable sort wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term top: wff;
+axiom ax_top: $ top $;
+axiom ax_k (a b: wff): $ a -> b -> a $;
+theorem pass_local_notation (a: wff): $ a -> top -> a $;

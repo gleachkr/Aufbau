@@ -154,6 +154,7 @@ pub const ParseError = error{
     ExpectedMathString,
     ExpectedNumber,
     ExpectedProofBlock,
+    ExpectedSemicolon,
     NumberOutOfRange,
     UnexpectedCharacter,
     UnterminatedMathString,
@@ -204,10 +205,33 @@ pub const DefItem = struct {
     }
 };
 
+/// A proof-side notation declaration: `prefix`, `infixl`, `infixr`, or
+/// general `notation`, written exactly as in an `.mm0` file (semicolon
+/// included) and handed to the MM0 parser unchanged. It may only name a
+/// proof-local definition; the compiler enforces that.
+pub const NotationItem = struct {
+    keyword: []const u8,
+    /// The term the declaration names.
+    name: []const u8,
+    name_span: Span,
+    /// The statement text, keyword through `;`.
+    text: []const u8,
+    annotations: []const []const u8 = &.{},
+    span: Span,
+};
+
 pub const TopLevelItem = union(enum) {
     block: ProofBlock,
     def: DefItem,
+    notation: NotationItem,
 };
+
+pub fn isNotationKeyword(ident: []const u8) bool {
+    return std.mem.eql(u8, ident, "prefix") or
+        std.mem.eql(u8, ident, "infixl") or
+        std.mem.eql(u8, ident, "infixr") or
+        std.mem.eql(u8, ident, "notation");
+}
 
 pub const TheoremBlock = ProofBlock;
 
@@ -265,6 +289,13 @@ pub const Parser = struct {
                 annotations,
             ) };
         }
+        if (isNotationKeyword(ident) and self.startsDefHeader()) {
+            return .{ .notation = try self.parseNotationItem(
+                item_start,
+                ident,
+                annotations,
+            ) };
+        }
         return .{ .block = try self.parseTheoremBlock(
             item_start,
             ident,
@@ -277,7 +308,7 @@ pub const Parser = struct {
         const item = (try self.nextItem()) orelse return null;
         return switch (item) {
             .block => |block| block,
-            .def => error.ExpectedProofBlock,
+            .def, .notation => error.ExpectedProofBlock,
         };
     }
 
@@ -446,24 +477,100 @@ pub const Parser = struct {
         };
     }
 
+    /// `KEYWORD name ... ;` — the statement is kept verbatim for the MM0
+    /// parser, so this only finds its end: the first `;` outside a math
+    /// string or comment. General notations may span lines, but a line
+    /// that opens another item ends the search: the `;` is missing, and
+    /// stopping there keeps that item recoverable instead of swallowing it.
+    fn parseNotationItem(
+        self: *Parser,
+        item_start: usize,
+        keyword: []const u8,
+        annotations: []const []const u8,
+    ) !NotationItem {
+        self.skipHorizontalSpace();
+        const name_start = self.pos;
+        const name = try self.parseIdentifier();
+        self.setCurrentBlockContext(name, name_start);
+
+        var content_end = self.pos;
+        while (true) {
+            if (self.pos >= self.src.len) {
+                return self.recordErrorAtSpan(
+                    error.ExpectedSemicolon,
+                    self.tokenSpanAt(content_end),
+                );
+            }
+            const ch = self.src[self.pos];
+            if (ch == '$') {
+                try self.skipMathStringFrom(self.pos);
+                content_end = self.pos;
+                continue;
+            }
+            if (self.lineStartsComment(self.pos)) {
+                self.skipLineComment();
+                continue;
+            }
+            if (ch == '\n') {
+                const next_start = self.pos + 1;
+                if (self.lineStartsAnnotation(next_start) or
+                    self.lineStartsItemHeaderLead(next_start))
+                {
+                    // `pos` stays on this newline so recovery lands on the
+                    // item that follows.
+                    return self.recordErrorAtSpan(
+                        error.ExpectedSemicolon,
+                        self.tokenSpanAt(content_end),
+                    );
+                }
+            }
+            self.pos += 1;
+            if (!isHorizontalSpace(ch) and ch != '\n' and ch != '\r') {
+                content_end = self.pos;
+            }
+            if (ch == ';') break;
+        }
+        const text = self.src[item_start..self.pos];
+        try self.expectLineEnd();
+
+        return .{
+            .keyword = keyword,
+            .name = name,
+            .name_span = .{
+                .start = name_start,
+                .end = name_start + name.len,
+            },
+            .text = text,
+            .annotations = annotations,
+            .span = .{
+                .start = item_start,
+                .end = self.pos,
+            },
+        };
+    }
+
+    /// Advance past the math string opening at `math_start`.
+    fn skipMathStringFrom(self: *Parser, math_start: usize) !void {
+        self.pos = math_start + 1;
+        while (self.pos < self.src.len and self.src[self.pos] != '$') {
+            self.pos += 1;
+        }
+        if (self.pos >= self.src.len) {
+            return self.recordErrorAtSpan(
+                error.UnterminatedMathString,
+                .{
+                    .start = math_start,
+                    .end = @min(math_start + 1, self.src.len),
+                },
+            );
+        }
+        self.pos += 1;
+    }
+
     fn skipUntilDefEquals(self: *Parser) !void {
         while (self.pos < self.src.len) {
             if (self.src[self.pos] == '$') {
-                const math_start = self.pos;
-                self.pos += 1;
-                while (self.pos < self.src.len and self.src[self.pos] != '$') {
-                    self.pos += 1;
-                }
-                if (self.pos >= self.src.len) {
-                    return self.recordErrorAtSpan(
-                        error.UnterminatedMathString,
-                        .{
-                            .start = math_start,
-                            .end = @min(math_start + 1, self.src.len),
-                        },
-                    );
-                }
-                self.pos += 1;
+                try self.skipMathStringFrom(self.pos);
                 continue;
             }
             if (self.src[self.pos] == '=') return;
@@ -1260,6 +1367,11 @@ pub const Parser = struct {
         if (std.mem.eql(u8, ident, "lemma")) {
             return self.lineLooksLikeLemmaHeader(i);
         }
+        // A block may be named after a notation keyword, so a line that
+        // does not read as a notation header still gets the block check.
+        if (isNotationKeyword(ident) and self.lineLooksLikeNotationHeader(i)) {
+            return true;
+        }
         while (i < self.src.len and isHorizontalSpace(self.src[i])) : (i += 1) {}
         const header_ok = i >= self.src.len or
             self.src[i] == '\n' or
@@ -1300,6 +1412,17 @@ pub const Parser = struct {
             i += 1;
         }
         return false;
+    }
+
+    /// Keyword followed by the named term on the same line. (A theorem block
+    /// named `prefix` has nothing after the name.)
+    fn lineLooksLikeNotationHeader(
+        self: *const Parser,
+        after_keyword: usize,
+    ) bool {
+        var i = after_keyword;
+        while (i < self.src.len and isHorizontalSpace(self.src[i])) : (i += 1) {}
+        return i < self.src.len and isIdentStart(self.src[i]);
     }
 
     fn lineLooksLikeLemmaHeader(

@@ -11,6 +11,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   (`@acui`, `@conversion`), so a local operator can carry its own ACUI
   bundle with the laws proved as lemmas beside it. A public definition's
   body filler still takes none; those belong on the `.mm0` declaration.
+- Local notation. A proof-local definition may be given `prefix`, `infixl`,
+  `infixr`, or general `notation` in the `.auf` file, written exactly as in
+  an `.mm0` file. Later proof lines, lemmas, and definitions may use the
+  token, and hovers, goal displays, and completions pick it up; the `.mm0`
+  file and the MMB never see it. Only proof-local definitions may be named;
+  notation for a term the `.mm0` file declares belongs in the `.mm0` file.
+  When a later `.mm0` declaration collides with a proof-side token or
+  precedence level, the diagnostic names the proof-side declaration.
 
 ### Fixed
 

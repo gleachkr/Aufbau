@@ -337,6 +337,7 @@ fn sourceTargetAnchorName(
                 if (!found_target) continue;
                 if (def.header_tail == null) return def.name;
             },
+            .notation => {},
         }
     }
     return null;
@@ -381,7 +382,7 @@ fn drainLocalItemsBeforeSearchTarget(
                 putBackProofItems(proofs, locals.items);
                 return error.MissingProofBlock;
             },
-            .def => {
+            .def, .notation => {
                 if (PipelineCommon.isLocalProofItem(item)) {
                     try locals.append(allocator, item);
                     continue;
@@ -526,7 +527,7 @@ fn consumeMatchingPublicProofBlock(
             }
             proofs.putBack(item);
         },
-        .def => proofs.putBack(item),
+        .def, .notation => proofs.putBack(item),
     }
 }
 

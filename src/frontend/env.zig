@@ -38,6 +38,17 @@ pub const CoercionDecl = struct {
     term_id: u32,
     src_sort: []const u8,
     dst_sort: []const u8,
+    /// A coercion on a proof-local term came from the `.mm0` (the proof file
+    /// cannot declare coercions); set once it has been reported.
+    local_reported: bool = false,
+};
+
+/// A notation declared by a `.auf` item, keyed the way the parser keys it.
+/// Lets the per-statement check tell proof-side notation on a local term
+/// from notation an `.mm0` declaration put there.
+pub const LocalNotation = struct {
+    term_id: u32,
+    token: []const u8,
 };
 
 pub const RuleDecl = struct {
@@ -62,6 +73,7 @@ pub const GlobalEnv = struct {
     /// Term ids flagged `is_local`, in declaration order, so the per-statement
     /// notation check does not rescan the whole term table.
     local_term_ids: std.ArrayListUnmanaged(u32) = .{},
+    local_notations: std.ArrayListUnmanaged(LocalNotation) = .{},
 
     pub fn init(allocator: std.mem.Allocator) GlobalEnv {
         return .{
@@ -207,6 +219,40 @@ pub const GlobalEnv = struct {
     pub fn isLocalTerm(self: *const GlobalEnv, term_id: u32) bool {
         return term_id < self.terms.items.len and
             self.terms.items[term_id].is_local;
+    }
+
+    pub fn addLocalNotation(
+        self: *GlobalEnv,
+        term_id: u32,
+        token: []const u8,
+    ) !void {
+        try self.local_notations.append(self.allocator, .{
+            .term_id = term_id,
+            .token = token,
+        });
+    }
+
+    pub fn hasLocalNotation(
+        self: *const GlobalEnv,
+        term_id: u32,
+        token: []const u8,
+    ) bool {
+        for (self.local_notations.items) |entry| {
+            if (entry.term_id == term_id and
+                std.mem.eql(u8, entry.token, token)) return true;
+        }
+        return false;
+    }
+
+    /// The local term a proof-side notation with `token` names, if any.
+    pub fn localNotationTerm(
+        self: *const GlobalEnv,
+        token: []const u8,
+    ) ?u32 {
+        for (self.local_notations.items) |entry| {
+            if (std.mem.eql(u8, entry.token, token)) return entry.term_id;
+        }
+        return null;
     }
 
     /// Whether `src` reaches `dst` through the declared coercion graph

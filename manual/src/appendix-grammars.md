@@ -76,12 +76,13 @@ See [Notation](notation.md) for how precedence and delimiters interact.
 
 ## The .auf language
 
-An Aufbau script is a sequence of theorem blocks, lemma blocks, and def
-items, in the same order as the `.mm0` declarations they serve (see [Proof
-blocks and lines](proof-blocks-and-lines.md)):
+An Aufbau script is a sequence of theorem blocks, lemma blocks, def items,
+and notation items, in the same order as the `.mm0` declarations they serve
+(see [Proof blocks and lines](proof-blocks-and-lines.md)):
 
 ```text
-aufbau-script ::= (theorem-block | lemma-block | def-item | blank | comment)*
+aufbau-script ::= (theorem-block | lemma-block | def-item | notation-item
+                  | blank | comment)*
 
 theorem-block ::= theorem-name newline underline newline* proof-line*
 underline     ::= '-' '-' '-'* newline          -- at least 3 dashes
@@ -94,12 +95,16 @@ def-item      ::= public-body-filler | local-def
 public-body-filler ::= 'def' identifier dummy-group* '=' math-string
 dummy-group   ::= '(' ('.' identifier)+ ':' sort ')'
 local-def     ::= 'def' identifier binder* ':' sort '=' math-string
+
+notation-item ::= prefix-stmt | infix-stmt | notation-stmt   -- MM0 syntax, ';' included
 ```
 
 Lemma binders use the same syntax as MM0 assertions. The presence of a
 top-level `: sort` return annotation is what distinguishes a proof-local
 definition from a public body filler ([Lemmas and definitions in
-proofs](lemmas-defs-in-proofs.md)).
+proofs](lemmas-defs-in-proofs.md)). A notation item is an MM0 `prefix`,
+`infixl`, `infixr`, or `notation` statement naming a proof-local
+definition; `coercion` and `delimiter` statements are not accepted.
 
 ## Proof lines
 

@@ -590,6 +590,132 @@ test "completion returns notation tokens in proof math" {
     );
 }
 
+test "completion offers proof-side notation in proof math only" {
+    // A local notation rides on the local def's declaration, which lives in
+    // the proof document, so the availability check keeps both the token
+    // and the def out of .mm0 contexts.
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (p q: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom ax (p q: wff): $ p -> q $;
+        \\theorem main (p q: wff): $ p -> q $;
+        \\theorem later (p q: wff): $ p -> q $;
+    ;
+    const proof_text =
+        \\def limp (p q: wff): wff = $ p -> q $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\main
+        \\----
+        \\l1: $ p li q $ by ax []
+        \\
+        \\later
+        \\-----
+        \\l1: $ p -> q $ by ax []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const proof_offset = std.mem.indexOf(u8, proof_text, "li q") orelse {
+        return error.MissingProofAliasContext;
+    };
+    const proof_items = try snapshot.completionsAt(
+        std.testing.allocator,
+        .proof,
+        proof_offset + "li".len,
+        .{},
+    );
+    defer std.testing.allocator.free(proof_items);
+    const local = completionNamed(proof_items, "=>") orelse {
+        return error.MissingLocalNotationCompletion;
+    };
+    try std.testing.expectEqualStrings("=>", local.replacement_text);
+    try std.testing.expect(completionNamed(proof_items, "limp") != null);
+
+    const mm0_offset = std.mem.indexOf(u8, mm0_text, "theorem later") orelse {
+        return error.MissingMm0Context;
+    };
+    const mm0_math = std.mem.indexOfPos(u8, mm0_text, mm0_offset, "q $") orelse {
+        return error.MissingMm0MathContext;
+    };
+    const mm0_items = try snapshot.completionsAt(
+        std.testing.allocator,
+        .mm0,
+        mm0_math + "q".len,
+        .{},
+    );
+    defer std.testing.allocator.free(mm0_items);
+    try std.testing.expect(completionNamed(mm0_items, "->") != null);
+    try std.testing.expect(completionNamed(mm0_items, "=>") == null);
+    try std.testing.expect(completionNamed(mm0_items, "limp") == null);
+}
+
+test "completion offers proof-side notation only past its declaration" {
+    // The def is available from its own position; the token only from the
+    // notation item's, which may come later.
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (p q: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\axiom ax (p q: wff): $ p -> q $;
+        \\theorem main (p q: wff): $ p -> q $;
+        \\theorem later (p q: wff): $ p -> q $;
+    ;
+    const proof_text =
+        \\def limp (p q: wff): wff = $ p -> q $
+        \\
+        \\main
+        \\----
+        \\l1: $ p li q $ by ax []
+        \\
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\later
+        \\-----
+        \\l1: $ p la q $ by ax []
+    ;
+    var snapshot = try Snapshot.build(std.testing.allocator, .{
+        .mm0_uri = "file:///test.mm0",
+        .mm0_text = mm0_text,
+        .proof_uri = "file:///test.auf",
+        .proof_text = proof_text,
+    });
+    defer snapshot.deinit();
+
+    const early = std.mem.indexOf(u8, proof_text, "li q") orelse {
+        return error.MissingProofAliasContext;
+    };
+    const early_items = try snapshot.completionsAt(
+        std.testing.allocator,
+        .proof,
+        early + "li".len,
+        .{},
+    );
+    defer std.testing.allocator.free(early_items);
+    try std.testing.expect(completionNamed(early_items, "limp") != null);
+    try std.testing.expect(completionNamed(early_items, "=>") == null);
+
+    const late = std.mem.indexOf(u8, proof_text, "la q") orelse {
+        return error.MissingProofAliasContext;
+    };
+    const late_items = try snapshot.completionsAt(
+        std.testing.allocator,
+        .proof,
+        late + "la".len,
+        .{},
+    );
+    defer std.testing.allocator.free(late_items);
+    try std.testing.expect(completionNamed(late_items, "=>") != null);
+}
+
 test "completion returns @vars dummies in proof math" {
     const mm0_text =
         \\--| @vars x y

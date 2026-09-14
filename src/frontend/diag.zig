@@ -65,6 +65,7 @@ pub const DiagnosticKind = enum {
     unexpected_proof_def,
     unsupported_proof_def_annotation,
     local_term_in_mm0,
+    local_notation_target,
     duplicate_rule_name,
     parse_assertion,
     parse_binding,
@@ -261,6 +262,15 @@ pub const NoteMessage = union(enum) {
     holey_unsolved_binder: struct {
         binder_name: []const u8,
     },
+    /// An `.mm0` notation error hit a token the proof file declared as local
+    /// notation on `term_name`.
+    local_notation_token: struct {
+        term_name: []const u8,
+        token: []const u8,
+    },
+    /// An `.mm0` notation error with proof-side notation in play: the
+    /// precedence and associativity tables are shared.
+    local_notation_tables_shared,
     /// 1-based display number.
     unsolved_binder_index: struct {
         number: usize,
@@ -457,6 +467,7 @@ pub const DiagnosticError = error{
     ExpectedIdentifier,
     ExpectedKeyword,
     ExpectedLineEnd,
+    ExpectedSemicolon,
     ExpectedMathStr,
     ExpectedMathString,
     ExpectedMathToken,
@@ -505,6 +516,7 @@ pub const DiagnosticError = error{
     InvalidTriggerAnnotation,
     InvalidVarsAnnotation,
     InvalidViewAnnotation,
+    LocalNotationOnPublicTerm,
     LocalTermInMm0,
     MissingBinderAssignment,
     MissingCongruenceRule,
@@ -909,6 +921,23 @@ pub fn unsupportedProofDefAnnotationDiagnostic(
     };
 }
 
+/// A proof-side notation item named a term the `.mm0` declared. Notation in
+/// the proof file may only decorate proof-local definitions: on a public
+/// term it would let later `.mm0` math use a token a standalone MM0 reader
+/// lacks, with nothing in the parsed expression to catch it.
+pub fn localNotationOnPublicTermDiagnostic(
+    name: []const u8,
+    span: Span,
+) Diagnostic {
+    return .{
+        .kind = .local_notation_target,
+        .err = error.LocalNotationOnPublicTerm,
+        .source = .proof,
+        .name = name,
+        .span = span,
+    };
+}
+
 /// The `.mm0` stream named a proof-local definition `term_name`. Anchored on
 /// the offending statement, or on the statement following a notation or
 /// coercion declaration (which the parser consumes without surfacing).
@@ -1238,6 +1267,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .unexpected_proof_def => t("kind_unexpected_proof_def"),
         .unsupported_proof_def_annotation => t("kind_unsupported_proof_def_annotation"),
         .local_term_in_mm0 => t("kind_local_term_in_mm0"),
+        .local_notation_target => t("kind_local_notation_target"),
         .duplicate_rule_name => t("kind_duplicate_rule_name"),
         .parse_assertion => switch (diag.err) {
             error.NotProvable => t("kind_statement_not_provable"),
@@ -1449,6 +1479,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.UnexpectedProofDefItem => t("kind_unexpected_proof_def"),
         error.UnsupportedProofDefAnnotation => t("kind_unsupported_proof_def_annotation"),
         error.LocalTermInMm0 => t("kind_local_term_in_mm0"),
+        error.LocalNotationOnPublicTerm => t("kind_local_notation_target"),
         error.ExtraProofItem => t("err_ExtraProofItem"),
         error.ExpectedBy => t("err_ExpectedBy"),
         error.ExpectedKeyword => t("err_ExpectedKeyword"),
@@ -1461,6 +1492,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.UnexpectedChar,
         => t("err_UnexpectedCharacter"),
         error.ExpectedLineEnd => t("err_ExpectedLineEnd"),
+        error.ExpectedSemicolon => t("err_ExpectedSemicolon"),
         error.ExpectedBlockUnderline => t("err_ExpectedBlockUnderline"),
         error.UnterminatedMathString,
         error.UnterminatedMathStr,
@@ -1736,6 +1768,8 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .premise_hypothesis_mismatch => |info| try printT(writer, "note_premise_hypothesis_mismatch", .{info.number}),
         .cited_premise_proves => |info| try printT(writer, "note_cited_premise_proves", .{info.text}),
         .holey_unsolved_binder => |info| try printT(writer, "note_holey_unsolved_binder", .{info.binder_name}),
+        .local_notation_token => |info| try printT(writer, "note_local_notation_token", .{ info.token, info.term_name }),
+        .local_notation_tables_shared => try writer.writeAll(t("note_local_notation_tables_shared")),
         .unsolved_binder_index => |info| try printT(writer, "note_unsolved_binder_index", .{info.number}),
         .conclusion_head_clash => |info| try printT(writer, "note_conclusion_head_clash", .{ info.expected_term, info.actual_term }),
         .conclusion_head_clash_with_variable => |info| try printT(writer, "note_conclusion_head_clash_with_variable", .{info.expected_term}),

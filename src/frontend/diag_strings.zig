@@ -35,6 +35,7 @@ pub const Strings = struct {
     kind_unexpected_proof_def: []const u8,
     kind_unsupported_proof_def_annotation: []const u8,
     kind_local_term_in_mm0: []const u8,
+    kind_local_notation_target: []const u8,
     kind_duplicate_rule_name: []const u8,
     kind_statement_not_provable: []const u8,
     kind_statement_subexpr_sort: []const u8,
@@ -211,6 +212,7 @@ pub const Strings = struct {
     err_UnexpectedKeyword: []const u8,
     err_UnexpectedCharacter: []const u8,
     err_ExpectedLineEnd: []const u8,
+    err_ExpectedSemicolon: []const u8,
     err_ExpectedBlockUnderline: []const u8,
     err_UnterminatedMathString: []const u8,
     err_UnterminatedString: []const u8,
@@ -260,6 +262,8 @@ pub const Strings = struct {
 
     // Note messages (renderNoteMessage).
     note_missing_semicolon_hint: []const u8,
+    note_local_notation_token: []const u8,
+    note_local_notation_tables_shared: []const u8,
     note_unknown_math_token_hint: []const u8,
     note_trailing_math_token_hint: []const u8,
     note_search_placeholder_meaning: []const u8,
@@ -411,6 +415,7 @@ pub const en: Strings = .{
     .kind_unexpected_proof_def = "unexpected proof-side definition item",
     .kind_unsupported_proof_def_annotation = "a public definition's body filler takes no annotations; put them on the .mm0 declaration",
     .kind_local_term_in_mm0 = "the .mm0 file names a proof-local definition; a standalone MM0 reader has no declaration for it",
+    .kind_local_notation_target = "proof-side notation may only be declared on a proof-local definition; notation for a term the .mm0 file declares belongs in the .mm0 file",
     .kind_duplicate_rule_name = "duplicate rule name",
     .kind_statement_not_provable = "the statement is not of a provable sort",
     .kind_statement_subexpr_sort = "a subexpression of the statement has the wrong sort",
@@ -587,6 +592,7 @@ pub const en: Strings = .{
     .err_UnexpectedKeyword = "unexpected keyword",
     .err_UnexpectedCharacter = "unexpected character",
     .err_ExpectedLineEnd = "expected end of line",
+    .err_ExpectedSemicolon = "expected ';' to end the notation declaration",
     .err_ExpectedBlockUnderline = "expected underline after proof block header",
     .err_UnterminatedMathString = "unterminated $...$ math string",
     .err_UnterminatedString = "unterminated string",
@@ -636,6 +642,8 @@ pub const en: Strings = .{
 
     // Note messages (renderNoteMessage).
     .note_missing_semicolon_hint = "usually a missing ';' at the end of the declaration before this point",
+    .note_local_notation_token = "the proof file declares '{s}' as notation on its local definition {s}; the .mm0 file is valid on its own, so change the proof-side declaration",
+    .note_local_notation_tables_shared = "notation declared in the proof file shares the precedence and associativity tables; a proof-side declaration may be the conflicting one",
     .note_unknown_math_token_hint = "the token is not a variable of this theorem, nor a term or notation of the theory",
     .note_trailing_math_token_hint = "the expression to the left parses on its own; this token is not a notation that can extend it",
     .note_search_placeholder_meaning = "search placeholders (auto?, exact?, apply?, conversion?) stand for a search that runs in the editor and is replaced by the proof it finds",
@@ -787,6 +795,7 @@ pub const de: Strings = .{
     .kind_unexpected_proof_def = "unerwartetes beweisseitiges Definitionselement",
     .kind_unsupported_proof_def_annotation = "der Rumpf einer öffentlichen Definition nimmt keine Annotationen an; sie gehören an die .mm0-Deklaration",
     .kind_local_term_in_mm0 = "die .mm0-Datei nennt eine beweislokale Definition; ein eigenständiger MM0-Leser kennt keine Deklaration dafür",
+    .kind_local_notation_target = "beweisseitige Notation darf nur für eine beweislokale Definition deklariert werden; Notation für einen in der .mm0-Datei deklarierten Term gehört in die .mm0-Datei",
     .kind_duplicate_rule_name = "doppelter Regelname",
     .kind_statement_not_provable = "die Aussage hat keine beweisbare Sorte",
     .kind_statement_subexpr_sort = "ein Teilausdruck der Aussage hat die falsche Sorte",
@@ -963,6 +972,7 @@ pub const de: Strings = .{
     .err_UnexpectedKeyword = "unerwartetes Schlüsselwort",
     .err_UnexpectedCharacter = "unerwartetes Zeichen",
     .err_ExpectedLineEnd = "Zeilenende erwartet",
+    .err_ExpectedSemicolon = "';' zum Abschluss der Notationsdeklaration erwartet",
     .err_ExpectedBlockUnderline = "Unterstreichung nach der Kopfzeile des Beweisblocks erwartet",
     .err_UnterminatedMathString = "nicht abgeschlossener $...$-Mathe-String",
     .err_UnterminatedString = "nicht abgeschlossener String",
@@ -1012,6 +1022,8 @@ pub const de: Strings = .{
 
     // Note messages (renderNoteMessage).
     .note_missing_semicolon_hint = "meist fehlt ein ';' am Ende der Deklaration vor dieser Stelle",
+    .note_local_notation_token = "die Beweisdatei deklariert '{s}' als Notation für ihre lokale Definition {s}; die .mm0-Datei ist für sich gültig, also die beweisseitige Deklaration ändern",
+    .note_local_notation_tables_shared = "in der Beweisdatei deklarierte Notation teilt die Präzedenz- und Assoziativitätstabellen; eine beweisseitige Deklaration kann die widersprüchliche sein",
     .note_unknown_math_token_hint = "das Token ist weder eine Variable dieses Theorems noch ein Term oder eine Notation der Theorie",
     .note_trailing_math_token_hint = "der Ausdruck links parst für sich allein; dieses Token ist keine Notation, die ihn erweitern kann",
     .note_search_placeholder_meaning = "Suchplatzhalter (auto?, exact?, apply?, conversion?) stehen für eine Suche, die im Editor läuft und durch den gefundenen Beweis ersetzt wird",

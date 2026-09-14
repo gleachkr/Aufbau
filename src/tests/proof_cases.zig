@@ -115,6 +115,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_proof_local_def", .outcome = .pass },
     .{ .stem = "pass_local_def_acui", .outcome = .pass },
     .{ .stem = "pass_local_def_in_filler", .outcome = .pass },
+    .{ .stem = "pass_local_notation", .outcome = .pass },
     .{ .stem = "pass_def_dummy", .outcome = .pass },
     .{ .stem = "pass_def_transport", .outcome = .pass },
     .{ .stem = "pass_def_unfold_line", .outcome = .pass },

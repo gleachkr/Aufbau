@@ -500,6 +500,9 @@ fn appendNotationCompletions(
             use_start,
             available_before,
         )) continue;
+        if (notation.proof_available_from) |from| {
+            if (document != .proof or from > use_start) continue;
+        }
         if (!completionAlreadyInserts(
             list.items,
             replacement,

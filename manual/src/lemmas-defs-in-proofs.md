@@ -128,11 +128,32 @@ l1: $ h ⊢ a ∧ b $ by and_intro [#2, #3]
 l2: $ g , h ⊢ ⊥ $ by not_elim [#1, l1]
 ```
 
-Proof-local definitions cannot have notation declarations. This example
-therefore uses `nand a b` where the previous version used `a ⊼ b`. They do
-take the same `--|` annotations as an `.mm0` term, so a local operator can be
-declared `@acui` with its laws proved as lemmas alongside it (see the
-[annotation reference](appendix-annotations.md)).
+Proof-local definitions take the same `--|` annotations as an `.mm0` term,
+so a local operator can be declared `@acui` with its laws proved as lemmas
+alongside it (see the [annotation reference](appendix-annotations.md)).
+
+## Local notation
+
+A proof-local definition may be given notation in the proof file. The
+declaration is written exactly as it would be in the `.mm0` file, semicolon
+included, and follows the definition it names:
+
+```aufbau-proof prelude=nd-base,nd-rules
+def nand (a b: wff): wff = $ ¬ (a ∧ b) $
+infixr nand: $⊼$ prec 30;
+
+lemma nand_intro (g: ctx) (a b: wff): $ g , a ∧ b ⊢ ⊥ $ > $ g ⊢ a ⊼ b $
+----
+l1: $ g ⊢ a ⊼ b $ by not_intro [#1]
+```
+
+`prefix`, `infixl`, `infixr`, and general `notation` declarations are
+accepted; `coercion` and `delimiter` are not. The notation is visible to
+later proof lines, lemmas, and definitions, and hovers and goal displays use
+it. Only a proof-local definition may be named: notation for a term the
+`.mm0` file declares belongs in the `.mm0` file. The token, precedence, and
+associativity tables are shared with the theory, so a local token should
+not be one the `.mm0` file also declares.
 
 Like ordinary definitions, proof-local definitions are transparent at rule
 applications: the folded and unfolded forms are interchangeable, and each line

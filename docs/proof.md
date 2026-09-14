@@ -318,8 +318,44 @@ binders free in the result is rejected.
 Local defs take the same `--|` annotations as an MM0 term, such as
 `@acui` and `@conversion`, and the laws an annotation names may be local
 lemmas. Public body fillers take no annotations; those belong on the
-public MM0 declaration. Proof-side notation declarations are not
-supported yet.
+public MM0 declaration.
+
+#### Local notation
+
+A local def may carry notation declared in the proof file. The
+declaration is a top-level item written exactly as in an MM0 file,
+semicolon included, and must follow the def it names:
+
+```auf
+def limp (a b: wff): wff = $ a -> b $
+infixr limp: $=>$ prec 25;
+
+lemma limp_k (a b: wff): $ a => b => a $
+----
+l1: $ a => b => a $ by ax_k []
+```
+
+`prefix`, `infixl`, `infixr`, and general `notation` declarations are
+accepted. `coercion` and `delimiter` are not: a coercion is inserted
+implicitly into every later math string, and a delimiter changes how every
+later math string is tokenized, so neither can be confined to the proof
+file. Notation is proof-side sugar only. Later proof lines, lemmas, and
+defs may use the token, hovers and goal displays print with it, and the
+MMB carries no notation at all.
+
+A proof-side notation may only name a proof-local def. Notation for a term
+the `.mm0` file declares belongs in the `.mm0` file, and declaring it in
+the proof file is an error: it would let later `.mm0` math use a token a
+standalone MM0 reader lacks, with nothing in the parsed expression to catch
+it. On a local def the token parses to the local term, so the rule above
+already rejects any `.mm0` statement that uses it.
+
+The precedence, associativity, and token tables are shared with the
+`.mm0` file. A proof-side declaration that claims a token, precedence, or
+associativity a later `.mm0` declaration also needs makes that `.mm0`
+declaration fail, even though the `.mm0` file is valid on its own; the
+diagnostic names the proof-side declaration. Choose local tokens that the
+theory does not use.
 
 ## Proof lines
 

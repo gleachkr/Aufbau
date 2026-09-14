@@ -1060,6 +1060,384 @@ test "compiler rejects .mm0 notation declared on a proof-local def" {
     );
 }
 
+test "compiler accepts proof-side notation on a local def" {
+    // The token is proof-side sugar: later proof math parses it, the MMB
+    // carries no notation, and the standalone verifier accepts the output.
+    const allocator = std.testing.allocator;
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term top: wff;
+        \\axiom ax_k (a b: wff): $ a -> b -> a $;
+        \\theorem thm (a: wff): $ a -> top -> a $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\--| @bogus dropped
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\lemma limp_k (a b: wff): $ a => b => a $
+        \\----
+        \\l1: $ a => b => a $ by ax_k []
+        \\
+        \\thm
+        \\---
+        \\p: $ a => top => a $ by limp_k []
+    ;
+
+    var analyzed = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    try analyzed.analyze();
+    try std.testing.expectEqual(@as(usize, 0), analyzed.primaryDiagnostics().len);
+    // The `@bogus` directive before the notation item attaches to nothing.
+    const warnings = analyzed.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.UnattachedAnnotation, warnings[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, warnings[0].source);
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb_bytes = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb_bytes);
+    try verifyNativeOnly(allocator, mmb_bytes);
+}
+
+test "compiler rejects proof-side notation on a public term" {
+    // Notation on an .mm0-declared term would let later .mm0 math use a
+    // token a standalone reader lacks, with nothing in the expression to
+    // catch it; it belongs in the .mm0 file.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term imp (a b: wff): wff;
+        \\axiom ax_top: $ top $;
+        \\theorem thm: $ top $;
+    ;
+    const proof_src =
+        \\infixr imp: $=>$ prec 25;
+        \\
+        \\thm
+        \\---
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.LocalNotationOnPublicTerm, diags[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
+    try std.testing.expectEqualStrings("imp", diags[0].name.?);
+
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.LocalNotationOnPublicTerm,
+        compile.compileMmb(std.testing.allocator),
+    );
+}
+
+test "compiler rejects .mm0 math written with proof-side notation" {
+    // The token parses to the local term, so the reference check from the
+    // local-def rule catches it at the .mm0 statement.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem use_local: $ top $;
+        \\theorem leak (a: wff): $ a => top $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\use_local
+        \\---------
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.LocalTermInMm0, diags[0].err);
+    try std.testing.expectEqualStrings("leak", diags[0].name.?);
+    try std.testing.expectEqualStrings(
+        "limp",
+        diags[0].detail.local_term_reference.term_name,
+    );
+}
+
+test "compiler still rejects .mm0 notation on a local def that has proof-side notation" {
+    // The .mm0's declaration is told apart from the proof file's by token.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem use_local: $ top $;
+        \\infixl limp: $##$ prec 30;
+        \\theorem after: $ top $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\use_local
+        \\---------
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.LocalTermInMm0, diags[0].err);
+    try std.testing.expectEqualStrings("after", diags[0].name.?);
+}
+
+test "compiler rejects .mm0 notation on a local def consumed before the proof-side one" {
+    // The .mm0 declaration between `main` and `later` registers before the
+    // proof item anchored at `later` does. Only the token that item
+    // introduces is recorded as proof-side, so the .mm0's stays foreign.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem main: $ top $;
+        \\infixl limp: $##$ prec 30;
+        \\theorem later: $ top $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\
+        \\main
+        \\----
+        \\p: $ top $ by ax_top []
+        \\
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\later
+        \\-----
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    // The failed `later` statement is skipped, which leaves its proof block
+    // unanchored; that follow-on report is the only other diagnostic.
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(error.LocalTermInMm0, diags[0].err);
+    try std.testing.expectEqualStrings("later", diags[0].name.?);
+    try std.testing.expectEqual(error.ExtraProofBlock, diags[1].err);
+
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.LocalTermInMm0,
+        compile.compileMmb(std.testing.allocator),
+    );
+}
+
+test "compiler rejects a public-term notation hidden behind comment dollars" {
+    // A `$` inside a comment must not pair with a later one, or one proof
+    // item would carry two statements past the local-target check.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem main: $ top $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25 -- $
+        \\;
+        \\-- $
+        \\prefix top: $truth$ prec max;
+        \\
+        \\main
+        \\----
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.LocalNotationOnPublicTerm, diags[0].err);
+    try std.testing.expectEqualStrings("top", diags[0].name.?);
+
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.LocalNotationOnPublicTerm,
+        compile.compileMmb(std.testing.allocator),
+    );
+}
+
+test "compiler rolls back a rejected proof-side notation" {
+    // The core claims the token's precedence before it checks the arity, so
+    // without a rollback the later, valid .mm0 declaration of `foo` would
+    // fail with a precedence mismatch.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem main: $ top $;
+        \\prefix top: $foo$ prec 30;
+        \\theorem later: $ top $;
+    ;
+    const proof_src =
+        \\def unary (x: wff): wff = $ x $
+        \\infixr unary: $foo$ prec 25;
+        \\
+        \\main
+        \\----
+        \\p: $ top $ by ax_top []
+        \\
+        \\later
+        \\-----
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.ExpectedBinaryOperator, diags[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
+}
+
+test "compiler notes proof-side notation when a later .mm0 declaration collides" {
+    // The token tables are shared, so the .mm0 statement fails even though
+    // the .mm0 file is valid on its own; the note names the local notation.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem use_local: $ top $;
+        \\term and (a b: wff): wff;
+        \\infixl and: $=>$ prec 35;
+        \\theorem after: $ top $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\use_local
+        \\---------
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.PrecedenceMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+    const diag = compiler.getDiagnostic().?;
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
+    const note = diag.noteSlice()[0].message.local_notation_token;
+    try std.testing.expectEqualStrings("limp", note.term_name);
+    try std.testing.expectEqualStrings("=>", note.token);
+}
+
+test "compiler notes proof-side notation when a later .mm0 binder collides" {
+    // A proof-side token also shadows binder names in later .mm0
+    // declarations; the note has to name the local notation here too.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem use_local: $ top $;
+        \\theorem later (x: wff): $ top $;
+    ;
+    const proof_src =
+        \\def local_top: wff = $ top $
+        \\prefix local_top: $x$ prec max;
+        \\
+        \\use_local
+        \\---------
+        \\p: $ top $ by ax_top []
+        \\
+        \\later
+        \\-----
+        \\p: $ top $ by ax_top []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.BinderTokenCollision,
+        compiler.compileMmb(std.testing.allocator),
+    );
+    const diag = compiler.getDiagnostic().?;
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
+    const note = diag.noteSlice()[0].message.local_notation_token;
+    try std.testing.expectEqualStrings("local_top", note.term_name);
+    try std.testing.expectEqualStrings("x", note.token);
+}
+
 test "compiler analyze accepts trailing local defs after proof blocks" {
     // A trailing local def, like a trailing lemma, has no public block to
     // anchor to at end of stream but is self-contained; it is processed

@@ -96,6 +96,200 @@ pub const MM0Parser = struct {
         return &self.core.coercion_terms;
     }
 
+    /// Register a proof-side notation declaration (`prefix`, `infixl`,
+    /// `infixr`, or general `notation`), written exactly as in an `.mm0`
+    /// file. The core consumes notation statements silently on its way to
+    /// the next public statement, so the text is fed to `next()` in place of
+    /// the `.mm0` source. The call is transactional: the core registers a
+    /// token's precedence and class before it finishes validating the
+    /// statement, so on any failure the grammar tables are rolled back, and
+    /// the text must register exactly one notation, on `term_id`. Returns
+    /// that entry. `text_offset` is the statement's offset in the proof
+    /// source: error spans are shifted to it, so `diagnosticSpan()` and
+    /// `mathSpan()` read as proof-source offsets.
+    pub fn parseLocalNotationText(
+        self: *MM0Parser,
+        text: []const u8,
+        text_offset: usize,
+        term_id: u32,
+    ) ParseError!NotationEntry {
+        self.clearDiagnosticOverrides();
+        var snapshot = try GrammarSnapshot.take(&self.core);
+        var committed = false;
+        defer if (committed) snapshot.discard() else snapshot.restore(&self.core);
+
+        const saved_src = self.core.src;
+        const saved_pos = self.core.pos;
+        defer {
+            self.core.src = saved_src;
+            self.core.pos = saved_pos;
+        }
+        self.core.src = text;
+        self.core.pos = 0;
+        const stmt = self.core.next() catch |err| {
+            self.shiftDiagnosticSpans(text_offset);
+            return err;
+        };
+        if (stmt != null) return error.UnexpectedKeyword;
+        const entry = snapshot.newEntry(&self.core) orelse
+            return error.UnexpectedKeyword;
+        if (entry.term_id != term_id) return error.UnexpectedKeyword;
+        committed = true;
+        return entry;
+    }
+
+    /// The core's term id for `name`, if declared.
+    pub fn lookupTermId(self: *const MM0Parser, name: []const u8) ?u32 {
+        return self.core.term_names.get(name);
+    }
+
+    pub const NotationEntry = struct {
+        term_id: u32,
+        /// The token the declaration keys on: the leading token of a prefix
+        /// or general notation, the operator of an infix one.
+        token: []const u8,
+    };
+
+    /// The tables a notation statement mutates, cloned so a rejected
+    /// proof-side declaration leaves no trace (`parseLocalNotationText`).
+    const grammar_fields = [_][]const u8{
+        "prefix_notations",
+        "infix_notations",
+        "term_notations",
+        "token_precs",
+        "infix_assoc",
+        "leading_tokens",
+        "infixy_tokens",
+    };
+
+    const GrammarSnapshot = struct {
+        prefix_notations: @FieldType(core.MM0Parser, "prefix_notations"),
+        infix_notations: @FieldType(core.MM0Parser, "infix_notations"),
+        term_notations: @FieldType(core.MM0Parser, "term_notations"),
+        token_precs: @FieldType(core.MM0Parser, "token_precs"),
+        infix_assoc: @FieldType(core.MM0Parser, "infix_assoc"),
+        leading_tokens: @FieldType(core.MM0Parser, "leading_tokens"),
+        infixy_tokens: @FieldType(core.MM0Parser, "infixy_tokens"),
+
+        fn take(
+            parser: *const core.MM0Parser,
+        ) std.mem.Allocator.Error!GrammarSnapshot {
+            var snapshot: GrammarSnapshot = undefined;
+            var taken: usize = 0;
+            errdefer snapshot.discardFirst(taken);
+            inline for (grammar_fields, 0..) |name, i| {
+                @field(snapshot, name) = try @field(parser.*, name).clone();
+                taken = i + 1;
+            }
+            return snapshot;
+        }
+
+        fn discardFirst(self: *GrammarSnapshot, count: usize) void {
+            inline for (grammar_fields, 0..) |name, i| {
+                if (i < count) @field(self, name).deinit();
+            }
+        }
+
+        fn discard(self: *GrammarSnapshot) void {
+            self.discardFirst(grammar_fields.len);
+        }
+
+        /// Put the cloned tables back in place of the live ones.
+        fn restore(self: *GrammarSnapshot, parser: *core.MM0Parser) void {
+            inline for (grammar_fields) |name| {
+                @field(parser.*, name).deinit();
+                @field(parser.*, name) = @field(self, name);
+            }
+        }
+
+        /// The one notation registered since the snapshot; null when none
+        /// or more than one was (the text held something other than a
+        /// single notation statement).
+        fn newEntry(
+            self: *const GrammarSnapshot,
+            parser: *const core.MM0Parser,
+        ) ?NotationEntry {
+            var found: ?NotationEntry = null;
+            var prefix_it = parser.prefix_notations.iterator();
+            while (prefix_it.next()) |entry| {
+                if (self.prefix_notations.contains(entry.key_ptr.*)) continue;
+                if (found != null) return null;
+                found = .{
+                    .term_id = entry.value_ptr.term_id,
+                    .token = entry.key_ptr.*,
+                };
+            }
+            var infix_it = parser.infix_notations.iterator();
+            while (infix_it.next()) |entry| {
+                if (self.infix_notations.contains(entry.key_ptr.*)) continue;
+                if (found != null) return null;
+                found = .{
+                    .term_id = entry.value_ptr.term_id,
+                    .token = entry.key_ptr.*,
+                };
+            }
+            return found;
+        }
+    };
+
+    /// Every notation the core has registered, whichever stream declared it.
+    /// Tokens are unique across both tables (the core rejects reuse), so an
+    /// entry identifies one declaration.
+    pub const NotationIterator = struct {
+        prefix: @FieldType(core.MM0Parser, "prefix_notations").Iterator,
+        infix: @FieldType(core.MM0Parser, "infix_notations").Iterator,
+
+        pub fn next(self: *NotationIterator) ?NotationEntry {
+            if (self.prefix.next()) |entry| {
+                return .{
+                    .term_id = entry.value_ptr.term_id,
+                    .token = entry.key_ptr.*,
+                };
+            }
+            if (self.infix.next()) |entry| {
+                return .{
+                    .term_id = entry.value_ptr.term_id,
+                    .token = entry.key_ptr.*,
+                };
+            }
+            return null;
+        }
+    };
+
+    pub fn notationIterator(self: *const MM0Parser) NotationIterator {
+        return .{
+            .prefix = self.core.prefix_notations.iterator(),
+            .infix = self.core.infix_notations.iterator(),
+        };
+    }
+
+    /// The `.mm0` source text a failed parse's diagnostic span covers, when
+    /// the span lies in the `.mm0` source (not in swapped-in proof text).
+    pub fn diagnosticSpanText(self: *const MM0Parser) ?[]const u8 {
+        const span = self.diagnosticSpan() orelse return null;
+        const src = self.core.src;
+        if (span.start >= span.end or span.end > src.len) return null;
+        return src[span.start..span.end];
+    }
+
+    /// The source text under the last math span, when it lies in the
+    /// current source (the `.mm0` file, outside a swapped-in parse).
+    pub fn mathSpanText(self: *const MM0Parser) ?[]const u8 {
+        const span = self.mathSpan() orelse return null;
+        const src = self.core.src;
+        if (span.start >= span.end or span.end > src.len) return null;
+        return src[span.start..span.end];
+    }
+
+    fn shiftDiagnosticSpans(self: *MM0Parser, offset: usize) void {
+        if (self.core.diagnosticSpan()) |span| {
+            self.diagnostic_span_override = shiftSpan(span, offset);
+        }
+        if (self.core.last_math_span) |span| {
+            self.math_span_override = shiftSpan(span, offset);
+        }
+    }
+
     pub fn recoverToStatementBoundary(self: *MM0Parser) ParseError!void {
         self.clearDiagnosticOverrides();
         const start = self.core.pos;
@@ -568,6 +762,10 @@ pub const MM0Parser = struct {
                 pos += 1;
             }
         }
+    }
+
+    fn shiftSpan(span: MathSpan, offset: usize) MathSpan {
+        return .{ .start = span.start + offset, .end = span.end + offset };
     }
 
     fn remapSyntheticBodyDiagnostic(

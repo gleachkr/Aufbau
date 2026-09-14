@@ -22,6 +22,7 @@ const ProofScript = @import("../../proof_script.zig");
 const ProofScriptParser = ProofScript.Parser;
 const TheoremBlock = ProofScript.TheoremBlock;
 const DefItem = ProofScript.DefItem;
+const NotationItem = ProofScript.NotationItem;
 const TopLevelItem = ProofScript.TopLevelItem;
 const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
@@ -202,7 +203,7 @@ pub fn fillPublicDefBody(
 
     switch (item) {
         .def => |def| return fillFromFillerDefItem(self, parser, term_stmt, def),
-        .block => {
+        .block, .notation => {
             actual_proofs.putBack(item);
             self.setDiagnostic(CompilerDiag.missingPublicDefBodyDiagnostic(
                 term_stmt.name,
@@ -334,6 +335,13 @@ pub fn setExtraProofItemDiagnostic(self: *CompilerContext, item: TopLevelItem) a
             self.setDiagnostic(
                 CompilerDiag.extraProofDefDiagnostic(def.name, def.name_span),
             );
+            return error.ExtraProofItem;
+        },
+        .notation => |notation| {
+            self.setDiagnostic(CompilerDiag.extraProofDefDiagnostic(
+                notation.name,
+                notation.name_span,
+            ));
             return error.ExtraProofItem;
         },
     }
@@ -468,6 +476,7 @@ pub fn isLocalProofItem(item: TopLevelItem) bool {
     return switch (item) {
         .block => |block| block.kind == .lemma,
         .def => |def| def.isLocalDef(),
+        .notation => true,
     };
 }
 
@@ -485,6 +494,7 @@ pub fn anchorMatches(header: PublicStmtHeader, item: TopLevelItem) bool {
             const name = header.name orelse return false;
             return std.mem.eql(u8, name, def.name);
         },
+        .notation => return false,
     }
 }
 
@@ -525,6 +535,12 @@ pub fn processLocalProofItem(
             registry,
             def,
             emit,
+        ),
+        .notation => |notation| try processLocalNotationItem(
+            self,
+            parser,
+            env,
+            notation,
         ),
     }
 }
@@ -574,25 +590,142 @@ fn firstLocalTerm(env: *const GlobalEnv, expr: *const Expr) ?u32 {
 }
 
 /// Notation and coercion declarations are consumed silently while the parser
-/// scans to the next public statement, so a local term that now carries
-/// notation or a coercion was named by one of them. Each local term is
-/// reported once, anchored on the statement that follows the declaration.
+/// scans to the next public statement, so a local term that carries a
+/// coercion, or notation the proof file did not declare, was named by one of
+/// them. Each declaration is reported once, anchored on the statement that
+/// follows it.
 pub fn rejectLocalTermNotation(
     self: *CompilerContext,
     parser: *const MM0Parser,
     env: *GlobalEnv,
     next_stmt: ?MM0Stmt,
-) error{LocalTermInMm0}!void {
-    for (env.local_term_ids.items, 0..) |term_id, index| {
-        if (parser.notationForTerm(term_id) == null and
-            !parser.isCoercionTerm(term_id)) continue;
-        _ = env.local_term_ids.orderedRemove(index);
-        self.setDiagnostic(CompilerDiag.localTermInMm0Diagnostic(
-            next_stmt,
-            env.terms.items[term_id].name,
-        ));
-        return error.LocalTermInMm0;
+) !void {
+    if (env.local_term_ids.items.len == 0) return;
+    // The proof file cannot declare coercions, so any on a local term is
+    // the `.mm0`'s.
+    for (env.coercions.items) |*coercion| {
+        if (coercion.local_reported) continue;
+        if (!env.isLocalTerm(coercion.term_id)) continue;
+        coercion.local_reported = true;
+        return failLocalTermInMm0(self, env, coercion.term_id, next_stmt);
     }
+    var it = parser.notationIterator();
+    while (it.next()) |entry| {
+        if (!env.isLocalTerm(entry.term_id)) continue;
+        if (env.hasLocalNotation(entry.term_id, entry.token)) continue;
+        // Recorded as seen so the analyze path reports it once.
+        try env.addLocalNotation(entry.term_id, entry.token);
+        return failLocalTermInMm0(self, env, entry.term_id, next_stmt);
+    }
+}
+
+fn failLocalTermInMm0(
+    self: *CompilerContext,
+    env: *const GlobalEnv,
+    term_id: u32,
+    next_stmt: ?MM0Stmt,
+) error{LocalTermInMm0} {
+    self.setDiagnostic(CompilerDiag.localTermInMm0Diagnostic(
+        next_stmt,
+        env.terms.items[term_id].name,
+    ));
+    return error.LocalTermInMm0;
+}
+
+/// `mm0ParserDiagnostic`, plus a note when proof-side notation may be the
+/// real culprit. The token, precedence, and associativity tables are shared,
+/// so a local notation registered earlier in lockstep order makes a later,
+/// standalone-valid `.mm0` declaration (or binder name) fail at the `.mm0`
+/// statement.
+pub fn mm0ParserDiagnosticWithLocalNotes(
+    parser: *const MM0Parser,
+    env: *const GlobalEnv,
+    err: CompilerDiag.DiagnosticError,
+) Diagnostic {
+    var diag = CompilerDiag.mm0ParserDiagnostic(parser, err);
+    if (env.local_notations.items.len == 0) return diag;
+    switch (err) {
+        error.PrecedenceMismatch,
+        error.PrecedenceAssocMismatch,
+        error.NotationFirstTokenConflict,
+        error.DuplicateInfixToken,
+        error.BinderTokenCollision,
+        => {},
+        else => return diag,
+    }
+    const candidates = [_]?[]const u8{
+        parser.mathSpanText(),
+        parser.diagnosticSpanText(),
+    };
+    for (candidates) |maybe_text| {
+        const text = std.mem.trim(u8, maybe_text orelse continue, " \t\r\n");
+        const term_id = env.localNotationTerm(text) orelse continue;
+        CompilerDiag.addNote(&diag, .{ .local_notation_token = .{
+            .term_name = env.terms.items[term_id].name,
+            .token = text,
+        } }, .proof, null);
+        return diag;
+    }
+    CompilerDiag.addNote(&diag, .local_notation_tables_shared, .proof, null);
+    return diag;
+}
+
+/// A proof-side notation declaration. It may only name a proof-local def:
+/// on a public term it would let later `.mm0` math use a token a standalone
+/// reader lacks, with nothing in the parsed expression to catch it. On a
+/// local def the token parses to the local term, so `rejectLocalTermReferences`
+/// already covers any `.mm0` use. The token this item registers is recorded
+/// on the env, which is how `rejectLocalTermNotation` tells it from `.mm0`
+/// ones; an `.mm0` notation on the same def consumed earlier stays
+/// unrecorded, so it is still rejected.
+pub fn processLocalNotationItem(
+    self: *CompilerContext,
+    parser: *MM0Parser,
+    env: *GlobalEnv,
+    item: NotationItem,
+) !void {
+    Metadata.warnDroppedProofAnnotations(self, item.annotations, item.name_span);
+    const term_id = env.term_names.get(item.name) orelse {
+        self.setDiagnostic(.{
+            .kind = .generic,
+            .err = error.UnknownTerm,
+            .source = .proof,
+            .name = item.name,
+            .span = item.name_span,
+        });
+        return error.UnknownTerm;
+    };
+    if (!env.isLocalTerm(term_id)) {
+        self.setDiagnostic(CompilerDiag.localNotationOnPublicTermDiagnostic(
+            item.name,
+            item.name_span,
+        ));
+        return error.LocalNotationOnPublicTerm;
+    }
+    const entry = parser.parseLocalNotationText(
+        item.text,
+        item.span.start,
+        term_id,
+    ) catch |err| {
+        self.setDiagnostic(localNotationParseDiagnostic(parser, item, err));
+        return err;
+    };
+    try env.addLocalNotation(entry.term_id, entry.token);
+}
+
+fn localNotationParseDiagnostic(
+    parser: *const MM0Parser,
+    item: NotationItem,
+    err: CompilerDiag.DiagnosticError,
+) Diagnostic {
+    return .{
+        .kind = .generic,
+        .err = err,
+        .source = .proof,
+        .name = item.name,
+        .span = CompilerDiag.mathSpanToSpanOpt(parser.diagnosticSpan()) orelse
+            item.name_span,
+    };
 }
 
 pub fn processLocalDefItem(
@@ -1041,6 +1174,13 @@ pub fn nextTheoremBlock(
                 self.setDiagnostic(CompilerDiag.unexpectedProofDefDiagnostic(
                     def.name,
                     def.name_span,
+                ));
+                return error.UnexpectedProofDefItem;
+            },
+            .notation => |notation| {
+                self.setDiagnostic(CompilerDiag.unexpectedProofDefDiagnostic(
+                    notation.name,
+                    notation.name_span,
                 ));
                 return error.UnexpectedProofDefItem;
             },

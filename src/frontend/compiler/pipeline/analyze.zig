@@ -13,6 +13,7 @@ const ProofScript = @import("../../proof_script.zig");
 const ProofScriptParser = ProofScript.Parser;
 const TheoremBlock = ProofScript.TheoremBlock;
 const DefItem = ProofScript.DefItem;
+const NotationItem = ProofScript.NotationItem;
 const TopLevelItem = ProofScript.TopLevelItem;
 const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
@@ -39,6 +40,7 @@ const anchorMatches = Common.anchorMatches;
 const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
+const processLocalNotationItem = Common.processLocalNotationItem;
 const processLocalProofBlock = Common.processLocalProofBlock;
 const rejectLocalTermNotation = Common.rejectLocalTermNotation;
 const rejectLocalTermReferences = Common.rejectLocalTermReferences;
@@ -168,7 +170,7 @@ fn analyzeInternal(
 
     parse_loop: while (true) {
         state.parser.prepareNextPublicStatement() catch |err| {
-            if (!recoverFromMm0ParseFailure(self, &state.parser, err)) {
+            if (!recoverFromMm0ParseFailure(self, &state, err)) {
                 return;
             }
             continue :parse_loop;
@@ -181,7 +183,7 @@ fn analyzeInternal(
             );
         }
         const next_stmt = state.parser.next() catch |err| {
-            if (!recoverFromMm0ParseFailure(self, &state.parser, err)) {
+            if (!recoverFromMm0ParseFailure(self, &state, err)) {
                 return;
             }
             continue :parse_loop;
@@ -262,7 +264,11 @@ fn analyzeInternal(
             recordPrimaryStatementFailure(self, &state.parser, stmt, err);
             return;
         }
-        self.setDiagnostic(CompilerDiag.mm0ParserDiagnostic(&state.parser, err));
+        self.setDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
+            &state.parser,
+            &state.env,
+            err,
+        ));
         return err;
     };
 
@@ -349,6 +355,12 @@ fn proofNextItemLooksLocal(parser: *const ProofScriptParser) bool {
     while (pos < src.len and isProofIdentChar(src[pos])) pos += 1;
     const word = src[word_start..pos];
     if (std.mem.eql(u8, word, "lemma")) return true;
+    if (ProofScript.isNotationKeyword(word)) {
+        // A notation item names its term on the same line; a theorem block
+        // that happens to be called `prefix` has nothing after the name.
+        while (pos < src.len and (src[pos] == ' ' or src[pos] == '\t')) pos += 1;
+        return pos < src.len and isProofIdentChar(src[pos]);
+    }
     if (!std.mem.eql(u8, word, "def")) return false;
 
     while (pos < src.len and (src[pos] == ' ' or src[pos] == '\t')) pos += 1;
@@ -396,7 +408,45 @@ fn analyzeLocalProofItem(
             proof,
             def,
         ),
+        .notation => |notation| analyzeLocalNotationItem(
+            self,
+            state,
+            proof,
+            notation,
+        ),
     }
+}
+
+fn analyzeLocalNotationItem(
+    self: *CompilerContext,
+    state: *AnalysisState,
+    proof: *ProofAnalysisState,
+    item: NotationItem,
+) void {
+    const warnings = WarningSnapshot.capture(self);
+    processLocalNotationItem(
+        self,
+        &state.parser,
+        &state.env,
+        item,
+    ) catch |err| {
+        warnings.restore(self);
+        // A def that failed to index has already been reported; notation on
+        // it is a consequence, not a second mistake.
+        if (proof.invalid_terms.contains(item.name)) {
+            self.restoreDiagnostic(null);
+            return;
+        }
+        const diag = self.getDiagnostic() orelse Diagnostic{
+            .kind = .generic,
+            .err = CompilerDiag.narrowDiagnosticError(err),
+            .source = .proof,
+            .name = item.name,
+            .span = item.name_span,
+        };
+        self.restoreDiagnostic(null);
+        self.addPrimaryDiagnostic(diag);
+    };
 }
 
 fn analyzeLocalProofBlock(
@@ -668,7 +718,7 @@ fn analyzeFillPublicDefBody(
                 def,
             ) catch null;
         },
-        .block => {
+        .block, .notation => {
             proof.putBack(item);
             self.setDiagnostic(CompilerDiag.missingPublicDefBodyDiagnostic(
                 term_stmt.name,
@@ -922,6 +972,15 @@ fn analyzeTheoremProof(
                 );
                 return null;
             },
+            .notation => |notation| {
+                self.addPrimaryDiagnostic(
+                    CompilerDiag.unexpectedProofDefDiagnostic(
+                        notation.name,
+                        notation.name_span,
+                    ),
+                );
+                return null;
+            },
             .block => |block| {
                 if (block.kind == .lemma) {
                     const warnings = WarningSnapshot.capture(self);
@@ -1073,16 +1132,30 @@ fn analyzeExtraProofBlocks(
                     def.name_span,
                 ));
             },
+            .notation => |notation| {
+                if (proof.invalid_terms.contains(notation.name)) {
+                    continue;
+                }
+                self.addPrimaryDiagnostic(CompilerDiag.extraProofDefDiagnostic(
+                    notation.name,
+                    notation.name_span,
+                ));
+            },
         }
     }
 }
 
 fn recoverFromMm0ParseFailure(
     self: *CompilerContext,
-    parser: *MM0Parser,
+    state: *AnalysisState,
     err: CompilerDiag.DiagnosticError,
 ) bool {
-    self.addPrimaryDiagnostic(CompilerDiag.mm0ParserDiagnostic(parser, err));
+    const parser = &state.parser;
+    self.addPrimaryDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
+        parser,
+        &state.env,
+        err,
+    ));
     parser.discardPendingAnnotations();
     parser.recoverToStatementBoundary() catch {
         return false;

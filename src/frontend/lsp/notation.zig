@@ -27,6 +27,10 @@ pub const NotationKind = enum {
 
 pub const NotationCompletionDecl = struct {
     decl_index: usize,
+    /// For a proof-side notation item: its offset in the proof document.
+    /// The declaration it rides on may precede it, so availability needs
+    /// both bounds.
+    proof_available_from: ?usize = null,
     kind: NotationKind,
     token: []const u8,
     detail: []const u8,

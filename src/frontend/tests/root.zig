@@ -891,6 +891,194 @@ test "proof script parser reads full-header def items" {
     try std.testing.expect((try parser.nextItem()) == null);
 }
 
+test "proof script parser reads notation items verbatim" {
+    // The statement is kept exactly as written, semicolon included, for the
+    // MM0 parser; a general notation may span lines and hold `;` in math.
+    const src =
+        \\def local_foo (x y: obj): obj = $ x $
+        \\infixl local_foo: $+$ prec 5;
+        \\notation local_foo (x y: obj): obj =
+        \\  ($[$:20) x ($;$:0) y ($]$:20);
+        \\
+        \\main
+        \\----
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    switch ((try parser.nextItem()).?) {
+        .def => |def| try std.testing.expectEqualStrings("local_foo", def.name),
+        else => return error.UnexpectedProofItem,
+    }
+    switch ((try parser.nextItem()).?) {
+        .notation => |item| {
+            try std.testing.expectEqualStrings("infixl", item.keyword);
+            try std.testing.expectEqualStrings("local_foo", item.name);
+            try std.testing.expectEqualStrings(
+                "infixl local_foo: $+$ prec 5;",
+                item.text,
+            );
+            try std.testing.expectEqualStrings(
+                "local_foo",
+                src[item.name_span.start..item.name_span.end],
+            );
+        },
+        else => return error.UnexpectedProofItem,
+    }
+    switch ((try parser.nextItem()).?) {
+        .notation => |item| {
+            try std.testing.expectEqualStrings("notation", item.keyword);
+            try std.testing.expectEqualStrings(
+                "notation local_foo (x y: obj): obj =\n  ($[$:20) x ($;$:0) y ($]$:20);",
+                item.text,
+            );
+        },
+        else => return error.UnexpectedProofItem,
+    }
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("main", block.name);
+}
+
+test "proof script parser skips comments while ending a notation item" {
+    // Neither a `;` nor a `$` inside a comment counts.
+    const src =
+        \\notation local_foo (x: obj): obj = -- opens; with $ punctuation
+        \\  ($foo$:20) x; -- $ trailing
+        \\
+        \\main
+        \\----
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    switch ((try parser.nextItem()).?) {
+        .notation => |item| try std.testing.expectEqualStrings(
+            "notation local_foo (x: obj): obj = -- opens; with $ punctuation\n  ($foo$:20) x;",
+            item.text,
+        ),
+        else => return error.UnexpectedProofItem,
+    }
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("main", block.name);
+}
+
+test "proof script parser recovers from a notation item missing its semicolon" {
+    // The search for `;` stops at a line that opens another item, so that
+    // item is neither swallowed nor lost to recovery.
+    const src =
+        \\infixr local_foo: $=>$ prec 25
+        \\main
+        \\----
+        \\p: $ top $ by ax []
+        \\infixl local_foo: $+$ prec 5
+        \\prefix local_foo: $-$ prec 6;
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    try std.testing.expectError(error.ExpectedSemicolon, parser.nextItem());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("main", block.name);
+    try std.testing.expectError(error.ExpectedSemicolon, parser.nextItem());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
+    switch ((try parser.nextItem()).?) {
+        .notation => |item| try std.testing.expectEqualStrings(
+            "prefix",
+            item.keyword,
+        ),
+        else => return error.UnexpectedProofItem,
+    }
+}
+
+test "proof script parser recovers to a block named after a notation keyword" {
+    // A block named `prefix` is not a notation header, so recovery must
+    // still recognise it by its underline rather than skipping to `later`.
+    const src =
+        \\infixr local_foo: $=>$ prec 25
+        \\prefix
+        \\------
+        \\p: $ top $ by ax []
+        \\later
+        \\-----
+        \\p: $ top $ by ax []
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.initLenient(arena.allocator(), src);
+    try std.testing.expectError(error.ExpectedSemicolon, parser.nextItem());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
+    const first = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("prefix", first.name);
+    const second = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("later", second.name);
+}
+
+test "MM0 parser rolls back a rejected local notation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var parser = MM0Parser.init(
+        "sort obj; term unary (x: obj): obj; term binary (x y: obj): obj;",
+        arena.allocator(),
+    );
+    while (try parser.next()) |_| {}
+    const unary = parser.lookupTermId("unary").?;
+    const binary = parser.lookupTermId("binary").?;
+
+    // The arity check comes after the token's precedence is claimed.
+    try std.testing.expectError(
+        error.ExpectedBinaryOperator,
+        parser.parseLocalNotationText("infixr unary: $=>$ prec 25;", 0, unary),
+    );
+    // A different precedence: would be a mismatch had the claim leaked.
+    const entry = try parser.parseLocalNotationText(
+        "infixr binary: $=>$ prec 30;",
+        0,
+        binary,
+    );
+    try std.testing.expectEqual(binary, entry.term_id);
+    try std.testing.expectEqualStrings("=>", entry.token);
+
+    // Exactly one statement, on the named term.
+    try std.testing.expectError(
+        error.UnexpectedKeyword,
+        parser.parseLocalNotationText(
+            "infixl binary: $+$ prec 5; prefix unary: $-$ prec 6;",
+            0,
+            binary,
+        ),
+    );
+    try std.testing.expectError(
+        error.UnexpectedKeyword,
+        parser.parseLocalNotationText("prefix unary: $!$ prec 40;", 0, binary),
+    );
+    _ = try parser.parseLocalNotationText("infixl binary: $+$ prec 7;", 0, binary);
+    _ = try parser.parseLocalNotationText("prefix unary: $!$ prec 41;", 0, unary);
+}
+
+test "proof script parser treats a block named after a notation keyword as a block" {
+    const src =
+        \\prefix
+        \\------
+        \\l1: $ x $ by ax []
+    ;
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = ProofScript.Parser.init(arena.allocator(), src);
+    const block = (try parser.nextBlock()).?;
+    try std.testing.expectEqualStrings("prefix", block.name);
+}
+
 test "proof script parser preserves comments and annotations before defs" {
     const src =
         \\-- ordinary comment

@@ -199,6 +199,26 @@ pub fn warnDroppedAnnotations(
     }
 }
 
+/// Annotations written before a proof-side notation item attach to nothing,
+/// as before an `.mm0` notation declaration. Plain `--|` prose is fine.
+pub fn warnDroppedProofAnnotations(
+    ctx: ?*CompilerContext,
+    annotations: []const []const u8,
+    span: Span,
+) void {
+    const compiler = ctx orelse return;
+    for (annotations) |ann| {
+        const directive = annotationDirective(ann) orelse continue;
+        if (std.mem.eql(u8, directive, "@syntax")) continue;
+        compiler.addWarning(.{
+            .kind = .generic,
+            .err = error.UnattachedAnnotation,
+            .source = .proof,
+            .span = span,
+        });
+    }
+}
+
 fn warnUnknownAnnotations(
     ctx: ?*CompilerContext,
     known: []const []const u8,

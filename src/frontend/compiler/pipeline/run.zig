@@ -58,8 +58,9 @@ pub fn run(
 
     while (true) {
         parser.prepareNextPublicStatement() catch |err| {
-            self.setDiagnostic(CompilerDiag.mm0ParserDiagnostic(
+            self.setDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
                 &parser,
+                &env,
                 err,
             ));
             return err;
@@ -80,8 +81,9 @@ pub fn run(
         );
 
         const maybe_stmt = parser.next() catch |err| {
-            self.setDiagnostic(CompilerDiag.mm0ParserDiagnostic(
+            self.setDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
                 &parser,
+                &env,
                 err,
             ));
             return err;

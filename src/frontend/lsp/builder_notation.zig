@@ -3,9 +3,11 @@ const std = @import("std");
 const source = @import("source.zig");
 const notation = @import("notation.zig");
 const completion = @import("completion.zig");
+const DocumentId = @import("types.zig").DocumentId;
 
 const SourceSpan = source.SourceSpan;
 const MathStringSpan = source.MathStringSpan;
+const StatementHeader = source.StatementHeader;
 const StatementIterator = source.StatementIterator;
 const statementHeader = source.statementHeader;
 const firstMathStringIn = source.firstMathStringIn;
@@ -39,41 +41,64 @@ pub fn collectMm0Notation(self: anytype, text: []const u8) !void {
             self.collectDelimiterStatement(text, stmt);
             continue;
         }
-        if (std.mem.eql(u8, header.keyword, "prefix") or
-            std.mem.eql(u8, header.keyword, "infixl") or
-            std.mem.eql(u8, header.keyword, "infixr"))
-        {
-            const name = header.name orelse continue;
-            const decl_index = self.decl_by_name.get(name) orelse continue;
-            const decl = self.declarations.items[decl_index];
-            const kind = simpleNotationKind(header.keyword);
-            try self.addDeclarationNameUse(text, name, decl_index);
-            if (firstMathStringIn(text, stmt)) |math| {
-                const snippet = if (kind == .prefix)
-                    try buildPrefixSnippet(
-                        self.allocator,
-                        trimMathWhitespace(math.text),
-                        decl.completion_args,
-                        decl.name,
-                    )
-                else
-                    null;
-                try self.addNotationMathToken(
-                    decl_index,
-                    kind,
-                    math,
-                    snippet,
-                );
-            }
-            continue;
-        }
-        if (!std.mem.eql(u8, header.keyword, "notation")) continue;
-        const name = header.name orelse continue;
-        const decl_index = self.decl_by_name.get(name) orelse continue;
-        try self.addDeclarationNameUse(text, name, decl_index);
-        const eq = findStatementByte(text, stmt, '=') orelse continue;
-        try self.collectGeneralNotation(text, stmt, decl_index, eq);
+        try self.collectNotationStatement(text, stmt, header, .mm0, null);
     }
+}
+
+/// Index one `prefix`/`infixl`/`infixr`/`notation` statement from either
+/// document (a proof-side notation item has the same shape). Any other
+/// statement is ignored. `proof_available_from` is the statement's offset
+/// in the proof document when it comes from there: its tokens complete only
+/// in proof math at or past it.
+pub fn collectNotationStatement(
+    self: anytype,
+    text: []const u8,
+    stmt: SourceSpan,
+    header: StatementHeader,
+    document: DocumentId,
+    proof_available_from: ?usize,
+) !void {
+    if (std.mem.eql(u8, header.keyword, "prefix") or
+        std.mem.eql(u8, header.keyword, "infixl") or
+        std.mem.eql(u8, header.keyword, "infixr"))
+    {
+        const name = header.name orelse return;
+        const decl_index = self.decl_by_name.get(name) orelse return;
+        const decl = self.declarations.items[decl_index];
+        const kind = simpleNotationKind(header.keyword);
+        try self.addDeclarationNameUseIn(document, text, name, decl_index);
+        if (firstMathStringIn(text, stmt)) |math| {
+            const snippet = if (kind == .prefix)
+                try buildPrefixSnippet(
+                    self.allocator,
+                    trimMathWhitespace(math.text),
+                    decl.completion_args,
+                    decl.name,
+                )
+            else
+                null;
+            try self.addNotationMathToken(
+                decl_index,
+                kind,
+                math,
+                snippet,
+                proof_available_from,
+            );
+        }
+        return;
+    }
+    if (!std.mem.eql(u8, header.keyword, "notation")) return;
+    const name = header.name orelse return;
+    const decl_index = self.decl_by_name.get(name) orelse return;
+    try self.addDeclarationNameUseIn(document, text, name, decl_index);
+    const eq = findStatementByte(text, stmt, '=') orelse return;
+    try self.collectGeneralNotation(
+        text,
+        stmt,
+        decl_index,
+        eq,
+        proof_available_from,
+    );
 }
 
 pub fn collectDelimiterStatement(
@@ -107,6 +132,7 @@ pub fn collectGeneralNotation(
     stmt: SourceSpan,
     decl_index: usize,
     eq: usize,
+    proof_available_from: ?usize,
 ) !void {
     const decl = self.declarations.items[decl_index];
     var variables = std.StringHashMapUnmanaged(NotationVariable){};
@@ -141,6 +167,7 @@ pub fn collectGeneralNotation(
             .general,
             constant,
             snippet,
+            proof_available_from,
         );
     }
 }
@@ -151,11 +178,18 @@ pub fn addNotationMathToken(
     kind: NotationKind,
     math: MathStringSpan,
     snippet: ?NotationSnippet,
+    proof_available_from: ?usize,
 ) !void {
     const trimmed = trimMathWhitespace(math.text);
     if (trimmed.len == 0) return;
     if (containsMathWhitespace(trimmed)) return;
-    try self.addNotationToken(decl_index, kind, trimmed, snippet);
+    try self.addNotationToken(
+        decl_index,
+        kind,
+        trimmed,
+        snippet,
+        proof_available_from,
+    );
 }
 
 pub fn addNotationToken(
@@ -164,10 +198,12 @@ pub fn addNotationToken(
     kind: NotationKind,
     token: []const u8,
     snippet: ?NotationSnippet,
+    proof_available_from: ?usize,
 ) !void {
     const decl = self.declarations.items[decl_index];
     try self.notations.append(self.allocator, .{
         .decl_index = decl_index,
+        .proof_available_from = proof_available_from,
         .kind = kind,
         .token = token,
         .detail = try std.fmt.allocPrint(

@@ -1,0 +1,14 @@
+-- A proof-local def may carry notation declared in the proof file, written
+-- exactly as in an .mm0 file. The token is proof-side sugar: later proof
+-- math parses it, the .mm0 file never sees it, and the MMB carries no
+-- notation at all.
+def limp (a b: wff): wff = $ a -> b $
+infixr limp: $=>$ prec 25;
+
+lemma limp_k (a b: wff): $ a => b => a $
+----
+l1: $ a => b => a $ by ax_k []
+
+pass_local_notation
+-------------------
+p: $ a => top => a $ by limp_k []
