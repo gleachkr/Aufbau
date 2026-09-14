@@ -1,7 +1,6 @@
 const std = @import("std");
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
-const RewriteModule = @import("../../rewrite_registry.zig");
-const RewriteRegistry = RewriteModule.RewriteRegistry;
+const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const Metadata = @import("../metadata.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CompilerVars = @import("../vars.zig");
@@ -47,7 +46,7 @@ pub const TermRecoverySnapshot = struct {
         state: anytype,
     ) !TermRecoverySnapshot {
         return .{
-            .registry = try cloneRewriteRegistry(allocator, &state.registry),
+            .registry = try state.registry.clone(allocator),
             .term_count = state.env.terms.items.len,
         };
     }
@@ -84,7 +83,7 @@ pub const AssertionRecoverySnapshot = struct {
         state: anytype,
     ) !AssertionRecoverySnapshot {
         return .{
-            .registry = try cloneRewriteRegistry(allocator, &state.registry),
+            .registry = try state.registry.clone(allocator),
             .fresh_bindings = try cloneManagedMap(
                 allocator,
                 &state.fresh_bindings,
@@ -128,45 +127,5 @@ pub fn cloneSortVarRegistry(
         .allocator = allocator,
         .tokens = try cloneManagedMap(allocator, &src.tokens),
         .pools = try cloneManagedMap(allocator, &src.pools),
-    };
-}
-
-fn cloneRewriteRegistry(
-    allocator: std.mem.Allocator,
-    src: *const RewriteRegistry,
-) !RewriteRegistry {
-    return .{
-        .allocator = allocator,
-        .relations = try cloneManagedMap(allocator, &src.relations),
-        .rewrites_by_head = try cloneManagedMap(
-            allocator,
-            &src.rewrites_by_head,
-        ),
-        .alpha_by_head = try cloneManagedMap(
-            allocator,
-            &src.alpha_by_head,
-        ),
-        .congr_by_head = try cloneManagedMap(
-            allocator,
-            &src.congr_by_head,
-        ),
-        .fallbacks = try cloneManagedMap(allocator, &src.fallbacks),
-        .auto_forward_rules = try cloneManagedMap(
-            allocator,
-            &src.auto_forward_rules,
-        ),
-        .auto_backward_rules = try cloneManagedMap(
-            allocator,
-            &src.auto_backward_rules,
-        ),
-        .auto_eager_rules = try cloneManagedMap(
-            allocator,
-            &src.auto_eager_rules,
-        ),
-        .acui_by_head = try cloneManagedMap(allocator, &src.acui_by_head),
-        .trigger_by_rule = try cloneManagedMap(
-            allocator,
-            &src.trigger_by_rule,
-        ),
     };
 }

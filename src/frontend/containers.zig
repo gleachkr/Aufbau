@@ -27,3 +27,21 @@ pub fn cloneManagedMap(
     }
     return clone;
 }
+
+/// Like `cloneManagedMap` for a map whose values are `ArrayListUnmanaged`s:
+/// each list is copied, so appends to either map's lists never reach the
+/// other's. (`cloneManagedMap` would copy the list headers by value and
+/// leave both maps sharing one backing buffer.)
+pub fn cloneManagedListMap(
+    allocator: std.mem.Allocator,
+    src: anytype,
+) !@TypeOf(src.*) {
+    var clone = @TypeOf(src.*).init(allocator);
+    errdefer clone.deinit();
+
+    var it = src.iterator();
+    while (it.next()) |entry| {
+        try clone.put(entry.key_ptr.*, try entry.value_ptr.clone(allocator));
+    }
+    return clone;
+}

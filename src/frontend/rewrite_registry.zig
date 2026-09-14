@@ -4,6 +4,7 @@ const RuleDecl = @import("./env.zig").RuleDecl;
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const hasPremiseOnlyBinder = @import("./rules.zig").hasPremiseOnlyBinder;
 const templateBinderMask = @import("./rules.zig").templateBinderMask;
+const Containers = @import("./containers.zig");
 
 /// True when a rule has a premise-only binder (see
 /// `rules.hasPremiseOnlyBinder`) — the binder a backward application would
@@ -275,6 +276,68 @@ pub const RewriteRegistry = struct {
                 std.ArrayListUnmanaged(TriggerPattern),
             ).init(allocator),
         };
+    }
+
+    /// How `clone` treats one field. Every field must be classified here:
+    /// `clone` iterates the struct's fields and refuses to compile for a
+    /// field the table does not list, so adding a collection to the
+    /// registry cannot silently leave it out of recovery snapshots.
+    const CloneKind = enum {
+        /// The clone's owning allocator (the `allocator` argument).
+        owner,
+        /// A managed hash map of plain values, copied entry by entry.
+        map,
+        /// A managed hash map whose values are `ArrayListUnmanaged`s; each
+        /// list is copied so later appends stay private to one side.
+        list_map,
+        /// A flat `ArrayListUnmanaged`, copied.
+        list,
+    };
+
+    const clone_kinds = std.StaticStringMap(CloneKind).initComptime(.{
+        .{ "allocator", .owner },
+        .{ "relations", .map },
+        .{ "rewrites_by_head", .list_map },
+        .{ "alpha_by_head", .list_map },
+        .{ "congr_by_head", .map },
+        .{ "fallbacks", .map },
+        .{ "auto_forward_rules", .map },
+        .{ "auto_backward_rules", .map },
+        .{ "auto_eager_rules", .map },
+        .{ "acui_by_head", .map },
+        .{ "trigger_by_rule", .list_map },
+        .{ "conversions", .list },
+        .{ "def_conversions", .list },
+        .{ "computes", .list },
+    });
+
+    /// An independent copy of every collection, for recovery snapshots: the
+    /// pipeline captures one before a declaration and reinstates it when
+    /// the declaration fails, discarding whatever the declaration
+    /// registered. Containers are copied; the rule payloads they hold
+    /// (templates, trigger patterns, names) are borrowed arena data that
+    /// no path mutates, so both registries share them.
+    pub fn clone(
+        self: *const RewriteRegistry,
+        allocator: std.mem.Allocator,
+    ) !RewriteRegistry {
+        var out: RewriteRegistry = undefined;
+        inline for (std.meta.fields(RewriteRegistry)) |field| {
+            const kind = comptime clone_kinds.get(field.name) orelse
+                @compileError("RewriteRegistry.clone: classify field '" ++
+                    field.name ++ "' in clone_kinds");
+            const src = &@field(self, field.name);
+            @field(out, field.name) = switch (kind) {
+                .owner => allocator,
+                .map => try Containers.cloneManagedMap(allocator, src),
+                .list_map => try Containers.cloneManagedListMap(
+                    allocator,
+                    src,
+                ),
+                .list => try src.clone(allocator),
+            };
+        }
+        return out;
     }
 
     pub fn processAnnotations(

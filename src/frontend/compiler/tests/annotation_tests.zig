@@ -1299,6 +1299,127 @@ test "compiler rejects auto trigger with unbalanced pattern" {
     );
 }
 
+// One entry in every registry collection, keyed so a second call adds a
+// distinct entry (or a second list element under the shared head 7).
+fn registerEveryFamily(
+    registry: *RewriteRegistry,
+    key: u32,
+    sort_name: []const u8,
+) !void {
+    const Registry = mm0.RewriteRegistry;
+    const rule = Registry.ConversionRule{
+        .rule_id = key,
+        .lhs = .{ .binder = 0 },
+        .rhs = .{ .binder = 0 },
+        .num_binders = 1,
+        .ltr = true,
+        .rtl = false,
+    };
+    try registry.relations.put(sort_name, .{
+        .sort_name = sort_name,
+        .rel_term_name = "iff",
+        .refl_name = "refl",
+        .trans_name = "trans",
+        .symm_name = "symm",
+        .transport_name = "mpbi",
+    });
+    const rewrites = try registry.rewrites_by_head.getOrPut(7);
+    if (!rewrites.found_existing) rewrites.value_ptr.* = .{};
+    try rewrites.value_ptr.append(registry.allocator, .{
+        .rule_id = key,
+        .lhs = .{ .binder = 0 },
+        .rhs = .{ .binder = 0 },
+        .num_binders = 1,
+        .head_term_id = 7,
+    });
+    const alphas = try registry.alpha_by_head.getOrPut(7);
+    if (!alphas.found_existing) alphas.value_ptr.* = .{};
+    try alphas.value_ptr.append(registry.allocator, .{
+        .rule_id = key,
+        .lhs = .{ .binder = 0 },
+        .rhs = .{ .binder = 1 },
+        .num_binders = 2,
+        .head_term_id = 7,
+        .old_idx = 0,
+        .new_idx = 1,
+    });
+    try registry.congr_by_head.put(key, .{
+        .rule_id = key,
+        .head_term_id = key,
+        .num_binders = 0,
+    });
+    try registry.fallbacks.put(key, key);
+    try registry.auto_forward_rules.put(key, {});
+    try registry.auto_backward_rules.put(key, {});
+    try registry.auto_eager_rules.put(key, 1);
+    try registry.acui_by_head.put(key, .{
+        .unit_term_name = "unit",
+        .assoc_name = "assoc",
+        .comm_name = null,
+        .idem_name = null,
+    });
+    const triggers = try registry.trigger_by_rule.getOrPut(7);
+    if (!triggers.found_existing) triggers.value_ptr.* = .{};
+    try triggers.value_ptr.append(registry.allocator, .wildcard);
+    try registry.conversions.append(registry.allocator, rule);
+    try registry.def_conversions.append(registry.allocator, .{
+        .term_id = key,
+        .lhs = .{ .binder = 0 },
+        .rhs = .{ .binder = 0 },
+        .num_binders = 1,
+        .fold = true,
+        .unfold = false,
+    });
+    try registry.computes.append(registry.allocator, rule);
+}
+
+fn expectEveryFamilyCount(
+    registry: *const RewriteRegistry,
+    expected: usize,
+) !void {
+    const expectEqual = std.testing.expectEqual;
+    try expectEqual(expected, registry.relations.count());
+    try expectEqual(expected, registry.rewrites_by_head.get(7).?.items.len);
+    try expectEqual(expected, registry.alpha_by_head.get(7).?.items.len);
+    try expectEqual(expected, registry.congr_by_head.count());
+    try expectEqual(expected, registry.fallbacks.count());
+    try expectEqual(expected, registry.auto_forward_rules.count());
+    try expectEqual(expected, registry.auto_backward_rules.count());
+    try expectEqual(expected, registry.auto_eager_rules.count());
+    try expectEqual(expected, registry.acui_by_head.count());
+    try expectEqual(expected, registry.trigger_by_rule.get(7).?.items.len);
+    try expectEqual(expected, registry.conversionRules().len);
+    try expectEqual(expected, registry.defConversionRules().len);
+    try expectEqual(expected, registry.computeRules().len);
+}
+
+test "rewrite registry clone is independent for every rule family" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var live = RewriteRegistry.init(allocator);
+    try registerEveryFamily(&live, 1, "wff");
+    const snapshot = try live.clone(allocator);
+    // Registrations after the snapshot (a second element under every
+    // shared head, a second entry in every map and list) must not leak
+    // into it; the snapshot is what a failed declaration restores.
+    try registerEveryFamily(&live, 2, "set");
+
+    try expectEveryFamilyCount(&live, 2);
+    try expectEveryFamilyCount(&snapshot, 1);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.conversionRules()[0].rule_id);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.computeRules()[0].rule_id);
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        snapshot.defConversionRules()[0].term_id,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        snapshot.rewrites_by_head.get(7).?.items[0].rule_id,
+    );
+}
+
 test "auto forward annotation is unavailable before its rule" {
     const mm0_src =
         \\provable sort wff;
