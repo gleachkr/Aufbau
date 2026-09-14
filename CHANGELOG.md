@@ -27,6 +27,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   no longer verified on its own. It is now rejected at that statement with
   the local definition named. A public definition's filler body may still
   use local definitions; it never appears in the `.mm0` file.
+- Search placeholder status, the search code actions, and the unpack code
+  action stopped at the first proof-local definition (or notation) in the
+  file, so lines after it had no status, no suggestions, and no unpack
+  offer. They now skip local items and reach every block.
 
 ## [0.0.10] - 2026-09-13
 

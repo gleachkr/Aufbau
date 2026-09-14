@@ -133,7 +133,7 @@ fn findTarget(
     offset: usize,
 ) !?Target {
     var parser = ProofScript.Parser.init(allocator, proof_src);
-    while (try parser.nextBlock()) |block| {
+    while (try parser.nextBlockSkippingLocalItems()) |block| {
         for (block.lines) |line| {
             if (offset < line.span.start or offset > line.span.end) continue;
             if (countInlineApplications(line.application) == 0) return null;

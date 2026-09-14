@@ -994,7 +994,7 @@ pub fn searchPlaceholders(
     var out = std.ArrayListUnmanaged(SearchPlaceholder){};
     errdefer out.deinit(allocator);
     var parser = ProofParser.initLenient(parse_arena.allocator(), proof_src);
-    while (parser.nextBlock() catch null) |block| {
+    while (parser.nextBlockSkippingLocalItems() catch null) |block| {
         for (block.lines) |line| {
             try collectSearchPlaceholders(allocator, &out, line.application);
         }
@@ -1058,7 +1058,7 @@ fn findSearchLine(
     // sibling line must not cost the block its search targets. Incomplete
     // lines themselves have no rule application to target.
     var parser = ProofParser.initLenient(allocator, proof_src);
-    while (try parser.nextBlock()) |block| {
+    while (try parser.nextBlockSkippingLocalItems()) |block| {
         for (block.lines, 0..) |line, line_index| {
             if (line.incomplete) continue;
             if (apply_at_offset and spanContains(

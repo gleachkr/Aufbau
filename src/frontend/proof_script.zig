@@ -312,6 +312,22 @@ pub const Parser = struct {
         };
     }
 
+    /// The next proof block (theorem or lemma), skipping local def and
+    /// notation items. For walkers that only care about proof lines —
+    /// editor-facing targeting and enumeration — a local item is not an
+    /// error, just something without lines.
+    pub fn nextBlockSkippingLocalItems(
+        self: *Parser,
+    ) ParseError!?ProofBlock {
+        while (try self.nextItem()) |item| {
+            switch (item) {
+                .block => |block| return block,
+                .def, .notation => continue,
+            }
+        }
+        return null;
+    }
+
     pub fn diagnosticSpan(self: *const Parser) ?Span {
         if (self.last_error_span) |span| {
             if (span.start < span.end or self.current_block_name_span == null) {

@@ -122,6 +122,51 @@ test "unpack offers nothing on lines without inline applications" {
     );
 }
 
+test "unpack targets a line after local def and notation items" {
+    const allocator = std.testing.allocator;
+    const auf =
+        \\t1
+        \\---
+        \\l1_1: $ top $ by top_i []
+        \\l1: $ b -> top $ by weaken (b := $ b $) [top_i []]
+        \\
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\t2
+        \\---
+        \\l1: $ (top /\ top) /\ top $ by conj_i [conj_i [top_i [], top_i []], top_i []]
+        \\
+        \\t3
+        \\---
+        \\l1: $ (top -> p) /\ top $ by conj_i [weaken [#1], top_i []]
+        \\
+    ;
+    const offset = std.mem.indexOf(u8, auf, "by conj_i [conj_i").?;
+    try std.testing.expect(Unpack.hasTargetAt(allocator, auf, offset));
+    const suggestion = (try Unpack.unpackAtSourceOffset(
+        allocator,
+        test_mm0,
+        auf,
+        offset,
+    )) orelse return error.ExpectedUnpackSuggestion;
+    defer suggestion.deinit(allocator);
+    try std.testing.expectEqualStrings(
+        "Unpack 4 inline applications",
+        suggestion.title,
+    );
+    try std.testing.expectEqualStrings(
+        \\l1_1: $ top $ by top_i
+        \\l1_2: $ top $ by top_i
+        \\l1_3: $ top /\ top $ by conj_i [l1_1, l1_2]
+        \\l1_4: $ top $ by top_i
+        \\l1: $ (top /\ top) /\ top $ by conj_i [l1_3, l1_4]
+        \\
+    ,
+        suggestion.replacement,
+    );
+}
+
 test "unpack offers nothing on a line containing a search placeholder" {
     const allocator = std.testing.allocator;
     const auf =

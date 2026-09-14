@@ -279,6 +279,64 @@ test "searchPlaceholders survives a broken sibling line" {
     );
 }
 
+// Local def and notation items are not blocks. The editor-facing walkers must
+// step over them rather than stop (enumeration) or fail (targeting) there.
+test "searchPlaceholders enumerates past local def and notation items" {
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\t
+        \\----
+        \\l1: $ Q $ by auto?
+    ;
+    const placeholders = try source.searchPlaceholders(
+        std.testing.allocator,
+        proof_src,
+    );
+    defer std.testing.allocator.free(placeholders);
+
+    try std.testing.expectEqual(@as(usize, 1), placeholders.len);
+    try std.testing.expectEqual(
+        source.SearchPlaceholder.Kind.auto,
+        placeholders[0].kind,
+    );
+}
+
+test "source suggestions target a line after local def and notation items" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom q: $ Q $;
+        \\theorem t: $ Q $;
+    ;
+    const proof_src =
+        \\def limp (a b: wff): wff = $ a -> b $
+        \\infixr limp: $=>$ prec 25;
+        \\
+        \\t
+        \\----
+        \\l1: $ Q $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        std.mem.indexOf(u8, proof_src, "exact?").?,
+        .{},
+    );
+    defer suggestions.deinit();
+    try std.testing.expect(suggestions.items.len > 0);
+    try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
+}
+
 // A trailing local lemma has no public anchor block; its search scope is the
 // whole mm0 (mirrors `drainTrailingLocalProofItems` on the compile path).
 test "source suggestions work in a trailing local lemma" {
