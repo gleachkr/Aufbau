@@ -6,18 +6,21 @@ Given a goal and the ambient theory it produces candidate `RuleApplication`s
 frontend automation: every suggestion is re-validated by the checker, so a bug
 here yields a rejected or missing suggestion, never an unsound proof.
 
-This file is the map. It exists because the global structure is spread across
-many files (the largest, `backward/backtrack.zig`, is ~2500 lines after the per-concern
-split) and because the
-mechanisms below are **specialized by rule-class and phase, not redundant** —
-a fact that has been re-learned the expensive way. Read this before assuming two
-similar-looking routines can be merged.
+This file is the map. The global structure spans backward generation and
+conversion search; the largest modules are now `egraph.zig`,
+`egraph/explain.zig`, `backward/backtrack.zig`, and `conversion/lowerer.zig`.
+The mechanisms below are **specialized by rule-class and phase, not
+redundant**. Read their contracts before merging similar-looking routines.
+
+Checker validation here means frontend elaboration, not trusted MM0/MMB
+verification. Complete generated proofs still need the trusted verifier;
+a search result or successful compilation alone is not that guarantee.
 
 `src/frontend/inference_solver.zig` is a *different* engine (last-resort
 omitted-binder inference for a single rule application); it is not part of this
 subsystem.
 
-## The three entry points
+## Backward-search entry points
 
 All three live behind `root.zig` and share `SearchSession` (`session.zig`),
 which lazily builds and caches the three indices (rule index, reference pool,
@@ -39,12 +42,14 @@ the generation-only behavior is gated on `options.generator != null` (in
 reading `backward/backtrack.zig`, "is `generator` null?" is the single most important branch
 to track — it separates plain `exact?` (must stay untouched) from `auto?`.
 
-There is also a fourth, standalone entry: **`conversion?`**
-(`conversion.zig:run`, dispatched from `source.zig` like the others). It does
-*not* share the pipeline below — it saturates an e-graph (`egraph.zig`) over
-the `@conversion`-enrolled rewrites plus the pool's local ground equations,
-asks whether the goal's two sides land in one class, and lowers the resulting
-explanation back to ordinary proof lines (`conversion/lowerer.zig`). AC
+## Conversion-search entry point
+
+**`conversion?`** is a separate engine (`conversion.zig:run`, dispatched
+from `source.zig` like the others). It does *not* share the pipeline below.
+It saturates an e-graph (`egraph.zig`) over `@conversion`-enrolled rewrites
+plus the pool's local ground equations, asks whether the goal's two sides
+land in one class, and lowers the explanation to ordinary proof lines
+(`conversion/lowerer.zig`). AC
 operators declared via `@conversion assoc`/`comm` role tokens are absorbed
 into the e-graph's bag-node interning instead of being enrolled as rules.
 A stored bag node's member multiset is stable for life: when a member class
@@ -819,6 +824,10 @@ zig build bench-search -Doptimize=ReleaseFast -- --frontier=depth \
 
 Notes:
 
+- In the sandbox, add the following flags before `--` in each build command:
+  `--cache-dir .cache/zig-local --global-cache-dir .cache/zig-global`.
+- For ownership/COW changes, also run safety-enabled tests (Debug or
+  ReleaseSafe). The ReleaseFast corpus gate does not replace lifetime checks.
 - **Always run ReleaseFast and use a freshly built binary.** Debug is slow;
   stale binaries give garbage. The breadth result is the stable oracle.
 - Metrics: breadth reports `found` / `miss` / `top1` (rank of the oracle
@@ -996,6 +1005,7 @@ width is real.
 | `forward.zig` | forward saturation (`@auto forward`) |
 | `shape.zig` / `clipper.zig` | shape extraction + discrimination index |
 | `ref_index.zig` / `refs.zig` / `rule_index.zig` | candidate/ref indexing |
+| `fixture.zig` | theorem-prefix preparation and test setup |
 | `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome) + `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics) |
 | `rank.zig` | candidate ranking |
 | `egraph.zig` | `conversion?` e-graph core: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation |

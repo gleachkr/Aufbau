@@ -1,16 +1,19 @@
 # Architecture
 
-This project is a single Zig module, `src/lib.zig`, with several thin
-entrypoints built on top of it:
+The reusable verifier and compiler API lives in `src/lib.zig`. Native
+and WASM builds instantiate it for their respective targets. Additional
+modules provide LSP protocol types, transport compatibility, and diagnostic
+conversion; this is not a single build-module graph for every product.
 
 - native verifier: `mm0-zig`
-- native compiler: `abc`
-- wasm verifier for the web demo
-- wasm compiler for the web demo
+- native compiler and stdio language server: `abc`, `abc lsp`
+- WASM verifier, compiler, and language server
+- JS packages and embeddable editor under `web/packages/`
 
-The important point is that the application logic lives in the shared
-library, not in the CLI or wasm entrypoints. The binaries mostly do I/O,
-argument handling, and JSON formatting.
+Proof semantics and elaboration live in the library. CLI entrypoints mostly
+handle I/O and arguments, but `src/bin/compiler/lsp.zig` also owns substantial
+application state: documents, caches, request routing, and publication.
+Both native and WASM language servers use that handler.
 
 ## High-level shape
 
@@ -27,16 +30,26 @@ already trust.
 
 ## Build products and top-level wiring
 
-`build.zig` produces four executables from the same shared module:
+`build.zig` defines five application executables, plus the search benchmark.
+The default install builds the two native applications; WASM artifacts are
+installed by the web build steps.
 
 - `src/bin/verifier/main.zig` → native `mm0-zig`
 - `src/bin/compiler/main.zig` → native `abc`
 - `src/bin/verifier/wasm.zig` → web verifier wasm
 - `src/bin/compiler/wasm.zig` → web compiler wasm
+- `src/bin/compiler/lsp_wasm.zig` → web language-server wasm
+
+`web-packages` installs the compiler, verifier, LSP, and editor packages under
+`zig-out/npm/@aufbau/`. `web-demo` installs the WASM packages alongside demo
+assets and a generated example manifest under `zig-out/web-demo/`.
+The three WASM executables use an explicit 8 MiB shadow stack.
 
 `src/lib.zig` is the public surface for the reusable module. It exports:
 
-- trusted types such as `Mmb`, `MM0Parser`, and `Verifier`
+- trusted types such as `Mmb`, `CrossChecker`, and `Verifier`
+- `MM0Parser`, which is the frontend recovery/annotation wrapper, not the
+  bare trusted parser used by `CrossChecker`
 - the `Compiler` frontend
 - `VerificationSession` and `verifyPair` convenience helpers
 - a few grouped frontend helper namespaces used by tests and tools
@@ -48,9 +61,10 @@ The native CLIs are thin wrappers:
 - `src/bin/compiler/cli.zig` reads `.mm0` and `.auf`, runs the
   frontend, and writes the resulting `.mmb`
 
-The wasm entrypoints export small C-style functions for buffer
-allocation, compilation / verification, and JSON result retrieval for the
-browser demo.
+The WASM entrypoints export C-style functions for allocation and result
+retrieval. Compiler/verifier calls return JSON metadata through result
+buffers; the LSP entry accepts JSON-RPC messages and returns newline-separated
+JSON messages. `lsp_wasm_compat.zig` supplies the freestanding transport API.
 
 ## Documentation map
 
@@ -62,6 +76,12 @@ Most project-specific docs now live under `docs/`:
 - `docs/view_recover.md` for `@view`, `@recover`, and `@abstract`
 - `docs/fresh_binders.md` for `@vars`, `@fresh`, and `@freshen`
 - `docs/holes.md` for proof-side holes (`@hole`)
+- `docs/proof_search.md` for search tactics and budgets
+
+`docs/design_notes/` contains rationale and historical investigations.
+Those notes are supporting evidence, not a substitute for the current maps.
+The dated review in `docs/code_quality_review.md` records proposed maintenance
+work; proposals there are not claims about the implemented architecture.
 
 The user-facing manual is an mdbook under `manual/`:
 
@@ -70,21 +90,27 @@ The user-facing manual is an mdbook under `manual/`:
   shared theories from `manual/preludes/`
 - `manual/scripts/check-cells.mjs` compiles every live cell with the native
   compiler and reports one line per document; CI diffs the report against
-  the `manual/cells.expected` baseline (regenerate with
-  `node manual/scripts/check-cells.mjs --abc zig-out/bin/abc > manual/cells.expected`)
+  the `manual/cells.expected` baseline. To regenerate it:
+
+  ```bash
+  node manual/scripts/check-cells.mjs --abc zig-out/bin/abc \
+    > manual/cells.expected
+  ```
 - CI wiring: `.github/workflows/test.yml` runs the cell check;
   `.github/workflows/web-demo-pages.yml` builds and deploys the book
 
 Subsystem-level architecture notes live next to their code:
 
-- `src/frontend/compiler/search/ARCHITECTURE.md` for the `exact?` / `apply?` /
-  `auto?` proof-search subsystem (pipeline, ACUI principal-matching mechanisms,
-  COW-interner invariant, verification contract)
+- `src/frontend/compiler/search/ARCHITECTURE.md` for backward and conversion
+  search: pipelines, ACUI matching, COW ownership, and regression contracts
 
 The canonical language and binary specifications are maintained upstream:
 
-- [MM0 language specification](https://github.com/digama0/mm0/blob/master/mm0.md)
-- [MMB binary specification](https://github.com/digama0/mm0/blob/master/mm0-c/mmb.md)
+- [MM0 language specification][mm0-spec]
+- [MMB binary specification][mmb-spec]
+
+[mm0-spec]: https://github.com/digama0/mm0/blob/master/mm0.md
+[mmb-spec]: https://github.com/digama0/mm0/blob/master/mm0-c/mmb.md
 
 ## Directory layout
 
@@ -220,6 +246,16 @@ carries diagnostic span/name overrides, and adds the wrapper-level
 parse errors (fillers, local defs) that the diagnostic catalog is
 checked to cover at compile time.
 
+Editor indexing and source rendering:
+
+- `lsp/index.zig` and `lsp/builder.zig` build navigation snapshots
+- `lsp/completion.zig` provides completion logic
+- `lsp/diagnostics.zig` translates compiler diagnostics to LSP records
+- `pretty_print.zig` renders expressions using MM0 notation
+- `interner_view.zig` adapts theorem DAGs to the shared printer
+- `statement_sink.zig` captures statements before compilation arenas die
+- `unpack.zig` expands inline applications into source proof lines
+
 ### Wiring: `src/lib.zig` and `src/bin/`
 
 `src/lib.zig` re-exports the shared module API and provides the
@@ -241,6 +277,11 @@ proof format and verification rules implemented in `src/trusted/`.
 When verifying an MM0/MMB pair, the trusted core also checks that the
 binary contents match the source declarations and unify streams from the
 MM0 file.
+
+Admissions are not successful verification. Source `by sorry!` can compile
+to MMB `Sorry`, but the verifier records admitted statements and returns
+`error.SorryUsed` after checking the stream. Compiler success alone is not
+a claim of a complete proof.
 
 ### Untrusted layers
 
@@ -411,11 +452,17 @@ between trusted parser trees and frontend proof elaboration.
 
 ### Pipeline orchestration
 
-`src/frontend/compiler/pipeline.zig` is the main streaming driver.
+`src/frontend/compiler/pipeline.zig` is a facade over separate drivers:
 
-It owns the statement-order loop over the MM0 parser, maintains the
-frontend environment and metadata registries, and optionally accumulates
-emission records.
+- `compiler/pipeline/run.zig`: strict checking and optional emission
+- `compiler/pipeline/analyze.zig`: recoverable MM0/proof analysis
+- `compiler/pipeline/common.zig`: shared declaration and local-item operations
+- `compiler/pipeline/recovery.zig`: analysis snapshots and rollback
+
+The drivers maintain the parser, frontend environment, and metadata
+registries. Search source preparation has another statement-order consumer
+in `compiler/search/fixture.zig`; it shares common operations but is not an
+invocation of the complete batch pipeline.
 
 At a high level it does this:
 
@@ -429,8 +476,8 @@ At a high level it does this:
 7. if emission is enabled, append the corresponding MMB records
 8. reject leftover proof items after the MM0 stream finishes
 
-This file is the best place to start if you want to understand the
-compiler's control flow.
+Start with `compiler/pipeline/run.zig` for batch control flow, then compare
+`compiler/pipeline/analyze.zig` for recovery policy.
 
 ### Aufbau-script parsing
 
@@ -446,14 +493,18 @@ A top-level proof item is one of:
   MM0 definition of the same name
 - a full-header `def name ... : sort = $ body $` item, which becomes a
   proof-local MMB `LocalDef`
+- a `prefix`, `infixl`, `infixr`, or general `notation` declaration for a
+  proof-local term; these affect parsing, not MMB proof commands
 
 The proof-script parser also carries leading `--|` annotation comments
 on an item. Public theorem metadata still comes from the `.mm0` theorem
 declaration, but local lemma annotations are attached to the lemma
 `ProofBlock`. After the pipeline checks and registers the local rule, it
 runs the normal assertion-metadata path for those annotations.
-Proof-side def annotations are intentionally rejected for now; local def
-notation and term metadata are not part of the current format.
+Proof-side def annotations are rejected. Separate proof-side notation
+items are supported for local terms; notation on public terms is rejected
+with `LocalNotationOnPublicTerm`. Local notation processing lives in
+`compiler/pipeline/common.zig`.
 
 The parser has two modes. `Parser.init` is strict — the first line it
 cannot read fails the whole item. `Parser.initLenient` recovers per
@@ -473,9 +524,12 @@ at the top of `checkTheoremBlock` (`compiler/check.zig`), not from the
 parse itself.
 
 Local defs are inserted into the live parser and `GlobalEnv` immediately
-after they are checked. Later `.auf` math and later MM0 declarations can
-therefore resolve them, but earlier items cannot. Bodyless public def
-fillers use the public declaration's binder context and are emitted as
+after they are checked, so later `.auf` math can resolve them. The shared
+parser also sees them while reading later MM0 declarations, but the compiler
+explicitly rejects references to local terms in those declarations with
+`LocalTermInMm0`: an independent MM0 reader does not have the proof file.
+Bodyless public def fillers may use local defs because their bodies live in
+`.auf`. They use the public declaration's binder context and are emitted as
 public term definitions, not `LocalDef` statements.
 
 A proof line contains:
@@ -551,8 +605,8 @@ desugaring. Top-level proof lines and inline applications share the same
 `RuleApplication` node shape.
 
 `compiler/check/apply.zig` handles both forms through a shared
-application entry point. Top-level lines pass a concrete or holey assertion mode from
-the user-written formula. Inline applications pass
+application entry point. Top-level lines pass a concrete or holey assertion
+mode from the user-written formula. Inline applications pass
 `implicit_whole_conclusion`, which accepts the selected candidate rule's
 instantiated conclusion as the hidden line's assertion.
 
@@ -623,12 +677,13 @@ cross-checker do not know holes exist.
 
 `src/frontend/checked_ir.zig` defines the checked theorem IR.
 
-The theorem checker records two kinds of checked lines:
+The theorem checker records three kinds of checked lines:
 
 - direct rule applications
 - transport lines
+- admitted lines (`.sorry`), lowered to MMB `Sorry`
 
-Inline chained applications do not add a third IR kind. They produce the
+Inline chained applications do not add another IR kind. They produce the
 same checked lines as user-written proof lines, but without adding a
 source label. A parent application stores a normal `.line` reference to
 the hidden line that the child produced.
@@ -872,6 +927,9 @@ metadata for:
 - congruence rules, indexed by head term
 - structural ACUI combiner metadata, indexed by head term
 - normalization specs for theorem applications
+- fallback and alpha rules
+- `@auto` forward, backward, eager, and trigger enrollment
+- `@conversion` theorem/definition enrollment and directed `@compute` rules
 
 ### Canonicalizer
 
@@ -1004,3 +1062,111 @@ It is used by:
 This reuse is deliberate. The traversal order is subtle enough that
 having multiple handwritten opcode loops would be a maintenance hazard.
 Because the verifier depends on it, it remains part of the trusted set.
+
+## Proof search and conversion search
+
+`src/frontend/compiler/search.zig` exposes the search facade. Within the
+search directory, `root.zig` assembles the public API and `source.zig` is the
+source-offset adapter used by editor requests. `fixture.zig` constructs the
+parser/environment at a proof point. Source queries use a per-call work arena
+and copy returned suggestions into the caller's allocator.
+
+There are distinct engines with different contracts:
+
+- `compiler/search/backward/backtrack.zig` finds one-step applications for
+  `exact?`/`apply?`.
+- `generate.zig` drives that engine recursively for `auto?`, with forward
+  saturation, phase/depth scheduling, budgets, and scoped memoization.
+- `conversion.zig` drives a separate e-graph. `egraph.zig` records justified
+  equality unions; `compiler/search/egraph/explain.zig` extracts explanations;
+  `compiler/search/conversion/lowerer.zig` renders proof-script steps.
+- `src/frontend/inference_solver.zig` solves omitted binders within one
+  application; it is not the recursive proof-search driver.
+
+Search output goes back through frontend checking, and complete proofs still
+require trusted MM0/MMB verification. A checker-accepted search candidate is
+not itself a kernel certificate. The detailed phase, ACUI-subset, extraction,
+and regression contracts are in the search subsystem architecture document.
+
+## Ownership and speculative state
+
+The important lifetimes are:
+
+- A `Compiler` borrows source text. Each check/analyze/compile call owns a
+  temporary arena. MMB output uses the explicitly supplied output allocator;
+  attached sinks must copy data that survives the call.
+- `TheoremContext.clone()` uses a COW interner. A scratch clone borrows a
+  stable base prefix; the base must outlive it and stay at a stable address.
+  `flatten()` makes the clone independent before it replaces its parent or
+  escapes that parent's lifetime.
+- Checked-line rollback, theorem/name-map replacement, and diagnostic
+  restoration are coordinated by candidate callers. They are not one
+  universal transaction abstraction today.
+- Def matching has its own `MatchSession` undo trail and snapshot protocol.
+  This match-local state must not allocate theorem dummies merely to compare.
+- Persistent generation caches use scope-stable expression content, not raw
+  `ExprId`s minted inside discardable child scopes.
+- `SearchCounters` currently also carries pruning switches and borrowed memo
+  pointers. The generation driver detaches memo pointers before returning;
+  this object is not purely an output statistics record.
+- Diagnostic language is module-global state in `diag.zig`; configure it
+  before compilation, not concurrently with rendering.
+
+## Language server and browser editor
+
+`src/bin/compiler/lsp.zig` owns open documents, document version/mtime keys,
+navigation snapshots, search results, and placeholder outcomes. Cache
+invalidation is centralized in `Handler.invalidateCachesForUri`.
+`src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its
+builder uses lenient proof parsing rather than requiring a successful proof.
+The handler translates byte spans through the negotiated LSP offset encoding.
+
+The native entry uses `lsp_kit`. The freestanding WASM entry reuses the
+handler with the compatibility transport. `web/packages/lsp/` offers a
+directly called server and a browser Web Worker transport. Requests execute
+synchronously inside the worker: the page remains responsive, but an
+in-flight search is not interrupted by a queued cancellation message.
+
+The compiler, verifier, and direct LSP packages load package-relative WASM
+URLs in browsers and Node. File URLs use Node's filesystem API. The worker
+transport is browser-only. Result buffers belong to the WASM instance and
+are replaced by subsequent calls; JS wrappers copy output they return.
+
+`web/packages/editor/index.js` implements custom elements for theories,
+proof cells, and declaration indexes. It also owns shared-document assembly,
+diagnostic routing, CodeMirror integration, and LSP request coordination.
+The manual and demo consume these same packages.
+
+## Tests and maintenance checks
+
+`build.zig` is the source of truth for test-step dependencies:
+
+- `test-unit`: trusted, root, frontend, compiler, search, LSP-index, and
+  binary test roots, plus native CLI smoke tests. File-based proof cases
+  run through the root tests here, not only through integration tests.
+- `test-integration`: upstream example pairs generated with `mm0-rs` and
+  checked by the verifier. `MM0_ZIG_EXAMPLE_FILTER` narrows selection.
+- `test-frontier-smoke`: selected search frontiers and whole-fixture guards.
+- `test-search-scenarios`: benchmark suggestion/count expectations.
+- `test-node-wasm`: packed-package compiler/verifier/LSP smoke tests in Node.
+- `test`: all five steps above.
+- `test-editor-browser` and `test-lsp-cross-origin`: separate Chromium gates;
+  CI runs them explicitly, but they are not dependencies of `test`.
+
+CI additionally checks versions, architecture paths, test-import wiring,
+Zig formatting, native builds, and manual cells. The scripts are
+`scripts/check-version.mjs`, `scripts/check-doc-paths.mjs`, and
+`scripts/check-test-wiring.mjs`. Path/import checks are structural aids, not
+proof that architectural claims or every colocated test are covered.
+
+In the sandbox, append these flags to every Zig build command:
+
+```text
+--cache-dir .cache/zig-local --global-cache-dir .cache/zig-global
+```
+
+Use ReleaseFast for expensive corpus runs. For COW/ownership changes, also
+exercise Debug or ReleaseSafe tests: ReleaseFast omits safety checks. Native
+builds and WASM/package gates matter independently because Zig analyzes only
+instantiated paths. Check logs for skipped external-tool tests; CI explicitly
+requires `mm0-rs`, `mm0-c`, and the upstream examples before testing.
