@@ -88,6 +88,280 @@ pub const ProofItemStream = struct {
     }
 };
 
+// ---------------------------------------------------------------------------
+// The `.mm0` statement walk.
+//
+// Three loops stream the `.mm0` file in lockstep with the `.auf` proofs: the
+// compile path (`run.zig`, strict), the editor analysis (`analyze.zig`,
+// recovers per statement), and the search fixture (`search/fixture.zig`,
+// stops at a target theorem). They differ in what they do when a step fails
+// and in whether they check proofs; they must NOT differ in what a step is.
+// Every per-gap and per-declaration obligation therefore lives in the
+// helpers below, and a loop only composes them under its own error policy.
+// ---------------------------------------------------------------------------
+
+/// Scan to the upcoming public statement, consuming the notation and
+/// coercion declarations before it and collecting its annotations. Only a
+/// loop that must look at the upcoming header before parsing the statement
+/// (to drain the proof-local items anchored to it) calls this separately;
+/// `nextPublicStatement` prepares on its own otherwise. On failure the
+/// diagnostic is set on `ctx` and the parser is left for
+/// `recoverToStatementBoundary`.
+pub fn prepareNextPublicStatement(
+    ctx: ?*CompilerContext,
+    parser: *MM0Parser,
+    env: *const GlobalEnv,
+) !void {
+    parser.prepareNextPublicStatement() catch |err| {
+        if (ctx) |c| {
+            c.setDiagnostic(mm0ParserDiagnosticWithLocalNotes(parser, env, err));
+        }
+        return err;
+    };
+}
+
+/// Parse the next public statement (`null` at end of stream) and discharge
+/// what the gap before it owes: mirror the coercions the parser consumed
+/// into `env`, warn about annotations that attached to nothing, and reject
+/// `.mm0` notation or coercions on a proof-local term. On a parse failure
+/// the diagnostic is set on `ctx` and the parser is left for
+/// `recoverToStatementBoundary`; `error.LocalTermInMm0` also comes with its
+/// diagnostic set, and the statement (if any) is consumed.
+pub fn nextPublicStatement(
+    ctx: ?*CompilerContext,
+    parser: *MM0Parser,
+    env: *GlobalEnv,
+) !?MM0Stmt {
+    const maybe_stmt = parser.next() catch |err| {
+        if (ctx) |c| {
+            c.setDiagnostic(mm0ParserDiagnosticWithLocalNotes(parser, env, err));
+        }
+        return err;
+    };
+    // The parser consumes coercion statements silently while scanning to
+    // the next public statement; keep the env's mirror in lockstep.
+    try env.syncCoercionsFromParser(parser);
+    // Dropped-annotation warnings belong to the gap, not to the statement
+    // that follows, so they are issued before any per-statement snapshot a
+    // recovering loop takes.
+    Metadata.warnDroppedAnnotations(ctx, parser);
+    try rejectLocalTermNotation(ctx, parser, env, maybe_stmt);
+    return maybe_stmt;
+}
+
+/// Where a declaration's annotations come from. This also fixes the
+/// diagnostic source and the span its lint and annotation diagnostics
+/// anchor on.
+pub const DeclarationSite = union(enum) {
+    /// A public `.mm0` statement: the parser holds its annotations.
+    mm0,
+    /// A proof-side item (a local def or lemma): the item carries them.
+    proof: struct {
+        annotations: []const []const u8,
+        name_span: Span,
+    },
+};
+
+/// Register a public sort: its annotations (`@vars`, hole tokens), then the
+/// env entry. Annotations go first so a rejected sort never enters `env`
+/// (a recovering loop restores `sort_vars` itself).
+pub fn registerSort(
+    ctx: ?*CompilerContext,
+    parser: *MM0Parser,
+    env: *GlobalEnv,
+    sort_stmt: SortStmt,
+    sort_vars: *SortVarRegistry,
+) !void {
+    try Metadata.processSortMetadata(
+        ctx,
+        parser,
+        sort_stmt,
+        parser.last_annotations,
+        parser.last_annotation_spans,
+        sort_vars,
+    );
+    try env.addStmt(.{ .sort = sort_stmt });
+}
+
+/// Register a term or def whose body is already filled and validated: the
+/// env entry, the unused-parameter lint, then its annotations (`@acui`,
+/// `@conversion`), which look the term up by name and so run last. A
+/// proof-site term is a proof-local def and is marked so.
+///
+/// On failure the entry may already be in `env`. The parser holds the
+/// term's id, so a recovering caller invalidates it in place
+/// (`TermRecoverySnapshot.discardTerm`); it is never removed.
+pub fn registerTerm(
+    ctx: ?*CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *const MM0Parser,
+    env: *GlobalEnv,
+    registry: *RewriteRegistry,
+    term_stmt: TermStmt,
+    site: DeclarationSite,
+) !void {
+    try env.addStmt(.{ .term = term_stmt });
+    const term_id = env.term_names.get(term_stmt.name) orelse {
+        return error.UnknownTerm;
+    };
+    if (site == .proof) try env.markTermLocal(term_id);
+    const source: DiagnosticSource = switch (site) {
+        .mm0 => .mm0,
+        .proof => .proof,
+    };
+    const name_span: Span = switch (site) {
+        .mm0 => CompilerDiag.mathSpanToSpan(term_stmt.name_span),
+        .proof => |item| item.name_span,
+    };
+    if (ctx) |c| {
+        try CompilerLints.lintUnusedDefinitionParameters(
+            c,
+            allocator,
+            &env.terms.items[term_id],
+            name_span,
+            source,
+        );
+    }
+    switch (site) {
+        .mm0 => try Metadata.processTermMetadata(
+            ctx,
+            env,
+            registry,
+            term_stmt,
+            parser.last_annotations,
+            parser.last_annotation_spans,
+        ),
+        .proof => |item| try Metadata.processTermMetadataAt(
+            ctx,
+            env,
+            registry,
+            term_stmt,
+            item.annotations,
+            &.{},
+            .proof,
+            item.name_span,
+        ),
+    }
+}
+
+/// Register an axiom, theorem, or lemma whose proof (if any) is already
+/// checked: the env entry, the unused-parameter lint, then its annotations
+/// (`@auto`, `@view`/`@recover`, `@fresh`, ...). Registration is atomic:
+/// when the annotations are rejected the rule is removed again, so a
+/// failed declaration leaves no rule behind for later proofs to cite.
+pub fn registerAssertion(
+    ctx: ?*CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    env: *GlobalEnv,
+    registry: *RewriteRegistry,
+    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
+    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
+    views: *std.AutoHashMap(u32, ViewDecl),
+    assertion: AssertionStmt,
+    site: DeclarationSite,
+) !void {
+    const source: DiagnosticSource = switch (site) {
+        .mm0 => .mm0,
+        .proof => .proof,
+    };
+    const name_span: Span = switch (site) {
+        .mm0 => CompilerDiag.mathSpanToSpan(assertion.name_span),
+        .proof => |item| item.name_span,
+    };
+    try addAssertionToEnv(ctx, env, assertion, assertion.name, name_span, source);
+    const rule_id = env.getRuleId(assertion.name) orelse {
+        return error.MissingRule;
+    };
+    if (ctx) |c| {
+        try CompilerLints.lintUnusedTheoremParameters(
+            c,
+            allocator,
+            &env.rules.items[rule_id],
+            name_span,
+            source,
+        );
+    }
+    const annotations: []const []const u8 = switch (site) {
+        .mm0 => parser.last_annotations,
+        .proof => |item| item.annotations,
+    };
+    const annotation_spans: []const MathSpan = switch (site) {
+        .mm0 => parser.last_annotation_spans,
+        .proof => &.{},
+    };
+    Metadata.processAssertionMetadata(
+        allocator,
+        ctx,
+        parser,
+        env,
+        registry,
+        fresh_bindings,
+        freshen_bindings,
+        views,
+        assertion,
+        annotations,
+        annotation_spans,
+        source,
+        if (site == .proof) name_span else null,
+    ) catch |err| {
+        env.removeLastRule(assertion.name);
+        return err;
+    };
+}
+
+/// Whether every sort and term a declaration names is available in `env`.
+/// Only a recovering loop can see `false`: a strict walk fails at the parser
+/// before an unknown name reaches the compiler, while recovery leaves
+/// unavailable placeholders behind for the declarations it rejected. A
+/// blocked declaration is skipped silently, since its cause was reported.
+pub fn termDependenciesAvailable(
+    env: *const GlobalEnv,
+    stmt: TermStmt,
+) bool {
+    if (!argSortsAvailable(env, stmt.args)) return false;
+    if (!argSortsAvailable(env, stmt.dummy_args)) return false;
+    if (!env.sort_names.contains(stmt.ret_sort_name)) return false;
+    const body = stmt.body orelse return true;
+    return exprTermsAvailable(env, body);
+}
+
+pub fn assertionDependenciesAvailable(
+    env: *const GlobalEnv,
+    stmt: AssertionStmt,
+) bool {
+    if (!argSortsAvailable(env, stmt.args)) return false;
+    for (stmt.hyps) |hyp| {
+        if (!exprTermsAvailable(env, hyp)) return false;
+    }
+    return exprTermsAvailable(env, stmt.concl);
+}
+
+fn argSortsAvailable(env: *const GlobalEnv, args: []const ArgInfo) bool {
+    for (args) |arg| {
+        if (!env.sort_names.contains(arg.sort_name)) return false;
+    }
+    return true;
+}
+
+fn exprTermsAvailable(env: *const GlobalEnv, expr: *const Expr) bool {
+    switch (expr.*) {
+        .variable => return true,
+        .term => |term| {
+            // Parsed expressions carry parser term ids, not frontend name
+            // lookups. In recovery mode a rejected term may still occupy
+            // that id as an unavailable placeholder, so the id is checked
+            // here instead of assuming every in-range slot is valid.
+            if (!env.hasAvailableTerm(term.id)) return false;
+            for (term.args) |arg| {
+                if (!exprTermsAvailable(env, arg)) return false;
+            }
+            return true;
+        },
+        .hole => return false,
+    }
+}
+
 pub fn validateDefinitionBody(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -347,6 +621,55 @@ pub fn setExtraProofItemDiagnostic(self: *CompilerContext, item: TopLevelItem) a
     }
 }
 
+/// The proof-local items (lemmas, local defs, notation) that precede the
+/// next public proof item, when that item anchors to the upcoming `.mm0`
+/// statement (the parser must be prepared, see `prepareNextPublicStatement`).
+/// The anchor is put back; the items come out in source order for the
+/// caller to process under its own error policy. Anything not anchored is
+/// put back too and the slice is empty.
+pub fn collectAnchoredLocalProofItems(
+    ctx: ?*CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *const MM0Parser,
+    proof_stream: *?ProofItemStream,
+) ![]const TopLevelItem {
+    const proofs = if (proof_stream.*) |*actual| actual else return &.{};
+    const header = parser.peekNextPublicStmtHeader() orelse return &.{};
+
+    var locals = std.ArrayListUnmanaged(TopLevelItem){};
+    defer locals.deinit(allocator);
+
+    while (true) {
+        const item = proofs.next() catch |err| {
+            if (ctx) |c| {
+                c.setDiagnostic(CompilerDiag.proofParserDiagnostic(
+                    &proofs.parser,
+                    header.name,
+                    err,
+                ));
+            }
+            return err;
+        } orelse {
+            putBackItems(proofs, locals.items);
+            return &.{};
+        };
+
+        if (isLocalProofItem(item)) {
+            try locals.append(allocator, item);
+            continue;
+        }
+
+        proofs.putBack(item);
+        if (locals.items.len == 0 or !anchorMatches(header, item)) {
+            putBackItems(proofs, locals.items);
+            return &.{};
+        }
+        return try locals.toOwnedSlice(allocator);
+    }
+}
+
+/// Strict form: process every anchored local item, failing on the first
+/// broken one.
 pub fn drainAnchoredLocalProofItems(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -361,55 +684,28 @@ pub fn drainAnchoredLocalProofItems(
     proof_stream: *?ProofItemStream,
     emit: ?*Output,
 ) !void {
-    const proofs = if (proof_stream.*) |*actual| actual else return;
-    const header = parser.peekNextPublicStmtHeader() orelse return;
-
-    var locals = std.ArrayListUnmanaged(TopLevelItem){};
-    defer locals.deinit(allocator);
-
-    while (true) {
-        const item = proofs.next() catch |err| {
-            self.setDiagnostic(CompilerDiag.proofParserDiagnostic(
-                &proofs.parser,
-                header.name,
-                err,
-            ));
-            return err;
-        } orelse {
-            putBackItems(proofs, locals.items);
-            return;
-        };
-
-        if (isLocalProofItem(item)) {
-            try locals.append(allocator, item);
-            continue;
-        }
-
-        const matches = locals.items.len > 0 and anchorMatches(header, item);
-        if (!matches) {
-            proofs.putBack(item);
-            putBackItems(proofs, locals.items);
-            return;
-        }
-
-        proofs.putBack(item);
-        for (locals.items) |local| {
-            try processLocalProofItem(
-                self,
-                allocator,
-                parser,
-                env,
-                registry,
-                rule_catalog,
-                fresh_bindings,
-                freshen_bindings,
-                views,
-                sort_vars,
-                local,
-                emit,
-            );
-        }
-        return;
+    const locals = try collectAnchoredLocalProofItems(
+        self,
+        allocator,
+        parser,
+        proof_stream,
+    );
+    defer allocator.free(locals);
+    for (locals) |local| {
+        try processLocalProofItem(
+            self,
+            allocator,
+            parser,
+            env,
+            registry,
+            rule_catalog,
+            fresh_bindings,
+            freshen_bindings,
+            views,
+            sort_vars,
+            local,
+            emit,
+        );
     }
 }
 
@@ -595,7 +891,7 @@ fn firstLocalTerm(env: *const GlobalEnv, expr: *const Expr) ?u32 {
 /// them. Each declaration is reported once, anchored on the statement that
 /// follows it.
 pub fn rejectLocalTermNotation(
-    self: *CompilerContext,
+    ctx: ?*CompilerContext,
     parser: *const MM0Parser,
     env: *GlobalEnv,
     next_stmt: ?MM0Stmt,
@@ -607,7 +903,7 @@ pub fn rejectLocalTermNotation(
         if (coercion.local_reported) continue;
         if (!env.isLocalTerm(coercion.term_id)) continue;
         coercion.local_reported = true;
-        return failLocalTermInMm0(self, env, coercion.term_id, next_stmt);
+        return failLocalTermInMm0(ctx, env, coercion.term_id, next_stmt);
     }
     var it = parser.notationIterator();
     while (it.next()) |entry| {
@@ -615,17 +911,17 @@ pub fn rejectLocalTermNotation(
         if (env.hasLocalNotation(entry.term_id, entry.token)) continue;
         // Recorded as seen so the analyze path reports it once.
         try env.addLocalNotation(entry.term_id, entry.token);
-        return failLocalTermInMm0(self, env, entry.term_id, next_stmt);
+        return failLocalTermInMm0(ctx, env, entry.term_id, next_stmt);
     }
 }
 
 fn failLocalTermInMm0(
-    self: *CompilerContext,
+    ctx: ?*CompilerContext,
     env: *const GlobalEnv,
     term_id: u32,
     next_stmt: ?MM0Stmt,
 ) error{LocalTermInMm0} {
-    self.setDiagnostic(CompilerDiag.localTermInMm0Diagnostic(
+    if (ctx) |c| c.setDiagnostic(CompilerDiag.localTermInMm0Diagnostic(
         next_stmt,
         env.terms.items[term_id].name,
     ));
@@ -792,34 +1088,19 @@ pub fn processLocalDefItem(
         });
     }
 
-    env.addStmt(.{ .term = term_stmt }) catch |err| {
-        self.setDiagnostic(localDefParseDiagnostic(parser, def, err));
-        return err;
-    };
-
-    const term_id = env.term_names.get(term_stmt.name) orelse {
-        return error.UnknownTerm;
-    };
-    try env.markTermLocal(term_id);
-    try CompilerLints.lintUnusedDefinitionParameters(
+    // Same directives as an .mm0 term (@acui, @conversion), attached to the
+    // def item.
+    registerTerm(
         self,
         allocator,
-        &env.terms.items[term_id],
-        def.name_span,
-        .proof,
-    );
-
-    // Same directives as an .mm0 term (@acui, @conversion); the registry
-    // looks the head up by name, so this runs after the term is in `env`.
-    Metadata.processTermMetadataAt(
-        self,
+        parser,
         env,
         registry,
         term_stmt,
-        def.annotations,
-        &.{},
-        .proof,
-        def.name_span,
+        .{ .proof = .{
+            .annotations = def.annotations,
+            .name_span = def.name_span,
+        } },
     ) catch |err| {
         self.setIfMissing(.{
             .kind = .generic,
@@ -998,27 +1279,9 @@ pub fn processAssertion(
         }
     }
 
-    try addAssertionToEnv(
-        self,
-        env,
-        assertion,
-        assertion.name,
-        CompilerDiag.mathSpanToSpan(assertion.name_span),
-        .mm0,
-    );
-    const rule_id = env.getRuleId(assertion.name) orelse {
-        return error.MissingRule;
-    };
-    try CompilerLints.lintUnusedTheoremParameters(
+    try registerAssertion(
         self,
         allocator,
-        &env.rules.items[rule_id],
-        CompilerDiag.mathSpanToSpan(assertion.name_span),
-        .mm0,
-    );
-    try Metadata.processAssertionMetadata(
-        allocator,
-        self,
         parser,
         env,
         registry,
@@ -1026,10 +1289,7 @@ pub fn processAssertion(
         freshen_bindings,
         views,
         assertion,
-        parser.last_annotations,
-        parser.last_annotation_spans,
         .mm0,
-        null,
     );
 }
 
@@ -1083,17 +1343,9 @@ pub fn processNonTheoremAssertion(
         });
     }
 
-    try addAssertionToEnv(
+    try registerAssertion(
         self,
-        env,
-        assertion,
-        assertion.name,
-        CompilerDiag.mathSpanToSpan(assertion.name_span),
-        .mm0,
-    );
-    try Metadata.processAssertionMetadata(
         allocator,
-        self,
         parser,
         env,
         registry,
@@ -1101,10 +1353,7 @@ pub fn processNonTheoremAssertion(
         freshen_bindings,
         views,
         assertion,
-        parser.last_annotations,
-        parser.last_annotation_spans,
         .mm0,
-        null,
     );
 }
 
@@ -1308,27 +1557,9 @@ pub fn processLocalProofBlock(
         });
     }
 
-    try addAssertionToEnv(
-        self,
-        env,
-        assertion,
-        block.name,
-        block.name_span,
-        .proof,
-    );
-    const rule_id = env.getRuleId(assertion.name) orelse {
-        return error.MissingRule;
-    };
-    try CompilerLints.lintUnusedTheoremParameters(
+    registerAssertion(
         self,
         allocator,
-        &env.rules.items[rule_id],
-        block.name_span,
-        .proof,
-    );
-    Metadata.processAssertionMetadata(
-        allocator,
-        self,
         parser,
         env,
         registry,
@@ -1336,12 +1567,11 @@ pub fn processLocalProofBlock(
         freshen_bindings,
         views,
         assertion,
-        block.annotations,
-        &.{},
-        .proof,
-        block.name_span,
+        .{ .proof = .{
+            .annotations = block.annotations,
+            .name_span = block.name_span,
+        } },
     ) catch |err| {
-        env.removeLastRule(assertion.name);
         self.setIfMissing(
             CompilerDiag.proofBlockDiagnostic(
                 block.name,
@@ -1354,7 +1584,7 @@ pub fn processLocalProofBlock(
 }
 
 pub fn addAssertionToEnv(
-    self: *CompilerContext,
+    ctx: ?*CompilerContext,
     env: *GlobalEnv,
     assertion: AssertionStmt,
     diag_name: []const u8,
@@ -1363,7 +1593,7 @@ pub fn addAssertionToEnv(
 ) !void {
     env.addStmt(.{ .assertion = assertion }) catch |err| {
         if (err == error.DuplicateRuleName) {
-            self.setDiagnostic(CompilerDiag.duplicateRuleNameDiagnostic(
+            if (ctx) |c| c.setDiagnostic(CompilerDiag.duplicateRuleNameDiagnostic(
                 diag_name,
                 span,
                 source,

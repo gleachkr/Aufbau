@@ -22,6 +22,18 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- Proof search (`auto?`, `exact?`, `apply?`, and the code actions built on
+  them) failed outright in any theory whose `@recover` or `@abstract`
+  crosses sorts through a coercion, such as a two-sort first-order theory
+  with separate variable and name sorts: the search's environment never
+  learned the file's coercions, so it rejected the annotation the compiler
+  accepts. The search now sees the same coercions as the compiler, and its
+  candidate pre-filter no longer discards a recovery through a coercion.
+- A broken declaration or lemma earlier in the file (a malformed `.mm0`
+  statement, a rejected annotation, a duplicate name, a lemma that does not
+  check) silently disabled proof search for every theorem after it. The
+  search now skips the broken item the way the editor's analysis does, so
+  only the target theorem itself has to be intact.
 - An `.mm0` statement, notation declaration, or coercion that named a
   proof-local definition was accepted by the compiler, so the `.mm0` file
   no longer verified on its own. It is now rejected at that statement with

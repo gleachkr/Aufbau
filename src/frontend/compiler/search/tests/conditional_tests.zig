@@ -386,8 +386,6 @@ test "conditional @conversion: undischargeable premise is a forced negative" {
 
 test "conditional @conversion: premise-bound binder is rejected at enrollment" {
     if (!conditional_rules_enrolled) return error.SkipZigTest;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
     // lhs-only coverage: `y` occurs only in the premise, so after the
     // match side `x / x` is bound the premise is not ground and
     // discharge would be a join, not a lookup (#239 lifts this). The
@@ -397,14 +395,8 @@ test "conditional @conversion: premise-bound binder is rejected at enrollment" {
         \\axiom self_div_sq (x y: nat): $ x = y * y $ > $ x / x = 1 $;
         \\theorem sq (a: nat): $ a / a = 1 $;
     ;
-    const proof_src =
-        \\sq
-        \\----
-        \\goal: $ a / a = 1 $ by conversion?
-        \\
-    ;
-    try std.testing.expectError(
+    try helpers.expectEnrollmentError(
+        mm0_src,
         error.ConversionPremiseBinderNotCovered,
-        conversionSuggestions(&arena, mm0_src, proof_src, .{}),
     );
 }

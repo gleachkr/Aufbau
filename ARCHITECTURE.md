@@ -456,13 +456,23 @@ between trusted parser trees and frontend proof elaboration.
 
 - `compiler/pipeline/run.zig`: strict checking and optional emission
 - `compiler/pipeline/analyze.zig`: recoverable MM0/proof analysis
-- `compiler/pipeline/common.zig`: shared declaration and local-item operations
+- `compiler/pipeline/common.zig`: the shared statement walk
+  (`prepareNextPublicStatement` / `nextPublicStatement`, which also mirror
+  coercions, warn about dropped annotations, and reject `.mm0` notation on
+  proof-local terms), per-kind declaration registration
+  (`registerSort` / `registerTerm` / `registerAssertion`: env entry, lints,
+  annotations), dependency availability checks, and the local-item
+  operations
 - `compiler/pipeline/recovery.zig`: analysis snapshots and rollback
 
 The drivers maintain the parser, frontend environment, and metadata
-registries. Search source preparation has another statement-order consumer
-in `compiler/search/fixture.zig`; it shares common operations but is not an
-invocation of the complete batch pipeline.
+registries. Search source preparation has a third statement-order consumer
+in `compiler/search/fixture.zig`; it walks the `.mm0` through the same
+`common.zig` helpers (recovering from a broken earlier declaration the way
+the analysis does) but checks no proofs before its target and is not an
+invocation of the complete batch pipeline. A loop chooses only its error
+policy and whether to check proofs; what a statement step *is* lives in
+`common.zig` once.
 
 At a high level it does this:
 

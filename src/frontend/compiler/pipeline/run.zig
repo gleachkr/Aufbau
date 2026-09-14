@@ -11,7 +11,6 @@ const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
-const CompilerLints = @import("../lints.zig");
 const Common = @import("common.zig");
 
 const FreshDecl = Metadata.FreshDecl;
@@ -25,7 +24,6 @@ const drainAnchoredLocalProofItems = Common.drainAnchoredLocalProofItems;
 const drainTrailingLocalProofItems = Common.drainTrailingLocalProofItems;
 const fillPublicDefBody = Common.fillPublicDefBody;
 const processAssertion = Common.processAssertion;
-const rejectLocalTermNotation = Common.rejectLocalTermNotation;
 const rejectLocalTermReferences = Common.rejectLocalTermReferences;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
@@ -57,14 +55,7 @@ pub fn run(
     var last_stmt: ?MM0Stmt = null;
 
     while (true) {
-        parser.prepareNextPublicStatement() catch |err| {
-            self.setDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
-                &parser,
-                &env,
-                err,
-            ));
-            return err;
-        };
+        try Common.prepareNextPublicStatement(self, &parser, &env);
         try drainAnchoredLocalProofItems(
             self,
             allocator,
@@ -80,20 +71,8 @@ pub fn run(
             emit,
         );
 
-        const maybe_stmt = parser.next() catch |err| {
-            self.setDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
-                &parser,
-                &env,
-                err,
-            ));
-            return err;
-        };
-        // The parser consumes coercion statements silently while scanning to
-        // the next public statement; keep the env's mirror in lockstep.
-        try env.syncCoercionsFromParser(&parser);
-        Metadata.warnDroppedAnnotations(self, &parser);
-        try rejectLocalTermNotation(self, &parser, &env, maybe_stmt);
-        const stmt = maybe_stmt orelse break;
+        const stmt = try Common.nextPublicStatement(self, &parser, &env) orelse
+            break;
         last_stmt = stmt;
         CompilerVars.validateSortVarCollisions(&parser, &sort_vars) catch |err| {
             self.setIfMissing(
@@ -104,7 +83,6 @@ pub fn run(
         try rejectLocalTermReferences(self, &env, stmt);
         switch (stmt) {
             .sort => |sort_stmt| {
-                const sort_stmt_copy = sort_stmt;
                 if (emit) |out| {
                     try out.sort_names.append(allocator, sort_stmt.name);
                     try out.sorts.append(allocator, sort_stmt.modifiers);
@@ -113,29 +91,18 @@ pub fn run(
                         .body = &.{},
                     });
                 }
-                env.addStmt(stmt) catch |err| {
-                    self.setIfMissing(
-                        CompilerDiag.mm0StatementDiagnostic(
-                            &parser,
-                            MM0Stmt{ .sort = sort_stmt_copy },
-                            err,
-                        ),
-                    );
-                    return err;
-                };
-                Metadata.processSortMetadata(
+                Common.registerSort(
                     self,
                     &parser,
+                    &env,
                     sort_stmt,
-                    parser.last_annotations,
-                    parser.last_annotation_spans,
                     &sort_vars,
                 ) catch |err| {
                     self.setIfMissing(
                         CompilerDiag.mm0StatementDiagnostic(
                             &parser,
-                            MM0Stmt{ .sort = sort_stmt_copy },
-                            err,
+                            stmt,
+                            CompilerDiag.narrowDiagnosticError(err),
                         ),
                     );
                     return err;
@@ -211,39 +178,14 @@ pub fn run(
                         .body = body,
                     });
                 }
-                env.addStmt(.{ .term = filled_term_stmt }) catch |err| {
-                    self.setIfMissing(
-                        CompilerDiag.mm0StatementDiagnostic(
-                            &parser,
-                            MM0Stmt{ .term = term_stmt_copy },
-                            err,
-                        ),
-                    );
-                    return err;
-                };
-                if (filled_term_stmt.is_def) {
-                    const term_id = env.term_names.get(
-                        filled_term_stmt.name,
-                    ) orelse {
-                        return error.UnknownTerm;
-                    };
-                    try CompilerLints.lintUnusedDefinitionParameters(
-                        self,
-                        allocator,
-                        &env.terms.items[term_id],
-                        CompilerDiag.mathSpanToSpan(
-                            filled_term_stmt.name_span,
-                        ),
-                        .mm0,
-                    );
-                }
-                Metadata.processTermMetadata(
+                Common.registerTerm(
                     self,
+                    allocator,
+                    &parser,
                     &env,
                     &registry,
                     filled_term_stmt,
-                    parser.last_annotations,
-                    parser.last_annotation_spans,
+                    .mm0,
                 ) catch |err| {
                     self.setIfMissing(
                         CompilerDiag.mm0StatementDiagnostic(

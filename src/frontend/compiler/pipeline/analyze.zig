@@ -2,8 +2,6 @@ const std = @import("std");
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const Metadata = @import("../metadata.zig");
-const Expr = @import("../../../trusted/expressions.zig").Expr;
-const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const SortStmt = @import("../../parse_recovery.zig").SortStmt;
 const TermStmt = @import("../../parse_recovery.zig").TermStmt;
@@ -22,7 +20,6 @@ const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
-const CompilerLints = @import("../lints.zig");
 const Recovery = @import("recovery.zig");
 const Common = @import("common.zig");
 
@@ -35,22 +32,16 @@ const WarningSnapshot = Recovery.WarningSnapshot;
 const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
 const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
 const ProofItemStream = Common.ProofItemStream;
-const addAssertionToEnv = Common.addAssertionToEnv;
 const anchorMatches = Common.anchorMatches;
 const isLocalProofItem = Common.isLocalProofItem;
 const processAssertion = Common.processAssertion;
 const processLocalDefItem = Common.processLocalDefItem;
 const processLocalNotationItem = Common.processLocalNotationItem;
 const processLocalProofBlock = Common.processLocalProofBlock;
-const rejectLocalTermNotation = Common.rejectLocalTermNotation;
 const rejectLocalTermReferences = Common.rejectLocalTermReferences;
 const validateDefinitionBody = Common.validateDefinitionBody;
 
 const FilledPublicDef = Common.FilledPublicDef;
-const DependencyStatus = enum {
-    ok,
-    blocked,
-};
 const InvalidRuleSet = std.StringHashMap(void);
 
 const FreshBindingMap = std.AutoHashMap(u32, []const FreshDecl);
@@ -169,10 +160,12 @@ fn analyzeInternal(
         sink.capture(&state.parser, &state.env);
 
     parse_loop: while (true) {
-        state.parser.prepareNextPublicStatement() catch |err| {
-            if (!recoverFromMm0ParseFailure(self, &state, err)) {
-                return;
-            }
+        Common.prepareNextPublicStatement(
+            self,
+            &state.parser,
+            &state.env,
+        ) catch |err| {
+            if (!recoverFromMm0ParseFailure(self, &state, err)) return;
             continue :parse_loop;
         };
         if (with_proof) {
@@ -182,36 +175,29 @@ fn analyzeInternal(
                 &state,
             );
         }
-        const next_stmt = state.parser.next() catch |err| {
-            if (!recoverFromMm0ParseFailure(self, &state, err)) {
-                return;
-            }
-            continue :parse_loop;
-        };
-        // The parser consumes coercion statements silently while scanning to
-        // the next public statement; keep the env's mirror in lockstep.
-        try state.env.syncCoercionsFromParser(&state.parser);
-        // Before the per-statement warning snapshot: dropped-annotation
-        // warnings belong to the gap, not to the statement that follows, so
-        // a failing statement must not roll them back.
-        Metadata.warnDroppedAnnotations(self, &state.parser);
-        rejectLocalTermNotation(
+        const next_stmt = Common.nextPublicStatement(
             self,
             &state.parser,
             &state.env,
-            next_stmt,
-        ) catch |err| {
-            if (next_stmt) |stmt| {
-                recordPrimaryStatementFailure(self, &state.parser, stmt, err);
-                continue;
-            }
-            self.addPrimaryDiagnostic(self.getDiagnostic().?);
-            self.restoreDiagnostic(null);
-            break;
+        ) catch |err| switch (err) {
+            // The gap named a proof-local term: report it and skip the
+            // statement it anchors on. At end of stream the next round has
+            // nothing left to report and ends the walk.
+            error.LocalTermInMm0 => {
+                recordPrimaryGapFailure(self);
+                continue :parse_loop;
+            },
+            else => {
+                if (!recoverFromMm0ParseFailure(self, &state, err)) return;
+                continue :parse_loop;
+            },
         };
         const stmt = next_stmt orelse break;
         state.last_stmt = stmt;
 
+        // Taken after the gap's obligations: dropped-annotation warnings
+        // belong to the gap, not to the statement that follows, so a failing
+        // statement must not roll them back.
         const warnings = WarningSnapshot.capture(self);
 
         CompilerVars.validateSortVarCollisions(
@@ -508,7 +494,7 @@ fn analyzeLocalDefItem(
     ) catch |err| {
         warnings.restore(self);
         snapshot.restore(state);
-        try discardFailedLocalTerm(
+        try Recovery.discardFailedLocalTerm(
             &state.env,
             &state.parser,
             parser_term_count,
@@ -518,23 +504,6 @@ fn analyzeLocalDefItem(
         recordPrimaryLocalDefFailure(self, def, err);
         return;
     };
-}
-
-fn discardFailedLocalTerm(
-    env: *GlobalEnv,
-    parser: *const MM0Parser,
-    parser_term_count: usize,
-    name: []const u8,
-) !void {
-    if (parser.core.terms.items.len <= parser_term_count) return;
-    while (env.terms.items.len + 1 < parser.core.terms.items.len) {
-        try env.appendInvalidTerm(name);
-    }
-    if (env.terms.items.len < parser.core.terms.items.len) {
-        try env.appendInvalidTerm(name);
-    } else {
-        env.invalidateLastTerm(name);
-    }
 }
 
 fn recordPrimaryLocalDefFailure(
@@ -565,20 +534,13 @@ fn analyzeSortStatement(
         allocator,
         &state.sort_vars,
     );
-    Metadata.processSortMetadata(
+    Common.registerSort(
         self,
         &state.parser,
+        &state.env,
         sort_stmt,
-        state.parser.last_annotations,
-        state.parser.last_annotation_spans,
         &state.sort_vars,
     ) catch |err| {
-        warnings.restore(self);
-        state.sort_vars = sort_vars_snapshot;
-        recordPrimaryStatementFailure(self, &state.parser, stmt, err);
-        return;
-    };
-    state.env.addStmt(stmt) catch |err| {
         warnings.restore(self);
         state.sort_vars = sort_vars_snapshot;
         recordPrimaryStatementFailure(self, &state.parser, stmt, err);
@@ -611,15 +573,12 @@ fn analyzeTermStatement(
         proof_body_span = filled.?.body_span;
     }
 
-    switch (validateTermDependencies(&state.env, actual_stmt)) {
-        .ok => {},
-        .blocked => {
-            warnings.restore(self);
-            snapshot.restore(state);
-            try snapshot.discardTerm(&state.env, actual_stmt.name);
-            try state.invalid_terms.put(actual_stmt.name, {});
-            return;
-        },
+    if (!Common.termDependenciesAvailable(&state.env, actual_stmt)) {
+        warnings.restore(self);
+        snapshot.restore(state);
+        try snapshot.discardTerm(&state.env, actual_stmt.name);
+        try state.invalid_terms.put(actual_stmt.name, {});
+        return;
     }
 
     validateDefinitionBody(
@@ -639,35 +598,14 @@ fn analyzeTermStatement(
         return;
     };
 
-    state.env.addStmt(.{ .term = actual_stmt }) catch |err| {
-        warnings.restore(self);
-        snapshot.restore(state);
-        try snapshot.discardTerm(&state.env, actual_stmt.name);
-        try state.invalid_terms.put(actual_stmt.name, {});
-        recordPrimaryStatementFailure(self, &state.parser, stmt, err);
-        return;
-    };
-
-    if (actual_stmt.is_def) {
-        const term_id = state.env.term_names.get(actual_stmt.name) orelse {
-            return error.UnknownTerm;
-        };
-        try CompilerLints.lintUnusedDefinitionParameters(
-            self,
-            allocator,
-            &state.env.terms.items[term_id],
-            CompilerDiag.mathSpanToSpan(actual_stmt.name_span),
-            .mm0,
-        );
-    }
-
-    Metadata.processTermMetadata(
+    Common.registerTerm(
         self,
+        allocator,
+        &state.parser,
         &state.env,
         &state.registry,
         actual_stmt,
-        state.parser.last_annotations,
-        state.parser.last_annotation_spans,
+        .mm0,
     ) catch |err| {
         warnings.restore(self);
         snapshot.restore(state);
@@ -739,14 +677,11 @@ fn analyzeAssertionStatement(
 ) !void {
     const snapshot = try AssertionRecoverySnapshot.capture(allocator, state);
 
-    switch (validateAssertionDependencies(&state.env, assertion)) {
-        .ok => {},
-        .blocked => {
-            warnings.restore(self);
-            snapshot.restore(state);
-            try markAssertionInvalid(state, assertion.name);
-            return;
-        },
+    if (!Common.assertionDependenciesAvailable(&state.env, assertion)) {
+        warnings.restore(self);
+        snapshot.restore(state);
+        try markAssertionInvalid(state, assertion.name);
+        return;
     }
 
     if (state.proof) |*proof| {
@@ -771,40 +706,9 @@ fn analyzeAssertionStatement(
             }
             const theorem_warnings = theorem_result.?.warnings;
 
-            addAssertionToEnv(
-                self,
-                &state.env,
-                assertion,
-                assertion.name,
-                CompilerDiag.mathSpanToSpan(assertion.name_span),
-                .mm0,
-            ) catch |err| {
-                theorem_warnings.restore(self);
-                snapshot.restore(state);
-                try markAssertionInvalid(state, assertion.name);
-                recordPrimaryStatementFailure(
-                    self,
-                    &state.parser,
-                    stmt,
-                    err,
-                );
-                return;
-            };
-
-            const rule_id = state.env.getRuleId(assertion.name) orelse {
-                return error.MissingRule;
-            };
-            try CompilerLints.lintUnusedTheoremParameters(
+            Common.registerAssertion(
                 self,
                 allocator,
-                &state.env.rules.items[rule_id],
-                CompilerDiag.mathSpanToSpan(assertion.name_span),
-                .mm0,
-            );
-
-            Metadata.processAssertionMetadata(
-                allocator,
-                self,
                 &state.parser,
                 &state.env,
                 &state.registry,
@@ -812,14 +716,10 @@ fn analyzeAssertionStatement(
                 &state.freshen_bindings,
                 &state.views,
                 assertion,
-                state.parser.last_annotations,
-                state.parser.last_annotation_spans,
                 .mm0,
-                null,
             ) catch |err| {
                 theorem_warnings.restore(self);
                 snapshot.restore(state);
-                state.env.removeLastRule(assertion.name);
                 try markAssertionInvalid(state, assertion.name);
                 if (!shouldSuppressAssertionMetadataFailure(
                     err,
@@ -1145,22 +1045,36 @@ fn analyzeExtraProofBlocks(
     }
 }
 
+/// Report the `.mm0` parse failure the shared walk just set (falling back
+/// to the parser's own diagnostic) and skip to the next statement. False
+/// when the parser cannot find one.
 fn recoverFromMm0ParseFailure(
     self: *CompilerContext,
     state: *AnalysisState,
-    err: CompilerDiag.DiagnosticError,
+    err: anyerror,
 ) bool {
     const parser = &state.parser;
-    self.addPrimaryDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
-        parser,
-        &state.env,
-        err,
-    ));
+    const diag = self.getDiagnostic() orelse
+        Common.mm0ParserDiagnosticWithLocalNotes(
+            parser,
+            &state.env,
+            CompilerDiag.narrowDiagnosticError(err),
+        );
+    self.restoreDiagnostic(null);
+    self.addPrimaryDiagnostic(diag);
     parser.discardPendingAnnotations();
     parser.recoverToStatementBoundary() catch {
         return false;
     };
     return true;
+}
+
+/// Promote the diagnostic a gap obligation set (`nextPublicStatement`
+/// always sets one for `error.LocalTermInMm0`).
+fn recordPrimaryGapFailure(self: *CompilerContext) void {
+    const diag = self.getDiagnostic().?;
+    self.restoreDiagnostic(null);
+    self.addPrimaryDiagnostic(diag);
 }
 
 fn recordPrimaryStatementFailure(
@@ -1227,61 +1141,4 @@ fn shouldSuppressAssertionMetadataFailure(
         if (invalid_assertions.contains(target_name)) return true;
     }
     return false;
-}
-
-fn validateTermDependencies(
-    env: *const GlobalEnv,
-    stmt: TermStmt,
-) DependencyStatus {
-    if (!validateArgSortsAvailable(env, stmt.args)) return .blocked;
-    if (!validateArgSortsAvailable(env, stmt.dummy_args)) return .blocked;
-    if (!env.sort_names.contains(stmt.ret_sort_name)) return .blocked;
-    const body = stmt.body orelse return .ok;
-    if (!validateExprTermsAvailable(env, body)) return .blocked;
-    return .ok;
-}
-
-fn validateAssertionDependencies(
-    env: *const GlobalEnv,
-    stmt: AssertionStmt,
-) DependencyStatus {
-    if (!validateArgSortsAvailable(env, stmt.args)) return .blocked;
-    for (stmt.hyps) |hyp| {
-        if (!validateExprTermsAvailable(env, hyp)) return .blocked;
-    }
-    if (!validateExprTermsAvailable(env, stmt.concl)) return .blocked;
-    return .ok;
-}
-
-fn validateArgSortsAvailable(
-    env: *const GlobalEnv,
-    args: []const ArgInfo,
-) bool {
-    for (args) |arg| {
-        if (!env.sort_names.contains(arg.sort_name)) return false;
-    }
-    return true;
-}
-
-fn validateExprTermsAvailable(
-    env: *const GlobalEnv,
-    expr: *const Expr,
-) bool {
-    switch (expr.*) {
-        .variable => return true,
-        .term => |term| {
-            // Parsed expressions carry parser term ids, not frontend name
-            // lookups. In recovery mode a rejected term may still occupy that
-            // id as an unavailable placeholder, so we must reject the id here
-            // instead of assuming every in-range slot is semantically valid.
-            if (!env.hasAvailableTerm(term.id)) {
-                return false;
-            }
-            for (term.args) |arg| {
-                if (!validateExprTermsAvailable(env, arg)) return false;
-            }
-            return true;
-        },
-        .hole => return false,
-    }
 }

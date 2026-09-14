@@ -1,6 +1,7 @@
 const std = @import("std");
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
+const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 const Metadata = @import("../metadata.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CompilerVars = @import("../vars.zig");
@@ -118,6 +119,27 @@ pub const AssertionRecoverySnapshot = struct {
         env.rollbackRulesToLen(self.rule_count, name);
     }
 };
+
+/// After a proof-local def fails to register: the parser already assigned
+/// the def (and any dummies its header introduced) term ids, so reserve
+/// those ids in `env` as unavailable placeholders instead of letting later
+/// parsed expressions index past the env's table.
+pub fn discardFailedLocalTerm(
+    env: *GlobalEnv,
+    parser: *const MM0Parser,
+    parser_term_count: usize,
+    name: []const u8,
+) !void {
+    if (parser.core.terms.items.len <= parser_term_count) return;
+    while (env.terms.items.len + 1 < parser.core.terms.items.len) {
+        try env.appendInvalidTerm(name);
+    }
+    if (env.terms.items.len < parser.core.terms.items.len) {
+        try env.appendInvalidTerm(name);
+    } else {
+        env.invalidateLastTerm(name);
+    }
+}
 
 pub fn cloneSortVarRegistry(
     allocator: std.mem.Allocator,

@@ -36,6 +36,11 @@ pub fn recoverDefiniteMismatch(
 ) bool {
     if (pattern == hole) return false;
     if (source == pattern) return false;
+    // A coercion chain around the hole is itself a recovery site: the
+    // validator re-sorts the source subtree through the coercion graph
+    // (cross-sort `@recover`, #215), so the chain's heads are not a rigid
+    // skeleton to clash on — `F (v2t x)` against `F (n2t b)` recovers `b`.
+    if (coercedHole(context, theorem, pattern, hole)) return false;
     const pattern_node = theorem.interner.node(pattern);
     const source_node = theorem.interner.node(source);
     const pattern_app = switch (pattern_node.*) {
@@ -97,6 +102,27 @@ pub fn recoverDefiniteMismatch(
         )) return true;
     }
     return false;
+}
+
+// Whether `expr` is the hole wrapped in nothing but declared coercions.
+fn coercedHole(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr: ExprId,
+    hole: ExprId,
+) bool {
+    var current = expr;
+    while (current != hole) {
+        const app = switch (theorem.interner.node(current).*) {
+            .app => |app| app,
+            else => return false,
+        };
+        if (app.args.len != 1 or !context.env.isCoercionTerm(app.term_id)) {
+            return false;
+        }
+        current = app.args[0];
+    }
+    return true;
 }
 
 // A term whose head the validator's recover reconciliation can never rewrite

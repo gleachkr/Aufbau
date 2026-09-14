@@ -223,8 +223,6 @@ test "conversion? equation goal still prefers a converged pool reference" {
 }
 
 test "conversion? relation heads can never absorb AC roles" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
     // The equation-goal path (and the pool-equation loop) pair a
     // relation node's two children against the written argument order,
     // which an AC bag's sorted member order would break. That is safe
@@ -240,16 +238,9 @@ test "conversion? relation heads can never absorb AC roles" {
         \\axiom iff_comm (a b: wff): $ iff (iff a b) (iff b a) $;
         \\theorem conv_ac_rel (p q: wff): $ iff (an p q) (an q p) $;
     ;
-    const proof_src =
-        \\conv_ac_rel
-        \\----
-        \\goal: $ iff (an p q) (an q p) $ by conversion?
-        \\
-    ;
-
-    try std.testing.expectError(
+    try helpers.expectEnrollmentError(
+        mm0_src,
         error.ConversionRoleRelationHead,
-        conversionSuggestions(&arena, mm0_src, proof_src, .{}),
     );
 }
 

@@ -24,7 +24,6 @@ const AssertionStmt = ParseRecovery.AssertionStmt;
 const SortStmt = ParseRecovery.SortStmt;
 const TermStmt = ParseRecovery.TermStmt;
 const MM0Parser = ParseRecovery.MM0Parser;
-const MM0Stmt = ParseRecovery.MM0Stmt;
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const Ref = ProofScript.Ref;
@@ -42,10 +41,12 @@ const Inference = @import("../inference.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
 const Check = @import("../check.zig");
 const CompilerVars = @import("../vars.zig");
-const Metadata = @import("../metadata.zig");
 const Holes = @import("../holes.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const PipelineCommon = @import("../pipeline/common.zig");
+const Recovery = @import("../pipeline/recovery.zig");
+const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
+const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
 const ProofParser = ProofScript.Parser;
 const Goal = types.Goal;
 const Context = types.Context;
@@ -144,8 +145,20 @@ pub fn fixtureForSourceTarget(
     var proof_stream: ?PipelineCommon.ProofItemStream =
         PipelineCommon.ProofItemStream.initLenient(allocator, proof_src);
 
+    // The walk recovers the way the editor analysis does: a declaration or
+    // local item that fails is dropped (its term invalidated, its rule rolled
+    // back) and the walk goes on, so a broken statement earlier in the file
+    // silences neither the analysis nor the search of a later theorem. Only
+    // the target itself must be intact.
     while (true) {
-        try fixture.parser.prepareNextPublicStatement();
+        PipelineCommon.prepareNextPublicStatement(
+            &compiler,
+            &fixture.parser,
+            &fixture.env,
+        ) catch |err| {
+            try recoverSearchMm0Parse(&fixture, err);
+            continue;
+        };
         const maybe_header = fixture.parser.peekNextPublicStmtHeader();
         const lemma_scope_complete = target.block.kind == .lemma and
             if (anchor_name) |name|
@@ -171,28 +184,33 @@ pub fn fixtureForSourceTarget(
         }
         if (maybe_header == null) return error.MissingTheorem;
 
-        try PipelineCommon.drainAnchoredLocalProofItems(
+        const locals = try PipelineCommon.collectAnchoredLocalProofItems(
             &compiler,
             allocator,
             &fixture.parser,
-            &fixture.env,
-            &fixture.registry,
-            &fixture.rule_catalog,
-            &fixture.fresh_bindings,
-            &fixture.freshen_bindings,
-            &fixture.views,
-            &fixture.sort_vars,
             &proof_stream,
-            null,
         );
+        try processSearchLocalItems(&compiler, allocator, &fixture, locals);
 
-        const stmt = try fixture.parser.next() orelse {
-            return error.MissingTheorem;
+        const maybe_stmt = PipelineCommon.nextPublicStatement(
+            &compiler,
+            &fixture.parser,
+            &fixture.env,
+        ) catch |err| switch (err) {
+            // The analysis reports the gap and skips the statement it
+            // anchors on; the search skips it too.
+            error.LocalTermInMm0 => continue,
+            else => {
+                try recoverSearchMm0Parse(&fixture, err);
+                continue;
+            },
         };
+        const stmt = maybe_stmt orelse return error.MissingTheorem;
         switch (stmt) {
             .sort => |sort_stmt| try processSearchSortStmt(
+                &compiler,
+                allocator,
                 &fixture,
-                stmt,
                 sort_stmt,
             ),
             .term => |term_stmt| try processSearchTermStmt(
@@ -207,11 +225,20 @@ pub fn fixtureForSourceTarget(
                 if (target.block.kind == .theorem and
                     std.mem.eql(u8, assertion.name, anchor_name.?))
                 {
+                    // A target that names a rejected declaration is what the
+                    // analysis marks invalid without checking; there is
+                    // nothing meaningful to search either.
+                    if (!PipelineCommon.assertionDependenciesAvailable(
+                        &fixture.env,
+                        assertion,
+                    )) return error.UnavailableDependency;
                     fixture.assertion = assertion;
                     fixture.available_rule_count = fixture.env.rules.items.len;
                     return fixture;
                 }
                 try processSearchAssertionStmt(
+                    &compiler,
+                    allocator,
                     &fixture,
                     &proof_stream,
                     assertion,
@@ -219,6 +246,16 @@ pub fn fixtureForSourceTarget(
             },
         }
     }
+}
+
+/// A malformed `.mm0` statement: skip to the next one, as the analysis
+/// does after reporting it. Out of memory is not a parse failure.
+fn recoverSearchMm0Parse(fixture: *Fixture, err: anyerror) !void {
+    if (err == error.OutOfMemory) return error.OutOfMemory;
+    fixture.parser.discardPendingAnnotations();
+    fixture.parser.recoverToStatementBoundary() catch {
+        return error.MissingTheorem;
+    };
 }
 
 fn initSearchFixture(
@@ -229,7 +266,10 @@ fn initSearchFixture(
         .parser = MM0Parser.init(mm0_src, allocator),
         .env = GlobalEnv.init(allocator),
         .registry = RewriteRegistry.init(allocator),
-        .rule_catalog = try RuleCatalog.build(allocator, mm0_src),
+        // As on the compile and analyze paths: the catalog is a convenience
+        // index, and a malformed statement must not abort the walk here.
+        .rule_catalog = RuleCatalog.build(allocator, mm0_src) catch
+            RuleCatalog.Catalog.init(allocator),
         .fresh_bindings = std.AutoHashMap(
             u32,
             []const FreshDecl,
@@ -254,30 +294,29 @@ fn fixtureForSearchPoint(
     var fixture = try initSearchFixture(allocator, mm0_src);
     var found_theorem = false;
 
-    while (try fixture.parser.next()) |stmt| {
+    // Test-only, `.mm0`-only walk: strict, so a broken fixture fails loudly.
+    while (try PipelineCommon.nextPublicStatement(
+        null,
+        &fixture.parser,
+        &fixture.env,
+    )) |stmt| {
         switch (stmt) {
-            .sort => |sort_stmt| {
-                try fixture.env.addStmt(stmt);
-                try Metadata.processSortMetadata(
-                    null,
-                    &fixture.parser,
-                    sort_stmt,
-                    fixture.parser.last_annotations,
-                    fixture.parser.last_annotation_spans,
-                    &fixture.sort_vars,
-                );
-            },
-            .term => |term_stmt| {
-                try fixture.env.addStmt(stmt);
-                try Metadata.processTermMetadata(
-                    null,
-                    &fixture.env,
-                    &fixture.registry,
-                    term_stmt,
-                    fixture.parser.last_annotations,
-                    fixture.parser.last_annotation_spans,
-                );
-            },
+            .sort => |sort_stmt| try PipelineCommon.registerSort(
+                null,
+                &fixture.parser,
+                &fixture.env,
+                sort_stmt,
+                &fixture.sort_vars,
+            ),
+            .term => |term_stmt| try PipelineCommon.registerTerm(
+                null,
+                allocator,
+                &fixture.parser,
+                &fixture.env,
+                &fixture.registry,
+                term_stmt,
+                .mm0,
+            ),
             .assertion => |assertion| {
                 if (!found_theorem and
                     std.mem.eql(u8, assertion.name, theorem_name))
@@ -289,10 +328,9 @@ fn fixtureForSearchPoint(
                     if (!include_trailing_rules) return fixture;
                     continue;
                 }
-                try fixture.env.addStmt(stmt);
-                try Metadata.processAssertionMetadata(
-                    allocator,
+                try PipelineCommon.registerAssertion(
                     null,
+                    allocator,
                     &fixture.parser,
                     &fixture.env,
                     &fixture.registry,
@@ -300,10 +338,7 @@ fn fixtureForSearchPoint(
                     &fixture.freshen_bindings,
                     &fixture.views,
                     assertion,
-                    fixture.parser.last_annotations,
-                    fixture.parser.last_annotation_spans,
                     .mm0,
-                    null,
                 );
             },
         }
@@ -402,7 +437,21 @@ fn processSearchLocalItems(
     items: []const ProofScript.TopLevelItem,
 ) !void {
     for (items) |item| {
-        try PipelineCommon.processLocalProofItem(
+        try processSearchLocalItem(compiler, allocator, fixture, item);
+    }
+}
+
+/// As the analysis does with a broken local item: a lemma that fails to
+/// check leaves no rule (registration is atomic), a local def that fails is
+/// invalidated in place, and the walk continues.
+fn processSearchLocalItem(
+    compiler: *CompilerContext,
+    allocator: std.mem.Allocator,
+    fixture: *Fixture,
+    item: ProofScript.TopLevelItem,
+) !void {
+    switch (item) {
+        .block => |block| PipelineCommon.processLocalProofBlock(
             compiler,
             allocator,
             &fixture.parser,
@@ -413,9 +462,41 @@ fn processSearchLocalItems(
             &fixture.freshen_bindings,
             &fixture.views,
             &fixture.sort_vars,
-            item,
+            block,
             null,
-        );
+        ) catch |err| {
+            if (err == error.OutOfMemory) return err;
+        },
+        .def => |def| {
+            const snapshot = try TermRecoverySnapshot.capture(allocator, fixture);
+            const parser_term_count = fixture.parser.core.terms.items.len;
+            PipelineCommon.processLocalDefItem(
+                compiler,
+                allocator,
+                &fixture.parser,
+                &fixture.env,
+                &fixture.registry,
+                def,
+                null,
+            ) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                snapshot.restore(fixture);
+                try Recovery.discardFailedLocalTerm(
+                    &fixture.env,
+                    &fixture.parser,
+                    parser_term_count,
+                    def.name,
+                );
+            };
+        },
+        .notation => |notation| PipelineCommon.processLocalNotationItem(
+            compiler,
+            &fixture.parser,
+            &fixture.env,
+            notation,
+        ) catch |err| {
+            if (err == error.OutOfMemory) return err;
+        },
     }
 }
 
@@ -431,22 +512,51 @@ fn putBackProofItems(
 }
 
 fn processSearchSortStmt(
+    compiler: *CompilerContext,
+    allocator: std.mem.Allocator,
     fixture: *Fixture,
-    stmt: MM0Stmt,
     sort_stmt: SortStmt,
 ) !void {
-    try fixture.env.addStmt(stmt);
-    try Metadata.processSortMetadata(
-        null,
-        &fixture.parser,
-        sort_stmt,
-        fixture.parser.last_annotations,
-        fixture.parser.last_annotation_spans,
+    const sort_vars_snapshot = try Recovery.cloneSortVarRegistry(
+        allocator,
         &fixture.sort_vars,
     );
+    PipelineCommon.registerSort(
+        compiler,
+        &fixture.parser,
+        &fixture.env,
+        sort_stmt,
+        &fixture.sort_vars,
+    ) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        fixture.sort_vars = sort_vars_snapshot;
+    };
 }
 
 fn processSearchTermStmt(
+    compiler: *CompilerContext,
+    allocator: std.mem.Allocator,
+    fixture: *Fixture,
+    proof_stream: *?PipelineCommon.ProofItemStream,
+    term_stmt: TermStmt,
+) !void {
+    const snapshot = try TermRecoverySnapshot.capture(allocator, fixture);
+    registerSearchTerm(
+        compiler,
+        allocator,
+        fixture,
+        proof_stream,
+        term_stmt,
+    ) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        snapshot.restore(fixture);
+        // The parser already holds the term's id: keep the slot, drop the
+        // declaration.
+        try snapshot.discardTerm(&fixture.env, term_stmt.name);
+    };
+}
+
+fn registerSearchTerm(
     compiler: *CompilerContext,
     allocator: std.mem.Allocator,
     fixture: *Fixture,
@@ -466,6 +576,10 @@ fn processSearchTermStmt(
         filled_term_stmt = filled.stmt;
         filled_body_span = filled.body_span;
     }
+    if (!PipelineCommon.termDependenciesAvailable(
+        &fixture.env,
+        filled_term_stmt,
+    )) return error.UnavailableDependency;
 
     try PipelineCommon.validateDefinitionBody(
         compiler,
@@ -476,38 +590,48 @@ fn processSearchTermStmt(
         if (filled_body_span != null) .proof else .mm0,
         filled_body_span,
     );
-    try fixture.env.addStmt(.{ .term = filled_term_stmt });
-    try Metadata.processTermMetadata(
+    try PipelineCommon.registerTerm(
         compiler,
+        allocator,
+        &fixture.parser,
         &fixture.env,
         &fixture.registry,
         filled_term_stmt,
-        fixture.parser.last_annotations,
-        fixture.parser.last_annotation_spans,
+        .mm0,
     );
 }
 
 fn processSearchAssertionStmt(
+    compiler: *CompilerContext,
+    allocator: std.mem.Allocator,
     fixture: *Fixture,
     proof_stream: *?PipelineCommon.ProofItemStream,
     assertion: AssertionStmt,
 ) !void {
-    try fixture.env.addStmt(.{ .assertion = assertion });
-    try Metadata.processAssertionMetadata(
-        fixture.env.allocator,
-        null,
-        &fixture.parser,
-        &fixture.env,
-        &fixture.registry,
-        &fixture.fresh_bindings,
-        &fixture.freshen_bindings,
-        &fixture.views,
-        assertion,
-        fixture.parser.last_annotations,
-        fixture.parser.last_annotation_spans,
-        .mm0,
-        null,
-    );
+    if (PipelineCommon.assertionDependenciesAvailable(&fixture.env, assertion)) {
+        const snapshot = try AssertionRecoverySnapshot.capture(
+            allocator,
+            fixture,
+        );
+        PipelineCommon.registerAssertion(
+            compiler,
+            allocator,
+            &fixture.parser,
+            &fixture.env,
+            &fixture.registry,
+            &fixture.fresh_bindings,
+            &fixture.freshen_bindings,
+            &fixture.views,
+            assertion,
+            .mm0,
+        ) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            snapshot.restore(fixture);
+            snapshot.rollbackRule(&fixture.env, assertion.name);
+        };
+    }
+    // Its proof block, if any, is skipped either way: the proofs before
+    // the target are not checked, only kept in lockstep.
     consumeMatchingPublicProofBlock(proof_stream, assertion) catch {};
 }
 

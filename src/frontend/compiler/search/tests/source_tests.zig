@@ -665,3 +665,153 @@ test "searchPlaceholders enumerates top-level and nested placeholders" {
         proof_src[placeholders[0].span.start..placeholders[0].span.end],
     );
 }
+
+fn suggestionStartingWith(
+    suggestions: []const types.SourceSuggestion,
+    prefix: []const u8,
+) ?types.SourceSuggestion {
+    for (suggestions) |item| {
+        if (std.mem.startsWith(u8, item.replacement, prefix)) return item;
+    }
+    return null;
+}
+
+// #262: the search fixture walks the `.mm0` through the same helper as the
+// compile and analyze paths, so it mirrors the parser's coercions into its
+// env. `ex_intro`'s @recover crosses sorts (a `tm` hole recovered from a
+// `name` instance), which enrolls only when the env knows `name > tm`;
+// without the mirror the fixture rejected the axiom's annotations and every
+// search in the theory failed before it started. The search's own recover
+// pre-filter then has to read a coercion chain around the hole as the
+// recovery site it is, or `ex_intro` is never tried.
+test "source search sees coercions: a cross-sort @recover rule is searchable" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const mm0_src = try helpers.readProofCase(
+        allocator,
+        "pass_ex_elim_infer_two_sort",
+        "mm0",
+    );
+
+    // The fixture's env carries the theory's three coercions.
+    var fixture = try fixtureFor(allocator, mm0_src, "ex_open");
+    try std.testing.expectEqual(@as(usize, 3), fixture.env.coercions.items.len);
+    try std.testing.expect(fixture.env.getRuleId("ex_intro") != null);
+
+    const proof_src =
+        \\ex_open
+        \\-------
+        \\
+        \\l1: $ ∃ x (F x) ⊢ ∃ x (F x) $ by ax
+        \\l2: $ F b ⊢ F b $ by ax
+        \\l3: $ F b ⊢ ∃ x (F x) $ by exact?
+        \\l4: $ ∃ x (F x) ⊢ ∃ x (F x) $ by ex_elim [l1, l3]
+    ;
+    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
+        return error.MissingNeedle;
+    };
+    var suggestions = try source.suggestionsAtSourceOffset(
+        allocator,
+        mm0_src,
+        proof_src,
+        offset,
+        .{},
+    );
+    defer suggestions.deinit();
+
+    const suggestion = suggestionStartingWith(suggestions.items, "ex_intro") orelse {
+        return error.MissingSuggestion;
+    };
+    try std.testing.expectEqualStrings("ex_intro [l2]", suggestion.replacement);
+    // What the search offers is exactly what the compile path accepts.
+    try helpers.expectConversionCompiles(&arena, mm0_src, proof_src, suggestion);
+}
+
+// #262: the fixture recovers the way the analysis does, so a broken
+// declaration or local item earlier in the file no longer silences the
+// search of every theorem after it. The four failures here take the four
+// recovery routes: an `.mm0` parse error, rejected annotations, a duplicate
+// rule, and a lemma whose proof does not check.
+test "source search survives broken statements before the target" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom bad_parse: $ R $;
+        \\--| @fallback missing
+        \\axiom bad_annotation: $ Q $;
+        \\axiom dup: $ Q $;
+        \\axiom dup: $ Q $;
+        \\theorem t: $ P $;
+    ;
+    const proof_src =
+        \\lemma wrong: $ Q $
+        \\------------------
+        \\l1: $ Q $ by p
+        \\
+        \\t
+        \\----
+        \\l1: $ P $ by exact?
+    ;
+    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
+        return error.MissingNeedle;
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        offset,
+        .{},
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.target_span != null);
+    const suggestion = suggestionStartingWith(suggestions.items, "p") orelse {
+        return error.MissingSuggestion;
+    };
+    try std.testing.expectEqualStrings("p", suggestion.replacement);
+    // The dropped declarations left no rule behind for the search to cite.
+    try std.testing.expect(suggestionStartingWith(suggestions.items, "dup") == null);
+    try std.testing.expect(suggestionStartingWith(suggestions.items, "wrong") == null);
+}
+
+// The target itself must be intact: a theorem that names a declaration the
+// walk dropped is what the analysis marks invalid without checking.
+test "source search declines a target that depends on a dropped declaration" {
+    // `bad`'s body depends on a dummy its result type does not declare:
+    // the parser accepts it, definition validation rejects it.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term P (a: obj): wff;
+        \\def bad {.x: obj}: obj = $ x $;
+        \\axiom p (a: obj): $ P a $;
+        \\theorem t: $ P bad $;
+    ;
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ P bad $ by exact?
+    ;
+    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
+        return error.MissingNeedle;
+    };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.UnavailableDependency,
+        source.suggestionsAtSourceOffset(
+            arena.allocator(),
+            mm0_src,
+            proof_src,
+            offset,
+            .{},
+        ),
+    );
+}

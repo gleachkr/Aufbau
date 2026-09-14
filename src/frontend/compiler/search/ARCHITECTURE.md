@@ -1005,7 +1005,7 @@ width is real.
 | `forward.zig` | forward saturation (`@auto forward`) |
 | `shape.zig` / `clipper.zig` | shape extraction + discrimination index |
 | `ref_index.zig` / `refs.zig` / `rule_index.zig` | candidate/ref indexing |
-| `fixture.zig` | theorem-prefix preparation and test setup |
+| `fixture.zig` | theorem-prefix preparation and test setup (walks the `.mm0` through `pipeline/common.zig`'s shared statement helpers, recovering from broken earlier declarations like the analysis) |
 | `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome) + `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics) |
 | `rank.zig` | candidate ranking |
 | `egraph.zig` | `conversion?` e-graph core: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation |

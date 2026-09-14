@@ -748,6 +748,15 @@ pub fn conversionSuggestions(
     );
 }
 
+/// An annotation the registry rejects at enrollment surfaces through the
+/// compile path. (The search fixture drops the rejected declaration and
+/// goes on, the way the editor analysis does — #262.)
+pub fn expectEnrollmentError(mm0_src: []const u8, expected: anyerror) !void {
+    const Compiler = @import("../../../compiler.zig").Compiler;
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(expected, compiler.check());
+}
+
 /// Splice the suggestion into the proof source and run the full compile
 /// path over the pair: the emitted chain must actually check.
 pub fn expectConversionCompiles(
