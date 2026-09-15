@@ -82,6 +82,11 @@ axiom lim_congr {h: real} (a b: real h):
 --| @rewrite
 axiom sb_var {x: real} (t: real x): $ [x | t] x = t $;
 --| @rewrite
+axiom sb_vac {x: real} (t: real) : $ [x | x] t = t $;
+--| @rewrite
+axiom sb_comp {x y: real} (t: real) (q: real x):
+  $ [y | t] ([x | y] q) = [x | t] q $;
+--| @rewrite
 axiom sb_irrel {x: real} (t: real x) (a: real): $ [x | t] a = a $;
 --| @rewrite
 axiom sb_add {x: real} (t: real x) (a b: real x):
@@ -128,16 +133,76 @@ axiom lim_const {h: real} (c: real):
 axiom eq_subst {x: real} (a b: real) (r: real x):
   $ a = b $ > $ [x | a] r = [x | b] r $;
 
--- The Product Rule: (fg)' = f'g + fg'
+-- In-place reasoning: preserve p while rewriting within the RHS context q.
+-- s and t are the consecutive right-hand sides exposed to @abstract.
+-- All these rules are theorems; the annotations only recover arguments.
 --
--- f, g:   function values at x
--- fh, gh: function values at x+h (depend on h)
--- df, dg: derivatives at x
---
--- Hypotheses:
---   #1  f is differentiable with derivative df
---   #2  g is differentiable with derivative dg
---   #3  f is continuous at x
+-- Apply an equality (first reference) to a calc step (second reference).
+--| @view {x:real}(a b p s t:real)(q:real x):$ a = b $ > $ p = s $ > $ p = t $
+--| @abstract q s t x a b
+--| @fresh x
+theorem eq_subst_in_place {x: real} (a b p: real) (q: real x):
+  $ a = b $ > $ p = [x | a] q $ > $ p = [x | b] q $;
+
+-- Algebra patterns recover both the operands and the surrounding context.
+--| @view {x:real}(a b c d p s t:real)(q:real x): $ p = s $ > $ p = t $
+--| @abstract q s t x $ (a + b) - (c + d) $ $ (a - c) + (b - d) $
+--| @fresh x
+theorem sub_add_in_place {x: real} (a b c d p: real) (q: real x):
+  $ p = [x | (a + b) - (c + d)] q $ >
+  $ p = [x | (a - c) + (b - d)] q $;
+
+--| @view {x:real}(a b c p s t:real)(q:real x): $ p = s $ > $ p = t $
+--| @abstract q s t x $ (a + b) / c $ $ a / c + b / c $
+--| @fresh x
+theorem div_add_in_place {x: real} (a b c p: real) (q: real x):
+  $ p = [x | (a + b) / c] q $ >
+  $ p = [x | a / c + b / c] q $;
+
+--| @view {x:real}(a b c d p s t:real)(q:real x): $ p = s $ > $ p = t $
+--| @abstract q s t x $ a * b - c * d $ $ a * (b - d) + d * (a - c) $
+--| @fresh x
+theorem factor_in_place {x: real} (a b c d p: real) (q: real x):
+  $ p = [x | a * b - c * d] q $ >
+  $ p = [x | a * (b - d) + d * (a - c)] q $;
+
+--| @view {x:real}(a b c p s t:real)(q:real x): $ p = s $ > $ p = t $
+--| @abstract q s t x $ a * b - a * c $ $ a * (b - c) $
+--| @fresh x
+theorem mul_sub_in_place {x: real} (a b c p: real) (q: real x):
+  $ p = [x | a * b - a * c] q $ >
+  $ p = [x | a * (b - c)] q $;
+
+--| @view {x:real}(a b c p s t:real)(q:real x): $ p = s $ > $ p = t $
+--| @abstract q s t x $ a * b / c $ $ a * (b / c) $
+--| @fresh x
+theorem div_mul_in_place {x: real} (a b c p: real) (q: real x):
+  $ p = [x | a * b / c] q $ >
+  $ p = [x | a * (b / c)] q $;
+
+-- Limit patterns rewrite whole limits, including inside sums/products.
+-- p and q may mention h: other limits can already use it in the chain.
+--| @view {x h:real}(a b:real h)(p s t:real h)(q:real x h):$ p = s $>$ p = t $
+--| @abstract q s t x $ lim h (a + b) $ $ lim h a + lim h b $
+--| @fresh x
+theorem lim_add_in_place {x h: real} (a b: real h) (p: real h) (q: real x h):
+  $ p = [x | lim h (a + b)] q $ >
+  $ p = [x | lim h a + lim h b] q $;
+
+--| @view {x h:real}(a b:real h)(p s t:real h)(q:real x h):$ p = s $>$ p = t $
+--| @abstract q s t x $ lim h (a * b) $ $ (lim h a) * (lim h b) $
+--| @fresh x
+theorem lim_mul_in_place {x h: real} (a b: real h) (p: real h) (q: real x h):
+  $ p = [x | lim h (a * b)] q $ >
+  $ p = [x | (lim h a) * (lim h b)] q $;
+
+--| @view {x h:real}(c:real)(p s t:real h)(q:real x h):$ p = s $>$ p = t $
+--| @abstract q s t x $ lim h c $ $ c $
+--| @fresh x
+theorem lim_const_in_place {x h: real} (c: real) (p: real h) (q: real x h):
+  $ p = [x | lim h c] q $ >
+  $ p = [x | c] q $;
+
 -- Sum Rule: (f+g)' = f' + g'
 theorem sum_rule {h: real} (f g df dg: real) (fh gh: real h):
   $ lim h ((fh - f) / h) = df $ >
@@ -149,7 +214,16 @@ theorem const_mul_rule {h: real} (f df c: real) (fh: real h):
   $ lim h ((fh - f) / h) = df $ >
   $ lim h ((c * fh - c * f) / h) = c * df $;
 
--- Product Rule: (fg)' = f'g + fg'
+-- The Product Rule: (fg)' = f'g + fg'
+--
+-- f, g:   function values at x
+-- fh, gh: function values at x+h (depend on h)
+-- df, dg: derivatives at x
+--
+-- Hypotheses:
+--   #1  f is differentiable with derivative df
+--   #2  g is differentiable with derivative dg
+--   #3  f is continuous at x
 theorem product_rule {h: real} (f g df dg: real) (fh gh: real h):
   $ lim h ((fh - f) / h) = df $ >
   $ lim h ((gh - g) / h) = dg $ >
