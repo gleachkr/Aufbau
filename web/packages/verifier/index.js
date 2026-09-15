@@ -1,5 +1,12 @@
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+// `./host.js` is copied in by `build.zig` from `web/packages/shared/host.js`;
+// the package is only runnable from a built tree (`zig build web-packages`).
+import {
+  encodeText,
+  instantiateWasm,
+  now,
+  readJsonResult,
+  withInputs,
+} from "./host.js";
 
 export const defaultWasmUrl = new URL("./verifier.wasm", import.meta.url);
 
@@ -10,12 +17,8 @@ export class Verifier {
   }
 
   verifyPair(mm0Text, mmbBytes) {
-    const mm0Bytes = encoder.encode(mm0Text);
-    const mmbByteArray = byteArray(mmbBytes);
-    const mm0Input = writeBytes(this.exports, mm0Bytes);
-    const mmbInput = writeBytes(this.exports, mmbByteArray);
-
-    try {
+    const inputs = [encodeText(mm0Text), byteArray(mmbBytes)];
+    return withInputs(this.exports, inputs, (mm0Input, mmbInput) => {
       const started = now();
       this.exports.verify_pair(
         mm0Input.ptr,
@@ -26,59 +29,13 @@ export class Verifier {
       const durationMs = now() - started;
       const meta = readJsonResult(this.exports);
       return Object.assign({ meta, durationMs }, meta ?? {});
-    } finally {
-      freeBytes(this.exports, mm0Input);
-      freeBytes(this.exports, mmbInput);
-    }
+    });
   }
 }
 
 export async function loadVerifier(options = {}) {
   const instance = await instantiateWasm(options, defaultWasmUrl);
   return new Verifier(instance);
-}
-
-async function instantiateWasm(options, fallbackUrl) {
-  if (options.instance) return options.instance;
-
-  const imports = options.imports ?? {};
-  if (options.module) {
-    const instance = await WebAssembly.instantiate(options.module, imports);
-    return instance;
-  }
-  if (options.wasmBytes) {
-    const result = await WebAssembly.instantiate(options.wasmBytes, imports);
-    return result.instance;
-  }
-
-  const url = options.wasmUrl ?? fallbackUrl;
-  const bytes = await loadWasmBytes(url);
-  const result = await WebAssembly.instantiate(bytes, imports);
-  return result.instance;
-}
-
-async function loadWasmBytes(url) {
-  if (isFileUrl(url)) {
-    const { readFile } = await import("node:fs/promises");
-    return readFile(url);
-  }
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to load ${url}`);
-  }
-  return response.arrayBuffer();
-}
-
-function isFileUrl(url) {
-  if (url instanceof URL) return url.protocol === "file:";
-  if (typeof url !== "string") return false;
-
-  try {
-    return new URL(url).protocol === "file:";
-  } catch {
-    return false;
-  }
 }
 
 function byteArray(bytes) {
@@ -88,32 +45,4 @@ function byteArray(bytes) {
     return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   }
   throw new TypeError("mmbBytes must be a Uint8Array or ArrayBuffer");
-}
-
-function writeBytes(exports, bytes) {
-  const len = bytes.length;
-  const ptr = exports.alloc(len);
-  if (len !== 0 && ptr === 0) {
-    throw new Error("WebAssembly allocation failed");
-  }
-  if (len !== 0) {
-    new Uint8Array(exports.memory.buffer, ptr, len).set(bytes);
-  }
-  return { ptr, len };
-}
-
-function freeBytes(exports, { ptr, len }) {
-  exports.free(ptr, len);
-}
-
-function readJsonResult(exports) {
-  const ptr = exports.result_json_ptr();
-  const len = exports.result_json_len();
-  if (!ptr || !len) return null;
-  const jsonBytes = new Uint8Array(exports.memory.buffer, ptr, len);
-  return JSON.parse(decoder.decode(jsonBytes));
-}
-
-function now() {
-  return globalThis.performance?.now?.() ?? Date.now();
 }

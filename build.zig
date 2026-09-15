@@ -131,6 +131,18 @@ fn installWebPackageSet(
             ),
         });
         step.dependOn(&install_wasm.step);
+
+        // The wasm-hosting glue (instantiation, input/result buffers) is one
+        // source shared by the three wasm packages, copied into each as a
+        // private module so the packages stay independently installable.
+        const install_host = b.addInstallFile(
+            b.path("web/packages/shared/host.js"),
+            b.fmt(
+                "{s}/@aufbau/{s}/host.js",
+                .{ install_root, wasm.package_name },
+            ),
+        );
+        step.dependOn(&install_host.step);
     }
 }
 
@@ -382,6 +394,16 @@ pub fn build(b: *std.Build) void {
         "Test packed npm WASM packages under Node",
     );
     node_wasm_test_step.dependOn(&node_wasm_test_cmd.step);
+
+    const wasm_host_test_cmd = b.addSystemCommand(&.{"node"});
+    wasm_host_test_cmd.addFileArg(b.path("tests/wasm_host_mock.mjs"));
+    wasm_host_test_cmd.addArg(b.getInstallPath(.prefix, "npm/@aufbau"));
+    wasm_host_test_cmd.step.dependOn(web_packages_step);
+    const wasm_host_test_step = b.step(
+        "test-wasm-host",
+        "Test the packages' wasm hosting against mock instances",
+    );
+    wasm_host_test_step.dependOn(&wasm_host_test_cmd.step);
 
     const editor_browser_test_cmd = b.addSystemCommand(&.{"node"});
     editor_browser_test_cmd.addFileArg(
@@ -1206,4 +1228,5 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(frontier_smoke_step);
     test_step.dependOn(search_scenarios_step);
     test_step.dependOn(node_wasm_test_step);
+    test_step.dependOn(wasm_host_test_step);
 }

@@ -1137,10 +1137,16 @@ directly called server and a browser Web Worker transport. Requests execute
 synchronously inside the worker: the page remains responsive, but an
 in-flight search is not interrupted by a queued cancellation message.
 
-The compiler, verifier, and direct LSP packages load package-relative WASM
-URLs in browsers and Node. File URLs use Node's filesystem API. The worker
-transport is browser-only. Result buffers belong to the WASM instance and
-are replaced by subsequent calls; JS wrappers copy output they return.
+The compiler, verifier, and direct LSP packages share one hosting module,
+`web/packages/shared/host.js`, which `build.zig` copies into each package as
+a private `host.js` so the packages stay independently installable. It loads
+package-relative WASM URLs in browsers and Node (file URLs use Node's
+filesystem API), copies call inputs into the instance and frees every input
+it acquired on any exit from the call, and reads results from the current
+memory buffer since a call may grow it. The worker transport is browser-only.
+Result buffers belong to the WASM instance and are replaced by subsequent
+calls; JS wrappers copy output they return. `tests/wasm_host_mock.mjs` pins
+the failure paths against scripted instances.
 
 `web/packages/editor/index.js` implements custom elements for theories,
 proof cells, and declaration indexes. It also owns shared-document assembly,

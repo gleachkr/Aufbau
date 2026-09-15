@@ -43,6 +43,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   action stopped at the first proof-local definition (or notation) in the
   file, so lines after it had no status, no suggestions, and no unpack
   offer. They now skip local items and reach every block.
+- The `@aufbau/compiler` and `@aufbau/verifier` packages copied both inputs
+  into the WebAssembly instance before guarding against failure, so when the
+  second copy could not be allocated the first was never freed. Every input
+  a call acquires is now released however the call ends.
 
 ## [0.0.10] - 2026-09-13
 

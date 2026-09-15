@@ -12,6 +12,7 @@
   "files": [
     "README.md",
     "index.js",
+    "host.js",
     "verifier.wasm"
   ],
   "sideEffects": false
