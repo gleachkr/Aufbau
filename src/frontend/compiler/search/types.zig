@@ -123,6 +123,9 @@ pub const AttemptOptions = struct {
     assertion_span: Span = .{ .start = 0, .end = 0 },
     diagnostic_span: ?Span = null,
     counters: ?*SearchCounters = null,
+    /// The calling search's memos + prune policy (`tryCandidate` reads the
+    /// verdict memo). Default = no memo.
+    runtime: SearchRuntime = .{},
     result_ownership: AttemptResultOwnership = .owned,
     /// Caller-computed scope of `validateSelectedRefs`' UnifyMismatch retry arm
     /// (holey goal + view rule + meta-bearing candidate theorem). The verdict
@@ -479,40 +482,55 @@ fn hashApplication(app: RuleApplication, h: *std.hash.Wyhash) void {
     };
 }
 
+/// What one generation call owns besides its statistics: the cross-phase
+/// memos and the prune policy. `generateTopLevel` builds one for exactly the
+/// span of that call and threads it BY VALUE beside the optional
+/// `*SearchCounters` sink, so search behaviour never depends on whether a
+/// caller is observing, and no caller-owned block is ever left carrying a
+/// stale policy or a pointer into a dead memo. The default is the plain
+/// `exact?`/`apply?` runtime: no memo, no strengthened prunes.
+pub const SearchRuntime = struct {
+    /// Lever A reject-verdict memo; null when the memo is off, in which case
+    /// `tryCandidate` computes no signature at all.
+    verdict_memo: ?*VerdictMemo = null,
+    /// Cross-candidate verdict cache for the deep member check (Lever E).
+    /// Amortizes the repeated def-unfolding of fixed goal members.
+    deep_verdict_cache: ?*DeepVerdictCache = null,
+    /// Lever B: prune on a definite re-pinned conclusion mismatch.
+    repin_prune_enabled: bool = false,
+    /// Lever E: reject on a complete-unfold ACUI member divergence.
+    deep_member_prune_enabled: bool = false,
+};
+
+/// Search statistics: a value-only observation sink. Every field is a plain
+/// count, flag, or duration; nothing the search DOES depends on this block
+/// (policy and memos travel in `SearchRuntime`), and it holds no pointers, so
+/// a caller may keep one block across calls or pass none at all. A test pins
+/// the no-pointer property.
 pub const SearchCounters = struct {
     /// When false (the production default), the expensive per-candidate
     /// diagnostics — `tryCandidate` timers and the per-rule/per-hyp attempt
     /// tallies (`recordRuleAttempt`/`recordHypLookup`, an O(n) name lookup each)
-    /// — are skipped. Search BEHAVIOR (the memo + re-pin prune below) never
-    /// depends on this; it only gates observability. The bench sets it true.
-    /// This keeps the counters block usable purely as the memo carrier (the
-    /// Driver attaches a fallback in production) without paying for diagnostics
-    /// nothing reads there.
+    /// — are skipped. It only gates observability; the bench sets it true.
     collect: bool = false,
-    /// Lever A reject-verdict memo (optional; bench/driver-owned). Null on paths
-    /// that don't use it (plain `exact?`).
-    verdict_memo: ?*VerdictMemo = null,
-    /// Scalar mirrors of the memo stats, snapshotted before the (value-copied)
-    /// counters outlive the memo. `total - distinct` is the skippable repeat
-    /// work; `skips` is what the enabled memo actually avoided.
+    /// Scalar mirrors of the Lever A verdict-memo stats, snapshotted by the
+    /// generation call before its memo dies. `total - distinct` is the
+    /// skippable repeat work; `skips` is what the enabled memo actually avoided.
     verdict_reject_total: usize = 0,
     verdict_reject_distinct: usize = 0,
     verdict_skips: usize = 0,
-    /// Lever B: re-pin conclusion-plausibility prune. `repin_prune_enabled`
-    /// gates the BEHAVIOR (prune on a definite re-pinned mismatch); the counts
-    /// are diagnostics gated by `collect`. `would_prune` counts candidates the
-    /// re-pin enrichment would reject that the plain check passed; `prunes`
-    /// counts actual prunes.
-    repin_prune_enabled: bool = false,
+    /// Lever B re-pin conclusion-plausibility prune diagnostics, gated by
+    /// `collect`: `would_prune` counts candidates the re-pin enrichment would
+    /// reject that the plain check passed; `prunes` counts actual prunes
+    /// (`SearchRuntime.repin_prune_enabled`).
     repin_would_prune: usize = 0,
     repin_prunes: usize = 0,
-    /// Lever E: deep-unfold ACUI member prune. `deep_member_prune_enabled` gates
-    /// the BEHAVIOR (reject on a complete-unfold member divergence); `would_prune`
-    /// counts candidates the deep check would reject that the plain check passed,
-    /// `prunes` the actual rejects. Counts gated by `collect`. Tests whether
-    /// complete def-unfold (vs the one-layer member check) cracks church's
+    /// Lever E deep-unfold ACUI member prune diagnostics, gated by `collect`:
+    /// `would_prune` counts candidates the deep check would reject that the
+    /// plain check passed, `prunes` the actual rejects
+    /// (`SearchRuntime.deep_member_prune_enabled`). Tests whether complete
+    /// def-unfold (vs the one-layer member check) cracks church's
     /// ax/membership reject-flood.
-    deep_member_prune_enabled: bool = false,
     deep_member_would_prune: usize = 0,
     deep_member_prunes: usize = 0,
     /// Diagnostic denominator: how many times the deep member check ran (every
@@ -520,9 +538,7 @@ pub const SearchCounters = struct {
     /// calls` is the hit rate — distinguishes "cost is inherent to pruning"
     /// (high) from "cost is wasted abstaining walks" (low).
     deep_member_calls: usize = 0,
-    /// Cross-candidate verdict cache for the deep member check (optional;
-    /// Driver-owned). Amortizes the repeated def-unfolding of fixed goal members.
-    deep_verdict_cache: ?*DeepVerdictCache = null,
+    /// Deep verdict cache traffic, snapshotted like the memo stats.
     deep_cache_hits: usize = 0,
     deep_cache_misses: usize = 0,
     cold_setup_ns: u64 = 0,
@@ -998,6 +1014,9 @@ pub const GlobalBudget = struct {
 pub const ExactOptions = struct {
     max_results: ?usize = null,
     counters: ?*SearchCounters = null,
+    /// Memos + prune policy for this call. Only the generation driver passes
+    /// its own; plain `exact?`/`apply?` run the default.
+    runtime: SearchRuntime = .{},
     generator: ?*const GenerationHook = null,
     /// Global recursive-search budget; null for non-generating `exact?`/`apply?`.
     fuel: ?*Fuel = null,

@@ -23,6 +23,7 @@ const Context = types.Context;
 const Goal = types.Goal;
 const ApplyCandidate = types.ApplyCandidate;
 const SearchCounters = types.SearchCounters;
+const SearchRuntime = types.SearchRuntime;
 const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
 const acuiUnitIdForHead = prune.acuiUnitIdForHead;
 const defBodyForUnfold = prune.defBodyForUnfold;
@@ -195,6 +196,7 @@ pub fn finalConclusionPlausible(
     candidate: *ApplyCandidate,
     goal: Goal,
     bindings: []const ?ExprId,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
 ) bool {
     const goal_expr = goal.concreteOrHint() orelse return true;
@@ -234,45 +236,47 @@ pub fn finalConclusionPlausible(
     // goal-forced for any provable candidate, so this never rejects a winnable
     // one.
     //
-    // The prune fires under `repin_prune_enabled` (behavior); `would_prune`/
-    // `prunes` are diagnostics gated by `collect`. `repinConclusionPlausible`
-    // itself skips the expensive re-check when re-pinning adds nothing, so it is
-    // cheap for candidates the strengthening can't affect.
-    if (counters) |c| {
-        if ((c.repin_prune_enabled or c.collect) and !repinConclusionPlausible(
-            context,
-            &candidate.theorem,
-            rule.concl,
-            goal_expr,
-            bindings,
-        )) {
-            if (c.collect) c.repin_would_prune += 1;
-            if (c.repin_prune_enabled) {
-                if (c.collect) c.repin_prunes += 1;
-                return false;
-            }
+    // The prune fires under `runtime.repin_prune_enabled` (behavior);
+    // `would_prune`/`prunes` are diagnostics gated by `collect`, so a
+    // collecting observer also runs the check when the prune is off.
+    // `repinConclusionPlausible` itself skips the expensive re-check when
+    // re-pinning adds nothing, so it is cheap for candidates the strengthening
+    // can't affect.
+    const stats: ?*SearchCounters = if (counters) |c|
+        (if (c.collect) c else null)
+    else
+        null;
+    if ((runtime.repin_prune_enabled or stats != null) and !repinConclusionPlausible(
+        context,
+        &candidate.theorem,
+        rule.concl,
+        goal_expr,
+        bindings,
+    )) {
+        if (stats) |s| s.repin_would_prune += 1;
+        if (runtime.repin_prune_enabled) {
+            if (stats) |s| s.repin_prunes += 1;
+            return false;
         }
     }
     // Lever E: does a COMPLETE def-unfold ACUI member check reject this
     // otherwise-plausible candidate? Cracks the church `ax`/membership
     // reject-flood the one-layer member check cannot. `would_prune`/`prunes`
     // are diagnostics gated by `collect`; the reject fires under
-    // `deep_member_prune_enabled`.
-    if (counters) |c| {
-        if (c.collect) c.deep_member_calls += 1;
-        if ((c.deep_member_prune_enabled or c.collect) and deepMemberWouldPrune(
-            context,
-            &candidate.theorem,
-            rule.concl,
-            goal_expr,
-            bindings,
-            c.deep_verdict_cache,
-        )) {
-            if (c.collect) c.deep_member_would_prune += 1;
-            if (c.deep_member_prune_enabled) {
-                if (c.collect) c.deep_member_prunes += 1;
-                return false;
-            }
+    // `runtime.deep_member_prune_enabled`.
+    if (stats) |s| s.deep_member_calls += 1;
+    if ((runtime.deep_member_prune_enabled or stats != null) and deepMemberWouldPrune(
+        context,
+        &candidate.theorem,
+        rule.concl,
+        goal_expr,
+        bindings,
+        runtime.deep_verdict_cache,
+    )) {
+        if (stats) |s| s.deep_member_would_prune += 1;
+        if (runtime.deep_member_prune_enabled) {
+            if (stats) |s| s.deep_member_prunes += 1;
+            return false;
         }
     }
     return true;

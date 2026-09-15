@@ -65,6 +65,273 @@ test "auto generates a depth-1 inline chain" {
     try std.testing.expect(counters.generated_chain_attempts > 0);
 }
 
+/// Whether `T` holds no pointer anywhere in its layout (through optionals,
+/// arrays, and nested structs/unions).
+fn holdsNoPointers(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => false,
+        .optional => |o| holdsNoPointers(o.child),
+        .array => |a| holdsNoPointers(a.child),
+        .vector => |v| holdsNoPointers(v.child),
+        .@"struct" => |s| blk: {
+            inline for (s.fields) |f| {
+                if (!holdsNoPointers(f.type)) break :blk false;
+            }
+            break :blk true;
+        },
+        .@"union" => |u| blk: {
+            inline for (u.fields) |f| {
+                if (!holdsNoPointers(f.type)) break :blk false;
+            }
+            break :blk true;
+        },
+        else => true,
+    };
+}
+
+test "search counters are value-only statistics" {
+    // The memos and the prune policy travel in `SearchRuntime`, threaded by
+    // value beside the counters sink, so a counters block may be reused across
+    // calls or omitted without changing what the search does. Pin that no
+    // borrowed pointer or policy switch creeps back onto the sink.
+    comptime {
+        if (!holdsNoPointers(types.SearchCounters)) {
+            @compileError("SearchCounters must hold no pointers");
+        }
+        for (std.meta.fields(types.SearchCounters)) |field| {
+            if (std.mem.endsWith(u8, field.name, "_enabled")) {
+                @compileError("SearchCounters." ++ field.name ++
+                    " is a policy switch; policy belongs on SearchRuntime");
+            }
+        }
+    }
+}
+
+// The propositional natural-deduction fragment of `nd_minimal` (ACUI
+// contexts, `ax`, the `∨` rules). On `p ⊢ q ∨ p` the re-pin
+// conclusion-plausibility check (Lever B) refutes a candidate the plain check
+// let through, so whether the re-pin PRUNE is armed is observable here: this
+// is the fixture that separates "policy from this call's options" from
+// "policy left behind on a reused observer".
+const nd_or_mm0 =
+    \\delimiter $ ( ) { } , $;
+    \\strict provable sort wff;
+    \\sort ctx;
+    \\term im (p q: wff): wff;
+    \\infixr im: $→$ prec 25;
+    \\term or (p q: wff): wff;
+    \\infixr or: $∨$ prec 28;
+    \\term bi (p q: wff): wff;
+    \\infixr bi: $↔$ prec 20;
+    \\term ctx_eq (G H: ctx): wff;
+    \\term emp: ctx;
+    \\notation emp: ctx = ($_$:max);
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (G H: ctx): ctx;
+    \\infixl join: $,$ prec 5;
+    \\term hyp (p: wff): ctx;
+    \\coercion hyp: wff > ctx;
+    \\term nd (G: ctx) (p: wff): wff;
+    \\infixl nd: $⊢$ prec 0;
+    \\--| @relation wff bi biid bitr bisym mpbi
+    \\axiom biid (p: wff): $ p ↔ p $;
+    \\axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+    \\axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+    \\axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+    \\axiom ctx_trans (G H K: ctx):
+    \\  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+    \\axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+    \\axiom ctx_assoc (G H K: ctx):
+    \\  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+    \\axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+    \\axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+    \\axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
+    \\--| @congr
+    \\axiom join_congr (G1 G2 H1 H2: ctx):
+    \\  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+    \\  $ ctx_eq (G1 , H1) (G2 , H2) $;
+    \\--| @congr
+    \\axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+    \\--| @congr
+    \\axiom nd_congr (G H: ctx) (p q: wff):
+    \\  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+    \\--| @auto trigger (hyp p)
+    \\--| @auto trigger (im p _)
+    \\--| @auto trigger (or p _)
+    \\--| @auto trigger (or _ p)
+    \\axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+    \\--| @auto backward
+    \\axiom imp_intro (G: ctx) (p q: wff):
+    \\  $ G , p ⊢ q $ > $ G ⊢ p → q $;
+    \\--| @auto forward
+    \\axiom imp_elim (G H: ctx) (p q: wff):
+    \\  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+    \\--| @auto backward
+    \\axiom or_intro_l (G: ctx) (p q: wff):
+    \\  $ G ⊢ p $ > $ G ⊢ p ∨ q $;
+    \\--| @auto backward
+    \\axiom or_intro_r (G: ctx) (p q: wff):
+    \\  $ G ⊢ q $ > $ G ⊢ p ∨ q $;
+    \\--| @auto forward
+    \\axiom or_elim (G H K: ctx) (p q r: wff):
+    \\  $ G ⊢ p ∨ q $ > $ H , p ⊢ r $ > $ K , q ⊢ r $ >
+    \\  $ G , H , K ⊢ r $;
+    \\theorem nd_or_comm_min (p q: wff): $ p ∨ q ⊢ q ∨ p $;
+;
+
+const nd_or_proof =
+    \\nd_or_comm_min
+    \\--------------
+    \\l1: $ p ∨ q ⊢ p ∨ q $ by ax
+    \\l2: $ p ⊢ p $ by ax
+    \\l3: $ p ⊢ q ∨ p $ by auto?
+;
+
+const NdPolicy = struct {
+    search_memo: bool = true,
+    deep_member_prune: bool = true,
+};
+
+fn ndOrSuggestions(
+    arena: *std.heap.ArenaAllocator,
+    counters: ?*types.SearchCounters,
+    policy: NdPolicy,
+) !types.SourceSuggestions {
+    const offset = std.mem.indexOf(u8, nd_or_proof, "auto?") orelse
+        return error.MissingNeedle;
+    return source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        nd_or_mm0,
+        nd_or_proof,
+        offset,
+        .{
+            .counters = counters,
+            .generate = .{
+                .enabled = true,
+                .search_memo = policy.search_memo,
+                .deep_member_prune = policy.deep_member_prune,
+            },
+        },
+    );
+}
+
+/// The work a call did, in the accumulating counters the policy can change.
+const NdWork = struct {
+    tries: usize,
+    rejects: usize,
+    repin_prunes: usize,
+    deep_member_prunes: usize,
+
+    fn of(c: *const types.SearchCounters) NdWork {
+        return .{
+            .tries = c.full_try_candidate_calls,
+            .rejects = c.rejected_candidates_after_validation,
+            .repin_prunes = c.repin_prunes,
+            .deep_member_prunes = c.deep_member_prunes,
+        };
+    }
+
+    fn since(after: NdWork, before: NdWork) NdWork {
+        return .{
+            .tries = after.tries - before.tries,
+            .rejects = after.rejects - before.rejects,
+            .repin_prunes = after.repin_prunes - before.repin_prunes,
+            .deep_member_prunes = after.deep_member_prunes - before.deep_member_prunes,
+        };
+    }
+};
+
+fn expectSameSuggestions(
+    expected: types.SourceSuggestions,
+    actual: types.SourceSuggestions,
+) !void {
+    try std.testing.expectEqual(expected.items.len, actual.items.len);
+    for (expected.items, actual.items) |e, a| {
+        try std.testing.expectEqualStrings(e.replacement, a.replacement);
+    }
+}
+
+/// One fresh, collecting observer per policy: the reference for each.
+fn ndFresh(
+    arena: *std.heap.ArenaAllocator,
+    policy: NdPolicy,
+) !struct { suggestions: types.SourceSuggestions, work: NdWork, skips: usize } {
+    var counters = types.SearchCounters{ .collect = true };
+    const suggestions = try ndOrSuggestions(arena, &counters, policy);
+    return .{
+        .suggestions = suggestions,
+        .work = NdWork.of(&counters),
+        .skips = counters.verdict_skips,
+    };
+}
+
+test "a reused counters block carries no search policy across calls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const memo_on = try ndFresh(&arena, .{});
+    const memo_off = try ndFresh(&arena, .{ .search_memo = false });
+    const deep_off = try ndFresh(&arena, .{ .deep_member_prune = false });
+
+    // The fixture must actually exercise the re-pin check (it is what the
+    // stale flag used to leave armed), and the search must do real work.
+    var probe = types.SearchCounters{ .collect = true };
+    var probe_suggestions = try ndOrSuggestions(&arena, &probe, .{});
+    defer probe_suggestions.deinit();
+    try std.testing.expect(probe.repin_would_prune > 0);
+    try std.testing.expect(probe.full_try_candidate_calls > 0);
+    try std.testing.expect(memo_on.suggestions.items.len > 0);
+    try std.testing.expectEqualStrings(
+        "or_intro_r [l2]",
+        memo_on.suggestions.items[0].replacement,
+    );
+    // The policy is completeness-neutral: every setting suggests the same.
+    try expectSameSuggestions(memo_on.suggestions, memo_off.suggestions);
+    try expectSameSuggestions(memo_on.suggestions, deep_off.suggestions);
+
+    // Policy toggled on a REUSED observer, in both orders and for both
+    // switches: each call must match the fresh-observer reference for its own
+    // options, never the previous call's.
+    const orders = [_][2]NdPolicy{
+        .{ .{}, .{ .search_memo = false } },
+        .{ .{ .search_memo = false }, .{} },
+        .{ .{}, .{ .deep_member_prune = false } },
+        .{ .{ .deep_member_prune = false }, .{} },
+    };
+    for (orders) |order| {
+        var reused = types.SearchCounters{ .collect = true };
+        for (order) |policy| {
+            const before = NdWork.of(&reused);
+            var suggestions = try ndOrSuggestions(&arena, &reused, policy);
+            defer suggestions.deinit();
+            const reference = if (!policy.search_memo)
+                memo_off
+            else if (!policy.deep_member_prune)
+                deep_off
+            else
+                memo_on;
+            try expectSameSuggestions(reference.suggestions, suggestions);
+            try std.testing.expectEqual(
+                reference.work,
+                NdWork.since(NdWork.of(&reused), before),
+            );
+            try std.testing.expectEqual(reference.skips, reused.verdict_skips);
+        }
+    }
+
+    // A non-collecting observer, and no observer at all, search identically.
+    var quiet = types.SearchCounters{};
+    var quiet_suggestions = try ndOrSuggestions(&arena, &quiet, .{});
+    defer quiet_suggestions.deinit();
+    try expectSameSuggestions(memo_on.suggestions, quiet_suggestions);
+    try std.testing.expectEqual(memo_on.work.tries, quiet.full_try_candidate_calls);
+    var absent_suggestions = try ndOrSuggestions(&arena, null, .{});
+    defer absent_suggestions.deinit();
+    try expectSameSuggestions(memo_on.suggestions, absent_suggestions);
+}
+
 fn autoInlineSuggestions(
     arena: *std.heap.ArenaAllocator,
     proof_src: []const u8,

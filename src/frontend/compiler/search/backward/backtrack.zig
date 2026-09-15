@@ -40,6 +40,7 @@ const ExactCandidate = types.ExactCandidate;
 const ExactOptions = types.ExactOptions;
 const ExactResults = types.ExactResults;
 const SearchCounters = types.SearchCounters;
+const SearchRuntime = types.SearchRuntime;
 const NameExprMap = types.NameExprMap;
 const GenerationHook = types.GenerationHook;
 const DerivedPool = types.DerivedPool;
@@ -111,6 +112,7 @@ pub fn exactWithSession(
     const context = session.context;
     const allocator = context.allocator;
     const counters = session.effectiveCounters(options.counters);
+    const runtime = options.runtime;
     const pool = try session.getReferencePool(theorem, counters);
 
     var candidates = std.ArrayListUnmanaged(ExactCandidate){};
@@ -209,6 +211,7 @@ pub fn exactWithSession(
             theorem_vars,
             options.generator,
             options.derived,
+            runtime,
             counters,
             options.fuel,
             &candidates,
@@ -239,6 +242,7 @@ pub fn exactWithSession(
             goal,
             theorem,
             theorem_vars,
+            runtime,
             counters,
             options.fuel,
             &candidates,
@@ -477,6 +481,7 @@ fn enumerateCandidateRefs(
     theorem_vars: *const NameExprMap,
     generator: ?*const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -495,6 +500,7 @@ fn enumerateCandidateRefs(
             candidate.bindings,
             &.{},
             &.{},
+            runtime,
             counters,
             fuel,
             candidates,
@@ -555,6 +561,7 @@ fn enumerateCandidateRefs(
         generated,
         generator,
         derived,
+        runtime,
         counters,
         fuel,
         candidates,
@@ -581,6 +588,7 @@ fn backtrackRefs(
     generated: []?RuleApplication,
     generator: ?*const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -602,6 +610,7 @@ fn backtrackRefs(
             bindings,
             selected,
             generated,
+            runtime,
             counters,
             fuel,
             candidates,
@@ -702,7 +711,7 @@ fn backtrackRefs(
         // `validateSelectedRefs` applies at the end, so results are
         // unchanged; plain `exact?` keeps its existing flow untouched.
         if ((generator != null or derived != null) and
-            !finalConclusionPlausible(context, candidate, goal, bindings, counters))
+            !finalConclusionPlausible(context, candidate, goal, bindings, runtime, counters))
         {
             if (counters) |actual| actual.final_conclusion_prunes += 1;
             rollbackOneHypMatch(bindings, snapshot);
@@ -784,6 +793,7 @@ fn backtrackRefs(
             generated,
             generator,
             derived,
+            runtime,
             counters,
             fuel,
             candidates,
@@ -820,6 +830,7 @@ fn backtrackRefs(
             selected,
             generated,
             generator,
+            runtime,
             counters,
             fuel,
             candidates,
@@ -852,6 +863,7 @@ fn backtrackRefs(
             generated,
             hook,
             derived,
+            runtime,
             counters,
             fuel,
             candidates,
@@ -891,6 +903,7 @@ fn tryDerivedSlots(
     selected: []?usize,
     generated: []?RuleApplication,
     generator: ?*const GenerationHook,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1011,7 +1024,7 @@ fn tryDerivedSlots(
             // Same incremental prune as the pool-ref loop: a fill whose
             // pinned binders already contradict the conclusion-vs-goal
             // correspondence dooms every tuple under it.
-            if (finalConclusionPlausible(context, candidate, goal, bindings, counters)) {
+            if (finalConclusionPlausible(context, candidate, goal, bindings, runtime, counters)) {
                 generated[position] = app;
                 try backtrackRefs(
                     compiler,
@@ -1032,6 +1045,7 @@ fn tryDerivedSlots(
                     generated,
                     generator,
                     dpool,
+                    runtime,
                     counters,
                     fuel,
                     candidates,
@@ -1073,6 +1087,7 @@ fn tryGenerateSlot(
     generated: []?RuleApplication,
     hook: *const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1102,6 +1117,7 @@ fn tryGenerateSlot(
             generated,
             hook,
             derived,
+            runtime,
             counters,
             fuel,
             candidates,
@@ -1137,6 +1153,7 @@ fn tryGenerateSlot(
         generated,
         hook,
         derived,
+        runtime,
         counters,
         fuel,
         candidates,
@@ -1177,6 +1194,7 @@ fn tryGenerateSlot(
             generated,
             hook,
             derived,
+            runtime,
             counters,
             fuel,
             candidates,
@@ -1208,6 +1226,7 @@ fn tryGenerateSlot(
         generated,
         hook,
         derived,
+        runtime,
         counters,
         fuel,
         candidates,
@@ -1240,6 +1259,7 @@ fn emitGeneratedSlot(
     generated: []?RuleApplication,
     hook: *const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1281,6 +1301,7 @@ fn emitGeneratedSlot(
         generated,
         hook,
         derived,
+        runtime,
         counters,
         fuel,
         candidates,
@@ -1316,6 +1337,7 @@ fn trySplitGenerate(
     generated: []?RuleApplication,
     hook: *const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1394,6 +1416,7 @@ fn trySplitGenerate(
                     generated,
                     hook,
                     derived,
+                    runtime,
                     counters,
                     fuel,
                     candidates,
@@ -1432,6 +1455,7 @@ fn trySplitGenerate(
                     generated,
                     hook,
                     derived,
+                    runtime,
                     counters,
                     fuel,
                     candidates,
@@ -1487,6 +1511,7 @@ fn tryPrincipalEnumerate(
     generated: []?RuleApplication,
     hook: *const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1605,6 +1630,7 @@ fn tryPrincipalEnumerate(
                 generated,
                 hook,
                 derived,
+                runtime,
                 counters,
                 fuel,
                 candidates,
@@ -1644,6 +1670,7 @@ const OpenSlot = struct {
     generated: []?RuleApplication,
     hook: *const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1685,6 +1712,7 @@ fn tryOpenGenerateSlot(
     generated: []?RuleApplication,
     hook: *const GenerationHook,
     derived: ?*DerivedPool,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -1731,6 +1759,7 @@ fn tryOpenGenerateSlot(
         .generated = generated,
         .hook = hook,
         .derived = derived,
+        .runtime = runtime,
         .counters = counters,
         .fuel = fuel,
         .candidates = candidates,
@@ -1951,6 +1980,7 @@ fn emitOpenTarget(
             slot.generated,
             slot.hook,
             slot.derived,
+            slot.runtime,
             slot.counters,
             slot.fuel,
             slot.candidates,
@@ -2181,7 +2211,7 @@ fn continueOpenTargetSolved(
     // Same incremental prune as the pool-ref loop: a fill whose pinned
     // binders contradict the conclusion-vs-goal correspondence dooms every
     // tuple under it.
-    if (!finalConclusionPlausible(slot.context, slot.candidate, slot.goal, slot.bindings, slot.counters)) {
+    if (!finalConclusionPlausible(slot.context, slot.candidate, slot.goal, slot.bindings, slot.runtime, slot.counters)) {
         if (slot.counters) |c| c.final_conclusion_prunes += 1;
         return;
     }
@@ -2217,6 +2247,7 @@ fn continueOpenTargetSolved(
             slot.generated,
             slot.hook,
             slot.derived,
+            slot.runtime,
             slot.counters,
             slot.fuel,
             slot.candidates,
@@ -2244,6 +2275,7 @@ fn continueOpenTargetSolved(
         slot.generated,
         slot.hook,
         slot.derived,
+        slot.runtime,
         slot.counters,
         slot.fuel,
         slot.candidates,

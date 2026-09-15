@@ -489,6 +489,7 @@ test "repeated-binder prune refutes a doomed ax and spares a valid one" {
         &candidate,
         good_goal,
         bindings,
+        .{},
         null,
     ));
     // No complementary pair → no value of `a` covers both `a` and `~ a`, so the
@@ -498,6 +499,7 @@ test "repeated-binder prune refutes a doomed ax and spares a valid one" {
         &candidate,
         bad_goal,
         bindings,
+        .{},
         null,
     ));
 }

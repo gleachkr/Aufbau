@@ -94,6 +94,8 @@ const Driver = struct {
     scratch: std.mem.Allocator,
     options: GenerateOptions,
     counters: ?*SearchCounters,
+    /// This call's memos + prune policy, passed to every child search.
+    runtime: types.SearchRuntime,
     /// `@frameAddress` at `generateTopLevel` entry: the zero point for the
     /// call-stack guard (`checkStackGuard`). The stack grows downward on
     /// every supported target (native and the wasm shadow stack), so
@@ -361,46 +363,45 @@ pub fn generateTopLevel(
         try buildDerivedIndex(session, &work_theorem, &derived_pool.?);
     }
 
-    // Search-reuse memos (Lever A reject-verdict memo + Lever B re-pin prune)
-    // ride on a counters block that spans this whole `generateTopLevel` (all
-    // retry phases). The bench supplies a counters block; production usually
-    // doesn't, so fall back to a local one purely as the memo's carrier. The
-    // memo's stats are snapshotted into the (value-readable) counters fields
-    // before it deinits, so observability survives in either case.
-    var fallback_counters = SearchCounters{};
-    const gen_counters = session.effectiveCounters(null) orelse &fallback_counters;
+    // The search-reuse memos (Lever A reject-verdict memo + Lever B re-pin
+    // prune) and the cross-candidate deep-member verdict cache live for this
+    // whole `generateTopLevel` (all retry phases) and travel in the
+    // `SearchRuntime` the Driver threads beside the optional counters sink —
+    // the policy comes from this call's options alone, never from whatever a
+    // caller-owned counters block carried over from an earlier call. The
+    // memo/cache stats are snapshotted into the (value-only) counters before
+    // they deinit, so observability survives.
+    const gen_counters = session.effectiveCounters(null);
     var verdict_memo = VerdictMemo{
         .allocator = session.allocator,
         .skip_enabled = options.search_memo,
     };
     defer {
-        // Snapshot stats for an observing caller, then DETACH the pointer before
-        // freeing — `gen_counters` may be a caller-owned block that outlives this
-        // call, so it must never be left pointing at the freed stack memo.
-        gen_counters.verdict_reject_total = verdict_memo.reject_total;
-        gen_counters.verdict_reject_distinct = verdict_memo.reject_distinct;
-        gen_counters.verdict_skips = verdict_memo.skips;
-        gen_counters.verdict_memo = null;
+        if (gen_counters) |c| {
+            c.verdict_reject_total = verdict_memo.reject_total;
+            c.verdict_reject_distinct = verdict_memo.reject_distinct;
+            c.verdict_skips = verdict_memo.skips;
+        }
         verdict_memo.deinit();
     }
-    // Cross-candidate deep-member verdict cache (same Driver-owned lifecycle).
     var deep_cache = DeepVerdictCache{ .allocator = session.allocator };
     defer {
-        gen_counters.deep_cache_hits = deep_cache.hits;
-        gen_counters.deep_cache_misses = deep_cache.misses;
-        gen_counters.deep_verdict_cache = null;
+        if (gen_counters) |c| {
+            c.deep_cache_hits = deep_cache.hits;
+            c.deep_cache_misses = deep_cache.misses;
+        }
         deep_cache.deinit();
     }
-    gen_counters.deep_verdict_cache = &deep_cache;
-    // Only arm the memo + prune when enabled; otherwise leave the carrier clean
-    // so `tryCandidate` computes no signature and the baseline path is untouched.
-    if (options.search_memo) {
-        gen_counters.verdict_memo = &verdict_memo;
-        gen_counters.repin_prune_enabled = true;
-    }
-    // Lever E (default-on, independent of the memo bundle so it can be A/B'd
-    // alone): the deep-unfold ACUI member prune.
-    gen_counters.deep_member_prune_enabled = options.deep_member_prune;
+    // The memo and the re-pin prune arm together under `search_memo`; when off
+    // the runtime carries no memo, so `tryCandidate` computes no signature and
+    // the baseline path is untouched. Lever E (default-on) is independent of
+    // the memo bundle so it can be A/B'd alone.
+    const runtime = types.SearchRuntime{
+        .verdict_memo = if (options.search_memo) &verdict_memo else null,
+        .deep_verdict_cache = &deep_cache,
+        .repin_prune_enabled = options.search_memo,
+        .deep_member_prune_enabled = options.deep_member_prune,
+    };
 
     var driver = Driver{
         .compiler = compiler,
@@ -412,6 +413,7 @@ pub fn generateTopLevel(
         .scratch = session.allocator,
         .options = options,
         .counters = gen_counters,
+        .runtime = runtime,
         .stack_base = @frameAddress(),
         .derived = if (derived_pool) |*dpool| dpool else null,
         .fuel = .{ .remaining = options.fuel, .global = budget_ptr },
@@ -477,7 +479,7 @@ pub fn generateTopLevel(
         );
         defer session.allocator.free(seeds);
         if (seeds.len > 0) {
-            gen_counters.trigger_seed_count += seeds.len;
+            if (gen_counters) |c| c.trigger_seed_count += seeds.len;
             seeded_pool = blk: {
                 if (session.context.registry.autoForwardRuleCount() > 0) {
                     // Re-saturate with the seeds as depth-0 sources so
@@ -562,12 +564,11 @@ pub fn generateTopLevel(
 
     // Per-call cost observability: ticks consumed by this whole call and
     // whether the per-call budget (not per-phase fuel) truncated it.
-    gen_counters.gen_work_ticks = expr_mod.work_ticks -% ticks_start;
-    gen_counters.gen_sym_ticks = expr_mod.work_ticks_sym -% sym_ticks_start;
-    gen_counters.gen_walk_ticks =
-        expr_mod.work_ticks_walk -% walk_ticks_start;
-    if (global_budget) |budget| {
-        gen_counters.gen_budget_exhausted = budget.exhausted;
+    if (gen_counters) |c| {
+        c.gen_work_ticks = expr_mod.work_ticks -% ticks_start;
+        c.gen_sym_ticks = expr_mod.work_ticks_sym -% sym_ticks_start;
+        c.gen_walk_ticks = expr_mod.work_ticks_walk -% walk_ticks_start;
+        if (global_budget) |budget| c.gen_budget_exhausted = budget.exhausted;
     }
 
     return .{
@@ -850,6 +851,7 @@ fn runDepthPass(
             .max_results = driver.options.max_results,
             .generator = &driver.hook,
             .counters = driver.counters,
+            .runtime = driver.runtime,
             .fuel = &driver.fuel,
             .derived = driver.derived,
         },
@@ -1039,7 +1041,7 @@ fn hookSolveOpen(
     // first proved inside the scope stay reusable after it (the transposition
     // memo works across open-chain boundaries). `open_fail`/`visited_open`
     // key on canonical byte strings; `visited` is strictly LIFO within
-    // `solveProof`. Any NEW persistent cache on the Driver or SearchCounters
+    // `solveProof`. Any NEW persistent cache on the Driver or SearchRuntime
     // must follow the same rule: content keys, or a strictly scope-local
     // lifetime.
     // The session's ref pool / index are built lazily from the FIRST theorem
@@ -1088,6 +1090,7 @@ fn hookSolveOpen(
             .max_results = open_child_max_results,
             .generator = generator,
             .counters = driver.counters,
+            .runtime = driver.runtime,
             .fuel = &driver.fuel,
             .derived = driver.derived,
             .internal_open_child = true,
@@ -1618,6 +1621,7 @@ fn solveProof(
             .max_results = 1,
             .generator = generator,
             .counters = driver.counters,
+            .runtime = driver.runtime,
             .fuel = &driver.fuel,
             .derived = driver.derived,
             .internal_open_child = true,

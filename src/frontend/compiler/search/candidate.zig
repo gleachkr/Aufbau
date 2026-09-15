@@ -86,7 +86,7 @@ pub fn tryCandidate(
     // (`hashCanonicalContent`).
     const verdict_memo: ?*types.VerdictMemo = switch (goal) {
         .holey => null,
-        else => if (options.counters) |c| c.verdict_memo else null,
+        else => options.runtime.verdict_memo,
     };
     const verdict_sig: u64 = if (verdict_memo != null)
         types.applicationSignature(theorem, application, goal)
@@ -99,8 +99,9 @@ pub fn tryCandidate(
         }
     }
 
-    // Timers are diagnostics, gated by `collect` so production (which carries a
-    // counters block only for the memo) does not pay clock reads per candidate.
+    // Timers are diagnostics, gated by `collect` so production (whose counters
+    // block exists only for the result's status flags) does not pay clock reads
+    // per candidate.
     const collect = if (options.counters) |c| c.collect else false;
     const clone_start = if (collect) timer.nanoTimestamp() else 0;
     var attempt_theorem = try theorem.clone();

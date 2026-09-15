@@ -25,6 +25,7 @@ const ExactCandidate = types.ExactCandidate;
 const DerivedPool = types.DerivedPool;
 const NameExprMap = types.NameExprMap;
 const SearchCounters = types.SearchCounters;
+const SearchRuntime = types.SearchRuntime;
 const Fuel = types.Fuel;
 const rankReferenceIndices = refs_mod.rankReferenceIndices;
 const tryCandidate = candidate_mod.tryCandidate;
@@ -43,6 +44,7 @@ pub fn appendDerivedDirectCandidates(
     goal: Goal,
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -114,6 +116,7 @@ pub fn appendDerivedDirectCandidates(
             theorem_vars,
             .{
                 .counters = counters,
+                .runtime = runtime,
                 .result_ownership = .borrowed,
             },
         ) catch |err| {
@@ -188,11 +191,12 @@ pub fn validateSelectedRefs(
     bindings: []const ?ExprId,
     selected: []const ?usize,
     generated: []const ?RuleApplication,
+    runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) !void {
-    if (!finalConclusionPlausible(context, candidate, goal, bindings, counters)) {
+    if (!finalConclusionPlausible(context, candidate, goal, bindings, runtime, counters)) {
         if (counters) |actual| actual.final_conclusion_prunes += 1;
         return;
     }
@@ -298,6 +302,7 @@ pub fn validateSelectedRefs(
         theorem_vars,
         .{
             .counters = counters,
+            .runtime = runtime,
             .result_ownership = .borrowed,
             .unify_retry_eligible = unify_retry_scope,
         },
@@ -366,6 +371,7 @@ pub fn validateSelectedRefs(
                 theorem_vars,
                 .{
                     .counters = counters,
+                    .runtime = runtime,
                     .result_ownership = .borrowed,
                     .unify_retry_eligible = unify_retry_scope,
                 },

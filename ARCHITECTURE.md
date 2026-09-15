@@ -1116,9 +1116,10 @@ The important lifetimes are:
   This match-local state must not allocate theorem dummies merely to compare.
 - Persistent generation caches use scope-stable expression content, not raw
   `ExprId`s minted inside discardable child scopes.
-- `SearchCounters` currently also carries pruning switches and borrowed memo
-  pointers. The generation driver detaches memo pointers before returning;
-  this object is not purely an output statistics record.
+- `SearchCounters` is a value-only statistics sink. The generation call's
+  memos and pruning switches travel separately as a `SearchRuntime`, so an
+  observer block can be reused across calls or omitted without affecting
+  what the search does.
 - Diagnostic language is module-global state in `diag.zig`; configure it
   before compilation, not concurrently with rendering.
 

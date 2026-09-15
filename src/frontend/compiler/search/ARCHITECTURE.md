@@ -770,8 +770,11 @@ memoize a *retry-eligible* reject (`MissingBinderAssignment` / holey
 `HypothesisMismatch` on a bare assembly), because `validateSelectedRefs` retries
 those with explicit bindings and may succeed — memoizing the bare reject would
 skip that retry. Holey goals are excluded (pointer-keyed, ABA-unstable). The
-memo + re-pin are Driver-owned and default-on for `auto?`; `--no-search-memo`
-disables both for A/B.
+memo + re-pin are owned by the generation call, which threads them (with the
+Lever E policy and its verdict cache) as a `types.SearchRuntime` beside the
+value-only `SearchCounters` sink — behaviour never depends on whether anyone
+is observing, and a reused observer block carries no policy over. Both are
+default-on for `auto?`; `--no-search-memo` disables both for A/B.
 
 **Interner-scope caveat (id stability).** Raw `ExprId`s are stable only while
 the work-theorem interner is append-only. That is *no longer true for the
@@ -793,7 +796,7 @@ open-chain boundaries with no re-keying). Leaf identities are chosen so
 hash-equal ⟹ interchangeable even across a discard: theorem vars by index,
 dummies by (index, sort), placeholders by (pid, class, sort, deps, meta_id) —
 see `hashCanonicalContent`'s doc comment. **Any new persistent cache on the
-Driver or `SearchCounters` must follow the same rule: canonical content keys,
+Driver or `SearchRuntime` must follow the same rule: canonical content keys,
 or a strictly scope-local lifetime.** A raw-id key replays a stale verdict
 against a reused id (a completeness bug visible only as corpus drift).
 
