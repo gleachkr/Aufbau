@@ -1645,3 +1645,90 @@ test "parser rejects result-type deps naming a hidden binder" {
         compiler.compileMmb(std.testing.allocator),
     );
 }
+
+test "exhausted @vars pool is reported, not a later tier's mismatch" {
+    // Matching `l @ a` against `t_tapp` unfolds `Nat` and must name its
+    // hidden `∀` dummy from the `ty` pool, but the theorem already binds
+    // the pool's only token.  The session tier's failure used to be
+    // swallowed as "no match", so the structural tier's generic unsolved
+    // binder message was reported instead.
+    const mm0_src =
+        \\delimiter $ ( [ / $ $ / . : , ) ] @ $;
+        \\strict provable sort jdg;
+        \\sort ctx;
+        \\--| @vars a
+        \\sort ty;
+        \\--| @vars x
+        \\sort tm;
+        \\term eq_ty (A B: ty): jdg;
+        \\infixl eq_ty: $~$ prec 15;
+        \\--| @relation ty eq_ty eq_ty_refl eq_ty_trans eq_ty_sym _
+        \\axiom eq_ty_refl (A: ty): $ A ~ A $;
+        \\axiom eq_ty_trans (A B C: ty): $ A ~ B $ > $ B ~ C $ > $ A ~ C $;
+        \\axiom eq_ty_sym (A B: ty): $ A ~ B $ > $ B ~ A $;
+        \\term has_ty (t: tm) (A: ty): jdg;
+        \\infixl has_ty: $:$ prec 12;
+        \\term nd (g: ctx) (J: jdg): jdg;
+        \\infixl nd: $⊢$ prec 0;
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (J: jdg): ctx;
+        \\coercion hyp: jdg > ctx;
+        \\term arr (A B: ty): ty;
+        \\infixr arr: $→$ prec 25;
+        \\--| @congr
+        \\axiom arr_congr (A1 A2 B1 B2: ty):
+        \\  $ A1 ~ A2 $ > $ B1 ~ B2 $ > $ (A1 → B1) ~ (A2 → B2) $;
+        \\term all {a: ty} (B: ty a): ty;
+        \\notation all {a: ty} (B: ty a): ty = ($∀$:20) a ($.$:0) B;
+        \\term tapp (f: tm) (A: ty): tm;
+        \\infixl tapp: $@$ prec 70;
+        \\term sb_ty {a: ty} (S: ty) (B: ty a): ty;
+        \\notation sb_ty {a: ty} (S: ty) (B: ty a): ty =
+        \\  ($[$:41) a ($/$:0) S ($]$:0) B;
+        \\--| @rewrite
+        \\axiom sb_ty_hit {a: ty} (S: ty): $ [a/S] a ~ S $;
+        \\--| @rewrite
+        \\axiom sb_ty_arr {a: ty} (S: ty) (A B: ty a):
+        \\  $ [a/S] (A → B) ~ ([a/S] A → [a/S] B) $;
+        \\axiom t_var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
+        \\axiom t_tapp {a: ty} (g: ctx a) (f: tm a) (B: ty a) (S: ty):
+        \\  $ g ⊢ f : ∀ a. B $ > $ g ⊢ f @ S : [a/S] B $;
+        \\def Nat {.a: ty}: ty = $ ∀ a. (a → a) → a → a $;
+        \\theorem p (g: ctx) {a: ty} {l: tm}:
+        \\  $ g , l : Nat ⊢ l @ a : (a → a) → a → a $;
+    ;
+    const proof_src =
+        \\p
+        \\--------
+        \\l1: $ g , l : Nat ⊢ l : Nat $ by t_var
+        \\l2: $ g , l : Nat ⊢ l @ a : (a → a) → a → a $ by t_tapp [l1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    if (compiler.compileMmb(std.testing.allocator)) |mmb| {
+        std.testing.allocator.free(mmb);
+        return error.ExpectedCompileFailure;
+    } else |_| {}
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.HiddenWitnessNoAvailableVar, diag.err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticPhase.inference, diag.phase.?);
+    try std.testing.expectEqualStrings("p", diag.theorem_name.?);
+    try std.testing.expectEqualStrings("l2", diag.line_label.?);
+    try std.testing.expectEqualStrings("t_tapp", diag.rule_name.?);
+    try std.testing.expectEqualStrings(
+        "hidden def witness needed a fresh @vars token, but none was available",
+        mm0.compilerDiagnosticSummary(diag),
+    );
+    switch (diag.detail) {
+        .inference_failure => |detail| {
+            try std.testing.expectEqual(.normalized_session_fallback, detail.path);
+        },
+        else => return error.ExpectedInferenceFailureDetail,
+    }
+}

@@ -1298,6 +1298,29 @@ pub fn tryConcreteRuleMatchSessionFallback(
         scratch.discard(mark);
         switch (err) {
             error.OutOfMemory => return err,
+            // The rule matched; only naming its hidden def witness failed
+            // because the sort's `@vars` pool is exhausted.  A later tier
+            // cannot fix the pool, and its generic mismatch would hide this
+            // cause, so stop here like the no-pool case below.
+            error.HiddenWitnessNoAvailableVar => {
+                self.setProof(
+                    try buildInferenceFailureDiagnostic(
+                        allocator,
+                        env,
+                        theorem,
+                        assertion,
+                        rule,
+                        line,
+                        .normalized_session_fallback,
+                        err,
+                        explicit_bindings,
+                        diagnostic_bindings,
+                        fresh_context,
+                        null,
+                    ),
+                );
+                return err;
+            },
             else => return null,
         }
     };

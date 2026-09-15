@@ -47,6 +47,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   into the WebAssembly instance before guarding against failure, so when the
   second copy could not be allocated the first was never freed. Every input
   a call acquires is now released however the call ends.
+- When a rule application matched only by unfolding a definition with a
+  hidden binder, and the sort's `@vars` pool had no spare token to name that
+  binder, the compiler reported a later matching tier's generic "one of the
+  rule's variables could not be determined" instead. It now stops at the
+  exhausted pool and says so, the same way it already did when the sort had
+  no pool at all.
 
 ## [0.0.10] - 2026-09-13
 
