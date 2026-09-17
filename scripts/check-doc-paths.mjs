@@ -12,7 +12,8 @@
 //   and any ARCHITECTURE.md nested under src/.
 // - A checked token is a backtick-quoted string ending in a source-ish
 //   extension, or a backtick-quoted directory path ending in `/`.
-//   Tokens containing globs/placeholders (`*`, `{`, `$`, `<`) are skipped.
+//   Tokens containing globs/placeholders (`*`, `{`, `$`, `<`) are skipped,
+//   as are build outputs under `zig-out/` (they only exist after a build).
 // - Multi-segment paths must resolve against one of a few roots (repo
 //   root, src/, src/frontend/, src/trusted/, src/bin/, src/bin/compiler/,
 //   or the doc's own directory — ARCHITECTURE.md's frontend file lists are
@@ -81,6 +82,7 @@ for (const doc of docs) {
       if (/[*{$<>\s]/.test(token)) continue;
       // Bare extension mentions ("a `.auf` file") are prose, not paths.
       if (token.startsWith(".")) continue;
+      if (token.startsWith("zig-out/")) continue;
       const isDir = token.endsWith("/") && token.includes("/");
       if (!isDir && !checkedExt.test(token)) continue;
       const rel = isDir ? token.slice(0, -1) : token;

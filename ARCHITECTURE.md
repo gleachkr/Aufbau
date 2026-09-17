@@ -80,8 +80,6 @@ Most project-specific docs now live under `docs/`:
 
 `docs/design_notes/` contains rationale and historical investigations.
 Those notes are supporting evidence, not a substitute for the current maps.
-The dated review in `docs/code_quality_review.md` records proposed maintenance
-work; proposals there are not claims about the implemented architecture.
 
 The user-facing manual is an mdbook under `manual/`:
 
