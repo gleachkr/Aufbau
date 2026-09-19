@@ -638,6 +638,16 @@ fn finishRuleMatchSession(
         if (session.state.rewrite_fuel_exhausted) out.* = true;
     };
 
+    // Hypotheses first, then the conclusion. A hypothesis that does not
+    // match yet is retried after the conclusion: the conclusion may be the
+    // only part that fixes a binder the hypothesis needs, as with an open
+    // `[x/t] p` premise whose `x` and `p` come from a comprehension hidden
+    // behind a definition in the goal. When the conclusion or the retry
+    // fails, the first deferred hypothesis is the reported clash site, as it
+    // was before deferral existed.
+    const deferred = try allocator.alloc(usize, rule.hyps.len);
+    defer allocator.free(deferred);
+    var deferred_len: usize = 0;
     for (rule.hyps, ref_exprs, 0..) |hyp, ref_expr, hyp_idx| {
         if (try matchRuleHypForInference(
             allocator,
@@ -648,7 +658,8 @@ fn finishRuleMatchSession(
             hyp,
             ref_expr,
         )) continue;
-        return .{ .no_match = hypothesisMismatch(hyp_idx, ref_expr) };
+        deferred[deferred_len] = hyp_idx;
+        deferred_len += 1;
     }
 
     if (!try session.matchTransparentOrSemantic(rule.concl, line_expr)) {
@@ -661,8 +672,29 @@ fn finishRuleMatchSession(
             rule.concl,
             line_expr,
         )) {
+            if (deferred_len > 0) {
+                const hyp_idx = deferred[0];
+                return .{
+                    .no_match = hypothesisMismatch(hyp_idx, ref_exprs[hyp_idx]),
+                };
+            }
             return .{ .no_match = conclusionMismatch() };
         }
+    }
+
+    for (deferred[0..deferred_len]) |hyp_idx| {
+        if (try matchRuleHypForInference(
+            allocator,
+            env,
+            registry,
+            scratch,
+            session,
+            rule.hyps[hyp_idx],
+            ref_exprs[hyp_idx],
+        )) continue;
+        return .{
+            .no_match = hypothesisMismatch(hyp_idx, ref_exprs[hyp_idx]),
+        };
     }
 
     const line_deps = (try exprInfo(

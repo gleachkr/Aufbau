@@ -53,6 +53,19 @@ This file records notable user-facing changes to Aufbau. The project follows
   rule's variables could not be determined" instead. It now stops at the
   exhausted pool and says so, the same way it already did when the sort had
   no pool at all.
+- A `@view` rule whose bound binder is hidden behind a definition in the
+  goal (`t ∈ A ∖ B` against a view stated on `t ∈ {x ∈ A | p}`) could only
+  be applied when the rule also carried a `@recover` naming that binder as
+  its hole, even when the recovered argument was already visible in a cited
+  premise: the view's solution for the hidden binder was discarded before
+  the raw rule was matched, and the raw hypothesis `[x/t] p` cannot be
+  matched with `x` and `p` unknown. The view's solution is now carried
+  through, so such rules apply without the redundant annotation.
+- The same shape without a `@view` failed too, for a different reason: the
+  inference session matched a rule's hypotheses before its conclusion and
+  gave up on the first hypothesis that did not match, so the open `[x/t] p`
+  premise was tried before the conclusion had determined `x` and `p`. A
+  hypothesis that does not match yet is now retried after the conclusion.
 
 ## [0.0.10] - 2026-09-13
 

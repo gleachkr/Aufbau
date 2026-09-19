@@ -149,6 +149,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_def_hidden_dummy_all_elim_ctx_fold", .outcome = .pass },
     .{ .stem = "pass_def_hidden_dummy_all_elim_ctx_twostep", .outcome = .pass },
     .{ .stem = "pass_def_hidden_dummy_imp_elim_ctx_mixed", .outcome = .pass },
+    .{ .stem = "pass_def_hidden_dummy_view_intro", .outcome = .pass },
+    .{ .stem = "pass_def_hidden_dummy_noview_intro", .outcome = .pass },
     // Historically named fail_verify_hidden_dummy_dep, but the failure has
     // long been a compile-time dep-validation rejection; the runner now
     // guarantees that a fail-case which compiles but does not verify is

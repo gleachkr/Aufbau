@@ -1,0 +1,3 @@
+def_hidden_dummy_view_intro
+---------------------------
+l1: $ a e. setdiff A B $ by sep_intro [#1, #2]

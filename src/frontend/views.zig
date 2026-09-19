@@ -495,9 +495,13 @@ fn applyViewBindingsWithConclusion(
     }
 
     // Export symbolic-preserving state in rule-binder space if requested.
-    // Only derived targets need symbolic carry-through. Non-derived view
-    // binders should be re-inferred by ordinary rule matching unless they
-    // already became concrete in partial_bindings.
+    // A view binder the match solved only symbolically — a def's hidden
+    // dummy, or a body naming one — has no concrete projection to hand over
+    // through partial_bindings, so its seed is carried through instead;
+    // re-inferring it from the raw rule would have to re-derive the same
+    // hidden structure, often from a position (an open `[x/t] p`) that
+    // cannot be matched until that structure is known. Derived targets are
+    // carried through unconditionally.
     if (exported_state) |out_state| {
         const rule_seeds = try allocator.alloc(
             DefOps.BindingSeed,
@@ -511,7 +515,9 @@ fn applyViewBindingsWithConclusion(
         var has_symbolic_seed = false;
         for (view.binder_map, 0..) |mapping, vi| {
             const rule_idx = mapping orelse continue;
-            if (!derived_targets[vi]) continue;
+            if (!derived_targets[vi] and projected_view_bindings[vi] != null) {
+                continue;
+            }
             switch (export_view_seeds[vi]) {
                 .bound => {
                     rule_seeds[rule_idx] = export_view_seeds[vi];
