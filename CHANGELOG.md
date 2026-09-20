@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.11] - 2026-09-20
 
 ### Added
 
@@ -74,6 +74,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   still open is now set aside until its siblings have bound them, then
   settled by instantiation and normalization. The `sep_intro_imp` rules in
   the Zermelo demos no longer need their views.
+- The registry snapshot the compiler takes before each declaration, and
+  restores when the declaration fails, omitted `@conversion` and `@compute`
+  rules and shared its rewrite lists with the live registry. In the editor,
+  a broken declaration could then drop every conversion rule declared before
+  it for the rest of the file, and rules declared after the snapshot could
+  leak back into it. The snapshot now copies every rule family.
 
 ## [0.0.10] - 2026-09-13
 
@@ -916,6 +922,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.11]: https://github.com/gleachkr/Aufbau/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/gleachkr/Aufbau/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/gleachkr/Aufbau/compare/v0.0.8...v0.0.9
 [0.0.8]: https://github.com/gleachkr/Aufbau/compare/v0.0.7...v0.0.8

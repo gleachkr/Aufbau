@@ -1,3 +1,125 @@
+# Aufbau 0.0.11
+
+Aufbau 0.0.11 lets proof-local definitions carry annotations and notation,
+makes proof search work through coercions and past broken declarations, and
+infers more rule binders without a `@view`.
+
+## Highlights
+
+### Annotations and notation on proof-local definitions
+
+A `def` item with a return sort takes the same `--|` directives as an
+`.mm0` term. A local operator can be declared `@acui` or `@conversion`,
+with the laws the annotation names proved as lemmas beside it:
+
+```
+--| @acui cat_assoc cat_comm emp cat_idem
+def cat (g h: ctx): ctx = $ g , h $
+
+lemma cat_assoc (g h i: ctx): $ ctx_eq (cat (cat g h) i) (cat g (cat h i)) $
+----
+l1: $ ctx_eq (cat (cat g h) i) (cat g (cat h i)) $ by ctx_assoc
+```
+
+A local definition may also be given notation, declared in the proof file
+exactly as it would be in the `.mm0` file and placed after the corresponding 
+definition.
+
+```
+def limp (a b: wff): wff = $ a -> b $
+infixr limp: $=>$ prec 25;
+
+lemma limp_k (a b: wff): $ a => b => a $
+----
+l1: $ a => b => a $ by ax_k []
+```
+
+`prefix`, `infixl`, `infixr`, and general `notation` are accepted;
+`coercion` and `delimiter` are not, since neither can be confined to the
+proof file. Later proof lines, lemmas, and definitions may use the token,
+and hovers, goal displays, and completions print with the new notation. The 
+token and precedence tables are shared with the theory, so a local token should 
+be one the theory does not use; a later `.mm0` declaration that collides with 
+one is reported as an error.
+
+The `.mm0` side is now checked as well. An `.mm0` statement, notation
+declaration, or coercion that named a proof-local definition used to
+compile, leaving an `.mm0` file that did not verify on its own. It is now
+rejected at that statement. A public definition's filler body may still use 
+local definitions; it is emitted only into the MMB.
+
+### Proof search in more places
+
+`auto?`, `exact?`, `apply?`, and the code actions built on them failed
+outright in any theory whose `@recover` or `@abstract` crossed sorts
+through a coercion, such as a two-sort first-order theory with separate
+variable and name sorts. The search now sees the same coercions as the
+compiler, and its candidate pre-filter no longer discards a recovery
+through a coercion.
+
+A broken declaration or lemma earlier in the file silently disabled search
+for every theorem after it. The search now skips the broken item the way
+the editor's analysis does, so only the target theorem has to be intact.
+Search placeholder status, the search code actions, and the unpack action
+also stopped at the first proof-local definition or notation in the file;
+they now reach every block.
+
+In the editor, a broken declaration could drop every `@conversion` and
+`@compute` rule declared before it for the rest of the file, because the
+registry snapshot restored after the failure did not include them. The
+snapshot now copies every rule family.
+
+### Fewer views
+
+Three fixes to binder inference let rules whose premise or conclusion
+contains an open substitution apply without a `@view`. Without a view, the
+compiler binds omitted binders in this order: the cited premises in source
+order, then the conclusion, then one retry of any premise that did not
+match. Within a single formula the walk is left to right, except that a
+subterm whose head has `@rewrite` rules, such as a substitution, and whose
+binders are still open is set aside until the rest of the formula has been
+matched, then instantiated and normalized against the concrete subterm.
+
+So a separation rule stated as
+
+```
+axiom sep_intro {x: set} (t A: set) (p: wff x):
+  $ t e. A $ > $ [x/t] p $ > $ t e. { x e. A | p } $;
+```
+
+now applies to a goal `a e. setdiff A B`, where `setdiff` unfolds to a
+set comprehension with a hidden binder, without a `@view` or `@recover`. The 
+implication form `[x/t] p -> t e. { x e. A | p }` also works, where the
+substitution *precedes* the comprehension that fixes `x` and `p`. A `@view` is 
+still needed when no premise or conclusion determines a binder except through 
+the substitution itself, when a hidden definition dummy must be named and no
+`@vars` pool is declared, or when two premises each wait on a binder the
+other would provide. See `docs/view_recover.md`.
+
+When a hidden binder can only be named from the sort's `@vars` pool and
+the pool is exhausted, the compiler now says so instead of reporting a
+later tier's generic "could not be determined".
+
+### Packages
+
+The `@aufbau/compiler`, `@aufbau/verifier`, and `@aufbau/lsp` packages
+now share one host module for the WebAssembly instance. A call that could not
+allocate its second input used to leak the first; every input a call
+acquires is now released however the call ends.
+
+## Compatibility
+
+An `.mm0` statement, notation declaration, or coercion that names a proof-local 
+definition is now an error. Such files never verified standalone, so nothing 
+that was correct is affected. The remaining changes are additive. A `@view` 
+that the compiler no longer needs is still honored, so existing annotated 
+theories compile unchanged. The MMB format, the MM0 parser, and the package 
+APIs are unchanged. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.10
 
 Aufbau 0.0.10 adds doc comments, shows a declaration's annotations in full
