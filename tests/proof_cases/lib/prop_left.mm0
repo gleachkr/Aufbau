@@ -1,0 +1,2 @@
+import "prop.mm0";
+theorem left (a b: wff): $ a $ > $ b -> a $;

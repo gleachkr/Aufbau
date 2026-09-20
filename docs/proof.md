@@ -77,6 +77,15 @@ The frontend therefore streams through the MM0 declarations and proof
 blocks together. It does not build a separate global proof database
 before checking begins.
 
+When the `.mm0` file imports other files (`import "other.mm0";`, the
+mm0-rs convention), the theory the compiler checks is the joined text:
+each import is replaced by the imported file, depth first, each file
+included once. Proof files follow the theory: `other.mm0` pairs with
+`other.auf` in the same directory when that file exists, and the paired
+proof files are concatenated in the same order as the joined theory. A
+file whose declarations need no proofs (axioms, terms, notation) needs no
+`.auf`. There is no import syntax on the proof side.
+
 ## Comments and whitespace
 
 Blank lines are ignored.

@@ -78,6 +78,7 @@ pub const Index = @import("./trusted/mmb.zig").Index;
 pub const StringList = @import("./trusted/mmb.zig").StringList;
 pub const Proof = @import("./trusted/proof.zig");
 pub const ProofScript = @import("./frontend/proof_script.zig");
+pub const Imports = @import("./frontend/imports.zig");
 pub const Sort = @import("./trusted/sorts.zig").Sort;
 pub const Stack = @import("./trusted/stack.zig").Stack;
 pub const Term = @import("./trusted/terms.zig").Term;

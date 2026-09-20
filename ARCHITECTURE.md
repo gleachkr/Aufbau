@@ -58,8 +58,9 @@ The native CLIs are thin wrappers:
 
 - `src/bin/verifier/cli.zig` reads an aligned `.mmb` file, reads MM0
   source from stdin, and runs `VerificationSession`
-- `src/bin/compiler/cli.zig` reads `.mm0` and `.auf`, runs the
-  frontend, and writes the resulting `.mmb`
+- `src/bin/compiler/cli.zig` reads `.mm0` and `.auf`, joins any
+  `import`s (`frontend/imports.zig`), runs the frontend, and writes the
+  resulting `.mmb`; `abc join` emits the joined `.mm0` for other verifiers
 
 The WASM entrypoints export C-style functions for allocation and result
 retrieval. Compiler/verifier calls return JSON metadata through result
@@ -394,6 +395,25 @@ That statement-order lockstep model is a major simplifying choice. It is
 also required for proof-side local definitions: local defs append to the
 MMB term table, so later public MM0 declarations must be parsed and
 emitted with term IDs that include those earlier local entries.
+
+### Imports
+
+`import "file";` is not MM0 (mm0-c never sees it); mm0-rs resolves it by
+textual inclusion. Aufbau does the same, in the frontend, before parsing:
+`frontend/imports.zig` scans a file for `import` statements, resolves each
+one relative to the importing file through an injected resolver (the
+filesystem for the CLI; the editor supplies its own), and splices the
+imported text in place of the statement, depth first, deduplicated (a
+diamond `A -> {B, C} -> D` includes D once), cycles rejected. The trusted
+parser still receives one source string. A source map carries joined
+offsets back to (file, offset) so diagnostics name the file they belong
+to; the compiler and its spans work in joined coordinates throughout.
+
+The `.auf` side needs no import syntax: `foo.auf` pairs with `foo.mm0` by
+name (optional per file), and the paired proof files are concatenated in
+the same post-order as the theory, so the lockstep above is unchanged.
+The MMB stays flat. `abc join` writes the joined `.mm0` so mm0-c remains
+the oracle for multi-file inputs.
 
 `Compiler.check` and `Compiler.compileMmb` both run
 `compiler/pipeline.zig`. One path stops after validation; the other also

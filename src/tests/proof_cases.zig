@@ -51,6 +51,11 @@ fn unsupportedReason(stem: []const u8) ?[]const u8 {
 const proof_case_ext = "auf";
 
 const proof_cases = [_]ProofCase{
+    // Multi-file: `.mm0` imports joined in post-order, paired `.auf` files
+    // concatenated in the same order (lib/prop_right.mm0 has none).
+    .{ .stem = "pass_import_diamond", .outcome = .pass },
+    .{ .stem = "fail_import_cycle", .outcome = .{ .fail = error.ImportCycle } },
+    .{ .stem = "fail_import_missing", .outcome = .{ .fail = error.ImportUnresolved } },
     .{ .stem = "pass_rule_symbolic_witness", .outcome = .pass },
     .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },
@@ -745,6 +750,24 @@ fn readProofCaseFile(
     );
 }
 
+fn loadProofCase(
+    arena: std.mem.Allocator,
+    stem: []const u8,
+    failure: *?mm0.Imports.LoadFailure,
+) !mm0.Imports.LoadedPair {
+    const mm0_path = try std.fmt.allocPrint(
+        arena,
+        "tests/proof_cases/{s}.mm0",
+        .{stem},
+    );
+    const proof_path = try std.fmt.allocPrint(
+        arena,
+        "tests/proof_cases/{s}." ++ proof_case_ext,
+        .{stem},
+    );
+    return mm0.Imports.loadPair(arena, mm0_path, proof_path, failure);
+}
+
 const mm0c_cache_dir = ".zig-cache-local/mm0c-test";
 
 fn mm0cExists() bool {
@@ -876,17 +899,31 @@ test "compiler proof cases from files" {
     var failed_cases: [proof_cases.len][]const u8 = undefined;
 
     for (proof_cases) |case| {
-        const mm0_src = try readProofCaseFile(allocator, case.stem, "mm0");
-        defer allocator.free(mm0_src);
-
-        const proof_src = try readProofCaseFile(
-            allocator,
+        // A case's `.mm0` may import other files (under `lib/`); the join
+        // is what the compiler, the verifier, and mm0-c all see.
+        var case_arena = std.heap.ArenaAllocator.init(allocator);
+        defer case_arena.deinit();
+        var load_failure: ?mm0.Imports.LoadFailure = null;
+        const pair = loadProofCase(
+            case_arena.allocator(),
             case.stem,
-            proof_case_ext,
-        );
-        defer allocator.free(proof_src);
+            &load_failure,
+        ) catch |err| {
+            switch (case.outcome) {
+                .fail => |expected_err| if (err == expected_err) continue,
+                else => {},
+            }
+            std.debug.print("FAIL (load) case={s} err={}\n", .{ case.stem, err });
+            failed_cases[failure_count] = case.stem;
+            failure_count += 1;
+            continue;
+        };
+        const mm0_src = pair.mm0.text;
+        const proof_src = pair.proof.?.text;
 
         var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+        compiler.diagnostics.setMapping(.mm0, pair.mm0_mapping);
+        compiler.diagnostics.setMapping(.proof, pair.proof_mapping);
         switch (case.outcome) {
             .pass => {
                 const mmb = compiler.compileMmb(allocator) catch |err| {

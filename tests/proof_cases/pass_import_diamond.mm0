@@ -1,0 +1,6 @@
+-- Diamond: both imports pull in lib/prop.mm0, which is joined once.
+import "lib/prop_left.mm0";
+import "lib/prop_right.mm0";
+theorem root_left (a b: wff): $ a $ > $ b -> a $;
+theorem root_right (a: wff): $ a -> a $;
+theorem root_prelude (a: wff): $ a -> a -> a $;

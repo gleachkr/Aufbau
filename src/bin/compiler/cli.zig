@@ -16,6 +16,7 @@ const usage_text =
     "Usage:\n" ++
     "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
     "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
+    "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
     "  abc lsp [--lang LANG]\n" ++
     "  abc [--help | --version]\n" ++
     "\nOptions:\n" ++
@@ -47,8 +48,15 @@ const CompileCommand = struct {
     warnings_as_errors: bool,
 };
 
+const JoinCommand = struct {
+    input: []const u8,
+    /// Standard output when null.
+    output: ?[]const u8,
+};
+
 const Command = union(enum) {
     compile: CompileCommand,
+    join: JoinCommand,
     lsp,
     help,
     version,
@@ -107,6 +115,15 @@ fn parseCompileArgs(argv: []const []const u8) !Command {
     }
 
     const pos = positional.items;
+    if (pos.len >= 2 and std.mem.eql(u8, pos[0], "join")) {
+        if (pos.len > 3 or warnings_as_errors or debug.any()) {
+            return CliError.InvalidUsage;
+        }
+        return .{ .join = .{
+            .input = pos[1],
+            .output = if (pos.len == 3) pos[2] else null,
+        } };
+    }
     if (pos.len != 4 or !std.mem.eql(u8, pos[0], "compile")) {
         return CliError.InvalidUsage;
     }
@@ -148,43 +165,123 @@ fn reportFileError(action: []const u8, path: []const u8, err: anyerror) void {
     });
 }
 
-fn loadSource(
+fn reportLoadFailure(
     allocator: std.mem.Allocator,
-    path: []const u8,
-) ![]u8 {
-    return std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        std.math.maxInt(usize),
+    failure: ?mm0.Imports.LoadFailure,
+    err: anyerror,
+) void {
+    const info = failure orelse {
+        std.debug.print("abc: {s}\n", .{@errorName(err)});
+        return;
+    };
+    switch (info) {
+        .read => |read| reportFileError("read", read.path, read.err),
+        .join => |join| {
+            switch (join.kind) {
+                .cycle => std.debug.print(
+                    "abc: import cycle: '{s}' is already being imported\n",
+                    .{join.spec},
+                ),
+                .unresolved => std.debug.print(
+                    "abc: unable to import '{s}': {s}\n",
+                    .{ join.spec, @errorName(join.err orelse err) },
+                ),
+                .malformed => std.debug.print(
+                    "abc: malformed import statement\n",
+                    .{},
+                ),
+            }
+            const cwd = std.process.getCwdAlloc(allocator) catch "";
+            defer if (cwd.len != 0) allocator.free(cwd);
+            const pos = lineCol(join.file_text, join.span.start);
+            std.debug.print("  --> {s}:{d}:{d}\n", .{
+                mm0.Imports.displayPath(cwd, join.file_key),
+                pos.line,
+                pos.column,
+            });
+        },
+    }
+}
+
+const LineCol = struct { line: usize, column: usize };
+
+fn lineCol(text: []const u8, offset: usize) LineCol {
+    var line: usize = 1;
+    var column: usize = 1;
+    for (text[0..@min(offset, text.len)]) |ch| {
+        if (ch == '\n') {
+            line += 1;
+            column = 1;
+        } else column += 1;
+    }
+    return .{ .line = line, .column = column };
+}
+
+fn runJoin(allocator: std.mem.Allocator, cmd: JoinCommand) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var failure: ?mm0.Imports.LoadFailure = null;
+    const pair = mm0.Imports.loadPair(
+        arena.allocator(),
+        cmd.input,
+        null,
+        &failure,
     ) catch |err| {
-        reportFileError("read", path, err);
+        reportLoadFailure(allocator, failure, err);
         return CliError.Reported;
     };
+
+    if (cmd.output) |output| {
+        std.fs.cwd().writeFile(.{
+            .sub_path = output,
+            .data = pair.mm0.text,
+        }) catch |err| {
+            reportFileError("write", output, err);
+            return CliError.Reported;
+        };
+    } else {
+        writeToFile(std.fs.File.stdout(), pair.mm0.text) catch |err| {
+            reportFileError("write", "standard output", err);
+            return CliError.Reported;
+        };
+    }
 }
 
 fn runCompile(
     allocator: std.mem.Allocator,
     cmd: CompileCommand,
 ) !void {
-    const source = try loadSource(allocator, cmd.paths.input);
-    defer allocator.free(source);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
 
-    const proof = try loadSource(allocator, cmd.paths.proof);
-    defer allocator.free(proof);
+    var failure: ?mm0.Imports.LoadFailure = null;
+    const pair = mm0.Imports.loadPair(
+        arena.allocator(),
+        cmd.paths.input,
+        cmd.paths.proof,
+        &failure,
+    ) catch |err| {
+        reportLoadFailure(allocator, failure, err);
+        return CliError.Reported;
+    };
 
     var compiler = mm0.Compiler.initWithProof(
         allocator,
-        source,
-        proof,
+        pair.mm0.text,
+        pair.proof.?.text,
     );
     compiler.debug = cmd.debug;
     compiler.diagnostics.warnings_as_errors = cmd.warnings_as_errors;
+    compiler.diagnostics.setMapping(.mm0, pair.mm0_mapping);
+    compiler.diagnostics.setMapping(.proof, pair.proof_mapping);
     const mmb = compiler.compileMmb(allocator) catch |err| {
         const failed_path = if (compiler.diagnostics.last_diagnostic) |diag|
-            switch (diag.source) {
-                .proof => cmd.paths.proof,
-                .mm0 => cmd.paths.input,
-            }
+            compiler.diagnostics.diagnosticFileLabel(diag) orelse
+                switch (diag.source) {
+                    .proof => cmd.paths.proof,
+                    .mm0 => cmd.paths.input,
+                }
         else
             cmd.paths.input;
         std.debug.print("abc: failed to compile '{s}'\n", .{failed_path});
@@ -258,6 +355,7 @@ pub fn run(
     const cmd = try parseArgs(split.rest);
     switch (cmd) {
         .compile => |compile| try runCompile(allocator, compile),
+        .join => |join| try runJoin(allocator, join),
         .lsp => try compiler_lsp.run(allocator),
         .help => try usage(),
         .version => try version(),
@@ -368,6 +466,31 @@ test "split --lang out of the argument list" {
     try std.testing.expectError(
         CliError.InvalidUsage,
         splitLangArgs(&.{ "lsp", "--lang" }, &buf),
+    );
+}
+
+test "parse join command" {
+    const cmd = try parseArgs(&.{ "join", "a.mm0" });
+    switch (cmd) {
+        .join => |join| {
+            try std.testing.expectEqualStrings("a.mm0", join.input);
+            try std.testing.expect(join.output == null);
+        },
+        else => return error.TestUnexpectedCommand,
+    }
+    const with_output = try parseArgs(&.{ "join", "a.mm0", "out.mm0" });
+    switch (with_output) {
+        .join => |join| try std.testing.expectEqualStrings("out.mm0", join.output.?),
+        else => return error.TestUnexpectedCommand,
+    }
+    try std.testing.expectError(CliError.InvalidUsage, parseArgs(&.{"join"}));
+    try std.testing.expectError(
+        CliError.InvalidUsage,
+        parseArgs(&.{ "join", "a.mm0", "b.mm0", "c.mm0" }),
+    );
+    try std.testing.expectError(
+        CliError.InvalidUsage,
+        parseArgs(&.{ "join", "a.mm0", "-Werror" }),
     );
 }
 

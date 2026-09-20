@@ -3,6 +3,20 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Theories in several files. An `.mm0` file may `import "other.mm0";`
+  (the mm0-rs convention, resolved relative to the importing file); the
+  compiler joins the imports in place, depth first, including each file
+  once and rejecting cycles. Proof files pair with theory files by name
+  (`other.mm0` reads `other.auf` beside it when present) and are read in
+  the same order, so no proof-side import syntax is needed. Diagnostics
+  name the file and line they belong to. A new `abc join INPUT.mm0
+  [OUTPUT.mm0]` subcommand writes the joined theory for verifiers, which
+  see plain MM0 without imports.
+
 ## [0.0.11] - 2026-09-20
 
 ### Added

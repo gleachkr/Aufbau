@@ -8,6 +8,10 @@ const MathSpan = mm0.MathSpan;
 const MM0Parser = mm0.MM0Parser;
 const ProofScript = mm0.ProofScript;
 
+comptime {
+    _ = mm0.Imports;
+}
+
 test "proof script parser reads theorem blocks and proof lines" {
     const src =
         \\id

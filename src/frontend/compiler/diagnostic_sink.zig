@@ -6,6 +6,7 @@ const DiagnosticPhase = CompilerDiag.DiagnosticPhase;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const Span = @import("../proof_script.zig").Span;
+const Imports = @import("../imports.zig");
 
 pub const DiagnosticSink = struct {
     pub const max_warnings = 32;
@@ -15,6 +16,10 @@ pub const DiagnosticSink = struct {
 
     source: []const u8,
     proof_source: ?[]const u8,
+    /// When a source is a join of several files, how joined offsets map
+    /// back to (file, offset) so reports name the right file.
+    mm0_mapping: ?Imports.Mapping = null,
+    proof_mapping: ?Imports.Mapping = null,
     last_diagnostic: ?Diagnostic,
     primary_diagnostic_storage: [max_primary_diagnostics]Diagnostic =
         undefined,
@@ -177,13 +182,47 @@ pub const DiagnosticSink = struct {
         self.reportDiagnosticLocation(diag);
     }
 
+    pub fn setMapping(
+        self: *DiagnosticSink,
+        source: DiagnosticSource,
+        new_mapping: ?Imports.Mapping,
+    ) void {
+        switch (source) {
+            .mm0 => self.mm0_mapping = new_mapping,
+            .proof => self.proof_mapping = new_mapping,
+        }
+    }
+
+    /// The file a diagnostic's span lies in, when the source is a join
+    /// with a mapping; null otherwise.
+    pub fn diagnosticFileLabel(
+        self: *const DiagnosticSink,
+        diag: Diagnostic,
+    ) ?[]const u8 {
+        const span = diag.span orelse return null;
+        const m = self.mapping(diag.source) orelse return null;
+        const hit = m.locateSpan(.{ .start = span.start, .end = span.end }) orelse
+            return null;
+        return hit.label;
+    }
+
+    fn mapping(
+        self: *const DiagnosticSink,
+        source: DiagnosticSource,
+    ) ?Imports.Mapping {
+        return switch (source) {
+            .mm0 => self.mm0_mapping,
+            .proof => self.proof_mapping,
+        };
+    }
+
     fn reportDiagnosticLocation(
         self: *const DiagnosticSink,
         diag: Diagnostic,
     ) void {
         const span = diag.span orelse return;
-        const source_info = self.sourceInfo(diag.source) orelse return;
-        reportSpanLocation("", source_info, span);
+        const located = self.locateSpan(diag.source, span) orelse return;
+        reportSpanLocation("", located.info, located.span);
     }
 
     fn reportDiagnosticNotes(
@@ -196,8 +235,12 @@ pub const DiagnosticSink = struct {
             CompilerDiag.renderNoteMessage(stderr, note.message) catch return;
             stderr.writeByte('\n') catch return;
             const span = note.span orelse continue;
-            const source_info = self.sourceInfo(note.source) orelse continue;
-            reportSpanLocation(CompilerDiag.noteHeading(), source_info, span);
+            const located = self.locateSpan(note.source, span) orelse continue;
+            reportSpanLocation(
+                CompilerDiag.noteHeading(),
+                located.info,
+                located.span,
+            );
         }
     }
 
@@ -214,11 +257,12 @@ pub const DiagnosticSink = struct {
             CompilerDiag.renderRelatedLabel(stderr, related.label) catch
                 return;
             stderr.writeByte('\n') catch return;
-            const source_info = self.sourceInfo(related.source) orelse continue;
+            const located = self.locateSpan(related.source, related.span) orelse
+                continue;
             reportSpanLocation(
                 CompilerDiag.relatedHeading(),
-                source_info,
-                related.span,
+                located.info,
+                located.span,
             );
         }
     }
@@ -237,6 +281,30 @@ pub const DiagnosticSink = struct {
                 .text = self.proof_source orelse return null,
             },
         };
+    }
+
+    const LocatedSpan = struct {
+        info: SourceInfo,
+        span: Span,
+    };
+
+    /// The text and label a span should be reported against: the joined
+    /// file it came from when a mapping is set, else the whole source.
+    fn locateSpan(
+        self: *const DiagnosticSink,
+        source: DiagnosticSource,
+        span: Span,
+    ) ?LocatedSpan {
+        if (self.mapping(source)) |m| {
+            if (m.locateSpan(.{ .start = span.start, .end = span.end })) |hit| {
+                return .{
+                    .info = .{ .label = hit.label, .text = hit.text },
+                    .span = .{ .start = hit.span.start, .end = hit.span.end },
+                };
+            }
+        }
+        const info = self.sourceInfo(source) orelse return null;
+        return .{ .info = info, .span = span };
     }
 
     pub fn setDiagnostic(self: *DiagnosticSink, diag: Diagnostic) void {

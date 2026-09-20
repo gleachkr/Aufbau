@@ -1116,6 +1116,7 @@ pub fn build(b: *std.Build) void {
         "Usage:\n" ++
         "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
         "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
+        "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
         "  abc lsp [--lang LANG]\n" ++
         "  abc [--help | --version]\n" ++
         "\nOptions:\n" ++

@@ -107,6 +107,39 @@ Verification successful!
 `mm0-zig` takes the MMB path as its argument and reads the matching MM0 source
 from standard input.
 
+## Theories in several files
+
+An `.mm0` file can import another one:
+
+```
+import "prop.mm0";
+theorem weaken (p q: wff): $ p -> (q -> p) $;
+```
+
+The path is relative to the importing file. The compiler replaces the
+`import` statement with the text of the imported file, so everything
+`prop.mm0` declares is available from that point on. Imports nest, and a
+file reached by two routes is included once, where it is first reached. A
+file that imports itself, directly or through others, is an error.
+
+Proof files follow the theory files by name: when `prop.mm0` has theorems
+to prove, put their proofs in `prop.auf` next to it, and the compiler
+reads it along with the proofs of the file that imports it. A file that
+declares only sorts, terms, notation, and axioms needs no `.auf` at all.
+
+```sh
+zig-out/bin/abc compile main.mm0 main.auf main.mmb
+```
+
+`import` is a convention shared with mm0-rs, not part of MM0 itself, so a
+verifier expects the joined theory. `abc join` writes it out:
+
+```sh
+zig-out/bin/abc join main.mm0 | zig-out/bin/mm0-zig main.mmb
+```
+
+`abc join main.mm0 joined.mm0` writes it to a file instead.
+
 ## Command-line help
 
 The compiler also exposes the language server used by editor integrations:

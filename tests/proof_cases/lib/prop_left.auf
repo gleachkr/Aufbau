@@ -1,0 +1,4 @@
+left
+----
+l1: $ a -> b -> a $ by ax_k (a := $ a $, b := $ b $) []
+l2: $ b -> a $ by ax_mp (a := $ a $, b := $ b -> a $) [#1, l1]

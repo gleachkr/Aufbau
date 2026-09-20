@@ -35,6 +35,14 @@ Verify it:
 mm0-zig OUTPUT.mmb < INPUT.mm0
 ```
 
+An `.mm0` file may `import "other.mm0";` (the mm0-rs convention). `abc
+compile` follows imports. To verify the resulting binary, apply the verifier to 
+the joined theory, thus:
+
+```sh
+abc join INPUT.mm0 | mm0-zig OUTPUT.mmb
+```
+
 ## JavaScript packages
 
 WebAssembly and browser packages are published on npm:

@@ -1,0 +1,3 @@
+import "prop.mm0";
+axiom ax_right (a: wff): $ a -> a $;
+-- no paired .auf: nothing here needs a proof

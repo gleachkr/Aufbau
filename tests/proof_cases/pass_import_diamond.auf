@@ -1,0 +1,11 @@
+root_left
+---------
+l1: $ b -> a $ by left (a := $ a $, b := $ b $) [#1]
+
+root_right
+----------
+l1: $ a -> a $ by ax_right (a := $ a $) []
+
+root_prelude
+------------
+l1: $ a -> a -> a $ by k_inst (a := $ a $) []
