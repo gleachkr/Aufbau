@@ -1,0 +1,3 @@
+-- Shared prelude: the provable sort of formulas and the bracket delimiters.
+delimiter $ ( ) $;
+provable sort wff;

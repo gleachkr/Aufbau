@@ -1,9 +1,7 @@
-delimiter $ ( ) $;
-provable sort wff;
+import "lib/iff.mm0";
+
 sort ctx;
 
-term iff (a b: wff): wff;
-infixr iff: $<->$ prec 20;
 term top: wff;
 
 term ctx_eq (g h: ctx): wff;
@@ -17,13 +15,6 @@ term nd (g: ctx) (a: wff): wff;
 infixl nd: $|-$ prec 0;
 
 def boxed (a: wff): ctx = $ hyp a $;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff):
-  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 axiom ctx_refl (g: ctx): $ ctx_eq g g $;

@@ -1,0 +1,10 @@
+-- Shared prelude: natural-deduction sequents `G ⊢ a` over `ctx.mm0`.
+import "ctx.mm0";
+import "iff.mm0";
+
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ↔ (h ⊢ b) $;

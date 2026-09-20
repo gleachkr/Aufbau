@@ -1197,6 +1197,11 @@ The manual and demo consume these same packages.
 - `test-unit`: trusted, root, frontend, compiler, search, LSP-index, and
   binary test roots, plus native CLI smoke tests. File-based proof cases
   run through the root tests here, not only through integration tests.
+  The proof-case driver joins imports like the CLI: shared preludes live
+  in `tests/proof_cases/lib/` (a `wff` base, `iff` and `ctx` over it,
+  `nd` and `seq` importing both), and most small fixtures import one of
+  them. Fixtures that other test roots or the web demo
+  read as raw text stay single-file, because those readers do not join.
 - `test-integration`: upstream example pairs generated with `mm0-rs` and
   checked by the verifier. `MM0_ZIG_EXAMPLE_FILTER` narrows selection.
 - `test-frontier-smoke`: selected search frontiers and whole-fixture guards.

@@ -1,12 +1,11 @@
 delimiter $ ( ) { } [ / ] | $;
-provable sort wff;
+import "lib/iff.mm0";
 --| @vars x y z
 sort set;
 
 term not (p: wff): wff;
 prefix not: $~$ prec 41;
-term iff (a b: wff): wff;
-infixr iff: $<->$ prec 20;
+
 term eq (a b: set): wff;
 infixl eq: $=$ prec 35;
 term mem (a A: set): wff;
@@ -21,13 +20,6 @@ notation sb_s {x: set} (t: set x) (a: set x): set =
 term sb_f {x: set} (t: set x) (p: wff x): wff;
 notation sb_f {x: set} (t: set x) (p: wff x): wff =
   ($[$:41) x ($/$:0) t ($]$:0) p;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff):
-  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @relation set eq eq_refl eq_trans eq_sym _
 axiom eq_refl (a: set): $ a = a $;

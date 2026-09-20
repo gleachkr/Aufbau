@@ -1,6 +1,6 @@
 delimiter $ ( ) [ / ] $;
-provable sort wff;
-sort ctx;
+import "lib/nd.mm0";
+
 --| @vars u v w
 sort obj;
 
@@ -10,9 +10,7 @@ infixr imp: $->$ prec 25;
 term and (a b: wff): wff;
 infixr and: $∧$ prec 30;
 infixr and: $/\$ prec 30;
-term iff (a b: wff): wff;
-infixr iff: $↔$ prec 20;
-infixr iff: $<->$ prec 20;
+
 term or (a b: wff): wff;
 infixr or: $∨$ prec 28;
 infixr or: $\/$ prec 28;
@@ -43,17 +41,7 @@ term sb_f {x: obj} (t: obj x) (p: wff x): wff;
 notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
   ($[$:41) x ($/$:0) t ($]$:0) p;
 
-term ctx_eq (g h: ctx): wff;
-term emp: ctx;
 notation emp: ctx = ($_$:max);
-
---| @acui ctx_assoc ctx_comm emp ctx_idem
-term join (g h: ctx): ctx;
-infixl join: $,$ prec 5;
-term hyp (a: wff): ctx;
-coercion hyp: wff > ctx;
-term nd (g: ctx) (a: wff): wff;
-infixl nd: $⊢$ prec 0;
 
 -- Contexts are ACUI collections of closed hypotheses.
 -- This is how the ∀-intro side condition is represented here:
@@ -61,43 +49,16 @@ infixl nd: $⊢$ prec 0;
 
 -- ===== Equivalence relations =====
 
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a ↔ a $;
-axiom iff_trans (a b c: wff):
-  $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
-axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
-axiom iff_mp (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
-
 --| @relation obj eq eq_refl eq_trans eq_sym _
 axiom eq_refl (a: obj): $ a = a $;
 axiom eq_trans (a b c: obj):
   $ a = b $ > $ b = c $ > $ a = c $;
 axiom eq_sym (a b: obj): $ a = b $ > $ b = a $;
 
---| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-axiom ctx_trans (g h i: ctx):
-  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-axiom ctx_assoc (g h i: ctx):
-  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
-axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
-axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
-axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
-
 -- ===== Congruence rules =====
 
 --| @congr
-axiom join_congr (g1 g2 h1 h2: ctx):
-  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
-  $ ctx_eq (g1 , h1) (g2 , h2) $;
-
---| @congr
 axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
-
---| @congr
-axiom nd_congr (g h: ctx) (a b: wff):
-  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ↔ (h ⊢ b) $;
 
 --| @congr
 axiom g_congr (a b c d: obj):
@@ -294,7 +255,6 @@ axiom ex_intro {x: obj} (g: ctx) (t: obj x) (p: wff x):
 --| @freshen c x
 axiom ex_elim {x: obj} (g: ctx x) (h: ctx) (p: wff x) (c: wff):
   $ g ⊢ ∃ x p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
-
 
 -- ===== Theorem =====
 -- Compile-path round-trip of the nd_or_comm auto? suggestion: an unannotated

@@ -1,10 +1,8 @@
-delimiter $ ( ) $;
-provable sort wff;
+import "lib/iff.mm0";
+
 --| @vars x
 sort obj;
 
-term iff (a b: wff): wff;
-infixr iff: $<->$ prec 20;
 term imp (a b: wff): wff;
 infixr imp: $->$ prec 25;
 term top: wff;
@@ -14,12 +12,6 @@ infixl eq: $=$ prec 35;
 term all {x: obj} (p: wff x): wff;
 prefix all: $A.$ prec 41;
 term g (a b: obj): obj;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @rewrite
 axiom mark_any (a: wff): $ mark a <-> top $;

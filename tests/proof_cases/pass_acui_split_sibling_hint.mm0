@@ -1,6 +1,5 @@
-delimiter $ ( ) $;
+import "lib/iff.mm0";
 
-provable sort wff;
 sort ctx;
 --| @vars u v
 sort world;
@@ -26,16 +25,6 @@ infixl nd: $|-$ prec 0;
 
 term valid (p: form): wff;
 prefix valid: $|=$ prec 3;
-
-term iff (a b: wff): wff;
-infixr iff: $<->$ prec 20;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff):
-  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 axiom ctx_refl (g: ctx): $ ctx_eq g g $;

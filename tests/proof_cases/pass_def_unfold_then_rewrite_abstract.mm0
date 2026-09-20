@@ -1,9 +1,7 @@
 delimiter $ ( ) [ / ] $;
-provable sort wff;
+import "lib/iff.mm0";
 sort mor;
 
-term iff (a b: wff): wff;
-infixr iff: $<->$ prec 20;
 term mor_eq (f g: mor): wff;
 infixl mor_eq: $~$ prec 15;
 term comp (f g: mor): mor;
@@ -12,12 +10,6 @@ infixl comp: $o$ prec 35;
 term sb_m {x: mor} (t: mor x) (a: mor x): mor;
 notation sb_m {x: mor} (t: mor x) (a: mor x): mor =
   ($subst$:41) x ($/$:0) t a;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @relation mor mor_eq mor_refl_raw mor_trans_raw mor_sym_raw _
 axiom mor_refl_raw (f: mor): $ f ~ f $;

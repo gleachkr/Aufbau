@@ -4,8 +4,7 @@
 -- the @recover pattern refutes the ∀ member (it is no substitution instance
 -- of p), forcing q := F b regardless of where the proof writes it.
 delimiter $ ( ) [ / ] $;
-provable sort wff;
-sort ctx;
+import "lib/ctx.mm0";
 
 --| @vars x y z
 sort var;
@@ -38,15 +37,8 @@ term sb_f {x: var} (t: tm x) (p: wff x): wff;
 notation sb_f {x: var} (t: tm x) (p: wff x): wff =
   ($[$:41) x ($/$:0) t ($]$:0) p;
 
-term ctx_eq (g h: ctx): wff;
-term emp: ctx;
 notation emp: ctx = ($_$:max);
 
---| @acui ctx_assoc ctx_comm emp ctx_idem
-term join (g h: ctx): ctx;
-infixl join: $,$ prec 5;
-term hyp (p: wff): ctx;
-coercion hyp: wff > ctx;
 term nd (g: ctx) (p: wff): wff;
 infixl nd: $⊢$ prec 0;
 
@@ -56,24 +48,11 @@ axiom iff_trans (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
 axiom iff_sym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
 axiom iff_mp (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
 
---| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-axiom ctx_trans (g h i: ctx):
-  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
-axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
-axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
-axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
-
 --| @relation tm eq eq_refl eq_trans eq_sym _
 axiom eq_refl (s: tm): $ s = s $;
 axiom eq_trans (s t u: tm): $ s = t $ > $ t = u $ > $ s = u $;
 axiom eq_sym (s t: tm): $ s = t $ > $ t = s $;
 
---| @congr
-axiom join_congr (g1 g2 h1 h2: ctx):
-  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
 --| @congr
 axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
 --| @congr

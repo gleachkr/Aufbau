@@ -1,9 +1,8 @@
-delimiter $ ( ) $;
-provable sort wff;
+import "lib/iff.mm0";
+
 sort ctx;
 sort set;
 
-term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
 term ctx_eq (g h: ctx): wff;
 term emp: ctx;
 --| @acui ctx_assoc ctx_comm emp ctx_idem
@@ -14,12 +13,6 @@ term all {x: set} (p: wff x): wff; prefix all: $A.$ prec 41;
 term pred (t: set): wff; prefix pred: $P$ prec 50;
 term alt (t: set): wff; prefix alt: $Q$ prec 50;
 term sb (t: set) {x: set} (p: wff x): wff;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 axiom ctx_refl (g: ctx): $ ctx_eq g g $;

@@ -1,12 +1,11 @@
 delimiter $ ( ) [ / ] $;
-provable sort wff;
+import "lib/iff.mm0";
 sort ctx;
 sort obj;
 
 term imp (a b: wff): wff;
 infixr imp: $->$ prec 25;
-term iff (a b: wff): wff;
-infixr iff: $<->$ prec 20;
+
 term all {x: obj} (p: wff x): wff;
 prefix all: $A.$ prec 41;
 term eq (a b: obj): wff;
@@ -30,13 +29,6 @@ term hyp (a: wff): ctx;
 coercion hyp: wff > ctx;
 term nd (g: ctx) (a: wff): wff;
 infixl nd: $|- $ prec 0;
-
---| @relation wff iff iff_refl iff_trans iff_sym iff_mp
-axiom iff_refl (a: wff): $ a <-> a $;
-axiom iff_trans (a b c: wff):
-  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
-axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
-axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
 
 --| @relation obj eq eq_refl eq_trans eq_sym _
 axiom eq_refl (a: obj): $ a = a $;
