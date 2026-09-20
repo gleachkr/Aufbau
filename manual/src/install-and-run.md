@@ -131,8 +131,24 @@ declares only sorts, terms, notation, and axioms needs no `.auf` at all.
 zig-out/bin/abc compile main.mm0 main.auf main.mmb
 ```
 
+An `include` line can be used to splice a secondary file of proof-local items 
+(lemmas, local definitions, notation) into a given `.auf` file:
+
+```
+include "lemmas/weaken.auf";
+
+weaken_twice
+------------
+l1: $ b -> a $ by weaken [#1]
+```
+
+The path is relative to the including file. The included items are visible from 
+the `include` on, as if written there. Includes are not deduplicated, so 
+include a file once per proof development.
+
 `import` is a convention shared with mm0-rs, not part of MM0 itself, so a
-verifier expects the joined theory. `abc join` writes it out:
+verifier requires that imports be flattened into a single file. `abc join` 
+follows imports to generate a flattened single-file mm0:
 
 ```sh
 zig-out/bin/abc join main.mm0 | zig-out/bin/mm0-zig main.mmb

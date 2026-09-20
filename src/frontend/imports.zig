@@ -15,6 +15,12 @@
 //! to (file, offset) so diagnostics can name the file they belong to. How a
 //! file is found is the caller's business: the [`Resolver`] is injected
 //! (filesystem for the CLI, a host callback for the editor).
+//!
+//! Proof files (`.auf`) get the same treatment with `include "file";`, a
+//! line-level item that splices a file of proof-local items (lemmas, local
+//! defs, notation) at that position. Includes are not deduplicated: an item
+//! is anchored where its `include` sits, so including a file twice is
+//! including its items twice. Cycles are still an error.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -23,9 +29,10 @@ pub const Span = struct {
     end: usize,
 };
 
-/// One `import "spec";` statement in a source text.
+/// One `import "spec";` (`.mm0`) or `include "spec";` (`.auf`) statement
+/// in a source text.
 pub const ImportStmt = struct {
-    /// The whole statement, `import` through `;`.
+    /// The whole statement, keyword through `;`.
     span: Span,
     /// The string contents (no quotes).
     spec: []const u8,
@@ -34,39 +41,80 @@ pub const ImportStmt = struct {
 };
 
 pub const ScanError = error{
-    /// `import` not followed by a `"..."` string and a `;`.
+    /// The keyword not followed by a `"..."` string and a `;`.
     MalformedImport,
-    /// A `$...$` math string or `"..."` string never closes.
+    /// The `"..."` string of a statement never closes.
     UnterminatedString,
 } || std.mem.Allocator.Error;
 
+/// Which file kind a scanner or joiner works on. The two differ in the
+/// statement it looks for and in how the rest of the text is skipped:
+/// `.mm0` statements end at `;` (so `import` may sit anywhere a statement
+/// may), `.auf` items are line based (so `include` must start a line).
+pub const Syntax = enum {
+    mm0,
+    auf,
+
+    pub fn keyword(self: Syntax) []const u8 {
+        return switch (self) {
+            .mm0 => "import",
+            .auf => "include",
+        };
+    }
+};
+
 pub const Scanner = struct {
     src: []const u8,
+    syntax: Syntax,
     pos: usize = 0,
     /// The span of the token a scan error refers to.
     error_span: ?Span = null,
 
-    pub fn init(src: []const u8) Scanner {
-        return .{ .src = src };
+    pub fn init(src: []const u8, syntax: Syntax) Scanner {
+        return .{ .src = src, .syntax = syntax };
     }
 
-    /// Advance to the next `import` statement and return it, skipping every
-    /// other statement. Returns null at end of input.
+    /// Advance to the next `import`/`include` statement and return it,
+    /// skipping everything else. Returns null at end of input. An
+    /// unterminated `$...$` math string ends the scan (the rest of the text
+    /// is left for the real parser to diagnose).
     pub fn next(self: *Scanner) ScanError!?ImportStmt {
-        while (true) {
-            self.skipWhitespaceAndComments();
-            if (self.pos >= self.src.len) return null;
-            const word = self.peekWord();
-            if (std.mem.eql(u8, word, "import")) {
-                return try self.parseImport();
-            }
-            try self.skipStatement();
+        switch (self.syntax) {
+            .mm0 => while (true) {
+                self.skipWhitespaceAndComments();
+                if (self.pos >= self.src.len) return null;
+                if (std.mem.eql(u8, self.peekWord(), "import")) {
+                    return try self.parseImport();
+                }
+                self.skipStatement();
+            },
+            .auf => while (true) {
+                if (self.pos != 0 and self.src[self.pos - 1] != '\n') {
+                    self.skipLine();
+                }
+                if (self.pos >= self.src.len) return null;
+                self.skipHorizontalSpace();
+                if (self.startsInclude()) return try self.parseImport();
+                self.skipLine();
+            },
         }
+    }
+
+    /// `include` followed by a `"`: a line whose first word is `include`
+    /// but which is not followed by a string is an ordinary item (a
+    /// theorem block may be named `include`).
+    fn startsInclude(self: *const Scanner) bool {
+        if (!std.mem.eql(u8, self.peekWord(), "include")) return false;
+        var i = self.pos + "include".len;
+        while (i < self.src.len and (self.src[i] == ' ' or self.src[i] == '\t')) {
+            i += 1;
+        }
+        return i < self.src.len and self.src[i] == '"';
     }
 
     fn parseImport(self: *Scanner) ScanError!ImportStmt {
         const start = self.pos;
-        self.pos += "import".len;
+        self.pos += self.syntax.keyword().len;
         self.skipWhitespaceAndComments();
         if (self.pos >= self.src.len or self.src[self.pos] != '"') {
             self.error_span = .{ .start = start, .end = self.pos };
@@ -99,23 +147,11 @@ pub const Scanner = struct {
 
     /// Skip to just past the next statement-terminating `;`, stepping over
     /// `$...$` math strings (which may contain `;`) and comments.
-    fn skipStatement(self: *Scanner) ScanError!void {
+    fn skipStatement(self: *Scanner) void {
         while (self.pos < self.src.len) {
             const ch = self.src[self.pos];
             if (ch == '$') {
-                const dollar_start = self.pos;
-                self.pos += 1;
-                while (self.pos < self.src.len and self.src[self.pos] != '$') {
-                    self.pos += 1;
-                }
-                if (self.pos >= self.src.len) {
-                    self.error_span = .{
-                        .start = dollar_start,
-                        .end = self.src.len,
-                    };
-                    return error.UnterminatedString;
-                }
-                self.pos += 1;
+                self.skipMathString();
             } else if (ch == '-' and
                 self.pos + 1 < self.src.len and
                 self.src[self.pos + 1] == '-')
@@ -125,6 +161,45 @@ pub const Scanner = struct {
                 self.pos += 1;
                 if (ch == ';') return;
             }
+        }
+    }
+
+    /// Skip to the start of the next line, stepping over `$...$` math
+    /// strings (which may span lines) and comments.
+    fn skipLine(self: *Scanner) void {
+        while (self.pos < self.src.len) {
+            const ch = self.src[self.pos];
+            if (ch == '$') {
+                self.skipMathString();
+            } else if (ch == '-' and
+                self.pos + 1 < self.src.len and
+                self.src[self.pos + 1] == '-')
+            {
+                while (self.pos < self.src.len and self.src[self.pos] != '\n') {
+                    self.pos += 1;
+                }
+            } else {
+                self.pos += 1;
+                if (ch == '\n') return;
+            }
+        }
+    }
+
+    /// At a `$`: skip past the closing `$`. An unterminated string consumes
+    /// the rest of the input, which ends the scan.
+    fn skipMathString(self: *Scanner) void {
+        self.pos += 1;
+        while (self.pos < self.src.len and self.src[self.pos] != '$') {
+            self.pos += 1;
+        }
+        if (self.pos < self.src.len) self.pos += 1;
+    }
+
+    fn skipHorizontalSpace(self: *Scanner) void {
+        while (self.pos < self.src.len and
+            (self.src[self.pos] == ' ' or self.src[self.pos] == '\t'))
+        {
+            self.pos += 1;
         }
     }
 
@@ -158,7 +233,7 @@ pub const Scanner = struct {
 /// Does `src` contain any `import` statement? Cheap pre-check so a
 /// single-file source is passed through untouched.
 pub fn hasImports(src: []const u8) bool {
-    var scanner = Scanner.init(src);
+    var scanner = Scanner.init(src, .mm0);
     const first = scanner.next() catch return true;
     return first != null;
 }
@@ -194,8 +269,8 @@ pub const Resolver = struct {
     }
 };
 
-/// One file of a join, in post-order (imports before importers, the root
-/// last).
+/// One file of a join, in post-order (imports before importers, a root
+/// after everything it pulls in).
 pub const File = struct {
     key: []const u8,
     text: []const u8,
@@ -262,10 +337,12 @@ pub const JoinErrorKind = enum {
     malformed,
 };
 
-/// Where a join failed: the import statement (in `file_key`'s own text)
-/// that could not be followed.
+/// Where a join failed: the import/include statement (in `file_key`'s own
+/// text) that could not be followed.
 pub const JoinFailure = struct {
     kind: JoinErrorKind,
+    /// Whether the failing statement is an `import` or an `include`.
+    syntax: Syntax = .mm0,
     file_key: []const u8,
     file_text: []const u8,
     span: Span,
@@ -282,14 +359,14 @@ pub const JoinError = error{
 } || std.mem.Allocator.Error;
 
 pub const Joined = struct {
-    /// The joined text. When the root has no imports this is the root text
-    /// itself (not owned); otherwise a buffer owned by `arena`.
+    /// The joined text. When a single root has no imports this is the root
+    /// text itself (not owned); otherwise a buffer owned by `arena`.
     text: []const u8,
     map: SourceMap,
     /// Post-order file list; `map` file indices point into it.
     files: []const File,
 
-    /// Is the joined text exactly the root text (no imports)?
+    /// Is the joined text exactly the root text (one root, no imports)?
     pub fn isPassthrough(self: Joined) bool {
         return self.files.len == 1 and self.map.segments.len == 1 and
             self.map.segments[0].len == self.text.len;
@@ -306,17 +383,50 @@ pub fn join(
     root_text: []const u8,
     failure: ?*?JoinFailure,
 ) JoinError!Joined {
+    return joinAll(
+        allocator,
+        resolver,
+        .mm0,
+        &.{.{ .key = root_key, .text = root_text }},
+        failure,
+    );
+}
+
+/// Join several roots in order, each with everything it pulls in, a
+/// newline between roots. `.mm0` roots follow `import` with
+/// deduplication; `.auf` roots follow `include` without it (the paired
+/// proof files of a join are the roots on that side). A single root
+/// without statements is passed through untouched.
+pub fn joinAll(
+    allocator: std.mem.Allocator,
+    resolver: Resolver,
+    syntax: Syntax,
+    roots: []const File,
+    failure: ?*?JoinFailure,
+) JoinError!Joined {
     var joiner = Joiner{
         .allocator = allocator,
         .resolver = resolver,
+        .syntax = syntax,
         .failure = failure,
+        .passthrough = roots.len == 1,
     };
     defer joiner.deinit();
-    try joiner.write(root_key, root_text, true);
+    for (roots, 0..) |root, index| {
+        if (index != 0 and (joiner.out.items.len == 0 or
+            joiner.out.items[joiner.out.items.len - 1] != '\n'))
+        {
+            try joiner.emitSeparator();
+        }
+        try joiner.write(root.key, root.text, true);
+    }
     const files = try joiner.files.toOwnedSlice(allocator);
     const segments = try joiner.segments.toOwnedSlice(allocator);
     return .{
-        .text = if (joiner.passthrough) root_text else try joiner.out.toOwnedSlice(allocator),
+        .text = if (joiner.passthrough)
+            roots[0].text
+        else
+            try joiner.out.toOwnedSlice(allocator),
         .map = .{ .segments = segments },
         .files = files,
     };
@@ -325,6 +435,7 @@ pub fn join(
 const Joiner = struct {
     allocator: std.mem.Allocator,
     resolver: Resolver,
+    syntax: Syntax,
     failure: ?*?JoinFailure,
     out: std.ArrayListUnmanaged(u8) = .{},
     files: std.ArrayListUnmanaged(File) = .{},
@@ -333,8 +444,9 @@ const Joiner = struct {
     working: std.StringHashMapUnmanaged(void) = .{},
     /// Keys on the current import path (mm0-rs `stack`), for cycles.
     stack: std.ArrayListUnmanaged([]const u8) = .{},
-    /// True while no import has been seen: the root text can be reused.
-    passthrough: bool = true,
+    /// True while a single root has shown no statement: its text can be
+    /// reused.
+    passthrough: bool,
 
     fn deinit(self: *Joiner) void {
         self.out.deinit(self.allocator);
@@ -352,7 +464,9 @@ const Joiner = struct {
     ) JoinError!void {
         try self.stack.append(self.allocator, key);
         defer _ = self.stack.pop();
-        if (is_root) try self.working.put(self.allocator, key, {});
+        if (is_root and self.syntax == .mm0) {
+            try self.working.put(self.allocator, key, {});
+        }
 
         // Files are numbered in post-order, so this file's index is only
         // known once its imports are done; segments record it via a
@@ -360,7 +474,7 @@ const Joiner = struct {
         var pending: std.ArrayListUnmanaged(usize) = .{};
         defer pending.deinit(self.allocator);
 
-        var scanner = Scanner.init(text);
+        var scanner = Scanner.init(text, self.syntax);
         var start: usize = 0;
         while (true) {
             const stmt = scanner.next() catch |err| switch (err) {
@@ -409,8 +523,10 @@ const Joiner = struct {
                     return error.ImportCycle;
                 }
             }
-            const gop = try self.working.getOrPut(self.allocator, resolved.key);
-            if (gop.found_existing) continue;
+            if (self.syntax == .mm0) {
+                const gop = try self.working.getOrPut(self.allocator, resolved.key);
+                if (gop.found_existing) continue;
+            }
             try self.write(resolved.key, resolved.text, false);
             // Keep the importer's text out of a trailing comment in the
             // imported file (mm0-rs does the same in comments mode).
@@ -461,14 +577,17 @@ const Joiner = struct {
 
     fn fail(self: *Joiner, info: JoinFailure) void {
         if (self.failure) |slot| {
-            if (slot.* == null) slot.* = info;
+            if (slot.* == null) {
+                slot.* = info;
+                slot.*.?.syntax = self.syntax;
+            }
         }
     }
 };
 
 /// Filesystem resolver for native hosts: specs resolve relative to the
 /// importing file's directory; keys are canonical paths so the same file
-/// reached by two routes is joined once.
+/// reached by two routes is joined once (`.mm0`) or recognised on a cycle.
 pub const FsResolver = struct {
     pub fn resolver(self: *FsResolver) Resolver {
         return .{ .ctx = @ptrCast(self), .resolveFn = resolveFn };
@@ -500,57 +619,6 @@ pub const FsResolver = struct {
         return .{ .key = key, .text = text };
     }
 };
-
-/// Concatenate already-ordered files (the paired `.auf` files of a join)
-/// into one text with a source map, a newline between files.
-pub fn concat(
-    allocator: std.mem.Allocator,
-    files: []const File,
-) std.mem.Allocator.Error!Joined {
-    if (files.len == 1) {
-        const segments = try allocator.alloc(Segment, 1);
-        segments[0] = .{
-            .joined_start = 0,
-            .len = files[0].text.len,
-            .file_index = 0,
-            .file_offset = 0,
-        };
-        return .{
-            .text = files[0].text,
-            .map = .{ .segments = segments },
-            .files = files,
-        };
-    }
-    var out: std.ArrayListUnmanaged(u8) = .{};
-    defer out.deinit(allocator);
-    var segments: std.ArrayListUnmanaged(Segment) = .{};
-    defer segments.deinit(allocator);
-    for (files, 0..) |file, index| {
-        if (index != 0 and (out.items.len == 0 or
-            out.items[out.items.len - 1] != '\n'))
-        {
-            try segments.append(allocator, .{
-                .joined_start = out.items.len,
-                .len = 1,
-                .file_index = null,
-                .file_offset = 0,
-            });
-            try out.append(allocator, '\n');
-        }
-        try segments.append(allocator, .{
-            .joined_start = out.items.len,
-            .len = file.text.len,
-            .file_index = index,
-            .file_offset = 0,
-        });
-        try out.appendSlice(allocator, file.text);
-    }
-    return .{
-        .text = try out.toOwnedSlice(allocator),
-        .map = .{ .segments = try segments.toOwnedSlice(allocator) },
-        .files = files,
-    };
-}
 
 /// A joined text plus the names its files go by in diagnostics.
 pub const Mapping = struct {
@@ -588,8 +656,8 @@ pub const Mapping = struct {
 };
 
 /// A root `.mm0` joined with its imports, and the `.auf` files paired with
-/// every joined file (by name: `foo.mm0` <-> `foo.auf`), concatenated in
-/// the same order. Native hosts only.
+/// every joined file (by name: `foo.mm0` <-> `foo.auf`), joined in the same
+/// order with their `include`s. Native hosts only.
 pub const LoadedPair = struct {
     mm0: Joined,
     mm0_mapping: Mapping,
@@ -660,31 +728,33 @@ pub fn loadPair(
     );
 
     var proof_files: std.ArrayListUnmanaged(File) = .{};
-    var proof_labels: std.ArrayListUnmanaged([]const u8) = .{};
+    var proof_labeller = Labeller{
+        .cwd = cwd,
+        .root_key = "",
+        .root_label = proof_path orelse "",
+    };
     for (joined.files, 0..) |file, index| {
         const is_root = index + 1 == joined.files.len;
-        const path: []const u8 = if (is_root)
-            proof_path orelse (proofSibling(allocator, file.key) catch continue)
+        const explicit = is_root and proof_path != null;
+        const path: []const u8 = if (explicit)
+            proof_path.?
         else
             proofSibling(allocator, file.key) catch continue;
-        const text = std.fs.cwd().readFileAlloc(
-            allocator,
-            path,
-            std.math.maxInt(usize),
-        ) catch |err| {
-            if (is_root and proof_path != null) {
-                failure.* = .{ .read = .{ .path = path, .err = err } };
-                return error.ReadFailed;
-            }
-            if (err == error.FileNotFound) continue;
+        const key = FsResolver.rootKey(allocator, path) catch |err| {
+            if (!explicit and err == error.FileNotFound) continue;
             failure.* = .{ .read = .{ .path = path, .err = err } };
             return error.ReadFailed;
         };
-        try proof_files.append(allocator, .{ .key = path, .text = text });
-        try proof_labels.append(
+        const text = std.fs.cwd().readFileAlloc(
             allocator,
-            if (is_root and proof_path != null) path else displayPath(cwd, path),
-        );
+            key,
+            std.math.maxInt(usize),
+        ) catch |err| {
+            failure.* = .{ .read = .{ .path = path, .err = err } };
+            return error.ReadFailed;
+        };
+        try proof_files.append(allocator, .{ .key = key, .text = text });
+        if (explicit) proof_labeller.root_key = key;
     }
     if (proof_files.items.len == 0) {
         return .{
@@ -694,16 +764,27 @@ pub fn loadPair(
             .proof_mapping = null,
         };
     }
-    const proof_joined = try concat(allocator, try proof_files.toOwnedSlice(allocator));
+    join_failure = null;
+    const proof_joined = joinAll(
+        allocator,
+        fs.resolver(),
+        .auf,
+        proof_files.items,
+        &join_failure,
+    ) catch |err| {
+        if (join_failure) |info| failure.* = .{ .join = info };
+        return err;
+    };
     return .{
         .mm0 = joined,
         .mm0_mapping = mm0_mapping,
         .proof = proof_joined,
-        .proof_mapping = .{
-            .map = proof_joined.map,
-            .files = proof_joined.files,
-            .labels = try proof_labels.toOwnedSlice(allocator),
-        },
+        .proof_mapping = try Mapping.fromJoined(
+            allocator,
+            proof_joined,
+            Labeller.label,
+            @ptrCast(&proof_labeller),
+        ),
     };
 }
 
@@ -714,7 +795,9 @@ const Labeller = struct {
 
     fn label(ctx: *anyopaque, key: []const u8) []const u8 {
         const self: *Labeller = @ptrCast(@alignCast(ctx));
-        if (std.mem.eql(u8, key, self.root_key)) return self.root_label;
+        if (self.root_key.len != 0 and std.mem.eql(u8, key, self.root_key)) {
+            return self.root_label;
+        }
         return displayPath(self.cwd, key);
     }
 };
@@ -775,6 +858,16 @@ fn joinMem(
     return join(arena, mem.resolver(), root_key, root_text, failure);
 }
 
+fn includeMem(
+    arena: std.mem.Allocator,
+    files: []const File,
+    roots: []const File,
+    failure: *?JoinFailure,
+) JoinError!Joined {
+    var mem = MemResolver{ .files = files };
+    return joinAll(arena, mem.resolver(), .auf, roots, failure);
+}
+
 test "scanner finds imports and skips other statements" {
     const src =
         \\-- import "not.mm0"; in a comment
@@ -785,7 +878,7 @@ test "scanner finds imports and skips other statements" {
         \\theorem t: $ x $;
         \\  import  "b.mm0" ;
     ;
-    var scanner = Scanner.init(src);
+    var scanner = Scanner.init(src, .mm0);
     const a = (try scanner.next()).?;
     try std.testing.expectEqualStrings("a.mm0", a.spec);
     try std.testing.expectEqualStrings("import \"a.mm0\";", src[a.span.start..a.span.end]);
@@ -798,14 +891,42 @@ test "scanner finds imports and skips other statements" {
 }
 
 test "scanner reports malformed imports" {
-    var scanner = Scanner.init("import a.mm0;");
+    var scanner = Scanner.init("import a.mm0;", .mm0);
     try std.testing.expectError(error.MalformedImport, scanner.next());
-    scanner = Scanner.init("import \"a.mm0\"");
+    scanner = Scanner.init("import \"a.mm0\"", .mm0);
     try std.testing.expectError(error.MalformedImport, scanner.next());
-    scanner = Scanner.init("import \"a.mm0");
+    scanner = Scanner.init("import \"a.mm0", .mm0);
     try std.testing.expectError(error.UnterminatedString, scanner.next());
-    scanner = Scanner.init("axiom a: $ x;");
-    try std.testing.expectError(error.UnterminatedString, scanner.next());
+    // An unterminated math string is the parser's to report; it just ends
+    // the scan.
+    scanner = Scanner.init("axiom a: $ x;\nimport \"a.mm0\";", .mm0);
+    try std.testing.expect((try scanner.next()) == null);
+}
+
+test "auf scanner finds includes at line starts only" {
+    const src =
+        \\-- include "not.auf"; in a comment
+        \\include "a.auf";
+        \\include
+        \\-------
+        \\l1: $ x $ by ax [] -- include "no.auf";
+        \\l2: $ multi
+        \\include "still math.auf";
+        \\line $ by ax []
+        \\  include  "b.auf" ; -- trailing
+        \\lemma include "c.auf"; is not an item
+    ;
+    var scanner = Scanner.init(src, .auf);
+    const a = (try scanner.next()).?;
+    try std.testing.expectEqualStrings("a.auf", a.spec);
+    try std.testing.expectEqualStrings("include \"a.auf\";", src[a.span.start..a.span.end]);
+    const b = (try scanner.next()).?;
+    try std.testing.expectEqualStrings("b.auf", b.spec);
+    try std.testing.expectEqualStrings("include  \"b.auf\" ;", src[b.span.start..b.span.end]);
+    try std.testing.expect((try scanner.next()) == null);
+
+    scanner = Scanner.init("include \"a.auf\"\nfoo\n---\n", .auf);
+    try std.testing.expectError(error.MalformedImport, scanner.next());
 }
 
 test "join without imports passes the root through" {
@@ -902,4 +1023,76 @@ test "join reports cycles and unresolved imports" {
     );
     try std.testing.expectEqual(JoinErrorKind.malformed, failure.?.kind);
     try std.testing.expectEqual(@as(usize, 8), failure.?.span.start);
+}
+
+test "include join splices in place without dedup and joins roots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const files = [_]File{
+        .{ .key = "d", .text = "lemma d\n---\n" },
+        .{ .key = "b", .text = "include \"d\";\nlemma b\n---\n" },
+    };
+    const roots = [_]File{
+        .{ .key = "p", .text = "lemma p\n---" },
+        .{ .key = "r", .text = "include \"b\";\nt\n---\ninclude \"d\";\n" },
+    };
+    var failure: ?JoinFailure = null;
+    const joined = try includeMem(arena.allocator(), &files, &roots, &failure);
+    try std.testing.expectEqualStrings(
+        "lemma p\n---\nlemma d\n---\n\nlemma b\n---\n\nt\n---\nlemma d\n---\n\n",
+        joined.text,
+    );
+    // Post-order per root, d twice: p, d, b, d, r.
+    try std.testing.expectEqual(@as(usize, 5), joined.files.len);
+    try std.testing.expectEqualStrings("p", joined.files[0].key);
+    try std.testing.expectEqualStrings("d", joined.files[1].key);
+    try std.testing.expectEqualStrings("b", joined.files[2].key);
+    try std.testing.expectEqualStrings("d", joined.files[3].key);
+    try std.testing.expectEqualStrings("r", joined.files[4].key);
+    try std.testing.expect(!joined.isPassthrough());
+    const t_start = std.mem.indexOf(u8, joined.text, "t\n---").?;
+    const loc = joined.map.locate(t_start).?;
+    try std.testing.expectEqualStrings("r", joined.files[loc.file_index].key);
+    try std.testing.expectEqual(@as(usize, "include \"b\";\n".len), loc.offset);
+    const second_d = std.mem.lastIndexOf(u8, joined.text, "lemma d").?;
+    try std.testing.expectEqual(@as(usize, 3), joined.map.locate(second_d).?.file_index);
+
+    // A single root without includes is passed through.
+    const single = try includeMem(arena.allocator(), &files, roots[0..1], &failure);
+    try std.testing.expect(single.isPassthrough());
+    try std.testing.expect(single.text.ptr == roots[0].text.ptr);
+}
+
+test "include join reports cycles, misses, and malformed includes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const files = [_]File{
+        .{ .key = "a", .text = "include \"b\";\n" },
+        .{ .key = "b", .text = "include \"a\";\n" },
+    };
+    var failure: ?JoinFailure = null;
+    try std.testing.expectError(
+        error.ImportCycle,
+        includeMem(arena.allocator(), &files, files[0..1], &failure),
+    );
+    try std.testing.expectEqual(JoinErrorKind.cycle, failure.?.kind);
+    try std.testing.expectEqual(Syntax.auf, failure.?.syntax);
+    try std.testing.expectEqualStrings("b", failure.?.file_key);
+
+    failure = null;
+    const missing = [_]File{.{ .key = "r", .text = "foo\n---\ninclude \"zz\";\n" }};
+    try std.testing.expectError(
+        error.ImportUnresolved,
+        includeMem(arena.allocator(), &files, &missing, &failure),
+    );
+    try std.testing.expectEqualStrings("zz", failure.?.spec);
+    try std.testing.expectEqual(@as(usize, 16), failure.?.span.start);
+
+    failure = null;
+    const malformed = [_]File{.{ .key = "r", .text = "include \"a\"\n" }};
+    try std.testing.expectError(
+        error.MalformedImport,
+        includeMem(arena.allocator(), &files, &malformed, &failure),
+    );
+    try std.testing.expectEqual(JoinErrorKind.malformed, failure.?.kind);
 }

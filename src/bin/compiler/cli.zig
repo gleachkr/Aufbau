@@ -177,18 +177,19 @@ fn reportLoadFailure(
     switch (info) {
         .read => |read| reportFileError("read", read.path, read.err),
         .join => |join| {
+            const keyword = join.syntax.keyword();
             switch (join.kind) {
                 .cycle => std.debug.print(
-                    "abc: import cycle: '{s}' is already being imported\n",
-                    .{join.spec},
+                    "abc: {s} cycle: '{s}' is already being {s}d\n",
+                    .{ keyword, join.spec, keyword },
                 ),
                 .unresolved => std.debug.print(
-                    "abc: unable to import '{s}': {s}\n",
-                    .{ join.spec, @errorName(join.err orelse err) },
+                    "abc: unable to {s} '{s}': {s}\n",
+                    .{ keyword, join.spec, @errorName(join.err orelse err) },
                 ),
                 .malformed => std.debug.print(
-                    "abc: malformed import statement\n",
-                    .{},
+                    "abc: malformed {s} statement\n",
+                    .{keyword},
                 ),
             }
             const cwd = std.process.getCwdAlloc(allocator) catch "";

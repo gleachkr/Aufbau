@@ -16,6 +16,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   name the file and line they belong to. A new `abc join INPUT.mm0
   [OUTPUT.mm0]` subcommand writes the joined theory for verifiers, which
   see plain MM0 without imports.
+- Proof-side `include "other.auf";`. The line is replaced by the named
+  file (relative to the including one), so the lemmas, local definitions,
+  and notation it holds are visible from that point on. Includes nest;
+  they are not deduplicated, and a cycle is an error.
 
 ## [0.0.11] - 2026-09-20
 

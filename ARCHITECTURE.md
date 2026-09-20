@@ -409,11 +409,14 @@ parser still receives one source string. A source map carries joined
 offsets back to (file, offset) so diagnostics name the file they belong
 to; the compiler and its spans work in joined coordinates throughout.
 
-The `.auf` side needs no import syntax: `foo.auf` pairs with `foo.mm0` by
-name (optional per file), and the paired proof files are concatenated in
-the same post-order as the theory, so the lockstep above is unchanged.
-The MMB stays flat. `abc join` writes the joined `.mm0` so mm0-c remains
-the oracle for multi-file inputs.
+The `.auf` side needs no import syntax for theory dependencies: `<name>.auf`
+pairs with `<name>.mm0` by name (optional per file), and the paired proof
+files are joined in the same post-order as the theory, so the lockstep
+above is unchanged. A proof file may `include "other.auf";` (line-level,
+same module, no deduplication): the included text replaces the statement,
+so its proof-local items are anchored by position like any other item.
+Both joins share the source map. The MMB stays flat. `abc join` writes
+the joined `.mm0` so mm0-c remains the oracle for multi-file inputs.
 
 `Compiler.check` and `Compiler.compileMmb` both run
 `compiler/pipeline.zig`. One path stops after validation; the other also

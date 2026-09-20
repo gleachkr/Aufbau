@@ -1,0 +1,5 @@
+include "k_def.auf";
+
+lemma kk_holds (a: wff): $ kk a $
+-------
+l1: $ a -> a -> a $ by k_inst (a := $ a $) []

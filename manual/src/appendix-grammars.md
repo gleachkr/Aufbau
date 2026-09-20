@@ -77,12 +77,15 @@ See [Notation](notation.md) for how precedence and delimiters interact.
 ## The .auf language
 
 An Aufbau script is a sequence of theorem blocks, lemma blocks, def items,
-and notation items, in the same order as the `.mm0` declarations they serve
-(see [Proof blocks and lines](proof-blocks-and-lines.md)):
+notation items, and include statements, in the same order as the 
+corresponding `.mm0` declarations (see [Proof blocks and 
+lines](proof-blocks-and-lines.md)):
 
 ```text
 aufbau-script ::= (theorem-block | lemma-block | def-item | notation-item
-                  | blank | comment)*
+                  | include | blank | comment)*
+
+include       ::= 'include' '"' path '"' ';'     -- at the start of a line
 
 theorem-block ::= theorem-name newline underline newline* proof-line*
 underline     ::= '-' '-' '-'* newline          -- at least 3 dashes
@@ -104,7 +107,10 @@ top-level `: sort` return annotation is what distinguishes a proof-local
 definition from a public body filler ([Lemmas and definitions in
 proofs](lemmas-defs-in-proofs.md)). A notation item is an MM0 `prefix`,
 `infixl`, `infixr`, or `notation` statement naming a proof-local
-definition; `coercion` and `delimiter` statements are not accepted.
+definition. `coercion` and `delimiter` statements are not accepted. An
+include statement is replaced by the text of the designated file before parsing 
+([Theories in several
+files](install-and-run.md#theories-in-several-files)).
 
 ## Proof lines
 

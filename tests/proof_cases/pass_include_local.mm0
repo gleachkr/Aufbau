@@ -1,0 +1,3 @@
+import "lib/prop.mm0";
+theorem inc_left (a b: wff): $ a $ > $ b -> a $;
+theorem inc_local (a: wff): $ a -> a -> a $;

@@ -1,0 +1,5 @@
+-- Included by pass_include_local.auf: a proof-local lemma over lib/prop.mm0.
+lemma weaken (a b: wff): $ a $ > $ b -> a $
+------
+l1: $ a -> b -> a $ by ax_k (a := $ a $, b := $ b $) []
+l2: $ b -> a $ by ax_mp (a := $ a $, b := $ b -> a $) [#1, l1]

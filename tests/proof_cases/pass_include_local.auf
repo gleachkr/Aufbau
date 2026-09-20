@@ -1,0 +1,13 @@
+-- Proof-side includes splice proof-local items where they sit: `weaken`
+-- is visible to inc_left, `kk`/`kk_holds` only from the second include on.
+include "lib/weaken.auf";
+
+inc_left
+--------
+l1: $ b -> a $ by weaken (a := $ a $, b := $ b $) [#1]
+
+include "lib/k_lemma.auf";
+
+inc_local
+---------
+l1: $ kk a $ by kk_holds (a := $ a $) []

@@ -1,0 +1,2 @@
+-- Included from lib/k_lemma.auf (resolved relative to that file).
+def kk (a: wff): wff = $ a -> a -> a $

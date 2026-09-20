@@ -80,11 +80,20 @@ before checking begins.
 When the `.mm0` file imports other files (`import "other.mm0";`, the
 mm0-rs convention), the theory the compiler checks is the joined text:
 each import is replaced by the imported file, depth first, each file
-included once. Proof files follow the theory: `other.mm0` pairs with
-`other.auf` in the same directory when that file exists, and the paired
+included once. Proof files follow the theory: `<name>.mm0` pairs with
+`<name>.auf` in the same directory when that file exists, and the paired
 proof files are concatenated in the same order as the joined theory. A
 file whose declarations need no proofs (axioms, terms, notation) needs no
-`.auf`. There is no import syntax on the proof side.
+`.auf`. Theory-level dependencies therefore need no proof-side syntax.
+
+A proof file may also `include "other.auf";` on a line of its own. The
+statement is replaced by the text of the named file (a path relative to
+the including file), so the items it holds are anchored where the
+`include` sits: lemmas, local definitions, and notation it declares are
+visible from that point on, exactly as if written there. This is the
+place for shared proof-local material and for generated lemma files.
+Includes nest and are not deduplicated (including a file twice declares
+its items twice); an include cycle is an error.
 
 ## Comments and whitespace
 
@@ -117,14 +126,18 @@ underline line, or at a `--` comment before that line.
 ## Top-level blocks
 
 An Aufbau script is a sequence of theorem blocks, lemma blocks, def
-items, blank lines, and comments.
+items, include statements, blank lines, and comments.
 
 ```text
-aufbau-script ::= (theorem-block | lemma-block | def-item | blank |
-                   comment)*
+aufbau-script ::= (theorem-block | lemma-block | def-item | include |
+                   blank | comment)*
+include ::= 'include' '"' path '"' ';'
 comment ::= '--' (any char except newline)* newline
 annotation-comment ::= '--|' annotation-text newline
 ```
+
+An `include` must start its line; it is resolved before parsing (see
+Processing model above), so the parser proper never sees it.
 
 ### Theorem blocks
 
