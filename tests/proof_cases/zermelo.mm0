@@ -547,8 +547,6 @@ axiom power_elim (G: ctx) (A B: set):
 
 -- The comprehension binds x in p, not in the element t. Allow t to
 -- mention x, even as a binder inside an inline comprehension.
---| @view {x:set}(G H:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
---| @recover t q p x
 axiom sep_intro {x: set} (G H: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ A $ > $ H ⊢ [x/t] p $ >
   $ G , H ⊢ t ∈ {x ∈ A | p} $;
@@ -556,8 +554,6 @@ axiom sep_intro {x: set} (G H: ctx x) (t: set x) (A: set) (p: wff x):
 axiom sep_elim_left {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ t ∈ A $;
 
---| @view {x:set}(G:ctx x)(t:set x)(A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ q $
---| @recover t q p x
 axiom sep_elim_right {x: set} (G: ctx x) (t: set x) (A: set) (p: wff x):
   $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ [x/t] p $;
 

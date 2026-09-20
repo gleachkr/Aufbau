@@ -355,16 +355,10 @@ axiom power_elim (A B: set): $ B ∈ power A $ > $ B ⊆ A $;
 
 axiom sep_intro {x: set} (A: set) (p: wff x):
   $ x ∈ A $ > $ p $ > $ x ∈ {x ∈ A | p} $;
---| @view {x: set} (t A: set) (p: wff x) (q: wff): $ t ∈ A $ > $ q → t ∈ {x ∈ A | p} $
---| @recover t q p x
 axiom sep_intro_imp {x: set} (t A: set) (p: wff x):
   $ t ∈ A $ > $ [x/t] p → t ∈ {x ∈ A | p} $;
---| @view {x: set} (t A: set) (p: wff x) (r: wff): $ t ∈ A → (r → t ∈ {x ∈ A | p}) $
---| @recover t r p x
 axiom sep_intro_imp_imp {x: set} (t A: set) (p: wff x):
   $ t ∈ A → ([x/t] p → t ∈ {x ∈ A | p}) $;
---| @view {x: set} (t A: set) (p: wff x) (q s: wff): $ q → t ∈ A $ > $ q → s $ > $ q → t ∈ {x ∈ A | p} $
---| @recover t s p x
 axiom sep_intro_imp2 {x: set} (t A: set) (p: wff x) (q: wff):
   $ q → t ∈ A $ > $ q → [x/t] p $ >
   $ q → t ∈ {x ∈ A | p} $;
@@ -375,8 +369,6 @@ axiom sep_elim_left_imp {x: set} (t A: set) (p: wff x):
   $ t ∈ {x ∈ A | p} → t ∈ A $;
 axiom sep_elim_right {x: set} (A: set) (p: wff x):
   $ x ∈ {x ∈ A | p} $ > $ p $;
---| @view {x: set} (t A: set) (p: wff x) (q: wff): $ t ∈ {x ∈ A | p} → q $
---| @recover t q p x
 axiom sep_elim_right_imp {x: set} (t A: set) (p: wff x):
   $ t ∈ {x ∈ A | p} → [x/t] p $;
 axiom sep_subset {x: set} (A: set) (p: wff x):

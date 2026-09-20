@@ -17,6 +17,7 @@ pub fn saveMatchSnapshot(
     return .{
         .trail_len = state.trail.items.len,
         .dummy_info_len = state.symbolic_dummy_infos.items.len,
+        .deferred_len = state.deferred.items.len,
         .cache_generation = state.cache_generation,
     };
 }
@@ -31,6 +32,7 @@ pub fn restoreMatchSnapshot(
     state.symbolic_dummy_infos.shrinkRetainingCapacity(
         snapshot.dummy_info_len,
     );
+    state.deferred.shrinkRetainingCapacity(snapshot.deferred_len);
     // The representative caches are memoization keyed on binding/witness
     // state. They are cleared (and the generation bumped) on every such
     // mutation, so a moved generation means the current cache contents

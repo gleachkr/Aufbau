@@ -16,6 +16,7 @@ const SymbolicExpr = Types.SymbolicExpr;
 const BindingMode = Types.BindingMode;
 const HiddenWitnessProvider = Types.HiddenWitnessProvider;
 const MatchSession = MatchState.MatchSession;
+const MatchSnapshot = MatchState.MatchSnapshot;
 const semantic_match_budget: usize = 8;
 
 fn assertCacheIdentity(self: anytype) void {
@@ -267,7 +268,9 @@ pub fn matchTemplateTransparent(
             null);
     }
 
-    if (!try matchTemplateRecState(self, template, actual, &state)) {
+    var snapshot = try WitnessState.saveMatchSnapshot(self, &state);
+    defer WitnessState.deinitMatchSnapshot(self, &snapshot);
+    if (!try matchTemplateSettled(self, template, actual, &state, &snapshot)) {
         return false;
     }
     try WitnessState.representResolvedBindings(self, &state, bindings);
@@ -675,14 +678,109 @@ pub fn matchTemplateRecState(
             // Structural replay and def expansion did not match, but earlier
             // hypotheses may already have solved every binder in this subtree.
             // In that case, compare the resolved concrete expression directly.
-            break :blk try matchResolvedTemplateConcrete(
+            if (try matchResolvedTemplateConcrete(
                 self,
                 template,
+                actual,
+                state,
+            )) {
+                break :blk true;
+            }
+
+            // A rewrite-head node with open binders proves nothing by
+            // mismatching structurally: `[x/t] p` cannot be matched until
+            // `x` and `p` are known. Defer it, let the siblings bind what they
+            // can, and settle it at the boundary by instantiation and
+            // normalization.
+            break :blk try deferRewriteHeadMismatch(
+                self,
+                template,
+                app,
                 actual,
                 state,
             );
         },
     };
+}
+
+fn deferRewriteHeadMismatch(
+    self: anytype,
+    template: TemplateExpr,
+    app: TemplateExpr.App,
+    actual: ExprId,
+    state: *MatchSession,
+) anyerror!bool {
+    if (state.deferral_suspended != 0) return false;
+    const registry = self.shared.registry orelse return false;
+    if (registry.getRewriteRules(app.term_id).len == 0) return false;
+    if (!templateHasUnsolvedBinder(template, state)) return false;
+    try state.deferred.append(self.shared.allocator, .{
+        .template = template,
+        .actual = actual,
+    });
+    return true;
+}
+
+fn templateHasUnsolvedBinder(
+    template: TemplateExpr,
+    state: *const MatchSession,
+) bool {
+    return switch (template) {
+        .binder => |idx| state.bindings[idx] == null,
+        .app => |app| blk: {
+            for (app.args) |arg| {
+                if (templateHasUnsolvedBinder(arg, state)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+/// Walk `template` against `actual` with sibling deferral, then settle every
+/// node deferred by the walk. A provisional result never escapes: if a
+/// deferred node cannot be settled, the state is rolled back to `snapshot`
+/// and the walk repeats with deferral suspended, so callers see exactly the
+/// pre-deferral outcome set plus the matches deferral unlocks. Callers roll
+/// back on `false`.
+fn matchTemplateSettled(
+    self: anytype,
+    template: TemplateExpr,
+    actual: ExprId,
+    state: *MatchSession,
+    snapshot: *const MatchSnapshot,
+) anyerror!bool {
+    const start = snapshot.deferred_len;
+    if (!try matchTemplateRecState(self, template, actual, state)) return false;
+    if (state.deferred.items.len == start) return true;
+    if (try drainDeferredNodes(self, state, start)) return true;
+
+    try WitnessState.restoreMatchSnapshot(self, snapshot, state);
+    state.deferral_suspended += 1;
+    defer state.deferral_suspended -= 1;
+    return try matchTemplateRecState(self, template, actual, state);
+}
+
+fn drainDeferredNodes(
+    self: anytype,
+    state: *MatchSession,
+    start: usize,
+) anyerror!bool {
+    state.deferral_suspended += 1;
+    defer state.deferral_suspended -= 1;
+    var idx = start;
+    while (idx < state.deferred.items.len) : (idx += 1) {
+        const node = state.deferred.items[idx];
+        if (!try self.matchTemplateSemanticState(
+            node.template,
+            node.actual,
+            state,
+            semantic_match_budget,
+        )) {
+            return false;
+        }
+    }
+    state.deferred.shrinkRetainingCapacity(start);
+    return true;
 }
 
 pub fn matchTemplateAppDirectState(
@@ -1081,7 +1179,7 @@ pub fn tryMatchTemplateStateDirect(
 ) anyerror!bool {
     var snapshot = try WitnessState.saveMatchSnapshot(self, state);
     defer WitnessState.deinitMatchSnapshot(self, &snapshot);
-    if (try matchTemplateRecState(self, template, actual, state)) {
+    if (try matchTemplateSettled(self, template, actual, state, &snapshot)) {
         return true;
     }
     try WitnessState.restoreMatchSnapshot(self, &snapshot, state);

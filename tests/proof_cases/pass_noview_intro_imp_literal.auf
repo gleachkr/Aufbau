@@ -1,0 +1,3 @@
+noview_intro_imp_literal
+------------------------
+l1: $ ~ a e. B -> a e. { y e. A | ~ y e. B } $ by sep_intro_imp [#1]

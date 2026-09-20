@@ -1,6 +1,7 @@
 const std = @import("std");
 const Types = @import("./types.zig");
 const ExprId = @import("../expr.zig").ExprId;
+const TemplateExpr = @import("../rules.zig").TemplateExpr;
 
 /// One undone-able mutation of a `MatchSession`. Each entry stores the
 /// *previous* value for a key (or binding slot); `old == null` means the
@@ -14,6 +15,16 @@ pub const TrailEntry = union(enum) {
     provisional_witness_info: struct { key: ExprId, old: ?Types.SymbolicDummyInfo },
     materialized_witness_info: struct { key: ExprId, old: ?Types.SymbolicDummyInfo },
     dummy_forbidden: struct { slot: usize, old: u55 },
+};
+
+/// A template node the transparent walker skipped provisionally: its head
+/// has `@rewrite` rules and its subtree still had unsolved binders when the
+/// walk reached it, so a structural mismatch there proves nothing yet. The
+/// walker's public boundaries retry every deferred node by instantiation +
+/// normalization once the siblings have bound what they can.
+pub const DeferredNode = struct {
+    template: TemplateExpr,
+    actual: ExprId,
 };
 
 pub const MatchSession = struct {
@@ -59,6 +70,15 @@ pub const MatchSession = struct {
     /// restore knows whether the representative caches were invalidated
     /// (and thus hold post-save entries that the rollback makes stale).
     cache_generation: u64 = 0,
+    /// Rewrite-head template nodes deferred by the transparent walker
+    /// (see `DeferredNode`). Append-only between snapshots; snapshots roll
+    /// it back by length (`MatchSnapshot.deferred_len`), and the walker's
+    /// boundaries drain it before a match result escapes.
+    deferred: std.ArrayListUnmanaged(DeferredNode) = .empty,
+    /// Non-zero while a boundary drains `deferred` (or re-walks after a
+    /// failed drain): the walker must not defer again inside the retry, or
+    /// a node whose binders are still open would re-qualify forever.
+    deferral_suspended: u32 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -87,6 +107,7 @@ pub const MatchSession = struct {
         self.symbolic_dummy_infos.deinit(allocator);
         self.sym_match_neg.deinit(allocator);
         self.trail.deinit(allocator);
+        self.deferred.deinit(allocator);
     }
 
     pub fn setBinding(
@@ -330,5 +351,6 @@ pub const MatchSession = struct {
 pub const MatchSnapshot = struct {
     trail_len: usize,
     dummy_info_len: usize,
+    deferred_len: usize,
     cache_generation: u64,
 };

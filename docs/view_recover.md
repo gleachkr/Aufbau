@@ -125,6 +125,26 @@ This matching is also def-aware: if a view expects an expanded expression and
 a cited line or user assertion uses a def, the compiler may unfold through
 that boundary. See `docs/transparent_defs.md` for the def-specific rules.
 
+### When a `@view` is not needed
+
+The raw conclusion is often enough even when a premise or the goal only
+matches it up to normalization. Without a view, the compiler binds omitted
+binders in this order: the cited premises in source order, then the
+conclusion, then one retry of any premise that did not match. Within a single
+premise or conclusion the walk is left to right, except that a subterm whose
+head has `@rewrite` rules (a substitution, say) and whose binders are still
+open is set aside until the rest of the formula has been matched; it is then
+instantiated and normalized against the concrete subterm. So `[x/t] p` is
+matched by instantiation, and `x` and `p` must be fixed elsewhere in the
+rule: by a sibling subterm, a literal comprehension, or a definition that
+unfolds to one.
+
+A `@view` is still needed when no premise or conclusion determines a binder
+except through the substitution itself, when a hidden definition dummy must
+be named and no `@vars` pool is declared, or when two premises each wait on
+a binder the other would provide (the retry is a single pass, not a
+fixpoint).
+
 ### Syntax
 ```
 --| @view <binders> : <hypotheses> > <conclusion>

@@ -66,6 +66,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   gave up on the first hypothesis that did not match, so the open `[x/t] p`
   premise was tried before the conclusion had determined `x` and `p`. A
   hypothesis that does not match yet is now retried after the conclusion.
+- A rule whose premise or conclusion places a substitution to the left of
+  the subterm that fixes its binders, as in `[x/t] p → t ∈ {x ∈ A | p}`,
+  could not be applied without a `@view`: the matcher walked the formula
+  left to right and gave up at the substitution before `x` and `p` were
+  known. A subterm whose head has `@rewrite` rules and whose binders are
+  still open is now set aside until its siblings have bound them, then
+  settled by instantiation and normalization. The `sep_intro_imp` rules in
+  the Zermelo demos no longer need their views.
 
 ## [0.0.10] - 2026-09-13
 

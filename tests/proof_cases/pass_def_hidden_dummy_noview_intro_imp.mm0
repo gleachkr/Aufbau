@@ -1,0 +1,70 @@
+delimiter $ ( ) { } [ / ] | $;
+provable sort wff;
+--| @vars x y z
+sort set;
+
+term not (p: wff): wff;
+prefix not: $~$ prec 41;
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term eq (a b: set): wff;
+infixl eq: $=$ prec 35;
+term mem (a A: set): wff;
+infixl mem: $e.$ prec 50;
+term sep (A: set) {x: set} (p: wff x): set;
+notation sep (A: set) {x: set} (p: wff x): set =
+  (${$:max) x ($e.$:50) A ($|$:0) p ($}$:0);
+
+term sb_s {x: set} (t: set x) (a: set x): set;
+notation sb_s {x: set} (t: set x) (a: set x): set =
+  ($subst$:41) x ($/$:0) t a;
+term sb_f {x: set} (t: set x) (p: wff x): wff;
+notation sb_f {x: set} (t: set x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff):
+  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation set eq eq_refl eq_trans eq_sym _
+axiom eq_refl (a: set): $ a = a $;
+axiom eq_trans (a b c: set): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_sym (a b: set): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom not_congr (a b: wff): $ a <-> b $ > $ ~ a <-> ~ b $;
+--| @congr
+axiom mem_congr (a b c d: set):
+  $ a = b $ > $ c = d $ > $ (a e. c) <-> (b e. d) $;
+
+--| @rewrite
+axiom sb_s_var {x: set} (t: set x): $ subst x / t x = t $;
+--| @rewrite
+axiom sb_s_irrel {x: set} (t: set x) (a: set): $ subst x / t a = a $;
+--| @rewrite
+axiom sb_f_not {x: set} (t: set x) (p: wff x):
+  $ [x/t] (~ p) <-> ~ [x/t] p $;
+--| @rewrite
+axiom sb_f_mem {x: set} (t a A: set x):
+  $ [x/t] (a e. A) <-> (subst x / t a) e. (subst x / t A) $;
+
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+--| @congr
+axiom imp_congr (a b c d: wff):
+  $ a <-> b $ > $ c <-> d $ > $ (a -> c) <-> (b -> d) $;
+
+-- No `@view`: the open `[x/t] p` sits LEFT of the comprehension in the
+-- conclusion, so a strict left-to-right walk reaches it before `x` and `p`
+-- are known. The walker defers the rewrite-head node, binds `x`/`p` from
+-- the def-hidden comprehension, and settles the substitution afterwards.
+axiom sep_intro_imp {x: set} (t A: set) (p: wff x):
+  $ t e. A $ > $ [x/t] p -> t e. { x e. A | p } $;
+
+def setdiff (A B: set) (.x: set): set = $ { x e. A | ~ x e. B } $;
+
+theorem def_hidden_dummy_noview_intro_imp (a A B: set):
+  $ a e. A $ > $ ~ a e. B -> a e. setdiff A B $;
