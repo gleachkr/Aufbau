@@ -156,6 +156,15 @@ zig-out/bin/abc join main.mm0 | zig-out/bin/mm0-zig main.mmb
 
 `abc join main.mm0 joined.mm0` writes it to a file instead.
 
+The language server also resolves `import` and`include`, first against the 
+documents open in the editor, so unsaved edits to a library count, and then 
+against files on disk. Diagnostics appear on the file they belong to: an error 
+inside an imported file appears there, and an import that cannot be followed is 
+reported on its statement while the rest of the file is still checked. Editing 
+a library re-checks the files that import it. In the browser there is no disk: 
+the host supplies a library by opening it as a document under the URI its 
+`import` resolves to.
+
 ## Command-line help
 
 The compiler also exposes the language server used by editor integrations:

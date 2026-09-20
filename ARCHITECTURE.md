@@ -418,6 +418,21 @@ so its proof-local items are anchored by position like any other item.
 Both joins share the source map. The MMB stays flat. `abc join` writes
 the joined `.mm0` so mm0-c remains the oracle for multi-file inputs.
 
+The language server (`bin/compiler/lsp.zig`) builds the same joins per
+request as a *unit*: its resolver looks a spec up (lexically, relative to
+the importing file's path) among the open documents first, then on disk
+(never on wasm, where the host opens library files as documents). The
+compiler and the navigation index run over the joined texts; the unit
+maps editor positions forward through the source map's inverse and index
+ranges and diagnostic spans back to (file, span), so diagnostics publish
+per file and navigation crosses files. A join that fails degrades to the
+root alone with its statements blanked (positions unchanged) plus a
+diagnostic on the failing statement. Every cache is keyed by the states
+of all files of the unit, and each analysis records what it read, so an
+edit to an imported document re-analyses the roots that import it. Open
+`.mm0` files and `.auf` files with a sibling theory report on
+themselves; other files receive the root's view.
+
 `Compiler.check` and `Compiler.compileMmb` both run
 `compiler/pipeline.zig`. One path stops after validation; the other also
 accumulates MMB records and serializes them with `mmb_writer.zig`.

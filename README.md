@@ -37,8 +37,9 @@ mm0-zig OUTPUT.mmb < INPUT.mm0
 
 An `.mm0` file may `import "other.mm0";` (the mm0-rs convention), and an
 `.auf` file may `include "other.auf";` to splice in shared proof-local
-lemmas and definitions. `abc compile` resolves imports and inclusions. To 
-verify the resulting binary, apply the verifier to the joined theory, thus:
+lemmas and definitions. `abc compile` and the language server resolve
+imports and inclusions. To verify the resulting binary, apply the verifier
+to the joined theory, thus:
 
 ```sh
 abc join INPUT.mm0 | mm0-zig OUTPUT.mmb

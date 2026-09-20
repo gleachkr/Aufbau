@@ -20,6 +20,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   file (relative to the including one), so the lemmas, local definitions,
   and notation it holds are visible from that point on. Includes nest;
   they are not deduplicated, and a cycle is an error.
+- The language server follows imports and includes. Statements resolve
+  against open documents first (unsaved edits count), then the disk;
+  diagnostics land on the file they belong to, go-to-definition crosses
+  files, editing a library re-checks the files that import it, and a
+  library `.auf` file is checked through the proof file that includes it.
+  An import that cannot be followed is reported on its statement while
+  the rest of the file is still analysed. In the browser, where there is
+  no disk, the host opens library files as documents.
 
 ## [0.0.11] - 2026-09-20
 

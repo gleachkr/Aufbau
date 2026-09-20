@@ -46,6 +46,15 @@ server.subscribe((message) => {
 Node applications should use `loadLspServer()` unless they provide their own
 adapter around `node:worker_threads`.
 
+## Files, imports, and includes
+
+The server tracks the documents the client opens (via `textDocument/didOpen`)
+and resolves `import "other.mm0";` and `include "other.auf";` against
+open documents, relative to the importing document's URI. So, for example, an 
+`import "prelude.mm0";` in `file:///aufbau-editor/doc1.mm0` looks for 
+`file:///aufbau-editor/prelude.mm0`. A proof file pairs with the theory
+file at the corresponding path.
+
 ## Loading from a CDN
 
 The package works as a plain `<script type="importmap">` entry — no bundler and

@@ -72,6 +72,11 @@ Long proof searches block the calling thread, so browser pages should prefer
 messages through `server.subscribe(callback)`. The worker transport is
 browser-only; Node applications should use `loadLspServer()` directly.
 
+The wasm server has no file system. It resolves `import` and `include`
+statements against the documents the client has opened, relative to the
+importing document's URI, so a shared library is made available by opening
+it as a document under the URI the statement resolves to.
+
 Browsers cannot start a worker directly from a script hosted on another
 origin. When the package loads from a CDN, `loadLspServerWorker()` starts
 the worker through a local `blob:` URL instead. Pages with a

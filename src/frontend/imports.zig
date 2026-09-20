@@ -329,6 +329,32 @@ pub const SourceMap = struct {
             .span = .{ .start = start.offset, .end = @max(end, start.offset) },
         };
     }
+
+    /// The joined offset a file position was copied to, or null when the
+    /// position lies inside an import/include statement (which the joined
+    /// text does not contain). A position at the very end of a file maps
+    /// to the end of its last run.
+    pub fn joinedOffset(
+        self: SourceMap,
+        file_index: usize,
+        file_offset: usize,
+    ) ?usize {
+        var last: ?Segment = null;
+        for (self.segments) |seg| {
+            if (seg.file_index != file_index) continue;
+            if (file_offset >= seg.file_offset and
+                file_offset < seg.file_offset + seg.len)
+            {
+                return seg.joined_start + (file_offset - seg.file_offset);
+            }
+            last = seg;
+        }
+        const seg = last orelse return null;
+        if (file_offset == seg.file_offset + seg.len) {
+            return seg.joined_start + seg.len;
+        }
+        return null;
+    }
 };
 
 pub const JoinErrorKind = enum {
@@ -372,6 +398,47 @@ pub const Joined = struct {
             self.map.segments[0].len == self.text.len;
     }
 };
+
+/// `text` with every import/include statement replaced by spaces, so a
+/// host that could not follow them can still parse the rest of the file
+/// with positions unchanged. Scanning stops at a malformed statement, which
+/// stays in place for the parser to report.
+pub fn blankStatements(
+    allocator: std.mem.Allocator,
+    syntax: Syntax,
+    text: []const u8,
+) std.mem.Allocator.Error![]u8 {
+    const out = try allocator.dupe(u8, text);
+    var scanner = Scanner.init(text, syntax);
+    while (true) {
+        const stmt = scanner.next() catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => break,
+        } orelse break;
+        @memset(out[stmt.span.start..stmt.span.end], ' ');
+    }
+    return out;
+}
+
+/// A one-file join: `text` with an identity map. Hosts fall back to this
+/// when a join fails (typically with `blankStatements` applied), so the
+/// root can still be analysed on its own.
+pub fn single(
+    allocator: std.mem.Allocator,
+    key: []const u8,
+    text: []const u8,
+) std.mem.Allocator.Error!Joined {
+    const files = try allocator.alloc(File, 1);
+    files[0] = .{ .key = key, .text = text };
+    const segments = try allocator.alloc(Segment, 1);
+    segments[0] = .{
+        .joined_start = 0,
+        .len = text.len,
+        .file_index = 0,
+        .file_offset = 0,
+    };
+    return .{ .text = text, .map = .{ .segments = segments }, .files = files };
+}
 
 /// Join `root_text` (identified by `root_key`) with everything it imports.
 /// All allocations come from `allocator`; the caller typically passes an
@@ -983,6 +1050,41 @@ test "join splices imports in post-order and dedups a diamond" {
     const sep = joined.map.locate(7).?;
     try std.testing.expectEqualStrings("d", joined.files[sep.file_index].key);
     try std.testing.expectEqual(@as(usize, 7), sep.offset);
+
+    // The inverse map: file positions back to the joined text. Positions
+    // inside an import statement have no joined counterpart.
+    try std.testing.expectEqual(c_start, joined.map.joinedOffset(2, 12).?);
+    const a_start = std.mem.indexOf(u8, joined.text, "sort a;").?;
+    try std.testing.expectEqual(a_start, joined.map.joinedOffset(3, 24).?);
+    try std.testing.expectEqual(joined.text.len, joined.map.joinedOffset(3, root.len).?);
+    try std.testing.expect(joined.map.joinedOffset(3, 0) == null);
+    try std.testing.expect(joined.map.joinedOffset(3, 14) == null);
+    try std.testing.expect(joined.map.joinedOffset(3, root.len + 1) == null);
+}
+
+test "blankStatements spaces out imports and includes in place" {
+    const mm0 = try blankStatements(std.testing.allocator, .mm0, "sort s;\nimport \"a\";\nsort t;");
+    defer std.testing.allocator.free(mm0);
+    try std.testing.expectEqualStrings("sort s;\n           \nsort t;", mm0);
+    const auf = try blankStatements(std.testing.allocator, .auf, "include \"a.auf\";\nfoo\n---\n");
+    defer std.testing.allocator.free(auf);
+    try std.testing.expectEqualStrings("                \nfoo\n---\n", auf);
+    // A malformed statement ends the scan and stays for the parser.
+    const bad = try blankStatements(std.testing.allocator, .mm0, "import \"a\";\nimport b;");
+    defer std.testing.allocator.free(bad);
+    try std.testing.expectEqualStrings("           \nimport b;", bad);
+}
+
+test "single join maps identically" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const text = "sort wff;\n";
+    const joined = try single(arena.allocator(), "root", text);
+    try std.testing.expect(joined.isPassthrough());
+    try std.testing.expect(joined.text.ptr == text.ptr);
+    try std.testing.expectEqual(@as(usize, 4), joined.map.joinedOffset(0, 4).?);
+    try std.testing.expectEqual(text.len, joined.map.joinedOffset(0, text.len).?);
+    try std.testing.expectEqual(@as(usize, 4), joined.map.locate(4).?.offset);
 }
 
 test "join reports cycles and unresolved imports" {
@@ -1058,9 +1160,9 @@ test "include join splices in place without dedup and joins roots" {
     try std.testing.expectEqual(@as(usize, 3), joined.map.locate(second_d).?.file_index);
 
     // A single root without includes is passed through.
-    const single = try includeMem(arena.allocator(), &files, roots[0..1], &failure);
-    try std.testing.expect(single.isPassthrough());
-    try std.testing.expect(single.text.ptr == roots[0].text.ptr);
+    const one = try includeMem(arena.allocator(), &files, roots[0..1], &failure);
+    try std.testing.expect(one.isPassthrough());
+    try std.testing.expect(one.text.ptr == roots[0].text.ptr);
 }
 
 test "include join reports cycles, misses, and malformed includes" {

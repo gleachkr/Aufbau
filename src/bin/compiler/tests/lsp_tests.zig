@@ -2394,3 +2394,344 @@ test "compiler dependency diagnostics explain one-sided violations" {
         "p was assigned: rel z z",
     ));
 }
+
+// Multi-file units: imports and includes resolved through the document
+// store (what the browser host relies on) and through disk.
+
+const lsp_import_lib_text =
+    \\provable sort wff;
+    \\term top: wff;
+    \\axiom top_i: $ top $;
+;
+
+const lsp_import_main_text =
+    \\import "lib.mm0";
+    \\theorem main: $ top $;
+;
+
+const lsp_import_proof_text =
+    \\main
+    \\----
+    \\l1: $ top $ by top_i []
+;
+
+/// Did the transport see an empty diagnostics set for `uri`?
+fn publishedEmpty(transport: *const TestTransport, uri: []const u8) bool {
+    for (transport.messages[0..transport.message_count]) |message| {
+        if (!std.mem.containsAtLeast(u8, message, 1, uri)) continue;
+        if (std.mem.containsAtLeast(u8, message, 1, "\"diagnostics\":[]")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn hoverMarkdown(result: lsp.ResultType("textDocument/hover")) ![]const u8 {
+    const hover = result orelse return error.ExpectedHover;
+    return switch (hover.contents) {
+        .MarkupContent => |content| content.value,
+        else => error.ExpectedMarkdownHover,
+    };
+}
+
+test "LSP resolves imports against open documents" {
+    const lib_uri = "file:///tmp/lsp-import/lib.mm0";
+    const mm0_uri = "file:///tmp/lsp-import/main.mm0";
+    const proof_uri = "file:///tmp/lsp-import/main.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.putDocument(lib_uri, lsp_import_lib_text, 1);
+    try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = lsp_import_proof_text,
+    } });
+    // The proof checks against the imported theory: a clean set for both
+    // roots, nothing for the open library (it reports on itself).
+    try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
+    try std.testing.expect(publishedEmpty(&transport_state, mm0_uri));
+    try std.testing.expect(!transport_state.containsMessage(lib_uri));
+
+    // Navigation crosses into the imported file.
+    const rule_location = try expectDefinitionLocation(
+        try handler.@"textDocument/definition"(arena, .{
+            .textDocument = .{ .uri = proof_uri },
+            .position = try testLastPosition(lsp_import_proof_text, "top_i"),
+        }),
+    );
+    try std.testing.expectEqualStrings(lib_uri, rule_location.uri);
+    try expectRangeText(lsp_import_lib_text, rule_location.range, "top_i");
+
+    // A position in the root after the import statement maps through the
+    // join: `top` in the theorem is the library's term.
+    const term_location = try expectDefinitionLocation(
+        try handler.@"textDocument/definition"(arena, .{
+            .textDocument = .{ .uri = mm0_uri },
+            .position = try testLastPosition(lsp_import_main_text, "top"),
+        }),
+    );
+    try std.testing.expectEqualStrings(lib_uri, term_location.uri);
+    try expectRangeText(lsp_import_lib_text, term_location.range, "top");
+
+    const markdown = try hoverMarkdown(try handler.@"textDocument/hover"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testLastPosition(lsp_import_proof_text, "top_i"),
+    }));
+    try std.testing.expect(std.mem.containsAtLeast(u8, markdown, 1, "top_i"));
+
+    // Inside the import statement there is nothing to hover.
+    try std.testing.expect((try handler.@"textDocument/hover"(arena, .{
+        .textDocument = .{ .uri = mm0_uri },
+        .position = try testPosition(lsp_import_main_text, "lib.mm0"),
+    })) == null);
+
+    // The outline of the root lists its own declarations only.
+    const symbols = try expectDocumentSymbols(
+        try handler.@"textDocument/documentSymbol"(arena, .{
+            .textDocument = .{ .uri = mm0_uri },
+        }),
+    );
+    try std.testing.expectEqual(@as(usize, 1), symbols.len);
+    try std.testing.expectEqualStrings("main", symbols[0].name);
+    try expectRangeText(lsp_import_main_text, symbols[0].selectionRange, "main");
+}
+
+test "LSP re-analyses importers when an imported document changes" {
+    const lib_uri = "file:///tmp/lsp-import-change/lib.mm0";
+    const mm0_uri = "file:///tmp/lsp-import-change/main.mm0";
+    const proof_uri = "file:///tmp/lsp-import-change/main.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.putDocument(lib_uri, lsp_import_lib_text, 1);
+    try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = lsp_import_proof_text,
+    } });
+    const first_hover = try handler.@"textDocument/hover"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testLastPosition(lsp_import_proof_text, "top_i"),
+    });
+    try std.testing.expect(first_hover != null);
+    try std.testing.expectEqual(@as(usize, 1), handler.nav_cache.count());
+
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = lib_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .literal_1 = .{ .text = "provable sort wff;\nterm top: wff;\n" } },
+        },
+    });
+    // The library's own set, then the proof re-checked against it.
+    try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
+    try std.testing.expect(transport_state.containsMessage(proof_uri));
+    try std.testing.expect(transport_state.containsMessage("top_i"));
+    // The unit's index was keyed on the library too.
+    try std.testing.expectEqual(@as(usize, 0), handler.nav_cache.count());
+}
+
+test "LSP reports an unresolved import on its statement and keeps going" {
+    const mm0_uri = "file:///tmp/lsp-import-missing/main.mm0";
+    const mm0_text =
+        \\provable sort wff;
+        \\import "missing.mm0";
+        \\term top: wff;
+        \\theorem main: $ top $;
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = mm0_uri,
+        .languageId = "metamath-zero",
+        .version = 1,
+        .text = mm0_text,
+    } });
+    try std.testing.expect(transport_state.containsMessage(
+        "unable to import 'missing.mm0': FileNotFound",
+    ));
+
+    // The root is still analysed on its own: navigation works past the
+    // failed statement.
+    const location = try expectDefinitionLocation(
+        try handler.@"textDocument/definition"(arena, .{
+            .textDocument = .{ .uri = mm0_uri },
+            .position = try testLastPosition(mm0_text, "top"),
+        }),
+    );
+    try std.testing.expectEqualStrings(mm0_uri, location.uri);
+    try expectRangeText(mm0_text, location.range, "top");
+}
+
+test "LSP resolves imports from disk and reports on the imported file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const dir = try tmp.dir.realpathAlloc(arena, ".");
+    try tmp.dir.writeFile(.{
+        .sub_path = "lib.mm0",
+        .data = "provable sort wff;\nterm top: wff;\naxiom bad: $ nope $;\n",
+    });
+    const lib_path = try std.fs.path.join(arena, &.{ dir, "lib.mm0" });
+    const lib_uri = try pathToUri(arena, lib_path);
+    const mm0_path = try std.fs.path.join(arena, &.{ dir, "main.mm0" });
+    const mm0_uri = try pathToUri(arena, mm0_path);
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = mm0_uri,
+        .languageId = "metamath-zero",
+        .version = 1,
+        .text = lsp_import_main_text,
+    } });
+
+    // The error sits in the closed library: published on that file.
+    var lib_message: ?[]const u8 = null;
+    for (transport_state.messages[0..transport_state.message_count]) |message| {
+        if (std.mem.containsAtLeast(u8, message, 1, lib_uri)) lib_message = message;
+    }
+    const message = lib_message orelse return error.ExpectedLibraryDiagnostics;
+    try std.testing.expect(std.mem.containsAtLeast(u8, message, 1, "nope"));
+
+    // Closing the root clears what it published for the library.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didClose"(arena, .{
+        .textDocument = .{ .uri = mm0_uri },
+    });
+    try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
+}
+
+test "LSP resolves proof includes against open library files" {
+    const mm0_uri = "file:///tmp/lsp-include/main.mm0";
+    const lib_uri = "file:///tmp/lsp-include/lemmas.auf";
+    const proof_uri = "file:///tmp/lsp-include/main.auf";
+    const lib_text =
+        \\lemma lib_top: $ top $
+        \\-------
+        \\l1: $ top $ by top_i []
+    ;
+    const proof_text =
+        \\include "lemmas.auf";
+        \\main
+        \\----
+        \\l1: $ top $ by lib_top []
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.putDocument(mm0_uri, lsp_import_lib_text ++ "\ntheorem main: $ top $;\n", 1);
+    // A library proof file has no theory of its own.
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = lib_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = lib_text,
+    } });
+    try std.testing.expect(transport_state.containsMessage(
+        "could not find sibling .mm0 file",
+    ));
+
+    transport_state.clearMessages();
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = proof_text,
+    } });
+    // The including root reports on the library: its note is cleared.
+    try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
+    try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
+
+    const location = try expectDefinitionLocation(
+        try handler.@"textDocument/definition"(arena, .{
+            .textDocument = .{ .uri = proof_uri },
+            .position = try testLastPosition(proof_text, "lib_top"),
+        }),
+    );
+    try std.testing.expectEqualStrings(lib_uri, location.uri);
+    try expectRangeText(lib_text, location.range, "lib_top");
+
+    // The library navigates through the root that includes it.
+    const rule_location = try expectDefinitionLocation(
+        try handler.@"textDocument/definition"(arena, .{
+            .textDocument = .{ .uri = lib_uri },
+            .position = try testLastPosition(lib_text, "top_i"),
+        }),
+    );
+    try std.testing.expectEqualStrings(mm0_uri, rule_location.uri);
+
+    // Editing the library re-checks the root; breaking the lemma is the
+    // root's problem to show.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = lib_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .literal_1 = .{ .text = "lemma lib_top: $ top $\n-------\nl1: $ top $ by nope []\n" } },
+        },
+    });
+    try std.testing.expect(transport_state.containsMessage(lib_uri));
+    try std.testing.expect(transport_state.containsMessage("nope"));
+}
+
+test "import specs resolve lexically against the importing file" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { from: []const u8, spec: []const u8, want: []const u8 }{
+        .{ .from = "/a/b/c.mm0", .spec = "d.mm0", .want = "/a/b/d.mm0" },
+        .{ .from = "/a/b/c.mm0", .spec = "../x/./y.mm0", .want = "/a/x/y.mm0" },
+        .{ .from = "/a/b/c.mm0", .spec = "/abs/z.mm0", .want = "/abs/z.mm0" },
+        .{ .from = "/c.mm0", .spec = "../../q.mm0", .want = "/q.mm0" },
+        .{ .from = "c.mm0", .spec = "../q.mm0", .want = "../q.mm0" },
+        .{ .from = "/aufbau-editor/doc3.mm0", .spec = "prelude.mm0", .want = "/aufbau-editor/prelude.mm0" },
+    };
+    for (cases) |case| {
+        const got = try lsp_server.resolveSpecPath(allocator, case.from, case.spec);
+        defer allocator.free(got);
+        try std.testing.expectEqualStrings(case.want, got);
+    }
+}

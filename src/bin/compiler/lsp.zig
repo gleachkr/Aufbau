@@ -8,15 +8,12 @@ const types = lsp.types;
 const LspIndex = mm0.Frontend.LspIndex;
 const Search = mm0.CompilerSupport.Search;
 const Unpack = mm0.CompilerSupport.Unpack;
+const Imports = mm0.Imports;
 const lsp_diagnostics = @import("lsp_diagnostics");
 const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
+const LocatedDiagnostic = lsp_diagnostics.LocatedDiagnostic;
 const LSP_SERVER_NAME = lsp_diagnostics.SERVER_NAME;
-const compilerDiagnosticsToLsp = lsp_diagnostics.compilerDiagnosticsToLsp;
-const compilerSourceDiagnosticsToLsp =
-    lsp_diagnostics.compilerSourceDiagnosticsToLsp;
-const compilerDiagnosticToLsp = lsp_diagnostics.compilerDiagnosticToLsp;
 const zeroRange = lsp_diagnostics.zeroRange;
-const sourceRangeToLsp = lsp_diagnostics.sourceRangeToLsp;
 const sourceRangesToLocations = lsp_diagnostics.sourceRangesToLocations;
 const completionsToLsp = lsp_diagnostics.completionsToLsp;
 const outlineSymbolsToLsp = lsp_diagnostics.outlineSymbolsToLsp;
@@ -117,49 +114,253 @@ fn invalidateCacheContaining(
     }
 }
 
-const NavigationCacheKey = struct {
-    mm0: NavigationDocumentState,
-    proof: ?NavigationDocumentState,
+/// One file of an analysis unit: an open document (with its version) or a
+/// file read from disk (with its mtime), keyed by its path.
+const UnitFile = struct {
+    uri: []const u8,
+    path: []const u8,
+    text: []const u8,
+    version: ?i32,
+    mtime: ?i128,
+
+    fn state(self: UnitFile) NavigationDocumentState {
+        return .{ .uri = self.uri, .version = self.version, .mtime = self.mtime };
+    }
+};
+
+/// A span of a joined text resolved to the file it was copied from.
+const UnitLocation = struct {
+    file: UnitFile,
+    span: Search.Span,
+};
+
+/// One side of a unit (`.mm0` or `.auf`): its files, joined in post-order.
+const UnitSide = struct {
+    joined: Imports.Joined,
+    /// Parallel to `joined.files`.
+    files: []const UnitFile,
+    /// Index of the root file in `files`.
+    root: usize,
+
+    fn rootFile(self: UnitSide) UnitFile {
+        return self.files[self.root];
+    }
+
+    fn fileIndex(self: UnitSide, uri: []const u8) ?usize {
+        for (self.files, 0..) |file, index| {
+            if (std.mem.eql(u8, file.uri, uri)) return index;
+        }
+        return null;
+    }
+
+    /// The joined offset of a position in one file, or null inside an
+    /// import/include statement (the joined text does not contain those).
+    fn joinedOffset(self: UnitSide, file_index: usize, offset: usize) ?usize {
+        return self.joined.map.joinedOffset(file_index, offset);
+    }
+
+    fn locate(self: UnitSide, span: Search.Span) ?UnitLocation {
+        const hit = self.joined.map.locateSpan(.{
+            .start = span.start,
+            .end = span.end,
+        }) orelse return null;
+        return .{
+            .file = self.files[hit.file_index],
+            .span = .{ .start = hit.span.start, .end = hit.span.end },
+        };
+    }
+};
+
+/// An import/include that could not be followed: a diagnostic on the file
+/// holding the statement.
+const UnitFailure = struct {
+    file: UnitFile,
+    span: Search.Span,
+    message: []const u8,
+};
+
+/// What one analysis or navigation request works on: the root `.mm0`
+/// joined with its imports and, when the root has a proof file, the paired
+/// `.auf` files joined with their includes — the same texts `abc compile`
+/// sees. The compiler and the index run over the joined texts; spans map
+/// back to files through `locate`, positions in a file map forward through
+/// `UnitSide.joinedOffset`. A document without imports is passed through,
+/// so both maps are the identity for it.
+const Unit = struct {
+    mm0: UnitSide,
+    proof: ?UnitSide,
+    failures: []const UnitFailure,
+
+    const Found = struct {
+        document: LspIndex.DocumentId,
+        file_index: usize,
+    };
+
+    fn side(self: *const Unit, document: LspIndex.DocumentId) ?*const UnitSide {
+        return switch (document) {
+            .mm0 => &self.mm0,
+            .proof => if (self.proof) |*proof| proof else null,
+        };
+    }
+
+    fn find(self: *const Unit, uri: []const u8) ?Found {
+        if (self.mm0.fileIndex(uri)) |index| {
+            return .{ .document = .mm0, .file_index = index };
+        }
+        if (self.proof) |proof| {
+            if (proof.fileIndex(uri)) |index| {
+                return .{ .document = .proof, .file_index = index };
+            }
+        }
+        return null;
+    }
+
+    fn isRootUri(self: *const Unit, uri: []const u8) bool {
+        if (std.mem.eql(u8, self.mm0.rootFile().uri, uri)) return true;
+        if (self.proof) |proof| {
+            if (std.mem.eql(u8, proof.rootFile().uri, uri)) return true;
+        }
+        return false;
+    }
+
+    /// The document states of every file, `.mm0` side then proof side:
+    /// the cache key for anything computed from the unit.
+    fn states(
+        self: *const Unit,
+        allocator: std.mem.Allocator,
+    ) ![]NavigationDocumentState {
+        const proof_len = if (self.proof) |proof| proof.files.len else 0;
+        const out = try allocator.alloc(
+            NavigationDocumentState,
+            self.mm0.files.len + proof_len,
+        );
+        var index: usize = 0;
+        for (self.mm0.files) |file| {
+            out[index] = file.state();
+            index += 1;
+        }
+        if (self.proof) |proof| {
+            for (proof.files) |file| {
+                out[index] = file.state();
+                index += 1;
+            }
+        }
+        return out;
+    }
+
+    fn diagnosticContext(self: *const Unit) DiagnosticContext {
+        return .{
+            .mm0 = diagnosticDocument(self.mm0.rootFile()),
+            .proof = if (self.proof) |proof|
+                diagnosticDocument(proof.rootFile())
+            else
+                null,
+            .locator = .{ .ctx = @ptrCast(self), .locateFn = locateSpan },
+        };
+    }
+
+    fn rangeLocator(self: *const Unit) lsp_diagnostics.RangeLocator {
+        return .{ .ctx = @ptrCast(self), .locateFn = locateRange };
+    }
+
+    fn diagnosticDocument(file: UnitFile) lsp_diagnostics.DiagnosticDocument {
+        return .{ .uri = file.uri, .text = file.text, .version = file.version };
+    }
+
+    fn locateSpan(
+        ctx: *const anyopaque,
+        source: mm0.CompilerDiagnosticSource,
+        span: lsp_diagnostics.Span,
+    ) ?lsp_diagnostics.LocatedSpan {
+        const self: *const Unit = @ptrCast(@alignCast(ctx));
+        const document: LspIndex.DocumentId = switch (source) {
+            .mm0 => .mm0,
+            .proof => .proof,
+        };
+        const unit_side = self.side(document) orelse return null;
+        const hit = unit_side.locate(.{
+            .start = span.start,
+            .end = span.end,
+        }) orelse return null;
+        return .{
+            .uri = hit.file.uri,
+            .text = hit.file.text,
+            .version = hit.file.version,
+            .span = .{ .start = hit.span.start, .end = hit.span.end },
+        };
+    }
+
+    fn locateRange(
+        ctx: *const anyopaque,
+        range: LspIndex.SourceRange,
+    ) ?lsp_diagnostics.LocatedRange {
+        const self: *const Unit = @ptrCast(@alignCast(ctx));
+        const unit_side = self.side(range.document) orelse return null;
+        const hit = unit_side.locate(.{
+            .start = range.start,
+            .end = range.end,
+        }) orelse return null;
+        return .{
+            .uri = hit.file.uri,
+            .text = hit.file.text,
+            .span = .{ .start = hit.span.start, .end = hit.span.end },
+        };
+    }
+};
+
+/// The states of every file a unit was built from, owned by the handler
+/// allocator. Every cache below is keyed by one: an edit to any file of the
+/// unit (a version bump for an open document, an mtime change on disk)
+/// makes a stored key stale.
+const UnitKey = struct {
+    states: []NavigationDocumentState,
 
     fn init(
         allocator: std.mem.Allocator,
-        request: NavigationCacheRequest,
-    ) !NavigationCacheKey {
-        const mm0_state = try request.mm0.dupe(allocator);
-        errdefer mm0_state.freeUri(allocator);
-
-        const proof = if (request.proof) |proof_state|
-            try proof_state.dupe(allocator)
-        else
-            null;
-
-        return .{ .mm0 = mm0_state, .proof = proof };
+        states: []const NavigationDocumentState,
+    ) !UnitKey {
+        const owned = try allocator.alloc(NavigationDocumentState, states.len);
+        var filled: usize = 0;
+        errdefer {
+            for (owned[0..filled]) |state| state.freeUri(allocator);
+            allocator.free(owned);
+        }
+        for (states, 0..) |state, index| {
+            owned[index] = try state.dupe(allocator);
+            filled = index + 1;
+        }
+        return .{ .states = owned };
     }
 
-    fn deinit(self: *NavigationCacheKey, allocator: std.mem.Allocator) void {
-        self.mm0.freeUri(allocator);
-        if (self.proof) |proof| proof.freeUri(allocator);
+    fn deinit(self: *UnitKey, allocator: std.mem.Allocator) void {
+        for (self.states) |state| state.freeUri(allocator);
+        allocator.free(self.states);
         self.* = undefined;
     }
 
-    fn eql(
-        self: NavigationCacheKey,
-        request: NavigationCacheRequest,
-    ) bool {
-        if (!self.mm0.eql(request.mm0)) return false;
-        if (self.proof == null and request.proof == null) return true;
-        if (self.proof == null or request.proof == null) return false;
-        return self.proof.?.eql(request.proof.?);
+    fn eql(self: UnitKey, states: []const NavigationDocumentState) bool {
+        if (self.states.len != states.len) return false;
+        for (self.states, states) |mine, other| {
+            if (!mine.eql(other)) return false;
+        }
+        return true;
+    }
+
+    fn containsUri(self: UnitKey, uri: []const u8) bool {
+        for (self.states) |state| {
+            if (std.mem.eql(u8, state.uri, uri)) return true;
+        }
+        return false;
     }
 };
 
-const NavigationCacheRequest = struct {
-    mm0: NavigationDocumentState,
-    proof: ?NavigationDocumentState,
-};
-
 const NavigationCacheEntry = struct {
-    key: NavigationCacheKey,
+    /// The root `.mm0` URI; aliases the map key.
+    uri: []const u8,
+    key: UnitKey,
+    /// Backs `unit`: its joined texts and file records.
+    unit_arena: std.heap.ArenaAllocator,
+    unit: Unit,
     snapshot: LspIndex.Snapshot,
 
     fn deinit(
@@ -167,69 +368,105 @@ const NavigationCacheEntry = struct {
         allocator: std.mem.Allocator,
     ) void {
         self.snapshot.deinit();
+        self.unit_arena.deinit();
         self.key.deinit(allocator);
+        allocator.free(self.uri);
         self.* = undefined;
     }
 };
 
 fn navEntryContainsUri(entry: NavigationCacheEntry, uri: []const u8) bool {
-    if (std.mem.eql(u8, entry.key.mm0.uri, uri)) return true;
-    if (entry.key.proof) |proof| {
-        if (std.mem.eql(u8, proof.uri, uri)) return true;
+    return entry.key.containsUri(uri);
+}
+
+/// A navigation request's view of its unit: the index over the joined
+/// texts plus which file of the unit the request document is.
+const NavigationSnapshot = struct {
+    snapshot: *const LspIndex.Snapshot,
+    unit: *const Unit,
+    document: LspIndex.DocumentId,
+    file_index: usize,
+
+    fn side(self: NavigationSnapshot) *const UnitSide {
+        return self.unit.side(self.document).?;
+    }
+
+    fn file(self: NavigationSnapshot) UnitFile {
+        return self.side().files[self.file_index];
+    }
+
+    /// The joined offset of an editor position in the request document,
+    /// or null when it sits inside an import/include statement.
+    fn joinedPosition(
+        self: NavigationSnapshot,
+        position: types.Position,
+        encoding: lsp.offsets.Encoding,
+    ) ?usize {
+        const offset = lsp.offsets.positionToIndex(
+            self.file().text,
+            position,
+            encoding,
+        );
+        return self.side().joinedOffset(self.file_index, offset);
+    }
+};
+
+/// What an analysis of one root touched: the other files it read (so the
+/// root is re-analysed when one of them changes) and the closed files it
+/// published diagnostics for (so those are cleared when they drop out).
+const UnitRecord = struct {
+    deps: []const []const u8,
+    published: []const []const u8,
+
+    fn deinit(self: *UnitRecord, allocator: std.mem.Allocator) void {
+        freeUriList(allocator, self.deps);
+        freeUriList(allocator, self.published);
+        self.* = undefined;
+    }
+};
+
+fn dupeUriList(
+    allocator: std.mem.Allocator,
+    uris: []const []const u8,
+) ![]const []const u8 {
+    const owned = try allocator.alloc([]const u8, uris.len);
+    var filled: usize = 0;
+    errdefer freeUriList(allocator, owned[0..filled]);
+    for (uris, 0..) |uri, index| {
+        owned[index] = try allocator.dupe(u8, uri);
+        filled = index + 1;
+    }
+    return owned;
+}
+
+fn freeUriList(allocator: std.mem.Allocator, uris: []const []const u8) void {
+    for (uris) |uri| allocator.free(uri);
+    allocator.free(uris);
+}
+
+fn uriListContains(uris: []const []const u8, uri: []const u8) bool {
+    for (uris) |candidate| {
+        if (std.mem.eql(u8, candidate, uri)) return true;
     }
     return false;
 }
 
-const NavigationSnapshot = struct {
-    snapshot: *const LspIndex.Snapshot,
-    document: LspIndex.DocumentId,
-};
-
 // Proof-search results (`exact?`/`auto?`/`apply?` code-action suggestions) are
 // expensive to compute and editors fire `textDocument/codeAction` repeatedly
 // around the same proof step (lightbulb, quick-fix menu, cursor settle/drift).
-// This caches the last result per proof document, keyed by both documents'
-// states; a single result serves every cursor offset that resolves to the same
-// placeholder (the search's `target_span`), so cursor movement within a step
-// still hits. A document edit changes its version/mtime, so a stale key never
-// matches.
-//
-// A SearchCacheKey is built borrowed (URIs point into the request arena) for a
-// lookup, then `dupe`d into the handler allocator when its result is stored.
-// `proof` is the edited document and is always present (unlike the navigation
-// cache's optional proof), so no Request/Key split is needed.
-const SearchCacheKey = struct {
-    mm0: NavigationDocumentState,
-    proof: NavigationDocumentState,
-
-    fn dupe(self: SearchCacheKey, allocator: std.mem.Allocator) !SearchCacheKey {
-        const mm0_state = try self.mm0.dupe(allocator);
-        errdefer mm0_state.freeUri(allocator);
-        const proof = try self.proof.dupe(allocator);
-        return .{ .mm0 = mm0_state, .proof = proof };
-    }
-
-    fn deinit(self: *SearchCacheKey, allocator: std.mem.Allocator) void {
-        self.mm0.freeUri(allocator);
-        self.proof.freeUri(allocator);
-        self.* = undefined;
-    }
-
-    fn eql(self: SearchCacheKey, other: SearchCacheKey) bool {
-        return self.mm0.eql(other.mm0) and self.proof.eql(other.proof);
-    }
-};
-
-fn searchEntryContainsUri(entry: SearchCacheEntry, uri: []const u8) bool {
-    return std.mem.eql(u8, entry.key.mm0.uri, uri) or
-        std.mem.eql(u8, entry.key.proof.uri, uri);
-}
-
+// This caches the last result per proof document, keyed by the states of
+// every file of the unit; a single result serves every cursor offset that
+// resolves to the same placeholder (the search's `target_span`), so cursor
+// movement within a step still hits. A document edit changes its
+// version/mtime, so a stale key never matches.
 const SearchCacheEntry = struct {
-    key: SearchCacheKey,
-    // The placeholder span these suggestions resolve to: a lookup hits only when
-    // the requested offset falls inside it (inclusive), so every offset within
-    // one proof step reuses this result.
+    /// The root proof URI; aliases the map key.
+    uri: []const u8,
+    key: UnitKey,
+    // The placeholder span (in the joined proof text) these suggestions
+    // resolve to: a lookup hits only when the requested offset falls inside
+    // it (inclusive), so every offset within one proof step reuses this
+    // result.
     target_span: Search.Span,
     // Owned by the handler allocator (deep copies of the arena-allocated search
     // output), so the slices stay valid across requests. An empty slice is a
@@ -247,17 +484,23 @@ const SearchCacheEntry = struct {
         }
         allocator.free(self.suggestions);
         self.key.deinit(allocator);
+        allocator.free(self.uri);
         self.* = undefined;
     }
 };
+
+fn searchEntryContainsUri(entry: SearchCacheEntry, uri: []const u8) bool {
+    return entry.key.containsUri(uri);
+}
 
 // The recorded outcome of one placeholder's search, backing that placeholder's
 // status diagnostic (info on success, error on failure). Placeholders with no
 // recorded outcome publish as a "not yet searched" warning.
 const PlaceholderOutcome = struct {
-    // The search's catchment span (`SourceSuggestions.target_span`): the whole
-    // proof line for a top-level placeholder, the nested application for an
-    // inline one. A placeholder is matched to its outcome by span containment.
+    // The search's catchment span (`SourceSuggestions.target_span`, in the
+    // joined proof text): the whole proof line for a top-level placeholder,
+    // the nested application for an inline one. A placeholder is matched to
+    // its outcome by span containment.
     target_span: Search.Span,
     status: Search.SearchStatus,
     // Owned by the handler allocator. The first suggestion's replacement text
@@ -266,14 +509,16 @@ const PlaceholderOutcome = struct {
 };
 
 // Per-proof-document search outcomes, accumulated across placeholders while
-// both documents stay unchanged (unlike the search cache, which keeps only the
-// most recent search's suggestions). Keyed by the same document-state pair as
-// the search cache: any edit makes the key stale, degrading every recorded
-// outcome back to the "not yet searched" warning even if the sweep in
-// `invalidateCachesForUri` hasn't freed the entry (e.g. an unopened .mm0
-// sibling changing on disk, which never fires a didChange).
+// every file of the unit stays unchanged (unlike the search cache, which
+// keeps only the most recent search's suggestions). Keyed like the search
+// cache: any edit makes the key stale, degrading every recorded outcome back
+// to the "not yet searched" warning even if the sweep in
+// `invalidateCachesForUri` hasn't freed the entry (e.g. an unopened file
+// changing on disk, which never fires a didChange).
 const SearchStatusEntry = struct {
-    key: SearchCacheKey,
+    /// The root proof URI; aliases the map key.
+    uri: []const u8,
+    key: UnitKey,
     statuses: std.ArrayListUnmanaged(PlaceholderOutcome),
 
     fn deinit(self: *SearchStatusEntry, allocator: std.mem.Allocator) void {
@@ -282,13 +527,13 @@ const SearchStatusEntry = struct {
         }
         self.statuses.deinit(allocator);
         self.key.deinit(allocator);
+        allocator.free(self.uri);
         self.* = undefined;
     }
 };
 
 fn statusEntryContainsUri(entry: SearchStatusEntry, uri: []const u8) bool {
-    return std.mem.eql(u8, entry.key.mm0.uri, uri) or
-        std.mem.eql(u8, entry.key.proof.uri, uri);
+    return entry.key.containsUri(uri);
 }
 
 // A placeholder is matched to a recorded outcome by containment in the
@@ -396,6 +641,9 @@ pub const Handler = struct {
     nav_cache: std.StringHashMapUnmanaged(NavigationCacheEntry),
     search_cache: std.StringHashMapUnmanaged(SearchCacheEntry),
     search_status: std.StringHashMapUnmanaged(SearchStatusEntry),
+    /// What the last analysis of each root document read and published,
+    /// keyed by the analysed URI (owned).
+    units: std.StringHashMapUnmanaged(UnitRecord),
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
 
@@ -410,6 +658,7 @@ pub const Handler = struct {
             .nav_cache = .empty,
             .search_cache = .empty,
             .search_status = .empty,
+            .units = .empty,
             .offset_encoding = .@"utf-16",
             .snippet_support = false,
         };
@@ -440,6 +689,13 @@ pub const Handler = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.search_status.deinit(self.allocator);
+
+        var units_it = self.units.iterator();
+        while (units_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.units.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -553,6 +809,7 @@ pub const Handler = struct {
         );
         self.invalidateCachesForUri(arena, params.textDocument.uri);
         try self.analyzeUri(arena, params.textDocument.uri);
+        try self.analyzeDependents(arena, params.textDocument.uri);
     }
 
     pub fn @"textDocument/didChange"(
@@ -594,6 +851,7 @@ pub const Handler = struct {
 
         self.invalidateCachesForUri(arena, params.textDocument.uri);
         try self.analyzeUri(arena, params.textDocument.uri);
+        try self.analyzeDependents(arena, params.textDocument.uri);
     }
 
     pub fn @"textDocument/didClose"(
@@ -602,36 +860,34 @@ pub const Handler = struct {
         params: types.DidCloseTextDocumentParams,
     ) !void {
         const uri = params.textDocument.uri;
-        const path = uriToPath(arena, uri) catch {
-            try self.removeDocument(uri);
-            try self.clearDiagnostics(arena, uri, null);
-            return;
-        };
-        const kind = documentKind(path);
-
         self.invalidateCachesForUri(arena, uri);
         try self.removeDocument(uri);
         try self.clearDiagnostics(arena, uri, null);
+        try self.forgetUnit(arena, uri);
 
-        switch (kind) {
-            .mm0 => {
-                const proof_path = siblingPathForMm0(arena, path) catch return;
-                const proof_uri = try pathToUri(arena, proof_path);
-                if (self.docs.contains(proof_uri)) {
-                    try self.analyzeUri(arena, proof_uri);
-                }
-            },
-            .proof => {
-                const mm0_path = siblingPathForProof(arena, path) catch return;
-                const mm0_uri = try pathToUri(arena, mm0_path);
-                if (self.docs.contains(mm0_uri)) {
-                    try self.analyzeUri(arena, mm0_uri);
-                } else {
-                    try self.clearDiagnostics(arena, mm0_uri, null);
-                }
-            },
-            .other => {},
-        }
+        if (uriToPath(arena, uri)) |path| {
+            switch (documentKind(path)) {
+                .mm0 => if (siblingPathForMm0(arena, path)) |proof_path| {
+                    const proof_uri = try pathToUri(arena, proof_path);
+                    if (self.docs.contains(proof_uri)) {
+                        try self.analyzeUri(arena, proof_uri);
+                    }
+                } else |_| {},
+                .proof => if (siblingPathForProof(arena, path)) |mm0_path| {
+                    const mm0_uri = try pathToUri(arena, mm0_path);
+                    if (self.docs.contains(mm0_uri)) {
+                        try self.analyzeUri(arena, mm0_uri);
+                    } else {
+                        try self.clearDiagnostics(arena, mm0_uri, null);
+                    }
+                } else |_| {},
+                .other => {},
+            }
+        } else |_| {}
+
+        // The file may still exist on disk, so roots that import or include
+        // it re-analyse against that copy.
+        try self.analyzeDependents(arena, uri);
     }
 
     pub fn @"textDocument/hover"(
@@ -643,12 +899,10 @@ pub const Handler = struct {
             arena,
             params.textDocument.uri,
         ) orelse return null;
-        const text = nav.snapshot.textForDocument(nav.document) orelse return null;
-        const offset = lsp.offsets.positionToIndex(
-            text,
+        const offset = nav.joinedPosition(
             params.position,
             self.offset_encoding,
-        );
+        ) orelse return null;
         const hover = nav.snapshot.hoverAt(nav.document, offset) orelse return null;
         return .{
             .contents = .{
@@ -657,8 +911,7 @@ pub const Handler = struct {
                     .value = hover.markdown,
                 },
             },
-            .range = sourceRangeToLsp(
-                nav.snapshot,
+            .range = nav.unit.rangeLocator().toLsp(
                 hover.range,
                 self.offset_encoding,
             ),
@@ -674,12 +927,10 @@ pub const Handler = struct {
             arena,
             params.textDocument.uri,
         ) orelse return null;
-        const text = nav.snapshot.textForDocument(nav.document) orelse return null;
-        const offset = lsp.offsets.positionToIndex(
-            text,
+        const offset = nav.joinedPosition(
             params.position,
             self.offset_encoding,
-        );
+        ) orelse return null;
         var completions = try nav.snapshot.completionsAt(
             arena,
             nav.document,
@@ -692,14 +943,14 @@ pub const Handler = struct {
             completions = try applicableRuleCompletions(
                 arena,
                 nav.snapshot,
-                text,
+                nav.side().joined.text,
                 offset,
                 completions,
             );
         }
         const items = try completionsToLsp(
             arena,
-            nav.snapshot,
+            nav.unit.rangeLocator(),
             completions,
             self.offset_encoding,
         );
@@ -721,54 +972,28 @@ pub const Handler = struct {
         arena: std.mem.Allocator,
         params: types.CodeActionParams,
     ) !lsp.ResultType("textDocument/codeAction") {
-        const path = uriToPath(arena, params.textDocument.uri) catch return null;
-        if (documentKind(path) != .proof) return null;
-        const proof_loaded = self.loadTextForUriPath(
+        const nav = try self.navigationSnapshotForUri(
             arena,
             params.textDocument.uri,
-            path,
-        ) catch return null;
-        const mm0_path = siblingPathForProof(arena, path) catch return null;
-        // The cache key only needs the sibling .mm0's state (version/mtime), not
-        // its contents, so on a cache hit we avoid reading the (often large,
-        // unopened) .mm0 from disk entirely — its text is loaded only on a miss.
-        const mm0_state = self.documentStateForPath(arena, mm0_path) catch return null;
-        const offset = lsp.offsets.positionToIndex(
-            proof_loaded.text,
+        ) orelse return null;
+        if (nav.document != .proof) return null;
+        const offset = nav.joinedPosition(
             params.range.start,
             self.offset_encoding,
-        );
+        ) orelse return null;
 
-        const key: SearchCacheKey = .{
-            .mm0 = mm0_state,
-            .proof = navigationState(proof_loaded),
-        };
         var actions = std.ArrayListUnmanaged(CodeActionItem){};
-        if (try self.suggestionsForKey(
-            arena,
-            key,
-            offset,
-            mm0_path,
-            proof_loaded.text,
-        )) |suggestions| {
+        if (try self.suggestionsForUnit(arena, nav, offset)) |suggestions| {
             for (suggestions) |suggestion| {
-                try actions.append(arena, .{
-                    .CodeAction = try self.searchCodeAction(
-                        arena,
-                        params.textDocument.uri,
-                        proof_loaded.text,
-                        suggestion,
-                    ),
-                });
+                const action = try self.searchCodeAction(
+                    arena,
+                    nav,
+                    suggestion,
+                ) orelse continue;
+                try actions.append(arena, .{ .CodeAction = action });
             }
         }
-        if (try self.unpackCodeAction(
-            arena,
-            params.textDocument.uri,
-            proof_loaded.text,
-            mm0_path,
-            offset,
-        )) |action| {
+        if (try self.unpackCodeAction(arena, nav, offset)) |action| {
             try actions.append(arena, .{ .CodeAction = action });
         }
         if (actions.items.len == 0) return null;
@@ -778,81 +1003,97 @@ pub const Handler = struct {
     /// Offer the `unpack` rewrite when the cursor sits on a checked proof
     /// line containing inline rule applications. The parse-only `hasTargetAt`
     /// gate keeps the common case (no inline application under the cursor)
-    /// free of the .mm0 read and the two compile passes the full rewrite
-    /// performs.
+    /// free of the two compile passes the full rewrite performs.
     fn unpackCodeAction(
         self: *Handler,
         arena: std.mem.Allocator,
-        uri: []const u8,
-        proof_text: []const u8,
-        mm0_path: []const u8,
+        nav: NavigationSnapshot,
         offset: usize,
     ) !?types.CodeAction {
+        const proof_side = nav.side();
+        const proof_text = proof_side.joined.text;
         if (!Unpack.hasTargetAt(arena, proof_text, offset)) return null;
-        const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch
-            return null;
         const suggestion = Unpack.unpackAtSourceOffset(
             arena,
-            mm0_loaded.text,
+            nav.unit.mm0.joined.text,
             proof_text,
             offset,
         ) catch |err| switch (err) {
             error.OutOfMemory => return err,
         } orelse return null;
 
+        return try self.replacementCodeAction(
+            arena,
+            proof_side.*,
+            suggestion.title,
+            .@"refactor.rewrite",
+            suggestion.replace_span,
+            suggestion.replacement,
+        );
+    }
+
+    /// A code action replacing `span` of the joined proof text with
+    /// `replacement`, addressed to the file the span lies in.
+    fn replacementCodeAction(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        proof_side: UnitSide,
+        title: []const u8,
+        kind: types.CodeActionKind,
+        span: Search.Span,
+        replacement: []const u8,
+    ) !?types.CodeAction {
+        const hit = proof_side.locate(span) orelse return null;
         const edits = try arena.alloc(types.TextEdit, 1);
         edits[0] = .{
             .range = lsp.offsets.locToRange(
-                proof_text,
-                .{
-                    .start = suggestion.replace_span.start,
-                    .end = suggestion.replace_span.end,
-                },
+                hit.file.text,
+                .{ .start = hit.span.start, .end = hit.span.end },
                 self.offset_encoding,
             ),
-            .newText = suggestion.replacement,
+            .newText = replacement,
         };
         var changes: std.json.ArrayHashMap([]const types.TextEdit) = .{};
-        try changes.map.put(arena, uri, edits);
+        try changes.map.put(arena, hit.file.uri, edits);
         return .{
-            .title = suggestion.title,
-            .kind = .@"refactor.rewrite",
+            .title = title,
+            .kind = kind,
             .edit = .{ .changes = changes },
         };
     }
 
-    /// Return the search suggestions for `key` at `offset`, serving the per-proof
-    /// cache when the document states match and the offset falls within the cached
-    /// result's placeholder span, and recomputing otherwise. The .mm0 contents
-    /// (`mm0_path`) are read only on a miss. The returned slice is owned by the
-    /// cache entry (handler allocator) and stays valid until the entry is evicted,
-    /// which never happens within one request. Returns null only when the search
-    /// itself fails (a cached empty result is a non-null empty slice).
+    /// Return the search suggestions for the unit at `offset` (in the joined
+    /// proof text), serving the per-proof cache when every file's state
+    /// matches and the offset falls within the cached result's placeholder
+    /// span, and recomputing otherwise. The returned slice is owned by the
+    /// cache entry (handler allocator) and stays valid until the entry is
+    /// evicted, which never happens within one request. Returns null only
+    /// when the search itself fails (a cached empty result is a non-null
+    /// empty slice).
     ///
     /// A recomputed search also records its outcome in `search_status` and
     /// re-publishes the proof document's diagnostics, upgrading the target
     /// placeholder's "not yet searched" warning; a cache hit changes nothing,
     /// so it publishes nothing.
-    fn suggestionsForKey(
+    fn suggestionsForUnit(
         self: *Handler,
         arena: std.mem.Allocator,
-        key: SearchCacheKey,
+        nav: NavigationSnapshot,
         offset: usize,
-        mm0_path: []const u8,
-        proof_src: []const u8,
     ) !?[]const Search.SourceSuggestion {
-        if (self.search_cache.getPtr(key.proof.uri)) |entry| {
-            if (entry.key.eql(key) and entry.matchesOffset(offset)) {
+        const proof_side = nav.side();
+        const proof_uri = proof_side.rootFile().uri;
+        const states = try nav.unit.states(arena);
+        if (self.search_cache.getPtr(proof_uri)) |entry| {
+            if (entry.key.eql(states) and entry.matchesOffset(offset)) {
                 return entry.suggestions;
             }
         }
 
-        const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch
-            return null;
         const suggestions = Search.suggestionsAtSourceOffset(
             arena,
-            mm0_loaded.text,
-            proof_src,
+            nav.unit.mm0.joined.text,
+            proof_side.joined.text,
             offset,
             // One best proof for the single-proof modes (`exact?`/`auto?`); this
             // also lets `exact?` short-circuit recursive generation once it has a
@@ -875,15 +1116,9 @@ pub const Handler = struct {
         // already short-circuited cheaply); just hand back the empty result.
         const target_span = suggestions.target_span orelse return suggestions.items;
 
-        // Store under the .mm0 state from the read just performed, so the stored
-        // key's mtime matches the contents actually searched (a file changed
-        // between the cheap stat and this read self-corrects on the next lookup).
-        const store_key: SearchCacheKey = .{
-            .mm0 = navigationState(mm0_loaded),
-            .proof = key.proof,
-        };
         const stored = try self.storeSearchSuggestions(
-            store_key,
+            proof_uri,
+            states,
             target_span,
             suggestions.items,
         );
@@ -893,7 +1128,8 @@ pub const Handler = struct {
         // warning upgrades to info (success) or error (failure) immediately.
         // Cache hits skip this — their outcome is already recorded.
         try self.recordSearchOutcome(
-            store_key,
+            proof_uri,
+            states,
             target_span,
             suggestions.status,
             if (suggestions.items.len > 0)
@@ -901,18 +1137,19 @@ pub const Handler = struct {
             else
                 suggestions.status_detail orelse "",
         );
-        try self.analyzeUri(arena, store_key.proof.uri);
+        try self.analyzeUri(arena, proof_uri);
         return stored;
     }
 
     /// Record the outcome of a freshly-run placeholder search under the
-    /// document-state `key`, updating the placeholder's previous outcome in
-    /// place (same `target_span`) or appending a new one. A recorded list
-    /// whose key no longer matches (either document changed) is dropped and
+    /// unit's document states, updating the placeholder's previous outcome
+    /// in place (same `target_span`) or appending a new one. A recorded list
+    /// whose key no longer matches (any file changed) is dropped and
     /// restarted rather than mixed with outcomes from other document states.
     fn recordSearchOutcome(
         self: *Handler,
-        key: SearchCacheKey,
+        proof_uri: []const u8,
+        states: []const NavigationDocumentState,
         target_span: Search.Span,
         status: Search.SearchStatus,
         detail: []const u8,
@@ -925,8 +1162,8 @@ pub const Handler = struct {
             .detail = detail_owned,
         };
 
-        if (self.search_status.getPtr(key.proof.uri)) |entry| {
-            if (entry.key.eql(key)) {
+        if (self.search_status.getPtr(proof_uri)) |entry| {
+            if (entry.key.eql(states)) {
                 for (entry.statuses.items) |*existing| {
                     if (existing.target_span.start == target_span.start and
                         existing.target_span.end == target_span.end)
@@ -943,16 +1180,19 @@ pub const Handler = struct {
                 SearchStatusEntry,
                 &self.search_status,
                 self.allocator,
-                key.proof.uri,
+                proof_uri,
             );
         }
 
-        var owned_key = try key.dupe(self.allocator);
+        var owned_key = try UnitKey.init(self.allocator, states);
         errdefer owned_key.deinit(self.allocator);
+        const owned_uri = try self.allocator.dupe(u8, proof_uri);
+        errdefer self.allocator.free(owned_uri);
         var statuses = std.ArrayListUnmanaged(PlaceholderOutcome){};
         errdefer statuses.deinit(self.allocator);
         try statuses.append(self.allocator, outcome);
-        try self.search_status.put(self.allocator, owned_key.proof.uri, .{
+        try self.search_status.put(self.allocator, owned_uri, .{
+            .uri = owned_uri,
             .key = owned_key,
             .statuses = statuses,
         });
@@ -963,7 +1203,8 @@ pub const Handler = struct {
     /// stored slice.
     fn storeSearchSuggestions(
         self: *Handler,
-        key: SearchCacheKey,
+        proof_uri: []const u8,
+        states: []const NavigationDocumentState,
         target_span: Search.Span,
         suggestions: []const Search.SourceSuggestion,
     ) ![]const Search.SourceSuggestion {
@@ -991,12 +1232,14 @@ pub const Handler = struct {
             filled = idx + 1;
         }
 
-        var owned_key = try key.dupe(self.allocator);
+        var owned_key = try UnitKey.init(self.allocator, states);
         errdefer owned_key.deinit(self.allocator);
+        const owned_uri = try self.allocator.dupe(u8, proof_uri);
+        errdefer self.allocator.free(owned_uri);
 
-        self.removeSearchCacheByProofUri(key.proof.uri);
-        const cache_key = owned_key.proof.uri;
-        try self.search_cache.put(self.allocator, cache_key, .{
+        self.removeSearchCacheByProofUri(proof_uri);
+        try self.search_cache.put(self.allocator, owned_uri, .{
+            .uri = owned_uri,
             .key = owned_key,
             .target_span = target_span,
             .suggestions = owned,
@@ -1032,29 +1275,17 @@ pub const Handler = struct {
     fn searchCodeAction(
         self: *Handler,
         arena: std.mem.Allocator,
-        uri: []const u8,
-        text: []const u8,
+        nav: NavigationSnapshot,
         suggestion: Search.SourceSuggestion,
-    ) !types.CodeAction {
-        const edits = try arena.alloc(types.TextEdit, 1);
-        edits[0] = .{
-            .range = lsp.offsets.locToRange(
-                text,
-                .{
-                    .start = suggestion.replace_span.start,
-                    .end = suggestion.replace_span.end,
-                },
-                self.offset_encoding,
-            ),
-            .newText = suggestion.replacement,
-        };
-        var changes: std.json.ArrayHashMap([]const types.TextEdit) = .{};
-        try changes.map.put(arena, uri, edits);
-        return .{
-            .title = suggestion.title,
-            .kind = .quickfix,
-            .edit = .{ .changes = changes },
-        };
+    ) !?types.CodeAction {
+        return try self.replacementCodeAction(
+            arena,
+            nav.side().*,
+            suggestion.title,
+            .quickfix,
+            suggestion.replace_span,
+            suggestion.replacement,
+        );
     }
 
     pub fn @"textDocument/documentSymbol"(
@@ -1068,7 +1299,8 @@ pub const Handler = struct {
         ) orelse return null;
         const symbols = try outlineSymbolsToLsp(
             arena,
-            nav.snapshot,
+            nav.unit.rangeLocator(),
+            params.textDocument.uri,
             nav.snapshot.outline(nav.document),
             self.offset_encoding,
         );
@@ -1084,28 +1316,19 @@ pub const Handler = struct {
             arena,
             params.textDocument.uri,
         ) orelse return null;
-        const text = nav.snapshot.textForDocument(nav.document) orelse return null;
-        const offset = lsp.offsets.positionToIndex(
-            text,
+        const offset = nav.joinedPosition(
             params.position,
             self.offset_encoding,
-        );
+        ) orelse return null;
         const definition = nav.snapshot.definitionAt(
             nav.document,
             offset,
         ) orelse return null;
-        return .{
-            .Definition = .{
-                .Location = .{
-                    .uri = definition.uri,
-                    .range = sourceRangeToLsp(
-                        nav.snapshot,
-                        definition.selection_range,
-                        self.offset_encoding,
-                    ),
-                },
-            },
-        };
+        const location = nav.unit.rangeLocator().toLocation(
+            definition.selection_range,
+            self.offset_encoding,
+        ) orelse return null;
+        return .{ .Definition = .{ .Location = location } };
     }
 
     pub fn @"textDocument/implementation"(
@@ -1117,28 +1340,19 @@ pub const Handler = struct {
             arena,
             params.textDocument.uri,
         ) orelse return null;
-        const text = nav.snapshot.textForDocument(nav.document) orelse return null;
-        const offset = lsp.offsets.positionToIndex(
-            text,
+        const offset = nav.joinedPosition(
             params.position,
             self.offset_encoding,
-        );
+        ) orelse return null;
         const implementation = nav.snapshot.implementationAt(
             nav.document,
             offset,
         ) orelse return null;
-        return .{
-            .Definition = .{
-                .Location = .{
-                    .uri = implementation.uri,
-                    .range = sourceRangeToLsp(
-                        nav.snapshot,
-                        implementation.selection_range,
-                        self.offset_encoding,
-                    ),
-                },
-            },
-        };
+        const location = nav.unit.rangeLocator().toLocation(
+            implementation.selection_range,
+            self.offset_encoding,
+        ) orelse return null;
+        return .{ .Definition = .{ .Location = location } };
     }
 
     pub fn @"textDocument/references"(
@@ -1150,12 +1364,10 @@ pub const Handler = struct {
             arena,
             params.textDocument.uri,
         ) orelse return null;
-        const text = nav.snapshot.textForDocument(nav.document) orelse return null;
-        const offset = lsp.offsets.positionToIndex(
-            text,
+        const offset = nav.joinedPosition(
             params.position,
             self.offset_encoding,
-        );
+        ) orelse return null;
         const ranges = try nav.snapshot.referencesAt(
             arena,
             nav.document,
@@ -1164,7 +1376,7 @@ pub const Handler = struct {
         );
         return try sourceRangesToLocations(
             arena,
-            nav.snapshot,
+            nav.unit.rangeLocator(),
             ranges,
             self.offset_encoding,
         );
@@ -1246,6 +1458,21 @@ pub const Handler = struct {
         }
     }
 
+    /// Re-analyse every open root whose last analysis read `uri` (as an
+    /// import, an include, or a paired proof file of an import).
+    fn analyzeDependents(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) !void {
+        const roots = try self.dependentRoots(arena, uri);
+        for (roots) |root| {
+            if (std.mem.eql(u8, root, uri)) continue;
+            if (!self.docs.contains(root)) continue;
+            try self.analyzeUri(arena, root);
+        }
+    }
+
     fn analyzeMm0Document(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1268,28 +1495,26 @@ pub const Handler = struct {
             }
         } else |_| {}
 
-        const diag_context: DiagnosticContext = .{
-            .mm0 = .{
-                .uri = uri,
-                .text = text,
-                .version = version,
-            },
-        };
+        const unit = try self.buildUnit(
+            arena,
+            .{ .uri = uri, .text = text, .version = version, .mtime = null },
+            path,
+            null,
+            null,
+        );
 
-        var compiler = mm0.Compiler.init(arena, text);
+        var compiler = mm0.Compiler.init(arena, unit.mm0.joined.text);
         compiler.analyzeMm0() catch |err| {
-            if (compiler.diagnostics.last_diagnostic != null or
-                compiler.primaryDiagnostics().len != 0 or
-                compiler.warningDiagnostics().len != 0)
-            {
-                try self.publishCompilerSourceDiagnostics(
+            if (hasDiagnostics(&compiler)) {
+                try self.publishUnitDiagnostics(
                     arena,
-                    diag_context,
+                    uri,
+                    &unit,
                     compiler.primaryDiagnostics(),
                     compiler.warningDiagnostics(),
                     compiler.diagnostics.last_diagnostic,
+                    null,
                     compiler.omittedPrimaryDiagnostic(.mm0),
-                    .mm0,
                     &.{},
                 );
             } else {
@@ -1303,14 +1528,15 @@ pub const Handler = struct {
             }
             return;
         };
-        try self.publishCompilerSourceDiagnostics(
+        try self.publishUnitDiagnostics(
             arena,
-            diag_context,
+            uri,
+            &unit,
             compiler.primaryDiagnostics(),
             compiler.warningDiagnostics(),
             null,
+            null,
             compiler.omittedPrimaryDiagnostic(.mm0),
-            .mm0,
             &.{},
         );
     }
@@ -1334,6 +1560,9 @@ pub const Handler = struct {
             return;
         };
         const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch |err| {
+            // A proof file without a theory of its own that some root
+            // includes: that root's analysis reports on it.
+            if (err == error.FileNotFound and self.isDependency(proof_uri)) return;
             const message = switch (err) {
                 error.FileNotFound => "could not find sibling .mm0 file for this proof",
                 else => try std.fmt.allocPrint(
@@ -1354,18 +1583,19 @@ pub const Handler = struct {
             return;
         };
 
-        const diag_context: DiagnosticContext = .{
-            .mm0 = .{
-                .uri = mm0_loaded.uri,
-                .text = mm0_loaded.text,
-                .version = mm0_loaded.version,
-            },
-            .proof = .{
+        const unit = try self.buildUnit(
+            arena,
+            mm0_loaded,
+            mm0_path,
+            .{
                 .uri = proof_uri,
                 .text = proof_text,
                 .version = proof_version,
+                .mtime = null,
             },
-        };
+            proof_path,
+        );
+        const states = try unit.states(arena);
 
         // One status diagnostic per search placeholder (warning until searched,
         // then info/error from the recorded outcome), published together with
@@ -1373,26 +1603,22 @@ pub const Handler = struct {
         // per document, so they must go out in the same payload.
         const search_diagnostics = try self.searchStatusDiagnostics(
             arena,
-            proof_uri,
-            proof_version,
-            proof_text,
-            navigationState(mm0_loaded),
+            &unit,
+            states,
         );
 
         var compiler = mm0.Compiler.initWithProof(
             arena,
-            mm0_loaded.text,
-            proof_text,
+            unit.mm0.joined.text,
+            unit.proof.?.joined.text,
         );
         compiler.allow_search_placeholders = true;
         compiler.analyze() catch |err| {
-            if (compiler.diagnostics.last_diagnostic != null or
-                compiler.primaryDiagnostics().len != 0 or
-                compiler.warningDiagnostics().len != 0)
-            {
-                try self.publishProofAndMm0Diagnostics(
+            if (hasDiagnostics(&compiler)) {
+                try self.publishUnitDiagnostics(
                     arena,
-                    diag_context,
+                    proof_uri,
+                    &unit,
                     compiler.primaryDiagnostics(),
                     compiler.warningDiagnostics(),
                     compiler.diagnostics.last_diagnostic,
@@ -1417,50 +1643,42 @@ pub const Handler = struct {
             return;
         };
 
-        try self.publishProofAndMm0Diagnostics(
+        try self.publishUnitDiagnostics(
             arena,
-            diag_context,
+            proof_uri,
+            &unit,
             compiler.primaryDiagnostics(),
             compiler.warningDiagnostics(),
-            compiler.diagnostics.last_diagnostic,
+            null,
             compiler.omittedPrimaryDiagnostic(.proof),
             compiler.omittedPrimaryDiagnostic(.mm0),
             search_diagnostics,
         );
     }
 
-    /// Build one LSP diagnostic per search placeholder in the proof document:
-    /// info for a recorded successful search, error for a recorded failure
-    /// (with the reason), warning for a placeholder not searched since the
-    /// documents last changed. Outcomes are keyed by both documents' states,
-    /// so anything stale silently degrades to the warning. These are built
-    /// directly as LSP diagnostics (not compiler diagnostics): search status
-    /// is an editor-session concept the compile pipeline never produces.
+    fn hasDiagnostics(compiler: *const mm0.Compiler) bool {
+        return compiler.diagnostics.last_diagnostic != null or
+            compiler.primaryDiagnostics().len != 0 or
+            compiler.warningDiagnostics().len != 0;
+    }
+
     fn searchStatusDiagnostics(
         self: *Handler,
         arena: std.mem.Allocator,
-        proof_uri: []const u8,
-        proof_version: i32,
-        proof_text: []const u8,
-        mm0_state: NavigationDocumentState,
-    ) ![]const types.Diagnostic {
+        unit: *const Unit,
+        states: []const NavigationDocumentState,
+    ) ![]const LocatedDiagnostic {
+        const proof_side = unit.proof orelse return &.{};
+        const proof_text = proof_side.joined.text;
         const placeholders = try Search.searchPlaceholders(arena, proof_text);
         if (placeholders.len == 0) return &.{};
 
-        const current_key: SearchCacheKey = .{
-            .mm0 = mm0_state,
-            .proof = .{
-                .uri = proof_uri,
-                .version = proof_version,
-                .mtime = null,
-            },
-        };
         var outcomes: []const PlaceholderOutcome = &.{};
-        if (self.search_status.getPtr(proof_uri)) |entry| {
-            if (entry.key.eql(current_key)) outcomes = entry.statuses.items;
+        if (self.search_status.getPtr(proof_side.rootFile().uri)) |entry| {
+            if (entry.key.eql(states)) outcomes = entry.statuses.items;
         }
 
-        var diagnostics = std.ArrayListUnmanaged(types.Diagnostic){};
+        var diagnostics = std.ArrayListUnmanaged(LocatedDiagnostic){};
         for (placeholders) |placeholder| {
             const keyword = placeholder.kind.keyword();
             var severity: types.DiagnosticSeverity = .Warning;
@@ -1506,20 +1724,14 @@ pub const Handler = struct {
                     },
                 }
             }
-            try diagnostics.append(arena, .{
-                .range = lsp.offsets.locToRange(
-                    proof_text,
-                    .{
-                        .start = placeholder.span.start,
-                        .end = placeholder.span.end,
-                    },
-                    self.offset_encoding,
-                ),
-                .severity = severity,
-                .source = LSP_SERVER_NAME,
-                .code = .{ .string = SEARCH_STATUS_CODE },
-                .message = message,
-            });
+            try self.appendLocated(
+                arena,
+                &diagnostics,
+                proof_side,
+                placeholder.span,
+                severity,
+                message,
+            );
             // Per-parameter validation (typo'd names, out-of-range values,
             // parameters on a non-auto? placeholder): one error diagnostic
             // per rejected entry, underlining the offending token. These
@@ -1532,23 +1744,46 @@ pub const Handler = struct {
                 placeholder.params,
             );
             for (issues) |issue| {
-                try diagnostics.append(arena, .{
-                    .range = lsp.offsets.locToRange(
-                        proof_text,
-                        .{
-                            .start = issue.span.start,
-                            .end = issue.span.end,
-                        },
-                        self.offset_encoding,
-                    ),
-                    .severity = .Error,
-                    .source = LSP_SERVER_NAME,
-                    .code = .{ .string = SEARCH_STATUS_CODE },
-                    .message = issue.message,
-                });
+                try self.appendLocated(
+                    arena,
+                    &diagnostics,
+                    proof_side,
+                    issue.span,
+                    .Error,
+                    issue.message,
+                );
             }
         }
         return try diagnostics.toOwnedSlice(arena);
+    }
+
+    /// A search-status diagnostic for `span` of the joined proof text, on
+    /// the file the span lies in.
+    fn appendLocated(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        diagnostics: *std.ArrayListUnmanaged(LocatedDiagnostic),
+        proof_side: UnitSide,
+        span: Search.Span,
+        severity: types.DiagnosticSeverity,
+        message: []const u8,
+    ) !void {
+        const hit = proof_side.locate(span) orelse return;
+        try diagnostics.append(arena, .{
+            .uri = hit.file.uri,
+            .version = hit.file.version,
+            .diagnostic = .{
+                .range = lsp.offsets.locToRange(
+                    hit.file.text,
+                    .{ .start = hit.span.start, .end = hit.span.end },
+                    self.offset_encoding,
+                ),
+                .severity = severity,
+                .source = LSP_SERVER_NAME,
+                .code = .{ .string = SEARCH_STATUS_CODE },
+                .message = message,
+            },
+        });
     }
 
     fn loadTextPreferOpenDocument(
@@ -1584,29 +1819,444 @@ pub const Handler = struct {
         };
     }
 
-    fn navigationState(loaded: LoadedText) NavigationDocumentState {
+    /// The file at `path` as a unit file: an open document first (unsaved
+    /// edits count), else the disk copy unless `open_only`. Null when there
+    /// is neither. Text and names are copied into `arena`, so a unit never
+    /// aliases the document store.
+    fn resolveUnitFile(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        path: []const u8,
+        open_only: bool,
+    ) !?UnitFile {
+        const uri = try pathToUri(arena, path);
+        if (self.docs.get(uri)) |doc| {
+            return .{
+                .uri = uri,
+                .path = try arena.dupe(u8, path),
+                .text = try arena.dupe(u8, doc.text),
+                .version = doc.version,
+                .mtime = null,
+            };
+        }
+        if (open_only) return null;
+        const disk = readFileWithMtimeAlloc(arena, path) catch |err| {
+            // On wasm there is no disk; the read reports FileNotFound.
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            return null;
+        };
         return .{
-            .uri = loaded.uri,
+            .uri = uri,
+            .path = try arena.dupe(u8, path),
+            .text = disk.text,
+            .version = null,
+            .mtime = disk.mtime,
+        };
+    }
+
+    /// Does `path` name an open document or a readable file?
+    fn pathExists(self: *Handler, arena: std.mem.Allocator, path: []const u8) bool {
+        const uri = pathToUri(arena, path) catch return false;
+        if (self.docs.contains(uri)) return true;
+        _ = statMtimeAlloc(path) catch return false;
+        return true;
+    }
+
+    /// Does the open document at `uri` report its own diagnostics (a `.mm0`
+    /// file, or a `.auf` file with a sibling theory)? A root's analysis
+    /// leaves such files alone; it publishes for closed files and for
+    /// library proof files that have no analysis of their own.
+    fn ownsDiagnostics(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) bool {
+        if (!self.docs.contains(uri)) return false;
+        const path = uriToPath(arena, uri) catch return true;
+        return switch (documentKind(path)) {
+            .mm0, .other => true,
+            .proof => blk: {
+                const mm0_path = siblingPathForProof(arena, path) catch
+                    break :blk true;
+                break :blk self.pathExists(arena, mm0_path);
+            },
+        };
+    }
+
+    /// Join a root `.mm0` with its imports and, when `proof` is given, the
+    /// paired `.auf` files with their includes. A join that fails (a
+    /// missing file, a cycle, a malformed statement) degrades that side to
+    /// the root alone with its statements blanked, and records the failure
+    /// as a diagnostic on the file holding the statement. Everything the
+    /// unit references is allocated from `arena`.
+    fn buildUnit(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        mm0_loaded: LoadedText,
+        mm0_path: []const u8,
+        proof_loaded: ?LoadedText,
+        proof_path: ?[]const u8,
+    ) !Unit {
+        var loader = UnitLoader{ .handler = self, .arena = arena };
+        var failures = std.ArrayListUnmanaged(UnitFailure){};
+
+        const mm0_root = try unitFileFrom(arena, mm0_loaded, mm0_path);
+        try loader.put(mm0_root);
+        var failure: ?Imports.JoinFailure = null;
+        const mm0_joined = Imports.join(
+            arena,
+            loader.resolver(),
+            mm0_root.path,
+            mm0_root.text,
+            &failure,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => blk: {
+                try recordJoinFailure(arena, &loader, &failures, failure);
+                break :blk try Imports.single(
+                    arena,
+                    mm0_root.path,
+                    try Imports.blankStatements(arena, .mm0, mm0_root.text),
+                );
+            },
+        };
+        const mm0_side: UnitSide = .{
+            .joined = mm0_joined,
+            .files = try loader.filesFor(mm0_joined),
+            .root = indexOfKey(mm0_joined, mm0_root.path),
+        };
+
+        var proof_side: ?UnitSide = null;
+        if (proof_loaded) |loaded| {
+            const proof_root = try unitFileFrom(arena, loaded, proof_path.?);
+            try loader.put(proof_root);
+            // Every joined `.mm0` pairs with its `<stem>.auf` sibling when
+            // one exists, in the same order; the root pairs with the given
+            // proof file.
+            var roots = std.ArrayListUnmanaged(Imports.File){};
+            for (mm0_joined.files) |file| {
+                if (std.mem.eql(u8, file.key, mm0_root.path)) {
+                    try roots.append(arena, .{
+                        .key = proof_root.path,
+                        .text = proof_root.text,
+                    });
+                    continue;
+                }
+                const sibling = siblingPathForMm0(arena, file.key) catch continue;
+                const paired = try loader.load(sibling, false) orelse continue;
+                try roots.append(arena, .{ .key = paired.path, .text = paired.text });
+            }
+            failure = null;
+            const proof_joined = Imports.joinAll(
+                arena,
+                loader.resolver(),
+                .auf,
+                roots.items,
+                &failure,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => blk: {
+                    try recordJoinFailure(arena, &loader, &failures, failure);
+                    break :blk try Imports.single(
+                        arena,
+                        proof_root.path,
+                        try Imports.blankStatements(arena, .auf, proof_root.text),
+                    );
+                },
+            };
+            proof_side = .{
+                .joined = proof_joined,
+                .files = try loader.filesFor(proof_joined),
+                .root = indexOfKey(proof_joined, proof_root.path),
+            };
+        }
+
+        return .{
+            .mm0 = mm0_side,
+            .proof = proof_side,
+            .failures = try failures.toOwnedSlice(arena),
+        };
+    }
+
+    fn unitFileFrom(
+        arena: std.mem.Allocator,
+        loaded: LoadedText,
+        path: []const u8,
+    ) !UnitFile {
+        return .{
+            .uri = try arena.dupe(u8, loaded.uri),
+            .path = try arena.dupe(u8, path),
+            .text = try arena.dupe(u8, loaded.text),
             .version = loaded.version,
             .mtime = loaded.mtime,
         };
     }
 
-    /// The document state (uri/version/mtime) for `path` WITHOUT reading its
-    /// contents: an open document contributes its version, a closed one its disk
-    /// mtime via a cheap stat. Mirrors `loadTextForUriPath`'s state fields exactly,
-    /// so a key built from this matches one built from a later full load of the
-    /// unchanged file.
-    fn documentStateForPath(
+    fn indexOfKey(joined: Imports.Joined, key: []const u8) usize {
+        for (joined.files, 0..) |file, index| {
+            if (std.mem.eql(u8, file.key, key)) return index;
+        }
+        unreachable;
+    }
+
+    fn recordJoinFailure(
+        arena: std.mem.Allocator,
+        loader: *UnitLoader,
+        failures: *std.ArrayListUnmanaged(UnitFailure),
+        failure: ?Imports.JoinFailure,
+    ) !void {
+        const info = failure orelse return;
+        const keyword = info.syntax.keyword();
+        const message = switch (info.kind) {
+            .cycle => try std.fmt.allocPrint(
+                arena,
+                "{s} cycle: '{s}' is already being {s}d",
+                .{ keyword, info.spec, keyword },
+            ),
+            .unresolved => try std.fmt.allocPrint(
+                arena,
+                "unable to {s} '{s}': {s}",
+                .{
+                    keyword,
+                    info.spec,
+                    if (info.err) |err| @errorName(err) else "unresolved",
+                },
+            ),
+            .malformed => try std.fmt.allocPrint(
+                arena,
+                "malformed {s} statement",
+                .{keyword},
+            ),
+        };
+        // The statement's file was loaded before its statements were
+        // followed, so it is always on record.
+        const file = loader.files.get(info.file_key) orelse return;
+        try failures.append(arena, .{
+            .file = file,
+            .span = .{ .start = info.span.start, .end = info.span.end },
+            .message = message,
+        });
+    }
+
+    /// Publish the diagnostics of one analysis, each on the file it lies
+    /// in. The roots always receive a set (an empty one clears them); other
+    /// files receive theirs only when they do not report on themselves
+    /// (`ownsDiagnostics`), and closed ones only when there is something to
+    /// report. Records what the analysis read and published under
+    /// `record_uri`.
+    fn publishUnitDiagnostics(
         self: *Handler,
         arena: std.mem.Allocator,
-        path: []const u8,
-    ) !NavigationDocumentState {
-        const uri = try pathToUri(arena, path);
-        if (self.docs.get(uri)) |doc| {
-            return .{ .uri = uri, .version = doc.version, .mtime = null };
+        record_uri: []const u8,
+        unit: *const Unit,
+        primary: []const mm0.CompilerDiagnostic,
+        warnings: []const mm0.CompilerDiagnostic,
+        extra: ?mm0.CompilerDiagnostic,
+        proof_omitted: ?mm0.CompilerDiagnostic,
+        mm0_omitted: ?mm0.CompilerDiagnostic,
+        extra_located: []const LocatedDiagnostic,
+    ) !void {
+        var all = std.ArrayListUnmanaged(LocatedDiagnostic){};
+        try all.appendSlice(arena, try lsp_diagnostics.locateCompilerDiagnostics(
+            arena,
+            unit.diagnosticContext(),
+            primary,
+            warnings,
+            extra,
+            proof_omitted,
+            mm0_omitted,
+            self.offset_encoding,
+        ));
+        for (unit.failures) |failure| {
+            try all.append(arena, .{
+                .uri = failure.file.uri,
+                .version = failure.file.version,
+                .diagnostic = .{
+                    .range = lsp.offsets.locToRange(
+                        failure.file.text,
+                        .{ .start = failure.span.start, .end = failure.span.end },
+                        self.offset_encoding,
+                    ),
+                    .severity = .Error,
+                    .source = LSP_SERVER_NAME,
+                    .message = failure.message,
+                },
+            });
         }
-        return .{ .uri = uri, .version = null, .mtime = try statMtimeAlloc(path) };
+        try all.appendSlice(arena, extra_located);
+
+        // Proof root first, then the theory root, then everything else.
+        var targets = std.ArrayListUnmanaged(UnitFile){};
+        if (unit.proof) |proof| try targets.append(arena, proof.rootFile());
+        try targets.append(arena, unit.mm0.rootFile());
+        for (unit.mm0.files, 0..) |file, index| {
+            if (index != unit.mm0.root) try targets.append(arena, file);
+        }
+        if (unit.proof) |proof| {
+            for (proof.files, 0..) |file, index| {
+                if (index != proof.root) try targets.append(arena, file);
+            }
+        }
+
+        var deps = std.ArrayListUnmanaged([]const u8){};
+        var published = std.ArrayListUnmanaged([]const u8){};
+        for (targets.items, 0..) |target, position| {
+            // A file reached twice (a proof file both paired and included)
+            // publishes once.
+            var seen = false;
+            for (targets.items[0..position]) |earlier| {
+                if (std.mem.eql(u8, earlier.uri, target.uri)) seen = true;
+            }
+            if (seen) continue;
+
+            const is_root = unit.isRootUri(target.uri);
+            if (!is_root) try deps.append(arena, target.uri);
+            var diagnostics = std.ArrayListUnmanaged(types.Diagnostic){};
+            for (all.items) |located| {
+                if (!std.mem.eql(u8, located.uri, target.uri)) continue;
+                try diagnostics.append(arena, located.diagnostic);
+            }
+            if (is_root) {
+                try self.publishDiagnostics(
+                    arena,
+                    target.uri,
+                    target.version,
+                    diagnostics.items,
+                );
+                continue;
+            }
+            // A closed file is left alone when it has nothing to report; an
+            // open library file always receives the root's view, which also
+            // clears the note its own analysis left ("no sibling theory").
+            if (diagnostics.items.len == 0 and !self.docs.contains(target.uri)) {
+                continue;
+            }
+            if (self.ownsDiagnostics(arena, target.uri)) continue;
+            try self.publishDiagnostics(
+                arena,
+                target.uri,
+                target.version,
+                diagnostics.items,
+            );
+            try published.append(arena, target.uri);
+        }
+
+        try self.storeUnitRecord(arena, record_uri, deps.items, published.items);
+    }
+
+    /// Replace the record for `root_uri`, clearing diagnostics on files the
+    /// previous analysis published for but this one did not.
+    fn storeUnitRecord(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        root_uri: []const u8,
+        deps: []const []const u8,
+        published: []const []const u8,
+    ) !void {
+        const owned_deps = try dupeUriList(self.allocator, deps);
+        errdefer freeUriList(self.allocator, owned_deps);
+        const owned_published = try dupeUriList(self.allocator, published);
+        errdefer freeUriList(self.allocator, owned_published);
+
+        const gop = try self.units.getOrPut(self.allocator, root_uri);
+        if (gop.found_existing) {
+            for (gop.value_ptr.published) |old| {
+                if (uriListContains(published, old)) continue;
+                try self.clearDiagnostics(arena, old, null);
+            }
+            gop.value_ptr.deinit(self.allocator);
+        } else {
+            errdefer _ = self.units.remove(root_uri);
+            gop.key_ptr.* = try self.allocator.dupe(u8, root_uri);
+        }
+        gop.value_ptr.* = .{ .deps = owned_deps, .published = owned_published };
+    }
+
+    /// Drop the record for `root_uri`, clearing what it published.
+    fn forgetUnit(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        root_uri: []const u8,
+    ) !void {
+        const removed = self.units.fetchRemove(root_uri) orelse return;
+        var record = removed.value;
+        defer {
+            record.deinit(self.allocator);
+            self.allocator.free(removed.key);
+        }
+        for (record.published) |uri| {
+            try self.clearDiagnostics(arena, uri, null);
+        }
+    }
+
+    /// Is `uri` read by some root's analysis?
+    fn isDependency(self: *Handler, uri: []const u8) bool {
+        var it = self.units.iterator();
+        while (it.next()) |entry| {
+            if (uriListContains(entry.value_ptr.deps, uri)) return true;
+        }
+        return false;
+    }
+
+    /// The roots whose analyses read `uri`, copied into `arena` (analysing
+    /// them rewrites the records).
+    fn dependentRoots(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) ![]const []const u8 {
+        var roots = std.ArrayListUnmanaged([]const u8){};
+        var it = self.units.iterator();
+        while (it.next()) |entry| {
+            if (!uriListContains(entry.value_ptr.deps, uri)) continue;
+            try roots.append(arena, try arena.dupe(u8, entry.key_ptr.*));
+        }
+        return roots.items;
+    }
+
+    /// The root `.mm0` (and its proof file, when there is one) a request on
+    /// `uri` navigates: the document itself for a `.mm0`, its sibling for a
+    /// `.auf`. Null when the root cannot be loaded.
+    fn rootDocumentsForUri(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        uri: []const u8,
+    ) !?RootDocuments {
+        const path = uriToPath(arena, uri) catch return null;
+        switch (documentKind(path)) {
+            .mm0 => {
+                const mm0_loaded = self.loadTextForUriPath(arena, uri, path) catch
+                    return null;
+                var docs: RootDocuments = .{
+                    .mm0 = mm0_loaded,
+                    .mm0_path = path,
+                    .proof = null,
+                    .proof_path = null,
+                };
+                if (siblingPathForMm0(arena, path)) |proof_path| {
+                    const proof_uri = try pathToUri(arena, proof_path);
+                    if (self.loadTextForUriPath(arena, proof_uri, proof_path)) |proof| {
+                        docs.proof = proof;
+                        docs.proof_path = proof_path;
+                    } else |_| {}
+                } else |_| {}
+                return docs;
+            },
+            .proof => {
+                const proof_loaded = self.loadTextForUriPath(arena, uri, path) catch
+                    return null;
+                const mm0_path = siblingPathForProof(arena, path) catch return null;
+                const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch
+                    return null;
+                return .{
+                    .mm0 = mm0_loaded,
+                    .mm0_path = mm0_path,
+                    .proof = proof_loaded,
+                    .proof_path = path,
+                };
+            },
+            .other => return null,
+        }
     }
 
     fn navigationSnapshotForUri(
@@ -1614,122 +2264,76 @@ pub const Handler = struct {
         arena: std.mem.Allocator,
         uri: []const u8,
     ) !?NavigationSnapshot {
-        const path = uriToPath(arena, uri) catch return null;
-        return switch (documentKind(path)) {
-            .mm0 => try self.navigationSnapshotForMm0(arena, uri, path),
-            .proof => try self.navigationSnapshotForProof(arena, uri, path),
-            .other => null,
-        };
-    }
-
-    fn navigationSnapshotForMm0(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        uri: []const u8,
-        path: []const u8,
-    ) !?NavigationSnapshot {
-        const mm0_loaded = self.loadTextForUriPath(arena, uri, path) catch {
-            return null;
-        };
-        var proof_state: ?NavigationDocumentState = null;
-        var proof_uri: ?[]const u8 = null;
-        var proof_text: ?[]const u8 = null;
-
-        if (siblingPathForMm0(arena, path)) |proof_path| {
-            const expected_uri = try pathToUri(arena, proof_path);
-            proof_state = .{
-                .uri = expected_uri,
-                .version = null,
-                .mtime = null,
-            };
-            if (self.loadTextForUriPath(
-                arena,
-                expected_uri,
-                proof_path,
-            )) |proof| {
-                proof_state = navigationState(proof);
-                proof_uri = proof.uri;
-                proof_text = proof.text;
-            } else |_| {}
-        } else |_| {}
-
-        return try self.navigationSnapshotForRequest(
-            .{
-                .mm0 = navigationState(mm0_loaded),
-                .proof = proof_state,
-            },
-            .{
-                .mm0_uri = mm0_loaded.uri,
-                .mm0_text = mm0_loaded.text,
-                .proof_uri = proof_uri,
-                .proof_text = proof_text,
-            },
-            .mm0,
-        );
-    }
-
-    fn navigationSnapshotForProof(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        uri: []const u8,
-        path: []const u8,
-    ) !?NavigationSnapshot {
-        const proof_loaded = self.loadTextForUriPath(arena, uri, path) catch {
-            return null;
-        };
-        const mm0_path = siblingPathForProof(arena, path) catch return null;
-        const mm0_loaded = self.loadTextPreferOpenDocument(arena, mm0_path) catch {
-            return null;
-        };
-
-        return try self.navigationSnapshotForRequest(
-            .{
-                .mm0 = navigationState(mm0_loaded),
-                .proof = navigationState(proof_loaded),
-            },
-            .{
-                .mm0_uri = mm0_loaded.uri,
-                .mm0_text = mm0_loaded.text,
-                .proof_uri = proof_loaded.uri,
-                .proof_text = proof_loaded.text,
-            },
-            .proof,
-        );
-    }
-
-    fn navigationSnapshotForRequest(
-        self: *Handler,
-        request: NavigationCacheRequest,
-        input: LspIndex.SnapshotInput,
-        document: LspIndex.DocumentId,
-    ) !NavigationSnapshot {
-        if (self.nav_cache.getPtr(request.mm0.uri)) |entry| {
-            if (entry.key.eql(request)) {
-                return .{
-                    .snapshot = &entry.snapshot,
-                    .document = document,
-                };
-            }
+        if (try self.rootDocumentsForUri(arena, uri)) |docs| {
+            return try self.navigationSnapshotForRoot(arena, uri, docs);
         }
+        // A library proof file without a theory of its own navigates
+        // through a root that includes it.
+        const roots = try self.dependentRoots(arena, uri);
+        for (roots) |root| {
+            if (std.mem.eql(u8, root, uri)) continue;
+            const docs = try self.rootDocumentsForUri(arena, root) orelse continue;
+            return try self.navigationSnapshotForRoot(arena, uri, docs);
+        }
+        return null;
+    }
 
-        self.removeNavigationCacheByMm0Uri(request.mm0.uri);
+    /// The cached index over the unit rooted at `docs`, rebuilt when any
+    /// file of the unit changed, viewed from `request_uri`.
+    fn navigationSnapshotForRoot(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        request_uri: []const u8,
+        docs: RootDocuments,
+    ) !?NavigationSnapshot {
+        var unit_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var keep_arena = false;
+        defer if (!keep_arena) unit_arena.deinit();
 
-        var snapshot = try LspIndex.Snapshot.build(self.allocator, input);
-        errdefer snapshot.deinit();
+        const unit = try self.buildUnit(
+            unit_arena.allocator(),
+            docs.mm0,
+            docs.mm0_path,
+            docs.proof,
+            docs.proof_path,
+        );
+        const states = try unit.states(arena);
+        const mm0_uri = docs.mm0.uri;
 
-        var key = try NavigationCacheKey.init(self.allocator, request);
-        errdefer key.deinit(self.allocator);
+        const entry: *NavigationCacheEntry = blk: {
+            if (self.nav_cache.getPtr(mm0_uri)) |entry| {
+                if (entry.key.eql(states)) break :blk entry;
+            }
+            self.removeNavigationCacheByMm0Uri(mm0_uri);
 
-        const cache_key = key.mm0.uri;
-        try self.nav_cache.put(self.allocator, cache_key, .{
-            .key = key,
-            .snapshot = snapshot,
-        });
+            var snapshot = try LspIndex.Snapshot.build(self.allocator, .{
+                .mm0_uri = mm0_uri,
+                .mm0_text = unit.mm0.joined.text,
+                .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
+                .proof_text = if (unit.proof) |proof| proof.joined.text else null,
+            });
+            errdefer snapshot.deinit();
+            var key = try UnitKey.init(self.allocator, states);
+            errdefer key.deinit(self.allocator);
+            const owned_uri = try self.allocator.dupe(u8, mm0_uri);
+            errdefer self.allocator.free(owned_uri);
+            try self.nav_cache.put(self.allocator, owned_uri, .{
+                .uri = owned_uri,
+                .key = key,
+                .unit_arena = unit_arena,
+                .unit = unit,
+                .snapshot = snapshot,
+            });
+            keep_arena = true;
+            break :blk self.nav_cache.getPtr(owned_uri).?;
+        };
 
-        const entry = self.nav_cache.getPtr(cache_key).?;
+        const found = entry.unit.find(request_uri) orelse return null;
         return .{
             .snapshot = &entry.snapshot,
-            .document = document,
+            .unit = &entry.unit,
+            .document = found.document,
+            .file_index = found.file_index,
         };
     }
 
@@ -1756,7 +2360,8 @@ pub const Handler = struct {
         // free the memory promptly on edit/close rather than waiting for the next
         // search on the same proof to evict it. Same for the recorded search
         // outcomes: dropping them returns the document's placeholders to the
-        // "not yet searched" warning.
+        // "not yet searched" warning. Every key lists all files of its unit,
+        // so an edited import or include sweeps the roots that read it too.
         self.invalidateSearchContainingUri(uri);
         invalidateCacheContaining(
             SearchStatusEntry,
@@ -1794,131 +2399,6 @@ pub const Handler = struct {
             self.allocator,
             uri,
             navEntryContainsUri,
-        );
-    }
-
-    fn publishProofAndMm0Diagnostics(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        diag_context: DiagnosticContext,
-        primary: []const mm0.CompilerDiagnostic,
-        warnings: []const mm0.CompilerDiagnostic,
-        extra: ?mm0.CompilerDiagnostic,
-        proof_omitted: ?mm0.CompilerDiagnostic,
-        mm0_omitted: ?mm0.CompilerDiagnostic,
-        proof_extra_lsp: []const types.Diagnostic,
-    ) !void {
-        try self.publishCompilerSourceDiagnostics(
-            arena,
-            diag_context,
-            primary,
-            warnings,
-            extra,
-            proof_omitted,
-            .proof,
-            proof_extra_lsp,
-        );
-        try self.publishCompilerSourceDiagnostics(
-            arena,
-            diag_context,
-            primary,
-            warnings,
-            extra,
-            mm0_omitted,
-            .mm0,
-            &.{},
-        );
-    }
-
-    fn publishCompilerDiagnostic(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        diag_context: DiagnosticContext,
-        diag: mm0.CompilerDiagnostic,
-    ) !void {
-        const doc = diag_context.sourceDocument(diag.source) orelse return;
-        const diagnostics = try arena.alloc(types.Diagnostic, 1);
-        diagnostics[0] = try compilerDiagnosticToLsp(
-            arena,
-            diag_context,
-            diag,
-            self.offset_encoding,
-        );
-        try self.publishDiagnostics(
-            arena,
-            doc.uri,
-            doc.version,
-            diagnostics,
-        );
-    }
-
-    fn publishCompilerWarnings(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        diag_context: DiagnosticContext,
-        diags: []const mm0.CompilerDiagnostic,
-        source: mm0.CompilerDiagnosticSource,
-    ) !void {
-        const doc = diag_context.sourceDocument(source) orelse return;
-        const diagnostics = try compilerDiagnosticsToLsp(
-            arena,
-            diag_context,
-            diags,
-            source,
-            self.offset_encoding,
-        );
-        if (diagnostics.len == 0) {
-            try self.clearDiagnostics(arena, doc.uri, doc.version);
-            return;
-        }
-        try self.publishDiagnostics(
-            arena,
-            doc.uri,
-            doc.version,
-            diagnostics,
-        );
-    }
-
-    fn publishCompilerSourceDiagnostics(
-        self: *Handler,
-        arena: std.mem.Allocator,
-        diag_context: DiagnosticContext,
-        primary: []const mm0.CompilerDiagnostic,
-        warnings: []const mm0.CompilerDiagnostic,
-        extra: ?mm0.CompilerDiagnostic,
-        omitted: ?mm0.CompilerDiagnostic,
-        source: mm0.CompilerDiagnosticSource,
-        extra_lsp: []const types.Diagnostic,
-    ) !void {
-        const doc = diag_context.sourceDocument(source) orelse return;
-        const diagnostics = try compilerSourceDiagnosticsToLsp(
-            arena,
-            diag_context,
-            primary,
-            warnings,
-            extra,
-            omitted,
-            source,
-            self.offset_encoding,
-        );
-        const all = if (extra_lsp.len == 0) diagnostics else merged: {
-            const merged = try arena.alloc(
-                types.Diagnostic,
-                diagnostics.len + extra_lsp.len,
-            );
-            @memcpy(merged[0..diagnostics.len], diagnostics);
-            @memcpy(merged[diagnostics.len..], extra_lsp);
-            break :merged merged;
-        };
-        if (all.len == 0) {
-            try self.clearDiagnostics(arena, doc.uri, doc.version);
-            return;
-        }
-        try self.publishDiagnostics(
-            arena,
-            doc.uri,
-            doc.version,
-            all,
         );
     }
 
@@ -1969,6 +2449,108 @@ pub const Handler = struct {
         );
     }
 };
+
+const RootDocuments = struct {
+    mm0: LoadedText,
+    mm0_path: []const u8,
+    proof: ?LoadedText,
+    proof_path: ?[]const u8,
+};
+
+/// Resolves imports and includes for `Handler.buildUnit`: a spec is joined
+/// to the importing file's directory and normalised lexically, then looked
+/// up as an open document or read from disk. Every file loaded is kept
+/// under its path so the unit can list them afterwards.
+const UnitLoader = struct {
+    handler: *Handler,
+    arena: std.mem.Allocator,
+    files: std.StringHashMapUnmanaged(UnitFile) = .empty,
+
+    fn resolver(self: *UnitLoader) Imports.Resolver {
+        return .{ .ctx = @ptrCast(self), .resolveFn = resolveFn };
+    }
+
+    fn put(self: *UnitLoader, file: UnitFile) !void {
+        try self.files.put(self.arena, file.path, file);
+    }
+
+    fn load(self: *UnitLoader, path: []const u8, open_only: bool) !?UnitFile {
+        if (self.files.get(path)) |file| return file;
+        const file = try self.handler.resolveUnitFile(
+            self.arena,
+            path,
+            open_only,
+        ) orelse return null;
+        try self.put(file);
+        return file;
+    }
+
+    /// The unit files behind a join, parallel to `joined.files`.
+    fn filesFor(self: *UnitLoader, joined: Imports.Joined) ![]const UnitFile {
+        const out = try self.arena.alloc(UnitFile, joined.files.len);
+        for (joined.files, 0..) |file, index| {
+            out[index] = self.files.get(file.key).?;
+        }
+        return out;
+    }
+
+    fn resolveFn(
+        ctx: *anyopaque,
+        allocator: std.mem.Allocator,
+        from_key: []const u8,
+        spec: []const u8,
+    ) anyerror!Imports.Resolved {
+        const self: *UnitLoader = @ptrCast(@alignCast(ctx));
+        const path = try resolveSpecPath(allocator, from_key, spec);
+        const file = try self.load(path, false) orelse return error.FileNotFound;
+        return .{ .key = file.path, .text = file.text };
+    }
+};
+
+/// The path an import/include spec names, relative to the importing file's
+/// directory, with `.` and `..` segments collapsed. Purely lexical: open
+/// documents have no file behind them, and the same form keys both.
+pub fn resolveSpecPath(
+    allocator: std.mem.Allocator,
+    from_path: []const u8,
+    spec: []const u8,
+) ![]const u8 {
+    const base = if (std.fs.path.isAbsolutePosix(spec))
+        ""
+    else
+        std.fs.path.dirnamePosix(from_path) orelse "";
+    const absolute = std.fs.path.isAbsolutePosix(spec) or
+        std.fs.path.isAbsolutePosix(base);
+
+    var parts = std.ArrayListUnmanaged([]const u8){};
+    defer parts.deinit(allocator);
+    const sources = [_][]const u8{ base, spec };
+    for (sources) |source| {
+        var it = std.mem.splitScalar(u8, source, '/');
+        while (it.next()) |part| {
+            if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
+            if (std.mem.eql(u8, part, "..")) {
+                if (parts.items.len != 0 and
+                    !std.mem.eql(u8, parts.items[parts.items.len - 1], ".."))
+                {
+                    _ = parts.pop();
+                    continue;
+                }
+                if (absolute) continue;
+            }
+            try parts.append(allocator, part);
+        }
+    }
+
+    var out = std.ArrayListUnmanaged(u8){};
+    if (absolute) try out.append(allocator, '/');
+    for (parts.items, 0..) |part, index| {
+        if (index != 0) try out.append(allocator, '/');
+        try out.appendSlice(allocator, part);
+    }
+    if (out.items.len == 0) try out.append(allocator, '.');
+    return try out.toOwnedSlice(allocator);
+}
 
 pub const DocumentKind = enum {
     mm0,
