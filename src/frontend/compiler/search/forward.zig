@@ -34,6 +34,7 @@ const types = @import("./types.zig");
 const refs_mod = @import("./refs.zig");
 const ref_index_mod = @import("./ref_index.zig");
 const prune = @import("./backward/prune.zig");
+const acui_mod = @import("./backward/acui.zig");
 const ExprModule = @import("../../expr.zig");
 const ExprId = ExprModule.ExprId;
 const VarId = ExprModule.VarId;
@@ -595,11 +596,25 @@ const Saturator = struct {
         // Bake any forward-join groundings into the surface: a consequent like
         // `Q ?t` derived by joining `P ?t → Q ?t` with `P c` becomes the
         // concrete fact `Q c`. Inert (identity) when no join grounded a meta.
-        const shape = try derefJoinOverlay(
+        const shape_deref = try derefJoinOverlay(
             store,
             theorem,
             &self.groundings,
             shape_raw,
+        );
+        // Canonicalize the registered ACUI combiners (flatten association,
+        // sort commutative members, drop idempotent duplicates) so a fact
+        // derived along two routes joins the same context the same way:
+        // without this a sequent theory's `g , g ⊢ p` and `g , (g , g) ⊢ p`
+        // are distinct shapes, the pool grows exponentially in chain length
+        // (measured 13/30/75/204/597 refs for 3..7-fact transitivity chains,
+        // 12/19/28/38/49 after), and a derived fact whose context is not in
+        // the goal's normal form never matches the goal directly. Inert for
+        // theories without `@acui` combiners.
+        const shape = try acui_mod.canonicalizeAcui(
+            self.context,
+            theorem,
+            shape_deref,
         );
         // A surface with no rigid root would match every goal of its sort —
         // an absorber, not a fact. Reject it; concrete shapes pass as before.

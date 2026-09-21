@@ -43,6 +43,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   instead of repeating them. Diagnostics are identical to a full analysis.
   Per-keystroke analysis of `zermelo` drops from about 74 ms to 5 ms.
 
+### Fixed
+
+- `auto?` forward saturation (`@auto forward`) now canonicalizes the
+  theory's ACUI combiners in every derived fact. In a sequent theory a
+  fact reached along two routes used to keep two context bracketings
+  (`g , g ⊢ p` and `g , (g , g) ⊢ p`), so the derived pool grew
+  exponentially with chain length and a derived fact whose context was
+  not in the goal's normal form never matched the goal. A five-fact
+  transitivity chain that missed after ten seconds is now found in
+  forty milliseconds; the search corpus is unchanged.
+
 ## [0.0.11] - 2026-09-20
 
 ### Added
