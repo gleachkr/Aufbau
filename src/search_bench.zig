@@ -1160,6 +1160,64 @@ const scenarios = [_]Scenario{
         .expected_suggestion_count = 0,
     },
     .{
+        // STAGE 8 nested re-grounding guard. A six-fact transitivity chain
+        // under a triple-nested ∀ hypothesis: every family fact derived from
+        // the ∀ shares one universal meta per binder, so the goal's recipe
+        // grounds the same `?z` at several nested layers (`… at z := j`
+        // wrapping a minor premise that was itself `… at z := i`). The goal
+        // fact is in the derived pool either way; the recipe only validates
+        // when each layer's own pin wins over its ancestors' (innermost-wins
+        // overlay in `forward.resolveRecipeValues`). The deeper forward budget
+        // is what a chain this long needs (two layers per hop); five facts
+        // succeed through a shallower route even without the fix.
+        .name = "forward nested re-grounding chain auto? (Stage 8 recipe pins)",
+        .mm0_path = "tests/search_bench_cases/forward_chain.mm0",
+        .proof_path = "tests/search_bench_cases/forward_chain.auf",
+        .marker = "auto?",
+        .expected_replacement = "imp_elim (g := $ g $, h := $ g $, a := $ R b j $, b := $ R a " ++
+            "j $) [imp_elim (g := $ g $, h := $ g $, a := $ R a b $, b := " ++
+            "$ R b j → R a j $) [all_elim (x := $ z $, g := $ g $, t := $ " ++
+            "j $, p := $ R a b → R b z → R a z $) [all_elim (x := $ y $, " ++
+            "g := $ g $, t := $ b $, p := $ ∀ z (R a y → R y z → R a z) " ++
+            "$) [all_elim (x := $ x $, g := $ g $, t := $ a $, p := $ ∀ y " ++
+            "∀ z (R x y → R y z → R x z) $) [#1]]], #2], imp_elim (g := $ " ++
+            "g $, h := $ g $, a := $ R d j $, b := $ R b j $) [imp_elim " ++
+            "(g := $ g $, h := $ g $, a := $ R b d $, b := $ R d j → R b " ++
+            "j $) [all_elim (x := $ z $, g := $ g $, t := $ j $, p := $ R " ++
+            "b d → R d z → R b z $) [all_elim (x := $ y $, g := $ g $, t " ++
+            ":= $ d $, p := $ ∀ z (R b y → R y z → R b z) $) [all_elim (x " ++
+            ":= $ x $, g := $ g $, t := $ b $, p := $ ∀ y ∀ z (R x y → R " ++
+            "y z → R x z) $) [#1]]], imp_elim (g := $ g $, h := $ g $, a " ++
+            ":= $ R c d $, b := $ R b d $) [imp_elim (g := $ g $, h := $ " ++
+            "g $, a := $ R b c $, b := $ R c d → R b d $) [all_elim (x := " ++
+            "$ z $, g := $ g $, t := $ d $, p := $ R b c → R c z → R b z " ++
+            "$) [all_elim (x := $ y $, g := $ g $, t := $ c $, p := $ ∀ z " ++
+            "(R b y → R y z → R b z) $) [all_elim (x := $ x $, g := $ g " ++
+            "$, t := $ b $, p := $ ∀ y ∀ z (R x y → R y z → R x z) $) " ++
+            "[#1]]], #3], #4]], imp_elim (g := $ g $, h := $ g $, a := $ " ++
+            "R e j $, b := $ R d j $) [imp_elim (g := $ g $, h := $ g $, " ++
+            "a := $ R d e $, b := $ R e j → R d j $) [all_elim (x := $ z " ++
+            "$, g := $ g $, t := $ j $, p := $ R d e → R e z → R d z $) " ++
+            "[all_elim (x := $ y $, g := $ g $, t := $ e $, p := $ ∀ z (R " ++
+            "d y → R y z → R d z) $) [all_elim (x := $ x $, g := $ g $, t " ++
+            ":= $ d $, p := $ ∀ y ∀ z (R x y → R y z → R x z) $) [#1]]], " ++
+            "#5], imp_elim (g := $ g $, h := $ g $, a := $ R i j $, b := " ++
+            "$ R e j $) [imp_elim (g := $ g $, h := $ g $, a := $ R e i " ++
+            "$, b := $ R i j → R e j $) [all_elim (x := $ z $, g := $ g " ++
+            "$, t := $ j $, p := $ R e i → R i z → R e z $) [all_elim (x " ++
+            ":= $ y $, g := $ g $, t := $ i $, p := $ ∀ z (R e y → R y z " ++
+            "→ R e z) $) [all_elim (x := $ x $, g := $ g $, t := $ e $, p " ++
+            ":= $ ∀ y ∀ z (R x y → R y z → R x z) $) [#1]]], #6], #7]]]]",
+        .generate = .{
+            .enabled = true,
+            .max_depth = 6,
+            .forward = .{
+                .max_forward_layers = 9,
+                .max_forward_rule_attempts = 4096,
+            },
+        },
+    },
+    .{
         // META_STRESS theory #5 (adversarial saturation). A commutativity loop:
         // `comm` swaps `g`'s args, regenerating from its own output. The shape
         // key drops the swapped-back fact and the recipe key blocks re-firing,

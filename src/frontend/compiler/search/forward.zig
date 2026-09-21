@@ -1313,7 +1313,9 @@ pub fn solveCorrespondence(
 /// Materialize a derived ref's proof recipe at the store's current (solved)
 /// assignments: dereference every recorded binder value in every layer of
 /// the recipe (nested derived sources included — shared holes are the same
-/// store metas, so one solve covers all layers), name any remaining
+/// store metas, so one solve covers all layers; each layer's per-use pins
+/// are layered over the store in a scoped overlay, see
+/// `resolveRecipeValues`), name any remaining
 /// unfold-dummy placeholders from the theorem's variable pools, and render
 /// the values as explicit `(name := $ … $)` bindings on ordinary
 /// `RuleApplication`s, derived sources becoming nested inline applications.
@@ -1334,26 +1336,21 @@ pub fn materializeApplication(
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
 
-    // Re-apply this recipe's per-use pins (nested-source universals a forward
-    // join grounded to a concrete witness) so the nested sources dereference to
-    // the witness *this* derivation used. Transient: the family fact stays
-    // general for other uses. Self-contained — opened and rolled back here so
-    // the discipline holds for every caller; concrete resolved values are
-    // captured before the rollback.
-    const pin_mark = dpool.store.mark();
-    const was_open = dpool.store.universal_use_open;
-    dpool.store.openUniversalUse();
-    defer {
-        dpool.store.universal_use_open = was_open;
-        dpool.store.rollbackTo(pin_mark);
-    }
-
     // Resolved binding values per recipe layer, in deterministic parent-
     // first DFS order — naming below must not depend on hash-map iteration.
+    // The recipe's per-use pins never touch the store: they live in a scoped
+    // overlay for the duration of the resolve, so the family facts stay
+    // general for other uses without any rollback discipline here.
     var resolved = ResolvedRecipe{};
-    if (!try resolveRecipeValues(dpool, theorem, dref, scratch, &resolved)) {
-        return null;
-    }
+    var pins = std.ArrayListUnmanaged(types.MetaAssignment){};
+    if (!try resolveRecipeValues(
+        dpool,
+        theorem,
+        dref,
+        scratch,
+        &pins,
+        &resolved,
+    )) return null;
 
     var namer = Namer.init(context.allocator);
     defer namer.deinit();
@@ -1394,82 +1391,122 @@ const ResolvedRecipe = struct {
 /// index), so visiting every occurrence terminates.
 ///
 /// Each layer's `pinned_metas` ground the *universal* metas its nested sources
-/// require (a forward join grounded a family's `?t` to a concrete witness). The
-/// SAME family fact can appear under sibling/nested joins with DIFFERENT
-/// groundings (e.g. `P(f(f c))` = `mp[all_elim(t:=f c), mp[all_elim(t:=c), Pc]]`,
-/// both `all_elim`s sharing one family `?t`). So a pin is applied SCOPED to the
-/// single source whose `required_metas` it grounds, then rolled back before the
-/// next sibling — otherwise the first grounding would leak into the second
-/// (rendering both witnesses identically and failing validation). The caller's
-/// use-time recover solve, plus any still-active ancestor scope, remain in force
-/// for this layer's own bindings.
+/// require (a forward join grounded a family's `?t` to a concrete witness).
+/// Every fact derived from one family shares that family's meta, so ONE meta
+/// is re-grounded at many layers of one recipe: under sibling joins
+/// (`P(f(f c))` = `mp[all_elim(t:=f c), mp[all_elim(t:=c), Pc]]`, both
+/// `all_elim`s sharing one family `?t`) and along one nested path (the
+/// transitivity chain `R a j` = `mp[(R i ?z → R a ?z) at z:=j, R a i]` whose
+/// minor `R a i` is itself `mp[(R e ?z → R a ?z) at z:=i, R e i]`). Pins
+/// therefore live in the scoped overlay `pins`, never in the store: a layer
+/// pushes its own pins for the duration of its subtree and pops them after,
+/// and lookups take the newest entry, so the innermost layer's pin wins both
+/// for its own bindings and for any descendant that still requires the meta.
+/// A pin's value is resolved through the overlay as it stands when pushed —
+/// the pinning layer's own environment (ancestor pins plus the use-time
+/// solve), never a descendant's later re-grounding of a meta it mentions —
+/// and a pin whose resolved value mentions its own meta is dropped, leaving
+/// that layer unsolved. The overlay shadows the store: the caller's use-time
+/// solve may hold the same family meta at a different witness.
 fn resolveRecipeValues(
     dpool: *DerivedPool,
     theorem: *TheoremContext,
     dref: *const DerivedRef,
     scratch: std.mem.Allocator,
+    pins: *std.ArrayListUnmanaged(types.MetaAssignment),
     resolved: *ResolvedRecipe,
 ) anyerror!bool {
-    // Resolve this layer's own bindings with its pins active (rolled back before
-    // descending, so a nested source re-grounding the same meta is not blocked).
-    const own_mark = dpool.store.mark();
+    const mark = pins.items.len;
+    defer pins.shrinkRetainingCapacity(mark);
     for (dref.pinned_metas) |pin| {
-        if (dpool.store.lookup(pin.meta) != null) continue;
-        dpool.store.assign(theorem, pin.meta, pin.value) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => {},
-        };
+        const value = try derefPinned(&dpool.store, theorem, pins, pin.value);
+        if (dpool.store.occursIn(theorem, pin.meta, value)) continue;
+        try pins.append(scratch, .{ .meta = pin.meta, .value = value });
     }
     const values = try scratch.alloc(ExprId, dref.bindings.len);
     for (dref.bindings, 0..) |binding, idx| {
-        const value = try dpool.store.deref(theorem, binding.value);
-        if (!dpool.store.isFullySolved(theorem, value)) {
-            dpool.store.rollbackTo(own_mark);
-            return false;
-        }
+        const value = try derefPinned(
+            &dpool.store,
+            theorem,
+            pins,
+            binding.value,
+        );
+        if (!dpool.store.isFullySolved(theorem, value)) return false;
         values[idx] = value;
     }
-    dpool.store.rollbackTo(own_mark);
     try resolved.order.append(scratch, .{ .dref = dref, .values = values });
     for (dref.sources) |source| {
         switch (source) {
             .pool => {},
             .derived => |child_idx| {
-                const child = &dpool.refs[child_idx];
-                const mark = dpool.store.mark();
-                // Apply only this layer's pins that ground a meta the child
-                // subtree still requires, so a sibling source's distinct
-                // grounding of the same meta is not pre-empted. Skip a meta an
-                // ancestor already pinned (a genuinely shared witness).
-                for (dref.pinned_metas) |pin| {
-                    if (std.mem.indexOfScalar(
-                        PlaceholderId,
-                        child.required_metas,
-                        pin.meta,
-                    ) == null) continue;
-                    if (dpool.store.lookup(pin.meta) != null) continue;
-                    dpool.store.assign(theorem, pin.meta, pin.value) catch |err|
-                        switch (err) {
-                            error.OutOfMemory => return error.OutOfMemory,
-                            // A pin that no longer validates (sort/dep/phase)
-                            // goes unapplied; the source then reads as unsolved
-                            // and the recipe fails to resolve cleanly below.
-                            else => {},
-                        };
-                }
-                const ok = try resolveRecipeValues(
+                if (!try resolveRecipeValues(
                     dpool,
                     theorem,
-                    child,
+                    &dpool.refs[child_idx],
                     scratch,
+                    pins,
                     resolved,
-                );
-                dpool.store.rollbackTo(mark);
-                if (!ok) return false;
+                )) return false;
             },
         }
     }
     return true;
+}
+
+/// Look up `pid` in the recipe pin overlay, newest entry first: a layer's
+/// own pin shadows any ancestor's pin of the same family meta.
+fn pinLookup(
+    pins: *const std.ArrayListUnmanaged(types.MetaAssignment),
+    pid: PlaceholderId,
+) ?ExprId {
+    var idx = pins.items.len;
+    while (idx > 0) {
+        idx -= 1;
+        if (pins.items[idx].meta == pid) return pins.items[idx].value;
+    }
+    return null;
+}
+
+/// Dereference `expr_id` through the recipe pin overlay and then the shared
+/// store, reinterning changed apps. Unlike `derefJoinOverlay` the overlay
+/// takes precedence, and an empty overlay still dereferences the store (the
+/// use-time solve). Terminates: a pushed pin value mentions only metas that
+/// were unresolvable when it was pushed, so every chase strictly advances
+/// through the overlay, and store values never mention pool metas.
+fn derefPinned(
+    store: *const MetaStore,
+    theorem: *TheoremContext,
+    pins: *const std.ArrayListUnmanaged(types.MetaAssignment),
+    expr_id: ExprId,
+) !ExprId {
+    switch (theorem.interner.node(expr_id).*) {
+        .variable => return expr_id,
+        .placeholder => |pid| {
+            if (pinLookup(pins, pid)) |value| {
+                return try derefPinned(store, theorem, pins, value);
+            }
+            if (store.lookup(pid)) |value| {
+                return try derefPinned(store, theorem, pins, value);
+            }
+            return expr_id;
+        },
+        .app => |app| {
+            var changed = false;
+            const args = try theorem.allocator.alloc(ExprId, app.args.len);
+            for (app.args, 0..) |arg, idx| {
+                args[idx] = derefPinned(store, theorem, pins, arg) catch |err| {
+                    theorem.allocator.free(args);
+                    return err;
+                };
+                if (args[idx] != arg) changed = true;
+            }
+            if (!changed) {
+                theorem.allocator.free(args);
+                return expr_id;
+            }
+            return try theorem.interner.internAppOwned(app.term_id, args);
+        },
+    }
 }
 
 /// Render one recipe layer (and, recursively, its derived sources) into the

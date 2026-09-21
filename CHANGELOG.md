@@ -53,6 +53,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   not in the goal's normal form never matched the goal. A five-fact
   transitivity chain that missed after ten seconds is now found in
   forty milliseconds; the search corpus is unchanged.
+- `auto?` forward saturation could derive the goal and still miss it. When
+  one family fact from a `∀` hypothesis was instantiated at different
+  witnesses along a single nested path of a proof recipe (a transitivity
+  chain of six or more facts), the rendered proof reused the outermost
+  witness in the inner instantiation and failed validation. Each layer of
+  a recipe now renders with its own witnesses; the search corpus is
+  unchanged.
 
 ## [0.0.11] - 2026-09-20
 

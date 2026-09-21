@@ -1096,8 +1096,10 @@ pub const DerivedRef = struct {
     /// holes across layers are literally the same store meta.
     required_metas: []const PlaceholderId,
     /// Nested-source universals grounded to concrete witnesses by the forward
-    /// join that produced this fact (see `MetaAssignment`). Applied transiently
-    /// to the pool store before this recipe is resolved at materialize time.
+    /// join that produced this fact (see `MetaAssignment`). Layered over the
+    /// pool store in a scoped overlay while this recipe is resolved at
+    /// materialize time; a nested layer's pin of the same family meta shadows
+    /// this one within that layer's subtree (`forward.resolveRecipeValues`).
     pinned_metas: []const MetaAssignment = &.{},
     has_universal_meta: bool,
     /// 1 for a fact derived from pool refs only; 1 + max(source depths)

@@ -327,7 +327,7 @@ pub const MetaStore = struct {
 
     /// Whether `meta_id` occurs in `expr_id`. The expression must already be
     /// dereferenced through current assignments.
-    fn occursIn(
+    pub fn occursIn(
         self: *const MetaStore,
         theorem: *const TheoremContext,
         meta_id: PlaceholderId,
