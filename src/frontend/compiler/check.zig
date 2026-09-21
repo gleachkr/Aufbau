@@ -78,6 +78,93 @@ pub const cloneNameExprMap = @import("./check/types.zig").cloneNameExprMap;
 const ensureConcreteCheckedIrRange = @import("./check/checked_range.zig").ensureConcreteCheckedIrRange;
 const findSearchPlaceholder = @import("./check/suggest.zig").findSearchPlaceholder;
 
+/// `checkTheoremBlock` behind the context's check memo, when one is
+/// attached (`CompilerContext.check_memo`): a hit replays the recorded
+/// outcome and output instead of checking again. A hit yields no checked
+/// lines, so paths that emit (the compile path) must call
+/// `checkTheoremBlock` directly.
+pub fn checkTheoremBlockMemoized(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    rule_catalog: *const RuleCatalog.Catalog,
+    fresh_bindings: *const std.AutoHashMap(u32, []const FreshDecl),
+    freshen_bindings: *const std.AutoHashMap(u32, []const FreshenDecl),
+    views: *const std.AutoHashMap(u32, ViewDecl),
+    sort_vars: *const SortVarRegistry,
+    assertion: AssertionStmt,
+    block: TheoremBlock,
+    theorem: *TheoremContext,
+    theorem_concl: ExprId,
+) ![]const CheckedLine {
+    const memo = self.check_memo orelse return checkTheoremBlock(
+        self,
+        allocator,
+        parser,
+        env,
+        registry,
+        rule_catalog,
+        fresh_bindings,
+        freshen_bindings,
+        views,
+        sort_vars,
+        assertion,
+        block,
+        theorem,
+        theorem_concl,
+    );
+    // The stats sink's running maximum cannot be replayed; leave it exact.
+    if (!memo.active or self.inference_stats_sink != null) {
+        return checkTheoremBlock(
+            self,
+            allocator,
+            parser,
+            env,
+            registry,
+            rule_catalog,
+            fresh_bindings,
+            freshen_bindings,
+            views,
+            sort_vars,
+            assertion,
+            block,
+            theorem,
+            theorem_concl,
+        );
+    }
+    const mm0_pos = parser.core.pos;
+    const key = memo.keyForBlock(self.source, mm0_pos, self.proof_source.?, block);
+    if (memo.find(key, rule_catalog)) |entry| {
+        try entry.replay(self, block.span.start);
+        if (entry.outcome) |err| return err;
+        return &.{};
+    }
+    const recording = memo.beginRecording(self);
+    const checked = checkTheoremBlock(
+        self,
+        allocator,
+        parser,
+        env,
+        registry,
+        rule_catalog,
+        fresh_bindings,
+        freshen_bindings,
+        views,
+        sort_vars,
+        assertion,
+        block,
+        theorem,
+        theorem_concl,
+    ) catch |err| {
+        memo.finishRecording(self, recording, key, err, block.span);
+        return err;
+    };
+    memo.finishRecording(self, recording, key, null, block.span);
+    return checked;
+}
+
 pub fn checkTheoremBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,

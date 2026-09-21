@@ -500,6 +500,21 @@ between trusted parser trees and frontend proof elaboration.
   annotations), dependency availability checks, and the local-item
   operations
 - `compiler/pipeline/recovery.zig`: analysis snapshots and rollback
+- `compiler/check_memo.zig`: the proof-block check memo the editor hosts
+  attach (`CompilerContext.check_memo`; the compile path never does).
+  Block checks are ~95% of an analysis, so re-analysis is made
+  incremental by memoizing them rather than by snapshotting the compiler
+  state: the analyze walk keeps a running fingerprint of what a check
+  can observe (the theory text up to the parser's position, the proof
+  text up to the block, and each earlier block's outcome in place of its
+  body), keys a check by that fingerprint plus the block body, and on a
+  hit replays the recorded diagnostics, sink entries and error with
+  proof spans relocated to the block's new position. Rule-catalog
+  lookups, the one thing a check reads beyond that prefix, are recorded
+  and re-verified. `src/tests/check_memo_corpus.zig` is the guard: on
+  every fixture, a warm analysis must equal a cold one under body edits
+  that shift or break later blocks and theory edits that shift
+  everything.
 
 The drivers maintain the parser, frontend environment, and metadata
 registries. Search source preparation has a third statement-order consumer
@@ -1162,8 +1177,12 @@ The important lifetimes are:
 ## Language server and browser editor
 
 `src/bin/compiler/lsp.zig` owns open documents, document version/mtime keys,
-navigation snapshots, search results, and placeholder outcomes. Cache
-invalidation is centralized in `Handler.invalidateCachesForUri`.
+navigation snapshots, search results, placeholder outcomes, and the
+proof-block check memo every analysis it runs shares (`check_memo.zig`),
+so an edit re-checks only the blocks it can affect and a root that imports
+a library replays the library's blocks instead of re-checking them. Cache
+invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
+needs none, being keyed by content.
 `src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its
 builder uses lenient proof parsing rather than requiring a successful proof.
 The handler translates byte spans through the negotiated LSP offset encoding.

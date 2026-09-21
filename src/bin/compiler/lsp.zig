@@ -644,6 +644,9 @@ pub const Handler = struct {
     /// What the last analysis of each root document read and published,
     /// keyed by the analysed URI (owned).
     units: std.StringHashMapUnmanaged(UnitRecord),
+    /// Proof-block check outcomes shared by every analysis this handler
+    /// runs, so an edit re-checks only what it can affect.
+    check_memo: mm0.CheckMemo,
     offset_encoding: lsp.offsets.Encoding,
     snippet_support: bool,
 
@@ -659,6 +662,7 @@ pub const Handler = struct {
             .search_cache = .empty,
             .search_status = .empty,
             .units = .empty,
+            .check_memo = mm0.CheckMemo.init(allocator),
             .offset_encoding = .@"utf-16",
             .snippet_support = false,
         };
@@ -696,6 +700,7 @@ pub const Handler = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.units.deinit(self.allocator);
+        self.check_memo.deinit();
         self.* = undefined;
     }
 
@@ -1613,6 +1618,7 @@ pub const Handler = struct {
             unit.proof.?.joined.text,
         );
         compiler.allow_search_placeholders = true;
+        compiler.check_memo = &self.check_memo;
         compiler.analyze() catch |err| {
             if (hasDiagnostics(&compiler)) {
                 try self.publishUnitDiagnostics(
@@ -2311,6 +2317,7 @@ pub const Handler = struct {
                 .mm0_text = unit.mm0.joined.text,
                 .proof_uri = if (unit.proof) |proof| proof.rootFile().uri else null,
                 .proof_text = if (unit.proof) |proof| proof.joined.text else null,
+                .check_memo = &self.check_memo,
             });
             errdefer snapshot.deinit();
             var key = try UnitKey.init(self.allocator, states);

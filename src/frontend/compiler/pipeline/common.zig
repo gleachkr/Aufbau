@@ -1479,14 +1479,7 @@ pub fn processLocalProofBlock(
     block: TheoremBlock,
     emit: ?*Output,
 ) !void {
-    const assertion = try parseLemmaAssertion(self, allocator, parser, block);
-
-    var theorem = TheoremContext.init(allocator);
-    defer theorem.deinit();
-    try theorem.seedAssertion(assertion);
-    const theorem_concl = try theorem.internParsedExpr(assertion.concl);
-
-    const checked = Check.checkTheoremBlock(
+    checkAndRegisterLocalProofBlock(
         self,
         allocator,
         parser,
@@ -1497,11 +1490,73 @@ pub fn processLocalProofBlock(
         freshen_bindings,
         views,
         sort_vars,
-        assertion,
         block,
-        &theorem,
-        theorem_concl,
+        emit,
     ) catch |err| {
+        self.noteBlockOutcome(block.name, false);
+        return err;
+    };
+    self.noteBlockOutcome(block.name, true);
+}
+
+fn checkAndRegisterLocalProofBlock(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    env: *GlobalEnv,
+    registry: *RewriteRegistry,
+    rule_catalog: *const RuleCatalog.Catalog,
+    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
+    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
+    views: *std.AutoHashMap(u32, ViewDecl),
+    sort_vars: *const SortVarRegistry,
+    block: TheoremBlock,
+    emit: ?*Output,
+) !void {
+    const assertion = try parseLemmaAssertion(self, allocator, parser, block);
+
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(assertion);
+    const theorem_concl = try theorem.internParsedExpr(assertion.concl);
+
+    // Emission consumes the checked lines, which a memo hit does not
+    // produce; only the analyze path (no emit) goes through the memo.
+    const check_result = if (emit == null)
+        Check.checkTheoremBlockMemoized(
+            self,
+            allocator,
+            parser,
+            env,
+            registry,
+            rule_catalog,
+            fresh_bindings,
+            freshen_bindings,
+            views,
+            sort_vars,
+            assertion,
+            block,
+            &theorem,
+            theorem_concl,
+        )
+    else
+        Check.checkTheoremBlock(
+            self,
+            allocator,
+            parser,
+            env,
+            registry,
+            rule_catalog,
+            fresh_bindings,
+            freshen_bindings,
+            views,
+            sort_vars,
+            assertion,
+            block,
+            &theorem,
+            theorem_concl,
+        );
+    const checked = check_result catch |err| {
         self.setIfMissing(
             CompilerDiag.theoremDiagnostic(
                 assertion.name,

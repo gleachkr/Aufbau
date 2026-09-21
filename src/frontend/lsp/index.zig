@@ -81,7 +81,7 @@ pub const Snapshot = struct {
             try builder.indexProof(text);
         }
         const inferred_hole_hovers = if (proof_text) |text|
-            try buildInferredHoleHovers(arena, mm0_text, text)
+            try buildInferredHoleHovers(arena, mm0_text, text, input.check_memo)
         else
             &.{};
 
@@ -295,6 +295,7 @@ fn buildInferredHoleHovers(
     allocator: std.mem.Allocator,
     mm0_text: []const u8,
     proof_text: []const u8,
+    check_memo: ?*CompilerModule.CheckMemo,
 ) ![]const InferredHoleHover {
     if (std.mem.indexOf(u8, mm0_text, "@hole") == null) return &.{};
 
@@ -310,6 +311,7 @@ fn buildInferredHoleHovers(
     );
     compiler.allow_search_placeholders = true;
     compiler.hole_inference_sink = &sink;
+    compiler.check_memo = check_memo;
     compiler.analyze() catch |err| {
         if (err == error.OutOfMemory) return err;
     };

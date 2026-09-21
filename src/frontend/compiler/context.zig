@@ -8,6 +8,7 @@ const DiagnosticPhase = CompilerDiag.DiagnosticPhase;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const Span = @import("../proof_script.zig").Span;
 const StatementSink = @import("../statement_sink.zig").StatementSink;
+const CheckMemo = @import("./check_memo.zig").CheckMemo;
 
 pub const HoleInference = struct {
     span: Span,
@@ -98,6 +99,16 @@ pub const CompilerContext = struct {
     inline_conclusion_sink: ?*InlineConclusionSink = null,
     statement_sink: ?*StatementSink = null,
     inference_stats_sink: ?*InferenceStatsSink = null,
+    /// Memo of block check outcomes for editor re-analysis; null on the
+    /// compile path. See `check_memo.zig`.
+    check_memo: ?*CheckMemo = null,
+
+    /// Tell the check memo how a theorem or lemma block came out: the one
+    /// thing later checks can observe of its proof.
+    pub fn noteBlockOutcome(self: *CompilerContext, name: []const u8, ok: bool) void {
+        const memo = self.check_memo orelse return;
+        memo.feedOutcome(name, ok);
+    }
 
     pub fn recordSolverBranches(self: *CompilerContext, peak_branches: usize) void {
         const sink = self.inference_stats_sink orelse return;

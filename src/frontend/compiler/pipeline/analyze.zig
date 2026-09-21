@@ -154,6 +154,12 @@ fn analyzeInternal(
         self.proof_source,
         with_proof,
     );
+    if (self.check_memo) |memo| {
+        memo.beginRun(.{
+            .allow_search_placeholders = self.allow_search_placeholders,
+        });
+    }
+    defer if (self.check_memo) |memo| memo.endRun();
     // Snapshot pretty-printed statements on every exit path (recovery bails
     // early in several places), while the parser and env are still alive.
     defer if (self.statement_sink) |sink|
@@ -702,6 +708,7 @@ fn analyzeAssertionStatement(
             );
             if (theorem_result == null) {
                 try markAssertionInvalid(state, assertion.name);
+                self.noteBlockOutcome(assertion.name, false);
                 return;
             }
             const theorem_warnings = theorem_result.?.warnings;
@@ -721,6 +728,7 @@ fn analyzeAssertionStatement(
                 theorem_warnings.restore(self);
                 snapshot.restore(state);
                 try markAssertionInvalid(state, assertion.name);
+                self.noteBlockOutcome(assertion.name, false);
                 if (!shouldSuppressAssertionMetadataFailure(
                     err,
                     state.parser.last_annotations,
@@ -735,6 +743,7 @@ fn analyzeAssertionStatement(
                 }
                 return;
             };
+            self.noteBlockOutcome(assertion.name, true);
             return;
         }
     }
@@ -939,7 +948,7 @@ fn analyzeTheoremProof(
                 const theorem_concl = try theorem.internParsedExpr(
                     assertion.concl,
                 );
-                _ = Check.checkTheoremBlock(
+                _ = Check.checkTheoremBlockMemoized(
                     self,
                     allocator,
                     parser,

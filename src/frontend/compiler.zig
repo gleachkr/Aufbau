@@ -16,6 +16,7 @@ pub const HoleInferenceSink = Context.HoleInferenceSink;
 pub const InlineConclusion = Context.InlineConclusion;
 pub const InlineConclusionSink = Context.InlineConclusionSink;
 pub const StatementSink = @import("./statement_sink.zig").StatementSink;
+pub const CheckMemo = @import("./compiler/check_memo.zig").CheckMemo;
 
 pub const Compiler = struct {
     pub const InferenceStatsSink = Context.InferenceStatsSink;
@@ -33,6 +34,8 @@ pub const Compiler = struct {
     inline_conclusion_sink: ?*InlineConclusionSink,
     statement_sink: ?*StatementSink,
     inference_stats_sink: ?*InferenceStatsSink,
+    /// Memo of proof-block check outcomes across analyses (editor hosts).
+    check_memo: ?*CheckMemo = null,
 
     const PipelineOutput = Pipeline.Output;
 
@@ -195,6 +198,7 @@ pub const Compiler = struct {
         result.inline_conclusion_sink = self.inline_conclusion_sink;
         result.statement_sink = self.statement_sink;
         result.inference_stats_sink = self.inference_stats_sink;
+        result.check_memo = self.check_memo;
         return result;
     }
 };

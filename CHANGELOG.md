@@ -28,6 +28,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   An import that cannot be followed is reported on its statement while
   the rest of the file is still analysed. In the browser, where there is
   no disk, the host opens library files as documents.
+- Incremental analysis in the language server. Every edit used to re-check
+  every proof in the file; now a proof block is re-checked only when
+  something it can see has changed (the theory before it, the proof text
+  before it other than earlier proof bodies, or an earlier proof's
+  outcome), and a file that imports a library replays the library's checks
+  instead of repeating them. Diagnostics are identical to a full analysis.
+  Per-keystroke analysis of `zermelo` drops from about 74 ms to 5 ms.
 
 ## [0.0.11] - 2026-09-20
 

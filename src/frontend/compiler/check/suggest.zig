@@ -160,7 +160,13 @@ pub fn lookupRuleApplicationId(
 ) !u32 {
     if (env.getRuleId(application.rule_name)) |rule_id| return rule_id;
 
-    if (rule_catalog.get(application.rule_name)) |entry| {
+    const catalog_entry = rule_catalog.get(application.rule_name);
+    // The catalog spans the whole `.mm0`, beyond what the check memo's
+    // fingerprint covers; the memo re-verifies this lookup on a hit.
+    if (self.check_memo) |memo| {
+        memo.noteCatalogLookup(application.rule_name, catalog_entry);
+    }
+    if (catalog_entry) |entry| {
         if (entry.ordinal >= env.rules.items.len) {
             var diag: Diagnostic = .{
                 .kind = .rule_not_yet_available,

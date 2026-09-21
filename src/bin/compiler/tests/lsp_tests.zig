@@ -2552,6 +2552,101 @@ test "LSP re-analyses importers when an imported document changes" {
     try std.testing.expectEqual(@as(usize, 0), handler.nav_cache.count());
 }
 
+test "LSP check memo replays library blocks across roots" {
+    const lib_mm0_uri = "file:///tmp/lsp-memo/lib.mm0";
+    const lib_auf_uri = "file:///tmp/lsp-memo/lib.auf";
+    const main_mm0_uri = "file:///tmp/lsp-memo/main.mm0";
+    const main_auf_uri = "file:///tmp/lsp-memo/main.auf";
+    const lib_mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem lib_thm: $ top $;
+        \\
+    ;
+    const lib_auf_text =
+        \\lib_thm
+        \\---
+        \\p: $ top $ by ax_top []
+        \\
+    ;
+    const main_mm0_text =
+        \\import "lib.mm0";
+        \\theorem main_thm: $ top $;
+        \\
+    ;
+    const main_auf_text =
+        \\main_thm
+        \\---
+        \\p: $ top $ by lib_thm []
+        \\
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.putDocument(lib_mm0_uri, lib_mm0_text, 1);
+    try handler.putDocument(main_mm0_uri, main_mm0_text, 1);
+    // The library root checks its own theorem: one miss, recorded.
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = lib_auf_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = lib_auf_text,
+    } });
+    try std.testing.expect(publishedEmpty(&transport_state, lib_auf_uri));
+    try std.testing.expectEqual(@as(usize, 0), handler.check_memo.hits);
+    try std.testing.expectEqual(@as(usize, 1), handler.check_memo.misses);
+
+    // The importing root walks the library's theorem again but replays
+    // it; only its own theorem is checked.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = main_auf_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = main_auf_text,
+    } });
+    try std.testing.expect(publishedEmpty(&transport_state, main_auf_uri));
+    try std.testing.expectEqual(@as(usize, 1), handler.check_memo.hits);
+    try std.testing.expectEqual(@as(usize, 2), handler.check_memo.misses);
+
+    // An edit to the root's proof re-checks that block alone.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = main_auf_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .literal_1 = .{ .text = "main_thm\n---\np: $ top $ by lib_thm [] \n" } },
+        },
+    });
+    try std.testing.expect(publishedEmpty(&transport_state, main_auf_uri));
+    try std.testing.expectEqual(@as(usize, 2), handler.check_memo.hits);
+    try std.testing.expectEqual(@as(usize, 3), handler.check_memo.misses);
+
+    // A library edit that keeps its outcome re-checks the library block
+    // once, and the root's block replays.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = lib_auf_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .literal_1 = .{ .text = "lib_thm\n---\np: $ top $ by ax_top [] \n" } },
+        },
+    });
+    try std.testing.expect(publishedEmpty(&transport_state, lib_auf_uri));
+    try std.testing.expect(publishedEmpty(&transport_state, main_auf_uri));
+    // Library root: 1 miss. Importing root: library block hit (same body
+    // as the library's own run), root block hit.
+    try std.testing.expectEqual(@as(usize, 4), handler.check_memo.hits);
+    try std.testing.expectEqual(@as(usize, 4), handler.check_memo.misses);
+}
+
 test "LSP reports an unresolved import on its statement and keeps going" {
     const mm0_uri = "file:///tmp/lsp-import-missing/main.mm0";
     const mm0_text =
