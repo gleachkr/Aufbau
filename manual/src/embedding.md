@@ -96,6 +96,13 @@ Sources can also live in separate files instead of inline scripts:
 `<aufbau-theory id="hilbert" src="/hilbert.mm0">` and
 `<aufbau-proof theory="hilbert" src="/proofs.auf">`.
 
+A theory or a cell may `import "other.mm0";` and a proof may `include
+"other.auf";`, as on the command line. The editor fetches each imported or 
+included file, relative to the page for inline sources, and relative to the 
+file's own URL for a `src` source. A fetched theory file brings its `.auf` 
+sibling along when the server has one, analogously to how the compiler pairs 
+`.mm0` and `.auf` files on disk.
+
 If you want the theory itself to be *visible and editable*, skip
 `<aufbau-theory>` and group the cells with a `doc` attribute instead. A
 proof cell whose body is only MM0 acts as an editable theory cell:

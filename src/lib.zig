@@ -12,6 +12,7 @@ const CompilerDiag = @import("./frontend/diag.zig");
 pub const CompilerDiagnostic = CompilerDiag.Diagnostic;
 pub const CompilerDiagnosticSeverity = CompilerDiag.DiagnosticSeverity;
 pub const CompilerDiagnosticSource = CompilerDiag.DiagnosticSource;
+pub const CompilerDiagnosticSpan = @import("./frontend/proof_script.zig").Span;
 pub const CompilerDiagnosticPhase = CompilerDiag.DiagnosticPhase;
 pub const CompilerDiagnosticNote = CompilerDiag.DiagnosticNote;
 pub const CompilerDiagnosticRelated = CompilerDiag.DiagnosticRelated;

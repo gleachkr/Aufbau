@@ -30,7 +30,7 @@
 //   ```
 //
 // A literate page grows one shared document instead: cells carrying the same
-// `doc=NAME` attribute stitch into a single (mm0, auf) pair in page order.
+// `doc=NAME` attribute form a single document, checked in page order.
 // An ```aufbau-theory doc=NAME``` block (no `id`) is an editable theory cell
 // contributing mm0 to that document; ```aufbau-proof doc=NAME``` cells add
 // declarations and proofs; ```aufbau-index doc=NAME``` renders a live

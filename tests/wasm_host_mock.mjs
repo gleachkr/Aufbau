@@ -191,6 +191,40 @@ const trap = () => {
   assert.equal(mock.liveCount(), 0, "locale input leaked");
 }
 
+{
+  // The file-table entry sends one JSON input and frees it on every exit.
+  let seen = null;
+  const mock = mockInstance("compile_files", {
+    call: (inputs) => {
+      seen = JSON.parse(mock.inputsSeen(inputs[0]));
+      return { json: '{"ok":true}', mmb: new Uint8Array([7]) };
+    },
+  });
+  const compiler = await loadCompiler({ instance: mock.instance });
+  const result = compiler.compileFiles({
+    files: [{ path: "/d/a.mm0", text: "sort s;" }],
+    root: "/d/a.mm0",
+  });
+  assert.deepEqual(seen, {
+    root: "/d/a.mm0",
+    proof: null,
+    files: [{ path: "/d/a.mm0", text: "sort s;" }],
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual([...result.mmbBytes], [7]);
+  assert.equal(mock.liveCount(), 0);
+}
+
+{
+  const mock = mockInstance("compile_files", { call: trap });
+  const compiler = await loadCompiler({ instance: mock.instance });
+  assert.throws(
+    () => compiler.compileFiles({ files: [], root: "/d/a.mm0" }),
+    WebAssembly.RuntimeError,
+  );
+  assert.equal(mock.liveCount(), 0, "request leaked after a trap");
+}
+
 // --- verifier --------------------------------------------------------------
 
 {

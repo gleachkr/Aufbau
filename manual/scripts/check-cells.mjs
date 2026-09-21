@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Compile every live cell in the manual with the native compiler.
 //
-// Renders each chapter through preprocessor/aufbau-cells.mjs, reassembles the
-// documents exactly the way the editor's coordinator does (standalone cells
-// are their own document; cells sharing a `doc`/`theory` attribute stitch in
-// page order), and runs `abc compile` on each. The report lists one line per
-// document so runs can be diffed: a page edit or prelude change that flips a
-// cell from ok to error shows up as a one-line diff.
+// Renders each chapter through preprocessor/aufbau-cells.mjs, lays each
+// document out the way the editor's coordinator does (standalone cells are
+// their own document; cells sharing a `doc`/`theory` attribute are combined,
+// as a chain of per-cell `cN.mm0`/`cN.auf` files each importing the previous
+// cell's, behind a `prelude.mm0`), and runs `abc compile` on the last cell's
+// file of each. The report lists one line per document so runs can be
+// diffed: a page edit or prelude change that flips a cell from ok to error
+// shows up as a one-line diff.
 //
 // Some cells fail by design (error demonstrations, cells left with search
 // placeholders); the point of the report is the *diff*, not universal green.
@@ -19,7 +21,7 @@
 //
 // Usage: node scripts/check-cells.mjs [--abc PATH] [--keep DIR]
 //   --abc PATH   compiler binary (default ../zig-out/bin/abc)
-//   --keep DIR   write the assembled mm0/auf pairs to DIR for inspection
+//   --keep DIR   write the assembled documents (one directory each) to DIR
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
@@ -56,7 +58,7 @@ for (const file of readdirSync(srcDir).sort()) {
   // Only cells the preprocessor generated count — it wraps each in
   // <div class="aufbau-cell">. Literal <aufbau-*> tags in prose (e.g. inside
   // ```html fences on the embedding page) are documentation, not cells.
-  const documents = new Map(); // key -> {mm0: [], auf: []}
+  const documents = new Map(); // key -> [{mm0, auf}] cells in page order
   let standalone = 0;
   const wrapperRe = /^<div class="aufbau-cell">\n([\s\S]*?)\n<\/div>$/gm;
   const cellRe = /<(aufbau-proof|aufbau-theory)((?:\s+[-\w]+(?:="[^"]*")?)*)>([\s\S]*?)<\/\1>/g;
@@ -85,25 +87,52 @@ for (const file of readdirSync(srcDir).sort()) {
             : attr("doc") != null
               ? `doc:${attr("doc")}`
               : `cell${++standalone}`;
-      const doc = documents.get(key) ?? { mm0: [], auf: [] };
+      const doc = documents.get(key) ?? [];
       documents.set(key, doc);
+      const cell = { mm0: null, auf: null };
       const scriptRe = /<script type="text\/(mm0|auf)">\n([\s\S]*?)\n<\/script>/g;
       let s;
       while ((s = scriptRe.exec(inner)) !== null) {
-        (s[1] === "mm0" ? doc.mm0 : doc.auf).push(s[2]);
+        cell[s[1]] = s[2];
       }
+      doc.push(cell);
     }
   }
 
-  for (const [key, doc] of documents) {
+  for (const [key, cells] of documents) {
     const stem = `${file.replace(/\.md$/, "")}--${key.replace(/[^\w]+/g, "_")}`;
-    const mm0Path = join(workDir, `${stem}.mm0`);
-    const aufPath = join(workDir, `${stem}.auf`);
-    writeFileSync(mm0Path, doc.mm0.join("\n") + "\n");
-    writeFileSync(aufPath, doc.auf.join("\n\n") + "\n");
+    const dir = join(workDir, stem);
+    mkdirSync(dir, { recursive: true });
+    // The manual's documents carry no shared <aufbau-theory> prelude (cells
+    // inline theirs), so the prelude file is empty; the chain still starts
+    // from it, as in the browser.
+    writeFileSync(join(dir, "prelude.mm0"), "");
+    let previous = "prelude.mm0";
+    let mm0Path = null;
+    let aufPath = null;
+    cells.forEach((cell, index) => {
+      const name = `c${index + 1}`;
+      mm0Path = join(dir, `${name}.mm0`);
+      writeFileSync(
+        mm0Path,
+        `import ${JSON.stringify(previous)};\n${cell.mm0 == null ? "" : cell.mm0 + "\n"}`,
+      );
+      aufPath = null;
+      if (cell.auf != null) {
+        aufPath = join(dir, `${name}.auf`);
+        writeFileSync(aufPath, cell.auf + "\n");
+      }
+      previous = `${name}.mm0`;
+    });
+    // `abc compile` wants a proof file; a theory cell at the end of the
+    // chain gets an empty one (the editor leaves it to sibling pairing).
+    if (aufPath == null) {
+      aufPath = mm0Path.replace(/\.mm0$/, ".auf");
+      writeFileSync(aufPath, "");
+    }
     let status = "ok";
     try {
-      execFileSync(abc, ["compile", mm0Path, aufPath, join(workDir, `${stem}.mmb`)], {
+      execFileSync(abc, ["compile", mm0Path, aufPath, join(dir, "out.mmb")], {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {

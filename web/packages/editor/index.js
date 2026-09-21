@@ -4,28 +4,38 @@
 //   <aufbau-theory id="…">  — holds a fixed MM0 theory prelude (inline or `src`).
 //   <aufbau-proof>          — an editor for one proof cell, checked in-browser.
 //
-// See docs/design_notes/embeddable_editor.md for the design. This is the v2
-// (assembled) model: every cell that shares a theory forms one *document*. On
-// each edit the document coordinator stitches all cells — in DOM order — into a
-// single `(mm0, auf)` pair, runs ONE debounced compile, and routes the compiler's
-// per-cell diagnostics back to each editor. The compiler's analyze/recovery path
-// means a broken or unfinished cell does not cascade red onto the cells that
-// depend on it. There is no separate kernel-verify seal: a cell is "verified"
-// only when the whole document compiles clean (meta.ok); otherwise a clean cell
-// reads as "no errors (pending)".
+// See docs/design_notes/embeddable_editor.md for the design. Every cell that
+// shares a theory forms one *document*. Each cell owns a small file pair
+// under the document's virtual directory — `cN.mm0` (its declaration
+// fragment behind an `import` of the previous cell's file, or of the
+// prelude for the first cell) and `cN.auf` (its proof) — so the compiler's
+// own import/include machinery chains the cells in DOM order and the
+// coordinator never splices text. On each edit it runs ONE debounced compile
+// of the last cell's file (which pulls in the whole chain) and hands every
+// cell the diagnostics the compiler reports on that cell's two files. The
+// compiler's analyze/recovery path means a broken or unfinished cell does
+// not cascade red onto the cells that depend on it. There is no separate
+// kernel-verify seal: a cell is "verified" only when the whole document
+// compiles clean (meta.ok); otherwise a clean cell reads as "no errors
+// (pending)".
 //
-//   - A lemma cell contributes an `.auf` block only (proves something not in the
-//     mm0). A theorem cell also contributes an mm0 `theorem …;` declaration that
-//     is stitched *into the document* (not the theory). A definition cell uses
-//     the same seam for a bodyless `def …;` declaration whose `.auf` content is
-//     the public body filler — the definiens (and any hidden dummy binders it
-//     needs) is what the reader edits, and the cells that prove things *about*
-//     the definition check it. A local-def cell's `.auf` content is a
-//     proof-local definition (it declares its own signature, nothing in the
-//     mm0) usable by every later cell. A theory cell has mm0 content and no
-//     `.auf` at all: its editable body IS its mm0 fragment, so terms and
-//     axioms can be authored in place; with the `doc` grouping attribute a
-//     page needs no <aufbau-theory> element at all.
+//   - A lemma cell contributes an `.auf` file only (proves something not in
+//     the mm0). A theorem cell also contributes an mm0 `theorem …;`
+//     declaration in its own `.mm0` file (not the theory). A definition cell
+//     uses the same seam for a bodyless `def …;` declaration whose `.auf`
+//     content is the public body filler — the definiens (and any hidden dummy
+//     binders it needs) is what the reader edits, and the cells that prove
+//     things *about* the definition check it. A local-def cell's `.auf`
+//     content is a proof-local definition (it declares its own signature,
+//     nothing in the mm0) usable by every later cell. A theory cell has mm0
+//     content and no `.auf` at all: its editable body IS its mm0 file, so
+//     terms and axioms can be authored in place; with the `doc` grouping
+//     attribute a page needs no <aufbau-theory> element at all.
+//   - An `import "x.mm0";` in the prelude or a cell, or an `include
+//     "x.auf";` in a proof, names a file the host fetches: relative to the
+//     page for inline sources and to the file's own URL for `src`-loaded
+//     ones. Fetched files keep their relative path under the document's
+//     virtual directory, so the compiler resolves the statement the same way.
 
 import {
   EditorView,
@@ -142,7 +152,7 @@ function loadLspOnce() {
   return lspPromise;
 }
 
-let lspDocSeq = 0;
+let documentSeq = 0;
 
 // `Diagnostic.code` the server puts on placeholder search-status entries. They
 // are the one thing publishDiagnostics carries that the compiler path cannot
@@ -388,8 +398,7 @@ function byteToCharIndex(str, byteOffset) {
   return str.length;
 }
 
-// Number of newlines before `charIndex` — the line delta that maps a cell's
-// body-local LSP positions into the stitched document it starts within.
+// Number of newlines in `text` before `charIndex`.
 function lineDeltaAt(text, charIndex) {
   let delta = 0;
   for (let i = 0; i < charIndex; i += 1) {
@@ -405,36 +414,34 @@ function severityOf(diag) {
 }
 
 // ---------------------------------------------------------------------------
-// Pure stitching + routing (kept side-effect free so they can be unit-tested).
+// Pure file assembly + routing (kept side-effect free so they can be
+// unit-tested).
 // ---------------------------------------------------------------------------
 
-// Concatenate `fragments` (each `{ id, text }`, skipping empty text) with the
-// given separator, returning the joined string plus a byte range per fragment.
-// `base` (if non-empty) is placed first without a tracked range.
-function stitch(base, fragments, sep) {
-  let text = base ?? "";
-  const ranges = [];
-  for (const frag of fragments) {
-    if (!frag.text) continue;
-    if (text.length) text += sep;
-    const start = byteLen(text);
-    text += frag.text;
-    ranges.push({ id: frag.id, start, end: byteLen(text) });
+// The virtual file pair of one cell: `mm0` is the cell's declaration fragment
+// behind an `import` of `previous` (the file that carries everything before
+// the cell), `auf` the proof text or null for a theory cell. `bodyByte` is
+// where the editable body starts in each file.
+function cellFiles(cell, previous) {
+  const importLine = `import ${JSON.stringify(previous)};\n`;
+  const mm0 = importLine + cell.mm0Fragment();
+  const files = { mm0, mm0BodyByte: byteLen(importLine), auf: null, aufBodyByte: 0 };
+  if (!cell.isTheoryCell()) {
+    files.auf = cell.aufText();
+    files.aufBodyByte = cell.prefixBytes();
   }
-  return { text, ranges };
+  return files;
 }
 
-// Assign each compiler diagnostic to the cell whose stitched byte range owns it.
-// Returns a Map<cellId, { proof: [...], banner: [...] }> plus `theory` diags
-// (mm0 diagnostics that fall in the shared base theory, i.e. author errors).
-// `proof` diagnostics carry a `localByte` offset into that cell's editable body.
-// `mm0BodyOwned(id)` marks cells whose editable body IS their mm0 fragment
-// (theory cells): their mm0 diagnostics localize like proof ones instead of
-// becoming banners.
-function routeDiagnostics(
-  diagnostics,
-  { aufRanges, mm0Ranges, bodyStartOf, mm0BodyOwned },
-) {
+// Assign each compiler diagnostic to the cell whose file owns it. Returns a
+// Map<cellId, { proof: [...], banner: [...] }> plus `theory` diags (those on
+// the prelude or a fetched library, i.e. author errors). `proof` diagnostics
+// carry a `localByte` offset into that cell's editable body. `owner(file)`
+// gives `{ id, side, bodyByte }` for a file path — the cell, which of its
+// files (`mm0`/`auf`) this is, and where the editable body begins in it — or
+// null for a file no cell owns. A theory cell's mm0 diagnostics localize like
+// proof ones instead of becoming banners, since its body IS its mm0 file.
+function routeDiagnostics(diagnostics, { owner, mm0BodyOwned }) {
   const perCell = new Map();
   const theory = [];
   const cellEntry = (id) => {
@@ -445,38 +452,87 @@ function routeDiagnostics(
     }
     return e;
   };
-  const owning = (ranges, offset) =>
-    ranges.find((r) => offset >= r.start && offset < r.end);
 
   for (const d of diagnostics) {
-    if (d.spanStart == null) continue;
-    if (d.source === "proof") {
-      const r = owning(aufRanges, d.spanStart);
-      if (!r) continue;
-      const bodyStart = bodyStartOf(r.id);
-      const localByte = d.spanStart - bodyStart;
-      const localEnd = (d.spanEnd ?? d.spanStart) - bodyStart;
+    const hit = d.file == null ? null : owner(d.file);
+    if (!hit) {
+      theory.push(d);
+      continue;
+    }
+    const { id, side, bodyByte } = hit;
+    if (d.spanStart == null) {
+      cellEntry(id).banner.push(d);
+      continue;
+    }
+    if (side === "auf" || mm0BodyOwned?.(id)) {
+      const localByte = d.spanStart - bodyByte;
+      const localEnd = (d.spanEnd ?? d.spanStart) - bodyByte;
       if (localEnd <= 0) {
-        cellEntry(r.id).banner.push(d); // inside the fixed header
+        cellEntry(id).banner.push(d); // inside the fixed header / import line
       } else {
-        cellEntry(r.id).proof.push({ diag: d, localByte, localEnd });
+        cellEntry(id).proof.push({ diag: d, localByte, localEnd });
       }
     } else {
-      const r = owning(mm0Ranges, d.spanStart);
-      if (!r) {
-        theory.push(d); // fell in the base theory
-      } else if (mm0BodyOwned?.(r.id)) {
-        cellEntry(r.id).proof.push({
-          diag: d,
-          localByte: d.spanStart - r.start,
-          localEnd: (d.spanEnd ?? d.spanStart) - r.start,
-        });
-      } else {
-        cellEntry(r.id).banner.push(d);
-      }
+      cellEntry(id).banner.push(d);
     }
   }
   return { perCell, theory };
+}
+
+// Statement-level `import "…";` specs of an mm0 text, and line-start
+// `include "…";` specs of an auf text — the same rule the compiler's scanner
+// applies (`--` comments and `$…$` math are skipped), so the host knows which
+// files to fetch before the compiler asks for them. Over-reporting is
+// harmless (a fetch that fails is simply not supplied); the compiler stays
+// the authority on what a statement means.
+function importSpecs(text, syntax) {
+  const specs = [];
+  const keyword = syntax === "mm0" ? "import" : "include";
+  const stmt = new RegExp(`^\\s*${keyword}\\s+"([^"]*)"\\s*;`);
+  const scan = (segment) => {
+    const m = stmt.exec(segment);
+    if (m) specs.push(m[1]);
+  };
+  // Strip comments and math, keeping newlines so the `include` line rule
+  // still sees line starts.
+  let stripped = "";
+  for (let i = 0; i < text.length; ) {
+    if (text.startsWith("--", i)) {
+      while (i < text.length && text[i] !== "\n") i += 1;
+    } else if (text[i] === "$") {
+      i += 1;
+      while (i < text.length && text[i] !== "$") {
+        if (text[i] === "\n") stripped += "\n";
+        i += 1;
+      }
+      i += 1;
+    } else {
+      stripped += text[i];
+      i += 1;
+    }
+  }
+  if (syntax === "mm0") {
+    for (const segment of stripped.split(";")) scan(`${segment};`);
+  } else {
+    for (const line of stripped.split("\n")) scan(line);
+  }
+  return specs;
+}
+
+// Resolve `spec` against the directory of `fromPath` (POSIX, lexical), the
+// way the compiler resolves an import: `/a/b/c.mm0` + `../d.mm0` → `/a/d.mm0`.
+function resolvePath(fromPath, spec) {
+  const base = spec.startsWith("/") ? [] : fromPath.split("/").slice(0, -1);
+  const parts = [];
+  for (const part of [...base, ...spec.split("/")]) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return `/${parts.join("/")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +552,11 @@ class AufbauTheory extends HTMLElement {
   }
   text() {
     return this._text ?? Promise.resolve(null);
+  }
+  // Where the theory came from — what its own `import`s resolve against.
+  sourceUrl() {
+    const src = this.getAttribute("src");
+    return src ? new URL(src, document.baseURI).href : document.baseURI;
   }
 }
 
@@ -535,17 +596,29 @@ class AufbauDocument {
     this._theorySrc = representative.getAttribute("theory-src");
     this._theoryText = null;
     this._timer = null;
-    this._lsp = null;
     this._statements = null; // latest statement snapshot (name-hover lookups)
     this._lastDocState = null; // latest check result (replayed to late indexes)
+    // The virtual directory holding this document's files. The compiler
+    // sees them as a file table keyed by these paths; the language server
+    // as `file://` documents under them. Relative `import`/`include` specs
+    // resolve within it on both sides.
+    this._dir = `/aufbau-editor/doc${documentSeq++}`;
+    this._preludePath = `${this._dir}/prelude.mm0`;
+    this._cellSeq = 0;
+    this._libraries = new LibraryStore((path) => this.ownsPath(path));
+    this._lsp = null;
   }
 
   register(cell) {
     this.cells.add(cell);
+    // A cell keeps its file stem for life; the chain between cells is
+    // rebuilt from DOM order on every assembly.
+    if (!cell._docPath) cell._docPath = `${this._dir}/c${++this._cellSeq}`;
   }
 
   unregister(cell) {
     this.cells.delete(cell);
+    this._closeLspFiles(cell);
     this._maybeRetire();
   }
 
@@ -574,8 +647,20 @@ class AufbauDocument {
     }
   }
 
+  // Is `path` one of the files this document assembles itself (the prelude
+  // or a cell's pair), as opposed to a library the host must fetch?
+  ownsPath(path) {
+    if (path === this._preludePath) return true;
+    for (const cell of this.cells) {
+      if (path === `${cell._docPath}.mm0` || path === `${cell._docPath}.auf`) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // The shared base theory (axioms/terms/notation). Cell-contributed mm0
-  // declarations are NOT part of this — they are stitched at check time.
+  // declarations are NOT part of this — each lives in its cell's own file.
   theoryText() {
     if (!this._theoryText) {
       if (this._theoryRef) {
@@ -590,6 +675,16 @@ class AufbauDocument {
       }
     }
     return this._theoryText;
+  }
+
+  // What the prelude's own `import`s resolve against: the theory file's
+  // URL when it was fetched, the page otherwise.
+  theoryBaseUrl() {
+    if (this._theoryRef) {
+      return theoryRegistry.get(this._theoryRef)?.sourceUrl() ?? document.baseURI;
+    }
+    if (this._theorySrc) return new URL(this._theorySrc, document.baseURI).href;
+    return document.baseURI;
   }
 
   // Cells in DOM order.
@@ -613,6 +708,73 @@ class AufbauDocument {
     );
   }
 
+  // Fetch (once) every library the prelude and the cells reference, so the
+  // assembled table can satisfy the compiler's imports and includes.
+  async ensureLibraries(cells, theory) {
+    const jobs = [
+      this._libraries.ensure(
+        this._preludePath,
+        theory ?? "",
+        "mm0",
+        this.theoryBaseUrl(),
+      ),
+    ];
+    for (const cell of cells) {
+      jobs.push(
+        this._libraries.ensure(
+          `${cell._docPath}.mm0`,
+          cell.mm0Fragment(),
+          "mm0",
+          document.baseURI,
+        ),
+      );
+      if (!cell.isTheoryCell()) {
+        jobs.push(
+          this._libraries.ensure(
+            `${cell._docPath}.auf`,
+            cell.aufText(),
+            "auf",
+            cell.sourceUrl(),
+          ),
+        );
+      }
+    }
+    await Promise.all(jobs);
+  }
+
+  // The document as a file table, in dependency order: the fetched
+  // libraries, the prelude, then each cell's pair with its `.mm0` importing
+  // the previous cell's (the prelude for the first). `root`/`proof` name the
+  // last cell's files — compiling that root pulls in the whole chain.
+  // `owners` maps each cell file to `{ id, side, bodyByte }`.
+  assemble(cells, theory) {
+    const files = [
+      ...this._libraries.files(),
+      { path: this._preludePath, text: theory ?? "" },
+    ];
+    const owners = new Map();
+    let previous = this._preludePath;
+    let root = this._preludePath;
+    let proof = null;
+    for (const cell of cells) {
+      const spec = previous.slice(previous.lastIndexOf("/") + 1);
+      const cellFile = cellFiles(cell, spec);
+      const mm0Path = `${cell._docPath}.mm0`;
+      files.push({ path: mm0Path, text: cellFile.mm0 });
+      owners.set(mm0Path, { id: cell, side: "mm0", bodyByte: cellFile.mm0BodyByte });
+      root = mm0Path;
+      proof = null;
+      if (cellFile.auf != null) {
+        const aufPath = `${cell._docPath}.auf`;
+        files.push({ path: aufPath, text: cellFile.auf });
+        owners.set(aufPath, { id: cell, side: "auf", bodyByte: cellFile.aufBodyByte });
+        proof = aufPath;
+      }
+      previous = mm0Path;
+    }
+    return { files, root, proof, owners };
+  }
+
   async check() {
     const cells = this.orderedCells().filter((c) => c.isReady());
     if (cells.length === 0) return;
@@ -625,25 +787,16 @@ class AufbauDocument {
         loadCompilerOnce(),
         this.theoryText(),
       ]);
+      await this.ensureLibraries(cells, theory);
     } catch (err) {
       for (const c of cells) c.setStatus("err", `load error: ${err.message}`);
       return;
     }
 
-    const mm0 = stitch(
-      theory ?? "",
-      cells.map((c) => ({ id: c, text: c.mm0Fragment() })),
-      "\n",
-    );
-    const auf = stitch(
-      "",
-      cells.map((c) => ({ id: c, text: c.aufText() })),
-      "\n\n",
-    );
-
+    const table = this.assemble(cells, theory);
     let result;
     try {
-      result = compiler.compile(mm0.text, auf.text);
+      result = compiler.compileFiles(table);
     } catch (err) {
       for (const c of cells) c.setStatus("err", `compiler error: ${err.message}`);
       return;
@@ -651,12 +804,16 @@ class AufbauDocument {
 
     const meta = result.meta ?? {};
     const diagnostics = meta.diagnostics ?? [];
-    const bodyStartByte = new Map();
-    for (const r of auf.ranges) bodyStartByte.set(r.id, r.start + r.id.prefixBytes());
+    if (!meta.ok && diagnostics.length === 0) {
+      // Nothing to pin on a cell (a malformed request, say): say so plainly
+      // rather than leaving every cell "pending".
+      for (const c of cells) {
+        c.setStatus("err", `compile failed: ${meta.message ?? meta.error ?? "unknown"}`);
+      }
+      return;
+    }
     const routed = routeDiagnostics(diagnostics, {
-      aufRanges: auf.ranges,
-      mm0Ranges: mm0.ranges,
-      bodyStartOf: (id) => bodyStartByte.get(id),
+      owner: (path) => table.owners.get(path) ?? null,
       mm0BodyOwned: (id) => id.isTheoryCell(),
     });
 
@@ -683,81 +840,90 @@ class AufbauDocument {
     for (const idx of this.indexes) idx.applyDocument(this._lastDocState);
   }
 
-  // Prepare an LSP view of this document for one cell: sync the stitched
-  // `(mm0, auf)` pair to the language server as a sibling document pair, and
-  // return the request context — the auf uri plus the line delta that maps the
-  // cell's body-local positions into the stitched document. Restitched on every
+  // Prepare an LSP view of this document for one cell: sync the assembled
+  // files to the language server as documents (only the ones whose text
+  // changed), and return the request context — the cell's file uri plus the
+  // line delta that maps its body-local positions into that file (the import
+  // line of a theory cell's mm0, the header of a proof). Reassembled on every
   // request (it's cheap) so hover/completion always see the live text.
   async lspContext(cell) {
     const [rpc, theory] = await Promise.all([loadLspOnce(), this.theoryText()]);
     const cells = this.orderedCells().filter((c) => c.isReady());
-    const mm0 = stitch(
-      theory ?? "",
-      cells.map((c) => ({ id: c, text: c.mm0Fragment() })),
-      "\n",
-    );
-    const auf = stitch(
-      "",
-      cells.map((c) => ({ id: c, text: c.aufText() })),
-      "\n\n",
-    );
+    await this.ensureLibraries(cells, theory);
+    const table = this.assemble(cells, theory);
 
     if (!this._lsp) {
-      const root = `file:///aufbau-editor/doc${lspDocSeq++}`;
-      this._lsp = {
-        mm0Uri: `${root}/current.mm0`,
-        aufUri: `${root}/current.auf`,
-        mm0Version: 0,
-        aufVersion: 0,
-        lastMm0: null,
-        lastAuf: null,
-        aufRanges: [],
-      };
-      // The server republishes the proof document's diagnostics whenever a
+      this._lsp = { docs: new Map() }; // path → { version, text }
+      // The server republishes a proof file's diagnostics whenever a
       // placeholder search concludes, and that publish is the only place the
       // failure reason for a missed search exists — a failed search returns no
       // code actions at all. Compile feedback still comes from the compiler
       // path; only the search-status entries are taken from here.
       this._lspUnsubscribe = rpc.onNotification((msg) => {
         if (msg.method !== "textDocument/publishDiagnostics") return;
-        if (msg.params?.uri !== this._lsp?.aufUri) return;
-        this.applySearchDiagnostics(msg.params.diagnostics ?? []);
+        const owner = this._cellForUri(msg.params?.uri);
+        if (!owner) return;
+        this.applySearchDiagnostics(owner, msg.params.diagnostics ?? []);
       });
     }
-    const s = this._lsp;
-    // The mm0 must be synced first: analyzing a proof reads its sibling .mm0.
-    if (s.lastMm0 !== mm0.text) {
-      s.lastMm0 = mm0.text;
-      syncLspDoc(rpc, s.mm0Uri, "mm0", ++s.mm0Version, mm0.text);
+    // Dependency order: a file's imports are open before the file itself is
+    // analysed, so no root is ever seen with a missing library.
+    const current = new Set();
+    for (const file of table.files) {
+      current.add(file.path);
+      const doc = this._lsp.docs.get(file.path);
+      if (doc && doc.text === file.text) continue;
+      const version = (doc?.version ?? 0) + 1;
+      this._lsp.docs.set(file.path, { version, text: file.text });
+      syncLspDoc(rpc, uriForPath(file.path), languageIdFor(file.path), version, file.text);
     }
-    if (s.lastAuf !== auf.text) {
-      s.lastAuf = auf.text;
-      s.aufRanges = auf.ranges;
-      syncLspDoc(rpc, s.aufUri, "aufbau", ++s.aufVersion, auf.text);
+    for (const path of [...this._lsp.docs.keys()]) {
+      if (current.has(path)) continue;
+      this._lsp.docs.delete(path);
+      rpc.notify("textDocument/didClose", {
+        textDocument: { uri: uriForPath(path) },
+      });
     }
 
-    // A theory cell's body lives in the stitched mm0; every other cell's body
-    // lives in the stitched auf after its fixed prefix.
-    if (cell.isTheoryCell()) {
-      const range = mm0.ranges.find((r) => r.id === cell);
-      if (!range) return null;
-      const bodyCharStart = byteToCharIndex(mm0.text, range.start);
-      return { rpc, uri: s.mm0Uri, lineDelta: lineDeltaAt(mm0.text, bodyCharStart) };
-    }
-    const range = auf.ranges.find((r) => r.id === cell);
-    if (!range) return null;
-    const bodyCharStart =
-      byteToCharIndex(auf.text, range.start) + cell.prefixText().length;
-    return { rpc, uri: s.aufUri, lineDelta: lineDeltaAt(auf.text, bodyCharStart) };
+    const own = cell.isTheoryCell() ? `${cell._docPath}.mm0` : `${cell._docPath}.auf`;
+    const owner = table.owners.get(own);
+    if (!owner) return null;
+    const text = this._lsp.docs.get(own)?.text ?? "";
+    return {
+      rpc,
+      uri: uriForPath(own),
+      lineDelta: lineDeltaAt(text, byteToCharIndex(text, owner.bodyByte)),
+    };
   }
 
-  // Hand each cell the search-status diagnostics that fall inside its body.
-  // Ranges arrive in stitched-document coordinates; a cell owns the stitched
-  // lines its editable body spans, which is what disambiguates two cells whose
-  // body-local line numbers coincide.
-  applySearchDiagnostics(diagnostics) {
-    const s = this._lsp;
-    if (!s?.lastAuf) return;
+  // Forget a departed cell's files on the language server.
+  _closeLspFiles(cell) {
+    if (!this._lsp) return;
+    for (const path of [`${cell._docPath}.mm0`, `${cell._docPath}.auf`]) {
+      if (!this._lsp.docs.delete(path)) continue;
+      loadLspOnce()
+        .then((rpc) =>
+          rpc.notify("textDocument/didClose", {
+            textDocument: { uri: uriForPath(path) },
+          }),
+        )
+        .catch(() => {});
+    }
+  }
+
+  // The proof cell whose `.auf` file the uri names, if any.
+  _cellForUri(uri) {
+    if (typeof uri !== "string") return null;
+    for (const cell of this.cells) {
+      if (uri === uriForPath(`${cell._docPath}.auf`)) return cell;
+    }
+    return null;
+  }
+
+  // Hand a cell the search-status diagnostics published for its proof file.
+  // Ranges arrive in that file's coordinates; the header lines ahead of the
+  // editable body are the only offset.
+  applySearchDiagnostics(cell, diagnostics) {
     // Errors only. A search-status error is a search that ran and failed (or a
     // rejected `(iters: …)` parameter) — the reason exists nowhere else. The
     // info and warning entries restate what the compiler path already says
@@ -765,21 +931,81 @@ class AufbauDocument {
     const search = diagnostics.filter(
       (d) => d.code === SEARCH_STATUS_CODE && d.severity === 1,
     );
-    // Theory cells contribute no auf text, so `stitch` leaves them out of the
-    // ranges entirely and every range here owns a proof body.
-    for (const range of s.aufRanges) {
-      const cell = range.id;
-      const bodyCharStart =
-        byteToCharIndex(s.lastAuf, range.start) + cell.prefixText().length;
-      const lineDelta = lineDeltaAt(s.lastAuf, bodyCharStart);
-      const endLine = lineDeltaAt(s.lastAuf, byteToCharIndex(s.lastAuf, range.end));
-      const mine = search.filter((d) => {
-        const line = d.range?.start?.line;
-        return line != null && line >= lineDelta && line <= endLine;
-      });
-      cell.applySearchDiagnostics(mine, lineDelta);
-    }
+    const prefix = cell.prefixText();
+    cell.applySearchDiagnostics(search, lineDeltaAt(prefix, prefix.length));
   }
+}
+
+// Libraries a document's sources name with `import`/`include`: fetched once
+// per virtual path, along with whatever they name in turn, and a fetched
+// `.mm0`'s `<stem>.auf` sibling (the pairing the compiler applies to files
+// on disk). A file that cannot be fetched is left to the compiler to report
+// on the statement that names it. `isOwn(path)` marks paths the document
+// supplies itself, which are never fetched.
+class LibraryStore {
+  constructor(isOwn) {
+    this._isOwn = isOwn;
+    this._files = new Map(); // path → { path, text }
+    this._pending = new Map(); // path → Promise
+    this._missing = new Set();
+  }
+
+  files() {
+    return [...this._files.values()];
+  }
+
+  // Fetch every file `text` (at `path`, obtained from `baseUrl`) references.
+  async ensure(path, text, syntax, baseUrl) {
+    const jobs = [];
+    for (const spec of importSpecs(text, syntax)) {
+      let url;
+      try {
+        url = new URL(spec, baseUrl).href;
+      } catch {
+        continue;
+      }
+      jobs.push(this._load(resolvePath(path, spec), url));
+    }
+    await Promise.all(jobs);
+  }
+
+  _load(path, url) {
+    if (this._isOwn(path) || this._files.has(path) || this._missing.has(path)) {
+      return Promise.resolve();
+    }
+    const pending = this._pending.get(path);
+    if (pending) return pending;
+    const job = (async () => {
+      let text;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`fetch ${url}: ${res.status}`);
+        text = await res.text();
+      } catch {
+        this._missing.add(path);
+        return;
+      }
+      this._files.set(path, { path, text });
+      const syntax = path.endsWith(".auf") ? "auf" : "mm0";
+      const jobs = [this.ensure(path, text, syntax, url)];
+      if (syntax === "mm0") {
+        jobs.push(
+          this._load(path.replace(/\.mm0$/, ".auf"), url.replace(/\.mm0(?=[?#]|$)/, ".auf")),
+        );
+      }
+      await Promise.all(jobs);
+    })().finally(() => this._pending.delete(path));
+    this._pending.set(path, job);
+    return job;
+  }
+}
+
+function uriForPath(path) {
+  return `file://${path}`;
+}
+
+function languageIdFor(path) {
+  return path.endsWith(".auf") ? "aufbau" : "mm0";
 }
 
 function syncLspDoc(rpc, uri, languageId, version, text) {
@@ -904,6 +1130,11 @@ class AufbauProof extends HTMLElement {
     if (this._mm0Editable) return "";
     const body = this._view ? this._view.state.doc.toString() : this._body;
     return this._prefix + body;
+  }
+  // Where the proof text came from — what its `include`s resolve against.
+  sourceUrl() {
+    const src = this.getAttribute("src");
+    return src ? new URL(src, document.baseURI).href : document.baseURI;
   }
   // The statements-snapshot key this cell owns (`rule:name` / `def:name`),
   // or null for theory and full-file cells.
@@ -1087,7 +1318,7 @@ class AufbauProof extends HTMLElement {
     this._lspReady = lspOk;
   }
 
-  // Hover contents at a body-local position, via the stitched document.
+  // Hover contents at a body-local position, via the cell's file.
   // Public (and used by the hover tooltip) so pages/tests can drive it.
   async lspHover(pos) {
     const ctx = await this._doc.lspContext(this);
@@ -1106,7 +1337,7 @@ class AufbauProof extends HTMLElement {
         ? result.contents
         : (result.contents.value ?? "");
     const range = result.range
-      ? this._rangeFromStitched(result.range, ctx.lineDelta)
+      ? this._rangeFromFile(result.range, ctx.lineDelta)
       : null;
     return { value, from: range?.from ?? pos, to: range?.to ?? pos };
   }
@@ -1190,7 +1421,7 @@ class AufbauProof extends HTMLElement {
     let to = pos;
     const anchored = items.find((i) => i.textEdit?.range);
     if (anchored) {
-      const mapped = this._rangeFromStitched(
+      const mapped = this._rangeFromFile(
         anchored.textEdit.range,
         ctx.lineDelta,
       );
@@ -1285,7 +1516,7 @@ class AufbauProof extends HTMLElement {
         : [];
       const changes = [];
       for (const edit of edits) {
-        const mapped = this._rangeFromStitched(edit.range, ctx.lineDelta);
+        const mapped = this._rangeFromFile(edit.range, ctx.lineDelta);
         if (!mapped) {
           changes.length = 0;
           break;
@@ -1388,9 +1619,9 @@ class AufbauProof extends HTMLElement {
     this._menuCleanup = null;
   }
 
-  // Map a stitched-document LSP range back to body-local positions. Returns
-  // null when the range falls outside this cell's editable body.
-  _rangeFromStitched(range, lineDelta) {
+  // Map an LSP range in this cell's file back to body-local positions.
+  // Returns null when the range falls outside the editable body.
+  _rangeFromFile(range, lineDelta) {
     const doc = this._view.state.doc;
     const mapPos = (p) => {
       const ln = p.line - lineDelta;
@@ -1413,7 +1644,7 @@ class AufbauProof extends HTMLElement {
     if (!this._view) return;
     const mapped = [];
     for (const d of list) {
-      const range = this._rangeFromStitched(d.range, lineDelta);
+      const range = this._rangeFromFile(d.range, lineDelta);
       if (!range) continue;
       mapped.push({
         from: range.from,
@@ -1593,7 +1824,7 @@ class AufbauIndex extends HTMLElement {
       if (owner) owners.set(key, owner);
     }
 
-    // Row order mirrors the stitched document: base-theory statements first,
+    // Row order mirrors the document: base-theory statements first,
     // then each cell's statements in page order. A cell whose statement
     // vanished from the snapshot (broken definition or theorem — recovery
     // invalidated it) keeps its last-known render, marked stale.
@@ -2096,7 +2327,9 @@ export {
   AufbauProof,
   AufbauTheory,
   AufbauIndex,
-  stitch,
+  cellFiles,
+  importSpecs,
+  resolvePath,
   routeDiagnostics,
   defFillerName,
   mm0DefSignature,

@@ -53,6 +53,11 @@ order. Use `readonly`, `theme="light|dark|auto"`, or `lsp="off"` to adjust an
 individual proof element. The package also registers `<aufbau-index>` for a
 live statement index.
 
+Theories and proofs may `import "other.mm0";` / `include "other.auf";`. The
+named file is fetched relative to the page (inline sources) or to the source's
+own URL (`src` sources), and a fetched `.mm0` brings its `.auf` sibling along
+when the server has one.
+
 This package requires a browser DOM. It does not run under plain Node.
 
 ## Loading from a CDN

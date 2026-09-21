@@ -206,6 +206,18 @@ pub const DiagnosticSink = struct {
         return hit.label;
     }
 
+    /// The file and file-local span a joined-source span lies in, when the
+    /// source is a join with a mapping; null otherwise (the span then
+    /// indexes the whole source text as given).
+    pub fn locateInFile(
+        self: *const DiagnosticSink,
+        source: DiagnosticSource,
+        span: Span,
+    ) ?Imports.Mapping.Located {
+        const m = self.mapping(source) orelse return null;
+        return m.locateSpan(.{ .start = span.start, .end = span.end });
+    }
+
     fn mapping(
         self: *const DiagnosticSink,
         source: DiagnosticSource,

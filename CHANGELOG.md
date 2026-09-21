@@ -28,6 +28,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   An import that cannot be followed is reported on its statement while
   the rest of the file is still analysed. In the browser, where there is
   no disk, the host opens library files as documents.
+- The browser editor components (`@aufbau/editor`) assemble a document as
+  one file pair per cell chained by `import`, instead of splicing every
+  cell into one text, so theories and cells may themselves `import` and
+  proofs `include`: the named files are fetched relative to the page (or
+  to a `src` file's URL). `@aufbau/compiler` gains `compileFiles`, which
+  compiles a root out of an in-memory file table and labels each
+  diagnostic with its file.
 - Incremental analysis in the language server. Every edit used to re-check
   every proof in the file; now a proof block is re-checked only when
   something it can see has changed (the theory before it, the proof text

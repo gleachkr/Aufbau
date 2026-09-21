@@ -2012,28 +2012,7 @@ pub const Handler = struct {
         failure: ?Imports.JoinFailure,
     ) !void {
         const info = failure orelse return;
-        const keyword = info.syntax.keyword();
-        const message = switch (info.kind) {
-            .cycle => try std.fmt.allocPrint(
-                arena,
-                "{s} cycle: '{s}' is already being {s}d",
-                .{ keyword, info.spec, keyword },
-            ),
-            .unresolved => try std.fmt.allocPrint(
-                arena,
-                "unable to {s} '{s}': {s}",
-                .{
-                    keyword,
-                    info.spec,
-                    if (info.err) |err| @errorName(err) else "unresolved",
-                },
-            ),
-            .malformed => try std.fmt.allocPrint(
-                arena,
-                "malformed {s} statement",
-                .{keyword},
-            ),
-        };
+        const message = try info.message(arena);
         // The statement's file was loaded before its statements were
         // followed, so it is always on record.
         const file = loader.files.get(info.file_key) orelse return;
@@ -2514,50 +2493,7 @@ const UnitLoader = struct {
     }
 };
 
-/// The path an import/include spec names, relative to the importing file's
-/// directory, with `.` and `..` segments collapsed. Purely lexical: open
-/// documents have no file behind them, and the same form keys both.
-pub fn resolveSpecPath(
-    allocator: std.mem.Allocator,
-    from_path: []const u8,
-    spec: []const u8,
-) ![]const u8 {
-    const base = if (std.fs.path.isAbsolutePosix(spec))
-        ""
-    else
-        std.fs.path.dirnamePosix(from_path) orelse "";
-    const absolute = std.fs.path.isAbsolutePosix(spec) or
-        std.fs.path.isAbsolutePosix(base);
-
-    var parts = std.ArrayListUnmanaged([]const u8){};
-    defer parts.deinit(allocator);
-    const sources = [_][]const u8{ base, spec };
-    for (sources) |source| {
-        var it = std.mem.splitScalar(u8, source, '/');
-        while (it.next()) |part| {
-            if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
-            if (std.mem.eql(u8, part, "..")) {
-                if (parts.items.len != 0 and
-                    !std.mem.eql(u8, parts.items[parts.items.len - 1], ".."))
-                {
-                    _ = parts.pop();
-                    continue;
-                }
-                if (absolute) continue;
-            }
-            try parts.append(allocator, part);
-        }
-    }
-
-    var out = std.ArrayListUnmanaged(u8){};
-    if (absolute) try out.append(allocator, '/');
-    for (parts.items, 0..) |part, index| {
-        if (index != 0) try out.append(allocator, '/');
-        try out.appendSlice(allocator, part);
-    }
-    if (out.items.len == 0) try out.append(allocator, '.');
-    return try out.toOwnedSlice(allocator);
-}
+const resolveSpecPath = Imports.resolveSpecPath;
 
 pub const DocumentKind = enum {
     mm0,

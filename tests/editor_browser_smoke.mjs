@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -27,7 +27,7 @@ try {
   );
 
   const tarballs = [];
-  for (const packageName of ["compiler", "editor"]) {
+  for (const packageName of ["compiler", "lsp", "editor"]) {
     const output = run("npm", [
       "pack",
       join(packageRoot, packageName),
@@ -53,6 +53,7 @@ try {
       "@codemirror/state@6.5.2",
       "@codemirror/commands@6.8.1",
       "@codemirror/lint@6.8.5",
+      "@codemirror/autocomplete@6.18.6",
       "esbuild@0.25.6",
     ],
     { cwd: tempRoot },
@@ -72,11 +73,10 @@ try {
   await esbuild.build({
     entryPoints: [entryPath],
     bundle: true,
-    external: [
-      "@aufbau/compiler",
-      "@aufbau/lsp",
-      "@codemirror/autocomplete",
-    ],
+    // The wasm packages stay external (served from node_modules through
+    // the import map, so the language server's worker and wasm resolve
+    // next to its index.js); autocomplete bundles in with the editor.
+    external: ["@aufbau/compiler", "@aufbau/lsp"],
     format: "esm",
     logLevel: "warning",
     outfile: join(tempRoot, "smoke.js"),
@@ -84,6 +84,12 @@ try {
   });
 
   await writeFile(join(tempRoot, "index.html"), smokePageSource());
+  // A library the inline theory imports, fetched relative to the page.
+  await mkdir(join(tempRoot, "lib"), { recursive: true });
+  await writeFile(
+    join(tempRoot, "lib", "smoke-base.mm0"),
+    "provable sort wff;\nterm top: wff;\n",
+  );
   const smokeServer = createResultServer(tempRoot, {
     resultPath: "/__smoke_result",
   });
@@ -104,7 +110,7 @@ try {
     `browser smoke test failed:\n${result.detail}\n${result.stderr}`,
   );
   console.log(
-    "Packed @aufbau/editor loads and verifies a proof in Chromium.",
+    "Packed @aufbau/editor loads and verifies a two-cell document in Chromium.",
   );
 } finally {
   if (server) await close(server);
@@ -126,7 +132,9 @@ function smokePageSource() {
       {
         "imports": {
           "@aufbau/compiler":
-            "/node_modules/@aufbau/compiler/index.js"
+            "/node_modules/@aufbau/compiler/index.js",
+          "@aufbau/lsp":
+            "/node_modules/@aufbau/lsp/index.js"
         }
       }
     </script>
@@ -134,17 +142,27 @@ function smokePageSource() {
   <body data-smoke="running">
     <aufbau-theory id="smoke-theory">
       <script type="text/mm0">
-        provable sort wff;
-        term top: wff;
+        import "lib/smoke-base.mm0";
         axiom top_i: $ top $;
       </script>
     </aufbau-theory>
 
-    <aufbau-proof theory="smoke-theory" debounce="0" lsp="off">
+    <aufbau-proof id="first" theory="smoke-theory" debounce="0" lsp="off">
       <script type="text/auf">
         lemma smoke: $ top $
         ----
         l1: $ top $ by top_i []
+      </script>
+    </aufbau-proof>
+
+    <aufbau-proof id="second" theory="smoke-theory" debounce="0">
+      <script type="text/mm0">
+        theorem main: $ top $;
+      </script>
+      <script type="text/auf">
+        main
+        ----
+        l1: $ top $ by smoke []
       </script>
     </aufbau-proof>
 
@@ -175,20 +193,37 @@ try {
   ]);
 
   const theory = document.querySelector("aufbau-theory");
-  const proof = document.querySelector("aufbau-proof");
+  const proof = document.querySelector("#first");
+  const second = document.querySelector("#second");
   const index = document.querySelector("aufbau-index");
   check(theory instanceof editor.AufbauTheory, "theory did not upgrade");
   check(proof instanceof editor.AufbauProof, "proof did not upgrade");
   check(index instanceof editor.AufbauIndex, "index did not upgrade");
   check((await theory.text()).includes("top_i"), "theory did not load");
 
-  await waitFor(() => {
-    const state = proof.statusState();
-    if (state?.kind === "err") {
-      throw new Error("proof check failed: " + state.text);
-    }
-    return state?.kind === "ok";
-  }, "proof did not reach verified state");
+  // Both cells verify: the theory's import was fetched and joined, and
+  // the second cell's theorem sees the first cell's lemma through the
+  // chain of cell files.
+  for (const [cell, label] of [[proof, "first"], [second, "second"]]) {
+    await waitFor(() => {
+      const state = cell.statusState();
+      if (state?.kind === "err") {
+        throw new Error(label + " cell check failed: " + state.text);
+      }
+      return state?.kind === "ok";
+    }, label + " cell did not reach verified state");
+  }
+
+  // The language server sees the same chain: hovering the lemma's name in
+  // the second cell resolves it across the cell boundary.
+  const body = second.shadowRoot.querySelector(".cm-content").textContent;
+  const at = body.indexOf("smoke");
+  check(at >= 0, "second cell body lost the lemma reference");
+  const hover = await second.lspHover(at + 1);
+  check(
+    hover?.value?.includes("smoke"),
+    "hover over a lemma from an earlier cell returned " + JSON.stringify(hover),
+  );
 
   check(proof.shadowRoot, "proof has no shadow root");
   check(
@@ -207,6 +242,7 @@ try {
   const indexText = index.shadowRoot.textContent;
   check(indexText.includes("top_i"), "index omitted the axiom");
   check(indexText.includes("smoke"), "index omitted the lemma");
+  check(indexText.includes("main"), "index omitted the theorem");
   check(browserErrors.length === 0, browserErrors.join("\n"));
 
   document.body.dataset.smoke = "passed";

@@ -376,6 +376,35 @@ pub const JoinFailure = struct {
     spec: []const u8,
     /// The resolver's error, for `unresolved`.
     err: ?anyerror = null,
+
+    /// The failure as one line of prose, without a location.
+    pub fn message(
+        self: JoinFailure,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error![]u8 {
+        const keyword = self.syntax.keyword();
+        return switch (self.kind) {
+            .cycle => std.fmt.allocPrint(
+                allocator,
+                "{s} cycle: '{s}' is already being {s}d",
+                .{ keyword, self.spec, keyword },
+            ),
+            .unresolved => std.fmt.allocPrint(
+                allocator,
+                "unable to {s} '{s}': {s}",
+                .{
+                    keyword,
+                    self.spec,
+                    if (self.err) |err| @errorName(err) else "unresolved",
+                },
+            ),
+            .malformed => std.fmt.allocPrint(
+                allocator,
+                "malformed {s} statement",
+                .{keyword},
+            ),
+        };
+    }
 };
 
 pub const JoinError = error{
@@ -687,6 +716,173 @@ pub const FsResolver = struct {
     }
 };
 
+/// The path an import/include spec names, relative to the importing file's
+/// directory, with `.` and `..` segments collapsed. Purely lexical: hosts
+/// without a filesystem (the language server's open documents, the browser)
+/// key their files by such paths, and the same form keys both.
+pub fn resolveSpecPath(
+    allocator: std.mem.Allocator,
+    from_path: []const u8,
+    spec: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    const base = if (std.fs.path.isAbsolutePosix(spec))
+        ""
+    else
+        std.fs.path.dirnamePosix(from_path) orelse "";
+    const absolute = std.fs.path.isAbsolutePosix(spec) or
+        std.fs.path.isAbsolutePosix(base);
+
+    var parts = std.ArrayListUnmanaged([]const u8){};
+    defer parts.deinit(allocator);
+    const sources = [_][]const u8{ base, spec };
+    for (sources) |source| {
+        var it = std.mem.splitScalar(u8, source, '/');
+        while (it.next()) |part| {
+            if (part.len == 0 or std.mem.eql(u8, part, ".")) continue;
+            if (std.mem.eql(u8, part, "..")) {
+                if (parts.items.len != 0 and
+                    !std.mem.eql(u8, parts.items[parts.items.len - 1], ".."))
+                {
+                    _ = parts.pop();
+                    continue;
+                }
+                if (absolute) continue;
+            }
+            try parts.append(allocator, part);
+        }
+    }
+
+    var out = std.ArrayListUnmanaged(u8){};
+    if (absolute) try out.append(allocator, '/');
+    for (parts.items, 0..) |part, index| {
+        if (index != 0) try out.append(allocator, '/');
+        try out.appendSlice(allocator, part);
+    }
+    if (out.items.len == 0) try out.append(allocator, '.');
+    return try out.toOwnedSlice(allocator);
+}
+
+/// Resolver over an in-memory file table for hosts without a filesystem
+/// (the browser compiler). Keys are lexical paths; a spec resolves against
+/// the importing file's key with `resolveSpecPath`, so the host must key
+/// its files in that normalised form (`/dir/file.mm0`, no `.` or `..`).
+pub const TableResolver = struct {
+    files: []const File,
+
+    pub fn resolver(self: *TableResolver) Resolver {
+        return .{ .ctx = @ptrCast(self), .resolveFn = resolveFn };
+    }
+
+    pub fn get(self: TableResolver, key: []const u8) ?File {
+        for (self.files) |file| {
+            if (std.mem.eql(u8, file.key, key)) return file;
+        }
+        return null;
+    }
+
+    fn resolveFn(
+        ctx: *anyopaque,
+        allocator: std.mem.Allocator,
+        from_key: []const u8,
+        spec: []const u8,
+    ) anyerror!Resolved {
+        const self: *TableResolver = @ptrCast(@alignCast(ctx));
+        const path = try resolveSpecPath(allocator, from_key, spec);
+        const file = self.get(path) orelse return error.FileNotFound;
+        return .{ .key = file.key, .text = file.text };
+    }
+};
+
+/// `loadPair` over an in-memory table (see `TableResolver` for the keys).
+/// `root_key` names the root `.mm0`; its proof file is `proof_key` when
+/// given, else its `<stem>.auf` sibling when the table holds one. Every
+/// other joined file pairs with its sibling. Labels are the keys.
+pub fn loadPairFromTable(
+    allocator: std.mem.Allocator,
+    files: []const File,
+    root_key: []const u8,
+    proof_key: ?[]const u8,
+    failure: *?LoadFailure,
+) LoadPairError!LoadedPair {
+    var table = TableResolver{ .files = files };
+    const root = table.get(root_key) orelse {
+        failure.* = .{ .read = .{ .path = root_key, .err = error.FileNotFound } };
+        return error.ReadFailed;
+    };
+    var join_failure: ?JoinFailure = null;
+    const joined = join(
+        allocator,
+        table.resolver(),
+        root.key,
+        root.text,
+        &join_failure,
+    ) catch |err| {
+        if (join_failure) |info| failure.* = .{ .join = info };
+        return err;
+    };
+    const mm0_mapping = try Mapping.fromJoined(
+        allocator,
+        joined,
+        keyLabel,
+        @ptrCast(&label_ctx),
+    );
+
+    var proof_files: std.ArrayListUnmanaged(File) = .{};
+    for (joined.files, 0..) |file, index| {
+        const is_root = index + 1 == joined.files.len;
+        if (is_root and proof_key != null) {
+            const proof = table.get(proof_key.?) orelse {
+                failure.* = .{
+                    .read = .{ .path = proof_key.?, .err = error.FileNotFound },
+                };
+                return error.ReadFailed;
+            };
+            try proof_files.append(allocator, proof);
+            continue;
+        }
+        const sibling = proofSibling(allocator, file.key) catch continue;
+        const paired = table.get(sibling) orelse continue;
+        try proof_files.append(allocator, paired);
+    }
+    if (proof_files.items.len == 0) {
+        return .{
+            .mm0 = joined,
+            .mm0_mapping = mm0_mapping,
+            .proof = null,
+            .proof_mapping = null,
+        };
+    }
+    join_failure = null;
+    const proof_joined = joinAll(
+        allocator,
+        table.resolver(),
+        .auf,
+        proof_files.items,
+        &join_failure,
+    ) catch |err| {
+        if (join_failure) |info| failure.* = .{ .join = info };
+        return err;
+    };
+    return .{
+        .mm0 = joined,
+        .mm0_mapping = mm0_mapping,
+        .proof = proof_joined,
+        .proof_mapping = try Mapping.fromJoined(
+            allocator,
+            proof_joined,
+            keyLabel,
+            @ptrCast(&label_ctx),
+        ),
+    };
+}
+
+var label_ctx: u8 = 0;
+
+fn keyLabel(ctx: *anyopaque, key: []const u8) []const u8 {
+    _ = ctx;
+    return key;
+}
+
 /// A joined text plus the names its files go by in diagnostics.
 pub const Mapping = struct {
     map: SourceMap,
@@ -933,6 +1129,90 @@ fn includeMem(
 ) JoinError!Joined {
     var mem = MemResolver{ .files = files };
     return joinAll(arena, mem.resolver(), .auf, roots, failure);
+}
+
+test "table loader chains cells the way the browser editor does" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const files = [_]File{
+        .{ .key = "/d/prelude.mm0", .text = "sort s;\n" },
+        .{ .key = "/d/c1.mm0", .text = "import \"prelude.mm0\";\n" },
+        .{ .key = "/d/c1.auf", .text = "lemma a\n" },
+        .{ .key = "/d/c2.mm0", .text = "import \"c1.mm0\";\nterm t: s;\n" },
+        .{ .key = "/d/c2.auf", .text = "main\n" },
+    };
+    var failure: ?LoadFailure = null;
+
+    // The root pairs with its sibling when no proof key is given; every
+    // earlier cell pairs with its own; the prelude has none.
+    const pair = try loadPairFromTable(arena.allocator(), &files, "/d/c2.mm0", null, &failure);
+    try std.testing.expectEqualStrings("sort s;\n\n\nterm t: s;\n", pair.mm0.text);
+    try std.testing.expectEqual(@as(usize, 3), pair.mm0.files.len);
+    try std.testing.expectEqualStrings("lemma a\nmain\n", pair.proof.?.text);
+    // Labels are the keys, and a span in the joined proof lands in its file.
+    const hit = pair.proof_mapping.?.locateSpan(.{ .start = 8, .end = 12 }).?;
+    try std.testing.expectEqualStrings("/d/c2.auf", hit.label);
+    try std.testing.expectEqual(@as(usize, 0), hit.span.start);
+
+    // An explicit proof key overrides the sibling.
+    const explicit = try loadPairFromTable(arena.allocator(), &files, "/d/c2.mm0", "/d/c1.auf", &failure);
+    try std.testing.expectEqualStrings("lemma a\nlemma a\n", explicit.proof.?.text);
+
+    // A root without any proof file yields no proof side.
+    const bare = try loadPairFromTable(arena.allocator(), &files, "/d/prelude.mm0", null, &failure);
+    try std.testing.expect(bare.proof == null);
+}
+
+test "table loader reports missing files and unresolved imports" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const files = [_]File{
+        .{ .key = "/d/a.mm0", .text = "import \"lib/x.mm0\";\n" },
+    };
+    var failure: ?LoadFailure = null;
+    try std.testing.expectError(
+        error.ReadFailed,
+        loadPairFromTable(arena.allocator(), &files, "/d/nope.mm0", null, &failure),
+    );
+    try std.testing.expectEqualStrings("/d/nope.mm0", failure.?.read.path);
+
+    failure = null;
+    try std.testing.expectError(
+        error.ImportUnresolved,
+        loadPairFromTable(arena.allocator(), &files, "/d/a.mm0", null, &failure),
+    );
+    try std.testing.expectEqualStrings("lib/x.mm0", failure.?.join.spec);
+    try std.testing.expectEqualStrings("/d/a.mm0", failure.?.join.file_key);
+    const message = try failure.?.join.message(arena.allocator());
+    try std.testing.expectEqualStrings(
+        "unable to import 'lib/x.mm0': FileNotFound",
+        message,
+    );
+
+    const plain = [_]File{.{ .key = "/d/b.mm0", .text = "sort s;\n" }};
+    failure = null;
+    try std.testing.expectError(
+        error.ReadFailed,
+        loadPairFromTable(arena.allocator(), &plain, "/d/b.mm0", "/d/b.auf", &failure),
+    );
+    try std.testing.expectEqualStrings("/d/b.auf", failure.?.read.path);
+}
+
+test "import specs resolve lexically against the importing file" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { from: []const u8, spec: []const u8, want: []const u8 }{
+        .{ .from = "/a/b/c.mm0", .spec = "d.mm0", .want = "/a/b/d.mm0" },
+        .{ .from = "/a/b/c.mm0", .spec = "../x/./y.mm0", .want = "/a/x/y.mm0" },
+        .{ .from = "/a/b/c.mm0", .spec = "/abs/z.mm0", .want = "/abs/z.mm0" },
+        .{ .from = "/c.mm0", .spec = "../../q.mm0", .want = "/q.mm0" },
+        .{ .from = "c.mm0", .spec = "../q.mm0", .want = "../q.mm0" },
+        .{ .from = "/aufbau-editor/doc3.mm0", .spec = "prelude.mm0", .want = "/aufbau-editor/prelude.mm0" },
+    };
+    for (cases) |case| {
+        const got = try resolveSpecPath(allocator, case.from, case.spec);
+        defer allocator.free(got);
+        try std.testing.expectEqualStrings(case.want, got);
+    }
 }
 
 test "scanner finds imports and skips other statements" {

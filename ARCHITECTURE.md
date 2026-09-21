@@ -402,7 +402,8 @@ emitted with term IDs that include those earlier local entries.
 textual inclusion. Aufbau does the same, in the frontend, before parsing:
 `frontend/imports.zig` scans a file for `import` statements, resolves each
 one relative to the importing file through an injected resolver (the
-filesystem for the CLI; the editor supplies its own), and splices the
+filesystem for the CLI, an in-memory file table for the browser compiler,
+the open documents for the language server), and splices the
 imported text in place of the statement, depth first, deduplicated (a
 diamond `A -> {B, C} -> D` includes D once), cycles rejected. The trusted
 parser still receives one source string. A source map carries joined
@@ -1205,9 +1206,16 @@ calls; JS wrappers copy output they return. `tests/wasm_host_mock.mjs` pins
 the failure paths against scripted instances.
 
 `web/packages/editor/index.js` implements custom elements for theories,
-proof cells, and declaration indexes. It also owns shared-document assembly,
-diagnostic routing, CodeMirror integration, and LSP request coordination.
-The manual and demo consume these same packages.
+proof cells, and declaration indexes. A document (the cells sharing a
+theory) is a virtual directory: a prelude file, one `<cell>.mm0`/`<cell>.auf`
+pair per cell whose `.mm0` imports the previous cell's, and any library
+the sources `import`/`include`, fetched once over HTTP. The compiler
+(`compile_files`, an in-memory file table with file-labelled diagnostics)
+compiles the last cell's file, so the whole chain is joined by the
+frontend's own import machinery and each cell takes the diagnostics on its
+two files; the language server sees the same files as documents, every
+cell's `.mm0` a root of its own, with the check memo sharing block results
+across the chain. The manual and demo consume these same packages.
 
 ## Tests and maintenance checks
 

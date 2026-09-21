@@ -89,6 +89,36 @@ const verifier = await loadVerifier();
 const verified = verifier.verifyPair(mm0Text, compiled.mmbBytes);
 assert.equal(verified.ok, true, JSON.stringify(verified.meta));
 
+// The file-table entry: a chain of cells the way the editor assembles them,
+// with the diagnostics of a broken cell named by file and file-local offset.
+const files = [
+  {
+    path: "/doc/prelude.mm0",
+    text: "provable sort wff;\nterm top: wff;\naxiom top_i: $ top $;\n",
+  },
+  { path: "/doc/c1.mm0", text: 'import "prelude.mm0";\n' },
+  { path: "/doc/c1.auf", text: "lemma helper: $ top $\n----\nl1: $ top $ by top_i []\n" },
+  { path: "/doc/c2.mm0", text: 'import "c1.mm0";\ntheorem main: $ top $;\n' },
+  { path: "/doc/c2.auf", text: "main\n----\nl1: $ top $ by helper []\n" },
+];
+const chained = compiler.compileFiles({ files, root: "/doc/c2.mm0" });
+assert.equal(chained.ok, true, JSON.stringify(chained.meta));
+assert.deepEqual(
+  chained.statements.map((s) => s.name).slice(-2),
+  ["helper", "main"],
+);
+files[4].text = "main\n----\nl1: $ top $ by nothing []\n";
+const broken = compiler.compileFiles({ files, root: "/doc/c2.mm0" });
+assert.equal(broken.ok, false);
+const [diag] = broken.diagnostics;
+assert.equal(diag.file, "/doc/c2.auf");
+assert.equal(files[4].text.slice(diag.spanStart, diag.spanEnd), "nothing");
+files[3].text = 'import "missing.mm0";\n';
+const unresolved = compiler.compileFiles({ files, root: "/doc/c2.mm0" });
+assert.equal(unresolved.ok, false);
+assert.equal(unresolved.diagnostics[0].file, "/doc/c2.mm0");
+assert.match(unresolved.diagnostics[0].message, /unable to import 'missing.mm0'/);
+
 const lsp = await loadLspServer();
 const output = lsp.process({
   jsonrpc: "2.0",

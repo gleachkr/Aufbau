@@ -2813,20 +2813,3 @@ test "LSP resolves proof includes against open library files" {
     try std.testing.expect(transport_state.containsMessage(lib_uri));
     try std.testing.expect(transport_state.containsMessage("nope"));
 }
-
-test "import specs resolve lexically against the importing file" {
-    const allocator = std.testing.allocator;
-    const cases = [_]struct { from: []const u8, spec: []const u8, want: []const u8 }{
-        .{ .from = "/a/b/c.mm0", .spec = "d.mm0", .want = "/a/b/d.mm0" },
-        .{ .from = "/a/b/c.mm0", .spec = "../x/./y.mm0", .want = "/a/x/y.mm0" },
-        .{ .from = "/a/b/c.mm0", .spec = "/abs/z.mm0", .want = "/abs/z.mm0" },
-        .{ .from = "/c.mm0", .spec = "../../q.mm0", .want = "/q.mm0" },
-        .{ .from = "c.mm0", .spec = "../q.mm0", .want = "../q.mm0" },
-        .{ .from = "/aufbau-editor/doc3.mm0", .spec = "prelude.mm0", .want = "/aufbau-editor/prelude.mm0" },
-    };
-    for (cases) |case| {
-        const got = try lsp_server.resolveSpecPath(allocator, case.from, case.spec);
-        defer allocator.free(got);
-        try std.testing.expectEqualStrings(case.want, got);
-    }
-}

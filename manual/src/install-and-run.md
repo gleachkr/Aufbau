@@ -162,8 +162,10 @@ against files on disk. Diagnostics appear on the file they belong to: an error
 inside an imported file appears there, and an import that cannot be followed is 
 reported on its statement while the rest of the file is still checked. Editing 
 a library re-checks the files that import it. In the browser there is no disk: 
-the host supplies a library by opening it as a document under the URI its 
-`import` resolves to.
+the editor components fetch each imported file over HTTP (relative to the page 
+for inline sources, to the file's own URL for sources loaded from one) and 
+hand it to the compiler and the language server; other hosts supply a library 
+by opening it as a document under the URI its `import` resolves to.
 
 ## Command-line help
 

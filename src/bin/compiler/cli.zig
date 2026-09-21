@@ -176,22 +176,12 @@ fn reportLoadFailure(
     };
     switch (info) {
         .read => |read| reportFileError("read", read.path, read.err),
-        .join => |join| {
-            const keyword = join.syntax.keyword();
-            switch (join.kind) {
-                .cycle => std.debug.print(
-                    "abc: {s} cycle: '{s}' is already being {s}d\n",
-                    .{ keyword, join.spec, keyword },
-                ),
-                .unresolved => std.debug.print(
-                    "abc: unable to {s} '{s}': {s}\n",
-                    .{ keyword, join.spec, @errorName(join.err orelse err) },
-                ),
-                .malformed => std.debug.print(
-                    "abc: malformed {s} statement\n",
-                    .{keyword},
-                ),
-            }
+        .join => |join_info| {
+            var join = join_info;
+            if (join.err == null) join.err = err;
+            const message = join.message(allocator) catch return;
+            defer allocator.free(message);
+            std.debug.print("abc: {s}\n", .{message});
             const cwd = std.process.getCwdAlloc(allocator) catch "";
             defer if (cwd.len != 0) allocator.free(cwd);
             const pos = lineCol(join.file_text, join.span.start);

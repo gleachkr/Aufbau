@@ -53,23 +53,101 @@ pub export fn compile_sources(
     proof_len: u32,
 ) u32 {
     clearState();
+    return compileUnit(.{
+        .mm0 = ptrToConstSlice(mm0_ptr, mm0_len),
+        .proof = ptrToConstSlice(proof_ptr, proof_len),
+    });
+}
 
-    const mm0_src = ptrToConstSlice(mm0_ptr, mm0_len);
-    const proof_src = ptrToConstSlice(proof_ptr, proof_len);
+/// One file of a `compile_files` request.
+const FileEntry = struct {
+    path: []const u8,
+    text: []const u8,
+};
+
+/// A `compile_files` request: `{"root": "/a/main.mm0", "proof":
+/// "/a/main.auf" | null, "files": [{"path": "...", "text": "..."}, ...]}`.
+/// Paths are normalised absolute POSIX paths (`Imports.TableResolver`).
+const FilesRequest = struct {
+    root: []const u8,
+    proof: ?[]const u8 = null,
+    files: []const FileEntry,
+};
+
+/// Compile a root `.mm0` out of an in-memory file table (JSON, see
+/// `FilesRequest`): imports and includes resolve against the table, the
+/// root's proof is `proof` when given and its `<stem>.auf` sibling
+/// otherwise, and every diagnostic names the file it lies in (`file`) with
+/// offsets local to that file. `compile_sources` is the one-pair form.
+pub export fn compile_files(json_ptr: u32, json_len: u32) u32 {
+    clearState();
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const request = std.json.parseFromSliceLeaky(
+        FilesRequest,
+        arena,
+        ptrToConstSlice(json_ptr, json_len),
+        .{ .ignore_unknown_fields = true },
+    ) catch |err| {
+        writeRequestFailure(err) catch clearState();
+        return 0;
+    };
+    const files = arena.alloc(mm0.Imports.File, request.files.len) catch {
+        writeRequestFailure(error.OutOfMemory) catch clearState();
+        return 0;
+    };
+    for (request.files, 0..) |entry, index| {
+        files[index] = .{ .key = entry.path, .text = entry.text };
+    }
+
+    var failure: ?mm0.Imports.LoadFailure = null;
+    const pair = mm0.Imports.loadPairFromTable(
+        arena,
+        files,
+        request.root,
+        request.proof,
+        &failure,
+    ) catch |err| {
+        writeLoadFailure(arena, failure, err) catch clearState();
+        return 0;
+    };
+    return compileUnit(.{
+        .mm0 = pair.mm0.text,
+        .proof = if (pair.proof) |proof| proof.text else "",
+        .mm0_mapping = pair.mm0_mapping,
+        .proof_mapping = pair.proof_mapping,
+    });
+}
+
+/// What one compile runs over: the (joined) texts and, for a join, the
+/// mappings that place diagnostics back in their files.
+const Unit = struct {
+    mm0: []const u8,
+    proof: []const u8,
+    mm0_mapping: ?mm0.Imports.Mapping = null,
+    proof_mapping: ?mm0.Imports.Mapping = null,
+
+    fn compiler(self: Unit) mm0.Compiler {
+        var result = mm0.Compiler.initWithProof(allocator, self.mm0, self.proof);
+        result.diagnostics.setMapping(.mm0, self.mm0_mapping);
+        result.diagnostics.setMapping(.proof, self.proof_mapping);
+        return result;
+    }
+};
+
+fn compileUnit(unit: Unit) u32 {
     // Pretty-printed statement snapshots for the meta JSON, captured at the
     // end of the pipeline run (or of the analysis rerun on failure, which
     // resets and re-captures with recovery's richer environment).
     var statements = mm0.StatementSink.init(allocator);
     defer statements.deinit();
-    var compiler = mm0.Compiler.initWithProof(allocator, mm0_src, proof_src);
+    var compiler = unit.compiler();
     compiler.statement_sink = &statements;
 
     result_mmb = compiler.compileMmb(allocator) catch |err| {
-        var analysis_compiler = mm0.Compiler.initWithProof(
-            allocator,
-            mm0_src,
-            proof_src,
-        );
+        var analysis_compiler = unit.compiler();
         // Match the LSP's analysis posture: a search placeholder (`auto?` /
         // `exact?` / `apply?`) is an unfilled hole, not an unknown rule — the
         // checker stops cleanly at it, and a warning-severity diagnostic per
@@ -81,7 +159,7 @@ pub export fn compile_sources(
             &compiler,
             &analysis_compiler,
             &statements,
-            proof_src,
+            unit.proof,
             err,
         ) catch clearState();
         return 0;
@@ -179,7 +257,7 @@ fn writeCompileFailure(
             mm0.compilerDiagnosticSummary(diag),
         );
         try out.writer.writeAll(",\"mmbLen\":0,\"diagnostic\":");
-        try writeDiagnosticObject(&out.writer, diag);
+        try writeDiagnosticObject(&out.writer, compiler, diag);
     } else {
         try writeJsonStringField(&out.writer, "message", mm0.compilerErrorSummary(err));
         try out.writer.writeAll(",\"mmbLen\":0,\"diagnostic\":null");
@@ -190,6 +268,81 @@ fn writeCompileFailure(
     try writeStatementsField(&out.writer, statements);
     try out.writer.writeByte('}');
 
+    result_json = try out.toOwnedSlice();
+}
+
+/// A `compile_files` request that could not be read at all.
+fn writeRequestFailure(err: anyerror) !void {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll("{\"ok\":false,\"phase\":\"compile\",");
+    try writeJsonStringField(&out.writer, "error", @errorName(err));
+    try out.writer.writeByte(',');
+    try writeJsonStringField(
+        &out.writer,
+        "message",
+        "malformed compile request",
+    );
+    try out.writer.writeAll(
+        ",\"mmbLen\":0,\"diagnostic\":null,\"diagnostics\":[],\"statements\":[]}",
+    );
+    result_json = try out.toOwnedSlice();
+}
+
+/// A file table whose imports or includes could not be joined: one error
+/// diagnostic on the failing statement (or, for a missing root, none).
+fn writeLoadFailure(
+    arena: std.mem.Allocator,
+    failure: ?mm0.Imports.LoadFailure,
+    err: anyerror,
+) !void {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    try out.writer.writeAll("{\"ok\":false,\"phase\":\"compile\",");
+    try writeJsonStringField(&out.writer, "error", @errorName(err));
+    try out.writer.writeByte(',');
+
+    var synthetic: ?SyntheticDiagnostic = null;
+    if (failure) |info| switch (info) {
+        .read => |read| synthetic = .{
+            .message = try std.fmt.allocPrint(
+                arena,
+                "unable to read '{s}': {s}",
+                .{ read.path, @errorName(read.err) },
+            ),
+            .source = if (std.mem.endsWith(u8, read.path, ".auf")) .proof else .mm0,
+            .err = read.err,
+        },
+        .join => |join_info| {
+            var join = join_info;
+            if (join.err == null) join.err = err;
+            synthetic = .{
+                .message = try join.message(arena),
+                .source = switch (join.syntax) {
+                    .mm0 => .mm0,
+                    .auf => .proof,
+                },
+                .err = err,
+                .file = join.file_key,
+                .span = .{ .start = join.span.start, .end = join.span.end },
+            };
+        },
+    };
+    try writeJsonStringField(
+        &out.writer,
+        "message",
+        if (synthetic) |diag| diag.message else @errorName(err),
+    );
+    try out.writer.writeAll(",\"mmbLen\":0,\"diagnostic\":");
+    if (synthetic) |diag| {
+        try writeSyntheticDiagnostic(&out.writer, diag);
+        try out.writer.writeAll(",\"diagnostics\":[");
+        try writeSyntheticDiagnostic(&out.writer, diag);
+        try out.writer.writeAll("],");
+    } else {
+        try out.writer.writeAll("null,\"diagnostics\":[],");
+    }
+    try out.writer.writeAll("\"statements\":[]}");
     result_json = try out.toOwnedSlice();
 }
 
@@ -204,27 +357,27 @@ fn writeDiagnosticsField(
     if (compiler) |actual| {
         for (actual.primaryDiagnostics()) |diag| {
             if (need_comma) try writer.writeByte(',');
-            try writeDiagnosticObject(writer, diag);
+            try writeDiagnosticObject(writer, actual, diag);
             need_comma = true;
         }
         if (actual.omittedPrimaryDiagnostic(.mm0)) |diag| {
             if (need_comma) try writer.writeByte(',');
-            try writeDiagnosticObject(writer, diag);
+            try writeDiagnosticObject(writer, actual, diag);
             need_comma = true;
         }
         if (actual.omittedPrimaryDiagnostic(.proof)) |diag| {
             if (need_comma) try writer.writeByte(',');
-            try writeDiagnosticObject(writer, diag);
+            try writeDiagnosticObject(writer, actual, diag);
             need_comma = true;
         }
         for (actual.warningDiagnostics()) |diag| {
             if (need_comma) try writer.writeByte(',');
-            try writeDiagnosticObject(writer, diag);
+            try writeDiagnosticObject(writer, actual, diag);
             need_comma = true;
         }
     }
     if (proof_src) |src| {
-        try writePlaceholderDiagnostics(writer, src, &need_comma);
+        try writePlaceholderDiagnostics(writer, compiler, src, &need_comma);
     }
 
     try writer.writeByte(']');
@@ -239,6 +392,7 @@ fn writeDiagnosticsField(
 // them a typo'd parameter is silently ignored in the browser editor.
 fn writePlaceholderDiagnostics(
     writer: anytype,
+    compiler: ?*const mm0.Compiler,
     proof_src: []const u8,
     need_comma: *bool,
 ) !void {
@@ -248,26 +402,26 @@ fn writePlaceholderDiagnostics(
     ) catch return;
     defer allocator.free(placeholders);
 
+    var message: std.io.Writer.Allocating = .init(allocator);
+    defer message.deinit();
     for (placeholders) |placeholder| {
         if (need_comma.*) try writer.writeByte(',');
         need_comma.* = true;
-        try writer.writeByte('{');
-        try writer.print(
-            "\"message\":\"{s} placeholder: proof search has not " ++
-                "filled this hole\",",
+        message.clearRetainingCapacity();
+        try message.writer.print(
+            "{s} placeholder: proof search has not filled this hole",
             .{placeholder.kind.keyword()},
         );
-        try writer.writeAll(
-            "\"severity\":\"warning\",\"source\":\"proof\"," ++
-                "\"error\":\"SearchPlaceholder\",\"theorem\":null," ++
-                "\"block\":null,\"lineLabel\":null,\"rule\":null," ++
-                "\"name\":null,\"expected\":null,\"phase\":null,",
-        );
-        try writer.print(
-            "\"spanStart\":{d},\"spanEnd\":{d},",
-            .{ placeholder.span.start, placeholder.span.end },
-        );
-        try writer.writeAll("\"detail\":null,\"notes\":[],\"related\":[]}");
+        try writeSyntheticDiagnostic(writer, placed(compiler, .{
+            .message = message.written(),
+            .severity = .warning,
+            .source = .proof,
+            .err = error.SearchPlaceholder,
+            .span = .{
+                .start = placeholder.span.start,
+                .end = placeholder.span.end,
+            },
+        }));
 
         const issues = mm0.CompilerSupport.Search.tunables.validateSearchParams(
             allocator,
@@ -280,25 +434,116 @@ fn writePlaceholderDiagnostics(
         }
         for (issues) |issue| {
             try writer.writeByte(',');
-            try writer.writeByte('{');
-            try writeJsonStringField(writer, "message", issue.message);
-            try writer.writeAll(
-                ",\"severity\":\"error\",\"source\":\"proof\"," ++
-                    "\"error\":\"InvalidSearchParameter\",\"theorem\":null," ++
-                    "\"block\":null,\"lineLabel\":null,\"rule\":null," ++
-                    "\"name\":null,\"expected\":null,\"phase\":null,",
-            );
-            try writer.print(
-                "\"spanStart\":{d},\"spanEnd\":{d},",
-                .{ issue.span.start, issue.span.end },
-            );
-            try writer.writeAll("\"detail\":null,\"notes\":[],\"related\":[]}");
+            try writeSyntheticDiagnostic(writer, placed(compiler, .{
+                .message = issue.message,
+                .severity = .@"error",
+                .source = .proof,
+                .err = error.InvalidSearchParameter,
+                .span = .{ .start = issue.span.start, .end = issue.span.end },
+            }));
         }
     }
 }
 
+/// A diagnostic this file makes up itself (placeholder status, a failed
+/// join): the same JSON shape as a compiler diagnostic, with the fields the
+/// compiler would leave empty set to null.
+const SyntheticDiagnostic = struct {
+    message: []const u8,
+    severity: enum { @"error", warning } = .@"error",
+    source: enum { mm0, proof },
+    err: anyerror,
+    /// The file the span lies in, when known (a join), else null.
+    file: ?[]const u8 = null,
+    /// Offsets into `file` when set, else into the whole source text.
+    span: ?mm0.Imports.Span = null,
+};
+
+/// `diag` with its whole-source span placed in its file, when the compiler
+/// ran over a join.
+fn placed(
+    compiler: ?*const mm0.Compiler,
+    diag: SyntheticDiagnostic,
+) SyntheticDiagnostic {
+    const actual = compiler orelse return diag;
+    const span = diag.span orelse return diag;
+    const source: mm0.CompilerDiagnosticSource = switch (diag.source) {
+        .mm0 => .mm0,
+        .proof => .proof,
+    };
+    const hit = actual.diagnostics.locateInFile(
+        source,
+        .{ .start = span.start, .end = span.end },
+    ) orelse return diag;
+    var out = diag;
+    out.file = hit.label;
+    out.span = hit.span;
+    return out;
+}
+
+fn writeSyntheticDiagnostic(
+    writer: anytype,
+    diag: SyntheticDiagnostic,
+) !void {
+    try writer.writeByte('{');
+    try writeJsonStringField(writer, "message", diag.message);
+    try writer.writeByte(',');
+    try writeJsonStringField(writer, "severity", @tagName(diag.severity));
+    try writer.writeByte(',');
+    try writeJsonStringField(writer, "source", @tagName(diag.source));
+    try writer.writeByte(',');
+    try writeJsonStringField(writer, "error", @errorName(diag.err));
+    try writer.writeAll(
+        ",\"theorem\":null,\"block\":null,\"lineLabel\":null,\"rule\":null," ++
+            "\"name\":null,\"expected\":null,\"phase\":null,",
+    );
+    try writeOptionalStringField(writer, "file", diag.file);
+    try writer.writeByte(',');
+    try writeOptionalUsizeField(
+        writer,
+        "spanStart",
+        if (diag.span) |span| span.start else null,
+    );
+    try writer.writeByte(',');
+    try writeOptionalUsizeField(
+        writer,
+        "spanEnd",
+        if (diag.span) |span| span.end else null,
+    );
+    try writer.writeAll(",\"detail\":null,\"notes\":[],\"related\":[]}");
+}
+
+/// Write `"file":…,"spanStart":…,"spanEnd":…` for a span of `source`: the
+/// file and file-local offsets when the compiler ran over a join, else a
+/// null file and offsets into the whole source text.
+fn writeSpanFields(
+    writer: anytype,
+    compiler: *const mm0.Compiler,
+    source: mm0.CompilerDiagnosticSource,
+    span: ?mm0.CompilerDiagnosticSpan,
+) !void {
+    var file: ?[]const u8 = null;
+    var start: ?usize = null;
+    var end: ?usize = null;
+    if (span) |actual| {
+        start = actual.start;
+        end = actual.end;
+        if (compiler.diagnostics.locateInFile(source, actual)) |hit| {
+            file = hit.label;
+            start = hit.span.start;
+            end = hit.span.end;
+        }
+    }
+    try writeOptionalStringField(writer, "file", file);
+    try writer.writeByte(',');
+    try writeOptionalUsizeField(writer, "spanStart", start);
+    try writer.writeByte(',');
+    try writeOptionalUsizeField(writer, "spanEnd", end);
+}
+
 fn writeDiagnosticObject(
     writer: anytype,
+    compiler: *const mm0.Compiler,
     diag: mm0.CompilerDiagnostic,
 ) !void {
     // The shared renderer's full text (summary + context lines), matching
@@ -338,23 +583,13 @@ fn writeDiagnosticObject(
             null,
     );
     try writer.writeByte(',');
-    try writeOptionalUsizeField(
-        writer,
-        "spanStart",
-        if (diag.span) |span| span.start else null,
-    );
-    try writer.writeByte(',');
-    try writeOptionalUsizeField(
-        writer,
-        "spanEnd",
-        if (diag.span) |span| span.end else null,
-    );
+    try writeSpanFields(writer, compiler, diag.source, diag.span);
     try writer.writeByte(',');
     try writeDiagnosticDetailField(writer, diag);
     try writer.writeByte(',');
-    try writeDiagnosticNotesField(writer, diag);
+    try writeDiagnosticNotesField(writer, compiler, diag);
     try writer.writeByte(',');
-    try writeDiagnosticRelatedField(writer, diag);
+    try writeDiagnosticRelatedField(writer, compiler, diag);
     try writer.writeByte('}');
 }
 
@@ -392,6 +627,7 @@ fn writeStatementsField(
 
 fn writeDiagnosticNotesField(
     writer: anytype,
+    compiler: *const mm0.Compiler,
     diag: mm0.CompilerDiagnostic,
 ) !void {
     var message: std.io.Writer.Allocating = .init(allocator);
@@ -406,17 +642,7 @@ fn writeDiagnosticNotesField(
         try writer.writeByte(',');
         try writeJsonStringField(writer, "source", @tagName(note.source));
         try writer.writeByte(',');
-        try writeOptionalUsizeField(
-            writer,
-            "spanStart",
-            if (note.span) |span| span.start else null,
-        );
-        try writer.writeByte(',');
-        try writeOptionalUsizeField(
-            writer,
-            "spanEnd",
-            if (note.span) |span| span.end else null,
-        );
+        try writeSpanFields(writer, compiler, note.source, note.span);
         try writer.writeAll("}");
     }
     try writer.writeByte(']');
@@ -424,6 +650,7 @@ fn writeDiagnosticNotesField(
 
 fn writeDiagnosticRelatedField(
     writer: anytype,
+    compiler: *const mm0.Compiler,
     diag: mm0.CompilerDiagnostic,
 ) !void {
     var label: std.io.Writer.Allocating = .init(allocator);
@@ -442,9 +669,7 @@ fn writeDiagnosticRelatedField(
             @tagName(related.source),
         );
         try writer.writeByte(',');
-        try writeOptionalUsizeField(writer, "spanStart", related.span.start);
-        try writer.writeByte(',');
-        try writeOptionalUsizeField(writer, "spanEnd", related.span.end);
+        try writeSpanFields(writer, compiler, related.source, related.span);
         try writer.writeAll("}");
     }
     try writer.writeByte(']');
