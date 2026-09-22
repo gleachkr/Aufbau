@@ -355,6 +355,14 @@ time — it is introduced *downstream* by the `@view`/`@recover` open-target sol
 > rules (`context.views.contains(rule_id)`) away from positional
 > forcing/member reasoning on the raw `rule.concl`.
 
+A carried meta must also survive the steps between its slot and its leaf. Inside
+an open target's child search, a generated slot whose premise has no unknowns of
+its own but still carries an ancestor meta (`imp_intro`'s `Γ , P ?t ⊢ ∀y P y`
+under `ex_intro`) is routed to the open path (`carriesAncestorWitness`), not
+the concrete one — `hook.solve` lifts only placeholder-free targets.
+`emitOpenTarget` registers ancestor metas before its fully-solved check for the
+same reason. Guard: `witness_carry_probe`.
+
 This is a hard-won constraint (Stage 1 `forceAcuiRestBinder` regressed `drinker`
 5/5→1/5 by over-constraining a witness slot). See `feedback_let_metas_propagate`
 and `feedback_forced_not_heuristic` — the project preference is solid, forced,

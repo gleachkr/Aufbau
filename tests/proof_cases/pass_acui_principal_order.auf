@@ -1,0 +1,7 @@
+principal_order
+---------------
+l1: $ ~ (a /\ b) , ~ c |- bot $ by not_left [and_left [#1]]
+
+nested_principal_order
+----------------------
+l1: $ ~ (a /\ b) |- c $ by raa [not_left [and_left [#1]]]

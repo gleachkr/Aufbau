@@ -345,6 +345,11 @@ const proof_cases = [_]ProofCase{
     // additive rule at the line's root (`not_left [and_left [#1]]` against a
     // one-member context), which needs the ACUI-aware fallback probe.
     .{ .stem = "pass_sibling_hint_acui_conclusion", .outcome = .pass },
+    // Two context members can be `not_left`'s principal `~ a`; positional
+    // replay claims the wrong one and starves the inline minor that needs it.
+    // The checker retries with each competing member pinned, at the line root
+    // (`principal_order`) and nested under `raa` (`nested_principal_order`).
+    .{ .stem = "pass_acui_principal_order", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },

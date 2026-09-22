@@ -1,0 +1,6 @@
+witness_carry_probe
+-------------------
+
+l1: $ ¬ ∃ x (P x → ∀ y (P y)) , P x ⊢ ∀ y (P y) $ by all_intro [#1]
+l2: $ ¬ ∃ x (P x → ∀ y (P y)) ⊢ P x → ∀ y (P y) $ by imp_intro [l1]
+l3: $ ¬ ∃ x (P x → ∀ y (P y)) ⊢ ∃ x (P x → ∀ y (P y)) $ by ex_intro [l2]

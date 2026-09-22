@@ -82,6 +82,8 @@ const foldTemplateOrRestore = @import("./inline_hints.zig").foldTemplateOrRestor
 const inferExpectedRefsForInlineApplicationProbe = @import("./inline_hints.zig").inferExpectedRefsForInlineApplicationProbe;
 const fillHoleyInlineHints = @import("./inline_hints.zig").fillHoleyInlineHints;
 const demoteAcuiSpineBindingsForRule = @import("./inline_hints.zig").demoteAcuiSpineBindingsForRule;
+const ambiguousPrincipalPins = @import("./inline_hints.zig").ambiguousPrincipalPins;
+const freePrincipalPins = @import("./inline_hints.zig").freePrincipalPins;
 const cloneNameExprMap = @import("./types.zig").cloneNameExprMap;
 const getDiagnostic = @import("./types.zig").getDiagnostic;
 const restoreDiagnostic = @import("./types.zig").restoreDiagnostic;
@@ -135,21 +137,30 @@ pub fn applyRuleApplication(
         const next_fallback = context.registry.getFallbackRule(
             candidate_rule_id,
         );
-        const speculative = first_err != null or next_fallback != null;
+        // Ambiguous ACUI principal: the plain attempt runs speculatively so a
+        // failure can be retried with each competing member pinned (see
+        // `ambiguousPrincipalPins`). Only an inline minor can depend on the
+        // principal before any concrete ref fixes it, so other applications
+        // skip the scan.
+        const pins = if (hasInlineRef(application))
+            try principalPinsFor(
+                allocator,
+                context,
+                theorem,
+                candidate_rule_id,
+                line_assertion,
+                expected_conclusion_hint,
+            )
+        else
+            &.{};
+        defer if (pins.len != 0) freePrincipalPins(allocator, pins);
+        const speculative = first_err != null or next_fallback != null or
+            pins.len != 0;
         restoreDiagnostic(self, if (speculative) null else saved_diag);
         const checked_mark = context.checked.items.len;
 
         if (speculative) {
-            var attempt_theorem = try theorem.clone();
-            var attempt_theorem_vars = cloneNameExprMap(
-                allocator,
-                theorem_vars,
-            ) catch |err| {
-                attempt_theorem.deinit();
-                return err;
-            };
-
-            var attempt = tryApplyRuleApplicationWithCandidate(
+            var attempt = trySpeculativeAttempt(
                 self,
                 context,
                 application,
@@ -157,15 +168,34 @@ pub fn applyRuleApplication(
                 expected_conclusion_hint,
                 line,
                 candidate_rule_id,
-                &attempt_theorem,
-                &attempt_theorem_vars,
-            ) catch |err| {
-                CheckedIr.rollbackToMark(allocator, context.checked, checked_mark);
-                attempt_theorem_vars.deinit();
-                attempt_theorem.deinit();
+                theorem,
+                theorem_vars,
+                &.{},
+            ) catch |err| retry: {
+                const err_diag = getDiagnostic(self);
+                for (pins) |pin| {
+                    restoreDiagnostic(self, null);
+                    if (trySpeculativeAttempt(
+                        self,
+                        context,
+                        application,
+                        line_assertion,
+                        expected_conclusion_hint,
+                        line,
+                        candidate_rule_id,
+                        theorem,
+                        theorem_vars,
+                        pin,
+                    )) |pinned| {
+                        break :retry pinned;
+                    } else |pin_err| {
+                        if (pin_err == error.OutOfMemory) return pin_err;
+                    }
+                }
+                restoreDiagnostic(self, err_diag);
                 if (first_err == null) {
                     first_err = err;
-                    first_diag = getDiagnostic(self);
+                    first_diag = err_diag;
                 }
                 candidate_rule_id = next_fallback orelse {
                     var diag = first_diag orelse saved_diag;
@@ -229,6 +259,7 @@ pub fn applyRuleApplication(
             candidate_rule_id,
             theorem,
             theorem_vars,
+            &.{},
         ) catch |err| {
             return err;
         };
@@ -283,6 +314,7 @@ pub fn probeRuleConclusion(
         theorem,
         theorem_vars,
         .conclusion_probe,
+        &.{},
     );
     return result.conclusion_probe;
 }
@@ -370,6 +402,7 @@ fn applyRuleCandidateCore(
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
     kind: CandidateApplyKind,
+    pins: []const ?ExprId,
 ) anyerror!CandidateApplyResult {
     const allocator = context.allocator;
     const parser = context.parser;
@@ -415,6 +448,13 @@ fn applyRuleCandidateCore(
         line,
     );
     defer allocator.free(partial_bindings);
+    // Principal pins from `applyRuleApplication`'s ambiguity retry act as
+    // explicit bindings; a binder the user bound explicitly keeps its value.
+    for (pins, 0..) |pin, idx| {
+        if (idx < partial_bindings.len and partial_bindings[idx] == null) {
+            partial_bindings[idx] = pin;
+        }
+    }
 
     var expected_refs: []?ExprId = &.{};
     if (kind == .full_application) {
@@ -1176,6 +1216,7 @@ fn tryApplyRuleApplicationWithCandidate(
     rule_id: u32,
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
+    pins: []const ?ExprId,
 ) anyerror!SuccessfulLineAttempt {
     const result = try applyRuleCandidateCore(
         self,
@@ -1193,8 +1234,86 @@ fn tryApplyRuleApplicationWithCandidate(
         theorem,
         theorem_vars,
         .full_application,
+        pins,
     );
     return result.full_application;
+}
+
+/// One speculative attempt on COW clones of `theorem`/`theorem_vars`: on
+/// failure the clones are discarded and `checked` rolled back, leaving the
+/// caller's state untouched for the next attempt.
+fn trySpeculativeAttempt(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    pins: []const ?ExprId,
+) anyerror!SuccessfulLineAttempt {
+    const allocator = context.allocator;
+    const checked_mark = context.checked.items.len;
+    var attempt_theorem = try theorem.clone();
+    var attempt_theorem_vars = cloneNameExprMap(
+        allocator,
+        theorem_vars,
+    ) catch |err| {
+        attempt_theorem.deinit();
+        return err;
+    };
+    return tryApplyRuleApplicationWithCandidate(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        line,
+        rule_id,
+        &attempt_theorem,
+        &attempt_theorem_vars,
+        pins,
+    ) catch |err| {
+        CheckedIr.rollbackToMark(allocator, context.checked, checked_mark);
+        attempt_theorem_vars.deinit();
+        attempt_theorem.deinit();
+        return err;
+    };
+}
+
+fn hasInlineRef(application: RuleApplication) bool {
+    for (application.refs) |ref| {
+        if (ref == .application) return true;
+    }
+    return false;
+}
+
+fn principalPinsFor(
+    allocator: std.mem.Allocator,
+    context: *const RuleApplyContext,
+    theorem: *const TheoremContext,
+    rule_id: u32,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+) ![][]?ExprId {
+    const expected = expected_conclusion_hint orelse switch (line_assertion) {
+        .concrete => |expr| expr,
+        .holey, .implicit_whole_conclusion => return &.{},
+    };
+    const rule = &context.env.rules.items[rule_id];
+    const explicit = try allocator.alloc(?ExprId, rule.args.len);
+    defer allocator.free(explicit);
+    @memset(explicit, null);
+    return ambiguousPrincipalPins(
+        allocator,
+        theorem,
+        context.registry,
+        rule,
+        expected,
+        explicit,
+    );
 }
 
 fn elaborateRefs(

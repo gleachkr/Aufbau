@@ -416,6 +416,24 @@ pub fn openMode(
     return .none;
 }
 
+/// True when a generated slot's otherwise concrete target still carries a
+/// witness meta threaded in from an enclosing open slot (e.g. `imp_intro`'s
+/// premise `Γ , P ?t ⊢ ∀y P y` inside the child search for `ex_intro`'s
+/// `Γ ⊢ P ?t → ∀y P y`). The concrete route cannot solve it — `hook.solve`
+/// lifts only placeholder-free targets — so such a slot takes the open path,
+/// where the meta can be bound at a leaf and read back to the slot that
+/// minted it. Witness-mode rules only: the same ones that mint those metas.
+fn carriesAncestorWitness(
+    context: *const Context,
+    candidate: *const ApplyCandidate,
+    hook: *const GenerationHook,
+    target: ExprId,
+) bool {
+    if (hook.solveOpenFn == null) return false;
+    if (openMode(context, candidate.rule_id, hook.allow_constrained_mp) != .witness) return false;
+    return seed.exprContainsMetaLeafWalk(&candidate.theorem, target);
+}
+
 fn exactRuleCandidates(
     session: *session_mod.SearchSession,
     goal: Goal,
@@ -1097,6 +1115,35 @@ fn tryGenerateSlot(
         rule.hyps[hyp_index],
         bindings,
     )) |raw_target| {
+        if (carriesAncestorWitness(context, candidate, hook, raw_target)) {
+            try tryOpenGenerateSlot(
+                compiler,
+                allocator,
+                context,
+                ref_index,
+                pool,
+                candidate,
+                rule,
+                goal,
+                theorem,
+                theorem_vars,
+                plans,
+                depth,
+                position,
+                hyp_index,
+                bindings,
+                snapshots,
+                selected,
+                generated,
+                hook,
+                derived,
+                runtime,
+                counters,
+                fuel,
+                candidates,
+            );
+            return;
+        }
         try emitGeneratedSlot(
             compiler,
             allocator,
@@ -1391,11 +1438,15 @@ fn trySplitGenerate(
                 bindings[b] = saved;
                 continue;
             }
-            if (try OpenTerms.instantiateTemplateConcrete(
+            const concrete_target = try OpenTerms.instantiateTemplateConcrete(
                 &candidate.theorem,
                 hyp_template,
                 bindings,
-            )) |raw_target| {
+            );
+            if (concrete_target != null and
+                !carriesAncestorWitness(context, candidate, hook, concrete_target.?))
+            {
+                const raw_target = concrete_target.?;
                 try emitGeneratedSlot(
                     compiler,
                     allocator,
@@ -1431,9 +1482,10 @@ fn trySplitGenerate(
             {
                 // The split pinned this context binder, but
                 // the hypothesis still has an open witness binder (e.g.
-                // `union_intro`'s `G ⊢ x ∈ y` with `y` hypothesis-only). Run
-                // the open path under the split binding so the witness can be
-                // solved from the now-concrete context's ACUI members.
+                // `union_intro`'s `G ⊢ x ∈ y` with `y` hypothesis-only), or
+                // carries an enclosing slot's witness meta. Run the open path
+                // under the split binding so the witness can be solved from
+                // the now-concrete context's ACUI members.
                 try tryOpenGenerateSlot(
                     compiler,
                     allocator,
@@ -1954,6 +2006,19 @@ fn emitOpenTarget(
     // concrete generated path already normalizes (see `tryGenerateSlot`).
     const reduced_target = try Redex.reduceRedexOnly(slot.context, theorem, raw_target_in);
     const raw_target = try normalizeAcuiUnits(slot.context, theorem, reduced_target);
+    // Register the witness metas threaded in from enclosing open slots before
+    // anything reads the store: an unregistered ancestor leaf counts as
+    // solved, which would send a target carrying one down the concrete route
+    // below, where `hook.solve` cannot lift a placeholder and drops it. Also
+    // before the rollback mark, so the registration survives the per-pass
+    // rollbacks: every pass (concrete-member, child `solveOpen`, coupled)
+    // needs the ancestor leaves bindable, and `solveOpen`'s hint reintern
+    // bails outright on an unregistered meta. Registration is trailed and
+    // unwound by `tryOpenGenerateSlot`'s outer mark, so it does not leak past
+    // this slot. Only `.witness` open slots carry witness metas.
+    if (slot.mode == .witness) {
+        try registerAncestorMetas(slot.store, theorem, raw_target);
+    }
     if (slot.store.isFullySolved(theorem, raw_target)) {
         const solved_before = slot.candidates.items.len;
         // Bound-witness enumeration closed every open binder: this is an
@@ -2026,18 +2091,6 @@ fn emitOpenTarget(
     }
 
     const candidates_before = slot.candidates.items.len;
-
-    // Register the witness metas threaded in from enclosing open slots BEFORE
-    // taking the rollback mark, so the registration survives the per-pass
-    // rollbacks below: every pass (concrete-member, child `solveOpen`, coupled)
-    // needs the ancestor leaves bindable, and `solveOpen`'s hint reintern bails
-    // outright on an unregistered meta. Registration is trailed and unwound by
-    // `tryOpenGenerateSlot`'s outer mark, so it does not leak past this slot.
-    // Only `.witness` open slots carry witness metas.
-    if (slot.mode == .witness) {
-        try registerAncestorMetas(slot.store, theorem, raw_target);
-    }
-
     const mark = slot.store.mark();
 
     // Force-first is a *witness-rule* optimization: only a `.witness` open

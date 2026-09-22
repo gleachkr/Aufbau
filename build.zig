@@ -620,6 +620,18 @@ pub fn build(b: *std.Build) void {
                 "tests/search_bench_cases/idem_complement_probe.auf",
             .mode = "depth",
         },
+        // Depth guard for carrying an open witness through generated steps
+        // (`backtrack.carriesAncestorWitness`): `ex_intro`'s child search must
+        // close `imp_intro`/`all_intro` premises that carry its witness meta.
+        // Before the fix those premises went to the concrete solver, which
+        // drops placeholders, so only a pool line fitting `imp_intro`'s
+        // premise directly could close the chain.
+        .{
+            .filter = "witness_carry_probe",
+            .files = "tests/search_bench_cases/witness_carry_probe.mm0:" ++
+                "tests/search_bench_cases/witness_carry_probe.auf",
+            .mode = "depth",
+        },
         // Depth guards for the success transposition memo (`generate.zig`
         // `Driver.concrete_ok`). `branch_converge` and `fan_in` are the convergent
         // (DAG-shaped) additive proofs whose shared subgoals the memo collapses;

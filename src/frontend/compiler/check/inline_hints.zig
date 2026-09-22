@@ -782,3 +782,150 @@ fn demoteAcuiSpineBindingsInTemplate(
         },
     }
 }
+
+/// Candidate pins for an ambiguous ACUI principal in `rule`'s conclusion.
+///
+/// A rule like `not_left` (`g , ¬ a ⊢ ⊥`) against `¬D , P x , ¬P y ⊢ ⊥` has
+/// two members its principal `¬ a` can claim. Strict replay of the conclusion
+/// commits to the one its positional spine match reaches (the last), so the
+/// application checks or fails by member ORDER. When the principal is also
+/// what an inline minor's hint needs (`not_left [ex_intro [l5]]`: `a` fixes
+/// `ex_intro`'s conclusion, which is not known until its hint is), nothing
+/// downstream can correct that guess. Each returned slice pins the principal's
+/// binders to one competing member, exactly as if the user had written those
+/// bindings, for the caller to retry with.
+///
+/// Returns an empty list unless the first combiner spine in the conclusion has
+/// exactly one structured member (the principal), at least one bare binder
+/// member not bound explicitly (the rest), and at least two expected members
+/// that match the principal consistently with `explicit`. Members carrying a
+/// placeholder (from a holey hint) are skipped. Free the result with
+/// `freePrincipalPins`.
+pub fn ambiguousPrincipalPins(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    registry: *const RewriteRegistry,
+    rule: *const RuleDecl,
+    expected: ExprId,
+    explicit: []const ?ExprId,
+) ![][]?ExprId {
+    var pins = std.ArrayListUnmanaged([]?ExprId){};
+    errdefer {
+        for (pins.items) |pin| allocator.free(pin);
+        pins.deinit(allocator);
+    }
+    const site = findPrincipalSite(theorem, registry, rule.concl, expected) orelse
+        return &.{};
+
+    var template_members = std.ArrayListUnmanaged(TemplateExpr){};
+    defer template_members.deinit(allocator);
+    try collectTemplateSpine(allocator, site.head_id, site.template, &template_members);
+    var principal: ?TemplateExpr = null;
+    var has_open_rest = false;
+    for (template_members.items) |member| switch (member) {
+        .binder => |idx| {
+            if (idx >= explicit.len or explicit[idx] == null) has_open_rest = true;
+        },
+        .app => {
+            if (principal != null) return &.{};
+            principal = member;
+        },
+    };
+    const principal_template = principal orelse return &.{};
+    if (!has_open_rest) return &.{};
+
+    var expr_members = std.ArrayListUnmanaged(ExprId){};
+    defer expr_members.deinit(allocator);
+    try collectExprSpine(allocator, theorem, site.head_id, site.expr, &expr_members);
+
+    const scratch = try allocator.alloc(?ExprId, explicit.len);
+    defer allocator.free(scratch);
+    for (expr_members.items) |member| {
+        // A holey hint's placeholder member is no candidate: pinning a binder
+        // to a placeholder would fix a guess, not a member.
+        if (theorem.exprAny(member, {}, isPlaceholderNode)) continue;
+        @memcpy(scratch, explicit);
+        if (!theorem.matchTemplate(principal_template, member, scratch)) continue;
+        const duplicate = for (pins.items) |pin| {
+            if (std.mem.eql(?ExprId, pin, scratch)) break true;
+        } else false;
+        if (duplicate) continue;
+        try pins.append(allocator, try allocator.dupe(?ExprId, scratch));
+    }
+    if (pins.items.len < 2) {
+        for (pins.items) |pin| allocator.free(pin);
+        pins.deinit(allocator);
+        return &.{};
+    }
+    return try pins.toOwnedSlice(allocator);
+}
+
+pub fn freePrincipalPins(allocator: std.mem.Allocator, pins: []const []?ExprId) void {
+    for (pins) |pin| allocator.free(pin);
+    allocator.free(pins);
+}
+
+fn isPlaceholderNode(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+    return theorem.interner.node(expr).* == .placeholder;
+}
+
+const PrincipalSite = struct {
+    head_id: u32,
+    template: TemplateExpr,
+    expr: ExprId,
+};
+
+/// Walk the conclusion template and the expected expression in lockstep
+/// through plain applications to the first combiner spine.
+fn findPrincipalSite(
+    theorem: *const TheoremContext,
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+    expr: ExprId,
+) ?PrincipalSite {
+    const app = switch (template) {
+        .binder => return null,
+        .app => |a| a,
+    };
+    if (registry.hasStructuralCombiner(app.term_id)) {
+        return .{ .head_id = app.term_id, .template = template, .expr = expr };
+    }
+    const node = theorem.interner.node(expr);
+    if (node.* != .app or node.app.term_id != app.term_id or
+        node.app.args.len != app.args.len) return null;
+    for (app.args, node.app.args) |targ, earg| {
+        if (findPrincipalSite(theorem, registry, targ, earg)) |site| return site;
+    }
+    return null;
+}
+
+fn collectTemplateSpine(
+    allocator: std.mem.Allocator,
+    head_id: u32,
+    template: TemplateExpr,
+    out: *std.ArrayListUnmanaged(TemplateExpr),
+) !void {
+    switch (template) {
+        .app => |a| if (a.term_id == head_id) {
+            for (a.args) |arg| try collectTemplateSpine(allocator, head_id, arg, out);
+            return;
+        },
+        .binder => {},
+    }
+    try out.append(allocator, template);
+}
+
+fn collectExprSpine(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    head_id: u32,
+    expr: ExprId,
+    out: *std.ArrayListUnmanaged(ExprId),
+) !void {
+    const node = theorem.interner.node(expr);
+    if (node.* == .app and node.app.term_id == head_id) {
+        for (node.app.args) |arg| try collectExprSpine(allocator, theorem, head_id, arg, out);
+        return;
+    }
+    try out.append(allocator, expr);
+}
