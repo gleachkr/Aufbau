@@ -1382,7 +1382,10 @@ fn recordInlineConclusion(
 ///   - only a *null or holey* existing hint is ever replaced — a concrete hint
 ///     from the strict pre-pass is authoritative and returned unchanged;
 ///   - the fold accepts only *exact structural* matches (`matchTemplate`, restored
-///     on failure), so nothing speculative is committed;
+///     on failure), so nothing speculative is committed; the conclusion is folded
+///     first, and only if that leaves the minor open are the siblings folded
+///     first instead (a sibling that differs from the conclusion only up to ACUI
+///     would otherwise be rolled back whole);
 ///   - bare ACUI-combiner-spine binders are demoted before instantiation, so a
 ///     positional context split (`g,h ⊢ …` matched member-wise) declines to
 ///     refine rather than emit a wrong-but-concrete hint;
@@ -1417,28 +1420,40 @@ fn refinedInlineHint(
     };
 
     const allocator = context.allocator;
-    const bindings = try allocator.dupe(?ExprId, partial_bindings);
+    const bindings = try allocator.alloc(?ExprId, partial_bindings.len);
     defer allocator.free(bindings);
     const snap = try allocator.alloc(?ExprId, partial_bindings.len);
     defer allocator.free(snap);
 
-    // Fold the line conclusion, then every already-elaborated sibling's
-    // conclusion through its hypothesis template. Each fold is all-or-nothing.
-    foldTemplateOrRestore(theorem, rule.concl, line_expr, bindings, snap);
-    for (0..idx) |j| {
-        foldTemplateOrRestore(theorem, rule.hyps[j], ref_exprs[j], bindings, snap);
+    // Conclusion first, then siblings. If a sibling disagrees with the
+    // conclusion only up to ACUI (`emp , ¬a` vs `¬a` for a shared `g`), its
+    // all-or-nothing fold rolls back and drops the binders only it could pin;
+    // retry with the siblings first, leaving the conclusion to transport. With
+    // no siblings the two orders coincide.
+    const orders: []const bool = if (idx == 0) &.{true} else &.{ true, false };
+    for (orders) |conclusion_first| {
+        @memcpy(bindings, partial_bindings);
+        if (conclusion_first) {
+            foldTemplateOrRestore(theorem, rule.concl, line_expr, bindings, snap);
+        }
+        for (0..idx) |j| {
+            foldTemplateOrRestore(theorem, rule.hyps[j], ref_exprs[j], bindings, snap);
+        }
+        if (!conclusion_first) {
+            foldTemplateOrRestore(theorem, rule.concl, line_expr, bindings, snap);
+        }
+
+        // Drop any positional ACUI-spine commitment so a context split cannot
+        // leak a wrong-but-concrete hint (the fold declines rather than guesses).
+        demoteAcuiSpineBindingsForRule(context.registry, rule, partial_bindings, bindings);
+
+        if (try OpenTerms.instantiateTemplatePartial(
+            theorem,
+            rule.hyps[idx],
+            bindings,
+        )) |refined| return refined;
     }
-
-    // Drop any positional ACUI-spine commitment so a context split cannot leak a
-    // wrong-but-concrete hint (the fold declines rather than guesses a member).
-    demoteAcuiSpineBindingsForRule(context.registry, rule, partial_bindings, bindings);
-
-    const refined = try OpenTerms.instantiateTemplatePartial(
-        theorem,
-        rule.hyps[idx],
-        bindings,
-    );
-    return refined orelse existing_hint;
+    return existing_hint;
 }
 
 fn refSpan(ref: Ref) Span {

@@ -336,6 +336,15 @@ const proof_cases = [_]ProofCase{
     // single binder in both the pre and the post). Lets the proof drop the
     // otherwise-required `r_skip (p := ...)` / `hoare_skip (p := ...)` binding.
     .{ .stem = "pass_sibling_conclusion_hint", .outcome = .pass },
+    // The same refinement when the parent's conclusion hint and a sibling
+    // disagree only up to ACUI: `raa` hands `not_elim` the hint
+    // `emp , ~(a /\ b) |- bot`, the sibling `l1` has context `~(a /\ b)`, and
+    // the conclusion-first fold rolls the sibling back. The sibling-first
+    // retry still pins `a /\ b` for the inline `and_left` (the ND drinker's
+    // `raa [not_elim [l0, ex_intro [l11]]]` shape). `additive_root` covers an
+    // additive rule at the line's root (`not_left [and_left [#1]]` against a
+    // one-member context), which needs the ACUI-aware fallback probe.
+    .{ .stem = "pass_sibling_hint_acui_conclusion", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },

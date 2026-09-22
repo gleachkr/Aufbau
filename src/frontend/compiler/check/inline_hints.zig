@@ -292,7 +292,7 @@ fn minorHasUnboundConclusionOnlyBinder(
 /// cannot pin and that the application does not annotate:
 ///   1. a conclusion-only binder (`minorHasUnboundConclusionOnlyBinder`, e.g.
 ///      `or_intro_r`'s free left disjunct, or any 0-hyp `ax`);
-///   2. an additive ACUI "rest" binder (`minorHasAcuiRestBinder`, e.g. `lan`'s
+///   2. an additive ACUI "rest" binder (`hasAcuiRestBinder`, e.g. `lan`'s
 ///      `g`, `rim`'s `d`) — needed so nested additive inline chains can infer.
 ///   3. an inline-application *descendant* that qualifies (recursively): a relay
 ///      minor like `feq_sym [red_test []]` has no underdetermined binder of its
@@ -319,7 +319,7 @@ fn inlineMinorWantsHoleyHint(
             // additive chain (`rim [lan [ran [ax [], ax []]]]`) fails to infer.
             // Offer the same holey, ACUI-aware hint that already recovers a 0-hyp
             // `ax` minor, extended to these intermediate additive minors.
-            if (minorHasAcuiRestBinder(registry, rule, app)) break :blk true;
+            if (hasAcuiRestBinder(registry, rule, app)) break :blk true;
             for (app.refs) |child| {
                 if (child != .application) continue;
                 if (inlineMinorWantsHoleyHint(env, registry, child)) {
@@ -338,7 +338,7 @@ fn inlineMinorWantsHoleyHint(
 /// Requiring a structured sibling keeps this off pure multiplicative split rules
 /// (`or_elim`'s `G , H , K`, all bare binders), which the search side splits and
 /// the existing conclusion-only-binder gate already covers where needed.
-fn minorHasAcuiRestBinder(
+fn hasAcuiRestBinder(
     registry: *const RewriteRegistry,
     rule: *const RuleDecl,
     app: RuleApplication,
@@ -417,12 +417,17 @@ fn scanAcuiSpine(
 /// binder as a whole-context placeholder, yielding a self-validating hint like
 /// `‹hole› ⊢ q∨p`.
 ///
-/// The single load-bearing gate is `inlineMinorWantsHoleyHint`: a minor is
-/// helped only if its own rule has a conclusion-only binder that the application
-/// leaves unannotated — exactly the binder no ref can reach. That keeps the probe
-/// off already-determined chained inference (it never fires for `not_elim`,
-/// `and_intro`, annotated minors, or non-ACUI proofs like church beta) and off
-/// any hint the strict pre-pass already produced. No speculative ACUI context
+/// Two gates decide which null hints the probe may fill:
+///   - `inlineMinorWantsHoleyHint`: the minor's own rule has a binder no ref can
+///     reach (conclusion-only, an additive rest, or a qualifying descendant);
+///   - `hasAcuiRestBinder` on the *parent* rule: an additive parent
+///     (`not_left`'s `g , ¬ a ⊢ ⊥`) strict-matches its conclusion only when the
+///     goal context is literally a join, so against a one-member context
+///     (`¬ D ⊢ ⊥`) every inline child's hint comes back null.
+/// That keeps the probe off already-determined chained inference (it never
+/// fires for `not_elim` or `and_intro` parents with determined minors, annotated
+/// minors, or non-ACUI proofs like church beta) and off any hint the strict
+/// pre-pass already produced. No speculative ACUI context
 /// splitting happens here: the open context becomes a wildcard placeholder, not
 /// an enumeration of candidate members (that lives only in search-side
 /// `backward/split.zig`).
@@ -443,10 +448,12 @@ pub fn fillHoleyInlineHints(
     if (application.refs.len != rule.hyps.len) return;
     if (expected_refs.len != application.refs.len) return;
 
+    const parent_acui_rest = hasAcuiRestBinder(context.registry, rule, application);
+
     var needs_fallback = false;
     for (application.refs, expected_refs) |ref, hint| {
         if (hint == null and
-            inlineMinorWantsHoleyHint(context.env, context.registry, ref))
+            wantsHoleyHint(context.env, context.registry, parent_acui_rest, ref))
         {
             needs_fallback = true;
             break;
@@ -474,11 +481,21 @@ pub fn fillHoleyInlineHints(
 
     for (application.refs, expected_refs, probe.expected_refs) |ref, *hint, holey| {
         if (hint.* == null and
-            inlineMinorWantsHoleyHint(context.env, context.registry, ref))
+            wantsHoleyHint(context.env, context.registry, parent_acui_rest, ref))
         {
             hint.* = holey;
         }
     }
+}
+
+fn wantsHoleyHint(
+    env: *const GlobalEnv,
+    registry: *const RewriteRegistry,
+    parent_acui_rest: bool,
+    ref: Ref,
+) bool {
+    if (ref != .application) return false;
+    return parent_acui_rest or inlineMinorWantsHoleyHint(env, registry, ref);
 }
 
 fn instantiateExpectedRefs(

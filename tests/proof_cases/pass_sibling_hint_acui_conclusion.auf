@@ -1,0 +1,8 @@
+nested
+------
+l1: $ ~ (a /\ b) |- ~ (a /\ b) $ by ax
+l2: $ emp |- a /\ b $ by raa [not_elim [l1, and_left [#1]]]
+
+additive_root
+-------------
+l1: $ ~ (a /\ b) |- bot $ by not_left [and_left [#1]]
