@@ -937,10 +937,13 @@ pub const Fuel = struct {
 /// depend only on the operations performed, never on time or machine.
 ///
 /// Checked at candidate granularity (the `Fuel.spend` sites plus the
-/// generation node entries): a candidate already being validated always runs
-/// to completion, so exhaustion can only truncate the un-tried tail — exactly
-/// the failure mode per-phase fuel exhaustion already has, reported the same
-/// way (`error.SearchBudgetExhausted`).
+/// generation node entries), so exhaustion normally truncates the un-tried
+/// tail — exactly the failure mode per-phase fuel exhaustion already has,
+/// reported the same way (`error.SearchBudgetExhausted`). The one
+/// sub-candidate poll is the inference solver's (`expr.zig` `WorkBudget`,
+/// installed on the `CompilerContext` for the call): its branch fan-out is
+/// the only per-candidate work with no bound of its own, so a solve that
+/// explodes aborts at the budget and the candidate counts as a reject.
 /// Relative unit costs of the tick populations (see `expr.zig`) plus a fixed
 /// per-candidate charge (each `Fuel.spend` — a `tryCandidate` — carries fixed
 /// overhead: theorem/vars clones, session setup/hash — that no per-node tick
@@ -1003,6 +1006,17 @@ pub const GlobalBudget = struct {
             self.exhausted = true;
             return error.SearchBudgetExhausted;
         }
+    }
+
+    /// The ceiling as the interface sub-candidate work polls (`expr.zig`
+    /// `WorkBudget`).
+    pub fn workBudget(self: *GlobalBudget) expr_mod.WorkBudget {
+        return .{ .ctx = @ptrCast(self), .check_fn = checkOpaque };
+    }
+
+    fn checkOpaque(ctx: *anyopaque) error{SearchBudgetExhausted}!void {
+        const self: *GlobalBudget = @ptrCast(@alignCast(ctx));
+        return self.check();
     }
 
     pub fn spendCandidate(self: *GlobalBudget) error{SearchBudgetExhausted}!void {

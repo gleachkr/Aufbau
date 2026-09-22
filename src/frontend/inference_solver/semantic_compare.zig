@@ -18,6 +18,7 @@ pub fn bindingCompatible(
     rhs: ExprId,
 ) anyerror!bool {
     if (lhs == rhs) return true;
+    try self.checkBudget();
     const lhs_canon = try self.canonicalizer.canonicalize(lhs);
     const rhs_canon = try self.canonicalizer.canonicalize(rhs);
     if (lhs_canon == rhs_canon) return true;

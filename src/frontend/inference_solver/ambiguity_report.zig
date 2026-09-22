@@ -29,6 +29,10 @@ pub fn pickUniqueSolution(
 
     var distinct_idxs = std.ArrayListUnmanaged(usize){};
     defer distinct_idxs.deinit(self.allocator);
+    // Every solution the structural enumeration would have produced: a
+    // distinct state stands for `multiplicity` covers (see
+    // `BranchState.multiplicity`), so the count is their sum.
+    var solution_count: usize = 0;
 
     var saw_incomplete = false;
     for (states, 0..) |state, idx| {
@@ -56,6 +60,7 @@ pub fn pickUniqueSolution(
         }
         if (!already_seen) {
             try distinct_idxs.append(self.allocator, idx);
+            solution_count +|= state.multiplicity;
         }
     }
 
@@ -67,13 +72,14 @@ pub fn pickUniqueSolution(
         distinct_idxs.items,
         preference,
     );
-    if (distinct_idxs.items.len > 1) {
+    if (solution_count > 1) {
         self.ambiguity_warning = true;
         try captureAmbiguityReport(
             self,
             states,
             distinct_idxs.items,
             chosen_distinct_idx,
+            solution_count,
         );
         if (self.debug.inference) {
             try debugPrintAmbiguousSolutions(
@@ -160,6 +166,7 @@ fn captureAmbiguityReport(
     states: []const BranchState,
     distinct_idxs: []const usize,
     chosen_distinct_idx: usize,
+    solution_count: usize,
 ) !void {
     // A Solver can solve more than once (the holey->plain fallback, and the
     // symbolic-rule retry), and the summaries live on `real_allocator` with a
@@ -172,7 +179,7 @@ fn captureAmbiguityReport(
         self.real_allocator.free(summary);
         self.ambiguity_report.alternative_bindings = null;
     }
-    self.ambiguity_report.distinct_solution_count = distinct_idxs.len;
+    self.ambiguity_report.distinct_solution_count = solution_count;
     if (distinct_idxs.len == 0) return;
 
     self.ambiguity_report.chosen_bindings = try formatBindingSummary(

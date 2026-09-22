@@ -9,6 +9,7 @@ const GlobalEnv = @import("../env.zig").GlobalEnv;
 const Span = @import("../proof_script.zig").Span;
 const StatementSink = @import("../statement_sink.zig").StatementSink;
 const CheckMemo = @import("./check_memo.zig").CheckMemo;
+const ExprModule = @import("../expr.zig");
 
 pub const HoleInference = struct {
     span: Span,
@@ -99,6 +100,10 @@ pub const CompilerContext = struct {
     inline_conclusion_sink: ?*InlineConclusionSink = null,
     statement_sink: ?*StatementSink = null,
     inference_stats_sink: ?*InferenceStatsSink = null,
+    /// Work ceiling installed by a budgeted search for the duration of one
+    /// generation call; every inference solver constructed under it polls
+    /// it (`expr.zig` `WorkBudget`). Null on the compile path.
+    work_budget: ?ExprModule.WorkBudget = null,
     /// Memo of block check outcomes for editor re-analysis; null on the
     /// compile path. See `check_memo.zig`.
     check_memo: ?*CheckMemo = null,

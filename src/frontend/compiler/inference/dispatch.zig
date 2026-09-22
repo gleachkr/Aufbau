@@ -596,6 +596,7 @@ pub fn inferBindings(
             self.debug,
         );
         defer solver.deinit();
+        solver.budget = self.work_budget;
         defer self.recordSolverBranches(solver.peak_branches);
         const solver_bindings = if (seed_setup.seeded_bindings) |stored|
             stored

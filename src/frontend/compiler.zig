@@ -7,6 +7,7 @@ const DiagnosticSink = @import("./compiler/diagnostic_sink.zig")
 const Context = @import("./compiler/context.zig");
 const CompilerContext = Context.CompilerContext;
 const DebugConfig = @import("./debug.zig").DebugConfig;
+const ExprModule = @import("./expr.zig");
 
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
@@ -34,6 +35,9 @@ pub const Compiler = struct {
     inline_conclusion_sink: ?*InlineConclusionSink,
     statement_sink: ?*StatementSink,
     inference_stats_sink: ?*InferenceStatsSink,
+    /// Search work ceiling for every inference solver this compiler
+    /// constructs (`CompilerContext.work_budget`); null on the compile path.
+    work_budget: ?ExprModule.WorkBudget = null,
     /// Memo of proof-block check outcomes across analyses (editor hosts).
     check_memo: ?*CheckMemo = null,
 
@@ -198,6 +202,7 @@ pub const Compiler = struct {
         result.inline_conclusion_sink = self.inline_conclusion_sink;
         result.statement_sink = self.statement_sink;
         result.inference_stats_sink = self.inference_stats_sink;
+        result.work_budget = self.work_budget;
         result.check_memo = self.check_memo;
         return result;
     }

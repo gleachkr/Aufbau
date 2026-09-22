@@ -474,6 +474,7 @@ const proof_cases = [_]ProofCase{
         .outcome = .{ .fail = error.UnifyMismatch },
     },
     .{ .stem = "pass_acui_multi_remainder_ambiguous", .outcome = .pass },
+    .{ .stem = "pass_acui_cover_product_ambiguous", .outcome = .pass },
     .{
         .stem = "fail_acui_multi_remainder_impossible",
         .outcome = .{ .fail = error.UnifyMismatch },

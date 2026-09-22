@@ -4,6 +4,7 @@ const RuleDecl = @import("./env.zig").RuleDecl;
 const Expr = @import("../trusted/expressions.zig").Expr;
 const SurfaceExpr = @import("./surface_expr.zig");
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
+const ExprModule = @import("./expr.zig");
 const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
 const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
@@ -110,6 +111,13 @@ pub const Solver = struct {
     /// build a fresh context — and therefore a cold def_ops context — per
     /// comparison. Same soundness argument as the def_ops contexts above.
     acui_support_ctx: ?AcuiSupport.Context = null,
+    /// Search work ceiling, set by the caller when the solve runs under a
+    /// budgeted search (`CompilerContext.work_budget`). Polled by every
+    /// branch clone and semantic compare (`checkBudget`), the two operations
+    /// a branch fan-out multiplies, so a solve whose population blows up
+    /// aborts at the budget instead of running to completion. Null on the
+    /// compile path.
+    budget: ?ExprModule.WorkBudget = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -226,6 +234,11 @@ pub const Solver = struct {
     /// deinit (or copy) the result; the Solver owns it. Lazily created via a
     /// stable `*Solver`, so the by-value construction copy settles while the
     /// context's lazy def_ops field is still null (the documented-safe window).
+    /// Abort the solve if the installed search budget is spent.
+    pub fn checkBudget(self: *const Solver) error{SearchBudgetExhausted}!void {
+        if (self.budget) |budget| try budget.check();
+    }
+
     pub fn structuralSupportShared(self: *Solver) *AcuiSupport.Context {
         if (self.acui_support_ctx == null) {
             self.acui_support_ctx = self.structuralSupport();

@@ -107,6 +107,7 @@ fn searchOrderedStructuralObligationAssignments(
             space,
             obligation.binder_idxs,
             binder_exprs,
+            1,
             out,
         );
         return;
@@ -206,6 +207,7 @@ fn searchAcuStructuralObligationAssignments(
             space,
             obligation.binder_idxs,
             binder_exprs,
+            1,
             out,
         );
         return;
@@ -228,6 +230,23 @@ fn searchAcuStructuralObligationAssignments(
     }
 }
 
+/// One member's admissible binder subsets (bit `i` stands for the
+/// obligation's `binder_idxs[i]`), in the order the cover enumeration
+/// visits them: the required binders plus every optional one first, then
+/// the optional part descending.
+const MemberChoices = struct {
+    item: ExprId,
+    subsets: []const usize,
+};
+
+/// ACUI: every member of the actual bag goes to some subset of the
+/// obligation's binders. A member's admissible subsets depend only on the
+/// member and the per-binder bounds — never on where earlier members went —
+/// so the obligation's covers are exactly the Cartesian product of the
+/// per-member choice lists. When nothing outside those bounds can tell two
+/// covers apart (`obligationCoupled`), the product is resolved in closed
+/// form; otherwise the covers are enumerated for the later constraints to
+/// filter.
 fn solveAcuiStructuralObligation(
     self: anytype,
     state: BranchState,
@@ -262,11 +281,6 @@ fn solveAcuiStructuralObligation(
         obligation.binder_idxs.len,
     );
     defer deinitExprItemLists(self, binder_uppers);
-    const binder_items = try initExprItemLists(
-        self,
-        obligation.binder_idxs.len,
-    );
-    defer deinitExprItemLists(self, binder_items);
 
     for (
         binder_lowers,
@@ -285,17 +299,56 @@ fn solveAcuiStructuralObligation(
         );
     }
 
+    const choices = try self.allocator.alloc(
+        MemberChoices,
+        upper_items.items.len,
+    );
+    for (choices) |*member| member.* = .{ .item = 0, .subsets = &.{} };
+    defer {
+        for (choices) |member| self.allocator.free(member.subsets);
+        self.allocator.free(choices);
+    }
     var out = std.ArrayListUnmanaged(BranchState){};
-    try searchAcuiStructuralObligationAssignments(
+    for (upper_items.items, 0..) |item, idx| {
+        choices[idx] = try admissibleSubsets(
+            self,
+            item,
+            lower_items.items,
+            binder_lowers,
+            binder_uppers,
+        );
+        if (choices[idx].subsets.len == 0) {
+            return try out.toOwnedSlice(self.allocator);
+        }
+    }
+
+    if (!obligationCoupled(self, &state, space, obligation)) {
+        if (try resolveCoverProduct(
+            self,
+            state,
+            space,
+            obligation,
+            profile,
+            choices,
+            &out,
+        )) {
+            return try out.toOwnedSlice(self.allocator);
+        }
+        out.clearRetainingCapacity();
+    }
+
+    const binder_items = try initExprItemLists(
+        self,
+        obligation.binder_idxs.len,
+    );
+    defer deinitExprItemLists(self, binder_items);
+    try enumerateCovers(
         self,
         state,
         space,
         obligation,
         profile,
-        lower_items.items,
-        upper_items.items,
-        binder_lowers,
-        binder_uppers,
+        choices,
         binder_items,
         0,
         &out,
@@ -303,39 +356,13 @@ fn solveAcuiStructuralObligation(
     return try out.toOwnedSlice(self.allocator);
 }
 
-fn searchAcuiStructuralObligationAssignments(
+fn admissibleSubsets(
     self: anytype,
-    state: BranchState,
-    space: BinderSpace,
-    obligation: StructuralJointObligation,
-    profile: StructuralProfile,
+    item: ExprId,
     lower_items: []const ExprId,
-    upper_items: []const ExprId,
     binder_lowers: []const std.ArrayListUnmanaged(ExprId),
     binder_uppers: []const std.ArrayListUnmanaged(ExprId),
-    binder_items: []std.ArrayListUnmanaged(ExprId),
-    item_pos: usize,
-    out: *std.ArrayListUnmanaged(BranchState),
-) anyerror!void {
-    if (item_pos >= upper_items.len) {
-        const binder_exprs = try rebuildBindingExprs(
-            self,
-            binder_items,
-            profile,
-        );
-        defer self.allocator.free(binder_exprs);
-        try StructuralStateUpdates.appendStructuralCandidateState(
-            self,
-            state,
-            space,
-            obligation.binder_idxs,
-            binder_exprs,
-            out,
-        );
-        return;
-    }
-
-    const item = upper_items[item_pos];
+) anyerror!MemberChoices {
     const global_required =
         try StructuralIntervals.structuralItemsContainCompatible(
             self,
@@ -360,39 +387,233 @@ fn searchAcuiStructuralObligationAssignments(
             required_mask |= (@as(usize, 1) << @intCast(idx));
         }
     }
-    if ((required_mask & ~allowed_mask) != 0) return;
-    const optional_mask = allowed_mask & ~required_mask;
-    var choice = optional_mask;
-    while (true) {
-        const subset = required_mask | choice;
-        if (!global_required or subset != 0) {
-            for (binder_items, 0..) |*items, idx| {
-                if ((subset & (@as(usize, 1) << @intCast(idx))) != 0) {
-                    try items.append(self.allocator, item);
-                }
+
+    var subsets = std.ArrayListUnmanaged(usize){};
+    errdefer subsets.deinit(self.allocator);
+    if ((required_mask & ~allowed_mask) == 0) {
+        const optional_mask = allowed_mask & ~required_mask;
+        var choice = optional_mask;
+        while (true) {
+            const subset = required_mask | choice;
+            if (!global_required or subset != 0) {
+                try subsets.append(self.allocator, subset);
             }
-            try searchAcuiStructuralObligationAssignments(
-                self,
-                state,
-                space,
-                obligation,
-                profile,
-                lower_items,
-                upper_items,
-                binder_lowers,
-                binder_uppers,
-                binder_items,
-                item_pos + 1,
-                out,
-            );
-            for (binder_items, 0..) |*items, idx| {
-                if ((subset & (@as(usize, 1) << @intCast(idx))) != 0) {
-                    _ = items.pop();
-                }
+            if (choice == 0) break;
+            choice = (choice - 1) & optional_mask;
+        }
+    }
+    return .{
+        .item = item,
+        .subsets = try subsets.toOwnedSlice(self.allocator),
+    };
+}
+
+/// Whether any constraint outside `obligation`'s own binder bounds can tell
+/// two of its covers apart: another joint obligation over one of its
+/// binders, or, in the view space, a binder that `propagateViewBindings`
+/// maps onto the rule space, where the rule's own obligations still wait.
+/// Bounds from intervals and existing bindings are already folded into the
+/// per-member masks, so an uncoupled obligation's covers pass every later
+/// check unchanged.
+fn obligationCoupled(
+    self: anytype,
+    state: *const BranchState,
+    space: BinderSpace,
+    obligation: StructuralJointObligation,
+) bool {
+    const obligations = BranchStateOps.getStructuralObligations(
+        @constCast(state),
+        space,
+    );
+    for (obligations) |other| {
+        if (other.binder_idxs.ptr == obligation.binder_idxs.ptr) continue;
+        for (other.binder_idxs) |other_idx| {
+            for (obligation.binder_idxs) |idx| {
+                if (idx == other_idx) return true;
             }
         }
-        if (choice == 0) break;
-        choice = (choice - 1) & optional_mask;
+    }
+    if (space == .view) {
+        const view = self.view orelse return true;
+        for (obligation.binder_idxs) |idx| {
+            if (idx < view.binder_map.len and view.binder_map[idx] != null) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Closed form of the cover enumeration for an uncoupled obligation. The
+/// only consumer of the cover set is `pickUniqueSolution`, which takes the
+/// first cover of minimal rank — rank sums the members per binder, so the
+/// minimum puts every member in its first smallest admissible subset — and,
+/// for the ambiguity report, the number of covers and the first one
+/// enumerated. Emits the first cover as the representative of every cover
+/// but the chosen one, then the chosen cover, in enumeration order. Returns
+/// false if a representative was rejected, in which case the caller falls
+/// back to enumerating.
+fn resolveCoverProduct(
+    self: anytype,
+    state: BranchState,
+    space: BinderSpace,
+    obligation: StructuralJointObligation,
+    profile: StructuralProfile,
+    choices: []const MemberChoices,
+    out: *std.ArrayListUnmanaged(BranchState),
+) anyerror!bool {
+    var count: usize = 1;
+    for (choices) |member| count *|= member.subsets.len;
+    if (count > 1) {
+        const before = out.items.len;
+        try appendCover(
+            self,
+            state,
+            space,
+            obligation,
+            profile,
+            choices,
+            .first,
+            count - 1,
+            out,
+        );
+        if (out.items.len == before) return false;
+    }
+    const before = out.items.len;
+    try appendCover(
+        self,
+        state,
+        space,
+        obligation,
+        profile,
+        choices,
+        .minimal,
+        1,
+        out,
+    );
+    return out.items.len != before;
+}
+
+const CoverPick = enum { first, minimal };
+
+fn appendCover(
+    self: anytype,
+    state: BranchState,
+    space: BinderSpace,
+    obligation: StructuralJointObligation,
+    profile: StructuralProfile,
+    choices: []const MemberChoices,
+    pick: CoverPick,
+    multiplicity: usize,
+    out: *std.ArrayListUnmanaged(BranchState),
+) anyerror!void {
+    const binder_items = try initExprItemLists(
+        self,
+        obligation.binder_idxs.len,
+    );
+    defer deinitExprItemLists(self, binder_items);
+    for (choices) |member| {
+        const subset = switch (pick) {
+            .first => member.subsets[0],
+            .minimal => minimalSubset(member.subsets),
+        };
+        try placeMember(self, binder_items, member.item, subset);
+    }
+    const binder_exprs = try rebuildBindingExprs(
+        self,
+        binder_items,
+        profile,
+    );
+    defer self.allocator.free(binder_exprs);
+    try StructuralStateUpdates.appendStructuralCandidateState(
+        self,
+        state,
+        space,
+        obligation.binder_idxs,
+        binder_exprs,
+        multiplicity,
+        out,
+    );
+}
+
+/// The first subset of minimal size, in enumeration order.
+fn minimalSubset(subsets: []const usize) usize {
+    var best = subsets[0];
+    for (subsets[1..]) |subset| {
+        if (@popCount(subset) < @popCount(best)) best = subset;
+    }
+    return best;
+}
+
+fn enumerateCovers(
+    self: anytype,
+    state: BranchState,
+    space: BinderSpace,
+    obligation: StructuralJointObligation,
+    profile: StructuralProfile,
+    choices: []const MemberChoices,
+    binder_items: []std.ArrayListUnmanaged(ExprId),
+    member_pos: usize,
+    out: *std.ArrayListUnmanaged(BranchState),
+) anyerror!void {
+    if (member_pos >= choices.len) {
+        const binder_exprs = try rebuildBindingExprs(
+            self,
+            binder_items,
+            profile,
+        );
+        defer self.allocator.free(binder_exprs);
+        try StructuralStateUpdates.appendStructuralCandidateState(
+            self,
+            state,
+            space,
+            obligation.binder_idxs,
+            binder_exprs,
+            1,
+            out,
+        );
+        return;
+    }
+
+    const member = choices[member_pos];
+    for (member.subsets) |subset| {
+        try placeMember(self, binder_items, member.item, subset);
+        try enumerateCovers(
+            self,
+            state,
+            space,
+            obligation,
+            profile,
+            choices,
+            binder_items,
+            member_pos + 1,
+            out,
+        );
+        unplaceMember(binder_items, subset);
+    }
+}
+
+fn placeMember(
+    self: anytype,
+    binder_items: []std.ArrayListUnmanaged(ExprId),
+    item: ExprId,
+    subset: usize,
+) !void {
+    for (binder_items, 0..) |*items, idx| {
+        if ((subset & (@as(usize, 1) << @intCast(idx))) != 0) {
+            try items.append(self.allocator, item);
+        }
+    }
+}
+
+fn unplaceMember(
+    binder_items: []std.ArrayListUnmanaged(ExprId),
+    subset: usize,
+) void {
+    for (binder_items, 0..) |*items, idx| {
+        if ((subset & (@as(usize, 1) << @intCast(idx))) != 0) {
+            _ = items.pop();
+        }
     }
 }
 

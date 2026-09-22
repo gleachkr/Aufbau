@@ -103,4 +103,11 @@ pub const BranchState = struct {
     view_structural_intervals: ?[]?StructuralInterval,
     rule_structural_obligations: []StructuralJointObligation,
     view_structural_obligations: ?[]StructuralJointObligation,
+    /// How many distinct complete solutions this branch stands for. An
+    /// uncoupled ACUI joint obligation is resolved in closed form
+    /// (`obligation_solver.zig`): rather than one branch per cover it yields
+    /// the cover the solver would pick plus one representative of every
+    /// other cover, carrying their count, so the ambiguity report still
+    /// counts each solution the enumeration would have produced.
+    multiplicity: usize = 1,
 };

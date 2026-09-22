@@ -186,15 +186,21 @@ pub fn appendCombinedStructuralIntervalState(
     try out.append(self.allocator, final_state);
 }
 
+/// Bind `binder_idxs` to `binder_exprs` on a clone of `state` and keep it if
+/// every binding is compatible with the state. `multiplicity` is the number
+/// of distinct assignments the new branch stands for (1 for an enumerated
+/// one; see `BranchState.multiplicity`).
 pub fn appendStructuralCandidateState(
     self: anytype,
     state: BranchState,
     space: BinderSpace,
     binder_idxs: []const usize,
     binder_exprs: []const ExprId,
+    multiplicity: usize,
     out: *std.ArrayListUnmanaged(BranchState),
 ) anyerror!void {
     var next_state = try BranchStateOps.cloneState(self, state);
+    next_state.multiplicity *|= multiplicity;
     for (binder_idxs, binder_exprs) |binder_idx, expr_id| {
         if (!try applyStructuralBindingCandidate(
             self,

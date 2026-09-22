@@ -1,5 +1,6 @@
 const std = @import("std");
 const compareExprIds = @import("../acui_support.zig").compareExprIds;
+const ExprModule = @import("../expr.zig");
 const ExprId = @import("../expr.zig").ExprId;
 const types = @import("./types.zig");
 const StructuralProfile = types.StructuralProfile;
@@ -30,6 +31,7 @@ pub fn collectItems(
     profile: StructuralProfile,
     out: *std.ArrayListUnmanaged(ExprId),
 ) anyerror!void {
+    ExprModule.work_ticks_walk +%= 1;
     const node = self.theorem.interner.node(expr_id);
     switch (node.*) {
         .variable => try out.append(self.allocator, expr_id),

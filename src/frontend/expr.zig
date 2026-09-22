@@ -124,10 +124,29 @@ const ExprNodeMap = std.HashMapUnmanaged(
 /// `work_ticks_walk` counts per-node visits of the non-interning tree walks:
 /// the shape builder (`search/shape.zig`), the open-generation meta walks
 /// (`match.registerMetasInExpr`, `MetaStore.deref`/`hasUnsolvedMeta`),
-/// and suggestion rendering (`pretty_print.renderNode`).
+/// suggestion rendering (`pretty_print.renderNode`), and the inference
+/// solver's branch clones and structural-congruence compares
+/// (`inference_solver/branch_state.zig`, `congruence.zig`).
 pub threadlocal var work_ticks: u64 = 0;
 pub threadlocal var work_ticks_sym: u64 = 0;
 pub threadlocal var work_ticks_walk: u64 = 0;
+
+/// A ceiling over the ticks above that a budgeted search installs for the
+/// duration of one call (`search/types.zig` `GlobalBudget.workBudget`). The
+/// search itself checks its budget only between candidates, so a subsystem
+/// whose work per candidate is not naturally bounded — the inference solver's
+/// branch fan-out and the pairwise compares that dedup it — polls this at
+/// its own unit of work and aborts with `error.SearchBudgetExhausted`, which
+/// the search reports the way it reports its own exhaustion. Absent outside
+/// a budgeted search, so ordinary compilation never pays for a check.
+pub const WorkBudget = struct {
+    ctx: *anyopaque,
+    check_fn: *const fn (ctx: *anyopaque) error{SearchBudgetExhausted}!void,
+
+    pub fn check(self: WorkBudget) error{SearchBudgetExhausted}!void {
+        return self.check_fn(self.ctx);
+    }
+};
 
 pub const ExprInterner = struct {
     allocator: std.mem.Allocator,

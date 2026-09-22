@@ -559,6 +559,51 @@ test "compiler reports structural ambiguity without ACUI-only wording" {
     );
 }
 
+test "uncoupled ACUI cover product is resolved without enumeration" {
+    // `frame7` spreads two members over seven context binders (too many for
+    // the positional match, so the structural solver runs): 127^2 covers.
+    // The solver used to materialize every cover and compare each against
+    // all the others; the closed form reports the same count, chosen cover
+    // (each member in the last binder alone), and alternative from the
+    // per-member choice lists.
+    const allocator = std.testing.allocator;
+    const mm0_src = try readProofCaseFile(
+        allocator,
+        "pass_acui_cover_product_ambiguous",
+        "mm0",
+    );
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(
+        allocator,
+        "pass_acui_cover_product_ambiguous",
+        "auf",
+    );
+    defer allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    const diag = warnings[0];
+    try std.testing.expectEqual(error.AmbiguousAcuiMatch, diag.err);
+    try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
+    try expectNoteText(
+        "chosen bindings: g1 = emp; g2 = emp; g3 = emp; +5 more",
+        diag.noteSlice()[1],
+    );
+    try expectNoteStartsWith(
+        "alternative bindings: g1 = join(hyp(v0), hyp(v1)); ",
+        diag.noteSlice()[2],
+    );
+    try expectNoteText(
+        "distinct solutions considered: 16129",
+        diag.noteSlice()[3],
+    );
+}
+
 test "-Werror upgrades ambiguity warnings into errors" {
     const allocator = std.testing.allocator;
     const mm0_src = try readProofCaseFile(
@@ -1084,6 +1129,36 @@ test "symbolic rule inference respects an explicit witness constraint" {
         error.UnifyMismatch,
         compiler.compileMmb(allocator),
     );
+}
+
+test "structural solve aborts at an exhausted search work budget" {
+    // A budgeted search installs a `WorkBudget` on the compiler context; the
+    // solver polls it at every branch clone and semantic compare, so a solve
+    // under a spent budget fails with the search's own exhaustion error
+    // instead of running its fan-out to completion.
+    const allocator = std.testing.allocator;
+    const stem = "pass_acui_cover_product_ambiguous";
+    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    defer allocator.free(proof_src);
+
+    const Spent = struct {
+        polls: usize = 0,
+        fn check(ctx: *anyopaque) error{SearchBudgetExhausted}!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.polls += 1;
+            return error.SearchBudgetExhausted;
+        }
+    };
+    var spent = Spent{};
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    compiler.work_budget = .{ .ctx = @ptrCast(&spent), .check_fn = Spent.check };
+    try std.testing.expectError(
+        error.SearchBudgetExhausted,
+        compiler.compileMmb(allocator),
+    );
+    try std.testing.expect(spent.polls >= 1);
 }
 
 test "kept symbolic match state extends a branch rather than duplicating it" {

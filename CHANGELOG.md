@@ -69,6 +69,20 @@ This file records notable user-facing changes to Aufbau. The project follows
   witness in the inner instantiation and failed validation. Each layer of
   a recipe now renders with its own witnesses; the search corpus is
   unchanged.
+- Inferring a rule whose context binders are fixed only by the conclusion
+  (an elimination such as `or_elim` on a goal, as `auto?` probes it) no
+  longer enumerates every way to spread the context's members over the
+  binders and compares the results pairwise. Each member's choices are
+  independent of the others', so the solver resolves them member by
+  member; the chosen bindings and the ambiguity warning's solution count
+  are unchanged. A four-member context under a three-binder rule used to
+  produce 2401 candidates, and one `auto?` search grew past 6 GB and was
+  killed.
+- `auto?` now charges the binder inference it runs on each candidate to the
+  call's work budget and stops that inference the moment the budget is
+  spent. The budget used to be checked only between candidates, so a single
+  candidate whose inference fanned out without bound could run past memory
+  before the search noticed; it now degrades to an ordinary budget miss.
 
 ## [0.0.11] - 2026-09-20
 

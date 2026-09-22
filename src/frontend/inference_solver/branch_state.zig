@@ -1,4 +1,5 @@
 const std = @import("std");
+const ExprModule = @import("../expr.zig");
 const ExprId = @import("../expr.zig").ExprId;
 const DefOps = @import("../def_ops.zig");
 const DefOpsTypes = @import("../def_ops/types.zig");
@@ -147,6 +148,10 @@ pub fn cloneState(
     self: anytype,
     state: BranchState,
 ) anyerror!BranchState {
+    // A clone is the unit of branch fan-out: tick it and poll the search
+    // budget so an exploding population stops at the budget.
+    try self.checkBudget();
+    ExprModule.work_ticks_walk +%= 1;
     return .{
         .rule_bindings = try self.allocator.dupe(?ExprId, state.rule_bindings),
         .rule_match_state = if (state.rule_match_state) |*match_state|
@@ -177,6 +182,7 @@ pub fn cloneState(
             try cloneStructuralObligations(self, obligations)
         else
             null,
+        .multiplicity = state.multiplicity,
     };
 }
 

@@ -274,6 +274,12 @@ pub fn generateTopLevel(
         budget
     else
         null;
+    // Let the inference solvers run under this call poll the budget mid-
+    // candidate (`expr.zig` `WorkBudget`). A nested call without a budget of
+    // its own keeps the enclosing one.
+    const saved_work_budget = compiler.work_budget;
+    if (budget_ptr) |budget| compiler.work_budget = budget.workBudget();
+    defer compiler.work_budget = saved_work_budget;
 
     const goal_expr = switch (goal) {
         .concrete => |expr| expr,
@@ -456,19 +462,24 @@ pub fn generateTopLevel(
         vars_clone != null,
     );
 
-    // Phase 6: only on a clean miss of the whole ladder, and only when the
-    // theory declares `@auto trigger` rules — harvest ground seed instances
-    // from the goal's subterms (the analytic leaf set; see `trigger.zig`),
+    // Phase 6: on a miss of the whole ladder, and only when the theory
+    // declares `@auto trigger` rules — harvest ground seed instances from
+    // the goal's subterms (the analytic leaf set; see `trigger.zig`),
     // rebuild the derived pool with the seeds included, and re-run the
     // ladder against it. Seeds are ordinary derived refs, so backward search
     // can pin premise-only elimination binders from them (the sequent
     // left-rule gap) and forward joins fire over them. Like phases 2–5, this
-    // runs last with fresh fuel only when everything else found nothing:
-    // proofs the ordinary phases handle never pay, and breadth stays
-    // byte-identical by construction.
+    // runs last with fresh per-phase fuel only when everything else found
+    // nothing: proofs the ordinary phases handle never pay, and breadth
+    // stays byte-identical by construction. Unlike the tails, a per-phase
+    // fuel exhaustion does not block it: the goals that need the seeds are
+    // exactly the elimination-shaped ones whose cut-formula flood exhausts
+    // fuel first (#276), so the retry is gated on the global tick budget
+    // alone — an exhausted budget would abort the re-run on its first tick.
     var seeded_pool: ?types.DerivedPool = null;
     defer if (seeded_pool) |*dpool| dpool.deinit();
-    if (applications.items.len == 0 and !budget_exhausted and
+    const global_exhausted = if (budget_ptr) |budget| budget.exhausted else false;
+    if (applications.items.len == 0 and !global_exhausted and
         session.context.registry.triggerRuleCount() > 0)
     {
         const seeds = try trigger.harvestSeeds(
