@@ -179,9 +179,21 @@ search sees them as ordinary derived refs.
 ### 4. Gating — a clean-miss retry phase
 
 Phase **6**, following the established ladder in `generateTopLevel`
-(`generate.zig:401–480`): runs only when phase 5 ends in a *clean miss*
-(`applications.len == 0 and !budget_exhausted`). On entry: harvest + mint
-seeds; if the seed set is empty, skip. Otherwise rebuild the derived
+(`generate.zig:401–480`): runs only when phase 5 ends in a *miss*
+(`applications.len == 0`) and the global tick budget is not exhausted. On
+entry: harvest + mint seeds; if the seed set is empty, skip.
+
+> **Gate change (#276, 2026-09).** As landed, the retry also required a
+> *clean* miss (`!budget_exhausted`, no core phase retired by its own
+> fuel). That excluded exactly the goals the seeds are for: elimination-
+> shaped goals whose cut-formula flood (`h ⊢ ?a` against every axiom)
+> exhausts per-phase fuel before phase 6. Measured on the euclid ND spike
+> theory with `@auto trigger (hyp a)` on `ax`: `m_contra`/`m_refl` k=2 and a
+> three-fact context-member transitivity chain go MISS → FULL; cost is only
+> ever paid by a miss, bounded by the remaining global budget (zermelo
+> corpus: no fraction moves, wall within noise; euclid with the four
+> patterns added: +12% depth wall, one miss spends its remaining 2.4G ticks
+> in the seeded re-ladder). Breadth stays byte-identical by construction. Otherwise rebuild the derived
 pool/index and re-run saturation with seeds included, then re-run the
 backward ladder over the augmented pool with fresh fuel.
 
@@ -193,7 +205,7 @@ Either way the phase is capped by its own fuel like phase 5
 (`options.phase5_fuel` precedent).
 
 **Breadth is byte-identical BY CONSTRUCTION**: phases 1–5 are untouched and
-phase 6 only runs where today's answer is a clean miss — depth/frontier can
+phase 6 only runs where today's answer is a miss — depth/frontier can
 only add. This is the established landing pattern. (Verified at landing:
 breadth 4149/4149, top1 3764, miss 0; depth TOTAL full 325, both unchanged.)
 

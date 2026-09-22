@@ -1479,6 +1479,9 @@ fn derefPinned(
     pins: *const std.ArrayListUnmanaged(types.MetaAssignment),
     expr_id: ExprId,
 ) !ExprId {
+    // Same budget accounting as `MetaStore.deref`: one walk tick per node,
+    // so materialization stays visible to the global tick budget.
+    ExprModule.work_ticks_walk +%= 1;
     switch (theorem.interner.node(expr_id).*) {
         .variable => return expr_id,
         .placeholder => |pid| {

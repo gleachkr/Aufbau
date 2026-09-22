@@ -1946,6 +1946,8 @@ const FrontierRun = struct {
     wall_ns: u64,
     err: ?anyerror = null,
     counters: Search.SearchCounters = .{},
+    /// Whitespace-normalized top suggestion (arena-owned), for `ok*` rows.
+    top_text: []const u8 = "",
 };
 
 /// Byte-exact live/peak tracking around the backing allocator, to split
@@ -2285,8 +2287,9 @@ fn runFrontierSearch(
     const wall_ns = elapsedSince(run_start);
 
     var top1_match = false;
+    var top: []const u8 = "";
     if (suggestions.items.len > 0) {
-        const top = normalizeWhitespace(
+        top = normalizeWhitespace(
             arena,
             suggestions.items[0].replacement,
         ) catch "";
@@ -2295,6 +2298,7 @@ fn runFrontierSearch(
     return .{
         .found = suggestions.items.len > 0,
         .top1_match = top1_match,
+        .top_text = top,
         .search_ns = counters.warm_search_ns,
         .wall_ns = wall_ns,
         .counters = counters,
@@ -2923,6 +2927,9 @@ fn runBreadthFixture(
                     "  by {s}\n",
                     .{truncateForRow(human, 70)},
                 );
+                if (options.verbose and run.found and !run.top1_match) {
+                    try writer.print("       -> {s}\n", .{run.top_text});
+                }
                 if (options.counters and (!run.found or slow)) {
                     try printRunCounters(writer, &run.counters);
                 }

@@ -43,6 +43,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   instead of repeating them. Diagnostics are identical to a full analysis.
   Per-keystroke analysis of `zermelo` drops from about 74 ms to 5 ms.
 
+### Changed
+
+- `auto?` runs the `@auto trigger` seeding retry after any miss, not only
+  after a miss that left every search phase's fuel unspent. The goals the
+  seeds exist for (an elimination whose premise must be found among the
+  hypotheses) are usually the ones that exhaust a phase's fuel first, so
+  the retry never ran for them. It is still skipped once the call's global
+  budget is spent, and a proof found without seeds costs nothing extra.
+
 ### Fixed
 
 - `auto?` forward saturation (`@auto forward`) now canonicalizes the
