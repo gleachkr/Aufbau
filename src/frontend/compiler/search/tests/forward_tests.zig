@@ -1137,6 +1137,76 @@ test "auto co-solves a complementary two-meta ax leaf through the rule template"
     try std.testing.expect(found);
 }
 
+test "anchor shapes derive from ax's member-to-succedent binder repeat" {
+    // nd_fol's `ax (g: ctx) (a: wff): g , a ⊢ a` repeats binder `a` (arg
+    // index 1) as the context member `hyp(a)` and as `nd`'s bare second
+    // argument, outside every region. It must be the fixture's ONLY anchor
+    // shape: the relation axioms repeat binders either inside ctx regions
+    // (no outside site) or only outside them (no member).
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const mm0 = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "tests/search_bench_cases/nd_fol.mm0",
+        std.math.maxInt(usize),
+    );
+    var fixture = try fixtureFor(allocator, mm0, "ex_all_to_all_ex");
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    var shapes: [Witness.max_anchor_shapes]Witness.AnchorShape = undefined;
+    const count = Witness.collectAnchorShapes(&context, &shapes);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqual(@as(usize, 1), shapes[0].hole);
+    try std.testing.expect(shapes[0].member.* == .app);
+    try std.testing.expectEqual(@as(u8, 1), shapes[0].path_len);
+    try std.testing.expectEqual(@as(u8, 1), shapes[0].path[0]);
+}
+
+test "auto co-solves a context-member/succedent two-meta ax leaf" {
+    // `∀ x R x y ⊢ ∃ w R z w` needs `all_left` (context instance `R ?t y`)
+    // and `ex_intro` (goal `R z ?w`) whose witnesses only the `ax` leaf
+    // forces: `?t := z`, `?w := y`. The pair spans the context member and the
+    // succedent, so the region sweeps never see it — the anchored pass does.
+    // Without it the analytic proof is unreachable (the search only found a
+    // costly route through the non-enrolled `all_elim`).
+    const proof_src =
+        \\ex_all_to_all_ex
+        \\----------------
+        \\l1: $ ∀ x R x y ⊢ ∃ w R z w $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const mm0 = try std.fs.cwd().readFileAlloc(
+        allocator,
+        "tests/search_bench_cases/nd_fol.mm0",
+        std.math.maxInt(usize),
+    );
+    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
+    var suggestions = try source.suggestionsAtSourceOffset(
+        allocator,
+        mm0,
+        proof_src,
+        offset,
+        .{ .generate = .{ .enabled = true } },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+    var found = false;
+    for (suggestions.items) |item| {
+        if (std.mem.indexOf(u8, item.replacement, "all_left") != null and
+            std.mem.indexOf(u8, item.replacement, "ex_intro") != null)
+        {
+            found = true;
+        }
+    }
+    try std.testing.expect(found);
+}
+
 test "member witness match rejects values captured under a member binder" {
     // A meta-bearing fragment may ground its witness off any *free* subterm
     // of a domain member, but not off a subterm under the member's own

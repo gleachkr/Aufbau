@@ -1021,6 +1021,180 @@ pub fn unifyMembersThroughShape(
     return matchTemplateCapture(store, theorem, shape.second, shape.hole, member_b, &captured);
 }
 
+/// Deepest conclusion-template position an anchor path records.
+pub const max_anchor_path = 4;
+/// Distinct anchor shapes considered by the coupled pass.
+pub const max_anchor_shapes = 4;
+
+/// An identity a hypothesis-free rule declares between an ACUI region member
+/// and a position OUTSIDE every region: `ax`'s `g , a ⊢ a` repeats `a` as
+/// the context member `hyp(a)` and as the whole succedent. The two-sided
+/// counterpart of `ComplementShape`, whose pair lives inside one region: a
+/// meta-bearing context member (`R ?t y`, an `all_left` instance) and the
+/// meta-bearing formula at the anchor position (`R z ?w`, an `ex_intro`
+/// premise) are co-solved through the shared binder. `root` is the rule's
+/// conclusion template; `path` walks its argument indices down to the bare
+/// binder `hole`, so target lookup can check every head on the way.
+pub const AnchorShape = struct {
+    member: *const TemplateExpr,
+    root: *const TemplateExpr,
+    path: [max_anchor_path]u8,
+    path_len: u8,
+    hole: usize,
+};
+
+/// Derive anchor shapes from the visible hypothesis-free rules: every pair of
+/// a single-binder region member template and a bare occurrence of the same
+/// (non-bound) binder outside any region. Theory-agnostic, like
+/// `collectComplementShapes`: driven by the template's repeated binder only.
+pub fn collectAnchorShapes(
+    context: *const Context,
+    buf: *[max_anchor_shapes]AnchorShape,
+) usize {
+    var count: usize = 0;
+    const rules = context.env.rules.items;
+    const visible = @min(context.available_rule_count, rules.len);
+    for (rules[0..visible]) |*rule| {
+        if (count >= buf.len) break;
+        if (rule.hyps.len != 0) continue;
+        var members: [max_region_members]*const TemplateExpr = undefined;
+        var member_count: usize = 0;
+        var sites: [max_region_members]AnchorSite = undefined;
+        var site_count: usize = 0;
+        var path: [max_anchor_path]u8 = undefined;
+        anchorWalkTemplate(
+            context,
+            &rule.concl,
+            &path,
+            0,
+            &members,
+            &member_count,
+            &sites,
+            &site_count,
+        );
+        for (members[0..member_count]) |member| {
+            const hole = singleBinderOf(member) orelse continue;
+            if (hole >= rule.args.len or rule.args[hole].bound) continue;
+            for (sites[0..site_count]) |site| {
+                if (site.hole != hole) continue;
+                if (count >= buf.len) return count;
+                buf[count] = .{
+                    .member = member,
+                    .root = &rule.concl,
+                    .path = site.path,
+                    .path_len = site.path_len,
+                    .hole = hole,
+                };
+                count += 1;
+            }
+        }
+    }
+    return count;
+}
+
+const AnchorSite = struct {
+    path: [max_anchor_path]u8,
+    path_len: u8,
+    hole: usize,
+};
+
+/// Collect region member templates and bare-binder positions outside any
+/// region, tracking each position's argument path from the conclusion root.
+fn anchorWalkTemplate(
+    context: *const Context,
+    tmpl: *const TemplateExpr,
+    path: *[max_anchor_path]u8,
+    depth: usize,
+    members: *[max_region_members]*const TemplateExpr,
+    member_count: *usize,
+    sites: *[max_region_members]AnchorSite,
+    site_count: *usize,
+) void {
+    const app = switch (tmpl.*) {
+        .app => |*app| app,
+        else => return,
+    };
+    const decl = termDecl(context, app.term_id) orelse return;
+    for (app.args, 0..) |*arg, idx| {
+        if (idx < decl.args.len) {
+            if (carrierCombinerHead(context, decl.args[idx].sort_name)) |head_id| {
+                var overflow = false;
+                flattenTemplateRegion(arg, head_id, members, member_count, &overflow);
+                continue;
+            }
+        }
+        if (depth >= max_anchor_path) continue;
+        path[depth] = @intCast(idx);
+        switch (arg.*) {
+            .binder => |hole| {
+                if (site_count.* >= sites.len) continue;
+                sites[site_count.*] = .{
+                    .path = path.*,
+                    .path_len = @intCast(depth + 1),
+                    .hole = hole,
+                };
+                site_count.* += 1;
+            },
+            .app => anchorWalkTemplate(
+                context,
+                arg,
+                path,
+                depth + 1,
+                members,
+                member_count,
+                sites,
+                site_count,
+            ),
+        }
+    }
+}
+
+/// The target subterm at `shape`'s anchor position, or null when the target
+/// does not follow the template's heads down the path.
+pub fn anchorSubterm(
+    theorem: *const TheoremContext,
+    shape: AnchorShape,
+    target: ExprId,
+) ?ExprId {
+    var tmpl = shape.root;
+    var expr = target;
+    for (shape.path[0..shape.path_len]) |idx| {
+        const tapp = switch (tmpl.*) {
+            .app => |*app| app,
+            else => return null,
+        };
+        const eapp = switch (theorem.interner.node(expr).*) {
+            .app => |app| app,
+            else => return null,
+        };
+        if (eapp.term_id != tapp.term_id) return null;
+        if (idx >= eapp.args.len or idx >= tapp.args.len) return null;
+        tmpl = &tapp.args[idx];
+        expr = eapp.args[idx];
+    }
+    return expr;
+}
+
+/// Unify a region member with the anchor subterm through `shape`: the member
+/// must match `shape.member` rigidly, capturing the hole, and the capture
+/// then unifies with `anchor` (assigning registered metas on either side).
+/// Partial assignments stay in `store` on failure; the caller rolls back.
+pub fn unifyMemberWithAnchor(
+    store: *MetaStore,
+    theorem: *TheoremContext,
+    shape: AnchorShape,
+    member: ExprId,
+    anchor: ExprId,
+) bool {
+    var captured: ?ExprId = null;
+    if (!matchTemplateCapture(store, theorem, shape.member, shape.hole, member, &captured)) {
+        return false;
+    }
+    const prior = captured orelse return false;
+    const target = store.deref(theorem, anchor) catch return false;
+    return unifyMembers(store, theorem, prior, target);
+}
+
 fn matchTemplateCapture(
     store: *MetaStore,
     theorem: *TheoremContext,

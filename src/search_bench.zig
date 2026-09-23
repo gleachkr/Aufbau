@@ -41,6 +41,9 @@ const BenchOptions = struct {
     /// When set, only scenarios whose name contains this substring are run.
     /// In frontier mode, filters theorem (block) names instead.
     filter: ?[]const u8 = null,
+    /// Frontier mode: skip theorems whose name contains this substring (e.g.
+    /// a fixture's supporting lemmas, proved with rules search never sees).
+    exclude: ?[]const u8 = null,
     /// Frontier analysis mode (META_STRESS.md workstream 1). When set, the
     /// scenario bench is skipped and the frontier runs over the corpus.
     frontier: ?FrontierMode = null,
@@ -1325,6 +1328,10 @@ fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
             options.filter = try allocator.dupe(u8, arg["--filter=".len..]);
             continue;
         }
+        if (std.mem.startsWith(u8, arg, "--exclude=")) {
+            options.exclude = try allocator.dupe(u8, arg["--exclude=".len..]);
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--frontier=")) {
             const mode = arg["--frontier=".len..];
             options.frontier = std.meta.stringToEnum(FrontierMode, mode) orelse {
@@ -1467,6 +1474,7 @@ fn printUsage() !void {
     try stderr.writeAll(
         "usage: zig build bench-search -- [--compact|-c] [--filter=TEXT]\n" ++
             "       [--frontier=breadth|depth] [--files=MM0:AUF]...\n" ++
+            "       [--exclude=TEXT]\n" ++
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--no-search-memo] [--no-deep-member-prune]\n" ++
@@ -1479,7 +1487,7 @@ fn printUsage() !void {
             "frontier modes (META_STRESS.md): per-line ablation (breadth)\n" ++
             "or proof-tail truncation (depth) over the real developments;\n" ++
             "default corpus is the major tests/proof_cases/ pairs and\n" ++
-            "--filter matches theorem names.\n" ++
+            "--filter matches theorem names; --exclude skips them.\n" ++
             "\n" ++
             "sweep mode (META_STRESS.md theory #4): synthesize a distractor\n" ++
             "theory parametrized by N and plot search time vs N to catch\n" ++
@@ -2836,6 +2844,17 @@ const BlockIterator = struct {
     }
 };
 
+/// Frontier theorem selection: `--filter` must match and `--exclude` must not.
+fn frontierSelects(options: BenchOptions, name: []const u8) bool {
+    if (options.filter) |needle| {
+        if (std.mem.indexOf(u8, name, needle) == null) return false;
+    }
+    if (options.exclude) |needle| {
+        if (std.mem.indexOf(u8, name, needle) != null) return false;
+    }
+    return true;
+}
+
 fn runBreadthFixture(
     allocator: std.mem.Allocator,
     writer: anytype,
@@ -2862,9 +2881,7 @@ fn runBreadthFixture(
 
     var blocks = BlockIterator.init(arena, proof_src);
     while (blocks.next()) |block| {
-        if (options.filter) |needle| {
-            if (std.mem.indexOf(u8, block.name, needle) == null) continue;
-        }
+        if (!frontierSelects(options, block.name)) continue;
         for (block.lines) |line| {
             if (ProofScript.applicationHasSearchPlaceholder(
                 line.application,
@@ -3006,9 +3023,7 @@ fn runDepthFixture(
 
     var blocks = BlockIterator.init(arena, proof_src);
     block_loop: while (blocks.next()) |block| {
-        if (options.filter) |needle| {
-            if (std.mem.indexOf(u8, block.name, needle) == null) continue;
-        }
+        if (!frontierSelects(options, block.name)) continue;
         if (block.lines.len == 0) continue;
         for (block.lines) |line| {
             if (ProofScript.applicationHasSearchPlaceholder(

@@ -1,0 +1,400 @@
+-- Classical first-order natural deduction, analytic.
+--
+-- The ND counterpart of `tait` and `additive_fol`: the same signature and the
+-- same theorem battery, over textbook ND judgements `g ⊢ a` with an ACUI
+-- assumption set. The primitive rules are the standard intro/elim pairs plus
+-- `raa`; search runs on the introduction rules and on derived left rules
+-- (eliminations whose major premise is an assumption). That is the
+-- intercalation discipline: intros backward from the goal, eliminations only
+-- on formulas already assumed, so every search step stays inside the
+-- subformulas of the goal (up to negation, which `raa` adds).
+delimiter $ ( ) [ / ] $;
+
+provable sort wff;
+sort ctx;
+
+--| @vars x y z u v w
+sort obj;
+
+-- ============================================================
+-- First-order formula language
+-- ============================================================
+
+term im (a b: wff): wff;
+infixr im: $→$ prec 25;
+term an (a b: wff): wff;
+infixr an: $∧$ prec 35;
+term or (a b: wff): wff;
+infixr or: $∨$ prec 30;
+term not (a: wff): wff;
+prefix not: $¬$ prec 40;
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+term bot: wff;
+notation bot: wff = ($⊥$:max);
+
+term all {x: obj} (p: wff x): wff;
+prefix all: $∀$ prec 41;
+term ex {x: obj} (p: wff x): wff;
+prefix ex: $∃$ prec 41;
+
+-- Object-level substitution `[x/t] p` and `subst x / t a`, the machinery the
+-- quantifier rules normalize through.
+term sb_f {x: obj} (t: obj x) (p: wff x): wff;
+notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_t {x: obj} (t: obj x) (a: obj x): obj;
+notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
+  ($subst$:41) x ($/$:0) t a;
+
+-- A small signature of predicate and constant symbols so concrete goals can
+-- be written.  The calculus is schematic in them.
+term P (a: obj): wff;
+prefix P: $P$ prec 45;
+term Q (a: obj): wff;
+prefix Q: $Q$ prec 45;
+term R (a b: obj): wff;
+term cc: obj;
+notation cc: obj = ($C$:max);
+term dd: obj;
+notation dd: obj = ($D$:max);
+term ee: obj;
+notation ee: obj = ($E$:max);
+
+-- ============================================================
+-- Contexts: ACUI sets of formulas (the open assumptions).
+-- ============================================================
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($∅$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+
+-- The ND judgement: formula `a` follows from the assumptions `g`.
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $⊢$ prec 1;
+
+term eq (a b: obj): wff;
+infixl eq: $=$ prec 50;
+
+-- ============================================================
+-- Relation / congruence batteries (for ACUI + substitution normalization)
+-- ============================================================
+
+-- The bi-conditional is the rewrite relation on wff.
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ a ↔ a $;
+axiom bitr (a b c: wff):
+  $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+-- ACUI equality on contexts.
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @relation obj eq eq_refl eq_trans eq_sym _
+axiom eq_refl (a: obj): $ a = a $;
+axiom eq_trans (a b c: obj):
+  $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_sym (a b: obj): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (e f: ctx) (a b: wff):
+  $ ctx_eq e f $ > $ a ↔ b $ > $ (e ⊢ a) ↔ (f ⊢ b) $;
+
+--| @congr
+axiom im_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+--| @congr
+axiom an_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a ∧ c) ↔ (b ∧ d) $;
+--| @congr
+axiom or_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a ∨ c) ↔ (b ∨ d) $;
+--| @congr
+axiom not_congr (a b: wff): $ a ↔ b $ > $ ¬ a ↔ ¬ b $;
+--| @congr
+axiom all_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+--| @congr
+axiom ex_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∃ x p ↔ ∃ x q $;
+--| @congr
+axiom P_congr (a b: obj): $ a = b $ > $ P a ↔ P b $;
+--| @congr
+axiom Q_congr (a b: obj): $ a = b $ > $ Q a ↔ Q b $;
+--| @congr
+axiom R_congr (a b c d: obj):
+  $ a = b $ > $ c = d $ > $ R a c ↔ R b d $;
+
+-- Alpha-renaming rules used by @freshen when a context contains the same
+-- bound variable a quantifier rule is trying to bind.
+--| @alpha x y
+axiom all_alpha {x y: obj} (p: wff x y):
+  $ ∀ x p ↔ ∀ y ([x/y] p) $;
+--| @alpha x y
+axiom ex_alpha {x y: obj} (p: wff x y):
+  $ ∃ x p ↔ ∃ y ([x/y] p) $;
+
+-- Substitution pushed through the syntactic operators, so the @rewrite
+-- automation can normalize the `[x/t] p` instances the quantifier rules emit.
+--| @rewrite
+axiom sb_t_var {x: obj} (t: obj x): $ (subst x / t x) = t $;
+--| @rewrite
+axiom sb_t_other {x y: obj} (t: obj x): $ (subst x / t y) = y $;
+--| @rewrite
+axiom sb_t_irrel {x: obj} (t: obj x) (a: obj): $ (subst x / t a) = a $;
+--| @rewrite
+axiom sb_f_irrel {x: obj} (t: obj x) (p: wff): $ [x/t] p ↔ p $;
+--| @rewrite
+axiom sb_f_im {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+--| @rewrite
+axiom sb_f_bi {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p ↔ q) ↔ ([x/t] p ↔ [x/t] q) $;
+--| @rewrite
+axiom sb_f_an {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p ∧ q) ↔ ([x/t] p ∧ [x/t] q) $;
+--| @rewrite
+axiom sb_f_or {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p ∨ q) ↔ ([x/t] p ∨ [x/t] q) $;
+--| @rewrite
+axiom sb_f_not {x: obj} (t: obj x) (p: wff x):
+  $ [x/t] (¬ p) ↔ ¬ [x/t] p $;
+--| @rewrite
+axiom sb_f_all {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y ([x/t] p) $;
+--| @rewrite
+axiom sb_f_ex {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∃ y p) ↔ ∃ y ([x/t] p) $;
+--| @rewrite
+axiom sb_f_bot {x: obj} (t: obj x): $ [x/t] ⊥ ↔ ⊥ $;
+--| @rewrite
+axiom sb_f_P {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (P a) ↔ P (subst x / t a) $;
+--| @rewrite
+axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
+  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
+--| @rewrite
+axiom sb_f_R {x: obj} (t: obj x) (a b: obj x):
+  $ [x/t] (R a b) ↔ R (subst x / t a) (subst x / t b) $;
+
+-- ============================================================
+-- Primitive rules: textbook classical natural deduction
+-- ============================================================
+--
+-- Judgements `g ⊢ a` over an ACUI assumption set `g`. The introduction rules
+-- are enrolled for backward search. The elimination rules are NOT: applied
+-- backward, an elimination must invent its major premise (`all_elim` has to
+-- guess a `∀ x ?p` whose instance is the goal), which is exactly the non-analytic
+-- step normal-form ND never needs. Search reaches the eliminations through the
+-- derived left rules below instead.
+
+--| @auto trigger (hyp a)
+axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+
+-- Weakening. Admissible (it is built into `ax`), but not derivable as a single
+-- rule without it, and the derived left rules below need it.
+axiom weak (g h: ctx) (a: wff): $ g ⊢ a $ > $ g , h ⊢ a $;
+
+--| @auto eager
+axiom imp_intro (g: ctx) (a b: wff):
+  $ g , a ⊢ b $ > $ g ⊢ a → b $;
+axiom imp_elim (g: ctx) (a b: wff):
+  $ g ⊢ a → b $ > $ g ⊢ a $ > $ g ⊢ b $;
+
+--| @auto eager 2
+axiom and_intro (g: ctx) (a b: wff):
+  $ g ⊢ a $ > $ g ⊢ b $ > $ g ⊢ a ∧ b $;
+axiom and_elim_l (g: ctx) (a b: wff): $ g ⊢ a ∧ b $ > $ g ⊢ a $;
+axiom and_elim_r (g: ctx) (a b: wff): $ g ⊢ a ∧ b $ > $ g ⊢ b $;
+
+--| @auto backward
+axiom or_intro_l (g: ctx) (a b: wff): $ g ⊢ a $ > $ g ⊢ a ∨ b $;
+--| @auto backward
+axiom or_intro_r (g: ctx) (a b: wff): $ g ⊢ b $ > $ g ⊢ a ∨ b $;
+axiom or_elim (g: ctx) (a b c: wff):
+  $ g ⊢ a ∨ b $ > $ g , a ⊢ c $ > $ g , b ⊢ c $ > $ g ⊢ c $;
+
+--| @auto eager
+axiom not_intro (g: ctx) (a: wff): $ g , a ⊢ ⊥ $ > $ g ⊢ ¬ a $;
+axiom not_elim (g: ctx) (a: wff): $ g ⊢ ¬ a $ > $ g ⊢ a $ > $ g ⊢ ⊥ $;
+
+--| @auto eager 2
+axiom bi_intro (g: ctx) (a b: wff):
+  $ g , a ⊢ b $ > $ g , b ⊢ a $ > $ g ⊢ a ↔ b $;
+axiom bi_elim_l (g: ctx) (a b: wff): $ g ⊢ a ↔ b $ > $ g ⊢ a $ > $ g ⊢ b $;
+axiom bi_elim_r (g: ctx) (a b: wff): $ g ⊢ a ↔ b $ > $ g ⊢ b $ > $ g ⊢ a $;
+
+-- Classical reductio, the only classical principle.
+--| @auto backward
+axiom raa (g: ctx) (a: wff): $ g , ¬ a ⊢ ⊥ $ > $ g ⊢ a $;
+
+-- Eigenvariable: `g: ctx` cannot depend on `x`, which is the side condition.
+--| @freshen g x
+--| @auto eager
+axiom all_intro (g: ctx) {x: obj} (p: wff x): $ g ⊢ p $ > $ g ⊢ ∀ x p $;
+
+--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ ∀ x p $ > $ g ⊢ q $
+--| @recover t q p x
+axiom all_elim {x: obj} (g: ctx x) (p: wff x) (t: obj):
+  $ g ⊢ ∀ x p $ > $ g ⊢ [x/t] p $;
+
+--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∃ x p $
+--| @recover t q p x
+--| @auto backward
+axiom ex_intro {x: obj} (g: ctx x) (p: wff x) (t: obj):
+  $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
+
+-- Eigenvariable: neither `h` nor `c` may depend on `x` (the major premise's
+-- context `g` may).
+--| @freshen h x
+--| @freshen c x
+axiom ex_elim {x: obj} (g: ctx x) (h: ctx) (p: wff x) (c: wff):
+  $ g ⊢ ∃ x p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
+
+-- ============================================================
+-- Derived left rules: the search layer (proofs in nd_fol.auf)
+-- ============================================================
+--
+-- Each elimination rule re-stated with its major premise an assumption, in
+-- the general-elimination style. Applied backward they only decompose a
+-- formula already in the context, so normal-form search stays analytic.
+-- Invertible ones drop the principal and are eager; `imp_left`, `not_left`
+-- and `all_left` keep it, since a later branch may need it again.
+
+--| @auto eager
+theorem and_left (g: ctx) (a b c: wff):
+  $ g , a , b ⊢ c $ > $ g , (a ∧ b) ⊢ c $;
+
+--| @auto eager 2
+theorem or_left (g: ctx) (a b c: wff):
+  $ g , a ⊢ c $ > $ g , b ⊢ c $ > $ g , (a ∨ b) ⊢ c $;
+
+--| @auto eager
+theorem bi_left (g: ctx) (a b c: wff):
+  $ g , (a → b) , (b → a) ⊢ c $ > $ g , (a ↔ b) ⊢ c $;
+
+--| @auto backward
+theorem imp_left (g: ctx) (a b c: wff):
+  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
+
+--| @auto backward
+theorem not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
+
+--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $
+--| @recover t q p x
+--| @freshen c x
+--| @auto backward
+theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj) (c: wff):
+  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
+
+--| @freshen g x
+--| @freshen c x
+--| @auto eager
+theorem ex_left (g: ctx) {x: obj} (p: wff x) (c: wff):
+  $ g , p ⊢ c $ > $ g , (∃ x p) ⊢ c $;
+
+-- ============================================================
+-- Theorem battery (proofs in nd_fol.auf)
+-- ============================================================
+--
+-- The `tait` battery, one-for-one, read as closed ND judgements `∅ ⊢ φ`
+-- (tait's `ex_intro` is renamed `ex_intro_inst`, since `ex_intro` is a rule
+-- here). The hand proofs are in normal form: intros and derived left rules
+-- only, with `raa` for the classical steps.
+
+theorem imp_refl: $ ∅ ⊢ P C → P C $;
+theorem and_comm: $ ∅ ⊢ (P C ∧ Q C) → (Q C ∧ P C) $;
+theorem or_comm: $ ∅ ⊢ (P C ∨ Q C) → (Q C ∨ P C) $;
+theorem imp_trans: $ ∅ ⊢ (P C → P D) → (P D → P E) → (P C → P E) $;
+theorem excluded_middle: $ ∅ ⊢ P C ∨ ¬ P C $;
+theorem peirce: $ ∅ ⊢ ((P C → Q C) → P C) → P C $;
+theorem de_morgan: $ ∅ ⊢ ¬ (P C ∧ P D) → (¬ P C ∨ ¬ P D) $;
+theorem contra_classical: $ ∅ ⊢ (¬ P D → ¬ P C) → (P C → P D) $;
+theorem resolution: $ ∅ ⊢ ((P C ∨ P D) ∧ (¬ P C ∨ P E)) → (P D ∨ P E) $;
+theorem iff_comm: $ ∅ ⊢ (P C ∧ Q C) ↔ (Q C ∧ P C) $;
+theorem all_inst {x: obj}: $ ∅ ⊢ (∀ x P x) → P C $;
+theorem ex_intro_inst {x: obj}: $ ∅ ⊢ P C → ∃ x P x $;
+theorem all_swap {x y z w: obj}:
+  $ ∅ ⊢ (∀ x ∀ y R x y) → (∀ z ∀ w R w z) $;
+theorem ex_swap {x y z w: obj}:
+  $ ∅ ⊢ (∃ x ∃ y R x y) → (∃ z ∃ w R w z) $;
+theorem ex_all_to_all_ex {x y z w: obj}:
+  $ ∅ ⊢ (∃ y ∀ x R x y) → (∀ z ∃ w R z w) $;
+theorem forall_mono {x y z: obj}:
+  $ ∅ ⊢ (∀ x (P x → Q x)) → ((∀ y P y) → (∀ z Q z)) $;
+theorem not_all_to_ex_not {x y: obj}:
+  $ ∅ ⊢ (¬ ∀ x P x) → ∃ y (¬ P y) $;
+theorem not_ex_to_all_not {x y: obj}:
+  $ ∅ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $;
+theorem all_an_dist_fwd {x y z: obj}:
+  $ ∅ ⊢ (∀ x (P x ∧ Q x)) → (∀ y P y ∧ ∀ z Q z) $;
+theorem drinker {x y: obj}:
+  $ ∅ ⊢ ∃ x (P x → ∀ y P y) $;
+theorem dne: $ ∅ ⊢ ¬ ¬ P C → P C $;
+theorem weakening: $ ∅ ⊢ P C → (P D → P C) $;
+theorem mp_internal: $ ∅ ⊢ P C → ((P C → P D) → P D) $;
+theorem modus_tollens: $ ∅ ⊢ ((P C → P D) ∧ ¬ P D) → ¬ P C $;
+theorem disj_syllogism: $ ∅ ⊢ ((P C ∨ P D) ∧ ¬ P C) → P D $;
+theorem cases_classical: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P D)) → P D $;
+theorem mat_imp_fwd: $ ∅ ⊢ (P C → P D) → (¬ P C ∨ P D) $;
+theorem contrapos_fwd: $ ∅ ⊢ (P C → P D) → (¬ P D → ¬ P C) $;
+theorem triple_neg: $ ∅ ⊢ ¬ ¬ ¬ P C → ¬ P C $;
+theorem and_assoc_fwd: $ ∅ ⊢ ((P C ∧ P D) ∧ P E) → (P C ∧ (P D ∧ P E)) $;
+theorem s_comb:
+  $ ∅ ⊢ (P C → (P D → P E)) → ((P C → P D) → (P C → P E)) $;
+theorem dummett: $ ∅ ⊢ (P C → P D) ∨ (P D → P C) $;
+theorem all_ex_inst {x y: obj}: $ ∅ ⊢ (∀ x P x) → (∃ y P y) $;
+theorem exists_mono {x y z: obj}:
+  $ ∅ ⊢ (∀ x (P x → Q x)) → ((∃ y P y) → (∃ z Q z)) $;
+theorem b_comb: $ ∅ ⊢ (P D → P E) → ((P C → P D) → (P C → P E)) $;
+theorem c_comb: $ ∅ ⊢ (P C → (P D → P E)) → (P D → (P C → P E)) $;
+theorem w_comb: $ ∅ ⊢ (P C → (P C → P D)) → (P C → P D) $;
+theorem clavius: $ ∅ ⊢ (¬ P C → P C) → P C $;
+theorem mat_cases: $ ∅ ⊢ ((P C → P D) ∧ (¬ P C → P E)) → (P D ∨ P E) $;
+theorem mat_imp_bwd: $ ∅ ⊢ (¬ P C ∨ P D) → (P C → P D) $;
+theorem de_morgan_conj_bwd: $ ∅ ⊢ (¬ P C ∨ ¬ P D) → ¬ (P C ∧ P D) $;
+theorem de_morgan_disj_fwd: $ ∅ ⊢ ¬ (P C ∨ P D) → (¬ P C ∧ ¬ P D) $;
+theorem de_morgan_disj_bwd: $ ∅ ⊢ (¬ P C ∧ ¬ P D) → ¬ (P C ∨ P D) $;
+theorem exportation_fwd:
+  $ ∅ ⊢ ((P C ∧ P D) → P E) → (P C → (P D → P E)) $;
+theorem exportation_bwd:
+  $ ∅ ⊢ (P C → (P D → P E)) → ((P C ∧ P D) → P E) $;
+theorem dist_or_an_fwd:
+  $ ∅ ⊢ (P C ∨ (P D ∧ P E)) → ((P C ∨ P D) ∧ (P C ∨ P E)) $;
+theorem absorb_an_fwd: $ ∅ ⊢ (P C ∧ (P C ∨ P D)) → P C $;
+theorem or_assoc_fwd: $ ∅ ⊢ ((P C ∨ P D) ∨ P E) → (P C ∨ (P D ∨ P E)) $;
+theorem ex_not_to_not_all {x y: obj}: $ ∅ ⊢ (∃ x (¬ P x)) → ¬ ∀ y P y $;
+theorem all_not_to_not_ex {x y: obj}: $ ∅ ⊢ (∀ x (¬ P x)) → ¬ ∃ y P y $;
+theorem ex_conj_weak {x y: obj}: $ ∅ ⊢ (∃ x (P x ∧ Q x)) → (∃ y P y) $;
+theorem ex_witness_conj {x: obj}: $ ∅ ⊢ (P C ∧ Q C) → (∃ x (P x ∧ Q x)) $;
+
+-- Vacuous quantification (see the matching block in tait.mm0).
+term s0: wff;
+
+theorem vac_intro {x: obj}: $ ∅ ⊢ s0 → ∀ x s0 $;
+theorem vac_ex {x: obj}: $ ∅ ⊢ (∃ x s0) → s0 $;
+theorem vac_all {x: obj}: $ ∅ ⊢ (∀ x s0) → s0 $;
+theorem vac_all_p {x: obj}: $ ∅ ⊢ (∀ x P C) → P C $;
+theorem vac_all_or {x: obj}: $ ∅ ⊢ (∀ x (s0 ∨ s0)) → s0 $;

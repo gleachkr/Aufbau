@@ -1043,6 +1043,58 @@ pub fn build(b: *std.Build) void {
             .mode = "depth",
             .max_depth = 12,
         },
+        // ── Analytic natural deduction (`nd_fol`): the tait battery read as
+        // `∅ ⊢ φ`, searched through intro rules and derived left rules only
+        // (eliminations are not enrolled; see nd_fol.mm0's header). The target
+        // is parity with tait/additive_fol. Status (2026-09-22): depth FULL
+        // 49/57 at defaults, mean frontier 5.16 (`--exclude=_left` skips the
+        // derived-rule lemmas); the misses are seven raa-heavy classical
+        // theorems plus forall_mono, all at the budget cap. Once every theorem
+        // is FULL, replace the per-line depth guards with a whole-fixture
+        // total.
+        .{
+            // Every hand-proof line, derived-rule lemmas included, stays found.
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "breadth",
+        },
+        // One FULL depth guard per search shape: eager intros with imp_left
+        // chains (s_comb), raa + not_left (cases_classical), or_left splits
+        // (resolution), and all_left/ex_left witnesses (exists_mono).
+        .{
+            .filter = "s_comb",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        .{
+            .filter = "cases_classical",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        .{
+            .filter = "resolution",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        .{
+            .filter = "exists_mono",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        // The anchored coupled sweep (`witness.collectAnchorShapes`): the
+        // all_left and ex_intro witnesses are forced only by the `ax` leaf,
+        // which pairs a context member with the succedent. A clean miss
+        // without it.
+        .{
+            .filter = "ex_all_to_all_ex",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
     };
     const frontier_smoke_step = b.step(
         "test-frontier-smoke",

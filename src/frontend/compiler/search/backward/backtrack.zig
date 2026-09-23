@@ -2501,16 +2501,45 @@ fn tryCoupledWitnesses(
         raw_target,
         &members,
     );
-    if (member_count < 2) return;
+    if (member_count == 0) return;
     const before_coupled = slot.candidates.items.len;
     var seen: [max_member_witness_attempts]ExprId = undefined;
     var attempts: usize = 0;
-    for (members[0..member_count], 0..) |a, i| {
-        for (members[0..member_count], 0..) |b, j| {
-            if (i >= j) continue;
+    if (member_count >= 2) try tryPairedMembers(
+        slot,
+        raw_target,
+        unknowns,
+        view,
+        view_bindings,
+        members[0..member_count],
+        &seen,
+        &attempts,
+    );
+    if (attempts >= max_member_witness_attempts) return;
+
+    // Anchored closure: nothing paired inside a region, but a
+    // hypothesis-free rule may identify a region member with a position
+    // outside every region — `ax`'s `g , a ⊢ a` pairs a context member with
+    // the succedent. A meta-bearing member (`R ?t y`, an `all_left`
+    // instance) and the formula at that position (`R z ?w`, an `ex_intro`
+    // premise) are co-solved through the shape, which needs only ONE
+    // meta-bearing member. Same guard as the complementary pass: runs only
+    // when the region sweeps emitted nothing.
+    if (slot.candidates.items.len != before_coupled) return;
+    var anchors: [Witness.max_anchor_shapes]Witness.AnchorShape = undefined;
+    const anchor_count = Witness.collectAnchorShapes(slot.context, &anchors);
+    for (anchors[0..anchor_count]) |shape| {
+        const anchor = Witness.anchorSubterm(theorem, shape, raw_target) orelse continue;
+        for (members[0..member_count]) |member| {
             if (attempts >= max_member_witness_attempts) return;
             const mark = slot.store.mark();
-            if (Witness.unifyMembers(slot.store, theorem, a, b)) {
+            if (Witness.unifyMemberWithAnchor(
+                slot.store,
+                theorem,
+                shape,
+                member,
+                anchor,
+            )) {
                 try pursueSolvedWitnessFill(
                     slot,
                     raw_target,
@@ -2519,6 +2548,42 @@ fn tryCoupledWitnesses(
                     view_bindings,
                     &seen,
                     &attempts,
+                );
+            }
+            slot.store.rollbackTo(mark);
+        }
+    }
+}
+
+/// The region-pair sweeps of `tryCoupledWitnesses`: equal unification of two
+/// meta-bearing members, then (if that emitted nothing) the complementary
+/// closure through a rule's repeated-binder member pair.
+fn tryPairedMembers(
+    slot: *OpenSlot,
+    raw_target: ExprId,
+    unknowns: []const ?ExprId,
+    view: ?types.ViewDecl,
+    view_bindings: ?[]const ?ExprId,
+    members: []const ExprId,
+    seen: *[max_member_witness_attempts]ExprId,
+    attempts: *usize,
+) anyerror!void {
+    const theorem = &slot.candidate.theorem;
+    const before_coupled = slot.candidates.items.len;
+    for (members, 0..) |a, i| {
+        for (members, 0..) |b, j| {
+            if (i >= j) continue;
+            if (attempts.* >= max_member_witness_attempts) return;
+            const mark = slot.store.mark();
+            if (Witness.unifyMembers(slot.store, theorem, a, b)) {
+                try pursueSolvedWitnessFill(
+                    slot,
+                    raw_target,
+                    unknowns,
+                    view,
+                    view_bindings,
+                    seen,
+                    attempts,
                 );
             }
             slot.store.rollbackTo(mark);
@@ -2538,11 +2603,11 @@ fn tryCoupledWitnesses(
     var shapes: [Witness.max_complement_shapes]Witness.ComplementShape = undefined;
     const shape_count = Witness.collectComplementShapes(slot.context, &shapes);
     if (shape_count == 0) return;
-    for (members[0..member_count], 0..) |member_a, i| {
-        for (members[0..member_count], 0..) |member_b, j| {
+    for (members, 0..) |member_a, i| {
+        for (members, 0..) |member_b, j| {
             if (i == j) continue;
             for (shapes[0..shape_count]) |shape| {
-                if (attempts >= max_member_witness_attempts) return;
+                if (attempts.* >= max_member_witness_attempts) return;
                 const mark = slot.store.mark();
                 if (Witness.unifyMembersThroughShape(
                     slot.store,
@@ -2557,8 +2622,8 @@ fn tryCoupledWitnesses(
                         unknowns,
                         view,
                         view_bindings,
-                        &seen,
-                        &attempts,
+                        seen,
+                        attempts,
                     );
                 }
                 slot.store.rollbackTo(mark);

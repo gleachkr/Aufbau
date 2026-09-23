@@ -594,7 +594,7 @@ registered. The unit-normalized second pass is NOT subsumed: it alone covers
 non-commutative (AU) subsets. Diagnostics: `acui_rb=recovered/plausibly-missed`
 (disjoint outcomes) in the bench `--counters` dump.
 
-The coupled pass has two sweeps. The equal-unify sweep pairs meta-bearing
+The coupled pass has three sweeps. The equal-unify sweep pairs meta-bearing
 region members that unify *equal* (`witness.unifyMembers`). On its
 clean miss, the **complementary sweep** derives *complement shapes* from the
 visible hypothesis-free rules (`collectComplementShapes`): a rule whose ACUI
@@ -609,6 +609,19 @@ rule ever produces a rigid anchor. Theory-agnostic by construction — the
 shapes come from rule templates, never from knowing `¬` is negation — and
 ordered after the equal sweep so theories without such rules (or goals the
 equal sweep already solves) are byte-identical.
+
+The **anchored sweep** is the two-sided counterpart, run when both region
+sweeps emit nothing. A hypothesis-free rule may repeat a binder as a region
+member and as a bare position *outside* every region: ND `ax`'s `g , a ⊢ a`
+pairs the context member `hyp(a)` with the succedent (`collectAnchorShapes`
+records the member template and the argument path to the outside site). A
+meta-bearing context member (`R ?t y`, an `all_left` instance) is then
+co-solved with the formula at that path (`R z ?w`, an `ex_intro` premise) by
+`unifyMemberWithAnchor`. Only one meta-bearing member is needed, since the
+other side is not a region member at all. Without it the analytic ND proof of
+`∀x R x y ⊢ ∃w R z w` is unreachable (the `nd_fol` ex_all_to_all_ex gap).
+Theories whose `ax` pairs lie inside regions (tait, additive_fol) derive no
+anchor shapes and are unaffected.
 
 Use backward on **introduction / witness rules** — the ones that build a goal up
 from sub-goals:
