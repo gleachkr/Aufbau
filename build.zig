@@ -632,6 +632,19 @@ pub fn build(b: *std.Build) void {
                 "tests/search_bench_cases/witness_carry_probe.auf",
             .mode = "depth",
         },
+        // Depth guard for open targets with several child proofs
+        // (`generate.hookSolveOpen` offers each to the slot in turn): the first
+        // child proof pins the witness to `all_intro`'s eigenvariable and the
+        // parent must fall through to the next. At depth 3 it also needs the
+        // eager steps on the open chain (`imp_intro`, `all_intro`) to keep
+        // their parent's depth, as `hookSolve` does on a concrete one.
+        .{
+            .filter = "witness_retry_probe",
+            .files = "tests/search_bench_cases/witness_retry_probe.mm0:" ++
+                "tests/search_bench_cases/witness_retry_probe.auf",
+            .mode = "depth",
+            .max_depth = 3,
+        },
         // Depth guards for the success transposition memo (`generate.zig`
         // `Driver.concrete_ok`). `branch_converge` and `fan_in` are the convergent
         // (DAG-shaped) additive proofs whose shared subgoals the memo collapses;
@@ -1047,8 +1060,8 @@ pub fn build(b: *std.Build) void {
         // `∅ ⊢ φ`, searched through intro rules and derived left rules only
         // (eliminations are not enrolled; see nd_fol.mm0's header). The target
         // is parity with tait/additive_fol. Status (2026-09-23): depth FULL
-        // 56/57 at defaults, mean frontier 5.84 (`--exclude=_left,or_right`
-        // skips the derived-rule lemmas); the one miss is drinker. Once every
+        // 56/57 at defaults, mean frontier 5.88 (`--exclude=_left,or_right`
+        // skips the derived-rule lemmas); the one miss is drinker (6/11). Once every
         // theorem is FULL, replace the per-line depth guards with a
         // whole-fixture total.
         .{

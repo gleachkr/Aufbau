@@ -1,0 +1,3 @@
+unit_context_member
+-------------------
+l1: $ emp |- bot -> bot $ by forget [imp_intro (g := $ emp $) [#1]]

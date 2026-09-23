@@ -1410,6 +1410,70 @@ pub fn hasOmittedStructuralBindings(
     return false;
 }
 
+/// Return true when an omitted binder sits inside a member of a structural
+/// region of some hypothesis, as `a` does in `g , a ⊢ b`. Exact replay is
+/// ACUI-blind, so it cannot recover such a binder when the ref's region is
+/// laid out differently (for instance when `g` is given as the unit).
+pub fn hasOmittedStructuralMember(
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+) !bool {
+    for (rule.hyps) |hyp| {
+        if (try templateHasOmittedStructuralMember(env, registry, rule, bindings, hyp)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn templateHasOmittedStructuralMember(
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+    template: TemplateExpr,
+) !bool {
+    const app = switch (template) {
+        .binder => return false,
+        .app => |app| app,
+    };
+    if (try registry.resolveStructuralCombiner(env, app.term_id)) |combiner| {
+        if (structuralTreeHasOmittedMember(env, rule, bindings, template, combiner)) {
+            return true;
+        }
+    }
+    for (app.args) |arg| {
+        if (try templateHasOmittedStructuralMember(env, registry, rule, bindings, arg)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn structuralTreeHasOmittedMember(
+    env: *const GlobalEnv,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+    template: TemplateExpr,
+    combiner: ResolvedStructuralCombiner,
+) bool {
+    switch (template) {
+        .binder => |idx| {
+            if (isStructuralRemainderBinder(env, rule, idx, combiner)) return false;
+            return idx < bindings.len and bindings[idx] == null;
+        },
+        .app => |app| {
+            if (app.term_id == combiner.head_term_id and app.args.len == 2) {
+                return structuralTreeHasOmittedMember(env, rule, bindings, app.args[0], combiner) or
+                    structuralTreeHasOmittedMember(env, rule, bindings, app.args[1], combiner);
+            }
+            return !templateItemIsFixed(bindings, template);
+        },
+    }
+}
+
 /// Return true when a structural template subtree contains both an omitted
 /// structural remainder and an already-fixed item.
 ///

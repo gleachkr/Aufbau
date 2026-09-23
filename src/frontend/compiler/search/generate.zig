@@ -965,25 +965,71 @@ const open_child_max_results: usize = 4;
 /// an ordinary child search against that hint via an implicit-conclusion
 /// goal. Each child candidate's checker-accepted conclusion is translated
 /// back and matched structurally against the open target — the match IS the
-/// witness solve; on success the assignments are left in `store` (they
-/// persist in the branch; the caller owns the rollback site) and the proof
-/// is returned with its concrete conclusion.
+/// witness solve. Every proof that matches back is offered to `sink` in
+/// child-candidate order, with its assignments live in `store` for the call.
 fn hookSolveOpen(
     ctx: *anyopaque,
     target: ExprId,
     target_theorem: *TheoremContext,
     store: *MetaStore,
-) anyerror!?types.GeneratedProof {
+    eager_step: bool,
+    sink: types.OpenProofSink,
+) anyerror!void {
     const driver: *Driver = @ptrCast(@alignCast(ctx));
     try checkStackGuard(driver);
+    // The `@auto eager` depth exemption, as in `hookSolve`.
+    const depth = if (eager_step)
+        driver.current_depth + 1
+    else
+        driver.current_depth;
+    var proofs = std.ArrayListUnmanaged(OpenProof){};
+    defer proofs.deinit(driver.scratch);
+    try collectOpenProofs(driver, target, target_theorem, store, depth, &proofs);
+    for (proofs.items) |proof| {
+        const mark = store.mark();
+        defer store.rollbackTo(mark);
+        const conclusion = (try readBackOpen(
+            driver,
+            store,
+            target_theorem,
+            proof.back,
+            target,
+            null,
+        )) orelse continue;
+        if (try sink.accept(.{
+            .application = proof.application,
+            .conclusion = conclusion,
+        })) return;
+    }
+}
 
+/// A child proof of an open target that reads back onto it (`back` is its
+/// conclusion in the target's theorem).
+const OpenProof = struct {
+    application: RuleApplication,
+    back: ExprId,
+};
+
+/// `hookSolveOpen`'s search: solve the lifted target once, inside the
+/// interner scope, and append every child proof whose conclusion reads back
+/// onto the open target to `out`. The metas are left unassigned; the
+/// assignments are redone per proof by `hookSolveOpen`, once the scope and
+/// the depth/visited state of this call are gone.
+fn collectOpenProofs(
+    driver: *Driver,
+    target: ExprId,
+    target_theorem: *TheoremContext,
+    store: *MetaStore,
+    depth: usize,
+    out: *std.ArrayListUnmanaged(OpenProof),
+) anyerror!void {
     // Canonical visited key: metas numbered by first occurrence, so two
     // alpha-variant open targets (fresh meta ids each attempt) collide.
     const key = try canonicalOpenKey(driver.scratch, target_theorem, target);
     // Depth bit for the failure memo: the solve depends on remaining recursion
     // depth, so a failure is only replayable at the same depth.
-    const depth_bit: u16 = if (driver.current_depth < 16)
-        @as(u16, 1) << @intCast(driver.current_depth)
+    const depth_bit: u16 = if (depth < 16)
+        @as(u16, 1) << @intCast(depth)
     else
         0;
     // Cheap O(1) skips (DFS path guard + failure memos) are charged no node
@@ -993,10 +1039,10 @@ fn hookSolveOpen(
     // The persisted map holds only untruncated cross-cell verdicts (empty
     // when `persist_negative` is off); the per-cell map keeps the truncated
     // ones.
-    if (persistOpenCovered(driver, key, driver.current_depth)) {
+    if (persistOpenCovered(driver, key, depth)) {
         if (driver.counters) |c| c.persist_open_skips += 1;
         driver.scratch.free(key);
-        return null;
+        return;
     }
     const memo_hit = if (driver.open_fail.get(key)) |bits|
         (depth_bit != 0 and (bits & depth_bit) != 0)
@@ -1004,12 +1050,12 @@ fn hookSolveOpen(
         false;
     if (memo_hit) {
         driver.scratch.free(key);
-        return null;
+        return;
     }
     if (driver.visited_open.contains(key)) {
         driver.path_prunes += 1;
         driver.scratch.free(key);
-        return null;
+        return;
     }
     // Per-call cost budget: bound long generation stretches between
     // `Fuel.spend` sites too (candidate assembly/enumeration burns ticks
@@ -1024,7 +1070,7 @@ fn hookSolveOpen(
     if (driver.nodes >= driver.options.max_nodes) {
         driver.budget_trips += 1;
         driver.scratch.free(key);
-        return null;
+        return;
     }
     driver.nodes += 1;
     const trips_at_entry = driver.budget_trips;
@@ -1083,9 +1129,8 @@ fn hookSolveOpen(
         &meta_map,
         driver.scratch,
         target,
-    )) orelse return null;
+    )) orelse return;
 
-    const depth = driver.current_depth;
     const generator: ?*const GenerationHook = if (depth > 0) &driver.hook else null;
     const saved_depth = driver.current_depth;
     driver.current_depth = if (depth > 0) depth - 1 else 0;
@@ -1134,106 +1179,16 @@ fn hookSolveOpen(
             accepted,
         )) orelse continue;
         const mark = store.mark();
-        if (forward.solveCorrespondence(
-            store,
-            target_theorem,
-            back,
-            target,
-            null,
-        ) == .ok and store.isFullySolved(target_theorem, target)) {
-            return .{
-                .application = try cloneApplication(
-                    driver.arena,
-                    candidate.application,
-                ),
-                .conclusion = back,
-            };
-        }
+        if (try readBackOpen(driver, store, target_theorem, back, target, driver.counters) == null) continue;
         store.rollbackTo(mark);
-        // Fallback: the positional `solveCorrespondence` can conflict when the
-        // child's accepted conclusion carries redundant ACUI units (a stray
-        // `emp` member) that the open target — built unit-free — does not. This
-        // is the readback dual of `emitOpenTarget`'s unit canonicalization.
-        // Normalizing both sides' units away and retrying lets the
-        // member-for-member match align (meta leaves survive normalization).
-        // Only reached after the un-normalized match already failed, so any
-        // readback that succeeds today is untouched.
-        //
-        // NOT subsumed by the member-wise third pass below: normalizeAcuiUnits
-        // flattens and drops units for EVERY registered combiner head,
-        // including non-commutative (AU) subsets, where the third pass
-        // deliberately abstains. This pass is the only unit/reassociation
-        // recovery an AU-subset theory gets — keep it even if it looks
-        // redundant on fully-commutative theories.
-        const back_n = acui.normalizeAcuiUnits(driver.context, target_theorem, back) catch back;
-        const target_n = acui.normalizeAcuiUnits(driver.context, target_theorem, target) catch target;
-        if ((back_n != back or target_n != target) and
-            forward.solveCorrespondence(
-                store,
-                target_theorem,
-                back_n,
-                target_n,
-                null,
-            ) == .ok and store.isFullySolved(target_theorem, target_n))
-        {
-            return .{
-                .application = try cloneApplication(
-                    driver.arena,
-                    candidate.application,
-                ),
-                .conclusion = back_n,
-            };
-        }
-        store.rollbackTo(mark);
-        // Third pass: member-wise ACUI-aware correspondence. The child's
-        // accepted conclusion can be ACUI-equal to the target yet positionally
-        // misaligned (the checker bridges conclusion-vs-hint, but the checked
-        // line keeps the child rule's own association/order), which both
-        // passes above reject. Match the commutative ACUI regions as
-        // multisets instead. The returned conclusion is RELABELED to the
-        // materialized target (the child proof concludes an ACUI variant of
-        // it): `continueOpenTargetSolved` requires conclusion == materialized
-        // target by identity, and the recompile validates the spliced
-        // assembly, inserting the ACUI reorder bridge — the same relabeling
-        // discipline as the transposition memo replay. Skipped when the
-        // theory registers no commutative combiner (the pass degenerates to
-        // the positional walk that already failed twice).
-        if (driver.has_comm_acui) {
-            if (try Witness.solveCorrespondenceAcui(
-                driver.context,
-                store,
-                target_theorem,
-                back,
-                target,
-            ) and store.isFullySolved(target_theorem, target)) {
-                const relabeled: ?ExprId = store.materialize(target_theorem, target) catch |err| switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    else => null,
-                };
-                if (relabeled) |conclusion| {
-                    if (driver.counters) |c| c.readback_acui_recovered += 1;
-                    return .{
-                        .application = try cloneApplication(
-                            driver.arena,
-                            candidate.application,
-                        ),
-                        .conclusion = conclusion,
-                    };
-                }
-            }
-            store.rollbackTo(mark);
-            // Observe-only probe, AFTER the pass so the two counters are
-            // disjoint outcomes: `readback_acui_recovered` = third pass
-            // succeeded; `readback_acui_misalign` = it abstained although the
-            // child conclusion still contains every rigid ACUI member of the
-            // target (the plausibly-missed residual).
-            if (driver.counters) |c| {
-                if (readbackAcuiPlausible(driver.context, target_theorem, back, target)) {
-                    c.readback_acui_misalign += 1;
-                }
-            }
-        }
+        try out.append(driver.scratch, .{
+            .application = try cloneApplication(driver.arena, candidate.application),
+            .back = back,
+        });
     }
+    // A target some child proof matched back is solvable at this depth: a
+    // parent that turned every such proof down is no failure of the target's.
+    if (out.items.len != 0) return;
     // Genuine exhaustive failure: every child candidate was tried and none
     // matched back. Cache it so sibling subtrees skip this canonical target.
     // Guard: only when no node-budget bail or DFS path-prune happened anywhere
@@ -1257,10 +1212,10 @@ fn hookSolveOpen(
             results.candidates.len < open_child_max_results)
         {
             persistOpenRecord(driver, key, depth_bit);
-            return null;
+            return;
         }
         const gop = driver.open_fail.getOrPut(driver.scratch, key) catch
-            return null;
+            return;
         if (gop.found_existing) {
             gop.value_ptr.* |= depth_bit;
         } else {
@@ -1268,10 +1223,108 @@ fn hookSolveOpen(
             // `defer` above). On dup failure, drop the entry rather than alias.
             const owned = driver.scratch.dupe(u8, key) catch {
                 _ = driver.open_fail.remove(key);
-                return null;
+                return;
             };
             gop.key_ptr.* = owned;
             gop.value_ptr.* = depth_bit;
+        }
+    }
+    return;
+}
+
+/// Match an open-target child proof's conclusion `back` onto `target`,
+/// solving the target's metas in `store`. On success the assignments are left
+/// in place and the conclusion to splice is returned (the target itself,
+/// materialized, when only the ACUI-aware pass aligns them); on failure the
+/// store is rolled back. `counters` is null when replaying an earlier match.
+fn readBackOpen(
+    driver: *Driver,
+    store: *MetaStore,
+    target_theorem: *TheoremContext,
+    back: ExprId,
+    target: ExprId,
+    counters: ?*SearchCounters,
+) anyerror!?ExprId {
+    const mark = store.mark();
+    if (forward.solveCorrespondence(
+        store,
+        target_theorem,
+        back,
+        target,
+        null,
+    ) == .ok and store.isFullySolved(target_theorem, target)) {
+        return back;
+    }
+    store.rollbackTo(mark);
+    // Fallback: the positional `solveCorrespondence` can conflict when the
+    // child's accepted conclusion carries redundant ACUI units (a stray
+    // `emp` member) that the open target — built unit-free — does not. This
+    // is the readback dual of `emitOpenTarget`'s unit canonicalization.
+    // Normalizing both sides' units away and retrying lets the
+    // member-for-member match align (meta leaves survive normalization).
+    // Only reached after the un-normalized match already failed, so any
+    // readback that succeeds today is untouched.
+    //
+    // NOT subsumed by the member-wise third pass below: normalizeAcuiUnits
+    // flattens and drops units for EVERY registered combiner head,
+    // including non-commutative (AU) subsets, where the third pass
+    // deliberately abstains. This pass is the only unit/reassociation
+    // recovery an AU-subset theory gets — keep it even if it looks
+    // redundant on fully-commutative theories.
+    const back_n = acui.normalizeAcuiUnits(driver.context, target_theorem, back) catch back;
+    const target_n = acui.normalizeAcuiUnits(driver.context, target_theorem, target) catch target;
+    if ((back_n != back or target_n != target) and
+        forward.solveCorrespondence(
+            store,
+            target_theorem,
+            back_n,
+            target_n,
+            null,
+        ) == .ok and store.isFullySolved(target_theorem, target_n))
+    {
+        return back_n;
+    }
+    store.rollbackTo(mark);
+    // Third pass: member-wise ACUI-aware correspondence. The child's
+    // accepted conclusion can be ACUI-equal to the target yet positionally
+    // misaligned (the checker bridges conclusion-vs-hint, but the checked
+    // line keeps the child rule's own association/order), which both
+    // passes above reject. Match the commutative ACUI regions as
+    // multisets instead. The returned conclusion is RELABELED to the
+    // materialized target (the child proof concludes an ACUI variant of
+    // it): `continueOpenTargetSolved` requires conclusion == materialized
+    // target by identity, and the recompile validates the spliced
+    // assembly, inserting the ACUI reorder bridge — the same relabeling
+    // discipline as the transposition memo replay. Skipped when the
+    // theory registers no commutative combiner (the pass degenerates to
+    // the positional walk that already failed twice).
+    if (driver.has_comm_acui) {
+        if (try Witness.solveCorrespondenceAcui(
+            driver.context,
+            store,
+            target_theorem,
+            back,
+            target,
+        ) and store.isFullySolved(target_theorem, target)) {
+            const relabeled: ?ExprId = store.materialize(target_theorem, target) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
+            if (relabeled) |conclusion| {
+                if (counters) |c| c.readback_acui_recovered += 1;
+                return conclusion;
+            }
+        }
+        store.rollbackTo(mark);
+        // Observe-only probe, AFTER the pass so the two counters are
+        // disjoint outcomes: `readback_acui_recovered` = third pass
+        // succeeded; `readback_acui_misalign` = it abstained although the
+        // child conclusion still contains every rigid ACUI member of the
+        // target (the plausibly-missed residual).
+        if (counters) |c| {
+            if (readbackAcuiPlausible(driver.context, target_theorem, back, target)) {
+                c.readback_acui_misalign += 1;
+            }
         }
     }
     return null;

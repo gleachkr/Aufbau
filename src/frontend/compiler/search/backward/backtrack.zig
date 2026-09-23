@@ -1735,6 +1735,12 @@ const OpenSlot = struct {
     /// deferral, ancestor-meta registration, the force-first ladder);
     /// `.constrained` keeps the child-search-first read-back discipline.
     mode: OpenMode,
+
+    /// The candidate is `@auto eager`: its open subgoal keeps the parent's
+    /// remaining depth, as a concrete one does (`tryGenerateSlot`).
+    fn eagerStep(self: *const OpenSlot) bool {
+        return self.context.registry.eagerPriority(self.candidate.rule_id) != null;
+    }
 };
 
 /// Structured open backward generation for one hypothesis
@@ -2111,10 +2117,8 @@ fn emitOpenTarget(
         try tryAcuiMemberWitnesses(slot, raw_target, unknowns, view, view_bindings, false);
         if (slot.candidates.items.len != candidates_before) return;
         slot.store.rollbackTo(mark);
-        if (try slot.hook.solveOpen(raw_target, theorem, slot.store)) |proof| {
-            try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, proof);
-            if (slot.candidates.items.len != candidates_before) return;
-        }
+        try solveOpenTargetByChild(slot, raw_target, unknowns, view, view_bindings);
+        if (slot.candidates.items.len != candidates_before) return;
         slot.store.rollbackTo(mark);
         try tryCoupledWitnesses(slot, raw_target, unknowns, view, view_bindings);
         if (slot.candidates.items.len != candidates_before) return;
@@ -2132,12 +2136,58 @@ fn emitOpenTarget(
     // Witness-free open target (e.g. `@abstract` motive inference): keep the
     // original child-search-first ordering, with member/coupled witness
     // enumeration as the fallback.
-    if (try slot.hook.solveOpen(raw_target, theorem, slot.store)) |proof| {
-        try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, proof);
-        if (slot.candidates.items.len != candidates_before) return;
-    }
+    try solveOpenTargetByChild(slot, raw_target, unknowns, view, view_bindings);
+    if (slot.candidates.items.len != candidates_before) return;
     slot.store.rollbackTo(mark);
     try tryAcuiMemberWitnesses(slot, raw_target, unknowns, view, view_bindings, true);
+}
+
+/// Solve an open target by child search (`GenerationHook.solveOpen`),
+/// continuing the slot from each child proof in turn until one continuation
+/// emits a candidate.
+fn solveOpenTargetByChild(
+    slot: *OpenSlot,
+    raw_target: ExprId,
+    unknowns: []const ?ExprId,
+    view: ?types.ViewDecl,
+    view_bindings: ?[]const ?ExprId,
+) anyerror!void {
+    const Continuation = struct {
+        slot: *OpenSlot,
+        raw_target: ExprId,
+        unknowns: []const ?ExprId,
+        view: ?types.ViewDecl,
+        view_bindings: ?[]const ?ExprId,
+        candidates_before: usize,
+
+        fn accept(ctx: *anyopaque, proof: types.GeneratedProof) anyerror!bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            try continueOpenTargetSolved(
+                self.slot,
+                self.raw_target,
+                self.unknowns,
+                self.view,
+                self.view_bindings,
+                proof,
+            );
+            return self.slot.candidates.items.len != self.candidates_before;
+        }
+    };
+    var continuation = Continuation{
+        .slot = slot,
+        .raw_target = raw_target,
+        .unknowns = unknowns,
+        .view = view,
+        .view_bindings = view_bindings,
+        .candidates_before = slot.candidates.items.len,
+    };
+    try slot.hook.solveOpen(
+        raw_target,
+        &slot.candidate.theorem,
+        slot.store,
+        slot.eagerStep(),
+        .{ .ctx = &continuation, .acceptFn = Continuation.accept },
+    );
 }
 
 /// Continue a structured open slot whose metas are all solved in the store:

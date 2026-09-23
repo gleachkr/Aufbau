@@ -42,4 +42,6 @@ pub const hasOmittedStructuralBindings =
     Strategies.hasOmittedStructuralBindings;
 pub const shouldPreferStructuralSolver =
     Strategies.shouldPreferStructuralSolver;
+pub const hasOmittedStructuralMember =
+    Strategies.hasOmittedStructuralMember;
 pub const requireConcreteBindings = Strategies.requireConcreteBindings;

@@ -795,6 +795,18 @@ pub const GeneratedProof = struct {
 /// `target` is the concrete hypothesis expression in `target_theorem`'s interner
 /// (the backtracker's working clone). The hook may re-intern it into its own
 /// stable interner before solving, but translates the returned conclusion back.
+/// Receives the proofs of an open target one at a time (see
+/// `GenerationHook.solveOpenFn`). `acceptFn` returns true once the caller has
+/// what it needs, which ends the enumeration.
+pub const OpenProofSink = struct {
+    ctx: *anyopaque,
+    acceptFn: *const fn (ctx: *anyopaque, proof: GeneratedProof) anyerror!bool,
+
+    pub fn accept(self: OpenProofSink, proof: GeneratedProof) anyerror!bool {
+        return self.acceptFn(self.ctx, proof);
+    }
+};
+
 pub const GenerationHook = struct {
     ctx: *anyopaque,
     /// `eager_step` is true when the applying rule is `@auto eager`: the
@@ -810,18 +822,25 @@ pub const GenerationHook = struct {
     /// Open-target solver. `target` is a *structured open* hypothesis
     /// expression in `target_theorem` whose unsolved leaves are existential
     /// metas registered in `store` (a branch-local store owned by the
-    /// caller). The hook finds a child proof whose concrete conclusion
-    /// matches the target structurally, assigns the metas in `store` (they
-    /// persist in the branch; the caller rolls them back at its backtrack
-    /// site), and returns the proof with its concrete conclusion translated
-    /// into `target_theorem`. Null (the default) disables open backward
-    /// generation entirely — `exact?`/`apply?` never set it.
+    /// caller). The hook finds child proofs whose concrete conclusions match
+    /// the target structurally and offers each to `sink` in turn, with the
+    /// metas it solves assigned in `store` for the duration of the call and
+    /// the conclusion translated into `target_theorem`. Unlike a concrete
+    /// target, whose proofs are interchangeable, each proof here fixes the
+    /// witnesses differently, and the parent may reject one assignment (an
+    /// eigenvariable escaping) yet accept the next. `eager_step` is
+    /// `solveFn`'s depth exemption: an eager rule whose subgoal carries an
+    /// open witness is no less a don't-care step than one whose subgoal is
+    /// concrete. Null (the default) disables open backward generation
+    /// entirely — `exact?`/`apply?` never set it.
     solveOpenFn: ?*const fn (
         ctx: *anyopaque,
         target: ExprId,
         target_theorem: *TheoremContext,
         store: *MetaStore,
-    ) anyerror!?GeneratedProof = null,
+        eager_step: bool,
+        sink: OpenProofSink,
+    ) anyerror!void = null,
     /// When false, the backtracker never attempts a speculative ACUI context
     /// split for an open hypothesis context binder (see `backward/backtrack.zig`
     /// `trySplitGenerate`). The driver runs a non-splitting generation pass first
@@ -894,9 +913,11 @@ pub const GenerationHook = struct {
         target: ExprId,
         target_theorem: *TheoremContext,
         store: *MetaStore,
-    ) anyerror!?GeneratedProof {
-        const solve_open = self.solveOpenFn orelse return null;
-        return solve_open(self.ctx, target, target_theorem, store);
+        eager_step: bool,
+        sink: OpenProofSink,
+    ) anyerror!void {
+        const solve_open = self.solveOpenFn orelse return;
+        return solve_open(self.ctx, target, target_theorem, store, eager_step, sink);
     }
 };
 

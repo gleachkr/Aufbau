@@ -604,8 +604,17 @@ pub fn inferCandidateBindings(
                 // applications. If normalized or view-backed rules remain
                 // underdetermined, treat the implicit conclusion like a
                 // whole-line hole so structural hypothesis constraints can
-                // recover hidden binders, e.g. an ACUI context for `nd`.
-                if (use_advanced_inference) {
+                // recover hidden binders, e.g. an ACUI context for `nd`, or
+                // a formula the exact path could not read out of an ACUI
+                // context (`a` in `g , a ⊢ b` with `g` given as `∅`).
+                if (use_advanced_inference or
+                    try Inference.hasOmittedStructuralMember(
+                        env,
+                        registry,
+                        rule,
+                        partial_bindings,
+                    ))
+                {
                     const whole_hole = Expr{ .hole = .{
                         .sort = try templateSort(env, rule, rule.concl),
                         .token = "<implicit>",

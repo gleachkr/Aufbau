@@ -350,6 +350,10 @@ const proof_cases = [_]ProofCase{
     // The checker retries with each competing member pinned, at the line root
     // (`principal_order`) and nested under `raa` (`nested_principal_order`).
     .{ .stem = "pass_acui_principal_order", .outcome = .pass },
+    // An inline `imp_intro` with `g` given as `emp` and no usable hint: exact
+    // replay cannot read `a` out of `emp , a` against the ref's one-member
+    // context, so the implicit conclusion falls back to ACUI-aware inference.
+    .{ .stem = "pass_acui_unit_context_member", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },
