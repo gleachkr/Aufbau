@@ -457,6 +457,85 @@ test "ACUI member prune allows transparent def matching variable member" {
     ));
 }
 
+test "closed-region prune refutes a ref context unequal to a bound context binder" {
+    // A bare ACUI binder already bound (e.g. an ND rule's `g`, pinned by the
+    // conclusion) must meet a ref context holding exactly its members; a ref
+    // proved under a larger or smaller context can never fill that slot.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\term hyp (a: wff): ctx;
+        \\term nd (g: ctx) (a: wff): wff;
+        \\def idw (a: wff): wff = $ a $;
+        \\
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx):
+        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx):
+        \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+        \\
+        \\theorem t (G: ctx) (a b c: wff): $ nd G a $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const join = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const hyp = fixture.env.term_names.get("hyp") orelse return error.MissingTerm;
+    const idw = fixture.env.term_names.get("idw") orelse return error.MissingTerm;
+    const g_var = try theorem.interner.internVar(.{ .theorem_var = 0 });
+    const a = try theorem.interner.internVar(.{ .theorem_var = 1 });
+    const b = try theorem.interner.internVar(.{ .theorem_var = 2 });
+    const c = try theorem.interner.internVar(.{ .theorem_var = 3 });
+    const ha = try theorem.interner.internApp(hyp, &.{a});
+    const hb = try theorem.interner.internApp(hyp, &.{b});
+    const hc = try theorem.interner.internApp(hyp, &.{c});
+    const h_ida = try theorem.interner.internApp(hyp, &.{
+        try theorem.interner.internApp(idw, &.{a}),
+    });
+    const ab = try theorem.interner.internApp(join, &.{ ha, hb });
+    const ba = try theorem.interner.internApp(join, &.{ hb, ha });
+    const abc = try theorem.interner.internApp(join, &.{ ab, hc });
+
+    const template: TemplateExpr = .{ .binder = 0 };
+    const plausible = struct {
+        fn f(ctx: *const Context, th: *const TheoremContext, t: TemplateExpr, bound: ExprId, ref: ExprId) bool {
+            const bindings = [_]?ExprId{bound};
+            return prune.acuiClosedRegionPlausible(ctx, th, t, ref, &bindings);
+        }
+    }.f;
+
+    // Same members in another order: plausible.
+    try std.testing.expect(plausible(&context, &theorem, template, ab, ba));
+    // An extra or a missing member: refuted, in either representation.
+    try std.testing.expect(!plausible(&context, &theorem, template, ab, abc));
+    try std.testing.expect(!plausible(&context, &theorem, template, ab, ha));
+    try std.testing.expect(!plausible(&context, &theorem, template, ha, ab));
+    // Abstains on an opaque ref member and on a member conversion could
+    // change (a transparent def), where identity is not decisive.
+    const g_b = try theorem.interner.internApp(join, &.{ g_var, hb });
+    try std.testing.expect(plausible(&context, &theorem, template, ab, g_b));
+    const ida_b = try theorem.interner.internApp(join, &.{ h_ida, hb });
+    try std.testing.expect(plausible(&context, &theorem, template, ab, ida_b));
+}
+
 test "exprUnifiesModuloMeta treats search metas as wildcards but prunes rigid clashes" {
     // The carry-to-leaf witness predicate behind the ACUI plausibility prune:
     // a binding embedding an open `.meta` leaf (e.g. `rim`'s `P ?t`) must stay

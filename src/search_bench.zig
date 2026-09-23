@@ -41,8 +41,9 @@ const BenchOptions = struct {
     /// When set, only scenarios whose name contains this substring are run.
     /// In frontier mode, filters theorem (block) names instead.
     filter: ?[]const u8 = null,
-    /// Frontier mode: skip theorems whose name contains this substring (e.g.
-    /// a fixture's supporting lemmas, proved with rules search never sees).
+    /// Frontier mode: skip theorems whose name contains any of these
+    /// comma-separated substrings (e.g. a fixture's supporting lemmas,
+    /// proved with rules search never sees).
     exclude: ?[]const u8 = null,
     /// Frontier analysis mode (META_STRESS.md workstream 1). When set, the
     /// scenario bench is skipped and the frontier runs over the corpus.
@@ -1474,7 +1475,7 @@ fn printUsage() !void {
     try stderr.writeAll(
         "usage: zig build bench-search -- [--compact|-c] [--filter=TEXT]\n" ++
             "       [--frontier=breadth|depth] [--files=MM0:AUF]...\n" ++
-            "       [--exclude=TEXT]\n" ++
+            "       [--exclude=TEXT[,TEXT...]]\n" ++
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
             "       [--require-no-miss] [--no-search-memo] [--no-deep-member-prune]\n" ++
@@ -2849,8 +2850,12 @@ fn frontierSelects(options: BenchOptions, name: []const u8) bool {
     if (options.filter) |needle| {
         if (std.mem.indexOf(u8, name, needle) == null) return false;
     }
-    if (options.exclude) |needle| {
-        if (std.mem.indexOf(u8, name, needle) != null) return false;
+    if (options.exclude) |list| {
+        var needles = std.mem.splitScalar(u8, list, ',');
+        while (needles.next()) |needle| {
+            if (needle.len == 0) continue;
+            if (std.mem.indexOf(u8, name, needle) != null) return false;
+        }
     }
     return true;
 }

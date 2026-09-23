@@ -7,7 +7,9 @@
 -- (eliminations whose major premise is an assumption). That is the
 -- intercalation discipline: intros backward from the goal, eliminations only
 -- on formulas already assumed, so every search step stays inside the
--- subformulas of the goal (up to negation, which `raa` adds).
+-- subformulas of the goal (up to negation, which `raa` adds). One derived
+-- classical rule, `or_right`, gives disjunctive goals the invertible
+-- decomposition a one-sided calculus has for free.
 delimiter $ ( ) [ / ] $;
 
 provable sort wff;
@@ -280,8 +282,10 @@ axiom ex_elim {x: obj} (g: ctx x) (h: ctx) (p: wff x) (c: wff):
 -- Each elimination rule re-stated with its major premise an assumption, in
 -- the general-elimination style. Applied backward they only decompose a
 -- formula already in the context, so normal-form search stays analytic.
--- Invertible ones drop the principal and are eager; `imp_left`, `not_left`
--- and `all_left` keep it, since a later branch may need it again.
+-- Invertible ones are eager. `imp_left`, `not_left` and `all_left` keep the
+-- principal, since a later branch may need it again; `not_left` is still
+-- classically invertible (`raa` and weakening recover its premise), so it is
+-- eager too.
 
 --| @auto eager
 theorem and_left (g: ctx) (a b c: wff):
@@ -291,6 +295,13 @@ theorem and_left (g: ctx) (a b c: wff):
 theorem or_left (g: ctx) (a b c: wff):
   $ g , a ⊢ c $ > $ g , b ⊢ c $ > $ g , (a ∨ b) ⊢ c $;
 
+-- Classical disjunction introduction: `a ∨ b` holds iff `a` does once `¬ b`
+-- is assumed. Invertible, unlike `or_intro_l`/`or_intro_r`, which make the
+-- search guess a disjunct.
+--| @auto eager
+theorem or_right (g: ctx) (a b: wff):
+  $ g , ¬ b ⊢ a $ > $ g ⊢ a ∨ b $;
+
 --| @auto eager
 theorem bi_left (g: ctx) (a b c: wff):
   $ g , (a → b) , (b → a) ⊢ c $ > $ g , (a ↔ b) ⊢ c $;
@@ -299,7 +310,7 @@ theorem bi_left (g: ctx) (a b c: wff):
 theorem imp_left (g: ctx) (a b c: wff):
   $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
 
---| @auto backward
+--| @auto eager 3
 theorem not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
 
 --| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $

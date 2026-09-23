@@ -1,7 +1,8 @@
 -- Hand proofs of the nd_fol.mm0 theorems.
 --
--- The derived left rules come first, proved from the primitive eliminations
--- (these blocks use rules search never sees; the depth bench skips them).
+-- The derived rules (left rules and `or_right`) come first, proved from the
+-- primitive eliminations (these blocks use rules search never sees; the
+-- depth bench skips them with `--exclude=_left,or_right`).
 -- The battery proofs are in normal form: introduction rules and left rules
 -- only, closing at `ax`, with `raa` for the classical steps.
 
@@ -22,6 +23,21 @@ l1: $ g , (a ∨ b) , a ⊢ c $ by weak [#1]
 l2: $ g , (a ∨ b) , b ⊢ c $ by weak [#2]
 l3: $ g , (a ∨ b) ⊢ a ∨ b $ by ax
 l4: $ g , (a ∨ b) ⊢ c $ by or_elim [l3, l1, l2]
+
+or_right
+--------
+l1: $ g , ¬ (a ∨ b) , b ⊢ b $ by ax
+l2: $ g , ¬ (a ∨ b) , b ⊢ a ∨ b $ by or_intro_r [l1]
+l3: $ g , ¬ (a ∨ b) , b ⊢ ¬ (a ∨ b) $ by ax
+l4: $ g , ¬ (a ∨ b) , b ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a ∨ b) ⊢ ¬ b $ by not_intro [l4]
+l6: $ g ⊢ ¬ b → a $ by imp_intro [#1]
+l7: $ g , ¬ (a ∨ b) ⊢ ¬ b → a $ by weak [l6]
+l8: $ g , ¬ (a ∨ b) ⊢ a $ by imp_elim [l7, l5]
+l9: $ g , ¬ (a ∨ b) ⊢ a ∨ b $ by or_intro_l [l8]
+l10: $ g , ¬ (a ∨ b) ⊢ ¬ (a ∨ b) $ by ax
+l11: $ g , ¬ (a ∨ b) ⊢ ⊥ $ by not_elim [l10, l9]
+l12: $ g ⊢ a ∨ b $ by raa [l11]
 
 bi_left
 -------

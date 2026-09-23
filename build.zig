@@ -1046,12 +1046,11 @@ pub fn build(b: *std.Build) void {
         // ── Analytic natural deduction (`nd_fol`): the tait battery read as
         // `∅ ⊢ φ`, searched through intro rules and derived left rules only
         // (eliminations are not enrolled; see nd_fol.mm0's header). The target
-        // is parity with tait/additive_fol. Status (2026-09-22): depth FULL
-        // 49/57 at defaults, mean frontier 5.16 (`--exclude=_left` skips the
-        // derived-rule lemmas); the misses are seven raa-heavy classical
-        // theorems plus forall_mono, all at the budget cap. Once every theorem
-        // is FULL, replace the per-line depth guards with a whole-fixture
-        // total.
+        // is parity with tait/additive_fol. Status (2026-09-23): depth FULL
+        // 56/57 at defaults, mean frontier 5.84 (`--exclude=_left,or_right`
+        // skips the derived-rule lemmas); the one miss is drinker. Once every
+        // theorem is FULL, replace the per-line depth guards with a
+        // whole-fixture total.
         .{
             // Every hand-proof line, derived-rule lemmas included, stays found.
             .files = "tests/search_bench_cases/nd_fol.mm0:" ++
@@ -1091,6 +1090,31 @@ pub fn build(b: *std.Build) void {
         // without it.
         .{
             .filter = "ex_all_to_all_ex",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        // Pool refs whose context differs from a bound context binder are
+        // refuted before sibling generation (`acui.boundRegionRefEqualPlausible`);
+        // without it the eliminations' ref-filled minors drown peirce.
+        .{
+            .filter = "peirce",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        // Eager `not_left` (classically invertible): dummett's two raa rounds
+        // fit the default depth only when the negation steps cost none.
+        .{
+            .filter = "dummett",
+            .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+                "tests/search_bench_cases/nd_fol.auf",
+            .mode = "depth",
+        },
+        // Eager `or_right`: classical disjunction goals decompose instead of
+        // guessing a disjunct under raa.
+        .{
+            .filter = "mat_cases",
             .files = "tests/search_bench_cases/nd_fol.mm0:" ++
                 "tests/search_bench_cases/nd_fol.auf",
             .mode = "depth",

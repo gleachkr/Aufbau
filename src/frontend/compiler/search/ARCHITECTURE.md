@@ -777,6 +777,16 @@ over-approximation (never reject a provable candidate):
   templates embedding ACUI or def heads, cap overflows, generated refs), so
   a winnable tuple is never pruned. Corpus-validated: breadth byte-identical,
   depth per-theorem fractions identical.
+- **bound-binder slot equality** (`acui.boundRegionRefEqualPlausible`, the
+  `.binder` case of `acuiClosedRegionPlausible`, run per fill in
+  `matchOneHypWithSnapshot`) — a bare ACUI binder already bound (an ND rule's
+  `g`, pinned by the conclusion) is a closed one-summand region, so the ref at
+  that position must hold exactly the bound value's members. Without it such a
+  fill classifies `.unknown`, and a pool line proved under a different context
+  pins an elimination's minor-premise binder, after which the whole major
+  premise is generated before validation rejects the context (nd_fol: the
+  `bi_elim` tower flood). Abstains on opaque members and on any member
+  conversion could change. Corpus-validated: breadth and depth identical.
 
 The same `finalConclusionPlausible`/`tryCandidate` path also carries the
 **reject-verdict memo** (`candidate.zig`, `types.VerdictMemo`): a `tryCandidate`

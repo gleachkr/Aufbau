@@ -1207,6 +1207,19 @@ pub fn acuiClosedRegionPlausible(
                     if (isAcuiUnitExpr(context, theorem, bound)) {
                         return isAcuiUnitExpr(context, theorem, expr_id);
                     }
+                    // A bound binder is a closed one-summand region: when
+                    // either side is a combiner region, the ref must hold
+                    // exactly the bound value's members.
+                    const head_id = combinerHeadOf(context, theorem, bound) orelse
+                        combinerHeadOf(context, theorem, expr_id) orelse
+                        return true;
+                    return boundRegionRefEqualPlausible(
+                        context,
+                        theorem,
+                        bound,
+                        expr_id,
+                        head_id,
+                    );
                 }
             }
             return true;
@@ -1243,6 +1256,69 @@ pub fn acuiClosedRegionPlausible(
             }
         },
     }
+}
+
+fn combinerHeadOf(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr_id: ExprId,
+) ?u32 {
+    return switch (theorem.interner.node(expr_id).*) {
+        .app => |app| if (context.registry.hasStructuralCombiner(app.term_id))
+            app.term_id
+        else
+            null,
+        else => null,
+    };
+}
+
+// ACUI equality of a bound binder's value with the ref at its position, as
+// member-set coverage in both directions. Bails to "no opinion" (true) on
+// overflow, on a bare variable/placeholder ref member (it could expand to
+// anything), and on any member conversion could change (a `@rewrite` head or
+// a transparent def), where syntactic member identity is not decisive.
+fn boundRegionRefEqualPlausible(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    bound: ExprId,
+    container: ExprId,
+    head_id: u32,
+) bool {
+    var bound_buf: [max_acui_members]AcuiMember = undefined;
+    var bound_n: usize = 0;
+    if (!collectAcuiMembers(theorem, bound, head_id, &bound_buf, &bound_n)) return true;
+    var ref_buf: [max_acui_members]AcuiMember = undefined;
+    var ref_n: usize = 0;
+    if (!collectAcuiMembers(theorem, container, head_id, &ref_buf, &ref_n)) return true;
+    for (ref_buf[0..ref_n]) |item| {
+        switch (theorem.interner.node(item.expr).*) {
+            .variable, .placeholder => return true,
+            else => {},
+        }
+        if (exprNeedsSemantic(context, theorem, item.expr)) return true;
+    }
+    for (bound_buf[0..bound_n]) |item| {
+        if (exprNeedsSemantic(context, theorem, item.expr)) return true;
+    }
+    return regionCovers(context, theorem, bound_buf[0..bound_n], ref_buf[0..ref_n]) and
+        regionCovers(context, theorem, ref_buf[0..ref_n], bound_buf[0..bound_n]);
+}
+
+// Every non-unit member of `wants` matches (modulo metas) some member of `haves`.
+fn regionCovers(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    wants: []const AcuiMember,
+    haves: []const AcuiMember,
+) bool {
+    outer: for (wants) |want| {
+        if (isAcuiUnitExpr(context, theorem, want.expr)) continue;
+        for (haves) |have| {
+            if (exprUnifiesModuloMeta(theorem, want.expr, have.expr)) continue :outer;
+        }
+        return false;
+    }
+    return true;
 }
 
 // A combiner-headed template region is "closed" when every direct summand

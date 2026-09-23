@@ -1660,11 +1660,17 @@ fn solveProof(
         driver.arena,
         results.candidates[0].application,
     );
-    const accepted = try acceptedConclusion(
+    // A re-check rejection means the child assembly is not a proof after all
+    // (as on the open path in `hookSolveOpen`); it is not a genuine exhaustive
+    // failure either, so it is not memoized.
+    const accepted = acceptedConclusion(
         driver,
         application,
         Goal{ .concrete = target },
-    );
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
     // A conclusion referencing a scope-minted dummy cannot escape (same
     // guard as `hookSolveOpen`'s read-back; `reinternConcrete`'s per-index
     // check alone cannot catch the parent owning an unrelated same-sort

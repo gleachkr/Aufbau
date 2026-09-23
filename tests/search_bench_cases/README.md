@@ -25,7 +25,7 @@ Flags (after `--`):
 | `--filter=TEXT`   | Run only scenarios whose name contains `TEXT` (substring). In frontier mode, filters theorem (block) names instead. |
 | `--frontier=MODE` | Skip the scenario bench and run frontier analysis (`breadth` or `depth`, below). |
 | `--files=MM0:AUF` | Frontier fixture pair (repeatable). Default: the major `tests/proof_cases/` developments. |
-| `--exclude=TEXT`  | Frontier mode: skip theorems whose name contains TEXT (a fixture's supporting lemmas). |
+| `--exclude=TEXT[,TEXT...]` | Frontier mode: skip theorems whose name contains any listed TEXT (a fixture's supporting lemmas). |
 | `--marker=TEXT`   | Frontier search marker (`auto?` default; `exact?`/`apply?` disable generation). |
 | `--max-depth=N`   | Frontier `auto?` generation depth (default 6). |
 | `--slow-ms=N`     | Breadth lines slower than this (warm search) are flagged SLOW (default 2). |
