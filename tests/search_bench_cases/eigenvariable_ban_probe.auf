@@ -1,0 +1,85 @@
+-- Hand proofs: the derived left rules (as in nd_fol.auf), then the probe.
+
+and_left
+--------
+l1: $ g , a ⊢ b → c $ by imp_intro [#1]
+l2: $ g ⊢ a → b → c $ by imp_intro [l1]
+l3: $ g , (a ∧ b) ⊢ a → b → c $ by weak [l2]
+l4: $ g , (a ∧ b) ⊢ a ∧ b $ by ax
+l5: $ g , (a ∧ b) ⊢ a $ by and_elim_l [l4]
+l6: $ g , (a ∧ b) ⊢ b → c $ by imp_elim [l3, l5]
+l7: $ g , (a ∧ b) ⊢ b $ by and_elim_r [l4]
+l8: $ g , (a ∧ b) ⊢ c $ by imp_elim [l6, l7]
+
+or_left
+-------
+l1: $ g , (a ∨ b) , a ⊢ c $ by weak [#1]
+l2: $ g , (a ∨ b) , b ⊢ c $ by weak [#2]
+l3: $ g , (a ∨ b) ⊢ a ∨ b $ by ax
+l4: $ g , (a ∨ b) ⊢ c $ by or_elim [l3, l1, l2]
+
+or_right
+--------
+l1: $ g , ¬ (a ∨ b) , b ⊢ b $ by ax
+l2: $ g , ¬ (a ∨ b) , b ⊢ a ∨ b $ by or_intro_r [l1]
+l3: $ g , ¬ (a ∨ b) , b ⊢ ¬ (a ∨ b) $ by ax
+l4: $ g , ¬ (a ∨ b) , b ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a ∨ b) ⊢ ¬ b $ by not_intro [l4]
+l6: $ g ⊢ ¬ b → a $ by imp_intro [#1]
+l7: $ g , ¬ (a ∨ b) ⊢ ¬ b → a $ by weak [l6]
+l8: $ g , ¬ (a ∨ b) ⊢ a $ by imp_elim [l7, l5]
+l9: $ g , ¬ (a ∨ b) ⊢ a ∨ b $ by or_intro_l [l8]
+l10: $ g , ¬ (a ∨ b) ⊢ ¬ (a ∨ b) $ by ax
+l11: $ g , ¬ (a ∨ b) ⊢ ⊥ $ by not_elim [l10, l9]
+l12: $ g ⊢ a ∨ b $ by raa [l11]
+
+bi_left
+-------
+l1: $ g , (a → b) ⊢ (b → a) → c $ by imp_intro [#1]
+l2: $ g ⊢ (a → b) → (b → a) → c $ by imp_intro [l1]
+l3: $ g , (a ↔ b) ⊢ (a → b) → (b → a) → c $ by weak [l2]
+l4: $ g , (a ↔ b) , a ⊢ a ↔ b $ by ax
+l5: $ g , (a ↔ b) , a ⊢ a $ by ax
+l6: $ g , (a ↔ b) , a ⊢ b $ by bi_elim_l [l4, l5]
+l7: $ g , (a ↔ b) ⊢ a → b $ by imp_intro [l6]
+l8: $ g , (a ↔ b) , b ⊢ a ↔ b $ by ax
+l9: $ g , (a ↔ b) , b ⊢ b $ by ax
+l10: $ g , (a ↔ b) , b ⊢ a $ by bi_elim_r [l8, l9]
+l11: $ g , (a ↔ b) ⊢ b → a $ by imp_intro [l10]
+l12: $ g , (a ↔ b) ⊢ (b → a) → c $ by imp_elim [l3, l7]
+l13: $ g , (a ↔ b) ⊢ c $ by imp_elim [l12, l11]
+
+imp_left
+--------
+l1: $ g , (a → b) ⊢ b → c $ by imp_intro [#2]
+l2: $ g , (a → b) ⊢ a → b $ by ax
+l3: $ g , (a → b) ⊢ b $ by imp_elim [l2, #1]
+l4: $ g , (a → b) ⊢ c $ by imp_elim [l1, l3]
+
+not_left
+--------
+l1: $ g , ¬ a ⊢ ¬ a $ by ax
+l2: $ g , ¬ a ⊢ ⊥ $ by not_elim [l1, #1]
+
+all_left
+--------
+l1: $ g , (∀ x p) ⊢ [x/t] p → c $ by imp_intro [#1]
+l2: $ g , (∀ x p) ⊢ ∀ x p $ by ax
+l3: $ g , (∀ x p) ⊢ [x/t] p $ by all_elim [l2]
+l4: $ g , (∀ x p) ⊢ c $ by imp_elim [l1, l3]
+
+ex_left
+-------
+l1: $ g , (∃ x p) ⊢ ∃ x p $ by ax
+l2: $ g , (∃ x p) ⊢ c $ by ex_elim [l1, #1]
+
+eigenvariable_ban_probe
+-----------------------
+l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [#1]
+l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ ⊥ $ by not_left [l1]
+l3: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ P y $ by raa [l2]
+l4: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ ∀ y P y $ by all_intro [l3]
+l5: $ ¬ ∃ x (P x → ∀ y P y) ⊢ P C → ∀ y P y $ by imp_intro [l4]
+l6: $ ¬ ∃ x (P x → ∀ y P y) ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [l5]
+l7: $ ¬ ∃ x (P x → ∀ y P y) ⊢ ⊥ $ by not_left [l6]
+l8: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by raa [l7]

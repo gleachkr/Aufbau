@@ -645,6 +645,38 @@ pub fn build(b: *std.Build) void {
             .mode = "depth",
             .max_depth = 3,
         },
+        // Depth guard for carried-meta dependency bans
+        // (`backtrack.banCarriedMetaDeps`, `MetaStore.dep_bans`): `all_intro`
+        // carries `ex_intro`'s witness in its context, so the witness may not
+        // mention the eigenvariable anywhere in that scope. Without the ban a
+        // member pass deep inside pins it to the eigenvariable and stops.
+        .{
+            .filter = "eigenvariable_ban_probe",
+            .files = "tests/search_bench_cases/eigenvariable_ban_probe.mm0:" ++
+                "tests/search_bench_cases/eigenvariable_ban_probe.auf",
+            .mode = "depth",
+        },
+        // Depth guard for the eager cut's eigenvariable check
+        // (`backtrack.bindingsBreakRuleDeps`): an eager `all_intro` over a
+        // context that mentions `y` free can never validate, and must not arm
+        // the cut that would skip `raa`.
+        .{
+            .filter = "eager_cut_dep_probe",
+            .files = "tests/search_bench_cases/eager_cut_dep_probe.mm0:" ++
+                "tests/search_bench_cases/eager_cut_dep_probe.auf",
+            .mode = "depth",
+        },
+        // Depth guard for additive split ordering (`split.conclusionIsSplit`):
+        // `not_left`'s `g , ¬ a` has one context binder, so the eager rule
+        // sorts ahead of `raa` and its cut applies. Counted as multiplicative,
+        // `raa`'s `¬ ⊥` detours spend the node budget and the empty-pool
+        // drinker (k=9) misses.
+        .{
+            .filter = "empty_pool_witness_probe",
+            .files = "tests/search_bench_cases/empty_pool_witness_probe.mm0:" ++
+                "tests/search_bench_cases/empty_pool_witness_probe.auf",
+            .mode = "depth",
+        },
         // Depth guards for the success transposition memo (`generate.zig`
         // `Driver.concrete_ok`). `branch_converge` and `fan_in` are the convergent
         // (DAG-shaped) additive proofs whose shared subgoals the memo collapses;
@@ -1060,10 +1092,10 @@ pub fn build(b: *std.Build) void {
         // `∅ ⊢ φ`, searched through intro rules and derived left rules only
         // (eliminations are not enrolled; see nd_fol.mm0's header). The target
         // is parity with tait/additive_fol. Status (2026-09-23): depth FULL
-        // 56/57 at defaults, mean frontier 5.88 (`--exclude=_left,or_right`
-        // skips the derived-rule lemmas); the one miss is drinker (6/11). Once every
-        // theorem is FULL, replace the per-line depth guards with a
-        // whole-fixture total.
+        // 57/57 at defaults, mean frontier 5.96 (`--exclude=_left,or_right`
+        // skips the derived-rule lemmas). The per-line depth guards below could
+        // now become one whole-fixture total, once the guard table can pass
+        // `--exclude`.
         .{
             // Every hand-proof line, derived-rule lemmas included, stays found.
             .files = "tests/search_bench_cases/nd_fol.mm0:" ++

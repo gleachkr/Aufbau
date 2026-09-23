@@ -26,6 +26,7 @@ const ExprId = @import("../../expr.zig").ExprId;
 const PlaceholderId = @import("../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const MetaStore = @import("../inference/meta_store.zig").MetaStore;
+const MetaDepBans = @import("../inference/meta_store.zig").MetaDepBans;
 const OpenTerms = @import("../inference/open_terms.zig");
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
@@ -240,6 +241,9 @@ const Driver = struct {
     /// open slot's store so a witness meta keeps one identity through the
     /// open-target recursion (carry-to-leaf). See `MetaStore.meta_id_counter`.
     next_meta_id: u64 = 0,
+    /// Carried-meta dependency bans (eigenvariable conditions), narrowed and
+    /// rolled back by open slots. See `MetaDepBans`.
+    meta_dep_bans: MetaDepBans,
     /// Expensive-op budget for the currently running phase, shared by all
     /// recursive sub-solves. Each retry phase owns one fuel pool spanning all
     /// its depths (the per-depth bound is `nodes`); the ladder swaps the
@@ -425,6 +429,7 @@ pub fn generateTopLevel(
         .fuel = .{ .remaining = options.fuel, .global = budget_ptr },
         .has_acui = session.context.registry.acui_by_head.count() > 0,
         .has_comm_acui = acui.hasCommutativeCombiner(session.context),
+        .meta_dep_bans = MetaDepBans.init(session.allocator),
     };
     driver.hook = .{
         .ctx = &driver,
@@ -432,7 +437,9 @@ pub fn generateTopLevel(
         .solveOpenFn = hookSolveOpen,
         .allow_split = false,
         .meta_id_counter = &driver.next_meta_id,
+        .meta_dep_bans = &driver.meta_dep_bans,
     };
+    defer driver.meta_dep_bans.deinit();
     defer driver.visited.deinit(driver.scratch);
     defer {
         var key_iter = driver.visited_open.keyIterator();
@@ -1025,7 +1032,7 @@ fn collectOpenProofs(
 ) anyerror!void {
     // Canonical visited key: metas numbered by first occurrence, so two
     // alpha-variant open targets (fresh meta ids each attempt) collide.
-    const key = try canonicalOpenKey(driver.scratch, target_theorem, target);
+    const key = try canonicalOpenKey(driver.scratch, target_theorem, target, &driver.meta_dep_bans);
     // Depth bit for the failure memo: the solve depends on remaining recursion
     // depth, so a failure is only replayable at the same depth.
     const depth_bit: u16 = if (depth < 16)
@@ -1419,12 +1426,13 @@ fn canonicalOpenKey(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
     expr: ExprId,
+    bans: *const MetaDepBans,
 ) ![]u8 {
     var out = std.ArrayListUnmanaged(u8){};
     errdefer out.deinit(allocator);
     var numbering = std.AutoHashMapUnmanaged(u32, u32){};
     defer numbering.deinit(allocator);
-    try appendCanonicalKey(&out, &numbering, allocator, theorem, expr);
+    try appendCanonicalKey(&out, &numbering, allocator, theorem, expr, bans);
     return try out.toOwnedSlice(allocator);
 }
 
@@ -1434,6 +1442,7 @@ fn appendCanonicalKey(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
     expr: ExprId,
+    bans: *const MetaDepBans,
 ) anyerror!void {
     switch (theorem.interner.node(expr).*) {
         .variable => |var_id| switch (var_id) {
@@ -1453,13 +1462,23 @@ fn appendCanonicalKey(
             }
             try out.append(allocator, 'm');
             try appendCanonicalInt(out, allocator, gop.value_ptr.*);
+            // A dep ban changes which fills are legal, so it is part of the
+            // target's identity for the failure memos and the path guard.
+            const meta_id = if (theorem.placeholderInfo(pid)) |ph| ph.meta_id else null;
+            const banned = if (meta_id) |id| bans.get(id) else 0;
+            if (banned != 0) {
+                var buf: [8]u8 = undefined;
+                std.mem.writeInt(u64, &buf, banned, .little);
+                try out.append(allocator, 'b');
+                try out.appendSlice(allocator, &buf);
+            }
         },
         .app => |app| {
             try out.append(allocator, 'a');
             try appendCanonicalInt(out, allocator, app.term_id);
             try appendCanonicalInt(out, allocator, @intCast(app.args.len));
             for (app.args) |arg| {
-                try appendCanonicalKey(out, numbering, allocator, theorem, arg);
+                try appendCanonicalKey(out, numbering, allocator, theorem, arg, bans);
             }
         },
     }

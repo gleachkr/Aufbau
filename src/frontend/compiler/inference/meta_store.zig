@@ -69,6 +69,60 @@ const TrailEntry = union(enum) {
     assigned: PlaceholderId,
 };
 
+/// Dependency bans on carried witness metas, keyed by stable `meta_id`: the
+/// theorem dep bits a meta's eventual value must not mention. A rule whose
+/// non-bound binder holds the meta while omitting one of its bound args from
+/// that binder's dependencies (the eigenvariable condition, e.g. `all_intro`'s
+/// context not depending on `x`) bans whatever that bound arg is bound to.
+/// Lexically scoped: the generation driver narrows it on entry to an open slot
+/// and rolls it back on exit, so a ban lives exactly as long as the binding
+/// that caused it.
+pub const MetaDepBans = struct {
+    allocator: std.mem.Allocator,
+    banned: std.AutoHashMapUnmanaged(u64, u55) = .empty,
+    undo: std.ArrayListUnmanaged(Undo) = .{},
+
+    const Undo = struct { meta_id: u64, prev: ?u55 };
+
+    pub fn init(allocator: std.mem.Allocator) MetaDepBans {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *MetaDepBans) void {
+        self.banned.deinit(self.allocator);
+        self.undo.deinit(self.allocator);
+    }
+
+    pub fn get(self: *const MetaDepBans, meta_id: u64) u55 {
+        return self.banned.get(meta_id) orelse 0;
+    }
+
+    pub fn mark(self: *const MetaDepBans) usize {
+        return self.undo.items.len;
+    }
+
+    pub fn ban(self: *MetaDepBans, meta_id: u64, deps: u55) !void {
+        const allocator = self.allocator;
+        const prev = self.banned.get(meta_id);
+        const next = (prev orelse 0) | deps;
+        if (prev != null and prev.? == next) return;
+        try self.undo.append(allocator, .{ .meta_id = meta_id, .prev = prev });
+        errdefer _ = self.undo.pop();
+        try self.banned.put(allocator, meta_id, next);
+    }
+
+    pub fn rollback(self: *MetaDepBans, to: usize) void {
+        while (self.undo.items.len > to) {
+            const entry = self.undo.pop().?;
+            if (entry.prev) |prev| {
+                self.banned.getPtr(entry.meta_id).?.* = prev;
+            } else {
+                _ = self.banned.remove(entry.meta_id);
+            }
+        }
+    }
+};
+
 pub const MetaStore = struct {
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
@@ -88,6 +142,11 @@ pub const MetaStore = struct {
     /// and bound at the leaf. Null on the legacy per-slot path (`exact?`/the
     /// forward derived pool), which keeps byte-identical behavior.
     meta_id_counter: ?*u64 = null,
+    /// The driver's carried-meta dependency bans (see `MetaDepBans`). An
+    /// ancestor meta registers with its banned bits excluded from
+    /// `allowed_deps`, so `assign` rejects an eigenvariable witness. Null on
+    /// the legacy per-slot path.
+    dep_bans: ?*const MetaDepBans = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -155,23 +214,25 @@ pub const MetaStore = struct {
         };
         if (self.metas.contains(pid)) return;
         const ph_info = theorem.placeholderInfo(pid) orelse return;
-        if (ph_info.meta_id == null) return;
-        try self.putRegistration(pid, ph_info.sort_name, true);
+        const meta_id = ph_info.meta_id orelse return;
+        const banned = if (self.dep_bans) |bans| bans.get(meta_id) else 0;
+        try self.putRegistration(pid, ph_info.sort_name, ~banned, true);
     }
 
     /// Shared registration body for `registerAncestorMeta` / `registerLocalMeta`:
-    /// record the leaf as a fully-dep-permitted existential meta and trail it for
+    /// record the leaf as an existential meta and trail it for
     /// rollback. Callers apply their own eligibility guard and the
     /// already-registered short-circuit first.
     fn putRegistration(
         self: *MetaStore,
         pid: PlaceholderId,
         sort_name: []const u8,
+        allowed_deps: u55,
         ancestor: bool,
     ) !void {
         try self.metas.put(self.allocator, pid, .{
             .sort_name = sort_name,
-            .allowed_deps = std.math.maxInt(u55),
+            .allowed_deps = allowed_deps,
             .kind = .existential,
             .ancestor = ancestor,
         });
@@ -200,7 +261,7 @@ pub const MetaStore = struct {
         if (self.metas.contains(pid)) return;
         const ph_info = theorem.placeholderInfo(pid) orelse return;
         if (ph_info.class != .meta) return;
-        try self.putRegistration(pid, ph_info.sort_name, false);
+        try self.putRegistration(pid, ph_info.sort_name, std.math.maxInt(u55), false);
     }
 
     /// True if `expr` mentions an ancestor meta (solved or not). Used to find

@@ -13,6 +13,7 @@ const RuleApplication = ProofScript.RuleApplication;
 pub const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const MetaStore = @import("../inference/meta_store.zig").MetaStore;
+const MetaDepBans = @import("../inference/meta_store.zig").MetaDepBans;
 const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerViews = @import("../../views.zig");
 const FreshSelect = @import("../fresh_select.zig");
@@ -898,6 +899,11 @@ pub const GenerationHook = struct {
     /// identity across the open-target recursion's interner clones — the
     /// carry-to-leaf channel. Null disables it (legacy per-slot behavior).
     meta_id_counter: ?*u64 = null,
+    /// The driver's carried-meta dependency bans (`MetaDepBans`): open slots
+    /// narrow them from the candidate's bindings for the duration of the
+    /// slot, and every open slot's store reads them when registering
+    /// ancestor metas. Null disables it alongside `meta_id_counter`.
+    meta_dep_bans: ?*MetaDepBans = null,
 
     pub fn solve(
         self: *const GenerationHook,

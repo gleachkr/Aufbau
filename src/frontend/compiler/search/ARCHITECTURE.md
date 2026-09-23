@@ -373,6 +373,34 @@ every child proof that reads back and offers them to the slot in turn
 (`OpenProofSink`), after its interner scope has closed. Guard:
 `witness_retry_probe`.
 
+The eigenvariable condition itself is enforced where the search makes its
+choices, not only by the final checker. It is read off the rule's own binder
+dependencies: a non-bound binder whose `ArgInfo.deps` omits bound arg `x` may
+not depend on `x`'s value. Two checks follow from it:
+
+- An eager candidate whose conclusion bindings already put that value in
+  such a binder (reachable without crossing a term that has alpha rules,
+  which `@freshen` could repair; `bindingsBreakRuleDeps`) does not arm the
+  eager cut. Otherwise a dead `all_intro` would hide `raa`. The candidate is
+  still tried, not pruned, because a view may re-choose the bound binder at
+  validation (martin_lof's `app_elim`). Guard: `eager_cut_dep_probe`.
+- `banCarriedMetaDeps` handles a binder that still holds carried metas. On
+  entry to an open slot it bans the value's dep bits from those metas, keyed
+  by stable `meta_id` in the driver's `MetaDepBans`, and rolls the ban back
+  on exit. `MetaStore.registerAncestorMeta` turns the ban into `allowed_deps`,
+  so any pass that tries to fill the witness with the eigenvariable fails in
+  `assign`. The ban is part of `canonicalOpenKey`, because it changes which
+  fills are legal. Guard: `eigenvariable_ban_probe`.
+
+The eager cut relies on the eager band being contiguous, and
+`nonSplitCandidateFirst` sorts on split-ness before class. So
+`split.conclusionIsSplit` counts only distinct *bare* binders on an ACUI
+spine: `weak`'s `g , h` is multiplicative, but `not_left`'s `g , ¬ a` is
+additive, because the `a` inside `¬ a` is a principal formula, not a context.
+When `not_left` counted as multiplicative it sorted behind `raa`, so its cut
+came too late. `raa`'s `Γ , ¬ ⊥ ⊢ ⊥` detours then spent the per-cell node
+budget, and the empty-pool drinker missed. Guard: `empty_pool_witness_probe`.
+
 This is a hard-won constraint (Stage 1 `forceAcuiRestBinder` regressed `drinker`
 5/5→1/5 by over-constraining a witness slot). See `feedback_let_metas_propagate`
 and `feedback_forced_not_heuristic` — the project preference is solid, forced,

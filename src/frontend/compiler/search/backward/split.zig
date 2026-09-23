@@ -21,7 +21,6 @@ const std = @import("std");
 const types = @import("../types.zig");
 const UsizeShift = std.math.Log2Int(usize);
 const acui = @import("./acui.zig");
-const plan = @import("./plan.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -54,9 +53,11 @@ pub const SplitSite = struct {
     fixed_len: usize = 0,
 };
 
-/// True when `concl` combines two or more distinct template binders under a
-/// registered ACUI combiner — i.e. the rule is "multiplicative" and a hypothesis
-/// of it may need a speculative context split. Used to order non-splitting
+/// True when `concl` combines two or more distinct context binders as bare
+/// summands of a registered ACUI combiner — i.e. the rule is "multiplicative"
+/// and a hypothesis of it may need a speculative context split. A binder inside
+/// a structured summand (the `a` of `g , ¬ a`) is a principal formula, not a
+/// context, so such an additive rule does not count. Used to order non-splitting
 /// (additive) rule candidates first, so a goal solvable without splitting claims
 /// the generation budget before split-capable rules explore (regression guard:
 /// nested `all_intro`, where split-capable bystanders would otherwise starve it).
@@ -65,8 +66,14 @@ pub fn conclusionIsSplit(context: *const Context, concl: TemplateExpr) bool {
         .binder => return false,
         .app => |app| {
             if (context.registry.acui_by_head.contains(app.term_id)) {
-                const binders = plan.templateBinderMask(concl);
-                if (binders.overflow or @popCount(binders.mask) >= 2) return true;
+                var site = SplitSite{ .container = undefined, .head_id = app.term_id };
+                if (!collectSpine(concl, app.term_id, &site)) return true;
+                var seen: u64 = 0;
+                for (site.spine[0..site.spine_len]) |idx| {
+                    if (idx >= 64) return true;
+                    seen |= @as(u64, 1) << @intCast(idx);
+                }
+                if (@popCount(seen) >= 2) return true;
             }
             for (app.args) |arg| {
                 if (conclusionIsSplit(context, arg)) return true;

@@ -33,6 +33,7 @@ const OpenTerms = @import("../../inference/open_terms.zig");
 const Redex = @import("./redex.zig");
 const MetaStoreMod = @import("../../inference/meta_store.zig");
 const MetaStore = MetaStoreMod.MetaStore;
+const BindingValidation = @import("../../../binding_validation.zig");
 const Goal = types.Goal;
 const Context = types.Context;
 const ApplyCandidate = types.ApplyCandidate;
@@ -216,9 +217,21 @@ pub fn exactWithSession(
             options.fuel,
             &candidates,
         );
+        // An eager candidate whose conclusion bindings break the rule's
+        // eigenvariable condition does not arm the cut: the step is not
+        // applicable as matched (e.g. `all_intro` over a context that
+        // mentions `y` free), so it says nothing about the goal's other
+        // rules. It is still tried, since a view or `@freshen` may re-choose
+        // the bound binder at validation.
         if (is_eager and
             (apply_candidate.reached_child_solve or
-                candidates.items.len > results_before))
+                candidates.items.len > results_before) and
+            !bindingsBreakRuleDeps(
+                context,
+                &apply_candidate.theorem,
+                &context.env.rules.items[apply_candidate.rule_id],
+                apply_candidate.bindings,
+            ))
         {
             eager_armed = true;
         }
@@ -1779,6 +1792,15 @@ fn tryOpenGenerateSlot(
     // Share the driver's global meta-id counter so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
     store.meta_id_counter = hook.meta_id_counter;
+    store.dep_bans = hook.meta_dep_bans;
+    // Narrow the carried-meta dependency bans for this slot's lifetime: the
+    // candidate's bindings are fixed for everything opened beneath it.
+    const ban_mark = if (hook.meta_dep_bans) |bans| blk: {
+        const mark = bans.mark();
+        try banCarriedMetaDeps(context.env, rule, &candidate.theorem, bindings, bans);
+        break :blk mark;
+    } else 0;
+    defer if (hook.meta_dep_bans) |bans| bans.rollback(ban_mark);
     defer {
         // Mirror this branch's meta activity into the bench counters
         // (META.md performance gates).
@@ -1832,6 +1854,99 @@ fn tryOpenGenerateSlot(
         try openSlotViaView(&slot, view);
     } else {
         try openSlotRaw(&slot);
+    }
+}
+
+/// The eigenvariable condition, read off the rule's own dependency data: a
+/// non-bound binder whose `ArgInfo.deps` omits bound arg `x` must not depend
+/// on `x`'s value, so no meta inside it may be filled with anything
+/// mentioning that value. Bans the value's dep bits on every such meta (by
+/// stable `meta_id`, so the ban survives the child search's interner
+/// clones); `MetaStore.registerAncestorMeta` turns the ban into the meta's
+/// `allowed_deps`.
+fn banCarriedMetaDeps(
+    env: *const GlobalEnv,
+    rule: *const @import("../../../env.zig").RuleDecl,
+    theorem: *const TheoremContext,
+    bindings: []const ?ExprId,
+    bans: *MetaStoreMod.MetaDepBans,
+) !void {
+    for (rule.args, 0..) |arg, idx| {
+        if (arg.bound) continue;
+        const value = bindings[idx] orelse continue;
+        if (!seed.exprContainsMetaLeafWalk(theorem, value)) continue;
+        var banned: u55 = 0;
+        for (rule.args, 0..) |bound_arg, bound_idx| {
+            if (!bound_arg.bound or arg.deps & bound_arg.deps != 0) continue;
+            const bound_value = bindings[bound_idx] orelse continue;
+            const info = BindingValidation.currentExprInfo(env, theorem, bound_value) catch continue;
+            banned |= info.deps;
+        }
+        if (banned != 0) try banMetasIn(theorem, value, banned, bans);
+    }
+}
+
+/// True when, as matched, a non-bound binder's value mentions the value of a
+/// bound arg its `ArgInfo.deps` omits: an occurrence reached without crossing
+/// a term with alpha rules (`@freshen` renames only through those). Meta
+/// leaves are dep-free, so a partially open binding is judged on its concrete
+/// part. Advisory only: a view can still re-choose the bound binder.
+fn bindingsBreakRuleDeps(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    rule: *const @import("../../../env.zig").RuleDecl,
+    bindings: []const ?ExprId,
+) bool {
+    for (rule.args, 0..) |arg, idx| {
+        if (arg.bound) continue;
+        const value = bindings[idx] orelse continue;
+        var banned: u55 = 0;
+        for (rule.args, 0..) |bound_arg, bound_idx| {
+            if (!bound_arg.bound or arg.deps & bound_arg.deps != 0) continue;
+            const bound_value = bindings[bound_idx] orelse continue;
+            const info = (theorem.currentLeafInfo(bound_value) catch null) orelse continue;
+            banned |= info.deps;
+        }
+        if (banned != 0 and unprotectedDepsHit(context, theorem, value, banned)) return true;
+    }
+    return false;
+}
+
+fn unprotectedDepsHit(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr: ExprId,
+    banned: u55,
+) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => false,
+        .variable => blk: {
+            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk false;
+            break :blk info.deps & banned != 0;
+        },
+        .app => |app| blk: {
+            if (context.registry.getAlphaRules(app.term_id).len != 0) break :blk false;
+            for (app.args) |arg| {
+                if (unprotectedDepsHit(context, theorem, arg, banned)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+fn banMetasIn(
+    theorem: *const TheoremContext,
+    expr: ExprId,
+    banned: u55,
+    bans: *MetaStoreMod.MetaDepBans,
+) !void {
+    switch (theorem.interner.node(expr).*) {
+        .variable => {},
+        .placeholder => |pid| {
+            const info = theorem.placeholderInfo(pid) orelse return;
+            if (info.meta_id) |meta_id| try bans.ban(meta_id, banned);
+        },
+        .app => |app| for (app.args) |arg| try banMetasIn(theorem, arg, banned, bans),
     }
 }
 
