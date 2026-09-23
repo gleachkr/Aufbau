@@ -1,0 +1,20 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+term and (a b: wff): wff; infixr and: $/\$ prec 30;
+term nd (g: ctx) (a: wff): wff; infixl nd: $|-$ prec 0;
+
+-- Defs whose bodies unfold to a bare argument: def compression must not
+-- try to fold an expression into them (it would bind the projected argument
+-- to the expression itself and recurse without end).
+def id (a: wff): wff = $ a $;
+def left (a b: wff): wff = $ a $;
+def right (a b: wff): wff = $ left b a $;
+
+axiom and_left (g: ctx) (a b: wff): $ g |- left a b $ > $ g |- a /\ b $;
+axiom and_right (g: ctx) (a b: wff): $ g |- right a b $ > $ g |- a /\ b $;
+axiom id_intro (g: ctx) (a: wff): $ g |- id a $ > $ g |- a /\ a $;
+
+theorem proj_left (g: ctx) (a b: wff): $ g |- a $ > $ g |- a /\ b $;
+theorem proj_right (g: ctx) (a b: wff): $ g |- b $ > $ g |- a /\ b $;
+theorem proj_id (g: ctx) (a: wff): $ g |- a $ > $ g |- a /\ a $;

@@ -1,0 +1,11 @@
+proj_left
+---------
+l1: $ g |- a /\ b $ by and_left [#1]
+
+proj_right
+----------
+l1: $ g |- a /\ b $ by and_right [#1]
+
+proj_id
+-------
+l1: $ g |- a /\ a $ by id_intro [#1]

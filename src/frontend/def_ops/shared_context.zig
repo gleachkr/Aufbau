@@ -3,6 +3,7 @@ const GlobalEnv = @import("../env.zig").GlobalEnv;
 const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
+const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const Types = @import("./types.zig");
 const SymbolicExpr = Types.SymbolicExpr;
 
@@ -310,6 +311,7 @@ pub const SharedContext = struct {
         if (!self.def_compression_index_built) {
             for (self.env.terms.items, 0..) |term, term_id| {
                 if (!term.is_def or term.body == null) continue;
+                if (self.projectedArgument(term.body.?) != null) continue;
                 const gop = try self.def_compression_index.getOrPut(
                     self.allocator,
                     term.ret_sort_name,
@@ -322,6 +324,27 @@ pub const SharedContext = struct {
         const bucket = self.def_compression_index.getPtr(sort_name) orelse
             return &.{};
         return bucket.items;
+    }
+
+    /// The argument a template reduces to by unfolding def heads alone, if
+    /// any. Folding into a def whose body projects an argument never
+    /// compresses: matching `x` against the unfolded body binds that
+    /// argument to `x` itself, so the fold only wraps `x`, and choosing the
+    /// argument's representative re-enters the same compression without end.
+    fn projectedArgument(self: *const SharedContext, template: TemplateExpr) ?usize {
+        return switch (template) {
+            .binder => |idx| idx,
+            .app => |app| blk: {
+                const term = &self.env.terms.items[app.term_id];
+                if (!term.is_def) break :blk null;
+                const body = term.body orelse break :blk null;
+                const idx = self.projectedArgument(body) orelse break :blk null;
+                // A body reducing to one of its own hidden dummies is not a
+                // projection of the caller's arguments.
+                if (idx >= app.args.len) break :blk null;
+                break :blk self.projectedArgument(app.args[idx]);
+            },
+        };
     }
 
     fn pureRepresentativeCache(

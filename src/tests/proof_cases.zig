@@ -62,6 +62,10 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_rule_symbolic_witness", .outcome = .pass },
     .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },
+    // Projection defs (body unfolds to a bare argument) are not def
+    // compression targets; folding into one used to recurse until the
+    // stack overflowed.
+    .{ .stem = "pass_def_projection", .outcome = .pass },
     .{ .stem = "pass_keep", .outcome = .pass },
     .{ .stem = "pass_label", .outcome = .pass },
     .{ .stem = "pass_chained_alpha", .outcome = .pass },
