@@ -1861,27 +1861,22 @@ fn acceptedConclusion(
     application: RuleApplication,
     goal: Goal,
 ) anyerror!ExprId {
-    // Borrowed probe: the returned attempt theorem is a COW clone based
-    // directly on `work_theorem` (which outlives it), so the `.owned`
-    // materialization this used to request (a whole-interner `flatten()` per
-    // accepted candidate — the cost `flatten`'s contract reserves for
-    // committed lines) and the pre-clones it required are both pure waste.
-    var attempt = try candidate_mod.tryCandidateProbe(
+    // The probe's theorem is a COW clone based directly on `work_theorem`
+    // (which outlives it), so no whole-interner `flatten()` per accepted
+    // candidate — the cost `flatten`'s contract reserves for committed lines.
+    var attempt = try candidate_mod.probe(
         driver.compiler,
         driver.context,
         application,
         goal,
         driver.work_theorem,
         driver.theorem_vars,
-        .{ .result_ownership = .borrowed },
+        .{},
     );
     defer attempt.deinit();
 
-    if (attempt.line_idx < attempt.checked_start) return error.InvalidLineIndex;
-    const local_idx = attempt.line_idx - attempt.checked_start;
-    if (local_idx >= attempt.checked_lines.len) return error.InvalidLineIndex;
-    const line = attempt.checked_lines[local_idx];
-    const accepted_theorem = &attempt.theorem.?;
+    const line = attempt.line() orelse return error.InvalidLineIndex;
+    const accepted_theorem = &attempt.theorem;
     var accepted = line.expr;
     if (goal == .implicit_whole_conclusion and line.data == .rule) {
         if (try viewSurfaceConclusion(

@@ -48,7 +48,6 @@ const ExactCandidate = types.ExactCandidate;
 const SourceSuggestion = types.SourceSuggestion;
 const SourceSuggestionOptions = types.SourceSuggestionOptions;
 const SourceSuggestions = types.SourceSuggestions;
-const AttemptResult = types.AttemptResult;
 const NameExprMap = types.NameExprMap;
 const LabelIndexMap = types.LabelIndexMap;
 const FreshDecl = types.FreshDecl;
@@ -57,13 +56,12 @@ const ViewDecl = types.ViewDecl;
 const SortVarRegistry = types.SortVarRegistry;
 const applyWithSession = apply_mod.applyWithSession;
 const exactWithSession = backtrack.exactWithSession;
-const tryCandidate = candidate_mod.tryCandidate;
 const extractHypPartialBindings = prune.extractHypPartialBindings;
 const fixture_mod = @import("./fixture.zig");
 const SourceTarget = fixture_mod.SourceTarget;
 const fixtureForSourceTarget = fixture_mod.fixtureForSourceTarget;
 const parseGoal = fixture_mod.parseGoal;
-const runSearchLine = fixture_mod.runSearchLine;
+const commitSearchLine = fixture_mod.commitSearchLine;
 
 pub fn suggestionsAtSourceOffset(
     allocator: std.mem.Allocator,
@@ -176,7 +174,7 @@ pub fn suggestionsAtSourceOffset(
             labels.put(line.label, line_idx) catch return error.OutOfMemory;
             continue;
         }
-        var result = runSearchLine(
+        const line_idx = commitSearchLine(
             work,
             &compiler,
             &fixture,
@@ -187,10 +185,8 @@ pub fn suggestionsAtSourceOffset(
             &diag_scratch,
             &cache,
             line,
-            true,
         ) catch return .{ .allocator = allocator, .items = &.{} };
-        defer result.deinit();
-        labels.put(line.label, result.line_idx) catch return error.OutOfMemory;
+        labels.put(line.label, line_idx) catch return error.OutOfMemory;
     }
 
     const context = Context{
@@ -1641,10 +1637,9 @@ fn validateReplacementApplication(
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
 ) !bool {
-    // Non-commit probe: no pre-clones needed (see `tryCandidateProbe`), and
-    // with `.borrowed` the attempt theorem is a COW clone based directly on
-    // the caller's `theorem`, which outlives it.
-    var attempt = candidate_mod.tryCandidateProbe(
+    // The probe's theorem is a COW clone based directly on the caller's
+    // `theorem`, which outlives it.
+    var attempt = candidate_mod.probe(
         compiler,
         context,
         application,
@@ -1655,7 +1650,6 @@ fn validateReplacementApplication(
             .line_label = line.label,
             .assertion_span = line.assertion.span,
             .diagnostic_span = line.span,
-            .result_ownership = .borrowed,
         },
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
@@ -1663,7 +1657,7 @@ fn validateReplacementApplication(
     };
     defer attempt.deinit();
     CheckedIr.validateLinesCached(
-        &attempt.theorem.?,
+        &attempt.theorem,
         attempt.checked_lines,
     ) catch {
         return false;

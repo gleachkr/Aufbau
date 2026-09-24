@@ -1012,8 +1012,8 @@ pub fn build(b: *std.Build) void {
         //     kills the sweep; the internal-child enumeration cutoff dropped
         //     the honest budget floor 5.51G → 3.75G ticks (was >10G before
         //     the prune); and removing the redundant pre-clone COW chain
-        //     level under every `tryCandidate` probe (`tryCandidateProbe` in
-        //     candidate.zig, 2026-07-05) dropped it again, 3.75G → 3.09G —
+        //     level under every `tryCandidate` probe (now `candidate.probe`,
+        //     2026-07-05) dropped it again, 3.75G → 3.09G —
         //     UNDER the 3.35G default cap. CLOSED: FULL 13/13 at pure
         //     defaults, guarded below with no overrides (deterministic
         //     margin 1.08×: any change pushing the k=6 floor +8% trips it).

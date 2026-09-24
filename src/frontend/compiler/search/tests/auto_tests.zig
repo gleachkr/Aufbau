@@ -15,7 +15,6 @@ const Goal = helpers.Goal;
 const Context = helpers.Context;
 const apply = helpers.apply;
 const exact = helpers.exact;
-const tryCandidate = helpers.tryCandidate;
 const fixtureFor = helpers.fixtureFor;
 const parseGoal = helpers.parseGoal;
 const readProofCase = helpers.readProofCase;

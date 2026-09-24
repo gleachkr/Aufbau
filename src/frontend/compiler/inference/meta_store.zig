@@ -337,7 +337,10 @@ pub const MetaStore = struct {
                     theorem.allocator.free(args);
                     return expr_id;
                 }
-                return try theorem.interner.internAppOwned(app.term_id, args);
+                return theorem.interner.internAppOwned(app.term_id, args) catch |err| {
+                    theorem.allocator.free(args);
+                    return err;
+                };
             },
         }
     }

@@ -8,7 +8,6 @@ const ExprId = helpers.ExprId;
 const TheoremContext = helpers.TheoremContext;
 const Goal = helpers.Goal;
 const exact = helpers.exact;
-const tryCandidate = helpers.tryCandidate;
 const fixtureFor = helpers.fixtureFor;
 const ContextHarness = helpers.ContextHarness;
 const tunables = helpers.tunables;

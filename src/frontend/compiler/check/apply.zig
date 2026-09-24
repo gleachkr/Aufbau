@@ -58,7 +58,6 @@ const applyFreshenedRuleLine = FreshenRetry.applyFreshenedRuleLine;
 const findRuleArgIndex = Idents.findRuleArgIndex;
 
 const NameExprMap = @import("./types.zig").NameExprMap;
-const SuccessfulLineAttempt = @import("./types.zig").SuccessfulLineAttempt;
 const UnresolvedHypothesis = @import("./types.zig").UnresolvedHypothesis;
 const ConclusionProbe = @import("./types.zig").ConclusionProbe;
 const RefExpectationProbe = @import("./types.zig").RefExpectationProbe;
@@ -92,6 +91,18 @@ const lineAssertionKnownDeps = @import("./bindings.zig").lineAssertionKnownDeps;
 const validateFreshBindingsAgainstLine = @import("./bindings.zig").validateFreshBindingsAgainstLine;
 const applyFreshBindings = @import("./bindings.zig").applyFreshBindings;
 
+/// Elaborate one rule application (with `@fallback` candidates and ambiguous
+/// ACUI principal retries) and return the index of the checked line it
+/// produced. Attempt ownership rules:
+/// - a speculative attempt works on COW clones (`SpeculativeAttempt`); a
+///   failed one is aborted — its checked lines, inline-conclusion sink
+///   entries and clones are discarded — before the next candidate runs;
+/// - diagnostics: the first failing candidate's diagnostic is the one
+///   reported if every candidate fails; a success restores the entry
+///   diagnostic;
+/// - on error, sink entries recorded during this call are dropped (the
+///   checked IR and, on the non-speculative path, the theorem are left to
+///   the caller, which discards the whole line).
 pub fn applyRuleApplication(
     self: *CompilerContext,
     context: *const RuleApplyContext,
@@ -102,8 +113,10 @@ pub fn applyRuleApplication(
     line: ApplicationLine,
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
-) anyerror!SuccessfulLineAttempt {
+) anyerror!usize {
     const allocator = context.allocator;
+    const sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0;
+    errdefer if (self.inline_conclusion_sink) |sink| sink.rollback(sink_mark);
     const initial_rule_id = try lookupRuleApplicationId(
         self,
         context.env,
@@ -160,7 +173,7 @@ pub fn applyRuleApplication(
         const checked_mark = context.checked.items.len;
 
         if (speculative) {
-            var attempt = trySpeculativeAttempt(
+            var attempt = SpeculativeAttempt.run(
                 self,
                 context,
                 application,
@@ -172,10 +185,11 @@ pub fn applyRuleApplication(
                 theorem_vars,
                 &.{},
             ) catch |err| retry: {
+                if (err == error.OutOfMemory) return err;
                 const err_diag = getDiagnostic(self);
                 for (pins) |pin| {
                     restoreDiagnostic(self, null);
-                    if (trySpeculativeAttempt(
+                    if (SpeculativeAttempt.run(
                         self,
                         context,
                         application,
@@ -227,29 +241,15 @@ pub fn applyRuleApplication(
                 .theorem_application,
                 saved_diag,
             ) catch |err| {
-                CheckedIr.rollbackToMark(allocator, context.checked, checked_mark);
-                attempt.theorem_vars.deinit();
-                attempt.theorem.deinit();
+                attempt.abort();
                 return err;
             };
-
-            // Materialize the COW clone before it replaces (and frees) its base.
-            attempt.theorem.flatten() catch |err| {
-                CheckedIr.rollbackToMark(allocator, context.checked, checked_mark);
-                attempt.theorem_vars.deinit();
-                attempt.theorem.deinit();
-                return err;
-            };
-            var old_theorem = theorem.*;
-            theorem.* = attempt.theorem;
-            old_theorem.deinit();
-            theorem_vars.deinit();
-            theorem_vars.* = attempt.theorem_vars;
+            const line_idx = try attempt.promote(theorem, theorem_vars);
             restoreDiagnostic(self, saved_diag);
-            return attempt;
+            return line_idx;
         }
 
-        const attempt = tryApplyRuleApplicationWithCandidate(
+        const line_idx = tryApplyRuleApplicationWithCandidate(
             self,
             context,
             application,
@@ -279,7 +279,7 @@ pub fn applyRuleApplication(
         );
 
         restoreDiagnostic(self, saved_diag);
-        return attempt;
+        return line_idx;
     }
 }
 
@@ -386,7 +386,8 @@ const CandidateApplyKind = enum {
 };
 
 const CandidateApplyResult = union(CandidateApplyKind) {
-    full_application: SuccessfulLineAttempt,
+    /// Index of the checked line the application produced.
+    full_application: usize,
     conclusion_probe: ConclusionProbe,
 };
 
@@ -457,6 +458,7 @@ fn applyRuleCandidateCore(
     }
 
     var expected_refs: []?ExprId = &.{};
+    defer allocator.free(expected_refs);
     if (kind == .full_application) {
         expected_refs = try inferExpectedRefsForInlineApplications(
             allocator,
@@ -481,7 +483,6 @@ fn applyRuleCandidateCore(
             expected_refs,
         );
     }
-    defer if (kind == .full_application) allocator.free(expected_refs);
 
     const refs = try allocator.alloc(CheckedRef, expected_ref_count);
     var refs_owned = true;
@@ -998,11 +999,7 @@ fn applyRuleCandidateCore(
         };
         allocator.free(refs);
         refs_owned = false;
-        return .{ .full_application = .{
-            .line_idx = line_idx,
-            .theorem = theorem.*,
-            .theorem_vars = theorem_vars.*,
-        } };
+        return .{ .full_application = line_idx };
     }
 
     for (ref_exprs, application.refs, 0..) |actual, ref, idx| {
@@ -1199,11 +1196,7 @@ fn applyRuleCandidateCore(
     refs_owned = false;
     diag_scratch.discard(concl_mark);
 
-    return .{ .full_application = .{
-        .line_idx = line_idx,
-        .theorem = theorem.*,
-        .theorem_vars = theorem_vars.*,
-    } };
+    return .{ .full_application = line_idx };
 }
 
 fn tryApplyRuleApplicationWithCandidate(
@@ -1217,7 +1210,7 @@ fn tryApplyRuleApplicationWithCandidate(
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
     pins: []const ?ExprId,
-) anyerror!SuccessfulLineAttempt {
+) anyerror!usize {
     const result = try applyRuleCandidateCore(
         self,
         context,
@@ -1239,49 +1232,101 @@ fn tryApplyRuleApplicationWithCandidate(
     return result.full_application;
 }
 
-/// One speculative attempt on COW clones of `theorem`/`theorem_vars`: on
-/// failure the clones are discarded and `checked` rolled back, leaving the
-/// caller's state untouched for the next attempt.
-fn trySpeculativeAttempt(
-    self: *CompilerContext,
-    context: *const RuleApplyContext,
-    application: RuleApplication,
-    line_assertion: LineAssertion,
-    expected_conclusion_hint: ?ExprId,
-    line: ApplicationLine,
-    rule_id: u32,
-    theorem: *TheoremContext,
-    theorem_vars: *NameExprMap,
-    pins: []const ?ExprId,
-) anyerror!SuccessfulLineAttempt {
-    const allocator = context.allocator;
-    const checked_mark = context.checked.items.len;
-    var attempt_theorem = try theorem.clone();
-    var attempt_theorem_vars = cloneNameExprMap(
-        allocator,
-        theorem_vars,
-    ) catch |err| {
-        attempt_theorem.deinit();
-        return err;
-    };
-    return tryApplyRuleApplicationWithCandidate(
-        self,
-        context,
-        application,
-        line_assertion,
-        expected_conclusion_hint,
-        line,
-        rule_id,
-        &attempt_theorem,
-        &attempt_theorem_vars,
-        pins,
-    ) catch |err| {
-        CheckedIr.rollbackToMark(allocator, context.checked, checked_mark);
-        attempt_theorem_vars.deinit();
-        attempt_theorem.deinit();
-        return err;
-    };
-}
+/// One speculative attempt, run on COW clones of the caller's theorem and
+/// vars. It owns the clones and the marks needed to undo what it appended to
+/// the shared checked IR and inline-conclusion sink; the caller's state is
+/// untouched until `promote`. Exactly one of `abort`/`promote` must run on a
+/// returned attempt (`run` aborts a failed one itself).
+const SpeculativeAttempt = struct {
+    allocator: std.mem.Allocator,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    checked_mark: usize,
+    sink: ?*InlineConclusionSink,
+    sink_mark: usize,
+    theorem: TheoremContext,
+    theorem_vars: NameExprMap,
+    line_idx: usize,
+
+    fn run(
+        self: *CompilerContext,
+        context: *const RuleApplyContext,
+        application: RuleApplication,
+        line_assertion: LineAssertion,
+        expected_conclusion_hint: ?ExprId,
+        line: ApplicationLine,
+        rule_id: u32,
+        theorem: *const TheoremContext,
+        theorem_vars: *const NameExprMap,
+        pins: []const ?ExprId,
+    ) anyerror!SpeculativeAttempt {
+        const allocator = context.allocator;
+        var attempt_theorem = try theorem.clone();
+        const attempt_theorem_vars = cloneNameExprMap(
+            allocator,
+            theorem_vars,
+        ) catch |err| {
+            attempt_theorem.deinit();
+            return err;
+        };
+        var attempt: SpeculativeAttempt = .{
+            .allocator = allocator,
+            .checked = context.checked,
+            .checked_mark = context.checked.items.len,
+            .sink = self.inline_conclusion_sink,
+            .sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0,
+            .theorem = attempt_theorem,
+            .theorem_vars = attempt_theorem_vars,
+            .line_idx = undefined,
+        };
+        attempt.line_idx = tryApplyRuleApplicationWithCandidate(
+            self,
+            context,
+            application,
+            line_assertion,
+            expected_conclusion_hint,
+            line,
+            rule_id,
+            &attempt.theorem,
+            &attempt.theorem_vars,
+            pins,
+        ) catch |err| {
+            attempt.abort();
+            return err;
+        };
+        return attempt;
+    }
+
+    /// Discard everything the attempt produced.
+    fn abort(attempt: *SpeculativeAttempt) void {
+        CheckedIr.rollbackToMark(attempt.allocator, attempt.checked, attempt.checked_mark);
+        if (attempt.sink) |sink| sink.rollback(attempt.sink_mark);
+        attempt.theorem_vars.deinit();
+        attempt.theorem.deinit();
+        attempt.* = undefined;
+    }
+
+    /// Replace the caller's theorem and vars with the attempt's and return
+    /// the produced line index. On error the attempt is aborted.
+    fn promote(
+        attempt: *SpeculativeAttempt,
+        theorem: *TheoremContext,
+        theorem_vars: *NameExprMap,
+    ) !usize {
+        // Materialize the COW clone before it replaces (and frees) its base.
+        attempt.theorem.flatten() catch |err| {
+            attempt.abort();
+            return err;
+        };
+        const line_idx = attempt.line_idx;
+        var old_theorem = theorem.*;
+        theorem.* = attempt.theorem;
+        old_theorem.deinit();
+        theorem_vars.deinit();
+        theorem_vars.* = attempt.theorem_vars;
+        attempt.* = undefined;
+        return line_idx;
+    }
+};
 
 fn hasInlineRef(application: RuleApplication) bool {
     for (application.refs) |ref| {
@@ -1417,7 +1462,7 @@ fn elaborateRefs(
                     ref_exprs,
                     idx,
                 );
-                const attempt = try applyRuleApplication(
+                const line_idx = try applyRuleApplication(
                     self,
                     context,
                     inline_app,
@@ -1432,9 +1477,9 @@ fn elaborateRefs(
                     theorem,
                     theorem_vars,
                 );
-                refs[idx] = .{ .line = attempt.line_idx };
+                refs[idx] = .{ .line = line_idx };
                 const conclusion =
-                    context.checked.items[attempt.line_idx].expr;
+                    context.checked.items[line_idx].expr;
                 try recordInlineConclusion(
                     self,
                     context,

@@ -449,7 +449,10 @@ pub fn materializeSurfaceWithCandidate(
                     arg,
                     candidate_arg,
                     report,
-                )) orelse return null;
+                )) orelse {
+                    theorem.allocator.free(args);
+                    return null;
+                };
             }
             return try theorem.interner.internAppOwned(holey_term.id, args);
         },

@@ -178,9 +178,11 @@ pub fn rebuildExprRepresentativeSymbolic(
                 *const SymbolicExpr,
                 app.args.len,
             );
-            errdefer self.shared.allocator.free(args);
+            var args_owned = true;
+            errdefer if (args_owned) self.shared.allocator.free(args);
             const plain_args = try self.shared.allocator.alloc(ExprId, app.args.len);
-            errdefer self.shared.allocator.free(plain_args);
+            var plain_args_owned = true;
+            errdefer if (plain_args_owned) self.shared.allocator.free(plain_args);
 
             var all_plain = true;
             var changed = false;
@@ -201,8 +203,10 @@ pub fn rebuildExprRepresentativeSymbolic(
             }
             if (all_plain) {
                 self.shared.allocator.free(args);
+                args_owned = false;
                 if (!changed) {
                     self.shared.allocator.free(plain_args);
+                    plain_args_owned = false;
                     break :blk try self.allocSymbolic(
                         .{ .fixed = expr_id },
                     );
@@ -211,11 +215,13 @@ pub fn rebuildExprRepresentativeSymbolic(
                     app.term_id,
                     plain_args,
                 );
+                plain_args_owned = false;
                 break :blk try self.allocSymbolic(
                     .{ .fixed = rebuilt },
                 );
             }
             self.shared.allocator.free(plain_args);
+            plain_args_owned = false;
             break :blk try self.allocSymbolic(.{ .app = .{
                 .term_id = app.term_id,
                 .args = args,
@@ -302,12 +308,14 @@ pub fn compressRepresentativeToDef(
             *const SymbolicExpr,
             term.args.len,
         );
-        errdefer self.shared.allocator.free(args);
+        var args_owned = true;
+        errdefer if (args_owned) self.shared.allocator.free(args);
         const plain_args = try self.shared.allocator.alloc(
             ExprId,
             term.args.len,
         );
-        errdefer self.shared.allocator.free(plain_args);
+        var plain_args_owned = true;
+        errdefer if (plain_args_owned) self.shared.allocator.free(plain_args);
         var all_plain = true;
         for (0..term.args.len) |idx| {
             const binding = temp.bindings[idx] orelse {
@@ -342,13 +350,16 @@ pub fn compressRepresentativeToDef(
 
         if (all_plain) {
             self.shared.allocator.free(args);
+            args_owned = false;
             const rebuilt = try self.shared.theorem.interner.internAppOwned(
                 @intCast(term_id),
                 plain_args,
             );
+            plain_args_owned = false;
             return try self.allocSymbolic(.{ .fixed = rebuilt });
         }
         self.shared.allocator.free(plain_args);
+        plain_args_owned = false;
         return try self.allocSymbolic(.{ .app = .{
             .term_id = @intCast(term_id),
             .args = args,

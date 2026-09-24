@@ -4,7 +4,6 @@
 
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
-const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RuleDecl = @import("../../env.zig").RuleDecl;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
@@ -61,12 +60,6 @@ const findRuleArgIndex = Idents.findRuleArgIndex;
 pub const NameExprMap = std.StringHashMap(*const Expr);
 
 pub const LabelIndexMap = std.StringHashMap(usize);
-
-pub const SuccessfulLineAttempt = struct {
-    line_idx: usize,
-    theorem: TheoremContext,
-    theorem_vars: NameExprMap,
-};
 
 pub const UnresolvedHypothesis = struct {
     index: usize,

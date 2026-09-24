@@ -12,7 +12,6 @@ const Check = @import("../check.zig");
 const Goal = types.Goal;
 const Context = types.Context;
 const AttemptOptions = types.AttemptOptions;
-const AttemptResult = types.AttemptResult;
 const NameExprMap = types.NameExprMap;
 
 /// Mirror of `validateSelectedRefs`' explicit-binding retry guard: a bare
@@ -33,14 +32,41 @@ fn retryEligibleReject(
         (err == error.UnifyMismatch and unify_retry_eligible);
 }
 
-/// Non-committing probe variant of `tryCandidate` for callers holding const
-/// theorem state. A non-commit attempt treats the base theorem/vars as
-/// read-only: `tryCandidate` clones both up front and only its commit branch
-/// ever writes back through the pointers. Probing therefore needs no caller
-/// pre-clone — the pre-clone pattern this replaces added one copy-on-write
-/// chain level (and a full vars-map copy) under every intern probe of the
-/// whole validation, purely to satisfy the mutable signature.
-pub fn tryCandidateProbe(
+/// A successful non-committing attempt. It BORROWS the probed theorem:
+/// `theorem` is a copy-on-write clone layered over the caller's theorem, so
+/// the probe must be deinitialized before that theorem is mutated, moved, or
+/// destroyed. `checked_lines` (the attempt's new lines, indexed from
+/// `checked_start`) and `theorem_vars` are owned.
+pub const Probe = struct {
+    allocator: std.mem.Allocator,
+    line_idx: usize,
+    checked_start: usize,
+    checked_lines: []const CheckedLine,
+    theorem: TheoremContext,
+    theorem_vars: NameExprMap,
+
+    pub fn deinit(self: *Probe) void {
+        CheckedIr.deinitLines(self.allocator, self.checked_lines);
+        self.allocator.free(self.checked_lines);
+        self.theorem_vars.deinit();
+        self.theorem.deinit();
+        self.* = undefined;
+    }
+
+    /// The checked line the application produced, or null if `line_idx`
+    /// falls outside the attempt's new lines.
+    pub fn line(self: *const Probe) ?CheckedLine {
+        if (self.line_idx < self.checked_start) return null;
+        const local_idx = self.line_idx - self.checked_start;
+        if (local_idx >= self.checked_lines.len) return null;
+        return self.checked_lines[local_idx];
+    }
+};
+
+/// Check `application` against `goal` without touching the caller's state.
+/// Inline-conclusion sink entries recorded by the attempt are dropped, and
+/// the caller's diagnostic is restored, whether it succeeds or fails.
+pub fn probe(
     compiler: *CompilerContext,
     context: *const Context,
     application: RuleApplication,
@@ -48,20 +74,33 @@ pub fn tryCandidateProbe(
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
     options: AttemptOptions,
-) !AttemptResult {
-    std.debug.assert(!options.commit);
-    return tryCandidate(
+) !Probe {
+    const sink_mark = if (compiler.inline_conclusion_sink) |sink| sink.mark() else 0;
+    defer if (compiler.inline_conclusion_sink) |sink| sink.rollback(sink_mark);
+    const result = try tryCandidate(
         compiler,
         context,
         application,
         goal,
-        @constCast(theorem),
-        @constCast(theorem_vars),
+        theorem,
+        theorem_vars,
         options,
     );
+    return .{
+        .allocator = context.allocator,
+        .line_idx = result.line_idx,
+        .checked_start = result.checked_start,
+        .checked_lines = result.checked_lines,
+        .theorem = result.theorem,
+        .theorem_vars = result.theorem_vars,
+    };
 }
 
-pub fn tryCandidate(
+/// Check `application` against `goal` and, on success, append its lines to
+/// `context.checked` and replace `theorem`/`theorem_vars` with the attempt's
+/// state. Returns the index of the produced line in `context.checked`. On
+/// failure the caller's state is untouched.
+pub fn commit(
     compiler: *CompilerContext,
     context: *const Context,
     application: RuleApplication,
@@ -69,7 +108,54 @@ pub fn tryCandidate(
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
     options: AttemptOptions,
-) !AttemptResult {
+) !usize {
+    const allocator = context.allocator;
+    var result = try tryCandidate(
+        compiler,
+        context,
+        application,
+        goal,
+        theorem,
+        theorem_vars,
+        options,
+    );
+    defer allocator.free(result.checked_lines);
+    errdefer {
+        CheckedIr.deinitLines(allocator, result.checked_lines);
+        result.theorem_vars.deinit();
+        result.theorem.deinit();
+    }
+    // Materialize the COW clone before it replaces (and frees) its base.
+    try result.theorem.flatten();
+    try context.checked.appendSlice(allocator, result.checked_lines);
+    var old_theorem = theorem.*;
+    theorem.* = result.theorem;
+    old_theorem.deinit();
+    theorem_vars.deinit();
+    theorem_vars.* = result.theorem_vars;
+    return result.line_idx;
+}
+
+const AttemptOutput = struct {
+    line_idx: usize,
+    checked_start: usize,
+    checked_lines: []const CheckedLine,
+    theorem: TheoremContext,
+    theorem_vars: NameExprMap,
+};
+
+/// Validate one assembly: run the checker on COW clones of the caller's
+/// theorem and vars and a scratch copy of the checked IR. The caller's state
+/// is only read; `probe` and `commit` decide what happens to the result.
+fn tryCandidate(
+    compiler: *CompilerContext,
+    context: *const Context,
+    application: RuleApplication,
+    goal: Goal,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+    options: AttemptOptions,
+) !AttemptOutput {
     const allocator = context.allocator;
     const saved_diag = compiler.getDiagnostic();
 
@@ -137,7 +223,7 @@ pub fn tryCandidate(
     }
     const apply_start = if (collect) timer.nanoTimestamp() else 0;
 
-    const attempt = Check.applyRuleApplication(
+    const line_idx = Check.applyRuleApplication(
         compiler,
         &attempt_context,
         application,
@@ -192,42 +278,8 @@ pub fn tryCandidate(
     );
     scratch_checked.shrinkRetainingCapacity(checked_mark);
 
-    if (options.commit) {
-        errdefer {
-            CheckedIr.deinitLines(allocator, new_lines);
-            allocator.free(new_lines);
-        }
-        // Materialize the COW clone before it replaces (and frees) its base.
-        try attempt_theorem.flatten();
-        try context.checked.appendSlice(allocator, new_lines);
-        var old_theorem = theorem.*;
-        theorem.* = attempt_theorem;
-        old_theorem.deinit();
-        theorem_vars.deinit();
-        theorem_vars.* = attempt_theorem_vars;
-        return .{
-            .allocator = allocator,
-            .committed = true,
-            .line_idx = attempt.line_idx,
-            .checked_start = checked_mark,
-            .checked_lines = new_lines,
-            .theorem = null,
-            .theorem_vars = null,
-        };
-    }
-
-    if (options.result_ownership == .owned) {
-        errdefer {
-            CheckedIr.deinitLines(allocator, new_lines);
-            allocator.free(new_lines);
-        }
-        try attempt_theorem.flatten();
-    }
-
     return .{
-        .allocator = allocator,
-        .committed = false,
-        .line_idx = attempt.line_idx,
+        .line_idx = line_idx,
         .checked_start = checked_mark,
         .checked_lines = new_lines,
         .theorem = attempt_theorem,

@@ -109,17 +109,7 @@ pub const Context = struct {
     }
 };
 
-pub const AttemptResultOwnership = enum {
-    /// Returned result owns a standalone theorem and may outlive the input.
-    owned,
-    /// Returned result borrows the input theorem's expression interner.
-    /// The caller must not use result theorem data after the input theorem is
-    /// destroyed or moved. Intended for hot internal validation paths only.
-    borrowed,
-};
-
 pub const AttemptOptions = struct {
-    commit: bool = false,
     line_label: []const u8 = "<search>",
     assertion_span: Span = .{ .start = 0, .end = 0 },
     diagnostic_span: ?Span = null,
@@ -127,7 +117,6 @@ pub const AttemptOptions = struct {
     /// The calling search's memos + prune policy (`tryCandidate` reads the
     /// verdict memo). Default = no memo.
     runtime: SearchRuntime = .{},
-    result_ownership: AttemptResultOwnership = .owned,
     /// Caller-computed scope of `validateSelectedRefs`' UnifyMismatch retry arm
     /// (holey goal + view rule + meta-bearing candidate theorem). The verdict
     /// memo consults it so a bare-assembly UnifyMismatch reject that the caller
@@ -135,26 +124,6 @@ pub const AttemptOptions = struct {
     /// memo's retry-eligibility predicate must mirror the caller's gate exactly,
     /// and only the caller has the rule/theorem context to compute this arm.
     unify_retry_eligible: bool = false,
-};
-
-pub const AttemptResult = struct {
-    allocator: std.mem.Allocator,
-    committed: bool,
-    line_idx: usize,
-    checked_start: usize,
-    checked_lines: []const CheckedLine,
-    theorem: ?TheoremContext,
-    theorem_vars: ?NameExprMap,
-
-    pub fn deinit(self: *AttemptResult) void {
-        if (!self.committed) {
-            CheckedIr.deinitLines(self.allocator, self.checked_lines);
-        }
-        self.allocator.free(self.checked_lines);
-        if (self.theorem_vars) |*vars| vars.deinit();
-        if (self.theorem) |*theorem| theorem.deinit();
-        self.* = undefined;
-    }
 };
 
 pub const UnresolvedHypothesis = Check.UnresolvedHypothesis;

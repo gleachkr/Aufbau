@@ -1172,7 +1172,10 @@ fn derefJoinOverlay(
                 theorem.allocator.free(args);
                 return expr_id;
             }
-            return try theorem.interner.internAppOwned(app.term_id, args);
+            return theorem.interner.internAppOwned(app.term_id, args) catch |err| {
+                theorem.allocator.free(args);
+                return err;
+            };
         },
     }
 }
@@ -1239,7 +1242,10 @@ pub fn leafSwap(
         theorem.allocator.free(args);
         return pattern;
     }
-    return try theorem.interner.internAppOwned(app.term_id, args);
+    return theorem.interner.internAppOwned(app.term_id, args) catch |err| {
+        theorem.allocator.free(args);
+        return err;
+    };
 }
 
 pub const SolveResult = enum { ok, conflict };
@@ -1507,7 +1513,10 @@ fn derefPinned(
                 theorem.allocator.free(args);
                 return expr_id;
             }
-            return try theorem.interner.internAppOwned(app.term_id, args);
+            return theorem.interner.internAppOwned(app.term_id, args) catch |err| {
+                theorem.allocator.free(args);
+                return err;
+            };
         },
     }
 }

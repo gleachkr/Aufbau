@@ -61,7 +61,6 @@ const findRuleArgIndex = Idents.findRuleArgIndex;
 
 pub const NameExprMap = @import("./check/types.zig").NameExprMap;
 pub const LabelIndexMap = @import("./check/types.zig").LabelIndexMap;
-pub const SuccessfulLineAttempt = @import("./check/types.zig").SuccessfulLineAttempt;
 pub const UnresolvedHypothesis = @import("./check/types.zig").UnresolvedHypothesis;
 pub const ConclusionProbe = @import("./check/types.zig").ConclusionProbe;
 pub const RefExpectationProbe = @import("./check/types.zig").RefExpectationProbe;
@@ -299,7 +298,7 @@ pub fn checkTheoremBlock(
             .diag_scratch = &diag_scratch,
             .rule_unify_cache = &rule_unify_cache,
         };
-        const attempt = try applyRuleApplication(
+        const line_idx = try applyRuleApplication(
             self,
             &apply_context,
             line.application,
@@ -321,13 +320,13 @@ pub fn checkTheoremBlock(
                 &theorem_vars,
                 line,
                 parsed_assertion.holey,
-                checked.items[attempt.line_idx].expr,
+                checked.items[line_idx].expr,
             );
         }
 
-        try labels.put(line.label, attempt.line_idx);
-        last_line = checked.items[attempt.line_idx].expr;
-        last_line_idx = attempt.line_idx;
+        try labels.put(line.label, line_idx);
+        last_line = checked.items[line_idx].expr;
+        last_line_idx = line_idx;
         last_label = line.label;
         last_span = line.span;
     }

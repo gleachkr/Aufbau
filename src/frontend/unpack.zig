@@ -84,8 +84,9 @@ pub fn unpackAtSourceOffset(
     var sink = InlineConclusionSink{ .allocator = work };
     if (!try analyzesCleanly(work, mm0_src, proof_src, &sink)) return null;
 
-    // Fallback and retry candidates re-record a span; the last entry is the
-    // one from the attempt that survived, so later inserts overwrite.
+    // Aborted fallback/retry attempts roll their entries back (see
+    // `InlineConclusionSink`), so every entry comes from the surviving
+    // elaboration; later inserts overwrite.
     var conclusions = std.AutoHashMapUnmanaged(u128, []const u8){};
     for (sink.items.items) |item| {
         try conclusions.put(work, spanKey(item.span), item.conclusion);

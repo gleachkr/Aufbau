@@ -112,6 +112,7 @@ fn inferExpectedRefsForInlineApplicationsWithContext(
     contextual: []?ExprId,
 ) ![]?ExprId {
     const expected_refs = try allocator.alloc(?ExprId, rule.hyps.len);
+    errdefer allocator.free(expected_refs);
     @memset(expected_refs, null);
 
     const line_expr = expected_conclusion_hint orelse switch (line_assertion) {

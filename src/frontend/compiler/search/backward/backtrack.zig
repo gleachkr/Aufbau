@@ -46,7 +46,6 @@ const NameExprMap = types.NameExprMap;
 const GenerationHook = types.GenerationHook;
 const DerivedPool = types.DerivedPool;
 const Fuel = types.Fuel;
-const tryCandidate = candidate_mod.tryCandidate;
 const rankReferenceIndices = refs_mod.rankReferenceIndices;
 const exactCandidateLessThan = rank.exactCandidateLessThan;
 const isBroadWholeLineHole = rank.isBroadWholeLineHole;

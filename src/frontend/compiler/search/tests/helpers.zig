@@ -68,7 +68,7 @@ pub const Goal = types.Goal;
 
 pub const Context = types.Context;
 
-pub const AttemptResult = types.AttemptResult;
+pub const Probe = candidate_mod.Probe;
 
 pub const NameExprMap = types.NameExprMap;
 
@@ -80,7 +80,7 @@ pub const applyWithSession = apply_mod.applyWithSession;
 
 pub const exact = backtrack.exact;
 
-pub const tryCandidate = candidate_mod.tryCandidate;
+pub const probe = candidate_mod.probe;
 
 pub const fixtureFor = fixture_mod.fixtureFor;
 
@@ -88,7 +88,9 @@ pub const fixtureForFullEnv = fixture_mod.fixtureForFullEnv;
 
 pub const parseGoal = fixture_mod.parseGoal;
 
-pub const runSearchLine = fixture_mod.runSearchLine;
+pub const Fixture = fixture_mod.Fixture;
+pub const commitSearchLine = fixture_mod.commitSearchLine;
+pub const probeSearchLine = fixture_mod.probeSearchLine;
 
 pub const readProofCase = fixture_mod.readProofCase;
 
@@ -181,7 +183,7 @@ pub fn expectCaseLineSearch(
     defer harness.deinit();
 
     for (block.lines[0..line_index]) |line| {
-        var result = try runSearchLine(
+        const line_idx = try commitSearchLine(
             allocator,
             &compiler,
             &fixture,
@@ -192,13 +194,11 @@ pub fn expectCaseLineSearch(
             &harness.diag_scratch,
             &harness.cache,
             line,
-            true,
         );
-        defer result.deinit();
-        try harness.labels.put(line.label, result.line_idx);
+        try harness.labels.put(line.label, line_idx);
     }
 
-    var result = try runSearchLine(
+    var result = try probeSearchLine(
         allocator,
         &compiler,
         &fixture,
@@ -209,11 +209,10 @@ pub fn expectCaseLineSearch(
         &harness.diag_scratch,
         &harness.cache,
         block.lines[line_index],
-        false,
     );
     defer result.deinit();
     try std.testing.expect(result.checked_lines.len > 0);
-    try CheckedIr.validateLines(&result.theorem.?, result.checked_lines);
+    try CheckedIr.validateLines(&result.theorem, result.checked_lines);
     try std.testing.expectEqual(line_index, harness.checked.items.len);
 }
 
@@ -429,7 +428,7 @@ pub fn expectExactRuleOrderWithPrefix(
     if (prefix_count > 0) {
         const actual_block = block orelse return error.MissingBlock;
         for (actual_block.lines[0..prefix_count]) |line| {
-            var result = try runSearchLine(
+            const line_idx = try commitSearchLine(
                 allocator,
                 &compiler,
                 &fixture,
@@ -440,10 +439,8 @@ pub fn expectExactRuleOrderWithPrefix(
                 &harness.diag_scratch,
                 &harness.cache,
                 line,
-                true,
             );
-            defer result.deinit();
-            try harness.labels.put(line.label, result.line_idx);
+            try harness.labels.put(line.label, line_idx);
         }
     }
 
@@ -471,25 +468,18 @@ pub fn expectExactRuleOrderWithPrefix(
             expected,
             results.candidates[idx].rule_name,
         );
-        var attempt_theorem = try theorem.clone();
-        defer attempt_theorem.deinit();
-        var attempt_vars = try Check.cloneNameExprMap(
-            allocator,
-            &theorem_vars,
-        );
-        defer attempt_vars.deinit();
-        var attempt = try tryCandidate(
+        var attempt = try probe(
             &compiler,
             &context,
             results.candidates[idx].application,
             goal,
-            &attempt_theorem,
-            &attempt_vars,
+            &theorem,
+            &theorem_vars,
             .{},
         );
         defer attempt.deinit();
         try CheckedIr.validateLines(
-            &attempt.theorem.?,
+            &attempt.theorem,
             attempt.checked_lines,
         );
     }
@@ -538,7 +528,7 @@ pub fn expectInlineSearch(
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
 
-    var result = try runSearchLine(
+    var result = try probeSearchLine(
         allocator,
         &compiler,
         &fixture,
@@ -549,7 +539,6 @@ pub fn expectInlineSearch(
         &harness.diag_scratch,
         &harness.cache,
         block.lines[line_index],
-        false,
     );
     defer result.deinit();
     try std.testing.expect(result.checked_lines.len > 0);
@@ -656,7 +645,7 @@ pub fn expectFirstExactRefs(
     if (prefix_count > 0) {
         const actual_block = block orelse return error.MissingBlock;
         for (actual_block.lines[0..prefix_count]) |line| {
-            var result = try runSearchLine(
+            const line_idx = try commitSearchLine(
                 allocator,
                 &compiler,
                 &fixture,
@@ -667,10 +656,8 @@ pub fn expectFirstExactRefs(
                 &harness.diag_scratch,
                 &harness.cache,
                 line,
-                true,
             );
-            defer result.deinit();
-            try harness.labels.put(line.label, result.line_idx);
+            try harness.labels.put(line.label, line_idx);
         }
     }
 

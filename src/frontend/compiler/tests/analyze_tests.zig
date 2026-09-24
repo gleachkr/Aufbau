@@ -1007,3 +1007,45 @@ test "subtractMembers: multiset order, duplicates, set semantics, strictness" {
         );
     }
 }
+
+test "compiler analyze keeps no inline conclusion from an aborted fallback attempt" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\term bot: wff;
+        \\axiom top_i: $ top $;
+        \\axiom outer_good: $ top $ > $ top $;
+        \\--| @fallback outer_good
+        \\axiom outer_bad: $ bot $ > $ top $;
+        \\theorem outer_fallback: $ top $;
+    ;
+    const proof_src =
+        \\outer_fallback
+        \\--------------
+        \\l1: $ top $ by outer_bad [top_i []]
+    ;
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var sink = mm0.CompilerSupport.Context.InlineConclusionSink{
+        .allocator = std.testing.allocator,
+    };
+    defer sink.deinit();
+    var compiler = Compiler.initWithProof(
+        arena_state.allocator(),
+        mm0_src,
+        proof_src,
+    );
+    compiler.inline_conclusion_sink = &sink;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+
+    // `outer_bad` elaborates the inline `top_i []` before its hypothesis
+    // mismatch aborts it; only the `outer_good` fallback's entry survives.
+    const inline_start = std.mem.indexOf(u8, proof_src, "top_i []").?;
+    var count: usize = 0;
+    for (sink.items.items) |item| {
+        if (item.span.start == inline_start) count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
+}

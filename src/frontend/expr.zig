@@ -273,9 +273,14 @@ pub const ExprInterner = struct {
         args: []const ExprId,
     ) !ExprId {
         const owned = try self.allocator.dupe(ExprId, args);
+        errdefer self.allocator.free(owned);
         return try self.internAppOwned(term_id, owned);
     }
 
+    /// Intern an application whose `args` slice the caller allocated with
+    /// this interner's allocator. On success the interner owns `args` (it is
+    /// freed at once if an equal node already exists); on error the caller
+    /// still owns it.
     pub fn internAppOwned(
         self: *ExprInterner,
         term_id: u32,
@@ -292,7 +297,6 @@ pub const ExprInterner = struct {
             return id;
         }
 
-        errdefer self.allocator.free(args);
         const id = std.math.cast(ExprId, self.count()) orelse {
             return error.TooManyTheoremExprs;
         };

@@ -725,8 +725,8 @@ opinion", so results look stable) and debug catches as a corrupt-tag crash.
 `flatten()` materializes a clone into a standalone interner (deep-copies the
 base nodes, preserving every `ExprId`). **Any "clone a candidate theorem, then
 free/replace the source" pattern must `flatten()` the clone first.** Current
-flatten sites: `candidate.zig:tryCandidate` (before commit and for `.owned`
-results) and `backward/seed.zig:cloneCandidateWithPrincipalPin` (the fan-out
+flatten sites: `candidate.zig:commit`, `check/apply.zig:SpeculativeAttempt.promote`
+and `backward/seed.zig:cloneCandidateWithPrincipalPin` (the fan-out
 variant outlives the `base` candidate that `appendRuleCandidates` frees). See
 `project_cow_interner` and `project_cow_fanout_dangling_base`.
 
@@ -734,17 +734,17 @@ Two cost corollaries (2026-07-05, the tait `resolution` budget fix):
 
 - The global budget's intern ticks count **probe levels of the base chain**,
   so every extra clone layer between the work theorem and the validation
-  clone multiplies the tick cost of the whole validation. A non-commit
-  `tryCandidate` treats the caller's theorem/vars as read-only (it clones
-  both internally; only the commit branch writes back), so callers must NOT
-  pre-clone just to satisfy the mutable signature — use
-  `candidate.zig:tryCandidateProbe` (const params, asserts non-commit).
-  Removing the three pre-clone sites cut resolution's k=6 floor 3.75G→3.09G
-  (under the default cap) with byte-identical corpus frontiers.
-- `.owned` results pay a whole-interner `flatten()` per call; `flatten`'s
-  contract reserves that cost for committed lines (rare). Internal
-  generation read-backs (`generate.zig:acceptedConclusion`) take `.borrowed`
-  results — the attempt dies before its base by defer order.
+  clone multiplies the tick cost of the whole validation. `candidate.zig`
+  therefore splits validation into `probe` (const theorem/vars; returns a
+  `Probe` whose theorem is a COW clone BORROWING the caller's, so it must be
+  deinitialized first) and `commit` (flattens and swaps the attempt into the
+  caller's state; returns the line index). Callers never pre-clone. Removing
+  the three pre-clone sites cut resolution's k=6 floor 3.75G→3.09G (under
+  the default cap) with byte-identical corpus frontiers.
+- Only `commit` pays a whole-interner `flatten()`; `flatten`'s contract
+  reserves that cost for committed lines (rare). A probe never flattens.
+- A probe drops any inline-conclusion sink entries it recorded and restores
+  the caller's diagnostic, whether it succeeds or fails.
 
 ## Indices and pruning (performance, completeness-neutral)
 
@@ -1065,7 +1065,7 @@ width is real.
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `trigger.zig` | `@auto trigger` seed harvest (phase 6): goal-subterm e-match → sourceless ground `DerivedRef`s |
-| `candidate.zig` | `tryCandidate`: full checker re-validation on a cloned theorem |
+| `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?` thin variant |
 | `backward/seed.zig` | seed-phase binder extraction + non-view principal fan-out + eliminator reconciliation seed (`partitionSeedBindings`) |
 | `backward/acui.zig` | ACUI member math (shared by all three principal mechanisms) |

@@ -49,9 +49,9 @@ pub const InlineConclusion = struct {
 };
 
 /// Collects the rendered conclusion of every inline rule application the
-/// checker elaborates. Fallback and retry candidates re-elaborate the same
-/// source application, so one span may be recorded more than once; the LAST
-/// entry for a span is the one from the attempt that ultimately succeeded.
+/// checker elaborates. An entry survives only if every attempt enclosing its
+/// application succeeds: a failed fallback or retry candidate, and any search
+/// probe, rolls the sink back to its entry mark (see `mark`/`rollback`).
 pub const InlineConclusionSink = struct {
     allocator: std.mem.Allocator,
     items: std.ArrayListUnmanaged(InlineConclusion) = .{},
@@ -74,6 +74,18 @@ pub const InlineConclusionSink = struct {
             .span = span,
             .conclusion = conclusion,
         });
+    }
+
+    pub fn mark(self: *const InlineConclusionSink) usize {
+        return self.items.items.len;
+    }
+
+    /// Drop (and free) every entry recorded since `at`.
+    pub fn rollback(self: *InlineConclusionSink, at: usize) void {
+        for (self.items.items[at..]) |item| {
+            self.allocator.free(item.conclusion);
+        }
+        self.items.shrinkRetainingCapacity(at);
     }
 };
 

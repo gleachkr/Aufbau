@@ -28,8 +28,7 @@ const SearchCounters = types.SearchCounters;
 const SearchRuntime = types.SearchRuntime;
 const Fuel = types.Fuel;
 const rankReferenceIndices = refs_mod.rankReferenceIndices;
-const tryCandidate = candidate_mod.tryCandidate;
-const tryCandidateProbe = candidate_mod.tryCandidateProbe;
+const probe = candidate_mod.probe;
 const finalConclusionPlausible = plausible.finalConclusionPlausible;
 
 /// Goal-direct use of derived refs: when a derived shape structurally
@@ -107,7 +106,7 @@ pub fn appendDerivedDirectCandidates(
             actual.ref_tuple_count_after_filtering += 1;
             actual.full_try_candidate_calls += 1;
         }
-        var attempt = tryCandidateProbe(
+        var attempt = probe(
             compiler,
             context,
             app,
@@ -117,7 +116,6 @@ pub fn appendDerivedDirectCandidates(
             .{
                 .counters = counters,
                 .runtime = runtime,
-                .result_ownership = .borrowed,
             },
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
@@ -293,7 +291,7 @@ pub fn validateSelectedRefs(
         // scope does not apply.
         context.registry.eagerPriority(candidate.rule_id) != null;
 
-    var attempt = tryCandidateProbe(
+    var attempt = probe(
         compiler,
         context,
         application,
@@ -303,7 +301,6 @@ pub fn validateSelectedRefs(
         .{
             .counters = counters,
             .runtime = runtime,
-            .result_ownership = .borrowed,
             .unify_retry_eligible = unify_retry_scope,
         },
     ) catch |err| blk: {
@@ -358,11 +355,9 @@ pub fn validateSelectedRefs(
             if (retry_bindings.len == 0) break :blk_retry;
             arg_bindings = retry_bindings;
 
-            // The failed first attempt worked entirely in `tryCandidate`'s own
-            // internal clones (a non-commit attempt never writes back through
-            // the base pointers), so the retry probes against the same
-            // untouched base.
-            break :blk tryCandidateProbe(
+            // A probe never writes to its inputs, so the retry runs
+            // against the same untouched base.
+            break :blk probe(
                 compiler,
                 context,
                 buildRuleApplication(candidate.rule_name, refs, arg_bindings),
@@ -372,7 +367,6 @@ pub fn validateSelectedRefs(
                 .{
                     .counters = counters,
                     .runtime = runtime,
-                    .result_ownership = .borrowed,
                     .unify_retry_eligible = unify_retry_scope,
                 },
             ) catch |err2| {

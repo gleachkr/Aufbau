@@ -15,10 +15,12 @@ const Goal = helpers.Goal;
 const apply = helpers.apply;
 const applyWithSession = helpers.applyWithSession;
 const exact = helpers.exact;
-const tryCandidate = helpers.tryCandidate;
+const probe = helpers.probe;
 const fixtureFor = helpers.fixtureFor;
 const parseGoal = helpers.parseGoal;
-const runSearchLine = helpers.runSearchLine;
+const Fixture = helpers.Fixture;
+const commitSearchLine = helpers.commitSearchLine;
+const probeSearchLine = helpers.probeSearchLine;
 const readProofCase = helpers.readProofCase;
 const expectTimingCounter = helpers.expectTimingCounter;
 const ContextHarness = helpers.ContextHarness;
@@ -358,7 +360,7 @@ test "apply search does not use checked proof lines as refs" {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
 
-    var line_result = try runSearchLine(
+    const line_idx = try commitSearchLine(
         allocator,
         &compiler,
         &fixture,
@@ -369,10 +371,8 @@ test "apply search does not use checked proof lines as refs" {
         &harness.diag_scratch,
         &harness.cache,
         block.lines[0],
-        true,
     );
-    defer line_result.deinit();
-    try harness.labels.put(block.lines[0].label, line_result.line_idx);
+    try harness.labels.put(block.lines[0].label, line_idx);
 
     const context = harness.context(&fixture);
     const goal = try parseGoal(&fixture, &theorem, &theorem_vars, "Q");
@@ -911,7 +911,7 @@ test "apply candidate can compile after user supplies refs" {
 
     var proof_parser = ProofParser.init(allocator, proof_src);
     const block = (try proof_parser.nextBlock()) orelse return error.MissingBlock;
-    var result = try runSearchLine(
+    var result = try probeSearchLine(
         allocator,
         &compiler,
         &fixture,
@@ -922,11 +922,10 @@ test "apply candidate can compile after user supplies refs" {
         &harness.diag_scratch,
         &harness.cache,
         block.lines[0],
-        false,
     );
     defer result.deinit();
     try std.testing.expect(result.checked_lines.len > 0);
-    try CheckedIr.validateLines(&result.theorem.?, result.checked_lines);
+    try CheckedIr.validateLines(&result.theorem, result.checked_lines);
 }
 
 test "search candidate failure leaves no checked lines" {
@@ -978,7 +977,7 @@ test "search candidate failure leaves no checked lines" {
 
     try std.testing.expectError(
         error.ConclusionMismatch,
-        tryCandidate(
+        probe(
             &compiler,
             &context,
             line.application,
@@ -1059,7 +1058,7 @@ test "search candidate rejects boundness failures" {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
 
-    const err = runSearchLine(
+    const err = probeSearchLine(
         allocator,
         &compiler,
         &fixture,
@@ -1070,7 +1069,6 @@ test "search candidate rejects boundness failures" {
         &harness.diag_scratch,
         &harness.cache,
         block.lines[0],
-        false,
     );
     try std.testing.expectError(error.BoundnessMismatch, err);
     try std.testing.expectEqual(@as(usize, 0), harness.checked.items.len);
@@ -1187,4 +1185,107 @@ test "exact search supports ACUI context holes" {
             .span = .{ .start = 0, .end = 0 },
         } }},
     );
+}
+
+const fallback_mm0_src =
+    \\provable sort wff;
+    \\term top: wff;
+    \\term bot: wff;
+    \\axiom top_i: $ top $;
+    \\axiom outer_good: $ top $ > $ top $;
+    \\--| @fallback outer_good
+    \\axiom outer_bad: $ bot $ > $ top $;
+    \\theorem t: $ top $;
+;
+const fallback_proof_src =
+    \\t
+    \\------
+    \\l1: $ top $ by outer_bad [top_i []]
+    \\l2: $ top $ by outer_good [top_i []]
+;
+
+/// Commit `line` with allocation `fail_index` failing. Returns whether the
+/// commit ran to completion (no allocation failed).
+fn commitLineFailingAt(
+    fixture: *Fixture,
+    line: ProofScript.ProofLine,
+    fail_index: usize,
+) !bool {
+    // Production checker/search allocations are arena-backed, so leaks on an
+    // OOM path are tolerated here (page allocator); what must hold is that
+    // OOM surfaces as an error, nothing is freed twice, and the caller's
+    // state is untouched.
+    var failing = std.testing.FailingAllocator.init(
+        std.heap.page_allocator,
+        .{ .fail_index = fail_index },
+    );
+    const allocator = failing.allocator();
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    // `commitSearchLine` parses the goal into the caller's theorem before it
+    // commits; intern it up front so the snapshot below isolates `commit`.
+    _ = try parseGoal(fixture, &theorem, &theorem_vars, line.assertion.text);
+    const interner_count = theorem.interner.count();
+    const vars_count = theorem_vars.count();
+
+    var sink = DiagnosticSink.init(fallback_mm0_src, fallback_proof_src);
+    var compiler = CompilerContext.init(
+        fallback_mm0_src,
+        fallback_proof_src,
+        .none,
+        &sink,
+    );
+    const line_idx = commitSearchLine(
+        allocator,
+        &compiler,
+        fixture,
+        &harness.labels,
+        &harness.checked,
+        &theorem,
+        &theorem_vars,
+        &harness.diag_scratch,
+        &harness.cache,
+        line,
+    ) catch |err| {
+        try std.testing.expect(failing.has_induced_failure);
+        try std.testing.expectEqual(error.OutOfMemory, err);
+        try std.testing.expectEqual(@as(usize, 0), harness.checked.items.len);
+        try std.testing.expectEqual(interner_count, theorem.interner.count());
+        try std.testing.expectEqual(vars_count, theorem_vars.count());
+        return false;
+    };
+    try std.testing.expectEqual(harness.checked.items.len - 1, line_idx);
+    return !failing.has_induced_failure;
+}
+
+test "search commit is atomic under allocation failure" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var fixture = try fixtureFor(arena.allocator(), fallback_mm0_src, "t");
+    var proof_parser = ProofParser.init(arena.allocator(), fallback_proof_src);
+    const block = (try proof_parser.nextBlock()) orelse return error.MissingBlock;
+    // l1: `outer_bad` fails speculatively and its `outer_good` fallback is
+    // promoted inside the attempt; l2: a direct application, whose commit
+    // flattens the attempt's copy-on-write theorem before the swap.
+    for (block.lines) |line| {
+        var fail_index: usize = 0;
+        while (true) : (fail_index += 1) {
+            // An OOM in the setup before `commit` is fine too; keep going.
+            const done = commitLineFailingAt(
+                &fixture,
+                line,
+                fail_index,
+            ) catch |err| blk: {
+                try std.testing.expectEqual(error.OutOfMemory, err);
+                break :blk false;
+            };
+            if (done) break;
+        }
+        try std.testing.expect(fail_index > 0);
+    }
 }

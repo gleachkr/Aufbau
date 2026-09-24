@@ -12,7 +12,6 @@ const TheoremContext = helpers.TheoremContext;
 const Check = helpers.Check;
 const apply = helpers.apply;
 const exact = helpers.exact;
-const tryCandidate = helpers.tryCandidate;
 const fixtureFor = helpers.fixtureFor;
 const parseGoal = helpers.parseGoal;
 const expectTimingCounter = helpers.expectTimingCounter;

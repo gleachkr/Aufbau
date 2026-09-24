@@ -3,8 +3,9 @@
 //! compiler uses. Split out of `source.zig`: this machinery is shared by the
 //! production LSP entry (`suggestionsAtSourceOffset` builds a fixture via
 //! `fixtureForSourceTarget`) and the search unit tests (`fixtureFor*`,
-//! `parseGoal`, `runSearchLine`, `readProofCase`). It holds no search logic —
-//! only the setup that positions parsing/elaboration state at a proof point.
+//! `parseGoal`, `commitSearchLine`/`probeSearchLine`, `readProofCase`). It
+//! holds no search logic — only the setup that positions parsing/elaboration
+//! state at a proof point.
 
 const std = @import("std");
 const types = @import("./types.zig");
@@ -55,7 +56,8 @@ const ExactCandidate = types.ExactCandidate;
 const SourceSuggestion = types.SourceSuggestion;
 const SourceSuggestionOptions = types.SourceSuggestionOptions;
 const SourceSuggestions = types.SourceSuggestions;
-const AttemptResult = types.AttemptResult;
+const Probe = candidate_mod.Probe;
+const AttemptOptions = types.AttemptOptions;
 const NameExprMap = types.NameExprMap;
 const LabelIndexMap = types.LabelIndexMap;
 const FreshDecl = types.FreshDecl;
@@ -64,7 +66,6 @@ const ViewDecl = types.ViewDecl;
 const SortVarRegistry = types.SortVarRegistry;
 const applyWithSession = apply_mod.applyWithSession;
 const exactWithSession = backtrack.exactWithSession;
-const tryCandidate = candidate_mod.tryCandidate;
 const extractHypPartialBindings = prune.extractHypPartialBindings;
 
 /// A search target resolved from a proof source: the enclosing block plus the
@@ -696,7 +697,9 @@ pub fn parseGoal(
     };
 }
 
-pub fn runSearchLine(
+/// Check `line` against the fixture and commit it: its lines join `checked`
+/// and `theorem`/`theorem_vars` advance. Returns the produced line's index.
+pub fn commitSearchLine(
     allocator: std.mem.Allocator,
     compiler: *CompilerContext,
     fixture: *Fixture,
@@ -707,9 +710,67 @@ pub fn runSearchLine(
     diag_scratch: *CompilerDiag.Scratch,
     rule_unify_cache: *Inference.RuleUnifyCache,
     line: ProofScript.ProofLine,
-    commit: bool,
-) !AttemptResult {
-    const context = Context{
+) !usize {
+    const context = searchLineContext(
+        allocator,
+        fixture,
+        labels,
+        checked,
+        diag_scratch,
+        rule_unify_cache,
+    );
+    return candidate_mod.commit(
+        compiler,
+        &context,
+        line.application,
+        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
+        theorem,
+        theorem_vars,
+        searchLineOptions(line),
+    );
+}
+
+/// Check `line` against the fixture without changing any caller state.
+pub fn probeSearchLine(
+    allocator: std.mem.Allocator,
+    compiler: *CompilerContext,
+    fixture: *Fixture,
+    labels: *LabelIndexMap,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    diag_scratch: *CompilerDiag.Scratch,
+    rule_unify_cache: *Inference.RuleUnifyCache,
+    line: ProofScript.ProofLine,
+) !Probe {
+    const context = searchLineContext(
+        allocator,
+        fixture,
+        labels,
+        checked,
+        diag_scratch,
+        rule_unify_cache,
+    );
+    return candidate_mod.probe(
+        compiler,
+        &context,
+        line.application,
+        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
+        theorem,
+        theorem_vars,
+        searchLineOptions(line),
+    );
+}
+
+fn searchLineContext(
+    allocator: std.mem.Allocator,
+    fixture: *Fixture,
+    labels: *LabelIndexMap,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    diag_scratch: *CompilerDiag.Scratch,
+    rule_unify_cache: *Inference.RuleUnifyCache,
+) Context {
+    return .{
         .allocator = allocator,
         .parser = &fixture.parser,
         .env = &fixture.env,
@@ -726,18 +787,12 @@ pub fn runSearchLine(
         .rule_unify_cache = rule_unify_cache,
         .available_rule_count = fixture.available_rule_count,
     };
-    return tryCandidate(
-        compiler,
-        &context,
-        line.application,
-        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
-        theorem,
-        theorem_vars,
-        .{
-            .commit = commit,
-            .line_label = line.label,
-            .assertion_span = line.assertion.span,
-            .diagnostic_span = line.span,
-        },
-    );
+}
+
+fn searchLineOptions(line: ProofScript.ProofLine) AttemptOptions {
+    return .{
+        .line_label = line.label,
+        .assertion_span = line.assertion.span,
+        .diagnostic_span = line.span,
+    };
 }
