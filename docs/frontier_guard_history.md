@@ -42,13 +42,14 @@ fixture was 20/20 FULL at every md≥8 with no overrides.
   self-feeding cascade of valid one-step rederivations (about one accepted
   full validation per chain node). Closed by the internal-child enumeration
   cutoff (`ExactOptions.internal_open_child`) plus the witness-class
-  candidate order (`witnessClass` in `exact.zig`): FULL 7/7 at the default
-  budget and nodes (worst row 1.68G, was 9.5G plus n=4096 floors).
+  candidate order (`witnessClass` in
+  `src/frontend/compiler/search/backward/backtrack.zig`): FULL 7/7 at the
+  default budget and nodes (worst row 1.68G, was 9.5G plus n=4096 floors).
 - **ex_all_to_all_ex**, formerly the hardest of the set (its single `ax`
   leaf must co-solve two open rex witnesses in one complementary pair, with
   no rigid anchor), was closed by the complementary coupled sweep
   (`collectComplementShapes` / `unifyMembersThroughShape` in
-  `exact_witness.zig`).
+  `src/frontend/compiler/search/backward/witness.zig`).
 
 ### `@auto eager` (2026-07-05)
 
@@ -62,7 +63,7 @@ net.
 The nested-inline binder-extraction residual (task #93) closed at the same
 time: accepted `@auto eager` candidates inside internal generation child
 solves carry their resolved bindings rendered on the spliced application
-(`internal_child` in `exact_validate.zig`), so the parent re-check never
-re-infers them from an ACUI-reassociated hint. The old resolution churn
+(`internal_child` in `src/frontend/compiler/search/backward/validate.zig`),
+so the parent re-check never re-infers them from an ACUI-reassociated hint. The old resolution churn
 (k≥6 rows at ~3.4G ticks, over the 3.35G default cap) collapsed to ~58M;
 the worst theorem became ~0.31G (exists_mono).
