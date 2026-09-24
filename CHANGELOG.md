@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.12] - 2026-09-24
 
 ### Added
 
@@ -51,6 +51,18 @@ This file records notable user-facing changes to Aufbau. The project follows
   hypotheses) are usually the ones that exhaust a phase's fuel first, so
   the retry never ran for them. It is still skipped once the call's global
   budget is spent, and a proof found without seeds costs nothing extra.
+- `auto?` finds more proofs in natural-deduction and sequent theories whose
+  quantifier rules leave witnesses open. A witness left open by one
+  generated step is carried into the steps below it, not dropped. An `ax`
+  leaf may fix a witness on both sides of the turnstile at once. Every child
+  proof of an open subgoal is offered to the parent in turn, so a parent
+  that rejects one witness choice can accept the next. The eigenvariable
+  condition is enforced while witnesses are being chosen, not only by the
+  final check. A context member that is a principal formula (`not_left`'s
+  `g , ¬ a`) no longer makes a rule count as multiplicative. A new bench
+  fixture, `nd_fol`, runs the Tait battery in classical natural deduction.
+  It is found in full at the default settings, including the drinker
+  paradox from an empty context.
 
 ### Fixed
 
@@ -83,6 +95,27 @@ This file records notable user-facing changes to Aufbau. The project follows
   spent. The budget used to be checked only between candidates, so a single
   candidate whose inference fanned out without bound could run past memory
   before the search noticed; it now degrades to an ordinary budget miss.
+- Checking a proof line crashed with a stack overflow when a definition's
+  body reduces to one of its own arguments (`def left (a b: wff): wff =
+  $ a $;`) and a line's statement could be folded back into it. Such
+  definitions are no longer tried as folding targets.
+- Four gaps in how nested inline applications get their binders were
+  closed, so these lines now check without explicit bindings:
+  - An inline premise whose hint from the enclosing rule and whose sibling
+    premise differ only up to ACUI (`raa [not_elim [l1, and_left [#1]]]`).
+  - A rule whose principal formula could be either of two context members
+    (`not_left` against `~ (a /\ b) , ~ c |- bot`). The checker used to
+    claim the first member and starve the inline minor that needed it. It
+    now retries with each competing member.
+  - An inline rule with an omitted binder inside a context member
+    (`imp_intro (g := $ emp $) [#1]`). Its implicit conclusion now falls
+    back to ACUI-aware inference.
+  - An inline minor under a `@view` rule while the rule's own premise is
+    still blocked on an open witness. The minor now takes its hint from the
+    view premise.
+- An `auto?` child proof that failed its final re-check could end the whole
+  search with an error. It now counts as a miss for that child, and the
+  search continues.
 
 ## [0.0.11] - 2026-09-20
 
@@ -1003,6 +1036,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.12]: https://github.com/gleachkr/Aufbau/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/gleachkr/Aufbau/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/gleachkr/Aufbau/compare/v0.0.9...v0.0.10
 [0.0.9]: https://github.com/gleachkr/Aufbau/compare/v0.0.8...v0.0.9

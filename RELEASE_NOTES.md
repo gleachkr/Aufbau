@@ -1,3 +1,131 @@
+# Aufbau 0.0.12
+
+Aufbau 0.0.12 adds import and include directives, makes the language server
+incrementally re-check only the proofs an edit can affect, and extends `auto?` 
+to natural-deduction theories whose quantifier rules leave witnesses open.
+
+## Highlights
+
+### Theories in several files
+
+An `.mm0` file can now import another, using the mm0-rs syntax:
+
+```
+import "prop.mm0";
+theorem weaken (p q: wff): $ p -> (q -> p) $;
+```
+
+The path is resolved relative to the importing file. The compiler replaces
+the `import` statement with the imported text, depth first. A file reached
+by two routes is included once, and a cycle is an error. Proof files still pair
+with theory files by name: the proofs of `prop.mm0`'s theorems go in `prop.auf` 
+beside it, and the compiler reads them in the same order.
+
+A proof file can splice in a file of proof-local items (lemmas, local
+definitions, notation) with `include`:
+
+```
+include "lemmas/weaken.auf";
+```
+
+Everything the included file holds is visible from that line on. Includes
+nest. They are not deduplicated, so include each file once.
+
+`import` is an mm0-rs convention, not part of MM0, so a verifier needs the
+theory as a single file. The new `abc join` subcommand writes it:
+
+```sh
+abc join main.mm0 | mm0-zig main.mmb
+```
+
+The language server resolves imports and includes too. 
+
+In the browser, the `@aufbau/editor` components now build a document from one
+file pair per cell, chained by `import`. Theories and cells can therefore 
+`import`, and proofs can `include`. Imported files are fetched relative to the 
+page, or relative to the file's own URL for a `src` source. `@aufbau/compiler` 
+gains `compileFiles`, which compiles a root from an in-memory file table and
+labels each diagnostic with its file.
+
+### Incremental analysis
+
+The language server used to re-check every proof in the file on every
+edit. It now re-checks a proof block only when something the block can see
+has changed: the theory before it, the proof text before it other than
+earlier proof bodies, or the outcome of an earlier proof. A file that
+imports a library replays the library's checks instead of repeating them.
+Diagnostics are the same as from a full analysis. On `zermelo`, analysis
+per keystroke drops from about 74 ms to 5 ms.
+
+### Proof search
+
+`auto?` now finds proofs in natural-deduction and sequent theories where a
+quantifier rule leaves a witness open:
+
+- A witness left open by one generated step is carried into the steps below
+  it.
+- An `ax` leaf can fix a witness on both sides of the turnstile at once.
+- Every child proof of an open subgoal is offered to the parent in turn. A
+  parent that rejects one witness choice, such as a witness equal to
+  `all_intro`'s eigenvariable, can accept the next.
+- The eigenvariable condition is enforced while witnesses are chosen, not
+  only by the final check.
+
+A new bench fixture, `nd_fol`, runs the Tait fixture's battery in classical
+natural deduction, searching through introduction rules and derived left
+rules. The whole battery is found at the default settings. That includes
+the drinker paradox, `∃x (P x → ∀y P y)`, proved from an empty context.
+
+Forward saturation (`@auto forward`) now puts derived facts into the
+theory's ACUI normal form, reducing the total number of facts generated and 
+letting more inferences go through.
+
+The `@auto trigger` seeding retry now runs after any miss. Before, it ran
+only when every phase's fuel was left unspent, which ruled out the goals
+it exists for.
+
+Three memory blowups were fixed:
+
+- Binder inference used to enumerate every way to spread a context's
+  members over a rule's context binders. It now resolves each member
+  independently. One `auto?` search that grew past 6 GB now finishes
+  normally.
+- The inference `auto?` runs on each candidate is now charged to the
+  call's work budget, and the search stops as soon as the budget is spent.
+  A runaway candidate becomes an ordinary budget miss.
+- A child proof that fails its final re-check now counts as a miss instead
+  of ending the search with an error.
+
+### Checking
+
+A proof line could crash the compiler with a stack overflow when a
+definition's body reduces to one of its own arguments
+(`def left (a b: wff): wff = $ a $;`). Such definitions are no longer
+tried as targets for folding.
+
+Nested inline applications now infer their binders in four more
+situations:
+
+- The hint from the enclosing rule and a sibling premise differ only up to
+  ACUI.
+- The rule's principal formula could be either of two context members.
+- An omitted binder sits inside a context member.
+- An inline minor sits under a `@view` rule whose own premise is still
+  waiting on an open witness.
+
+In each case the line used to need explicit bindings.
+
+## Compatibility
+
+All changes here are additive. `import` is new `.mm0` syntax and `include` is 
+new `.auf` syntax. A theory that uses neither compiles as before and produces
+the same MMB. The MMB format, the verifier, and the existing package APIs
+are unchanged. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.11
 
 Aufbau 0.0.11 lets proof-local definitions carry annotations and notation,
