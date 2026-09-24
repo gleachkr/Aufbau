@@ -509,6 +509,9 @@ const proof_cases = [_]ProofCase{
     },
     .{ .stem = "pass_struct_nd_forall_elim", .outcome = .pass },
     .{ .stem = "pass_view_infer_ctx_raw", .outcome = .pass },
+    // An inline minor under a @view rule takes its hint from the view premise
+    // while the rule premise is blocked on the open witness.
+    .{ .stem = "pass_view_inline_minor_hint", .outcome = .pass },
     .{ .stem = "pass_view_materialized_nonderived", .outcome = .pass },
     .{ .stem = "pass_view_recover_free_hole_auto", .outcome = .pass },
     .{ .stem = "pass_view_recover_symbolic_hole", .outcome = .pass },

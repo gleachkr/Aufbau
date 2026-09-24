@@ -1,0 +1,4 @@
+view_inline_minor
+-----------------
+
+l1: $ nd (hyp d) (ex x (imp (P x) q)) $ by ex_intro [imp_intro [#1]]

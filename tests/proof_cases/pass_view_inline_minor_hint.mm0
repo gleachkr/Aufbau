@@ -1,0 +1,61 @@
+import "lib/iff.mm0";
+
+sort ctx;
+sort set;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+term hyp (a: wff): ctx;
+term nd (g: ctx) (a: wff): wff;
+term imp (a b: wff): wff;
+term ex {x: set} (p: wff x): wff;
+term pred (t: set): wff; prefix pred: $P$ prec 50;
+term sb (t: set) {x: set} (p: wff x): wff;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (join g1 h1) (join g2 h2) $;
+
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
+
+--| @congr
+axiom imp_congr (a b c d: wff):
+  $ a <-> b $ > $ c <-> d $ > $ imp a c <-> imp b d $;
+
+--| @rewrite
+axiom sb_imp (t: set) {x: set} (p q: wff x):
+  $ sb t x (imp p q) <-> imp (sb t x p) (sb t x q) $;
+--| @rewrite
+axiom sb_pred (t: set) {x: set}: $ sb t x (P x) <-> P t $;
+--| @rewrite
+axiom sb_irrel (t: set) {x: set} (p: wff): $ sb t x p <-> p $;
+
+axiom imp_intro (g: ctx) (a b: wff):
+  $ nd (join g (hyp a)) b $ > $ nd g (imp a b) $;
+
+--| @view (g: ctx) {x: set} (t: set) (p: wff x) (q: wff): $ nd g q $ > $ nd g (ex x p) $
+--| @recover t q p x
+axiom ex_intro (g: ctx) {x: set} (t: set) (p: wff x):
+  $ nd g (sb t x p) $ > $ nd g (ex x p) $;
+
+-- `ex_intro`'s premise `g ⊢ [x/t] p` cannot hint the inline `imp_intro`
+-- while the witness `t` is open; the view premise `g ⊢ q` still pins `g`,
+-- which decides how `imp_intro` splits the cited context `d , P c`.
+theorem view_inline_minor (d q: wff) (c: set) {x: set}:
+  $ nd (join (hyp d) (hyp (P c))) q $ > $ nd (hyp d) (ex x (imp (P x) q)) $;

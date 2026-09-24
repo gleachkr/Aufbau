@@ -47,6 +47,7 @@ const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("../holes.zig");
 const Idents = @import("../../idents.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
+const InlineHints = @import("./inline_hints.zig");
 const addFallbackFailureNote = DiagNotes.addFallbackFailureNote;
 const concreteMatchFailureSpan = DiagNotes.concreteMatchFailureSpan;
 const setHoleyInferenceDiagnostic = DiagNotes.setHoleyInferenceDiagnostic;
@@ -619,6 +620,38 @@ pub fn inferCandidateBindings(
                         .sort = try templateSort(env, rule, rule.concl),
                         .token = "<implicit>",
                     } };
+                    // A holey hint that failed as a whole may still fix some
+                    // binders (the context of `¬D ⊢ ‹hole›`); without them
+                    // the whole-hole solve can pick another ACUI split.
+                    // Hints stay advisory: on failure fall through.
+                    if (expected_conclusion_hint) |hint| {
+                        if (try InlineHints.seedBindingsFromHoleyHint(
+                            allocator,
+                            theorem,
+                            registry,
+                            rule,
+                            hint,
+                            partial_bindings,
+                        )) |seeded| {
+                            defer allocator.free(seeded);
+                            if (Inference.inferBindingsFromHoleyAdvanced(
+                                self,
+                                context,
+                                line,
+                                seeded,
+                                base_ref_exprs,
+                                &whole_hole,
+                                maybe_view,
+                                fresh_context,
+                            )) |bindings| {
+                                restoreDiagnostic(self, null);
+                                break :blk bindings;
+                            } else |err| {
+                                if (err == error.OutOfMemory) return err;
+                                restoreDiagnostic(self, null);
+                            }
+                        }
+                    }
                     break :blk try Inference.inferBindingsFromHoleyAdvanced(
                         self,
                         context,

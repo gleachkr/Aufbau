@@ -293,7 +293,9 @@ fn minorHasUnboundConclusionOnlyBinder(
 ///   1. a conclusion-only binder (`minorHasUnboundConclusionOnlyBinder`, e.g.
 ///      `or_intro_r`'s free left disjunct, or any 0-hyp `ax`);
 ///   2. an additive ACUI "rest" binder (`hasAcuiRestBinder`, e.g. `lan`'s
-///      `g`, `rim`'s `d`) — needed so nested additive inline chains can infer.
+///      `g`, `rim`'s `d`) — needed so nested additive inline chains can infer —
+///      in the conclusion or in a premise (`imp_intro`'s `g , a`, whose split
+///      of the cited context only the conclusion's context decides);
 ///   3. an inline-application *descendant* that qualifies (recursively): a relay
 ///      minor like `feq_sym [red_test []]` has no underdetermined binder of its
 ///      own — every binder is shared between hypothesis and conclusion — but its
@@ -320,6 +322,12 @@ fn inlineMinorWantsHoleyHint(
             // Offer the same holey, ACUI-aware hint that already recovers a 0-hyp
             // `ax` minor, extended to these intermediate additive minors.
             if (hasAcuiRestBinder(registry, rule, app)) break :blk true;
+            // The same shape in a premise (`imp_intro`'s `g , a ⊢ b`) splits
+            // the cited context ambiguously; only the conclusion's context,
+            // which the hint carries, decides which member is `a`.
+            for (rule.hyps) |hyp| {
+                if (acuiRestBinderWalk(registry, hyp, rule, app)) break :blk true;
+            }
             for (app.refs) |child| {
                 if (child != .application) continue;
                 if (inlineMinorWantsHoleyHint(env, registry, child)) {
@@ -447,7 +455,47 @@ pub fn fillHoleyInlineHints(
 ) !void {
     if (application.refs.len != rule.hyps.len) return;
     if (expected_refs.len != application.refs.len) return;
+    try fillRuleHoleyInlineHints(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        line,
+        rule_id,
+        rule,
+        theorem,
+        theorem_vars,
+        partial_bindings,
+        expected_refs,
+    );
+    try fillViewInlineHints(
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        rule_id,
+        rule,
+        theorem,
+        partial_bindings,
+        expected_refs,
+    );
+}
 
+fn fillRuleHoleyInlineHints(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    partial_bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+) !void {
     const parent_acui_rest = hasAcuiRestBinder(context.registry, rule, application);
 
     var needs_fallback = false;
@@ -496,6 +544,77 @@ fn wantsHoleyHint(
 ) bool {
     if (ref != .application) return false;
     return parent_acui_rest or inlineMinorWantsHoleyHint(env, registry, ref);
+}
+
+/// Derive the still-missing hints of a `@view` rule's inline minors from the
+/// view's own premises.
+///
+/// A view rule's premise is often stated through a binder only `@recover`
+/// fills: `ex_intro`'s `g ⊢ [x/t] p` cannot be instantiated while the witness
+/// `t` is open, so every hint above comes back null and the minor elaborates
+/// unguided. The view premise (`g ⊢ q`) is what the minor must conclude, and
+/// its binders are pinned by matching the view conclusion against the line,
+/// so a holey instance (`¬D ⊢ ‹hole›`) still fixes the context. Without it,
+/// `ex_intro [imp_intro [#1]]` over `¬D , P C ⊢ ∀ y P y` splits `imp_intro`'s
+/// `g , a` the wrong way round and the witness cannot be recovered.
+///
+/// ACUI spine binders of the view conclusion are positional guesses under the
+/// structural match, so they are left open (the holey instance collapses their
+/// region to one placeholder) unless the application binds them explicitly.
+fn fillViewInlineHints(
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    theorem: *TheoremContext,
+    partial_bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+) !void {
+    const view = context.views.get(rule_id) orelse return;
+    if (view.hyps.len != expected_refs.len) return;
+    const missing = for (application.refs, expected_refs) |ref, hint| {
+        if (hint == null and
+            inlineMinorWantsHoleyHint(context.env, context.registry, ref)) break true;
+    } else false;
+    if (!missing) return;
+    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
+        .concrete => |expr| expr,
+        .holey, .implicit_whole_conclusion => return,
+    };
+
+    const allocator = context.allocator;
+    const explicit = try allocator.alloc(?ExprId, view.num_binders);
+    defer allocator.free(explicit);
+    @memset(explicit, null);
+    for (view.binder_map, 0..) |maybe_rule_idx, vi| {
+        const rule_idx = maybe_rule_idx orelse continue;
+        if (rule_idx < partial_bindings.len) explicit[vi] = partial_bindings[rule_idx];
+    }
+    const bindings = try allocator.dupe(?ExprId, explicit);
+    defer allocator.free(bindings);
+    if (!theorem.matchTemplate(view.concl, line_expr, bindings)) return;
+    demoteAcuiSpineBindingsInTemplate(context.registry, view.concl, false, explicit, bindings);
+
+    var view_rule = rule.*;
+    view_rule.args = view.arg_infos;
+    view_rule.arg_names = view.arg_names;
+    view_rule.hyps = view.hyps;
+    view_rule.concl = view.concl;
+    for (application.refs, expected_refs, view.hyps) |ref, *hint, hyp| {
+        if (hint.* != null) continue;
+        if (!inlineMinorWantsHoleyHint(context.env, context.registry, ref)) continue;
+        hint.* = try OpenTerms.instantiateTemplateHoley(
+            theorem,
+            context.env,
+            context.registry,
+            &view_rule,
+            hyp,
+            bindings,
+            .{},
+        );
+    }
 }
 
 fn instantiateExpectedRefs(
@@ -752,6 +871,60 @@ pub fn demoteAcuiSpineBindingsForRule(
         demoteAcuiSpineBindingsInTemplate(registry, hyp, false, partial_bindings, inferred);
     }
     demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, partial_bindings, inferred);
+}
+
+/// The binders a holey expected-conclusion hint fixes for `rule`, or null
+/// when it fixes none beyond `partial_bindings`.
+///
+/// Matches the conclusion against the hint with placeholders as wildcards: a
+/// binder whose hint subterm holds a placeholder stays open, as does an ACUI
+/// spine binder (its position is only a guess). `¬D ⊢ ‹hole›` against
+/// `imp_intro`'s `g ⊢ a → b` yields `g := ¬D` although the hint as a whole
+/// cannot match. Caller owns the result.
+pub fn seedBindingsFromHoleyHint(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    registry: *const RewriteRegistry,
+    rule: *const RuleDecl,
+    hint: ExprId,
+    partial_bindings: []const ?ExprId,
+) !?[]?ExprId {
+    if (!theorem.exprAny(hint, {}, isPlaceholderNode)) return null;
+    const seeded = try allocator.dupe(?ExprId, partial_bindings);
+    errdefer allocator.free(seeded);
+    if (matchTemplateHoleyHint(theorem, rule.concl, hint, seeded)) {
+        demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, partial_bindings, seeded);
+        if (!std.mem.eql(?ExprId, seeded, partial_bindings)) return seeded;
+    }
+    allocator.free(seeded);
+    return null;
+}
+
+fn matchTemplateHoleyHint(
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+    bindings: []?ExprId,
+) bool {
+    if (isPlaceholderNode({}, theorem, expr)) return true;
+    return switch (template) {
+        .binder => |idx| blk: {
+            if (idx >= bindings.len) break :blk false;
+            if (theorem.exprAny(expr, {}, isPlaceholderNode)) break :blk true;
+            if (bindings[idx]) |existing| break :blk existing == expr;
+            bindings[idx] = expr;
+            break :blk true;
+        },
+        .app => |app| blk: {
+            const node = theorem.interner.node(expr);
+            if (node.* != .app or node.app.term_id != app.term_id or
+                node.app.args.len != app.args.len) break :blk false;
+            for (app.args, node.app.args) |targ, earg| {
+                if (!matchTemplateHoleyHint(theorem, targ, earg, bindings)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
 }
 
 fn demoteAcuiSpineBindingsInTemplate(
