@@ -267,7 +267,7 @@ fn unpinnedBinderMask(mask: u64, bindings: []const ?ExprId) u64 {
 /// zermelo_hilbert 117); higher costs plateau lower as gen-only is deferred behind
 /// loose refs. Behavior is corpus-validated (breadth byte-identical, depth 301);
 /// retuning it can shift depth-frontier results, so it is pinned by the `eq_euclid`
-/// and `additive_fol`-total guards in `build.zig`.
+/// and `additive_fol`-total guards in `tests/frontier_guards.zig`.
 const generate_only_cost: usize = 4;
 
 fn hypSlotCost(plan: HypPlan) usize {

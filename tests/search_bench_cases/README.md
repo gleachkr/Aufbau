@@ -67,7 +67,7 @@ applies only to scenario fixtures.
 ### Regression guards (`zig build test-frontier-smoke`, wired into `zig build test`)
 
 `--require-no-miss` exits nonzero on any MISS/ERR (breadth) or any non-`FULL`
-theorem (depth). `build.zig`'s `frontier_guards` array wires a set of these into
+theorem (depth). `tests/frontier_guards.zig` wires a set of these into
 the test gate, each with per-guard budget overrides (`max_depth`, `gen_nodes`,
 `gen_fuel`, `fwd_facts`, `fwd_attempts`, `fwd_layers`) so a deep proof can raise
 its own budget without loosening the conservative global search defaults.

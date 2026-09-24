@@ -1231,7 +1231,9 @@ across the chain. The manual and demo consume these same packages.
   read as raw text stay single-file, because those readers do not join.
 - `test-integration`: upstream example pairs generated with `mm0-rs` and
   checked by the verifier. `MM0_ZIG_EXAMPLE_FILTER` narrows selection.
-- `test-frontier-smoke`: selected search frontiers and whole-fixture guards.
+- `test-frontier-smoke`: selected search frontiers and whole-fixture guards,
+  one `search-bench` run per entry in `tests/frontier_guards.zig` (dated
+  floor measurements live in `docs/frontier_guard_history.md`).
 - `test-search-scenarios`: benchmark suggestion/count expectations.
 - `test-node-wasm`: packed-package compiler/verifier/LSP smoke tests in Node.
 - `test`: all five steps above.

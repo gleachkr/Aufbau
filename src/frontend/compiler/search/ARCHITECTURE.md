@@ -292,7 +292,7 @@ which the persisted-memo covering rule requires:
    is never reached), so pre-seeding phases plan exactly as before; and
    breadth stays byte-identical by construction (phase 6 runs only where
    today's answer is a clean miss). Guarded by the `nd_minimal` depth
-   frontier tests in `build.zig`.
+   frontier tests in `tests/frontier_guards.zig`.
 
 ### The cost-weighted per-call budget (`GlobalBudget`)
 
@@ -1038,7 +1038,7 @@ sound because the recompile validates the bridged proof.)
 `max_depth > 6` — but **the global default must stay at 6**: raising it to 10
 roughly 10×'s corpus wall-clock on the 385 doomed generic-corpus searches for
 zero found-ness gain. The higher budget is scoped to the depth-frontier
-regression guards in `build.zig`, which double as the memo's only automated check
+regression guards in `tests/frontier_guards.zig`, which double as the memo's only automated check
 — breadth finds these lines through the pool and never exercises deep generation.
 Each guard's budget is pinned just above the theorem's measured floor (2026-06-24)
 so a budget regression trips it: `branch_converge` is fuel-bound (`max_depth=10,
