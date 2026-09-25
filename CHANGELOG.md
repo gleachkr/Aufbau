@@ -5,6 +5,30 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Changed
+
+- The Martin-Löf example no longer assumes regularity. Its nine axioms
+  such as `has_ty_regular` and `Id_left_regular`, which read well-formedness
+  facts back out of a judgment, are gone. Instead each rule carries the
+  premises its conclusion needs, for example `var` now requires `Ty A`, and
+  theorems take such facts as hypotheses. Before, `var` accepted any type,
+  so `true : Nat` was derivable in a context assuming `x : Id Nat true zero`.
+  New lemmas `arr_form` and `arr_elim` handle non-dependent arrows without
+  inventing a bound variable.
+- The Martin-Löf example now also checks contexts. A new judgment `ok g`
+  says that `g` is well formed. Rules with no premises, such as `nat_form`,
+  require it, `weaken` requires the new entry's type to be a type, and every
+  derivable `g ⊢ J` has a well-formed `g`. Theorems that use such a rule
+  take `ok g` as a hypothesis.
+- `auto?` wastes less time on rules that cannot match. When a context is
+  neither commutative nor idempotent, a rule needing two entries after `g`
+  no longer matches a goal context with one, even though each required
+  entry finds a candidate on its own. A rule is also dropped before any
+  search when its conclusion forces a variable into a binder that may not
+  depend on it, such as `weaken`'s `g , x : T ⊢ J` against
+  `g , k : Nat ⊢ suc k : Nat`. In the Martin-Löf example this lets
+  `auto?` find proofs at greater depth, for example of `double_step_ty`.
+
 ### Fixed
 
 - A line whose rule conclusion differs from it only under a definition that
@@ -22,6 +46,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   `lam_alpha`, `all_alpha` and `ex_alpha` now declare the body as depending
   on the old variable only. Theories copied from these examples should make
   the same change.
+- `auto?` now proves goals that need a rule like `var` (`g , x : A ⊢ x : A`)
+  on the last entry of a context with two or more entries, when that context
+  is associative but not commutative. The search matched the rule's context
+  against the goal's by its written grouping, so a context grouped as
+  `g , (k : Nat , ih : Nat)` bound `g` to `g` alone, and the rule never
+  applied. It now matches the entries in order, ignoring grouping.
 
 ## [0.0.12] - 2026-09-24
 

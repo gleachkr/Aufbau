@@ -121,8 +121,29 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/eigenvariable_ban_probe.auf",
         .mode = "depth",
     },
+    // Depth guard for order-aware extraction under an associative,
+    // non-commutative context combiner (`def_match.extractOrderedSpineBindings`):
+    // `var`'s `g , x : A` must pin `g` to all but the last member of a
+    // right-nested generated context. A positional walk drops a member and
+    // the search misses at k=1.
+    .{
+        .filter = "ordered_ctx_probe",
+        .files = "tests/search_bench_cases/ordered_ctx_probe.mm0:" ++
+            "tests/search_bench_cases/ordered_ctx_probe.auf",
+        .mode = "depth",
+    },
+    // Depth guard for the ACUI multiplicity reject
+    // (`acui.acuiDistinctMembersPlausible`): without it `weaken2`/`weaken3`
+    // seed on contexts too short for them, and `nat_rec_step_ty` misses at
+    // k=5.
+    .{
+        .filter = "nat_rec_step_ty",
+        .files = "tests/proof_cases/martin_lof.mm0:" ++
+            "tests/proof_cases/martin_lof.auf",
+        .mode = "depth",
+    },
     // Depth guard for the eager cut's eigenvariable check
-    // (`backtrack.bindingsBreakRuleDeps`): an eager `all_intro` over a
+    // (`backtrack.bindingsDepHit`): an eager `all_intro` over a
     // context that mentions `y` free can never validate, and must not arm
     // the cut that would skip `raa`.
     .{

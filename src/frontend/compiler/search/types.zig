@@ -551,6 +551,10 @@ pub const SearchCounters = struct {
     tc_apply_ns: u64 = 0,
     candidate_rules_before_conclusion_validation: usize = 0,
     conclusion_member_prunes: usize = 0,
+    /// Rule candidates dropped at seed time because a conclusion binding
+    /// rigidly mentions a bound binder its dependency list omits
+    /// (`bindingsDepHit == .rigid` on a rule with no view or freshen).
+    dep_violation_prunes: usize = 0,
     final_conclusion_prunes: usize = 0,
     /// (candidate, refs) tuples refuted by the hyp-vs-ref ACUI member
     /// consistency check (`hypRefMembersPlausible`) before `tryCandidate`:

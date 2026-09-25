@@ -86,10 +86,8 @@ pub fn conclusionIsSplit(context: *const Context, concl: TemplateExpr) bool {
 /// Locate the ACUI combiner in `concl` that references rule binder `binder_idx`,
 /// returning the aligned concrete goal subterm. Walks `concl` against `goal_expr`
 /// in parallel, descending matching non-ACUI app heads positionally (the same
-/// alignment `partialMatchTemplate` uses). Returns null when no combiner spine
-/// references the binder, when the goal shape diverges, or when the combiner has
-/// a non-binder summand (a concrete required member) — a current limitation:
-/// that case is left to the existing non-split behaviour.
+/// alignment `partialMatchTemplate` uses). Returns null when the binder is not a
+/// bare summand of the combiner spine or when the goal shape diverges.
 pub fn findSplitSite(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -104,7 +102,13 @@ pub fn findSplitSite(
                 if (!templateRefsBinder(concl, binder_idx)) return null;
                 var site = SplitSite{ .container = goal_expr, .head_id = app.term_id };
                 if (!collectSpine(concl, app.term_id, &site)) return null;
-                return site;
+                // Only a bare spine binder distributes context members. A
+                // binder inside a fixed summand (the `A` of `g , x : A`) is not
+                // a context, and enumerating contexts for it is ill-sorted.
+                for (site.spine[0..site.spine_len]) |idx| {
+                    if (idx == binder_idx) return site;
+                }
+                return null;
             }
             const node = theorem.interner.node(goal_expr);
             switch (node.*) {

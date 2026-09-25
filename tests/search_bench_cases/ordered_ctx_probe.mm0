@@ -1,0 +1,61 @@
+-- Depth-frontier probe: a rule's context rest binder against an ordered
+-- (associative, non-commutative) context spine.
+--
+-- Wired as a depth-frontier regression guard in build.zig (test-frontier-smoke).
+-- The theory is a cut-down `martin_lof`: `join` is `@acui assoc _ emp _`, so a
+-- context is a sequence and its binary association carries no meaning. `var`
+-- concludes `g , x : A ⊢ x : A`. As a generated premise of `refl_intro` the
+-- goal context arrives right-nested, `g , (k : Nat , ih : Nat)`, and a
+-- positional seed walk of that spine binds `g := g`, dropping `k : Nat`. The
+-- seed aligns the flattened member sequences instead, which forces
+-- `g := g , k : Nat` and `x : A := ih : Nat`.
+
+delimiter $ ( [ / $ $ / . : , ) ] ~ $;
+strict provable sort jdg;
+sort ctx;
+sort ty;
+--| @vars x y z u v w m n k ih p q
+sort tm;
+term jiff (J K: jdg): jdg;
+infixr jiff: $<=>$ prec 20;
+--| @relation jdg jiff jiff_refl jiff_trans jiff_sym jiff_mp
+axiom jiff_refl (J: jdg): $ J <=> J $;
+axiom jiff_trans (J K L: jdg): $ J <=> K $ > $ K <=> L $ > $ J <=> L $;
+axiom jiff_sym (J K: jdg): $ J <=> K $ > $ K <=> J $;
+axiom jiff_mp (J K: jdg): $ J <=> K $ > $ J $ > $ K $;
+term eq_raw_ctx (g h: ctx): jdg;
+infixl eq_raw_ctx: $≋$ prec 15;
+--| @relation ctx eq_raw_ctx eq_raw_ctx_refl eq_raw_ctx_trans eq_raw_ctx_sym _
+axiom eq_raw_ctx_refl (g: ctx): $ g ≋ g $;
+axiom eq_raw_ctx_trans (g h i: ctx): $ g ≋ h $ > $ h ≋ i $ > $ g ≋ i $;
+axiom eq_raw_ctx_sym (g h: ctx): $ g ≋ h $ > $ h ≋ g $;
+term is_ty (A: ty): jdg;
+prefix is_ty: $Ty$ prec 60;
+term has_ty (t: tm) (A: ty): jdg;
+infixl has_ty: $:$ prec 40;
+term nd (g: ctx) (J: jdg): jdg;
+infixl nd: $⊢$ prec 0;
+term emp: ctx;
+--| @acui eq_raw_ctx_assoc _ emp _
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term hyp (J: jdg): ctx;
+coercion hyp: jdg > ctx;
+axiom eq_raw_ctx_assoc (g h i: ctx): $ ((g , h) , i) ≋ (g , (h , i)) $;
+axiom eq_raw_ctx_unit (g: ctx): $ (emp , g) ≋ g $;
+--| @congr
+axiom hyp_congr (J K: jdg): $ J <=> K $ > $ hyp J ≋ hyp K $;
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx): $ g1 ≋ g2 $ > $ h1 ≋ h2 $ > $ (g1 , h1) ≋ (g2 , h2) $;
+--| @congr
+axiom nd_congr (g h: ctx) (J K: jdg): $ g ≋ h $ > $ J <=> K $ > $ (g ⊢ J) <=> (h ⊢ K) $;
+axiom weaken (g: ctx) {x: tm} (T: ty) (J: jdg): $ g ⊢ J $ > $ g , x : T ⊢ J $;
+axiom var (g: ctx) {x: tm} (A: ty): $ g ⊢ Ty A $ > $ g , x : A ⊢ x : A $;
+term Nat: ty;
+term Id (A: ty) (s t: tm): ty;
+term refl (A: ty) (s: tm): tm;
+axiom refl_intro (g: ctx) (A: ty) (s: tm): $ g ⊢ s : A $ > $ g ⊢ refl A s : Id A s s $;
+
+theorem ordered_ctx_probe_two (g: ctx) {k ih: tm}:
+  $ g , k : Nat ⊢ Ty Nat $
+  > $ g , k : Nat , ih : Nat ⊢ refl Nat ih : Id Nat ih ih $;

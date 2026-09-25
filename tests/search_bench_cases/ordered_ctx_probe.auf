@@ -1,0 +1,4 @@
+ordered_ctx_probe_two
+---
+l1: $ g , k : Nat , ih : Nat ⊢ ih : Nat $ by var [#1]
+l2: $ g , k : Nat , ih : Nat ⊢ refl Nat ih : Id Nat ih ih $ by refl_intro [l1]

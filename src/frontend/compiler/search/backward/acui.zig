@@ -432,6 +432,13 @@ fn acuiPrecheckWalk(
                     expr_id,
                     app.term_id,
                     bindings,
+                ) and acuiDistinctMembersPlausible(
+                    context,
+                    theorem,
+                    template,
+                    expr_id,
+                    app.term_id,
+                    bindings,
                 );
             }
             // Non-ACUI head: structurally line up template and ref so that
@@ -509,6 +516,140 @@ fn acuiCheckRequiredElements(
             );
         },
     }
+}
+
+// Multiplicity half of the required-element check. Without idempotence, each
+// required template leaf needs its OWN goal member: `weaken2`'s
+// `g , x : T1 , y : T2` against `g , k : Nat` finds a `hyp` member for both
+// leaves, but only one exists. Look for a matching (leaf -> distinct
+// compatible member) by augmenting paths.
+//
+// Sound only when the goal's member multiset is fixed: a placeholder member,
+// or one headed by a def or `@rewrite` term, might expand into several (or
+// none), so any such member means no opinion. Likewise a leaf whose head
+// needs semantics might vanish (unfold to the unit) and is not counted. A
+// variable member (an opaque context such as `g`) can only be absorbed by a
+// binder leaf, which is never counted either.
+fn acuiDistinctMembersPlausible(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    container: ExprId,
+    head_id: u32,
+    bindings: []const ?ExprId,
+) bool {
+    const combiner = context.registry.acui_by_head.get(head_id) orelse return true;
+    if (combiner.idem_name != null) return true;
+    const unit_id = acuiUnitIdForHead(context, head_id);
+
+    var leaves: [max_acui_members]TemplateExpr = undefined;
+    var leaf_len: usize = 0;
+    if (!collectCountedLeaves(context, template, head_id, &leaves, &leaf_len)) return true;
+    if (leaf_len == 0) return true;
+    var members: [max_acui_members]ExprId = undefined;
+    var member_len: usize = 0;
+    if (!collectRigidMembers(context, theorem, container, head_id, unit_id, &members, &member_len))
+        return true;
+    if (leaf_len > member_len) return false;
+
+    // owner[m] = leaf currently matched to member m.
+    var owner: [max_acui_members]?usize = @splat(null);
+    for (0..leaf_len) |leaf_idx| {
+        var visited: [max_acui_members]bool = @splat(false);
+        if (!augmentLeaf(
+            context,
+            theorem,
+            leaves[0..leaf_len],
+            members[0..member_len],
+            bindings,
+            leaf_idx,
+            &owner,
+            &visited,
+        )) return false;
+    }
+    return true;
+}
+
+fn augmentLeaf(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    leaves: []const TemplateExpr,
+    members: []const ExprId,
+    bindings: []const ?ExprId,
+    leaf_idx: usize,
+    owner: *[max_acui_members]?usize,
+    visited: *[max_acui_members]bool,
+) bool {
+    for (members, 0..) |member, m| {
+        if (visited[m]) continue;
+        if (!templateMatchesExprPlausible(context, theorem, leaves[leaf_idx], member, bindings))
+            continue;
+        visited[m] = true;
+        if (owner[m]) |other| {
+            if (!augmentLeaf(context, theorem, leaves, members, bindings, other, owner, visited))
+                continue;
+        }
+        owner[m] = leaf_idx;
+        return true;
+    }
+    return false;
+}
+
+// Non-binder leaves of the combiner spine whose head is rigid (always exactly
+// one member). False on overflow.
+fn collectCountedLeaves(
+    context: *const Context,
+    template: TemplateExpr,
+    head_id: u32,
+    out: *[max_acui_members]TemplateExpr,
+    len: *usize,
+) bool {
+    switch (template) {
+        .binder => return true,
+        .app => |app| {
+            if (app.term_id == head_id) {
+                for (app.args) |arg| {
+                    if (!collectCountedLeaves(context, arg, head_id, out, len)) return false;
+                }
+                return true;
+            }
+            if (termNeedsSemantic(context, app.term_id)) return true;
+            if (len.* == out.len) return false;
+            out[len.*] = template;
+            len.* += 1;
+            return true;
+        },
+    }
+}
+
+// The container's members, unit leaves dropped. False (no opinion) when a
+// member could stand for a different number of members after conversion, or
+// on overflow.
+fn collectRigidMembers(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr_id: ExprId,
+    head_id: u32,
+    unit_id: ?u32,
+    out: *[max_acui_members]ExprId,
+    len: *usize,
+) bool {
+    switch (theorem.interner.node(expr_id).*) {
+        .placeholder => return false,
+        .variable => {},
+        .app => |app| {
+            if (app.term_id == head_id and app.args.len == 2) {
+                return collectRigidMembers(context, theorem, app.args[0], head_id, unit_id, out, len) and
+                    collectRigidMembers(context, theorem, app.args[1], head_id, unit_id, out, len);
+            }
+            if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
+            if (termNeedsSemantic(context, app.term_id)) return false;
+        },
+    }
+    if (len.* == out.len) return false;
+    out[len.*] = expr_id;
+    len.* += 1;
+    return true;
 }
 
 fn acuiContainerHasTemplateMember(

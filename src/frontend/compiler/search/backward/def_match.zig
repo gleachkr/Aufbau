@@ -201,6 +201,167 @@ fn resolveRigidHead(context: *const Context, term_id: u32) ?u32 {
     return null;
 }
 
+// True when `term_id` heads a structural combiner declared with neither
+// commutativity nor idempotence, so its members form a sequence: two spines
+// are equal exactly when their flattened, unit-free member lists are.
+fn acuiIsOrdered(context: *const Context, term_id: u32) bool {
+    const combiner = context.registry.acui_by_head.get(term_id) orelse return false;
+    return combiner.comm_name == null and combiner.idem_name == null;
+}
+
+const max_ordered_members = 16;
+
+// Flatten `template` through `head_id` into its unit-free leaf sequence.
+// Returns false on overflow.
+fn flattenOrderedTemplate(
+    template: TemplateExpr,
+    head_id: u32,
+    unit_id: ?u32,
+    out: *[max_ordered_members]TemplateExpr,
+    len: *usize,
+) bool {
+    if (template == .app) {
+        const app = template.app;
+        if (app.term_id == head_id and app.args.len == 2) {
+            return flattenOrderedTemplate(app.args[0], head_id, unit_id, out, len) and
+                flattenOrderedTemplate(app.args[1], head_id, unit_id, out, len);
+        }
+        if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
+    }
+    if (len.* >= out.len) return false;
+    out[len.*] = template;
+    len.* += 1;
+    return true;
+}
+
+// Flatten `expr_id` through `head_id` into its unit-free member sequence.
+// Returns false on overflow.
+fn flattenOrderedExpr(
+    theorem: *const TheoremContext,
+    expr_id: ExprId,
+    head_id: u32,
+    unit_id: ?u32,
+    out: *[max_ordered_members]ExprId,
+    len: *usize,
+) bool {
+    if (theorem.interner.node(expr_id).* == .app) {
+        const app = theorem.interner.node(expr_id).app;
+        if (app.term_id == head_id and app.args.len == 2) {
+            return flattenOrderedExpr(theorem, app.args[0], head_id, unit_id, out, len) and
+                flattenOrderedExpr(theorem, app.args[1], head_id, unit_id, out, len);
+        }
+        if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
+    }
+    if (len.* >= out.len) return false;
+    out[len.*] = expr_id;
+    len.* += 1;
+    return true;
+}
+
+// Whether a sequence entry is exactly one member: an application whose head
+// no conversion can turn into a combiner spine or the unit. A binder, a
+// variable, a placeholder, or a def or `@rewrite` head may stand for any
+// number of members.
+fn templateIsSingleMember(context: *const Context, template: TemplateExpr) bool {
+    return switch (template) {
+        .binder => false,
+        .app => |app| !termNeedsSemantic(context, app.term_id),
+    };
+}
+
+fn exprIsSingleMember(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr_id: ExprId,
+) bool {
+    return switch (theorem.interner.node(expr_id).*) {
+        .variable, .placeholder => false,
+        .app => |app| !termNeedsSemantic(context, app.term_id),
+    };
+}
+
+// Order-aware extraction under an ordered combiner (`acuiIsOrdered`). Both
+// sides are flattened to their member sequences. Single-member template leaves
+// before the first multi-member leaf align with the ref's leading members, and
+// those after the last one with its trailing members; any other alignment
+// would reorder the sequence. So when every aligned ref member is itself a
+// single member, those pairs are forced and extracted. With no multi-member
+// leaf the lengths must agree and every pair is forced. With exactly one, an
+// unbound bare binder, it is forced to the members in between (the unit when
+// there are none). E.g. martin_lof's `var` concludes `g , x : A ⊢ x : A`;
+// against `g , k : Nat , ih : Nat` in any association this pins
+// `x : A := ih : Nat` and `g := g , k : Nat`, where a positional walk of the
+// right-nested spine `g , (k : Nat , ih : Nat)` would bind `g := g`.
+fn extractOrderedSpineBindings(
+    context: *const Context,
+    theorem: *TheoremContext,
+    head_id: u32,
+    template: TemplateExpr,
+    expr_id: ExprId,
+    bindings: []?ExprId,
+) void {
+    const unit_id = acui.acuiUnitIdForHead(context, head_id);
+    var leaves: [max_ordered_members]TemplateExpr = undefined;
+    var leaf_len: usize = 0;
+    if (!flattenOrderedTemplate(template, head_id, unit_id, &leaves, &leaf_len)) return;
+    var members: [max_ordered_members]ExprId = undefined;
+    var member_len: usize = 0;
+    if (!flattenOrderedExpr(theorem, expr_id, head_id, unit_id, &members, &member_len)) return;
+
+    var first_multi: ?usize = null;
+    var last_multi: usize = 0;
+    var multi_count: usize = 0;
+    for (leaves[0..leaf_len], 0..) |leaf, i| {
+        if (templateIsSingleMember(context, leaf)) continue;
+        if (first_multi == null) first_multi = i;
+        last_multi = i;
+        multi_count += 1;
+    }
+    const prefix_len = first_multi orelse leaf_len;
+    const suffix_len = if (first_multi == null) 0 else leaf_len - last_multi - 1;
+    if (first_multi == null) {
+        if (leaf_len != member_len) return;
+    } else if (prefix_len + suffix_len > member_len) return;
+
+    // Every aligned ref entry must be exactly one member, or the alignment is
+    // not forced and nothing is extracted.
+    for (members[0..prefix_len]) |member| {
+        if (!exprIsSingleMember(context, theorem, member)) return;
+    }
+    for (members[member_len - suffix_len .. member_len]) |member| {
+        if (!exprIsSingleMember(context, theorem, member)) return;
+    }
+    for (leaves[0..prefix_len], members[0..prefix_len]) |leaf, member| {
+        extractHypPartialBindings(context, theorem, leaf, member, bindings);
+    }
+    for (
+        leaves[leaf_len - suffix_len .. leaf_len],
+        members[member_len - suffix_len .. member_len],
+    ) |leaf, member| {
+        extractHypPartialBindings(context, theorem, leaf, member, bindings);
+    }
+
+    if (multi_count != 1) return;
+    const idx = switch (leaves[first_multi.?]) {
+        .binder => |b| b,
+        .app => return,
+    };
+    if (idx >= bindings.len or bindings[idx] != null) return;
+    const middle = members[prefix_len .. member_len - suffix_len];
+    if (middle.len == 0) {
+        const unit = unit_id orelse return;
+        bindings[idx] = theorem.interner.internApp(unit, &.{}) catch return;
+        return;
+    }
+    var value = middle[middle.len - 1];
+    var k = middle.len - 1;
+    while (k > 0) {
+        k -= 1;
+        value = theorem.interner.internApp(head_id, &.{ middle[k], value }) catch return;
+    }
+    bindings[idx] = value;
+}
+
 // True when `term_id` heads a structural combiner registered with `@acui` AND
 // that declaration includes commutativity. Multiset/bag reasoning over the
 // combiner's arguments is only sound when this holds.
@@ -715,6 +876,20 @@ pub fn extractHypPartialBindings(
             bindings[idx] = expr_id;
         },
         .app => |app| {
+            // An ordered (non-commutative, non-idempotent) combiner: align the
+            // flattened member sequences, never the binary spines, whose
+            // association is arbitrary.
+            if (acuiIsOrdered(context, app.term_id)) {
+                extractOrderedSpineBindings(
+                    context,
+                    theorem,
+                    app.term_id,
+                    template,
+                    expr_id,
+                    bindings,
+                );
+                return;
+            }
             const node = theorem.interner.node(expr_id);
             switch (node.*) {
                 .variable, .placeholder => {},
@@ -724,8 +899,8 @@ pub fn extractHypPartialBindings(
                     {
                         // Positional walk: when the ref happens to be written
                         // with the same association as the template, this pins
-                        // binders directly (and matches the ordered reading an
-                        // associative-but-not-commutative combiner requires).
+                        // binders directly. (Ordered combiners never get here;
+                        // this serves the idempotent non-commutative ones.)
                         //
                         // Skip it under a *commutative* ACUI head: there the
                         // positional correspondence is meaningless — the ref's

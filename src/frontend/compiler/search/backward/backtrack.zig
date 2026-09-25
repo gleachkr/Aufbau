@@ -197,6 +197,23 @@ pub fn exactWithSession(
             if (counters) |c| c.conclusion_member_prunes += 1;
             continue;
         }
+        // A conclusion binding that rigidly mentions a bound binder its
+        // dependency list omits dooms the application: no conversion removes
+        // the occurrence, and without a view or `@freshen` nothing re-chooses
+        // the bound binder, so every assembly fails the checker's
+        // DepViolation. (e.g. `weaken`'s `g , x : T ⊢ J` against
+        // `g , k : Nat ⊢ suc k : Nat` binds `J := suc k : Nat`.)
+        if (!ruleMayRechooseBound(context, apply_candidate.rule_id) and
+            bindingsDepHit(
+                context,
+                &apply_candidate.theorem,
+                &context.env.rules.items[apply_candidate.rule_id],
+                apply_candidate.bindings,
+            ) == .rigid)
+        {
+            if (counters) |c| c.dep_violation_prunes += 1;
+            continue;
+        }
 
         const results_before = candidates.items.len;
         try enumerateCandidateRefs(
@@ -216,21 +233,21 @@ pub fn exactWithSession(
             options.fuel,
             &candidates,
         );
-        // An eager candidate whose conclusion bindings break the rule's
-        // eigenvariable condition does not arm the cut: the step is not
+        // An eager candidate whose conclusion bindings may break the rule's
+        // eigenvariable condition does not arm the cut: the step may not be
         // applicable as matched (e.g. `all_intro` over a context that
         // mentions `y` free), so it says nothing about the goal's other
-        // rules. It is still tried, since a view or `@freshen` may re-choose
-        // the bound binder at validation.
+        // rules. The rigid, view-less case was pruned above; the rest is
+        // tried, since a conversion, view or `@freshen` may still repair it.
         if (is_eager and
             (apply_candidate.reached_child_solve or
                 candidates.items.len > results_before) and
-            !bindingsBreakRuleDeps(
+            bindingsDepHit(
                 context,
                 &apply_candidate.theorem,
                 &context.env.rules.items[apply_candidate.rule_id],
                 apply_candidate.bindings,
-            ))
+            ) == .none)
         {
             eager_armed = true;
         }
@@ -1885,17 +1902,29 @@ fn banCarriedMetaDeps(
     }
 }
 
-/// True when, as matched, a non-bound binder's value mentions the value of a
-/// bound arg its `ArgInfo.deps` omits: an occurrence reached without crossing
-/// a term with alpha rules (`@freshen` renames only through those). Meta
-/// leaves are dep-free, so a partially open binding is judged on its concrete
-/// part. Advisory only: a view can still re-choose the bound binder.
-fn bindingsBreakRuleDeps(
+/// How a matched non-bound binder's value mentions the value of a bound arg
+/// its `ArgInfo.deps` omits. Occurrences under a term with alpha rules don't
+/// count (`@freshen` renames only through those); meta leaves are dep-free, so
+/// a partially open binding is judged on its concrete part.
+const DepHit = enum {
+    none,
+    /// Reached only through a head conversion can rewrite away: a def, a
+    /// `@rewrite` head, or an unavailable term.
+    soft,
+    /// Reached along rigid heads only. ACUI combiners count as rigid:
+    /// rearrangement never drops a member (idempotence keeps a copy, and the
+    /// unit mentions nothing).
+    rigid,
+};
+
+/// The strongest `DepHit` over the rule's non-bound binders, as matched.
+fn bindingsDepHit(
     context: *const Context,
     theorem: *const TheoremContext,
     rule: *const @import("../../../env.zig").RuleDecl,
     bindings: []const ?ExprId,
-) bool {
+) DepHit {
+    var result: DepHit = .none;
     for (rule.args, 0..) |arg, idx| {
         if (arg.bound) continue;
         const value = bindings[idx] orelse continue;
@@ -1906,31 +1935,55 @@ fn bindingsBreakRuleDeps(
             const info = (theorem.currentLeafInfo(bound_value) catch null) orelse continue;
             banned |= info.deps;
         }
-        if (banned != 0 and unprotectedDepsHit(context, theorem, value, banned)) return true;
+        if (banned == 0) continue;
+        const hit = exprDepHit(context, theorem, value, banned);
+        if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
+        if (result == .rigid) break;
     }
-    return false;
+    return result;
 }
 
-fn unprotectedDepsHit(
+fn exprDepHit(
     context: *const Context,
     theorem: *const TheoremContext,
     expr: ExprId,
     banned: u55,
-) bool {
+) DepHit {
     return switch (theorem.interner.node(expr).*) {
-        .placeholder => false,
+        .placeholder => .none,
         .variable => blk: {
-            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk false;
-            break :blk info.deps & banned != 0;
+            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk .none;
+            break :blk if (info.deps & banned != 0) .rigid else .none;
         },
         .app => |app| blk: {
-            if (context.registry.getAlphaRules(app.term_id).len != 0) break :blk false;
+            if (context.registry.getAlphaRules(app.term_id).len != 0) break :blk .none;
+            var result: DepHit = .none;
             for (app.args) |arg| {
-                if (unprotectedDepsHit(context, theorem, arg, banned)) break :blk true;
+                const hit = exprDepHit(context, theorem, arg, banned);
+                if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
+                if (result == .rigid) break;
             }
-            break :blk false;
+            if (result == .rigid and !headIsRigid(context, app.term_id)) result = .soft;
+            break :blk result;
         },
     };
+}
+
+/// A head no checker conversion can remove: available, not a def with a body,
+/// and not a `@rewrite` head. (Alpha-rule heads are screened by the caller.)
+fn headIsRigid(context: *const Context, term_id: u32) bool {
+    if (!context.env.hasAvailableTerm(term_id)) return false;
+    if (context.registry.rewrites_by_head.contains(term_id)) return false;
+    const term = context.env.terms.items[term_id];
+    return !(term.is_def and term.body != null);
+}
+
+/// A view, `@fresh`, or `@freshen` can re-choose a bound binder after the
+/// conclusion match, so a dependency hit as matched is not decisive.
+fn ruleMayRechooseBound(context: *const Context, rule_id: u32) bool {
+    return context.views.contains(rule_id) or
+        context.fresh_bindings.contains(rule_id) or
+        context.freshen_bindings.contains(rule_id);
 }
 
 fn banMetasIn(

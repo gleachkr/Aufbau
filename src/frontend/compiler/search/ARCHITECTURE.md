@@ -106,7 +106,10 @@ goal + theorem
   │                                        then by witness class (see below)
   │
   ├─ for each candidate:
-  │    ├─ conclusionMembersPlausible        cheap ACUI reject  (backward/seed.zig)
+  │    ├─ conclusionMembersPlausible        cheap ACUI reject  (backward/seed.zig):
+  │    │                                    each required member present, and
+  │    │                                    distinct ones unless idempotent
+  │    ├─ bindingsDepHit == .rigid          doomed eigenvariable reject
   │    └─ enumerateCandidateRefs            fill hyps from the ref pool (DFS)
   │         ├─ lookupHypReferences          per-slot ref lookup (backward/lookup.zig)
   │         ├─ buildHypPlans                slot fill ordering   (backward/plan.zig)
@@ -378,12 +381,18 @@ choices, not only by the final checker. It is read off the rule's own binder
 dependencies: a non-bound binder whose `ArgInfo.deps` omits bound arg `x` may
 not depend on `x`'s value. Two checks follow from it:
 
-- An eager candidate whose conclusion bindings already put that value in
-  such a binder (reachable without crossing a term that has alpha rules,
-  which `@freshen` could repair; `bindingsBreakRuleDeps`) does not arm the
-  eager cut. Otherwise a dead `all_intro` would hide `raa`. The candidate is
-  still tried, not pruned, because a view may re-choose the bound binder at
-  validation (martin_lof's `app_elim`). Guard: `eager_cut_dep_probe`.
+- `bindingsDepHit` classifies how a conclusion binding mentions such a
+  value. Occurrences under a term with alpha rules don't count, since
+  `@freshen` could rename them away. A `.rigid` hit is reached through
+  rigid heads only (ACUI combiners count as rigid, since rearrangement
+  never drops a member); a `.soft` hit passes through a def, a `@rewrite`
+  head or an unavailable term, which conversion might remove. A `.rigid`
+  hit on a rule with no view, `@fresh` or `@freshen` is pruned at seed
+  time, before ref lookup: every assembly would fail the checker's
+  DepViolation. Anything else is still tried, because a view may re-choose
+  the bound binder at validation (martin_lof's `app_elim`), but only a
+  candidate with no hit arms the eager cut. Otherwise a dead `all_intro`
+  would hide `raa`. Guard: `eager_cut_dep_probe`.
 - `banCarriedMetaDeps` handles a binder that still holds carried metas. On
   entry to an open slot it bans the value's dep bits from those metas, keyed
   by stable `meta_id` in the driver's `MetaDepBans`, and rolls the ban back

@@ -173,9 +173,10 @@ those are shared with the proof-case suite **and bundled into the web demo**
 silently break or skew a benchmark.
 
 Known exception / drift risk: several existing `auto?` scenarios still reference
-`tests/proof_cases/zermelo.mm0`, `martin_lof.mm0`, and `zermelo_hilbert.mm0`
-(~3000 lines of shared theory). These predate this convention and are candidates
-for migration to bench-only copies. New cases should not add to that list.
+`tests/proof_cases/zermelo.mm0` and `zermelo_hilbert.mm0` (~2300 lines of
+shared theory). These predate this convention and are candidates for migration
+to bench-only copies. The `martin_lof` scenarios have moved to
+`martin_lof_frontier.mm0`. New cases should not add to that list.
 
 ## Baseline
 

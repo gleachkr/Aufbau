@@ -385,6 +385,136 @@ test "ACUI conclusion member prune scans below semantic container" {
     try std.testing.expect(counters.conclusion_member_prunes > 0);
 }
 
+// An ordered (associative, unit, not commutative, not idempotent) context
+// theory in the martin_lof style, shared by the multiplicity and dependency
+// prune tests below.
+const ordered_ctx_theory =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\sort tm;
+    \\sort ty;
+    \\term iff (a b: wff): wff;
+    \\infixr iff: $<->$ prec 20;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc _ emp _
+    \\term join (g h: ctx): ctx;
+    \\term hyp (a: wff): ctx;
+    \\term nd (g: ctx) (a: wff): wff;
+    \\term has (t: tm) (A: ty): wff;
+    \\term Nat: ty;
+    \\term suc (n: tm): tm;
+    \\def cst (n: tm) (A: ty): ty = $ A $;
+    \\
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (a: wff): $ a <-> a $;
+    \\axiom iff_trans (a b c: wff):
+    \\  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+    \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+    \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+    \\
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx):
+    \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+    \\
+;
+
+/// Runs `exact?` at the proof's `exact?` needle; returns the suggestion count.
+fn exactSuggestionCount(
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    counters: *types.SearchCounters,
+) !usize {
+    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
+        return error.MissingNeedle;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        offset,
+        .{ .counters = counters },
+    );
+    defer suggestions.deinit();
+    return suggestions.items.len;
+}
+
+test "ACUI member prune counts distinct members without idempotence" {
+    // `weaken2` needs two entries after `g`; the goal context has one. Each
+    // required `hyp` leaf finds a compatible member on its own, but not a
+    // distinct one, so the candidate is pruned before validation.
+    const mm0_src = ordered_ctx_theory ++
+        \\axiom weaken2 (g: ctx) {x y: tm} (T U: ty) (J: wff):
+        \\  $ nd g J $ > $ nd (join (join g (hyp (has x T))) (hyp (has y U))) J $;
+        \\theorem t (g: ctx) {k: tm} (z: tm):
+        \\  $ nd g (has z Nat) $ > $ nd (join g (hyp (has k Nat))) (has z Nat) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join g (hyp (has k Nat))) (has z Nat) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    const count = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expectEqual(@as(usize, 0), counters.full_try_candidate_calls);
+    try std.testing.expect(counters.conclusion_member_prunes > 0);
+}
+
+test "dependency prune drops a rule whose binding rigidly mentions its bound binder" {
+    // `weaken`'s `J` does not depend on `x`, but the goal forces `x := k` and
+    // `J := has (suc k) Nat`. No conversion removes `k`, so every assembly is
+    // a DepViolation: pruned at seed time.
+    const mm0_src = ordered_ctx_theory ++
+        \\axiom weaken (g: ctx) {x: tm} (T: ty) (J: wff):
+        \\  $ nd g J $ > $ nd (join g (hyp (has x T))) J $;
+        \\theorem t (g: ctx) {k: tm}:
+        \\  $ nd g (has (suc k) Nat) $ >
+        \\  $ nd (join g (hyp (has k Nat))) (has (suc k) Nat) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join g (hyp (has k Nat))) (has (suc k) Nat) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    const count = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expectEqual(@as(usize, 0), counters.full_try_candidate_calls);
+    try std.testing.expect(counters.dep_violation_prunes > 0);
+}
+
+test "dependency prune keeps an occurrence a def unfold can remove" {
+    // Here `k` reaches `J` only through the def `cst`, whose body drops its
+    // first argument, so conversion may remove it: no prune.
+    const mm0_src = ordered_ctx_theory ++
+        \\axiom weaken (g: ctx) {x: tm} (T: ty) (J: wff):
+        \\  $ nd g J $ > $ nd (join g (hyp (has x T))) J $;
+        \\theorem t (g: ctx) {k: tm} (z: tm):
+        \\  $ nd g (has z Nat) $ >
+        \\  $ nd (join g (hyp (has k Nat))) (has z (cst k Nat)) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join g (hyp (has k Nat))) (has z (cst k Nat)) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    _ = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), counters.dep_violation_prunes);
+    try std.testing.expect(counters.full_try_candidate_calls > 0);
+}
+
 test "ACUI member prune allows transparent def matching variable member" {
     const mm0_src =
         \\delimiter $ ( ) $;
