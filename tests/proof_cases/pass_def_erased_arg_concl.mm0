@@ -1,0 +1,10 @@
+delimiter $ ( ) $;
+provable sort wff;
+term pair (a b: wff): wff;
+
+-- `K` erases its second argument, so `K a b` and `K a c` are the same wff
+-- once unfolded. With `x := c` the rule concludes `pair (K a c) c`; the line
+-- writes `pair (K a b) c`, which differs only under the erased argument.
+def K (a b: wff): wff = $ a $;
+axiom r (y x: wff): $ pair (K y x) x $;
+theorem erased_arg_concl (a b c: wff): $ pair (K a b) c $;

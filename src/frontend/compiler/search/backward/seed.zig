@@ -615,9 +615,11 @@ pub fn conclusionMembersPlausible(
 // Soundness: we prune only on `rigidExprMismatch`, which reports a conflict
 // solely for genuine rigid-head clashes and stays silent whenever a def, ACUI
 // rearrangement, or placeholder could still reconcile the two sides via
-// conversion. So this never rejects a candidate the matcher/normalizer could
-// otherwise close. ACUI-combiner-headed and head-mismatched template nodes are
-// treated as "no opinion" for the same reason. Allocation failure simply yields
+// conversion, and we descend only into arguments the head determines
+// (`argDetermined`), so a `@rewrite` head or a def arg the body drops never
+// forces two occurrences together. So this never rejects a candidate the
+// matcher/normalizer could otherwise close. ACUI-combiner-headed and
+// head-mismatched template nodes are treated as "no opinion" for the same reason. Allocation failure simply yields
 // no opinion (we keep the candidate).
 fn conclusionRepeatedBinderConflict(
     context: *const Context,
@@ -663,7 +665,10 @@ fn repeatedBinderConflictWalk(
                     // withhold judgment rather than descend.
                     if (concrete.term_id != app.term_id) return false;
                     if (concrete.args.len != app.args.len) return false;
-                    for (app.args, concrete.args) |tmpl_arg, conc_arg| {
+                    // Only args the head determines are forced to coincide
+                    // (not a `@rewrite` head's, or a def arg its body drops).
+                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
+                        if (!def_match.argDetermined(context, app.term_id, i)) continue;
                         if (repeatedBinderConflictWalk(
                             context,
                             theorem,

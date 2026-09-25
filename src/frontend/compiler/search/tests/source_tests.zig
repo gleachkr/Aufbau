@@ -631,6 +631,173 @@ test "witnessClass splits un-enrolled, conclusion-determined, and witness rules"
     }
 }
 
+// Three rules share the shape `P (f y x) x` and differ only in the head `f`:
+// a primitive `h`, a def `K` that drops its second argument, and a `@rewrite`
+// head `k2` that reduces to its first. Against `P (f a b) c` the re-pin may pin
+// `x := b` only through `h`: `K a b ≡ K a c` and `k2 a b ≡ k2 a c`, so there
+// `x := c` is still possible and pinning `x := b` would refute it.
+const repin_heads_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort obj;
+    \\term bi (a b: wff): wff;
+    \\infixl bi: $<->$ prec 5;
+    \\--| @relation wff bi biid bitr bisym mpbi
+    \\axiom biid (a: wff): $ a <-> a $;
+    \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+    \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
+    \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+    \\term oeq (a b: obj): wff;
+    \\infixl oeq: $==$ prec 10;
+    \\--| @relation obj oeq oeq_refl oeq_trans oeq_sym _
+    \\axiom oeq_refl (a: obj): $ a == a $;
+    \\axiom oeq_trans (a b c: obj): $ a == b $ > $ b == c $ > $ a == c $;
+    \\axiom oeq_sym (a b: obj): $ a == b $ > $ b == a $;
+    \\term P (a b: obj): wff;
+    \\--| @congr
+    \\axiom P_congr (a b c d: obj): $ a == b $ > $ c == d $ > $ P a c <-> P b d $;
+    \\term h (a b: obj): obj;
+    \\def K (a b: obj): obj = $ a $;
+    \\term k2 (a b: obj): obj;
+    \\--| @congr
+    \\axiom k2_congr (a b c d: obj): $ a == b $ > $ c == d $ > $ k2 a c == k2 b d $;
+    \\--| @rewrite
+    \\axiom k2_drop (a b: obj): $ k2 a b == a $;
+    \\axiom r_h (y x: obj): $ P (h y x) x $;
+    \\axiom r_K (y x: obj): $ P (K y x) x $;
+    \\axiom r_k2 (y x: obj): $ P (k2 y x) x $;
+    \\term R (a: obj): wff;
+    \\term Q (a: obj): wff;
+    \\axiom r3 (y x: obj): $ R y $ > $ Q x $ > $ P (k2 y x) x $;
+    \\axiom r3K (y x: obj): $ R y $ > $ Q x $ > $ P (K y x) x $;
+    \\theorem t (a b c: obj): $ P (k2 a b) c $;
+    \\theorem t3 (a b c: obj): $ R a $ > $ Q c $ > $ P (k2 a b) c $;
+    \\theorem t3K (a b c: obj): $ R a $ > $ Q c $ > $ P (K a b) c $;
+;
+
+test "re-pin descends only into arguments the head determines" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, repin_heads_mm0, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const cases = [_]struct { rule: []const u8, goal: []const u8, plausible: bool }{
+        .{ .rule = "r_h", .goal = "P (h a b) c", .plausible = false },
+        .{ .rule = "r_K", .goal = "P (K a b) c", .plausible = true },
+        .{ .rule = "r_k2", .goal = "P (k2 a b) c", .plausible = true },
+    };
+    var goals: [cases.len]types.Goal = undefined;
+    for (cases, &goals) |case, *goal| {
+        goal.* = try parseGoal(&fixture, &theorem, &theorem_vars, case.goal);
+    }
+    var failed = false;
+    for (cases, goals) |case, goal| {
+        var rule_id: ?u32 = null;
+        for (context.env.rules.items, 0..) |rule, i| {
+            if (std.mem.eql(u8, rule.name, case.rule)) rule_id = @intCast(i);
+        }
+        const rid = rule_id orelse return error.MissingRule;
+        // Both binders unbound: the seed nulls `x` on its conflicting
+        // occurrences, and `y` is left for the re-pin to fill.
+        const bindings = try allocator.alloc(?ExprId, 2);
+        @memset(bindings, null);
+        var candidate = types.ApplyCandidate{
+            .allocator = allocator,
+            .rule_id = rid,
+            .rule_name = case.rule,
+            .declaration_order = 0,
+            .theorem = try theorem.clone(),
+            .bindings = try allocator.alloc(?ExprId, 0),
+            .conclusion = goal.concrete,
+            .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
+        };
+        defer candidate.deinit();
+        const actual = plausible.finalConclusionPlausible(
+            &context,
+            &candidate,
+            goal,
+            bindings,
+            .{ .repin_prune_enabled = true },
+            null,
+        );
+        if (actual != case.plausible) {
+            std.debug.print("rule {s}: expected plausible={}\n", .{ case.rule, case.plausible });
+            failed = true;
+        }
+    }
+    try std.testing.expect(!failed);
+}
+
+// End to end: `r_k2` and `r3 [#1, #2]` prove `P (k2 a b) c` with `x := c`
+// (normalization reduces both `k2` sides to `a`), so the conclusion prunes
+// must not force `x := b` from the goal's `k2 a b` where the rule repeats `x`.
+test "search keeps a rule whose repeated binder sits under a @rewrite head" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const proof_src =
+        \\t3
+        \\----
+        \\l1: $ P (k2 a b) c $ by exact?
+    ;
+    var found = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        repin_heads_mm0,
+        proof_src,
+        std.mem.indexOf(u8, proof_src, "exact?").?,
+        .{},
+    );
+    defer found.deinit();
+    // Both the hypothesis-free `r_k2` and `r3` (whose `x` comes from `Q c`)
+    // must be offered.
+    var failed = false;
+    for ([_][]const u8{ "r_k2", "r3 [#1, #2]" }) |expected| {
+        var offered = false;
+        for (found.items) |item| {
+            if (std.mem.eql(u8, item.replacement, expected)) offered = true;
+        }
+        if (!offered) {
+            std.debug.print("missing suggestion {s}\n", .{expected});
+            failed = true;
+        }
+    }
+    try std.testing.expect(!failed);
+}
+
+// The def twin of the test above: `K a b ≡ K a c` once `K` unfolds, so
+// `r3K [#1, #2]` proves `P (K a b) c` with `x := c` (the checker accepts it),
+// and the search prunes must not force `x := b` through `K`'s erased argument.
+test "search offers a rule whose repeated binder sits under an erasing def" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const proof_src =
+        \\t3K
+        \\-----
+        \\l1: $ P (K a b) c $ by exact?
+    ;
+    var found = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        repin_heads_mm0,
+        proof_src,
+        std.mem.indexOf(u8, proof_src, "exact?").?,
+        .{},
+    );
+    defer found.deinit();
+    var offered = false;
+    for (found.items) |item| {
+        if (std.mem.eql(u8, item.replacement, "r3K [#1, #2]")) offered = true;
+    }
+    try std.testing.expect(offered);
+}
+
 test "searchPlaceholders enumerates top-level and nested placeholders" {
     const proof_src =
         \\t

@@ -29,6 +29,7 @@ const acuiUnitIdForHead = prune.acuiUnitIdForHead;
 const defBodyForUnfold = prune.defBodyForUnfold;
 const templateDefiniteMismatch = prune.templateDefiniteMismatch;
 const unfoldDefBody = prune.unfoldDefBody;
+const argDetermined = prune.argDetermined;
 
 const max_split_guard_members: usize = 64;
 
@@ -203,13 +204,11 @@ pub fn finalConclusionPlausible(
     // View rules match their VIEW conclusion, not `rule.concl`, so refuting
     // against the raw conclusion would falsely reject (e.g. `ax_inst`'s raw
     // `A.x p -> sb t x p` vs a line matching the view `A.x p -> q`). Run the base
-    // (trap-free) refuter against the view conclusion instead, remapping bindings
+    // refuter against the view conclusion instead, remapping bindings
     // into view-binder space via `binder_map`. `view.concl` is an
     // over-approximation (phantom / unbound view binders are unconstrained), so
-    // this stays a sound one-sided necessary-condition filter. Deliberately does
-    // NOT apply the Lever B/E strengthenings below: those call `pinRigidBinders`,
-    // which has the non-injective-def const-trap edge, whereas the base refuter is
-    // trap-free.
+    // this stays a sound one-sided necessary-condition filter. The Lever B/E
+    // strengthenings below are not applied to views (never measured there).
     if (context.views.get(candidate.rule_id)) |view| {
         return viewConclusionPlausible(
             context,
@@ -291,7 +290,7 @@ const max_view_binders: usize = 32;
 /// (rule-arg indexed) remapped into view-binder space via `binder_map`. Phantom
 /// view binders (`binder_map[vi] == null`) and unbound / out-of-range mapped
 /// binders become `null` ("matches anything") — the over-approximation that keeps
-/// this a sound necessary condition. Only the trap-free base refuter is used (no
+/// this a sound necessary condition. Only the base refuter is used (no
 /// `pinRigidBinders` strengthening).
 fn viewConclusionPlausible(
     context: *const Context,
@@ -322,11 +321,9 @@ fn viewConclusionPlausible(
 /// The re-pin is REQUIRED: most doomed church `ax` candidates leave the
 /// required-member binder (the succedent `P` in `Γ ⊢ P`, mirrored as `hyp(P)`
 /// in the context) unbound at this stage, so without it `instantiateTemplateConcrete`
-/// returns null and the deep check abstains (church flood uncracked). To avoid
-/// amplifying `pinRigidBinders`' const-trap (the deep refuter actively seeks
-/// divergence, unlike Lever B's def-abstaining check), this re-pin runs with
-/// `descend_defs = false`: it pins only through injective rigid heads, never
-/// baking a non-injective-def mis-pin into the concrete leaf.
+/// returns null and the deep check abstains (church flood uncracked). The deep
+/// refuter actively seeks divergence, so a mis-pin would become a false prune;
+/// `pinRigidBinders` only pins through arguments the head determines.
 fn deepMemberWouldPrune(
     context: *const Context,
     theorem: *TheoremContext,
@@ -337,7 +334,7 @@ fn deepMemberWouldPrune(
 ) bool {
     const enriched = context.allocator.dupe(?ExprId, bindings) catch return false;
     defer context.allocator.free(enriched);
-    _ = pinRigidBinders(context, theorem, concl, goal_expr, enriched, false);
+    _ = pinRigidBinders(context, theorem, concl, goal_expr, enriched);
     return acui.acuiBoundMembersDeepMismatch(
         context,
         theorem,
@@ -363,35 +360,25 @@ fn repinConclusionPlausible(
     defer context.allocator.free(enriched);
     // If re-pinning adds no new binding, the enriched check is identical to the
     // plain one (already run by the caller) — skip the second full check.
-    if (!pinRigidBinders(context, theorem, concl, goal_expr, enriched, true)) return true;
+    if (!pinRigidBinders(context, theorem, concl, goal_expr, enriched)) return true;
     return conclusionTemplatePlausible(context, theorem, concl, goal_expr, enriched);
 }
 
 /// Fill unbound binders from the goal subterms at rigid, head/arity-aligned
-/// template positions. ACUI-combiner subtrees are skipped (members aren't
-/// positionally ordered — the member check handles them); a head/arity mismatch
-/// stops the descent (a def could bridge it, so forming no opinion is the
-/// conservative choice). Only fills `null` slots, so it never overwrites a seed.
-///
-/// Mirrors the established seed descent (`seed.partialMatchTemplate`), and
-/// is corpus-validated sound (breadth byte-identical, depth TOTAL=325) — the
-/// `top1`/depth oracle would catch any false prune from a mis-pin. ⚠ Known
-/// latent edge: descending a *non-injective* transparent def head (the const
-/// trap, where `f(X) == f(t)` with `X ≠ t`) can pin `X := t` wrongly, and if `X`
-/// also occurs at another rigid position the strengthened check could falsely
-/// reject. Not exercised by the current corpus; restricting descent to
-/// `termNeedsSemantic`-rigid heads fixes it soundly but also drops the
-/// def-headed descents that carry the zermelo_hilbert benefit, so the precise
-/// fix needs per-arg injectivity analysis (tracked follow-up). The member check
-/// downstream (`templateDefiniteMismatch`) is def-aware but does NOT backstop a
-/// concrete mis-pin, so this is a real (if narrow) risk, kept deliberately.
+/// template positions. Descends only into args the head DETERMINES
+/// (`argDetermined`): a primitive rigid head, or a transparent def whose body
+/// places that arg at a rigid path. ACUI members (not positionally ordered — the
+/// member check handles them), `@rewrite` heads, and def args the body drops (the
+/// `const` trap, where `f(X) == f(t)` with `X ≠ t`) are skipped, so every pin is
+/// goal-forced for any provable candidate. A head/arity mismatch stops the
+/// descent (a def could bridge it, so forming no opinion is the conservative
+/// choice). Only fills `null` slots, so it never overwrites a seed.
 fn pinRigidBinders(
     context: *const Context,
     theorem: *const TheoremContext,
     template: TemplateExpr,
     expr_id: ExprId,
     bindings: []?ExprId,
-    comptime descend_defs: bool,
 ) bool {
     switch (template) {
         .binder => |idx| {
@@ -402,39 +389,20 @@ fn pinRigidBinders(
             return false;
         },
         .app => |app| {
-            if (context.registry.hasStructuralCombiner(app.term_id)) return false;
-            // The const-trap (`f(X) == f(t)` with `X ≠ t` for a non-injective
-            // transparent def) only arises when descending INTO a def head's
-            // args. Callers that feed the pinned values to a divergence-seeking
-            // deep refuter (Lever E) pass `descend_defs = false` to stay on
-            // injective rigid heads and avoid baking a mis-pin into a concrete
-            // leaf. Lever B's one-layer/def-abstaining check is robust to it, so
-            // it keeps `true` (carrying the zermelo_hilbert def-descent benefit).
-            if (!descend_defs and isTransparentDefHead(context, app.term_id)) {
-                return false;
-            }
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .app => |concrete| {
-                    if (concrete.term_id != app.term_id) return false;
-                    if (concrete.args.len != app.args.len) return false;
-                    var added = false;
-                    for (app.args, concrete.args) |targ, earg| {
-                        if (pinRigidBinders(
-                            context,
-                            theorem,
-                            targ,
-                            earg,
-                            bindings,
-                            descend_defs,
-                        )) {
-                            added = true;
-                        }
-                    }
-                    return added;
-                },
+            const concrete = switch (theorem.interner.node(expr_id).*) {
+                .app => |concrete| concrete,
                 else => return false,
+            };
+            if (concrete.term_id != app.term_id) return false;
+            if (concrete.args.len != app.args.len) return false;
+            var added = false;
+            for (app.args, concrete.args, 0..) |targ, earg, i| {
+                if (!argDetermined(context, app.term_id, i)) continue;
+                if (pinRigidBinders(context, theorem, targ, earg, bindings)) {
+                    added = true;
+                }
             }
+            return added;
         },
     }
 }
@@ -1149,7 +1117,9 @@ fn foldedGoalBodyMismatch(
                     goal_app.args,
                 ) catch return false;
                 defer theorem.allocator.free(goal_args);
-                for (app.args, goal_args) |arg, goal_arg| {
+                // Compare only args the head determines (see `argDetermined`).
+                for (app.args, goal_args, 0..) |arg, goal_arg, i| {
+                    if (!argDetermined(context, app.term_id, i)) continue;
                     if (foldedGoalBodyMismatch(
                         context,
                         theorem,

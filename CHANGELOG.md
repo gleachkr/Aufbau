@@ -3,6 +3,19 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A line whose rule conclusion differs from it only under a definition that
+  drops the differing argument is now accepted. With `def K (a b) = a`, a
+  rule concluding `pair (K y x) x` proves `pair (K a b) c` with `x := c`,
+  since `K a b` and `K a c` unfold to the same `a`.
+- `auto?`, `exact?` and `apply?` no longer discard a valid rule whose
+  repeated binder sits under a `@rewrite` head or under a definition
+  argument that the definition drops. The search pruned such rules as
+  impossible even though the checker accepts them.
+
 ## [0.0.12] - 2026-09-24
 
 ### Added

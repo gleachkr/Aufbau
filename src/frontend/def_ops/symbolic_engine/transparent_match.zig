@@ -1,5 +1,6 @@
 const std = @import("std");
 const TermDecl = @import("../../env.zig").TermDecl;
+const def_injectivity = @import("../../def_injectivity.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const AcuiCacheKey = @import("../../expr.zig").AcuiCacheKey;
 const DefCacheKey = @import("../../expr.zig").DefCacheKey;
@@ -221,16 +222,25 @@ fn compareTransparentUncached(
                 *const ConversionPlan,
                 lhs_app.args.len,
             );
-            for (lhs_app.args, rhs_app.args, 0..) |lhs_arg, rhs_arg, idx| {
+            const mismatch: ?usize = for (lhs_app.args, rhs_app.args, 0..) |lhs_arg, rhs_arg, idx| {
                 children[idx] = try compareTransparent(
                     self,
                     lhs_arg,
                     rhs_arg,
-                ) orelse {
-                    return null;
-                };
-            }
-            return try allocPlan(self, .{ .cong = .{ .children = children } });
+                ) orelse break idx;
+            } else null;
+            const idx = mismatch orelse {
+                return try allocPlan(self, .{ .cong = .{ .children = children } });
+            };
+            // A def may drop or bury the arg that differs (`K a b ≡ K a c`
+            // for `K x y := x`), so fall through to the unfold attempts below.
+            // If the head forces that arg, unfolding cannot reconcile it.
+            if (def_injectivity.argDetermined(
+                self.shared.env,
+                self.shared.registry,
+                lhs_app.term_id,
+                idx,
+            )) return null;
         }
     }
 

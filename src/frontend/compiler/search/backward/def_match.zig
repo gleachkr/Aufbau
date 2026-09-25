@@ -5,6 +5,7 @@ const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const Context = types.Context;
+const def_injectivity = @import("../../../def_injectivity.zig");
 
 const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
@@ -669,6 +670,11 @@ fn scopedBodyMismatch(
             return false;
         },
     }
+}
+
+/// See `def_injectivity.argDetermined`.
+pub fn argDetermined(context: *const Context, head: u32, arg_idx: usize) bool {
+    return def_injectivity.argDetermined(context.env, context.registry, head, arg_idx);
 }
 
 pub fn projectViewBindingsIntoRule(

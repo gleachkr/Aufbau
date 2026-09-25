@@ -298,6 +298,15 @@ back to a transparent match of the whole application, so the two sides are
 still recognized as the same wff after unfolding. The fallback is taken only
 for def heads, so ordinary term clashes cost nothing extra.
 
+The same holds once the bindings are fixed, such as when they are written
+explicitly. With `def K (a b: wff): wff = $ a $`, a rule concluding
+`pair (K y x) x` with `x := c` gives `pair (K a c) c`, which a line
+`pair (K a b) c` matches, because `K a b` and `K a c` unfold to the same `a`.
+The comparison unfolds a shared def head only when the clashing argument is
+one the def drops or buries under a head that is not injective. A clash in an
+argument the def keeps rigid cannot be repaired by unfolding and fails at
+once.
+
 ### Symbolic witnesses across structural premises
 
 Ordinary rules do not need an identity `@view` annotation just to retain a
