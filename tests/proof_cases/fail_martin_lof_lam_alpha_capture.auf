@@ -1,0 +1,4 @@
+lam_alpha_capture
+-----------------
+
+l1: $ (λ x : Nat. y) ≈ (λ y : Nat. ⟦ x / y ⟧ y) $ by lam_alpha

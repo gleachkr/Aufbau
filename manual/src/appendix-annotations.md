@@ -261,7 +261,7 @@ variable.
 
 ```text
 --| @alpha OLD NEW
-axiom all_alpha {x y: obj} (p: wff x y): $ ∀ x p ↔ ∀ y ([x/y] p) $;
+axiom all_alpha {x y: obj} (p: wff x): $ ∀ x p ↔ ∀ y ([x/y] p) $;
 ```
 
 `OLD` and `NEW` are bound binders of the same sort on a hypothesis-free

@@ -532,11 +532,11 @@ axiom sb_f_cb_branch {x: set} (t A B f g u v: set x):
       (⟦ x / t ⟧ g) (⟦ x / t ⟧ u) (⟦ x / t ⟧ v) $;
 
 --| @alpha x y
-axiom all_alpha {x y: set} (p: wff x y):
+axiom all_alpha {x y: set} (p: wff x):
   $ ∀ x p ↔ ∀ y ([x/y] p) $;
 
 --| @alpha x y
-axiom ex_alpha {x y: set} (p: wff x y):
+axiom ex_alpha {x y: set} (p: wff x):
   $ ∃ x p ↔ ∃ y ([x/y] p) $;
 
 -- --------------------------------------------------------------------------

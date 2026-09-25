@@ -118,7 +118,7 @@ renaming principle:
 
 ```mm0
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y): $ ∀ x p ↔ ∀ y ([x := y] p) $;
+axiom all_alpha {x y: obj} (p: wff x): $ ∀ x p ↔ ∀ y ([x := y] p) $;
 
 --| @freshen g x
 axiom all_intro (g: ctx) {x: obj} (p: wff x):

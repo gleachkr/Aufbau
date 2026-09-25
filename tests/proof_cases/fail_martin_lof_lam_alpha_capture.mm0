@@ -1,0 +1,6 @@
+import "martin_lof.mm0";
+
+-- α-renaming `λ x. y` to `λ y. …` would capture the free `y`; with the
+-- body allowed to mention `y`, martin_lof derived `Id Nat (suc zero) zero`.
+theorem lam_alpha_capture {x y: tm}:
+  $ (λ x : Nat. y) ≈ (λ y : Nat. ⟦ x / y ⟧ y) $;

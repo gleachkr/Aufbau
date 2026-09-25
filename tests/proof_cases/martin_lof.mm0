@@ -177,7 +177,7 @@ theorem weaken3 (g: ctx) {x y z: tm} (T1: ty) (T2: ty x)
 
 axiom var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
 
-axiom exchange (g: ctx) {x y: tm} (A: ty) (B: ty y) (d: ctx x y)
+axiom exchange (g: ctx) {x y: tm} (A: ty) (B: ty) (d: ctx x y)
   (J: jdg x y):
   $ g , x : A , y : B , d ⊢ J $
   > $ g , y : B , x : A , d ⊢ J $;
@@ -293,7 +293,7 @@ axiom pi_alpha (A: ty) {x y: tm} (B: ty x):
   $ (Π x : A. B) ~ (Π y : A. [x/y] B) $;
 
 --| @alpha x y
-axiom lam_alpha {x y: tm} (A: ty) (t: tm x y):
+axiom lam_alpha {x y: tm} (A: ty) (t: tm x):
   $ (λ x : A. t) ≈ (λ y : A. ⟦ x / y ⟧ t) $;
 
 -- Π, λ, and application are grouped with their formation, introduction,

@@ -353,7 +353,7 @@ A typical pair looks like this:
 
 ```mm0
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y):
+axiom all_alpha {x y: obj} (p: wff x):
   $ ∀ x p ↔ ∀ y ([x/y] p) $;
 
 --| @freshen g x

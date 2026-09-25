@@ -1,0 +1,8 @@
+import "../../manual/preludes/nd-base.mm0";
+import "../../manual/preludes/fol-base.mm0";
+
+-- Renaming `∀ x (P y)` to `∀ y …` would capture the free `y`; with the
+-- body allowed to mention `y`, the manual's FOL preludes derived
+-- `⊢ P y → ∀ y (P y)`.
+theorem all_alpha_capture {x y: obj}:
+  $ ∀ x (P y) ↔ ∀ y ([x := y] (P y)) $;

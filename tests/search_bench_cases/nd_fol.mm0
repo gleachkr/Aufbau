@@ -152,10 +152,10 @@ axiom R_congr (a b c d: obj):
 -- Alpha-renaming rules used by @freshen when a context contains the same
 -- bound variable a quantifier rule is trying to bind.
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y):
+axiom all_alpha {x y: obj} (p: wff x):
   $ ∀ x p ↔ ∀ y ([x/y] p) $;
 --| @alpha x y
-axiom ex_alpha {x y: obj} (p: wff x y):
+axiom ex_alpha {x y: obj} (p: wff x):
   $ ∃ x p ↔ ∃ y ([x/y] p) $;
 
 -- Substitution pushed through the syntactic operators, so the @rewrite

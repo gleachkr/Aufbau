@@ -15,6 +15,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   repeated binder sits under a `@rewrite` head or under a definition
   argument that the definition drops. The search pruned such rules as
   impossible even though the checker accepts them.
+- The alpha-renaming axioms in the example theories and the manual's FOL
+  prelude were unsound: they let the renamed body mention the new bound
+  variable, so renaming captured it. The Martin-Löf example proved
+  `Id Nat (suc zero) zero`, and the FOL prelude proved `P y → ∀ y (P y)`.
+  `lam_alpha`, `all_alpha` and `ex_alpha` now declare the body as depending
+  on the old variable only. Theories copied from these examples should make
+  the same change.
 
 ## [0.0.12] - 2026-09-24
 

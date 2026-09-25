@@ -144,7 +144,7 @@ axiom sb_m_box {x: obj} (t: obj x) (p: mform x):
   $ [x/t] (□ p) ≃ □ ([x/t] p) $;
 
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: mform x y):
+axiom all_alpha {x y: obj} (p: mform x):
   $ ∀ x p ≃ ∀ y ([x/y] p) $;
 
 -- Axiom

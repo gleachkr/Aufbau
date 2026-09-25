@@ -136,7 +136,7 @@ test "freshen repairs strict replay dep violation without normalize" {
         \\--| @rewrite
         \\axiom sb_P (t: obj) {x: obj}: $ iff (sb t x (P x)) (P t) $;
         \\--| @alpha x y
-        \\axiom all_alpha {x y: obj} (p: wff x y):
+        \\axiom all_alpha {x y: obj} (p: wff x):
         \\  $ iff (all x p) (all y (sb y x p)) $;
         \\--| @freshen A x
         \\axiom use {x: obj} (A: wff): $ A $ > $ marker x $;

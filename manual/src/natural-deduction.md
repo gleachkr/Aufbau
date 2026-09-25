@@ -262,9 +262,9 @@ axiom sb_ex {x y: obj} (t: obj x) (p: wff x y):
   $ [x := t] (∃ y p) ↔ ∃ y ([x := t] p) $;
 
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y): $ ∀ x p ↔ ∀ y ([x := y] p) $;
+axiom all_alpha {x y: obj} (p: wff x): $ ∀ x p ↔ ∀ y ([x := y] p) $;
 --| @alpha x y
-axiom ex_alpha {x y: obj} (p: wff x y): $ ∃ x p ↔ ∃ y ([x := y] p) $;
+axiom ex_alpha {x y: obj} (p: wff x): $ ∃ x p ↔ ∃ y ([x := y] p) $;
 ```
 
 The four quantifier rules have several additional annotations: `@freshen`

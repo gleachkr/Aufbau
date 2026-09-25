@@ -79,11 +79,11 @@ axiom sb_P_other {x y: obj} (t: obj x): $ sb t x (P y) ↔ P y $;
 axiom sb_P_free {x: obj} (t: obj x) (a: obj): $ sb t x (P a) ↔ P a $;
 
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y):
+axiom all_alpha {x y: obj} (p: wff x):
   $ ∀ x p ↔ ∀ y (sb y x p) $;
 
 --| @alpha x y
-axiom ex_alpha {x y: obj} (p: wff x y):
+axiom ex_alpha {x y: obj} (p: wff x):
   $ ∃ x p ↔ ∃ y (sb y x p) $;
 
 axiom ax (a: wff): $ a ==> a $;

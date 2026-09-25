@@ -24,7 +24,7 @@ axiom sb_P (t: obj) {x: obj}: $ sb t x (P x) ↔ P t $;
 --| @rewrite
 axiom sb_P_other {x y: obj} (t: obj x): $ sb t x (P y) ↔ P y $;
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y): $ ∀ x p ↔ ∀ y (sb y x p) $;
+axiom all_alpha {x y: obj} (p: wff x): $ ∀ x p ↔ ∀ y (sb y x p) $;
 --| @freshen g x
 --| @freshen d x
 axiom all_right (g d: ctx) {x: obj} (p: wff x):

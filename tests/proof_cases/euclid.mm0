@@ -152,10 +152,10 @@ axiom ex_congr {x: nat} (p q: wff x):
 -- Alpha-renaming rules used by @freshen when a context contains the
 -- same bound variable that a quantifier rule is trying to bind.
 --| @alpha x y
-axiom all_alpha {x y: nat} (p: wff x y):
+axiom all_alpha {x y: nat} (p: wff x):
   $ ∀ x p ↔ ∀ y ([x/y] p) $;
 --| @alpha x y
-axiom ex_alpha {x y: nat} (p: wff x y):
+axiom ex_alpha {x y: nat} (p: wff x):
   $ ∃ x p ↔ ∃ y ([x/y] p) $;
 
 -- Equality on naturals is an equivalence relation; eq_replace below

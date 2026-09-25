@@ -178,6 +178,17 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_def_body_free_hidden_binder",
         .outcome = .{ .fail = error.DepViolation },
     },
+    // The fixture theories' alpha axioms must not let the body mention
+    // the new binder, or renaming captures a free variable (martin_lof
+    // derived `Id Nat (suc zero) zero`, the FOL preludes `P y → ∀ y P y`).
+    .{
+        .stem = "fail_martin_lof_lam_alpha_capture",
+        .outcome = .{ .fail = error.DepViolation },
+    },
+    .{
+        .stem = "fail_fol_all_alpha_capture",
+        .outcome = .{ .fail = error.DepViolation },
+    },
     // Capture-unfolding of a hidden-dummy def (task #138): the stated
     // formula spells out the unfolding with the dummy witness equal to a
     // def argument. MMB `UDummy` requires the witness to be disjoint from

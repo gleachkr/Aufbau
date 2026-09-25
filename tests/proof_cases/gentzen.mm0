@@ -135,11 +135,11 @@ axiom sb_ex {x y: obj} (t: obj x) (p: wff x y):
   $ sb t x (∃ y p) ↔ ∃ y (sb t x p) $;
 
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y):
+axiom all_alpha {x y: obj} (p: wff x):
   $ ∀ x p ↔ ∀ y (sb y x p) $;
 
 --| @alpha x y
-axiom ex_alpha {x y: obj} (p: wff x y):
+axiom ex_alpha {x y: obj} (p: wff x):
   $ ∃ x p ↔ ∃ y (sb y x p) $;
 
 axiom ax (a: wff): $ a ==> a $;

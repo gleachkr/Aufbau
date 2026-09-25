@@ -369,7 +369,7 @@ axiom pi_alpha (A: ty) {x y: tm} (B: ty x):
   $ ty_raw_eq (Π x : A. B) (Π y : A. [x/y] B) $;
 
 --| @alpha x y
-axiom lam_alpha {x y: tm} (A: ty) (t: tm x y):
+axiom lam_alpha {x y: tm} (A: ty) (t: tm x):
   $ tm_raw_eq (λ x : A. t) (λ y : A. ⟦ x / y ⟧ t) $;
 
 axiom nat_form (g: ctx): $ g ⊢ Ty Nat $;
@@ -502,7 +502,7 @@ axiom app_bool_not_true (g: ctx):
 axiom app_bool_not_false (g: ctx):
   $ g ⊢ ≡[Bool] (bool_not_fn · false) = true $;
 
-axiom exchange (g: ctx) {x y: tm} (A: ty) (B: ty y) (d: ctx x y)
+axiom exchange (g: ctx) {x y: tm} (A: ty) (B: ty) (d: ctx x y)
   (J: jdg x y):
   $ g , x : A , y : B , d ⊢ J $
   > $ g , y : B , x : A , d ⊢ J $;

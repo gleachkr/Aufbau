@@ -147,7 +147,7 @@ Example:
 
 ```
 --| @alpha x y
-axiom all_alpha {x y: obj} (p: wff x y):
+axiom all_alpha {x y: obj} (p: wff x):
   $ ∀ x p ↔ ∀ y ([x/y] p) $;
 ```
 

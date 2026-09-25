@@ -1,0 +1,4 @@
+all_alpha_capture
+-----------------
+
+l1: $ ∀ x (P y) ↔ ∀ y ([x := y] (P y)) $ by all_alpha
