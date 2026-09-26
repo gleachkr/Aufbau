@@ -20,6 +20,19 @@ This file records notable user-facing changes to Aufbau. The project follows
   require it, `weaken` requires the new entry's type to be a type, and every
   derivable `g ⊢ J` has a well-formed `g`. Theorems that use such a rule
   take `ok g` as a hypothesis.
+- The Martin-Löf example derives its equality shortcuts. Two substitution
+  rules, `sb_ty_eq` and `sb_tm_eq`, say that substituting equal terms gives
+  equal results, and `eq_tm_conv` converts an equation's type.
+  `eq_tm_to_Id`, `suc_eq`, `add_eq_congr`, `app_eq_left` and `app_eq_right`
+  are now theorems proved from them, so their statements gained typing
+  hypotheses such as `g ⊢ Ty A`.
+- The Martin-Löf example now proves that zero is not one:
+  `zero_ne_one : g ⊢ zero_ne_one_p : (Id Nat zero (suc zero) → Empty)`. It
+  adds an `Empty` type and a small universe `U` whose codes `El` decodes, and
+  makes Bool's eliminator dependent (`bool_ind`). `bool_rec` is now a
+  definition over `bool_ind`, and `bool_elim` and the Bool computation rules
+  are theorems. The `const_ty` family is gone: `nat_rec`'s constant motive is
+  now plain `A`.
 - `auto?` wastes less time on rules that cannot match. When a context is
   neither commutative nor idempotent, a rule needing two entries after `g`
   no longer matches a goal context with one, even though each required
