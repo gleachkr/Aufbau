@@ -496,6 +496,84 @@ fn exactSuggestionCount(
     return suggestions.items.len;
 }
 
+/// A theory with one `@rewrite` head, a substitution: `sb x u t` reduces to
+/// `t` when `t` avoids `x`.
+const redex_theory =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort tm;
+    \\term iff (a b: wff): wff;
+    \\term teq (s t: tm): wff;
+    \\term pr (t: tm): wff;
+    \\term lam {x: tm} (t: tm x): tm;
+    \\term sb {x: tm} (u: tm) (t: tm x): tm;
+    \\term z: tm;
+    \\term o: tm;
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (a: wff): $ iff a a $;
+    \\axiom iff_trans (a b c: wff): $ iff a b $ > $ iff b c $ > $ iff a c $;
+    \\axiom iff_sym (a b: wff): $ iff a b $ > $ iff b a $;
+    \\axiom iff_mp (a b: wff): $ iff a b $ > $ a $ > $ b $;
+    \\--| @relation tm teq teq_refl teq_trans teq_sym _
+    \\axiom teq_refl (s: tm): $ teq s s $;
+    \\axiom teq_trans (s t u: tm): $ teq s t $ > $ teq t u $ > $ teq s u $;
+    \\axiom teq_sym (s t: tm): $ teq s t $ > $ teq t s $;
+    \\--| @congr
+    \\axiom pr_congr (s t: tm): $ teq s t $ > $ iff (pr s) (pr t) $;
+    \\--| @rewrite
+    \\axiom sb_free {x: tm} (u: tm x) (t: tm): $ teq (sb x u t) t $;
+    \\axiom sub {x: tm} (t: tm x) (u: tm):
+    \\  $ pr (lam x t) $ > $ pr u $ > $ pr (sb x u t) $;
+;
+
+test "redex conclusion prune reads rewrite-head binders off the selected refs" {
+    // `sub`'s conclusion has a `@rewrite` head, so the goal alone says nothing.
+    // The ref `pr (lam y z)` gives `t := z`, and `sb y ?u z` reduces to `z`,
+    // not the goal's `o`: pruned before the full check.
+    const mm0_src = redex_theory ++
+        \\theorem t {y: tm}: $ pr (lam y z) $ > $ pr z $ > $ pr o $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ pr o $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    const count = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expectEqual(@as(usize, 0), counters.full_try_candidate_calls);
+    try std.testing.expect(counters.final_conclusion_prunes > 0);
+}
+
+test "redex conclusion prune keeps a ref whose redex reduces to the goal" {
+    // Here the ref gives `t := o`, and `sb y z o` reduces to the goal.
+    const mm0_src = redex_theory ++
+        \\theorem t {y: tm}: $ pr (lam y o) $ > $ pr z $ > $ pr o $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ pr o $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
+        return error.MissingNeedle;
+    var suggestions = try source.suggestionsAtSourceOffset(
+        arena.allocator(),
+        mm0_src,
+        proof_src,
+        offset,
+        .{},
+    );
+    defer suggestions.deinit();
+    for (suggestions.items) |suggestion| {
+        if (std.mem.indexOf(u8, suggestion.replacement, "sub [") != null) return;
+    }
+    return error.MissingSuggestion;
+}
+
 test "ACUI member prune counts distinct members without idempotence" {
     // `weaken2` needs two entries after `g`; the goal context has one. Each
     // required `hyp` leaf finds a compatible member on its own, but not a

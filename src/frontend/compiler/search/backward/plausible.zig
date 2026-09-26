@@ -13,6 +13,7 @@ const prune = @import("./prune.zig");
 const acui = @import("./acui.zig");
 const match = @import("./match.zig");
 const split = @import("./split.zig");
+const redex = @import("./redex.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
@@ -449,6 +450,113 @@ fn conclusionTemplatePlausible(
         bindings,
         0,
     );
+}
+
+/// Whether `template` has a `@rewrite` head anywhere.
+pub fn templateHasRewriteHead(context: *const Context, template: TemplateExpr) bool {
+    return switch (template) {
+        .binder => false,
+        .app => |app| blk: {
+            if (context.registry.rewrites_by_head.contains(app.term_id)) break :blk true;
+            for (app.args) |arg| {
+                if (templateHasRewriteHead(context, arg)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
+}
+
+/// A `@rewrite` head in the conclusion gives `templateDefiniteMismatch` no
+/// opinion, since it can reduce to any head. But the redex usually reduces far
+/// enough to be compared: with martin_lof's substitution, `[x/?u] Nat` is
+/// `Nat` whatever `u` is. Instantiate each redex, with a placeholder for every
+/// unbound ordinary binder, reduce it, and compare the result against the goal
+/// subterm at the same position. A placeholder is never a definite mismatch,
+/// so this only rejects what no choice of the unbound binders could match.
+pub fn redexConclusionMismatch(
+    context: *const Context,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    goal_expr: ExprId,
+    bindings: []const ?ExprId,
+) bool {
+    if (context.registry.rewrites_by_head.count() == 0) return false;
+    // Placeholders and reduced terms go into a scratch clone, so repeated
+    // checks leave no trace in the candidate's interner.
+    var scratch = theorem.clone() catch return false;
+    defer scratch.deinit();
+    var filled: ?[]?ExprId = null;
+    defer if (filled) |f| scratch.allocator.free(f);
+    return redexTemplateMismatch(
+        context,
+        &scratch,
+        rule,
+        rule.concl,
+        goal_expr,
+        bindings,
+        &filled,
+    );
+}
+
+fn redexTemplateMismatch(
+    context: *const Context,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    template: TemplateExpr,
+    goal_expr: ExprId,
+    bindings: []const ?ExprId,
+    filled: *?[]?ExprId,
+) bool {
+    const app = switch (template) {
+        .binder => return false,
+        .app => |app| app,
+    };
+    if (context.registry.rewrites_by_head.contains(app.term_id)) {
+        const values = filled.* orelse blk: {
+            const f = fillOrdinaryBinders(theorem, rule, bindings) catch return false;
+            filled.* = f;
+            break :blk f;
+        };
+        const concrete = (OpenTerms.instantiateTemplateConcrete(
+            theorem,
+            template,
+            values,
+        ) catch return false) orelse return false;
+        const reduced = redex.reduceRedexOnly(context, theorem, concrete) catch
+            return false;
+        return unfoldedExprMismatch(context, theorem, reduced, goal_expr, 0);
+    }
+    if (context.registry.acui_by_head.contains(app.term_id)) return false;
+    if (isTransparentDefHead(context, app.term_id)) return false;
+    const goal_app = switch (theorem.interner.node(goal_expr).*) {
+        .app => |goal_app| goal_app,
+        else => return false,
+    };
+    if (goal_app.term_id != app.term_id or goal_app.args.len != app.args.len) {
+        return false;
+    }
+    for (app.args, goal_app.args) |targ, garg| {
+        if (redexTemplateMismatch(context, theorem, rule, targ, garg, bindings, filled)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// `bindings` with a fresh placeholder in each unbound ordinary slot. Unbound
+/// bound-variable slots stay null, so a redex over one abstains.
+fn fillOrdinaryBinders(
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+) ![]?ExprId {
+    const out = try theorem.allocator.dupe(?ExprId, bindings);
+    errdefer theorem.allocator.free(out);
+    for (out, 0..) |*slot, idx| {
+        if (slot.* != null or idx >= rule.args.len or rule.args[idx].bound) continue;
+        slot.* = try theorem.addPlaceholderResolved(rule.args[idx].sort_name);
+    }
+    return out;
 }
 
 fn closedAcuiTemplateMismatch(

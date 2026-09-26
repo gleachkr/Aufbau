@@ -12,6 +12,7 @@ const ref_index_mod = @import("../ref_index.zig");
 const forward = @import("../forward.zig");
 const candidate_mod = @import("../candidate.zig");
 const plausible = @import("./plausible.zig");
+const prune = @import("./prune.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const ProofScript = @import("../../../proof_script.zig");
@@ -233,6 +234,50 @@ pub fn validateSelectedRefs(
             ref_concls,
         )) {
             if (counters) |actual| actual.hyp_ref_prunes += 1;
+            return;
+        }
+    }
+
+    // A `@rewrite` head in the conclusion (e.g. a substitution `⟦x/u⟧ t`)
+    // matches any goal until its binders are known, and those usually come
+    // from the selected refs, not the conclusion match. Read them off the
+    // refs, then compare the reduced conclusion against the goal. A premise
+    // with a rewrite head of its own is skipped: the checker may match it only
+    // after reducing, so reading `[x/u] B` against a ref's `[y/v] C` position
+    // by position is a guess, and a guess must not reject a candidate.
+    redex: {
+        if (context.views.contains(candidate.rule_id)) break :redex;
+        const goal_expr = goal.concreteOrHint() orelse break :redex;
+        const rule = &context.env.rules.items[candidate.rule_id];
+        if (!plausible.templateHasRewriteHead(context, rule.concl)) break :redex;
+        const enriched = try allocator.dupe(?ExprId, bindings);
+        defer allocator.free(enriched);
+        for (selected, 0..) |maybe_pool_index, idx| {
+            if (idx >= rule.hyps.len) break;
+            if (idx < generated.len and generated[idx] != null) continue;
+            const pool_index = maybe_pool_index orelse continue;
+            if (plausible.templateHasRewriteHead(context, rule.hyps[idx])) continue;
+            const ref_expr = refs_mod.sourceRefExpr(
+                context,
+                &candidate.theorem,
+                pool[pool_index].ref,
+            ) catch continue;
+            prune.extractHypPartialBindings(
+                context,
+                &candidate.theorem,
+                rule.hyps[idx],
+                ref_expr,
+                enriched,
+            );
+        }
+        if (plausible.redexConclusionMismatch(
+            context,
+            &candidate.theorem,
+            rule,
+            goal_expr,
+            enriched,
+        )) {
+            if (counters) |actual| actual.final_conclusion_prunes += 1;
             return;
         }
     }

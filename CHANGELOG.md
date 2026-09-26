@@ -57,6 +57,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   supplies `ih` like any other hidden variable. In the Martin-Löf example
   `auto?` now reconstructs `add_comm`, `add_zero_right` and `ap_suc_ty`
   from their hypotheses with every intermediate line removed.
+- `auto?` and `exact?` try fewer rules whose conclusion contains a
+  `@rewrite` head. Such a term can rewrite to almost anything, so the goal
+  alone says little about it, and the search used to hand every choice of
+  premise lines to the full check. It now fills in the term's variables from
+  the chosen premise lines, rewrites it with the theory's `@rewrite` rules,
+  and skips the rule when the result cannot match the goal. In the
+  Martin-Löf example, where substitution is such a head, this lets `auto?`
+  find `add_suc_right` at greater depth.
 - When `auto?` runs out of budget after searching every depth up to its
   limit, the report now says so and suggests more depth first. Before, it
   suggested only more budget. It named the depth of the last retry pass,
