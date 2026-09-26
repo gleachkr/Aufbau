@@ -142,6 +142,17 @@ pub const guards = [_]FrontierGuard{
             "tests/proof_cases/martin_lof.auf",
         .mode = "depth",
     },
+    // Depth guard for fresh variables hidden by a def
+    // (`backtrack.tryFreshBoundGenerate`): `A → B` unfolds to `Π x : A. B`,
+    // so `pi_form` (`arr_form`) and `app_elim` (`arr_elim`) need a premise
+    // `g , x : A ⊢ Ty B` for an `x` that nothing pins. Without a fresh `x`
+    // both miss at k=1.
+    .{
+        .filter = "arr_",
+        .files = "tests/proof_cases/martin_lof.mm0:" ++
+            "tests/proof_cases/martin_lof.auf",
+        .mode = "depth",
+    },
     // Depth guard for the eager cut's eigenvariable check
     // (`backtrack.bindingsDepHit`): an eager `all_intro` over a
     // context that mentions `y` free can never validate, and must not arm

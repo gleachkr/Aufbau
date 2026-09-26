@@ -231,8 +231,10 @@ which the persisted-memo covering rule requires:
    multiplicative rules whose hypothesis context halves must be guessed.
 3. **Phase 3 — pool retry** (capability-identical to phase 2). Per core
    depth, only after phase 2 missed at that depth, and only if the theory
-   pre-materialized `@vars`-pool dummies (`@auto backward` + non-empty
-   `@vars`). A re-run with its own fuel pool and persisted-memo lineage;
+   has a witness-deferring `@auto backward` rule and a non-empty `@vars`.
+   (The pool dummies themselves are materialized whenever `@vars` is
+   non-empty, since hidden-variable generation below also draws on them.)
+   A re-run with its own fuel pool and persisted-memo lineage;
    deep open-witness theories need it (peano `mul_eq_*_all` at depth 6 are
    found by this cell and by nothing else — #174: neither 4x fuel nor
    `max_depth` 10 recovers them without it). Witness invention itself —
@@ -432,6 +434,30 @@ Instead (`backward/seed.zig:partitionSeedBindings`, keyed on `multiHypBinderMask
 - a dummy in a single-hypothesis binder (its witness/output) is scrubbed to null
   and reconciles at its own generated slot via the open path;
 - a *bare* meta leaf is always scrubbed — it constrains nothing.
+
+A scrubbed dummy on a **bound** binder is a variable the def hid (`A → B`
+unfolds to `Π x : A. B`, so `pi_form`'s premise `g , x : A ⊢ Ty B` needs an
+`x` the goal never names). A ref can still supply it, and at k=0 one does.
+When none matches, `backtrack.tryFreshBoundGenerate` generates the premise
+in every phase, not only phase 5. It also takes a bare unfold placeholder
+left on a bound binder by ref-side extraction (`app_elim`'s `f : A → B`), and
+an intro rule's eigenvariable (`subset_intro`'s `x` in `G , x ∈ A ⊢ x ∈ B`):
+a bound binder absent from the conclusion, where the goal fixes every other
+binder of the premise and no fixed binding may mention the variable. The
+binders open as `.bound_choice` metas in a `fresh_bound` open slot, which
+runs the constrained child-search-first ladder, so a proof below can still
+name the variable however deep its ref sits. Only when the child search
+leaves one unsolved (`weaken`'s conclusion just echoes it back) does
+`tryFreshPoolWitnesses` give it a `@vars` pool variable that occurs in no
+binding, and generate the now-concrete premise. Every fresh choice gives the
+same instance up to renaming, since the variable must avoid every variable of
+the instance. Picking it before the child search is equally complete (the
+open path is still the fallback) but slower: each miss costs a doomed
+concrete child search first. The criteria exclude two shapes. `inst`'s `x`
+may be a variable its fixed `a : term x` already mentions, so a fresh fill is
+a wrong guess (church `SPEC`). `dvd_elim`'s `k` sits in an elim-shaped
+premise whose other binders come from a sibling ref, so fills are mostly
+doomed (euclid). Guard: the `arr_` depth rows of `martin_lof`.
 
 These seed metas are resolved by a **meta-aware ref match**
 (`backward/match.zig:tryMetaAwareHypMatch`, gated by

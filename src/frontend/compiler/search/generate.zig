@@ -297,23 +297,23 @@ pub fn generateTopLevel(
     var work_theorem = try theorem.clone();
     defer work_theorem.deinit();
 
-    // When the theory enrolls a rule that can DEFER a witness,
-    // pre-materialize every `@vars` pool token as a named theorem-local dummy
+    // Pre-materialize every `@vars` pool token as a named theorem-local dummy
     // in the work theorem (sorted for deterministic dummy ids), through a
-    // driver-owned clone of the theorem-vars map. Open bound binders then
-    // enumerate these as concrete witnesses; the rendered explicit binding
-    // re-materializes the same name on the user's side. Theories without a
-    // witness-deferring backward rule skip this entirely, keeping behavior
-    // byte-identical — the gate is `hasWitnessBackwardRules`, not raw
-    // enrollment count, because `@auto eager` implies enrollment while
-    // rejecting witness-deferring rules: an eager-only theory has no
-    // consumer for the pool.
+    // driver-owned clone of the theorem-vars map. Two consumers read it:
+    // open bound binders of witness-deferring rules enumerate these as
+    // concrete witnesses (the rendered explicit binding re-materializes the
+    // same name on the user's side), and a generated premise whose only open
+    // binders are bound variables takes a fresh one (`tryFreshBoundGenerate`).
+    // The witness capabilities (phase 3, invention) stay gated on
+    // `hasWitnessBackwardRules`, not raw enrollment count, because
+    // `@auto eager` implies enrollment while rejecting witness-deferring
+    // rules: an eager-only theory has no witness consumer for the pool.
     var vars_clone: ?types.NameExprMap = null;
     defer if (vars_clone) |*clone| clone.deinit();
     var effective_vars: *const NameExprMap = theorem_vars;
-    if (session.context.registry.hasWitnessBackwardRules(session.context.env) and
-        session.context.sort_vars.count() > 0)
-    {
+    const has_vars_pool = session.context.sort_vars.count() > 0 and
+        session.context.registry.hasWitnessBackwardRules(session.context.env);
+    if (session.context.sort_vars.count() > 0) {
         vars_clone = try Check.cloneNameExprMap(
             session.allocator,
             theorem_vars,
@@ -466,7 +466,7 @@ pub fn generateTopLevel(
         goal_expr,
         &applications,
         budget_ptr,
-        vars_clone != null,
+        has_vars_pool,
     );
 
     // Phase 6: on a miss of the whole ladder, and only when the theory
@@ -532,7 +532,7 @@ pub fn generateTopLevel(
                 goal_expr,
                 &applications,
                 budget_ptr,
-                vars_clone != null,
+                has_vars_pool,
             );
         }
     }
@@ -559,7 +559,7 @@ pub fn generateTopLevel(
             goal_expr,
             &applications,
             budget_ptr,
-            vars_clone != null,
+            has_vars_pool,
         );
     }
 

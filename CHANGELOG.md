@@ -28,6 +28,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   depend on it, such as `weaken`'s `g , x : T ⊢ J` against
   `g , k : Nat ⊢ suc k : Nat`. In the Martin-Löf example this lets
   `auto?` find proofs at greater depth, for example of `double_step_ty`.
+- `auto?` can now supply a bound variable that a definition hides. In the
+  Martin-Löf example `A → B` stands for `Π x : A. B`, so proving
+  `g ⊢ Ty (A → B)` by `pi_form` needs `g , x : A ⊢ Ty B` for some `x` the
+  goal never names. `auto?` now takes `x` from the proof of that premise
+  when some hypothesis names it, and otherwise picks an unused variable
+  from `@vars`, finding `pi_form [#1, weaken [#1, #2]]`. The same applies
+  to eigenvariables of introduction rules such as `subset_intro`, which
+  lets `auto?` find deeper proofs in the Zermelo examples.
 
 ### Fixed
 

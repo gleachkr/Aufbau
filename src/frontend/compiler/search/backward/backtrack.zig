@@ -445,6 +445,195 @@ pub fn openMode(
     return .none;
 }
 
+/// Generate a premise whose only open binders are bound variables nothing
+/// outside the premise sees, in every phase. Two kinds qualify:
+/// - a variable a def hid. Unfolding `A → B` to `Π x : A. B`, on the goal
+///   (`pi_form`) or on a ref (`app_elim`'s `f : A → B`), leaves `x` null (the
+///   seed scrubs it) or a bare placeholder;
+/// - an eigenvariable of an intro-shaped premise (`subset_intro`'s `x` in
+///   `G , x ∈ A ⊢ x ∈ B`): the goal fixes every other binder of the premise
+///   (`otherHypBindersInConclusion`), and no fixed binding may mention the
+///   variable (`noFixedBindingMayMention`; `inst`'s `a : term x` may).
+/// The binders open as metas (`fresh_bound` open slot), so a proof below can
+/// still name the variable, however deep its ref (`g , y : A ⊢ Ty B` under
+/// `list_form`). Only if none does is each given a `@vars` variable occurring
+/// in no binding (`tryFreshPoolWitnesses`). Such a variable must avoid every
+/// variable of the instance, so any fresh one gives the same instance up to
+/// renaming. Witness-mode rules keep their own witness ladder, and a holey
+/// goal may still carry the variable as a meta. Returns true iff the premise
+/// produced a candidate; otherwise the other fallbacks still run.
+fn tryFreshBoundGenerate(
+    compiler: *CompilerContext,
+    allocator: std.mem.Allocator,
+    context: *const Context,
+    ref_index: *const ref_index_mod.Index,
+    pool: []const refs_mod.RefPoolEntry,
+    candidate: *ApplyCandidate,
+    rule: *const @import("../../../env.zig").RuleDecl,
+    goal: Goal,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+    plans: []const HypPlan,
+    depth: usize,
+    position: usize,
+    hyp_index: usize,
+    bindings: []?ExprId,
+    snapshots: []?ExprId,
+    selected: []?usize,
+    generated: []?RuleApplication,
+    hook: *const GenerationHook,
+    derived: ?*DerivedPool,
+    runtime: SearchRuntime,
+    counters: ?*SearchCounters,
+    fuel: ?*Fuel,
+    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+) anyerror!bool {
+    if (goal != .concrete) return false;
+    if (openMode(context, candidate.rule_id, hook.allow_constrained_mp) == .witness) {
+        return false;
+    }
+    const cand_theorem = &candidate.theorem;
+    const mask = plan.templateBinderMask(rule.hyps[hyp_index]);
+    if (mask.overflow) return false;
+    // A null conclusion binder of a non-view rule met a def's dummy in the
+    // concrete goal (the seed scrubs it). A view rule's raw conclusion is not
+    // what matched the goal, so there only the placeholder case applies.
+    const concl_mask: u64 = if (context.views.contains(candidate.rule_id))
+        0
+    else
+        plan.conclusionBinderMaskOrNone(rule.concl);
+    var open: u64 = 0;
+    var rest = mask.mask;
+    while (rest != 0) {
+        const idx: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        if (idx >= bindings.len) return false;
+        const bit = @as(u64, 1) << idx;
+        if (bindings[idx]) |value| {
+            if (!isStandardPlaceholder(cand_theorem, value)) continue;
+        } else if (concl_mask & bit == 0 and
+            !(noFixedBindingMayMention(rule, bindings, idx) and
+                otherHypBindersInConclusion(rule, mask.mask, idx))) return false;
+        if (!rule.args[idx].bound) return false;
+        open |= bit;
+    }
+    if (open == 0) return false;
+
+    if (hook.solveOpenFn == null) return false;
+    // Open the def-unfold placeholders too, so the child search can fix them.
+    var saved: [64]?ExprId = undefined;
+    rest = open;
+    while (rest != 0) {
+        const idx: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        saved[idx] = bindings[idx];
+        bindings[idx] = null;
+    }
+    defer {
+        rest = open;
+        while (rest != 0) {
+            const idx: u6 = @intCast(@ctz(rest));
+            rest &= rest - 1;
+            bindings[idx] = saved[idx];
+        }
+    }
+
+    const before = candidates.items.len;
+    try tryOpenGenerateSlot(
+        compiler,
+        allocator,
+        context,
+        ref_index,
+        pool,
+        candidate,
+        rule,
+        goal,
+        theorem,
+        theorem_vars,
+        plans,
+        depth,
+        position,
+        hyp_index,
+        bindings,
+        snapshots,
+        selected,
+        generated,
+        hook,
+        derived,
+        runtime,
+        counters,
+        fuel,
+        candidates,
+        true,
+    );
+    return candidates.items.len != before;
+}
+
+/// True when every non-bound binder of the premise other than `idx` occurs in
+/// the rule's conclusion, so the goal alone fixes the premise (intro-shaped,
+/// `subset_intro`). An elim-shaped premise takes binders from a sibling ref
+/// (`dvd_elim`'s `a`, `b`) and is mostly a doomed search.
+fn otherHypBindersInConclusion(
+    rule: *const @import("../../../env.zig").RuleDecl,
+    hyp_mask: u64,
+    idx: usize,
+) bool {
+    const concl = plan.conclusionBinderMaskOrNone(rule.concl);
+    var rest = hyp_mask & ~(@as(u64, 1) << @intCast(idx));
+    while (rest != 0) {
+        const other: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        if (rule.args[other].bound) continue;
+        if (concl & (@as(u64, 1) << other) == 0) return false;
+    }
+    return true;
+}
+
+/// True when no bound-to-a-value binder of `rule` is declared to depend on
+/// bound binder `idx`. Each fixed value must then avoid the variable, so every
+/// legal choice is distinct from all of them and any fresh one is equal up to
+/// renaming (`subset_intro`'s `x` in `G , x ∈ A ⊢ x ∈ B`). A fixed dependent
+/// (`inst`'s `a : term x`) may already mention the right variable.
+fn noFixedBindingMayMention(
+    rule: *const @import("../../../env.zig").RuleDecl,
+    bindings: []const ?ExprId,
+    idx: usize,
+) bool {
+    const bit = rule.args[idx].deps;
+    for (rule.args, 0..) |arg, other| {
+        if (other == idx or arg.bound) continue;
+        if (arg.deps & bit == 0) continue;
+        if (bindings[other] != null) return false;
+    }
+    return true;
+}
+
+/// A bare non-meta placeholder: the unfolded dummy of a def the ref or goal
+/// hid a bound variable behind (`unfoldDefBody`).
+fn isStandardPlaceholder(theorem: *const TheoremContext, expr: ExprId) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => |pid| theorem.placeholderClass(pid) == .standard,
+        else => false,
+    };
+}
+
+/// Dependency bits of every variable occurring in `expr` (placeholders
+/// contribute none).
+fn exprVarDeps(theorem: *const TheoremContext, expr: ExprId) u55 {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => 0,
+        .variable => blk: {
+            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk 0;
+            break :blk info.deps;
+        },
+        .app => |app| blk: {
+            var deps: u55 = 0;
+            for (app.args) |arg| deps |= exprVarDeps(theorem, arg);
+            break :blk deps;
+        },
+    };
+}
+
 /// True when a generated slot's otherwise concrete target still carries a
 /// witness meta threaded in from an enclosing open slot (e.g. `imp_intro`'s
 /// premise `Γ , P ?t ⊢ ∀y P y` inside the child search for `ex_intro`'s
@@ -1139,6 +1328,35 @@ fn tryGenerateSlot(
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) anyerror!void {
+    // A premise whose only open binders are bound variables (a def's hidden
+    // binder, `pi_form`'s `x` under `A → B`) takes fresh ones.
+    if (try tryFreshBoundGenerate(
+        compiler,
+        allocator,
+        context,
+        ref_index,
+        pool,
+        candidate,
+        rule,
+        goal,
+        theorem,
+        theorem_vars,
+        plans,
+        depth,
+        position,
+        hyp_index,
+        bindings,
+        snapshots,
+        selected,
+        generated,
+        hook,
+        derived,
+        runtime,
+        counters,
+        fuel,
+        candidates,
+    )) return;
+
     if (try OpenTerms.instantiateTemplateConcrete(
         &candidate.theorem,
         rule.hyps[hyp_index],
@@ -1170,6 +1388,7 @@ fn tryGenerateSlot(
                 counters,
                 fuel,
                 candidates,
+                false,
             );
             return;
         }
@@ -1274,6 +1493,7 @@ fn tryGenerateSlot(
             counters,
             fuel,
             candidates,
+            false,
         );
         if (candidates.items.len != candidates_before_split) return;
     }
@@ -1540,6 +1760,7 @@ fn trySplitGenerate(
                     counters,
                     fuel,
                     candidates,
+                    false,
                 );
             }
             bindings[b] = saved;
@@ -1764,6 +1985,10 @@ const OpenSlot = struct {
     /// deferral, ancestor-meta registration, the force-first ladder);
     /// `.constrained` keeps the child-search-first read-back discipline.
     mode: OpenMode,
+    /// The slot's open binders are bound variables nothing outside the premise
+    /// sees (`tryFreshBoundGenerate`): when the child search leaves one
+    /// unsolved, it takes a fresh `@vars` variable (`tryFreshPoolWitnesses`).
+    fresh_bound: bool = false,
 
     /// The candidate is `@auto eager`: its open subgoal keeps the parent's
     /// remaining depth, as a concrete one does (`tryGenerateSlot`).
@@ -1803,6 +2028,7 @@ fn tryOpenGenerateSlot(
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    fresh_bound: bool,
 ) anyerror!void {
     var store = MetaStore.init(allocator, context.env);
     // Share the driver's global meta-id counter so witness metas keep a stable
@@ -1860,11 +2086,12 @@ fn tryOpenGenerateSlot(
         .fuel = fuel,
         .candidates = candidates,
         .store = &store,
-        .mode = openMode(
+        .mode = if (fresh_bound) .constrained else openMode(
             context,
             candidate.rule_id,
             hook.allow_constrained_mp,
         ),
+        .fresh_bound = fresh_bound,
     };
     if (context.views.get(candidate.rule_id)) |view| {
         try openSlotViaView(&slot, view);
@@ -2307,6 +2534,13 @@ fn emitOpenTarget(
     if (slot.candidates.items.len != candidates_before) return;
     slot.store.rollbackTo(mark);
     try tryAcuiMemberWitnesses(slot, raw_target, unknowns, view, view_bindings, true);
+    if (slot.candidates.items.len != candidates_before) return;
+    // No proof below fixed the variable (`weaken` only echoes it back), so
+    // any fresh one will do.
+    if (slot.fresh_bound) {
+        slot.store.rollbackTo(mark);
+        try tryFreshPoolWitnesses(slot, raw_target, unknowns, view, view_bindings);
+    }
 }
 
 /// Solve an open target by child search (`GenerationHook.solveOpen`),
@@ -2922,6 +3156,51 @@ fn tryVarPoolWitnesses(
     slot.store.rollbackTo(mark);
 }
 
+/// `fresh_bound` fallback, after the child search left the slot's bound
+/// metas unsolved: give each a `@vars` variable occurring in no binding of
+/// the rule, so it is distinct from every variable of the instance and from
+/// the other fills, then generate the now-concrete premise.
+fn tryFreshPoolWitnesses(
+    slot: *OpenSlot,
+    raw_target: ExprId,
+    unknowns: []const ?ExprId,
+    view: ?types.ViewDecl,
+    view_bindings: ?[]const ?ExprId,
+) anyerror!void {
+    const theorem = &slot.candidate.theorem;
+    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+    defer unsolved.deinit(slot.allocator);
+    try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
+    if (unsolved.items.len == 0) return;
+
+    var taken: u55 = 0;
+    for (slot.bindings) |maybe| {
+        const value = maybe orelse continue;
+        taken |= exprVarDeps(theorem, value);
+    }
+    const mark = slot.store.mark();
+    defer slot.store.rollbackTo(mark);
+    for (unsolved.items) |meta_id| {
+        const meta = slot.store.info(meta_id) orelse return;
+        // Only the opened bound binders are fresh; any other meta (a view
+        // binder) must come from the child search.
+        if (meta.kind != .bound_choice) return;
+        var buf: [max_pool_tokens][]const u8 = undefined;
+        const tokens = sortedPoolTokens(slot.context, meta.sort_name, &buf);
+        for (tokens) |token| {
+            const parser_var = slot.theorem_vars.get(token) orelse continue;
+            const dummy = theorem.internParsedExpr(parser_var) catch continue;
+            const deps = exprVarDeps(theorem, dummy);
+            if (deps == 0 or deps & taken != 0) continue;
+            slot.store.assign(theorem, meta_id, dummy) catch continue;
+            taken |= deps;
+            break;
+        } else return;
+    }
+    if (!slot.store.isFullySolved(theorem, raw_target)) return;
+    try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
+}
+
 /// Collect witness metas that dangle in the slot's bindings after the open
 /// target came out fully solved (an erased witness: the instance does not
 /// mention it), and ground each from the `@vars` pool. Returns true iff at
@@ -2967,29 +3246,39 @@ fn assignPoolWitness(
     meta_id: PlaceholderId,
     sort_name: []const u8,
 ) bool {
-    // Gather matching tokens, then try in sorted order (the HashMap iteration
-    // order is unspecified; the pool is small).
-    var tokens: [32][]const u8 = undefined;
-    var count: usize = 0;
-    var it = slot.context.sort_vars.tokens.iterator();
-    while (it.next()) |entry| {
-        if (!std.mem.eql(u8, entry.value_ptr.sort_name, sort_name)) continue;
-        if (count >= tokens.len) break;
-        tokens[count] = entry.key_ptr.*;
-        count += 1;
-    }
-    std.mem.sort([]const u8, tokens[0..count], {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
-        }
-    }.lt);
-    for (tokens[0..count]) |token| {
+    var buf: [max_pool_tokens][]const u8 = undefined;
+    for (sortedPoolTokens(slot.context, sort_name, &buf)) |token| {
         const parser_var = slot.theorem_vars.get(token) orelse continue;
         const dummy = theorem.internParsedExpr(parser_var) catch continue;
         slot.store.assign(theorem, meta_id, dummy) catch continue;
         return true;
     }
     return false;
+}
+
+const max_pool_tokens = 32;
+
+/// The `@vars` pool tokens of `sort_name`, in sorted order (the HashMap
+/// iteration order is unspecified; the pool is small).
+fn sortedPoolTokens(
+    context: *const Context,
+    sort_name: []const u8,
+    buf: *[max_pool_tokens][]const u8,
+) []const []const u8 {
+    var count: usize = 0;
+    var it = context.sort_vars.tokens.iterator();
+    while (it.next()) |entry| {
+        if (!std.mem.eql(u8, entry.value_ptr.sort_name, sort_name)) continue;
+        if (count >= buf.len) break;
+        buf[count] = entry.key_ptr.*;
+        count += 1;
+    }
+    std.mem.sort([]const u8, buf[0..count], {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lt);
+    return buf[0..count];
 }
 
 /// `PlaceholderFactory.makeFn` minting branch-local existential metas.
