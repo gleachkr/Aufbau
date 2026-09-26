@@ -530,6 +530,12 @@ pub const SearchCounters = struct {
     /// (1 non-splitting .. 5 constrained MP); 0 = generation never ran.
     gen_last_depth: usize = 0,
     gen_last_phase: usize = 0,
+    /// The deepest depth at which every core ladder phase (1–3) finished
+    /// without a find or any exhaustion, maxed over ladder runs; 0 = none.
+    /// On a budget-truncated miss, `gen_core_depth_done + 1 >= max_depth`
+    /// means every depth below the limit was searched, so the proof may
+    /// need more depth rather than more budget.
+    gen_core_depth_done: usize = 0,
     rule_index_build_ns: u64 = 0,
     ref_index_build_ns: u64 = 0,
     shape_emission_ns: u64 = 0,

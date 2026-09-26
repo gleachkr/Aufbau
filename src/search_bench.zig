@@ -2436,6 +2436,48 @@ const BreadthStats = struct {
 /// *failure* latency — the search that burns the full budget proving nothing.
 const DepthRunStatus = enum { found, miss, err };
 
+/// Which bound ended a MISS, mirroring the precedence of the user-facing
+/// failure report (`search/source.zig` `searchStatus`/`buildStatusDetail`).
+/// A budget truncation is split by where it died: `budget_deep` when every
+/// core ladder depth below `max_depth` finished clean (the proof may need
+/// more depth, not only more budget), `budget_shallow` when the budget died
+/// before the ladder reached the depth limit (more depth cannot help).
+const MissCause = enum {
+    exhausted,
+    budget_deep,
+    budget_shallow,
+    fuel,
+    stack,
+    forward,
+    no_generation,
+
+    fn of(counters: *const Search.SearchCounters, max_depth: usize) MissCause {
+        if (counters.stack_guard_exhausted) return .stack;
+        if (counters.gen_budget_exhausted) {
+            return if (counters.gen_core_depth_done + 1 >= max_depth)
+                .budget_deep
+            else
+                .budget_shallow;
+        }
+        if (counters.recursive_budget_exhausted) return .fuel;
+        if (counters.forward_saturation_exhausted) return .forward;
+        if (counters.gen_last_phase == 0) return .no_generation;
+        return .exhausted;
+    }
+
+    fn label(self: MissCause) []const u8 {
+        return switch (self) {
+            .exhausted => "exhausted",
+            .budget_deep => "budget-deep",
+            .budget_shallow => "budget-shallow",
+            .fuel => "fuel",
+            .stack => "stack",
+            .forward => "forward",
+            .no_generation => "no-gen",
+        };
+    }
+};
+
 const DepthStats = struct {
     theorems: usize = 0,
     frontier_sum: usize = 0,
@@ -2477,6 +2519,9 @@ const DepthStats = struct {
     found_ticks_k: usize = 0,
     found_ticks_label: []const u8 = "",
     fail_ticks_max: u64 = 0,
+    /// Terminating MISS runs by the bound that ended them (see `MissCause`).
+    miss_causes: [@typeInfo(MissCause).@"enum".fields.len]usize =
+        @splat(0),
 
     /// Fold one search outcome into the per-fixture stats. `label` may point
     /// into the fixture arena; it is only retained as a borrowed slice and
@@ -2527,6 +2572,7 @@ const DepthStats = struct {
         self.fail_runs += other.fail_runs;
         self.fail_ns_sum += other.fail_ns_sum;
         self.fail_ns_max = @max(self.fail_ns_max, other.fail_ns_max);
+        for (&self.miss_causes, other.miss_causes) |*mine, theirs| mine.* += theirs;
         if (other.slowest_ns > self.slowest_ns) {
             self.slowest_ns = other.slowest_ns;
             self.slowest_k = other.slowest_k;
@@ -3057,6 +3103,9 @@ fn runDepthFixture(
         // for this theorem (`0` when the proof is FULL and never fails).
         var fail_ns: u64 = 0;
         var fail_status: DepthRunStatus = .found;
+        var fail_cause: MissCause = .exhausted;
+        var fail_last_phase: usize = 0;
+        var fail_last_depth: usize = 0;
         var frontier_ticks: RunTicks = .{};
         var fail_ticks: RunTicks = .{};
         var k: usize = 0;
@@ -3108,6 +3157,16 @@ fn runDepthFixture(
                 );
                 try printDurationCompact(writer, run.search_ns);
                 try printTicksCompact(writer, RunTicks.of(&run.counters));
+                if (run.err == null and !run.found) {
+                    try writer.writeAll(" ");
+                    try printMissCause(
+                        writer,
+                        MissCause.of(&run.counters, options.max_depth),
+                        run.counters.gen_last_phase,
+                        run.counters.gen_last_depth,
+                        options.max_depth,
+                    );
+                }
                 try writer.print(
                     "  rss {d} MiB  hwm {d} MiB  live {d} MiB  " ++
                         "live-peak {d} MiB\n",
@@ -3138,6 +3197,10 @@ fn runDepthFixture(
                 fail_ns = run.search_ns;
                 fail_ticks = RunTicks.of(&run.counters);
                 fail_status = .miss;
+                fail_cause = MissCause.of(&run.counters, options.max_depth);
+                fail_last_phase = run.counters.gen_last_phase;
+                fail_last_depth = run.counters.gen_last_depth;
+                stats.miss_causes[@intFromEnum(fail_cause)] += 1;
                 break;
             }
             frontier = k;
@@ -3181,23 +3244,39 @@ fn runDepthFixture(
                 // show it so a slow failure is not hidden behind the (fast)
                 // last success. FULL theorems never fail, so there is none.
                 if (fail_status != .found) {
-                    try writer.print("  fail({s} k={d}) ", .{
+                    try writer.print("  fail({s} k={d}", .{
                         @tagName(fail_status),
                         best + 1,
                     });
+                    if (fail_status == .miss) try printMissCause(
+                        writer,
+                        fail_cause,
+                        fail_last_phase,
+                        fail_last_depth,
+                        options.max_depth,
+                    );
+                    try writer.writeAll(") ");
                     try printDurationCompact(writer, fail_ns);
                     try printTicksCompact(writer, fail_ticks);
                 }
                 try writer.writeAll("\n");
             } else {
                 try writer.print(
-                    "  {s}/{s:<28} UNFOUND at k=0 ({s}) fail ",
+                    "  {s}/{s:<28} UNFOUND at k=0 ({s}",
                     .{
                         fixture.name,
                         block.name,
                         if (last_err) |err| @errorName(err) else "no proof",
                     },
                 );
+                if (fail_status == .miss) try printMissCause(
+                    writer,
+                    fail_cause,
+                    fail_last_phase,
+                    fail_last_depth,
+                    options.max_depth,
+                );
+                try writer.writeAll(") fail ");
                 try printDurationCompact(writer, fail_ns);
                 try printTicksCompact(writer, fail_ticks);
                 try writer.writeAll("\n");
@@ -3219,6 +3298,21 @@ fn runDepthFixture(
     }
     try printDepthSummary(writer, fixture.name, stats);
     return stats;
+}
+
+/// ` <cause> d<last>/<max>`: the bound that ended a miss and the ladder depth
+/// it was working at (the user-facing report's "at depth D of N").
+fn printMissCause(
+    writer: anytype,
+    cause: MissCause,
+    last_phase: usize,
+    last_depth: usize,
+    max_depth: usize,
+) !void {
+    try writer.print(" {s}", .{cause.label()});
+    if (cause != .no_generation) {
+        try writer.print(" p{d} d{d}/{d}", .{ last_phase, last_depth, max_depth });
+    }
 }
 
 fn printDepthSummary(
@@ -3248,6 +3342,19 @@ fn printDepthSummary(
         },
     );
     try printDurationCompact(writer, stats.wall_ns_sum);
+    try writer.writeAll("\n");
+
+    // Why the frontier+1 searches missed. `budget-deep` is the "may need
+    // more depth" bucket: the budget died only after every shallower depth
+    // was searched clean, so the depth limit may be what hides the proof.
+    try writer.print("{s:<16} miss causes:", .{label});
+    inline for (@typeInfo(MissCause).@"enum".fields) |field| {
+        const cause: MissCause = @enumFromInt(field.value);
+        try writer.print(" {s} {d}", .{
+            cause.label(),
+            stats.miss_causes[field.value],
+        });
+    }
     try writer.writeAll("\n");
 
     // Failure latency: the cost a user actually waits through when `auto?`

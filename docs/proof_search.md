@@ -265,6 +265,13 @@ distinguishes the cases, because they call for different responses:
   ladder phase and depth the budget died in. Raise the budget for this
   one call (`auto? (budget: 13)`, roughly seconds of work; `budget: 0`
   removes the cap) — or reduce the space with better annotations.
+- **"every depth up to N was searched without finding a proof; the
+  per-call work budget … then ran out during `<phase>` …"** — the
+  budget also ran out, but only after the main phases had searched every
+  depth up to the limit. The budget died in a later retry pass, marked
+  "(a retry pass)"; those restart at depth 1, so their depth is not how
+  deep the search got. The proof may simply be deeper than the limit:
+  try `auto? (depth: 8)` first, and more budget second.
 - **"a search phase ran out of fuel (N candidate validations per
   phase) …"** — same inconclusiveness, but the bound that tripped was
   the per-phase validation budget rather than the global one; raise it
@@ -321,7 +328,8 @@ the ceiling there and nowhere else.
 
 Rules of thumb:
 
-- Raise **`depth`** when the report says the space was *exhausted* — the
+- Raise **`depth`** when the report says the space was *exhausted*, or
+  that *every depth up to N was searched* before the budget ran out — the
   proof, if any, is deeper than the ladder looked. Depth is the
   exponential knob; go up in small steps and expect the miss case to get
   slower.

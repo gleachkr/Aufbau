@@ -241,6 +241,74 @@ test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
     );
 }
 
+test "auto? budget truncation past every core depth suggests more depth" {
+    // `add_suc_right`'s shape: the core phases searched depths 1–6 clean,
+    // then the budget died in the constrained-MP tail, which restarts at
+    // depth 1. The detail must lead with depth, and must not present the
+    // tail's depth as how far the search got.
+    const gen = types.GenerateOptions{
+        .global_budget = 6 * tunables.ticks_per_budget_unit,
+    };
+    const counters = types.SearchCounters{
+        .gen_budget_exhausted = true,
+        .gen_last_phase = 5,
+        .gen_last_depth = 2,
+        .gen_core_depth_done = 6,
+    };
+    const detail = (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .budget_exhausted,
+        &counters,
+        gen,
+    )).?;
+    defer std.testing.allocator.free(detail);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "every depth up to 6 was searched",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "constrained modus ponens (a retry pass) at depth 2 of 6",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (depth: 8)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (budget: 12)") != null);
+}
+
+test "auto? budget truncation before the depth limit suggests only budget" {
+    // The budget died in the core at depth 4 with depth 3 the deepest clean
+    // one: more depth cannot help, so the detail keeps the budget advice.
+    const gen = types.GenerateOptions{
+        .global_budget = 6 * tunables.ticks_per_budget_unit,
+    };
+    const counters = types.SearchCounters{
+        .gen_budget_exhausted = true,
+        .gen_last_phase = 1,
+        .gen_last_depth = 4,
+        .gen_core_depth_done = 3,
+    };
+    const detail = (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .budget_exhausted,
+        &counters,
+        gen,
+    )).?;
+    defer std.testing.allocator.free(detail);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "stopped by the per-call work budget (~6s of work) during " ++
+            "non-splitting generation at depth 4 of 6",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (budget: 12)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "depth: 8") == null);
+}
+
 test "searchPlaceholders carries parsed search params" {
     const proof_src =
         \\t

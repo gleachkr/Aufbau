@@ -766,6 +766,9 @@ fn runPhaseLadder(
             }
             if (applications.items.len > 0) return false;
         }
+        if (!any_retired) if (driver.counters) |c| {
+            c.gen_core_depth_done = @max(c.gen_core_depth_done, depth_limit);
+        };
     }
     // A retired core phase means the miss is not clean; stay exactly as
     // conservative as phase-major (where any fuel exhaustion blocked all

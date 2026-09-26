@@ -44,6 +44,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   supplies `ih` like any other hidden variable. In the Martin-Löf example
   `auto?` now reconstructs `add_comm`, `add_zero_right` and `ap_suc_ty`
   from their hypotheses with every intermediate line removed.
+- When `auto?` runs out of budget after searching every depth up to its
+  limit, the report now says so and suggests more depth first. Before, it
+  suggested only more budget. It named the depth of the last retry pass,
+  which starts again at depth 1, so it read like "at depth 2 of 6"
+  even though every depth up to 6 had been searched. For such a
+  goal in the Martin-Löf example, doubling the budget still missed, while
+  `auto? (depth: 8)` found the proof.
 
 ### Fixed
 

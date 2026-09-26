@@ -726,7 +726,7 @@ const ladder_phase_names = [_][]const u8{
 /// caller's allocator (the per-call work arena; `copyOutSuggestions` deep-
 /// copies it out). Purely observational: reads the same counters the search
 /// already fills, never influences it.
-fn buildStatusDetail(
+pub fn buildStatusDetail(
     allocator: std.mem.Allocator,
     keyword: []const u8,
     is_auto: bool,
@@ -808,7 +808,47 @@ fn buildStatusDetail(
                     limit,
                     tunables.ticks_per_budget_unit,
                 ) catch unreachable;
-                try w.print(
+                const budget_hint = std.math.clamp(
+                    limit_units * 2,
+                    1,
+                    tunables.max_budget_value,
+                );
+                // Every depth below the limit finished clean in the core
+                // phases, so the proof may be deeper than the ladder looks:
+                // lead with depth. The last cell may sit at a shallow depth
+                // only because a retry pass (the tails, a seeded or cut-free
+                // re-run) restarts at depth 1 — say so, or "at depth 2 of 6"
+                // reads as if depth were nowhere near the problem.
+                const core_done = counters.gen_core_depth_done;
+                const deeper = @min(gen.max_depth + 2, tunables.max_depth_value);
+                if (core_done + 1 >= gen.max_depth and deeper > gen.max_depth) {
+                    try w.print(
+                        "every depth up to {d} was searched without finding " ++
+                            "a proof; the per-call work budget (~{d}s of " ++
+                            "work) then ran out during {s}{s} at depth {d} " ++
+                            "of {d}; {d} applications validated ({d} " ++
+                            "accepted). The proof may be deeper — try " ++
+                            "'{s} (depth: {d})' — or give the search more " ++
+                            "room with '{s} (budget: {d})'.",
+                        .{
+                            core_done,
+                            limit_units,
+                            ladderPhaseName(counters.gen_last_phase),
+                            if (counters.gen_last_depth <= core_done)
+                                " (a retry pass)"
+                            else
+                                "",
+                            counters.gen_last_depth,
+                            gen.max_depth,
+                            validated,
+                            accepted,
+                            keyword,
+                            deeper,
+                            keyword,
+                            budget_hint,
+                        },
+                    );
+                } else try w.print(
                     "stopped by the per-call work budget (~{d}s of work) " ++
                         "during {s} at depth {d} of {d}; {d} applications " ++
                         "validated ({d} accepted). A proof may still " ++
@@ -822,11 +862,7 @@ fn buildStatusDetail(
                         validated,
                         accepted,
                         keyword,
-                        std.math.clamp(
-                            limit_units * 2,
-                            1,
-                            tunables.max_budget_value,
-                        ),
+                        budget_hint,
                     },
                 );
             } else if (counters.recursive_budget_exhausted) {
