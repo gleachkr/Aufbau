@@ -408,22 +408,23 @@ fn shouldScrubRuleSeed(theorem: *const TheoremContext, expr_id: ExprId) bool {
 /// binders land on dummy-laden values. The legacy behaviour scrubbed every such
 /// binding to null. Instead we partition them:
 ///
-///   * a dummy in a binder that occurs in **more than one hypothesis** is a
-///     variable threaded across the hypotheses — an induction variable, a motive
-///     — whose occurrences must stay identified. Keep it, with every occurrence
-///     of one dummy rewritten to ONE shared meta leaf (across its own binder slot
-///     and inside the other kept bindings), so a meta-aware ref-match on any one
-///     hypothesis (`match.tryMetaAwareHypMatch`) pins it for all the
-///     others;
-///   * a term in a binder that occurs in **at most one hypothesis**, mentioning
-///     only dummies other binders are pinned to (the step term `s` under `k`
-///     and `ih`), is kept the same way, along with those binders: it fixes its
-///     premise's subject. A dummy no ref pins by the time that premise is
-///     generated opens there as a bound variable
-///     (`backtrack.tryFreshBoundGenerate`);
-///   * any other dummy in a binder that occurs in **at most one hypothesis** is
-///     local to that hypothesis (its witness/output); scrub it to null so it
-///     reconciles at its own generated slot via the open path.
+///   * a binder holding a **term** that mentions dummies (a motive, the step
+///     term `s` under `k` and `ih`) keeps it: the term fixes its premises'
+///     subjects. Every occurrence of one dummy, in any kept binding, becomes
+///     ONE shared meta leaf, so a meta-aware ref-match on any hypothesis
+///     (`match.tryMetaAwareHypMatch`) pins it for all the others. A dummy no
+///     ref pins by the time its premise is generated opens there as a bound
+///     variable (`backtrack.tryFreshBoundGenerate`). One no binder holds (the
+///     `λ` variable inside `id_trans`'s unfolded `J` term) can only be pinned
+///     by a ref; keeping such terms measured neutral against scrubbing them,
+///     so they get no special case;
+///   * a binder holding a **bare dummy** keeps it when the binder occurs in
+///     more than one hypothesis (an induction variable threaded across them)
+///     or a kept term mentions the dummy (`ih` under `s`), so the meta stays
+///     shared;
+///   * any other bare dummy is local to its one hypothesis (its
+///     witness/output); scrub it to null so it reconciles at its own generated
+///     slot via the open path.
 ///
 /// Concrete (meta-free) goals never expose dummies, so for the whole non-eliminator
 /// corpus the `shouldScrubRuleSeed` gate skips every binding and this is a no-op.
@@ -442,39 +443,14 @@ pub fn partitionSeedBindings(
     // bindings) all become the SAME meta and resolve together.
     var dummy_metas = std.AutoHashMapUnmanaged(PlaceholderId, ExprId){};
     defer dummy_metas.deinit(allocator);
-    // Dummies some binder is pinned to outright (`nat_ind_elim`'s `k`, `ih`).
-    var binder_dummies = std.AutoHashMapUnmanaged(PlaceholderId, void){};
-    defer binder_dummies.deinit(allocator);
+    // Dummies some kept term mentions.
+    var term_dummies = DummySet{ .allocator = allocator };
+    defer term_dummies.set.deinit(allocator);
     for (bindings) |binding| {
         const value = binding orelse continue;
-        switch (theorem.interner.node(value).*) {
-            .placeholder => |pid| if (theorem.placeholderClass(pid) != .meta) {
-                try binder_dummies.put(allocator, pid, {});
-            },
-            else => {},
-        }
-    }
-    // A single-hypothesis term mentioning only such dummies (the step term
-    // `s`, under `k` and `ih`) is kept too: the rule's own binders name every
-    // variable in it, so it pins its premise's subject outright. Its dummies'
-    // binders are kept with it, so the metas stay shared.
-    var kept_apps = std.AutoHashMapUnmanaged(PlaceholderId, void){};
-    defer kept_apps.deinit(allocator);
-    var keep_mask: u64 = if (multi.overflow) 0 else multi.mask;
-    if (!multi.overflow) for (bindings, 0..) |binding, idx| {
-        const value = binding orelse continue;
-        if (idx >= 64 or keep_mask & (@as(u64, 1) << @intCast(idx)) != 0) continue;
         if (theorem.interner.node(value).* != .app) continue;
-        if (!exprContainsStandardPlaceholder(theorem, value)) continue;
-        var found = std.AutoHashMapUnmanaged(PlaceholderId, void){};
-        defer found.deinit(allocator);
-        if (!try collectBinderDummies(allocator, theorem, value, &binder_dummies, &found)) {
-            continue;
-        }
-        var it = found.keyIterator();
-        while (it.next()) |pid| try kept_apps.put(allocator, pid.*, {});
-        keep_mask |= @as(u64, 1) << @intCast(idx);
-    };
+        try theorem.exprForEach(value, &term_dummies, DummySet.visit);
+    }
     for (bindings, 0..) |*binding, idx| {
         const value = binding.* orelse continue;
         if (!shouldScrubRuleSeed(theorem, value)) continue; // concrete / meta-only
@@ -487,12 +463,12 @@ pub fn partitionSeedBindings(
             binding.* = null;
             continue;
         }
-        const keep = !multi.overflow and idx < 64 and
-            (keep_mask & (@as(u64, 1) << @intCast(idx)) != 0 or
-                switch (theorem.interner.node(value).*) {
-                    .placeholder => |pid| kept_apps.contains(pid),
-                    else => false,
-                });
+        const keep = !multi.overflow and switch (theorem.interner.node(value).*) {
+            .app => true,
+            .placeholder => |pid| term_dummies.set.contains(pid) or
+                (idx < 64 and multi.mask & (@as(u64, 1) << @intCast(idx)) != 0),
+            .variable => unreachable, // `shouldScrubRuleSeed` passes no variable
+        };
         if (keep) {
             binding.* = try rewriteDummiesToSharedMetas(
                 allocator,
@@ -506,34 +482,20 @@ pub fn partitionSeedBindings(
     }
 }
 
-/// Adds `expr_id`'s standard placeholders to `out`, returning false when one
-/// is not in `allowed` (`out` may then hold a partial set; the caller drops it
-/// only on success, see `partitionSeedBindings`).
-fn collectBinderDummies(
+/// The standard placeholders (def-unfold dummies) an `exprForEach` walk meets.
+const DummySet = struct {
     allocator: std.mem.Allocator,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-    allowed: *const std.AutoHashMapUnmanaged(PlaceholderId, void),
-    out: *std.AutoHashMapUnmanaged(PlaceholderId, void),
-) !bool {
-    switch (theorem.interner.node(expr_id).*) {
-        .variable => return true,
-        .placeholder => |pid| {
-            if (theorem.placeholderClass(pid) == .meta) return true;
-            if (!allowed.contains(pid)) return false;
-            try out.put(allocator, pid, {});
-            return true;
-        },
-        .app => |app| {
-            for (app.args) |arg| {
-                if (!try collectBinderDummies(allocator, theorem, arg, allowed, out)) {
-                    return false;
-                }
-            }
-            return true;
-        },
+    set: std.AutoHashMapUnmanaged(PlaceholderId, void) = .{},
+
+    fn visit(self: *DummySet, theorem: *const TheoremContext, expr_id: ExprId) !void {
+        switch (theorem.interner.node(expr_id).*) {
+            .placeholder => |pid| if (theorem.placeholderClass(pid) != .meta) {
+                try self.set.put(self.allocator, pid, {});
+            },
+            else => {},
+        }
     }
-}
+};
 
 /// Bits set for binder indices occurring in more than one hypothesis. Overflow
 /// (a binder index ≥ 64) disables the keep entirely — the caller then scrubs as

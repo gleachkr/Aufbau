@@ -428,15 +428,20 @@ than one hypothesis (an induction variable, a motive) must keep its occurrences
 identified; scrubbing it to null (the legacy behaviour) both floods and loses it.
 Instead (`backward/seed.zig:partitionSeedBindings`, keyed on `multiHypBinderMask`):
 
-- a dummy in a binder occurring in **>1 hypothesis** is kept, with every
-  occurrence rewritten to ONE shared `.meta` leaf flagged
-  `reconciliation_meta` (`addReconciliationMetaPlaceholderResolved`);
-- a term in a single-hypothesis binder that mentions only dummies other
-  binders are pinned to outright is kept the same way, together with those
-  binders (`nat_ind_elim`'s step term `s` over `k` and `ih`): it fixes the
-  premise's subject, where scrubbing leaves a hole that induction floods;
-- any other dummy in a single-hypothesis binder (its witness/output) is
-  scrubbed to null and reconciles at its own generated slot via the open path;
+- a binder holding a **term** that mentions dummies is kept, with every
+  occurrence of one dummy (in any kept binding) rewritten to ONE shared
+  `.meta` leaf flagged `reconciliation_meta`
+  (`addReconciliationMetaPlaceholderResolved`). The term fixes its premise's
+  subject (`nat_ind_elim`'s step term `s` over `k` and `ih`), where scrubbing
+  leaves a hole that induction floods. A dummy no binder holds (the `λ`
+  variable in `id_trans`'s unfolded `J` term) can only be pinned by a ref;
+  keeping such terms measured neutral against scrubbing them (#297), so they
+  get no special case;
+- a binder holding a **bare dummy** keeps it when the binder occurs in
+  **>1 hypothesis** (an induction variable) or a kept term mentions the dummy
+  (`ih` under `s`), so the meta stays shared;
+- any other bare dummy (a single hypothesis's witness/output) is scrubbed to
+  null and reconciles at its own generated slot via the open path;
 - a *bare* meta leaf is always scrubbed — it constrains nothing.
 
 A scrubbed dummy on a **bound** binder is a variable the def hid (`A → B`

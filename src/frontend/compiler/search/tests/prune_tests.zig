@@ -170,10 +170,11 @@ test "partitionSeedBindings: keep multi-hyp dummy as reconciliation meta, scrub 
     try std.testing.expectEqual(@as(?ExprId, null), bindings[2]);
 }
 
-// `nat_ind_elim`'s step term: a single-hypothesis binder whose value mentions
-// only dummies other binders hold (`s` under `ih`) is kept, sharing the meta
-// with the dummy's own binder; one mentioning a stray dummy is still scrubbed.
-test "partitionSeedBindings: keep a single-hyp term over binder dummies" {
+// `nat_ind_elim`'s step term: a single-hypothesis binder holding a term is
+// kept (`s` under `ih`), sharing the meta with the dummy's own binder, which is
+// kept because the term mentions it. A term over a dummy no binder holds (a
+// `λ` variable inside an unfolded body) is kept too, with its own meta.
+test "partitionSeedBindings: keep single-hyp terms and the dummies they share" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -206,7 +207,17 @@ test "partitionSeedBindings: keep a single-hyp term over binder dummies" {
         @as(?ExprId, try theorem.interner.internApp(1, &.{meta})),
         bindings[1],
     );
-    try std.testing.expectEqual(@as(?ExprId, null), bindings[2]);
+    const kept_t = bindings[2] orelse return error.ExpectedKept;
+    const stray_meta = switch (theorem.interner.node(kept_t).*) {
+        .app => |app| app.args[0],
+        else => return error.ExpectedApp,
+    };
+    const stray_pid = switch (theorem.interner.node(stray_meta).*) {
+        .placeholder => |id| id,
+        else => return error.ExpectedPlaceholder,
+    };
+    try std.testing.expect(theorem.placeholderInfo(stray_pid).?.reconciliation_meta);
+    try std.testing.expect(stray_meta != meta);
 }
 
 // A two-sided sequent calculus with an ACUI context, a two-premise
