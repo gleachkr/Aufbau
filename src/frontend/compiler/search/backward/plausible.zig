@@ -473,18 +473,31 @@ pub fn templateHasRewriteHead(context: *const Context, template: TemplateExpr) b
 /// unbound ordinary binder, reduce it, and compare the result against the goal
 /// subterm at the same position. A placeholder is never a definite mismatch,
 /// so this only rejects what no choice of the unbound binders could match.
+///
+/// `refs[i]`, when set, is the ref selected for premise `i`; the binders it
+/// forces are read off it first (`extractHypPartialBindings`, which binds only
+/// what the ref's structure forces).
 pub fn redexConclusionMismatch(
     context: *const Context,
     theorem: *TheoremContext,
     rule: *const RuleDecl,
     goal_expr: ExprId,
     bindings: []const ?ExprId,
+    refs: []const ?ExprId,
 ) bool {
     if (context.registry.rewrites_by_head.count() == 0) return false;
-    // Placeholders and reduced terms go into a scratch clone, so repeated
-    // checks leave no trace in the candidate's interner.
+    // Extraction placeholders, fill placeholders and reduced terms all go into
+    // a scratch clone, so repeated checks leave no trace in the candidate's
+    // interner.
     var scratch = theorem.clone() catch return false;
     defer scratch.deinit();
+    const enriched = scratch.allocator.dupe(?ExprId, bindings) catch return false;
+    defer scratch.allocator.free(enriched);
+    for (refs, 0..) |maybe_ref, idx| {
+        const ref_expr = maybe_ref orelse continue;
+        if (idx >= rule.hyps.len) break;
+        prune.extractHypPartialBindings(context, &scratch, rule.hyps[idx], ref_expr, enriched);
+    }
     var filled: ?[]?ExprId = null;
     defer if (filled) |f| scratch.allocator.free(f);
     return redexTemplateMismatch(
@@ -493,7 +506,7 @@ pub fn redexConclusionMismatch(
         rule,
         rule.concl,
         goal_expr,
-        bindings,
+        enriched,
         &filled,
     );
 }
@@ -603,7 +616,8 @@ fn closedAcuiTemplateMismatch(
             };
             if (goal_app.term_id != app.term_id) return false;
             if (goal_app.args.len != app.args.len) return false;
-            for (app.args, goal_app.args) |arg, goal_arg| {
+            for (app.args, goal_app.args, 0..) |arg, goal_arg, i| {
+                if (!argDetermined(context, app.term_id, i)) continue;
                 if (closedAcuiTemplateMismatch(
                     context,
                     theorem,
@@ -939,7 +953,10 @@ fn collectLockstepRegions(
                     // reporting a structural surprise to the caller.
                     if (g.term_id != app.term_id) return false;
                     if (g.args.len != app.args.len) return false;
-                    for (app.args, g.args) |ta, ga| {
+                    for (app.args, g.args, 0..) |ta, ga, i| {
+                        // An arg the head does not determine need not equal
+                        // the goal's: it imposes no member constraint.
+                        if (!argDetermined(context, app.term_id, i)) continue;
                         if (!collectLockstepRegions(
                             context,
                             theorem,
@@ -1258,7 +1275,8 @@ fn foldedGoalBodyMismatch(
                 unfolded_app.args,
             ) catch return false;
             defer theorem.allocator.free(goal_args);
-            for (app.args, goal_args) |arg, goal_arg| {
+            for (app.args, goal_args, 0..) |arg, goal_arg, i| {
+                if (!argDetermined(context, app.term_id, i)) continue;
                 if (templateArgMismatchAfterGoalUnfold(
                     context,
                     theorem,
@@ -1370,7 +1388,10 @@ fn unfoldedExprMismatch(
                     bb.args,
                 ) catch return false;
                 defer theorem.allocator.free(b_args);
-                for (a_args, b_args) |a_arg, b_arg| {
+                // Neither side unfolds further, but a `@rewrite` head can
+                // still reduce: compare only the args the head determines.
+                for (a_args, b_args, 0..) |a_arg, b_arg, i| {
+                    if (!argDetermined(context, aa.term_id, i)) continue;
                     if (unfoldedExprMismatch(
                         context,
                         theorem,

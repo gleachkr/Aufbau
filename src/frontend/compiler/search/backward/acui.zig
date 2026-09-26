@@ -10,6 +10,7 @@ const semantic = @import("./semantic.zig");
 const exprNeedsSemantic = semantic.exprNeedsSemantic;
 const templateNeedsSemantic = semantic.templateNeedsSemantic;
 const termNeedsSemantic = semantic.termNeedsSemantic;
+const argDetermined = semantic.argDetermined;
 const OpenTerms = @import("../../inference/open_terms.zig");
 const DeepVerdictCache = types.DeepVerdictCache;
 
@@ -388,10 +389,11 @@ pub fn hasCommutativeCombiner(context: *const Context) bool {
 // The check requires only associativity. Without it, `f(f(a,b),c)` and
 // `f(a,f(b,c))` are distinct expressions, not two shapes of one multiset,
 // and "is X a member?" is ill-defined. Commutativity, idempotency, and the
-// unit element are irrelevant: if a unit appears as a leaf, it just fails
-// equality with the target, same outcome as if it weren't there. So this
-// works equally for A, AU, AC, ACU, and full ACUI combiners; we never need
-// to consult the registry beyond "is this term_id flagged as ACUI?".
+// unit element are irrelevant to presence: a unit leaf in the template needs
+// a literal unit in the ref, as the matcher does not absorb one. So presence
+// works equally for A, AU, AC, ACU, and full ACUI combiners. The multiplicity
+// half (`acuiDistinctMembersPlausible`) does consult the combiner: it applies
+// only without idempotence, and skips unit leaves and unit members alike.
 //
 // The plausibility path is conservative around semantic heads: when a
 // transparent def or ACUI combiner could reconcile the required member with a
@@ -451,7 +453,8 @@ fn acuiPrecheckWalk(
                 .app => |concrete| {
                     if (concrete.term_id != app.term_id) return true;
                     if (concrete.args.len != app.args.len) return true;
-                    for (app.args, concrete.args) |tmpl_arg, conc_arg| {
+                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
+                        if (!argDetermined(context, app.term_id, i)) continue;
                         if (!acuiPrecheckWalk(
                             context,
                             theorem,
@@ -544,7 +547,7 @@ fn acuiDistinctMembersPlausible(
 
     var leaves: [max_acui_members]TemplateExpr = undefined;
     var leaf_len: usize = 0;
-    if (!collectCountedLeaves(context, template, head_id, &leaves, &leaf_len)) return true;
+    if (!collectCountedLeaves(context, template, head_id, unit_id, &leaves, &leaf_len)) return true;
     if (leaf_len == 0) return true;
     var members: [max_acui_members]ExprId = undefined;
     var member_len: usize = 0;
@@ -596,11 +599,13 @@ fn augmentLeaf(
 }
 
 // Non-binder leaves of the combiner spine whose head is rigid (always exactly
-// one member). False on overflow.
+// one member). Unit leaves are skipped, as `collectRigidMembers` skips unit
+// members: the unit needs no member of its own. False on overflow.
 fn collectCountedLeaves(
     context: *const Context,
     template: TemplateExpr,
     head_id: u32,
+    unit_id: ?u32,
     out: *[max_acui_members]TemplateExpr,
     len: *usize,
 ) bool {
@@ -609,10 +614,11 @@ fn collectCountedLeaves(
         .app => |app| {
             if (app.term_id == head_id) {
                 for (app.args) |arg| {
-                    if (!collectCountedLeaves(context, arg, head_id, out, len)) return false;
+                    if (!collectCountedLeaves(context, arg, head_id, unit_id, out, len)) return false;
                 }
                 return true;
             }
+            if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
             if (termNeedsSemantic(context, app.term_id)) return true;
             if (len.* == out.len) return false;
             out[len.*] = template;
@@ -742,7 +748,8 @@ pub fn acuiBoundMembersDeepMismatch(
                 .app => |concrete| {
                     if (concrete.term_id != app.term_id) return false;
                     if (concrete.args.len != app.args.len) return false;
-                    for (app.args, concrete.args) |tmpl_arg, conc_arg| {
+                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
+                        if (!argDetermined(context, app.term_id, i)) continue;
                         if (acuiBoundMembersDeepMismatch(
                             context,
                             theorem,
@@ -1382,7 +1389,8 @@ pub fn acuiClosedRegionPlausible(
                 .app => |concrete| {
                     if (concrete.term_id != app.term_id) return true;
                     if (concrete.args.len != app.args.len) return true;
-                    for (app.args, concrete.args) |tmpl_arg, conc_arg| {
+                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
+                        if (!argDetermined(context, app.term_id, i)) continue;
                         if (!acuiClosedRegionPlausible(
                             context,
                             theorem,

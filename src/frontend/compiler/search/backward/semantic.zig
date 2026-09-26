@@ -3,6 +3,14 @@ const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const Context = types.Context;
+const def_injectivity = @import("../../../def_injectivity.zig");
+
+/// Does `h(a) ≡ h(b)` force the args at `arg_idx` equal? A lockstep walk may
+/// compare, pin, or descend into only such args. See
+/// `def_injectivity.argDetermined`.
+pub fn argDetermined(context: *const Context, head: u32, arg_idx: usize) bool {
+    return def_injectivity.argDetermined(context.env, context.registry, head, arg_idx);
+}
 
 pub fn termNeedsSemantic(context: *const Context, term_id: u32) bool {
     if (!context.env.hasAvailableTerm(term_id)) return true;

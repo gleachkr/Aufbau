@@ -797,6 +797,9 @@ test "auto stack guard stops the search and reports exhaustion" {
     // The guard is reported like a budget exhaustion, never a hard error.
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
     try std.testing.expect(counters.stack_guard_exhausted);
+    // It ends the whole ladder at the cell that tripped: no later phase
+    // (which would only walk back into the same wall) runs after it.
+    try std.testing.expectEqual(@as(usize, 1), counters.gen_last_phase);
     try std.testing.expectEqual(
         types.SearchStatus.budget_exhausted,
         suggestions.status,
@@ -1227,6 +1230,52 @@ test "extractHypPartialBindings keeps an ACUI binder open for an eigenvariable s
     // binder `H` (binder 0) stays open rather than swallowing it.
     try std.testing.expectEqual(@as(?ExprId, px), bindings[1]);
     try std.testing.expectEqual(@as(?ExprId, null), bindings[0]);
+}
+
+test "extractHypPartialBindings reads only arguments the head determines" {
+    // `kst` drops its second argument, so `kst a b` against `kst a c` forces
+    // the first binder but not the second: `kst a x` matches `kst a c` for any
+    // `x`. The redex prune turns these bindings into rejects, so a guess here
+    // would discard a provable candidate.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term pr (a: obj): wff;
+        \\term a0: obj;
+        \\term c0: obj;
+        \\def kst (a b: obj): obj = $ a $;
+        \\theorem t: $ pr a0 $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const ti_pr = fixture.env.term_names.get("pr").?;
+    const ti_kst = fixture.env.term_names.get("kst").?;
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    const a0 = try theorem.interner.internApp(fixture.env.term_names.get("a0").?, &.{});
+    const c0 = try theorem.interner.internApp(fixture.env.term_names.get("c0").?, &.{});
+    const kst_ref = try theorem.interner.internApp(ti_kst, &.{ a0, c0 });
+    const ref = try theorem.interner.internApp(ti_pr, &.{kst_ref});
+
+    // Template `pr (kst binder0 binder1)`.
+    const kst_args = [_]TemplateExpr{ .{ .binder = 0 }, .{ .binder = 1 } };
+    const kst_t = TemplateExpr{ .app = .{ .term_id = ti_kst, .args = &kst_args } };
+    const pr_args = [_]TemplateExpr{kst_t};
+    const template = TemplateExpr{ .app = .{ .term_id = ti_pr, .args = &pr_args } };
+
+    var bindings = [_]?ExprId{ null, null };
+    def_match.extractHypPartialBindings(&context, &theorem, template, ref, &bindings);
+
+    try std.testing.expectEqual(@as(?ExprId, a0), bindings[0]);
+    try std.testing.expectEqual(@as(?ExprId, null), bindings[1]);
 }
 
 test "canonicalizeAcui respects the registered combiner subset" {

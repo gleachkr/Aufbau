@@ -5,7 +5,6 @@ const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const Context = types.Context;
-const def_injectivity = @import("../../../def_injectivity.zig");
 
 const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
@@ -833,10 +832,7 @@ fn scopedBodyMismatch(
     }
 }
 
-/// See `def_injectivity.argDetermined`.
-pub fn argDetermined(context: *const Context, head: u32, arg_idx: usize) bool {
-    return def_injectivity.argDetermined(context.env, context.registry, head, arg_idx);
-}
+pub const argDetermined = semantic.argDetermined;
 
 pub fn projectViewBindingsIntoRule(
     view: types.ViewDecl,
@@ -915,8 +911,14 @@ pub fn extractHypPartialBindings(
                         // pass below is the correct, order-insensitive extractor
                         // for this case; it never pins a bare binder, leaving the
                         // split open for the validator's ACUI weakening.
+                        //
+                        // Only args the head determines are forced by the ref
+                        // (`argDetermined`): a `@rewrite` head, an erasing def,
+                        // or an idempotent combiner's spine would make the
+                        // positional value a guess.
                         if (!acuiIsCommutative(context, app.term_id)) {
-                            for (app.args, concrete.args) |tmpl_arg, conc_arg| {
+                            for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
+                                if (!argDetermined(context, app.term_id, i)) continue;
                                 extractHypPartialBindings(
                                     context,
                                     theorem,

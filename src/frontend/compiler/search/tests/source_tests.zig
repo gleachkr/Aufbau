@@ -737,6 +737,53 @@ test "re-pin descends only into arguments the head determines" {
     try std.testing.expect(!failed);
 }
 
+test "folded-body check compares only determined args of a same-head @rewrite" {
+    // `y := k2 a b` against the goal's `k2 a c`: both reduce to `a`, so the
+    // differing second argument is no mismatch.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const mm0_src = repin_heads_mm0 ++
+        \\axiom r_y (y x: obj): $ P y x $;
+        \\theorem t_y (a b c: obj): $ P (k2 a c) c $;
+    ;
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t_y");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, "P (k2 a c) c");
+    const other = try parseGoal(&fixture, &theorem, &theorem_vars, "P (k2 a b) c");
+    const y_value = theorem.interner.node(other.concrete).app.args[0];
+    const rule_id = fixture.env.getRuleId("r_y") orelse return error.MissingRule;
+    const bindings = try allocator.dupe(?ExprId, &.{ y_value, null });
+    var candidate = types.ApplyCandidate{
+        .allocator = allocator,
+        .rule_id = rule_id,
+        .rule_name = "r_y",
+        .declaration_order = 0,
+        .theorem = try theorem.clone(),
+        .bindings = try allocator.alloc(?ExprId, 0),
+        .conclusion = goal.concrete,
+        .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
+    };
+    defer candidate.deinit();
+    try std.testing.expect(plausible.finalConclusionPlausible(
+        &context,
+        &candidate,
+        goal,
+        bindings,
+        .{ .repin_prune_enabled = true },
+        null,
+    ));
+}
+
 // End to end: `r_k2` and `r3 [#1, #2]` prove `P (k2 a b) c` with `x := c`
 // (normalization reduces both `k2` sides to `a`), so the conclusion prunes
 // must not force `x := b` from the goal's `k2 a b` where the rule repeats `x`.

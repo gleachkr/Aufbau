@@ -461,7 +461,7 @@ pub fn generateTopLevel(
     }
 
     var applications = std.ArrayListUnmanaged(RuleApplication){};
-    var budget_exhausted = try runPhaseLadder(
+    var ladder = try runPhaseLadder(
         &driver,
         goal_expr,
         &applications,
@@ -481,12 +481,12 @@ pub fn generateTopLevel(
     // stays byte-identical by construction. Unlike the tails, a per-phase
     // fuel exhaustion does not block it: the goals that need the seeds are
     // exactly the elimination-shaped ones whose cut-formula flood exhausts
-    // fuel first (#276), so the retry is gated on the global tick budget
-    // alone — an exhausted budget would abort the re-run on its first tick.
+    // fuel first (#276), so the retry is gated only on the ladder not having
+    // stopped (global tick budget or stack guard), which would abort the
+    // re-run on its first tick.
     var seeded_pool: ?types.DerivedPool = null;
     defer if (seeded_pool) |*dpool| dpool.deinit();
-    const global_exhausted = if (budget_ptr) |budget| budget.exhausted else false;
-    if (applications.items.len == 0 and !global_exhausted and
+    if (applications.items.len == 0 and ladder != .stopped and
         session.context.registry.triggerRuleCount() > 0)
     {
         const seeds = try trigger.harvestSeeds(
@@ -527,7 +527,7 @@ pub fn generateTopLevel(
             // The seeded pool changes every failure verdict's inputs; the
             // persisted memos must not carry across.
             clearPersistedFails(&driver);
-            budget_exhausted = try runPhaseLadder(
+            ladder = try runPhaseLadder(
                 &driver,
                 goal_expr,
                 &applications,
@@ -545,7 +545,7 @@ pub fn generateTopLevel(
     // fuel like every retry, same global tick budget. Theories without
     // eager annotations never reach this, and annotated theories pay only
     // on a clean miss — proofs the cut-honoring ladder finds never do.
-    if (applications.items.len == 0 and !budget_exhausted and
+    if (applications.items.len == 0 and ladder == .clean and
         session.context.registry.autoEagerRuleCount() > 0)
     {
         driver.hook.honor_eager_cut = false;
@@ -554,7 +554,7 @@ pub fn generateTopLevel(
         // cut-free re-solves. (Depth-0 verdicts would survive — no hook at
         // depth 0 — but clear conservatively.)
         clearPersistedFails(&driver);
-        budget_exhausted = try runPhaseLadder(
+        ladder = try runPhaseLadder(
             &driver,
             goal_expr,
             &applications,
@@ -595,7 +595,7 @@ pub fn generateTopLevel(
             RuleApplication,
             applications.items,
         ),
-        .budget_exhausted = budget_exhausted,
+        .budget_exhausted = ladder != .clean,
     };
 }
 
@@ -627,12 +627,18 @@ fn buildDerivedIndex(
     };
 }
 
+/// How a full ladder ended without a proof: every cell ran (`clean`), a
+/// phase's own fuel ran dry (`exhausted`; later retries still run with fresh
+/// fuel), or the search must end now (`stopped`: the global tick budget or
+/// the stack guard, which every later cell would hit again).
+const LadderOutcome = enum { clean, exhausted, stopped };
+
 /// The retry-phase ladder (phases 1–5): a DEPTH-MAJOR core over phases 1–3
 /// (outer iterative deepening 1..max_depth, inner phases per depth, stopping
 /// at the first (depth, phase) cell that yields results), followed by
 /// phase-major tail ladders for phases 4–5 on a clean core miss. Extracted
 /// so the phase-6 trigger-seeding retry can re-run the whole ladder against
-/// the seeded derived pool. Returns true if a budget floor was hit.
+/// the seeded derived pool. Returns how the ladder ended without a proof.
 ///
 /// Why depth-major: `max_depth` monotonicity is a PREFIX property of the cell
 /// visit order. Depth-major makes a higher max_depth's cell sequence a strict
@@ -678,16 +684,16 @@ fn buildDerivedIndex(
 ///   in both nestings, so its fuel drains — and exhausts — at exactly the
 ///   same cell as before; only the interleaving with other phases' cells
 ///   changed.
-/// - Exhaustion of the GLOBAL tick budget aborts the whole ladder, exactly
-///   as before. Exhaustion of one core phase's own fuel, however, only
+/// - Exhaustion of the GLOBAL tick budget (or a stack-guard trip) aborts the
+///   whole ladder, exactly as before. Exhaustion of one core phase's own fuel, however, only
 ///   RETIRES that phase (its remaining cells are skipped); the other phases
 ///   keep their pools and continue. Phase-major could afford to abort
 ///   everything on any exhaustion because an exhausted phase had, by the
 ///   clean-miss gating, no earlier phase left to hurt — here an expensive
 ///   phase flooding out at a shallow cell must not kill a sibling phase's
 ///   deeper find. A retirement still reports the ladder as budget-truncated
-///   (the miss is not clean, so the tail phases and the phase-6
-///   trigger-seeding gate stay exactly as conservative as before). Abort and
+///   (the miss is not clean, so the tail phases and the eager-cut valve stay
+///   exactly as conservative as before). Abort and
 ///   retire points depend only on cumulative work along the fixed visit
 ///   order, so md monotonicity holds even on truncated calls.
 fn runPhaseLadder(
@@ -696,7 +702,7 @@ fn runPhaseLadder(
     applications: *std.ArrayListUnmanaged(RuleApplication),
     budget_ptr: ?*types.GlobalBudget,
     has_vars_pool: bool,
-) anyerror!bool {
+) anyerror!LadderOutcome {
     const options = driver.options;
     // Phase gates, constant across the ladder. Phase 3 is a capability-
     // identical retry of phase 2 — same flags, its own fuel pool, its own
@@ -750,28 +756,24 @@ fn runPhaseLadder(
                 .remaining = phase_fuel[phase],
                 .global = budget_ptr,
             };
-            const exhausted = try runDepthPass(
+            const pass = try runDepthPass(
                 driver,
                 goal_expr,
                 depth_limit,
                 applications,
             );
             phase_fuel[phase] = driver.fuel.remaining;
-            if (exhausted) {
-                // The global tick budget aborts everything; a core phase's
-                // own fuel running dry only retires that phase. `GlobalBudget`
-                // marks itself exhausted before erroring, so the two share
-                // an error but are distinguishable here.
-                const global_exhausted = if (budget_ptr) |budget|
-                    budget.exhausted
-                else
-                    false;
-                if (global_exhausted) return true;
-                retired[phase] = true;
-                any_retired = true;
-                continue;
+            switch (pass) {
+                .done => {},
+                // A core phase's own fuel running dry only retires it.
+                .fuel => {
+                    retired[phase] = true;
+                    any_retired = true;
+                    continue;
+                },
+                .stop => return .stopped,
             }
-            if (applications.items.len > 0) return false;
+            if (applications.items.len > 0) return .clean;
         }
         if (!any_retired and !any_capped and
             driver.budget_trips == trips_at_depth)
@@ -784,7 +786,7 @@ fn runPhaseLadder(
     // A retired core phase means the miss is not clean; stay exactly as
     // conservative as phase-major (where any fuel exhaustion blocked all
     // later phases) and skip the tails.
-    if (any_retired) return true;
+    if (any_retired) return .exhausted;
 
     // Tail: phases 4–5, phase-major full ladders, each only on a clean miss
     // of everything before it — identical to the original nesting.
@@ -801,17 +803,20 @@ fn runPhaseLadder(
         };
         var tail_depth: usize = 1;
         while (tail_depth <= options.max_depth) : (tail_depth += 1) {
-            const exhausted = try runDepthPass(
+            switch (try runDepthPass(
                 driver,
                 goal_expr,
                 tail_depth,
                 applications,
-            );
-            if (exhausted) return true;
-            if (applications.items.len > 0) return false;
+            )) {
+                .done => {},
+                .fuel => return .exhausted,
+                .stop => return .stopped,
+            }
+            if (applications.items.len > 0) return .clean;
         }
     }
-    return false;
+    return .clean;
 }
 
 /// Phases 1–3 (indices 0–2) form the depth-major core of `runPhaseLadder`;
@@ -830,10 +835,15 @@ fn hasIdempotentCombiner(context: *const Context) bool {
     return false;
 }
 
+/// How one ladder cell ended: it ran in full (`done`), the phase's own fuel
+/// ran dry (`fuel`), or the global tick budget or the stack guard tripped and
+/// the whole search must end (`stop`).
+const PassEnd = enum { done, fuel, stop };
+
 /// One single-depth generation pass over `goal_expr` under the driver's
 /// currently configured phase flags and fuel — one (depth, phase) ladder
 /// cell — appending generation-using assemblies to `applications`. Returns
-/// true if a budget floor was hit. The per-cell `nodes` counter and the
+/// which floor, if any, cut the pass short. The per-cell `nodes` counter and the
 /// per-cell failure memos reset here (a deeper pass can succeed where a
 /// shallow one failed, and a later phase can succeed where an earlier one
 /// failed at the same depth — the raw (target, depth) verdicts don't carry).
@@ -846,7 +856,7 @@ fn runDepthPass(
     goal_expr: ExprId,
     depth_limit: usize,
     applications: *std.ArrayListUnmanaged(RuleApplication),
-) anyerror!bool {
+) anyerror!PassEnd {
     driver.nodes = 0;
     const trips_at_start = driver.budget_trips;
     defer if (driver.budget_trips != trips_at_start) {
@@ -893,16 +903,19 @@ fn runDepthPass(
         },
     ) catch |err| switch (err) {
         // A budget floor was hit mid-search; stop and report it distinctly.
+        // Phase fuel and the global budget share the error; `GlobalBudget`
+        // marks itself exhausted before erroring, which tells them apart.
         error.SearchBudgetExhausted => {
             if (driver.counters) |c| c.recursive_budget_exhausted = true;
-            return true;
+            const global = if (driver.fuel.global) |budget| budget.exhausted else false;
+            return if (global) .stop else .fuel;
         },
         // The call-stack guard tripped mid-descent. The stack has unwound
         // safely; stop the ladder and report like a budget exhaustion —
         // later cells would walk back into the same wall.
         error.SearchStackExhausted => {
             if (driver.counters) |c| c.stack_guard_exhausted = true;
-            return true;
+            return .stop;
         },
         else => return err,
     };
@@ -919,7 +932,7 @@ fn runDepthPass(
             try cloneApplication(driver.arena, candidate.application),
         );
     }
-    return false;
+    return .done;
 }
 
 /// Call-stack guard, checked at the two recursion choke points (`solveProof`

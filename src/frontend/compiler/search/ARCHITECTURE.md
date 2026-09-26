@@ -275,8 +275,10 @@ which the persisted-memo covering rule requires:
    visible (a hard miss that used to fail slowly now succeeds slowly). The fix
    is the global per-call budget below.
 6. **Phase 6 — `@auto trigger` seeding** (`trigger.zig`; design:
-   `docs/design_notes/trigger_seeding.md`). Only on a clean miss of the whole
-   phase-1–5 ladder, and only when the theory declares `@auto trigger`
+   `docs/design_notes/trigger_seeding.md`). Only on a miss of the whole
+   phase-1–5 ladder that did not stop the search (a phase's own fuel running
+   dry does not block it; the global tick budget and the stack guard do),
+   and only when the theory declares `@auto trigger`
    patterns (registry `trigger_by_rule`). Each pattern is e-matched against
    the *original goal's* subterms; every match mints a ground instance of the
    annotated rule (for `ax`: `φ ⊢ φ` per harvested formula) as a **seed** — a
@@ -472,7 +474,8 @@ A kept seed meta a bound binder still holds when its premise is generated
 (`ih`, when no ref pinned it) qualifies the same way. `rebindSeedMetas`
 replaces it, in every binding that mentions it, with a `.bound_choice` meta
 of the slot's store, and a solved fill materializes those bindings
-(`OpenSlot.rebound`). A seed meta keeps its dummy's dep bit and reads as a
+(`OpenSlot.rebound`). Only the generated premise's own open binders are
+rebound: this slot's solve cannot fill another premise's seed meta. A seed meta keeps its dummy's dep bit and reads as a
 bound variable (`TheoremContext.leafInfoWithArgs`), so a substitution over
 it reduces as over the dummy: `sep_intro`'s `[x/t] p` under `image` must
 reduce before its premise can be generated. Guard: the `add_zero_right`

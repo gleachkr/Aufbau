@@ -75,6 +75,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- When `auto?`'s call-stack guard trips, the search now stops, as its
+  report says. Before, it abandoned only the current phase and went on with
+  the others, each of which walked back into the same limit.
 - A failed `auto?` no longer claims it searched the whole space when its
   per-pass subgoal limit (`nodes`) cut it short. It used to say "the search
   space was exhausted" and suggest more depth. It now names the limit and

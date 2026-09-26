@@ -597,6 +597,27 @@ test "ACUI member prune counts distinct members without idempotence" {
     try std.testing.expect(counters.conclusion_member_prunes > 0);
 }
 
+test "ACUI member prune does not count a unit leaf as a required member" {
+    // `emp` in `join g emp` is the unit: it needs no goal entry of its own.
+    // Counting it would demand two members of a one-entry context.
+    const mm0_src = ordered_ctx_theory ++
+        \\axiom emp_right (g: ctx) (J: wff): $ nd g J $ > $ nd (join g emp) J $;
+        \\theorem t {k: tm} (z: tm):
+        \\  $ nd (hyp (has k Nat)) (has z Nat) $ >
+        \\  $ nd (join (hyp (has k Nat)) emp) (has z Nat) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join (hyp (has k Nat)) emp) (has z Nat) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    const count = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expect(count > 0);
+    try std.testing.expectEqual(@as(usize, 0), counters.conclusion_member_prunes);
+}
+
 test "dependency prune drops a rule whose binding rigidly mentions its bound binder" {
     // `weaken`'s `J` does not depend on `x`, but the goal forces `x := k` and
     // `J := has (suc k) Nat`. No conversion removes `k`, so every assembly is

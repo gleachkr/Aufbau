@@ -574,7 +574,7 @@ fn tryFreshBoundGenerate(
         counters,
         fuel,
         candidates,
-        true,
+        open,
     );
     return candidates.items.len != before;
 }
@@ -1410,7 +1410,7 @@ fn tryGenerateSlot(
                 counters,
                 fuel,
                 candidates,
-                false,
+                0,
             );
             return;
         }
@@ -1515,7 +1515,7 @@ fn tryGenerateSlot(
             counters,
             fuel,
             candidates,
-            false,
+            0,
         );
         if (candidates.items.len != candidates_before_split) return;
     }
@@ -1782,7 +1782,7 @@ fn trySplitGenerate(
                     counters,
                     fuel,
                     candidates,
-                    false,
+                    0,
                 );
             }
             bindings[b] = saved;
@@ -2053,8 +2053,11 @@ fn tryOpenGenerateSlot(
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
-    fresh_bound: bool,
+    /// The premise's binders open as fresh bound variables
+    /// (`tryFreshBoundGenerate`); 0 for an ordinary open slot.
+    fresh_open: u64,
 ) anyerror!void {
+    const fresh_bound = fresh_open != 0;
     var store = MetaStore.init(allocator, context.env);
     // Share the driver's global meta-id counter so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
@@ -2065,10 +2068,7 @@ fn tryOpenGenerateSlot(
     const snapshot = snapshots[depth * bindings.len ..][0..bindings.len];
     @memcpy(snapshot, bindings);
     defer rollbackOneHypMatch(bindings, snapshot);
-    const rebound: u64 = if (fresh_bound)
-        try rebindSeedMetas(&store, &candidate.theorem, rule, bindings)
-    else
-        0;
+    const rebound = try rebindSeedMetas(&store, &candidate.theorem, bindings, fresh_open);
     // Narrow the carried-meta dependency bans for this slot's lifetime: the
     // candidate's bindings are fixed for everything opened beneath it.
     const ban_mark = if (hook.meta_dep_bans) |bans| blk: {
@@ -2130,19 +2130,23 @@ fn tryOpenGenerateSlot(
     }
 }
 
-/// Replace each seed meta a bound binder still holds (`ih`, unmatched by any
-/// ref) with a `.bound_choice` meta of `store`, in every binding that mentions
-/// it, so the child search can read it back and `tryFreshPoolWitnesses` can
-/// fill it. Returns the binders whose values changed.
+/// Replace each seed meta an open binder of this premise still holds (`ih`,
+/// unmatched by any ref) with a `.bound_choice` meta of `store`, in every
+/// binding that mentions it, so the child search can read it back and
+/// `tryFreshPoolWitnesses` can fill it. A seed meta of another premise stays
+/// put: this slot's solve could not fill it. Returns the binders whose values
+/// changed.
 fn rebindSeedMetas(
     store: *MetaStore,
     theorem: *TheoremContext,
-    rule: *const @import("../../../env.zig").RuleDecl,
     bindings: []?ExprId,
+    open: u64,
 ) !u64 {
     var changed: u64 = 0;
-    for (rule.args, 0..) |arg, idx| {
-        if (!arg.bound or idx >= 64) continue;
+    var rest = open;
+    while (rest != 0) {
+        const idx: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
         const leaf = bindings[idx] orelse continue;
         if (!isReconciliationLeaf(theorem, leaf)) continue;
         const pid = theorem.interner.node(leaf).placeholder;
@@ -3187,7 +3191,7 @@ fn tryVarPoolWitnesses(
             slot.store.rollbackTo(mark);
             return;
         };
-        if (!assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) {
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) {
             slot.store.rollbackTo(mark);
             return;
         }
@@ -3245,8 +3249,8 @@ fn tryFreshPoolWitnesses(
         // Only the opened bound binders are fresh; any other meta (a view
         // binder) must come from the child search.
         if (meta.kind != .bound_choice) return;
-        var buf: [max_pool_tokens][]const u8 = undefined;
-        const tokens = sortedPoolTokens(slot.context, meta.sort_name, &buf);
+        const tokens = try sortedPoolTokens(slot.allocator, slot.context, meta.sort_name);
+        defer slot.allocator.free(tokens);
         for (tokens) |token| {
             const parser_var = slot.theorem_vars.get(token) orelse continue;
             const dummy = theorem.internParsedExpr(parser_var) catch continue;
@@ -3287,7 +3291,7 @@ fn groundDanglingWitnessMetas(
     if (unsolved.items.len == 0) return false;
     for (unsolved.items) |meta_id| {
         const meta = slot.store.info(meta_id) orelse return false;
-        if (!assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) return false;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) return false;
     }
     return true;
 }
@@ -3305,9 +3309,10 @@ fn assignPoolWitness(
     theorem: *TheoremContext,
     meta_id: PlaceholderId,
     sort_name: []const u8,
-) bool {
-    var buf: [max_pool_tokens][]const u8 = undefined;
-    for (sortedPoolTokens(slot.context, sort_name, &buf)) |token| {
+) !bool {
+    const tokens = try sortedPoolTokens(slot.allocator, slot.context, sort_name);
+    defer slot.allocator.free(tokens);
+    for (tokens) |token| {
         const parser_var = slot.theorem_vars.get(token) orelse continue;
         const dummy = theorem.internParsedExpr(parser_var) catch continue;
         slot.store.assign(theorem, meta_id, dummy) catch continue;
@@ -3316,29 +3321,26 @@ fn assignPoolWitness(
     return false;
 }
 
-const max_pool_tokens = 32;
-
-/// The `@vars` pool tokens of `sort_name`, in sorted order (the HashMap
-/// iteration order is unspecified; the pool is small).
+/// Every `@vars` pool token of `sort_name`, in sorted order (the HashMap
+/// iteration order is unspecified). Caller frees the slice.
 fn sortedPoolTokens(
+    allocator: std.mem.Allocator,
     context: *const Context,
     sort_name: []const u8,
-    buf: *[max_pool_tokens][]const u8,
-) []const []const u8 {
-    var count: usize = 0;
+) ![]const []const u8 {
+    var tokens = std.ArrayListUnmanaged([]const u8){};
+    errdefer tokens.deinit(allocator);
     var it = context.sort_vars.tokens.iterator();
     while (it.next()) |entry| {
         if (!std.mem.eql(u8, entry.value_ptr.sort_name, sort_name)) continue;
-        if (count >= buf.len) break;
-        buf[count] = entry.key_ptr.*;
-        count += 1;
+        try tokens.append(allocator, entry.key_ptr.*);
     }
-    std.mem.sort([]const u8, buf[0..count], {}, struct {
+    std.mem.sort([]const u8, tokens.items, {}, struct {
         fn lt(_: void, a: []const u8, b: []const u8) bool {
             return std.mem.order(u8, a, b) == .lt;
         }
     }.lt);
-    return buf[0..count];
+    return tokens.toOwnedSlice(allocator);
 }
 
 /// `PlaceholderFactory.makeFn` minting branch-local existential metas.
