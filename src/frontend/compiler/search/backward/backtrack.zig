@@ -449,7 +449,9 @@ pub fn openMode(
 /// outside the premise sees, in every phase. Two kinds qualify:
 /// - a variable a def hid. Unfolding `A → B` to `Π x : A. B`, on the goal
 ///   (`pi_form`) or on a ref (`app_elim`'s `f : A → B`), leaves `x` null (the
-///   seed scrubs it) or a bare placeholder;
+///   seed scrubs it) or a bare placeholder. When the seed kept a term over
+///   the variable (`nat_ind_elim`'s step term `s` over `ih`), the variable is
+///   a seed meta instead, and `rebindSeedMetas` opens it in place;
 /// - an eigenvariable of an intro-shaped premise (`subset_intro`'s `x` in
 ///   `G , x ∈ A ⊢ x ∈ B`): the goal fixes every other binder of the premise
 ///   (`otherHypBindersInConclusion`), and no fixed binding may mention the
@@ -510,7 +512,8 @@ fn tryFreshBoundGenerate(
         if (idx >= bindings.len) return false;
         const bit = @as(u64, 1) << idx;
         if (bindings[idx]) |value| {
-            if (!isStandardPlaceholder(cand_theorem, value)) continue;
+            if (!isStandardPlaceholder(cand_theorem, value) and
+                !isReconciliationLeaf(cand_theorem, value)) continue;
         } else if (concl_mask & bit == 0 and
             !(noFixedBindingMayMention(rule, bindings, idx) and
                 otherHypBindersInConclusion(rule, mask.mask, idx))) return false;
@@ -521,16 +524,23 @@ fn tryFreshBoundGenerate(
 
     if (hook.solveOpenFn == null) return false;
     // Open the def-unfold placeholders too, so the child search can fix them.
+    // A seed meta stays put: other kept bindings mention it (`s` under `ih`),
+    // and `tryOpenGenerateSlot` rebinds it everywhere at once.
     var saved: [64]?ExprId = undefined;
+    var nulled: u64 = 0;
     rest = open;
     while (rest != 0) {
         const idx: u6 = @intCast(@ctz(rest));
         rest &= rest - 1;
+        if (bindings[idx]) |value| {
+            if (isReconciliationLeaf(cand_theorem, value)) continue;
+        }
         saved[idx] = bindings[idx];
         bindings[idx] = null;
+        nulled |= @as(u64, 1) << idx;
     }
     defer {
-        rest = open;
+        rest = nulled;
         while (rest != 0) {
             const idx: u6 = @intCast(@ctz(rest));
             rest &= rest - 1;
@@ -610,6 +620,18 @@ fn noFixedBindingMayMention(
 
 /// A bare non-meta placeholder: the unfolded dummy of a def the ref or goal
 /// hid a bound variable behind (`unfoldDefBody`).
+/// A seed meta still standing in for a def's hidden variable (see
+/// `seed.partitionSeedBindings`): a ref match would have replaced it.
+fn isReconciliationLeaf(theorem: *const TheoremContext, expr: ExprId) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => |pid| if (theorem.placeholderInfo(pid)) |info|
+            info.reconciliation_meta
+        else
+            false,
+        else => false,
+    };
+}
+
 fn isStandardPlaceholder(theorem: *const TheoremContext, expr: ExprId) bool {
     return switch (theorem.interner.node(expr).*) {
         .placeholder => |pid| theorem.placeholderClass(pid) == .standard,
@@ -1989,6 +2011,9 @@ const OpenSlot = struct {
     /// sees (`tryFreshBoundGenerate`): when the child search leaves one
     /// unsolved, it takes a fresh `@vars` variable (`tryFreshPoolWitnesses`).
     fresh_bound: bool = false,
+    /// Binders whose values hold metas `rebindSeedMetas` minted for this slot;
+    /// a solved fill materializes them too.
+    rebound: u64 = 0,
 
     /// The candidate is `@auto eager`: its open subgoal keeps the parent's
     /// remaining depth, as a concrete one does (`tryGenerateSlot`).
@@ -2035,6 +2060,15 @@ fn tryOpenGenerateSlot(
     // identity across the open-target recursion's interner clones.
     store.meta_id_counter = hook.meta_id_counter;
     store.dep_bans = hook.meta_dep_bans;
+    // The pool-ref loop at this depth is done with its snapshot slice;
+    // reuse it as the open path's bindings rollback point.
+    const snapshot = snapshots[depth * bindings.len ..][0..bindings.len];
+    @memcpy(snapshot, bindings);
+    defer rollbackOneHypMatch(bindings, snapshot);
+    const rebound: u64 = if (fresh_bound)
+        try rebindSeedMetas(&store, &candidate.theorem, rule, bindings)
+    else
+        0;
     // Narrow the carried-meta dependency bans for this slot's lifetime: the
     // candidate's bindings are fixed for everything opened beneath it.
     const ban_mark = if (hook.meta_dep_bans) |bans| blk: {
@@ -2054,11 +2088,6 @@ fn tryOpenGenerateSlot(
         }
         store.deinit();
     }
-    // The pool-ref loop at this depth is done with its snapshot slice;
-    // reuse it as the open path's bindings rollback point.
-    const snapshot = snapshots[depth * bindings.len ..][0..bindings.len];
-    @memcpy(snapshot, bindings);
-    defer rollbackOneHypMatch(bindings, snapshot);
 
     var slot = OpenSlot{
         .compiler = compiler,
@@ -2092,12 +2121,42 @@ fn tryOpenGenerateSlot(
             hook.allow_constrained_mp,
         ),
         .fresh_bound = fresh_bound,
+        .rebound = rebound,
     };
     if (context.views.get(candidate.rule_id)) |view| {
         try openSlotViaView(&slot, view);
     } else {
         try openSlotRaw(&slot);
     }
+}
+
+/// Replace each seed meta a bound binder still holds (`ih`, unmatched by any
+/// ref) with a `.bound_choice` meta of `store`, in every binding that mentions
+/// it, so the child search can read it back and `tryFreshPoolWitnesses` can
+/// fill it. Returns the binders whose values changed.
+fn rebindSeedMetas(
+    store: *MetaStore,
+    theorem: *TheoremContext,
+    rule: *const @import("../../../env.zig").RuleDecl,
+    bindings: []?ExprId,
+) !u64 {
+    var changed: u64 = 0;
+    for (rule.args, 0..) |arg, idx| {
+        if (!arg.bound or idx >= 64) continue;
+        const leaf = bindings[idx] orelse continue;
+        if (!isReconciliationLeaf(theorem, leaf)) continue;
+        const pid = theorem.interner.node(leaf).placeholder;
+        const info = theorem.placeholderInfo(pid) orelse continue;
+        const meta = try store.mint(theorem, info.sort_name, std.math.maxInt(u55), .bound_choice);
+        for (bindings, 0..) |*binding, other| {
+            const value = binding.* orelse continue;
+            const swapped = try forward.leafSwap(theorem, value, leaf, meta);
+            if (swapped == value) continue;
+            binding.* = swapped;
+            if (other < 64) changed |= @as(u64, 1) << @intCast(other);
+        }
+    }
+    return changed;
 }
 
 /// The eigenvariable condition, read off the rule's own dependency data: a
@@ -2676,7 +2735,8 @@ fn continueOpenTargetSolved(
                 }
             }
             if (already) continue;
-            if (!slot.store.exprMentionsAncestor(theorem, val)) continue;
+            const rebound = idx < 64 and slot.rebound & (@as(u64, 1) << @intCast(idx)) != 0;
+            if (!rebound and !slot.store.exprMentionsAncestor(theorem, val)) continue;
             const concrete = slot.store.materialize(theorem, val) catch continue;
             if (concrete == val) continue;
             slot.bindings[idx] = concrete;

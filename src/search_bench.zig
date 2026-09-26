@@ -711,7 +711,9 @@ const scenarios = [_]Scenario{
     },
     .{
         // martin_lof add_comm capstone: `nat_ind_elim` whose induction motive
-        // is not pinned by the conclusion (higher-order).
+        // is not pinned by the conclusion (higher-order). Besides citing the
+        // motive `l5`, the search also generates it (`Id_form [l3, l4]`),
+        // opening the def's hidden `k` at that premise.
         .name = "auto martin_lof add_comm capstone auto? (no result)",
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_capstone_auto.auf",
@@ -719,7 +721,7 @@ const scenarios = [_]Scenario{
         .expected_replacement = "",
         .generate = .{ .enabled = true, .max_depth = 6 },
         .expect_result = false,
-        .expected_suggestion_count = 2,
+        .expected_suggestion_count = 4,
     },
     .{
         // martin_lof add_comm: rebuild the WHOLE tail of the `id_trans` DAG

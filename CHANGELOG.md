@@ -36,6 +36,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   from `@vars`, finding `pi_form [#1, weaken [#1, #2]]`. The same applies
   to eigenvariables of introduction rules such as `subset_intro`, which
   lets `auto?` find deeper proofs in the Zermelo examples.
+- `auto?` proves induction steps it used to miss. For a goal such as
+  `g ⊢ add_suc_right_p m n : Id Nat (m + suc n) (suc (m + n))`, unfolding
+  the definition gives the step term of `nat_ind_elim`, but that term
+  mentions the definition's hidden `ih`, so the search dropped it and had
+  to find a step term from its type alone. It now keeps the step term and
+  supplies `ih` like any other hidden variable. In the Martin-Löf example
+  `auto?` now reconstructs `add_comm`, `add_zero_right` and `ap_suc_ty`
+  from their hypotheses with every intermediate line removed.
 
 ### Fixed
 

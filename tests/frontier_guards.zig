@@ -153,6 +153,17 @@ pub const guards = [_]FrontierGuard{
             "tests/proof_cases/martin_lof.auf",
         .mode = "depth",
     },
+    // Depth guard for a kept step term (`seed.partitionSeedBindings`,
+    // `backtrack.rebindSeedMetas`): unfolding `add_zero_right_p m` pins
+    // `nat_ind_elim`'s step term `s` over the def's hidden `ih`. Scrubbed, the
+    // step premise's subject is a hole and induction floods it; the search
+    // misses from k=2.
+    .{
+        .filter = "add_zero_right",
+        .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
+            "tests/search_bench_cases/martin_lof_frontier.auf",
+        .mode = "depth",
+    },
     // Depth guard for the eager cut's eigenvariable check
     // (`backtrack.bindingsDepHit`): an eager `all_intro` over a
     // context that mentions `y` free can never validate, and must not arm

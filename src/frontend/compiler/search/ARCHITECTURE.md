@@ -431,8 +431,12 @@ Instead (`backward/seed.zig:partitionSeedBindings`, keyed on `multiHypBinderMask
 - a dummy in a binder occurring in **>1 hypothesis** is kept, with every
   occurrence rewritten to ONE shared `.meta` leaf flagged
   `reconciliation_meta` (`addReconciliationMetaPlaceholderResolved`);
-- a dummy in a single-hypothesis binder (its witness/output) is scrubbed to null
-  and reconciles at its own generated slot via the open path;
+- a term in a single-hypothesis binder that mentions only dummies other
+  binders are pinned to outright is kept the same way, together with those
+  binders (`nat_ind_elim`'s step term `s` over `k` and `ih`): it fixes the
+  premise's subject, where scrubbing leaves a hole that induction floods;
+- any other dummy in a single-hypothesis binder (its witness/output) is
+  scrubbed to null and reconciles at its own generated slot via the open path;
 - a *bare* meta leaf is always scrubbed — it constrains nothing.
 
 A scrubbed dummy on a **bound** binder is a variable the def hid (`A → B`
@@ -458,6 +462,16 @@ may be a variable its fixed `a : term x` already mentions, so a fresh fill is
 a wrong guess (church `SPEC`). `dvd_elim`'s `k` sits in an elim-shaped
 premise whose other binders come from a sibling ref, so fills are mostly
 doomed (euclid). Guard: the `arr_` depth rows of `martin_lof`.
+
+A kept seed meta a bound binder still holds when its premise is generated
+(`ih`, when no ref pinned it) qualifies the same way. `rebindSeedMetas`
+replaces it, in every binding that mentions it, with a `.bound_choice` meta
+of the slot's store, and a solved fill materializes those bindings
+(`OpenSlot.rebound`). A seed meta keeps its dummy's dep bit and reads as a
+bound variable (`TheoremContext.leafInfoWithArgs`), so a substitution over
+it reduces as over the dummy: `sep_intro`'s `[x/t] p` under `image` must
+reduce before its premise can be generated. Guard: the `add_zero_right`
+depth rows of `martin_lof`.
 
 These seed metas are resolved by a **meta-aware ref match**
 (`backward/match.zig:tryMetaAwareHypMatch`, gated by

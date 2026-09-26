@@ -73,8 +73,10 @@ pub const PlaceholderInfo = struct {
     /// (the carry-to-leaf witness channel). Null for non-search placeholders.
     meta_id: ?u64 = null,
     /// True for an eliminator-reconciliation seed meta: a `.meta` leaf that
-    /// `makeExactRuleCandidate` minted to replace a def-unfold dummy threaded
-    /// across more than one hypothesis (see `seed.partitionSeedBindings`).
+    /// `makeExactRuleCandidate` minted to replace a def-unfold dummy the seed
+    /// keeps (see `seed.partitionSeedBindings`). It stands for that dummy's
+    /// variable, so it keeps the dummy's dep bit and leaf info reports it as
+    /// bound (a substitution over it reduces as over the dummy).
     /// The meta-aware hypothesis match (`match.tryMetaAwareHypMatch`) keys
     /// on this so it resolves *only* these — never upstream carry-to-leaf/witness
     /// metas, which must stay deferred to leaf forcing. Travels with the leaf
@@ -698,10 +700,11 @@ pub const TheoremContext = struct {
     pub fn addReconciliationMetaPlaceholderResolved(
         self: *TheoremContext,
         sort_name: []const u8,
+        deps: u55,
     ) !ExprId {
         return self.mintMetaPlaceholder(.{
             .sort_name = sort_name,
-            .deps = 0,
+            .deps = deps,
             .class = .meta,
             .reconciliation_meta = true,
         });
@@ -870,13 +873,15 @@ pub const TheoremContext = struct {
                         .deps = placeholder.deps,
                     },
                     // A meta stands for an arbitrary expression of its sort,
-                    // not a bound-variable stand-in. Live metas must be solved
-                    // before validation ever consults leaf info, so this is a
-                    // conservative default, not a load-bearing answer.
+                    // not a bound-variable stand-in (dep-free), except a seed
+                    // meta, which stands for a def's hidden variable. Live
+                    // metas must be solved before validation ever consults
+                    // leaf info, so this is a conservative default, not a
+                    // load-bearing answer.
                     .meta => .{
                         .sort_name = placeholder.sort_name,
-                        .bound = false,
-                        .deps = 0,
+                        .bound = placeholder.reconciliation_meta,
+                        .deps = placeholder.deps,
                     },
                 };
             },

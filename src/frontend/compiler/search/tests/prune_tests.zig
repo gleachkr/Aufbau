@@ -170,6 +170,45 @@ test "partitionSeedBindings: keep multi-hyp dummy as reconciliation meta, scrub 
     try std.testing.expectEqual(@as(?ExprId, null), bindings[2]);
 }
 
+// `nat_ind_elim`'s step term: a single-hypothesis binder whose value mentions
+// only dummies other binders hold (`s` under `ih`) is kept, sharing the meta
+// with the dummy's own binder; one mentioning a stray dummy is still scrubbed.
+test "partitionSeedBindings: keep a single-hyp term over binder dummies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+
+    // arg0 `ih` and arg1 `s` occur in hyp0 only; arg2 `t` in hyp1 only.
+    const hyp0_args = [_]TemplateExpr{ .{ .binder = 0 }, .{ .binder = 1 } };
+    const hyp1_args = [_]TemplateExpr{.{ .binder = 2 }};
+    const hyps = [_]TemplateExpr{
+        .{ .app = .{ .term_id = 0, .args = &hyp0_args } },
+        .{ .app = .{ .term_id = 0, .args = &hyp1_args } },
+    };
+
+    const ih = try theorem.addPlaceholderResolved("tm");
+    const stray = try theorem.addPlaceholderResolved("tm");
+    const s = try theorem.interner.internApp(1, &.{ih});
+    const t = try theorem.interner.internApp(1, &.{stray});
+    var bindings = [_]?ExprId{ ih, s, t };
+
+    try seed.partitionSeedBindings(allocator, &theorem, &hyps, &bindings);
+
+    const meta = bindings[0] orelse return error.ExpectedKept;
+    const pid = switch (theorem.interner.node(meta).*) {
+        .placeholder => |id| id,
+        else => return error.ExpectedPlaceholder,
+    };
+    try std.testing.expect(theorem.placeholderInfo(pid).?.reconciliation_meta);
+    try std.testing.expectEqual(
+        @as(?ExprId, try theorem.interner.internApp(1, &.{meta})),
+        bindings[1],
+    );
+    try std.testing.expectEqual(@as(?ExprId, null), bindings[2]);
+}
+
 // A two-sided sequent calculus with an ACUI context, a two-premise
 // left-implication rule (`lim`, principal `im a b` selected from the
 // antecedent), and a one-premise left-conjunction rule (`lan`). Each fan-out
