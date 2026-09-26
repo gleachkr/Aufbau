@@ -720,8 +720,15 @@ fn runPhaseLadder(
     // Core: phases 1–3, depth-major.
     var retired = [_]bool{false} ** core_phase_count;
     var any_retired = false;
+    // A node-capped depth was not searched in full, so it and every deeper
+    // one stop counting toward `gen_core_depth_done`, as a retired phase does.
+    var any_capped = false;
     var depth_limit: usize = 1;
     while (depth_limit <= options.max_depth) : (depth_limit += 1) {
+        const trips_at_depth = driver.budget_trips;
+        defer if (driver.budget_trips != trips_at_depth) {
+            any_capped = true;
+        };
         for (0..core_phase_count) |phase| {
             if (retired[phase]) continue;
             if (phase == 2 and !has_vars_pool) continue;
@@ -766,9 +773,13 @@ fn runPhaseLadder(
             }
             if (applications.items.len > 0) return false;
         }
-        if (!any_retired) if (driver.counters) |c| {
-            c.gen_core_depth_done = @max(c.gen_core_depth_done, depth_limit);
-        };
+        if (!any_retired and !any_capped and
+            driver.budget_trips == trips_at_depth)
+        {
+            if (driver.counters) |c| {
+                c.gen_core_depth_done = @max(c.gen_core_depth_done, depth_limit);
+            }
+        }
     }
     // A retired core phase means the miss is not clean; stay exactly as
     // conservative as phase-major (where any fuel exhaustion blocked all
@@ -837,6 +848,10 @@ fn runDepthPass(
     applications: *std.ArrayListUnmanaged(RuleApplication),
 ) anyerror!bool {
     driver.nodes = 0;
+    const trips_at_start = driver.budget_trips;
+    defer if (driver.budget_trips != trips_at_start) {
+        if (driver.counters) |c| c.gen_node_capped_passes += 1;
+    };
     // Ladder-progress observability for the failure report: which (depth,
     // phase) cell was running when the search ended (phase 1-based).
     if (driver.counters) |c| {

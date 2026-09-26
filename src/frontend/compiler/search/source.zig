@@ -703,7 +703,8 @@ fn searchStatus(
     if (counters.gen_budget_exhausted or
         counters.recursive_budget_exhausted or
         counters.stack_guard_exhausted or
-        counters.forward_saturation_exhausted)
+        counters.forward_saturation_exhausted or
+        counters.gen_node_capped_passes > 0)
     {
         return .budget_exhausted;
     }
@@ -880,11 +881,29 @@ pub fn buildStatusDetail(
                         @min(gen.fuel * 2, tunables.max_fuel_value),
                     },
                 );
-            } else {
+            } else if (counters.forward_saturation_exhausted) {
                 try w.writeAll(
                     "forward saturation stopped at its bounds before " ++
                         "reaching a fixpoint, so the derived-fact pool is " ++
                         "incomplete and a proof may still exist.",
+                );
+            } else {
+                // Only the per-pass subgoal cap cut the search short: no
+                // budget ran out, but some subgoals were never expanded.
+                try w.print(
+                    "no proof found, but the search reached its limit of " ++
+                        "{d} subgoals per pass in {d} of its passes, so " ++
+                        "part of the search space was never explored; " ++
+                        "{d} applications validated ({d} accepted). A " ++
+                        "proof may still exist — try '{s} (nodes: {d})'.",
+                    .{
+                        gen.max_nodes,
+                        counters.gen_node_capped_passes,
+                        validated,
+                        accepted,
+                        keyword,
+                        @min(gen.max_nodes * 2, tunables.max_nodes_value),
+                    },
                 );
             }
         },

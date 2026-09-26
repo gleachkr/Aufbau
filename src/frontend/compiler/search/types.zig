@@ -530,8 +530,14 @@ pub const SearchCounters = struct {
     /// (1 non-splitting .. 5 constrained MP); 0 = generation never ran.
     gen_last_depth: usize = 0,
     gen_last_phase: usize = 0,
+    /// Ladder cells (one depth pass of one phase) in which the `max_nodes`
+    /// cap stopped the search from expanding a subgoal. Such a cell did not
+    /// search its whole space, so a miss with a nonzero count is truncated,
+    /// not exhausted, even when no budget or fuel ran out.
+    gen_node_capped_passes: usize = 0,
     /// The deepest depth at which every core ladder phase (1–3) finished
-    /// without a find or any exhaustion, maxed over ladder runs; 0 = none.
+    /// without a find, any exhaustion, or a node cap, maxed over ladder
+    /// runs; 0 = none.
     /// On a budget-truncated miss, `gen_core_depth_done + 1 >= max_depth`
     /// means every depth below the limit was searched, so the proof may
     /// need more depth rather than more budget.

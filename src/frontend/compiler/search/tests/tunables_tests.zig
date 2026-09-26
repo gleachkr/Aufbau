@@ -241,6 +241,62 @@ test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
     );
 }
 
+test "auto? node-cap truncation is reported as truncation with a nodes hint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // `nodes: 1` lets each pass expand a single subgoal, too few for the
+    // two-level chain. No budget or fuel runs out, so before the node cap was
+    // reported the miss read as an exhausted search space.
+    var capped = try tunableChainSuggestions(&arena,
+        \\t
+        \\----
+        \\l1: $ R $ by auto? (nodes: 1)
+    , .{ .generate = .{ .enabled = true }, .status_detail = true });
+    defer capped.deinit();
+    try std.testing.expectEqual(
+        types.SearchStatus.budget_exhausted,
+        capped.status,
+    );
+    const detail = capped.status_detail orelse
+        return error.MissingStatusDetail;
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "limit of 1 subgoals per pass") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "auto? (nodes: 2)") != null,
+    );
+    try std.testing.expect(
+        std.mem.indexOf(u8, detail, "search space was exhausted") == null,
+    );
+}
+
+test "auto? budget truncation does not claim node-capped depths were searched" {
+    // Depth 3 was node-capped, so `gen_core_depth_done` stops at 2 and the
+    // budget message must not say every depth up to the limit was searched.
+    const gen = types.GenerateOptions{
+        .global_budget = 6 * tunables.ticks_per_budget_unit,
+    };
+    const counters = types.SearchCounters{
+        .gen_budget_exhausted = true,
+        .gen_node_capped_passes = 1,
+        .gen_last_phase = 1,
+        .gen_last_depth = 4,
+        .gen_core_depth_done = 2,
+    };
+    const detail = (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .budget_exhausted,
+        &counters,
+        gen,
+    )).?;
+    defer std.testing.allocator.free(detail);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "every depth up to") == null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (budget: 12)") != null);
+}
+
 test "auto? budget truncation past every core depth suggests more depth" {
     // `add_suc_right`'s shape: the core phases searched depths 1–6 clean,
     // then the budget died in the constrained-MP tail, which restarts at

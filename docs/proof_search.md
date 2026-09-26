@@ -276,6 +276,11 @@ distinguishes the cases, because they call for different responses:
   phase) …"** — same inconclusiveness, but the bound that tripped was
   the per-phase validation budget rather than the global one; raise it
   per call with `auto? (fuel: 8192)`.
+- **"no proof found, but the search reached its limit of N subgoals per
+  pass …"** — no budget ran out, but in some passes the search stopped
+  expanding new subgoals at its per-pass cap, so part of the space was
+  never explored and the miss is inconclusive. Raise the cap per call with
+  `auto? (nodes: 512)`.
 - **"forward saturation stopped at its bounds …"** — the theory's
   `@auto forward` rules derived facts up to a bound without reaching a
   fixpoint, so the derived-fact pool itself is incomplete.
@@ -336,8 +341,9 @@ Rules of thumb:
 - Raise **`budget`** (or `fuel`, if that is the bound the report named)
   when the report says the search was *truncated* — it never finished
   looking at the depth it was already exploring.
-- `nodes` rarely needs touching; the report will steer you to the other
-  three first.
+- Raise **`nodes`** when the report says the search *reached its limit of
+  subgoals per pass*: the budget was not the bound, the per-pass subgoal
+  cap was.
 
 A typo'd parameter name or an out-of-range value gets its own error
 diagnostic immediately (no search needed), and is otherwise ignored —

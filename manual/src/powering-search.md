@@ -126,10 +126,11 @@ took the pool variable `u` as the witness for `?t`. Without the annotation, the
 same search fails:
 
 ```
-auto? search failed: no proof found within depth 6. The search space was
-exhausted (25 applications validated: 0 accepted, 25 rejected), so only a
-deeper proof can exist — try 'auto? (depth: 8)'. Most-tried rules: ax
-(25 tried, 0 accepted).
+auto? search failed: no proof found, but the search reached its limit of 256
+subgoals per pass in 1 of its passes, so part of the search space was never
+explored; 97 applications validated (55 accepted). A proof may still exist —
+try 'auto? (nodes: 512)'. Most-tried rules: not_intro (42 tried, 42
+accepted), ax (25 tried, 2 accepted), all_intro (19 tried, 0 accepted).
 ```
 
 Use `@auto backward` for **introduction and witness** rules that build a goal

@@ -2449,6 +2449,7 @@ const MissCause = enum {
     fuel,
     stack,
     forward,
+    node_cap,
     no_generation,
 
     fn of(counters: *const Search.SearchCounters, max_depth: usize) MissCause {
@@ -2461,6 +2462,7 @@ const MissCause = enum {
         }
         if (counters.recursive_budget_exhausted) return .fuel;
         if (counters.forward_saturation_exhausted) return .forward;
+        if (counters.gen_node_capped_passes > 0) return .node_cap;
         if (counters.gen_last_phase == 0) return .no_generation;
         return .exhausted;
     }
@@ -2473,6 +2475,7 @@ const MissCause = enum {
             .fuel => "fuel",
             .stack => "stack",
             .forward => "forward",
+            .node_cap => "node-cap",
             .no_generation => "no-gen",
         };
     }

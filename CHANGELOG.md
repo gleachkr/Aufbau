@@ -75,6 +75,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A failed `auto?` no longer claims it searched the whole space when its
+  per-pass subgoal limit (`nodes`) cut it short. It used to say "the search
+  space was exhausted" and suggest more depth. It now names the limit and
+  suggests `auto? (nodes: …)`. On the search benchmark, 132 of the 137
+  misses reported as exhausted had hit this limit.
 - A line whose rule conclusion differs from it only under a definition that
   drops the differing argument is now accepted. With `def K (a b) = a`, a
   rule concluding `pair (K y x) x` proves `pair (K a b) c` with `x := c`,
