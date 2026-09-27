@@ -73,6 +73,10 @@ const BenchOptions = struct {
     fwd_tuples: usize = 0,
     /// Print every frontier line result, not just misses/slow lines.
     verbose: bool = false,
+    /// Re-run each theorem's first frontier miss with the retry its failure
+    /// report suggests (`Search.miss.retryFor`) and print whether it finds
+    /// the proof.
+    retry_misses: bool = false,
     /// Breadth lines whose warm search exceeds this are flagged SLOW.
     slow_ms: u64 = 2,
     /// Print a key-counter line (tryCandidate calls, rejects, top rules by
@@ -1428,6 +1432,10 @@ fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
             );
             continue;
         }
+        if (std.mem.eql(u8, arg, "--retry-misses")) {
+            options.retry_misses = true;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--require-no-miss")) {
             options.require_no_miss = true;
             continue;
@@ -1480,7 +1488,8 @@ fn printUsage() !void {
             "       [--exclude=TEXT[,TEXT...]]\n" ++
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
-            "       [--require-no-miss] [--no-search-memo] [--no-deep-member-prune]\n" ++
+            "       [--require-no-miss] [--retry-misses]\n" ++
+            "       [--no-search-memo] [--no-deep-member-prune]\n" ++
             "       [--no-persist-negative]\n" ++
             "       [--no-shape-cache]\n" ++
             "       [--gen-nodes=N] [--gen-fuel=N] [--global-budget=TICKS]\n" ++
@@ -1491,6 +1500,8 @@ fn printUsage() !void {
             "or proof-tail truncation (depth) over the real developments;\n" ++
             "default corpus is the major tests/proof_cases/ pairs and\n" ++
             "--filter matches theorem names; --exclude skips them.\n" ++
+            "--retry-misses re-runs each depth miss with the retry its\n" ++
+            "failure report suggests and prints whether that finds it.\n" ++
             "\n" ++
             "sweep mode (META_STRESS.md theory #4): synthesize a distractor\n" ++
             "theory parametrized by N and plot search time vs N to catch\n" ++
@@ -2436,12 +2447,11 @@ const BreadthStats = struct {
 /// *failure* latency — the search that burns the full budget proving nothing.
 const DepthRunStatus = enum { found, miss, err };
 
-/// Which bound ended a MISS, mirroring the precedence of the user-facing
-/// failure report (`search/source.zig` `searchStatus`/`buildStatusDetail`).
-/// A budget truncation is split by where it died: `budget_deep` when every
-/// core ladder depth below `max_depth` finished clean (the proof may need
-/// more depth, not only more budget), `budget_shallow` when the budget died
-/// before the ladder reached the depth limit (more depth cannot help).
+/// Which bound ended a MISS: the first limit `Search.miss.MissReport` shows,
+/// in the precedence stack guard, budget, fuel, forward saturation, node cap.
+/// A budget truncation is split by how far the ladder got: `budget_deep`
+/// when the core got through every depth below `max_depth` (the proof may
+/// need more depth, not only more budget), `budget_shallow` otherwise.
 const MissCause = enum {
     exhausted,
     budget_deep,
@@ -2453,17 +2463,19 @@ const MissCause = enum {
     no_generation,
 
     fn of(counters: *const Search.SearchCounters, max_depth: usize) MissCause {
-        if (counters.stack_guard_exhausted) return .stack;
-        if (counters.gen_budget_exhausted) {
-            return if (counters.gen_core_depth_done + 1 >= max_depth)
+        const report = Search.miss.MissReport.of(counters);
+        switch (report.stop) {
+            .stack => return .stack,
+            .budget => return if (report.searchedBelowDepthLimit(max_depth))
                 .budget_deep
             else
-                .budget_shallow;
+                .budget_shallow,
+            .none => {},
         }
-        if (counters.recursive_budget_exhausted) return .fuel;
-        if (counters.forward_saturation_exhausted) return .forward;
-        if (counters.gen_node_capped_passes > 0) return .node_cap;
-        if (counters.gen_last_phase == 0) return .no_generation;
+        if (report.fuel) return .fuel;
+        if (report.forward) return .forward;
+        if (report.nodes) return .node_cap;
+        if (!report.generation_ran) return .no_generation;
         return .exhausted;
     }
 
@@ -3109,6 +3121,7 @@ fn runDepthFixture(
         var fail_cause: MissCause = .exhausted;
         var fail_last_phase: usize = 0;
         var fail_last_depth: usize = 0;
+        var retry_note: []const u8 = "";
         var frontier_ticks: RunTicks = .{};
         var fail_ticks: RunTicks = .{};
         var k: usize = 0;
@@ -3204,6 +3217,17 @@ fn runDepthFixture(
                 fail_last_phase = run.counters.gen_last_phase;
                 fail_last_depth = run.counters.gen_last_depth;
                 stats.miss_causes[@intFromEnum(fail_cause)] += 1;
+                if (options.retry_misses) {
+                    retry_note = try retryMissNote(
+                        allocator,
+                        arena,
+                        mm0_src,
+                        spliced,
+                        human,
+                        options,
+                        &run.counters,
+                    );
+                }
                 break;
             }
             frontier = k;
@@ -3258,6 +3282,7 @@ fn runDepthFixture(
                         fail_last_depth,
                         options.max_depth,
                     );
+                    try writer.writeAll(retry_note);
                     try writer.writeAll(") ");
                     try printDurationCompact(writer, fail_ns);
                     try printTicksCompact(writer, fail_ticks);
@@ -3301,6 +3326,38 @@ fn runDepthFixture(
     }
     try printDepthSummary(writer, fixture.name, stats);
     return stats;
+}
+
+/// ` [retry <params> FOUND|miss t=…]`: re-run one miss, on the same
+/// instance, with the retry its failure report suggests
+/// (`Search.miss.retryFor`), or ` [retry none]` when it suggests none.
+fn retryMissNote(
+    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    mm0_src: []const u8,
+    spliced: Spliced,
+    human: []const u8,
+    options: BenchOptions,
+    counters: *const Search.SearchCounters,
+) ![]const u8 {
+    const gen = frontierGenerateOptions(options);
+    const retry = Search.miss.retryFor(Search.miss.MissReport.of(counters), gen) orelse
+        return " [retry none]";
+    var out = std.ArrayListUnmanaged(u8){};
+    const w = out.writer(arena);
+    try w.writeAll(" [retry ");
+    try retry.writeParams(w);
+    var retried = options;
+    if (retry.depth) |v| retried.max_depth = @intCast(v);
+    if (retry.nodes) |v| retried.gen_nodes = @intCast(v);
+    if (retry.fuel) |v| retried.gen_fuel = @intCast(v);
+    if (retry.budget) |v| retried.global_budget = v * Search.tunables.ticks_per_budget_unit;
+    const run = runFrontierSearch(allocator, arena, mm0_src, spliced, human, retried);
+    try w.print(" {s} t={d:.0}M]", .{
+        if (run.err != null) "err" else if (run.found) "FOUND" else "miss",
+        @as(f64, @floatFromInt(RunTicks.of(&run.counters).weighted())) / 1e6,
+    });
+    return out.items;
 }
 
 /// ` <cause> d<last>/<max>`: the bound that ended a miss and the ladder depth

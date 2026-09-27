@@ -902,6 +902,55 @@ test "LSP placeholder status diagnostics report a search miss as error" {
     ));
 }
 
+test "LSP code action offers a retry with raised limits after an auto? miss" {
+    const mm0_uri = "file:///tmp/lsp-retry-miss.mm0";
+    const proof_uri = "file:///tmp/lsp-retry-miss.auf";
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ bot $ by auto? (depth: 1)
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri,
+        \\provable sort wff;
+        \\term top: wff;
+        \\term bot: wff;
+        \\axiom top_i: $ top $;
+        \\theorem main: $ top $;
+    , 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const actions = try expectCodeActionItems(
+        try handler.@"textDocument/codeAction"(
+            arena_state.allocator(),
+            try codeActionParamsAt(proof_uri, proof_text, "auto?"),
+        ),
+    );
+    // The search exhausted depth 1, so the retry raises depth and, since a
+    // deeper search spends more, the budget with it.
+    const action = codeActionWithReplacement(
+        actions,
+        proof_uri,
+        "auto? (depth: 3, budget: 14)",
+    ) orelse return error.MissingRetryCodeAction;
+    try std.testing.expectEqualStrings(
+        "Retry with depth: 3, budget: 14",
+        action.title,
+    );
+    const edit = codeActionSingleEdit(action, proof_uri) orelse {
+        return error.ExpectedCodeActionEdit;
+    };
+    try expectRangeText(proof_text, edit.range, "auto? (depth: 1)");
+}
+
 test "LSP placeholder diagnostics report invalid search parameters" {
     const mm0_uri = "file:///tmp/lsp-status-params.mm0";
     const proof_uri = "file:///tmp/lsp-status-params.auf";

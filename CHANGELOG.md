@@ -65,13 +65,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   and skips the rule when the result cannot match the goal. In the
   Martin-Löf example, where substitution is such a head, this lets `auto?`
   find `add_suc_right` at greater depth.
-- When `auto?` runs out of budget after searching every depth up to its
-  limit, the report now says so and suggests more depth first. Before, it
-  suggested only more budget. It named the depth of the last retry pass,
-  which starts again at depth 1, so it read like "at depth 2 of 6"
-  even though every depth up to 6 had been searched. For such a
-  goal in the Martin-Löf example, doubling the budget still missed, while
-  `auto? (depth: 8)` found the proof.
+- A failed `auto?` now names every limit that cut it short and suggests
+  raising them together with the budget, for example
+  `auto? (nodes: 512, fuel: 8192, budget: 14)`. Editors offer the same
+  retry as a **Retry with …** code action on the placeholder. Before, the
+  report named one limit and suggested raising only that one, but about
+  half of the misses that a limit cut short had hit more than one. On the
+  search benchmark, re-running each of 282 misses with the suggested retry
+  found 26 of the missed proofs, against 10 for the old advice, and every
+  proof the old advice found. In the additive FOL example it found all 8
+  misses, most of them proofs just deeper than the depth limit.
 
 ### Fixed
 
@@ -80,9 +83,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   the others, each of which walked back into the same limit.
 - A failed `auto?` no longer claims it searched the whole space when its
   per-pass subgoal limit (`nodes`) cut it short. It used to say "the search
-  space was exhausted" and suggest more depth. It now names the limit and
-  suggests `auto? (nodes: …)`. On the search benchmark, 132 of the 137
-  misses reported as exhausted had hit this limit.
+  space was exhausted" and suggest more depth. It now names the limit. On
+  the search benchmark, 132 of the 137 misses reported as exhausted had hit
+  this limit.
 - A line whose rule conclusion differs from it only under a definition that
   drops the differing argument is now accepted. With `def K (a b) = a`, a
   rule concluding `pair (K y x) x` proves `pair (K a b) c` with `x := c`,

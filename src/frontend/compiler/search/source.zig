@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("./types.zig");
 const tunables = @import("./tunables.zig");
+const miss = @import("./miss.zig");
 const ConversionSearch = @import("./conversion.zig");
 const timer = @import("./timer.zig");
 const apply_mod = @import("./apply.zig");
@@ -465,6 +466,19 @@ pub fn suggestionsAtSourceOffset(
                 options.counters.?,
                 options.generate,
             );
+            if (is_auto) {
+                if (miss.retryFor(
+                    miss.MissReport.of(options.counters.?),
+                    options.generate,
+                )) |retry| {
+                    suggestions.retry = try retrySuggestion(
+                        work,
+                        proof_src,
+                        target_application,
+                        retry,
+                    );
+                }
+            }
         }
         // `suggestions` lives on the work arena; hand the caller an owned copy.
         return try copyOutSuggestions(allocator, suggestions);
@@ -693,21 +707,14 @@ fn buildConversionDetail(
 }
 
 /// Derive the user-facing outcome of a completed search: found beats
-/// everything; an empty result is a definitive miss unless one of the
-/// counters' exhaustion flags shows a budget truncated the search first.
+/// everything; an empty result is a definitive miss unless a limit cut the
+/// search short first (`miss.MissReport.truncated`).
 fn searchStatus(
     items_len: usize,
     counters: *const types.SearchCounters,
 ) types.SearchStatus {
     if (items_len > 0) return .found;
-    if (counters.gen_budget_exhausted or
-        counters.recursive_budget_exhausted or
-        counters.stack_guard_exhausted or
-        counters.forward_saturation_exhausted or
-        counters.gen_node_capped_passes > 0)
-    {
-        return .budget_exhausted;
-    }
+    if (miss.MissReport.of(counters).truncated()) return .budget_exhausted;
     return .miss;
 }
 
@@ -719,14 +726,13 @@ const ladder_phase_names = [_][]const u8{
     "constrained modus ponens",
 };
 
-/// Elaborate a failed search into the user-facing detail string: which bound
-/// truncated it (per-call work budget vs. per-phase fuel vs. forward
-/// saturation), how far the generation ladder got, how many candidates were
-/// validated vs. accepted, and — since every number is actionable — the
-/// concrete per-call parameter to try next (`auto? (depth: 8)`). Built on the
-/// caller's allocator (the per-call work arena; `copyOutSuggestions` deep-
-/// copies it out). Purely observational: reads the same counters the search
-/// already fills, never influences it.
+/// Elaborate a failed search into the user-facing detail string: which
+/// limits cut it short, how far the generation ladder got, how many
+/// candidates were validated vs. accepted, and the per-call parameters to
+/// raise together (`miss.retryFor`). Built on the caller's allocator (the
+/// per-call work arena; `copyOutSuggestions` deep-copies it out). Purely
+/// observational: reads the same counters the search already fills, never
+/// influences it.
 pub fn buildStatusDetail(
     allocator: std.mem.Allocator,
     keyword: []const u8,
@@ -742,10 +748,11 @@ pub fn buildStatusDetail(
     const validated = counters.full_try_candidate_calls;
     const accepted = counters.accepted_candidates;
     const rejected = counters.rejected_candidates_after_validation;
-    // The ladder records the cell it is in as each pass starts, so a nonzero
-    // phase means recursive generation actually ran (an `exact?`, an open
-    // inline slot, or a disabled generation permit leaves it 0).
-    const generation_ran = is_auto and counters.gen_last_phase != 0;
+    const report = miss.MissReport.of(counters);
+    // Only `auto?` generates (an `exact?`, an open inline slot, or a
+    // disabled generation permit leaves the ladder unrun).
+    const generation_ran = is_auto and report.generation_ran;
+    const retry: ?miss.Retry = if (is_auto) miss.retryFor(report, gen) else null;
 
     switch (status) {
         .found => return null,
@@ -754,17 +761,12 @@ pub fn buildStatusDetail(
                 try w.print(
                     "no proof found within depth {d}. The search space was " ++
                         "exhausted ({d} applications validated: {d} " ++
-                        "accepted, {d} rejected), so only a deeper proof " ++
-                        "can exist — try '{s} (depth: {d})'.",
-                    .{
-                        gen.max_depth,
-                        validated,
-                        accepted,
-                        rejected,
-                        keyword,
-                        @min(gen.max_depth + 2, tunables.max_depth_value),
-                    },
+                        "accepted, {d} rejected), so a proof, if one " ++
+                        "exists, is deeper or needs a rule the search " ++
+                        "cannot use backward here.",
+                    .{ gen.max_depth, validated, accepted, rejected },
                 );
+                if (retry) |r| try writeRetryAdvice(w, keyword, r, false);
             } else {
                 try w.print(
                     "no rule application closes this goal from existing " ++
@@ -783,7 +785,7 @@ pub fn buildStatusDetail(
             }
         },
         .budget_exhausted => {
-            if (counters.stack_guard_exhausted) {
+            if (report.stop == .stack) {
                 // No user-tunable parameter raises this bound (it protects
                 // the process stack itself), so the actionable advice is to
                 // shrink the search, not to grow a budget.
@@ -799,112 +801,76 @@ pub fn buildStatusDetail(
                         gen.max_depth,
                     },
                 );
-            } else if (counters.gen_budget_exhausted) {
-                // Whole-call weighted-tick cap: report consumption in the
-                // `budget` parameter's unit (billions of ticks ≈ seconds of
-                // calibrated work) and suggest roughly doubling it.
-                const limit = gen.global_budget orelse 0;
-                const limit_units = std.math.divCeil(
-                    u64,
-                    limit,
-                    tunables.ticks_per_budget_unit,
-                ) catch unreachable;
-                const budget_hint = std.math.clamp(
-                    limit_units * 2,
-                    1,
-                    tunables.max_budget_value,
-                );
-                // Every depth below the limit finished clean in the core
-                // phases, so the proof may be deeper than the ladder looks:
-                // lead with depth. The last cell may sit at a shallow depth
-                // only because a retry pass (the tails, a seeded or cut-free
-                // re-run) restarts at depth 1 — say so, or "at depth 2 of 6"
-                // reads as if depth were nowhere near the problem.
-                const core_done = counters.gen_core_depth_done;
-                const deeper = @min(gen.max_depth + 2, tunables.max_depth_value);
-                if (core_done + 1 >= gen.max_depth and deeper > gen.max_depth) {
+            } else {
+                // Every limit that was hit, not just the first: they bind
+                // together, and naming one sends the author from limit to
+                // limit.
+                try w.writeAll("the search was cut short: ");
+                var first = true;
+                if (report.stop == .budget) {
+                    first = false;
+                    // The call ends where the budget runs out, so the last
+                    // cell started is the one that tripped it.
                     try w.print(
-                        "every depth up to {d} was searched without finding " ++
-                            "a proof; the per-call work budget (~{d}s of " ++
-                            "work) then ran out during {s}{s} at depth {d} " ++
-                            "of {d}; {d} applications validated ({d} " ++
-                            "accepted). The proof may be deeper — try " ++
-                            "'{s} (depth: {d})' — or give the search more " ++
-                            "room with '{s} (budget: {d})'.",
+                        "the per-call work budget (~{d}s of work) ran out " ++
+                            "during {s} at depth {d} of {d}",
                         .{
-                            core_done,
-                            limit_units,
+                            std.math.divCeil(
+                                u64,
+                                gen.global_budget orelse 0,
+                                tunables.ticks_per_budget_unit,
+                            ) catch unreachable,
                             ladderPhaseName(counters.gen_last_phase),
-                            if (counters.gen_last_depth <= core_done)
-                                " (a retry pass)"
-                            else
-                                "",
                             counters.gen_last_depth,
                             gen.max_depth,
-                            validated,
-                            accepted,
-                            keyword,
-                            deeper,
-                            keyword,
-                            budget_hint,
                         },
                     );
-                } else try w.print(
-                    "stopped by the per-call work budget (~{d}s of work) " ++
-                        "during {s} at depth {d} of {d}; {d} applications " ++
-                        "validated ({d} accepted). A proof may still " ++
-                        "exist — try '{s} (budget: {d})', or 'budget: 0' " ++
-                        "for no cap.",
-                    .{
-                        limit_units,
-                        ladderPhaseName(counters.gen_last_phase),
-                        counters.gen_last_depth,
-                        gen.max_depth,
-                        validated,
-                        accepted,
-                        keyword,
-                        budget_hint,
-                    },
-                );
-            } else if (counters.recursive_budget_exhausted) {
+                }
+                if (report.nodes) {
+                    if (!first) try w.writeAll("; ");
+                    first = false;
+                    const passes = counters.gen_node_capped_passes;
+                    try w.print(
+                        "the limit of {d} subgoals per pass was reached in " ++
+                            "{d} pass{s}",
+                        .{ gen.max_nodes, passes, if (passes == 1) "" else "es" },
+                    );
+                }
+                if (report.fuel) {
+                    if (!first) try w.writeAll("; ");
+                    first = false;
+                    try w.print(
+                        "a search phase ran out of fuel ({d} candidate " ++
+                            "validations per phase)",
+                        .{gen.fuel},
+                    );
+                }
+                if (report.forward) {
+                    if (!first) try w.writeAll("; ");
+                    first = false;
+                    try w.writeAll(
+                        "forward saturation stopped before reaching a " ++
+                            "fixpoint, so the derived-fact pool is incomplete",
+                    );
+                }
                 try w.print(
-                    "a search phase ran out of fuel ({d} candidate " ++
-                        "validations per phase) during {s} at depth {d} " ++
-                        "of {d}. A proof may still exist — try " ++
-                        "'{s} (fuel: {d})'.",
-                    .{
-                        gen.fuel,
-                        ladderPhaseName(counters.gen_last_phase),
-                        counters.gen_last_depth,
-                        gen.max_depth,
-                        keyword,
-                        @min(gen.fuel * 2, tunables.max_fuel_value),
-                    },
+                    ". {d} applications validated ({d} accepted).",
+                    .{ validated, accepted },
                 );
-            } else if (counters.forward_saturation_exhausted) {
-                try w.writeAll(
-                    "forward saturation stopped at its bounds before " ++
-                        "reaching a fixpoint, so the derived-fact pool is " ++
-                        "incomplete and a proof may still exist.",
-                );
-            } else {
-                // Only the per-pass subgoal cap cut the search short: no
-                // budget ran out, but some subgoals were never expanded.
-                try w.print(
-                    "no proof found, but the search reached its limit of " ++
-                        "{d} subgoals per pass in {d} of its passes, so " ++
-                        "part of the search space was never explored; " ++
-                        "{d} applications validated ({d} accepted). A " ++
-                        "proof may still exist — try '{s} (nodes: {d})'.",
-                    .{
-                        gen.max_nodes,
-                        counters.gen_node_capped_passes,
-                        validated,
-                        accepted,
-                        keyword,
-                        @min(gen.max_nodes * 2, tunables.max_nodes_value),
-                    },
-                );
+                if (generation_ran and
+                    report.searchedBelowDepthLimit(gen.max_depth))
+                {
+                    try w.print(
+                        " Every depth below {d} was searched, so the " ++
+                            "proof may also be deeper.",
+                        .{gen.max_depth},
+                    );
+                }
+                if (retry) |r| {
+                    try writeRetryAdvice(w, keyword, r, true);
+                } else {
+                    try w.writeAll(" A proof may still exist.");
+                }
             }
         },
     }
@@ -915,6 +881,73 @@ pub fn buildStatusDetail(
     try appendTopRuleAttempts(w, counters);
 
     return try buf.toOwnedSlice(allocator);
+}
+
+/// " Try 'auto? (nodes: 512, budget: 14)'." — on a cut-short miss, with
+/// the reason to raise the limits together and what to try if that fails.
+fn writeRetryAdvice(
+    w: anytype,
+    keyword: []const u8,
+    retry: miss.Retry,
+    cut_short: bool,
+) !void {
+    if (cut_short) {
+        try w.writeAll(
+            " These limits share one work budget, so raise them together:",
+        );
+    }
+    try w.print(" {s} '{s} (", .{ if (cut_short) "try" else "Try", keyword });
+    try retry.writeParams(w);
+    try w.writeAll(")'.");
+    if (cut_short) {
+        try w.writeAll(
+            " A larger search finds only some of the proofs a smaller " ++
+                "one misses; if it fails too, try proving an intermediate " ++
+                "lemma first.",
+        );
+    }
+}
+
+/// The code action for a retry: the placeholder with its parameter list
+/// rewritten to carry the raised limits. Bindings and every parameter the
+/// retry does not set are kept verbatim. Requesting code actions again on
+/// the edited placeholder runs the larger search.
+fn retrySuggestion(
+    allocator: std.mem.Allocator,
+    proof_src: []const u8,
+    application: RuleApplication,
+    retry: miss.Retry,
+) !SourceSuggestion {
+    var params = std.ArrayListUnmanaged(u8){};
+    defer params.deinit(allocator);
+    try retry.writeParams(params.writer(allocator));
+
+    var text = std.ArrayListUnmanaged(u8){};
+    errdefer text.deinit(allocator);
+    const w = text.writer(allocator);
+    try w.print("{s} (", .{application.rule_name});
+    for (application.arg_bindings) |binding| {
+        try w.print("{s}, ", .{proof_src[binding.span.start..binding.span.end]});
+    }
+    for (application.search_params) |param| {
+        if (retry.sets(param.name)) continue;
+        try w.print("{s}, ", .{proof_src[param.span.start..param.span.end]});
+    }
+    try w.print("{s})", .{params.items});
+
+    return .{
+        .title = try std.fmt.allocPrint(
+            allocator,
+            "Retry with {s}",
+            .{params.items},
+        ),
+        .replacement = try text.toOwnedSlice(allocator),
+        .replace_span = .{
+            .start = application.rule_span.start,
+            .end = (application.binding_list_span orelse
+                application.rule_span).end,
+        },
+    };
 }
 
 fn ladderPhaseName(phase_1based: usize) []const u8 {
@@ -2026,12 +2059,24 @@ fn copyOutSuggestions(
         try allocator.dupe(u8, detail)
     else
         null;
+    errdefer if (status_detail) |detail| allocator.free(detail);
+    var retry: ?SourceSuggestion = null;
+    if (src.retry) |item| {
+        const title = try allocator.dupe(u8, item.title);
+        errdefer allocator.free(title);
+        retry = .{
+            .title = title,
+            .replacement = try allocator.dupe(u8, item.replacement),
+            .replace_span = item.replace_span,
+        };
+    }
     return .{
         .allocator = allocator,
         .items = items,
         .target_span = src.target_span,
         .status = src.status,
         .status_detail = status_detail,
+        .retry = retry,
     };
 }
 

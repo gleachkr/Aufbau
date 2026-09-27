@@ -40,13 +40,15 @@ repeated, the last occurrence wins.
 | Parameter | Default | Range | Meaning |
 |---|---|---|---|
 | `depth` | 6 | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. Deepening stops at the shallowest depth that closes the goal, so raising it never changes a proof that was already found. `@auto eager` steps are exempt. |
-| `nodes` | 256 | 1–1 000 000 | Per-depth budget of distinct generated sub-goal solves, reset at each deepening pass. Raise it when a failure report names this limit. |
+| `nodes` | 256 | 1–1 000 000 | Per-depth budget of distinct generated sub-goal solves, reset at each deepening pass. |
 | `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase |
 | `budget` | ≈6 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 6.3 units). `budget: 0` is legal and disables the cap entirely. |
 
-When `auto?` fails, the failure report says which limit it hit and suggests a
-concrete retry, e.g. `auto? (depth: 8)` — start from that suggestion rather
-than guessing.
+When `auto?` fails, the failure report names every limit it hit and suggests
+one retry that raises them together with the budget, e.g.
+`auto? (nodes: 512, fuel: 8192, budget: 14)`. Editors offer the same retry as a
+**Retry with …** code action. Start from that suggestion: the limits share one
+work budget, so raising one of them alone rarely helps.
 
 ## `conversion?` parameters
 

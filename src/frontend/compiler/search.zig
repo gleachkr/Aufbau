@@ -26,6 +26,7 @@ pub const SearchStatus = root.SearchStatus;
 pub const SearchPlaceholder = root.SearchPlaceholder;
 pub const searchPlaceholders = root.searchPlaceholders;
 pub const tunables = root.tunables;
+pub const miss = root.miss;
 pub const Span = root.Span;
 pub const GenerateOptions = root.GenerateOptions;
 pub const weightedTicks = root.weightedTicks;

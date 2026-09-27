@@ -6,6 +6,7 @@ const ProofScript = helpers.ProofScript;
 const apply = helpers.apply;
 const exact = helpers.exact;
 const tunables = helpers.tunables;
+const miss_mod = helpers.miss;
 const tunable_chain_mm0 = helpers.tunable_chain_mm0;
 
 fn testParam(name: []const u8, value: u64) ProofScript.SearchParam {
@@ -157,8 +158,42 @@ test "auto? per-call depth parameter narrows one search" {
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "no proof found within depth 1") != null,
     );
+    // Raising depth spends more of the shared budget, so the budget grows
+    // with it (the default ~6.3s rounds up to 7 units).
     try std.testing.expect(
-        std.mem.indexOf(u8, detail, "auto? (depth: 3)") != null,
+        std.mem.indexOf(u8, detail, "Try 'auto? (depth: 3, budget: 14)'") != null,
+    );
+    // The retry edit rewrites the placeholder's own parameters.
+    const retry = narrowed.retry orelse return error.MissingRetry;
+    try std.testing.expectEqualStrings("Retry with depth: 3, budget: 14", retry.title);
+    try std.testing.expectEqualStrings("auto? (depth: 3, budget: 14)", retry.replacement);
+}
+
+test "auto? retry keeps the parameters it does not raise" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ R $ by auto? (fuel: 4096, depth: 1)
+    ;
+    var narrowed = try tunableChainSuggestions(
+        &arena,
+        proof_src,
+        .{ .generate = .{ .enabled = true }, .status_detail = true },
+    );
+    defer narrowed.deinit();
+    try std.testing.expectEqual(types.SearchStatus.miss, narrowed.status);
+    const retry = narrowed.retry orelse return error.MissingRetry;
+    try std.testing.expectEqualStrings(
+        "auto? (fuel: 4096, depth: 3, budget: 14)",
+        retry.replacement,
+    );
+    // The edit covers the keyword through the closing parenthesis.
+    try std.testing.expectEqualStrings(
+        "auto? (fuel: 4096, depth: 1)",
+        proof_src[retry.replace_span.start..retry.replace_span.end],
     );
 }
 
@@ -212,6 +247,8 @@ test "exact? miss detail reports pool coverage and suggests auto?" {
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "auto? can additionally synthesize") != null,
     );
+    // exact? takes no parameters, so there is nothing to retry with.
+    try std.testing.expectEqual(@as(?types.SourceSuggestion, null), miss.retry);
 }
 
 test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
@@ -236,9 +273,11 @@ test "auto? fuel exhaustion is reported as truncation with a fuel hint" {
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "ran out of fuel") != null,
     );
-    try std.testing.expect(
-        std.mem.indexOf(u8, detail, "auto? (fuel: 2)") != null,
-    );
+    // Fuel doubles, and the budget grows with it.
+    try std.testing.expect(std.mem.indexOf(u8, detail, "fuel: 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 14)'") != null);
+    const retry = starved.retry orelse return error.MissingRetry;
+    try std.testing.expect(std.mem.indexOf(u8, retry.replacement, "fuel: 2") != null);
 }
 
 test "auto? node-cap truncation is reported as truncation with a nodes hint" {
@@ -263,106 +302,128 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "limit of 1 subgoals per pass") != null,
     );
-    try std.testing.expect(
-        std.mem.indexOf(u8, detail, "auto? (nodes: 2)") != null,
-    );
+    try std.testing.expect(std.mem.indexOf(u8, detail, "nodes: 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "budget: 14)'") != null);
     try std.testing.expect(
         std.mem.indexOf(u8, detail, "search space was exhausted") == null,
     );
 }
 
-test "auto? budget truncation does not claim node-capped depths were searched" {
-    // Depth 3 was node-capped, so `gen_core_depth_done` stops at 2 and the
-    // budget message must not say every depth up to the limit was searched.
+fn budgetDetail(counters: types.SearchCounters) ![]const u8 {
     const gen = types.GenerateOptions{
         .global_budget = 6 * tunables.ticks_per_budget_unit,
     };
-    const counters = types.SearchCounters{
+    return (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .budget_exhausted,
+        &counters,
+        gen,
+    )) orelse error.MissingStatusDetail;
+}
+
+test "auto? budget truncation names every limit that was hit" {
+    // The budget ran out in the core at depth 4, after node caps and a
+    // retired phase. Each limit is named, and each one that was hit is
+    // raised together with the budget; depth is not, since the core never
+    // got near the depth limit.
+    const detail = try budgetDetail(.{
         .gen_budget_exhausted = true,
-        .gen_node_capped_passes = 1,
+        .recursive_budget_exhausted = true,
+        .gen_node_capped_passes = 3,
         .gen_last_phase = 1,
         .gen_last_depth = 4,
         .gen_core_depth_done = 2,
-    };
-    const detail = (try source.buildStatusDetail(
-        std.testing.allocator,
-        "auto?",
-        true,
-        .budget_exhausted,
-        &counters,
-        gen,
-    )).?;
+    });
     defer std.testing.allocator.free(detail);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "every depth up to") == null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (budget: 12)") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "the per-call work budget (~6s of work) ran out during " ++
+            "non-splitting generation at depth 4 of 6",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "the limit of 256 subgoals per pass was reached in 3 passes",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "ran out of fuel (4096") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "try 'auto? (nodes: 512, fuel: 8192, budget: 12)'",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "depth: 8") == null);
 }
 
 test "auto? budget truncation past every core depth suggests more depth" {
-    // `add_suc_right`'s shape: the core phases searched depths 1–6 clean,
-    // then the budget died in the constrained-MP tail, which restarts at
-    // depth 1. The detail must lead with depth, and must not present the
-    // tail's depth as how far the search got.
-    const gen = types.GenerateOptions{
-        .global_budget = 6 * tunables.ticks_per_budget_unit,
-    };
-    const counters = types.SearchCounters{
+    // `add_suc_right`'s shape: the core searched depths 1–6 in full, then
+    // the budget ran out in the constrained-MP tail, where a pass also hit
+    // the node cap.
+    const detail = try budgetDetail(.{
         .gen_budget_exhausted = true,
+        .gen_node_capped_passes = 1,
         .gen_last_phase = 5,
         .gen_last_depth = 2,
         .gen_core_depth_done = 6,
-    };
-    const detail = (try source.buildStatusDetail(
-        std.testing.allocator,
-        "auto?",
-        true,
-        .budget_exhausted,
-        &counters,
-        gen,
-    )).?;
+    });
     defer std.testing.allocator.free(detail);
     try std.testing.expect(std.mem.indexOf(
         u8,
         detail,
-        "every depth up to 6 was searched",
+        "Every depth below 6 was searched",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
         detail,
-        "constrained modus ponens (a retry pass) at depth 2 of 6",
+        "try 'auto? (depth: 8, nodes: 512, budget: 12)'",
     ) != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (depth: 8)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (budget: 12)") != null);
 }
 
 test "auto? budget truncation before the depth limit suggests only budget" {
-    // The budget died in the core at depth 4 with depth 3 the deepest clean
-    // one: more depth cannot help, so the detail keeps the budget advice.
-    const gen = types.GenerateOptions{
-        .global_budget = 6 * tunables.ticks_per_budget_unit,
-    };
-    const counters = types.SearchCounters{
+    const detail = try budgetDetail(.{
         .gen_budget_exhausted = true,
         .gen_last_phase = 1,
         .gen_last_depth = 4,
         .gen_core_depth_done = 3,
-    };
-    const detail = (try source.buildStatusDetail(
-        std.testing.allocator,
-        "auto?",
-        true,
-        .budget_exhausted,
-        &counters,
-        gen,
-    )).?;
+    });
     defer std.testing.allocator.free(detail);
-    try std.testing.expect(std.mem.indexOf(
-        u8,
-        detail,
-        "stopped by the per-call work budget (~6s of work) during " ++
-            "non-splitting generation at depth 4 of 6",
-    ) != null);
-    try std.testing.expect(std.mem.indexOf(u8, detail, "auto? (budget: 12)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, detail, "try 'auto? (budget: 12)'") != null);
     try std.testing.expect(std.mem.indexOf(u8, detail, "depth: 8") == null);
+}
+
+test "miss retry is null when no parameter can help" {
+    const gen = types.GenerateOptions{};
+    // The stack guard protects the process stack; no parameter raises it.
+    try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
+        miss_mod.MissReport.of(&.{ .stack_guard_exhausted = true, .gen_last_phase = 1 }),
+        gen,
+    ));
+    // Generation never ran (an exact?-style miss).
+    try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
+        miss_mod.MissReport.of(&.{ .gen_budget_exhausted = true }),
+        gen,
+    ));
+    // A clean miss already at the depth maximum.
+    try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
+        miss_mod.MissReport.of(&.{ .gen_last_phase = 5, .gen_core_depth_done = 64 }),
+        .{ .max_depth = tunables.max_depth_value },
+    ));
+    // Only forward saturation was cut short, and no auto? parameter
+    // bounds it.
+    try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
+        miss_mod.MissReport.of(&.{ .forward_saturation_exhausted = true, .gen_last_phase = 5 }),
+        gen,
+    ));
+}
+
+test "miss retry leaves an uncapped budget uncapped" {
+    const retry = miss_mod.retryFor(
+        miss_mod.MissReport.of(&.{ .gen_node_capped_passes = 1, .gen_last_phase = 5 }),
+        .{ .global_budget = null },
+    ) orelse return error.MissingRetry;
+    try std.testing.expectEqual(miss_mod.Retry{ .nodes = 512 }, retry);
 }
 
 test "searchPlaceholders carries parsed search params" {

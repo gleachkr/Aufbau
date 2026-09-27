@@ -537,10 +537,9 @@ pub const SearchCounters = struct {
     gen_node_capped_passes: usize = 0,
     /// The deepest depth at which every core ladder phase (1–3) finished
     /// without a find, any exhaustion, or a node cap, maxed over ladder
-    /// runs; 0 = none.
-    /// On a budget-truncated miss, `gen_core_depth_done + 1 >= max_depth`
-    /// means every depth below the limit was searched, so the proof may
-    /// need more depth rather than more budget.
+    /// runs; 0 = none. `gen_core_depth_done + 1 >= max_depth` means every
+    /// depth below the limit was searched in full, so the proof may need
+    /// more depth (see `miss.zig`).
     gen_core_depth_done: usize = 0,
     rule_index_build_ns: u64 = 0,
     ref_index_build_ns: u64 = 0,
@@ -1227,6 +1226,11 @@ pub const SourceSuggestions = struct {
     /// built when `SourceSuggestionOptions.status_detail` is set (the LSP
     /// path); null otherwise. Owned by `allocator` when present.
     status_detail: ?[]const u8 = null,
+    /// After an `auto?` miss that larger limits might fix: the edit that
+    /// rewrites the placeholder's parameters to the raised values (see
+    /// `miss.retryFor`). Built alongside `status_detail`; null otherwise.
+    /// Owned by `allocator` when present.
+    retry: ?SourceSuggestion = null,
 
     pub fn deinit(self: *SourceSuggestions) void {
         for (self.items) |item| {
@@ -1235,6 +1239,10 @@ pub const SourceSuggestions = struct {
         }
         self.allocator.free(self.items);
         if (self.status_detail) |detail| self.allocator.free(detail);
+        if (self.retry) |retry| {
+            self.allocator.free(retry.title);
+            self.allocator.free(retry.replacement);
+        }
         self.* = undefined;
     }
 };

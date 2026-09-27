@@ -702,6 +702,8 @@ pub fn expectFirstExactRefs(
 
 pub const tunables = @import("../tunables.zig");
 
+pub const miss = @import("../miss.zig");
+
 // End-to-end fixture: `R` needs a two-level generated chain
 // (`qr [pq [p []]]`), `S` is unprovable.
 pub const tunable_chain_mm0 =

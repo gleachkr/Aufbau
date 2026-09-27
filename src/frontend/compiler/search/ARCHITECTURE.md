@@ -1136,6 +1136,7 @@ width is real.
 | `ref_index.zig` / `refs.zig` / `rule_index.zig` | candidate/ref indexing |
 | `fixture.zig` | theorem-prefix preparation and test setup (walks the `.mm0` through `pipeline/common.zig`'s shared statement helpers, recovering from broken earlier declarations like the analysis) |
 | `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome) + `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics) |
+| `miss.zig` | `MissReport` (which limits cut a failed search short, read once from its counters) + `retryFor` (the `auto?` parameters the failure report and its **Retry with …** code action suggest) |
 | `rank.zig` | candidate ranking |
 | `egraph.zig` | `conversion?` e-graph core: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation |
 | `egraph/alpha.zig` | alpha pairing scheduler (`collectAlphaMatches`): pairs `@conversion alpha` rule instances under a lexical renaming; its settled cache and watermarks live on the `EGraph` |

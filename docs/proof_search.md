@@ -251,39 +251,39 @@ A failed `auto?` is not one thing. The placeholder diagnostic
 distinguishes the cases, because they call for different responses:
 
 - **"no proof found within depth N. The search space was exhausted
-  (… validated: … accepted, … rejected) …"** — the search ran every
-  candidate it had, to completion, up to its depth limit. Within that
-  depth the answer is definitive: no proof exists over the current rules
-  and references. Only two things can change it: search *deeper*
-  (`auto? (depth: 8)` — see the next section), or make the space richer
-  (prove an intermediate lemma line for the pool, or enroll rules with
-  `@auto` annotations).
-- **"stopped by the per-call work budget (~Ns of work) during
-  `<phase>` at depth D of N …"** — the bounded work budget ran out
-  before the search completed, so the empty result is *inconclusive*: a
-  proof may exist just past where it stopped. The report names the
-  ladder phase and depth the budget died in. Raise the budget for this
-  one call (`auto? (budget: 13)`, roughly seconds of work; `budget: 0`
-  removes the cap) — or reduce the space with better annotations.
-- **"every depth up to N was searched without finding a proof; the
-  per-call work budget … then ran out during `<phase>` …"** — the
-  budget also ran out, but only after the main phases had searched every
-  depth up to the limit. The budget died in a later retry pass, marked
-  "(a retry pass)"; those restart at depth 1, so their depth is not how
-  deep the search got. The proof may simply be deeper than the limit:
-  try `auto? (depth: 8)` first, and more budget second.
-- **"a search phase ran out of fuel (N candidate validations per
-  phase) …"** — same inconclusiveness, but the bound that tripped was
-  the per-phase validation budget rather than the global one; raise it
-  per call with `auto? (fuel: 8192)`.
-- **"no proof found, but the search reached its limit of N subgoals per
-  pass …"** — no budget ran out, but in some passes the search stopped
-  expanding new subgoals at its per-pass cap, so part of the space was
-  never explored and the miss is inconclusive. Raise the cap per call with
-  `auto? (nodes: 512)`.
-- **"forward saturation stopped at its bounds …"** — the theory's
-  `@auto forward` rules derived facts up to a bound without reaching a
-  fixpoint, so the derived-fact pool itself is incomplete.
+  (… validated: … accepted, … rejected) …"**: the search ran every
+  candidate it had, to completion, up to its depth limit. Nothing it can
+  build within that depth closes the goal. That does not prove the goal
+  unprovable, since the search does not try every possible proof. The
+  report suggests a deeper retry, e.g. `Try 'auto? (depth: 8, budget: 14)'`;
+  the budget grows with the depth because a deeper search spends more.
+  If that fails too, make the space richer: prove an intermediate lemma
+  line for the pool, or enroll rules with `@auto` annotations.
+- **"the search was cut short: …"**: one or more limits stopped the
+  search before it finished, so the empty result is *inconclusive*. The
+  report names every limit that was hit, and usually there are several:
+  - *the per-call work budget (~Ns of work) ran out during `<phase>` at
+    depth D of N*: the whole call stopped there;
+  - *the limit of N subgoals per pass was reached in K passes*: those
+    passes stopped expanding new subgoals;
+  - *a search phase ran out of fuel*: that phase was retired early;
+  - *forward saturation stopped before reaching a fixpoint*: the
+    theory's `@auto forward` rules left the derived-fact pool incomplete.
+
+  If the main phases searched every depth below the limit in full, the
+  report adds "Every depth below N was searched", and the retry raises
+  depth too. The report then suggests raising every limit that was hit,
+  together with the budget, e.g.
+  `try 'auto? (nodes: 512, fuel: 8192, budget: 14)'`.
+- **"stopped by the call-stack guard …"**: one branch recursed deep
+  enough to risk the process stack. No parameter raises this guard; try
+  a smaller goal or prove an intermediate lemma first.
+
+In an editor, a failed `auto?` with a suggested retry also offers a
+**Retry with …** code action. It rewrites the placeholder's parameters to
+the suggested values, keeping its bindings and any other parameters;
+request code actions on the placeholder again to run the larger search.
+If that search fails too, its report suggests the next step up.
 
 Failure reports end with a **"Most-tried rules"** list — each entry
 shows how many times a rule was *tried* against how many attempts were
@@ -333,17 +333,17 @@ the ceiling there and nowhere else.
 
 Rules of thumb:
 
-- Raise **`depth`** when the report says the space was *exhausted*, or
-  that *every depth up to N was searched* before the budget ran out — the
-  proof, if any, is deeper than the ladder looked. Depth is the
-  exponential knob; go up in small steps and expect the miss case to get
-  slower.
-- Raise **`budget`** (or `fuel`, if that is the bound the report named)
-  when the report says the search was *truncated* — it never finished
-  looking at the depth it was already exploring.
-- Raise **`nodes`** when the report says the search *reached its limit of
-  subgoals per pass*: the budget was not the bound, the per-pass subgoal
-  cap was.
+- Start from the retry the failure report suggests rather than raising
+  one parameter. The limits share one work budget, and a miss usually hits
+  several: raising one alone mostly exposes the next, or spends the budget
+  before the search reaches the proof.
+- A larger search finds only some of the proofs a smaller one misses: on
+  the bench corpus the suggested retry found about one missed proof in
+  ten. If the retry fails too, an intermediate lemma or better `@auto`
+  annotations usually help more than a third, larger search.
+- Depth is the exponential knob; go up in small steps and expect the
+  miss case to get slower. `budget: 0` removes the cap entirely, for a
+  goal you are willing to wait on.
 
 A typo'd parameter name or an out-of-range value gets its own error
 diagnostic immediately (no search needed), and is otherwise ignored —

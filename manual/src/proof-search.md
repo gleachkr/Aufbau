@@ -114,9 +114,11 @@ When a search fails, the diagnostic explains why it stopped. **Exhausted**
 means it finished exploring the candidates available to its search
 strategies at the configured depth. It does not mean that the goal is
 unprovable. Try a greater depth, add useful references, or adjust the
-theory's search annotations. If search ran out of **budget** or **fuel**, it
-stopped before finishing that exploration. The report also lists the
-most-tried rules, which can reveal repeated unsuccessful attempts.
+theory's search annotations. If a limit such as the work **budget** cut the
+search short, it stopped before finishing that exploration. The report names
+every limit it hit and suggests a retry that raises them together, which
+editors also offer as a **Retry with …** code action. The report also lists
+the most-tried rules, which can reveal repeated unsuccessful attempts.
 
 You can allow more search work on a single line by passing parameters to
 that call:

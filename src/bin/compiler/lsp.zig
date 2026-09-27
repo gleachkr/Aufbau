@@ -1068,7 +1068,8 @@ pub const Handler = struct {
     }
 
     /// Return the search suggestions for the unit at `offset` (in the joined
-    /// proof text), serving the per-proof cache when every file's state
+    /// proof text), plus the retry edit after a miss that larger limits
+    /// might fix, serving the per-proof cache when every file's state
     /// matches and the offset falls within the cached result's placeholder
     /// span, and recomputing otherwise. The returned slice is owned by the
     /// cache entry (handler allocator) and stays valid until the entry is
@@ -1121,11 +1122,21 @@ pub const Handler = struct {
         // already short-circuited cheaply); just hand back the empty result.
         const target_span = suggestions.target_span orelse return suggestions.items;
 
+        // A miss that larger limits might fix also offers the retry: the
+        // placeholder rewritten with those limits, searched on the next
+        // request.
+        const actions = if (suggestions.retry) |retry|
+            try std.mem.concat(arena, Search.SourceSuggestion, &.{
+                suggestions.items,
+                &.{retry},
+            })
+        else
+            suggestions.items;
         const stored = try self.storeSearchSuggestions(
             proof_uri,
             states,
             target_span,
-            suggestions.items,
+            actions,
         );
 
         // A fresh search just concluded: record its outcome and re-publish the
