@@ -23,16 +23,26 @@ This file records notable user-facing changes to Aufbau. The project follows
 - The Martin-Löf example derives its equality shortcuts. Two substitution
   rules, `sb_ty_eq` and `sb_tm_eq`, say that substituting equal terms gives
   equal results, and `eq_tm_conv` converts an equation's type.
-  `eq_tm_to_Id`, `suc_eq`, `add_eq_congr`, `app_eq_left` and `app_eq_right`
+  `eq_tm_to_Id`, `suc_eq`, `add_eq`, `app_eq_left` and `app_eq_right`
   are now theorems proved from them, so their statements gained typing
   hypotheses such as `g ⊢ Ty A`.
 - The Martin-Löf example now proves that zero is not one:
   `zero_ne_one : g ⊢ zero_ne_one_p : (Id Nat zero (suc zero) → Empty)`. It
   adds an `Empty` type and a small universe `U` whose codes `El` decodes, and
   makes Bool's eliminator dependent (`bool_ind`). `bool_rec` is now a
-  definition over `bool_ind`, and `bool_elim` and the Bool computation rules
-  are theorems. The `const_ty` family is gone: `nat_rec`'s constant motive is
-  now plain `A`.
+  definition over `bool_ind`, and its typing and computation rules are
+  theorems. The `const_ty` family is gone: `nat_rec`'s constant motive is now
+  plain `A`.
+- The Martin-Löf example renames several lemmas after what they state:
+  `bool_elim`, `bool_beta_true` and `bool_beta_false` are now `bool_rec_ty`,
+  `bool_rec_true` and `bool_rec_false`, `id_ty` and `app_id_beta` are
+  `lam_id_ty` and `lam_id_beta`, and `add_eq_congr` is `add_eq`. It drops
+  `exchange`, which nothing used and which could not swap the last two
+  entries, and `pi_const_alpha`, `sb_ty_other` and `sb_tm_other`, which
+  other rules cover. `sb_ty_congr` now allows the substituted term to
+  mention the bound variable, like `sb_tm_congr`. New lemmas `arr_intro`,
+  `arr_beta`, `add_zero_left_path` and `add_suc_left_path` shorten the
+  proofs.
 - `auto?` wastes less time on rules that cannot match. When a context is
   not idempotent, a rule needing two entries after `g`
   no longer matches a goal context with one, even though each required
@@ -108,8 +118,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   variable, so renaming captured it. The Martin-Löf example proved
   `Id Nat (suc zero) zero`, and the FOL prelude proved `P y → ∀ y (P y)`.
   `lam_alpha`, `all_alpha` and `ex_alpha` now declare the body as depending
-  on the old variable only. `exchange` in the Martin-Löf examples likewise
-  let the moved entry's type mention its own variable; it no longer does.
+  on the old variable only. `exchange` in the Martin-Löf example likewise
+  let the moved entry's type mention its own variable; it has since been
+  removed.
   Theories copied from these examples should make the same changes.
 - `auto?` now proves goals that need a rule like `var` (`g , x : A ⊢ x : A`)
   on the last entry of a context with two or more entries, when that context

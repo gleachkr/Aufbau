@@ -554,6 +554,7 @@ pub fn build(b: *std.Build) void {
             "--require-no-miss",
         });
         if (guard.filter) |needle| run.addArg(b.fmt("--filter={s}", .{needle}));
+        if (guard.exclude) |list| run.addArg(b.fmt("--exclude={s}", .{list}));
         if (guard.max_depth) |d| run.addArg(b.fmt("--max-depth={d}", .{d}));
         if (guard.gen_nodes) |n| run.addArg(b.fmt("--gen-nodes={d}", .{n}));
         if (guard.gen_fuel) |f| run.addArg(b.fmt("--gen-fuel={d}", .{f}));
