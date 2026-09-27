@@ -204,7 +204,9 @@ Known exception / drift risk: several existing `auto?` scenarios still reference
 `tests/proof_cases/zermelo.mm0` and `zermelo_hilbert.mm0` (~2300 lines of
 shared theory). These predate this convention and are candidates for migration
 to bench-only copies. The `martin_lof` scenarios have moved to
-`martin_lof_frontier.mm0`. New cases should not add to that list.
+`martin_lof_regular.mm0`, a bench copy of the earlier Martin-Löf theory (kept
+as `tests/proof_cases/martin_lof_regular` too); `martin_lof_frontier` tracks the
+current example. New cases should not add to that list.
 
 ## Baseline
 

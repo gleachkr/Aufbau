@@ -1,3 +1,8 @@
+-- An earlier version of martin_lof.mm0, kept as a fixture. Its rules lean
+-- on regularity axioms (`has_ty_regular`, `arr_dom_regular`, ...) instead
+-- of carrying the premises their conclusions presuppose, and contexts are
+-- unchecked (there is no `ok g` judgment).
+--
 -- This is a small dependently typed calculus with an identity type
 --
 -- For readability, the intended user-facing notation is:
@@ -32,7 +37,6 @@ axiom jiff_refl (J: jdg): $ J <=> J $;
 axiom jiff_trans (J K L: jdg):
   $ J <=> K $ > $ K <=> L $ > $ J <=> L $;
 axiom jiff_sym (J K: jdg): $ J <=> K $ > $ K <=> J $;
---| @auto forward
 axiom jiff_mp (J K: jdg): $ J <=> K $ > $ J $ > $ K $;
 
 --| @congr
@@ -109,30 +113,11 @@ axiom is_ty_congr (A B: ty): $ A ~ B $ > $ Ty A <=> Ty B $;
 axiom has_ty_congr (s t: tm) (A B: ty):
   $ s ≈ t $ > $ A ~ B $ > $ (s : A) <=> (t : B) $;
 
--- Presuppositions. A judgment is only meaningful if its parts are well
--- formed: `g ⊢ t : A` presupposes `g ⊢ Ty A`, `g ⊢ ≡[A] s = t` presupposes
--- `g ⊢ s : A` and `g ⊢ t : A`, and `g ⊢ A ≡ B` presupposes `g ⊢ Ty A` and
--- `g ⊢ Ty B`. No rule asserts these facts. Instead every rule has enough
--- premises to derive its conclusion's presuppositions directly, which is why
--- `var`, `app_elim`, `app_beta` and `J_elim` carry premises their conclusions
--- do not mention. The presuppositions then hold of every derivable judgment by
--- induction on derivations, and no case of that induction has to take a type
--- apart. The induction uses the usual substitution lemma, for example
--- to type the right side of `app_beta`. Substituting into a type is also a
--- rule (`sb_ty_form`); the same rule for terms,
---
---   g , x : A ⊢ t : B  and  g ⊢ u : A  give  g ⊢ ⟦x/u⟧ t : [x/u] B,
---
--- is sound but left out: its conclusion fits every typing goal, and `auto?`
--- would spend its budget trying it. Theorems follow the same rule as the
--- axioms: a proof that needs `Ty A` takes it as a hypothesis.
---
--- The context is well formed too: if `g ⊢ J` is derivable, so is `ok g`
--- (Section 2). A rule whose conclusion's context is not the context of one
--- of its premises says why it is well formed: the rules with no premises,
--- such as `nat_form`, take `ok g`, and a rule that extends the context, such
--- as `weaken`, takes the new entry's `Ty`. Theorems that use such a rule take
--- `ok g`.
+-- Regularity keeps the derived development from carrying premises that can
+-- be recovered from typing judgements.
+axiom has_ty_regular (g: ctx) (t: tm) (A: ty):
+  $ g ⊢ t : A $
+  > $ g ⊢ Ty A $;
 
 --| @congr
 axiom eq_ty_congr (A1 A2 B1 B2: ty):
@@ -148,7 +133,6 @@ axiom eq_tm_congr (A B: ty) (s1 s2 t1 t2: tm):
 -- Checklist for every constructor introduced below:
 --   * add nice notation if it is user-facing
 --   * add all intro/elim/comp axioms together
---   * give each of them the premises its conclusion presupposes
 --   * add `eq_raw_*` congruence axioms
 --   * add `sb_ty_*` and/or `sb_tm_*` rewrite axioms
 --
@@ -157,7 +141,7 @@ axiom eq_tm_congr (A B: ty) (s1 s2 t1 t2: tm):
 -- ==================================================================
 --
 -- Contexts are built from an empty context, a binary join, and singleton
--- hypotheses.
+-- hypotheses. 
 term emp: ctx;
 --| @acui eq_raw_ctx_assoc _ emp _
 term join (g h: ctx): ctx;
@@ -181,62 +165,27 @@ axiom join_congr (g1 g2 h1 h2: ctx):
 axiom nd_congr (g h: ctx) (J K: jdg):
   $ g ≋ h $ > $ J <=> K $ > $ (g ⊢ J) <=> (h ⊢ K) $;
 
--- `ok g` says that `g` is a well-formed context: each entry's type is a
--- type in the context before it.
---
--- The `hyp` coercion lets any judgment stand as a context entry, but only
--- `x : A` with `x` a variable ever matters. `ext_ok` is the only way to extend
--- an `ok` context, and it adds exactly such an entry. Every derivable
--- judgment has an `ok` context, so a context holding some other entry, such
--- as `Ty A` or `x : A` with `x` a compound term, never occurs in a derivation
--- except through a theorem's own hypotheses.
-term ok (g: ctx): jdg;
-
---| @congr
-axiom ok_congr (g h: ctx): $ g ≋ h $ > $ ok g <=> ok h $;
-
-axiom emp_ok: $ ok emp $;
-axiom ext_ok (g: ctx) {x: tm} (A: ty):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ ok (g , x : A) $;
-
 -- The structural core lives here so later sections can focus on the
 -- constructors they introduce rather than reopening context management.
 axiom weaken (g: ctx) {x: tm} (T: ty) (J: jdg):
-  $ g ⊢ Ty T $
-  > $ g ⊢ J $
+  $ g ⊢ J $
   > $ g , x : T ⊢ J $;
 
 theorem weaken2 (g: ctx) {x y: tm} (T1: ty) (T2: ty x) (J: jdg):
-  $ g ⊢ Ty T1 $
-  > $ g , x : T1 ⊢ Ty T2 $
-  > $ g ⊢ J $
+  $ g ⊢ J $
   > $ g , x : T1 , y : T2 ⊢ J $;
 
 theorem weaken3 (g: ctx) {x y z: tm} (T1: ty) (T2: ty x)
   (T3: ty x y) (J: jdg):
-  $ g ⊢ Ty T1 $
-  > $ g , x : T1 ⊢ Ty T2 $
-  > $ g , x : T1 , y : T2 ⊢ Ty T3 $
-  > $ g ⊢ J $
+  $ g ⊢ J $
   > $ g , x : T1 , y : T2 , z : T3 ⊢ J $;
 
-axiom var (g: ctx) {x: tm} (A: ty):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ x : A $;
+axiom var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
 
--- A variable stays in scope under later hypotheses.
-theorem var_wk (g: ctx) {x y: tm} (A: ty) (B: ty x):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
-  > $ g , x : A , y : B ⊢ x : A $;
-
-theorem var_wk2 (g: ctx) {x y z: tm} (A: ty) (B: ty x) (C: ty x y):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
-  > $ g , x : A , y : B ⊢ Ty C $
-  > $ g , x : A , y : B , z : C ⊢ x : A $;
+axiom exchange (g: ctx) {x y: tm} (A: ty) (B: ty) (d: ctx x y)
+  (J: jdg x y):
+  $ g , x : A , y : B , d ⊢ J $
+  > $ g , y : B , x : A , d ⊢ J $;
 
 -- ==================================================================
 -- SECTION 3: Π-types and substitution primitives
@@ -250,7 +199,7 @@ notation sb_tm {x: tm} (u: tm) (t: tm x): tm =
   ($⟦$:41) x ($/$:0) u ($⟧$:0) t;
 
 --| @congr
-axiom sb_ty_congr {x: tm} (u1 u2: tm x) (A B: ty x):
+axiom sb_ty_congr {x: tm} (u1 u2: tm) (A B: ty x):
   $ u1 ≈ u2 $ > $ A ~ B $ > $ [x/u1] A ~ [x/u2] B $;
 
 --| @congr
@@ -274,10 +223,16 @@ axiom sb_ty_shadow {x: tm} (u v: tm) (A: ty x):
   $ [x/u] [x/v] A ~ [x/v] A $;
 
 --| @rewrite
+axiom sb_ty_other {x y: tm} (u: tm x) (A: ty y): $ [x/u] A ~ A $;
+
+--| @rewrite
 axiom sb_ty_free {x: tm} (u: tm x) (A: ty): $ [x/u] A ~ A $;
 
 --| @rewrite
 axiom sb_tm_var {x: tm} (u: tm x): $ (⟦ x / u ⟧ x) ≈ u $;
+
+--| @rewrite
+axiom sb_tm_other {x y: tm} (u: tm x): $ (⟦ x / u ⟧ y) ≈ y $;
 
 --| @rewrite
 axiom sb_tm_free {x: tm} (u: tm x) (t: tm): $ (⟦ x / u ⟧ t) ≈ t $;
@@ -288,14 +243,10 @@ axiom sb_ty_form (g: ctx) (A: ty) {x: tm} (B: ty x) (u: tm):
   > $ g ⊢ u : A $
   > $ g ⊢ Ty ([x/u] B) $;
 
--- Renaming the last variable while keeping it in scope is the same
--- substitution. It can't be derived from `sb_ty_form`: the derivation has to
--- `weaken` by `x` under `[x/y] B`, and MM0 disjointness is syntactic, so it
--- rejects a judgment that mentions `x` even as a bound variable.
-axiom sb_ty_var_form (g: ctx) (A: ty) {x y: tm} (B: ty x):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
-  > $ g , x : A , y : A ⊢ Ty ([x/y] B) $;
+axiom sb_ty_var_form (g: ctx) (A: ty) {x y: tm} (B: ty x)
+  (d: ctx x y):
+  $ g , x : A ⊢ Ty B $
+  > $ g , x : A , y : A , d ⊢ Ty ([x/y] B) $;
 
 term Pi (A: ty) {x: tm} (B: ty x): ty;
 notation Pi (A: ty) {x: tm} (B: ty x): ty =
@@ -340,6 +291,8 @@ axiom sb_tm_lam {x y: tm} (u: tm x) (A: ty x) (t: tm x y):
 axiom sb_tm_app {x: tm} (u: tm x) (f t: tm x):
   $ (⟦ x / u ⟧ (f · t)) ≈ ((⟦ x / u ⟧ f) · (⟦ x / u ⟧ t)) $;
 
+axiom pi_const_alpha (A B: ty) {x y: tm}: $ (Π x : A. B) ~ (Π y : A. B) $;
+
 --| @alpha x y
 axiom pi_alpha (A: ty) {x y: tm} (B: ty x):
   $ (Π x : A. B) ~ (Π y : A. [x/y] B) $;
@@ -351,71 +304,37 @@ axiom lam_alpha {x y: tm} (A: ty) (t: tm x):
 -- Π, λ, and application are grouped with their formation, introduction,
 -- elimination, and computation rules. This is the pattern later sections
 -- should follow for every constructor family.
---| @auto backward
 axiom pi_form (g: ctx) (A: ty) {x: tm} (B: ty x):
   $ g ⊢ Ty A $
   > $ g , x : A ⊢ Ty B $
   > $ g ⊢ Ty (Π x : A. B) $;
 
---| @auto backward
 axiom lam_intro (g: ctx) (A: ty) {x: tm} (B: ty x) (t: tm x):
   $ g ⊢ Ty A $
   > $ g , x : A ⊢ Ty B $
   > $ g , x : A ⊢ t : B $
   > $ g ⊢ (λ x : A. t) : (Π x : A. B) $;
 
---| @view (g: ctx) (A: ty) {x: tm} (B: ty x) (f u: tm) (q: ty): $ g ⊢ f : (Π x : A. B) $ > $ g ⊢ u : A $ > $ g , x : A ⊢ Ty B $ > $ g ⊢ f · u : q $
---| @auto forward
+--| @view (g: ctx) (A: ty) {x: tm} (B: ty x) (f u: tm) (q: ty): $ g ⊢ f : (Π x : A. B) $ > $ g ⊢ u : A $ > $ g ⊢ f · u : q $
 axiom app_elim (g: ctx) (A: ty) {x: tm} (B: ty x) (f u: tm):
   $ g ⊢ f : (Π x : A. B) $
   > $ g ⊢ u : A $
-  > $ g , x : A ⊢ Ty B $
   > $ g ⊢ f · u : [x/u] B $;
 
 -- β-reduction lands in typed equality, but its normalization depends on the
 -- raw substitution rewrites above.
---| @view (g: ctx) (A: ty) {x: tm} (B: ty x) (a b t u v: tm) (q: ty): $ g ⊢ Ty A $ > $ g , x : A ⊢ Ty B $ > $ g , x : A ⊢ t : B $ > $ g ⊢ u : A $ > $ g ⊢ ≡[q] a = b $
+--| @view (g: ctx) (A: ty) {x: tm} (B: ty x) (a b t u v: tm) (q: ty): $ g ⊢ (λ x : A. t) : (Π x : A. B) $ > $ g ⊢ u : A $ > $ g ⊢ ≡[q] a = b $
 axiom app_beta (g: ctx) (A: ty) {x: tm} (B: ty x) (t: tm x) (u: tm):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
-  > $ g , x : A ⊢ t : B $
+  $ g ⊢ (λ x : A. t) : (Π x : A. B) $
   > $ g ⊢ u : A $
   > $ g ⊢ ≡[[x/u] B] ((λ x : A. t) · u) = (⟦ x / u ⟧ t) $;
 
--- Non-dependent arrows hide their binder, so these wrappers take the
--- codomain's formation premise in `g` rather than under the binder.
-theorem arr_form (g: ctx) (A B: ty):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ Ty (A → B) $;
-
-theorem arr_elim (g: ctx) (A B: ty) (f u: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ f : (A → B) $
-  > $ g ⊢ u : A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ f · u : B $;
-
-theorem arr_intro (g: ctx) (A B: ty) {x: tm} (t: tm x):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g , x : A ⊢ t : B $
-  > $ g ⊢ (λ x : A. t) : (A → B) $;
-
-theorem arr_beta (g: ctx) (A B: ty) {x: tm} (t: tm x) (u: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g , x : A ⊢ t : B $
-  > $ g ⊢ u : A $
-  > $ g ⊢ ≡[B] ((λ x : A. t) · u) = (⟦ x / u ⟧ t) $;
-
-theorem lam_id_ty (g: ctx) (A: ty) {x: tm}:
+theorem id_ty (g: ctx) (A: ty) {x: tm}:
   $ g ⊢ Ty A $
   > $ g ⊢ (λ x : A. x) : (Π x : A. A) $;
 
-theorem lam_id_beta (g: ctx) (A: ty) {x: tm} (u: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ u : A $
+theorem app_id_beta (g: ctx) (A: ty) {x: tm} (u: tm):
+  $ g ⊢ u : A $
   > $ g ⊢ ≡[A] ((λ x : A. x) · u) = u $;
 
 -- The generic identity theorem stays here as the smallest possible Π example;
@@ -425,30 +344,19 @@ theorem lam_id_beta (g: ctx) (A: ty) {x: tm} (u: tm):
 -- SECTION 4: Bool
 -- ==================================================================
 --
--- Bool is the first closed datatype in this example. Its eliminator
--- `bool_ind` is dependent: like `nat_ind` below, it binds the variable `x`
--- its motive `C` may mention. `bool_rec` is the non-dependent case, and
--- negation is a user-facing helper over it.
+-- Bool is the first closed datatype in this example. We keep its rules small
+-- and direct: one eliminator, two computation rules, and one user-facing
+-- helper def for negation.
 term Bool: ty;
 term true: tm;
 term false: tm;
-term bool_ind {x: tm} (C: ty x) (t f b: tm): tm;
-
-def bool_rec (A: ty) (t f b: tm) {.x: tm}: tm = $ bool_ind x A t f b $;
+term bool_rec (A: ty) (t f b: tm): tm;
 
 def bool_not (b: tm): tm = $ bool_rec Bool false true b $;
 notation bool_not (b: tm): tm = ($¬$:65) b;
 
 --| @congr
 axiom bool_not_congr (b c: tm): $ b ≈ c $ > $ ¬ b ≈ ¬ c $;
-
---| @congr
-axiom bool_ind_congr {x: tm} (C D: ty x) (t1 t2 f1 f2 b1 b2: tm):
-  $ C ~ D $
-  > $ t1 ≈ t2 $
-  > $ f1 ≈ f2 $
-  > $ b1 ≈ b2 $
-  > $ bool_ind x C t1 f1 b1 ≈ bool_ind x D t2 f2 b2 $;
 
 --| @congr
 axiom bool_rec_congr (A B: ty) (t1 t2 f1 f2 b1 b2: tm):
@@ -468,12 +376,6 @@ axiom sb_tm_true {x: tm} (u: tm x): $ (⟦ x / u ⟧ true) ≈ true $;
 axiom sb_tm_false {x: tm} (u: tm x): $ (⟦ x / u ⟧ false) ≈ false $;
 
 --| @rewrite
-axiom sb_tm_bool_ind {w x: tm} (u: tm w) (C: ty w x) (t f b: tm w):
-  $ (⟦ w / u ⟧ (bool_ind x C t f b))
-      ≈ (bool_ind x ([w/u] C) (⟦ w / u ⟧ t) (⟦ w / u ⟧ f)
-          (⟦ w / u ⟧ b)) $;
-
---| @rewrite
 axiom sb_tm_bool_rec {x: tm} (u: tm x) (A: ty x) (t f b: tm x):
   $ (⟦ x / u ⟧ (bool_rec A t f b))
       ≈ (bool_rec ([x/u] A) (⟦ x / u ⟧ t) (⟦ x / u ⟧ f)
@@ -483,63 +385,35 @@ axiom sb_tm_bool_rec {x: tm} (u: tm x) (A: ty x) (t f b: tm x):
 axiom sb_tm_bool_not {x: tm} (u: tm x) (b: tm x):
   $ (⟦ x / u ⟧ (¬ b)) ≈ (¬ (⟦ x / u ⟧ b)) $;
 
-axiom bool_form (g: ctx): $ ok g $ > $ g ⊢ Ty Bool $;
-axiom true_intro (g: ctx): $ ok g $ > $ g ⊢ true : Bool $;
-axiom false_intro (g: ctx): $ ok g $ > $ g ⊢ false : Bool $;
+axiom bool_form (g: ctx): $ g ⊢ Ty Bool $;
+axiom true_intro (g: ctx): $ g ⊢ true : Bool $;
+axiom false_intro (g: ctx): $ g ⊢ false : Bool $;
 
-axiom bool_ind_elim (g: ctx) {x: tm} (C: ty x) (t f b: tm):
-  $ g , x : Bool ⊢ Ty C $
-  > $ g ⊢ t : [x/true] C $
-  > $ g ⊢ f : [x/false] C $
-  > $ g ⊢ b : Bool $
-  > $ g ⊢ bool_ind x C t f b : [x/b] C $;
-
-axiom bool_ind_true (g: ctx) {x: tm} (C: ty x) (t f: tm):
-  $ g , x : Bool ⊢ Ty C $
-  > $ g ⊢ t : [x/true] C $
-  > $ g ⊢ f : [x/false] C $
-  > $ g ⊢ ≡[[x/true] C] (bool_ind x C t f true) = t $;
-
-axiom bool_ind_false (g: ctx) {x: tm} (C: ty x) (t f: tm):
-  $ g , x : Bool ⊢ Ty C $
-  > $ g ⊢ t : [x/true] C $
-  > $ g ⊢ f : [x/false] C $
-  > $ g ⊢ ≡[[x/false] C] (bool_ind x C t f false) = f $;
-
-theorem bool_rec_ty (g: ctx) (A: ty) (t f b: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ t : A $
+axiom bool_elim (g: ctx) (A: ty) (t f b: tm):
+  $ g ⊢ t : A $
   > $ g ⊢ f : A $
   > $ g ⊢ b : Bool $
   > $ g ⊢ bool_rec A t f b : A $;
 
-theorem bool_rec_true (g: ctx) (A: ty) (t f: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ t : A $
+axiom bool_beta_true (g: ctx) (A: ty) (t f: tm):
+  $ g ⊢ t : A $
   > $ g ⊢ f : A $
   > $ g ⊢ ≡[A] (bool_rec A t f true) = t $;
 
-theorem bool_rec_false (g: ctx) (A: ty) (t f: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ t : A $
+axiom bool_beta_false (g: ctx) (A: ty) (t f: tm):
+  $ g ⊢ t : A $
   > $ g ⊢ f : A $
   > $ g ⊢ ≡[A] (bool_rec A t f false) = f $;
 
 theorem bool_not_ty (g: ctx) (b: tm):
-  $ ok g $
-  > $ g ⊢ b : Bool $
+  $ g ⊢ b : Bool $
   > $ g ⊢ ¬ b : Bool $;
 
 theorem bool_not_true (g: ctx):
-  $ ok g $
-  > $ g ⊢ ≡[Bool] (¬ true) = false $;
+  $ g ⊢ ≡[Bool] (¬ true) = false $;
 
 theorem bool_not_false (g: ctx):
-  $ ok g $
-  > $ g ⊢ ≡[Bool] (¬ false) = true $;
+  $ g ⊢ ≡[Bool] (¬ false) = true $;
 
 -- ==================================================================
 -- SECTION 5: Nat
@@ -550,6 +424,7 @@ theorem bool_not_false (g: ctx):
 term Nat: ty;
 term zero: tm;
 term suc (n: tm): tm;
+term const_ty (n: tm) (A: ty): ty;
 
 -- `nat_ind` is a dependent eliminator, so its family and step case are
 -- open expressions. Morally, the eliminator is applied as
@@ -567,7 +442,7 @@ term suc (n: tm): tm;
 term nat_ind {k ih: tm} (C: ty k) (z: tm) (s: tm k ih) (n: tm): tm;
 
 def nat_rec (A: ty) (z s n: tm) {.k .ih: tm}: tm =
-  $ nat_ind k ih A z (s · ih) n $;
+  $ nat_ind k ih (const_ty k A) z (s · ih) n $;
 
 --| @congr
 axiom nat_rec_congr (A B: ty) (z1 z2 s1 s2 n1 n2: tm):
@@ -582,6 +457,10 @@ axiom suc_congr (m n: tm):
   $ m ≈ n $ > $ suc m ≈ suc n $;
 
 --| @congr
+axiom const_ty_congr (m n: tm) (A B: ty):
+  $ m ≈ n $ > $ A ~ B $ > $ const_ty m A ~ const_ty n B $;
+
+--| @congr
 axiom nat_ind_congr {k ih: tm} (C D: ty k) (z1 z2: tm)
   (s1 s2: tm k ih) (n1 n2: tm):
   $ C ~ D $
@@ -592,6 +471,13 @@ axiom nat_ind_congr {k ih: tm} (C D: ty k) (z1 z2: tm)
 
 --| @rewrite
 axiom sb_ty_nat {x: tm} (u: tm x): $ [x/u] Nat ~ Nat $;
+
+--| @rewrite
+axiom sb_ty_const {x: tm} (u n: tm x) (A: ty x):
+  $ [x/u] (const_ty n A) ~ const_ty (⟦ x / u ⟧ n) ([x/u] A) $;
+
+--| @rewrite
+axiom const_ty_eval (n: tm) (A: ty): $ const_ty n A ~ A $;
 
 --| @rewrite
 axiom sb_tm_zero {x: tm} (u: tm x): $ (⟦ x / u ⟧ zero) ≈ zero $;
@@ -613,9 +499,8 @@ axiom sb_tm_nat_rec {x: tm} (u: tm x) (A: ty x) (z s n: tm x):
       ≈ (nat_rec ([x/u] A) (⟦ x / u ⟧ z) (⟦ x / u ⟧ s)
           (⟦ x / u ⟧ n)) $;
 
-axiom nat_form (g: ctx): $ ok g $ > $ g ⊢ Ty Nat $;
-axiom zero_intro (g: ctx): $ ok g $ > $ g ⊢ zero : Nat $;
---| @auto backward
+axiom nat_form (g: ctx): $ g ⊢ Ty Nat $;
+axiom zero_intro (g: ctx): $ g ⊢ zero : Nat $;
 axiom suc_intro (g: ctx) (n: tm):
   $ g ⊢ n : Nat $
   > $ g ⊢ suc n : Nat $;
@@ -646,35 +531,21 @@ axiom nat_ind_suc (g: ctx) {k ih: tm} (C: ty k) (z: tm) (s: tm k ih)
 -- The first user-facing Nat theorems show that ordinary recursion really is
 -- available as a transparent def over induction.
 theorem one_ty (g: ctx):
-  $ ok g $
-  > $ g ⊢ suc zero : Nat $;
-
--- The step case shared by the three `nat_rec` lemmas.
-theorem nat_rec_step_ty (g: ctx) (A: ty) {k ih: tm} (s: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ s : (A → A) $
-  > $ g , k : Nat , ih : A ⊢ s · ih : A $;
+  $ g ⊢ suc zero : Nat $;
 
 theorem nat_rec_ty (g: ctx) (A: ty) (z s n: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ z : A $
+  $ g ⊢ z : A $
   > $ g ⊢ s : (A → A) $
   > $ g ⊢ n : Nat $
   > $ g ⊢ nat_rec A z s n : A $;
 
 theorem nat_rec_zero (g: ctx) (A: ty) (z s: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ z : A $
+  $ g ⊢ z : A $
   > $ g ⊢ s : (A → A) $
   > $ g ⊢ ≡[A] (nat_rec A z s zero) = z $;
 
 theorem nat_rec_suc (g: ctx) (A: ty) (z s n: tm):
-  $ ok g $
-  > $ g ⊢ Ty A $
-  > $ g ⊢ z : A $
+  $ g ⊢ z : A $
   > $ g ⊢ s : (A → A) $
   > $ g ⊢ n : Nat $
   > $ g ⊢ ≡[A] (nat_rec A z s (suc n)) = (s · (nat_rec A z s n)) $;
@@ -713,62 +584,57 @@ axiom eq_tm_trans (g: ctx) (A: ty) (s t u: tm):
   > $ g ⊢ ≡[A] t = u $
   > $ g ⊢ ≡[A] s = u $;
 
---| @auto forward
+axiom eq_ty_left (g: ctx) (A B: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ Ty A $;
+
+axiom eq_ty_right (g: ctx) (A B: ty):
+  $ g ⊢ A ≡ B $
+  > $ g ⊢ Ty B $;
+
+axiom eq_tm_left (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ s : A $;
+
+axiom eq_tm_right (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ t : A $;
+
+-- Function type inversion recovers closed domain and codomain regularity.
+axiom arr_dom_regular (g: ctx) (A B: ty) (f: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ Ty A $;
+
+axiom arr_cod_regular (g: ctx) (A B: ty) (f: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ Ty B $;
+
+axiom app_eq_right (g: ctx) (A B: ty) (f s t: tm):
+  $ g ⊢ f : (A → B) $
+  > $ g ⊢ ≡[A] s = t $
+  > $ g ⊢ ≡[B] (f · s) = (f · t) $;
+
+axiom app_eq_left (g: ctx) (A B: ty) (f h u: tm):
+  $ g ⊢ ≡[(A → B)] f = h $
+  > $ g ⊢ u : A $
+  > $ g ⊢ ≡[B] (f · u) = (h · u) $;
+
+axiom suc_eq (g: ctx) (m n: tm):
+  $ g ⊢ ≡[Nat] m = n $
+  > $ g ⊢ ≡[Nat] suc m = suc n $;
+
 axiom ty_conv (g: ctx) (t: tm) (A B: ty):
   $ g ⊢ A ≡ B $
   > $ g ⊢ t : A $
   > $ g ⊢ t : B $;
 
-axiom eq_tm_conv (g: ctx) (A B: ty) (s t: tm):
-  $ g ⊢ A ≡ B $
-  > $ g ⊢ ≡[A] s = t $
-  > $ g ⊢ ≡[B] s = t $;
-
--- Substituting equal terms gives equal results. With these two rules no
--- constructor needs its own rule saying that equal term arguments give equal
--- results: each such rule is an instance, as the theorems below show. They do
--- not give equal results from equal type arguments, since `sb_ty_eq`
--- substitutes a term, and they do not give equality under a binder, which
--- would equate `λ x : A. s` and `λ x : A. t` when `s` and `t` are equal
--- under `x : A`. Nothing here needs either.
-axiom sb_ty_eq (g: ctx) (A: ty) {x: tm} (B: ty x) (u1 u2: tm):
-  $ g , x : A ⊢ Ty B $
-  > $ g ⊢ ≡[A] u1 = u2 $
-  > $ g ⊢ [x/u1] B ≡ [x/u2] B $;
-
-axiom sb_tm_eq (g: ctx) (A: ty) {x: tm} (B: ty x) (t: tm x) (u1 u2: tm):
-  $ g , x : A ⊢ t : B $
-  > $ g ⊢ ≡[A] u1 = u2 $
-  > $ g ⊢ ≡[[x/u1] B] (⟦ x / u1 ⟧ t) = (⟦ x / u2 ⟧ t) $;
-
-theorem app_eq_right (g: ctx) (A B: ty) (f s t: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ f : (A → B) $
-  > $ g ⊢ ≡[A] s = t $
-  > $ g ⊢ ≡[B] (f · s) = (f · t) $;
-
-theorem app_eq_left (g: ctx) (A B: ty) (f h u: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ ≡[(A → B)] f = h $
-  > $ g ⊢ u : A $
-  > $ g ⊢ ≡[B] (f · u) = (h · u) $;
-
-theorem suc_eq (g: ctx) (m n: tm):
-  $ ok g $
-  > $ g ⊢ ≡[Nat] m = n $
-  > $ g ⊢ ≡[Nat] suc m = suc n $;
-
 -- One small Nat computation here is enough to verify that typed equality is
 -- usable for chaining and for rewriting under application.
 theorem double_step_ty (g: ctx) {k: tm}:
-  $ ok g $
-  > $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $;
+  $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $;
 
 theorem nat_rec_two_step_one (g: ctx) {k: tm}:
-  $ ok g $
-  > $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
+  $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
       (suc zero)) = (suc (suc zero)) $;
 --
 -- ==================================================================
@@ -838,31 +704,37 @@ axiom sb_tm_J {w x y q: tm} (u: tm w) (A: ty w) (C: ty w x y q)
       ≈ J x y q ([w/u] A) ([w/u] C) (⟦ w / u ⟧ r)
           (⟦ w / u ⟧ s) (⟦ w / u ⟧ t) (⟦ w / u ⟧ p) $;
 
---| @auto backward
 axiom Id_form (g: ctx) (A: ty) (s t: tm):
   $ g ⊢ s : A $
   > $ g ⊢ t : A $
   > $ g ⊢ Ty (Id A s t) $;
 
---| @auto backward
 axiom refl_intro (g: ctx) (A: ty) (s: tm):
   $ g ⊢ s : A $
   > $ g ⊢ refl A s : Id A s s $;
 
+axiom Id_ty_regular (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ Ty A $;
+
+axiom Id_left_regular (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ s : A $;
+
+axiom Id_right_regular (g: ctx) (A: ty) (s t p: tm):
+  $ g ⊢ p : Id A s t $
+  > $ g ⊢ t : A $;
+
 -- Judgemental equality gives an identity path. This is the bridge that lets
 -- definitional computation feed later propositional arithmetic proofs.
-theorem eq_tm_to_Id (g: ctx) (A: ty) (s t: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ s : A $
-  > $ g ⊢ ≡[A] s = t $
+axiom eq_tm_to_Id (g: ctx) (A: ty) (s t: tm):
+  $ g ⊢ ≡[A] s = t $
   > $ g ⊢ refl A s : Id A s t $;
 
 axiom J_elim (g: ctx) {x y q: tm} (A: ty) (C: ty x y q) (r: tm x)
   (s t p: tm):
   $ g , x : A , y : A , q : Id A x y ⊢ Ty C $
   > $ g , x : A ⊢ r : [y/x] [q/refl A x] C $
-  > $ g ⊢ s : A $
-  > $ g ⊢ t : A $
   > $ g ⊢ p : Id A s t $
   > $ g ⊢ J x y q A C r s t p : [x/s] [y/t] [q/p] C $;
 
@@ -891,27 +763,12 @@ axiom sb_tm_id_sym {x: tm} (u: tm x) (A: ty x) (s t p: tm x):
       ≈ id_sym ([x/u] A) (⟦ x / u ⟧ s) (⟦ x / u ⟧ t)
           (⟦ x / u ⟧ p) $;
 
--- Each path-induction lemma pairs a motive with a reflexivity branch.
--- The typing and computation lemmas share them.
--- The context a path-induction motive lives in.
-theorem id_ctx_ty (g: ctx) (A: ty) {x y: tm}:
-  $ g ⊢ Ty A $
-  > $ g , x : A , y : A ⊢ Ty (Id A x y) $;
-
-theorem id_sym_motive (g: ctx) (A: ty) {x y q: tm}:
-  $ g ⊢ Ty A $
-  > $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $;
-
 theorem id_sym_ty (g: ctx) (A: ty) (s t p: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ s : A $
-  > $ g ⊢ t : A $
-  > $ g ⊢ p : Id A s t $
+  $ g ⊢ p : Id A s t $
   > $ g ⊢ id_sym A s t p : Id A t s $;
 
 theorem id_sym_refl (g: ctx) (A: ty) (s: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ s : A $
+  $ g ⊢ s : A $
   > $ g ⊢ ≡[Id A s s] (id_sym A s s (refl A s)) = refl A s $;
 
 def id_trans (A: ty) (s t u p q: tm) {.x .y .z .w: tm}: tm =
@@ -935,30 +792,13 @@ axiom sb_tm_id_trans {x: tm} (a: tm x) (A: ty x)
       ≈ id_trans ([x/a] A) (⟦ x / a ⟧ s) (⟦ x / a ⟧ t)
           (⟦ x / a ⟧ u) (⟦ x / a ⟧ p) (⟦ x / a ⟧ q) $;
 
-theorem id_trans_motive (g: ctx) (A: ty) {x y z: tm} (u: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ u : A $
-  > $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u → Id A x u) $;
-
-theorem id_trans_branch (g: ctx) (A: ty) {x w: tm} (u: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ u : A $
-  > $ g , x : A ⊢ (λ w : Id A x u. w) : (Id A x u → Id A x u) $;
-
 theorem id_trans_ty (g: ctx) (A: ty) (s t u p q: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ s : A $
-  > $ g ⊢ t : A $
-  > $ g ⊢ u : A $
-  > $ g ⊢ p : Id A s t $
+  $ g ⊢ p : Id A s t $
   > $ g ⊢ q : Id A t u $
   > $ g ⊢ id_trans A s t u p q : Id A s u $;
 
 theorem id_trans_refl_left (g: ctx) (A: ty) (s u q: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ s : A $
-  > $ g ⊢ u : A $
-  > $ g ⊢ q : Id A s u $
+  $ g ⊢ q : Id A s u $
   > $ g ⊢ ≡[Id A s u] (id_trans A s s u (refl A s) q) = q $;
 
 def ap (A B: ty) (f s t p: tm) {.x .y .q: tm}: tm =
@@ -980,31 +820,13 @@ axiom sb_tm_ap {x: tm} (u: tm x) (A B: ty x) (f s t p: tm x):
       ≈ ap ([x/u] A) ([x/u] B) (⟦ x / u ⟧ f) (⟦ x / u ⟧ s)
           (⟦ x / u ⟧ t) (⟦ x / u ⟧ p) $;
 
-theorem ap_motive (g: ctx) (A B: ty) {x y q: tm} (f: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ f : (A → B) $
-  > $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id B (f · x) (f · y)) $;
-
-theorem ap_branch (g: ctx) (A B: ty) {x: tm} (f: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ f : (A → B) $
-  > $ g , x : A ⊢ refl B (f · x) : Id B (f · x) (f · x) $;
-
 theorem ap_ty (g: ctx) (A B: ty) (f s t p: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ f : (A → B) $
-  > $ g ⊢ s : A $
-  > $ g ⊢ t : A $
+  $ g ⊢ f : (A → B) $
   > $ g ⊢ p : Id A s t $
   > $ g ⊢ ap A B f s t p : Id B (f · s) (f · t) $;
 
 theorem ap_refl (g: ctx) (A B: ty) (f s: tm):
-  $ g ⊢ Ty A $
-  > $ g ⊢ Ty B $
-  > $ g ⊢ f : (A → B) $
+  $ g ⊢ f : (A → B) $
   > $ g ⊢ s : A $
   > $ g ⊢ ≡[Id B (f · s) (f · s)]
       (ap A B f s s (refl A s)) = refl B (f · s) $;
@@ -1027,25 +849,12 @@ axiom sb_tm_ap_suc {x: tm} (u: tm x) (s t p: tm x):
   $ (⟦ x / u ⟧ (ap_suc s t p))
       ≈ ap_suc (⟦ x / u ⟧ s) (⟦ x / u ⟧ t) (⟦ x / u ⟧ p) $;
 
-theorem ap_suc_motive (g: ctx) {x y q: tm}:
-  $ ok g $
-  > $ g , x : Nat , y : Nat , q : Id Nat x y ⊢
-      Ty (Id Nat (suc x) (suc y)) $;
-
-theorem ap_suc_branch (g: ctx) {x: tm}:
-  $ ok g $
-  > $ g , x : Nat ⊢ refl Nat (suc x) : Id Nat (suc x) (suc x) $;
-
 theorem ap_suc_ty (g: ctx) (s t p: tm):
-  $ ok g $
-  > $ g ⊢ s : Nat $
-  > $ g ⊢ t : Nat $
-  > $ g ⊢ p : Id Nat s t $
+  $ g ⊢ p : Id Nat s t $
   > $ g ⊢ ap_suc s t p : Id Nat (suc s) (suc t) $;
 
 theorem ap_suc_refl (g: ctx) (s: tm):
-  $ ok g $
-  > $ g ⊢ s : Nat $
+  $ g ⊢ s : Nat $
   > $ g ⊢ ≡[Id Nat (suc s) (suc s)]
       (ap_suc s s (refl Nat s)) = refl Nat (suc s) $;
 
@@ -1073,24 +882,15 @@ axiom sb_tm_transport {x y: tm} (a: tm x) (A: ty x) (B: ty x y)
       ≈ transport ([x/a] A) y ([x/a] B) (⟦ x / a ⟧ s)
           (⟦ x / a ⟧ t) (⟦ x / a ⟧ p) (⟦ x / a ⟧ u) $;
 
-theorem transport_motive (g: ctx) (A: ty) {x y q: tm} (B: ty x):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
-  > $ g , x : A , y : A , q : Id A x y ⊢ Ty (B → [x/y] B) $;
-
 theorem transport_ty (g: ctx) (A: ty) {x: tm} (B: ty x)
   (s t p u: tm):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
-  > $ g ⊢ s : A $
-  > $ g ⊢ t : A $
+  $ g , x : A ⊢ Ty B $
   > $ g ⊢ p : Id A s t $
   > $ g ⊢ u : [x/s] B $
   > $ g ⊢ transport A x B s t p u : [x/t] B $;
 
 theorem transport_refl (g: ctx) (A: ty) {x: tm} (B: ty x) (s u: tm):
-  $ g ⊢ Ty A $
-  > $ g , x : A ⊢ Ty B $
+  $ g , x : A ⊢ Ty B $
   > $ g ⊢ s : A $
   > $ g ⊢ u : [x/s] B $
   > $ g ⊢ ≡[[x/s] B] (transport A x B s s (refl A s) u) = u $;
@@ -1121,50 +921,30 @@ axiom add_congr (m1 m2 n1 n2: tm):
 axiom sb_tm_add {x: tm} (u: tm x) (m n: tm x):
   $ (⟦ x / u ⟧ (m + n)) ≈ ((⟦ x / u ⟧ m) + (⟦ x / u ⟧ n)) $;
 
-theorem suc_fn_ty (g: ctx):
-  $ ok g $
-  > $ g ⊢ suc_fn : (Nat → Nat) $;
-
-theorem add_ty (g: ctx) (m n: tm):
-  $ ok g $
-  > $ g ⊢ m : Nat $
-  > $ g ⊢ n : Nat $
-  > $ g ⊢ m + n : Nat $;
-
-theorem add_eq (g: ctx) (m1 m2 n1 n2: tm):
-  $ ok g $
-  > $ g ⊢ m2 : Nat $
-  > $ g ⊢ n1 : Nat $
-  > $ g ⊢ ≡[Nat] m1 = m2 $
+axiom add_eq_congr (g: ctx) (m1 m2 n1 n2: tm):
+  $ g ⊢ ≡[Nat] m1 = m2 $
   > $ g ⊢ ≡[Nat] n1 = n2 $
   > $ g ⊢ ≡[Nat] (m1 + n1) = (m2 + n2) $;
 
-theorem add_zero_left (g: ctx) (n: tm):
-  $ ok g $
+theorem suc_fn_ty (g: ctx):
+  $ g ⊢ suc_fn : (Nat → Nat) $;
+
+theorem add_ty (g: ctx) (m n: tm):
+  $ g ⊢ m : Nat $
   > $ g ⊢ n : Nat $
+  > $ g ⊢ m + n : Nat $;
+
+theorem add_zero_left (g: ctx) (n: tm):
+  $ g ⊢ n : Nat $
   > $ g ⊢ ≡[Nat] (zero + n) = n $;
 
 theorem add_suc_left (g: ctx) (m n: tm):
-  $ ok g $
-  > $ g ⊢ m : Nat $
+  $ g ⊢ m : Nat $
   > $ g ⊢ n : Nat $
   > $ g ⊢ ≡[Nat] ((suc m) + n) = suc (m + n) $;
 
 theorem one_plus_one (g: ctx):
-  $ ok g $
-  > $ g ⊢ ≡[Nat] ((suc zero) + (suc zero)) = (suc (suc zero)) $;
-
--- The two computation lemmas as identity paths, for the proofs below.
-theorem add_zero_left_path (g: ctx) (n: tm):
-  $ ok g $
-  > $ g ⊢ n : Nat $
-  > $ g ⊢ refl Nat (zero + n) : Id Nat (zero + n) n $;
-
-theorem add_suc_left_path (g: ctx) (m n: tm):
-  $ ok g $
-  > $ g ⊢ m : Nat $
-  > $ g ⊢ n : Nat $
-  > $ g ⊢ refl Nat ((suc m) + n) : Id Nat ((suc m) + n) (suc (m + n)) $;
+  $ g ⊢ ≡[Nat] ((suc zero) + (suc zero)) = (suc (suc zero)) $;
 
 -- The remaining arithmetic laws are propositional. Their proof terms are
 -- named so theorem statements stay readable in the demo.
@@ -1232,133 +1012,30 @@ axiom sb_tm_add_comm_p {x: tm} (u: tm x) (m n: tm x):
       ≈ add_comm_p (⟦ x / u ⟧ m) (⟦ x / u ⟧ n) $;
 
 theorem add_zero_right (g: ctx) (m: tm):
-  $ ok g $
-  > $ g ⊢ m : Nat $
+  $ g ⊢ m : Nat $
   > $ g ⊢ add_zero_right_p m : Id Nat (m + zero) m $;
 
 theorem add_suc_right (g: ctx) (m n: tm):
-  $ ok g $
-  > $ g ⊢ m : Nat $
+  $ g ⊢ m : Nat $
   > $ g ⊢ n : Nat $
   > $ g ⊢ add_suc_right_p m n : Id Nat (m + suc n) (suc (m + n)) $;
 
 theorem add_comm (g: ctx) (m n: tm):
-  $ ok g $
-  > $ g ⊢ m : Nat $
+  $ g ⊢ m : Nat $
   > $ g ⊢ n : Nat $
   > $ g ⊢ add_comm_p m n : Id Nat (m + n) (n + m) $;
 --
 -- ==================================================================
--- SECTION 9: Empty, a universe, and zero ≠ one
--- ==================================================================
---
--- Every type family written so far is built from type formers, so none can
--- be `Nat` at `zero` and something else at `suc zero`, and without such a
--- family the theory cannot refute `Id Nat zero (suc zero)`. A universe
--- supplies one. `U` is a type of codes and `El` decodes a code to the type it
--- names, so a function into `U`, defined by recursion, is a family of types.
--- `zero_code` is `Nat` at zero and `Empty` at every successor. Transporting
--- `zero` along a path `zero = suc zero` would give an element of `Empty`.
-term Empty: ty;
-term absurd {x: tm} (C: ty x) (e: tm): tm;
-
---| @congr
-axiom absurd_congr {x: tm} (C D: ty x) (e1 e2: tm):
-  $ C ~ D $ > $ e1 ≈ e2 $ > $ absurd x C e1 ≈ absurd x D e2 $;
-
---| @rewrite
-axiom sb_ty_empty {x: tm} (u: tm x): $ [x/u] Empty ~ Empty $;
-
---| @rewrite
-axiom sb_tm_absurd {w x: tm} (u: tm w) (C: ty w x) (e: tm w):
-  $ (⟦ w / u ⟧ (absurd x C e)) ≈ absurd x ([w/u] C) (⟦ w / u ⟧ e) $;
-
-axiom empty_form (g: ctx): $ ok g $ > $ g ⊢ Ty Empty $;
-
-axiom empty_elim (g: ctx) {x: tm} (C: ty x) (e: tm):
-  $ g , x : Empty ⊢ Ty C $
-  > $ g ⊢ e : Empty $
-  > $ g ⊢ absurd x C e : [x/e] C $;
-
--- The universe is à la Tarski, with codes for `Nat` and `Empty`. Decoding a
--- code holds in every context, so it is a raw rewrite, like substitution.
-term U: ty;
-term El (a: tm): ty;
-term nat_c: tm;
-term empty_c: tm;
-
---| @congr
-axiom El_congr (a b: tm): $ a ≈ b $ > $ El a ~ El b $;
-
---| @rewrite
-axiom sb_ty_U {x: tm} (u: tm x): $ [x/u] U ~ U $;
-
---| @rewrite
-axiom sb_ty_El {x: tm} (u a: tm x): $ [x/u] (El a) ~ El (⟦ x / u ⟧ a) $;
-
---| @rewrite
-axiom sb_tm_nat_c {x: tm} (u: tm x): $ (⟦ x / u ⟧ nat_c) ≈ nat_c $;
-
---| @rewrite
-axiom sb_tm_empty_c {x: tm} (u: tm x): $ (⟦ x / u ⟧ empty_c) ≈ empty_c $;
-
---| @rewrite
-axiom El_nat: $ El nat_c ~ Nat $;
-
---| @rewrite
-axiom El_empty: $ El empty_c ~ Empty $;
-
-axiom U_form (g: ctx): $ ok g $ > $ g ⊢ Ty U $;
-axiom El_form (g: ctx) (a: tm): $ g ⊢ a : U $ > $ g ⊢ Ty (El a) $;
-axiom nat_c_intro (g: ctx): $ ok g $ > $ g ⊢ nat_c : U $;
-axiom empty_c_intro (g: ctx): $ ok g $ > $ g ⊢ empty_c : U $;
-
-def zero_code (n: tm) {.w: tm}: tm = $ nat_rec U nat_c (λ w : U. empty_c) n $;
-
---| @congr
-axiom zero_code_congr (m n: tm): $ m ≈ n $ > $ zero_code m ≈ zero_code n $;
-
---| @rewrite
-axiom sb_tm_zero_code {x: tm} (u n: tm x):
-  $ (⟦ x / u ⟧ (zero_code n)) ≈ zero_code (⟦ x / u ⟧ n) $;
-
-theorem zero_code_step_ty (g: ctx) {w: tm}:
-  $ ok g $
-  > $ g ⊢ (λ w : U. empty_c) : (U → U) $;
-
-theorem zero_code_ty (g: ctx) (n: tm):
-  $ ok g $
-  > $ g ⊢ n : Nat $
-  > $ g ⊢ zero_code n : U $;
-
-theorem zero_code_zero (g: ctx):
-  $ ok g $
-  > $ g ⊢ El (zero_code zero) ≡ Nat $;
-
-theorem zero_code_one (g: ctx):
-  $ ok g $
-  > $ g ⊢ El (zero_code (suc zero)) ≡ Empty $;
-
-def zero_ne_one_p {.p .x: tm}: tm =
-  $ λ p : Id Nat zero (suc zero).
-      transport Nat x (El (zero_code x)) zero (suc zero) p zero $;
-
-theorem zero_ne_one (g: ctx):
-  $ ok g $
-  > $ g ⊢ zero_ne_one_p : (Id Nat zero (suc zero) → Empty) $;
---
--- ==================================================================
--- SECTION 10: Demo shape and maintenance notes
+-- SECTION 9: Demo shape and maintenance notes
 -- ==================================================================
 --
 -- The visible theorem progression is now:
---   1. a Π warmup (`lam_id_ty`, `lam_id_beta`)
+--   1. a Π warmup (`id_ty`, `app_id_beta`)
 --   2. Bool formation and computation (`bool_not_*`)
 --   3. Nat recursion and judgemental equality chaining
 --   4. an Id toolkit built from path induction
 --   5. addition typing, computation, and propositional arithmetic
---   6. commutativity of addition
---   7. a universe, and a proof that zero is not one
+--   6. the capstone: commutativity of addition
 --
 -- The file is intentionally more explicit than a minimal proof of the final
 -- theorem. Raw congruence and substitution metadata are included for

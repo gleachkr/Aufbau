@@ -707,7 +707,7 @@ const scenarios = [_]Scenario{
         // pinned by the sibling refs (l14, l19), so the binders are concrete
         // and the step is regenerable. Realistic large-mm0 generation gate.
         .name = "auto martin_lof add_comm id_trans auto?",
-        .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
+        .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_idtrans_auto.auf",
         .marker = "auto?",
         .expected_replacement = "id_trans_ty [l14, l19]",
@@ -719,7 +719,7 @@ const scenarios = [_]Scenario{
         // motive `l5`, the search also generates it (`Id_form [l3, l4]`),
         // opening the def's hidden `k` at that premise.
         .name = "auto martin_lof add_comm capstone auto? (no result)",
-        .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
+        .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_capstone_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",
@@ -733,7 +733,7 @@ const scenarios = [_]Scenario{
         // multi-step concrete regeneration that drives iterative deepening
         // toward its depth-6 ceiling. Deep-rebuild latency probe.
         .name = "auto martin_lof add_comm id_trans deep auto?",
-        .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
+        .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_idtrans_deep_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",
@@ -744,7 +744,7 @@ const scenarios = [_]Scenario{
         // martin_lof id_sym_ty: `J_elim` (path induction) whose large motive
         // and eigenvariables are not conclusion-pinned.
         .name = "auto martin_lof id_sym_ty J_elim auto? (no result)",
-        .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
+        .mm0_path = "tests/search_bench_cases/martin_lof_regular.mm0",
         .proof_path = "tests/search_bench_cases/ml_id_sym_ty_auto.auf",
         .marker = "auto?",
         .expected_replacement = "",

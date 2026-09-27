@@ -541,6 +541,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "mltt_min", .outcome = .pass },
     .{ .stem = "mltt", .outcome = .pass },
     .{ .stem = "martin_lof", .outcome = .pass },
+    .{ .stem = "martin_lof_regular", .outcome = .pass },
     .{ .stem = "peano", .outcome = .pass },
     .{ .stem = "euclid", .outcome = .pass },
     .{ .stem = "tait", .outcome = .pass },

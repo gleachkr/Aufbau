@@ -162,8 +162,8 @@ pub const guards = [_]FrontierGuard{
     // misses from k=2.
     .{
         .filter = "add_zero_right",
-        .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
-            "tests/search_bench_cases/martin_lof_frontier.auf",
+        .files = "tests/search_bench_cases/martin_lof_regular.mm0:" ++
+            "tests/search_bench_cases/martin_lof_regular.auf",
         .mode = "depth",
     },
     // Depth guard for the eager cut's eigenvariable check

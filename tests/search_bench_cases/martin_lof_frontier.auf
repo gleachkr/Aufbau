@@ -1,543 +1,733 @@
--- The proof progression is:
---   * a Π identity warmup
+-- Proofs for the theorems of martin_lof.mm0. Section numbers follow the
+-- .mm0 file; Section 1 has no theorems. The proof progression is:
+--   * structural helpers for contexts
+--   * a Π identity warmup and the non-dependent arrow wrappers
 --   * Bool and Nat computation examples
 --   * judgemental equality chaining
 --   * an internal identity toolkit built by path induction
 --   * addition laws, ending in commutativity
+--   * a universe, and a proof that zero is not one
 --
 -- ==================================================================
--- SECTION 0: Structural helpers
+-- SECTION 2: Context structure and structural rules
 -- ==================================================================
 
 weaken2
 -------
 
-l1: $ g , x : T1 ⊢ J $ by weaken [#1]
-l2: $ g , x : T1 , y : T2 ⊢ J $ by weaken [l1]
+l1: $ g , x : T1 ⊢ J $ by weaken [#1, #3]
+l2: $ g , x : T1 , y : T2 ⊢ J $ by weaken [#2, l1]
 
 weaken3
 -------
 
-l1: $ g , x : T1 , y : T2 ⊢ J $ by weaken2 [#1]
-l2: $ g , x : T1 , y : T2 , z : T3 ⊢ J $ by weaken [l1]
+l1: $ g , x : T1 , y : T2 ⊢ J $ by weaken2 [#1, #2, #4]
+l2: $ g , x : T1 , y : T2 , z : T3 ⊢ J $ by weaken [#3, l1]
+
+var_wk
+------
+
+l1: $ g , x : A ⊢ x : A $ by var [#1]
+l2: $ g , x : A , y : B ⊢ x : A $ by weaken [#2, l1]
+
+var_wk2
+-------
+
+l1: $ g , x : A , y : B ⊢ x : A $ by var_wk [#1, #2]
+l2: $ g , x : A , y : B , z : C ⊢ x : A $ by weaken [#3, l1]
 
 -- ==================================================================
--- SECTION 1: Π warmup
+-- SECTION 3: Π-types and substitution primitives
 -- ==================================================================
 
-id_ty
+arr_form
+--------
+
+l1: $ g , x : A ⊢ Ty B $ by weaken [#1, #2]
+l2: $ g ⊢ Ty (A → B) $ by pi_form [#1, l1]
+
+arr_elim
+--------
+
+l1: $ g , x : A ⊢ Ty B $ by weaken [#1, #4]
+l2: $ g ⊢ f · u : B $ by app_elim [#2, #3, l1]
+
+arr_intro
+---------
+
+l1: $ g , x : A ⊢ Ty B $ by weaken [#1, #2]
+l2: $ g ⊢ (λ x : A. t) : (A → B) $ by lam_intro [#1, l1, #3]
+
+arr_beta
+--------
+
+l1: $ g , x : A ⊢ Ty B $ by weaken [#1, #2]
+l2: $ g ⊢ ≡[B] ((λ x : A. t) · u) = (⟦ x / u ⟧ t) $
+  by app_beta [#1, l1, #3, #4]
+
+lam_id_ty
 -----
 
-l1: $ g , x : A ⊢ Ty A $ by weaken [#1]
-l2: $ g , x : A ⊢ x : A $ by var
+l1: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l2: $ g , x : A ⊢ x : A $ by var [#1]
 l3: $ g ⊢ (λ x : A. x) : (Π x : A. A) $ by lam_intro [#1, l1, l2]
 
-app_id_beta
+lam_id_beta
 -----------
 
-l1: $ g ⊢ Ty A $ by has_ty_regular [#1]
-l2: $ g ⊢ (λ x : A. x) : (Π x : A. A) $ by id_ty [l1]
-l3: $ g ⊢ ≡[A] ((λ x : A. x) · u) = u $ by app_beta [l2, #1]
+l1: $ g , x : A ⊢ x : A $ by var [#1]
+l2: $ g ⊢ ≡[A] ((λ x : A. x) · u) = u $ by arr_beta [#1, #1, l1, #2]
 
 -- ==================================================================
--- SECTION 2: Bool warmup
+-- SECTION 4: Bool
 -- ==================================================================
+
+bool_rec_ty
+---------
+
+l1: $ g ⊢ Ty Bool $ by bool_form [#1]
+l2: $ g , x : Bool ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g ⊢ bool_rec A t f b : A $ by bool_ind_elim [l2, #3, #4, #5]
+
+bool_rec_true
+--------------
+
+l1: $ g ⊢ Ty Bool $ by bool_form [#1]
+l2: $ g , x : Bool ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g ⊢ ≡[A] (bool_rec A t f true) = t $ by bool_ind_true [l2, #3, #4]
+
+bool_rec_false
+---------------
+
+l1: $ g ⊢ Ty Bool $ by bool_form [#1]
+l2: $ g , x : Bool ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g ⊢ ≡[A] (bool_rec A t f false) = f $ by bool_ind_false [l2, #3, #4]
 
 bool_not_ty
 -----------
 
-l1: $ g ⊢ false : Bool $ by false_intro
-l2: $ g ⊢ true : Bool $ by true_intro
-l3: $ g ⊢ ¬ b : Bool $ by bool_elim [l1, l2, #1]
+l1: $ g ⊢ Ty Bool $ by bool_form [#1]
+l2: $ g ⊢ false : Bool $ by false_intro [#1]
+l3: $ g ⊢ true : Bool $ by true_intro [#1]
+l4: $ g ⊢ ¬ b : Bool $ by bool_rec_ty [#1, l1, l2, l3, #2]
 
 bool_not_true
 -------------
 
-l1: $ g ⊢ false : Bool $ by false_intro
-l2: $ g ⊢ true : Bool $ by true_intro
-l3: $ g ⊢ ≡[Bool] (¬ true) = false $ by bool_beta_true [l1, l2]
+l1: $ g ⊢ Ty Bool $ by bool_form [#1]
+l2: $ g ⊢ false : Bool $ by false_intro [#1]
+l3: $ g ⊢ true : Bool $ by true_intro [#1]
+l4: $ g ⊢ ≡[Bool] (¬ true) = false $ by bool_rec_true [#1, l1, l2, l3]
 
 bool_not_false
 --------------
 
-l1: $ g ⊢ false : Bool $ by false_intro
-l2: $ g ⊢ true : Bool $ by true_intro
-l3: $ g ⊢ ≡[Bool] (¬ false) = true $ by bool_beta_false [l1, l2]
+l1: $ g ⊢ Ty Bool $ by bool_form [#1]
+l2: $ g ⊢ false : Bool $ by false_intro [#1]
+l3: $ g ⊢ true : Bool $ by true_intro [#1]
+l4: $ g ⊢ ≡[Bool] (¬ false) = true $ by bool_rec_false [#1, l1, l2, l3]
 
 -- ==================================================================
--- SECTION 3: Nat warmup
+-- SECTION 5: Nat
 -- ==================================================================
 
 one_ty
 ------
 
-l1: $ g ⊢ zero : Nat $ by zero_intro
+l1: $ g ⊢ zero : Nat $ by zero_intro [#1]
 l2: $ g ⊢ suc zero : Nat $ by suc_intro [l1]
+
+nat_rec_step_ty
+---------------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g , k : Nat , ih : A ⊢ s : (A → A) $
+  by weaken2 [l1, l2, #3]
+l4: $ g , k : Nat , ih : A ⊢ ih : A $ by var [l2]
+l5: $ g , k : Nat , ih : A ⊢ Ty A $ by weaken2 [l1, l2, #2]
+l6: $ g , k : Nat , ih : A ⊢ s · ih : A $
+  by arr_elim [l5, l3, l4, l5]
 
 nat_rec_ty
 ----------
 
-l1: $ g ⊢ Ty A $ by has_ty_regular [#1]
-l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1]
-l3: $ g , k : Nat , ih : const_ty k A ⊢ s : (A → A) $ by weaken2 [#2]
-l4: $ g , k : Nat , ih : const_ty k A ⊢ ih : const_ty k A $ by var
-l5: $ g , k : Nat , ih : const_ty k A ⊢ s · ih : A $
-  by app_elim [l3, l4]
-l6: $ g ⊢ nat_ind k ih (const_ty k A) z (s · ih) n :
-  [k/n] (const_ty k A) $ by nat_ind_elim [l2, #1, l5, #3]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g , k : Nat , ih : A ⊢ s · ih : A $
+  by nat_rec_step_ty [#1, #2, #4]
+l4: $ g ⊢ nat_rec A z s n : A $ by nat_ind_elim [l2, #3, l3, #5]
 
 nat_rec_zero
 ------------
 
-l1: $ g ⊢ Ty A $ by has_ty_regular [#1]
-l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1]
-l3: $ g , k : Nat , ih : const_ty k A ⊢ s : (A → A) $ by weaken2 [#2]
-l4: $ g , k : Nat , ih : const_ty k A ⊢ ih : const_ty k A $ by var
-l5: $ g , k : Nat , ih : const_ty k A ⊢ s · ih : A $
-  by app_elim [l3, l4]
-l6: $ g ⊢ ≡[[k/zero] (const_ty k A)]
-  (nat_ind k ih (const_ty k A) z (s · ih) zero) = z $
-  by nat_ind_zero [l2, #1, l5]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g , k : Nat , ih : A ⊢ s · ih : A $
+  by nat_rec_step_ty [#1, #2, #4]
+l4: $ g ⊢ ≡[A] (nat_rec A z s zero) = z $ by nat_ind_zero [l2, #3, l3]
 
 nat_rec_suc
 -----------
 
-l1: $ g ⊢ Ty A $ by has_ty_regular [#1]
-l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1]
-l3: $ g , k : Nat , ih : const_ty k A ⊢ s : (A → A) $ by weaken2 [#2]
-l4: $ g , k : Nat , ih : const_ty k A ⊢ ih : const_ty k A $ by var
-l5: $ g , k : Nat , ih : const_ty k A ⊢ s · ih : A $
-  by app_elim [l3, l4]
-l6: $ g ⊢ ≡[[k/suc n] (const_ty k A)]
-  (nat_ind k ih (const_ty k A) z (s · ih) (suc n)) =
-  (⟦ ih / nat_ind k ih (const_ty k A) z (s · ih) n ⟧
-      (⟦ k / n ⟧ (s · ih))) $
-  by nat_ind_suc [l2, #1, l5, #3]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ Ty A $ by weaken [l1, #2]
+l3: $ g , k : Nat , ih : A ⊢ s · ih : A $
+  by nat_rec_step_ty [#1, #2, #4]
+l4: $ g ⊢ ≡[A] (nat_rec A z s (suc n)) = (s · (nat_rec A z s n)) $
+  by nat_ind_suc [l2, #3, l3, #5]
 
 -- ==================================================================
--- SECTION 4: Typed equality warmup
+-- SECTION 6: Typed equality layer
 -- ==================================================================
+
+app_eq_right
+------------
+
+l1: $ g , x : A ⊢ f : (A → B) $ by weaken [#1, #3]
+l2: $ g , x : A ⊢ x : A $ by var [#1]
+l3: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l4: $ g , x : A ⊢ Ty B $ by weaken [#1, #2]
+l5: $ g , x : A ⊢ f · x : B $ by arr_elim [l3, l1, l2, l4]
+l6: $ g ⊢ ≡[B] (f · s) = (f · t) $ by sb_tm_eq [l5, #4]
+
+app_eq_left
+-----------
+
+l1: $ g ⊢ Ty (A → B) $ by arr_form [#1, #2]
+l2: $ g , x : (A → B) ⊢ x : (A → B) $ by var [l1]
+l3: $ g , x : (A → B) ⊢ u : A $ by weaken [l1, #4]
+l4: $ g , x : (A → B) ⊢ Ty A $ by weaken [l1, #1]
+l5: $ g , x : (A → B) ⊢ Ty B $ by weaken [l1, #2]
+l6: $ g , x : (A → B) ⊢ x · u : B $ by arr_elim [l4, l2, l3, l5]
+l7: $ g ⊢ ≡[B] (f · u) = (h · u) $ by sb_tm_eq [l6, #3]
+
+suc_eq
+------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , x : Nat ⊢ x : Nat $ by var [l1]
+l3: $ g , x : Nat ⊢ suc x : Nat $ by suc_intro [l2]
+l4: $ g ⊢ ≡[Nat] suc m = suc n $ by sb_tm_eq [l3, #2]
 
 double_step_ty
 --------------
 
-l1: $ g ⊢ Ty Nat $ by nat_form
-l2: $ g , k : Nat ⊢ Ty Nat $ by nat_form
-l3: $ g , k : Nat ⊢ k : Nat $ by var
-l4: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l3]
-l5: $ g , k : Nat ⊢ suc (suc k) : Nat $ by suc_intro [l4]
-l6: $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $
-  by lam_intro [l1, l2, l5]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l3: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l2]
+l4: $ g , k : Nat ⊢ suc (suc k) : Nat $ by suc_intro [l3]
+l5: $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $
+  by arr_intro [l1, l1, l4]
 
 nat_rec_two_step_one
 --------------------
 
-l1: $ g ⊢ zero : Nat $ by zero_intro
-l2: $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $ by double_step_ty
-l3: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l3: $ g ⊢ (λ k : Nat. suc (suc k)) : (Nat → Nat) $ by double_step_ty [#1]
+l4: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
   (suc zero)) = ((λ k : Nat. suc (suc k)) ·
   (nat_rec Nat zero (λ k : Nat. suc (suc k)) zero)) $
-  by nat_rec_suc [l1, l2, l1]
-l4: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k)) zero) = zero $
-  by nat_rec_zero [l1, l2]
-l5: $ g ⊢ ≡[Nat] ((λ k : Nat. suc (suc k)) ·
+  by nat_rec_suc [#1, l1, l2, l3, l2]
+l5: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k)) zero) = zero $
+  by nat_rec_zero [#1, l1, l2, l3]
+l6: $ g ⊢ ≡[Nat] ((λ k : Nat. suc (suc k)) ·
   (nat_rec Nat zero (λ k : Nat. suc (suc k)) zero)) =
-  ((λ k : Nat. suc (suc k)) · zero) $ by app_eq_right [l2, l4]
-l6: $ g ⊢ ≡[Nat] ((λ k : Nat. suc (suc k)) · zero) =
-  (suc (suc zero)) $ by app_beta [l2, l1]
-l7: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
+  ((λ k : Nat. suc (suc k)) · zero) $ by app_eq_right [l1, l1, l3, l5]
+l7: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l8: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l7]
+l9: $ g , k : Nat ⊢ suc (suc k) : Nat $ by suc_intro [l8]
+l10: $ g ⊢ ≡[Nat] ((λ k : Nat. suc (suc k)) · zero) =
+  (suc (suc zero)) $ by arr_beta [l1, l1, l9, l2]
+l11: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
   (suc zero)) = ((λ k : Nat. suc (suc k)) · zero) $
-  by eq_tm_trans [l3, l5]
-l8: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
-  (suc zero)) = (suc (suc zero)) $ by eq_tm_trans [l7, l6]
+  by eq_tm_trans [l4, l6]
+l12: $ g ⊢ ≡[Nat] (nat_rec Nat zero (λ k : Nat. suc (suc k))
+  (suc zero)) = (suc (suc zero)) $ by eq_tm_trans [l11, l10]
 
 -- ==================================================================
--- SECTION 5: Identity warmup
+-- SECTION 7: Identity type
 -- ==================================================================
+
+eq_tm_to_Id
+-----------
+
+l1: $ g , x : A ⊢ s : A $ by weaken [#1, #2]
+l2: $ g , x : A ⊢ x : A $ by var [#1]
+l3: $ g , x : A ⊢ Ty (Id A s x) $ by Id_form [l1, l2]
+l4: $ g ⊢ Id A s s ≡ Id A s t $ by sb_ty_eq [l3, #3]
+l5: $ g ⊢ refl A s : Id A s s $ by refl_intro [#2]
+l6: $ g ⊢ refl A s : Id A s t $ by ty_conv [l4, l5]
+
+id_ctx_ty
+---------
+
+l1: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l2: $ g , x : A , y : A ⊢ x : A $ by var_wk [#1, l1]
+l3: $ g , x : A , y : A ⊢ y : A $ by var [l1]
+l4: $ g , x : A , y : A ⊢ Ty (Id A x y) $ by Id_form [l2, l3]
+
+id_sym_motive
+-------------
+
+l1: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l2: $ g , x : A , y : A ⊢ Ty (Id A x y) $ by id_ctx_ty [#1]
+l3: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by var_wk [l1, l2]
+l4: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by var_wk2 [#1, l1, l2]
+l5: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $
+  by Id_form [l3, l4]
 
 id_sym_ty
 ---------
 
-l1: $ g , x : A , y : A ⊢ y : A $ by var
-l2: $ g , x : A ⊢ x : A $ by var
-l3: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by weaken [l1]
-l4: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by weaken2 [l2]
-l5: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $
-  by Id_form [l3, l4]
-l6: $ g , x : A ⊢ refl A x : Id A x x $ by refl_intro [l2]
-l7: $ g ⊢ J x y q A (Id A y x) (refl A x) s t p :
-  [x/s] [y/t] [q/p] (Id A y x) $ by J_elim [l5, l6, #1]
+l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $
+  by id_sym_motive [#1]
+l2: $ g , x : A ⊢ x : A $ by var [#1]
+l3: $ g , x : A ⊢ refl A x : Id A x x $ by refl_intro [l2]
+l4: $ g ⊢ J x y q A (Id A y x) (refl A x) s t p :
+  [x/s] [y/t] [q/p] (Id A y x) $ by J_elim [l1, l3, #2, #3, #4]
 
 id_sym_refl
 -----------
 
-l1: $ g , x : A , y : A ⊢ y : A $ by var
-l2: $ g , x : A ⊢ x : A $ by var
-l3: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by weaken [l1]
-l4: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by weaken2 [l2]
-l5: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $
-  by Id_form [l3, l4]
-l6: $ g , x : A ⊢ refl A x : Id A x x $ by refl_intro [l2]
-l7: $ g ⊢ ≡[[x/s] [y/s] [q/refl A s] (Id A y x)]
+l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id A y x) $
+  by id_sym_motive [#1]
+l2: $ g , x : A ⊢ x : A $ by var [#1]
+l3: $ g , x : A ⊢ refl A x : Id A x x $ by refl_intro [l2]
+l4: $ g ⊢ ≡[[x/s] [y/s] [q/refl A s] (Id A y x)]
   (J x y q A (Id A y x) (refl A x) s s (refl A s)) =
-  (⟦ x / s ⟧ (refl A x)) $ by J_beta [l5, l6, #1]
+  (⟦ x / s ⟧ (refl A x)) $ by J_beta [l1, l3, #2]
+
+id_trans_motive
+---------------
+
+l1: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l2: $ g , x : A , y : A ⊢ Ty (Id A x y) $ by id_ctx_ty [#1]
+l3: $ g , x : A , y : A , z : Id A x y ⊢ y : A $ by var_wk [l1, l2]
+l4: $ g , x : A , y : A , z : Id A x y ⊢ x : A $ by var_wk2 [#1, l1, l2]
+l5: $ g , x : A , y : A , z : Id A x y ⊢ u : A $
+  by weaken3 [#1, l1, l2, #2]
+l6: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u) $
+  by Id_form [l3, l5]
+l7: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A x u) $
+  by Id_form [l4, l5]
+l8: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u → Id A x u) $
+  by arr_form [l6, l7]
+
+id_trans_branch
+---------------
+
+l1: $ g , x : A ⊢ x : A $ by var [#1]
+l2: $ g , x : A ⊢ u : A $ by weaken [#1, #2]
+l3: $ g , x : A ⊢ Ty (Id A x u) $ by Id_form [l1, l2]
+l4: $ g , x : A ⊢ (λ w : Id A x u. w) : (Id A x u → Id A x u) $
+  by lam_id_ty [l3]
 
 id_trans_ty
 -----------
 
-l1: $ g ⊢ u : A $ by Id_right_regular [#2]
-l2: $ g , x : A ⊢ x : A $ by var
-l3: $ g , x : A , y : A ⊢ y : A $ by var
-l4: $ g , x : A , y : A , z : Id A x y ⊢ u : A $ by weaken3 [l1]
-l5: $ g , x : A , y : A , z : Id A x y ⊢ x : A $ by weaken2 [l2]
-l6: $ g , x : A , y : A , z : Id A x y ⊢ y : A $ by weaken [l3]
-l7: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u) $
-  by Id_form [l6, l4]
-l8: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A x u) $
-  by Id_form [l5, l4]
-l9: $ g , x : A , y : A , z : Id A x y , w : Id A y u ⊢
-  Ty (Id A x u) $ by weaken [l8]
-l10: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u → Id A x u) $
-  by pi_form [l7, l9]
-l11: $ g , x : A ⊢ u : A $ by weaken [l1]
-l12: $ g , x : A ⊢ Ty (Id A x u) $ by Id_form [l2, l11]
-l13: $ g , x : A ⊢ (λ w : Id A x u. w) : (Id A x u → Id A x u) $
-  by id_ty [l12]
-l14: $ g ⊢ J x y z A (Id A y u → Id A x u)
+l1: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u → Id A x u) $
+  by id_trans_motive [#1, #4]
+l2: $ g , x : A ⊢ (λ w : Id A x u. w) : (Id A x u → Id A x u) $
+  by id_trans_branch [#1, #4]
+l3: $ g ⊢ J x y z A (Id A y u → Id A x u)
   (λ w : Id A x u. w) s t p : (Id A t u → Id A s u) $
-  by J_elim [l10, l13, #1]
-l15: $ g ⊢ (J x y z A (Id A y u → Id A x u)
-  (λ w : Id A x u. w) s t p) · q : Id A s u $ by app_elim [l14, #2]
+  by J_elim [l1, l2, #2, #3, #5]
+l4: $ g ⊢ Ty (Id A t u) $ by Id_form [#3, #4]
+l5: $ g ⊢ Ty (Id A s u) $ by Id_form [#2, #4]
+l6: $ g ⊢ (J x y z A (Id A y u → Id A x u)
+  (λ w : Id A x u. w) s t p) · q : Id A s u $
+  by arr_elim [l4, l3, #6, l5]
 
 id_trans_refl_left
 ------------------
 
-l1: $ g ⊢ s : A $ by Id_left_regular [#1]
-l2: $ g ⊢ u : A $ by Id_right_regular [#1]
-l3: $ g , x : A ⊢ x : A $ by var
-l4: $ g , x : A , y : A ⊢ y : A $ by var
-l5: $ g , x : A , y : A , z : Id A x y ⊢ u : A $ by weaken3 [l2]
-l6: $ g , x : A , y : A , z : Id A x y ⊢ x : A $ by weaken2 [l3]
-l7: $ g , x : A , y : A , z : Id A x y ⊢ y : A $ by weaken [l4]
-l8: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u) $
-  by Id_form [l7, l5]
-l9: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A x u) $
-  by Id_form [l6, l5]
-l10: $ g , x : A , y : A , z : Id A x y , w : Id A y u ⊢
-  Ty (Id A x u) $ by weaken [l9]
-l11: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u → Id A x u) $
-  by pi_form [l8, l10]
-l12: $ g , x : A ⊢ u : A $ by weaken [l2]
-l13: $ g , x : A ⊢ Ty (Id A x u) $ by Id_form [l3, l12]
-l14: $ g , x : A ⊢ (λ w : Id A x u. w) : (Id A x u → Id A x u) $
-  by id_ty [l13]
-l15: $ g ⊢ ≡[[x/s] [y/s] [z/refl A s] (Id A y u → Id A x u)]
+l1: $ g , x : A , y : A , z : Id A x y ⊢ Ty (Id A y u → Id A x u) $
+  by id_trans_motive [#1, #3]
+l2: $ g , x : A ⊢ (λ w : Id A x u. w) : (Id A x u → Id A x u) $
+  by id_trans_branch [#1, #3]
+l3: $ g ⊢ ≡[[x/s] [y/s] [z/refl A s] (Id A y u → Id A x u)]
   (J x y z A (Id A y u → Id A x u) (λ w : Id A x u. w)
     s s (refl A s)) = (⟦ x / s ⟧ (λ w : Id A x u. w)) $
-  by J_beta [l11, l14, l1]
-l16: $ g ⊢ ≡[Id A s u]
+  by J_beta [l1, l2, #2]
+l4: $ g ⊢ Ty (Id A s u) $ by Id_form [#2, #3]
+l5: $ g ⊢ ≡[Id A s u]
   ((J x y z A (Id A y u → Id A x u) (λ w : Id A x u. w)
     s s (refl A s)) · q) = ((λ w : Id A s u. w) · q) $
-  by app_eq_left [l15, #1]
-l17: $ g ⊢ Ty (Id A s u) $ by Id_form [l1, l2]
-l18: $ g , w : Id A s u ⊢ Ty (Id A s u) $ by weaken [l17]
-l19: $ g , w : Id A s u ⊢ w : Id A s u $ by var
-l20: $ g ⊢ (λ w : Id A s u. w) : (Id A s u → Id A s u) $
-  by lam_intro [l17, l18, l19]
-l21: $ g ⊢ ≡[Id A s u] ((λ w : Id A s u. w) · q) = q $
-  by app_beta [l20, #1]
-l22: $ g ⊢ ≡[Id A s u]
+  by app_eq_left [l4, l4, l3, #4]
+l6: $ g , w : Id A s u ⊢ w : Id A s u $ by var [l4]
+l7: $ g ⊢ ≡[Id A s u] ((λ w : Id A s u. w) · q) = q $
+  by arr_beta [l4, l4, l6, #4]
+l8: $ g ⊢ ≡[Id A s u]
   ((J x y z A (Id A y u → Id A x u) (λ w : Id A x u. w)
-    s s (refl A s)) · q) = q $ by eq_tm_trans [l16, l21]
+    s s (refl A s)) · q) = q $ by eq_tm_trans [l5, l7]
+
+ap_motive
+---------
+
+l1: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l2: $ g , x : A , y : A ⊢ Ty (Id A x y) $ by id_ctx_ty [#1]
+l3: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by var_wk2 [#1, l1, l2]
+l4: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by var_wk [l1, l2]
+l5: $ g , x : A , y : A , q : Id A x y ⊢ f : (A → B) $
+  by weaken3 [#1, l1, l2, #3]
+l6: $ g , x : A , y : A , q : Id A x y ⊢ Ty B $ by weaken3 [#1, l1, l2, #2]
+l7: $ g , x : A , y : A , q : Id A x y ⊢ Ty A $ by weaken3 [#1, l1, l2, #1]
+l8: $ g , x : A , y : A , q : Id A x y ⊢ f · x : B $
+  by arr_elim [l7, l5, l3, l6]
+l9: $ g , x : A , y : A , q : Id A x y ⊢ f · y : B $
+  by arr_elim [l7, l5, l4, l6]
+l10: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id B (f · x) (f · y)) $
+  by Id_form [l8, l9]
+
+ap_branch
+---------
+
+l1: $ g , x : A ⊢ f : (A → B) $ by weaken [#1, #3]
+l2: $ g , x : A ⊢ x : A $ by var [#1]
+l3: $ g , x : A ⊢ Ty B $ by weaken [#1, #2]
+l4: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l5: $ g , x : A ⊢ f · x : B $ by arr_elim [l4, l1, l2, l3]
+l6: $ g , x : A ⊢ refl B (f · x) : Id B (f · x) (f · x) $
+  by refl_intro [l5]
 
 ap_ty
 -----
 
-l1: $ g , x : A ⊢ f : (A → B) $ by weaken [#1]
-l2: $ g , x : A ⊢ x : A $ by var
-l3: $ g , x : A , y : A ⊢ y : A $ by var
-l4: $ g , x : A , y : A , q : Id A x y ⊢ f : (A → B) $
-  by weaken3 [#1]
-l5: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by weaken2 [l2]
-l6: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by weaken [l3]
-l7: $ g , x : A , y : A , q : Id A x y ⊢ f · x : B $
-  by app_elim [l4, l5]
-l8: $ g , x : A , y : A , q : Id A x y ⊢ f · y : B $
-  by app_elim [l4, l6]
-l9: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id B (f · x) (f · y)) $
-  by Id_form [l7, l8]
-l10: $ g , x : A ⊢ f · x : B $ by app_elim [l1, l2]
-l11: $ g , x : A ⊢ refl B (f · x) : Id B (f · x) (f · x) $
-  by refl_intro [l10]
-l12: $ g ⊢ J x y q A (Id B (f · x) (f · y))
+l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id B (f · x) (f · y)) $
+  by ap_motive [#1, #2, #3]
+l2: $ g , x : A ⊢ refl B (f · x) : Id B (f · x) (f · x) $
+  by ap_branch [#1, #2, #3]
+l3: $ g ⊢ J x y q A (Id B (f · x) (f · y))
   (refl B (f · x)) s t p : Id B (f · s) (f · t) $
-  by J_elim [l9, l11, #2]
+  by J_elim [l1, l2, #4, #5, #6]
 
 ap_refl
 -------
 
-l1: $ g , x : A ⊢ f : (A → B) $ by weaken [#1]
-l2: $ g , x : A ⊢ x : A $ by var
-l3: $ g , x : A , y : A ⊢ y : A $ by var
-l4: $ g , x : A , y : A , q : Id A x y ⊢ f : (A → B) $
-  by weaken3 [#1]
-l5: $ g , x : A , y : A , q : Id A x y ⊢ x : A $ by weaken2 [l2]
-l6: $ g , x : A , y : A , q : Id A x y ⊢ y : A $ by weaken [l3]
-l7: $ g , x : A , y : A , q : Id A x y ⊢ f · x : B $
-  by app_elim [l4, l5]
-l8: $ g , x : A , y : A , q : Id A x y ⊢ f · y : B $
-  by app_elim [l4, l6]
-l9: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id B (f · x) (f · y)) $
-  by Id_form [l7, l8]
-l10: $ g , x : A ⊢ f · x : B $ by app_elim [l1, l2]
-l11: $ g , x : A ⊢ refl B (f · x) : Id B (f · x) (f · x) $
-  by refl_intro [l10]
-l12: $ g ⊢ ≡[Id B (f · s) (f · s)]
+l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty (Id B (f · x) (f · y)) $
+  by ap_motive [#1, #2, #3]
+l2: $ g , x : A ⊢ refl B (f · x) : Id B (f · x) (f · x) $
+  by ap_branch [#1, #2, #3]
+l3: $ g ⊢ ≡[Id B (f · s) (f · s)]
   (J x y q A (Id B (f · x) (f · y)) (refl B (f · x))
     s s (refl A s)) = (refl B (f · s)) $
-  by J_beta [l9, l11, #2]
+  by J_beta [l1, l2, #4]
+
+ap_suc_motive
+-------------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , x : Nat ⊢ Ty Nat $ by weaken [l1, l1]
+l3: $ g , x : Nat , y : Nat ⊢ Ty (Id Nat x y) $ by id_ctx_ty [l1]
+l4: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ x : Nat $
+  by var_wk2 [l1, l2, l3]
+l5: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ y : Nat $ by var_wk [l2, l3]
+l6: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ suc x : Nat $
+  by suc_intro [l4]
+l7: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ suc y : Nat $
+  by suc_intro [l5]
+l8: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢
+  Ty (Id Nat (suc x) (suc y)) $ by Id_form [l6, l7]
+
+ap_suc_branch
+-------------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , x : Nat ⊢ x : Nat $ by var [l1]
+l3: $ g , x : Nat ⊢ suc x : Nat $ by suc_intro [l2]
+l4: $ g , x : Nat ⊢ refl Nat (suc x) : Id Nat (suc x) (suc x) $
+  by refl_intro [l3]
 
 ap_suc_ty
 ---------
 
-l1: $ g , x : Nat ⊢ x : Nat $ by var
-l2: $ g , x : Nat ⊢ suc x : Nat $ by suc_intro [l1]
-l3: $ g , x : Nat , y : Nat ⊢ y : Nat $ by var
-l4: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ suc x : Nat $
-  by weaken2 [l2]
-l5: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ y : Nat $ by weaken [l3]
-l6: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ suc y : Nat $
-  by suc_intro [l5]
-l7: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢
-  Ty (Id Nat (suc x) (suc y)) $ by Id_form [l4, l6]
-l8: $ g , x : Nat ⊢ refl Nat (suc x) : Id Nat (suc x) (suc x) $
-  by refl_intro [l2]
-l9: $ g ⊢ ap_suc s t p : Id Nat (suc s) (suc t) $
-  by J_elim [l7, l8, #1]
+l1: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢
+  Ty (Id Nat (suc x) (suc y)) $ by ap_suc_motive [#1]
+l2: $ g , x : Nat ⊢ refl Nat (suc x) : Id Nat (suc x) (suc x) $
+  by ap_suc_branch [#1]
+l3: $ g ⊢ ap_suc s t p : Id Nat (suc s) (suc t) $
+  by J_elim [l1, l2, #2, #3, #4]
 
 ap_suc_refl
 -----------
 
-l1: $ g , x : Nat ⊢ x : Nat $ by var
-l2: $ g , x : Nat ⊢ suc x : Nat $ by suc_intro [l1]
-l3: $ g , x : Nat , y : Nat ⊢ y : Nat $ by var
-l4: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ suc x : Nat $
-  by weaken2 [l2]
-l5: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ y : Nat $ by weaken [l3]
-l6: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢ suc y : Nat $
-  by suc_intro [l5]
-l7: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢
-  Ty (Id Nat (suc x) (suc y)) $ by Id_form [l4, l6]
-l8: $ g , x : Nat ⊢ refl Nat (suc x) : Id Nat (suc x) (suc x) $
-  by refl_intro [l2]
-l9: $ g ⊢ ≡[Id Nat (suc s) (suc s)]
+l1: $ g , x : Nat , y : Nat , q : Id Nat x y ⊢
+  Ty (Id Nat (suc x) (suc y)) $ by ap_suc_motive [#1]
+l2: $ g , x : Nat ⊢ refl Nat (suc x) : Id Nat (suc x) (suc x) $
+  by ap_suc_branch [#1]
+l3: $ g ⊢ ≡[Id Nat (suc s) (suc s)]
   (ap_suc s s (refl Nat s)) = refl Nat (suc s) $
-  by J_beta [l7, l8, #1]
+  by J_beta [l1, l2, #2]
+
+transport_motive
+----------------
+
+l1: $ g , x : A ⊢ Ty A $ by weaken [#1, #1]
+l2: $ g , x : A , y : A ⊢ Ty (Id A x y) $ by id_ctx_ty [#1]
+l3: $ g , x : A , y : A , q : Id A x y ⊢ Ty B $ by weaken2 [l1, l2, #2]
+l4: $ g , x : A , y : A ⊢ Ty ([x/y] B) $ by sb_ty_var_form [#1, #2]
+l5: $ g , x : A , y : A , q : Id A x y ⊢ Ty ([x/y] B) $ by weaken [l2, l4]
+l6: $ g , x : A , y : A , q : Id A x y ⊢ Ty (B → [x/y] B) $
+  by arr_form [l3, l5]
 
 transport_ty
 ------------
 
-l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty B $ by weaken2 [#1]
-l2: $ g , x : A , y : A , q : Id A x y ⊢ Ty ([x/y] B) $
-  by sb_ty_var_form [#1]
-l3: $ g , x : A , y : A , q : Id A x y , w : B ⊢ Ty ([x/y] B) $
-  by weaken [l2]
-l4: $ g , x : A , y : A , q : Id A x y ⊢ Ty (B → [x/y] B) $
-  by pi_form [l1, l3]
-l5: $ g , x : A ⊢ (λ w : B. w) : (B → B) $ by id_ty [#1]
-l6: $ g ⊢ J x y q A (B → [x/y] B) (λ w : B. w) s t p :
+l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty (B → [x/y] B) $
+  by transport_motive [#1, #2]
+l2: $ g , x : A ⊢ (λ w : B. w) : (B → B) $ by lam_id_ty [#2]
+l3: $ g ⊢ J x y q A (B → [x/y] B) (λ w : B. w) s t p :
   ([x/s] B → [x/t] B) $
-  by J_elim [l4, l5, #2]
-l7: $ g ⊢ (J x y q A (B → [x/y] B) (λ w : B. w) s t p) · u :
-  [x/t] B $ by app_elim [l6, #3]
+  by J_elim [l1, l2, #3, #4, #5]
+l4: $ g ⊢ Ty ([x/s] B) $ by sb_ty_form [#2, #3]
+l5: $ g ⊢ Ty ([x/t] B) $ by sb_ty_form [#2, #4]
+l6: $ g ⊢ (J x y q A (B → [x/y] B) (λ w : B. w) s t p) · u :
+  [x/t] B $ by arr_elim [l4, l3, #6, l5]
 
 transport_refl
 --------------
 
-l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty B $ by weaken2 [#1]
-l2: $ g , x : A , y : A , q : Id A x y ⊢ Ty ([x/y] B) $
-  by sb_ty_var_form [#1]
-l3: $ g , x : A , y : A , q : Id A x y , w : B ⊢ Ty ([x/y] B) $
-  by weaken [l2]
-l4: $ g , x : A , y : A , q : Id A x y ⊢ Ty (B → [x/y] B) $
-  by pi_form [l1, l3]
-l5: $ g , x : A ⊢ (λ w : B. w) : (B → B) $ by id_ty [#1]
-l6: $ g ⊢ ≡[[x/s] [y/s] [q/refl A s] (B → [x/y] B)]
+l1: $ g , x : A , y : A , q : Id A x y ⊢ Ty (B → [x/y] B) $
+  by transport_motive [#1, #2]
+l2: $ g , x : A ⊢ (λ w : B. w) : (B → B) $ by lam_id_ty [#2]
+l3: $ g ⊢ ≡[[x/s] [y/s] [q/refl A s] (B → [x/y] B)]
   (J x y q A (B → [x/y] B) (λ w : B. w) s s (refl A s)) =
-  (⟦ x / s ⟧ (λ w : B. w)) $ by J_beta [l4, l5, #2]
-l7: $ g ⊢ ≡[[x/s] B]
+  (⟦ x / s ⟧ (λ w : B. w)) $ by J_beta [l1, l2, #3]
+l4: $ g ⊢ Ty ([x/s] B) $ by sb_ty_form [#2, #3]
+l5: $ g ⊢ ≡[[x/s] B]
   ((J x y q A (B → [x/y] B) (λ w : B. w) s s (refl A s)) · u) =
-  ((λ w : [x/s] B. w) · u) $ by app_eq_left [l6, #3]
-l8: $ g ⊢ Ty ([x/s] B) $ by sb_ty_form [#1, #2]
-l9: $ g ⊢ (λ w : [x/s] B. w) : ([x/s] B → [x/s] B) $
-  by id_ty [l8]
-l10: $ g ⊢ ≡[[x/s] B] ((λ w : [x/s] B. w) · u) = u $
-  by app_beta [l9, #3]
-l11: $ g ⊢ ≡[[x/s] B]
+  ((λ w : [x/s] B. w) · u) $ by app_eq_left [l4, l4, l3, #4]
+l6: $ g , w : [x/s] B ⊢ w : [x/s] B $ by var [l4]
+l7: $ g ⊢ ≡[[x/s] B] ((λ w : [x/s] B. w) · u) = u $
+  by arr_beta [l4, l4, l6, #4]
+l8: $ g ⊢ ≡[[x/s] B]
   ((J x y q A (B → [x/y] B) (λ w : B. w) s s (refl A s)) · u) = u $
-  by eq_tm_trans [l7, l10]
+  by eq_tm_trans [l5, l7]
 
 -- ==================================================================
--- SECTION 6: Arithmetic warmup
+-- SECTION 8: Arithmetic library
 -- ==================================================================
 
 suc_fn_ty
 ---------
 
-l1: $ g ⊢ Ty Nat $ by nat_form
-l2: $ g , k : Nat ⊢ Ty Nat $ by nat_form
-l3: $ g , k : Nat ⊢ k : Nat $ by var
-l4: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l3]
-l5: $ g ⊢ suc_fn : (Nat → Nat) $ by lam_intro [l1, l2, l4]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l3: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l2]
+l4: $ g ⊢ suc_fn : (Nat → Nat) $ by arr_intro [l1, l1, l3]
 
 add_ty
 ------
 
-l1: $ g ⊢ suc_fn : (Nat → Nat) $ by suc_fn_ty
-l2: $ g ⊢ m + n : Nat $ by nat_rec_ty [#2, l1, #1]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g ⊢ suc_fn : (Nat → Nat) $ by suc_fn_ty [#1]
+l3: $ g ⊢ m + n : Nat $ by nat_rec_ty [#1, l1, #3, l2, #2]
+
+add_eq
+------------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ ok (g , x : Nat) $ by ext_ok [#1, l1]
+l3: $ g , x : Nat ⊢ x : Nat $ by var [l1]
+l4: $ g , x : Nat ⊢ n1 : Nat $ by weaken [l1, #3]
+l5: $ g , x : Nat ⊢ x + n1 : Nat $ by add_ty [l2, l3, l4]
+l6: $ g ⊢ ≡[Nat] (m1 + n1) = (m2 + n1) $ by sb_tm_eq [l5, #4]
+l7: $ g , x : Nat ⊢ m2 : Nat $ by weaken [l1, #2]
+l8: $ g , x : Nat ⊢ m2 + x : Nat $ by add_ty [l2, l7, l3]
+l9: $ g ⊢ ≡[Nat] (m2 + n1) = (m2 + n2) $ by sb_tm_eq [l8, #5]
+l10: $ g ⊢ ≡[Nat] (m1 + n1) = (m2 + n2) $ by eq_tm_trans [l6, l9]
 
 add_zero_left
 -------------
 
-l1: $ g ⊢ suc_fn : (Nat → Nat) $ by suc_fn_ty
-l2: $ g ⊢ ≡[Nat] (zero + n) = n $ by nat_rec_zero [#1, l1]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g ⊢ suc_fn : (Nat → Nat) $ by suc_fn_ty [#1]
+l3: $ g ⊢ ≡[Nat] (zero + n) = n $ by nat_rec_zero [#1, l1, #2, l2]
 
 add_suc_left
 ------------
 
-l1: $ g ⊢ Ty Nat $ by nat_form
-l2: $ g , k : Nat ⊢ Ty Nat $ by nat_form
-l3: $ g , k : Nat ⊢ k : Nat $ by var
-l4: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l3]
-l5: $ g ⊢ (λ k : Nat. suc k) : (Nat → Nat) $
-  by lam_intro [l1, l2, l4]
-l6: $ g ⊢ m + n : Nat $ by add_ty [#1, #2]
-l7: $ g ⊢ ≡[Nat] ((suc m) + n) =
-  ((λ k : Nat. suc k) · (m + n)) $ by nat_rec_suc [#2, l5, #1]
-l8: $ g ⊢ ≡[Nat] ((λ k : Nat. suc k) · (m + n)) = suc (m + n) $
-  by app_beta [l5, l6]
-l9: $ g ⊢ ≡[Nat] ((suc m) + n) = suc (m + n) $
-  by eq_tm_trans [l7, l8]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l3: $ g , k : Nat ⊢ suc k : Nat $ by suc_intro [l2]
+l4: $ g ⊢ (λ k : Nat. suc k) : (Nat → Nat) $
+  by arr_intro [l1, l1, l3]
+l5: $ g ⊢ m + n : Nat $ by add_ty [#1, #2, #3]
+l6: $ g ⊢ ≡[Nat] ((suc m) + n) =
+  ((λ k : Nat. suc k) · (m + n)) $ by nat_rec_suc [#1, l1, #3, l4, #2]
+l7: $ g ⊢ ≡[Nat] ((λ k : Nat. suc k) · (m + n)) = suc (m + n) $
+  by arr_beta [l1, l1, l3, l5]
+l8: $ g ⊢ ≡[Nat] ((suc m) + n) = suc (m + n) $
+  by eq_tm_trans [l6, l7]
 
 one_plus_one
 ------------
 
-l1: $ g ⊢ zero : Nat $ by zero_intro
+l1: $ g ⊢ zero : Nat $ by zero_intro [#1]
 l2: $ g ⊢ suc zero : Nat $ by suc_intro [l1]
 l3: $ g ⊢ ≡[Nat] ((suc zero) + (suc zero)) =
-  suc (zero + (suc zero)) $ by add_suc_left [l1, l2]
+  suc (zero + (suc zero)) $ by add_suc_left [#1, l1, l2]
 l4: $ g ⊢ ≡[Nat] (zero + (suc zero)) = suc zero $
-  by add_zero_left [l2]
+  by add_zero_left [#1, l2]
 l5: $ g ⊢ ≡[Nat] suc (zero + (suc zero)) = suc (suc zero) $
-  by suc_eq [l4]
+  by suc_eq [#1, l4]
 l6: $ g ⊢ ≡[Nat] ((suc zero) + (suc zero)) = (suc (suc zero)) $
   by eq_tm_trans [l3, l5]
+
+add_zero_left_path
+------------------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l3: $ g ⊢ zero + n : Nat $ by add_ty [#1, l2, #2]
+l4: $ g ⊢ ≡[Nat] (zero + n) = n $ by add_zero_left [#1, #2]
+l5: $ g ⊢ refl Nat (zero + n) : Id Nat (zero + n) n $
+  by eq_tm_to_Id [l1, l3, l4]
+
+add_suc_left_path
+-----------------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ g ⊢ suc m : Nat $ by suc_intro [#2]
+l3: $ g ⊢ (suc m) + n : Nat $ by add_ty [#1, l2, #3]
+l4: $ g ⊢ ≡[Nat] ((suc m) + n) = suc (m + n) $ by add_suc_left [#1, #2, #3]
+l5: $ g ⊢ refl Nat ((suc m) + n) : Id Nat ((suc m) + n) (suc (m + n)) $
+  by eq_tm_to_Id [l1, l3, l4]
 
 add_zero_right
 --------------
 
-l1: $ g , k : Nat ⊢ k : Nat $ by var
-l2: $ g , k : Nat ⊢ zero : Nat $ by zero_intro
-l3: $ g , k : Nat ⊢ k + zero : Nat $ by add_ty [l1, l2]
-l4: $ g , k : Nat ⊢ Ty (Id Nat (k + zero) k) $
-  by Id_form [l3, l1]
-l5: $ g ⊢ zero : Nat $ by zero_intro
-l6: $ g ⊢ ≡[Nat] (zero + zero) = zero $ by add_zero_left [l5]
-l7: $ g ⊢ refl Nat (zero + zero) : Id Nat (zero + zero) zero $
-  by eq_tm_to_Id [l6]
-l8: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢ k : Nat $
-  by weaken [l1]
-l9: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢ zero : Nat $
-  by zero_intro
-l10: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
-  ≡[Nat] ((suc k) + zero) = suc (k + zero) $
-  by add_suc_left [l8, l9]
-l11: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
-  refl Nat ((suc k) + zero) : Id Nat ((suc k) + zero) (suc (k + zero)) $
-  by eq_tm_to_Id [l10]
-l12: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
-  ih : Id Nat (k + zero) k $ by var
-l13: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
-  ap_suc (k + zero) k ih : Id Nat (suc (k + zero)) (suc k) $
-  by ap_suc_ty [l12]
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ ok (g , k : Nat) $ by ext_ok [#1, l1]
+l3: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l4: $ g , k : Nat ⊢ zero : Nat $ by zero_intro [l2]
+l5: $ g , k : Nat ⊢ k + zero : Nat $ by add_ty [l2, l3, l4]
+l6: $ g , k : Nat ⊢ Ty (Id Nat (k + zero) k) $
+  by Id_form [l5, l3]
+l7: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l8: $ g ⊢ refl Nat (zero + zero) : Id Nat (zero + zero) zero $
+  by add_zero_left_path [#1, l7]
+l9: $ ok (g , k : Nat , ih : Id Nat (k + zero) k) $ by ext_ok [l2, l6]
+l10: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢ k : Nat $ by var_wk [l1, l6]
+l11: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢ zero : Nat $ by zero_intro [l9]
+l12: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢ Ty Nat $ by nat_form [l9]
+l13: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢ suc k : Nat $ by suc_intro [l10]
 l14: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
+  (suc k) + zero : Nat $ by add_ty [l9, l13, l11]
+l15: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
+  refl Nat ((suc k) + zero) : Id Nat ((suc k) + zero) (suc (k + zero)) $
+  by add_suc_left_path [l9, l10, l11]
+l16: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
+  ih : Id Nat (k + zero) k $ by var [l6]
+l17: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
+  k + zero : Nat $ by add_ty [l9, l10, l11]
+l18: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
+  ap_suc (k + zero) k ih : Id Nat (suc (k + zero)) (suc k) $
+  by ap_suc_ty [l9, l17, l10, l16]
+l19: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
+  suc (k + zero) : Nat $ by suc_intro [l17]
+l20: $ g , k : Nat , ih : Id Nat (k + zero) k ⊢
   id_trans Nat ((suc k) + zero) (suc (k + zero)) (suc k)
     (refl Nat ((suc k) + zero)) (ap_suc (k + zero) k ih) :
   Id Nat ((suc k) + zero) (suc k) $
-  by id_trans_ty [l11, l13]
-l15: $ g ⊢ add_zero_right_p m : Id Nat (m + zero) m $
-  by nat_ind_elim [l4, l7, l14, #1]
+  by id_trans_ty [l12, l14, l19, l13, l15, l18]
+l21: $ g ⊢ add_zero_right_p m : Id Nat (m + zero) m $
+  by nat_ind_elim [l6, l8, l20, #2]
 
 add_suc_right
 -------------
 
-l1: $ g , k : Nat ⊢ k : Nat $ by var
-l2: $ g , k : Nat ⊢ n : Nat $ by weaken [#2]
-l3: $ g , k : Nat ⊢ suc n : Nat $ by suc_intro [l2]
-l4: $ g , k : Nat ⊢ k + suc n : Nat $ by add_ty [l1, l3]
-l5: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l1, l2]
-l6: $ g , k : Nat ⊢ suc (k + n) : Nat $ by suc_intro [l5]
-l7: $ g , k : Nat ⊢ Ty (Id Nat (k + suc n) (suc (k + n))) $
-  by Id_form [l4, l6]
-l8: $ g ⊢ suc n : Nat $ by suc_intro [#2]
-l9: $ g ⊢ ≡[Nat] (zero + suc n) = suc n $ by add_zero_left [l8]
-l10: $ g ⊢ refl Nat (zero + suc n) : Id Nat (zero + suc n) (suc n) $
-  by eq_tm_to_Id [l9]
-l11: $ g ⊢ ≡[Nat] (zero + n) = n $ by add_zero_left [#2]
-l12: $ g ⊢ ≡[Nat] suc (zero + n) = suc n $ by suc_eq [l11]
-l13: $ g ⊢ refl Nat (suc (zero + n)) : Id Nat (suc (zero + n)) (suc n) $
-  by eq_tm_to_Id [l12]
-l14: $ g ⊢ id_sym Nat (suc (zero + n)) (suc n)
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ ok (g , k : Nat) $ by ext_ok [#1, l1]
+l3: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l4: $ g , k : Nat ⊢ n : Nat $ by weaken [l1, #3]
+l5: $ g , k : Nat ⊢ suc n : Nat $ by suc_intro [l4]
+l6: $ g , k : Nat ⊢ k + suc n : Nat $ by add_ty [l2, l3, l5]
+l7: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l2, l3, l4]
+l8: $ g , k : Nat ⊢ suc (k + n) : Nat $ by suc_intro [l7]
+l9: $ g , k : Nat ⊢ Ty (Id Nat (k + suc n) (suc (k + n))) $
+  by Id_form [l6, l8]
+l10: $ g ⊢ suc n : Nat $ by suc_intro [#3]
+l11: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l12: $ g ⊢ zero + suc n : Nat $ by add_ty [#1, l11, l10]
+l13: $ g ⊢ refl Nat (zero + suc n) : Id Nat (zero + suc n) (suc n) $
+  by add_zero_left_path [#1, l10]
+l14: $ g ⊢ ≡[Nat] (zero + n) = n $ by add_zero_left [#1, #3]
+l15: $ g ⊢ ≡[Nat] suc (zero + n) = suc n $ by suc_eq [#1, l14]
+l16: $ g ⊢ zero + n : Nat $ by add_ty [#1, l11, #3]
+l17: $ g ⊢ suc (zero + n) : Nat $ by suc_intro [l16]
+l18: $ g ⊢ refl Nat (suc (zero + n)) : Id Nat (suc (zero + n)) (suc n) $
+  by eq_tm_to_Id [l1, l17, l15]
+l19: $ g ⊢ id_sym Nat (suc (zero + n)) (suc n)
   (refl Nat (suc (zero + n))) : Id Nat (suc n) (suc (zero + n)) $
-  by id_sym_ty [l13]
-l15: $ g ⊢ id_trans Nat (zero + suc n) (suc n) (suc (zero + n))
+  by id_sym_ty [l1, l17, l10, l18]
+l20: $ g ⊢ id_trans Nat (zero + suc n) (suc n) (suc (zero + n))
   (refl Nat (zero + suc n))
   (id_sym Nat (suc (zero + n)) (suc n)
     (refl Nat (suc (zero + n)))) :
   Id Nat (zero + suc n) (suc (zero + n)) $
-  by id_trans_ty [l10, l14]
-l16: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢ k : Nat $
-  by weaken [l1]
-l17: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢ n : Nat $
-  by weaken [l2]
-l18: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢ suc n : Nat $
-  by suc_intro [l17]
-l19: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
-  ≡[Nat] ((suc k) + suc n) = suc (k + suc n) $
-  by add_suc_left [l16, l18]
-l20: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by id_trans_ty [l1, l12, l10, l17, l13, l19]
+l21: $ ok (g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n))) $
+  by ext_ok [l2, l9]
+l22: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  k : Nat $ by var_wk [l1, l9]
+l23: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  n : Nat $ by weaken [l9, l4]
+l24: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  suc n : Nat $ by suc_intro [l23]
+l25: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  suc k : Nat $ by suc_intro [l22]
+l26: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  Ty Nat $ by nat_form [l21]
+l27: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  (suc k) + suc n : Nat $ by add_ty [l21, l25, l24]
+l28: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   refl Nat ((suc k) + suc n) :
   Id Nat ((suc k) + suc n) (suc (k + suc n)) $
-  by eq_tm_to_Id [l19]
-l21: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
-  ih : Id Nat (k + suc n) (suc (k + n)) $ by var
-l22: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by add_suc_left_path [l21, l22, l24]
+l29: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  ih : Id Nat (k + suc n) (suc (k + n)) $ by var [l9]
+l30: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  k + suc n : Nat $ by add_ty [l21, l22, l24]
+l31: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  k + n : Nat $ by add_ty [l21, l22, l23]
+l32: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  suc (k + n) : Nat $ by suc_intro [l31]
+l33: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   ap_suc (k + suc n) (suc (k + n)) ih :
   Id Nat (suc (k + suc n)) (suc (suc (k + n))) $
-  by ap_suc_ty [l21]
-l23: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
-  ≡[Nat] ((suc k) + n) = suc (k + n) $ by add_suc_left [l16, l17]
-l24: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by ap_suc_ty [l21, l30, l32, l29]
+l34: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  (suc k) + n : Nat $ by add_ty [l21, l25, l23]
+l35: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   refl Nat ((suc k) + n) : Id Nat ((suc k) + n) (suc (k + n)) $
-  by eq_tm_to_Id [l23]
-l25: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by add_suc_left_path [l21, l22, l23]
+l36: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   ap_suc ((suc k) + n) (suc (k + n)) (refl Nat ((suc k) + n)) :
   Id Nat (suc ((suc k) + n)) (suc (suc (k + n))) $
-  by ap_suc_ty [l24]
-l26: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by ap_suc_ty [l21, l34, l32, l35]
+l37: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  suc ((suc k) + n) : Nat $ by suc_intro [l34]
+l38: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  suc (suc (k + n)) : Nat $ by suc_intro [l32]
+l39: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   id_sym Nat (suc ((suc k) + n)) (suc (suc (k + n)))
     (ap_suc ((suc k) + n) (suc (k + n)) (refl Nat ((suc k) + n))) :
   Id Nat (suc (suc (k + n))) (suc ((suc k) + n)) $
-  by id_sym_ty [l25]
-l27: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by id_sym_ty [l26, l37, l38, l36]
+l40: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  suc (k + suc n) : Nat $ by suc_intro [l30]
+l41: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   id_trans Nat (suc (k + suc n)) (suc (suc (k + n)))
     (suc ((suc k) + n)) (ap_suc (k + suc n) (suc (k + n)) ih)
     (id_sym Nat (suc ((suc k) + n)) (suc (suc (k + n)))
       (ap_suc ((suc k) + n) (suc (k + n))
         (refl Nat ((suc k) + n)))) :
   Id Nat (suc (k + suc n)) (suc ((suc k) + n)) $
-  by id_trans_ty [l22, l26]
-l28: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
+  by id_trans_ty [l26, l40, l38, l37, l33, l39]
+l42: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
   id_trans Nat ((suc k) + suc n) (suc (k + suc n))
     (suc ((suc k) + n)) (refl Nat ((suc k) + suc n))
     (id_trans Nat (suc (k + suc n)) (suc (suc (k + n)))
@@ -546,64 +736,166 @@ l28: $ g , k : Nat , ih : Id Nat (k + suc n) (suc (k + n)) ⊢
         (ap_suc ((suc k) + n) (suc (k + n))
           (refl Nat ((suc k) + n))))) :
   Id Nat ((suc k) + suc n) (suc ((suc k) + n)) $
-  by id_trans_ty [l20, l27]
-l29: $ g ⊢ add_suc_right_p m n : Id Nat (m + suc n) (suc (m + n)) $
-  by nat_ind_elim [l7, l15, l28, #1]
+  by id_trans_ty [l26, l27, l40, l37, l28, l41]
+l43: $ g ⊢ add_suc_right_p m n : Id Nat (m + suc n) (suc (m + n)) $
+  by nat_ind_elim [l9, l20, l42, #2]
 
 add_comm
 --------
 
-l1: $ g , k : Nat ⊢ k : Nat $ by var
-l2: $ g , k : Nat ⊢ n : Nat $ by weaken [#2]
-l3: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l1, l2]
-l4: $ g , k : Nat ⊢ n + k : Nat $ by add_ty [l2, l1]
-l5: $ g , k : Nat ⊢ Ty (Id Nat (k + n) (n + k)) $
-  by Id_form [l3, l4]
-l6: $ g ⊢ ≡[Nat] (zero + n) = n $ by add_zero_left [#2]
-l7: $ g ⊢ refl Nat (zero + n) : Id Nat (zero + n) n $
-  by eq_tm_to_Id [l6]
-l8: $ g ⊢ add_zero_right_p n : Id Nat (n + zero) n $
-  by add_zero_right [#2]
-l9: $ g ⊢ id_sym Nat (n + zero) n (add_zero_right_p n) :
-  Id Nat n (n + zero) $ by id_sym_ty [l8]
-l10: $ g ⊢ id_trans Nat (zero + n) n (n + zero)
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ ok (g , k : Nat) $ by ext_ok [#1, l1]
+l3: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l4: $ g , k : Nat ⊢ n : Nat $ by weaken [l1, #3]
+l5: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l2, l3, l4]
+l6: $ g , k : Nat ⊢ n + k : Nat $ by add_ty [l2, l4, l3]
+l7: $ g , k : Nat ⊢ Ty (Id Nat (k + n) (n + k)) $
+  by Id_form [l5, l6]
+l8: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l9: $ g ⊢ zero + n : Nat $ by add_ty [#1, l8, #3]
+l10: $ g ⊢ refl Nat (zero + n) : Id Nat (zero + n) n $
+  by add_zero_left_path [#1, #3]
+l11: $ g ⊢ add_zero_right_p n : Id Nat (n + zero) n $
+  by add_zero_right [#1, #3]
+l12: $ g ⊢ n + zero : Nat $ by add_ty [#1, #3, l8]
+l13: $ g ⊢ id_sym Nat (n + zero) n (add_zero_right_p n) :
+  Id Nat n (n + zero) $ by id_sym_ty [l1, l12, #3, l11]
+l14: $ g ⊢ id_trans Nat (zero + n) n (n + zero)
   (refl Nat (zero + n)) (id_sym Nat (n + zero) n (add_zero_right_p n)) :
   Id Nat (zero + n) (n + zero) $
-  by id_trans_ty [l7, l9]
-l11: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ k : Nat $
-  by weaken [l1]
-l12: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ n : Nat $
-  by weaken [l2]
-l13: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
-  ≡[Nat] ((suc k) + n) = suc (k + n) $ by add_suc_left [l11, l12]
-l14: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  by id_trans_ty [l1, l9, #3, l12, l10, l13]
+l15: $ ok (g , k : Nat , ih : Id Nat (k + n) (n + k)) $ by ext_ok [l2, l7]
+l16: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ k : Nat $ by var_wk [l1, l7]
+l17: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ n : Nat $ by weaken [l7, l4]
+l18: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ Ty Nat $ by nat_form [l15]
+l19: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  suc k : Nat $ by suc_intro [l16]
+l20: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  (suc k) + n : Nat $ by add_ty [l15, l19, l17]
+l21: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
   refl Nat ((suc k) + n) : Id Nat ((suc k) + n) (suc (k + n)) $
-  by eq_tm_to_Id [l13]
-l15: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
-  ih : Id Nat (k + n) (n + k) $ by var
-l16: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  by add_suc_left_path [l15, l16, l17]
+l22: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  ih : Id Nat (k + n) (n + k) $ by var [l7]
+l23: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  k + n : Nat $ by add_ty [l15, l16, l17]
+l24: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  n + k : Nat $ by add_ty [l15, l17, l16]
+l25: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
   ap_suc (k + n) (n + k) ih : Id Nat (suc (k + n)) (suc (n + k)) $
-  by ap_suc_ty [l15]
-l17: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  by ap_suc_ty [l15, l23, l24, l22]
+l26: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
   add_suc_right_p n k : Id Nat (n + suc k) (suc (n + k)) $
-  by add_suc_right [l12, l11]
-l18: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  by add_suc_right [l15, l17, l16]
+l27: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  n + suc k : Nat $ by add_ty [l15, l17, l19]
+l28: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  suc (n + k) : Nat $ by suc_intro [l24]
+l29: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
   id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k) :
   Id Nat (suc (n + k)) (n + suc k) $
-  by id_sym_ty [l17]
-l19: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  by id_sym_ty [l18, l27, l28, l26]
+l30: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  suc (k + n) : Nat $ by suc_intro [l23]
+l31: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
   id_trans Nat (suc (k + n)) (suc (n + k)) (n + suc k)
     (ap_suc (k + n) (n + k) ih)
     (id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k)) :
   Id Nat (suc (k + n)) (n + suc k) $
-  by id_trans_ty [l16, l18]
-l20: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  by id_trans_ty [l18, l30, l28, l27, l25, l29]
+l32: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
   id_trans Nat ((suc k) + n) (suc (k + n)) (n + suc k)
     (refl Nat ((suc k) + n))
     (id_trans Nat (suc (k + n)) (suc (n + k)) (n + suc k)
       (ap_suc (k + n) (n + k) ih)
       (id_sym Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k))) :
   Id Nat ((suc k) + n) (n + suc k) $
-  by id_trans_ty [l14, l19]
-l21: $ g ⊢ add_comm_p m n : Id Nat (m + n) (n + m) $
-  by nat_ind_elim [l5, l10, l20, #1]
+  by id_trans_ty [l18, l20, l30, l27, l21, l31]
+l33: $ g ⊢ add_comm_p m n : Id Nat (m + n) (n + m) $
+  by nat_ind_elim [l7, l14, l32, #2]
+
+-- ==================================================================
+-- SECTION 9: Empty, a universe, and zero ≠ one
+-- ==================================================================
+
+zero_code_step_ty
+-----------------
+
+l1: $ g ⊢ Ty U $ by U_form [#1]
+l2: $ ok (g , w : U) $ by ext_ok [#1, l1]
+l3: $ g , w : U ⊢ empty_c : U $ by empty_c_intro [l2]
+l4: $ g ⊢ (λ w : U. empty_c) : (U → U) $ by arr_intro [l1, l1, l3]
+
+zero_code_ty
+------------
+
+l1: $ g ⊢ Ty U $ by U_form [#1]
+l2: $ g ⊢ nat_c : U $ by nat_c_intro [#1]
+l3: $ g ⊢ (λ w : U. empty_c) : (U → U) $ by zero_code_step_ty [#1]
+l4: $ g ⊢ zero_code n : U $ by nat_rec_ty [#1, l1, l2, l3, #2]
+
+zero_code_zero
+--------------
+
+l1: $ g ⊢ Ty U $ by U_form [#1]
+l2: $ g ⊢ nat_c : U $ by nat_c_intro [#1]
+l3: $ g ⊢ (λ w : U. empty_c) : (U → U) $ by zero_code_step_ty [#1]
+l4: $ g ⊢ ≡[U] (zero_code zero) = nat_c $ by nat_rec_zero [#1, l1, l2, l3]
+l5: $ g , y : U ⊢ y : U $ by var [l1]
+l6: $ g , y : U ⊢ Ty (El y) $ by El_form [l5]
+l7: $ g ⊢ El (zero_code zero) ≡ Nat $ by sb_ty_eq [l6, l4]
+
+zero_code_one
+-------------
+
+l1: $ g ⊢ Ty U $ by U_form [#1]
+l2: $ g ⊢ nat_c : U $ by nat_c_intro [#1]
+l3: $ g ⊢ (λ w : U. empty_c) : (U → U) $ by zero_code_step_ty [#1]
+l4: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l5: $ g ⊢ ≡[U] (zero_code (suc zero)) =
+  ((λ w : U. empty_c) · (zero_code zero)) $ by nat_rec_suc [#1, l1, l2, l3, l4]
+l6: $ g ⊢ zero_code zero : U $ by zero_code_ty [#1, l4]
+l7: $ ok (g , w : U) $ by ext_ok [#1, l1]
+l8: $ g , w : U ⊢ empty_c : U $ by empty_c_intro [l7]
+l9: $ g ⊢ ≡[U] ((λ w : U. empty_c) · (zero_code zero)) = empty_c $
+  by arr_beta [l1, l1, l8, l6]
+l10: $ g ⊢ ≡[U] (zero_code (suc zero)) = empty_c $ by eq_tm_trans [l5, l9]
+l11: $ g , y : U ⊢ y : U $ by var [l1]
+l12: $ g , y : U ⊢ Ty (El y) $ by El_form [l11]
+l13: $ g ⊢ El (zero_code (suc zero)) ≡ Empty $ by sb_ty_eq [l12, l10]
+
+zero_ne_one
+-----------
+
+l1: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l2: $ g ⊢ suc zero : Nat $ by suc_intro [l1]
+l3: $ g ⊢ Ty (Id Nat zero (suc zero)) $ by Id_form [l1, l2]
+l4: $ ok (g , p : Id Nat zero (suc zero)) $ by ext_ok [#1, l3]
+l5: $ g , p : Id Nat zero (suc zero) ⊢ Ty Nat $ by nat_form [l4]
+l6: $ ok (g , p : Id Nat zero (suc zero) , x : Nat) $ by ext_ok [l4, l5]
+l7: $ g , p : Id Nat zero (suc zero) , x : Nat ⊢ x : Nat $ by var [l5]
+l8: $ g , p : Id Nat zero (suc zero) , x : Nat ⊢ zero_code x : U $
+  by zero_code_ty [l6, l7]
+l9: $ g , p : Id Nat zero (suc zero) , x : Nat ⊢ Ty (El (zero_code x)) $
+  by El_form [l8]
+l10: $ g , p : Id Nat zero (suc zero) ⊢ zero : Nat $ by zero_intro [l4]
+l11: $ g , p : Id Nat zero (suc zero) ⊢ suc zero : Nat $ by suc_intro [l10]
+l12: $ g , p : Id Nat zero (suc zero) ⊢ p : Id Nat zero (suc zero) $
+  by var [l3]
+l13: $ g , p : Id Nat zero (suc zero) ⊢ El (zero_code zero) ≡ Nat $
+  by zero_code_zero [l4]
+l14: $ g , p : Id Nat zero (suc zero) ⊢ Nat ≡ El (zero_code zero) $
+  by eq_ty_sym [l13]
+l15: $ g , p : Id Nat zero (suc zero) ⊢ zero : El (zero_code zero) $
+  by ty_conv [l14, l10]
+l16: $ g , p : Id Nat zero (suc zero) ⊢
+  transport Nat x (El (zero_code x)) zero (suc zero) p zero :
+  El (zero_code (suc zero)) $ by transport_ty [l5, l9, l10, l11, l12, l15]
+l17: $ g , p : Id Nat zero (suc zero) ⊢ El (zero_code (suc zero)) ≡ Empty $
+  by zero_code_one [l4]
+l18: $ g , p : Id Nat zero (suc zero) ⊢
+  transport Nat x (El (zero_code x)) zero (suc zero) p zero : Empty $
+  by ty_conv [l17, l16]
+l19: $ g ⊢ Ty Empty $ by empty_form [#1]
+l20: $ g ⊢ zero_ne_one_p : (Id Nat zero (suc zero) → Empty) $
+  by arr_intro [l3, l19, l18]
