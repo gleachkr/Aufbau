@@ -190,6 +190,9 @@ pub fn validateSelectedRefs(
     bindings: []const ?ExprId,
     selected: []const ?usize,
     generated: []const ?RuleApplication,
+    // Whether the rule's conclusion has a `@rewrite` head anywhere
+    // (`plausible.templateHasRewriteHead`), computed once per rule.
+    concl_has_rewrite_head: bool,
     runtime: SearchRuntime,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
@@ -200,6 +203,27 @@ pub fn validateSelectedRefs(
         return;
     }
 
+    // The selected pool refs' conclusions, read once for the checks below. A
+    // generated slot has no ref yet.
+    var ref_buf: [16]?ExprId = undefined;
+    const ref_exprs = if (selected.len <= ref_buf.len)
+        ref_buf[0..selected.len]
+    else
+        try allocator.alloc(?ExprId, selected.len);
+    defer if (selected.len > ref_buf.len) allocator.free(ref_exprs);
+    var any_pool_ref = false;
+    for (ref_exprs, 0..) |*slot, idx| {
+        slot.* = null;
+        if (idx < generated.len and generated[idx] != null) continue;
+        const pool_index = selected[idx] orelse continue;
+        slot.* = refs_mod.sourceRefExpr(
+            context,
+            &candidate.theorem,
+            pool[pool_index].ref,
+        ) catch null;
+        if (slot.* != null) any_pool_ref = true;
+    }
+
     // Hyp-vs-ref ACUI member consistency: refute (candidate, refs) tuples
     // whose pool-ref conclusions cannot ACUI-match the instantiated
     // hypotheses under any conclusion-vs-goal binder assignment. This is
@@ -208,34 +232,16 @@ pub fn validateSelectedRefs(
     // from sweeping the whole pool through full `tryCandidate` — the
     // dominant doomed-reject flood in one-sided sequent theories, where
     // the entire conclusion is one ACUI region and seeding pins nothing.
-    hypref: {
-        var ref_concls_buf: [16]?ExprId = undefined;
-        if (selected.len > ref_concls_buf.len) break :hypref;
-        const ref_concls = ref_concls_buf[0..selected.len];
-        var any_pool_ref = false;
-        for (selected, 0..) |maybe_pool_index, idx| {
-            ref_concls[idx] = null;
-            if (idx < generated.len and generated[idx] != null) continue;
-            const pool_index = maybe_pool_index orelse continue;
-            ref_concls[idx] = refs_mod.sourceRefExpr(
-                context,
-                &candidate.theorem,
-                pool[pool_index].ref,
-            ) catch null;
-            if (ref_concls[idx] != null) any_pool_ref = true;
-        }
-        if (!any_pool_ref) break :hypref;
-        if (!plausible.hypRefMembersPlausible(
-            context,
-            &candidate.theorem,
-            candidate.rule_id,
-            goal,
-            bindings,
-            ref_concls,
-        )) {
-            if (counters) |actual| actual.hyp_ref_prunes += 1;
-            return;
-        }
+    if (any_pool_ref and selected.len <= ref_buf.len and !plausible.hypRefMembersPlausible(
+        context,
+        &candidate.theorem,
+        candidate.rule_id,
+        goal,
+        bindings,
+        ref_exprs,
+    )) {
+        if (counters) |actual| actual.hyp_ref_prunes += 1;
+        return;
     }
 
     // A `@rewrite` head in the conclusion (e.g. a substitution `⟦x/u⟧ t`)
@@ -245,28 +251,12 @@ pub fn validateSelectedRefs(
     // the seed bindings, not `bindings`: the ref match fills those position by
     // position, which under a `@rewrite` head is one choice among several
     // (`fst t u` against `fst o z` need not bind `u := z`).
-    redex: {
-        if (context.views.contains(candidate.rule_id)) break :redex;
+    if (concl_has_rewrite_head and !context.views.contains(candidate.rule_id)) redex: {
         const goal_expr = goal.concreteOrHint() orelse break :redex;
-        const rule = &context.env.rules.items[candidate.rule_id];
-        if (!plausible.templateHasRewriteHead(context, rule.concl)) break :redex;
-        const ref_exprs = try allocator.alloc(?ExprId, rule.hyps.len);
-        defer allocator.free(ref_exprs);
-        for (ref_exprs, 0..) |*slot, idx| {
-            slot.* = null;
-            if (idx >= selected.len) continue;
-            if (idx < generated.len and generated[idx] != null) continue;
-            const pool_index = selected[idx] orelse continue;
-            slot.* = refs_mod.sourceRefExpr(
-                context,
-                &candidate.theorem,
-                pool[pool_index].ref,
-            ) catch null;
-        }
         if (plausible.redexConclusionMismatch(
             context,
             &candidate.theorem,
-            rule,
+            &context.env.rules.items[candidate.rule_id],
             goal_expr,
             candidate.bindings,
             ref_exprs,

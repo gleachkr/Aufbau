@@ -1,6 +1,6 @@
 const std = @import("std");
 const TermDecl = @import("../../env.zig").TermDecl;
-const def_injectivity = @import("../../def_injectivity.zig");
+const head_class = @import("../../head_class.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const AcuiCacheKey = @import("../../expr.zig").AcuiCacheKey;
 const DefCacheKey = @import("../../expr.zig").DefCacheKey;
@@ -235,7 +235,7 @@ fn compareTransparentUncached(
             // A def may drop or bury the arg that differs (`K a b ≡ K a c`
             // for `K x y := x`), so fall through to the unfold attempts below.
             // If the head forces that arg, unfolding cannot reconcile it.
-            if (def_injectivity.argDetermined(
+            if (head_class.argDetermined(
                 self.shared.env,
                 self.shared.registry,
                 lhs_app.term_id,

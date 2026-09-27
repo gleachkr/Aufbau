@@ -7,7 +7,6 @@ pub const rigidExprMismatch = def_match.rigidExprMismatch;
 pub const UnfoldDefInfo = def_match.UnfoldDefInfo;
 pub const defBodyForUnfold = def_match.defBodyForUnfold;
 pub const unfoldDefBody = def_match.unfoldDefBody;
-pub const argDetermined = def_match.argDetermined;
 pub const projectViewBindingsIntoRule = def_match.projectViewBindingsIntoRule;
 pub const extractHypPartialBindings = def_match.extractHypPartialBindings;
 pub const templateNeedsSemantic = def_match.templateNeedsSemantic;

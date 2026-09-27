@@ -75,6 +75,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   rules, and skips the rule when the result cannot match the goal. In the
   Martin-Löf example, where substitution is such a head, this lets `auto?`
   find `add_suc_right` at greater depth.
+- `auto?` and `exact?` now rule out a rule whose conclusion differs from
+  the goal inside a definition that introduces a bound variable, such as
+  `∃`. `some a` and `some b` are distinct whenever `a` and `b` are, even
+  though each unfolds with a fresh bound variable, but the search used to
+  hold no opinion on such a pair. In the Martin-Löf example this lets
+  `auto?` find `add_comm` at greater depth.
 - A failed `auto?` now names every limit that cut it short and suggests
   raising them together with the budget, for example
   `auto? (nodes: 512, fuel: 8192, budget: 14)`. Editors offer the same
@@ -124,6 +130,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   repeated binder sits under a `@rewrite` head or under a definition
   argument that the definition drops. The search pruned such rules as
   impossible even though the checker accepts them.
+- `auto?`, `exact?` and `apply?` no longer discard a candidate for a
+  `@recover` rule whose line differs from the pattern only in an argument
+  that a definition drops. With `def K (a b) = a`, `P (K x y)` fits the
+  pattern `P (K x z)`, since both unfold to `P x`, but the search pruned
+  it. Nor does the search read bindings off such an argument, or off a
+  `@rewrite` head's arguments, when it seeds a rule from the goal.
 - The alpha-renaming axioms in the example theories and the manual's FOL
   prelude were unsound: they let the renamed body mention the new bound
   variable, so renaming captured it. The Martin-Löf example proved

@@ -36,7 +36,7 @@
 //! Head resolution sees through transparent defs including binder-introducing
 //! ones — `le a b`≡`∃ k (a+k=b)`, `dvd a b`≡`∃ k (b=a*k)`, `lt`→`le`→`∃` — because
 //! a def's *head* term never depends on its dummy binders, so a `dvd`-vs-`eq` or
-//! `or`-vs-`le` tuple prunes even though one surface head is `termNeedsSemantic`.
+//! `or`-vs-`le` tuple prunes even though one surface head is not rigid.
 //! Body walking is deliberately non-materializing: it never interns the expanded
 //! body and never mints placeholders for dummy binders, so it stays read-only and
 //! cannot consume the bounded per-context dependency-mask slots.
@@ -230,7 +230,7 @@ fn abstractDefiniteMismatch(
     // depends on its dummy binders. When the two roots are distinct rigid terms,
     // no unfolding or ACUI canonicalization can reconcile them. This is a
     // definite mismatch even though one or both surface heads is a
-    // `termNeedsSemantic` def: the divergence is at THIS node, and a node can be
+    // non-rigid def: the divergence is at THIS node, and a node can be
     // the hole only when it is the plug pair (excluded above) — a hole below
     // would force the two sides to share this head (hence the same rigid root).
     // `resolveRigidHead` returns null for ACUI / `@rewrite` / unavailable /
@@ -317,13 +317,9 @@ const BodySide = union(enum) {
 };
 
 fn defBody(context: *const Context, term_id: u32) ?BodyInfo {
-    if (!context.env.hasAvailableTerm(term_id)) return null;
-    if (context.registry.acui_by_head.contains(term_id)) return null;
-    if (context.registry.rewrites_by_head.contains(term_id)) return null;
+    if (semantic.headClass(context, term_id) != .def) return null;
     const term = context.env.terms.items[term_id];
-    if (!(term.available and term.is_def)) return null;
-    const body = term.body orelse return null;
-    return .{ .body = body, .nargs = term.args.len };
+    return .{ .body = term.body.?, .nargs = term.args.len };
 }
 
 fn bodyCompareUseful(
@@ -792,7 +788,7 @@ fn appAppMismatch(
     )) return true;
     if (left_term_id != right_term_id) return false;
     if (left_arg_count != right_arg_count) return false;
-    if (semantic.termNeedsSemantic(context, left_term_id)) return false;
+    if (!semantic.isRigidHead(context, left_term_id)) return false;
     for (0..left_arg_count) |idx| {
         if (bodyExpandedMismatch(
             context,
@@ -888,7 +884,7 @@ fn plugCouldOccurAt(
 
 fn headNeedsSemantic(context: *const Context, node: anytype) bool {
     return switch (node.*) {
-        .app => |a| semantic.termNeedsSemantic(context, a.term_id),
+        .app => |a| !semantic.isRigidHead(context, a.term_id),
         else => false,
     };
 }
@@ -899,7 +895,7 @@ fn headNeedsSemantic(context: *const Context, node: anytype) bool {
 /// structural divergence it simply stops descending that subtree, leaving the
 /// already-recorded (and positionally correct) bindings intact.
 ///
-/// It does NOT descend a `termNeedsSemantic` head (ACUI / transparent def /
+/// It does NOT descend a non-rigid head (ACUI / transparent def /
 /// `@rewrite` / unavailable): such a head has no canonical positional structure
 /// that the normalization-aware view match would commit to, so a binder pinned
 /// under it would be evidence the real matcher never forces — and could drive an
@@ -923,7 +919,7 @@ fn matchTemplateStructural(
             }
         },
         .app => |app| {
-            if (semantic.termNeedsSemantic(context, app.term_id)) return;
+            if (!semantic.isRigidHead(context, app.term_id)) return;
             const node = theorem.interner.node(expr_id);
             switch (node.*) {
                 .app => |concrete| {

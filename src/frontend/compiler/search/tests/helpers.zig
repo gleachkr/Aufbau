@@ -18,6 +18,8 @@ pub const backtrack = @import("../backward/backtrack.zig");
 
 pub const prune = @import("../backward/prune.zig");
 
+pub const semantic = @import("../backward/semantic.zig");
+
 pub const plausible = @import("../backward/plausible.zig");
 
 pub const abstract_prune = @import("../abstract_prune.zig");

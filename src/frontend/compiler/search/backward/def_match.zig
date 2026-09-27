@@ -8,8 +8,9 @@ const Context = types.Context;
 
 const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
+const lockstep = @import("./lockstep.zig");
 
-const termNeedsSemantic = semantic.termNeedsSemantic;
+const isRigidHead = semantic.isRigidHead;
 pub const templateNeedsSemantic = semantic.templateNeedsSemantic;
 pub const exprNeedsSemantic = semantic.exprNeedsSemantic;
 pub const bindingsNeedSemantic = semantic.bindingsNeedSemantic;
@@ -91,15 +92,12 @@ pub fn recoverDefiniteMismatch(
             return false;
         return source_head != pattern_head;
     }
-    if (source_app.args.len != pattern_app.args.len) return false;
-    for (source_app.args, pattern_app.args) |source_arg, pattern_arg| {
-        if (recoverDefiniteMismatch(
-            context,
-            theorem,
-            source_arg,
-            pattern_arg,
-            hole,
-        )) return true;
+    // Same head: only the args it forces must agree. A def arg the body drops
+    // (`K x y ≡ K x z` for `K a b := a`) or a `@rewrite` head's arg can differ
+    // in a source the validator still accepts.
+    var args = lockstep.exprArgs(context, theorem, source, pattern) orelse return false;
+    while (args.next()) |pair| {
+        if (recoverDefiniteMismatch(context, theorem, pair.a, pair.b, hole)) return true;
     }
     return false;
 }
@@ -125,17 +123,10 @@ fn coercedHole(
     return true;
 }
 
-// A term whose head the validator's recover reconciliation can never rewrite
-// away: available, not a transparent def, not an ACUI combiner. This is the
-// negation of `termNeedsSemantic`, named for the role it plays here.
-fn isRigidTerm(context: *const Context, term_id: u32) bool {
-    return !termNeedsSemantic(context, term_id);
-}
-
 // True when the node is an application whose head term can be rewritten away
 // by a `@rewrite` rule (so its head is not a reliable rigid key). Used to
 // withhold a definite-mismatch verdict, mirroring the reducible-head guards in
-// shape.zig and `termNeedsSemantic`.
+// shape.zig and `semantic.isRigidHead`.
 fn headIsReducibleNode(context: *const Context, node: *const ExprNode) bool {
     return switch (node.*) {
         .app => |app| context.registry.rewrites_by_head.contains(app.term_id),
@@ -147,9 +138,7 @@ fn headIsReducibleNode(context: *const Context, node: *const ExprNode) bool {
 // def-unfolding alignment: follow transparent-def heads through their body
 // templates until reaching a non-def app head (the rigid root). Head-only, so it
 // neither interns nor inspects dummy-bearing arguments — a head term's identity
-// is independent of the def's dummies, so unfolding binder-defs here is sound
-// (unlike the deep arg comparison `transparentDefBody` must gate against).
-// Returns null when the chain hits an ACUI combiner (canonicalization could
+// is independent of the def's dummies. Returns null when the chain hits an ACUI combiner (canonicalization could
 // rewrite it), a `@rewrite` LHS head (could rewrite to a different head), an
 // unavailable term, or a body rooted at a binder rather than an app — i.e. cases
 // where we hold no opinion.
@@ -180,21 +169,16 @@ fn resolveRigidHead(context: *const Context, term_id: u32) ?u32 {
     var current = term_id;
     var depth: usize = 0;
     while (depth < max_def_unfold_depth) : (depth += 1) {
-        if (context.registry.acui_by_head.contains(current)) return null;
-        // A `@rewrite` LHS head can rewrite to a *different* head, so it is not a
-        // reliable rigid root — even though it may be an ordinary (non-def,
-        // available) term. Treat it as non-rigid so a head clash against it is
-        // never decisive. (Callers that hit the immediate head guard this too;
-        // doing it here also covers a def whose body unfolds onto a rewrite head.)
-        if (context.registry.rewrites_by_head.contains(current)) return null;
-        if (!context.env.hasAvailableTerm(current)) return null;
-        const term = context.env.terms.items[current];
-        if (!term.available) return null;
-        if (!term.is_def) return current;
-        const body = term.body orelse return null;
-        switch (body) {
-            .app => |app| current = app.term_id,
-            .binder => return null,
+        switch (semantic.headClass(context, current)) {
+            .rigid => return current,
+            // Follow a def to the head its body presents.
+            .def => switch (context.env.terms.items[current].body.?) {
+                .app => |app| current = app.term_id,
+                .binder => return null,
+            },
+            // Canonicalization can rewrite an ACUI or `@rewrite` head, even a
+            // `@rewrite` head that is an ordinary term, so it is no stable root.
+            .acui, .rewrite, .unavailable => return null,
         }
     }
     return null;
@@ -264,7 +248,7 @@ fn flattenOrderedExpr(
 fn templateIsSingleMember(context: *const Context, template: TemplateExpr) bool {
     return switch (template) {
         .binder => false,
-        .app => |app| !termNeedsSemantic(context, app.term_id),
+        .app => |app| isRigidHead(context, app.term_id),
     };
 }
 
@@ -275,7 +259,7 @@ fn exprIsSingleMember(
 ) bool {
     return switch (theorem.interner.node(expr_id).*) {
         .variable, .placeholder => false,
-        .app => |app| !termNeedsSemantic(context, app.term_id),
+        .app => |app| isRigidHead(context, app.term_id),
     };
 }
 
@@ -361,16 +345,6 @@ fn extractOrderedSpineBindings(
     bindings[idx] = value;
 }
 
-// True when `term_id` heads a structural combiner registered with `@acui` AND
-// that declaration includes commutativity. Multiset/bag reasoning over the
-// combiner's arguments is only sound when this holds.
-fn acuiIsCommutative(context: *const Context, term_id: u32) bool {
-    const combiner = context.registry.acui_by_head.get(term_id) orelse return false;
-    // `comm_name` is the declaration-time signal (null iff `_` was given for the
-    // commutativity slot); `comm_id` is resolved lazily and may still be null.
-    return combiner.comm_name != null;
-}
-
 // Decide whether `template` (under `bindings`) provably cannot match `ref`,
 // looking only at *rigid* structure the validator can never bridge.
 //
@@ -402,99 +376,36 @@ pub fn templateDefiniteMismatch(
             return false;
         },
         .app => |app| {
-            // A `@rewrite` LHS head can reduce to a *different* head, so a
-            // rigid-head clash here is never definite — defer to the semantic
-            // matcher. (e.g. `[y/x][q/refl A x] C` vs `Id A x x`: the `sb_ty`
-            // head rewrites away.) Mirrors shape.zig's reducible-head widening
-            // and `termNeedsSemantic`; without this the rigid-head comparison
-            // below short-circuits the whole pair to `.mismatch`.
-            if (context.registry.rewrites_by_head.contains(app.term_id)) return false;
-            const node = theorem.interner.node(ref);
-            // Transparent def with a body: when the ref is the SAME def at the
-            // same arity, compare *through* the body. A payload like `≃[A] a = b`
-            // (`eqc`) unfolds to `eq · A · a · b`, so its bound args sit at rigid
-            // positions and can prune — even though the `eqc` head itself is not
-            // rigid. We never assume a def is injective: only arguments the body
-            // actually places at a rigid position are compared (see
-            // `defBodyTemplateMismatch`); ignored args (the `const` trap) and
-            // dummies are silently skipped. Bounded to one unfold layer.
-            if (transparentDefBody(context, app.term_id)) |info| {
-                switch (node.*) {
-                    .app => |concrete| {
-                        if (concrete.term_id == app.term_id and
-                            concrete.args.len == app.args.len and
-                            app.args.len == info.nargs)
-                        {
-                            return defBodyTemplateMismatch(
+            // A `@rewrite` head can reduce to a *different* head, so no clash
+            // with it is definite (`[y/x][q/refl A x] C` vs `Id A x x`: the
+            // `sb_ty` head rewrites away).
+            if (semantic.headClass(context, app.term_id) == .rewrite) return false;
+            switch (theorem.interner.node(ref).*) {
+                // A placeholder may still stand for anything.
+                .placeholder => return false,
+                // A compound with a rigid root can't equal a bare atom.
+                .variable => return resolveRigidHead(context, app.term_id) != null,
+                .app => |concrete| {
+                    // Same head: compare the args it forces. No def is assumed
+                    // injective: an arg its body drops (the `const` trap) or
+                    // places only under an ACUI or `@rewrite` head is skipped.
+                    if (lockstep.templateArgs(context, theorem, app, ref)) |aligned| {
+                        var args = aligned;
+                        while (args.next()) |pair| {
+                            if (templateDefiniteMismatch(
                                 context,
                                 theorem,
-                                info.body,
-                                app.args,
-                                concrete.args,
-                                info.nargs,
+                                pair.template,
+                                pair.expr,
                                 bindings,
-                            );
+                            )) return true;
                         }
-                    },
-                    .variable => {
-                        return resolveRigidHead(context, app.term_id) != null;
-                    },
-                    .placeholder => return false,
-                }
-                // Different def heads can still be impossible: if both expose
-                // distinct rigid roots after transparent-def unfolding, no
-                // unification or ACUI canonicalization can reconcile them.
-                switch (node.*) {
-                    .app => |concrete| {
-                        return rigidHeadMismatch(
-                            context,
-                            app.term_id,
-                            concrete.term_id,
-                        );
-                    },
-                    else => return false,
-                }
-            }
-            // A non-rigid template head (ACUI / unavailable / binder-def) could
-            // rearrange or unfold to match.  Still, if head-only def unfolding
-            // reveals distinct rigid roots on both sides, we can reject.
-            if (!isRigidTerm(context, app.term_id)) {
-                switch (node.*) {
-                    .app => |concrete| return rigidHeadMismatch(
-                        context,
-                        app.term_id,
-                        concrete.term_id,
-                    ),
-                    .variable => return resolveRigidHead(context, app.term_id) !=
-                        null,
-                    .placeholder => return false,
-                }
-            }
-            switch (node.*) {
-                .app => |concrete| {
-                    if (concrete.term_id != app.term_id) {
-                        return rigidHeadMismatch(
-                            context,
-                            app.term_id,
-                            concrete.term_id,
-                        );
+                        return false;
                     }
-                    if (concrete.args.len != app.args.len) return false;
-                    for (app.args, concrete.args) |tmpl_arg, ref_arg| {
-                        if (templateDefiniteMismatch(
-                            context,
-                            theorem,
-                            tmpl_arg,
-                            ref_arg,
-                            bindings,
-                        )) return true;
-                    }
-                    return false;
+                    // Different heads are definite only when def unfolding
+                    // exposes distinct rigid roots on both sides.
+                    return rigidHeadMismatch(context, app.term_id, concrete.term_id);
                 },
-                // A rigid compound can't equal a bare atom; a placeholder may
-                // still stand for anything, so withhold judgment there.
-                .variable => return true,
-                .placeholder => return false,
             }
         },
     }
@@ -502,8 +413,9 @@ pub fn templateDefiniteMismatch(
 
 // Rigid-divergence comparison of two committed expressions (the bound-binder
 // counterpart of `templateDefiniteMismatch`). Two distinct rigid atoms, a rigid
-// atom against a rigid compound, or two rigid compounds with differing heads are
-// all unbridgeable. Anything touching an ACUI/def/unavailable head or a
+// atom against a compound with a rigid root, compounds with distinct rigid
+// roots, or a divergence in an argument their shared head forces are all
+// unbridgeable. Anything else touching an ACUI/`@rewrite`/unavailable head or a
 // placeholder is inconclusive.
 pub fn rigidExprMismatch(
     context: *const Context,
@@ -517,9 +429,7 @@ pub fn rigidExprMismatch(
     // A `@rewrite`-reducible head on either side can rewrite to a different
     // head, so a rigid clash is never definite — e.g. a bound motive value
     // `const_ty k A` (reducible to `A` via `const_ty_eval`) compared against a
-    // ref's `A`. Mirrors `templateDefiniteMismatch`'s `.app` reducible guard;
-    // without it, primitive-but-reducible heads are treated as rigid and the
-    // pair is wrongly rejected before the normalizer runs.
+    // ref's `A`.
     if (headIsReducibleNode(context, na) or headIsReducibleNode(context, nb)) {
         return false;
     }
@@ -532,101 +442,21 @@ pub fn rigidExprMismatch(
             .app => |bb| return resolveRigidHead(context, bb.term_id) != null,
             .placeholder => return false,
         },
-        .app => |aa| {
-            // Same transparent-def head on both sides: compare through the body
-            // (e.g. a bound value `and(p,q)` vs ref `and(p',q')`), mirroring
-            // `templateDefiniteMismatch`. Only args the body places at a rigid
-            // position are compared, so this stays sound (no injectivity
-            // assumption) and bounded.
-            if (transparentDefBody(context, aa.term_id)) |info| {
-                switch (nb.*) {
-                    .app => |bb| {
-                        if (bb.term_id == aa.term_id and
-                            bb.args.len == aa.args.len and
-                            aa.args.len == info.nargs)
-                        {
-                            return defBodyExprMismatch(
-                                context,
-                                theorem,
-                                info.body,
-                                aa.args,
-                                bb.args,
-                                info.nargs,
-                            );
-                        }
-                    },
-                    else => {},
-                }
-                switch (nb.*) {
-                    .app => |bb| return rigidHeadMismatch(
-                        context,
-                        aa.term_id,
-                        bb.term_id,
-                    ),
-                    .variable => return resolveRigidHead(context, aa.term_id) !=
-                        null,
-                    .placeholder => return false,
-                }
-            }
-            if (!isRigidTerm(context, aa.term_id)) {
-                switch (nb.*) {
-                    .app => |bb| return rigidHeadMismatch(
-                        context,
-                        aa.term_id,
-                        bb.term_id,
-                    ),
-                    .variable => return resolveRigidHead(context, aa.term_id) !=
-                        null,
-                    .placeholder => return false,
-                }
-            }
-            switch (nb.*) {
-                .variable => return true,
-                .placeholder => return false,
-                .app => |bb| {
-                    if (aa.term_id != bb.term_id) {
-                        return rigidHeadMismatch(
-                            context,
-                            aa.term_id,
-                            bb.term_id,
-                        );
-                    }
-                    if (aa.args.len != bb.args.len) return false;
-                    for (aa.args, bb.args) |x, y| {
-                        if (rigidExprMismatch(context, theorem, x, y)) return true;
+        .app => |aa| switch (nb.*) {
+            .placeholder => return false,
+            .variable => return resolveRigidHead(context, aa.term_id) != null,
+            .app => |bb| {
+                if (lockstep.exprArgs(context, theorem, a, b)) |aligned| {
+                    var args = aligned;
+                    while (args.next()) |pair| {
+                        if (rigidExprMismatch(context, theorem, pair.a, pair.b)) return true;
                     }
                     return false;
-                },
-            }
+                }
+                return rigidHeadMismatch(context, aa.term_id, bb.term_id);
+            },
         },
     }
-}
-
-const DefBodyInfo = struct {
-    body: TemplateExpr,
-    nargs: usize,
-};
-
-// If `term_id` heads an available transparent def we can SAFELY unfold for a
-// structural comparison, return its body and argument count; otherwise null.
-//
-// "Safely" means first-order: the body introduces no binders of its own. We
-// detect this by `dummy_args.len == 0` — a def's inner λ-bound variables are
-// exactly its dummy args. The comparison walks the body substituting each side's
-// arguments and compares them at rigid positions as if independent closed terms;
-// that reasoning is only valid when no enclosing binder can capture an argument's
-// free variables. So binder-introducing defs (`∀`, `∃`, substitution, `and`/`or`
-// built from λ, …) are deliberately excluded — unfolding those here was unsound
-// and over-pruned. ACUI combiners are excluded too (flagged by
-// `termNeedsSemantic` but not defs).
-fn transparentDefBody(context: *const Context, term_id: u32) ?DefBodyInfo {
-    if (!context.env.hasAvailableTerm(term_id)) return null;
-    if (context.registry.acui_by_head.contains(term_id)) return null;
-    const term = context.env.terms.items[term_id];
-    if (!(term.available and term.is_def)) return null;
-    if (term.dummy_args.len != 0) return null;
-    const body = term.body orelse return null;
-    return .{ .body = body, .nargs = term.args.len };
 }
 
 pub const UnfoldDefInfo = struct {
@@ -635,13 +465,11 @@ pub const UnfoldDefInfo = struct {
     dummies: []const ArgInfo,
 };
 
-// Like `transparentDefBody`, but optionally accepts binder-introducing defs
-// (those with dummy args). Binder defs are only safe to unfold in SEED contexts
-// that materialize each dummy as a fresh placeholder (see `unfoldDefBody`): a
-// placeholder only loosens downstream matching, so it can never cause a false
-// prune or a captured-variable comparison. The matcher's mismatch logic must
-// NOT use this — it compares dummies as concrete terms, which is
-// capture-unsound — and stays on first-order `transparentDefBody`.
+// The body of `term_id` when it is an available transparent def, for unfolding
+// one layer. A binder-introducing def (one with dummy args) is returned only
+// when `allow_binder_defs`: its unfolding materializes each dummy as a fresh
+// placeholder (see `unfoldDefBody`), which only loosens later matching, so
+// only a caller that tolerates placeholders may ask for it.
 pub fn defBodyForUnfold(
     context: *const Context,
     term_id: u32,
@@ -681,158 +509,9 @@ pub fn unfoldDefBody(
     return try theorem.instantiateTemplate(info.body, binders);
 }
 
-// Compare `def(t_args)` against `def(r_args)` by walking the def's body. Both
-// unfoldings share the entire (recursively unfolded) body skeleton and differ
-// ONLY at occurrences of the outermost def's parameters, so a mismatch can only
-// arise where a root parameter sits at an all-rigid path. We walk the body, and:
-//   * a root-parameter binder reached via rigid heads → compare its two argument
-//     trees (`templateDefiniteMismatch`);
-//   * a nested transparent-def head → unfold it, pushing a scope whose params map
-//     to that application's argument templates (interpreted in the parent scope),
-//     so deeper levels (e.g. `⇔`/`bic` → `≃`/`eqc` → `eq`) keep narrowing;
-//   * a non-rigid, non-def head (ACUI / unavailable) → stop (no opinion);
-//   * a dummy binder (idx ≥ nargs) → fresh on both sides, no opinion.
-// Sound without assuming injectivity: arguments the unfolded body never places at
-// a rigid position are never compared (handles the `const`-def trap). Terminating:
-// def bodies reference only earlier-declared terms, so the unfold chain is acyclic;
-// `max_def_unfold_depth` is a defensive cap against pathologically deep stacks.
+// Bound on nested def unfolding. Def bodies reference only earlier-declared
+// terms, so the chain is acyclic; this caps pathologically deep stacks.
 const max_def_unfold_depth = 64;
-
-// A def-unfold scope. The root carries the two sides' argument trees being
-// compared (either rule-template-vs-ref-expr or expr-vs-expr); each nested level
-// carries the unfolding application's argument templates plus a pointer to the
-// enclosing scope they are interpreted in.
-const DefScope = struct {
-    nargs: usize,
-    kind: union(enum) {
-        // Outermost def reached from `templateDefiniteMismatch`.
-        template_root: struct {
-            t_args: []const TemplateExpr,
-            r_args: []const ExprId,
-        },
-        // Outermost def reached from `rigidExprMismatch`.
-        expr_root: struct {
-            a_args: []const ExprId,
-            b_args: []const ExprId,
-        },
-        nested: struct {
-            args: []const TemplateExpr,
-            parent: *const DefScope,
-        },
-    },
-};
-
-fn defBodyTemplateMismatch(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    body: TemplateExpr,
-    t_args: []const TemplateExpr,
-    r_args: []const ExprId,
-    nargs: usize,
-    bindings: []const ?ExprId,
-) bool {
-    const root = DefScope{
-        .nargs = nargs,
-        .kind = .{ .template_root = .{ .t_args = t_args, .r_args = r_args } },
-    };
-    return scopedBodyMismatch(context, theorem, body, &root, bindings, 0);
-}
-
-// Expr-vs-expr counterpart: compare `def(a_args)` against `def(b_args)` through
-// the shared body. Same machinery as `defBodyTemplateMismatch`, differing only in
-// the root leaf comparison (`rigidExprMismatch`).
-fn defBodyExprMismatch(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    body: TemplateExpr,
-    a_args: []const ExprId,
-    b_args: []const ExprId,
-    nargs: usize,
-) bool {
-    const root = DefScope{
-        .nargs = nargs,
-        .kind = .{ .expr_root = .{ .a_args = a_args, .b_args = b_args } },
-    };
-    return scopedBodyMismatch(context, theorem, body, &root, &.{}, 0);
-}
-
-// Resolve `template` (a node of some def body) against `scope`, reporting a rigid
-// divergence between the two sides it stands for. See `defBodyTemplateMismatch`.
-fn scopedBodyMismatch(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    template: TemplateExpr,
-    scope: *const DefScope,
-    bindings: []const ?ExprId,
-    depth: usize,
-) bool {
-    if (depth >= max_def_unfold_depth) return false;
-    switch (template) {
-        .binder => |idx| {
-            if (idx >= scope.nargs) return false; // dummy of this def
-            switch (scope.kind) {
-                // Outermost def parameter: this is where the two sides actually
-                // differ — compare their argument trees.
-                .template_root => |r| return templateDefiniteMismatch(
-                    context,
-                    theorem,
-                    r.t_args[idx],
-                    r.r_args[idx],
-                    bindings,
-                ),
-                .expr_root => |r| return rigidExprMismatch(
-                    context,
-                    theorem,
-                    r.a_args[idx],
-                    r.b_args[idx],
-                ),
-                // Nested def parameter: continue with the argument template that
-                // was substituted for it, interpreted one scope out.
-                .nested => |n| return scopedBodyMismatch(
-                    context,
-                    theorem,
-                    n.args[idx],
-                    n.parent,
-                    bindings,
-                    depth + 1,
-                ),
-            }
-        },
-        .app => |app| {
-            if (transparentDefBody(context, app.term_id)) |info| {
-                // Unfold one more transparent-def layer.
-                if (app.args.len != info.nargs) return false;
-                const child = DefScope{
-                    .nargs = info.nargs,
-                    .kind = .{ .nested = .{ .args = app.args, .parent = scope } },
-                };
-                return scopedBodyMismatch(
-                    context,
-                    theorem,
-                    info.body,
-                    &child,
-                    bindings,
-                    depth + 1,
-                );
-            }
-            // Non-rigid, non-def head (ACUI / unavailable): can't judge.
-            if (!isRigidTerm(context, app.term_id)) return false;
-            for (app.args) |child| {
-                if (scopedBodyMismatch(
-                    context,
-                    theorem,
-                    child,
-                    scope,
-                    bindings,
-                    depth + 1,
-                )) return true;
-            }
-            return false;
-        },
-    }
-}
-
-pub const argDetermined = semantic.argDetermined;
 
 pub fn projectViewBindingsIntoRule(
     view: types.ViewDecl,
@@ -874,8 +553,13 @@ pub fn extractHypPartialBindings(
         .app => |app| {
             // An ordered (non-commutative, non-idempotent) combiner: align the
             // flattened member sequences, never the binary spines, whose
-            // association is arbitrary.
+            // association is arbitrary. A ref folded behind a def presents no
+            // sequence to align, so unfold it first.
             if (acuiIsOrdered(context, app.term_id)) {
+                if (unfoldForeignRefDef(context, theorem, app.term_id, expr_id)) |unfolded| {
+                    extractHypPartialBindings(context, theorem, template, unfolded, bindings);
+                    return;
+                }
                 extractOrderedSpineBindings(
                     context,
                     theorem,
@@ -887,116 +571,70 @@ pub fn extractHypPartialBindings(
                 return;
             }
             const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .variable, .placeholder => {},
-                .app => |concrete| {
-                    if (concrete.term_id == app.term_id and
-                        concrete.args.len == app.args.len)
-                    {
-                        // Positional walk: when the ref happens to be written
-                        // with the same association as the template, this pins
-                        // binders directly. (Ordered combiners never get here;
-                        // this serves the idempotent non-commutative ones.)
-                        //
-                        // Skip it under a *commutative* ACUI head: there the
-                        // positional correspondence is meaningless — the ref's
-                        // members can be in any order/association — so pinning a
-                        // bare binder leaf (e.g. `ex_elim`'s context `H` in
-                        // `H , p`) to the ref's first arg is a wrong guess at the
-                        // split. It would also swallow members that belong to a
-                        // sibling leaf (the eigenvariable hyp `p`), leaving that
-                        // leaf unpinnable and the binder carrying a free
-                        // eigenvariable into the conclusion (pruned by
-                        // `finalConclusionPlausible`). The `extractAcuiMemberBindings`
-                        // pass below is the correct, order-insensitive extractor
-                        // for this case; it never pins a bare binder, leaving the
-                        // split open for the validator's ACUI weakening.
-                        //
-                        // Only args the head determines are forced by the ref
-                        // (`argDetermined`): a `@rewrite` head, an erasing def,
-                        // or an idempotent combiner's spine would make the
-                        // positional value a guess.
-                        if (!acuiIsCommutative(context, app.term_id)) {
-                            for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
-                                if (!argDetermined(context, app.term_id, i)) continue;
-                                extractHypPartialBindings(
-                                    context,
-                                    theorem,
-                                    tmpl_arg,
-                                    conc_arg,
-                                    bindings,
-                                );
-                            }
-                        }
-                    } else if (transparentDefBody(context, app.term_id)) |info| {
-                        // Head mismatch but the template head is a transparent
-                        // first-order def whose unfolding may line up with the
-                        // ref. The ref is commonly stored in the def's *unfolded*
-                        // form (e.g. hyp `P ⇔ Q` = `bic(P,Q)` against a ref proven
-                        // as `≃[𝔹] a = b` = `eqc(𝔹,a,b)`), so the plain positional
-                        // walk bails at `bic`≠`eqc` and the binders under the def
-                        // never get pinned. Unfold the template body and continue
-                        // extraction against the same ref. Mirrors the matcher's
-                        // `scopedBodyMismatch`; sound for the same reason (the def
-                        // is transparent and first-order, so the binder values are
-                        // forced by the ref).
-                        if (app.args.len == info.nargs) {
-                            const root = ExtractScope{
-                                .nargs = info.nargs,
-                                .kind = .{ .template_root = .{ .t_args = app.args } },
-                            };
-                            extractScopedBindings(
-                                context,
-                                theorem,
-                                info.body,
-                                &root,
-                                expr_id,
-                                bindings,
-                                0,
-                            );
-                        }
-                    } else if (defBodyForUnfold(
+            if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
+                // Positional walk over the args the head forces (see
+                // `lockstep`). That skips an ACUI spine, where pinning a bare
+                // binder leaf (e.g. `ex_elim`'s context `H` in `H , p`) to the
+                // ref's first arg would guess at the split and swallow members
+                // of a sibling leaf; the member pass below handles commutative
+                // combiners instead. It also skips a `@rewrite` head's args and
+                // a def arg its body drops, where the value would be a guess.
+                var args = aligned;
+                while (args.next()) |pair| {
+                    extractHypPartialBindings(
                         context,
-                        concrete.term_id,
-                        true,
-                    )) |info| {
-                        // Symmetric case: the *ref* head is a binder-introducing
-                        // def folded over the template's existential — e.g. the
-                        // view hyp `G ⊢ ∃ x p` (`nd(G, ex(λx.p))`) against a ref
-                        // proven as `has_preimage f X y` (= `∃ x (x∈X ∧ maps f x y)`)
-                        // or euclid's `a < b` (= `∃ k …`). The positional walk bails
-                        // at `ex` ≠ `has_preimage`, so the existential body binder
-                        // `p` never pins and the `@recover` containment injection
-                        // for the paired hypothesis stays inert. Unfold the ref one
-                        // layer — each dummy materialized as a fresh placeholder by
-                        // `unfoldDefBody` — and re-extract against the same template,
-                        // exposing the `∃` so `p` binds.
-                        //
-                        // Sound for the same reason as `partialMatchTemplate`'s
-                        // concrete-side unfold (which this mirrors): a placeholder
-                        // only ever loosens later matching, and bindings written on
-                        // this extraction path merely seed downstream hyp lookups
-                        // and the recover guard — they never themselves reject a
-                        // candidate. Reserved for extraction; the strict matcher
-                        // stays first-order (see `defBodyForUnfold`). `concrete` is
-                        // a value copy whose `args` slice is a stable heap
-                        // allocation, so interning here cannot invalidate it.
-                        if (concrete.args.len == info.nargs) {
-                            const unfolded = unfoldDefBody(
-                                theorem,
-                                info,
-                                concrete.args,
-                            ) catch return;
-                            extractHypPartialBindings(
-                                context,
-                                theorem,
-                                template,
-                                unfolded,
-                                bindings,
-                            );
-                        }
+                        theorem,
+                        pair.template,
+                        pair.expr,
+                        bindings,
+                    );
+                }
+            } else if (node.* == .app) {
+                if (defBodyForUnfold(context, app.term_id, false)) |info| {
+                    // Head mismatch but the template head is a transparent
+                    // first-order def whose unfolding may line up with the
+                    // ref. The ref is commonly stored in the def's *unfolded*
+                    // form (e.g. hyp `P ⇔ Q` = `bic(P,Q)` against a ref proven
+                    // as `≃[𝔹] a = b` = `eqc(𝔹,a,b)`), so the plain positional
+                    // walk bails at `bic`≠`eqc` and the binders under the def
+                    // never get pinned. Unfold the template body and continue
+                    // extraction against the same ref; the def is transparent
+                    // and first-order, so the binder values are forced by the
+                    // ref.
+                    if (app.args.len == info.nargs) {
+                        const root = ExtractScope{
+                            .nargs = info.nargs,
+                            .kind = .{ .template_root = .{ .t_args = app.args } },
+                        };
+                        extractScopedBindings(
+                            context,
+                            theorem,
+                            info.body,
+                            &root,
+                            expr_id,
+                            bindings,
+                            0,
+                        );
                     }
-                },
+                } else if (unfoldForeignRefDef(context, theorem, app.term_id, expr_id)) |unfolded| {
+                    // Symmetric case: the *ref* head is a def folded over the
+                    // template's structure — e.g. the view hyp `G ⊢ ∃ x p`
+                    // (`nd(G, ex(λx.p))`) against a ref proven as
+                    // `has_preimage f X y` (= `∃ x (x∈X ∧ maps f x y)`) or
+                    // euclid's `a < b` (= `∃ k …`). The positional walk bails
+                    // at `ex` ≠ `has_preimage`, so the existential body binder
+                    // `p` never pins and the `@recover` containment injection
+                    // for the paired hypothesis stays inert. Unfold the ref one
+                    // layer and re-extract against the same template, exposing
+                    // the `∃` so `p` binds.
+                    extractHypPartialBindings(
+                        context,
+                        theorem,
+                        template,
+                        unfolded,
+                        bindings,
+                    );
+                }
             }
             // For an ACUI combiner the positional walk above usually bails at
             // the head (the ref writes the same multiset in a different shape),
@@ -1009,7 +647,7 @@ pub fn extractHypPartialBindings(
             // C. An ordered combiner (neither C nor I) returned above through
             // `extractOrderedSpineBindings`; an idempotent non-commutative one
             // keeps only the positional walk.
-            if (acuiIsCommutative(context, app.term_id)) {
+            if (acui.isCommutative(context, app.term_id)) {
                 acui.extractAcuiMemberBindings(
                     context,
                     theorem,
@@ -1024,8 +662,29 @@ pub fn extractHypPartialBindings(
     }
 }
 
-// Scope for extraction through transparent-def unfoldings, the extraction-side
-// analogue of `DefScope`. A `template_root` carries the rule template's argument
+// `expr_id` unfolded one layer when it is an application of a def other than
+// `head` (binder-introducing defs included), else null. Each dummy of the def
+// becomes a fresh placeholder (`unfoldDefBody`); that only loosens later
+// matching, and the bindings extraction writes merely seed downstream lookups
+// and the recover guard, so it is sound for extraction. The strict matcher
+// stays first-order (see `defBodyForUnfold`).
+fn unfoldForeignRefDef(
+    context: *const Context,
+    theorem: *TheoremContext,
+    head: u32,
+    expr_id: ExprId,
+) ?ExprId {
+    const concrete = switch (theorem.interner.node(expr_id).*) {
+        .app => |concrete| concrete,
+        else => return null,
+    };
+    if (concrete.term_id == head) return null;
+    const info = defBodyForUnfold(context, concrete.term_id, true) orelse return null;
+    if (concrete.args.len != info.nargs) return null;
+    return unfoldDefBody(theorem, info, concrete.args) catch null;
+}
+
+// Scope for extraction through transparent-def unfoldings. A `template_root` carries the rule template's argument
 // trees (binders index into `bindings`); each `nested` level carries a def
 // application's argument templates plus the enclosing scope they are read in.
 const ExtractScope = struct {
@@ -1080,18 +739,17 @@ fn extractScopedBindings(
         },
         .app => |app| {
             const node = theorem.interner.node(expr_id);
-            if (node.* == .app and
-                node.app.term_id == app.term_id and
-                node.app.args.len == app.args.len)
-            {
-                // Heads aligned at this folding level: descend positionally.
-                for (app.args, node.app.args) |barg, rarg| {
+            if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
+                // Heads aligned at this folding level: descend into the args
+                // the head forces.
+                var args = aligned;
+                while (args.next()) |pair| {
                     extractScopedBindings(
                         context,
                         theorem,
-                        barg,
+                        pair.template,
                         scope,
-                        rarg,
+                        pair.expr,
                         bindings,
                         depth + 1,
                     );
@@ -1100,7 +758,7 @@ fn extractScopedBindings(
             }
             // Heads differ: unfold one more transparent-def layer on the template
             // side and retry against the same ref.
-            if (transparentDefBody(context, app.term_id)) |info| {
+            if (defBodyForUnfold(context, app.term_id, false)) |info| {
                 if (app.args.len != info.nargs) return;
                 const child = ExtractScope{
                     .nargs = info.nargs,

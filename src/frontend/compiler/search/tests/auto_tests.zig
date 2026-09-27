@@ -1185,6 +1185,122 @@ test "extractHypPartialBindings reads only arguments the head determines" {
     try std.testing.expectEqual(@as(?ExprId, null), bindings[1]);
 }
 
+test "recoverDefiniteMismatch compares only arguments the head determines" {
+    // `kst` drops its second argument, so `kst a0 c0` can recover from the
+    // pattern `kst a0 d0` (both unfold to `a0`); only a clash in the first
+    // argument is definite.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term pr (a: obj): wff;
+        \\term a0: obj;
+        \\term c0: obj;
+        \\term d0: obj;
+        \\term h0: obj;
+        \\def kst (a b: obj): obj = $ a $;
+        \\theorem t: $ pr a0 $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    const names = &fixture.env.term_names;
+    const a0 = try theorem.interner.internApp(names.get("a0").?, &.{});
+    const c0 = try theorem.interner.internApp(names.get("c0").?, &.{});
+    const d0 = try theorem.interner.internApp(names.get("d0").?, &.{});
+    const hole = try theorem.interner.internApp(names.get("h0").?, &.{});
+    const kst = names.get("kst").?;
+    const pr = names.get("pr").?;
+    const source = try theorem.interner.internApp(
+        pr,
+        &.{try theorem.interner.internApp(kst, &.{ a0, c0 })},
+    );
+    const dropped_differs = try theorem.interner.internApp(
+        pr,
+        &.{try theorem.interner.internApp(kst, &.{ a0, d0 })},
+    );
+    const kept_differs = try theorem.interner.internApp(
+        pr,
+        &.{try theorem.interner.internApp(kst, &.{ d0, c0 })},
+    );
+
+    try std.testing.expect(!def_match.recoverDefiniteMismatch(
+        &context,
+        &theorem,
+        source,
+        dropped_differs,
+        hole,
+    ));
+    try std.testing.expect(def_match.recoverDefiniteMismatch(
+        &context,
+        &theorem,
+        source,
+        kept_differs,
+        hole,
+    ));
+}
+
+test "templateDefiniteMismatch compares a binder-introducing def by its arguments" {
+    // `some` hides a bound variable behind its body, yet `some a ≡ some b`
+    // still forces `a ≡ b`: the dummy is fresh on both sides.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term pr (a b: obj): wff;
+        \\term all {x: obj} (p: wff x): wff;
+        \\term a0: obj;
+        \\term c0: obj;
+        \\def some (a: obj) {.y: obj}: wff = $ all y (pr y a) $;
+        \\theorem t: $ some a0 $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    const names = &fixture.env.term_names;
+    const a0 = try theorem.interner.internApp(names.get("a0").?, &.{});
+    const c0 = try theorem.interner.internApp(names.get("c0").?, &.{});
+    const some = names.get("some").?;
+    const ref = try theorem.interner.internApp(some, &.{c0});
+
+    // Template `some binder0`.
+    const some_args = [_]TemplateExpr{.{ .binder = 0 }};
+    const template = TemplateExpr{ .app = .{ .term_id = some, .args = &some_args } };
+
+    const matching = [_]?ExprId{c0};
+    try std.testing.expect(!def_match.templateDefiniteMismatch(
+        &context,
+        &theorem,
+        template,
+        ref,
+        &matching,
+    ));
+    const clashing = [_]?ExprId{a0};
+    try std.testing.expect(def_match.templateDefiniteMismatch(
+        &context,
+        &theorem,
+        template,
+        ref,
+        &clashing,
+    ));
+}
+
 test "canonicalizeAcui respects the registered combiner subset" {
     // The success/failure memo keys (`generate.zig` `canonicalKey`) collapse
     // ACUI-equal subgoals via `canonicalizeAcui`. It must collapse only the laws

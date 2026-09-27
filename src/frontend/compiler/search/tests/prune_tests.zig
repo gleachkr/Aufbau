@@ -4,6 +4,7 @@ const types = helpers.types;
 const fixture_mod = helpers.fixture_mod;
 const backtrack = helpers.backtrack;
 const prune = helpers.prune;
+const semantic = helpers.semantic;
 const abstract_prune = helpers.abstract_prune;
 const context_prune = helpers.context_prune;
 const seed = helpers.seed;
@@ -971,7 +972,7 @@ test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
     for (rows) |row| {
         const head = fixture.env.term_names.get(row.head) orelse return error.MissingTerm;
         for (row.determined, 0..) |expected, i| {
-            std.testing.expectEqual(expected, prune.argDetermined(&context, head, i)) catch |err| {
+            std.testing.expectEqual(expected, semantic.argDetermined(&context, head, i)) catch |err| {
                 std.debug.print("argDetermined({s}, {d})\n", .{ row.head, i });
                 return err;
             };
@@ -980,21 +981,23 @@ test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
 
     // An argument index past a def's parameters.
     const cst = fixture.env.term_names.get("cst") orelse return error.MissingTerm;
-    try std.testing.expect(!prune.argDetermined(&context, cst, 2));
+    try std.testing.expect(!semantic.argDetermined(&context, cst, 2));
     // A term id past the table, and a term recovery has discarded.
     const len: u32 = @intCast(fixture.env.terms.items.len);
-    try std.testing.expect(!prune.argDetermined(&context, len, 0));
+    try std.testing.expect(!semantic.argDetermined(&context, len, 0));
     const f = fixture.env.term_names.get("f") orelse return error.MissingTerm;
     fixture.env.terms.items[f].available = false;
-    try std.testing.expect(!prune.argDetermined(&context, f, 0));
+    try std.testing.expect(!semantic.argDetermined(&context, f, 0));
 }
 
 test "extractHypPartialBindings aligns an ordered context entry by entry" {
     // `lam_i`'s premise context `g , x : A` against the right-nested
     // `G , (k : Nat , m : Nat)`: aligning the flattened entry sequences pins
     // `g := G , k : Nat` and `x : A := m : Nat`, where a positional walk of the
-    // spine would bind `g := G` and nothing else.
+    // spine would bind `g := G` and nothing else. The same holds when the ref's
+    // context is folded behind a def (`two`), which is unfolded first.
     const mm0_src = ordered_ctx_theory ++
+        \\def two (G: ctx) (a b: wff): ctx = $ join G (join (hyp a) (hyp b)) $;
         \\axiom lam_i (g: ctx) {x: tm} (A: ty) (J: wff):
         \\  $ nd (join g (hyp (has x A))) J $ > $ nd g J $;
         \\theorem t (G: ctx) {k m: tm}:
@@ -1015,13 +1018,13 @@ test "extractHypPartialBindings aligns an ordered context entry by entry" {
     const rule_id = fixture.env.getRuleId("lam_i") orelse return error.MissingRule;
     const rule = &fixture.env.rules.items[rule_id];
 
-    const ref = (try parseGoal(
+    const spelled = (try parseGoal(
         &fixture,
         &theorem,
         &theorem_vars,
         "nd (join G (join (hyp (has k Nat)) (hyp (has m Nat)))) (has m Nat)",
     )).concrete;
-    const nd = theorem.interner.node(ref).app;
+    const nd = theorem.interner.node(spelled).app;
     const spine = theorem.interner.node(nd.args[0]).app;
     const tail = theorem.interner.node(spine.args[1]).app;
     const k_entry = tail.args[0];
@@ -1030,14 +1033,22 @@ test "extractHypPartialBindings aligns an ordered context entry by entry" {
     const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
     const expected_g = try theorem.interner.internApp(join_id, &.{ spine.args[0], k_entry });
 
-    const bindings = try allocator.alloc(?ExprId, rule.args.len);
-    @memset(bindings, null);
-    prune.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
+    const folded = (try parseGoal(
+        &fixture,
+        &theorem,
+        &theorem_vars,
+        "nd (two G (has k Nat) (has m Nat)) (has m Nat)",
+    )).concrete;
+    for ([_]ExprId{ spelled, folded }) |ref| {
+        const bindings = try allocator.alloc(?ExprId, rule.args.len);
+        @memset(bindings, null);
+        prune.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
 
-    try std.testing.expectEqual(@as(?ExprId, expected_g), bindings[0]);
-    try std.testing.expectEqual(@as(?ExprId, m_has.args[0]), bindings[1]);
-    try std.testing.expectEqual(@as(?ExprId, m_has.args[1]), bindings[2]);
-    try std.testing.expectEqual(@as(?ExprId, nd.args[1]), bindings[3]);
+        try std.testing.expectEqual(@as(?ExprId, expected_g), bindings[0]);
+        try std.testing.expectEqual(@as(?ExprId, m_has.args[0]), bindings[1]);
+        try std.testing.expectEqual(@as(?ExprId, m_has.args[1]), bindings[2]);
+        try std.testing.expectEqual(@as(?ExprId, nd.args[1]), bindings[3]);
+    }
 }
 
 test "ACUI member prune allows transparent def matching variable member" {
@@ -1575,7 +1586,7 @@ test "abstract pruner resolves def heads to rigid roots, abstains on reducible h
     // to a *rigid root* that clashes with the goal: `wrapiff c c` has head
     // `wrapiff`, a `def … = $ a <-> b $`, so its rigid root is `iff`, which
     // differs from the goal's `imp`. The prune now (soundly) fires on this, where
-    // the committed code abstained on every `termNeedsSemantic` def head. Doomed:
+    // the committed code abstained on every non-rigid def head. Doomed:
     // with left_plug == hole, the motive is forced to the ref, and `[a:=b]` of
     // `c <-> c` (no `a`) is `c <-> c` ≠ the goal `b -> top`.
     const def_clash_expr = try parseConcreteGoal(

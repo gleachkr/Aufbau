@@ -5,6 +5,7 @@ const ref_index_mod = @import("../ref_index.zig");
 const clipper = @import("../clipper.zig");
 const rank = @import("../rank.zig");
 const prune = @import("./prune.zig");
+const semantic = @import("./semantic.zig");
 const abstract_prune = @import("../abstract_prune.zig");
 const context_prune = @import("../context_prune.zig");
 const seed = @import("./seed.zig");
@@ -330,21 +331,27 @@ const PruneSetup = struct {
     /// True when `context_info` was built in raw rule binder space, so the
     /// current rule bindings can be used for shape-aware discharge pruning.
     context_uses_rule_bindings: bool,
+    /// The rule's conclusion has a `@rewrite` head, so `validateSelectedRefs`
+    /// runs the redex check.
+    concl_has_rewrite_head: bool,
 };
 
 fn computePruneSetup(context: *const Context, rule_id: u32) PruneSetup {
+    const rule = context.env.rules.items[rule_id];
+    const concl_has_rewrite_head = plausible.templateHasRewriteHead(context, rule.concl);
     if (context.views.get(rule_id)) |view| {
         return .{
             .abstract_view = if (viewDeclHasAbstract(view)) view else null,
             .context_info = context_prune.analyzeView(context, view),
             .context_uses_rule_bindings = false,
+            .concl_has_rewrite_head = concl_has_rewrite_head,
         };
     }
-    const rule = context.env.rules.items[rule_id];
     return .{
         .abstract_view = null,
         .context_info = context_prune.analyzeRule(context, rule),
         .context_uses_rule_bindings = true,
+        .concl_has_rewrite_head = concl_has_rewrite_head,
     };
 }
 
@@ -758,6 +765,10 @@ fn enumerateCandidateRefs(
             candidate.bindings,
             &.{},
             &.{},
+            plausible.templateHasRewriteHead(
+                context,
+                context.env.rules.items[candidate.rule_id].concl,
+            ),
             runtime,
             counters,
             fuel,
@@ -868,6 +879,13 @@ fn backtrackRefs(
             bindings,
             selected,
             generated,
+            if (prune_setup) |setup|
+                setup.concl_has_rewrite_head
+            else
+                plausible.templateHasRewriteHead(
+                    context,
+                    context.env.rules.items[candidate.rule_id].concl,
+                ),
             runtime,
             counters,
             fuel,
@@ -2261,13 +2279,13 @@ fn exprDepHit(
     };
 }
 
-/// A head no checker conversion can remove: available, not a def with a body,
-/// and not a `@rewrite` head. (Alpha-rule heads are screened by the caller.)
+/// A head no checker conversion can remove. ACUI combiners count: rearrangement
+/// never drops a member. (Alpha-rule heads are screened by the caller.)
 fn headIsRigid(context: *const Context, term_id: u32) bool {
-    if (!context.env.hasAvailableTerm(term_id)) return false;
-    if (context.registry.rewrites_by_head.contains(term_id)) return false;
-    const term = context.env.terms.items[term_id];
-    return !(term.is_def and term.body != null);
+    return switch (semantic.headClass(context, term_id)) {
+        .rigid, .acui => true,
+        .def, .rewrite, .unavailable => false,
+    };
 }
 
 /// A view, `@fresh`, or `@freshen` can re-choose a bound binder after the

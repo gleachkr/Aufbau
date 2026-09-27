@@ -242,8 +242,7 @@ fn hypBudget(
                 // A discharged member is budgeted as exactly one concrete member
                 // only if it is rigid (non-ACUI, non-def, non-`@rewrite`);
                 // anything reducible could unfold/rearrange to several members.
-                if (context.registry.acui_by_head.contains(a.term_id)) return null;
-                if (semantic.termNeedsSemantic(context, a.term_id)) return null;
+                if (!semantic.isRigidHead(context, a.term_id)) return null;
                 if (budget >= max_discharged_members) return null;
                 discharged[budget] = m;
                 discharged_has_bound[budget] = templateHasBoundBinder(

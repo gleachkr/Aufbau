@@ -9,8 +9,8 @@ const Context = types.Context;
 const semantic = @import("./semantic.zig");
 const exprNeedsSemantic = semantic.exprNeedsSemantic;
 const templateNeedsSemantic = semantic.templateNeedsSemantic;
-const termNeedsSemantic = semantic.termNeedsSemantic;
-const argDetermined = semantic.argDetermined;
+const isRigidHead = semantic.isRigidHead;
+const lockstep = @import("./lockstep.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const DeepVerdictCache = types.DeepVerdictCache;
 
@@ -51,7 +51,7 @@ const AcuiMember = struct {
 // only cost completeness, which the uniqueness gate prevents.
 //
 // Treating the args as a multiset assumes commutativity, so callers gate this
-// on it (`def_match.acuiIsCommutative`). A combiner that is neither commutative
+// on it (`isCommutative`). A combiner that is neither commutative
 // nor idempotent is a sequence and goes through
 // `def_match.extractOrderedSpineBindings` instead.
 pub fn extractAcuiMemberBindings(
@@ -308,24 +308,13 @@ fn exprFullyRigid(
         .variable => return true,
         .placeholder => return false,
         .app => |app| {
-            if (termNeedsSemantic(context, app.term_id)) return false;
-            if (headIsTransparentDef(context, app.term_id)) return false;
+            if (!isRigidHead(context, app.term_id)) return false;
             for (app.args) |arg| {
                 if (!exprFullyRigid(context, theorem, arg)) return false;
             }
             return true;
         },
     }
-}
-
-// True when `term_id` heads a transparent (unfoldable) definition. Inlined from
-// `defBodyForUnfold`'s essential test to avoid importing `prune` (which
-// imports this module). ACUI combiner heads are structural, not defs.
-fn headIsTransparentDef(context: *const Context, term_id: u32) bool {
-    if (!context.env.hasAvailableTerm(term_id)) return false;
-    if (context.registry.acui_by_head.contains(term_id)) return false;
-    const term = context.env.terms.items[term_id];
-    return term.available and term.is_def and term.body != null;
 }
 
 fn findAmbiguousLeaf(
@@ -386,6 +375,10 @@ fn findAmbiguousLeaf(
     }
 }
 
+/// Whether `term_id` is an `@acui` combiner declared commutative, so that its
+/// arguments may be treated as a multiset. `comm_name` is the declaration-time
+/// signal (null iff `_` was given for the commutativity slot); `comm_id` is
+/// resolved lazily and may still be null.
 pub fn isCommutative(context: *const Context, term_id: u32) bool {
     const combiner = context.registry.acui_by_head.get(term_id) orelse return false;
     return combiner.comm_name != null;
@@ -478,25 +471,17 @@ fn acuiPrecheckWalk(
             // child positions point at corresponding ref subtrees. If they
             // don't line up at the rigid head, `matchTemplate` already
             // failed for an unrelated reason and we have no opinion.
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .variable, .placeholder => return true,
-                .app => |concrete| {
-                    if (concrete.term_id != app.term_id) return true;
-                    if (concrete.args.len != app.args.len) return true;
-                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
-                        if (!argDetermined(context, app.term_id, i)) continue;
-                        if (!acuiPrecheckWalk(
-                            context,
-                            theorem,
-                            tmpl_arg,
-                            conc_arg,
-                            bindings,
-                        )) return false;
-                    }
-                    return true;
-                },
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return true;
+            while (args.next()) |pair| {
+                if (!acuiPrecheckWalk(
+                    context,
+                    theorem,
+                    pair.template,
+                    pair.expr,
+                    bindings,
+                )) return false;
             }
+            return true;
         },
     }
 }
@@ -650,7 +635,7 @@ fn collectCountedLeaves(
                 return true;
             }
             if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
-            if (termNeedsSemantic(context, app.term_id)) return true;
+            if (!isRigidHead(context, app.term_id)) return true;
             if (len.* == out.len) return false;
             out[len.*] = template;
             len.* += 1;
@@ -680,7 +665,7 @@ fn collectRigidMembers(
                     collectRigidMembers(context, theorem, app.args[1], head_id, unit_id, out, len);
             }
             if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
-            if (termNeedsSemantic(context, app.term_id)) return false;
+            if (!isRigidHead(context, app.term_id)) return false;
         },
     }
     if (len.* == out.len) return false;
@@ -773,27 +758,19 @@ pub fn acuiBoundMembersDeepMismatch(
             // the corresponding goal subtrees, recursing for any nested ACUI
             // context. A head/arity mismatch means the plain check would not
             // have lined up here either — no opinion.
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .variable, .placeholder => return false,
-                .app => |concrete| {
-                    if (concrete.term_id != app.term_id) return false;
-                    if (concrete.args.len != app.args.len) return false;
-                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
-                        if (!argDetermined(context, app.term_id, i)) continue;
-                        if (acuiBoundMembersDeepMismatch(
-                            context,
-                            theorem,
-                            tmpl_arg,
-                            conc_arg,
-                            bindings,
-                            deepExprMismatch,
-                            cache,
-                        )) return true;
-                    }
-                    return false;
-                },
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
+            while (args.next()) |pair| {
+                if (acuiBoundMembersDeepMismatch(
+                    context,
+                    theorem,
+                    pair.template,
+                    pair.expr,
+                    bindings,
+                    deepExprMismatch,
+                    cache,
+                )) return true;
             }
+            return false;
         },
     }
 }
@@ -1035,7 +1012,7 @@ fn templateMatchesExprPlausible(
                     // Same semantic head: transparent defs are not injective,
                     // and an ACUI-headed member may match after canonicalizing.
                     // Do not judge this by positional argument equality.
-                    if (termNeedsSemantic(context, app.term_id)) return true;
+                    if (!isRigidHead(context, app.term_id)) return true;
                     if (concrete.args.len != app.args.len) return false;
                     for (app.args, concrete.args) |tmpl_arg, conc_arg| {
                         if (!templateMatchesExprPlausible(
@@ -1419,25 +1396,17 @@ pub fn acuiClosedRegionPlausible(
                     bindings,
                 );
             }
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .app => |concrete| {
-                    if (concrete.term_id != app.term_id) return true;
-                    if (concrete.args.len != app.args.len) return true;
-                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
-                        if (!argDetermined(context, app.term_id, i)) continue;
-                        if (!acuiClosedRegionPlausible(
-                            context,
-                            theorem,
-                            tmpl_arg,
-                            conc_arg,
-                            bindings,
-                        )) return false;
-                    }
-                    return true;
-                },
-                else => return true,
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return true;
+            while (args.next()) |pair| {
+                if (!acuiClosedRegionPlausible(
+                    context,
+                    theorem,
+                    pair.template,
+                    pair.expr,
+                    bindings,
+                )) return false;
             }
+            return true;
         },
     }
 }

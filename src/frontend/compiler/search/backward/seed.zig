@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../types.zig");
 const prune = @import("./prune.zig");
 const def_match = @import("./def_match.zig");
+const lockstep = @import("./lockstep.zig");
 const acui = @import("./acui.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const PlaceholderId = @import("../../../expr.zig").PlaceholderId;
@@ -224,23 +225,18 @@ fn walkForFanout(
                     bindings,
                 );
             }
-            // A plain term (`seq`, `hyp`, …): descend positionally when the goal
-            // head and arity align, so we reach each side's ACUI context.
-            const node = theorem.interner.node(expr_id);
-            if (node.* == .app and
-                node.app.term_id == app.term_id and
-                node.app.args.len == app.args.len)
-            {
-                for (app.args, node.app.args) |targ, earg| {
-                    if (try walkForFanout(
-                        allocator,
-                        context,
-                        theorem,
-                        targ,
-                        earg,
-                        bindings,
-                    )) |fan| return fan;
-                }
+            // A plain term (`seq`, `hyp`, …): descend into the args the goal
+            // forces, so we reach each side's ACUI context.
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return null;
+            while (args.next()) |pair| {
+                if (try walkForFanout(
+                    allocator,
+                    context,
+                    theorem,
+                    pair.template,
+                    pair.expr,
+                    bindings,
+                )) |fan| return fan;
             }
             return null;
         },
@@ -693,34 +689,21 @@ fn repeatedBinderConflictWalk(
             return false;
         },
         .app => |app| {
-            // An ACUI combiner's binary spine has an arbitrary association
-            // (and, under C, an arbitrary order): we can't positionally line
-            // it up against the goal, so we form no opinion (mirrors
-            // `partialMatchTemplate`).
-            if (context.registry.hasStructuralCombiner(app.term_id)) return false;
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .variable, .placeholder => return false,
-                .app => |concrete| {
-                    // Head/arity mismatch: a def could unfold to bridge it, so
-                    // withhold judgment rather than descend.
-                    if (concrete.term_id != app.term_id) return false;
-                    if (concrete.args.len != app.args.len) return false;
-                    // Only args the head determines are forced to coincide
-                    // (not a `@rewrite` head's, or a def arg its body drops).
-                    for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
-                        if (!def_match.argDetermined(context, app.term_id, i)) continue;
-                        if (repeatedBinderConflictWalk(
-                            context,
-                            theorem,
-                            tmpl_arg,
-                            conc_arg,
-                            bindings,
-                        )) return true;
-                    }
-                    return false;
-                },
+            // Only args the head determines are forced to coincide: not an
+            // ACUI spine's (its association and order are arbitrary), a
+            // `@rewrite` head's, or a def arg its body drops. A head/arity
+            // mismatch could be bridged by unfolding, so it forms no opinion.
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
+            while (args.next()) |pair| {
+                if (repeatedBinderConflictWalk(
+                    context,
+                    theorem,
+                    pair.template,
+                    pair.expr,
+                    bindings,
+                )) return true;
             }
+            return false;
         },
     }
 }
@@ -916,16 +899,18 @@ fn partialMatchScoped(
             switch (node.*) {
                 .variable, .placeholder => return,
                 .app => |concrete| {
-                    if (concrete.term_id == app.term_id and
-                        concrete.args.len == app.args.len)
-                    {
-                        for (app.args, concrete.args) |tmpl_arg, conc_arg| {
+                    if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
+                        // Same head: seed from the args it forces. A `@rewrite`
+                        // head's arg or one a def drops need not match the
+                        // goal's, so its value would be a guess.
+                        var args = aligned;
+                        while (args.next()) |pair| {
                             try partialMatchScoped(
                                 context,
                                 theorem,
-                                tmpl_arg,
+                                pair.template,
                                 scope,
-                                conc_arg,
+                                pair.expr,
                                 bindings,
                                 allow_binder_defs,
                                 extract_members,

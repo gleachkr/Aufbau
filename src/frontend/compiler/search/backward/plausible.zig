@@ -10,6 +10,7 @@
 
 const types = @import("../types.zig");
 const prune = @import("./prune.zig");
+const semantic = @import("./semantic.zig");
 const acui = @import("./acui.zig");
 const match = @import("./match.zig");
 const split = @import("./split.zig");
@@ -30,7 +31,7 @@ const acuiUnitIdForHead = prune.acuiUnitIdForHead;
 const defBodyForUnfold = prune.defBodyForUnfold;
 const templateDefiniteMismatch = prune.templateDefiniteMismatch;
 const unfoldDefBody = prune.unfoldDefBody;
-const argDetermined = prune.argDetermined;
+const lockstep = @import("./lockstep.zig");
 
 const max_split_guard_members: usize = 64;
 
@@ -390,28 +391,16 @@ fn pinRigidBinders(
             return false;
         },
         .app => |app| {
-            const concrete = switch (theorem.interner.node(expr_id).*) {
-                .app => |concrete| concrete,
-                else => return false,
-            };
-            if (concrete.term_id != app.term_id) return false;
-            if (concrete.args.len != app.args.len) return false;
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
             var added = false;
-            for (app.args, concrete.args, 0..) |targ, earg, i| {
-                if (!argDetermined(context, app.term_id, i)) continue;
-                if (pinRigidBinders(context, theorem, targ, earg, bindings)) {
+            while (args.next()) |pair| {
+                if (pinRigidBinders(context, theorem, pair.template, pair.expr, bindings)) {
                     added = true;
                 }
             }
             return added;
         },
     }
-}
-
-fn isTransparentDefHead(context: *const Context, term_id: u32) bool {
-    if (!context.env.hasAvailableTerm(term_id)) return false;
-    const term = context.env.terms.items[term_id];
-    return term.available and term.is_def;
 }
 
 fn conclusionTemplatePlausible(
@@ -539,19 +528,17 @@ fn redexTemplateMismatch(
             return false;
         return unfoldedExprMismatch(context, theorem, reduced, goal_expr, 0);
     }
-    if (context.registry.acui_by_head.contains(app.term_id)) return false;
-    if (isTransparentDefHead(context, app.term_id)) return false;
-    const goal_app = switch (theorem.interner.node(goal_expr).*) {
-        .app => |goal_app| goal_app,
-        else => return false,
-    };
-    if (goal_app.term_id != app.term_id or goal_app.args.len != app.args.len) {
-        return false;
-    }
-    for (app.args, goal_app.args) |targ, garg| {
-        if (redexTemplateMismatch(context, theorem, rule, targ, garg, bindings, filled)) {
-            return true;
-        }
+    var args = lockstep.templateArgs(context, theorem, app, goal_expr) orelse return false;
+    while (args.next()) |pair| {
+        if (redexTemplateMismatch(
+            context,
+            theorem,
+            rule,
+            pair.template,
+            pair.expr,
+            bindings,
+            filled,
+        )) return true;
     }
     return false;
 }
@@ -609,20 +596,13 @@ fn closedAcuiTemplateMismatch(
                     goal_expr,
                 );
             }
-            const node = theorem.interner.node(goal_expr);
-            const goal_app = switch (node.*) {
-                .app => |concrete| concrete,
-                else => return false,
-            };
-            if (goal_app.term_id != app.term_id) return false;
-            if (goal_app.args.len != app.args.len) return false;
-            for (app.args, goal_app.args, 0..) |arg, goal_arg, i| {
-                if (!argDetermined(context, app.term_id, i)) continue;
+            var args = lockstep.templateArgs(context, theorem, app, goal_expr) orelse return false;
+            while (args.next()) |pair| {
                 if (closedAcuiTemplateMismatch(
                     context,
                     theorem,
-                    arg,
-                    goal_arg,
+                    pair.template,
+                    pair.expr,
                     bindings,
                 )) return true;
             }
@@ -859,13 +839,12 @@ pub fn hypRefMembersPlausible(
             r.app.term_id,
         ) orelse return true;
         // The strict `matchTemplate` enumeration below cannot see through a
-        // transparent def, so a foldable goal member could hide the true
-        // assignment — abstain.
+        // def unfolding, a `@rewrite` reduction, or an ACUI rearrangement, so
+        // a goal member with such a head could hide the true assignment —
+        // abstain.
         for (state.goal_members[i].items[0..state.goal_members[i].len]) |gm| {
             const node = theorem.interner.node(gm);
-            if (node.* == .app and isTransparentDefHead(context, node.app.term_id)) {
-                return true;
-            }
+            if (node.* == .app and !semantic.isRigidHead(context, node.app.term_id)) return true;
         }
     }
 
@@ -896,10 +875,10 @@ pub fn hypRefMembersPlausible(
                     state.consumed[ridx][state.consumed_len[ridx]] = m;
                     state.consumed_len[ridx] += 1;
                     if (split.templateFullyBound(m, bindings)) continue;
-                    // A member template that itself embeds an ACUI head (or a
-                    // transparent def head) can match goal members in ways the
-                    // strict matcher misses — abstain.
-                    if (templateMentionsSpecialHead(context, m)) return true;
+                    // A member template that itself embeds an ACUI, def, or
+                    // `@rewrite` head can match goal members in ways the strict
+                    // matcher misses — abstain.
+                    if (semantic.templateNeedsSemantic(context, m)) return true;
                     if (item_len == max_hypref_items) return true;
                     items[item_len] = .{ .member = m, .region = ridx };
                     item_len += 1;
@@ -912,20 +891,6 @@ pub fn hypRefMembersPlausible(
     @memcpy(merged[0..bindings.len], bindings);
     const outcome = hypRefDfs(&state, items[0..item_len], 0, merged[0..bindings.len]);
     return outcome != .exhausted;
-}
-
-fn templateMentionsSpecialHead(context: *const Context, t: TemplateExpr) bool {
-    switch (t) {
-        .binder => return false,
-        .app => |app| {
-            if (context.registry.acui_by_head.contains(app.term_id)) return true;
-            if (isTransparentDefHead(context, app.term_id)) return true;
-            for (app.args) |arg| {
-                if (templateMentionsSpecialHead(context, arg)) return true;
-            }
-            return false;
-        },
-    }
 }
 
 fn collectLockstepRegions(
@@ -946,30 +911,22 @@ fn collectLockstepRegions(
                 len.* += 1;
                 return true;
             }
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .app => |g| {
-                    // Head/arity mismatch: a def could bridge — abstain by
-                    // reporting a structural surprise to the caller.
-                    if (g.term_id != app.term_id) return false;
-                    if (g.args.len != app.args.len) return false;
-                    for (app.args, g.args, 0..) |ta, ga, i| {
-                        // An arg the head does not determine need not equal
-                        // the goal's: it imposes no member constraint.
-                        if (!argDetermined(context, app.term_id, i)) continue;
-                        if (!collectLockstepRegions(
-                            context,
-                            theorem,
-                            ta,
-                            ga,
-                            out,
-                            len,
-                        )) return false;
-                    }
-                    return true;
-                },
-                else => return false,
+            // Head/arity mismatch: a def could bridge — abstain by reporting a
+            // structural surprise to the caller. An arg the head does not
+            // determine need not equal the goal's, so it imposes no member
+            // constraint and is skipped.
+            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
+            while (args.next()) |pair| {
+                if (!collectLockstepRegions(
+                    context,
+                    theorem,
+                    pair.template,
+                    pair.expr,
+                    out,
+                    len,
+                )) return false;
             }
+            return true;
         },
     }
 }
@@ -1233,23 +1190,14 @@ fn foldedGoalBodyMismatch(
                 else => return false,
             };
             if (goal_app.term_id == app.term_id) {
-                if (goal_app.args.len != app.args.len) return false;
-                if (context.registry.acui_by_head.contains(app.term_id)) {
+                var args = lockstep.templateArgs(context, theorem, app, goal_expr) orelse
                     return false;
-                }
-                const goal_args = theorem.allocator.dupe(
-                    ExprId,
-                    goal_app.args,
-                ) catch return false;
-                defer theorem.allocator.free(goal_args);
-                // Compare only args the head determines (see `argDetermined`).
-                for (app.args, goal_args, 0..) |arg, goal_arg, i| {
-                    if (!argDetermined(context, app.term_id, i)) continue;
+                while (args.next()) |pair| {
                     if (foldedGoalBodyMismatch(
                         context,
                         theorem,
-                        arg,
-                        goal_arg,
+                        pair.template,
+                        pair.expr,
                         bindings,
                         depth + 1,
                     )) return true;
@@ -1262,26 +1210,14 @@ fn foldedGoalBodyMismatch(
                 goal_expr,
             ) catch return false;
             if (unfolded_goal == goal_expr) return false;
-            const unfolded_node = theorem.interner.node(unfolded_goal);
-            const unfolded_app = switch (unfolded_node.*) {
-                .app => |concrete| concrete,
-                else => return false,
-            };
-            if (unfolded_app.term_id != app.term_id) return false;
-            if (unfolded_app.args.len != app.args.len) return false;
-            if (context.registry.acui_by_head.contains(app.term_id)) return false;
-            const goal_args = theorem.allocator.dupe(
-                ExprId,
-                unfolded_app.args,
-            ) catch return false;
-            defer theorem.allocator.free(goal_args);
-            for (app.args, goal_args, 0..) |arg, goal_arg, i| {
-                if (!argDetermined(context, app.term_id, i)) continue;
+            var args = lockstep.templateArgs(context, theorem, app, unfolded_goal) orelse
+                return false;
+            while (args.next()) |pair| {
                 if (templateArgMismatchAfterGoalUnfold(
                     context,
                     theorem,
-                    arg,
-                    goal_arg,
+                    pair.template,
+                    pair.expr,
                     bindings,
                     depth + 1,
                 )) return true;
@@ -1370,33 +1306,22 @@ fn unfoldedExprMismatch(
             .variable => return prune.rigidExprMismatch(context, theorem, a, b),
             .app => |bb| {
                 if (aa.term_id != bb.term_id) {
-                    if (plainRigidTerm(context, aa.term_id) and
-                        plainRigidTerm(context, bb.term_id))
+                    if (semantic.isRigidHead(context, aa.term_id) and
+                        semantic.isRigidHead(context, bb.term_id))
                     {
                         return true;
                     }
                     return prune.rigidExprMismatch(context, theorem, a, b);
                 }
-                if (aa.args.len != bb.args.len) return false;
-                const a_args = theorem.allocator.dupe(
-                    ExprId,
-                    aa.args,
-                ) catch return false;
-                defer theorem.allocator.free(a_args);
-                const b_args = theorem.allocator.dupe(
-                    ExprId,
-                    bb.args,
-                ) catch return false;
-                defer theorem.allocator.free(b_args);
                 // Neither side unfolds further, but a `@rewrite` head can
                 // still reduce: compare only the args the head determines.
-                for (a_args, b_args, 0..) |a_arg, b_arg, i| {
-                    if (!argDetermined(context, aa.term_id, i)) continue;
+                var args = lockstep.exprArgs(context, theorem, a, b) orelse return false;
+                while (args.next()) |pair| {
                     if (unfoldedExprMismatch(
                         context,
                         theorem,
-                        a_arg,
-                        b_arg,
+                        pair.a,
+                        pair.b,
                         depth + 1,
                     )) return true;
                 }
@@ -1404,20 +1329,6 @@ fn unfoldedExprMismatch(
             },
         },
     }
-}
-
-fn plainRigidTerm(context: *const Context, term_id: u32) bool {
-    if (context.registry.acui_by_head.contains(term_id)) return false;
-    // A `@rewrite`-reducible head can rewrite to a different head, so a clash
-    // between two such heads is never definite. Mirror `rigidExprMismatch`'s
-    // `headIsReducibleNode` guard: without this the fast-path at
-    // `unfoldedExprMismatch`'s `aa.term_id != bb.term_id` branch reports a
-    // mismatch before `rigidExprMismatch` (which abstains on reducible heads)
-    // is reached, wrongly pruning a candidate a rewrite step could reconcile.
-    if (context.registry.rewrites_by_head.contains(term_id)) return false;
-    if (!context.env.hasAvailableTerm(term_id)) return false;
-    const term = context.env.terms.items[term_id];
-    return term.available and !term.is_def;
 }
 
 fn unfoldExprOnce(

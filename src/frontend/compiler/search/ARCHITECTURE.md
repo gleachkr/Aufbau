@@ -923,15 +923,31 @@ over-approximation (never reject a provable candidate):
 
 ### Which arguments a head determines (`argDetermined`)
 
+`head_class.zig` classifies every term head once for all of matching
+(`HeadClass`: rigid, def, acui, rewrite, unavailable). A rigid head is a
+primitive term or a def without a body: no conversion changes it.
+
 A lockstep walk of a template against an expression may compare, pin, or
 descend into argument `i` of head `h` only when `h(a) ≡ h(b)` forces the two
-arguments equal (`semantic.argDetermined` → `def_injectivity.argDetermined`).
-An available primitive head determines all its arguments. A transparent def
-determines an argument only when its body places it at a path of such heads,
-so a def that drops an argument (`def K (a b) = a`, the const trap) does not.
-An ACUI combiner, a `@rewrite` head and an unavailable term determine none. The seed extractor, the re-pin
-(`pinRigidBinders`), and the member and redex checks all gate on it, so every
-pin they make is forced by the goal for any provable candidate.
+arguments equal (`head_class.argDetermined`, reached through
+`semantic.argDetermined`). A rigid head determines all its arguments. A
+transparent def determines an argument only when its body places it at a path
+of such heads, so a def that drops an argument (`def K (a b) = a`, the const
+trap) does not; a binder-introducing def is no exception, since its dummies are
+fresh on both sides. An ACUI combiner, a `@rewrite` head and an unavailable
+term determine none.
+
+Every such walk takes its argument pairs from `backward/lockstep.zig`
+(`templateArgs`, `exprArgs`), which pairs only determined arguments of
+applications with the same head and arity. That covers the conclusion and hyp
+prunes (`templateDefiniteMismatch`, `rigidExprMismatch`, the member, redex,
+closed-region and recover checks), the seeds and extractors
+(`partialMatchTemplate`, `extractHypPartialBindings`, `pinRigidBinders`), and
+the fan-out locator, so every pin they make is forced by the goal for any
+provable candidate and every mismatch they report is real. The split-site
+locator (`split.findSplitSite`) is the one exception: it descends every
+argument of a same-head application, because the split pass only adds
+candidates and the validator checks each one.
 
 ### Contexts that are ordered, and where a split can happen
 

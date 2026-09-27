@@ -85,9 +85,9 @@ pub fn conclusionIsSplit(context: *const Context, concl: TemplateExpr) bool {
 
 /// Locate the ACUI combiner in `concl` that references rule binder `binder_idx`,
 /// returning the aligned concrete goal subterm. Walks `concl` against `goal_expr`
-/// in parallel, descending matching non-ACUI app heads positionally (the same
-/// alignment `partialMatchTemplate` uses). Returns null when the binder is not a
-/// bare summand of the combiner spine or when the goal shape diverges.
+/// in parallel, descending matching non-ACUI app heads positionally. Returns null
+/// when the binder is not a bare summand of the combiner spine or when the goal
+/// shape diverges.
 pub fn findSplitSite(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -110,6 +110,10 @@ pub fn findSplitSite(
                 }
                 return null;
             }
+            // Every arg of a same-head app, not just the determined ones (see
+            // `lockstep`): a site under a `@rewrite` head or a dropped def arg is
+            // only a guess, but the split pass merely adds candidates, and the
+            // validator checks each one.
             const node = theorem.interner.node(goal_expr);
             switch (node.*) {
                 .app => |concrete| {
