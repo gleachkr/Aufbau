@@ -78,6 +78,15 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` no longer skips rules because part of a goal it has not chosen
+  yet looks empty. In the additive FOL example, `ror` leaves `d` open in its
+  premise `g ⊢ a , b , d`, since `d` may be the goal's whole right-hand side
+  or all of it but `a ∨ b`. The search treated the open `d` as holding
+  nothing, so it never tried a rule on the formulas `d` must hold. The same
+  went for a formula it had not picked yet, such as `lnot`'s `a` when the
+  context holds several negations. The benchmarks find the same proofs, and
+  failing searches in the additive FOL example run longer before they give
+  up.
 - When `auto?`'s call-stack guard trips, the search now stops, as its
   report says. Before, it abandoned only the current phase and went on with
   the others, each of which walked back into the same limit.

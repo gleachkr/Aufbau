@@ -1017,9 +1017,13 @@ fn templateMatchesExprPlausible(
                     }
                     return true;
                 },
-                .variable, .placeholder => {
+                .variable => {
                     return templateNeedsSemantic(context, .{ .app = app });
                 },
+                // An open meta, such as the rest of a context that a
+                // premise leaves unresolved, may stand for anything,
+                // including a context that holds the leaf.
+                .placeholder => return true,
             }
         },
     }

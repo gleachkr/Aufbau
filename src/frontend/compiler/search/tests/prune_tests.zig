@@ -817,6 +817,47 @@ test "ACUI member prune does not count a placeholder member" {
     ));
 }
 
+test "ACUI member prune keeps a required member an open meta may supply" {
+    // `weaken` needs a `hyp` entry after `g`. Bare `g` has none, so the rule
+    // is pruned. A meta after `g`, such as a context a premise left open,
+    // may stand for one, so it is kept.
+    const mm0_src = ordered_ctx_theory ++
+        \\axiom weaken (g: ctx) {x: tm} (T: ty) (J: wff):
+        \\  $ nd g J $ > $ nd (join g (hyp (has x T))) J $;
+        \\theorem t (g: ctx) (z: tm): $ nd g (has z Nat) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId("weaken") orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+
+    const bare = (try parseGoal(&fixture, &theorem, &theorem_vars, "nd g (has z Nat)")).concrete;
+    const nd = theorem.interner.node(bare).app;
+    const g = nd.args[0];
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    bindings[0] = g;
+    try std.testing.expect(!prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, bare, bindings));
+
+    var store = MetaStore.init(allocator, &fixture.env);
+    defer store.deinit();
+    const meta = try store.mint(&theorem, "ctx", std.math.maxInt(u55), .existential);
+    const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const open_ctx = try theorem.interner.internApp(join_id, &.{ g, meta });
+    const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
+    try std.testing.expect(prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, open_goal, bindings));
+}
+
 // The dependency prune's exemption (`ruleMayRechooseBound`): the pruned
 // `weaken` instance above, on rules whose bound binder a view, `@fresh`, or
 // `@freshen` may re-choose after the conclusion match.
