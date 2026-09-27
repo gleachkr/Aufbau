@@ -201,17 +201,26 @@ test "auto? miss detail reports the exhausted space" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
+    var counters = types.SearchCounters{};
     var miss = try tunableChainSuggestions(&arena,
         \\ts
         \\----
-        \\l1: $ S $ by auto?
-    , .{ .generate = .{ .enabled = true }, .status_detail = true });
+        \\l1: $ S $ by auto? (depth: 3)
+    , .{
+        .generate = .{ .enabled = true },
+        .status_detail = true,
+        .counters = &counters,
+    });
     defer miss.deinit();
     try std.testing.expectEqual(types.SearchStatus.miss, miss.status);
     const detail = miss.status_detail orelse return error.MissingStatusDetail;
     try std.testing.expect(
-        std.mem.indexOf(u8, detail, "no proof found within depth 6") != null,
+        std.mem.indexOf(u8, detail, "no proof found within depth 3") != null,
     );
+    // The core searched every depth in full, and nothing cut it short.
+    try std.testing.expectEqual(@as(usize, 3), counters.gen_core_depth_done);
+    try std.testing.expectEqual(@as(usize, 0), counters.gen_node_capped_passes);
+    try std.testing.expect(!counters.gen_budget_exhausted);
 
     // The detail is opt-in: the same miss without the flag carries none
     // (the bench/programmatic path stays untouched).
@@ -287,16 +296,27 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
     // `nodes: 1` lets each pass expand a single subgoal, too few for the
     // two-level chain. No budget or fuel runs out, so before the node cap was
     // reported the miss read as an exhausted search space.
+    var counters = types.SearchCounters{};
     var capped = try tunableChainSuggestions(&arena,
         \\t
         \\----
         \\l1: $ R $ by auto? (nodes: 1)
-    , .{ .generate = .{ .enabled = true }, .status_detail = true });
+    , .{
+        .generate = .{ .enabled = true },
+        .status_detail = true,
+        .counters = &counters,
+    });
     defer capped.deinit();
     try std.testing.expectEqual(
         types.SearchStatus.budget_exhausted,
         capped.status,
     );
+    // Depth 1 expands a single subgoal, so the cap first stops a pass at
+    // depth 2. Only depth 1 counts as searched in full, and no budget ran
+    // out.
+    try std.testing.expect(counters.gen_node_capped_passes > 0);
+    try std.testing.expectEqual(@as(usize, 1), counters.gen_core_depth_done);
+    try std.testing.expect(!counters.gen_budget_exhausted);
     const detail = capped.status_detail orelse
         return error.MissingStatusDetail;
     try std.testing.expect(
@@ -311,6 +331,7 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
 
 fn budgetDetail(counters: types.SearchCounters) ![]const u8 {
     const gen = types.GenerateOptions{
+        .max_depth = 6,
         .global_budget = 6 * tunables.ticks_per_budget_unit,
     };
     return (try source.buildStatusDetail(
@@ -337,11 +358,17 @@ test "auto? budget truncation names every limit that was hit" {
         .gen_core_depth_done = 2,
     });
     defer std.testing.allocator.free(detail);
+    const where = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "ran out during {s} at depth 4 of 6",
+        .{source.ladderPhaseName(1)},
+    );
+    defer std.testing.allocator.free(where);
+    try std.testing.expect(std.mem.indexOf(u8, detail, where) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
         detail,
-        "the per-call work budget (~6s of work) ran out during " ++
-            "non-splitting generation at depth 4 of 6",
+        "the per-call work budget (~6s of work)",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,

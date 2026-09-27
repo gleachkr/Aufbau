@@ -950,7 +950,7 @@ fn retrySuggestion(
     };
 }
 
-fn ladderPhaseName(phase_1based: usize) []const u8 {
+pub fn ladderPhaseName(phase_1based: usize) []const u8 {
     if (phase_1based == 0 or phase_1based > ladder_phase_names.len) {
         return "generation";
     }
