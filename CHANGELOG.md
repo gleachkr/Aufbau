@@ -94,6 +94,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   treated that hidden variable and the λ's `x` as a conflict, so it forgot
   which `x` the premise was about. In the Martin-Löf example, `arr_intro`
   is now found from its hypotheses alone.
+- `auto?` now invents a fresh bound variable for a rule marked
+  `@auto backward` too. With `pi_form` enrolled, it could not prove
+  `g ⊢ Ty (A → B)` from `g ⊢ Ty A` and `g ⊢ Ty B`, because the premise
+  `g , x : A ⊢ Ty B` needs an `x` that nothing else names. Unenrolled,
+  `pi_form` already got one.
 - `auto?` no longer skips rules because part of a goal it has not chosen
   yet looks empty. In the additive FOL example, `ror` leaves `d` open in its
   premise `g ⊢ a , b , d`, since `d` may be the goal's whole right-hand side

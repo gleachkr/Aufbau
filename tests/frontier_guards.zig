@@ -155,6 +155,15 @@ pub const guards = [_]FrontierGuard{
             "tests/proof_cases/martin_lof.auf",
         .mode = "depth",
     },
+    // The same fresh `x` for a rule enrolled `@auto backward`: the bench copy
+    // enrolls `pi_form`, whose witness ladder alone never proves
+    // `g , x : A ⊢ Ty B`, so `arr_form` misses at k=1.
+    .{
+        .filter = "arr_form",
+        .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
+            "tests/search_bench_cases/martin_lof_frontier.auf",
+        .mode = "depth",
+    },
     // Depth guard for a kept step term (`seed.partitionSeedBindings`,
     // `backtrack.rebindSeedMetas`): unfolding `add_zero_right_p m` pins
     // `nat_ind_elim`'s step term `s` over the def's hidden `ih`. Scrubbed, the

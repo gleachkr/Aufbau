@@ -463,9 +463,10 @@ pub fn openMode(
 /// `list_form`). Only if none does is each given a `@vars` variable occurring
 /// in no binding (`tryFreshPoolWitnesses`). Such a variable must avoid every
 /// variable of the instance, so any fresh one gives the same instance up to
-/// renaming. Witness-mode rules keep their own witness ladder, and a holey
-/// goal may still carry the variable as a meta. Returns true iff the premise
-/// produced a candidate; otherwise the other fallbacks still run.
+/// renaming. `@auto backward` rules take this route too: their witness
+/// ladder has no fresh-variable rung. A holey goal may still carry the
+/// variable as a meta. Returns true iff the premise produced a candidate;
+/// otherwise the other fallbacks still run.
 fn tryFreshBoundGenerate(
     compiler: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -493,9 +494,6 @@ fn tryFreshBoundGenerate(
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) anyerror!bool {
     if (goal != .concrete) return false;
-    if (openMode(context, candidate.rule_id, hook.allow_constrained_mp) == .witness) {
-        return false;
-    }
     const cand_theorem = &candidate.theorem;
     const mask = plan.templateBinderMask(rule.hyps[hyp_index]);
     if (mask.overflow) return false;
