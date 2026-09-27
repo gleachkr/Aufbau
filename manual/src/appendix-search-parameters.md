@@ -39,8 +39,8 @@ repeated, the last occurrence wins.
 
 | Parameter | Default | Range | Meaning |
 |---|---|---|---|
-| `depth` | 6 | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. Deepening stops at the shallowest depth that closes the goal, so raising it never changes a proof that was already found. `@auto eager` steps are exempt. |
-| `nodes` | 256 | 1–1 000 000 | Per-depth budget of distinct generated sub-goal solves, reset at each deepening pass. |
+| `depth` | 6 | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. `@auto eager` steps are exempt. Deepening stops at the shallowest depth that closes the goal, but the later search phases run only after every depth has missed, so a higher limit can spend the work budget before they find a proof. |
+| `nodes` | 256 | 1–1 000 000 | Budget of distinct generated sub-goal solves per pass (one depth of one search phase), reset at each pass. |
 | `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase |
 | `budget` | ≈6 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 6.3 units). `budget: 0` is legal and disables the cap entirely. |
 

@@ -216,8 +216,8 @@ The ordering is load-bearing: within a core depth an anchored proof still
 wins (split-free beats split at equal height, and within any single
 application an anchored witness beats an invented one — invention is the
 last rung of the slot-local witness ladder, not a phase capability), and
-phases 4–6 still fire only on clean misses, so they can only *add*
-found-ness. What the reorder changed is the cross-depth preference within
+phases 4–5 still fire only on clean misses and phase 6 only on misses that
+did not stop the search, so they can only *add* found-ness. What the reorder changed is the cross-depth preference within
 the core — a shallow invented-witness proof now beats a deeper split-free
 one (measured impact: none — breadth corpus byte-identical). Flag sets are
 monotone along the ladder (phase 3 carries the same flags as phase 2),
@@ -298,8 +298,32 @@ which the persisted-memo covering rule requires:
    the seed-determined elimination major sorts after its wide open minors and
    is never reached), so pre-seeding phases plan exactly as before; and
    breadth stays byte-identical by construction (phase 6 runs only where
-   today's answer is a clean miss). Guarded by the `nd_minimal` depth
+   the ladder missed). Guarded by the `nd_minimal` depth
    frontier tests in `tests/frontier_guards.zig`.
+
+### How a miss is classified (`miss.zig`)
+
+"Clean miss" means two different things, and the difference is deliberate:
+
+- **Ladder gating** (`LadderOutcome` in `generate.zig`) decides whether the
+  tails and retries run. A node-capped cell still counts as `done`, so a core
+  whose cells hit `max_nodes` is `clean` and the tails run after it. Only a
+  retired core phase (`exhausted`) or the global budget / stack guard
+  (`stopped`) change the gating.
+- **The failure report** (`miss.MissReport`, read by `source.zig`'s status and
+  detail, the retry code action, and the bench's miss causes) calls a miss
+  *truncated* when any limit cut it short: the global budget, the stack guard,
+  a phase's fuel, forward saturation, or a node-capped pass
+  (`SearchCounters.gen_node_capped_passes`). A truncated miss reports
+  `budget_exhausted` status; only an untruncated one reads as exhausted.
+
+`SearchCounters.gen_core_depth_done` records the deepest depth at which every
+core phase finished with no find, exhaustion or node cap. When it reaches
+`max_depth - 1`, the report says every depth below the limit was searched and
+`miss.retryFor` raises depth; a node cap in the core keeps it lower on
+purpose (see `searchedBelowDepthLimit`). `retryFor` doubles every limit that
+was hit and the budget with them, and returns null when nothing can help (the
+stack guard, no generation, or every hit limit already at its maximum).
 
 ### The cost-weighted per-call budget (`GlobalBudget`)
 
@@ -827,12 +851,10 @@ over-approximation (never reject a provable candidate):
   occurrence or ACUI member (e.g. `ax`'s `P` in `G , P ⊩ P`) can be required
   present and reject `W ∉ Γ` early. Gated by `repin_prune_enabled` (the Driver
   sets it on for `auto?`); the re-check is skipped when re-pinning adds nothing.
-  ⚠ Latent edge: descending a non-injective transparent-def head can mis-pin
-  (the const trap); corpus-validated sound but not fully guarded — see
-  `pinRigidBinders`' comment. `pinRigidBinders` takes a comptime `descend_defs`
-  flag: the re-pin strengthening passes `true` (def-descent carries a
-  zermelo_hilbert benefit and is robust to the trap because its downstream check
-  abstains on def heads); the deep-member prune below passes `false`.
+  `pinRigidBinders` descends only into args the head determines
+  (`argDetermined`, see "Which arguments a head determines" below), so a def
+  that drops an argument (the const trap), a `@rewrite` head, or an ACUI spine
+  never yields a pin.
 - **deep-unfold ACUI member prune** (`backward/plausible.zig` `deepMemberWouldPrune`
   → `acui.acuiBoundMembersDeepMismatch`) — strengthens the member check
   for def-dense theories. The plain member check abstains the moment a
@@ -844,8 +866,8 @@ over-approximation (never reject a provable candidate):
   plausible↔acui import cycle); it rejects when a required leaf
   matches no member. Cracks church choose_eq (42.5s→1.9s) while leaving the
   `eqmp` open-cut flood (DISJ_CASES) untouched (a cut isn't a membership
-  question). Its re-pin uses `descend_defs = false` so the divergence-seeking
-  deep refuter can never act on a const-trap mis-pin. Gated by
+  question). Its re-pin shares `pinRigidBinders`, so it pins only what the
+  goal forces. Gated by
   `deep_member_prune_enabled` (Driver default-on for `auto?`;
   `--no-deep-member-prune` for A/B). Completeness-neutral: breadth byte-identical
   + depth TOTAL preserved.
@@ -882,6 +904,51 @@ over-approximation (never reject a provable candidate):
   premise is generated before validation rejects the context (nd_fol: the
   `bi_elim` tower flood). Abstains on opaque members and on any member
   conversion could change. Corpus-validated: breadth and depth identical.
+- **conclusion member check** (`seed.conclusionMembersPlausible` →
+  `acui.acuiBoundMembersPlausible`, counter `conclusion_member_prunes`) — every
+  fully-bound required member of an ACUI conclusion must have a candidate in
+  the goal. Presence needs only associativity, so it holds for every
+  combiner. Multiplicity (`acuiDistinctMembersPlausible`) applies only without
+  idempotence: a rule needing two distinct entries after `g` cannot match a
+  context holding one. An open meta in the goal (the rest of a context a
+  premise left unresolved) may hold any member, so it never refutes one.
+- **redex conclusion prune** (`plausible.redexConclusionMismatch`, called from
+  `validateSelectedRefs`; counter `redex_conclusion_prunes`) — a `@rewrite`
+  head in the conclusion gives the plain checks no opinion. Once the refs are
+  chosen, it binds what they force, fills every other ordinary binder with a
+  placeholder, reduces each redex in a scratch clone, and rejects the tuple
+  when the result cannot match the goal subterm at that position. A
+  placeholder never mismatches, so it rejects only what no choice of the
+  unbound binders could match.
+
+### Which arguments a head determines (`argDetermined`)
+
+A lockstep walk of a template against an expression may compare, pin, or
+descend into argument `i` of head `h` only when `h(a) ≡ h(b)` forces the two
+arguments equal (`semantic.argDetermined` → `def_injectivity.argDetermined`).
+An available primitive head determines all its arguments. A transparent def
+determines an argument only when its body places it at a path of such heads,
+so a def that drops an argument (`def K (a b) = a`, the const trap) does not.
+An ACUI combiner, a `@rewrite` head and an unavailable term determine none. The seed extractor, the re-pin
+(`pinRigidBinders`), and the member and redex checks all gate on it, so every
+pin they make is forced by the goal for any provable candidate.
+
+### Contexts that are ordered, and where a split can happen
+
+- **Ordered-context extraction** (`def_match.extractOrderedSpineBindings`) — a
+  combiner declared with neither commutativity nor idempotence is a sequence
+  (`acuiIsOrdered`). Seeding flattens both sides to their unit-free member
+  lists and aligns them from each end, never along the binary spines, whose
+  association is arbitrary. With one multi-member leaf (an unbound bare
+  binder) between the aligned ends, that binder is forced to the members in
+  between. martin_lof's `var` (`g , x : A ⊢ x : A`) against
+  `g , k : Nat , ih : Nat` in any association pins `x : A := ih : Nat` and
+  `g := g , k : Nat`. Commutative combiners use the multiset extractor
+  (`acui.extractAcuiMemberBindings`) instead.
+- **Split sites** (`split.findSplitSite`) — only a bare spine binder of an
+  ACUI conclusion distributes context members. A binder inside a fixed summand
+  (the `A` of `g , x : A`) is not a context, and enumerating contexts for it
+  would be ill-sorted, so it is never a split site.
 
 The same `finalConclusionPlausible`/`tryCandidate` path also carries the
 **reject-verdict memo** (`candidate.zig`, `types.VerdictMemo`): a `tryCandidate`
@@ -1040,7 +1107,7 @@ it is the identity, gated by `has_acui` so those theories pay nothing.
 - `concrete_fail` — per-pass **failure** memo keyed `(canonical target, depth)`.
   A failure is depth-relative (unprovable in d levels may be provable in d+1), so
   depth is part of the key. Only written for *exhaustive* failures (gated on
-  `budget_trips`/`path_prunes` unchanged across the subtree), and cleared each
+  `node_cap_trips`/`path_prunes` unchanged across the subtree), and cleared each
   iterative-deepening pass. An exhausted failure for one ACUI variant skips them
   all. It reuses `concrete_ok`'s already-computed canonical key, so it costs
   nothing beyond the success memo. Legacy path: only written when
@@ -1122,6 +1189,7 @@ width is real.
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `trigger.zig` | `@auto trigger` seed harvest (phase 6): goal-subterm e-match → sourceless ground `DerivedRef`s |
+| `tunables.zig` | `auto?` per-call parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?` thin variant |
 | `backward/seed.zig` | seed-phase binder extraction + non-view principal fan-out + eliminator reconciliation seed (`partitionSeedBindings`) |
@@ -1129,6 +1197,7 @@ width is real.
 | `backward/split.zig` | multiplicative context-partition search |
 | `backward/witness.zig` | ACUI member-witness enumeration for open existentials |
 | `backward/def_match.zig` | transparent-def-aware matching |
+| `backward/redex.zig` | reduce `@rewrite` redexes in generated emit targets, leaving ACUI context structure as the pool writes it |
 | `backward/prune.zig` / `backward/semantic.zig` | small prune/semantic helpers |
 | `abstract_prune.zig` / `context_prune.zig` | broad-slot prefilters |
 | `forward.zig` | forward saturation (`@auto forward`) |

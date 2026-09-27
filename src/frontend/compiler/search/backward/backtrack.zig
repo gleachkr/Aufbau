@@ -199,8 +199,8 @@ pub fn exactWithSession(
         }
         // A conclusion binding that rigidly mentions a bound binder its
         // dependency list omits dooms the application: no conversion removes
-        // the occurrence, and without a view or `@freshen` nothing re-chooses
-        // the bound binder, so every assembly fails the checker's
+        // the occurrence, and without a view, `@fresh` or `@freshen` nothing
+        // re-chooses the bound binder, so every assembly fails the checker's
         // DepViolation. (e.g. `weaken`'s `g , x : T ⊢ J` against
         // `g , k : Nat ⊢ suc k : Nat` binds `J := suc k : Nat`.)
         if (!ruleMayRechooseBound(context, apply_candidate.rule_id) and
@@ -426,11 +426,13 @@ pub fn witnessClass(context: *const Context, rule_id: u32) u8 {
 /// solving, and — only under `allow_invent_witness` — `@vars` pool
 /// invention).
 ///
-/// `.constrained` — the phase-5 constrained-backward-MP concession for
-/// un-enrolled rules (`hook.allow_constrained_mp`): a structured open target
-/// is built, but the child proof must determine every meta by read-back; no
-/// meta propagates into nested open slots and nothing is invented.
-/// `@abstract` motive inference rides this branch too.
+/// `.constrained` — a structured open target is built, but the child proof
+/// must determine every meta by read-back; no meta propagates into nested
+/// open slots and nothing is invented. Un-enrolled rules get it in phase 5
+/// (constrained backward modus ponens, `hook.allow_constrained_mp`), and
+/// `@abstract` motive inference rides that branch too. A premise that only
+/// opens a hidden bound variable gets it in every phase
+/// (`tryFreshBoundGenerate`).
 ///
 /// `.none` — no open generation for this candidate.
 pub const OpenMode = enum { none, constrained, witness };
@@ -2194,8 +2196,10 @@ fn banCarriedMetaDeps(
 
 /// How a matched non-bound binder's value mentions the value of a bound arg
 /// its `ArgInfo.deps` omits. Occurrences under a term with alpha rules don't
-/// count (`@freshen` renames only through those); meta leaves are dep-free, so
-/// a partially open binding is judged on its concrete part.
+/// count (`@freshen` renames only through those). A meta leaf counts as no hit,
+/// even a seed meta carrying a dep bit: an open meta may still be assigned
+/// something that avoids the bound variable, so a partially open binding is
+/// judged on its concrete part.
 const DepHit = enum {
     none,
     /// Reached only through a head conversion can rewrite away: a def, a

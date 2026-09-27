@@ -383,15 +383,13 @@ fn standardPlaceholderPred(_: void, theorem: *const TheoremContext, expr_id: Exp
     };
 }
 
-/// Whether a seeded rule binding should be dropped to "unconstrained":
-///   * a bare placeholder leaf (meta hole or def-unfold dummy) constrains
-///     nothing on its own; and
-///   * any value embedding a standard def-unfold placeholder must not reach
-///     validation/emission as a rule binding.
-/// A rigid app whose only placeholders are meta-class is kept (carry-to-leaf).
-/// For concrete (meta-free) goals this matches the legacy "scrub any
-/// placeholder-bearing binding" behaviour exactly.
-fn shouldScrubRuleSeed(theorem: *const TheoremContext, expr_id: ExprId) bool {
+/// Whether `partitionSeedBindings` must decide a seeded rule binding: a bare
+/// placeholder leaf (meta hole or def-unfold dummy), or a value embedding a
+/// standard def-unfold placeholder, which must not reach validation/emission
+/// as it stands. It either keeps such a value, with its dummies turned into
+/// shared metas, or scrubs it to null. Concrete values and rigid apps whose
+/// only placeholders are meta-class pass through untouched (carry-to-leaf).
+fn needsSeedPartition(theorem: *const TheoremContext, expr_id: ExprId) bool {
     return switch (theorem.interner.node(expr_id).*) {
         .variable => false,
         .placeholder => true,
@@ -427,7 +425,7 @@ fn shouldScrubRuleSeed(theorem: *const TheoremContext, expr_id: ExprId) bool {
 ///     slot via the open path.
 ///
 /// Concrete (meta-free) goals never expose dummies, so for the whole non-eliminator
-/// corpus the `shouldScrubRuleSeed` gate skips every binding and this is a no-op.
+/// corpus the `needsSeedPartition` gate skips every binding and this is a no-op.
 /// The kept metas are flagged `reconciliation_meta` on their interner leaf, so the
 /// meta-aware match (`match.tryMetaAwareHypMatch`) targets exactly these and
 /// never disturbs carry-to-leaf metas — no candidate-side bookkeeping needed.
@@ -453,7 +451,7 @@ pub fn partitionSeedBindings(
     }
     for (bindings, 0..) |*binding, idx| {
         const value = binding.* orelse continue;
-        if (!shouldScrubRuleSeed(theorem, value)) continue; // concrete / meta-only
+        if (!needsSeedPartition(theorem, value)) continue; // concrete / meta-only
         // A bare meta leaf constrains nothing — scrub it (baseline behavior),
         // regardless of the multi-hyp keep below. `rewriteDummiesToSharedMetas`
         // would otherwise return it unchanged (it only converts STANDARD
@@ -467,7 +465,7 @@ pub fn partitionSeedBindings(
             .app => true,
             .placeholder => |pid| term_dummies.set.contains(pid) or
                 (idx < 64 and multi.mask & (@as(u64, 1) << @intCast(idx)) != 0),
-            .variable => unreachable, // `shouldScrubRuleSeed` passes no variable
+            .variable => unreachable, // `needsSeedPartition` passes no variable
         };
         if (keep) {
             binding.* = try rewriteDummiesToSharedMetas(
@@ -688,8 +686,9 @@ fn repeatedBinderConflictWalk(
             return false;
         },
         .app => |app| {
-            // An ACUI combiner is unordered: we can't positionally line up its
-            // spine against the goal, so we form no opinion (mirrors
+            // An ACUI combiner's binary spine has an arbitrary association
+            // (and, under C, an arbitrary order): we can't positionally line
+            // it up against the goal, so we form no opinion (mirrors
             // `partialMatchTemplate`).
             if (context.registry.hasStructuralCombiner(app.term_id)) return false;
             const node = theorem.interner.node(expr_id);
@@ -797,10 +796,12 @@ fn partialMatchScoped(
     // multiset — a template member with a rigid head that lines up with exactly
     // one goal member must match it, so its internal binders are pinned. This is
     // the conclusion-seed analogue of the hyp-side `extractHypPartialBindings`
-    // ACUI member pass (which this delegates to). It never pins a bare context
-    // rest-binder, so it does not commit the ACUI context *split* the view seed
-    // must leave open (the documented eq_replace hazard) — hence it is enabled
-    // only for the rule-conclusion seed, not the view seeds.
+    // ACUI member pass (which this delegates to). Under a commutative combiner
+    // it never pins a bare context rest-binder, so it does not commit the ACUI
+    // context *split* the view seed must leave open (the documented eq_replace
+    // hazard) — hence it is enabled only for the rule-conclusion seed, not the
+    // view seeds. Under an ordered combiner (neither C nor I) the split is
+    // unique, so the one rest-binder it may pin is forced.
     extract_members: bool,
 ) !void {
     switch (template) {
@@ -851,8 +852,8 @@ fn partialMatchScoped(
             bindings[idx] = expr_id;
         },
         .app => |app| {
-            // An ACUI combiner (e.g. `join`) is an unordered multiset: its
-            // binary spine encodes association/order that carries no meaning,
+            // An ACUI combiner's (e.g. `join`) binary spine encodes an
+            // association, and under C an order, that carries no meaning,
             // so positionally descending `join(g, hyp(a))` into a goal's join
             // spine would bind `g` to whichever member happens to land first —
             // an unsound bind. Treat ACUI-combiner-headed template nodes as
@@ -881,11 +882,11 @@ fn partialMatchScoped(
                         }
                     }
                     // Forced structured-member recovery (conclusion seed only).
-                    // `extractHypPartialBindings` treats the combiner's args as an
-                    // unordered bag (gated internally on commutativity) and pins a
-                    // structured leaf's binders only when exactly one goal member
-                    // is shape-compatible — leaving the bare context rest-binder
-                    // open. For rim's succedent `(a→b), d` against goal `P c → P c`
+                    // Under C, `extractHypPartialBindings` treats the combiner's
+                    // args as a multiset and pins a structured leaf's binders
+                    // only when exactly one goal member is shape-compatible,
+                    // leaving the bare context rest-binder open. Under an
+                    // ordered combiner it aligns the member sequences instead. For rim's succedent `(a→b), d` against goal `P c → P c`
                     // this pins `a = b = P c` while `d` stays open for generation.
                     if (extract_members) {
                         def_match.extractHypPartialBindings(

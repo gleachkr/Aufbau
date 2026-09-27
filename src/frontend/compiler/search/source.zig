@@ -718,10 +718,12 @@ fn searchStatus(
     return .miss;
 }
 
+// Phase 3 has the same capabilities as phase 2, with its own fuel; it runs
+// only for theories with a `@vars` witness pool (generate.zig:`runPhaseLadder`).
 const ladder_phase_names = [_][]const u8{
     "non-splitting generation",
     "context splitting",
-    "witness invention",
+    "a retry of context splitting",
     "principal retention",
     "constrained modus ponens",
 };

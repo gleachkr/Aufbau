@@ -114,8 +114,9 @@ When a search fails, the diagnostic explains why it stopped. **Exhausted**
 means it finished exploring the candidates available to its search
 strategies at the configured depth. It does not mean that the goal is
 unprovable. Try a greater depth, add useful references, or adjust the
-theory's search annotations. If a limit such as the work **budget** cut the
-search short, it stopped before finishing that exploration. The report names
+theory's search annotations. If a limit such as the work **budget** or the
+per-pass subgoal limit (`nodes`) cut the search short, it stopped before
+finishing that exploration. The report names
 every limit it hit and suggests a retry that raises them together, which
 editors also offer as a **Retry with …** code action. The report also lists
 the most-tried rules, which can reveal repeated unsuccessful attempts.
@@ -130,7 +131,7 @@ l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 13)
 | parameter | default | meaning |
 |---|---|---|
 | `depth` | 6 | how deeply generated steps may nest |
-| `nodes` | 256 | distinct sub-goals per depth pass |
+| `nodes` | 256 | distinct sub-goals per pass (one depth of one search phase) |
 | `fuel` | 4096 | candidate validations per phase |
 | `budget` | ≈6 | whole-call work cap, in units of about a second; `0` removes it |
 

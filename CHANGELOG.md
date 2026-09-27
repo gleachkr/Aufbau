@@ -34,7 +34,7 @@ This file records notable user-facing changes to Aufbau. The project follows
   are theorems. The `const_ty` family is gone: `nat_rec`'s constant motive is
   now plain `A`.
 - `auto?` wastes less time on rules that cannot match. When a context is
-  neither commutative nor idempotent, a rule needing two entries after `g`
+  not idempotent, a rule needing two entries after `g`
   no longer matches a goal context with one, even though each required
   entry finds a candidate on its own. A rule is also dropped before any
   search when its conclusion forces a variable into a binder that may not
@@ -108,11 +108,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   variable, so renaming captured it. The Martin-Löf example proved
   `Id Nat (suc zero) zero`, and the FOL prelude proved `P y → ∀ y (P y)`.
   `lam_alpha`, `all_alpha` and `ex_alpha` now declare the body as depending
-  on the old variable only. Theories copied from these examples should make
-  the same change.
+  on the old variable only. `exchange` in the Martin-Löf examples likewise
+  let the moved entry's type mention its own variable; it no longer does.
+  Theories copied from these examples should make the same changes.
 - `auto?` now proves goals that need a rule like `var` (`g , x : A ⊢ x : A`)
   on the last entry of a context with two or more entries, when that context
-  is associative but not commutative. The search matched the rule's context
+  is neither commutative nor idempotent. The search matched the rule's context
   against the goal's by its written grouping, so a context grouped as
   `g , (k : Nat , ih : Nat)` bound `g` to `g` alone, and the rule never
   applied. It now matches the entries in order, ignoring grouping.

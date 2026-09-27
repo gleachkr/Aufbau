@@ -1005,10 +1005,10 @@ pub fn extractHypPartialBindings(
             // member so the value is forced (see `extractAcuiMemberBindings`).
             //
             // Gated on commutativity: the member extractor treats the combiner's
-            // arguments as an unordered bag, which is only valid when `@acui`
-            // declared C. Under a non-commutative subset (e.g. AU) the args are
-            // an ordered list — the positional walk above already handles those
-            // correctly, and order-aware strategies are a separate problem.
+            // arguments as a multiset, which is only valid when `@acui` declared
+            // C. An ordered combiner (neither C nor I) returned above through
+            // `extractOrderedSpineBindings`; an idempotent non-commutative one
+            // keeps only the positional walk.
             if (acuiIsCommutative(context, app.term_id)) {
                 acui.extractAcuiMemberBindings(
                     context,
@@ -1151,34 +1151,3 @@ fn extractScopedBindings(
         },
     }
 }
-
-// Extract binder values from the members of an ACUI multiset (Proposal B).
-//
-// The structural walk in `extractHypPartialBindings` can't cross an ACUI head:
-// e.g. the template context `G , ≃[A] x = t` (`join(G, hyp(eqc(A,x,t)))`)
-// almost never matches the ref's context shape, so `A`, `x`, `t` stay unbound
-// and the next hypothesis (`G ⊩ t : A`) is left searching its full ref pool.
-// Here we treat the template's leaves under this combiner as a multiset and try
-// to pin the binders of an unbound leaf from a forced ref member.
-//
-// The key step is *subtracting the bound siblings*. A leaf like the bound `G`
-// (a binder already pinned to the goal context) expands to a known multiset of
-// ref members; in any valid alignment those members are claimed by `G`. We mark
-// them consumed first, so the unbound leaf only competes against what's left.
-// Without this, `G ⊩ … , ≃[A] x = t` against a goal whose context already holds
-// other equations would see several `hyp(eqc …)` members and give up. After
-// removing `G`'s members, the lone remaining equation is forced.
-//
-// Why this is completeness-safe: in any valid ACUI alignment each bound leaf
-// maps to ref members equal to its own (hash-consed ⇒ identity equality), and
-// the unbound leaf maps to one of the rest. If, after removing the bound-leaf
-// members, exactly one remaining member is shape-compatible with the unbound
-// leaf, every valid alignment maps the leaf to it — so the binder values it
-// yields are forced (the same the full validator would derive). With zero or
-// several candidates we commit nothing. These are only search-guidance bindings
-// (the proof is re-derived by `tryCandidate`), so an over-eager commit could
-// only cost completeness, which the uniqueness gate prevents.
-//
-// NOTE: treating the args as an unordered multiset assumes commutativity. Under
-// a non-commutative `@acui` subset (e.g. pure AU) this is a heuristic — still
-// sound as guidance, but not a completeness guarantee. See `docs/rewrite_system.md`.

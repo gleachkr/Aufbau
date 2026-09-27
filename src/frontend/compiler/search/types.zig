@@ -525,9 +525,12 @@ pub const SearchCounters = struct {
     gen_budget_exhausted: bool = false,
     /// Ladder progress observability (for the user-facing failure report):
     /// the (depth, phase) of the last generation ladder cell that STARTED.
-    /// On a truncated call this locates where the budget died; on a clean
-    /// miss the depth equals the configured `max_depth`. Phase is 1-based
-    /// (1 non-splitting .. 5 constrained MP); 0 = generation never ran.
+    /// When the global budget or the stack guard ended the call, this is the
+    /// cell they ended it in. Otherwise it is just the last cell run: fuel
+    /// retires a core phase without ending the ladder, and the node cap only
+    /// stops a cell expanding. After a full ladder the depth is `max_depth`.
+    /// Phase is 1-based (1 non-splitting .. 5 constrained MP); 0 =
+    /// generation never ran.
     gen_last_depth: usize = 0,
     gen_last_phase: usize = 0,
     /// Ladder cells (one depth pass of one phase) in which the `max_nodes`
@@ -564,7 +567,8 @@ pub const SearchCounters = struct {
     conclusion_member_prunes: usize = 0,
     /// Rule candidates dropped at seed time because a conclusion binding
     /// rigidly mentions a bound binder its dependency list omits
-    /// (`bindingsDepHit == .rigid` on a rule with no view or freshen).
+    /// (`bindingsDepHit == .rigid` on a rule with no view, `@fresh` or
+    /// `@freshen`).
     dep_violation_prunes: usize = 0,
     final_conclusion_prunes: usize = 0,
     /// (candidate, refs) tuples refuted because a `@rewrite`-headed redex in
@@ -1258,33 +1262,38 @@ pub const SourceSuggestions = struct {
 /// so they never pay generation cost.
 pub const GenerateOptions = struct {
     enabled: bool = false,
-    /// Maximum recursion depth, explored via iterative deepening (depth 1, then
-    /// 2, ... up to this), stopping at the SHALLOWEST depth that yields a proof
-    /// (generate.zig:`runIterativeDeepening`) — so raising this never costs a
-    /// shallow solution, it only lets a deeper one be found. A finite cap (not
-    /// unbounded) keeps the no-result case bounded: a goal with no proof runs
-    /// every depth 1..max before giving up, so an unbounded limit would burn the
-    /// whole `fuel` floor on every miss.
+    /// Maximum generation depth. The core phases (1–3) deepen together,
+    /// depth 1 then 2 ... up to this, and stop at the first (depth, phase)
+    /// cell that yields a proof (generate.zig:`runPhaseLadder`); the tail
+    /// phases (4–5) each run their own full 1..max ladder only after the
+    /// core misses. For proofs the core finds, raising the limit keeps the
+    /// same cell order and so never loses them. It can lose a tail-phase
+    /// or trigger-seeded proof: the core runs every extra depth first and
+    /// may spend the shared `global_budget` before the tail reaches it
+    /// (#295: the depth corpus went 363→361→360 FULL rows at 6, 7, 8).
+    /// A finite limit keeps a miss bounded, since a goal with no proof runs
+    /// every cell before giving up.
     max_depth: usize = 6,
-    /// Per-depth budget of *distinct* generated-node solves (skips deduplicated
-    /// by `generate.zig`'s within-pass path guard + failure memo cost nothing),
-    /// reset at each iterative-deepening depth. The cheap *secondary* guard; the
-    /// load-bearing bound is `fuel` (global, expensive-op-counted, not reset per
-    /// depth). Sized so the deepest additive_fol proofs regenerate fully from an
-    /// empty pool: the two-branch `*_dist_*` proofs touch ~76 distinct
-    /// sub-targets, but `forall_mono` (whose double-`lall` eigenvariable
-    /// meta-coupling widens the search relative to its existential dual) needs
-    /// ~170, and `drinker` (the underdetermined `@vars`-pool witness case) needs
-    /// the full 256 to reach its forced witness — at 192 it stalls at frontier
-    /// 1/5, at 256 it regenerates fully. Raising it never changes a found proof
-    /// (iterative deepening stops at the shallowest); it only lets doomed
-    /// searches explore further before giving up, so it is kept as tight as
-    /// full coverage allows. The cost is bounded doomed-search latency, since
-    /// real proofs solve shallow.
+    /// Budget of *distinct* generated-node solves per ladder cell (one
+    /// depth pass of one phase), reset at each cell; subgoals the path
+    /// guard or a failure memo skip cost nothing. Once a cell reaches it,
+    /// the cell expands no further subgoals, and the miss report counts the
+    /// cell as truncated (`SearchCounters.gen_node_capped_passes`). Sized so
+    /// the deepest additive_fol proofs regenerate fully from an empty pool:
+    /// the two-branch `*_dist_*` proofs touch ~76 distinct sub-targets,
+    /// `forall_mono` ~170, and `drinker` (the `@vars`-pool witness case)
+    /// needs the full 256 (at 192 it stalls at frontier 1/5). Raising it can
+    /// change which proofs are found either way (#299): a wider cell reaches
+    /// top-level alternatives the first alternative's subtree starved, but
+    /// it also spends more of the shared `global_budget`, which can starve
+    /// the tail phases of proofs they found before.
     max_nodes: usize = 256,
-    /// Global `tryCandidate` budget for the whole recursive search, NOT reset per
-    /// depth. The safety floor that guarantees termination/bounded memory; sized
-    /// generously so ordinary proofs never hit it while pathological goals do.
+    /// Per-phase `tryCandidate` budget. Each ladder phase draws from its own
+    /// pool across all its depths, and every ladder run (the retries of
+    /// phase 6 and the eager-cut valve included) starts each phase with a
+    /// fresh pool. A core phase that runs dry is retired for the rest of the
+    /// ladder while the other phases continue; a tail phase that runs dry
+    /// ends the ladder. Sized generously so ordinary proofs never hit it.
     /// Lowered in tests to assert clean budget-exhausted behaviour.
     fuel: usize = 4096,
     /// Cap on generated top-level suggestions. Set by the dispatch to the number

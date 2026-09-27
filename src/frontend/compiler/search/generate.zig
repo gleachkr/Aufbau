@@ -188,7 +188,7 @@ const Driver = struct {
     /// "no proof of gen-depth ≤ d under phase-p capabilities and this
     /// pool" — because the phase capability flags are cumulative, linearly
     /// ordered, and purely additive (each only ADDS candidate branches),
-    /// and the exhaustiveness guards (`budget_trips`/`path_prunes`)
+    /// and the exhaustiveness guards (`node_cap_trips`/`path_prunes`)
     /// already exclude truncated verdicts. So a recorded failure soundly
     /// covers any later re-solve at depth ≤ d under phase ≤ p — which the
     /// depth-major core re-encounters constantly (phases 1–2 re-run at
@@ -230,7 +230,7 @@ const Driver = struct {
     /// the value at subtree entry and exit): if it grew, some descendant bailed
     /// on budget, so the failure is not exhaustive and must not enter a
     /// failure memo.
-    budget_trips: usize = 0,
+    node_cap_trips: usize = 0,
     /// Monotonic count of DFS path-guard prunes. A solve that only fails
     /// because a descendant target is already on the current recursion path is
     /// not an unconditional failure; the same target may succeed from a sibling
@@ -311,7 +311,7 @@ pub fn generateTopLevel(
     var vars_clone: ?types.NameExprMap = null;
     defer if (vars_clone) |*clone| clone.deinit();
     var effective_vars: *const NameExprMap = theorem_vars;
-    const has_vars_pool = session.context.sort_vars.count() > 0 and
+    const can_invent_witness = session.context.sort_vars.count() > 0 and
         session.context.registry.hasWitnessBackwardRules(session.context.env);
     if (session.context.sort_vars.count() > 0) {
         vars_clone = try Check.cloneNameExprMap(
@@ -466,7 +466,7 @@ pub fn generateTopLevel(
         goal_expr,
         &applications,
         budget_ptr,
-        has_vars_pool,
+        can_invent_witness,
     );
 
     // Phase 6: on a miss of the whole ladder, and only when the theory
@@ -532,7 +532,7 @@ pub fn generateTopLevel(
                 goal_expr,
                 &applications,
                 budget_ptr,
-                has_vars_pool,
+                can_invent_witness,
             );
         }
     }
@@ -559,7 +559,7 @@ pub fn generateTopLevel(
             goal_expr,
             &applications,
             budget_ptr,
-            has_vars_pool,
+            can_invent_witness,
         );
     }
 
@@ -701,7 +701,7 @@ fn runPhaseLadder(
     goal_expr: ExprId,
     applications: *std.ArrayListUnmanaged(RuleApplication),
     budget_ptr: ?*types.GlobalBudget,
-    has_vars_pool: bool,
+    can_invent_witness: bool,
 ) anyerror!LadderOutcome {
     const options = driver.options;
     // Phase gates, constant across the ladder. Phase 3 is a capability-
@@ -731,13 +731,13 @@ fn runPhaseLadder(
     var any_capped = false;
     var depth_limit: usize = 1;
     while (depth_limit <= options.max_depth) : (depth_limit += 1) {
-        const trips_at_depth = driver.budget_trips;
-        defer if (driver.budget_trips != trips_at_depth) {
+        const trips_at_depth = driver.node_cap_trips;
+        defer if (driver.node_cap_trips != trips_at_depth) {
             any_capped = true;
         };
         for (0..core_phase_count) |phase| {
             if (retired[phase]) continue;
-            if (phase == 2 and !has_vars_pool) continue;
+            if (phase == 2 and !can_invent_witness) continue;
             // Capabilities, phase index 0-based: 0 ordinary (non-splitting)
             // generation, 1 + ACUI context splitting, 2 a capability-identical
             // RETRY of phase 1 (see the phase-gates comment), 3 + idempotent
@@ -748,7 +748,7 @@ fn runPhaseLadder(
             // along the phase order (index 2 equals index 1), which the
             // persisted-memo covering rule below requires.
             driver.hook.allow_split = phase >= 1;
-            driver.hook.allow_invent_witness = has_vars_pool;
+            driver.hook.allow_invent_witness = can_invent_witness;
             driver.hook.allow_retain_principal = false;
             driver.hook.allow_constrained_mp = false;
             driver.phase_index = phase;
@@ -776,7 +776,7 @@ fn runPhaseLadder(
             if (applications.items.len > 0) return .clean;
         }
         if (!any_retired and !any_capped and
-            driver.budget_trips == trips_at_depth)
+            driver.node_cap_trips == trips_at_depth)
         {
             if (driver.counters) |c| {
                 c.gen_core_depth_done = @max(c.gen_core_depth_done, depth_limit);
@@ -793,7 +793,7 @@ fn runPhaseLadder(
     for (core_phase_count..phase_fuel.len) |phase| {
         if (phase == 3 and !has_idem) continue;
         driver.hook.allow_split = true;
-        driver.hook.allow_invent_witness = has_vars_pool;
+        driver.hook.allow_invent_witness = can_invent_witness;
         driver.hook.allow_retain_principal = phase >= 3 and has_idem;
         driver.hook.allow_constrained_mp = phase >= 4;
         driver.phase_index = phase;
@@ -858,8 +858,8 @@ fn runDepthPass(
     applications: *std.ArrayListUnmanaged(RuleApplication),
 ) anyerror!PassEnd {
     driver.nodes = 0;
-    const trips_at_start = driver.budget_trips;
-    defer if (driver.budget_trips != trips_at_start) {
+    const trips_at_start = driver.node_cap_trips;
+    defer if (driver.node_cap_trips != trips_at_start) {
         if (driver.counters) |c| c.gen_node_capped_passes += 1;
     };
     // Ladder-progress observability for the failure report: which (depth,
@@ -1106,12 +1106,12 @@ fn collectOpenProofs(
         };
     }
     if (driver.nodes >= driver.options.max_nodes) {
-        driver.budget_trips += 1;
+        driver.node_cap_trips += 1;
         driver.scratch.free(key);
         return;
     }
     driver.nodes += 1;
-    const trips_at_entry = driver.budget_trips;
+    const trips_at_entry = driver.node_cap_trips;
     const path_prunes_at_entry = driver.path_prunes;
     try driver.visited_open.put(driver.scratch, key, {});
     defer {
@@ -1230,12 +1230,12 @@ fn collectOpenProofs(
     // Genuine exhaustive failure: every child candidate was tried and none
     // matched back. Cache it so sibling subtrees skip this canonical target.
     // Guard: only when no node-budget bail or DFS path-prune happened anywhere
-    // in this subtree (`budget_trips` / `path_prunes` unchanged since entry) —
+    // in this subtree (`node_cap_trips` / `path_prunes` unchanged since entry) —
     // otherwise the exploration was truncated or ancestor-dependent, so the
     // failure is not exhaustive. Fuel exhaustion propagates as an error, never
     // a null, so it cannot reach here. The key is owned by the `defer` above,
     // so the memo takes its own copy.
-    if (driver.budget_trips == trips_at_entry and
+    if (driver.node_cap_trips == trips_at_entry and
         driver.path_prunes == path_prunes_at_entry and
         depth_bit != 0)
     {
@@ -1689,13 +1689,13 @@ fn solveProof(
     // Per-call cost budget (see `hookSolveOpen`'s twin check).
     if (driver.fuel.global) |budget| try budget.check();
     if (driver.nodes >= driver.options.max_nodes) {
-        driver.budget_trips += 1;
+        driver.node_cap_trips += 1;
         return null;
     }
     driver.nodes += 1;
     try driver.visited.put(driver.scratch, target, {});
     defer _ = driver.visited.remove(target);
-    const trips_at_entry = driver.budget_trips;
+    const trips_at_entry = driver.node_cap_trips;
     const path_prunes_at_entry = driver.path_prunes;
 
     // Interner scope: the concrete twin of `hookSolveOpen`'s (see the full
@@ -1747,7 +1747,7 @@ fn solveProof(
         // Genuine exhaustive failure (no candidate at this depth), with no
         // node-budget bail and no DFS path-prune inside the subtree: memoize so
         // siblings skip it.
-        if (driver.budget_trips == trips_at_entry and
+        if (driver.node_cap_trips == trips_at_entry and
             driver.path_prunes == path_prunes_at_entry)
         {
             if (driver.options.persist_negative) {

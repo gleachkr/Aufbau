@@ -152,9 +152,9 @@ const SweepSpec = struct {
     points: []const usize,
 };
 
-/// The major real developments. Frontier runs are read-only analysis, so
-/// pointing at shared `tests/proof_cases/` fixtures is fine here (unlike
-/// scenario fixtures, which must be bench-local copies).
+/// The major real developments, as bench-local `*_frontier` copies that carry
+/// search-only `@auto` annotations (the `tests/proof_cases/` originals are
+/// shared with the proof-case suite and the web demo).
 const default_frontier_corpus = [_]FixturePair{
     .{
         // search-only @auto-annotated copy of proof_cases/euclid (annotations
@@ -1492,13 +1492,16 @@ fn printUsage() !void {
             "       [--no-search-memo] [--no-deep-member-prune]\n" ++
             "       [--no-persist-negative]\n" ++
             "       [--no-shape-cache]\n" ++
-            "       [--gen-nodes=N] [--gen-fuel=N] [--global-budget=TICKS]\n" ++
+            "       [--gen-nodes=N] [--gen-fuel=N] [--phase5-fuel=N]\n" ++
+            "       [--global-budget=TICKS] [--alloc-trap=MIB]\n" ++
             "       [--fwd-facts=N] [--fwd-layers=N] [--fwd-attempts=N]\n" ++
+            "       [--fwd-tuples=N]\n" ++
             "       [--sweep=FAMILY[:N1,N2,...]]\n" ++
             "\n" ++
             "frontier modes (META_STRESS.md): per-line ablation (breadth)\n" ++
             "or proof-tail truncation (depth) over the real developments;\n" ++
-            "default corpus is the major tests/proof_cases/ pairs and\n" ++
+            "default corpus is the *_frontier copies of the major\n" ++
+            "developments in tests/search_bench_cases/, and\n" ++
             "--filter matches theorem names; --exclude skips them.\n" ++
             "--retry-misses re-runs each depth miss with the retry its\n" ++
             "failure report suggests and prints whether that finds it.\n" ++

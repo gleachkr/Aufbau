@@ -266,7 +266,9 @@ axiom all_alpha {x y: obj} (p: wff x): $ ∀ x p ↔ ∀ y ([x/y] p) $;
 
 `OLD` and `NEW` are bound binders of the same sort on a hypothesis-free
 equivalence. Registers the rule as the alpha-renaming lemma for its head term,
-consumed only by the `@freshen` repair path.
+consumed only by the `@freshen` repair path. No other argument may depend on
+`NEW`, or renaming captures it: declare the body as `(p: wff x)`, not
+`(p: wff x y)`. The compiler does not check this.
 
 ## Holes and fallbacks
 

@@ -50,8 +50,9 @@ pub const DummyInfo = struct {
 /// - `standard`: the historical frontend placeholder — a bound-variable
 ///   stand-in or witness that consumes a synthetic dep bit from the shared
 ///   u55 mask space (`addPlaceholderResolved`).
-/// - `meta`: a search metavariable leaf minted dep-free
-///   (`addMetaPlaceholderResolved`). Its assignment state lives in the
+/// - `meta`: a search metavariable leaf minted without consuming a dep bit
+///   (`addMetaPlaceholderResolved`); a reconciliation seed meta reuses the
+///   bit of the hidden variable it stands for. Its assignment state lives in the
 ///   branch-local `MetaStore` (`compiler/inference/meta_store.zig`), never in
 ///   the interner node. Search-scale minting must not consume dep bits, and
 ///   rigid `.placeholder` matching arms / the emission leakage guard need to
@@ -714,7 +715,7 @@ pub const TheoremContext = struct {
     /// `meta_id` (see `PlaceholderInfo.meta_id`). Used by the shared `MetaStore`
     /// so a meta minted in one interner and reinterned into another resolves to
     /// the same store slot. Otherwise identical to `addMetaPlaceholderResolved`
-    /// (dep-free, `.meta` class).
+    /// (no dep bit, `.meta` class).
     pub fn addMetaPlaceholderWithMetaId(
         self: *TheoremContext,
         sort_name: []const u8,
@@ -873,8 +874,9 @@ pub const TheoremContext = struct {
                         .deps = placeholder.deps,
                     },
                     // A meta stands for an arbitrary expression of its sort,
-                    // not a bound-variable stand-in (dep-free), except a seed
-                    // meta, which stands for a def's hidden variable. Live
+                    // not a bound-variable stand-in, except a seed meta, which
+                    // stands for a def's hidden variable and carries its dep
+                    // bit. Live
                     // metas must be solved before validation ever consults
                     // leaf info, so this is a conservative default, not a
                     // load-bearing answer.

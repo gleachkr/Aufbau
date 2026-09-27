@@ -167,6 +167,12 @@ The annotated rule must satisfy these frontend checks:
 - the left-hand side has a visible head term, so the compiler can index
   the rule as a rewrite candidate for that constructor
 
+The rule must also be sound, which the compiler does not check: no other
+argument may depend on the new binder. Declare the body as `(p: wff x)`,
+not `(p: wff x y)`. With the second, `p` may mention `y` freely, and
+renaming `x` to `y` captures it: `all_alpha` would prove
+`P y → ∀ y (P y)`.
+
 ### Operational model
 
 When the freshening helper inspects a concrete expression, it only looks
