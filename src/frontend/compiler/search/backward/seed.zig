@@ -376,6 +376,13 @@ fn exprContainsStandardPlaceholder(
     return theorem.exprAny(expr_id, {}, standardPlaceholderPred);
 }
 
+/// A seed value that holds a meta leaf or a def-unfold dummy, and so could
+/// still equal a different concrete value.
+fn seedValueIsLoose(theorem: *const TheoremContext, expr_id: ExprId) bool {
+    return exprContainsMetaLeaf(theorem, expr_id) or
+        exprContainsStandardPlaceholder(theorem, expr_id);
+}
+
 fn standardPlaceholderPred(_: void, theorem: *const TheoremContext, expr_id: ExprId) bool {
     return switch (theorem.interner.node(expr_id).*) {
         .placeholder => |pid| theorem.placeholderClass(pid) != .meta,
@@ -833,17 +840,22 @@ fn partialMatchScoped(
             // `?t = 0`, where the first occurrence is meta-bearing and a later
             // one is concrete) is handled by *refinement*: a concrete
             // occurrence overrides a meta-bearing bind, never the reverse, so
-            // the concrete seed validation needs survives. (Concrete goals
-            // never carry meta leaves, so for the non-meta corpus this is the
-            // old "first occurrence binds; a distinct repeat nulls" rule.)
-            const incoming_meta = exprContainsMetaLeaf(theorem, expr_id);
+            // the concrete seed validation needs survives.
+            //
+            // A def-unfold dummy (a standard placeholder) is loose the same
+            // way: the unfolding may instantiate it to any suitable bound
+            // variable. `lam_intro`'s `(λ x : A. t) : (Π x : A. B)` against
+            // `(λ x : A. t) : (A → B)` meets `x` twice, once from the λ and
+            // once as the arrow's hidden binder; the λ's `x` must win, not
+            // null the pin as a conflict between two concretes.
+            const incoming_loose = seedValueIsLoose(theorem, expr_id);
             if (bindings[idx]) |existing| {
                 if (existing == expr_id) return;
-                const existing_meta = exprContainsMetaLeaf(theorem, existing);
-                if (existing_meta and !incoming_meta) {
-                    bindings[idx] = expr_id; // concrete refines meta-bearing
-                } else if (existing_meta or incoming_meta) {
-                    return; // keep the standing bind; metas are not comparable
+                const existing_loose = seedValueIsLoose(theorem, existing);
+                if (existing_loose and !incoming_loose) {
+                    bindings[idx] = expr_id; // concrete refines a loose bind
+                } else if (existing_loose or incoming_loose) {
+                    return; // keep the standing bind; loose values are not comparable
                 } else {
                     bindings[idx] = null; // two distinct concretes: real conflict
                 }

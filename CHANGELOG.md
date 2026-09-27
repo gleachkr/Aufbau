@@ -88,6 +88,12 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` now proves `g ⊢ (λ x : A. t) : (A → B)` by `lam_intro` when it
+  also has to prove the premise `g , x : A ⊢ Ty B`. The arrow is a
+  definition that hides a bound variable (`Π x : A. B`), and the search
+  treated that hidden variable and the λ's `x` as a conflict, so it forgot
+  which `x` the premise was about. In the Martin-Löf example, `arr_intro`
+  is now found from its hypotheses alone.
 - `auto?` no longer skips rules because part of a goal it has not chosen
   yet looks empty. In the additive FOL example, `ror` leaves `d` open in its
   premise `g ⊢ a , b , d`, since `d` may be the goal's whole right-hand side
