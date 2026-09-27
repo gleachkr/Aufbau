@@ -132,34 +132,30 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/ordered_ctx_probe.auf",
         .mode = "depth",
     },
-    // Depth guard for the ACUI multiplicity reject
-    // (`acui.acuiDistinctMembersPlausible`): without it `weaken2`/`weaken3`
-    // seed on contexts too short for them, and `nat_rec_step_ty` misses at
-    // k=5.
-    .{
-        .filter = "nat_rec_step_ty",
-        .files = "tests/proof_cases/martin_lof.mm0:" ++
-            "tests/proof_cases/martin_lof.auf",
-        .mode = "depth",
-    },
-    // Depth guard for fresh variables hidden by a def
+    // Depth guards for fresh variables hidden by a def
     // (`backtrack.tryFreshBoundGenerate`): `A → B` unfolds to `Π x : A. B`,
     // so `pi_form` (`arr_form`) and `app_elim` (`arr_elim`) need a premise
     // `g , x : A ⊢ Ty B` for an `x` that nothing pins. Without a fresh `x`
-    // both miss at k=1. `arr_intro`'s `lam_intro` step needs the opposite:
-    // the hidden binder is the λ's own `x`, and the conclusion seed must keep
-    // that pin rather than drop it as a conflict with the dummy.
-    .{
-        .filter = "arr_",
-        .files = "tests/proof_cases/martin_lof.mm0:" ++
-            "tests/proof_cases/martin_lof.auf",
-        .mode = "depth",
-    },
-    // The same fresh `x` for a rule enrolled `@auto backward`: the bench copy
-    // enrolls `pi_form`, whose witness ladder alone never proves
-    // `g , x : A ⊢ Ty B`, so `arr_form` misses at k=1.
+    // both miss at k=1. The bench copy enrolls `pi_form` `@auto backward`,
+    // and its witness ladder must take the same route.
     .{
         .filter = "arr_form",
+        .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
+            "tests/search_bench_cases/martin_lof_frontier.auf",
+        .mode = "depth",
+    },
+    .{
+        .filter = "arr_elim",
+        .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
+            "tests/search_bench_cases/martin_lof_frontier.auf",
+        .mode = "depth",
+    },
+    // `arr_intro`'s `lam_intro` step needs the opposite: the hidden binder is
+    // the λ's own `x`, and the conclusion seed must keep that pin rather than
+    // drop it as a conflict with the dummy (`seed.seedValueIsLoose`). Without
+    // it `arr_intro` misses at k=1.
+    .{
+        .filter = "arr_intro",
         .files = "tests/search_bench_cases/martin_lof_frontier.mm0:" ++
             "tests/search_bench_cases/martin_lof_frontier.auf",
         .mode = "depth",

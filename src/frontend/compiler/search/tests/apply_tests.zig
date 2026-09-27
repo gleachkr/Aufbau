@@ -1,7 +1,6 @@
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
-const source = helpers.source;
 const def_match = helpers.def_match;
 const session_mod = helpers.session_mod;
 const TheoremContext = helpers.TheoremContext;
@@ -32,6 +31,7 @@ const expectApplyRuleOrder = helpers.expectApplyRuleOrder;
 const expectExactRuleOrderWithPrefix = helpers.expectExactRuleOrderWithPrefix;
 const expectExactRuleOrder = helpers.expectExactRuleOrder;
 const expectFirstExactRefs = helpers.expectFirstExactRefs;
+const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
 
 test "apply rule index filters nonmatching rules before validation" {
     const mm0_src =
@@ -50,17 +50,14 @@ test "apply rule index filters nonmatching rules before validation" {
         \\------
         \\l1: $ P $ by apply?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "apply?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "apply?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
@@ -427,17 +424,14 @@ test "exact ref index filters multi-hyp reference tuples" {
         \\------
         \\l1: $ T $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
@@ -477,17 +471,14 @@ test "exact search propagates sibling hyp bindings while filtering refs" {
         \\------
         \\l1: $ Goal $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();

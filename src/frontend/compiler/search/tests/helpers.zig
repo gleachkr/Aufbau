@@ -720,13 +720,16 @@ pub const tunable_chain_mm0 =
     \\theorem ts: $ S $;
 ;
 
-pub fn conversionSuggestions(
+/// Runs the source search at the first `needle` in `proof_src` (usually the
+/// search token itself, such as `"auto?"`).
+pub fn suggestionsAtNeedle(
     arena: *std.heap.ArenaAllocator,
     mm0_src: []const u8,
     proof_src: []const u8,
+    needle: []const u8,
     options: types.SourceSuggestionOptions,
 ) !types.SourceSuggestions {
-    const offset = std.mem.indexOf(u8, proof_src, "conversion?") orelse
+    const offset = std.mem.indexOf(u8, proof_src, needle) orelse
         return error.MissingNeedle;
     return source.suggestionsAtSourceOffset(
         arena.allocator(),
@@ -735,6 +738,41 @@ pub fn conversionSuggestions(
         offset,
         options,
     );
+}
+
+pub fn conversionSuggestions(
+    arena: *std.heap.ArenaAllocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+    options: types.SourceSuggestionOptions,
+) !types.SourceSuggestions {
+    return suggestionsAtNeedle(
+        arena,
+        mm0_src,
+        proof_src,
+        "conversion?",
+        options,
+    );
+}
+
+/// Fails unless every replacement in `expected` is among `items`, printing
+/// what was offered instead.
+pub fn expectOffered(
+    items: []const types.SourceSuggestion,
+    expected: []const []const u8,
+) !void {
+    var missing = false;
+    for (expected) |wanted| {
+        for (items) |item| {
+            if (std.mem.eql(u8, item.replacement, wanted)) break;
+        } else {
+            std.debug.print("missing suggestion: {s}\n", .{wanted});
+            missing = true;
+        }
+    }
+    if (!missing) return;
+    for (items) |item| std.debug.print("  offered: {s}\n", .{item.replacement});
+    return error.MissingSuggestion;
 }
 
 /// An annotation the registry rejects at enrollment surfaces through the

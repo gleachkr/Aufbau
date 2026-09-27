@@ -1,7 +1,6 @@
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
-const source = helpers.source;
 const fixture_mod = helpers.fixture_mod;
 const backtrack = helpers.backtrack;
 const prune = helpers.prune;
@@ -31,6 +30,8 @@ const expectCaseLineSearch = helpers.expectCaseLineSearch;
 const expectApplyContains = helpers.expectApplyContains;
 const expectExactRuleOrder = helpers.expectExactRuleOrder;
 const expectFirstExactRefs = helpers.expectFirstExactRefs;
+const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
+const expectOffered = helpers.expectOffered;
 
 test "conclusion seed unfolds transparent template head" {
     const mm0_src =
@@ -413,16 +414,14 @@ test "ACUI conclusion member prune scans below semantic container" {
         \\------
         \\l1: $ nd (join (hyp a) (hyp b)) c $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
@@ -501,15 +500,13 @@ fn exactSuggestionCount(
     proof_src: []const u8,
     counters: *types.SearchCounters,
 ) !usize {
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = counters },
     );
     defer suggestions.deinit();
@@ -578,20 +575,15 @@ test "redex conclusion prune keeps a ref whose redex reduces to the goal" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
-    for (suggestions.items) |suggestion| {
-        if (std.mem.indexOf(u8, suggestion.replacement, "sub [") != null) return;
-    }
-    return error.MissingSuggestion;
+    try expectOffered(suggestions.items, &.{"sub [#1, #2]"});
 }
 
 test "redex conclusion prune abstains on a rewrite-headed premise" {
@@ -611,6 +603,10 @@ test "redex conclusion prune abstains on a rewrite-headed premise" {
         \\------
         \\l1: $ pr o $ by exact?
     ;
+    // The checker does not yet read `u` back through the `@rewrite` head
+    // (`via (u := $ o $) [#1]` checks; `via [#1]` does not), so there is no
+    // suggestion to count; the test checks only that the candidate reaches
+    // validation.
     var counters = types.SearchCounters{};
     _ = try exactSuggestionCount(mm0_src, proof_src, &counters);
 
@@ -1479,27 +1475,19 @@ test "abstract pruner skips rigid-bad broad refs before validation" {
         \\------
         \\l1: $ b -> top $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "ax_ctx [#1, #2]")) {
-            found = true;
-        }
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"ax_ctx [#1, #2]"});
     try std.testing.expect(counters.abstract_prunes > 0);
 }
 
@@ -2064,23 +2052,16 @@ test "exact keeps ACUI view conclusion split binders open" {
         \\l9: $ a + k = b , b + m = a ⊢ a + (k + m) = a $
         \\  by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "eq_replace [l8, l7]")) {
-            return;
-        }
-    }
-    return error.ExpectedSourceSuggestion;
+    try expectOffered(suggestions.items, &.{"eq_replace [l8, l7]"});
 }
 
 test "exact recovers ex_intro with reused named existential binder" {
@@ -2094,23 +2075,16 @@ test "exact recovers ex_intro with reused named existential binder" {
         \\l1: $ x + k = y ⊢ x + k = y $ by ax
         \\l2: $ x + k = y ⊢ ∃ k (x + k = y) $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "ex_intro [l1]")) {
-            return;
-        }
-    }
-    return error.ExpectedSourceSuggestion;
+    try expectOffered(suggestions.items, &.{"ex_intro [l1]"});
 }
 
 test "exact uses view hyp shape to discover ex_intro past substitution head" {

@@ -1,7 +1,6 @@
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
-const source = helpers.source;
 const Witness = helpers.Witness;
 const MetaStore = helpers.MetaStore;
 const ExprId = helpers.ExprId;
@@ -11,6 +10,8 @@ const exact = helpers.exact;
 const fixtureFor = helpers.fixtureFor;
 const ContextHarness = helpers.ContextHarness;
 const tunables = helpers.tunables;
+const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
+const expectOffered = helpers.expectOffered;
 
 // Concrete forward chain: `pq` is fired forward on hyp #1 (`P K`),
 // deriving `Q K` with recipe `pq (x := $ K $) [#1]`. The backward
@@ -40,29 +41,21 @@ test "forward saturation derives a concrete ref usable by auto" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_concrete_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "qr [pq (x := $ K $) [#1]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "qr [pq (x := $ K $) [#1]]",
+    });
     // `pq` fired on `P K` concretely. `pq2`'s unbound conclusion binder `y`
     // is deferred as a universal meta, deriving the family fact
     // `Q (pr K ?y)` — nothing solves `?y` here (the goal `R` never shows a
@@ -100,29 +93,21 @@ test "forward family fact from unbound conclusion binder solves at the goal" {
         \\----
         \\l1: $ seq G q $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_family_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "bot_elim (g := $ G $, a := $ q $) [#1]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "bot_elim (g := $ G $, a := $ q $) [#1]",
+    });
     // `bot_elim` derived the family fact; `anything`'s bare-meta surface
     // was rejected by the absorber guard.
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
@@ -161,16 +146,14 @@ test "forward join grounds a nested family meta into a concrete fact" {
         \\----
         \\l1: $ Goal $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_join_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -223,16 +206,14 @@ test "forward join does not fabricate a witness without a base fact" {
         \\----
         \\l1: $ Goal $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_no_anchor_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -264,29 +245,21 @@ test "forward premise matching unfolds nested concrete defs on demand" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "qr [pq_box (x := $ K $) [#1]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "qr [pq_box (x := $ K $) [#1]]",
+    });
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
     try std.testing.expect(counters.forward_match_tuples > 0);
 }
@@ -297,16 +270,14 @@ test "exact does not run forward saturation or use derived refs" {
         \\----
         \\l1: $ R $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_concrete_mm0,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -380,16 +351,14 @@ test "derived ref with universal meta matches a later concrete goal" {
         \\---------
         \\l1: $ pair f u = pair u f $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_universal_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -397,21 +366,11 @@ test "derived ref with universal meta matches a later concrete goal" {
     // The goal-direct derived use renders explicit bindings for the solved
     // universal meta (`t := u`) and the premise-match binders. The plain
     // backward `all_elim [#1]` is also offered (supported boundary).
-    var found_derived = false;
-    var found_direct = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "all_elim (x := $ x $, t := $ u $, " ++
-                "p := $ pair f x = pair x f $) [#1]",
-        )) found_derived = true;
-        if (std.mem.eql(u8, item.replacement, "all_elim [#1]")) {
-            found_direct = true;
-        }
-    }
-    try std.testing.expect(found_direct);
-    try std.testing.expect(found_derived);
+    try expectOffered(suggestions.items, &.{
+        "all_elim [#1]",
+        "all_elim (x := $ x $, t := $ u $, " ++
+            "p := $ pair f x = pair x f $) [#1]",
+    });
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
     try std.testing.expectEqual(@as(usize, 1), counters.universal_metas_created);
     // The repeated meta occurrence (`pair f ?t` / `pair ?t f`) was assigned
@@ -426,16 +385,14 @@ test "inconsistent repeated universal meta occurrence rejects the use" {
         \\------------
         \\l1: $ pair f u = pair v f $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_universal_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -460,14 +417,12 @@ test "auto solves the nested forward-instantiation flagship (Stage 7)" {
         \\---------------------
         \\l1: $ (pair f u = pair f v) → (u = v) $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -477,16 +432,10 @@ test "auto solves the nested forward-instantiation flagship (Stage 7)" {
     // `all_elim` premise slot; the `@recover` correspondence solves `?t := u`
     // from the goal. The hidden unfold dummies are named from the theorem's
     // unused bound vars (a, b).
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "all_elim [all_elim (x := $ a $, t := $ u $, " ++
-                "p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "all_elim [all_elim (x := $ a $, t := $ u $, " ++
+            "p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
+    });
     try std.testing.expect(counters.derived_ref_count > 0);
     try std.testing.expect(counters.universal_metas_created > 0);
     try std.testing.expect(counters.forward_rule_attempts > 0);
@@ -576,16 +525,14 @@ test "same derived ref is selected twice at two different witnesses" {
         \\---------
         \\l1: $ ((pair f u = pair f v) → (u = v)) ∧ ((pair f a = pair f b) → (a = b)) $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_twice_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -644,29 +591,21 @@ test "two-step forward chain renders a nested recipe" {
         \\----
         \\l1: $ S $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_chain_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "rs [qr (x := $ K $) [pq (x := $ K $) [#1]]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "rs [qr (x := $ K $) [pq (x := $ K $) [#1]]]",
+    });
     // Layer 1: `Q K`; layer 2: `R K`; layer 3 derives nothing (fixpoint —
     // a clean stop, not budget exhaustion).
     try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
@@ -694,29 +633,21 @@ test "multi-premise forward rule fires on a source tuple" {
         \\----
         \\l1: $ S $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "rs [pqr (x := $ K $) [#1, #2]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "rs [pqr (x := $ K $) [#1, #2]]",
+    });
     // One tuple (#1, #2) matches both premises consistently (x := K at both
     // positions); the cross pairings reject on the shared binder.
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
@@ -743,29 +674,21 @@ test "duplicate derivations collapse to one derived ref" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "qr [pq (x := $ K $) [#1]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "qr [pq (x := $ K $) [#1]]",
+    });
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
 }
 
@@ -790,16 +713,14 @@ test "layer bound stops a self-feeding forward loop" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_loop_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -820,16 +741,14 @@ test "fact bound stops a forward explosion" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_loop_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{
             .counters = &counters,
             .generate = .{
@@ -857,33 +776,25 @@ test "two-layer derived ref solves a shared hole in both recipe layers" {
         \\----------
         \\l1: $ (pair f u = pair f v) → (u = v) $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         fwd_twice_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(
-            u8,
-            item.replacement,
-            "all_elim (x := $ b $, t := $ v $, " ++
-                "p := $ pair f u = pair f b → u = b $) " ++
-                "[all_elim (x := $ a $, t := $ u $, " ++
-                "p := $ ∀ b (pair f a = pair f b → a = b) $) " ++
-                "[#1]]",
-        )) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{
+        "all_elim (x := $ b $, t := $ v $, " ++
+            "p := $ pair f u = pair f b → u = b $) " ++
+            "[all_elim (x := $ a $, t := $ u $, " ++
+            "p := $ ∀ b (pair f a = pair f b → a = b) $) " ++
+            "[#1]]",
+    });
     try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
     try std.testing.expectEqual(@as(usize, 2), counters.universal_metas_created);
 }
@@ -927,14 +838,12 @@ test "auto trigger seeds close an elimination major from an empty pool" {
         "nd_mp_inner\n" ++
         "-----------\n" ++
         "l1: $ p → q , p ⊢ q $ by auto?\n";
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -970,14 +879,12 @@ test "theories without trigger annotations mint no seeds on a miss" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const offset = std.mem.indexOf(u8, proof_src, "auto?") orelse
-        return error.MissingNeedle;
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -1113,12 +1020,11 @@ test "auto co-solves a complementary two-meta ax leaf through the rule template"
         "tests/search_bench_cases/tait.mm0",
         std.math.maxInt(usize),
     );
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -1184,12 +1090,11 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
         "tests/search_bench_cases/nd_fol.mm0",
         std.math.maxInt(usize),
     );
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();

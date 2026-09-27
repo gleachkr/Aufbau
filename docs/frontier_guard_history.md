@@ -67,3 +67,24 @@ solves carry their resolved bindings rendered on the spliced application
 so the parent re-check never re-infers them from an ACUI-reassociated hint. The old resolution churn
 (k≥6 rows at ~3.4G ticks, over the 3.35G default cap) collapsed to ~58M;
 the worst theorem became ~0.31G (exists_mono).
+
+## Martin-Löf type theory (`tests/search_bench_cases/martin_lof_frontier.*`)
+
+### Guards move to the bench copy (2026-09-27)
+
+The `arr_` guard ran on `tests/proof_cases/martin_lof`, the living example,
+so any tidy-up of the example changed what it tested; and `arr_` was a
+substring filter that also picked up `arr_beta`, which depends on neither
+fix. It became three exact-name guards on the bench copy, which matches
+the example plus eight `@auto` lines. With each fix reverted, the same rows
+miss at k=1 on both files: `arr_form` and `arr_elim` without
+`tryFreshBoundGenerate`, `arr_intro` without `seedValueIsLoose`'s
+placeholder arm.
+
+The `nat_rec_step_ty` guard (added with the ACUI multiplicity reject,
+`acuiDistinctMembersPlausible`, on 2026-09-25) was retired. With the reject
+disabled the theorem stays FULL 5/5 on both files; the cost rises from
+21.8M to 84.9M ticks (48 to 312 candidate tries) but never reaches a miss,
+so the depth run no longer caught the regression. The unit test "ACUI
+member prune counts distinct members without idempotence" (prune_tests.zig)
+fails without the reject and is now its check.

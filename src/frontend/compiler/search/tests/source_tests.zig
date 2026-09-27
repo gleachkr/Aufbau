@@ -18,6 +18,8 @@ const expectTimingCounter = helpers.expectTimingCounter;
 const ContextHarness = helpers.ContextHarness;
 const expectApplyContains = helpers.expectApplyContains;
 const expectInlineSearch = helpers.expectInlineSearch;
+const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
+const expectOffered = helpers.expectOffered;
 
 test "search candidate matches exactly" {
     const mm0_src =
@@ -62,17 +64,14 @@ test "source search records search counters" {
         \\----
         \\l1: $ P $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
@@ -157,11 +156,11 @@ test "source suggestions report found and miss status" {
         \\----
         \\l1: $ P $ by exact?
     ;
-    var found = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var found = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         found_src,
-        std.mem.indexOf(u8, found_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer found.deinit();
@@ -174,11 +173,11 @@ test "source suggestions report found and miss status" {
         \\----
         \\l1: $ Q $ by exact?
     ;
-    var miss = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var miss = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         miss_src,
-        std.mem.indexOf(u8, miss_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer miss.deinit();
@@ -210,11 +209,11 @@ test "source suggestions survive a broken sibling line" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        std.mem.indexOf(u8, proof_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -246,11 +245,11 @@ test "source suggestions survive a broken line in a preceding local lemma" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        std.mem.indexOf(u8, proof_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -324,11 +323,11 @@ test "source suggestions target a line after local def and notation items" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        std.mem.indexOf(u8, proof_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -355,11 +354,11 @@ test "source suggestions work in a trailing local lemma" {
         \\----
         \\l1: $ P $ by exact?
     ;
-    var solo = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var solo = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         solo_src,
-        std.mem.indexOf(u8, solo_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer solo.deinit();
@@ -376,11 +375,11 @@ test "source suggestions work in a trailing local lemma" {
         \\----
         \\l1: $ P $ by exact?
     ;
-    var trailing = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var trailing = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         trailing_src,
-        std.mem.indexOf(u8, trailing_src, "exact?").?,
+        "exact?",
         .{},
     );
     defer trailing.deinit();
@@ -701,11 +700,8 @@ test "re-pin descends only into arguments the head determines" {
     }
     var failed = false;
     for (cases, goals) |case, goal| {
-        var rule_id: ?u32 = null;
-        for (context.env.rules.items, 0..) |rule, i| {
-            if (std.mem.eql(u8, rule.name, case.rule)) rule_id = @intCast(i);
-        }
-        const rid = rule_id orelse return error.MissingRule;
+        const rid = context.env.getRuleId(case.rule) orelse
+            return error.MissingRule;
         // Both binders unbound: the seed nulls `x` on its conflicting
         // occurrences, and `y` is left for the re-pin to fill.
         const bindings = try allocator.alloc(?ExprId, 2);
@@ -784,65 +780,46 @@ test "folded-body check compares only determined args of a same-head @rewrite" {
     ));
 }
 
-// End to end: `r_k2` and `r3 [#1, #2]` prove `P (k2 a b) c` with `x := c`
-// (normalization reduces both `k2` sides to `a`), so the conclusion prunes
-// must not force `x := b` from the goal's `k2 a b` where the rule repeats `x`.
-test "search keeps a rule whose repeated binder sits under a @rewrite head" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const proof_src =
-        \\t3
-        \\----
-        \\l1: $ P (k2 a b) c $ by exact?
-    ;
-    var found = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
-        repin_heads_mm0,
-        proof_src,
-        std.mem.indexOf(u8, proof_src, "exact?").?,
-        .{},
-    );
-    defer found.deinit();
-    // Both the hypothesis-free `r_k2` and `r3` (whose `x` comes from `Q c`)
-    // must be offered.
-    var failed = false;
-    for ([_][]const u8{ "r_k2", "r3 [#1, #2]" }) |expected| {
-        var offered = false;
-        for (found.items) |item| {
-            if (std.mem.eql(u8, item.replacement, expected)) offered = true;
-        }
-        if (!offered) {
-            std.debug.print("missing suggestion {s}\n", .{expected});
-            failed = true;
-        }
+// End to end: a rule that repeats `x` proves `P (_ a b) c` with `x := c`
+// when the head drops its second argument, so the conclusion prunes must not
+// force `x := b` from the goal.
+// - `k2` is a `@rewrite` head: normalization reduces both `k2` sides to `a`,
+//   so the hypothesis-free `r_k2` and `r3` (whose `x` comes from `Q c`) both
+//   prove `P (k2 a b) c`.
+// - `K` is an erasing def: `K a b ≡ K a c` once `K` unfolds, so
+//   `r3K [#1, #2]` proves `P (K a b) c` (the checker accepts it).
+test "search keeps a rule whose repeated binder sits under an erasing head" {
+    const cases = [_]struct { proof: []const u8, offered: []const []const u8 }{
+        .{
+            .proof =
+            \\t3
+            \\----
+            \\l1: $ P (k2 a b) c $ by exact?
+            ,
+            .offered = &.{ "r_k2", "r3 [#1, #2]" },
+        },
+        .{
+            .proof =
+            \\t3K
+            \\-----
+            \\l1: $ P (K a b) c $ by exact?
+            ,
+            .offered = &.{"r3K [#1, #2]"},
+        },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var found = try suggestionsAtNeedle(
+            &arena,
+            repin_heads_mm0,
+            case.proof,
+            "exact?",
+            .{},
+        );
+        defer found.deinit();
+        try expectOffered(found.items, case.offered);
     }
-    try std.testing.expect(!failed);
-}
-
-// The def twin of the test above: `K a b ≡ K a c` once `K` unfolds, so
-// `r3K [#1, #2]` proves `P (K a b) c` with `x := c` (the checker accepts it),
-// and the search prunes must not force `x := b` through `K`'s erased argument.
-test "search offers a rule whose repeated binder sits under an erasing def" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const proof_src =
-        \\t3K
-        \\-----
-        \\l1: $ P (K a b) c $ by exact?
-    ;
-    var found = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
-        repin_heads_mm0,
-        proof_src,
-        std.mem.indexOf(u8, proof_src, "exact?").?,
-        .{},
-    );
-    defer found.deinit();
-    var offered = false;
-    for (found.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "r3K [#1, #2]")) offered = true;
-    }
-    try std.testing.expect(offered);
 }
 
 test "searchPlaceholders enumerates top-level and nested placeholders" {
@@ -923,14 +900,11 @@ test "source search sees coercions: a cross-sort @recover rule is searchable" {
         \\l3: $ F b ⊢ ∃ x (F x) $ by exact?
         \\l4: $ ∃ x (F x) ⊢ ∃ x (F x) $ by ex_elim [l1, l3]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -971,16 +945,13 @@ test "source search survives broken statements before the target" {
         \\----
         \\l1: $ P $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();

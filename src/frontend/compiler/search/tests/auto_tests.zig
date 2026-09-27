@@ -1,7 +1,6 @@
 const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const types = helpers.types;
-const source = helpers.source;
 const prune = helpers.prune;
 const def_match = helpers.def_match;
 const acui = helpers.acui;
@@ -23,6 +22,8 @@ const ContextHarness = helpers.ContextHarness;
 const auto_chain_mm0 = helpers.auto_chain_mm0;
 const auto_inline_mm0 = helpers.auto_inline_mm0;
 const GeneratedConclusionHookCtx = helpers.GeneratedConclusionHookCtx;
+const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
+const expectOffered = helpers.expectOffered;
 
 fn autoChainSuggestions(
     arena: *std.heap.ArenaAllocator,
@@ -30,13 +31,11 @@ fn autoChainSuggestions(
     needle: []const u8,
     options: types.SourceSuggestionOptions,
 ) !types.SourceSuggestions {
-    const offset = std.mem.indexOf(u8, proof_src, needle) orelse
-        return error.MissingNeedle;
-    return source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    return suggestionsAtNeedle(
+        arena,
         auto_chain_mm0,
         proof_src,
-        offset,
+        needle,
         options,
     );
 }
@@ -56,11 +55,7 @@ test "auto generates a depth-1 inline chain" {
     });
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "pq [p []]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"pq [p []]"});
     try std.testing.expect(counters.generated_chain_attempts > 0);
 }
 
@@ -198,22 +193,14 @@ fn ndOrSuggestions(
     counters: ?*types.SearchCounters,
     policy: NdPolicy,
 ) !types.SourceSuggestions {
-    const offset = std.mem.indexOf(u8, nd_or_proof, "auto?") orelse
-        return error.MissingNeedle;
-    return source.suggestionsAtSourceOffset(
-        arena.allocator(),
-        nd_or_mm0,
-        nd_or_proof,
-        offset,
-        .{
-            .counters = counters,
-            .generate = .{
-                .enabled = true,
-                .search_memo = policy.search_memo,
-                .deep_member_prune = policy.deep_member_prune,
-            },
+    return suggestionsAtNeedle(arena, nd_or_mm0, nd_or_proof, "auto?", .{
+        .counters = counters,
+        .generate = .{
+            .enabled = true,
+            .search_memo = policy.search_memo,
+            .deep_member_prune = policy.deep_member_prune,
         },
-    );
+    });
 }
 
 /// The work a call did, in the accumulating counters the policy can change.
@@ -337,13 +324,11 @@ fn autoInlineSuggestions(
     needle: []const u8,
     options: types.SourceSuggestionOptions,
 ) !types.SourceSuggestions {
-    const offset = std.mem.indexOf(u8, proof_src, needle) orelse
-        return error.MissingNeedle;
-    return source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    return suggestionsAtNeedle(
+        arena,
         auto_inline_mm0,
         proof_src,
-        offset,
+        needle,
         options,
     );
 }
@@ -366,11 +351,7 @@ test "auto generates a depth-1 chain inside a slot" {
     });
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "pq [p []]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"pq [p []]"});
     // The slot span is what gets replaced, not the whole line.
     try std.testing.expect(suggestions.target_span != null);
     const auto_offset = std.mem.indexOf(u8, proof_src, "auto?").?;
@@ -401,11 +382,7 @@ test "inline auto still resolves a slot from a direct ref without generating" {
     // emitted for non-empty ref lists); the generation pass, which also runs,
     // renders the same axiom as `p []`. Either way the slot resolves; the point
     // is that a directly-provable slot does not depend on generation.
-    var found_direct = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "p")) found_direct = true;
-    }
-    try std.testing.expect(found_direct);
+    try expectOffered(suggestions.items, &.{"p"});
 }
 
 test "inline auto reports a miss on an unprovable slot" {
@@ -447,11 +424,7 @@ test "inline auto generates a longer chain in a slot" {
     });
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "qr [pq [p []]]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
     try std.testing.expect(counters.generated_chain_attempts > 0);
 }
 
@@ -475,11 +448,7 @@ test "inline auto grounds an existential meta inside a slot" {
     });
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "r2 [#1, pq [#1]]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"r2 [#1, pq [#1]]"});
 }
 
 // Real Zermelo natural-deduction theory: `,` (the sequent context) is a full
@@ -497,24 +466,7 @@ fn andCommSlotSuggestions(
         "tests/proof_cases/zermelo.mm0",
         std.math.maxInt(usize),
     );
-    const offset = std.mem.indexOf(u8, proof_src, "exact?").?;
-    return source.suggestionsAtSourceOffset(
-        arena.allocator(),
-        mm0,
-        proof_src,
-        offset,
-        .{},
-    );
-}
-
-fn expectSlotReplacement(
-    suggestions: types.SourceSuggestions,
-    wanted: []const u8,
-) !void {
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, wanted)) return;
-    }
-    return error.MissingExpectedSuggestion;
+    return suggestionsAtNeedle(arena, mm0, proof_src, "exact?", .{});
 }
 
 test "inline exact resolves either and_intro premise slot (ACUI context split)" {
@@ -545,14 +497,14 @@ test "inline exact resolves either and_intro premise slot (ACUI context split)" 
     var first = try andCommSlotSuggestions(&arena_a, first_slot);
     defer first.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, first.status);
-    try expectSlotReplacement(first, "l3");
+    try expectOffered(first.items, &.{"l3"});
 
     var arena_b = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_b.deinit();
     var second = try andCommSlotSuggestions(&arena_b, second_slot);
     defer second.deinit();
     try std.testing.expectEqual(types.SearchStatus.found, second.status);
-    try expectSlotReplacement(second, "l2");
+    try expectOffered(second.items, &.{"l2"});
 }
 
 fn expectGeneratedConclusionGate(wrong_conclusion: bool) !usize {
@@ -662,23 +614,18 @@ test "auto grounds an open hypothesis from a ref and generates a sibling" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_open_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "r2 [#1, pq [#1]]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"r2 [#1, pq [#1]]"});
 }
 
 // Iterative deepening. `R` needs a two-level chain
@@ -702,23 +649,18 @@ test "auto escalates depth to find a two-level chain" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_depth2_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "qr [pq [p []]]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
 }
 
 test "auto depth cap stops escalation" {
@@ -727,15 +669,14 @@ test "auto depth cap stops escalation" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // With the depth capped at 1, the two-level chain is unreachable.
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_depth2_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .generate = .{ .enabled = true, .max_depth = 1 } },
     );
     defer suggestions.deinit();
@@ -748,17 +689,16 @@ test "auto global fuel floor stops the search and reports exhaustion" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
     // The two-level chain `qr [pq [p]]` needs several validations; a fuel of 1
     // is spent on the first `tryCandidate`, so the next one trips the floor.
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_depth2_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true, .fuel = 1 } },
     );
     defer suggestions.deinit();
@@ -777,17 +717,16 @@ test "auto stack guard stops the search and reports exhaustion" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
     // A 1-byte guard trips at the first recursive sub-solve: the honest-miss
     // degradation path a real overflow-threatening descent would take.
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_depth2_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{
             .counters = &counters,
             .generate = .{ .enabled = true, .stack_guard_bytes = 1 },
@@ -812,24 +751,19 @@ test "auto with ample fuel finds the chain without tripping the floor" {
         \\----
         \\l1: $ R $ by auto?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "auto?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_depth2_mm0,
         proof_src,
-        offset,
+        "auto?",
         .{ .counters = &counters, .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
 
-    var found = false;
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "qr [pq [p []]]")) found = true;
-    }
-    try std.testing.expect(found);
+    try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
     // The default fuel floor is generous; a normal proof never trips it.
     try std.testing.expect(!counters.recursive_budget_exhausted);
     // Same for the default call-stack guard.
@@ -843,14 +777,13 @@ test "exact does not ground-and-generate the open-hyp chain" {
         \\----
         \\l1: $ R $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?").?;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         auto_open_mm0,
         proof_src,
-        offset,
+        "exact?",
         .{ .generate = .{ .enabled = true } },
     );
     defer suggestions.deinit();
@@ -872,16 +805,13 @@ test "source exact completes inline application from parent expected goal" {
         \\------
         \\l1: $ Q $ by use [exact?]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -903,17 +833,14 @@ test "source exact inside inline application can resolve to direct ref" {
         \\------
         \\l1: $ P $ by id [exact?]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
@@ -942,16 +869,13 @@ test "source apply completes inline application with unresolved subrefs" {
         \\------
         \\l1: $ Q $ by use [apply?]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "apply?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "apply?",
         .{},
     );
     defer suggestions.deinit();
@@ -981,16 +905,13 @@ test "source exact inside inline application requires useful parent goal" {
         \\------
         \\l1: $ Q $ by mp [exact?, exact?]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -1014,16 +935,13 @@ test "source exact nested inline edit is local" {
         \\------
         \\l1: $ R $ by use [id [exact?], #1]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -1086,16 +1004,13 @@ test "source exact inside inline ex elim uses sibling and goal" {
         \\l1: $ H , P x ⊢ Q $ by make_q
         \\l2: $ G , H ⊢ Q $ by ex_elim [#1, exact?]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
@@ -1123,26 +1038,18 @@ test "source exact inside inline ex elim uses later sibling" {
         \\l6: $ ∃ x p ⊢ (p → q) → q $ by imp_intro [l5]
         \\l7: $ _ ⊢ (∃ x p) → ((p → q) → q) $ by imp_intro [l6]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var counters = types.SearchCounters{};
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{ .counters = &counters },
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "l1")) {
-            try expectTimingCounter(counters.ref_lookup_ns);
-            return;
-        }
-    }
-    return error.ExpectedInlineExactSuggestion;
+    try expectOffered(suggestions.items, &.{"l1"});
+    try expectTimingCounter(counters.ref_lookup_ns);
 }
 
 test "extractHypPartialBindings keeps an ACUI binder open for an eigenvariable sibling" {
@@ -1418,22 +1325,16 @@ test "source exact inside inline or_elim uses sibling branch" {
         \\l6: $ p ∨ q ⊢ q ∨ p $ by or_elim [l1, exact?, l5]
         \\l7: $ _ ⊢ (p ∨ q) → (q ∨ p) $ by imp_intro [l6]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
-    var suggestions = try source.suggestionsAtSourceOffset(
-        allocator,
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "l3")) return;
-    }
-    return error.ExpectedInlineExactSuggestion;
+    try expectOffered(suggestions.items, &.{"l3"});
 }
 
 test "source exact inline search supports view candidates" {
@@ -1488,24 +1389,18 @@ test "source exact inline search supports view candidates" {
         \\l1: $ P c $ by have_Pc
         \\l2: $ Goal $ by use_exists (x := $ x $) [exact?]
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "ex_intro [l1]")) return;
-    }
-    return error.ExpectedSourceSuggestion;
+    try expectOffered(suggestions.items, &.{"ex_intro [l1]"});
 }
 
 // Guard for the `recoverGuardRejects` soundness fix: a `@recover` whose target
@@ -1544,24 +1439,18 @@ test "exact search keeps view candidate when a pinned-target recover diverges" {
         \\l2: $ imp Psi Phi $ by ref2
         \\l3: $ imp Psi (Mem TT (Sep x AA Phi)) $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "myrule [l1, l2]")) return;
-    }
-    return error.ExpectedSourceSuggestion;
+    try expectOffered(suggestions.items, &.{"myrule [l1, l2]"});
 }
 
 test "recover member injection skips pinned-target laws" {
@@ -1607,22 +1496,16 @@ test "recover member injection skips pinned-target laws" {
         \\l2: $ nd (join emp (hyp Psi)) Phi $ by ref2
         \\l3: $ nd emp (Mem TT (Sep x AA Phi)) $ by exact?
     ;
-    const offset = std.mem.indexOf(u8, proof_src, "exact?") orelse {
-        return error.MissingNeedle;
-    };
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var suggestions = try source.suggestionsAtSourceOffset(
-        arena.allocator(),
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
         mm0_src,
         proof_src,
-        offset,
+        "exact?",
         .{},
     );
     defer suggestions.deinit();
 
-    for (suggestions.items) |item| {
-        if (std.mem.eql(u8, item.replacement, "myrule [l1, l2]")) return;
-    }
-    return error.ExpectedSourceSuggestion;
+    try expectOffered(suggestions.items, &.{"myrule [l1, l2]"});
 }
