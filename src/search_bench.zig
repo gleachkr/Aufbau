@@ -1640,6 +1640,10 @@ fn runScenario(
         .{counters.final_conclusion_prunes},
     );
     try writer.print(
+        "  redex conclusion prunes: {}\n",
+        .{counters.redex_conclusion_prunes},
+    );
+    try writer.print(
         "  conclusion probes: {}\n",
         .{counters.conclusion_probes},
     );

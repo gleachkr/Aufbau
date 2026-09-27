@@ -241,7 +241,10 @@ pub fn validateSelectedRefs(
     // A `@rewrite` head in the conclusion (e.g. a substitution `⟦x/u⟧ t`)
     // matches any goal until its binders are known, and those usually come
     // from the selected refs, not the conclusion match. Read what the refs
-    // force, then compare the reduced conclusion against the goal.
+    // force, then compare the reduced conclusion against the goal. Start from
+    // the seed bindings, not `bindings`: the ref match fills those position by
+    // position, which under a `@rewrite` head is one choice among several
+    // (`fst t u` against `fst o z` need not bind `u := z`).
     redex: {
         if (context.views.contains(candidate.rule_id)) break :redex;
         const goal_expr = goal.concreteOrHint() orelse break :redex;
@@ -265,10 +268,10 @@ pub fn validateSelectedRefs(
             &candidate.theorem,
             rule,
             goal_expr,
-            bindings,
+            candidate.bindings,
             ref_exprs,
         )) {
-            if (counters) |actual| actual.final_conclusion_prunes += 1;
+            if (counters) |actual| actual.redex_conclusion_prunes += 1;
             return;
         }
     }

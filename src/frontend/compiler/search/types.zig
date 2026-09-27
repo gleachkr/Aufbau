@@ -567,6 +567,11 @@ pub const SearchCounters = struct {
     /// (`bindingsDepHit == .rigid` on a rule with no view or freshen).
     dep_violation_prunes: usize = 0,
     final_conclusion_prunes: usize = 0,
+    /// (candidate, refs) tuples refuted because a `@rewrite`-headed redex in
+    /// the conclusion, instantiated from the goal and the selected refs,
+    /// reduces to something that cannot match the goal
+    /// (`redexConclusionMismatch`).
+    redex_conclusion_prunes: usize = 0,
     /// (candidate, refs) tuples refuted by the hyp-vs-ref ACUI member
     /// consistency check (`hypRefMembersPlausible`) before `tryCandidate`:
     /// no conclusion-vs-goal binder assignment makes every pool-ref

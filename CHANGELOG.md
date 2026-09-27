@@ -60,9 +60,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `auto?` and `exact?` try fewer rules whose conclusion contains a
   `@rewrite` head. Such a term can rewrite to almost anything, so the goal
   alone says little about it, and the search used to hand every choice of
-  premise lines to the full check. It now fills in the term's variables from
-  the chosen premise lines, rewrites it with the theory's `@rewrite` rules,
-  and skips the rule when the result cannot match the goal. In the
+  premise lines to the full check. It now fills in the variables that the
+  chosen premise lines force, rewrites the term with the theory's `@rewrite`
+  rules, and skips the rule when the result cannot match the goal. In the
   Martin-Löf example, where substitution is such a head, this lets `auto?`
   find `add_suc_right` at greater depth.
 - A failed `auto?` now names every limit that cut it short and suggests

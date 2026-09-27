@@ -475,6 +475,26 @@ const ordered_ctx_theory =
     \\
 ;
 
+/// `src` with its one occurrence of `old` replaced by `new`.
+fn replaceOnce(
+    comptime src: []const u8,
+    comptime old: []const u8,
+    comptime new: []const u8,
+) []const u8 {
+    const at = std.mem.indexOf(u8, src, old) orelse @compileError("missing: " ++ old);
+    return src[0..at] ++ new ++ src[at + old.len ..];
+}
+
+/// `ordered_ctx_theory` with an idempotent (still ordered) context combiner.
+const idempotent_ctx_theory = replaceOnce(
+    ordered_ctx_theory,
+    "@acui ctx_assoc _ emp _",
+    "@acui ctx_assoc _ emp ctx_idem",
+) ++
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+    \\
+;
+
 /// Runs `exact?` at the proof's `exact?` needle; returns the suggestion count.
 fn exactSuggestionCount(
     mm0_src: []const u8,
@@ -543,7 +563,7 @@ test "redex conclusion prune reads rewrite-head binders off the selected refs" {
 
     try std.testing.expectEqual(@as(usize, 0), count);
     try std.testing.expectEqual(@as(usize, 0), counters.full_try_candidate_calls);
-    try std.testing.expect(counters.final_conclusion_prunes > 0);
+    try std.testing.expect(counters.redex_conclusion_prunes > 0);
 }
 
 test "redex conclusion prune keeps a ref whose redex reduces to the goal" {
@@ -572,6 +592,30 @@ test "redex conclusion prune keeps a ref whose redex reduces to the goal" {
         if (std.mem.indexOf(u8, suggestion.replacement, "sub [") != null) return;
     }
     return error.MissingSuggestion;
+}
+
+test "redex conclusion prune abstains on a rewrite-headed premise" {
+    // `via`'s premise `pr (fst t u)` reduces to `pr t`, so the ref
+    // `pr (fst o z)` forces `t := o` and leaves `u` open; `u := o` proves the
+    // goal. Read position by position, the ref would give `u := z`, and the
+    // conclusion `fst z o` would reduce to `z`, not the goal's `o`.
+    const mm0_src = redex_theory ++
+        \\term fst (a b: tm): tm;
+        \\--| @rewrite
+        \\axiom fst_red (a b: tm): $ teq (fst a b) a $;
+        \\axiom via (t u: tm): $ pr (fst t u) $ > $ pr (fst u t) $;
+        \\theorem t: $ pr (fst o z) $ > $ pr o $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ pr o $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    _ = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), counters.redex_conclusion_prunes);
+    try std.testing.expect(counters.full_try_candidate_calls > 0);
 }
 
 test "ACUI member prune counts distinct members without idempotence" {
@@ -644,7 +688,10 @@ test "dependency prune drops a rule whose binding rigidly mentions its bound bin
 
 test "dependency prune keeps an occurrence a def unfold can remove" {
     // Here `k` reaches `J` only through the def `cst`, whose body drops its
-    // first argument, so conversion may remove it: no prune.
+    // first argument, so conversion may remove it: no prune. The checker does
+    // not yet unfold `cst` to clear the dependency (it reports the
+    // DepViolation), so there is no suggestion to count; the test checks only
+    // that the candidate reaches validation.
     const mm0_src = ordered_ctx_theory ++
         \\axiom weaken (g: ctx) {x: tm} (T: ty) (J: wff):
         \\  $ nd g J $ > $ nd (join g (hyp (has x T))) J $;
@@ -662,6 +709,298 @@ test "dependency prune keeps an occurrence a def unfold can remove" {
 
     try std.testing.expectEqual(@as(usize, 0), counters.dep_violation_prunes);
     try std.testing.expect(counters.full_try_candidate_calls > 0);
+}
+
+// Abstentions of the multiplicity half (`acuiDistinctMembersPlausible`). Each
+// runs `weaken2` against a context that shows one entry after `g`, which the
+// ordered theory prunes (see "counts distinct members" above), in a setting
+// where the entry count is not fixed.
+
+const weaken2_rule =
+    \\axiom weaken2 (g: ctx) {x y: tm} (T U: ty) (J: wff):
+    \\  $ nd g J $ > $ nd (join (join g (hyp (has x T))) (hyp (has y U))) J $;
+    \\
+;
+
+test "ACUI member prune does not count members under an idempotent combiner" {
+    // `join a a = a`: one visible entry may stand for both of the rule's.
+    const mm0_src = idempotent_ctx_theory ++ weaken2_rule ++
+        \\theorem t (g: ctx) {k: tm} (z: tm):
+        \\  $ nd g (has z Nat) $ > $ nd (join g (hyp (has k Nat))) (has z Nat) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join g (hyp (has k Nat))) (has z Nat) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    _ = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), counters.conclusion_member_prunes);
+    try std.testing.expect(counters.full_try_candidate_calls > 0);
+}
+
+test "ACUI member prune does not count a def-headed member" {
+    // `hyp2 a b` unfolds to two entries, so the goal context has three.
+    const mm0_src = ordered_ctx_theory ++ weaken2_rule ++
+        \\def hyp2 (a b: wff): ctx = $ join (hyp a) (hyp b) $;
+        \\theorem t (g: ctx) {k m: tm} (z: tm):
+        \\  $ nd g (has z Nat) $ >
+        \\  $ nd (join g (hyp2 (has k Nat) (has m Nat))) (has z Nat) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join g (hyp2 (has k Nat) (has m Nat))) (has z Nat) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    _ = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), counters.conclusion_member_prunes);
+    try std.testing.expect(counters.full_try_candidate_calls > 0);
+}
+
+test "ACUI member prune does not count a placeholder member" {
+    // `weaken2` needs two entries after `g`, and `g , k : Nat` has one. With
+    // an open meta after `k : Nat`, the meta may stand for the second entry
+    // (or for any number of them), so the count has no opinion.
+    const mm0_src = ordered_ctx_theory ++ weaken2_rule ++
+        \\theorem t (g: ctx) {k: tm} (z: tm): $ nd g (has z Nat) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId("weaken2") orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+
+    const one_entry = (try parseGoal(
+        &fixture,
+        &theorem,
+        &theorem_vars,
+        "nd (join g (hyp (has k Nat))) (has z Nat)",
+    )).concrete;
+    const nd = theorem.interner.node(one_entry).app;
+    const g = theorem.interner.node(nd.args[0]).app.args[0];
+    // The goal pins `weaken2`'s context binder `g` (argument 0), as seeding would.
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    bindings[0] = g;
+    try std.testing.expect(!prune.acuiBoundMembersPlausible(
+        &context,
+        &theorem,
+        rule.concl,
+        one_entry,
+        bindings,
+    ));
+
+    var store = MetaStore.init(allocator, &fixture.env);
+    defer store.deinit();
+    const meta = try store.mint(&theorem, "ctx", std.math.maxInt(u55), .existential);
+    const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const open_ctx = try theorem.interner.internApp(join_id, &.{ nd.args[0], meta });
+    const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
+    try std.testing.expect(prune.acuiBoundMembersPlausible(
+        &context,
+        &theorem,
+        rule.concl,
+        open_goal,
+        bindings,
+    ));
+}
+
+// The dependency prune's exemption (`ruleMayRechooseBound`): the pruned
+// `weaken` instance above, on rules whose bound binder a view, `@fresh`, or
+// `@freshen` may re-choose after the conclusion match.
+
+const dep_hit_theorem =
+    \\theorem t (g: ctx) {k: tm}:
+    \\  $ nd g (has (suc k) Nat) $ >
+    \\  $ nd (join g (hyp (has k Nat))) (has (suc k) Nat) $;
+;
+
+const dep_hit_proof =
+    \\t
+    \\------
+    \\l1: $ nd (join g (hyp (has k Nat))) (has (suc k) Nat) $ by exact?
+;
+
+fn expectDepPruneAbstains(comptime annotation: []const u8) !void {
+    const mm0_src = ordered_ctx_theory ++ annotation ++
+        \\axiom weaken (g: ctx) {x: tm} (T: ty) (J: wff):
+        \\  $ nd g J $ > $ nd (join g (hyp (has x T))) J $;
+        \\
+    ++ dep_hit_theorem;
+    var counters = types.SearchCounters{};
+    _ = try exactSuggestionCount(mm0_src, dep_hit_proof, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), counters.dep_violation_prunes);
+    try std.testing.expect(counters.full_try_candidate_calls > 0);
+}
+
+test "dependency prune abstains on a rule with a view" {
+    try expectDepPruneAbstains(
+        \\--| @view (g: ctx) {x: tm} (T: ty) (J: wff): $ nd g J $ > $ nd (join g (hyp (has x T))) J $
+        \\
+    );
+}
+
+test "dependency prune abstains on a rule with @fresh" {
+    try expectDepPruneAbstains(
+        \\--| @fresh x
+        \\
+    );
+}
+
+test "dependency prune abstains on a rule with @freshen" {
+    try expectDepPruneAbstains(
+        \\--| @freshen J x
+        \\
+    );
+}
+
+test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\sort ctx;
+        \\term oeq (a b: obj): wff;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term f (a b: obj): obj;
+        \\term rw (a b: obj): obj;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc _ emp _
+        \\term join (g h: ctx): ctx;
+        \\term pt (a: obj): ctx;
+        \\--| @relation obj oeq oeq_refl oeq_trans oeq_sym _
+        \\axiom oeq_refl (a: obj): $ oeq a a $;
+        \\axiom oeq_trans (a b c: obj): $ oeq a b $ > $ oeq b c $ > $ oeq a c $;
+        \\axiom oeq_sym (a b: obj): $ oeq a b $ > $ oeq b a $;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx):
+        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx):
+        \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+        \\--| @rewrite
+        \\axiom rw_red (a b: obj): $ oeq (rw a b) a $;
+        \\
+        \\def cst (a b: obj): obj = $ a $;
+        \\def swp (a b: obj): obj = $ cst b a $;
+        \\def wrap (a b: obj): obj = $ f (cst a b) b $;
+        \\def via_rw (a b: obj): obj = $ rw a b $;
+        \\def in_ctx (a b: obj): ctx = $ join (pt a) (pt b) $;
+        \\def opaque (a: obj): obj;
+        \\theorem t (a: obj): $ oeq a a $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var fixture = try fixtureFor(arena.allocator(), mm0_src, "t");
+    var harness = ContextHarness.init(arena.allocator());
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const Row = struct { head: []const u8, determined: []const bool };
+    const rows = [_]Row{
+        // A primitive head forces every argument.
+        .{ .head = "f", .determined = &.{ true, true } },
+        // `cst` drops `b`: `cst a t` and `cst a t'` are equal.
+        .{ .head = "cst", .determined = &.{ true, false } },
+        // Nested: `swp`'s `a` lands in `cst`'s dropped slot.
+        .{ .head = "swp", .determined = &.{ false, true } },
+        // `wrap`'s `b` is also in `cst`'s dropped slot, but one forced
+        // path is enough.
+        .{ .head = "wrap", .determined = &.{ true, true } },
+        // Under a `@rewrite` head or an ACUI combiner nothing is forced,
+        // directly or through a def body.
+        .{ .head = "rw", .determined = &.{ false, false } },
+        .{ .head = "via_rw", .determined = &.{ false, false } },
+        .{ .head = "join", .determined = &.{ false, false } },
+        .{ .head = "in_ctx", .determined = &.{ false, false } },
+        // A def without a body is opaque, so rigid.
+        .{ .head = "opaque", .determined = &.{true} },
+    };
+    for (rows) |row| {
+        const head = fixture.env.term_names.get(row.head) orelse return error.MissingTerm;
+        for (row.determined, 0..) |expected, i| {
+            std.testing.expectEqual(expected, prune.argDetermined(&context, head, i)) catch |err| {
+                std.debug.print("argDetermined({s}, {d})\n", .{ row.head, i });
+                return err;
+            };
+        }
+    }
+
+    // An argument index past a def's parameters.
+    const cst = fixture.env.term_names.get("cst") orelse return error.MissingTerm;
+    try std.testing.expect(!prune.argDetermined(&context, cst, 2));
+    // A term id past the table, and a term recovery has discarded.
+    const len: u32 = @intCast(fixture.env.terms.items.len);
+    try std.testing.expect(!prune.argDetermined(&context, len, 0));
+    const f = fixture.env.term_names.get("f") orelse return error.MissingTerm;
+    fixture.env.terms.items[f].available = false;
+    try std.testing.expect(!prune.argDetermined(&context, f, 0));
+}
+
+test "extractHypPartialBindings aligns an ordered context entry by entry" {
+    // `lam_i`'s premise context `g , x : A` against the right-nested
+    // `G , (k : Nat , m : Nat)`: aligning the flattened entry sequences pins
+    // `g := G , k : Nat` and `x : A := m : Nat`, where a positional walk of the
+    // spine would bind `g := G` and nothing else.
+    const mm0_src = ordered_ctx_theory ++
+        \\axiom lam_i (g: ctx) {x: tm} (A: ty) (J: wff):
+        \\  $ nd (join g (hyp (has x A))) J $ > $ nd g J $;
+        \\theorem t (G: ctx) {k m: tm}:
+        \\  $ nd (join G (join (hyp (has k Nat)) (hyp (has m Nat)))) (has m Nat) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId("lam_i") orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+
+    const ref = (try parseGoal(
+        &fixture,
+        &theorem,
+        &theorem_vars,
+        "nd (join G (join (hyp (has k Nat)) (hyp (has m Nat)))) (has m Nat)",
+    )).concrete;
+    const nd = theorem.interner.node(ref).app;
+    const spine = theorem.interner.node(nd.args[0]).app;
+    const tail = theorem.interner.node(spine.args[1]).app;
+    const k_entry = tail.args[0];
+    const m_typing = theorem.interner.node(tail.args[1]).app.args[0];
+    const m_has = theorem.interner.node(m_typing).app;
+    const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const expected_g = try theorem.interner.internApp(join_id, &.{ spine.args[0], k_entry });
+
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    prune.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
+
+    try std.testing.expectEqual(@as(?ExprId, expected_g), bindings[0]);
+    try std.testing.expectEqual(@as(?ExprId, m_has.args[0]), bindings[1]);
+    try std.testing.expectEqual(@as(?ExprId, m_has.args[1]), bindings[2]);
+    try std.testing.expectEqual(@as(?ExprId, nd.args[1]), bindings[3]);
 }
 
 test "ACUI member prune allows transparent def matching variable member" {
