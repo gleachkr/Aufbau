@@ -92,6 +92,13 @@ the `tests/proof_cases/` originals: they carry search-only `@auto`
 annotations, and the originals are shared with the proof-case suite and the
 web demo.
 
+Standalone depth fixtures outside the default corpus are run with `--files`:
+`tait`, `additive_fol`, `nd_fol` (with `--exclude=_left,or_right`) and
+`girard`. `girard` is intuitionistic linear logic. It is the only fixture
+whose contexts are multisets (`@acui` with no idempotence law), so it checks
+how `⊗R` and `⊸L` split resources. Its last ten theorems are bench-only
+extras and do not appear in `tests/proof_cases/girard`.
+
 ### Regression guards (`zig build test-frontier-smoke`, wired into `zig build test`)
 
 `--require-no-miss` exits nonzero on any MISS/ERR (breadth) or any non-`FULL`

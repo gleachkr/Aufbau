@@ -1,0 +1,329 @@
+poly_id
+-------
+
+l1: $ g , x : a ⊢ x : a $ by t_var
+l2: $ g ⊢ (λ x : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (Λ a. λ x : a. x) : ∀ a. a → a $ by t_tlam [l2]
+
+poly_id_inst
+------------
+
+l1: $ g , x : a ⊢ x : a $ by t_var
+l2: $ g ⊢ (λ x : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (Λ a. λ x : a. x) : ∀ a. a → a $ by t_tlam [l2]
+l4: $ g ⊢ (Λ a. λ x : a. x) @ A : A → A $ by t_tapp [l3]
+
+poly_id_self
+------------
+
+l1: $ g , x : a ⊢ x : a $ by t_var
+l2: $ g ⊢ (λ x : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (Λ a. λ x : a. x) : ∀ a. a → a $ by t_tlam [l2]
+l4: $ g ⊢ (Λ a. λ x : a. x) @ (∀ b. b → b) : (∀ b. b → b) → (∀ b. b → b) $
+  by t_tapp [l3]
+
+poly_compose
+------------
+
+l1: $ g , f : b → c , n : a → b , x : a ⊢ x : a $ by t_var
+l2: $ g , f : b → c , n : a → b , x : a ⊢ n : a → b $ by t_var
+l3: $ g , f : b → c , n : a → b , x : a ⊢ n · x : b $ by t_app [l2, l1]
+l4: $ g , f : b → c , n : a → b , x : a ⊢ f : b → c $ by t_var
+l5: $ g , f : b → c , n : a → b , x : a ⊢ f · (n · x) : c $ by t_app [l4, l3]
+l6: $ g , f : b → c , n : a → b ⊢ (λ x : a. f · (n · x)) : a → c $ by t_lam [l5]
+l7: $ g , f : b → c ⊢ (λ n : a → b. λ x : a. f · (n · x)) : (a → b) → a → c $
+  by t_lam [l6]
+l8: $ g ⊢ (λ f : b → c. λ n : a → b. λ x : a. f · (n · x))
+      : (b → c) → (a → b) → a → c $ by t_lam [l7]
+l9: $ g ⊢ (Λ c. λ f : b → c. λ n : a → b. λ x : a. f · (n · x))
+      : ∀ c. (b → c) → (a → b) → a → c $ by t_tlam [l8]
+l10: $ g ⊢ (Λ b. Λ c. λ f : b → c. λ n : a → b. λ x : a. f · (n · x))
+      : ∀ b. ∀ c. (b → c) → (a → b) → a → c $ by t_tlam [l9]
+l11: $ g ⊢ (Λ a. Λ b. Λ c. λ f : b → c. λ n : a → b. λ x : a. f · (n · x))
+      : ∀ a. ∀ b. ∀ c. (b → c) → (a → b) → a → c $ by t_tlam [l10]
+
+church_true
+-----------
+
+l1: $ g , x : a , y : a ⊢ x : a $ by t_var
+l2: $ g , x : a ⊢ (λ y : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (λ x : a. λ y : a. x) : a → a → a $ by t_lam [l2]
+l4: $ g ⊢ (Λ a. λ x : a. λ y : a. x) : Bool $ by t_tlam [l3]
+
+church_false
+------------
+
+l1: $ g , x : a , y : a ⊢ y : a $ by t_var
+l2: $ g , x : a ⊢ (λ y : a. y) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (λ x : a. λ y : a. y) : a → a → a $ by t_lam [l2]
+l4: $ g ⊢ (Λ a. λ x : a. λ y : a. y) : Bool $ by t_tlam [l3]
+
+church_if
+---------
+
+l1: $ g , x : a , y : a ⊢ x : a $ by t_var
+l2: $ g , x : a ⊢ (λ y : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (λ x : a. λ y : a. x) : a → a → a $ by t_lam [l2]
+l4: $ g ⊢ (Λ a. λ x : a. λ y : a. x) : ∀ a. a → a → a $ by t_tlam [l3]
+l5: $ g ⊢ (Λ a. λ x : a. λ y : a. x) @ A : A → A → A $ by t_tapp [l4]
+l6: $ g ⊢ (Λ a. λ x : a. λ y : a. x) @ A · u : A → A $ by t_app [l5, #1]
+l7: $ g ⊢ (Λ a. λ x : a. λ y : a. x) @ A · u · v : A $ by t_app [l6, #2]
+
+church_zero
+-----------
+
+l1: $ g , f : a → a , x : a ⊢ x : a $ by t_var
+l2: $ g , f : a → a ⊢ (λ x : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (λ f : a → a. λ x : a. x) : (a → a) → a → a $ by t_lam [l2]
+l4: $ g ⊢ (Λ a. λ f : a → a. λ x : a. x) : Nat $ by t_tlam [l3]
+
+church_two
+----------
+
+l1: $ g , f : a → a , x : a ⊢ x : a $ by t_var
+l2: $ g , f : a → a , x : a ⊢ f : a → a $ by t_var
+l3: $ g , f : a → a , x : a ⊢ f · x : a $ by t_app [l2, l1]
+l4: $ g , f : a → a , x : a ⊢ f · (f · x) : a $ by t_app [l2, l3]
+l5: $ g , f : a → a ⊢ (λ x : a. f · (f · x)) : a → a $ by t_lam [l4]
+l6: $ g ⊢ (λ f : a → a. λ x : a. f · (f · x)) : (a → a) → a → a $ by t_lam [l5]
+l7: $ g ⊢ (Λ a. λ f : a → a. λ x : a. f · (f · x)) : Nat $ by t_tlam [l6]
+
+church_succ
+-----------
+
+l1: $ g , n : Nat , f : a → a , x : a ⊢ n : Nat $ by t_var
+l2: $ g , n : Nat , f : a → a , x : a ⊢ n @ a : (a → a) → a → a $ by t_tapp [l1]
+l3: $ g , n : Nat , f : a → a , x : a ⊢ f : a → a $ by t_var
+l4: $ g , n : Nat , f : a → a , x : a ⊢ n @ a · f : a → a $ by t_app [l2, l3]
+l5: $ g , n : Nat , f : a → a , x : a ⊢ x : a $ by t_var
+l6: $ g , n : Nat , f : a → a , x : a ⊢ n @ a · f · x : a $ by t_app [l4, l5]
+l7: $ g , n : Nat , f : a → a , x : a ⊢ f · (n @ a · f · x) : a $ by t_app [l3, l6]
+l8: $ g , n : Nat , f : a → a ⊢ (λ x : a. f · (n @ a · f · x)) : a → a $
+  by t_lam [l7]
+l9: $ g , n : Nat ⊢ (λ f : a → a. λ x : a. f · (n @ a · f · x))
+      : (a → a) → a → a $ by t_lam [l8]
+l10: $ g , n : Nat ⊢ (Λ a. λ f : a → a. λ x : a. f · (n @ a · f · x)) : Nat $
+  by t_tlam [l9]
+l11: $ g ⊢ (λ n : Nat. Λ a. λ f : a → a. λ x : a. f · (n @ a · f · x))
+      : Nat → Nat $ by t_lam [l10]
+
+t_iter
+------
+
+l1: $ g ⊢ n @ A : (A → A) → A → A $ by t_tapp [#1]
+l2: $ g ⊢ n @ A · f : A → A $ by t_app [l1, #2]
+l3: $ g ⊢ n @ A · f · x : A $ by t_app [l2, #3]
+
+church_add
+----------
+
+l1: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ n : Nat $ by t_var
+l2: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ n @ a : (a → a) → a → a $
+  by t_tapp [l1]
+l3: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ f : a → a $ by t_var
+l4: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ n @ a · f : a → a $
+  by t_app [l2, l3]
+l5: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ x : a $ by t_var
+l6: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ n @ a · f · x : a $
+  by t_app [l4, l5]
+l7: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ m : Nat $ by t_var
+l8: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ m @ a : (a → a) → a → a $
+  by t_tapp [l7]
+l9: $ g , m : Nat , n : Nat , f : a → a , x : a ⊢ m @ a · f : a → a $
+  by t_app [l8, l3]
+l10: $ g , m : Nat , n : Nat , f : a → a , x : a
+      ⊢ m @ a · f · (n @ a · f · x) : a $ by t_app [l9, l6]
+l11: $ g , m : Nat , n : Nat , f : a → a
+      ⊢ (λ x : a. m @ a · f · (n @ a · f · x)) : a → a $ by t_lam [l10]
+l12: $ g , m : Nat , n : Nat
+      ⊢ (λ f : a → a. λ x : a. m @ a · f · (n @ a · f · x))
+      : (a → a) → a → a $ by t_lam [l11]
+l13: $ g , m : Nat , n : Nat
+      ⊢ (Λ a. λ f : a → a. λ x : a. m @ a · f · (n @ a · f · x)) : Nat $
+  by t_tlam [l12]
+l14: $ g , m : Nat
+      ⊢ (λ n : Nat. Λ a. λ f : a → a. λ x : a. m @ a · f · (n @ a · f · x))
+      : Nat → Nat $ by t_lam [l13]
+l15: $ g ⊢ (λ m : Nat. λ n : Nat. Λ a. λ f : a → a. λ x : a.
+             m @ a · f · (n @ a · f · x))
+      : Nat → Nat → Nat $ by t_lam [l14]
+
+church_mult
+-----------
+
+l1: $ g , m : Nat , n : Nat , f : a → a ⊢ n : Nat $ by t_var
+l2: $ g , m : Nat , n : Nat , f : a → a ⊢ n @ a : (a → a) → a → a $
+  by t_tapp [l1]
+l3: $ g , m : Nat , n : Nat , f : a → a ⊢ f : a → a $ by t_var
+l4: $ g , m : Nat , n : Nat , f : a → a ⊢ n @ a · f : a → a $
+  by t_app [l2, l3]
+l5: $ g , m : Nat , n : Nat , f : a → a ⊢ m : Nat $ by t_var
+l6: $ g , m : Nat , n : Nat , f : a → a ⊢ m @ a : (a → a) → a → a $
+  by t_tapp [l5]
+l7: $ g , m : Nat , n : Nat , f : a → a ⊢ m @ a · (n @ a · f) : a → a $
+  by t_app [l6, l4]
+l8: $ g , m : Nat , n : Nat ⊢ (λ f : a → a. m @ a · (n @ a · f))
+      : (a → a) → a → a $ by t_lam [l7]
+l9: $ g , m : Nat , n : Nat ⊢ (Λ a. λ f : a → a. m @ a · (n @ a · f)) : Nat $
+  by t_tlam [l8]
+l10: $ g , m : Nat ⊢ (λ n : Nat. Λ a. λ f : a → a. m @ a · (n @ a · f))
+      : Nat → Nat $ by t_lam [l9]
+l11: $ g ⊢ (λ m : Nat. λ n : Nat. Λ a. λ f : a → a. m @ a · (n @ a · f))
+      : Nat → Nat → Nat $ by t_lam [l10]
+
+church_exp
+----------
+
+l1: $ g , m : Nat , n : Nat ⊢ n : Nat $ by t_var
+l2: $ g , m : Nat , n : Nat
+      ⊢ n @ (a → a) : ((a → a) → a → a) → (a → a) → a → a $ by t_tapp [l1]
+l3: $ g , m : Nat , n : Nat ⊢ m : Nat $ by t_var
+l4: $ g , m : Nat , n : Nat ⊢ m @ a : (a → a) → a → a $ by t_tapp [l3]
+l5: $ g , m : Nat , n : Nat ⊢ n @ (a → a) · (m @ a) : (a → a) → a → a $
+  by t_app [l2, l4]
+l6: $ g , m : Nat , n : Nat ⊢ (Λ a. n @ (a → a) · (m @ a)) : Nat $
+  by t_tlam [l5]
+l7: $ g , m : Nat ⊢ (λ n : Nat. Λ a. n @ (a → a) · (m @ a)) : Nat → Nat $
+  by t_lam [l6]
+l8: $ g ⊢ (λ m : Nat. λ n : Nat. Λ a. n @ (a → a) · (m @ a))
+      : Nat → Nat → Nat $ by t_lam [l7]
+
+t_pack
+------
+
+l1: $ g , k : (∀ b. B → c) ⊢ k : ∀ b. B → c $ by t_var
+l2: $ g , k : (∀ b. B → c) ⊢ k @ S : ([b/S] B) → c $ by t_tapp [l1]
+l3: $ g , k : (∀ b. B → c) ⊢ e : [b/S] B $ by t_weak [#1]
+l4: $ g , k : (∀ b. B → c) ⊢ k @ S · e : c $ by t_app [l2, l3]
+l5: $ g ⊢ (λ k : (∀ b. B → c). k @ S · e) : (∀ b. B → c) → c $ by t_lam [l4]
+l6: $ g ⊢ (Λ c. λ k : (∀ b. B → c). k @ S · e) : ∃ b. B $ by t_tlam [l5]
+
+t_unpack
+--------
+
+l1: $ g ⊢ e @ C : (∀ b. B → C) → C $ by t_tapp [#1]
+l2: $ g ⊢ e @ C · k : C $ by t_app [l1, #2]
+
+pack_id_nat
+-----------
+
+l1: $ g , x : a ⊢ x : a $ by t_var
+l2: $ g ⊢ (λ x : a. x) : a → a $ by t_lam [l1]
+l3: $ g ⊢ (Λ a. λ x : a. x) : ∀ a. a → a $ by t_tlam [l2]
+l4: $ g ⊢ (Λ a. λ x : a. x) @ Nat : Nat → Nat $ by t_tapp [l3]
+l5: $ g ⊢ (Λ c. λ k : (∀ b. (b → b) → c). k @ Nat · ((Λ a. λ x : a. x) @ Nat))
+      : ∃ b. b → b $ by t_pack [l4]
+
+unpack_abstract
+---------------
+
+l1: $ g ⊢ p @ Bool · k : Bool $ by t_unpack [#1, #2]
+
+rank2_apply
+-----------
+
+l1: $ g , p : (∀ a. a → a) , f : b → b , x : b ⊢ x : b $ by t_var
+l2: $ g , p : (∀ a. a → a) , f : b → b ⊢ (λ x : b. x) : b → b $ by t_lam [l1]
+l3: $ g , p : (∀ a. a → a) ⊢ (λ f : b → b. λ x : b. x) : (b → b) → b → b $
+  by t_lam [l2]
+l4: $ g , p : (∀ a. a → a) ⊢ (Λ b. λ f : b → b. λ x : b. x) : Nat $
+  by t_tlam [l3]
+l5: $ g , p : (∀ a. a → a) ⊢ p : ∀ a. a → a $ by t_var
+l6: $ g , p : (∀ a. a → a) ⊢ p @ Nat : Nat → Nat $ by t_tapp [l5]
+l7: $ g , p : (∀ a. a → a)
+      ⊢ p @ Nat · (Λ b. λ f : b → b. λ x : b. x) : Nat $ by t_app [l6, l4]
+l8: $ g ⊢ (λ p : (∀ a. a → a). p @ Nat · (Λ b. λ f : b → b. λ x : b. x))
+      : (∀ a. a → a) → Nat $ by t_lam [l7]
+
+list_nil
+--------
+
+l1: $ g , f : A → c → c , x : c ⊢ x : c $ by t_var
+l2: $ g , f : A → c → c ⊢ (λ x : c. x) : c → c $ by t_lam [l1]
+l3: $ g ⊢ (λ f : A → c → c. λ x : c. x) : (A → c → c) → c → c $ by t_lam [l2]
+l4: $ g ⊢ (Λ c. λ f : A → c → c. λ x : c. x) : List A $ by t_tlam [l3]
+
+list_cons
+---------
+
+l1: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ t : List A $ by t_var
+l2: $ g , h : A , t : List A , f : A → c → c , x : c
+      ⊢ t @ c : (A → c → c) → c → c $ by t_tapp [l1]
+l3: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ f : A → c → c $
+  by t_var
+l4: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ t @ c · f : c → c $
+  by t_app [l2, l3]
+l5: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ x : c $ by t_var
+l6: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ t @ c · f · x : c $
+  by t_app [l4, l5]
+l7: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ h : A $ by t_var
+l8: $ g , h : A , t : List A , f : A → c → c , x : c ⊢ f · h : c → c $
+  by t_app [l3, l7]
+l9: $ g , h : A , t : List A , f : A → c → c , x : c
+      ⊢ f · h · (t @ c · f · x) : c $ by t_app [l8, l6]
+l10: $ g , h : A , t : List A , f : A → c → c
+      ⊢ (λ x : c. f · h · (t @ c · f · x)) : c → c $ by t_lam [l9]
+l11: $ g , h : A , t : List A
+      ⊢ (λ f : A → c → c. λ x : c. f · h · (t @ c · f · x))
+      : (A → c → c) → c → c $ by t_lam [l10]
+l12: $ g , h : A , t : List A
+      ⊢ (Λ c. λ f : A → c → c. λ x : c. f · h · (t @ c · f · x)) : List A $
+  by t_tlam [l11]
+l13: $ g , h : A
+      ⊢ (λ t : List A. Λ c. λ f : A → c → c. λ x : c.
+           f · h · (t @ c · f · x))
+      : List A → List A $ by t_lam [l12]
+l14: $ g ⊢ (λ h : A. λ t : List A. Λ c. λ f : A → c → c. λ x : c.
+             f · h · (t @ c · f · x))
+      : A → List A → List A $ by t_lam [l13]
+
+list_map
+--------
+
+l1: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ h : b $ by t_var
+l2: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ f : b → c $ by t_var
+l3: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ f · h : c $ by t_app [l2, l1]
+l4: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ k : c → d → d $ by t_var
+l5: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ k · (f · h) : d → d $ by t_app [l4, l3]
+l6: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ r : d $ by t_var
+l7: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b , r : d
+      ⊢ k · (f · h) · r : d $ by t_app [l5, l6]
+l8: $ g , f : b → c , l : List b , k : c → d → d , x : d , h : b
+      ⊢ (λ r : d. k · (f · h) · r) : d → d $ by t_lam [l7]
+l9: $ g , f : b → c , l : List b , k : c → d → d , x : d
+      ⊢ (λ h : b. λ r : d. k · (f · h) · r) : b → d → d $ by t_lam [l8]
+l10: $ g , f : b → c , l : List b , k : c → d → d , x : d ⊢ l : List b $
+  by t_var
+l11: $ g , f : b → c , l : List b , k : c → d → d , x : d
+      ⊢ l @ d : (b → d → d) → d → d $ by t_tapp [l10]
+l12: $ g , f : b → c , l : List b , k : c → d → d , x : d
+      ⊢ l @ d · (λ h : b. λ r : d. k · (f · h) · r) : d → d $ by t_app [l11, l9]
+l13: $ g , f : b → c , l : List b , k : c → d → d , x : d ⊢ x : d $ by t_var
+l14: $ g , f : b → c , l : List b , k : c → d → d , x : d
+      ⊢ l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x : d $ by t_app [l12, l13]
+l15: $ g , f : b → c , l : List b , k : c → d → d
+      ⊢ (λ x : d. l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x) : d → d $ by t_lam [l14]
+l16: $ g , f : b → c , l : List b
+      ⊢ (λ k : c → d → d. λ x : d. l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x)
+      : (c → d → d) → d → d $ by t_lam [l15]
+l17: $ g , f : b → c , l : List b
+      ⊢ (Λ d. λ k : c → d → d. λ x : d. l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x) : List c $
+  by t_tlam [l16]
+l18: $ g , f : b → c
+      ⊢ (λ l : List b. Λ d. λ k : c → d → d. λ x : d. l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x)
+      : List b → List c $ by t_lam [l17]
+l19: $ g ⊢ (λ f : b → c. λ l : List b. Λ d. λ k : c → d → d. λ x : d.
+             l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x)
+      : (b → c) → List b → List c $ by t_lam [l18]
+l20: $ g ⊢ (Λ c. λ f : b → c. λ l : List b. Λ d. λ k : c → d → d. λ x : d.
+             l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x)
+      : ∀ c. (b → c) → List b → List c $ by t_tlam [l19]
+l21: $ g ⊢ (Λ b. Λ c. λ f : b → c. λ l : List b. Λ d. λ k : c → d → d.
+             λ x : d. l @ d · (λ h : b. λ r : d. k · (f · h) · r) · x)
+      : ∀ b. ∀ c. (b → c) → List b → List c $ by t_tlam [l20]
