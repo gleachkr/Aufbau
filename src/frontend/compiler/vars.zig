@@ -1,5 +1,6 @@
 const std = @import("std");
 const TheoremContext = @import("../expr.zig").TheoremContext;
+const ExprId = @import("../expr.zig").ExprId;
 const Expr = @import("../../trusted/expressions.zig").Expr;
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
 const Sort = @import("../../trusted/sorts.zig").Sort;
@@ -82,6 +83,76 @@ pub const SortVarRegistry = struct {
             };
         }
         try gop.value_ptr.tokens.append(self.allocator, token);
+    }
+};
+
+/// One `@vars` pool variable, as `theorem_vars` binds its token.
+pub const PoolVar = struct {
+    token: []const u8,
+    expr: ExprId,
+    /// Its dependency bits; 0 when the token is not bound to a variable.
+    deps: u55,
+
+    /// True for a variable sharing no dependency bit with `taken`: it is
+    /// none of the variables `taken` collects.
+    pub fn avoids(self: PoolVar, taken: u55) bool {
+        return self.deps != 0 and self.deps & taken == 0;
+    }
+};
+
+/// The pool variables of one sort, in sorted token order, each as
+/// `theorem_vars` binds it (search pre-materializes them as dummies of its
+/// work theorem). A token `theorem_vars` does not bind is skipped.
+pub const PoolVars = struct {
+    allocator: std.mem.Allocator,
+    tokens: []const []const u8,
+    index: usize = 0,
+    theorem: *TheoremContext,
+    theorem_vars: *const NameExprMap,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        sort_vars: *const SortVarRegistry,
+        sort_name: []const u8,
+        theorem: *TheoremContext,
+        theorem_vars: *const NameExprMap,
+    ) !PoolVars {
+        const pool = sort_vars.getPool(sort_name);
+        const tokens = try allocator.dupe([]const u8, if (pool) |p| p.tokens.items else &.{});
+        std.mem.sort([]const u8, tokens, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lt);
+        return .{
+            .allocator = allocator,
+            .tokens = tokens,
+            .theorem = theorem,
+            .theorem_vars = theorem_vars,
+        };
+    }
+
+    pub fn deinit(self: *PoolVars) void {
+        self.allocator.free(self.tokens);
+    }
+
+    pub fn next(self: *PoolVars) !?PoolVar {
+        while (self.index < self.tokens.len) {
+            const token = self.tokens[self.index];
+            self.index += 1;
+            const parser_var = self.theorem_vars.get(token) orelse continue;
+            const expr = self.theorem.internParsedExpr(parser_var) catch |err| switch (err) {
+                error.OutOfMemory => return err,
+                else => continue,
+            };
+            const info = self.theorem.currentLeafInfo(expr) catch null;
+            return .{
+                .token = token,
+                .expr = expr,
+                .deps = if (info) |leaf| leaf.deps else 0,
+            };
+        }
+        return null;
     }
 };
 

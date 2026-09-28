@@ -107,6 +107,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   treated that hidden variable and the λ's `x` as a conflict, so it forgot
   which `x` the premise was about. In the Martin-Löf example, `arr_intro`
   is now found from its hypotheses alone.
+- `auto?` now finds proofs that need a bound variable no goal names. In
+  the Church example, `T` hides a bound variable (`(λ x. x) = (λ x. x)`), so
+  proving `G ⊩ T` by `reflt [lamT [ax]]` needs an `x`. So does
+  `eqTR1 [T_DEF]`, where `T_DEF` binds an `x` that the premise `eqTR1`
+  generates never shows. The search used to give up on both. It now keeps
+  such a variable open until a proof below names it, or gives it a fresh
+  `@vars` variable when nothing can. On the depth benchmark, Church's `TT`,
+  `FT`, `TRUTH` and `andT` through `exT` are now found, as are three
+  lemmas that instantiate a `∀` lemma, such as Euclid's `fact_pos_inst`.
 - `auto?` now invents a fresh bound variable for a rule marked
   `@auto backward` too. With `pi_form` enrolled, it could not prove
   `g ⊢ Ty (A → B)` from `g ⊢ Ty A` and `g ⊢ Ty B`, because the premise

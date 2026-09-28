@@ -35,6 +35,7 @@ const Redex = @import("./redex.zig");
 const MetaStoreMod = @import("../../inference/meta_store.zig");
 const MetaStore = MetaStoreMod.MetaStore;
 const BindingValidation = @import("../../../binding_validation.zig");
+const PoolVars = @import("../../vars.zig").PoolVars;
 const Goal = types.Goal;
 const Context = types.Context;
 const ApplyCandidate = types.ApplyCandidate;
@@ -451,8 +452,9 @@ pub fn openMode(
 /// - a variable a def hid. Unfolding `A → B` to `Π x : A. B`, on the goal
 ///   (`pi_form`) or on a ref (`app_elim`'s `f : A → B`), leaves `x` null (the
 ///   seed scrubs it) or a bare placeholder. When the seed kept a term over
-///   the variable (`nat_ind_elim`'s step term `s` over `ih`), the variable is
-///   a seed meta instead, and `rebindSeedMetas` opens it in place;
+///   the variable (`nat_ind_elim`'s step term `s` over `ih`, `reflt`'s
+///   `t := λ x. x` under `T`), the variable is a seed meta instead, and
+///   `rebindHiddenVars` opens it in place, whichever binder holds it;
 /// - an eigenvariable of an intro-shaped premise (`subset_intro`'s `x` in
 ///   `G , x ∈ A ⊢ x ∈ B`): the goal fixes every other binder of the premise
 ///   (`otherHypBindersInConclusion`, a cost gate), and no fixed binding may mention the
@@ -487,6 +489,7 @@ fn tryFreshBoundGenerate(
     else
         plan.conclusionBinderMaskOrNone(rule.concl);
     var open: u64 = 0;
+    var hosts: u64 = 0;
     var rest = mask.mask;
     while (rest != 0) {
         const idx: u6 = @intCast(@ctz(rest));
@@ -497,7 +500,13 @@ fn tryFreshBoundGenerate(
             // Still standing in for a def's hidden variable: the unfolded
             // dummy (`unfoldDefBody`), or a seed meta a ref match would have
             // replaced (`seed.partitionSeedBindings`).
-            const kind = cand_theorem.leafPlaceholderKind(value) orelse continue;
+            const kind = cand_theorem.leafPlaceholderKind(value) orelse {
+                // A term over a def's hidden variable (`reflt`'s
+                // `t := λ x. x` under `T`): the variable opens in place, as
+                // no ref matched this premise to name it.
+                if (cand_theorem.exprAny(value, {}, isHiddenVarLeaf)) hosts |= bit;
+                continue;
+            };
             if (kind != .dummy and kind != .seed_meta) continue;
         } else if (concl_mask & bit == 0 and
             !(noFixedBindingMayMention(rule, bindings, idx) and
@@ -505,12 +514,14 @@ fn tryFreshBoundGenerate(
         if (!rule.args[idx].bound) return false;
         open |= bit;
     }
-    if (open == 0) return false;
+    if (open == 0 and hosts == 0) return false;
 
     if (hook.solveOpenFn == null) return false;
     // Open the def-unfold placeholders too, so the child search can fix them.
     // A seed meta stays put: other kept bindings mention it (`s` under `ih`),
-    // and `tryOpenGenerateSlot` rebinds it everywhere at once.
+    // and `tryOpenGenerateSlot` rebinds it everywhere at once. So does a
+    // dummy another binding also holds (`B` over `x` in `Π x : A. B`), or its
+    // copies would open as two variables.
     var saved: [64]?ExprId = undefined;
     var nulled: u64 = 0;
     rest = open;
@@ -518,7 +529,8 @@ fn tryFreshBoundGenerate(
         const idx: u6 = @intCast(@ctz(rest));
         rest &= rest - 1;
         if (bindings[idx]) |value| {
-            if (cand_theorem.leafPlaceholderKind(value) == .seed_meta) continue;
+            if (cand_theorem.leafPlaceholderKind(value) == .seed_meta or
+                heldElsewhere(cand_theorem, bindings, idx, value)) continue;
         }
         saved[idx] = bindings[idx];
         bindings[idx] = null;
@@ -534,7 +546,7 @@ fn tryFreshBoundGenerate(
     }
 
     const before = ctx.candidates.items.len;
-    try tryOpenGenerateSlot(ctx, hook, at, open);
+    try tryOpenGenerateSlot(ctx, hook, at, .{ .binders = open, .hosts = hosts });
     return ctx.candidates.items.len != before;
 }
 
@@ -1176,7 +1188,7 @@ fn tryGenerateSlot(
         ctx.bindings,
     )) |raw_target| {
         if (carriesAncestorWitness(context, candidate, hook, raw_target)) {
-            try tryOpenGenerateSlot(ctx, hook, slot, 0);
+            try tryOpenGenerateSlot(ctx, hook, slot, .{});
             return;
         }
         try emitGeneratedSlot(ctx, hook, slot, raw_target);
@@ -1205,7 +1217,7 @@ fn tryGenerateSlot(
     if (hook.solveOpenFn != null and
         openMode(context, candidate.rule_id, hook.allow_constrained_mp) != .none)
     {
-        try tryOpenGenerateSlot(ctx, hook, slot, 0);
+        try tryOpenGenerateSlot(ctx, hook, slot, .{});
         if (ctx.candidates.items.len != candidates_before_split) return;
     }
 
@@ -1332,7 +1344,7 @@ fn trySplitGenerate(
                 // carries an enclosing slot's witness meta. Run the open path
                 // under the split binding so the witness can be solved from
                 // the now-concrete context's ACUI members.
-                try tryOpenGenerateSlot(ctx, hook, slot, 0);
+                try tryOpenGenerateSlot(ctx, hook, slot, .{});
             }
             bindings[b] = saved;
         }
@@ -1495,7 +1507,7 @@ const OpenSlot = struct {
     /// sees (`tryFreshBoundGenerate`): when the child search leaves one
     /// unsolved, it takes a fresh `@vars` variable (`tryPoolWitnesses`).
     fresh_bound: bool = false,
-    /// Binders whose values hold metas `rebindSeedMetas` minted for this slot;
+    /// Binders whose values hold metas `rebindHiddenVars` minted for this slot;
     /// a solved fill materializes them too.
     rebound: u64 = 0,
 
@@ -1516,14 +1528,14 @@ fn tryOpenGenerateSlot(
     ctx: *const SlotCtx,
     hook: *const GenerationHook,
     at: Slot,
-    /// The premise's binders open as fresh bound variables
-    /// (`tryFreshBoundGenerate`); 0 for an ordinary open slot.
-    fresh_open: u64,
+    /// What opens as fresh bound variables (`tryFreshBoundGenerate`);
+    /// empty for an ordinary open slot.
+    fresh: FreshOpen,
 ) anyerror!void {
     const context = ctx.context;
     const candidate = ctx.candidate;
     const bindings = ctx.bindings;
-    const fresh_bound = fresh_open != 0;
+    const fresh_bound = fresh.binders != 0 or fresh.hosts != 0;
     var store = MetaStore.init(ctx.allocator, context.env);
     // Share the driver's global meta-id counter so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
@@ -1534,7 +1546,7 @@ fn tryOpenGenerateSlot(
     const snapshot = ctx.snapshotAt(at.depth);
     @memcpy(snapshot, bindings);
     defer rollbackOneHypMatch(bindings, snapshot);
-    const rebound = try rebindSeedMetas(&store, &candidate.theorem, bindings, fresh_open);
+    const rebound = try rebindHiddenVars(&store, &candidate.theorem, bindings, fresh.binders | fresh.hosts);
     // Narrow the carried-meta dependency bans for this slot's lifetime: the
     // candidate's bindings are fixed for everything opened beneath it.
     const ban_mark = if (hook.meta_dep_bans) |bans| blk: {
@@ -1575,37 +1587,78 @@ fn tryOpenGenerateSlot(
     }
 }
 
-/// Replace each seed meta an open binder of this premise still holds (`ih`,
-/// unmatched by any ref) with a `.bound_choice` meta of `store`, in every
-/// binding that mentions it, so the child search can read it back and
-/// `tryPoolWitnesses` can fill it. A seed meta of another premise stays
-/// put: this slot's solve could not fill it. Returns the binders whose values
-/// changed.
-fn rebindSeedMetas(
+/// The parts of a premise `tryFreshBoundGenerate` opens as fresh bound
+/// variables.
+const FreshOpen = struct {
+    /// Bound binders that open as metas.
+    binders: u64 = 0,
+    /// Binders whose values are terms over a def's hidden variable.
+    hosts: u64 = 0,
+};
+
+/// Replace each hidden-variable leaf in the values of `hosts` with a
+/// `.bound_choice` meta of `store`, in every binding that mentions it, so the
+/// child search can name the variable and `tryPoolWitnesses` can fill it.
+/// Two leaves stand for a def's hidden variable: an unfolded dummy, and a
+/// seed meta (`ih` on an open binder, unmatched by any ref, or inside a kept
+/// term such as `reflt`'s `t := λ x. x` under `T`). A hidden variable only
+/// another premise's binders mention stays put: this slot's solve could not
+/// fill it. Returns the binders whose values changed.
+fn rebindHiddenVars(
     store: *MetaStore,
     theorem: *TheoremContext,
     bindings: []?ExprId,
-    open: u64,
+    hosts: u64,
 ) !u64 {
     var changed: u64 = 0;
-    var rest = open;
+    var rest = hosts;
     while (rest != 0) {
         const idx: u6 = @intCast(@ctz(rest));
         rest &= rest - 1;
-        const leaf = bindings[idx] orelse continue;
-        if (theorem.leafPlaceholderKind(leaf) != .seed_meta) continue;
-        const pid = theorem.interner.node(leaf).placeholder;
-        const info = theorem.placeholderInfo(pid) orelse continue;
-        const meta = try store.mint(theorem, info.sort_name, std.math.maxInt(u55), .bound_choice);
-        for (bindings, 0..) |*binding, other| {
-            const value = binding.* orelse continue;
-            const swapped = try forward.leafSwap(theorem, value, leaf, meta);
-            if (swapped == value) continue;
-            binding.* = swapped;
-            if (other < 64) changed |= @as(u64, 1) << @intCast(other);
+        while (bindings[idx]) |value| {
+            const leaf = firstHiddenVarLeaf(theorem, value) orelse break;
+            const pid = theorem.interner.node(leaf).placeholder;
+            const info = theorem.placeholderInfo(pid) orelse break;
+            const meta = try store.mint(theorem, info.sort_name, std.math.maxInt(u55), .bound_choice);
+            for (bindings, 0..) |*binding, other| {
+                const other_value = binding.* orelse continue;
+                const swapped = try forward.leafSwap(theorem, other_value, leaf, meta);
+                if (swapped == other_value) continue;
+                binding.* = swapped;
+                if (other < 64) changed |= @as(u64, 1) << @intCast(other);
+            }
         }
     }
     return changed;
+}
+
+/// True when a binding other than `bindings[idx]` mentions `leaf`.
+fn heldElsewhere(theorem: *const TheoremContext, bindings: []const ?ExprId, idx: usize, leaf: ExprId) bool {
+    for (bindings, 0..) |maybe, other| {
+        if (other == idx) continue;
+        const value = maybe orelse continue;
+        if (theorem.exprAny(value, leaf, isExpr)) return true;
+    }
+    return false;
+}
+
+fn isExpr(target: ExprId, _: *const TheoremContext, expr: ExprId) bool {
+    return expr == target;
+}
+
+fn isHiddenVarLeaf(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+    const kind = theorem.leafPlaceholderKind(expr) orelse return false;
+    return kind == .dummy or kind == .seed_meta;
+}
+
+fn firstHiddenVarLeaf(theorem: *const TheoremContext, expr: ExprId) ?ExprId {
+    return switch (theorem.interner.node(expr).*) {
+        .variable => null,
+        .placeholder => if (isHiddenVarLeaf({}, theorem, expr)) expr else null,
+        .app => |app| for (app.args) |arg| {
+            if (firstHiddenVarLeaf(theorem, arg)) |leaf| break leaf;
+        } else null,
+    };
 }
 
 /// The eigenvariable condition, read off the rule's own dependency data: a
@@ -2644,42 +2697,23 @@ fn assignPoolWitness(
     sort_name: []const u8,
     avoid: ?*u55,
 ) !bool {
-    const tokens = try sortedPoolTokens(slot.ctx.allocator, slot.ctx.context, sort_name);
-    defer slot.ctx.allocator.free(tokens);
-    for (tokens) |token| {
-        const parser_var = slot.ctx.theorem_vars.get(token) orelse continue;
-        const dummy = theorem.internParsedExpr(parser_var) catch continue;
-        const deps = if (avoid != null) exprDeps(slot.ctx.context, theorem, dummy) else 0;
+    var pool = try PoolVars.init(
+        slot.ctx.allocator,
+        slot.ctx.context.sort_vars,
+        sort_name,
+        theorem,
+        slot.ctx.theorem_vars,
+    );
+    defer pool.deinit();
+    while (try pool.next()) |pool_var| {
         if (avoid) |taken| {
-            if (deps == 0 or deps & taken.* != 0) continue;
+            if (!pool_var.avoids(taken.*)) continue;
         }
-        slot.store.assign(theorem, meta_id, dummy) catch continue;
-        if (avoid) |taken| taken.* |= deps;
+        slot.store.assign(theorem, meta_id, pool_var.expr) catch continue;
+        if (avoid) |taken| taken.* |= pool_var.deps;
         return true;
     }
     return false;
-}
-
-/// Every `@vars` pool token of `sort_name`, in sorted order (the HashMap
-/// iteration order is unspecified). Caller frees the slice.
-fn sortedPoolTokens(
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    sort_name: []const u8,
-) ![]const []const u8 {
-    var tokens = std.ArrayListUnmanaged([]const u8){};
-    errdefer tokens.deinit(allocator);
-    var it = context.sort_vars.tokens.iterator();
-    while (it.next()) |entry| {
-        if (!std.mem.eql(u8, entry.value_ptr.sort_name, sort_name)) continue;
-        try tokens.append(allocator, entry.key_ptr.*);
-    }
-    std.mem.sort([]const u8, tokens.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
-        }
-    }.lt);
-    return tokens.toOwnedSlice(allocator);
 }
 
 /// `PlaceholderFactory.makeFn` minting branch-local existential metas.

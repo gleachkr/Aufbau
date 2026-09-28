@@ -329,6 +329,34 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/church_frontier.auf",
         .mode = "depth",
     },
+    // Bound variables no goal names (task #318). `TT` (`eqTR1 [T_DEF]`):
+    // phase 5 opens `eqTR1`'s cut as `?b`, and `T_DEF`'s `{x}` lies inside
+    // `?b`'s value, so the explicit-binding retry must name it
+    // (`validate.appendFreshBoundBindings`). `TRUTH` (`reflt [lamT [ax]]`):
+    // unfolding `T` leaves its hidden `.x` inside `reflt`'s `t := λ x. x`,
+    // which must open as a `.bound_choice` meta (`rebindHiddenVars`) instead
+    // of going to the concrete route, which cannot lift it.
+    .{
+        .filter = "TT",
+        .files = "tests/search_bench_cases/church_frontier.mm0:" ++
+            "tests/search_bench_cases/church_frontier.auf",
+        .mode = "depth",
+    },
+    .{
+        .filter = "TRUTH",
+        .files = "tests/search_bench_cases/church_frontier.mm0:" ++
+            "tests/search_bench_cases/church_frontier.auf",
+        .mode = "depth",
+    },
+    // Same retry, with the binder also on a bare meta: `fact_pos`'s `n`
+    // against `all_elim`'s `⊢ ∀ ?x ?p` lies inside `?p` too, so only the
+    // leaf can name it.
+    .{
+        .filter = "fact_pos_inst",
+        .files = "tests/search_bench_cases/euclid_frontier.mm0:" ++
+            "tests/search_bench_cases/euclid_frontier.auf",
+        .mode = "depth",
+    },
     // Forward-JOIN depth guards (∀∃ quantifier alternation, META_STRESS.md
     // "Bespoke theory #3"). These pin the forward-join meta grounding: a
     // universal family fact (`P ?t → Q ?t`, from `all_elim`) joined with a

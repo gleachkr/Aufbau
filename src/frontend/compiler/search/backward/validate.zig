@@ -13,6 +13,9 @@ const forward = @import("../forward.zig");
 const candidate_mod = @import("../candidate.zig");
 const plausible = @import("./plausible.zig");
 const prune = @import("./prune.zig");
+const lockstep = @import("./lockstep.zig");
+const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const PoolVars = @import("../../vars.zig").PoolVars;
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const ProofScript = @import("../../../proof_script.zig");
@@ -371,12 +374,18 @@ pub fn validateSelectedRefs(
             unify_retry) and
             arg_bindings.len == 0)
         blk_retry: {
+            const hint = if (err == error.MissingBinderAssignment) goal.expectedHint() else null;
+            const fresh_bindings = if (hint) |goal_expr|
+                try withFreshBoundVars(allocator, context, candidate, theorem_vars, bindings, goal_expr)
+            else
+                null;
+            defer if (fresh_bindings) |fresh| allocator.free(fresh);
             const retry_bindings = renderAllResolvedBindings(
                 allocator,
                 context,
                 candidate,
                 theorem_vars,
-                bindings,
+                fresh_bindings orelse bindings,
             ) catch |rerr| {
                 if (rerr == error.OutOfMemory) return rerr;
                 break :blk_retry;
@@ -585,6 +594,117 @@ fn renderAllResolvedBindings(
     bindings: []const ?ExprId,
 ) ![]ProofScript.ArgBinding {
     return renderBindings(allocator, context, candidate, theorem_vars, bindings, null);
+}
+
+/// Close out a candidate against a holey goal: a bound binder the search left
+/// null has an occurrence in the conclusion strictly inside what a goal meta
+/// stands for (`T_DEF`'s `{x}` in `G ⊩ ≃[𝔹] T = ?b`, which reads back as
+/// `?b := (λ x. x) = (λ x. x)`; `fact_pos`'s `n` inside `?p` in
+/// `⊢ ∀ ?x ?p`). Whatever names it must also build that meta's value, which
+/// only this candidate does, so it is named here, as a `@vars` pool variable
+/// occurring nowhere in the candidate's bindings or the goal; the read-back
+/// carries it into the meta. A binder only bare metas match (`var`'s `x` in
+/// `g , ?x : A ⊢ ?x : A`) just says the meta is a variable; the slot that
+/// minted the meta names it. Returns a copy of `bindings` with every null
+/// binder named, or null when some null binder does not qualify (the
+/// candidate then fails) or no pool variable fits. Caller frees.
+fn withFreshBoundVars(
+    allocator: std.mem.Allocator,
+    context: *const Context,
+    candidate: *ApplyCandidate,
+    theorem_vars: *const NameExprMap,
+    bindings: []const ?ExprId,
+    goal_expr: ExprId,
+) !?[]?ExprId {
+    if (context.views.contains(candidate.rule_id)) return null;
+    const rule = &context.env.rules.items[candidate.rule_id];
+    const theorem = &candidate.theorem;
+    var any = false;
+    for (bindings, 0..) |maybe, idx| {
+        if (maybe != null) continue;
+        if (idx >= rule.args.len or !rule.args[idx].bound) return null;
+        if (rule.arg_names[idx] == null) return null;
+        if (!binderInsideMeta(context, theorem, rule.concl, goal_expr, idx)) return null;
+        any = true;
+    }
+    if (!any) return null;
+
+    var taken: u55 = varDeps(theorem, goal_expr);
+    for (bindings) |maybe| {
+        if (maybe) |value| taken |= varDeps(theorem, value);
+    }
+    const named = try allocator.dupe(?ExprId, bindings);
+    errdefer allocator.free(named);
+    for (named, 0..) |*binding, idx| {
+        if (binding.* != null) continue;
+        var pool = try PoolVars.init(
+            allocator,
+            context.sort_vars,
+            rule.args[idx].sort_name,
+            theorem,
+            theorem_vars,
+        );
+        defer pool.deinit();
+        const fresh = while (try pool.next()) |pool_var| {
+            if (pool_var.avoids(taken)) break pool_var;
+        } else {
+            allocator.free(named);
+            return null;
+        };
+        taken |= fresh.deps;
+        binding.* = fresh.expr;
+    }
+    return named;
+}
+
+/// True when some occurrence of binder `idx` in `template` lies strictly
+/// inside a subterm a meta of `expr` stands for, walking the two along the
+/// determined argument pairs (`lockstep`).
+fn binderInsideMeta(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+    idx: usize,
+) bool {
+    const app = switch (template) {
+        .binder => return false,
+        .app => |app| app,
+    };
+    if (theorem.interner.node(expr).* == .placeholder) return templateMentions(template, idx);
+    var pairs = lockstep.templateArgs(context, theorem, app, expr) orelse return false;
+    while (pairs.next()) |pair| {
+        if (binderInsideMeta(context, theorem, pair.template, pair.expr, idx)) return true;
+    }
+    return false;
+}
+
+fn templateMentions(template: TemplateExpr, idx: usize) bool {
+    return switch (template) {
+        .binder => |b| b == idx,
+        .app => |app| for (app.args) |arg| {
+            if (templateMentions(arg, idx)) break true;
+        } else false,
+    };
+}
+
+/// The dependency bits of the variables in `expr`. Placeholders count for
+/// nothing: a goal meta's mask is not a variable's, and every placeholder bit
+/// is disjoint from the dummy bits a pool variable carries
+/// (`TheoremContext.next_placeholder_dep`).
+fn varDeps(theorem: *const TheoremContext, expr: ExprId) u55 {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => 0,
+        .variable => blk: {
+            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk 0;
+            break :blk info.deps;
+        },
+        .app => |app| blk: {
+            var deps: u55 = 0;
+            for (app.args) |arg| deps |= varDeps(theorem, arg);
+            break :blk deps;
+        },
+    };
 }
 
 fn refsFromSelected(

@@ -501,16 +501,36 @@ a wrong guess (church `SPEC`). `dvd_elim`'s `k` sits in an elim-shaped
 premise whose other binders come from a sibling ref, so fills are mostly
 doomed (euclid). Guard: the `arr_` depth rows of `martin_lof`.
 
-A kept seed meta a bound binder still holds when its premise is generated
-(`ih`, when no ref pinned it) qualifies the same way. `rebindSeedMetas`
-replaces it, in every binding that mentions it, with a `.bound_choice` meta
-of the slot's store, and a solved fill materializes those bindings
-(`OpenSlot.rebound`). Only the generated premise's own open binders are
-rebound: this slot's solve cannot fill another premise's seed meta. A seed meta keeps its dummy's dep bit and reads as a
+A hidden variable inside a fixed binding of the premise qualifies the same
+way: a kept seed meta a bound binder still holds (`ih`, when no ref pinned
+it), or one inside a kept term (`reflt`'s `t := λ x. x` when the goal `G ⊩ T`
+unfolds `T`'s hidden `.x`). `rebindHiddenVars` replaces it, in every binding
+that mentions it, with a `.bound_choice` meta of the slot's store, and a
+solved fill materializes those bindings (`OpenSlot.rebound`). The child
+search names the variable (`lamT` below `reflt`), or the pool rung does. Only
+hidden variables in the generated premise's own binders are rebound: this
+slot's solve cannot fill another premise's. A seed meta keeps its dummy's dep bit and reads as a
 bound variable (`TheoremContext.leafInfoWithArgs`), so a substitution over
 it reduces as over the dummy: `sep_intro`'s `[x/t] p` under `image` must
-reduce before its premise can be generated. Guard: the `add_zero_right`
-depth rows of `martin_lof`.
+reduce before its premise can be generated. Guards: the `add_zero_right`
+depth rows of `martin_lof`, and church `TRUTH`.
+
+The dual case is a bound binder of a child-search candidate with an
+occurrence strictly inside what a goal meta stands for. In phase 5, `eqTR1`
+opens its cut `b`, so the child target is `G ⊩ ≃[𝔹] T = ?b`. `T_DEF`
+matches it, but its `{x}` lies inside `?b`'s value `(λ x. x) = (λ x. x)`,
+so the checker cannot infer it (`MissingBinderAssignment`). Likewise
+`fact_pos`'s `n` against `all_elim`'s `⊢ ∀ ?x ?p` lies inside `?p` as well
+as on `?x`. Whatever names such a variable must also build the meta's
+value, and only this candidate does. So the explicit-binding retry in
+`validateSelectedRefs` gives it a `@vars` variable that occurs nowhere in
+the bindings or the goal (`withFreshBoundVars`), and the read-back
+carries that choice into the metas. A binder that only bare metas match
+(`var`'s `x` in `g , ?x : A ⊢ ?x : A`) says no more than that the meta is a
+variable. That is the minting slot's to name. Naming it at every such leaf
+as well turned doomed child searches into candidates and cost martin_lof
+`suc_eq` and `ap_motive` their node budget. Guards: church `TT`, euclid
+`fact_pos_inst`.
 
 These seed metas are resolved by a **meta-aware ref match**
 (`backward/match.zig:tryMetaAwareHypMatch`, gated by
