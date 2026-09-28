@@ -353,23 +353,7 @@ pub fn generateTopLevel(
     var derived_pool: ?types.DerivedPool = null;
     defer if (derived_pool) |*dpool| dpool.deinit();
     if (session.context.registry.autoForwardRuleCount() > 0) {
-        const ref_pool = try session.getReferencePool(
-            theorem,
-            session.effectiveCounters(null),
-        );
-        const ref_index = try session.getRefIndex(
-            theorem,
-            session.effectiveCounters(null),
-        );
-        derived_pool = try forward.saturate(
-            session.context,
-            &work_theorem,
-            ref_pool,
-            ref_index,
-            options.forward,
-            session.effectiveCounters(null),
-            &.{},
-        );
+        derived_pool = try saturateForward(session, theorem, &work_theorem, options, &.{});
         try buildDerivedIndex(session, &work_theorem, &derived_pool.?);
     }
 
@@ -460,13 +444,20 @@ pub fn generateTopLevel(
         driver.persist_open_fail.deinit(driver.scratch);
     }
 
+    const gates = LadderGates{
+        .witness_pool = can_invent_witness,
+        .idempotent = hasIdempotentCombiner(session.context),
+    };
+    const schedule = try buildSchedule(session.allocator, options.max_depth, gates);
+    defer session.allocator.free(schedule);
     var applications = std.ArrayListUnmanaged(RuleApplication){};
     var ladder = try runPhaseLadder(
         &driver,
         goal_expr,
         &applications,
         budget_ptr,
-        can_invent_witness,
+        schedule,
+        gates,
     );
 
     // Phase 6: on a miss of the whole ladder, and only when the theory
@@ -498,30 +489,12 @@ pub fn generateTopLevel(
         defer session.allocator.free(seeds);
         if (seeds.len > 0) {
             if (gen_counters) |c| c.trigger_seed_count += seeds.len;
-            seeded_pool = blk: {
-                if (session.context.registry.autoForwardRuleCount() > 0) {
-                    // Re-saturate with the seeds as depth-0 sources so
-                    // forward joins fire over them too.
-                    const ref_pool = try session.getReferencePool(
-                        theorem,
-                        session.effectiveCounters(null),
-                    );
-                    const ref_index = try session.getRefIndex(
-                        theorem,
-                        session.effectiveCounters(null),
-                    );
-                    break :blk try forward.saturate(
-                        session.context,
-                        &work_theorem,
-                        ref_pool,
-                        ref_index,
-                        options.forward,
-                        session.effectiveCounters(null),
-                        seeds,
-                    );
-                }
-                break :blk try trigger.seedOnlyPool(session.context, seeds);
-            };
+            // With `@auto forward` rules, re-saturate with the seeds as
+            // depth-0 sources so forward joins fire over them too.
+            seeded_pool = if (session.context.registry.autoForwardRuleCount() > 0)
+                try saturateForward(session, theorem, &work_theorem, options, seeds)
+            else
+                try trigger.seedOnlyPool(session.context, seeds);
             try buildDerivedIndex(session, &work_theorem, &seeded_pool.?);
             driver.derived = &seeded_pool.?;
             // The seeded pool changes every failure verdict's inputs; the
@@ -532,7 +505,8 @@ pub fn generateTopLevel(
                 goal_expr,
                 &applications,
                 budget_ptr,
-                can_invent_witness,
+                schedule,
+                gates,
             );
         }
     }
@@ -559,7 +533,8 @@ pub fn generateTopLevel(
             goal_expr,
             &applications,
             budget_ptr,
-            can_invent_witness,
+            schedule,
+            gates,
         );
     }
 
@@ -599,6 +574,34 @@ pub fn generateTopLevel(
     };
 }
 
+/// Bounded forward saturation over the theorem's ref pool, with `seeds` as
+/// extra depth-0 sources.
+fn saturateForward(
+    session: *session_mod.SearchSession,
+    theorem: *const TheoremContext,
+    work_theorem: *TheoremContext,
+    options: GenerateOptions,
+    seeds: []const types.DerivedRef,
+) !types.DerivedPool {
+    const ref_pool = try session.getReferencePool(
+        theorem,
+        session.effectiveCounters(null),
+    );
+    const ref_index = try session.getRefIndex(
+        theorem,
+        session.effectiveCounters(null),
+    );
+    return forward.saturate(
+        session.context,
+        work_theorem,
+        ref_pool,
+        ref_index,
+        options.forward,
+        session.effectiveCounters(null),
+        seeds,
+    );
+}
+
 /// Index a derived pool's shapes so backward search pre-filters them per
 /// slot/goal exactly like pool refs, instead of attempting every derived ref
 /// at every open hypothesis slot at every depth. A failed build (e.g. an
@@ -633,12 +636,146 @@ fn buildDerivedIndex(
 /// the stack guard, which every later cell would hit again).
 const LadderOutcome = enum { clean, exhausted, stopped };
 
-/// The retry-phase ladder (phases 1–5): a DEPTH-MAJOR core over phases 1–3
-/// (outer iterative deepening 1..max_depth, inner phases per depth, stopping
-/// at the first (depth, phase) cell that yields results), followed by
-/// phase-major tail ladders for phases 4–5 on a clean core miss. Extracted
-/// so the phase-6 trigger-seeding retry can re-run the whole ladder against
-/// the seeded derived pool. Returns how the ladder ended without a proof.
+/// One phase of the retry ladder: the capabilities its cells search with, and
+/// what the theory needs for the phase to run at all. Witness invention is not
+/// a phase capability: it is the last rung of `emitOpenTarget`'s slot-local
+/// witness ladder, on in every phase whenever the theory has a `@vars` pool.
+const Phase = struct {
+    split: bool = false,
+    retain_principal: bool = false,
+    constrained_mp: bool = false,
+    requires: enum { nothing, witness_pool, idempotent } = .nothing,
+};
+
+/// The ladder's phases in order; index 0 is phase 1.
+/// - Phase 1: ordinary, non-splitting generation.
+/// - Phase 2: adds ACUI context splitting.
+/// - Phase 3: a capability-identical retry of phase 2, with its own fuel pool
+///   and its own persisted-memo lineage (`persist*Covered` is
+///   phase-indexed). It runs only for theories with a `@vars` witness pool,
+///   where deep open-witness churn makes the retry pay: peano's
+///   mul_eq_*_all at depth 6 are found by this cell and by nothing else
+///   (#174; neither 4x fuel nor max_depth 10 recovers them without it).
+/// - Phase 4: adds idempotent principal retention. It needs an idempotent
+///   structural combiner.
+/// - Phase 5: adds constrained backward modus ponens.
+/// A gated-off phase contributes neither its cells nor its capability to
+/// later phases: phase 5 retains principals only where phase 4 runs.
+const ladder_phases = [_]Phase{
+    .{},
+    .{ .split = true },
+    .{ .split = true, .requires = .witness_pool },
+    .{ .split = true, .retain_principal = true, .requires = .idempotent },
+    .{ .split = true, .retain_principal = true, .constrained_mp = true },
+};
+
+// A persisted failure recorded under phase p covers re-solves under any
+// phase ≤ p (`persist*Covered`), which is sound only while each phase's
+// capabilities include every earlier phase's.
+comptime {
+    for (ladder_phases[1..], ladder_phases[0 .. ladder_phases.len - 1]) |phase, prev| {
+        if ((prev.split and !phase.split) or
+            (prev.retain_principal and !phase.retain_principal) or
+            (prev.constrained_mp and !phase.constrained_mp))
+        {
+            @compileError("each ladder phase must keep every earlier phase's capabilities");
+        }
+    }
+}
+
+/// What the theory offers the ladder: a `@vars` witness pool with a rule to
+/// consume it, and an idempotent structural combiner.
+const LadderGates = struct {
+    witness_pool: bool,
+    idempotent: bool,
+
+    fn allows(self: LadderGates, phase: Phase) bool {
+        return switch (phase.requires) {
+            .nothing => true,
+            .witness_pool => self.witness_pool,
+            .idempotent => self.idempotent,
+        };
+    }
+};
+
+/// What a cell's outcomes mean. A `core` cell whose phase fuel runs dry
+/// retires that phase: its later cells are skipped and the rest of the core
+/// continues. Core depths searched in full are what `gen_core_depth_done`
+/// reports. A `tail` cell runs only while no core phase has retired, and its
+/// phase fuel running dry ends the ladder.
+const Band = enum { core, tail };
+
+/// One (depth, phase) cell of the ladder schedule.
+const Cell = struct {
+    phase: usize,
+    depth: usize,
+    band: Band,
+};
+
+/// The ladder's cells in visit order: the depth-major core over phases 1–3,
+/// then a phase-major tail for each of phases 4–5 (see `runPhaseLadder`
+/// for why).
+fn buildSchedule(
+    allocator: std.mem.Allocator,
+    max_depth: usize,
+    gates: LadderGates,
+) ![]const Cell {
+    var cells = std.ArrayListUnmanaged(Cell){};
+    errdefer cells.deinit(allocator);
+    for (1..max_depth + 1) |depth| {
+        for (ladder_phases[0..core_phase_count], 0..) |phase, index| {
+            if (!gates.allows(phase)) continue;
+            try cells.append(allocator, .{ .phase = index, .depth = depth, .band = .core });
+        }
+    }
+    for (ladder_phases[core_phase_count..], core_phase_count..) |phase, index| {
+        if (!gates.allows(phase)) continue;
+        for (1..max_depth + 1) |depth| {
+            try cells.append(allocator, .{ .phase = index, .depth = depth, .band = .tail });
+        }
+    }
+    return cells.toOwnedSlice(allocator);
+}
+
+/// Phases 1–3 (indices 0–2) form the depth-major core of the schedule;
+/// phases 4–5 run as phase-major tails. See `runPhaseLadder` for why the
+/// boundary sits here (fixed-depth cost growth across phases).
+const core_phase_count = 3;
+
+/// What one run of the ladder carries from cell to cell.
+const LadderState = struct {
+    /// Each phase draws on its own fuel pool across all of its cells.
+    fuel: [ladder_phases.len]usize,
+    /// Core phases whose fuel ran dry; their later cells are skipped.
+    retired: [ladder_phases.len]bool = @splat(false),
+    any_retired: bool = false,
+    /// A core cell hit the node cap, so it was not searched in full: its
+    /// depth and every deeper one stop counting toward
+    /// `gen_core_depth_done`, as after a retired phase.
+    core_capped: bool = false,
+
+    fn init(options: GenerateOptions) LadderState {
+        var fuel: [ladder_phases.len]usize = @splat(options.fuel);
+        // Phase 5 (constrained modus ponens) may have its own pool.
+        fuel[ladder_phases.len - 1] = options.phase5_fuel orelse options.fuel;
+        return .{ .fuel = fuel };
+    }
+
+    fn runs(self: *const LadderState, cell: Cell) bool {
+        return switch (cell.band) {
+            .core => !self.retired[cell.phase],
+            .tail => !self.any_retired,
+        };
+    }
+};
+
+/// The retry-phase ladder (phases 1–5): runs `schedule` (`buildSchedule`) in
+/// order, stopping at the first cell that yields results. The core is
+/// depth-major over phases 1–3 (outer iterative deepening 1..max_depth,
+/// inner phases per depth); phases 4–5 follow as phase-major tails, only on
+/// a clean core miss. Extracted so the phase-6 trigger-seeding retry and the
+/// eager-cut valve can re-run the whole ladder. Returns how the ladder ended
+/// without a proof.
 ///
 /// Why depth-major: `max_depth` monotonicity is a PREFIX property of the cell
 /// visit order. Depth-major makes a higher max_depth's cell sequence a strict
@@ -680,7 +817,7 @@ const LadderOutcome = enum { clean, exhausted, stopped };
 ///   within the core: a shallow invented-witness proof now beats a deeper
 ///   split-free proof.
 /// - Each phase still draws from its own per-phase fuel pool across depths
-///   (`phase_fuel`). A phase's own cell sequence in depth order is identical
+///   (`LadderState.fuel`). A phase's own cell sequence in depth order is identical
 ///   in both nestings, so its fuel drains — and exhausts — at exactly the
 ///   same cell as before; only the interleaving with other phases' cells
 ///   changed.
@@ -701,128 +838,72 @@ fn runPhaseLadder(
     goal_expr: ExprId,
     applications: *std.ArrayListUnmanaged(RuleApplication),
     budget_ptr: ?*types.GlobalBudget,
-    can_invent_witness: bool,
+    schedule: []const Cell,
+    gates: LadderGates,
 ) anyerror!LadderOutcome {
-    const options = driver.options;
-    // Phase gates, constant across the ladder. Phase 3 is a capability-
-    // identical retry of phase 2 — same flags, its own fuel pool, its own
-    // persisted-memo lineage (`persist*Covered` is phase-indexed). It runs
-    // only for theories with a pre-materialized `@vars` witness pool (the
-    // `@auto backward` + non-empty `@vars` gate in `generateTopLevel`),
-    // where deep open-witness churn makes the retry pay: peano's
-    // mul_eq_*_all at depth 6 are found by this cell and by nothing else
-    // (#174 — neither 4x fuel nor max_depth 10 recovers them without it).
-    // Phase 4 (principal retention) needs an idempotent structural
-    // combiner. A gated-off phase contributes neither its cell nor its
-    // capability flag to later phases.
-    const has_idem = hasIdempotentCombiner(driver.context);
-    var phase_fuel = [5]usize{
-        options.fuel,
-        options.fuel,
-        options.fuel,
-        options.fuel,
-        options.phase5_fuel orelse options.fuel,
-    };
-    // Core: phases 1–3, depth-major.
-    var retired = [_]bool{false} ** core_phase_count;
-    var any_retired = false;
-    // A node-capped depth was not searched in full, so it and every deeper
-    // one stop counting toward `gen_core_depth_done`, as a retired phase does.
-    var any_capped = false;
-    var depth_limit: usize = 1;
-    while (depth_limit <= options.max_depth) : (depth_limit += 1) {
-        const trips_at_depth = driver.node_cap_trips;
-        defer if (driver.node_cap_trips != trips_at_depth) {
-            any_capped = true;
-        };
-        for (0..core_phase_count) |phase| {
-            if (retired[phase]) continue;
-            if (phase == 2 and !can_invent_witness) continue;
-            // Capabilities, phase index 0-based: 0 ordinary (non-splitting)
-            // generation, 1 + ACUI context splitting, 2 a capability-identical
-            // RETRY of phase 1 (see the phase-gates comment), 3 + idempotent
-            // principal retention, 4 + constrained backward modus ponens.
-            // Witness invention is not a phase capability: it is the last
-            // rung of `emitOpenTarget`'s slot-local witness ladder, on
-            // whenever the theory has a `@vars` pool. Flags stay monotone
-            // along the phase order (index 2 equals index 1), which the
-            // persisted-memo covering rule below requires.
-            driver.hook.allow_split = phase >= 1;
-            driver.hook.allow_invent_witness = can_invent_witness;
-            driver.hook.allow_retain_principal = false;
-            driver.hook.allow_constrained_mp = false;
-            driver.phase_index = phase;
-            driver.fuel = .{
-                .remaining = phase_fuel[phase],
-                .global = budget_ptr,
-            };
-            const pass = try runDepthPass(
-                driver,
-                goal_expr,
-                depth_limit,
-                applications,
-            );
-            phase_fuel[phase] = driver.fuel.remaining;
-            switch (pass) {
-                .done => {},
-                // A core phase's own fuel running dry only retires it.
-                .fuel => {
-                    retired[phase] = true;
-                    any_retired = true;
-                    continue;
+    var state = LadderState.init(driver.options);
+    for (schedule, 0..) |cell, index| {
+        if (state.runs(cell)) {
+            switch (try runCell(driver, &state, gates, cell, goal_expr, applications, budget_ptr)) {
+                .miss => {},
+                .found => return .clean,
+                .fuel => switch (cell.band) {
+                    .core => {
+                        state.retired[cell.phase] = true;
+                        state.any_retired = true;
+                    },
+                    .tail => return .exhausted,
                 },
                 .stop => return .stopped,
             }
-            if (applications.items.len > 0) return .clean;
         }
-        if (!any_retired and !any_capped and
-            driver.node_cap_trips == trips_at_depth)
-        {
+        const next: ?Cell = if (index + 1 < schedule.len) schedule[index + 1] else null;
+        const ends_core_depth = cell.band == .core and
+            (next == null or next.?.band != .core or next.?.depth != cell.depth);
+        if (ends_core_depth and !state.any_retired and !state.core_capped) {
             if (driver.counters) |c| {
-                c.gen_core_depth_done = @max(c.gen_core_depth_done, depth_limit);
+                c.gen_core_depth_done = @max(c.gen_core_depth_done, cell.depth);
             }
         }
     }
     // A retired core phase means the miss is not clean; stay exactly as
     // conservative as phase-major (where any fuel exhaustion blocked all
-    // later phases) and skip the tails.
-    if (any_retired) return .exhausted;
-
-    // Tail: phases 4–5, phase-major full ladders, each only on a clean miss
-    // of everything before it — identical to the original nesting.
-    for (core_phase_count..phase_fuel.len) |phase| {
-        if (phase == 3 and !has_idem) continue;
-        driver.hook.allow_split = true;
-        driver.hook.allow_invent_witness = can_invent_witness;
-        driver.hook.allow_retain_principal = phase >= 3 and has_idem;
-        driver.hook.allow_constrained_mp = phase >= 4;
-        driver.phase_index = phase;
-        driver.fuel = .{
-            .remaining = phase_fuel[phase],
-            .global = budget_ptr,
-        };
-        var tail_depth: usize = 1;
-        while (tail_depth <= options.max_depth) : (tail_depth += 1) {
-            switch (try runDepthPass(
-                driver,
-                goal_expr,
-                tail_depth,
-                applications,
-            )) {
-                .done => {},
-                .fuel => return .exhausted,
-                .stop => return .stopped,
-            }
-            if (applications.items.len > 0) return .clean;
-        }
-    }
-    return .clean;
+    // later phases).
+    return if (state.any_retired) .exhausted else .clean;
 }
 
-/// Phases 1–3 (indices 0–2) form the depth-major core of `runPhaseLadder`;
-/// phases 4–5 run as phase-major tails. See the ladder doc for why the
-/// boundary sits here (fixed-depth cost growth across phases).
-const core_phase_count = 3;
+/// How one ladder cell ended: it ran in full without a proof (`miss`), it
+/// found one (`found`), the phase's own fuel ran dry (`fuel`), or the global
+/// tick budget or the stack guard tripped and the whole search must end
+/// (`stop`).
+const CellEnd = enum { miss, found, fuel, stop };
+
+/// Run one ladder cell under its phase's capabilities and fuel.
+fn runCell(
+    driver: *Driver,
+    state: *LadderState,
+    gates: LadderGates,
+    cell: Cell,
+    goal_expr: ExprId,
+    applications: *std.ArrayListUnmanaged(RuleApplication),
+    budget_ptr: ?*types.GlobalBudget,
+) anyerror!CellEnd {
+    const phase = ladder_phases[cell.phase];
+    driver.hook.allow_split = phase.split;
+    driver.hook.allow_invent_witness = gates.witness_pool;
+    driver.hook.allow_retain_principal = phase.retain_principal and gates.idempotent;
+    driver.hook.allow_constrained_mp = phase.constrained_mp;
+    driver.phase_index = cell.phase;
+    driver.fuel = .{ .remaining = state.fuel[cell.phase], .global = budget_ptr };
+    const trips_at_start = driver.node_cap_trips;
+    const end = try runDepthPass(driver, goal_expr, cell.depth, applications);
+    state.fuel[cell.phase] = driver.fuel.remaining;
+    if (driver.node_cap_trips != trips_at_start) {
+        if (driver.counters) |c| c.gen_node_capped_passes += 1;
+        if (cell.band == .core) state.core_capped = true;
+    }
+    return end;
+}
 
 /// True when the theory declares at least one *idempotent* structural combiner
 /// (`@acui ... idem`). Gates the phase-4 principal-retention pass so a theory
@@ -835,15 +916,10 @@ fn hasIdempotentCombiner(context: *const Context) bool {
     return false;
 }
 
-/// How one ladder cell ended: it ran in full (`done`), the phase's own fuel
-/// ran dry (`fuel`), or the global tick budget or the stack guard tripped and
-/// the whole search must end (`stop`).
-const PassEnd = enum { done, fuel, stop };
-
 /// One single-depth generation pass over `goal_expr` under the driver's
 /// currently configured phase flags and fuel — one (depth, phase) ladder
 /// cell — appending generation-using assemblies to `applications`. Returns
-/// which floor, if any, cut the pass short. The per-cell `nodes` counter and the
+/// how the cell ended. The per-cell `nodes` counter and the
 /// per-cell failure memos reset here (a deeper pass can succeed where a
 /// shallow one failed, and a later phase can succeed where an earlier one
 /// failed at the same depth — the raw (target, depth) verdicts don't carry).
@@ -856,12 +932,8 @@ fn runDepthPass(
     goal_expr: ExprId,
     depth_limit: usize,
     applications: *std.ArrayListUnmanaged(RuleApplication),
-) anyerror!PassEnd {
+) anyerror!CellEnd {
     driver.nodes = 0;
-    const trips_at_start = driver.node_cap_trips;
-    defer if (driver.node_cap_trips != trips_at_start) {
-        if (driver.counters) |c| c.gen_node_capped_passes += 1;
-    };
     // Ladder-progress observability for the failure report: which (depth,
     // phase) cell was running when the search ended (phase 1-based).
     if (driver.counters) |c| {
@@ -932,7 +1004,7 @@ fn runDepthPass(
             try cloneApplication(driver.arena, candidate.application),
         );
     }
-    return .done;
+    return if (applications.items.len > 0) .found else .miss;
 }
 
 /// Call-stack guard, checked at the two recursion choke points (`solveProof`

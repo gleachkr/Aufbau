@@ -189,7 +189,10 @@ for *committing*. See the `@acui can be a subset` note.
 
 `generateTopLevel` runs **five** retry phases over single-depth passes
 (`runDepthPass`) inside `runPhaseLadder`, and a sixth outer retry against a
-seeded derived pool. Since 2026-07-05 the ladder is a **hybrid nesting**:
+seeded derived pool. The phases' capabilities and gates are a table
+(`ladder_phases`), and the order the ladder visits its (depth, phase) cells is
+a list built from it (`buildSchedule`), so a schedule change is a change to
+that list. Since 2026-07-05 the ladder is a **hybrid nesting**:
 
 - **Phases 1–3 form a depth-major core** — outer iterative deepening
   1..`max_depth`, inner phases per depth, stopping at the first
@@ -308,8 +311,8 @@ which the persisted-memo covering rule requires:
 "Clean miss" means two different things, and the difference is deliberate:
 
 - **Ladder gating** (`LadderOutcome` in `generate.zig`) decides whether the
-  tails and retries run. A node-capped cell still counts as `done`, so a core
-  whose cells hit `max_nodes` is `clean` and the tails run after it. Only a
+  tails and retries run. A node-capped cell still ends as a plain `miss`, so
+  a core whose cells hit `max_nodes` is `clean` and the tails run after it. Only a
   retired core phase (`exhausted`) or the global budget / stack guard
   (`stopped`) change the gating.
 - **The failure report** (`miss.MissReport`, read by `source.zig`'s status and
