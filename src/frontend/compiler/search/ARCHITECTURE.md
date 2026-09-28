@@ -110,7 +110,9 @@ goal + theorem
   │    │                                    each required member present, and
   │    │                                    distinct ones unless idempotent
   │    ├─ bindingsDepHit == .rigid          doomed eigenvariable reject
-  │    └─ enumerateCandidateRefs            fill hyps from the ref pool (DFS)
+  │    └─ enumerateCandidateRefs            fill hyps from the ref pool (DFS over
+  │         │                               one `SlotCtx`: the candidate's bindings,
+  │         │                               snapshots and per-slot fills)
   │         ├─ lookupHypReferences          per-slot ref lookup (backward/lookup.zig)
   │         ├─ buildHypPlans                slot fill ordering   (backward/plan.zig)
   │         ├─ matchOneHypWithSnapshot      per-ref match        (backward/match.zig)
@@ -488,7 +490,7 @@ binders open as `.bound_choice` metas in a `fresh_bound` open slot, which
 runs the constrained child-search-first ladder, so a proof below can still
 name the variable however deep its ref sits. Only when the child search
 leaves one unsolved (`weaken`'s conclusion just echoes it back) does
-`tryFreshPoolWitnesses` give it a `@vars` pool variable that occurs in no
+`tryPoolWitnesses(.fresh)` give it a `@vars` pool variable that occurs in no
 binding, and generate the now-concrete premise. Every fresh choice gives the
 same instance up to renaming, since the variable must avoid every variable of
 the instance. Picking it before the child search is equally complete (the

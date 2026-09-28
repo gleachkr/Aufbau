@@ -18,6 +18,7 @@ const Ref = ProofScript.Ref;
 const RuleApplication = ProofScript.RuleApplication;
 const Span = ProofScript.Span;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("../../rules.zig").templateMentionsBinder;
 const TheoremBlock = @import("../../proof_script.zig").TheoremBlock;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const CompilerViews = @import("../../views.zig");
@@ -224,18 +225,6 @@ pub fn inferExpectedRefsForInlineApplicationProbe(
     return .{
         .contextual_bindings = contextual,
         .expected_refs = expected_refs,
-    };
-}
-
-fn templateMentionsBinder(template: TemplateExpr, idx: usize) bool {
-    return switch (template) {
-        .binder => |i| i == idx,
-        .app => |app| blk: {
-            for (app.args) |arg| {
-                if (templateMentionsBinder(arg, idx)) break :blk true;
-            }
-            break :blk false;
-        },
     };
 }
 

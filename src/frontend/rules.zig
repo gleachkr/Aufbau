@@ -99,6 +99,20 @@ fn collectTemplateBinderMask(
     }
 }
 
+/// True when `template` references binder `idx` (no index cap, unlike
+/// `templateBinderMask`).
+pub fn templateMentionsBinder(template: TemplateExpr, idx: usize) bool {
+    return switch (template) {
+        .binder => |b| b == idx,
+        .app => |app| {
+            for (app.args) |arg| {
+                if (templateMentionsBinder(arg, idx)) return true;
+            }
+            return false;
+        },
+    };
+}
+
 /// True when some hypothesis references a binder the conclusion does not.
 /// This is a purely SYNTACTIC fact about the rule; whether the search may
 /// existentially defer such a binder is a separate policy question

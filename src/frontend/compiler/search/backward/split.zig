@@ -105,7 +105,6 @@ pub fn findSplitSite(
         .binder => return null,
         .app => |app| {
             if (context.registry.acui_by_head.contains(app.term_id)) {
-                if (!templateRefsBinder(concl, binder_idx)) return null;
                 var site = SplitSite{ .container = goal_expr, .head_id = app.term_id, .template = concl };
                 if (!collectSpine(context, &site)) return null;
                 // Only a bare spine binder distributes context members. A
@@ -150,18 +149,6 @@ pub fn templateFullyBound(template: TemplateExpr, bindings: []const ?ExprId) boo
                 if (!templateFullyBound(arg, bindings)) break :blk false;
             }
             break :blk true;
-        },
-    };
-}
-
-fn templateRefsBinder(template: TemplateExpr, idx: usize) bool {
-    return switch (template) {
-        .binder => |i| i == idx,
-        .app => |app| blk: {
-            for (app.args) |arg| {
-                if (templateRefsBinder(arg, idx)) break :blk true;
-            }
-            break :blk false;
         },
     };
 }

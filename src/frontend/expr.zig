@@ -62,6 +62,22 @@ pub const PlaceholderClass = enum {
     meta,
 };
 
+/// What a placeholder leaf stands for, read off its `PlaceholderInfo` (see
+/// `TheoremContext.placeholderKind`). The three meta kinds are exclusive by
+/// construction: each mint path sets at most one of `reconciliation_meta` and
+/// `meta_id`.
+pub const PlaceholderKind = enum {
+    /// A def-unfold dummy: the one `.standard` kind.
+    dummy,
+    /// An eliminator seed meta standing for a def's hidden variable
+    /// (`reconciliation_meta`).
+    seed_meta,
+    /// A search metavariable with a stable `meta_id` (a `MetaStore` leaf).
+    store_meta,
+    /// Any other `.meta` leaf: an anonymous hole.
+    hole,
+};
+
 pub const PlaceholderInfo = struct {
     sort_name: []const u8,
     deps: u55,
@@ -756,6 +772,33 @@ pub const TheoremContext = struct {
     ) PlaceholderClass {
         const info = self.placeholderInfo(idx) orelse return .standard;
         return info.class;
+    }
+
+    pub fn placeholderKind(
+        self: *const TheoremContext,
+        idx: PlaceholderId,
+    ) PlaceholderKind {
+        const info = self.placeholderInfo(idx) orelse return .dummy;
+        return switch (info.class) {
+            .standard => .dummy,
+            .meta => if (info.reconciliation_meta)
+                .seed_meta
+            else if (info.meta_id != null)
+                .store_meta
+            else
+                .hole,
+        };
+    }
+
+    /// The `PlaceholderKind` of `expr` when it is a placeholder leaf, else null.
+    pub fn leafPlaceholderKind(
+        self: *const TheoremContext,
+        expr: ExprId,
+    ) ?PlaceholderKind {
+        return switch (self.interner.node(expr).*) {
+            .placeholder => |pid| self.placeholderKind(pid),
+            .variable, .app => null,
+        };
     }
 
     /// Pre-order OR-walk over the expression tree: true when

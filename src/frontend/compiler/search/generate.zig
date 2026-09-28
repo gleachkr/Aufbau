@@ -47,10 +47,6 @@ const GenerationHook = types.GenerationHook;
 pub const GeneratedResults = struct {
     arena: std.heap.ArenaAllocator,
     applications: []const RuleApplication,
-    /// True when the global fuel floor was hit before the search completed. A
-    /// distinct outcome from "no proof found": the search stopped early, so the
-    /// absence of a suggestion is inconclusive rather than a definite miss.
-    budget_exhausted: bool = false,
 
     pub fn deinit(self: *GeneratedResults) void {
         self.arena.deinit();
@@ -528,7 +524,7 @@ pub fn generateTopLevel(
         // cut-free re-solves. (Depth-0 verdicts would survive — no hook at
         // depth 0 — but clear conservatively.)
         clearPersistedFails(&driver);
-        ladder = try runPhaseLadder(
+        _ = try runPhaseLadder(
             &driver,
             goal_expr,
             &applications,
@@ -570,7 +566,6 @@ pub fn generateTopLevel(
             RuleApplication,
             applications.items,
         ),
-        .budget_exhausted = ladder != .clean,
     };
 }
 
@@ -1018,9 +1013,6 @@ fn runDepthPass(
 /// `stack_guard_bytes` and the linked stack size.
 fn checkStackGuard(driver: *Driver) error{SearchStackExhausted}!void {
     const used = driver.stack_base -| @frameAddress();
-    if (driver.counters) |c| {
-        if (used > c.stack_high_water) c.stack_high_water = used;
-    }
     if (used > driver.options.stack_guard_bytes) {
         return error.SearchStackExhausted;
     }

@@ -19,6 +19,7 @@ const OpenTerms = @import("../../inference/open_terms.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("../../../rules.zig").templateMentionsBinder;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const ViewDecl = @import("../../../views.zig").ViewDecl;
 const Context = types.Context;
@@ -1056,18 +1057,6 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
         }
     }
     return .pass;
-}
-
-fn templateMentionsBinder(t: TemplateExpr, b: usize) bool {
-    return switch (t) {
-        .binder => |idx| idx == b,
-        .app => |app| {
-            for (app.args) |arg| {
-                if (templateMentionsBinder(arg, b)) return true;
-            }
-            return false;
-        },
-    };
 }
 
 const max_folded_body_probe_depth: usize = 64;

@@ -701,6 +701,31 @@ test "dependency prune keeps an occurrence a def unfold can remove" {
     try std.testing.expect(counters.full_try_candidate_calls > 0);
 }
 
+test "dependency prune sees through a def that keeps the occurrence" {
+    // `sc k` unfolds to `suc k`: the body keeps its argument along rigid
+    // heads, so no conversion removes `k` and the instance is pruned as in
+    // the `suc k` case.
+    const mm0_src = ordered_ctx_theory ++
+        \\def sc (n: tm): tm = $ suc n $;
+        \\axiom weaken (g: ctx) {x: tm} (T: ty) (J: wff):
+        \\  $ nd g J $ > $ nd (join g (hyp (has x T))) J $;
+        \\theorem t (g: ctx) {k: tm}:
+        \\  $ nd g (has (sc k) Nat) $ >
+        \\  $ nd (join g (hyp (has k Nat))) (has (sc k) Nat) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ nd (join g (hyp (has k Nat))) (has (sc k) Nat) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    const count = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expectEqual(@as(usize, 0), counters.full_try_candidate_calls);
+    try std.testing.expect(counters.dep_violation_prunes > 0);
+}
+
 // Abstentions of the multiplicity matching (`acuiRequiredMembersPlausible`). Each
 // runs `weaken2` against a context that shows one entry after `g`, which the
 // ordered theory prunes (see "counts distinct members" above), in a setting

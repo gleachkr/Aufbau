@@ -597,18 +597,14 @@ pub const SearchCounters = struct {
     recursive_apply_calls: usize = 0,
     generated_chain_attempts: usize = 0,
     /// Set when recursive `auto?` generation hit the global fuel floor and
-    /// stopped early (distinct from an ordinary no-result miss). Observability
-    /// for tests/bench; the authoritative signal is `GeneratedResults`.
+    /// stopped early (distinct from an ordinary no-result miss); read by
+    /// `miss.MissReport`.
     recursive_budget_exhausted: bool = false,
     /// Set when the call-stack guard stopped the generation descent: one
     /// branch recursed close enough to the runtime stack limit that
     /// continuing would risk overflow (on wasm, silent linear-memory
     /// corruption). Reported like a budget exhaustion, not a definitive miss.
     stack_guard_exhausted: bool = false,
-    /// High-water mark of call-stack bytes consumed below the generation
-    /// driver's entry frame, sampled at the recursion choke points. For
-    /// calibrating `GenerateOptions.stack_guard_bytes` against real corpora.
-    stack_high_water: usize = 0,
     accepted_candidates: usize = 0,
     rejected_candidates_after_validation: usize = 0,
     hyp_match_syntactic: usize = 0,
@@ -619,10 +615,6 @@ pub const SearchCounters = struct {
     // Distinct ACUI member-witness fills attempted on open
     // targets (each one is a full child generation attempt).
     acui_witness_attempts: usize = 0,
-    // Invented-witness fills: an unsolved existential meta with no concrete or
-    // coupled anchor grounded to a reused `@vars`-pool dummy (the witness
-    // ladder's last rung; needs a `@vars` pool).
-    var_pool_witness_attempts: usize = 0,
     // Open-target read-back triple-failures (positional, unit-normalized, and
     // member-wise passes all failed) where the child conclusion still contains
     // every rigid ACUI member of the target — the plausibly-missed residual
@@ -1374,8 +1366,8 @@ pub const GenerateOptions = struct {
     /// poisons the allocator for the rest of the session (the instance is
     /// dead until page reload). Sized far above anything real proofs reach
     /// (the tait depth corpus — the deepest known workload — peaks at
-    /// ~430 KiB native high-water, observable via
-    /// `SearchCounters.stack_high_water`) and comfortably under the 8 MiB
+    /// ~430 KiB of native stack, measured below the driver's entry frame at
+    /// the guard's check points) and comfortably under the 8 MiB
     /// stack the wasm executables link with (`build.zig` `stack_size`),
     /// leaving headroom for the frames between two check points (one full
     /// backtracker level plus expression walks). Overridable only for tests.

@@ -23,7 +23,7 @@ const session_mod = @import("../session.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const PlaceholderId = @import("../../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
-const GlobalEnv = @import("../../../env.zig").GlobalEnv;
+const RuleDecl = @import("../../../env.zig").RuleDecl;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const ProofScript = @import("../../../proof_script.zig");
@@ -203,14 +203,13 @@ pub fn exactWithSession(
         // re-chooses the bound binder, so every assembly fails the checker's
         // DepViolation. (e.g. `weaken`'s `g , x : T ⊢ J` against
         // `g , k : Nat ⊢ suc k : Nat` binds `J := suc k : Nat`.)
-        if (!ruleMayRechooseBound(context, apply_candidate.rule_id) and
-            bindingsDepHit(
-                context,
-                &apply_candidate.theorem,
-                &context.env.rules.items[apply_candidate.rule_id],
-                apply_candidate.bindings,
-            ) == .rigid)
-        {
+        const dep_hit = bindingsDepHit(
+            context,
+            &apply_candidate.theorem,
+            &context.env.rules.items[apply_candidate.rule_id],
+            apply_candidate.bindings,
+        );
+        if (dep_hit == .rigid and !ruleMayRechooseBound(context, apply_candidate.rule_id)) {
             if (counters) |c| c.dep_violation_prunes += 1;
             continue;
         }
@@ -242,12 +241,7 @@ pub fn exactWithSession(
         if (is_eager and
             (apply_candidate.reached_child_solve or
                 candidates.items.len > results_before) and
-            bindingsDepHit(
-                context,
-                &apply_candidate.theorem,
-                &context.env.rules.items[apply_candidate.rule_id],
-                apply_candidate.bindings,
-            ) == .none)
+            dep_hit == .none)
         {
             eager_armed = true;
         }
@@ -315,11 +309,10 @@ fn viewDeclHasAbstract(view: types.ViewDecl) bool {
     return false;
 }
 
-/// Loop-invariant candidate-ref pruning setup for one rule. Both members are a
-/// pure function of `(context, rule_id)`, so `backtrackRefs` computes this once
-/// per candidate and threads it down the recursive ref enumeration rather than
-/// re-deriving it at every DFS node (a single hoisted `views.get` plus the
-/// static `analyzeView` flatten).
+/// Loop-invariant candidate-ref pruning setup for one rule. Every field is a
+/// pure function of `(context, rule_id)`, so each candidate computes it once
+/// (`SlotCtx.prune_setup`) rather than at every DFS node (a single hoisted
+/// `views.get` plus the static `analyzeView` flatten).
 const PruneSetup = struct {
     /// The view when it carries an `@abstract` decl (else null): gates the
     /// Leibniz one-hole-context prefilter (`abstract_prune.zig`).
@@ -462,46 +455,29 @@ pub fn openMode(
 ///   a seed meta instead, and `rebindSeedMetas` opens it in place;
 /// - an eigenvariable of an intro-shaped premise (`subset_intro`'s `x` in
 ///   `G , x ∈ A ⊢ x ∈ B`): the goal fixes every other binder of the premise
-///   (`otherHypBindersInConclusion`), and no fixed binding may mention the
+///   (`otherHypBindersInConclusion`, a cost gate), and no fixed binding may mention the
 ///   variable (`noFixedBindingMayMention`; `inst`'s `a : term x` may).
 /// The binders open as metas (`fresh_bound` open slot), so a proof below can
 /// still name the variable, however deep its ref (`g , y : A ⊢ Ty B` under
 /// `list_form`). Only if none does is each given a `@vars` variable occurring
-/// in no binding (`tryFreshPoolWitnesses`). Such a variable must avoid every
+/// in no binding (`tryPoolWitnesses`). Such a variable must avoid every
 /// variable of the instance, so any fresh one gives the same instance up to
 /// renaming. `@auto backward` rules take this route too: their witness
 /// ladder has no fresh-variable rung. A holey goal may still carry the
 /// variable as a meta. Returns true iff the premise produced a candidate;
 /// otherwise the other fallbacks still run.
 fn tryFreshBoundGenerate(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    at: Slot,
 ) anyerror!bool {
-    if (goal != .concrete) return false;
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const rule = ctx.rule;
+    const bindings = ctx.bindings;
+    if (ctx.goal != .concrete) return false;
     const cand_theorem = &candidate.theorem;
-    const mask = plan.templateBinderMask(rule.hyps[hyp_index]);
+    const mask = plan.templateBinderMask(rule.hyps[at.hyp_index]);
     if (mask.overflow) return false;
     // A null conclusion binder of a non-view rule met a def's dummy in the
     // concrete goal (the seed scrubs it). A view rule's raw conclusion is not
@@ -518,8 +494,11 @@ fn tryFreshBoundGenerate(
         if (idx >= bindings.len) return false;
         const bit = @as(u64, 1) << idx;
         if (bindings[idx]) |value| {
-            if (!isStandardPlaceholder(cand_theorem, value) and
-                !isReconciliationLeaf(cand_theorem, value)) continue;
+            // Still standing in for a def's hidden variable: the unfolded
+            // dummy (`unfoldDefBody`), or a seed meta a ref match would have
+            // replaced (`seed.partitionSeedBindings`).
+            const kind = cand_theorem.leafPlaceholderKind(value) orelse continue;
+            if (kind != .dummy and kind != .seed_meta) continue;
         } else if (concl_mask & bit == 0 and
             !(noFixedBindingMayMention(rule, bindings, idx) and
                 otherHypBindersInConclusion(rule, mask.mask, idx))) return false;
@@ -539,7 +518,7 @@ fn tryFreshBoundGenerate(
         const idx: u6 = @intCast(@ctz(rest));
         rest &= rest - 1;
         if (bindings[idx]) |value| {
-            if (isReconciliationLeaf(cand_theorem, value)) continue;
+            if (cand_theorem.leafPlaceholderKind(value) == .seed_meta) continue;
         }
         saved[idx] = bindings[idx];
         bindings[idx] = null;
@@ -554,43 +533,19 @@ fn tryFreshBoundGenerate(
         }
     }
 
-    const before = candidates.items.len;
-    try tryOpenGenerateSlot(
-        compiler,
-        allocator,
-        context,
-        ref_index,
-        pool,
-        candidate,
-        rule,
-        goal,
-        theorem,
-        theorem_vars,
-        plans,
-        depth,
-        position,
-        hyp_index,
-        bindings,
-        snapshots,
-        selected,
-        generated,
-        hook,
-        derived,
-        runtime,
-        counters,
-        fuel,
-        candidates,
-        open,
-    );
-    return candidates.items.len != before;
+    const before = ctx.candidates.items.len;
+    try tryOpenGenerateSlot(ctx, hook, at, open);
+    return ctx.candidates.items.len != before;
 }
 
 /// True when every non-bound binder of the premise other than `idx` occurs in
 /// the rule's conclusion, so the goal alone fixes the premise (intro-shaped,
-/// `subset_intro`). An elim-shaped premise takes binders from a sibling ref
-/// (`dvd_elim`'s `a`, `b`) and is mostly a doomed search.
+/// `subset_intro`). A cost gate, not a soundness condition: an elim-shaped
+/// premise takes its other binders from a sibling ref (`dvd_elim`'s `a`, `b`),
+/// and opening its eigenvariable, though sound, was mostly a doomed search
+/// (euclid).
 fn otherHypBindersInConclusion(
-    rule: *const @import("../../../env.zig").RuleDecl,
+    rule: *const RuleDecl,
     hyp_mask: u64,
     idx: usize,
 ) bool {
@@ -611,7 +566,7 @@ fn otherHypBindersInConclusion(
 /// renaming (`subset_intro`'s `x` in `G , x ∈ A ⊢ x ∈ B`). A fixed dependent
 /// (`inst`'s `a : term x`) may already mention the right variable.
 fn noFixedBindingMayMention(
-    rule: *const @import("../../../env.zig").RuleDecl,
+    rule: *const RuleDecl,
     bindings: []const ?ExprId,
     idx: usize,
 ) bool {
@@ -624,42 +579,11 @@ fn noFixedBindingMayMention(
     return true;
 }
 
-/// A bare non-meta placeholder: the unfolded dummy of a def the ref or goal
-/// hid a bound variable behind (`unfoldDefBody`).
-/// A seed meta still standing in for a def's hidden variable (see
-/// `seed.partitionSeedBindings`): a ref match would have replaced it.
-fn isReconciliationLeaf(theorem: *const TheoremContext, expr: ExprId) bool {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => |pid| if (theorem.placeholderInfo(pid)) |info|
-            info.reconciliation_meta
-        else
-            false,
-        else => false,
-    };
-}
-
-fn isStandardPlaceholder(theorem: *const TheoremContext, expr: ExprId) bool {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => |pid| theorem.placeholderClass(pid) == .standard,
-        else => false,
-    };
-}
-
-/// Dependency bits of every variable occurring in `expr` (placeholders
-/// contribute none).
-fn exprVarDeps(theorem: *const TheoremContext, expr: ExprId) u55 {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => 0,
-        .variable => blk: {
-            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk 0;
-            break :blk info.deps;
-        },
-        .app => |app| blk: {
-            var deps: u55 = 0;
-            for (app.args) |arg| deps |= exprVarDeps(theorem, arg);
-            break :blk deps;
-        },
-    };
+/// The dependency bits of `expr`, as the checker computes them
+/// (`BindingValidation.currentExprInfo`); none for an expression it rejects.
+fn exprDeps(context: *const Context, theorem: *const TheoremContext, expr: ExprId) u55 {
+    const info = BindingValidation.currentExprInfo(context.env, theorem, expr) catch return 0;
+    return info.deps;
 }
 
 /// True when a generated slot's otherwise concrete target still carries a
@@ -733,6 +657,86 @@ fn deinitApplyCandidateItems(candidates: []ApplyCandidate) void {
     for (candidates) |*candidate| candidate.deinit();
 }
 
+/// One candidate's backtracking search: what `backtrackRefs` and the slot
+/// generators share for the lifetime of one `enumerateCandidateRefs` call.
+/// The slices are the search's mutable state (the rule bindings, a bindings
+/// snapshot per depth, and the pool ref or generated sub-application chosen
+/// for each slot); everything else is fixed for the candidate.
+const SlotCtx = struct {
+    compiler: *CompilerContext,
+    allocator: std.mem.Allocator,
+    context: *const Context,
+    ref_index: *const ref_index_mod.Index,
+    pool: []const refs_mod.RefPoolEntry,
+    candidate: *ApplyCandidate,
+    rule: *const RuleDecl,
+    goal: Goal,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+    plans: []const HypPlan,
+    bindings: []?ExprId,
+    snapshots: []?ExprId,
+    selected: []?usize,
+    /// Parallel to `selected`: a generated inline sub-application chosen for
+    /// a slot instead of a pool ref. Always `null` without a `generator`, so
+    /// the pool-only `exact?` path is unaffected.
+    generated: []?RuleApplication,
+    generator: ?*const GenerationHook,
+    derived: ?*DerivedPool,
+    runtime: SearchRuntime,
+    counters: ?*SearchCounters,
+    fuel: ?*Fuel,
+    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    prune_setup: PruneSetup,
+
+    /// The bindings snapshot of search depth `depth`.
+    fn snapshotAt(self: *const SlotCtx, depth: usize) []?ExprId {
+        return self.snapshots[depth * self.bindings.len ..][0..self.bindings.len];
+    }
+
+    /// Validate the fills chosen for every slot as one complete application.
+    fn validate(self: *const SlotCtx) !void {
+        try validateSelectedRefs(
+            self.compiler,
+            self.allocator,
+            self.context,
+            self.pool,
+            self.candidate,
+            self.goal,
+            self.theorem,
+            self.theorem_vars,
+            self.bindings,
+            self.selected,
+            self.generated,
+            self.prune_setup.concl_has_rewrite_head,
+            self.runtime,
+            self.counters,
+            self.fuel,
+            self.candidates,
+        );
+    }
+
+    /// Descend to the next slot with slot `position` filled by `application`.
+    fn descendGenerated(
+        self: *const SlotCtx,
+        depth: usize,
+        position: usize,
+        application: RuleApplication,
+    ) anyerror!void {
+        self.generated[position] = application;
+        defer self.generated[position] = null;
+        try backtrackRefs(self, depth + 1);
+    }
+};
+
+/// The hypothesis slot a generator fills: its search depth, its index into
+/// `candidate.unresolved_hyps`, and the rule hypothesis it instantiates.
+const Slot = struct {
+    depth: usize,
+    position: usize,
+    hyp_index: usize,
+};
+
 fn enumerateCandidateRefs(
     compiler: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -750,34 +754,9 @@ fn enumerateCandidateRefs(
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) !void {
-    const hyp_count = candidate.unresolved_hyps.len;
-    if (hyp_count == 0) {
-        try validateSelectedRefs(
-            compiler,
-            allocator,
-            context,
-            pool,
-            candidate,
-            goal,
-            theorem,
-            theorem_vars,
-            candidate.bindings,
-            &.{},
-            &.{},
-            plausible.templateHasRewriteHead(
-                context,
-                context.env.rules.items[candidate.rule_id].concl,
-            ),
-            runtime,
-            counters,
-            fuel,
-            candidates,
-        );
-        return;
-    }
-
     const rule = &context.env.rules.items[candidate.rule_id];
-    const plans = try buildHypPlans(
+    const hyp_count = candidate.unresolved_hyps.len;
+    const plans: []const HypPlan = if (hyp_count == 0) &.{} else try buildHypPlans(
         allocator,
         context,
         ref_index,
@@ -786,7 +765,7 @@ fn enumerateCandidateRefs(
         derived,
         counters,
     );
-    defer allocator.free(plans);
+    defer if (hyp_count != 0) allocator.free(plans);
     // A hyp with no pool refs makes the candidate impossible for pool-only
     // search. With a generator (or a derived-ref pool) the slot may
     // instead be filled by a synthesized sub-proof, so don't prune then.
@@ -803,97 +782,48 @@ fn enumerateCandidateRefs(
     const selected = try allocator.alloc(?usize, hyp_count);
     defer allocator.free(selected);
     @memset(selected, null);
-    // Parallel to `selected`: a generated inline sub-application chosen for a
-    // slot instead of a pool ref. Always `null` when `generator` is
-    // null, so the pool-only `exact?` path is unaffected.
     const generated = try allocator.alloc(?RuleApplication, hyp_count);
     defer allocator.free(generated);
     @memset(generated, null);
 
-    try backtrackRefs(
-        compiler,
-        allocator,
-        context,
-        ref_index,
-        pool,
-        candidate,
-        rule,
-        goal,
-        theorem,
-        theorem_vars,
-        plans,
-        0,
-        bindings,
-        snapshots,
-        selected,
-        generated,
-        generator,
-        derived,
-        runtime,
-        counters,
-        fuel,
-        candidates,
-        null,
-    );
+    const ctx = SlotCtx{
+        .compiler = compiler,
+        .allocator = allocator,
+        .context = context,
+        .ref_index = ref_index,
+        .pool = pool,
+        .candidate = candidate,
+        .rule = rule,
+        .goal = goal,
+        .theorem = theorem,
+        .theorem_vars = theorem_vars,
+        .plans = plans,
+        .bindings = bindings,
+        .snapshots = snapshots,
+        .selected = selected,
+        .generated = generated,
+        .generator = generator,
+        .derived = derived,
+        .runtime = runtime,
+        .counters = counters,
+        .fuel = fuel,
+        .candidates = candidates,
+        .prune_setup = computePruneSetup(context, candidate.rule_id),
+    };
+    try backtrackRefs(&ctx, 0);
 }
 
-fn backtrackRefs(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
-    generator: ?*const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
-    // Loop-invariant pruning setup for `candidate.rule_id`. `null` on the
-    // outermost entry (computed once here); the recursive descent threads the
-    // computed value so it is not re-derived at every DFS node.
-    prune_setup: ?PruneSetup,
-) anyerror!void {
-    if (depth == plans.len) {
-        try validateSelectedRefs(
-            compiler,
-            allocator,
-            context,
-            pool,
-            candidate,
-            goal,
-            theorem,
-            theorem_vars,
-            bindings,
-            selected,
-            generated,
-            if (prune_setup) |setup|
-                setup.concl_has_rewrite_head
-            else
-                plausible.templateHasRewriteHead(
-                    context,
-                    context.env.rules.items[candidate.rule_id].concl,
-                ),
-            runtime,
-            counters,
-            fuel,
-            candidates,
-        );
+fn backtrackRefs(ctx: *const SlotCtx, depth: usize) anyerror!void {
+    if (depth == ctx.plans.len) {
+        try ctx.validate();
         return;
     }
 
-    const position = plans[depth].position;
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const bindings = ctx.bindings;
+    const counters = ctx.counters;
+    const position = ctx.plans[depth].position;
     const hyp = candidate.unresolved_hyps[position];
     // Derived-pool participation for this slot. The cached unbound lookup
     // (`derivedSlotCandidates`) can prove no derived shape will ever fill
@@ -903,7 +833,7 @@ fn backtrackRefs(
     // in one build (the dual lookup).
     var derived_index: ?*const ref_index_mod.Index = null;
     var derived_dead = false;
-    if (derived) |dpool| {
+    if (ctx.derived) |dpool| {
         if (dpool.index != null) {
             if (try derivedSlotCandidates(
                 context,
@@ -919,7 +849,7 @@ fn backtrackRefs(
     }
     var lookup = try lookupHypReferences(
         context,
-        ref_index,
+        ctx.ref_index,
         derived_index,
         candidate,
         bindings,
@@ -933,12 +863,11 @@ fn backtrackRefs(
     // No pool ref fits this slot. With no generator and no derived refs that's
     // a dead branch (unchanged `exact?` behaviour); otherwise we still fall
     // through to try a derived ref or a synthesized sub-proof below.
-    if (lookup.pool.indices.len == 0 and generator == null and derived == null) {
+    if (lookup.pool.indices.len == 0 and ctx.generator == null and ctx.derived == null) {
         return;
     }
 
-    // Candidate-ref pruning setup, loop-invariant for this rule. Computed once on
-    // the outermost entry and threaded down the recursion (see `prune_setup`).
+    // Candidate-ref pruning setup, loop-invariant for this rule:
     //   * `@abstract` (Leibniz one-hole-context) prefilter — only views carrying
     //     an @abstract decl participate; fires on *all* search paths to cut the
     //     broad-slot ref flood, e.g. `eq_replace`'s bare-binder target hyp, whose
@@ -947,19 +876,19 @@ fn backtrackRefs(
     //   * ACUI context-combination prefilter — any view with an ACUI context
     //     position participates, catching broad hypothesis-context floods the
     //     conclusion-side view refuter does not reach.
-    const setup = prune_setup orelse computePruneSetup(context, candidate.rule_id);
+    const setup = ctx.prune_setup;
     const abstract_view = setup.abstract_view;
     const context_prune_info = setup.context_info;
 
-    const snapshot = snapshots[depth * bindings.len ..][0..bindings.len];
+    const snapshot = ctx.snapshotAt(depth);
     for (lookup.pool.indices) |pool_index| {
         switch (try matchOneHypWithSnapshot(
-            allocator,
+            ctx.allocator,
             context,
             &candidate.theorem,
             candidate.rule_id,
             hyp.index,
-            ref_index.entries[pool_index].expr,
+            ctx.ref_index.entries[pool_index].expr,
             bindings,
             snapshot,
             candidate.view_concl_seed,
@@ -985,8 +914,8 @@ fn backtrackRefs(
         // fills, generation). The check is the same one
         // `validateSelectedRefs` applies at the end, so results are
         // unchanged; plain `exact?` keeps its existing flow untouched.
-        if ((generator != null or derived != null) and
-            !finalConclusionPlausible(context, candidate, goal, bindings, runtime, counters))
+        if ((ctx.generator != null or ctx.derived != null) and
+            !finalConclusionPlausible(context, candidate, ctx.goal, bindings, ctx.runtime, counters))
         {
             if (counters) |actual| actual.final_conclusion_prunes += 1;
             rollbackOneHypMatch(bindings, snapshot);
@@ -1000,24 +929,24 @@ fn backtrackRefs(
         if (abstract_view != null or context_prune_info != null) {
             var fill_buf: [32]abstract_prune.Fill = undefined;
             var fill_len: usize = 0;
-            for (plans[0..depth]) |earlier| {
-                const sel = selected[earlier.position] orelse continue;
+            for (ctx.plans[0..depth]) |earlier| {
+                const sel = ctx.selected[earlier.position] orelse continue;
                 if (fill_len >= fill_buf.len) break;
                 fill_buf[fill_len] = .{
                     .hyp_index = candidate.unresolved_hyps[earlier.position].index,
-                    .ref_expr = ref_index.entries[sel].expr,
+                    .ref_expr = ctx.ref_index.entries[sel].expr,
                 };
                 fill_len += 1;
             }
             if (fill_len < fill_buf.len) {
                 fill_buf[fill_len] = .{
                     .hyp_index = hyp.index,
-                    .ref_expr = ref_index.entries[pool_index].expr,
+                    .ref_expr = ctx.ref_index.entries[pool_index].expr,
                 };
                 fill_len += 1;
             }
             const fills = fill_buf[0..fill_len];
-            const goal_expr: ?ExprId = goal.concreteOrHint();
+            const goal_expr: ?ExprId = ctx.goal.concreteOrHint();
             if (abstract_view) |view| {
                 if (abstract_prune.abstractInfeasible(
                     &candidate.theorem,
@@ -1048,67 +977,21 @@ fn backtrackRefs(
                 }
             }
         }
-        selected[position] = pool_index;
-        try backtrackRefs(
-            compiler,
-            allocator,
-            context,
-            ref_index,
-            pool,
-            candidate,
-            rule,
-            goal,
-            theorem,
-            theorem_vars,
-            plans,
-            depth + 1,
-            bindings,
-            snapshots,
-            selected,
-            generated,
-            generator,
-            derived,
-            runtime,
-            counters,
-            fuel,
-            candidates,
-            setup,
-        );
-        selected[position] = null;
+        ctx.selected[position] = pool_index;
+        try backtrackRefs(ctx, depth + 1);
+        ctx.selected[position] = null;
         rollbackOneHypMatch(bindings, snapshot);
     }
 
     // Forward refs: after pool refs, try filling the slot with a
     // derived ref's materialized recipe (cheaper than recursive generation,
     // and the only way an open slot can absorb a deferred instantiation).
-    if (derived) |dpool| {
+    if (ctx.derived) |dpool| {
         if (!derived_dead) try tryDerivedSlots(
-            compiler,
-            allocator,
-            context,
-            ref_index,
-            pool,
+            ctx,
             dpool,
             if (lookup.derived) |*dlookup| dlookup else null,
-            candidate,
-            rule,
-            goal,
-            theorem,
-            theorem_vars,
-            plans,
-            depth,
-            position,
-            hyp.index,
-            bindings,
-            snapshot,
-            snapshots,
-            selected,
-            generated,
-            generator,
-            runtime,
-            counters,
-            fuel,
-            candidates,
+            .{ .depth = depth, .position = position, .hyp_index = hyp.index },
         );
     }
 
@@ -1116,33 +999,12 @@ fn backtrackRefs(
     // sub-proof for this slot. Only fires when a hook is present and the
     // hypothesis is already concrete given the current bindings (its binders
     // pinned by the conclusion or by sibling refs chosen above).
-    if (generator) |hook| {
-        try tryGenerateSlot(
-            compiler,
-            allocator,
-            context,
-            ref_index,
-            pool,
-            candidate,
-            rule,
-            goal,
-            theorem,
-            theorem_vars,
-            plans,
-            depth,
-            position,
-            hyp.index,
-            bindings,
-            snapshots,
-            selected,
-            generated,
-            hook,
-            derived,
-            runtime,
-            counters,
-            fuel,
-            candidates,
-        );
+    if (ctx.generator) |hook| {
+        try tryGenerateSlot(ctx, hook, .{
+            .depth = depth,
+            .position = position,
+            .hyp_index = hyp.index,
+        });
     }
 }
 
@@ -1156,34 +1018,16 @@ fn backtrackRefs(
 /// immediately, so the same derived ref can be selected again at a different
 /// witness deeper in the assembly.
 fn tryDerivedSlots(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
+    ctx: *const SlotCtx,
     dpool: *DerivedPool,
     derived_lookup: ?*const ref_index_mod.LookupResult,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshot: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
-    generator: ?*const GenerationHook,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    slot: Slot,
 ) anyerror!void {
-    const goal_expr: ?ExprId = goal.concreteOrHint();
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const bindings = ctx.bindings;
+    const snapshot = ctx.snapshotAt(slot.depth);
+    const goal_expr: ?ExprId = ctx.goal.concreteOrHint();
     // `derived_lookup` is the derived-index half of the slot's dual shape
     // lookup (binding-pinned, so it narrows as siblings pin binders); the
     // caller already skipped this call entirely when the cached unbound
@@ -1199,16 +1043,16 @@ fn tryDerivedSlots(
         defer dpool.store.universal_use_open = was_open;
 
         var ok = switch (try matchOneHypWithSnapshot(
-            allocator,
+            ctx.allocator,
             context,
             &candidate.theorem,
             candidate.rule_id,
-            hyp_index,
+            slot.hyp_index,
             dref.shape,
             bindings,
             snapshot,
             candidate.view_concl_seed,
-            counters,
+            ctx.counters,
         )) {
             .matched, .unknown => true,
             .mismatch => false,
@@ -1220,11 +1064,11 @@ fn tryDerivedSlots(
         // matched pattern.
         if (ok and dref.has_universal_meta) {
             if (context.views.get(candidate.rule_id)) |cview| {
-                const view_bindings = try allocator.alloc(
+                const view_bindings = try ctx.allocator.alloc(
                     ?ExprId,
                     cview.num_binders,
                 );
-                defer allocator.free(view_bindings);
+                defer ctx.allocator.free(view_bindings);
                 seedViewBindingsForMatch(
                     cview,
                     bindings,
@@ -1285,7 +1129,7 @@ fn tryDerivedSlots(
                     dpool,
                     context,
                     &candidate.theorem,
-                    theorem_vars,
+                    ctx.theorem_vars,
                     goal_expr,
                     dref,
                 );
@@ -1299,35 +1143,9 @@ fn tryDerivedSlots(
             // Same incremental prune as the pool-ref loop: a fill whose
             // pinned binders already contradict the conclusion-vs-goal
             // correspondence dooms every tuple under it.
-            if (finalConclusionPlausible(context, candidate, goal, bindings, runtime, counters)) {
-                generated[position] = app;
-                try backtrackRefs(
-                    compiler,
-                    allocator,
-                    context,
-                    ref_index,
-                    pool,
-                    candidate,
-                    rule,
-                    goal,
-                    theorem,
-                    theorem_vars,
-                    plans,
-                    depth + 1,
-                    bindings,
-                    snapshots,
-                    selected,
-                    generated,
-                    generator,
-                    dpool,
-                    runtime,
-                    counters,
-                    fuel,
-                    candidates,
-                    null,
-                );
-                generated[position] = null;
-            } else if (counters) |actual| {
+            if (finalConclusionPlausible(context, candidate, ctx.goal, bindings, ctx.runtime, ctx.counters)) {
+                try ctx.descendGenerated(slot.depth, slot.position, app);
+            } else if (ctx.counters) |actual| {
                 actual.final_conclusion_prunes += 1;
             }
         }
@@ -1342,121 +1160,26 @@ const derivedSlotCandidates = plan.derivedSlotCandidates;
 /// the current bindings; if fully concrete, asks the hook to prove it, and on
 /// success recurses with that slot generated.
 fn tryGenerateSlot(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    slot: Slot,
 ) anyerror!void {
+    const context = ctx.context;
+    const candidate = ctx.candidate;
     // A premise whose only open binders are bound variables (a def's hidden
     // binder, `pi_form`'s `x` under `A → B`) takes fresh ones.
-    if (try tryFreshBoundGenerate(
-        compiler,
-        allocator,
-        context,
-        ref_index,
-        pool,
-        candidate,
-        rule,
-        goal,
-        theorem,
-        theorem_vars,
-        plans,
-        depth,
-        position,
-        hyp_index,
-        bindings,
-        snapshots,
-        selected,
-        generated,
-        hook,
-        derived,
-        runtime,
-        counters,
-        fuel,
-        candidates,
-    )) return;
+    if (try tryFreshBoundGenerate(ctx, hook, slot)) return;
 
     if (try OpenTerms.instantiateTemplateConcrete(
         &candidate.theorem,
-        rule.hyps[hyp_index],
-        bindings,
+        ctx.rule.hyps[slot.hyp_index],
+        ctx.bindings,
     )) |raw_target| {
         if (carriesAncestorWitness(context, candidate, hook, raw_target)) {
-            try tryOpenGenerateSlot(
-                compiler,
-                allocator,
-                context,
-                ref_index,
-                pool,
-                candidate,
-                rule,
-                goal,
-                theorem,
-                theorem_vars,
-                plans,
-                depth,
-                position,
-                hyp_index,
-                bindings,
-                snapshots,
-                selected,
-                generated,
-                hook,
-                derived,
-                runtime,
-                counters,
-                fuel,
-                candidates,
-                0,
-            );
+            try tryOpenGenerateSlot(ctx, hook, slot, 0);
             return;
         }
-        try emitGeneratedSlot(
-            compiler,
-            allocator,
-            context,
-            ref_index,
-            pool,
-            candidate,
-            rule,
-            goal,
-            theorem,
-            theorem_vars,
-            plans,
-            depth,
-            position,
-            bindings,
-            snapshots,
-            selected,
-            generated,
-            hook,
-            derived,
-            runtime,
-            counters,
-            fuel,
-            candidates,
-            raw_target,
-        );
+        try emitGeneratedSlot(ctx, hook, slot, raw_target);
         return;
     }
 
@@ -1465,33 +1188,8 @@ fn tryGenerateSlot(
     // split-half (`Γ`/`Δ`/`Σ`) unpinned because its subproof must be generated.
     // Speculatively distribute the goal context across the open binder and recurse
     // per candidate; the validator confirms each assembly.
-    const candidates_before_split = candidates.items.len;
-    try trySplitGenerate(
-        compiler,
-        allocator,
-        context,
-        ref_index,
-        pool,
-        candidate,
-        rule,
-        goal,
-        theorem,
-        theorem_vars,
-        plans,
-        depth,
-        position,
-        hyp_index,
-        bindings,
-        snapshots,
-        selected,
-        generated,
-        hook,
-        derived,
-        runtime,
-        counters,
-        fuel,
-        candidates,
-    );
+    const candidates_before_split = ctx.candidates.items.len;
+    try trySplitGenerate(ctx, hook, slot);
 
     // Structured open backward generation. Strictly the
     // LAST fallback (concrete and ACUI split-generate both failed for this
@@ -1503,69 +1201,18 @@ fn tryGenerateSlot(
     // existential is propagated or invented (the non-`@auto` branch of
     // `emitOpenTarget` is child-search-first with no var-pool fallback). If no
     // child conclusion determines the binder, the slot simply fails.
-    if (candidates.items.len != candidates_before_split) return;
+    if (ctx.candidates.items.len != candidates_before_split) return;
     if (hook.solveOpenFn != null and
         openMode(context, candidate.rule_id, hook.allow_constrained_mp) != .none)
     {
-        try tryOpenGenerateSlot(
-            compiler,
-            allocator,
-            context,
-            ref_index,
-            pool,
-            candidate,
-            rule,
-            goal,
-            theorem,
-            theorem_vars,
-            plans,
-            depth,
-            position,
-            hyp_index,
-            bindings,
-            snapshots,
-            selected,
-            generated,
-            hook,
-            derived,
-            runtime,
-            counters,
-            fuel,
-            candidates,
-            0,
-        );
-        if (candidates.items.len != candidates_before_split) return;
+        try tryOpenGenerateSlot(ctx, hook, slot, 0);
+        if (ctx.candidates.items.len != candidates_before_split) return;
     }
 
     // Final fallback: ACUI principal enumeration for the order-sensitive
     // principal-selection gap (e.g. `de_morgan`). Reached only when split and
     // open generation both produced nothing for this slot, so it is additive.
-    try tryPrincipalEnumerate(
-        compiler,
-        allocator,
-        context,
-        ref_index,
-        pool,
-        candidate,
-        rule,
-        goal,
-        theorem,
-        theorem_vars,
-        plans,
-        depth,
-        position,
-        hyp_index,
-        bindings,
-        snapshots,
-        selected,
-        generated,
-        hook,
-        derived,
-        runtime,
-        counters,
-        fuel,
-        candidates,
-    );
+    try tryPrincipalEnumerate(ctx, hook, slot);
 }
 
 /// Emit a single generated slot: canonicalize ACUI units out of the (now
@@ -1575,73 +1222,28 @@ fn tryGenerateSlot(
 /// `emp`, leaving a redundant unit the strict `matchTemplate` would otherwise
 /// reject (the validator absorbs it anyway).
 fn emitGeneratedSlot(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    slot: Slot,
     raw_target: ExprId,
 ) anyerror!void {
-    const reduced = try Redex.reduceRedexOnly(context, &candidate.theorem, raw_target);
-    const target = try normalizeAcuiUnits(context, &candidate.theorem, reduced);
+    const candidate = ctx.candidate;
+    const reduced = try Redex.reduceRedexOnly(ctx.context, &candidate.theorem, raw_target);
+    const target = try normalizeAcuiUnits(ctx.context, &candidate.theorem, reduced);
     // The application matched the goal and is launching a subgoal solve —
     // the signal that arms the `@auto eager` set-commit cut (consulted only
     // for eager candidates). An eager application is also exempt from the
     // depth budget: `eager_step` tells the driver to solve the child at the
     // parent's remaining depth (independent of `honor_eager_cut`).
     candidate.reached_child_solve = true;
-    const eager_step = context.registry.eagerPriority(candidate.rule_id) != null;
+    const eager_step = ctx.context.registry.eagerPriority(candidate.rule_id) != null;
     const proof = (try hook.solve(target, &candidate.theorem, eager_step)) orelse {
         return;
     };
     if (proof.conclusion != target) {
         return;
     }
-    generated[position] = proof.application;
-    defer generated[position] = null;
-    try backtrackRefs(
-        compiler,
-        allocator,
-        context,
-        ref_index,
-        pool,
-        candidate,
-        rule,
-        goal,
-        theorem,
-        theorem_vars,
-        plans,
-        depth + 1,
-        bindings,
-        snapshots,
-        selected,
-        generated,
-        hook,
-        derived,
-        runtime,
-        counters,
-        fuel,
-        candidates,
-        null,
-    );
+    try ctx.descendGenerated(slot.depth, slot.position, proof.application);
 }
 
 /// Speculative ACUI split for a generate-only slot whose context binder is open.
@@ -1652,34 +1254,16 @@ fn emitGeneratedSlot(
 /// recursion (so it pins the conclusion + later slots), then rolled back. Other
 /// open binders are resolved as their own slots are reached.
 fn trySplitGenerate(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    slot: Slot,
 ) anyerror!void {
     if (!hook.allow_split) return; // first (non-splitting) generation pass
-    const goal_expr = goal.concreteOrHint() orelse return;
-    const hyp_template = rule.hyps[hyp_index];
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const bindings = ctx.bindings;
+    const goal_expr = ctx.goal.concreteOrHint() orelse return;
+    const hyp_template = ctx.rule.hyps[slot.hyp_index];
     const binders = templateBinderMask(hyp_template);
     if (binders.overflow) return;
 
@@ -1691,7 +1275,7 @@ fn trySplitGenerate(
         const site = split.findSplitSite(
             context,
             &candidate.theorem,
-            rule.concl,
+            ctx.rule.concl,
             goal_expr,
             b,
         ) orelse continue;
@@ -1720,7 +1304,7 @@ fn trySplitGenerate(
                 site,
                 bindings,
             )) {
-                if (counters) |actual| {
+                if (ctx.counters) |actual| {
                     actual.split_context_guard_rejects += 1;
                 }
                 bindings[b] = saved;
@@ -1734,33 +1318,7 @@ fn trySplitGenerate(
             if (concrete_target != null and
                 !carriesAncestorWitness(context, candidate, hook, concrete_target.?))
             {
-                const raw_target = concrete_target.?;
-                try emitGeneratedSlot(
-                    compiler,
-                    allocator,
-                    context,
-                    ref_index,
-                    pool,
-                    candidate,
-                    rule,
-                    goal,
-                    theorem,
-                    theorem_vars,
-                    plans,
-                    depth,
-                    position,
-                    bindings,
-                    snapshots,
-                    selected,
-                    generated,
-                    hook,
-                    derived,
-                    runtime,
-                    counters,
-                    fuel,
-                    candidates,
-                    raw_target,
-                );
+                try emitGeneratedSlot(ctx, hook, slot, concrete_target.?);
             } else if (hook.solveOpenFn != null and
                 openMode(
                     context,
@@ -1774,33 +1332,7 @@ fn trySplitGenerate(
                 // carries an enclosing slot's witness meta. Run the open path
                 // under the split binding so the witness can be solved from
                 // the now-concrete context's ACUI members.
-                try tryOpenGenerateSlot(
-                    compiler,
-                    allocator,
-                    context,
-                    ref_index,
-                    pool,
-                    candidate,
-                    rule,
-                    goal,
-                    theorem,
-                    theorem_vars,
-                    plans,
-                    depth,
-                    position,
-                    hyp_index,
-                    bindings,
-                    snapshots,
-                    selected,
-                    generated,
-                    hook,
-                    derived,
-                    runtime,
-                    counters,
-                    fuel,
-                    candidates,
-                    0,
-                );
+                try tryOpenGenerateSlot(ctx, hook, slot, 0);
             }
             bindings[b] = saved;
         }
@@ -1832,40 +1364,22 @@ fn trySplitGenerate(
 /// positional path), so it is purely additive — theories that already generate
 /// a candidate here are byte-identical.
 fn tryPrincipalEnumerate(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    slot: Slot,
 ) anyerror!void {
     if (!hook.allow_split) return;
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const bindings = ctx.bindings;
     // Structural gate only, no enrollment requirement: everything below
     // enumerates concrete goal members for one unresolved structured
     // principal (no metas minted, ≥2 genuinely competing members), mirroring
     // seed-time `detectPrincipalFanout`, which is likewise
     // annotation-independent. The seed-time/generation-time pair differ by
     // *phase*, not by author permission.
-    const goal_expr = goal.concreteOrHint() orelse return;
-    const hyp_template = rule.hyps[hyp_index];
+    const goal_expr = ctx.goal.concreteOrHint() orelse return;
+    const hyp_template = ctx.rule.hyps[slot.hyp_index];
     const hyp_binders = templateBinderMask(hyp_template);
     if (hyp_binders.overflow) return;
 
@@ -1886,7 +1400,7 @@ fn tryPrincipalEnumerate(
         const s = split.findSplitSite(
             context,
             &candidate.theorem,
-            rule.concl,
+            ctx.rule.concl,
             goal_expr,
             b,
         ) orelse continue;
@@ -1950,32 +1464,7 @@ fn tryPrincipalEnumerate(
             .{},
         );
         if (matched) {
-            try trySplitGenerate(
-                compiler,
-                allocator,
-                context,
-                ref_index,
-                pool,
-                candidate,
-                rule,
-                goal,
-                theorem,
-                theorem_vars,
-                plans,
-                depth,
-                position,
-                hyp_index,
-                bindings,
-                snapshots,
-                selected,
-                generated,
-                hook,
-                derived,
-                runtime,
-                counters,
-                fuel,
-                candidates,
-            );
+            try trySplitGenerate(ctx, hook, slot);
         }
         pm = pmask.mask;
         while (pm != 0) {
@@ -1986,35 +1475,13 @@ fn tryPrincipalEnumerate(
     }
 }
 
-/// Shared state for one open-slot attempt. Bundled (unlike the rest
-/// of this file's explicit parameter style) because the open path recurses
-/// over bound-witness choices and recover/meta construction layers, and
-/// would otherwise thread two dozen parameters through every level.
+/// State for one open-slot attempt, on top of the candidate's `SlotCtx`. The
+/// open path recurses over bound-witness choices and recover/meta
+/// construction layers, which all share it.
 const OpenSlot = struct {
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    at: Slot,
     /// Branch-local existential store for this slot attempt. Mint marks are
     /// taken before each construction layer and rolled back beside the
     /// bindings snapshot (the meta-store rollback invariant).
@@ -2026,7 +1493,7 @@ const OpenSlot = struct {
     mode: OpenMode,
     /// The slot's open binders are bound variables nothing outside the premise
     /// sees (`tryFreshBoundGenerate`): when the child search leaves one
-    /// unsolved, it takes a fresh `@vars` variable (`tryFreshPoolWitnesses`).
+    /// unsolved, it takes a fresh `@vars` variable (`tryPoolWitnesses`).
     fresh_bound: bool = false,
     /// Binders whose values hold metas `rebindSeedMetas` minted for this slot;
     /// a solved fill materializes them too.
@@ -2035,7 +1502,7 @@ const OpenSlot = struct {
     /// The candidate is `@auto eager`: its open subgoal keeps the parent's
     /// remaining depth, as a concrete one does (`tryGenerateSlot`).
     fn eagerStep(self: *const OpenSlot) bool {
-        return self.context.registry.eagerPriority(self.candidate.rule_id) != null;
+        return self.ctx.context.registry.eagerPriority(self.ctx.candidate.rule_id) != null;
     }
 };
 
@@ -2046,43 +1513,25 @@ const OpenSlot = struct {
 /// child proof, matches the child's concrete conclusion back against the
 /// target to pin the parent's binders, and continues to the next sibling.
 fn tryOpenGenerateSlot(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    context: *const Context,
-    ref_index: *const ref_index_mod.Index,
-    pool: []const refs_mod.RefPoolEntry,
-    candidate: *ApplyCandidate,
-    rule: *const @import("../../../env.zig").RuleDecl,
-    goal: Goal,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
-    plans: []const HypPlan,
-    depth: usize,
-    position: usize,
-    hyp_index: usize,
-    bindings: []?ExprId,
-    snapshots: []?ExprId,
-    selected: []?usize,
-    generated: []?RuleApplication,
+    ctx: *const SlotCtx,
     hook: *const GenerationHook,
-    derived: ?*DerivedPool,
-    runtime: SearchRuntime,
-    counters: ?*SearchCounters,
-    fuel: ?*Fuel,
-    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    at: Slot,
     /// The premise's binders open as fresh bound variables
     /// (`tryFreshBoundGenerate`); 0 for an ordinary open slot.
     fresh_open: u64,
 ) anyerror!void {
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const bindings = ctx.bindings;
     const fresh_bound = fresh_open != 0;
-    var store = MetaStore.init(allocator, context.env);
+    var store = MetaStore.init(ctx.allocator, context.env);
     // Share the driver's global meta-id counter so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
     store.meta_id_counter = hook.meta_id_counter;
     store.dep_bans = hook.meta_dep_bans;
     // The pool-ref loop at this depth is done with its snapshot slice;
     // reuse it as the open path's bindings rollback point.
-    const snapshot = snapshots[depth * bindings.len ..][0..bindings.len];
+    const snapshot = ctx.snapshotAt(at.depth);
     @memcpy(snapshot, bindings);
     defer rollbackOneHypMatch(bindings, snapshot);
     const rebound = try rebindSeedMetas(&store, &candidate.theorem, bindings, fresh_open);
@@ -2090,14 +1539,14 @@ fn tryOpenGenerateSlot(
     // candidate's bindings are fixed for everything opened beneath it.
     const ban_mark = if (hook.meta_dep_bans) |bans| blk: {
         const mark = bans.mark();
-        try banCarriedMetaDeps(context.env, rule, &candidate.theorem, bindings, bans);
+        try banCarriedMetaDeps(context, ctx.rule, &candidate.theorem, bindings, bans);
         break :blk mark;
     } else 0;
     defer if (hook.meta_dep_bans) |bans| bans.rollback(ban_mark);
     defer {
         // Mirror this branch's meta activity into the bench counters
         // (META.md performance gates).
-        if (counters) |c| {
+        if (ctx.counters) |c| {
             c.existential_metas_created += store.stats.existential_created;
             c.bound_choice_metas_created += store.stats.bound_choice_created;
             c.meta_assignments += store.stats.assignments;
@@ -2107,30 +1556,9 @@ fn tryOpenGenerateSlot(
     }
 
     var slot = OpenSlot{
-        .compiler = compiler,
-        .allocator = allocator,
-        .context = context,
-        .ref_index = ref_index,
-        .pool = pool,
-        .candidate = candidate,
-        .rule = rule,
-        .goal = goal,
-        .theorem = theorem,
-        .theorem_vars = theorem_vars,
-        .plans = plans,
-        .depth = depth,
-        .position = position,
-        .hyp_index = hyp_index,
-        .bindings = bindings,
-        .snapshots = snapshots,
-        .selected = selected,
-        .generated = generated,
+        .ctx = ctx,
         .hook = hook,
-        .derived = derived,
-        .runtime = runtime,
-        .counters = counters,
-        .fuel = fuel,
-        .candidates = candidates,
+        .at = at,
         .store = &store,
         .mode = if (fresh_bound) .constrained else openMode(
             context,
@@ -2150,7 +1578,7 @@ fn tryOpenGenerateSlot(
 /// Replace each seed meta an open binder of this premise still holds (`ih`,
 /// unmatched by any ref) with a `.bound_choice` meta of `store`, in every
 /// binding that mentions it, so the child search can read it back and
-/// `tryFreshPoolWitnesses` can fill it. A seed meta of another premise stays
+/// `tryPoolWitnesses` can fill it. A seed meta of another premise stays
 /// put: this slot's solve could not fill it. Returns the binders whose values
 /// changed.
 fn rebindSeedMetas(
@@ -2165,7 +1593,7 @@ fn rebindSeedMetas(
         const idx: u6 = @intCast(@ctz(rest));
         rest &= rest - 1;
         const leaf = bindings[idx] orelse continue;
-        if (!isReconciliationLeaf(theorem, leaf)) continue;
+        if (theorem.leafPlaceholderKind(leaf) != .seed_meta) continue;
         const pid = theorem.interner.node(leaf).placeholder;
         const info = theorem.placeholderInfo(pid) orelse continue;
         const meta = try store.mint(theorem, info.sort_name, std.math.maxInt(u55), .bound_choice);
@@ -2188,8 +1616,8 @@ fn rebindSeedMetas(
 /// clones); `MetaStore.registerAncestorMeta` turns the ban into the meta's
 /// `allowed_deps`.
 fn banCarriedMetaDeps(
-    env: *const GlobalEnv,
-    rule: *const @import("../../../env.zig").RuleDecl,
+    context: *const Context,
+    rule: *const RuleDecl,
     theorem: *const TheoremContext,
     bindings: []const ?ExprId,
     bans: *MetaStoreMod.MetaDepBans,
@@ -2198,15 +1626,29 @@ fn banCarriedMetaDeps(
         if (arg.bound) continue;
         const value = bindings[idx] orelse continue;
         if (!seed.exprContainsMetaLeafWalk(theorem, value)) continue;
-        var banned: u55 = 0;
-        for (rule.args, 0..) |bound_arg, bound_idx| {
-            if (!bound_arg.bound or arg.deps & bound_arg.deps != 0) continue;
-            const bound_value = bindings[bound_idx] orelse continue;
-            const info = BindingValidation.currentExprInfo(env, theorem, bound_value) catch continue;
-            banned |= info.deps;
-        }
+        const banned = bannedDeps(context, theorem, rule, bindings, idx);
         if (banned != 0) try banMetasIn(theorem, value, banned, bans);
     }
+}
+
+/// The dependency bits non-bound binder `idx` of `rule` must avoid, as the
+/// checker's dependency condition reads them: those of the values of the bound
+/// binders `idx`'s `ArgInfo.deps` omits.
+fn bannedDeps(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+    idx: usize,
+) u55 {
+    const deps = rule.args[idx].deps;
+    var banned: u55 = 0;
+    for (rule.args, 0..) |bound_arg, bound_idx| {
+        if (!bound_arg.bound or deps & bound_arg.deps != 0) continue;
+        const bound_value = bindings[bound_idx] orelse continue;
+        banned |= exprDeps(context, theorem, bound_value);
+    }
+    return banned;
 }
 
 /// How a matched non-bound binder's value mentions the value of a bound arg
@@ -2217,12 +1659,12 @@ fn banCarriedMetaDeps(
 /// judged on its concrete part.
 const DepHit = enum {
     none,
-    /// Reached only through a head conversion can rewrite away: a def, a
-    /// `@rewrite` head, or an unavailable term.
+    /// Reached only through a head conversion can rewrite away: a def
+    /// argument its body may drop, a `@rewrite` head, or an unavailable term.
     soft,
-    /// Reached along rigid heads only. ACUI combiners count as rigid:
-    /// rearrangement never drops a member (idempotence keeps a copy, and the
-    /// unit mentions nothing).
+    /// Reached along heads no conversion removes (`argSurvivesConversion`).
+    /// ACUI combiners count: rearrangement never drops a member (idempotence
+    /// keeps a copy, and the unit mentions nothing).
     rigid,
 };
 
@@ -2230,20 +1672,14 @@ const DepHit = enum {
 fn bindingsDepHit(
     context: *const Context,
     theorem: *const TheoremContext,
-    rule: *const @import("../../../env.zig").RuleDecl,
+    rule: *const RuleDecl,
     bindings: []const ?ExprId,
 ) DepHit {
     var result: DepHit = .none;
     for (rule.args, 0..) |arg, idx| {
         if (arg.bound) continue;
         const value = bindings[idx] orelse continue;
-        var banned: u55 = 0;
-        for (rule.args, 0..) |bound_arg, bound_idx| {
-            if (!bound_arg.bound or arg.deps & bound_arg.deps != 0) continue;
-            const bound_value = bindings[bound_idx] orelse continue;
-            const info = (theorem.currentLeafInfo(bound_value) catch null) orelse continue;
-            banned |= info.deps;
-        }
+        const banned = bannedDeps(context, theorem, rule, bindings, idx);
         if (banned == 0) continue;
         const hit = exprDepHit(context, theorem, value, banned);
         if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
@@ -2267,23 +1703,26 @@ fn exprDepHit(
         .app => |app| blk: {
             if (context.registry.getAlphaRules(app.term_id).len != 0) break :blk .none;
             var result: DepHit = .none;
-            for (app.args) |arg| {
-                const hit = exprDepHit(context, theorem, arg, banned);
+            for (app.args, 0..) |arg, i| {
+                var hit = exprDepHit(context, theorem, arg, banned);
+                if (hit == .rigid and !argSurvivesConversion(context, app.term_id, i)) hit = .soft;
                 if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
                 if (result == .rigid) break;
             }
-            if (result == .rigid and !headIsRigid(context, app.term_id)) result = .soft;
             break :blk result;
         },
     };
 }
 
-/// A head no checker conversion can remove. ACUI combiners count: rearrangement
-/// never drops a member. (Alpha-rule heads are screened by the caller.)
-fn headIsRigid(context: *const Context, term_id: u32) bool {
+/// No checker conversion can remove argument `arg_idx` of a `term_id` app: the
+/// head is rigid, an ACUI combiner (rearrangement never drops a member), or a
+/// def whose body keeps the argument along determining heads
+/// (`semantic.argDetermined`). Alpha-rule heads are screened by the caller.
+fn argSurvivesConversion(context: *const Context, term_id: u32, arg_idx: usize) bool {
     return switch (semantic.headClass(context, term_id)) {
         .rigid, .acui => true,
-        .def, .rewrite, .unavailable => false,
+        .def => semantic.argDetermined(context, term_id, arg_idx),
+        .rewrite, .unavailable => false,
     };
 }
 
@@ -2315,11 +1754,11 @@ fn banMetasIn(
 /// bound-class binders, defer the remaining open binders as existential
 /// metas, and emit the structured target.
 fn openSlotRaw(slot: *OpenSlot) anyerror!void {
-    const template = slot.rule.hyps[slot.hyp_index];
+    const template = slot.ctx.rule.hyps[slot.at.hyp_index];
     // See `openSlotView`: open bound binders defer to the existential-meta path
     // (carry-to-leaf) rather than enumerating a concrete witness pool.
-    const unknowns = try slot.allocator.alloc(?ExprId, slot.bindings.len);
-    defer slot.allocator.free(unknowns);
+    const unknowns = try slot.ctx.allocator.alloc(?ExprId, slot.ctx.bindings.len);
+    defer slot.ctx.allocator.free(unknowns);
     @memset(unknowns, null);
     var options = OpenTerms.OpenInstantiateOptions{
         .factory = .{
@@ -2329,18 +1768,18 @@ fn openSlotRaw(slot: *OpenSlot) anyerror!void {
         },
         .logical_unknowns = unknowns,
         .excluded = null,
-        .conclusion_binders = conclusionBinderMaskOrNone(slot.rule.concl),
+        .conclusion_binders = conclusionBinderMaskOrNone(slot.ctx.rule.concl),
         .open_bound_in_combiner = slot.mode != .witness,
-        .arg_infos = slot.rule.args,
+        .arg_infos = slot.ctx.rule.args,
     };
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
     const target = (try OpenTerms.instantiateTemplateOpen(
-        &slot.candidate.theorem,
-        slot.context.env,
-        slot.context.registry,
+        &slot.ctx.candidate.theorem,
+        slot.ctx.context.env,
+        slot.ctx.context.registry,
         template,
-        slot.bindings,
+        slot.ctx.bindings,
         &options,
     )) orelse return;
     try emitOpenTarget(slot, target, unknowns, null, null);
@@ -2353,19 +1792,19 @@ fn openSlotRaw(slot: *OpenSlot) anyerror!void {
 /// a law that cannot fire owns its binders exclusively (no bare-meta
 /// fallback for them).
 fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
-    if (slot.hyp_index >= view.hyps.len) return;
-    const theorem = &slot.candidate.theorem;
-    const view_bindings = try slot.allocator.alloc(?ExprId, view.num_binders);
-    defer slot.allocator.free(view_bindings);
+    if (slot.at.hyp_index >= view.hyps.len) return;
+    const theorem = &slot.ctx.candidate.theorem;
+    const view_bindings = try slot.ctx.allocator.alloc(?ExprId, view.num_binders);
+    defer slot.ctx.allocator.free(view_bindings);
     seedViewBindingsForMatch(
         view,
-        slot.bindings,
-        slot.candidate.view_concl_seed,
+        slot.ctx.bindings,
+        slot.ctx.candidate.view_concl_seed,
         view_bindings,
     );
 
-    const excluded = try slot.allocator.alloc(bool, view.num_binders);
-    defer slot.allocator.free(excluded);
+    const excluded = try slot.ctx.allocator.alloc(bool, view.num_binders);
+    defer slot.ctx.allocator.free(excluded);
     @memset(excluded, false);
 
     const mark = slot.store.mark();
@@ -2428,8 +1867,8 @@ fn instantiateAndEmitView(
     view_bindings: []?ExprId,
     excluded: []const bool,
 ) anyerror!void {
-    const unknowns = try slot.allocator.alloc(?ExprId, view.num_binders);
-    defer slot.allocator.free(unknowns);
+    const unknowns = try slot.ctx.allocator.alloc(?ExprId, view.num_binders);
+    defer slot.ctx.allocator.free(unknowns);
     @memset(unknowns, null);
     var options = OpenTerms.OpenInstantiateOptions{
         .factory = .{
@@ -2446,18 +1885,18 @@ fn instantiateAndEmitView(
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
     const target = (try OpenTerms.instantiateTemplateOpen(
-        &slot.candidate.theorem,
-        slot.context.env,
-        slot.context.registry,
-        view.hyps[slot.hyp_index],
+        &slot.ctx.candidate.theorem,
+        slot.ctx.context.env,
+        slot.ctx.context.registry,
+        view.hyps[slot.at.hyp_index],
         view_bindings,
         &options,
     )) orelse return;
 
     // Overlay the freshly minted per-binder metas into a local copy of the
     // view bindings so the match-back materialization covers them.
-    const effective = try slot.allocator.dupe(?ExprId, view_bindings);
-    defer slot.allocator.free(effective);
+    const effective = try slot.ctx.allocator.dupe(?ExprId, view_bindings);
+    defer slot.ctx.allocator.free(effective);
     for (unknowns, 0..) |maybe_meta, vi| {
         if (maybe_meta) |meta| {
             if (effective[vi] == null) effective[vi] = meta;
@@ -2477,7 +1916,7 @@ fn emitOpenTarget(
     view: ?types.ViewDecl,
     view_bindings: ?[]?ExprId,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
+    const theorem = &slot.ctx.candidate.theorem;
     // Canonicalize ACUI units away before the recursive solve and readback.
     // An open target can carry a redundant `emp` (e.g. a witness rule whose
     // context binder `g` is the unit, so its hypothesis instantiates to
@@ -2486,8 +1925,8 @@ fn emitOpenTarget(
     // align the ACUI members to bind the carried ancestor witness. Meta leaves
     // survive normalization unchanged, so the open binders stay intact. The
     // concrete generated path already normalizes (see `tryGenerateSlot`).
-    const reduced_target = try Redex.reduceRedexOnly(slot.context, theorem, raw_target_in);
-    const raw_target = try normalizeAcuiUnits(slot.context, theorem, reduced_target);
+    const reduced_target = try Redex.reduceRedexOnly(slot.ctx.context, theorem, raw_target_in);
+    const raw_target = try normalizeAcuiUnits(slot.ctx.context, theorem, reduced_target);
     // Register the witness metas threaded in from enclosing open slots before
     // anything reads the store: an unregistered ancestor leaf counts as
     // solved, which would send a target carrying one down the concrete route
@@ -2502,38 +1941,13 @@ fn emitOpenTarget(
         try registerAncestorMetas(slot.store, theorem, raw_target);
     }
     if (slot.store.isFullySolved(theorem, raw_target)) {
-        const solved_before = slot.candidates.items.len;
+        const solved_before = slot.ctx.candidates.items.len;
         // Bound-witness enumeration closed every open binder: this is an
         // ordinary concrete generated slot (for view rules, a concrete
         // view-surface target the validator reconciles through the view
         // machinery).
-        try emitGeneratedSlot(
-            slot.compiler,
-            slot.allocator,
-            slot.context,
-            slot.ref_index,
-            slot.pool,
-            slot.candidate,
-            slot.rule,
-            slot.goal,
-            slot.theorem,
-            slot.theorem_vars,
-            slot.plans,
-            slot.depth,
-            slot.position,
-            slot.bindings,
-            slot.snapshots,
-            slot.selected,
-            slot.generated,
-            slot.hook,
-            slot.derived,
-            slot.runtime,
-            slot.counters,
-            slot.fuel,
-            slot.candidates,
-            raw_target,
-        );
-        if (slot.candidates.items.len != solved_before) return;
+        try emitGeneratedSlot(slot.ctx, slot.hook, slot.at, raw_target);
+        if (slot.ctx.candidates.items.len != solved_before) return;
         // A witness meta can be *erased* from a fully-solved target: a vacuous
         // `@recover` body makes the leaf swap `p[x ↦ ?t]` a no-op, and redex
         // reduction can likewise collapse `[x/?t]p` to `p` when `x` is not
@@ -2572,7 +1986,7 @@ fn emitOpenTarget(
         .variable, .placeholder => return,
     }
 
-    const candidates_before = slot.candidates.items.len;
+    const candidates_before = slot.ctx.candidates.items.len;
     const mark = slot.store.mark();
 
     // Force-first is a *witness-rule* optimization: only a `.witness` open
@@ -2591,20 +2005,20 @@ fn emitOpenTarget(
         // expensive O(n²) coupled pass is left last (`try_coupled = false`).
         // Every emitted fill is still revalidated by `tryCandidate`.
         try tryAcuiMemberWitnesses(slot, raw_target, unknowns, view, view_bindings, false);
-        if (slot.candidates.items.len != candidates_before) return;
+        if (slot.ctx.candidates.items.len != candidates_before) return;
         slot.store.rollbackTo(mark);
         try solveOpenTargetByChild(slot, raw_target, unknowns, view, view_bindings);
-        if (slot.candidates.items.len != candidates_before) return;
+        if (slot.ctx.candidates.items.len != candidates_before) return;
         slot.store.rollbackTo(mark);
         try tryCoupledWitnesses(slot, raw_target, unknowns, view, view_bindings);
-        if (slot.candidates.items.len != candidates_before) return;
+        if (slot.ctx.candidates.items.len != candidates_before) return;
         // Last resort: the witness is genuinely free — invent it from the
         // `@vars` pool. The flag is set whenever the theory has a pool; the
         // forced passes above stay the default because they run first and
         // this rung is reached only when they leave metas unsolved.
         if (slot.hook.allow_invent_witness) {
             slot.store.rollbackTo(mark);
-            try tryVarPoolWitnesses(slot, raw_target, unknowns, view, view_bindings);
+            try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .shared);
         }
         return;
     }
@@ -2613,15 +2027,15 @@ fn emitOpenTarget(
     // original child-search-first ordering, with member/coupled witness
     // enumeration as the fallback.
     try solveOpenTargetByChild(slot, raw_target, unknowns, view, view_bindings);
-    if (slot.candidates.items.len != candidates_before) return;
+    if (slot.ctx.candidates.items.len != candidates_before) return;
     slot.store.rollbackTo(mark);
     try tryAcuiMemberWitnesses(slot, raw_target, unknowns, view, view_bindings, true);
-    if (slot.candidates.items.len != candidates_before) return;
+    if (slot.ctx.candidates.items.len != candidates_before) return;
     // No proof below fixed the variable (`weaken` only echoes it back), so
     // any fresh one will do.
     if (slot.fresh_bound) {
         slot.store.rollbackTo(mark);
-        try tryFreshPoolWitnesses(slot, raw_target, unknowns, view, view_bindings);
+        try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
     }
 }
 
@@ -2653,7 +2067,7 @@ fn solveOpenTargetByChild(
                 self.view_bindings,
                 proof,
             );
-            return self.slot.candidates.items.len != self.candidates_before;
+            return self.slot.ctx.candidates.items.len != self.candidates_before;
         }
     };
     var continuation = Continuation{
@@ -2662,11 +2076,11 @@ fn solveOpenTargetByChild(
         .unknowns = unknowns,
         .view = view,
         .view_bindings = view_bindings,
-        .candidates_before = slot.candidates.items.len,
+        .candidates_before = slot.ctx.candidates.items.len,
     };
     try slot.hook.solveOpen(
         raw_target,
-        &slot.candidate.theorem,
+        &slot.ctx.candidate.theorem,
         slot.store,
         slot.eagerStep(),
         .{ .ctx = &continuation, .acceptFn = Continuation.accept },
@@ -2688,7 +2102,7 @@ fn continueOpenTargetSolved(
     view_bindings: ?[]const ?ExprId,
     proof: ?types.GeneratedProof,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
+    const theorem = &slot.ctx.candidate.theorem;
     // The metas the target mentions must all be solved; the materialized
     // target is the concrete hypothesis this branch commits to.
     const concrete_target = slot.store.materialize(theorem, raw_target) catch {
@@ -2703,11 +2117,11 @@ fn continueOpenTargetSolved(
     // branch and render as explicit bindings on the final application.
     const Flag = struct { idx: usize, orig: ?ExprId };
     var flagged = std.ArrayListUnmanaged(Flag){};
-    defer flagged.deinit(slot.allocator);
+    defer flagged.deinit(slot.ctx.allocator);
     var solve_failed = false;
     if (view) |v| {
-        const vb = try slot.allocator.dupe(?ExprId, view_bindings.?);
-        defer slot.allocator.free(vb);
+        const vb = try slot.ctx.allocator.dupe(?ExprId, view_bindings.?);
+        defer slot.ctx.allocator.free(vb);
         for (vb) |*entry| {
             const value = entry.* orelse continue;
             // A view binder whose meta is still unsolved is left unpinned (the
@@ -2721,11 +2135,11 @@ fn continueOpenTargetSolved(
         if (!solve_failed) {
             for (v.binder_map, 0..) |maybe_rule_idx, vi| {
                 const rule_idx = maybe_rule_idx orelse continue;
-                if (rule_idx >= slot.bindings.len) continue;
-                if (slot.bindings[rule_idx] != null) continue;
+                if (rule_idx >= slot.ctx.bindings.len) continue;
+                if (slot.ctx.bindings[rule_idx] != null) continue;
                 const value = vb[vi] orelse continue;
-                slot.bindings[rule_idx] = value;
-                try flagged.append(slot.allocator, .{ .idx = rule_idx, .orig = null });
+                slot.ctx.bindings[rule_idx] = value;
+                try flagged.append(slot.ctx.allocator, .{ .idx = rule_idx, .orig = null });
             }
         }
     } else {
@@ -2735,9 +2149,9 @@ fn continueOpenTargetSolved(
                 solve_failed = true;
                 break;
             };
-            if (slot.bindings[idx] == null) {
-                slot.bindings[idx] = value;
-                try flagged.append(slot.allocator, .{ .idx = idx, .orig = null });
+            if (slot.ctx.bindings[idx] == null) {
+                slot.ctx.bindings[idx] = value;
+                try flagged.append(slot.ctx.allocator, .{ .idx = idx, .orig = null });
             }
         }
     }
@@ -2748,7 +2162,7 @@ fn continueOpenTargetSolved(
     // ancestor meta is present (only the cross-boundary generation path).
     var coupled = false;
     if (!solve_failed) {
-        for (slot.bindings, 0..) |maybe_val, idx| {
+        for (slot.ctx.bindings, 0..) |maybe_val, idx| {
             const val = maybe_val orelse continue;
             var already = false;
             for (flagged.items) |f| {
@@ -2762,8 +2176,8 @@ fn continueOpenTargetSolved(
             if (!rebound and !slot.store.exprMentionsAncestor(theorem, val)) continue;
             const concrete = slot.store.materialize(theorem, val) catch continue;
             if (concrete == val) continue;
-            slot.bindings[idx] = concrete;
-            try flagged.append(slot.allocator, .{ .idx = idx, .orig = val });
+            slot.ctx.bindings[idx] = concrete;
+            try flagged.append(slot.ctx.allocator, .{ .idx = idx, .orig = val });
             coupled = true;
         }
     }
@@ -2777,7 +2191,7 @@ fn continueOpenTargetSolved(
     // witness flowed back here) so the single-witness path — used by the
     // byte-identical broad corpus — is untouched.
     if (coupled) {
-        for (slot.bindings, 0..) |maybe_val, idx| {
+        for (slot.ctx.bindings, 0..) |maybe_val, idx| {
             const val = maybe_val orelse continue;
             var already = false;
             for (flagged.items) |f| {
@@ -2787,87 +2201,36 @@ fn continueOpenTargetSolved(
                 }
             }
             if (already) continue;
-            try flagged.append(slot.allocator, .{ .idx = idx, .orig = val });
+            try flagged.append(slot.ctx.allocator, .{ .idx = idx, .orig = val });
         }
     }
     defer for (flagged.items) |f| {
-        slot.bindings[f.idx] = f.orig;
+        slot.ctx.bindings[f.idx] = f.orig;
     };
     if (solve_failed) return;
 
     // Same incremental prune as the pool-ref loop: a fill whose pinned
     // binders contradict the conclusion-vs-goal correspondence dooms every
     // tuple under it.
-    if (!finalConclusionPlausible(slot.context, slot.candidate, slot.goal, slot.bindings, slot.runtime, slot.counters)) {
-        if (slot.counters) |c| c.final_conclusion_prunes += 1;
+    if (!finalConclusionPlausible(slot.ctx.context, slot.ctx.candidate, slot.ctx.goal, slot.ctx.bindings, slot.ctx.runtime, slot.ctx.counters)) {
+        if (slot.ctx.counters) |c| c.final_conclusion_prunes += 1;
         return;
     }
 
-    const flag_restores = try slot.allocator.alloc(?bool, flagged.items.len);
-    defer slot.allocator.free(flag_restores);
+    const flag_restores = try slot.ctx.allocator.alloc(?bool, flagged.items.len);
+    defer slot.ctx.allocator.free(flag_restores);
     for (flagged.items, 0..) |f, i| {
-        flag_restores[i] = try setMetaSolvedFlag(slot.candidate, f.idx);
+        flag_restores[i] = try setMetaSolvedFlag(slot.ctx.candidate, f.idx);
     }
     defer for (flagged.items, 0..) |f, i| {
-        restoreMetaSolvedFlag(slot.candidate, f.idx, flag_restores[i]);
+        restoreMetaSolvedFlag(slot.ctx.candidate, f.idx, flag_restores[i]);
     };
 
     if (proof) |p| {
-        slot.generated[slot.position] = p.application;
-        defer slot.generated[slot.position] = null;
-        try backtrackRefs(
-            slot.compiler,
-            slot.allocator,
-            slot.context,
-            slot.ref_index,
-            slot.pool,
-            slot.candidate,
-            slot.rule,
-            slot.goal,
-            slot.theorem,
-            slot.theorem_vars,
-            slot.plans,
-            slot.depth + 1,
-            slot.bindings,
-            slot.snapshots,
-            slot.selected,
-            slot.generated,
-            slot.hook,
-            slot.derived,
-            slot.runtime,
-            slot.counters,
-            slot.fuel,
-            slot.candidates,
-            null,
-        );
+        try slot.ctx.descendGenerated(slot.at.depth, slot.at.position, p.application);
         return;
     }
-    try emitGeneratedSlot(
-        slot.compiler,
-        slot.allocator,
-        slot.context,
-        slot.ref_index,
-        slot.pool,
-        slot.candidate,
-        slot.rule,
-        slot.goal,
-        slot.theorem,
-        slot.theorem_vars,
-        slot.plans,
-        slot.depth,
-        slot.position,
-        slot.bindings,
-        slot.snapshots,
-        slot.selected,
-        slot.generated,
-        slot.hook,
-        slot.derived,
-        slot.runtime,
-        slot.counters,
-        slot.fuel,
-        slot.candidates,
-        concrete_target,
-    );
+    try emitGeneratedSlot(slot.ctx, slot.hook, slot.at, concrete_target);
 }
 
 /// Cap on member-witness fills attempted per open slot. The domain is the
@@ -2893,7 +2256,7 @@ fn tryAcuiMemberWitnesses(
     view_bindings: ?[]const ?ExprId,
     try_coupled: bool,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
+    const theorem = &slot.ctx.candidate.theorem;
 
     // Collect meta fragments first and bail before the (more expensive) domain
     // member walk when the target has none — the common case for open targets
@@ -2909,7 +2272,7 @@ fn tryAcuiMemberWitnesses(
     if (fragment_count == 0) return;
     var members: [Witness.max_domain_members]ExprId = undefined;
     const member_count = Witness.collectDomainMembers(
-        slot.context,
+        slot.ctx.context,
         theorem,
         raw_target,
         &members,
@@ -2920,13 +2283,13 @@ fn tryAcuiMemberWitnesses(
     // distinct fill is enough.
     var seen: [max_member_witness_attempts]ExprId = undefined;
     var attempts: usize = 0;
-    const before_concrete = slot.candidates.items.len;
+    const before_concrete = slot.ctx.candidates.items.len;
     for (members[0..member_count]) |member| {
         for (fragments[0..fragment_count]) |fragment| {
             if (attempts >= max_member_witness_attempts) break;
             const mark = slot.store.mark();
             if (!Witness.matchFragmentToMember(
-                slot.context,
+                slot.ctx.context,
                 slot.store,
                 theorem,
                 fragment,
@@ -2951,7 +2314,7 @@ fn tryAcuiMemberWitnesses(
     // binding metas on both sides (e.g. `R ?t ey` = `R ez ?w` → `?t:=ez`,
     // `?w:=ey`). One of those metas is typically an ancestor witness; solving
     // it here concretizes the conclusion that carries it back up.
-    if (try_coupled and slot.candidates.items.len == before_concrete) {
+    if (try_coupled and slot.ctx.candidates.items.len == before_concrete) {
         try tryCoupledWitnesses(slot, raw_target, unknowns, view, view_bindings);
     }
 }
@@ -2970,7 +2333,7 @@ fn pursueSolvedWitnessFill(
     seen: *[max_member_witness_attempts]ExprId,
     attempts: *usize,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
+    const theorem = &slot.ctx.candidate.theorem;
     if (!slot.store.isFullySolved(theorem, raw_target)) return;
     const concrete = slot.store.materialize(theorem, raw_target) catch return;
     for (seen[0..attempts.*]) |prior| {
@@ -2978,7 +2341,7 @@ fn pursueSolvedWitnessFill(
     }
     seen[attempts.*] = concrete;
     attempts.* += 1;
-    if (slot.counters) |c| c.acui_witness_attempts += 1;
+    if (slot.ctx.counters) |c| c.acui_witness_attempts += 1;
     try continueOpenTargetSolved(
         slot,
         raw_target,
@@ -3018,7 +2381,7 @@ fn tryCoupledWitnesses(
     view: ?types.ViewDecl,
     view_bindings: ?[]const ?ExprId,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
+    const theorem = &slot.ctx.candidate.theorem;
 
     // Carry-to-leaf: register any ancestor witness metas (stable-`meta_id`
     // leaves threaded in from an enclosing open slot) so the unification can
@@ -3029,14 +2392,14 @@ fn tryCoupledWitnesses(
 
     var members: [Witness.max_domain_members]ExprId = undefined;
     const member_count = Witness.collectMetaMembers(
-        slot.context,
+        slot.ctx.context,
         slot.store,
         theorem,
         raw_target,
         &members,
     );
     if (member_count == 0) return;
-    const before_coupled = slot.candidates.items.len;
+    const before_coupled = slot.ctx.candidates.items.len;
     var seen: [max_member_witness_attempts]ExprId = undefined;
     var attempts: usize = 0;
     if (member_count >= 2) try tryPairedMembers(
@@ -3059,9 +2422,9 @@ fn tryCoupledWitnesses(
     // premise) are co-solved through the shape, which needs only ONE
     // meta-bearing member. Same guard as the complementary pass: runs only
     // when the region sweeps emitted nothing.
-    if (slot.candidates.items.len != before_coupled) return;
+    if (slot.ctx.candidates.items.len != before_coupled) return;
     var anchors: [Witness.max_anchor_shapes]Witness.AnchorShape = undefined;
-    const anchor_count = Witness.collectAnchorShapes(slot.context, &anchors);
+    const anchor_count = Witness.collectAnchorShapes(slot.ctx.context, &anchors);
     for (anchors[0..anchor_count]) |shape| {
         const anchor = Witness.anchorSubterm(theorem, shape, raw_target) orelse continue;
         for (members[0..member_count]) |member| {
@@ -3102,8 +2465,8 @@ fn tryPairedMembers(
     seen: *[max_member_witness_attempts]ExprId,
     attempts: *usize,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
-    const before_coupled = slot.candidates.items.len;
+    const theorem = &slot.ctx.candidate.theorem;
+    const before_coupled = slot.ctx.candidates.items.len;
     for (members, 0..) |a, i| {
         for (members, 0..) |b, j| {
             if (i >= j) continue;
@@ -3133,9 +2496,9 @@ fn tryPairedMembers(
     // the engine never knows the wrapper means negation. Runs only when the
     // equal-unify sweep emitted nothing, so existing outcomes are untouched,
     // and every fill is revalidated by the child search plus `tryCandidate`.
-    if (slot.candidates.items.len != before_coupled) return;
+    if (slot.ctx.candidates.items.len != before_coupled) return;
     var shapes: [Witness.max_complement_shapes]Witness.ComplementShape = undefined;
-    const shape_count = Witness.collectComplementShapes(slot.context, &shapes);
+    const shape_count = Witness.collectComplementShapes(slot.ctx.context, &shapes);
     if (shape_count == 0) return;
     for (members, 0..) |member_a, i| {
         for (members, 0..) |member_b, j| {
@@ -3166,119 +2529,68 @@ fn tryPairedMembers(
     }
 }
 
-/// Invented-witness fallback (the ladder's last rung, `allow_invent_witness`,
-/// set whenever the theory has a `@vars` pool): an open
-/// target still carrying unsolved existential metas after the concrete-member
-/// and coupled passes has a *genuinely free* witness — e.g. the `y` in
-/// `(∀x P x) → (∃y P y)`, which any domain element satisfies. The calculus is
-/// sound only over a non-empty domain, so completeness here requires *picking*
-/// a witness rather than forcing one. We ground every unsolved meta to a reused
-/// `@vars`-pool DUMMY of its sort — the "diagonal" assignment, which also
-/// realizes any equality the proof implies between the metas (the lall
-/// instantiation and rex witness in `all_ex_inst` must coincide). Nothing is
-/// minted: the dummy is a pre-materialized pool token (generate.zig), reinterned
-/// by `internParsedExpr`, so no dependency bit is consumed however many slots
-/// request a witness. One witness per sort is committed (the first pool dummy
-/// the dep-mask check accepts); pool dummies are otherwise interchangeable.
-/// `tryCandidate` revalidates every fill.
-fn tryVarPoolWitnesses(
+/// Which `@vars` variables `tryPoolWitnesses` gives the unsolved metas.
+const PoolPick = enum {
+    /// The invented witness, the ladder's last rung (`allow_invent_witness`,
+    /// set whenever the theory has a `@vars` pool): an open target still
+    /// carrying unsolved existential metas after the concrete-member and
+    /// coupled passes has a *genuinely free* witness — e.g. the `y` in
+    /// `(∀x P x) → (∃y P y)`, which any domain element satisfies. The calculus
+    /// is sound only over a non-empty domain, so completeness here requires
+    /// *picking* a witness rather than forcing one. Every meta takes the first
+    /// pool dummy of its sort, in sorted token order, that `assign` accepts
+    /// (its dep-mask check is the theory-agnostic guard against a witness that
+    /// would capture an in-scope bound variable). This is the "diagonal"
+    /// assignment: the coupled slots of one chain pick the SAME witness, so an
+    /// equality the proof implies between the metas holds (the `lall`
+    /// instantiation and `rex` witness in `all_ex_inst` must coincide).
+    shared,
+    /// `fresh_bound`, after the child search left the slot's opened bound
+    /// metas unsolved: each takes a variable occurring in no binding of the
+    /// rule, distinct from every variable of the instance and from the other
+    /// fills. Any other meta (a view binder) must come from the child search.
+    fresh,
+};
+
+/// Ground every unsolved meta of `raw_target` to a `@vars`-pool dummy per
+/// `pick`, then continue like the member- and coupled-witness passes:
+/// `continueOpenTargetSolved` pins the parent's binders from the solved
+/// metas, flags them for explicit-binding rendering (a witness is not
+/// inferable from a freshly generated premise, and a bare generated
+/// `lall`/`rex` leaves it unassigned → `MissingBinderAssignment`), and resumes
+/// the backtrack. Nothing is minted: the dummies are pre-materialized pool
+/// tokens (generate.zig), reinterned by `internParsedExpr`, so no dependency
+/// bit is consumed however many slots request one. A meta whose sort has no
+/// acceptable pool token fails the branch. `tryCandidate` revalidates every
+/// fill.
+fn tryPoolWitnesses(
     slot: *OpenSlot,
     raw_target: ExprId,
     unknowns: []const ?ExprId,
     view: ?types.ViewDecl,
     view_bindings: ?[]const ?ExprId,
+    pick: PoolPick,
 ) anyerror!void {
-    const theorem = &slot.candidate.theorem;
-
+    const theorem = &slot.ctx.candidate.theorem;
     var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.allocator);
-    try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
-    if (unsolved.items.len == 0) return;
-
-    const mark = slot.store.mark();
-    // Assign each unsolved meta a `@vars`-pool dummy of its sort. Try the pool
-    // (in deterministic, sorted token order) and take the first dummy that
-    // `assign` accepts: its dependency-mask check is the theory-agnostic guard
-    // against picking a witness that would capture an in-scope bound variable
-    // (a dummy whose deps exceed the meta's `allowed_deps` is rejected). Trying
-    // in a fixed order from the *target* makes the coupled slots of one chain
-    // pick the SAME witness, so the implied equality between the metas (e.g.
-    // `all_ex_inst`'s lall and rex witnesses) holds. A meta whose sort has no
-    // acceptable pool token cannot be invented — bail (the branch just fails).
-    for (unsolved.items) |meta_id| {
-        const meta = slot.store.info(meta_id) orelse {
-            slot.store.rollbackTo(mark);
-            return;
-        };
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) {
-            slot.store.rollbackTo(mark);
-            return;
-        }
-    }
-    if (!slot.store.isFullySolved(theorem, raw_target)) {
-        slot.store.rollbackTo(mark);
-        return;
-    }
-    // The witness metas are now solved. Continue exactly like the member- and
-    // coupled-witness passes: `continueOpenTargetSolved` pins the parent's
-    // witness binder from the solved meta, flags it for explicit-binding
-    // rendering (so the inline witness rule states `(t := …)` — the witness is
-    // not inferable from a freshly generated premise, only from a pooled one),
-    // and resumes the backtrack. Unlike `emitGeneratedSlot`, this renders the
-    // binding, which the validator requires (a bare generated `lall`/`rex`
-    // leaves the witness unassigned → `MissingBinderAssignment`).
-    if (slot.counters) |c| c.var_pool_witness_attempts += 1;
-    try continueOpenTargetSolved(
-        slot,
-        raw_target,
-        unknowns,
-        view,
-        view_bindings,
-        null,
-    );
-    slot.store.rollbackTo(mark);
-}
-
-/// `fresh_bound` fallback, after the child search left the slot's bound
-/// metas unsolved: give each a `@vars` variable occurring in no binding of
-/// the rule, so it is distinct from every variable of the instance and from
-/// the other fills, then generate the now-concrete premise.
-fn tryFreshPoolWitnesses(
-    slot: *OpenSlot,
-    raw_target: ExprId,
-    unknowns: []const ?ExprId,
-    view: ?types.ViewDecl,
-    view_bindings: ?[]const ?ExprId,
-) anyerror!void {
-    const theorem = &slot.candidate.theorem;
-    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.allocator);
+    defer unsolved.deinit(slot.ctx.allocator);
     try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
     if (unsolved.items.len == 0) return;
 
     var taken: u55 = 0;
-    for (slot.bindings) |maybe| {
-        const value = maybe orelse continue;
-        taken |= exprVarDeps(theorem, value);
+    if (pick == .fresh) {
+        for (slot.ctx.bindings) |maybe| {
+            const value = maybe orelse continue;
+            taken |= exprDeps(slot.ctx.context, theorem, value);
+        }
     }
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
     for (unsolved.items) |meta_id| {
         const meta = slot.store.info(meta_id) orelse return;
-        // Only the opened bound binders are fresh; any other meta (a view
-        // binder) must come from the child search.
-        if (meta.kind != .bound_choice) return;
-        const tokens = try sortedPoolTokens(slot.allocator, slot.context, meta.sort_name);
-        defer slot.allocator.free(tokens);
-        for (tokens) |token| {
-            const parser_var = slot.theorem_vars.get(token) orelse continue;
-            const dummy = theorem.internParsedExpr(parser_var) catch continue;
-            const deps = exprVarDeps(theorem, dummy);
-            if (deps == 0 or deps & taken != 0) continue;
-            slot.store.assign(theorem, meta_id, dummy) catch continue;
-            taken |= deps;
-            break;
-        } else return;
+        if (pick == .fresh and meta.kind != .bound_choice) return;
+        const avoid: ?*u55 = if (pick == .fresh) &taken else null;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, avoid)) return;
     }
     if (!slot.store.isFullySolved(theorem, raw_target)) return;
     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
@@ -3294,9 +2606,9 @@ fn groundDanglingWitnessMetas(
     unknowns: []const ?ExprId,
     view_bindings: ?[]?ExprId,
 ) !bool {
-    const theorem = &slot.candidate.theorem;
+    const theorem = &slot.ctx.candidate.theorem;
     var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.allocator);
+    defer unsolved.deinit(slot.ctx.allocator);
     if (view_bindings) |vb| {
         for (vb) |maybe| {
             const b = maybe orelse continue;
@@ -3310,7 +2622,7 @@ fn groundDanglingWitnessMetas(
     if (unsolved.items.len == 0) return false;
     for (unsolved.items) |meta_id| {
         const meta = slot.store.info(meta_id) orelse return false;
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name)) return false;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, null)) return false;
     }
     return true;
 }
@@ -3318,23 +2630,31 @@ fn groundDanglingWitnessMetas(
 /// Assign `meta_id` a `@vars`-pool dummy of `sort_name`, trying tokens in sorted
 /// order and committing the first that `store.assign` accepts (its dep-mask /
 /// sort / occurs checks reject a witness that would capture an in-scope bound
-/// variable). Returns true on success. The dummies were pre-materialized into
-/// the work theorem (generate.zig) and registered in `theorem_vars`; reinterning
-/// the parser var here is dependency-free. A successful `assign` records a trail
-/// entry; a rejected one records nothing, so the caller's single mark/rollback
-/// covers the whole loop.
+/// variable). With `avoid`, a dummy must also be a variable none of whose
+/// dependency bits are in `avoid.*`, and its bits join the set. Returns true
+/// on success. The dummies were pre-materialized into the work theorem
+/// (generate.zig) and registered in `theorem_vars`; reinterning the parser var
+/// here is dependency-free. A successful `assign` records a trail entry; a
+/// rejected one records nothing, so the caller's single mark/rollback covers
+/// the whole loop.
 fn assignPoolWitness(
     slot: *OpenSlot,
     theorem: *TheoremContext,
     meta_id: PlaceholderId,
     sort_name: []const u8,
+    avoid: ?*u55,
 ) !bool {
-    const tokens = try sortedPoolTokens(slot.allocator, slot.context, sort_name);
-    defer slot.allocator.free(tokens);
+    const tokens = try sortedPoolTokens(slot.ctx.allocator, slot.ctx.context, sort_name);
+    defer slot.ctx.allocator.free(tokens);
     for (tokens) |token| {
-        const parser_var = slot.theorem_vars.get(token) orelse continue;
+        const parser_var = slot.ctx.theorem_vars.get(token) orelse continue;
         const dummy = theorem.internParsedExpr(parser_var) catch continue;
+        const deps = if (avoid != null) exprDeps(slot.ctx.context, theorem, dummy) else 0;
+        if (avoid) |taken| {
+            if (deps == 0 or deps & taken.* != 0) continue;
+        }
         slot.store.assign(theorem, meta_id, dummy) catch continue;
+        if (avoid) |taken| taken.* |= deps;
         return true;
     }
     return false;

@@ -122,13 +122,6 @@ fn mintMetaPlaceholder(
     return theorem.addMetaPlaceholderResolved(sort_name);
 }
 
-/// True when `pid` is a `reconciliation_meta` leaf (an eliminator seed meta —
-/// see `PlaceholderInfo.reconciliation_meta`).
-fn isReconciliationMeta(theorem: *const TheoremContext, pid: PlaceholderId) bool {
-    const info = theorem.placeholderInfo(pid) orelse return false;
-    return info.reconciliation_meta;
-}
-
 /// True when `expr_id` mentions a reconciliation seed meta.
 fn exprMentionsReconciliationMeta(
     theorem: *const TheoremContext,
@@ -139,7 +132,7 @@ fn exprMentionsReconciliationMeta(
 
 fn reconciliationMetaPred(_: void, theorem: *const TheoremContext, expr_id: ExprId) bool {
     return switch (theorem.interner.node(expr_id).*) {
-        .placeholder => |pid| isReconciliationMeta(theorem, pid),
+        .placeholder => |pid| theorem.placeholderKind(pid) == .seed_meta,
         else => false,
     };
 }
@@ -162,7 +155,7 @@ fn registerReconciliationMetaVisit(
     expr_id: ExprId,
 ) anyerror!void {
     switch (theorem.interner.node(expr_id).*) {
-        .placeholder => |pid| if (isReconciliationMeta(theorem, pid)) {
+        .placeholder => |pid| if (theorem.placeholderKind(pid) == .seed_meta) {
             try store.registerLocalMeta(theorem, expr_id);
         },
         else => {},
@@ -479,7 +472,7 @@ fn registerMetasInExpr(
     return switch (theorem.interner.node(expr).*) {
         .variable => false,
         .placeholder => |pid| blk: {
-            if (theorem.placeholderMetaId(pid) == null) break :blk false;
+            if (theorem.placeholderKind(pid) != .store_meta) break :blk false;
             try store.registerAncestorMeta(theorem, expr);
             break :blk true;
         },
