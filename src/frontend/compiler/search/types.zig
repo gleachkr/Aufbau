@@ -855,10 +855,11 @@ pub const GenerationHook = struct {
     /// final-phase gating). `exact?`/`apply?` never set it.
     allow_invent_witness: bool = false,
 
-    /// When true, a speculative ACUI split for an *idempotent* combiner may also
-    /// retain a member already claimed by a fixed principal summand in the open
-    /// rest binder — the non-minimal complement `g , g = g` allows (see
-    /// `split.buildEnumerator`). Broadens every additive split node, so it
+    /// When true, a speculative ACUI split for an idempotent combiner may also
+    /// retain a member already claimed by a fixed principal summand in the
+    /// open rest binder — the non-minimal complement `g , g = g` allows (for an
+    /// ordered combiner, any contiguous run; see `split.buildEnumerator`). Broadens
+    /// every additive split node, so it
     /// is gated to a final phase run with fresh fuel only on a clean miss
     /// (mirrors `allow_constrained_mp`): theories whose proofs use the minimal
     /// complement never pay the cost. `exact?`/`apply?` never set it.

@@ -9,6 +9,7 @@ const Context = types.Context;
 const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
 const lockstep = @import("./lockstep.zig");
+const bag = @import("./bag.zig");
 
 const isRigidHead = semantic.isRigidHead;
 pub const templateNeedsSemantic = semantic.templateNeedsSemantic;
@@ -192,55 +193,6 @@ fn acuiIsOrdered(context: *const Context, term_id: u32) bool {
     return combiner.comm_name == null and combiner.idem_name == null;
 }
 
-const max_ordered_members = 16;
-
-// Flatten `template` through `head_id` into its unit-free leaf sequence.
-// Returns false on overflow.
-fn flattenOrderedTemplate(
-    template: TemplateExpr,
-    head_id: u32,
-    unit_id: ?u32,
-    out: *[max_ordered_members]TemplateExpr,
-    len: *usize,
-) bool {
-    if (template == .app) {
-        const app = template.app;
-        if (app.term_id == head_id and app.args.len == 2) {
-            return flattenOrderedTemplate(app.args[0], head_id, unit_id, out, len) and
-                flattenOrderedTemplate(app.args[1], head_id, unit_id, out, len);
-        }
-        if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
-    }
-    if (len.* >= out.len) return false;
-    out[len.*] = template;
-    len.* += 1;
-    return true;
-}
-
-// Flatten `expr_id` through `head_id` into its unit-free member sequence.
-// Returns false on overflow.
-fn flattenOrderedExpr(
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-    head_id: u32,
-    unit_id: ?u32,
-    out: *[max_ordered_members]ExprId,
-    len: *usize,
-) bool {
-    if (theorem.interner.node(expr_id).* == .app) {
-        const app = theorem.interner.node(expr_id).app;
-        if (app.term_id == head_id and app.args.len == 2) {
-            return flattenOrderedExpr(theorem, app.args[0], head_id, unit_id, out, len) and
-                flattenOrderedExpr(theorem, app.args[1], head_id, unit_id, out, len);
-        }
-        if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
-    }
-    if (len.* >= out.len) return false;
-    out[len.*] = expr_id;
-    len.* += 1;
-    return true;
-}
-
 // Whether a sequence entry is exactly one member: an application whose head
 // no conversion can turn into a combiner spine or the unit. A binder, a
 // variable, a placeholder, or a def or `@rewrite` head may stand for any
@@ -283,18 +235,17 @@ fn extractOrderedSpineBindings(
     expr_id: ExprId,
     bindings: []?ExprId,
 ) void {
-    const unit_id = acui.acuiUnitIdForHead(context, head_id);
-    var leaves: [max_ordered_members]TemplateExpr = undefined;
-    var leaf_len: usize = 0;
-    if (!flattenOrderedTemplate(template, head_id, unit_id, &leaves, &leaf_len)) return;
-    var members: [max_ordered_members]ExprId = undefined;
-    var member_len: usize = 0;
-    if (!flattenOrderedExpr(theorem, expr_id, head_id, unit_id, &members, &member_len)) return;
+    const leaf_bag = bag.flattenTemplate(context, head_id, template) orelse return;
+    const leaves = leaf_bag.slice();
+    const leaf_len = leaves.len;
+    const member_bag = bag.flatten(context, theorem, head_id, expr_id) orelse return;
+    const members = member_bag.slice();
+    const member_len = members.len;
 
     var first_multi: ?usize = null;
     var last_multi: usize = 0;
     var multi_count: usize = 0;
-    for (leaves[0..leaf_len], 0..) |leaf, i| {
+    for (leaves, 0..) |leaf, i| {
         if (templateIsSingleMember(context, leaf)) continue;
         if (first_multi == null) first_multi = i;
         last_multi = i;
@@ -331,18 +282,7 @@ fn extractOrderedSpineBindings(
     };
     if (idx >= bindings.len or bindings[idx] != null) return;
     const middle = members[prefix_len .. member_len - suffix_len];
-    if (middle.len == 0) {
-        const unit = unit_id orelse return;
-        bindings[idx] = theorem.interner.internApp(unit, &.{}) catch return;
-        return;
-    }
-    var value = middle[middle.len - 1];
-    var k = middle.len - 1;
-    while (k > 0) {
-        k -= 1;
-        value = theorem.interner.internApp(head_id, &.{ middle[k], value }) catch return;
-    }
-    bindings[idx] = value;
+    bindings[idx] = (bag.build(context, theorem, head_id, middle) catch return) orelse return;
 }
 
 // Decide whether `template` (under `bindings`) provably cannot match `ref`,

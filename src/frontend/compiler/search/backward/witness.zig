@@ -23,6 +23,7 @@ const std = @import("std");
 const types = @import("../types.zig");
 const forward = @import("../forward.zig");
 const acui = @import("./acui.zig");
+const bag = @import("./bag.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const MetaStore = @import("../../inference/meta_store.zig").MetaStore;
@@ -99,9 +100,9 @@ fn carrierCombinerHead(context: *const Context, sort_name: []const u8) ?u32 {
     return null;
 }
 
-/// Flatten the region rooted at `container` by `head_id` and append its
-/// concrete non-unit members. A singleton region (no combiner node) is one
-/// member.
+/// Append the concrete non-unit members of the region rooted at `container`
+/// by `head_id` (see `bag.flatten`). A singleton region (no combiner node) is
+/// one member.
 fn collectRegionMembers(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -110,24 +111,23 @@ fn collectRegionMembers(
     buf: *[max_domain_members]ExprId,
     count: *usize,
 ) void {
-    switch (theorem.interner.node(container).*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    collectRegionMembers(context, theorem, arg, head_id, buf, count);
-                }
-                return;
-            }
-        },
-        else => {},
+    const members = bag.flatten(context, theorem, head_id, container) orelse return;
+    for (members.slice()) |member| {
+        if (!exprIsConcrete(theorem, member)) continue;
+        if (acui.isAcuiUnitExpr(context, theorem, member)) continue;
+        appendDomainMember(buf, count, member);
     }
-    if (!exprIsConcrete(theorem, container)) return;
-    if (acui.isAcuiUnitExpr(context, theorem, container)) return;
-    for (buf[0..count.*]) |existing| {
-        if (existing == container) return;
-    }
+}
+
+/// Append `member` unless present; past `max_domain_members` it is ignored.
+fn appendDomainMember(
+    buf: *[max_domain_members]ExprId,
+    count: *usize,
+    member: ExprId,
+) void {
+    if (std.mem.indexOfScalar(ExprId, buf[0..count.*], member) != null) return;
     if (count.* >= buf.len) return;
-    buf[count.*] = container;
+    buf[count.*] = member;
     count.* += 1;
 }
 
@@ -471,24 +471,10 @@ fn collectMetaRegionMembers(
     buf: *[max_domain_members]ExprId,
     count: *usize,
 ) void {
-    switch (theorem.interner.node(container).*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    collectMetaRegionMembers(context, store, theorem, arg, head_id, buf, count);
-                }
-                return;
-            }
-        },
-        else => {},
+    const members = bag.flatten(context, theorem, head_id, container) orelse return;
+    for (members.slice()) |member| {
+        if (exprHasRegisteredMeta(store, theorem, member)) appendDomainMember(buf, count, member);
     }
-    if (!exprHasRegisteredMeta(store, theorem, container)) return;
-    for (buf[0..count.*]) |existing| {
-        if (existing == container) return;
-    }
-    if (count.* >= buf.len) return;
-    buf[count.*] = container;
-    count.* += 1;
 }
 
 fn exprHasRegisteredMeta(
@@ -629,7 +615,7 @@ fn matchAcuiRegion(
 ) error{OutOfMemory}!bool {
     // Only the region head's OWN unit is droppable: `join(emp2, X)` with a
     // foreign combiner's unit is not ACUI-equal to `X` under `join`'s laws.
-    const unit_id = acui.acuiUnitIdForHead(context, head);
+    const unit_id = bag.unitOf(context, head);
     var sbuf: [max_region_members]ExprId = undefined;
     var pbuf: [max_region_members]ExprId = undefined;
     var scount: usize = 0;
@@ -709,10 +695,8 @@ fn matchAcuiRegion(
 /// (`unit_id`; a foreign combiner's unit is a real member). Returns false on
 /// overflow (the matcher abstains rather than truncates).
 ///
-/// Deliberately separate from `acui.collectAcuiMembers`: that one is a
-/// raw member collection (no meta store to deref through, units kept for the
-/// caller to judge), and parameterizing one flattener over both behaviors
-/// would cost more than the shared spine saves.
+/// Deliberately separate from `bag.flatten`, which has no meta store to deref
+/// through: a solved meta here may itself be a combiner spine to splice.
 fn flattenRegion(
     store: *MetaStore,
     theorem: *TheoremContext,
@@ -807,13 +791,13 @@ fn joinLeftoverMembers(
         kept_n += 1;
     }
     if (kept_n == 0) {
-        const unit_id = acui.acuiUnitIdForHead(context, head) orelse return null;
+        const unit_id = bag.unitOf(context, head) orelse return null;
         return theorem.interner.internApp(unit_id, &.{}) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
         };
     }
-    return acui.internRightFold(theorem, head, kept[0..kept_n]) catch |err| switch (err) {
+    return bag.rightFold(theorem, head, kept[0..kept_n]) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };
@@ -869,8 +853,8 @@ pub const max_complement_shapes = 4;
 /// `hyp(¬ a)`, so neither need be a bare binder). The pair of member
 /// templates (env-owned, stable) with the shared binder as the hole.
 pub const ComplementShape = struct {
-    first: *const TemplateExpr,
-    second: *const TemplateExpr,
+    first: TemplateExpr,
+    second: TemplateExpr,
     hole: usize,
 };
 
@@ -913,7 +897,7 @@ fn complementWalkTemplate(
     for (app.args, 0..) |*arg, idx| {
         if (idx < decl.args.len) {
             if (carrierCombinerHead(context, decl.args[idx].sort_name)) |head_id| {
-                analyzeComplementRegion(rule, arg, head_id, buf, count);
+                analyzeComplementRegion(context, rule, arg.*, head_id, buf, count);
             }
         }
         complementWalkTemplate(context, rule, arg, buf, count);
@@ -924,31 +908,29 @@ fn complementWalkTemplate(
 /// whose binder occurrences are exactly one shared binder (the repetition is
 /// what makes the two members "the same formula" to the rule).
 fn analyzeComplementRegion(
+    context: *const Context,
     rule: *const RuleDecl,
-    container: *const TemplateExpr,
+    container: TemplateExpr,
     head_id: u32,
     buf: *[max_complement_shapes]ComplementShape,
     count: *usize,
 ) void {
-    var members: [max_region_members]*const TemplateExpr = undefined;
-    var member_count: usize = 0;
-    var overflow = false;
-    flattenTemplateRegion(container, head_id, &members, &member_count, &overflow);
-    if (overflow) return;
+    const region = bag.flattenTemplate(context, head_id, container) orelse return;
+    const members = region.slice();
 
-    for (members[0..member_count], 0..) |first, i| {
+    for (members, 0..) |first, i| {
         const hole = singleBinderOf(first) orelse continue;
         // A bound (eigenvariable-class) hole would raise capture questions
         // the hole unification cannot arbitrate; abstain.
         if (hole >= rule.args.len or rule.args[hole].bound) continue;
-        for (members[i + 1 .. member_count]) |second| {
+        for (members[i + 1 ..]) |second| {
             if (singleBinderOf(second) != hole) continue;
-            if (first.eql(second.*)) continue;
+            if (first.eql(second)) continue;
             var duplicate = false;
             for (buf[0..count.*]) |existing| {
                 if (existing.hole == hole and
-                    existing.first.eql(first.*) and
-                    existing.second.eql(second.*))
+                    existing.first.eql(first) and
+                    existing.second.eql(second))
                 {
                     duplicate = true;
                     break;
@@ -962,36 +944,10 @@ fn analyzeComplementRegion(
     }
 }
 
-fn flattenTemplateRegion(
-    tmpl: *const TemplateExpr,
-    head_id: u32,
-    members: *[max_region_members]*const TemplateExpr,
-    count: *usize,
-    overflow: *bool,
-) void {
-    switch (tmpl.*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |*arg| {
-                    flattenTemplateRegion(arg, head_id, members, count, overflow);
-                }
-                return;
-            }
-        },
-        .binder => {},
-    }
-    if (count.* >= members.len) {
-        overflow.* = true;
-        return;
-    }
-    members[count.*] = tmpl;
-    count.* += 1;
-}
-
 /// The single distinct binder index occurring in `tmpl`, or null when the
 /// template mentions zero or several binders (or overflows the mask).
-fn singleBinderOf(tmpl: *const TemplateExpr) ?usize {
-    const m = templateBinderMask(tmpl.*);
+fn singleBinderOf(tmpl: TemplateExpr) ?usize {
+    const m = templateBinderMask(tmpl);
     if (m.overflow) return null;
     if (@popCount(m.mask) != 1) return null;
     return @ctz(m.mask);
@@ -1015,10 +971,10 @@ pub fn unifyMembersThroughShape(
     member_b: ExprId,
 ) bool {
     var captured: ?ExprId = null;
-    if (!matchTemplateCapture(store, theorem, shape.first, shape.hole, member_a, &captured)) {
+    if (!matchTemplateCapture(store, theorem, &shape.first, shape.hole, member_a, &captured)) {
         return false;
     }
-    return matchTemplateCapture(store, theorem, shape.second, shape.hole, member_b, &captured);
+    return matchTemplateCapture(store, theorem, &shape.second, shape.hole, member_b, &captured);
 }
 
 /// Deepest conclusion-template position an anchor path records.
@@ -1036,7 +992,7 @@ pub const max_anchor_shapes = 4;
 /// conclusion template; `path` walks its argument indices down to the bare
 /// binder `hole`, so target lookup can check every head on the way.
 pub const AnchorShape = struct {
-    member: *const TemplateExpr,
+    member: TemplateExpr,
     root: *const TemplateExpr,
     path: [max_anchor_path]u8,
     path_len: u8,
@@ -1057,22 +1013,20 @@ pub fn collectAnchorShapes(
     for (rules[0..visible]) |*rule| {
         if (count >= buf.len) break;
         if (rule.hyps.len != 0) continue;
-        var members: [max_region_members]*const TemplateExpr = undefined;
-        var member_count: usize = 0;
+        var members = bag.TemplateBag{};
         var sites: [max_region_members]AnchorSite = undefined;
         var site_count: usize = 0;
         var path: [max_anchor_path]u8 = undefined;
-        anchorWalkTemplate(
+        if (!anchorWalkTemplate(
             context,
             &rule.concl,
             &path,
             0,
             &members,
-            &member_count,
             &sites,
             &site_count,
-        );
-        for (members[0..member_count]) |member| {
+        )) continue;
+        for (members.slice()) |member| {
             const hole = singleBinderOf(member) orelse continue;
             if (hole >= rule.args.len or rule.args[hole].bound) continue;
             for (sites[0..site_count]) |site| {
@@ -1100,26 +1054,28 @@ const AnchorSite = struct {
 
 /// Collect region member templates and bare-binder positions outside any
 /// region, tracking each position's argument path from the conclusion root.
+/// False when the members overflow a bag (the rule then offers no shape).
 fn anchorWalkTemplate(
     context: *const Context,
     tmpl: *const TemplateExpr,
     path: *[max_anchor_path]u8,
     depth: usize,
-    members: *[max_region_members]*const TemplateExpr,
-    member_count: *usize,
+    members: *bag.TemplateBag,
     sites: *[max_region_members]AnchorSite,
     site_count: *usize,
-) void {
+) bool {
     const app = switch (tmpl.*) {
         .app => |*app| app,
-        else => return,
+        else => return true,
     };
-    const decl = termDecl(context, app.term_id) orelse return;
+    const decl = termDecl(context, app.term_id) orelse return true;
     for (app.args, 0..) |*arg, idx| {
         if (idx < decl.args.len) {
             if (carrierCombinerHead(context, decl.args[idx].sort_name)) |head_id| {
-                var overflow = false;
-                flattenTemplateRegion(arg, head_id, members, member_count, &overflow);
+                const region = bag.flattenTemplate(context, head_id, arg.*) orelse return false;
+                for (region.slice()) |member| {
+                    if (!members.append(member)) return false;
+                }
                 continue;
             }
         }
@@ -1135,18 +1091,18 @@ fn anchorWalkTemplate(
                 };
                 site_count.* += 1;
             },
-            .app => anchorWalkTemplate(
+            .app => if (!anchorWalkTemplate(
                 context,
                 arg,
                 path,
                 depth + 1,
                 members,
-                member_count,
                 sites,
                 site_count,
-            ),
+            )) return false,
         }
     }
+    return true;
 }
 
 /// The target subterm at `shape`'s anchor position, or null when the target
@@ -1187,7 +1143,7 @@ pub fn unifyMemberWithAnchor(
     anchor: ExprId,
 ) bool {
     var captured: ?ExprId = null;
-    if (!matchTemplateCapture(store, theorem, shape.member, shape.hole, member, &captured)) {
+    if (!matchTemplateCapture(store, theorem, &shape.member, shape.hole, member, &captured)) {
         return false;
     }
     const prior = captured orelse return false;

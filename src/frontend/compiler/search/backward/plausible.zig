@@ -27,33 +27,11 @@ const ApplyCandidate = types.ApplyCandidate;
 const SearchCounters = types.SearchCounters;
 const SearchRuntime = types.SearchRuntime;
 const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
-const acuiUnitIdForHead = prune.acuiUnitIdForHead;
+const bag = @import("./bag.zig");
 const defBodyForUnfold = prune.defBodyForUnfold;
 const templateDefiniteMismatch = prune.templateDefiniteMismatch;
 const unfoldDefBody = prune.unfoldDefBody;
 const lockstep = @import("./lockstep.zig");
-
-const max_split_guard_members: usize = 64;
-
-pub const SplitMemberList = struct {
-    items: [max_split_guard_members]ExprId = undefined,
-    len: usize = 0,
-
-    /// The populated prefix of `items` (the only valid range to iterate).
-    pub fn slice(self: *const SplitMemberList) []const ExprId {
-        return self.items[0..self.len];
-    }
-
-    fn appendDistinct(self: *SplitMemberList, expr: ExprId) bool {
-        for (self.slice()) |existing| {
-            if (existing == expr) return true;
-        }
-        if (self.len >= self.items.len) return false;
-        self.items[self.len] = expr;
-        self.len += 1;
-        return true;
-    }
-};
 
 pub fn splitSiteBindingsPlausible(
     context: *const Context,
@@ -68,7 +46,7 @@ pub fn splitSiteBindingsPlausible(
         site.head_id,
     ) orelse return true;
 
-    var bound_members = SplitMemberList{};
+    var bound_members = bag.ExprBag{};
     var all_bound = true;
     var any_bound = false;
     for (site.spine[0..site.spine_len]) |binder_idx| {
@@ -119,69 +97,29 @@ pub fn splitSiteBindingsPlausible(
     return true;
 }
 
+/// The distinct members of `expr` under combiner `head_id`, or null on overflow
+/// or when a member is a placeholder. The prunes here compare which members
+/// occur, a necessary condition whatever the combiner's laws.
 pub fn collectSplitMembers(
     context: *const Context,
     theorem: *const TheoremContext,
     expr: ExprId,
     head_id: u32,
-) ?SplitMemberList {
-    var out = SplitMemberList{};
-    if (!collectSplitMembersInto(context, theorem, expr, head_id, &out)) {
-        return null;
+) ?bag.ExprBag {
+    const members = bag.flatten(context, theorem, head_id, expr) orelse return null;
+    var out = bag.ExprBag{};
+    for (members.slice()) |member| {
+        if (theorem.interner.node(member).* == .placeholder) return null;
+        _ = out.appendDistinct(member);
     }
     return out;
-}
-
-fn collectSplitMembersInto(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr: ExprId,
-    head_id: u32,
-    out: *SplitMemberList,
-) bool {
-    const node = theorem.interner.node(expr);
-    switch (node.*) {
-        .placeholder => return false,
-        .variable => return out.appendDistinct(expr),
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (!collectSplitMembersInto(
-                        context,
-                        theorem,
-                        arg,
-                        head_id,
-                        out,
-                    )) return false;
-                }
-                return true;
-            }
-            if (isAcuiUnitForHead(context, theorem, expr, head_id)) return true;
-            return out.appendDistinct(expr);
-        },
-    }
-}
-
-fn isAcuiUnitForHead(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr: ExprId,
-    head_id: u32,
-) bool {
-    const unit_id = acuiUnitIdForHead(context, head_id) orelse return false;
-    const node = theorem.interner.node(expr);
-    const app = switch (node.*) {
-        .app => |a| a,
-        else => return false,
-    };
-    return app.term_id == unit_id and app.args.len == 0;
 }
 
 fn memberPossiblyInList(
     context: *const Context,
     theorem: *const TheoremContext,
     member: ExprId,
-    list: SplitMemberList,
+    list: bag.ExprBag,
 ) bool {
     for (list.slice()) |candidate| {
         if (!prune.rigidExprMismatch(
@@ -666,17 +604,17 @@ fn repeatedBinderMemberMismatch(
     bindings: []const ?ExprId,
 ) bool {
     if (bindings.len == 0 or bindings.len > max_repeated_binder_binders) return false;
-    var members: [max_split_guard_members]TemplateExpr = undefined;
-    var member_len: usize = 0;
-    collectAcuiMemberTemplates(region, region.term_id, &members, &member_len);
-    if (member_len < 2) return false;
+    const member_bag = bag.flattenTemplate(context, region.term_id, .{ .app = region }) orelse
+        return false;
+    const members = member_bag.slice();
+    if (members.len < 2) return false;
 
     // The unbound binder shared by ≥2 members (the repeated-binder schema).
     var repeated: ?usize = null;
     for (bindings, 0..) |binding, bi| {
         if (binding != null) continue;
         var count: usize = 0;
-        for (members[0..member_len]) |m| {
+        for (members) |m| {
             if (templateMentionsBinder(m, bi)) count += 1;
         }
         if (count >= 2) {
@@ -697,7 +635,7 @@ fn repeatedBinderMemberMismatch(
     // A member mentioning `b`, used to enumerate `b`'s candidate values off the
     // goal (matchTemplate reads through the `hyp(...)` coercion structurally).
     var seed: ?TemplateExpr = null;
-    for (members[0..member_len]) |m| {
+    for (members) |m| {
         if (templateMentionsBinder(m, b)) {
             seed = m;
             break;
@@ -712,7 +650,7 @@ fn repeatedBinderMemberMismatch(
         const bval = s0[b] orelse continue;
 
         var all_present = true;
-        for (members[0..member_len]) |m| {
+        for (members) |m| {
             if (!templateMentionsBinder(m, b)) continue;
             var found = false;
             for (goal_members.slice()) |gm| {
@@ -771,7 +709,7 @@ const HypRefState = struct {
     theorem: *TheoremContext,
     rule: *const RuleDecl,
     regions: []const RegionPair,
-    goal_members: [max_hypref_regions]SplitMemberList,
+    goal_members: [max_hypref_regions]bag.ExprBag,
     // Per-binder: the conclusion region in which it is a bare (rest) member.
     rest_region: [max_repeated_binder_binders]?usize,
     // Per-region: how many distinct rest binders it holds.
@@ -842,7 +780,7 @@ pub fn hypRefMembersPlausible(
         // def unfolding, a `@rewrite` reduction, or an ACUI rearrangement, so
         // a goal member with such a head could hide the true assignment —
         // abstain.
-        for (state.goal_members[i].items[0..state.goal_members[i].len]) |gm| {
+        for (state.goal_members[i].slice()) |gm| {
             const node = theorem.interner.node(gm);
             if (node.* == .app and !semantic.isRigidHead(context, node.app.term_id)) return true;
         }
@@ -851,10 +789,9 @@ pub fn hypRefMembersPlausible(
     var items: [max_hypref_items]HypRefItem = undefined;
     var item_len: usize = 0;
     for (regions[0..region_len], 0..) |r, ridx| {
-        var mts: [max_split_guard_members]TemplateExpr = undefined;
-        var mts_len: usize = 0;
-        collectAcuiMemberTemplates(r.app, r.app.term_id, &mts, &mts_len);
-        for (mts[0..mts_len]) |m| {
+        const mts = bag.flattenTemplate(context, r.app.term_id, .{ .app = r.app }) orelse
+            return true;
+        for (mts.slice()) |m| {
             switch (m) {
                 .binder => |bi| {
                     if (bi >= bindings.len) return true;
@@ -968,9 +905,9 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
 
     // Instantiate each region's consumed (non-rest) conclusion members under
     // this assignment, for the direction-3 remainder check below.
-    var consumed_vals: [max_hypref_regions]SplitMemberList = undefined;
+    var consumed_vals: [max_hypref_regions]bag.ExprBag = undefined;
     for (state.regions, 0..) |r, ridx| {
-        consumed_vals[ridx] = SplitMemberList{};
+        consumed_vals[ridx] = bag.ExprBag{};
         for (state.consumed[ridx][0..state.consumed_len[ridx]]) |ct| {
             if (!split.templateFullyBound(ct, merged)) return .abstain;
             const v = (OpenTerms.instantiateTemplateConcrete(
@@ -1009,14 +946,13 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                 hr.expr,
                 hr.app.term_id,
             ) orelse return .abstain;
-            var mts: [max_split_guard_members]TemplateExpr = undefined;
-            var mts_len: usize = 0;
-            collectAcuiMemberTemplates(hr.app, hr.app.term_id, &mts, &mts_len);
-            var inst = SplitMemberList{};
+            const mts = bag.flattenTemplate(context, hr.app.term_id, .{ .app = hr.app }) orelse
+                return .abstain;
+            var inst = bag.ExprBag{};
             var rest_mask = [_]bool{false} ** max_hypref_regions;
             var hyp_rest_count = [_]usize{0} ** max_hypref_regions;
             var has_rest = false;
-            for (mts[0..mts_len]) |m| {
+            for (mts.slice()) |m| {
                 switch (m) {
                     .binder => |bi| {
                         if (bi >= merged.len) return .abstain;
@@ -1134,32 +1070,6 @@ fn templateMentionsBinder(t: TemplateExpr, b: usize) bool {
     };
 }
 
-/// Flatten an ACUI region template into its member templates (descending nested
-/// combiner apps of the same head, mirroring `collectSplitMembers` on the
-/// concrete side).
-fn collectAcuiMemberTemplates(
-    region: TemplateExpr.App,
-    head_id: u32,
-    out: *[max_split_guard_members]TemplateExpr,
-    len: *usize,
-) void {
-    for (region.args) |arg| {
-        switch (arg) {
-            .app => |inner| {
-                if (inner.term_id == head_id) {
-                    collectAcuiMemberTemplates(inner, head_id, out, len);
-                    continue;
-                }
-            },
-            else => {},
-        }
-        if (len.* < out.len) {
-            out[len.*] = arg;
-            len.* += 1;
-        }
-    }
-}
-
 const max_folded_body_probe_depth: usize = 64;
 
 fn foldedGoalBodyMismatch(
@@ -1257,7 +1167,7 @@ fn templateArgMismatchAfterGoalUnfold(
     );
 }
 
-fn unfoldedExprMismatch(
+pub fn unfoldedExprMismatch(
     context: *const Context,
     theorem: *TheoremContext,
     a: ExprId,

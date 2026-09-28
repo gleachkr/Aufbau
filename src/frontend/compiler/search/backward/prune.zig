@@ -14,7 +14,6 @@ pub const exprNeedsSemantic = def_match.exprNeedsSemantic;
 pub const bindingsNeedSemantic = def_match.bindingsNeedSemantic;
 
 pub const acuiBoundMembersPlausible = acui.acuiBoundMembersPlausible;
-pub const acuiUnitIdForHead = acui.acuiUnitIdForHead;
 pub const isAcuiUnitExpr = acui.isAcuiUnitExpr;
 pub const bindAcuiSpineToUnit = acui.bindAcuiSpineToUnit;
 pub const normalizeAcuiUnits = acui.normalizeAcuiUnits;

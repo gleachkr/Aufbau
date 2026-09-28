@@ -32,6 +32,8 @@ pub const def_match = @import("../backward/def_match.zig");
 
 pub const acui = @import("../backward/acui.zig");
 
+pub const split = @import("../backward/split.zig");
+
 pub const Witness = @import("../backward/witness.zig");
 
 pub const MetaStore = @import("../../inference/meta_store.zig").MetaStore;
@@ -724,6 +726,15 @@ pub const tunable_chain_mm0 =
 
 /// Runs the source search at the first `needle` in `proof_src` (usually the
 /// search token itself, such as `"auto?"`).
+/// The index of the rule argument called `name`.
+pub fn ruleArgIndex(rule: anytype, name: []const u8) !usize {
+    for (rule.arg_names, 0..) |maybe_name, idx| {
+        const arg_name = maybe_name orelse continue;
+        if (std.mem.eql(u8, arg_name, name)) return idx;
+    }
+    return error.MissingArg;
+}
+
 pub fn suggestionsAtNeedle(
     arena: *std.heap.ArenaAllocator,
     mm0_src: []const u8,

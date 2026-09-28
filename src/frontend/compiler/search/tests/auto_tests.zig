@@ -4,6 +4,7 @@ const types = helpers.types;
 const prune = helpers.prune;
 const def_match = helpers.def_match;
 const acui = helpers.acui;
+const split = helpers.split;
 const TemplateExpr = helpers.TemplateExpr;
 const ExprId = helpers.ExprId;
 const TheoremContext = helpers.TheoremContext;
@@ -24,6 +25,7 @@ const auto_inline_mm0 = helpers.auto_inline_mm0;
 const GeneratedConclusionHookCtx = helpers.GeneratedConclusionHookCtx;
 const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
 const expectOffered = helpers.expectOffered;
+const ruleArgIndex = helpers.ruleArgIndex;
 
 fn autoChainSuggestions(
     arena: *std.heap.ArenaAllocator,
@@ -1624,4 +1626,158 @@ test "recover member injection skips pinned-target laws" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{"myrule [l1, l2]"});
+}
+
+/// One context combiner under the laws `comm` and `idem` name (`_` for none),
+/// with a two-context rule, a context-extension rule, a context `nil` that
+/// unfolds to the unit, and the goal context `A , B , A`.
+fn splitLawMm0(comptime comm: []const u8, comptime idem: []const u8) []const u8 {
+    return 
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc 
+++ comm ++ " emp " ++ idem ++ "\n" ++
+    \\term join (g h: ctx): ctx;
+    \\term hyp (a: wff): ctx;
+    \\term seq (g: ctx) (a: wff): wff;
+    \\term A: wff;
+    \\term B: wff;
+    \\term P: wff;
+    \\def nil: ctx = $ emp $;
+    \\axiom ctx_assoc (g h i: ctx):
+    \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+    \\axiom two (g h: ctx): $ seq g P $ > $ seq h P $ > $ seq (join g h) P $;
+    \\axiom ext (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) a $;
+    \\theorem t: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
+    \\theorem u: $ seq (join (join (hyp A) (hyp B)) (hyp A)) A $;
+    ;
+}
+
+/// Parse context `text` (not a provable sort) as the context of `seq (text) P`.
+fn parseContext(
+    fixture: anytype,
+    theorem: *TheoremContext,
+    theorem_vars: anytype,
+    text: []const u8,
+) !ExprId {
+    var buf: [256]u8 = undefined;
+    const wrapped = try std.fmt.bufPrint(&buf, "seq ({s}) P", .{text});
+    const seq = (try parseGoal(fixture, theorem, theorem_vars, wrapped)).concrete;
+    return theorem.interner.node(seq).app.args[0];
+}
+
+/// The split candidates `rule_name`'s context binder `g` gets against the goal
+/// of theorem `theorem_name`, with binder `h` bound to `h_value` when given, as
+/// math strings `expected` in candidate order.
+fn expectSplitCandidates(
+    mm0_src: []const u8,
+    theorem_name: []const u8,
+    rule_name: []const u8,
+    h_value: ?[]const u8,
+    retain_claimed: bool,
+    expected: []const []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, theorem_name);
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
+
+    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    const g_idx = try ruleArgIndex(rule, "g");
+    if (h_value) |text| {
+        bindings[try ruleArgIndex(rule, "h")] =
+            try parseContext(&fixture, &theorem, &theorem_vars, text);
+    }
+    const site = split.findSplitSite(&context, &theorem, rule.concl, goal_expr, g_idx) orelse
+        return error.MissingSplitSite;
+    const enumerator = split.buildEnumerator(&context, &theorem, site, bindings, g_idx, retain_claimed) orelse
+        return error.MissingEnumerator;
+
+    try std.testing.expectEqual(expected.len, enumerator.count());
+    for (expected, 0..) |text, i| {
+        const want = try parseContext(&fixture, &theorem, &theorem_vars, text);
+        const got = (try enumerator.candidate(&context, &theorem, i)) orelse
+            return error.MissingCandidate;
+        try std.testing.expectEqual(want, got);
+    }
+}
+
+test "split of a set context enumerates sub-sets of its distinct members" {
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "ctx_idem"), "t", "two", null, false, &.{
+        "emp",
+        "hyp A",
+        "hyp B",
+        "join (hyp A) (hyp B)",
+    });
+}
+
+test "split of a multiset context counts repeated members" {
+    // With `h` open, `g` takes any sub-multiset of `A , B , A`: `A , A` too.
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", null, false, &.{
+        "emp",
+        "hyp A",
+        "hyp B",
+        "join (hyp A) (hyp A)",
+        "join (hyp A) (hyp B)",
+        "join (hyp A) (join (hyp B) (hyp A))",
+    });
+    // With `h := B` bound, `g` must take exactly what is left.
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "hyp B", false, &.{
+        "join (hyp A) (hyp A)",
+    });
+}
+
+test "split of a sequence context enumerates contiguous runs only" {
+    // `g` opens the sequence and `h` is open, so `g` is a prefix.
+    try expectSplitCandidates(splitLawMm0("_", "_"), "t", "two", null, false, &.{
+        "emp",
+        "hyp A",
+        "join (hyp A) (hyp B)",
+        "join (hyp A) (join (hyp B) (hyp A))",
+    });
+    // `g , hyp a` pins `g` to everything but the last member.
+    try expectSplitCandidates(splitLawMm0("_", "_"), "u", "ext", null, false, &.{
+        "join (hyp A) (hyp B)",
+    });
+    // `h := nil` may unfold to nothing, so it does not pin where `g` ends.
+    try expectSplitCandidates(splitLawMm0("_", "_"), "t", "two", "nil", false, &.{
+        "emp",
+        "hyp A",
+        "join (hyp A) (hyp B)",
+        "join (hyp A) (join (hyp B) (hyp A))",
+    });
+}
+
+test "split of an idempotent sequence context retains principals as any run" {
+    // `A , B , A` under `a , a = a`: retaining the principal `hyp a` lets `g`
+    // overlap it, so `g` may be any contiguous run, each built once.
+    try expectSplitCandidates(splitLawMm0("_", "ctx_idem"), "u", "ext", null, true, &.{
+        "emp",
+        "hyp A",
+        "hyp B",
+        "join (hyp A) (hyp B)",
+        "join (hyp B) (hyp A)",
+        "join (hyp A) (join (hyp B) (hyp A))",
+    });
+    // Without retention the principal pins `g` as in a plain sequence.
+    try expectSplitCandidates(splitLawMm0("_", "ctx_idem"), "u", "ext", null, false, &.{
+        "join (hyp A) (hyp B)",
+    });
 }

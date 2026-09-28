@@ -996,8 +996,8 @@ test "complement shapes derive from ax's repeated-binder template pair" {
     try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqual(@as(usize, 1), shapes[0].hole);
     // Both members are compound (coercion-wrapped), not bare binders.
-    try std.testing.expect(shapes[0].first.* == .app);
-    try std.testing.expect(shapes[0].second.* == .app);
+    try std.testing.expect(shapes[0].first == .app);
+    try std.testing.expect(shapes[0].second == .app);
 }
 
 test "auto co-solves a complementary two-meta ax leaf through the rule template" {
@@ -1065,7 +1065,7 @@ test "anchor shapes derive from ax's member-to-succedent binder repeat" {
     const count = Witness.collectAnchorShapes(&context, &shapes);
     try std.testing.expectEqual(@as(usize, 1), count);
     try std.testing.expectEqual(@as(usize, 1), shapes[0].hole);
-    try std.testing.expect(shapes[0].member.* == .app);
+    try std.testing.expect(shapes[0].member == .app);
     try std.testing.expectEqual(@as(u8, 1), shapes[0].path_len);
     try std.testing.expectEqual(@as(u8, 1), shapes[0].path[0]);
 }

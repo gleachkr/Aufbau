@@ -94,6 +94,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` now splits a context between a rule's premises by the context's
+  own laws. For a context that is not idempotent, such as linear logic's, it
+  counts repeated entries, so `a , a , b` can give one premise `a , a`. For
+  an ordered context it tries only runs of consecutive entries, and when the
+  rule fixes the entries around a premise's context, only the run they leave:
+  `g , x : A` against a three-entry context gives `g` the first two. Before,
+  every context was split as a set of distinct entries.
 - `auto?` now proves `g ⊢ (λ x : A. t) : (A → B)` by `lam_intro` when it
   also has to prove the premise `g , x : A ⊢ Ty B`. The arrow is a
   definition that hides a bound variable (`Π x : A. B`), and the search

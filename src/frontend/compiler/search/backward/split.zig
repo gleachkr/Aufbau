@@ -9,32 +9,35 @@
 //!
 //! This module proposes concrete values for such an open binder by distributing
 //! the goal's concrete context members across the conclusion's combiner spine
-//! binders. Splitting is inherently speculative — `H ∪ K = ctx` only bounds each
-//! half (`H ⊇ ctx∖upper(others)`, `H ⊆ ctx`); pinning siblings tightens the
-//! interval but never forces a value. We therefore enumerate within the interval,
-//! ordered minimal-first so the common no-contraction split is tried first, and
-//! let the ordinary `tryCandidate` validator confirm soundness (it does the real
-//! member-level ACUI check). Restriction to small contexts + the global fuel
-//! floor + iterative deepening keep the fan-out bounded.
+//! binders. What a candidate may hold depends on the combiner's laws (`bag.Law`):
+//!   * a set (ACUI) splits with overlap — `H ∪ K = ctx` only bounds each half
+//!     (`H ⊇ ctx∖upper(others)`, `H ⊆ ctx`) — so we enumerate sub-sets within
+//!     that interval;
+//!   * a multiset (ACU) splits by count: a candidate is a sub-multiset of what
+//!     the bound siblings and principals leave, forced when no sibling is open;
+//!   * a sequence (AU) splits by position: a candidate is one contiguous run,
+//!     pinned at each end the summands before and after it fix exactly.
+//! Candidates are tried smallest first, so the common no-contraction split comes
+//! first, and the ordinary `tryCandidate` validator confirms each one (it does
+//! the real member-level ACUI check). A site with more than `max_candidates`
+//! candidates skips the split; the global fuel floor and iterative deepening
+//! bound the rest.
 
 const std = @import("std");
 const types = @import("../types.zig");
-const UsizeShift = std.math.Log2Int(usize);
 const acui = @import("./acui.zig");
+const bag = @import("./bag.zig");
+const semantic = @import("./semantic.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const Context = types.Context;
 
-/// Distinct-member and spine-binder caps. Contexts at a split point are small in
-/// practice; a larger one simply skips the split (falls back to today's
-/// no-generation behaviour) rather than risk a `2^n` blow-up.
-const max_members = 8;
+/// Summands of one conclusion spine. Rule conclusions combine a handful.
 const max_spine = 8;
-/// Optional (non-required) members enumerated as subsets. Caps the candidate
-/// count at `2^max_optional`.
-const max_optional = 6;
-const max_masks = 1 << max_optional;
+/// Candidates one split may try. Sub-bags grow as `2^optional`, so a site with
+/// more candidates than this skips the split rather than risk the blow-up.
+const max_candidates = 64;
 
 /// Where a conclusion's ACUI combiner aligns with the goal: the concrete goal
 /// subterm holding the members to distribute, the combiner head, and the spine
@@ -42,6 +45,9 @@ const max_masks = 1 << max_optional;
 pub const SplitSite = struct {
     container: ExprId,
     head_id: u32,
+    /// The conclusion's combiner subterm, whose summand order a sequence split
+    /// reads.
+    template: TemplateExpr,
     spine: [max_spine]usize = undefined,
     spine_len: usize = 0,
     /// Structured (non-binder) summands of the combiner spine — the principal
@@ -66,8 +72,8 @@ pub fn conclusionIsSplit(context: *const Context, concl: TemplateExpr) bool {
         .binder => return false,
         .app => |app| {
             if (context.registry.acui_by_head.contains(app.term_id)) {
-                var site = SplitSite{ .container = undefined, .head_id = app.term_id };
-                if (!collectSpine(concl, app.term_id, &site)) return true;
+                var site = SplitSite{ .container = undefined, .head_id = app.term_id, .template = concl };
+                if (!collectSpine(context, &site)) return true;
                 var seen: u64 = 0;
                 for (site.spine[0..site.spine_len]) |idx| {
                     if (idx >= 64) return true;
@@ -100,8 +106,8 @@ pub fn findSplitSite(
         .app => |app| {
             if (context.registry.acui_by_head.contains(app.term_id)) {
                 if (!templateRefsBinder(concl, binder_idx)) return null;
-                var site = SplitSite{ .container = goal_expr, .head_id = app.term_id };
-                if (!collectSpine(concl, app.term_id, &site)) return null;
+                var site = SplitSite{ .container = goal_expr, .head_id = app.term_id, .template = concl };
+                if (!collectSpine(context, &site)) return null;
                 // Only a bare spine binder distributes context members. A
                 // binder inside a fixed summand (the `A` of `g , x : A`) is not
                 // a context, and enumerating contexts for it is ill-sorted.
@@ -160,46 +166,40 @@ fn templateRefsBinder(template: TemplateExpr, idx: usize) bool {
     };
 }
 
-/// Collect the combiner spine's summands: bare binders become spine entries that
-/// distribute container members; structured (non-binder) summands are recorded as
-/// `fixed` principals that each claim one member. Returns false only if either
-/// array overflows `max_spine` (then the split is skipped).
-fn collectSpine(template: TemplateExpr, head_id: u32, site: *SplitSite) bool {
-    switch (template) {
+/// Collect the combiner spine's summands (units dropped): bare binders become
+/// spine entries that distribute container members; structured (non-binder)
+/// summands are recorded as `fixed` principals that each claim one member.
+/// Returns false only if either array overflows `max_spine` (then the split is
+/// skipped).
+fn collectSpine(context: *const Context, site: *SplitSite) bool {
+    const summands = bag.flattenTemplate(context, site.head_id, site.template) orelse
+        return false;
+    for (summands.slice()) |summand| switch (summand) {
         .binder => |idx| {
-            if (site.spine_len >= site.spine.len) return false;
+            if (site.spine_len == max_spine) return false;
             site.spine[site.spine_len] = idx;
             site.spine_len += 1;
-            return true;
         },
-        .app => |app| {
-            if (app.term_id != head_id) {
-                // A structured principal summand (e.g. `a→b` in `(a→b), d`). The
-                // additive rule keeps it on this side; it claims one goal member,
-                // and the open spine binder distributes the rest. Recording it
-                // (rather than bailing) is what makes additive rule hypotheses
-                // with an open context rest generatable.
-                if (site.fixed_len >= site.fixed.len) return false;
-                site.fixed[site.fixed_len] = template;
-                site.fixed_len += 1;
-                return true;
-            }
-            for (app.args) |arg| {
-                if (!collectSpine(arg, head_id, site)) return false;
-            }
-            return true;
+        // A structured principal summand (e.g. `a→b` in `(a→b), d`). The
+        // additive rule keeps it on this side; it claims one goal member, and
+        // the open spine binder distributes the rest. Recording it (rather than
+        // bailing) is what makes additive rule hypotheses with an open context
+        // rest generatable.
+        .app => {
+            if (site.fixed_len == max_spine) return false;
+            site.fixed[site.fixed_len] = summand;
+            site.fixed_len += 1;
         },
-    }
+    };
+    return true;
 }
 
-/// Enumerates candidate concrete contexts for one open spine binder, ordered
-/// minimal-first (fewest members). Each candidate is a sub-multiset of the
-/// container's distinct members within the binder's `[lower, upper]` interval.
+/// Enumerates candidate concrete contexts for one open spine binder, smallest
+/// first. Each candidate is a mask over `members`, the goal's members in order.
 pub const SplitEnumerator = struct {
-    members: [max_members]ExprId = undefined,
-    member_len: usize = 0,
+    members: bag.ExprBag = .{},
     head_id: u32 = 0,
-    masks: [max_masks]u64 = undefined,
+    masks: [max_candidates]u64 = undefined,
     mask_len: usize = 0,
 
     pub fn count(self: *const SplitEnumerator) usize {
@@ -215,38 +215,28 @@ pub const SplitEnumerator = struct {
         theorem: *TheoremContext,
         i: usize,
     ) !?ExprId {
-        const mask = self.masks[i];
-        var chosen: [max_members]ExprId = undefined;
+        var chosen: [bag.capacity]ExprId = undefined;
         var n: usize = 0;
-        var b: usize = 0;
-        while (b < self.member_len) : (b += 1) {
-            if (mask & (@as(u64, 1) << @as(u6, @intCast(b))) != 0) {
-                chosen[n] = self.members[b];
+        for (self.members.slice(), 0..) |member, b| {
+            if (self.masks[i] & bit(b) != 0) {
+                chosen[n] = member;
                 n += 1;
             }
         }
-        if (n == 0) {
-            const unit = acui.acuiUnitIdForHead(context, self.head_id) orelse
-                return null;
-            return try theorem.interner.internApp(unit, &.{});
-        }
-        if (n == 1) return chosen[0];
-        // Right-fold into binary combiner applications, preserving order.
-        var result = chosen[n - 1];
-        var k = n - 1;
-        while (k > 0) {
-            k -= 1;
-            result = try theorem.interner.internApp(self.head_id, &.{ chosen[k], result });
-        }
-        return result;
+        return bag.build(context, theorem, self.head_id, chosen[0..n]);
+    }
+
+    fn push(self: *SplitEnumerator, mask: u64) bool {
+        if (self.mask_len == max_candidates) return false;
+        self.masks[self.mask_len] = mask;
+        self.mask_len += 1;
+        return true;
     }
 };
 
-/// Build the enumerator for open binder `target_b` at `site`. Computes the
-/// interval: `upper` = all container members; `lower` (required) = members no
-/// *other* spine binder can cover (an open sibling can cover anything; a bound
-/// sibling covers exactly its own members). Returns null — skip the split — when
-/// the container is empty/oversized or the optional set is too large to enumerate.
+/// Build the enumerator for open binder `target_b` at `site`, or null — skip the
+/// split — when a bag overflows or the site has more than `max_candidates`
+/// candidates.
 pub fn buildEnumerator(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -255,194 +245,356 @@ pub fn buildEnumerator(
     target_b: usize,
     retain_claimed: bool,
 ) ?SplitEnumerator {
-    var en = SplitEnumerator{ .head_id = site.head_id };
-    var all: [max_members]ExprId = undefined;
-    var all_len: usize = 0;
-    if (!flattenDistinct(theorem, site.container, site.head_id, &all, &all_len)) {
+    const law = bag.lawOf(context, site.head_id) orelse return null;
+    const goal = bag.flatten(context, theorem, site.head_id, site.container) orelse
         return null;
-    }
-    const had_members = all_len > 0;
-
-    // Under an idempotent combiner (`g , g = g`) a goal member may sit in BOTH a
-    // fixed principal summand AND the open rest binder, so claimed members below
-    // are retained as OPTIONAL rest members instead of removed. Non-idempotent
-    // subsets (AU / ACU) keep the additive-minimal reading: a claimed member is
-    // removed from the rest's distribution. Gated on the declared `@acui` idem
-    // axiom (subset soundness) AND `retain_claimed` — the principal-retaining
-    // split broadens every additive node, so the driver only enables it in a
-    // final phase on a clean miss (see `GenerationHook.allow_retain_principal`).
-    const retain = retain_claimed and
-        if (context.registry.acui_by_head.get(site.head_id)) |c|
-            c.idem_name != null
-        else
-            false;
-
-    // Members claimed by structured principal summands. Each fully-bound fixed
-    // summand that uniquely matches one remaining member claims it (the principal
-    // already sits on this side). A partially-bound or ambiguous summand claims
-    // nothing — the validator's ACUI weakening still confirms the assembly.
-    var claimed = [_]bool{false} ** max_members;
-    var f: usize = 0;
-    while (f < site.fixed_len) : (f += 1) {
-        const ftmpl = site.fixed[f];
-        if (!templateFullyBound(ftmpl, bindings)) continue;
-        var match_idx: ?usize = null;
-        var matches: usize = 0;
-        var mi: usize = 0;
-        while (mi < all_len) : (mi += 1) {
-            if (claimed[mi]) continue;
-            if (acui.templateMatchesExprReadOnly(theorem, ftmpl, all[mi], bindings)) {
-                matches += 1;
-                match_idx = mi;
-            }
-        }
-        if (matches == 1) claimed[match_idx.?] = true;
-    }
-
-    // Collect the rest binder's distributable members. Claimed members are
-    // dropped under a non-idempotent combiner; under idempotency they are kept
-    // and marked optional (`optional_claimed`) so the minimal claimed-excluded
-    // split is still enumerated first, with the principal-retaining split behind.
-    var optional_claimed: u64 = 0;
-    var mi: usize = 0;
-    while (mi < all_len) : (mi += 1) {
-        if (claimed[mi]) {
-            if (!retain) continue;
-            optional_claimed |= (@as(u64, 1) << @as(u6, @intCast(en.member_len)));
-        }
-        en.members[en.member_len] = all[mi];
-        en.member_len += 1;
-    }
-
-    // A genuinely empty container offers no split. But a container whose members
-    // were *all* claimed by fixed principals leaves the open rest forced to the
-    // unit (e.g. rim's succedent `d = emp`) — emit that single candidate, provided
-    // the combiner has a representable unit.
-    if (en.member_len == 0) {
-        if (!had_members) return null;
-        if (acui.acuiUnitIdForHead(context, site.head_id) == null) return null;
-    }
-
-    // Required mask: members that no other spine binder can cover.
-    var required: u64 = 0;
-    var m: usize = 0;
-    while (m < en.member_len) : (m += 1) {
-        const member = en.members[m];
-        var coverable = false;
-        var s: usize = 0;
-        while (s < site.spine_len) : (s += 1) {
-            const bidx = site.spine[s];
-            if (bidx == target_b) continue;
-            if (bidx >= bindings.len or bindings[bidx] == null) {
-                coverable = true; // an open sibling can absorb this member
-                break;
-            }
-            if (memberInValue(theorem, bindings[bidx].?, site.head_id, member)) {
-                coverable = true;
-                break;
-            }
-        }
-        if (!coverable) required |= (@as(u64, 1) << @as(u6, @intCast(m)));
-    }
-    // Claimed members are covered by the fixed principal, so the open rest never
-    // *requires* them — keep them strictly optional (idempotent retention only).
-    required &= ~optional_claimed;
-
-    // Optional members (may or may not also sit in target_b): enumerate subsets.
-    // Unclaimed optionals first, so that if the optional budget is exceeded it is
-    // the idempotent-retained claimed members that are dropped — this keeps the
-    // non-idempotent candidate set byte-identical and only ever *adds* the
-    // principal-retaining splits, within budget.
-    var opt_bits: [max_members]usize = undefined;
-    var opt_n: usize = 0;
-    var t: usize = 0;
-    while (t < en.member_len) : (t += 1) {
-        const bit = @as(u64, 1) << @as(u6, @intCast(t));
-        if (required & bit != 0) continue;
-        if (optional_claimed & bit != 0) continue;
-        opt_bits[opt_n] = t;
-        opt_n += 1;
-    }
-    if (opt_n > max_optional) return null;
-    t = 0;
-    while (t < en.member_len and opt_n < max_optional) : (t += 1) {
-        const bit = @as(u64, 1) << @as(u6, @intCast(t));
-        if (optional_claimed & bit == 0) continue;
-        opt_bits[opt_n] = t;
-        opt_n += 1;
-    }
-
-    const subsets = @as(usize, 1) << @as(UsizeShift, @intCast(opt_n));
-    var idx: usize = 0;
-    while (idx < subsets) : (idx += 1) {
-        var mask = required;
-        var j: usize = 0;
-        while (j < opt_n) : (j += 1) {
-            if (idx & (@as(usize, 1) << @as(UsizeShift, @intCast(j))) != 0) {
-                mask |= (@as(u64, 1) << @as(u6, @intCast(opt_bits[j])));
-            }
-        }
-        en.masks[en.mask_len] = mask;
-        en.mask_len += 1;
-    }
-    // Minimal-first: try the fewest-member (disjoint) splits before the
-    // overlapping (contraction) ones.
+    var en = SplitEnumerator{ .head_id = site.head_id };
+    const ok = switch (law) {
+        .set => enumerateSet(context, theorem, site, bindings, target_b, retain_claimed, goal, &en),
+        .multiset => enumerateMultiset(context, theorem, site, bindings, target_b, goal, &en),
+        .sequence => enumerateSequence(context, theorem, site, bindings, target_b, retain_claimed, goal, &en),
+    };
+    if (!ok) return null;
     std.sort.insertion(u64, en.masks[0..en.mask_len], {}, lessPopcount);
     return en;
 }
 
-fn lessPopcount(_: void, a: u64, b: u64) bool {
-    return @popCount(a) < @popCount(b);
-}
-
-/// Flatten the ACUI multiset rooted at `container` into distinct members (by
-/// hash-cons `ExprId` equality — idempotency makes duplicates redundant).
-/// Returns false on overflow (caller skips the split).
-fn flattenDistinct(
+/// Set (ACUI) split: sub-sets of the distinct members within the target's
+/// interval. `upper` is every member (idempotency lets siblings overlap);
+/// `lower` (required) is what no *other* spine binder can cover (an open
+/// sibling can cover anything; a bound sibling covers exactly its own members).
+fn enumerateSet(
+    context: *const Context,
     theorem: *const TheoremContext,
-    container: ExprId,
-    head_id: u32,
-    buf: *[max_members]ExprId,
-    count: *usize,
+    site: SplitSite,
+    bindings: []const ?ExprId,
+    target_b: usize,
+    retain_claimed: bool,
+    goal: bag.ExprBag,
+    en: *SplitEnumerator,
 ) bool {
-    switch (theorem.interner.node(container).*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (!flattenDistinct(theorem, arg, head_id, buf, count)) return false;
-                }
-                return true;
-            }
-        },
-        else => {},
+    var distinct = bag.ExprBag{};
+    for (goal.slice()) |member| _ = distinct.appendDistinct(member);
+    var free = [_]bool{true} ** bag.capacity;
+    claimPrincipals(theorem, site, bindings, distinct.slice(), free[0..distinct.len]);
+
+    // A goal member may sit in BOTH a fixed principal summand AND the open rest
+    // binder (`g , g = g`), so with `retain_claimed` claimed members stay as
+    // OPTIONAL rest members instead of being removed. That principal-retaining
+    // split broadens every additive node, so the driver only enables it in a
+    // final phase on a clean miss (see `GenerationHook.allow_retain_principal`).
+    var optional_claimed: u64 = 0;
+    for (distinct.slice(), 0..) |member, i| {
+        if (!free[i]) {
+            if (!retain_claimed) continue;
+            optional_claimed |= bit(en.members.len);
+        }
+        _ = en.members.append(member);
     }
-    for (buf[0..count.*]) |existing| {
-        if (existing == container) return true; // dedupe
+
+    var covered = bag.ExprBag{};
+    const covers_all = siblingsCover(context, theorem, site, bindings, target_b, &covered);
+    var required: u64 = 0;
+    if (!covers_all) {
+        for (en.members.slice(), 0..) |member, m| {
+            if (std.mem.indexOfScalar(ExprId, covered.slice(), member) == null)
+                required |= bit(m);
+        }
     }
-    if (count.* >= buf.len) return false;
-    buf[count.*] = container;
-    count.* += 1;
+    // Claimed members are covered by the fixed principal, so the open rest never
+    // *requires* them.
+    required &= ~optional_claimed;
+
+    // Optional members (may or may not also sit in the target): enumerate
+    // subsets. Unclaimed optionals first, so that if the candidate budget is
+    // exceeded it is the retained claimed members that are dropped — the
+    // principal-retaining splits are only ever *added*, within budget.
+    const max_optional = std.math.log2_int(usize, max_candidates);
+    var opt_bits: [bag.capacity]usize = undefined;
+    var opt_n: usize = 0;
+    for (0..en.members.len) |t| {
+        if ((required | optional_claimed) & bit(t) != 0) continue;
+        opt_bits[opt_n] = t;
+        opt_n += 1;
+    }
+    if (opt_n > max_optional) return false;
+    for (0..en.members.len) |t| {
+        if (opt_n == max_optional) break;
+        if (optional_claimed & bit(t) == 0) continue;
+        opt_bits[opt_n] = t;
+        opt_n += 1;
+    }
+
+    const subsets = @as(usize, 1) << @intCast(opt_n);
+    for (0..subsets) |idx| {
+        var mask = required;
+        for (opt_bits[0..opt_n], 0..) |b, j| {
+            if (idx & (@as(usize, 1) << @intCast(j)) != 0) mask |= bit(b);
+        }
+        if (!en.push(mask)) return false;
+    }
     return true;
 }
 
-/// Does the ACUI context `value` contain `member` as one of its flattened
-/// members?
-fn memberInValue(
+/// What the spine binders other than `target_b` can hold in a set split: true
+/// when that is anything (an open sibling, or one too large to read), else
+/// exactly the members collected into `covered`.
+fn siblingsCover(
+    context: *const Context,
     theorem: *const TheoremContext,
-    value: ExprId,
-    head_id: u32,
-    member: ExprId,
+    site: SplitSite,
+    bindings: []const ?ExprId,
+    target_b: usize,
+    covered: *bag.ExprBag,
 ) bool {
-    if (value == member) return true;
-    switch (theorem.interner.node(value).*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (memberInValue(theorem, arg, head_id, member)) return true;
+    for (site.spine[0..site.spine_len]) |b| {
+        if (b == target_b) continue;
+        const value = boundValue(bindings, b) orelse return true;
+        const held = bag.flatten(context, theorem, site.head_id, value) orelse return true;
+        for (held.slice()) |member| {
+            if (!covered.appendDistinct(member)) return true;
+        }
+    }
+    return false;
+}
+
+/// Multiset (ACU) split: the target holds what the fixed principals and bound
+/// siblings leave, copy by copy. With an open sibling it may hold any sub-bag
+/// of that; without one it must hold all of it.
+fn enumerateMultiset(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    site: SplitSite,
+    bindings: []const ?ExprId,
+    target_b: usize,
+    goal: bag.ExprBag,
+    en: *SplitEnumerator,
+) bool {
+    en.members = goal;
+    const members = en.members.slice();
+    var free = [_]bool{true} ** bag.capacity;
+    claimPrincipals(theorem, site, bindings, members, free[0..members.len]);
+
+    var open_sibling = false;
+    for (site.spine[0..site.spine_len]) |b| {
+        if (b == target_b) continue;
+        const value = boundValue(bindings, b) orelse {
+            open_sibling = true;
+            continue;
+        };
+        const held = bag.flatten(context, theorem, site.head_id, value) orelse return false;
+        for (held.slice()) |member| {
+            // A member the goal lacks may still match after conversion; the
+            // validator decides.
+            _ = takeCopy(members, free[0..members.len], member);
+        }
+    }
+
+    var rest: u64 = 0;
+    for (0..members.len) |i| {
+        if (free[i]) rest |= bit(i);
+    }
+    if (!open_sibling) return en.push(rest);
+
+    // Each distinct member contributes 0..n of its n free copies, always the
+    // leftmost ones, so equal sub-multisets are built once.
+    var firsts: [bag.capacity]usize = undefined;
+    var copies: [bag.capacity]usize = undefined;
+    var groups: usize = 0;
+    var total: usize = 1;
+    for (members, 0..) |member, i| {
+        if (!free[i] or firstFreeCopy(members, free[0..members.len], member) != i) continue;
+        var n: usize = 0;
+        for (members, 0..) |other, j| {
+            if (free[j] and other == member) n += 1;
+        }
+        firsts[groups] = i;
+        copies[groups] = n;
+        groups += 1;
+        total = std.math.mul(usize, total, n + 1) catch return false;
+        if (total > max_candidates) return false;
+    }
+
+    var counts = [_]usize{0} ** bag.capacity;
+    while (true) {
+        var mask: u64 = 0;
+        for (0..groups) |g| {
+            var left = counts[g];
+            var j = firsts[g];
+            while (left > 0) : (j += 1) {
+                if (free[j] and members[j] == members[firsts[g]]) {
+                    mask |= bit(j);
+                    left -= 1;
+                }
+            }
+        }
+        if (!en.push(mask)) return false;
+        // Next count vector (mixed radix).
+        var g: usize = 0;
+        while (g < groups) : (g += 1) {
+            if (counts[g] < copies[g]) {
+                counts[g] += 1;
+                break;
+            }
+            counts[g] = 0;
+        }
+        if (g == groups) return true;
+    }
+}
+
+/// Sequence (AU) split: the target holds one contiguous run of the goal. Each
+/// end of the run is pinned when every summand on that side has a known member
+/// count (a rigid fixed summand holds one member, a bound binder its own);
+/// otherwise that end ranges over what is left. Under idempotence (AUI) a
+/// summand may overlap its neighbours (`a , a = a`), so with `retain_claimed`
+/// the run may be any contiguous run, as the set split retains principals.
+fn enumerateSequence(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    site: SplitSite,
+    bindings: []const ?ExprId,
+    target_b: usize,
+    retain_claimed: bool,
+    goal: bag.ExprBag,
+    en: *SplitEnumerator,
+) bool {
+    en.members = goal;
+    const members = goal.slice();
+    const n = goal.len;
+    const summands = bag.flattenTemplate(context, site.head_id, site.template) orelse
+        return false;
+    const pos = for (summands.slice(), 0..) |summand, i| {
+        if (summand == .binder and summand.binder == target_b) break i;
+    } else return false;
+
+    const overlap = retain_claimed and
+        context.registry.acui_by_head.get(site.head_id).?.idem_name != null;
+    const before = if (overlap)
+        Span{ .exact = false }
+    else
+        summandSpan(context, theorem, site.head_id, summands.slice()[0..pos], bindings);
+    const after = if (overlap)
+        Span{ .exact = false }
+    else
+        summandSpan(context, theorem, site.head_id, summands.slice()[pos + 1 ..], bindings);
+    if (before.count + after.count > n) return true; // no run fits
+    const start_max = if (before.exact) before.count else n - after.count;
+    const end_min = if (after.exact) n - after.count else before.count;
+
+    for (0..n + 1) |len| {
+        var start = before.count;
+        while (start <= start_max) : (start += 1) {
+            const end = start + len;
+            if (end < end_min or end > n - after.count) continue;
+            // An earlier valid start with the same members builds the same
+            // candidate (always so for the empty run).
+            const first = @max(before.count, end_min -| len);
+            const repeat = for (first..start) |earlier| {
+                if (std.mem.eql(ExprId, members[earlier .. earlier + len], members[start..end])) break true;
+            } else false;
+            if (repeat) continue;
+            var mask: u64 = 0;
+            for (start..end) |i| mask |= bit(i);
+            if (!en.push(mask)) return false;
+        }
+    }
+    return true;
+}
+
+const Span = struct {
+    /// Members the summands hold at least.
+    count: usize = 0,
+    /// Whether they hold exactly `count`.
+    exact: bool = true,
+};
+
+fn summandSpan(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    head_id: u32,
+    summands: []const TemplateExpr,
+    bindings: []const ?ExprId,
+) Span {
+    var span = Span{};
+    for (summands) |summand| switch (summand) {
+        .binder => |b| {
+            const value = boundValue(bindings, b) orelse {
+                span.exact = false;
+                continue;
+            };
+            const members = bag.flatten(context, theorem, head_id, value) orelse {
+                span.exact = false;
+                continue;
+            };
+            // A meta or def member may stand for any number of members.
+            for (members.slice()) |member| {
+                if (acui.memberIsFixed(context, theorem, member)) {
+                    span.count += 1;
+                } else {
+                    span.exact = false;
                 }
             }
         },
-        else => {},
+        // A def or `@rewrite` summand may unfold to any number of members.
+        .app => |app| {
+            if (semantic.isRigidHead(context, app.term_id)) {
+                span.count += 1;
+            } else {
+                span.exact = false;
+            }
+        },
+    };
+    return span;
+}
+
+/// Each fully-bound fixed summand that matches exactly one distinct free member
+/// claims one copy of it (the principal already sits on this side). A
+/// partially-bound or ambiguous summand claims nothing — the validator's ACUI
+/// weakening still confirms the assembly.
+fn claimPrincipals(
+    theorem: *const TheoremContext,
+    site: SplitSite,
+    bindings: []const ?ExprId,
+    members: []const ExprId,
+    free: []bool,
+) void {
+    for (site.fixed[0..site.fixed_len]) |ftmpl| {
+        if (!templateFullyBound(ftmpl, bindings)) continue;
+        var match: ?ExprId = null;
+        const unique = for (members, 0..) |member, i| {
+            if (!free[i]) continue;
+            if (!acui.templateMatchesExprReadOnly(theorem, ftmpl, member, bindings)) continue;
+            if (match) |first| {
+                if (first != member) break false;
+            } else match = member;
+        } else true;
+        if (unique) {
+            if (match) |member| _ = takeCopy(members, free, member);
+        }
     }
-    return false;
+}
+
+fn takeCopy(members: []const ExprId, free: []bool, member: ExprId) bool {
+    const i = firstFreeCopy(members, free, member) orelse return false;
+    free[i] = false;
+    return true;
+}
+
+fn firstFreeCopy(members: []const ExprId, free: []const bool, member: ExprId) ?usize {
+    for (members, 0..) |other, i| {
+        if (free[i] and other == member) return i;
+    }
+    return null;
+}
+
+fn boundValue(bindings: []const ?ExprId, b: usize) ?ExprId {
+    return if (b < bindings.len) bindings[b] else null;
+}
+
+fn bit(i: usize) u64 {
+    return @as(u64, 1) << @intCast(i);
+}
+
+fn lessPopcount(_: void, a: u64, b: u64) bool {
+    return @popCount(a) < @popCount(b);
 }

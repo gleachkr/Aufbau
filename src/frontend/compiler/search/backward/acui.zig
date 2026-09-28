@@ -11,12 +11,11 @@ const exprNeedsSemantic = semantic.exprNeedsSemantic;
 const templateNeedsSemantic = semantic.templateNeedsSemantic;
 const isRigidHead = semantic.isRigidHead;
 const lockstep = @import("./lockstep.zig");
+const bag = @import("./bag.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const DeepVerdictCache = types.DeepVerdictCache;
 
 const DeepExprMismatchFn = fn (*const Context, *TheoremContext, ExprId, ExprId, usize) bool;
-
-const max_acui_members = 64;
 
 const AcuiMember = struct {
     expr: ExprId,
@@ -69,15 +68,15 @@ pub fn extractAcuiMemberBindings(
         []?ExprId,
     ) void,
 ) void {
-    var members: [max_acui_members]AcuiMember = undefined;
+    var members: [bag.capacity]AcuiMember = undefined;
     var count: usize = 0;
     // Bail (extract nothing) on an unusually large context rather than risk
     // truncating the multiset, which could make a member look spuriously unique.
-    if (!collectAcuiMembers(theorem, container, head_id, &members, &count)) return;
+    if (!collectAcuiMembers(context, theorem, container, head_id, &members, &count)) return;
     const pool = members[0..count];
 
     // Pass 1: consume ref members claimed by the bound sibling leaves.
-    consumeBoundLeafMembers(theorem, head_id, template, bindings, pool);
+    consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
     // Pass 2: pin each unbound leaf from a unique remaining member.
     extractUnboundLeafMembers(
         context,
@@ -90,33 +89,19 @@ pub fn extractAcuiMemberBindings(
     );
 }
 
-// Flatten the ACUI multiset rooted at `container` into `buf`. A node headed by
-// `head_id` is a nested combiner (recurse); anything else is one member.
-// Returns false if the multiset would exceed `buf` (caller then bails).
+// The members of `container` under `head_id` (see `bag.flatten`) as an
+// unconsumed pool. Returns false on overflow (caller then bails).
 fn collectAcuiMembers(
+    context: *const Context,
     theorem: *const TheoremContext,
     container: ExprId,
     head_id: u32,
-    buf: []AcuiMember,
+    buf: *[bag.capacity]AcuiMember,
     count: *usize,
 ) bool {
-    const node = theorem.interner.node(container);
-    switch (node.*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (!collectAcuiMembers(theorem, arg, head_id, buf, count)) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        },
-        else => {},
-    }
-    if (count.* >= buf.len) return false;
-    buf[count.*] = .{ .expr = container };
-    count.* += 1;
+    const members = bag.flatten(context, theorem, head_id, container) orelse return false;
+    for (members.slice(), buf[0..members.len]) |expr, *slot| slot.* = .{ .expr = expr };
+    count.* = members.len;
     return true;
 }
 
@@ -124,6 +109,7 @@ fn collectAcuiMembers(
 // unbound binder: a bound binder (e.g. `G`) expands to its own multiset; any
 // other fully-bound leaf matches a single member directly.
 fn consumeBoundLeafMembers(
+    context: *const Context,
     theorem: *const TheoremContext,
     head_id: u32,
     template: TemplateExpr,
@@ -134,15 +120,13 @@ fn consumeBoundLeafMembers(
         .binder => |idx| {
             if (idx >= bindings.len) return;
             const value = bindings[idx] orelse return;
-            var sub: [max_acui_members]AcuiMember = undefined;
-            var sub_n: usize = 0;
-            if (!collectAcuiMembers(theorem, value, head_id, &sub, &sub_n)) return;
-            for (sub[0..sub_n]) |member| consumePoolMemberById(pool, member.expr);
+            const sub = bag.flatten(context, theorem, head_id, value) orelse return;
+            for (sub.slice()) |member| consumePoolMemberById(pool, member);
         },
         .app => |app| {
             if (app.term_id == head_id) {
                 for (app.args) |arg| {
-                    consumeBoundLeafMembers(theorem, head_id, arg, bindings, pool);
+                    consumeBoundLeafMembers(context, theorem, head_id, arg, bindings, pool);
                 }
                 return;
             }
@@ -273,9 +257,9 @@ pub fn findAmbiguousPrincipal(
     bindings: []const ?ExprId,
 ) !?PrincipalFanout {
     if (!isCommutative(context, head_id)) return null;
-    var members: [max_acui_members]AcuiMember = undefined;
+    var members: [bag.capacity]AcuiMember = undefined;
     var count: usize = 0;
-    if (!collectAcuiMembers(theorem, container, head_id, &members, &count)) return null;
+    if (!collectAcuiMembers(context, theorem, container, head_id, &members, &count)) return null;
     const pool = members[0..count];
     // Soundness gate for REPLACING the loose candidate with the fan-out. The
     // member match below (`templateMatchesExprReadOnly`) is purely structural —
@@ -291,7 +275,7 @@ pub fn findAmbiguousPrincipal(
     }
     // Pass 1 (as in `extractAcuiMemberBindings`): consume members claimed by
     // already-bound sibling leaves, so they don't inflate a principal's count.
-    consumeBoundLeafMembers(theorem, head_id, template, bindings, pool);
+    consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
     return findAmbiguousLeaf(allocator, theorem, head_id, template, bindings, pool);
 }
 
@@ -412,12 +396,11 @@ pub fn hasCommutativeCombiner(context: *const Context) bool {
 //
 // The check requires only associativity. Without it, `f(f(a,b),c)` and
 // `f(a,f(b,c))` are distinct expressions, not two shapes of one multiset,
-// and "is X a member?" is ill-defined. Commutativity, idempotency, and the
-// unit element are irrelevant to presence: a unit leaf in the template needs
-// a literal unit in the ref, as the matcher does not absorb one. So presence
-// works equally for A, AU, AC, ACU, and full ACUI combiners. The multiplicity
-// half (`acuiDistinctMembersPlausible`) does consult the combiner: it applies
-// only without idempotence, and skips unit leaves and unit members alike.
+// and "is X a member?" is ill-defined. Commutativity and idempotency are
+// irrelevant to presence, and the unit is dropped on both sides (`bag.flatten`),
+// so presence works equally for A, AU, AC, ACU, and full ACUI combiners.
+// Multiplicity does consult the combiner: without idempotence each required
+// leaf needs a member of its own (`acuiRequiredMembersPlausible`).
 //
 // The plausibility path is conservative around semantic heads: when a
 // transparent def or ACUI combiner could reconcile the required member with a
@@ -451,14 +434,7 @@ fn acuiPrecheckWalk(
         .binder => return true,
         .app => |app| {
             if (context.registry.acui_by_head.contains(app.term_id)) {
-                return acuiCheckRequiredElements(
-                    context,
-                    theorem,
-                    template,
-                    expr_id,
-                    app.term_id,
-                    bindings,
-                ) and acuiDistinctMembersPlausible(
+                return acuiRequiredMembersPlausible(
                     context,
                     theorem,
                     template,
@@ -486,70 +462,25 @@ fn acuiPrecheckWalk(
     }
 }
 
-// Inside an ACUI-rooted template subtree, each "leaf" (a sub-template that
-// isn't another nested application of the same combiner) is a required
-// element of the ref's ACUI multiset. For each such leaf, search the ref's
-// subtree for a member that the leaf (with current bindings) could match
-// against. Returns false if any required leaf has no compatible member.
-fn acuiCheckRequiredElements(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    template: TemplateExpr,
-    container: ExprId,
-    head_id: u32,
-    bindings: []const ?ExprId,
-) bool {
-    switch (template) {
-        .binder => |idx| {
-            // A binder at the multiset level (e.g. `$h` in `join($h, …)`)
-            // captures "everything else". With or without a value, we can't
-            // soundly insist on its presence at a single slot, so skip.
-            _ = idx;
-            return true;
-        },
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (!acuiCheckRequiredElements(
-                        context,
-                        theorem,
-                        arg,
-                        container,
-                        head_id,
-                        bindings,
-                    )) return false;
-                }
-                return true;
-            }
-            // Non-combiner leaf: a single required element. Either it's
-            // entirely concrete (or has only bound binders) and we can be
-            // strict about membership, or it has unbound binders and we
-            // treat them as wildcards while walking the container.
-            return acuiContainerHasTemplateMember(
-                context,
-                theorem,
-                container,
-                template,
-                head_id,
-                bindings,
-            );
-        },
-    }
-}
-
-// Multiplicity half of the required-element check. Without idempotence, each
-// required template leaf needs its OWN goal member: `weaken2`'s
-// `g , x : T1 , y : T2` against `g , k : Nat` finds a `hyp` member for both
-// leaves, but only one exists. Look for a matching (leaf -> distinct
-// compatible member) by augmenting paths.
+// Inside an ACUI-rooted template subtree, each non-binder summand is a
+// required member of the ref's bag and needs a ref member it could match (with
+// current bindings; unbound binders act as wildcards). A binder summand (`$h` in
+// `join($h, …)`) captures "everything else", so it requires nothing. Returns
+// false if some required leaf cannot be placed.
 //
-// Sound only when the goal's member multiset is fixed: a placeholder member,
-// or one headed by a def or `@rewrite` term, might expand into several (or
-// none), so any such member means no opinion. Likewise a leaf whose head
-// needs semantics might vanish (unfold to the unit) and is not counted. A
-// variable member (an opaque context such as `g`) can only be absorbed by a
-// binder leaf, which is never counted either.
-fn acuiDistinctMembersPlausible(
+// Under idempotence a member can serve any number of leaves, so presence is
+// enough. Without it each leaf needs a member of its OWN: `weaken2`'s
+// `g , x : T1 , y : T2` against `g , k : Nat` finds a `hyp` member for both
+// leaves, but only one exists. That is a bipartite matching (leaf -> distinct
+// compatible member), found by augmenting paths.
+//
+// The matching is sound only when the ref's bag is fixed: a placeholder member,
+// or one headed by a def or `@rewrite` term, might expand into several members
+// (or none), so any such member falls back to presence. A leaf whose head
+// needs semantics might vanish (unfold to the unit), so it is never required.
+// A variable member (an opaque context such as `g`) can only be
+// absorbed by a binder summand, which never counts.
+fn acuiRequiredMembersPlausible(
     context: *const Context,
     theorem: *const TheoremContext,
     template: TemplateExpr,
@@ -558,35 +489,56 @@ fn acuiDistinctMembersPlausible(
     bindings: []const ?ExprId,
 ) bool {
     const combiner = context.registry.acui_by_head.get(head_id) orelse return true;
-    if (combiner.idem_name != null) return true;
-    const unit_id = acuiUnitIdForHead(context, head_id);
-
-    var leaves: [max_acui_members]TemplateExpr = undefined;
-    var leaf_len: usize = 0;
-    if (!collectCountedLeaves(context, template, head_id, unit_id, &leaves, &leaf_len)) return true;
-    if (leaf_len == 0) return true;
-    var members: [max_acui_members]ExprId = undefined;
-    var member_len: usize = 0;
-    if (!collectRigidMembers(context, theorem, container, head_id, unit_id, &members, &member_len))
-        return true;
-    if (leaf_len > member_len) return false;
+    const leaf_bag = bag.flattenTemplate(context, head_id, template) orelse return true;
+    const member_bag = bag.flatten(context, theorem, head_id, container) orelse return true;
+    const leaves = leaf_bag.slice();
+    const members = member_bag.slice();
+    const distinct = combiner.idem_name == null and bagIsFixed(context, theorem, members);
 
     // owner[m] = leaf currently matched to member m.
-    var owner: [max_acui_members]?usize = @splat(null);
-    for (0..leaf_len) |leaf_idx| {
-        var visited: [max_acui_members]bool = @splat(false);
-        if (!augmentLeaf(
-            context,
-            theorem,
-            leaves[0..leaf_len],
-            members[0..member_len],
-            bindings,
-            leaf_idx,
-            &owner,
-            &visited,
-        )) return false;
+    var owner: [bag.capacity]?usize = @splat(null);
+    for (leaves, 0..) |leaf, leaf_idx| {
+        if (leaf == .binder) continue;
+        // A def or `@rewrite` leaf may unfold to the unit, needing no member.
+        if (!isRigidHead(context, leaf.app.term_id)) continue;
+        if (distinct) {
+            var visited: [bag.capacity]bool = @splat(false);
+            if (!augmentLeaf(context, theorem, leaves, members, bindings, leaf_idx, &owner, &visited))
+                return false;
+        } else {
+            for (members) |member| {
+                if (templateMatchesExprPlausible(context, theorem, leaf, member, bindings)) break;
+            } else return false;
+        }
     }
     return true;
+}
+
+// Whether no member of the bag could stand for a different number of members
+// after conversion.
+fn bagIsFixed(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    members: []const ExprId,
+) bool {
+    for (members) |member| {
+        if (!memberIsFixed(context, theorem, member)) return false;
+    }
+    return true;
+}
+
+/// Whether `member` stays exactly one member after conversion: not a meta, and
+/// not headed by a def or `@rewrite` term that may unfold to several or none.
+pub fn memberIsFixed(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    member: ExprId,
+) bool {
+    return switch (theorem.interner.node(member).*) {
+        .placeholder => false,
+        .variable => true,
+        .app => |app| isRigidHead(context, app.term_id),
+    };
 }
 
 fn augmentLeaf(
@@ -596,8 +548,8 @@ fn augmentLeaf(
     members: []const ExprId,
     bindings: []const ?ExprId,
     leaf_idx: usize,
-    owner: *[max_acui_members]?usize,
-    visited: *[max_acui_members]bool,
+    owner: *[bag.capacity]?usize,
+    visited: *[bag.capacity]bool,
 ) bool {
     for (members, 0..) |member, m| {
         if (visited[m]) continue;
@@ -612,102 +564,6 @@ fn augmentLeaf(
         return true;
     }
     return false;
-}
-
-// Non-binder leaves of the combiner spine whose head is rigid (always exactly
-// one member). Unit leaves are skipped, as `collectRigidMembers` skips unit
-// members: the unit needs no member of its own. False on overflow.
-fn collectCountedLeaves(
-    context: *const Context,
-    template: TemplateExpr,
-    head_id: u32,
-    unit_id: ?u32,
-    out: *[max_acui_members]TemplateExpr,
-    len: *usize,
-) bool {
-    switch (template) {
-        .binder => return true,
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (!collectCountedLeaves(context, arg, head_id, unit_id, out, len)) return false;
-                }
-                return true;
-            }
-            if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
-            if (!isRigidHead(context, app.term_id)) return true;
-            if (len.* == out.len) return false;
-            out[len.*] = template;
-            len.* += 1;
-            return true;
-        },
-    }
-}
-
-// The container's members, unit leaves dropped. False (no opinion) when a
-// member could stand for a different number of members after conversion, or
-// on overflow.
-fn collectRigidMembers(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-    head_id: u32,
-    unit_id: ?u32,
-    out: *[max_acui_members]ExprId,
-    len: *usize,
-) bool {
-    switch (theorem.interner.node(expr_id).*) {
-        .placeholder => return false,
-        .variable => {},
-        .app => |app| {
-            if (app.term_id == head_id and app.args.len == 2) {
-                return collectRigidMembers(context, theorem, app.args[0], head_id, unit_id, out, len) and
-                    collectRigidMembers(context, theorem, app.args[1], head_id, unit_id, out, len);
-            }
-            if (unit_id != null and app.term_id == unit_id.? and app.args.len == 0) return true;
-            if (!isRigidHead(context, app.term_id)) return false;
-        },
-    }
-    if (len.* == out.len) return false;
-    out[len.*] = expr_id;
-    len.* += 1;
-    return true;
-}
-
-fn acuiContainerHasTemplateMember(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    container: ExprId,
-    leaf_template: TemplateExpr,
-    head_id: u32,
-    bindings: []const ?ExprId,
-) bool {
-    const node = theorem.interner.node(container);
-    switch (node.*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (acuiContainerHasTemplateMember(
-                        context,
-                        theorem,
-                        arg,
-                        leaf_template,
-                        head_id,
-                        bindings,
-                    )) return true;
-                }
-                return false;
-            }
-        },
-        else => {},
-    }
-    return templateMatchesExprPlausible(
-        context,
-        theorem,
-        leaf_template,
-        container,
-        bindings,
-    );
 }
 
 // ===========================================================================
@@ -785,82 +641,37 @@ fn deepCheckRequiredElements(
     comptime deepExprMismatch: DeepExprMismatchFn,
     cache: ?*DeepVerdictCache,
 ) bool {
-    switch (template) {
-        // A multiset-level binder captures "everything else" — never a single
+    const leaves = bag.flattenTemplate(context, head_id, template) orelse return false;
+    const members = bag.flatten(context, theorem, head_id, container) orelse return false;
+    for (leaves.slice()) |leaf_template| {
+        // A bag-level binder captures "everything else" — never a single
         // required member.
-        .binder => return false,
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (deepCheckRequiredElements(
-                        context,
-                        theorem,
-                        arg,
-                        container,
-                        head_id,
-                        bindings,
-                        deepExprMismatch,
-                        cache,
-                    )) return true;
-                }
-                return false;
-            }
-            // A required leaf. Only judge it when FULLY BOUND — instantiate to a
-            // concrete expr (null ⇒ an unbound binder remains ⇒ wildcard ⇒ no
-            // opinion) and require a deep-compatible container member.
-            const leaf = (OpenTerms.instantiateTemplateConcrete(
-                theorem,
-                template,
-                bindings,
-            ) catch return false) orelse return false;
-            return !deepContainerHasCompatibleMember(
-                context,
-                theorem,
-                container,
-                leaf,
-                head_id,
-                deepExprMismatch,
-                cache,
-            );
-        },
+        if (leaf_template == .binder) continue;
+        // A required leaf. Only judge it when FULLY BOUND — instantiate to a
+        // concrete expr (null ⇒ an unbound binder remains ⇒ wildcard ⇒ no
+        // opinion) and require a deep-compatible container member. A member is
+        // compatible iff it does NOT definitely diverge from the leaf after
+        // complete def-unfolding. The unit is implicitly always a member: a
+        // leaf that unfolds to it needs no member of its own.
+        const leaf = (OpenTerms.instantiateTemplateConcrete(
+            theorem,
+            leaf_template,
+            bindings,
+        ) catch continue) orelse continue;
+        for (members.slice()) |member| {
+            if (!deepMemberMismatch(context, theorem, leaf, member, deepExprMismatch, cache)) break;
+        } else {
+            const unit = bag.unitOf(context, head_id) orelse continue;
+            const unit_expr = theorem.interner.internApp(unit, &.{}) catch continue;
+            if (deepMemberMismatch(context, theorem, leaf, unit_expr, deepExprMismatch, cache))
+                return true;
+        }
     }
+    return false;
 }
 
-fn deepContainerHasCompatibleMember(
-    context: *const Context,
-    theorem: *TheoremContext,
-    container: ExprId,
-    leaf: ExprId,
-    head_id: u32,
-    comptime deepExprMismatch: DeepExprMismatchFn,
-    cache: ?*DeepVerdictCache,
-) bool {
-    const node = theorem.interner.node(container);
-    switch (node.*) {
-        .app => |app| {
-            if (app.term_id == head_id) {
-                for (app.args) |arg| {
-                    if (deepContainerHasCompatibleMember(
-                        context,
-                        theorem,
-                        arg,
-                        leaf,
-                        head_id,
-                        deepExprMismatch,
-                        cache,
-                    )) return true;
-                }
-                return false;
-            }
-        },
-        else => {},
-    }
-    // A single container member: compatible iff it does NOT definitely diverge
-    // from the leaf after complete def-unfolding. Memoize the verdict across
-    // candidates by a content key (see `acuiBoundMembersDeepMismatch`).
-    return !deepMemberMismatch(context, theorem, leaf, container, deepExprMismatch, cache);
-}
-
+// Memoizes the verdict across candidates by a content key (see
+// `acuiBoundMembersDeepMismatch`).
 fn deepMemberMismatch(
     context: *const Context,
     theorem: *TheoremContext,
@@ -1074,13 +885,6 @@ pub fn exprUnifiesModuloMeta(
     }
 }
 
-// The unit (identity) term id of the ACUI combiner headed by `head_id`, or
-// null if `head_id` is not a registered combiner / has no resolvable unit.
-pub fn acuiUnitIdForHead(context: *const Context, head_id: u32) ?u32 {
-    const combiner = context.registry.acui_by_head.get(head_id) orelse return null;
-    return context.env.term_names.get(combiner.unit_term_name);
-}
-
 // Is `expr_id` the unit element of some registered ACUI combiner (e.g. `emp`)?
 // A unit is a nullary application of the combiner's declared unit term.
 pub fn isAcuiUnitExpr(
@@ -1155,15 +959,13 @@ fn normalizeAcuiCombiner(
     head_id: u32,
     expr_id: ExprId,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    var raw: [max_acui_members]AcuiMember = undefined;
-    var raw_n: usize = 0;
     // Bail unchanged on an oversized multiset rather than truncate it.
-    if (!collectAcuiMembers(theorem, expr_id, head_id, &raw, &raw_n)) return expr_id;
+    const raw = bag.flatten(context, theorem, head_id, expr_id) orelse return expr_id;
 
-    var kept: [max_acui_members]ExprId = undefined;
+    var kept: [bag.capacity]ExprId = undefined;
     var kept_n: usize = 0;
-    for (raw[0..raw_n]) |member| {
-        const normalized = try normalizeAcuiUnits(context, theorem, member.expr);
+    for (raw.slice()) |member| {
+        const normalized = try normalizeAcuiUnits(context, theorem, member);
         if (isAcuiUnitExpr(context, theorem, normalized)) continue;
         kept[kept_n] = normalized;
         kept_n += 1;
@@ -1171,29 +973,10 @@ fn normalizeAcuiCombiner(
 
     if (kept_n == 0) {
         // Every member was a unit ⇒ the whole region is the unit element.
-        const unit_term = acuiUnitIdForHead(context, head_id) orelse return expr_id;
+        const unit_term = bag.unitOf(context, head_id) orelse return expr_id;
         return theorem.interner.internApp(unit_term, &.{});
     }
-    return internRightFold(theorem, head_id, kept[0..kept_n]);
-}
-
-/// Right-fold `members` back into binary `head_id` combiner applications,
-/// preserving left-to-right order: `[a, b, c]` → `head(a, head(b, c))`. A
-/// single member is returned as itself. The empty region is the combiner's
-/// unit, whose resolution can fail — callers handle that case themselves.
-pub fn internRightFold(
-    theorem: *TheoremContext,
-    head_id: u32,
-    members: []const ExprId,
-) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    std.debug.assert(members.len > 0);
-    var result = members[members.len - 1];
-    var i = members.len - 1;
-    while (i > 0) {
-        i -= 1;
-        result = try theorem.interner.internApp(head_id, &.{ members[i], result });
-    }
-    return result;
+    return bag.rightFold(theorem, head_id, kept[0..kept_n]);
 }
 
 /// Canonical `ExprId` for ACUI-equality memo keying. Like `normalizeAcuiUnits`
@@ -1253,9 +1036,7 @@ fn canonicalizeAcuiCombiner(
     combiner: StructuralCombiner,
     expr_id: ExprId,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    var raw: [max_acui_members]AcuiMember = undefined;
-    var raw_n: usize = 0;
-    if (!collectAcuiMembers(theorem, expr_id, head_id, &raw, &raw_n)) return expr_id;
+    const raw = bag.flatten(context, theorem, head_id, expr_id) orelse return expr_id;
 
     // Each canonicalization step is gated on the law the *registered subset*
     // actually declares, so this never equates two genuinely-unequal expressions
@@ -1267,10 +1048,10 @@ fn canonicalizeAcuiCombiner(
     // U (always): drop unit members. `isAcuiUnitExpr` is false for everything if
     // the unit term is unresolvable, so a malformed unit-less declaration is inert
     // here rather than wrong.
-    var kept: [max_acui_members]ExprId = undefined;
+    var kept: [bag.capacity]ExprId = undefined;
     var kept_n: usize = 0;
-    for (raw[0..raw_n]) |member| {
-        const canonical = try canonicalizeAcui(context, theorem, member.expr);
+    for (raw.slice()) |member| {
+        const canonical = try canonicalizeAcui(context, theorem, member);
         if (isAcuiUnitExpr(context, theorem, canonical)) continue;
         kept[kept_n] = canonical;
         kept_n += 1;
@@ -1300,10 +1081,10 @@ fn canonicalizeAcuiCombiner(
     }
 
     if (kept_n == 0) {
-        const unit_term = acuiUnitIdForHead(context, head_id) orelse return expr_id;
+        const unit_term = bag.unitOf(context, head_id) orelse return expr_id;
         return theorem.interner.internApp(unit_term, &.{});
     }
-    return internRightFold(theorem, head_id, kept[0..kept_n]);
+    return bag.rightFold(theorem, head_id, kept[0..kept_n]);
 }
 
 // Unit law: in an ACUI monoid with a unit, `combine(a, b, …) = unit` forces
@@ -1437,37 +1218,35 @@ fn boundRegionRefEqualPlausible(
     container: ExprId,
     head_id: u32,
 ) bool {
-    var bound_buf: [max_acui_members]AcuiMember = undefined;
-    var bound_n: usize = 0;
-    if (!collectAcuiMembers(theorem, bound, head_id, &bound_buf, &bound_n)) return true;
-    var ref_buf: [max_acui_members]AcuiMember = undefined;
-    var ref_n: usize = 0;
-    if (!collectAcuiMembers(theorem, container, head_id, &ref_buf, &ref_n)) return true;
-    for (ref_buf[0..ref_n]) |item| {
-        switch (theorem.interner.node(item.expr).*) {
+    const bound_members = bag.flatten(context, theorem, head_id, bound) orelse return true;
+    const ref_members = bag.flatten(context, theorem, head_id, container) orelse return true;
+    for (ref_members.slice()) |item| {
+        switch (theorem.interner.node(item).*) {
             .variable, .placeholder => return true,
             else => {},
         }
-        if (exprNeedsSemantic(context, theorem, item.expr)) return true;
+        if (exprNeedsSemantic(context, theorem, item)) return true;
     }
-    for (bound_buf[0..bound_n]) |item| {
-        if (exprNeedsSemantic(context, theorem, item.expr)) return true;
+    for (bound_members.slice()) |item| {
+        if (exprNeedsSemantic(context, theorem, item)) return true;
     }
-    return regionCovers(context, theorem, bound_buf[0..bound_n], ref_buf[0..ref_n]) and
-        regionCovers(context, theorem, ref_buf[0..ref_n], bound_buf[0..bound_n]);
+    return regionCovers(context, theorem, bound_members.slice(), ref_members.slice()) and
+        regionCovers(context, theorem, ref_members.slice(), bound_members.slice());
 }
 
 // Every non-unit member of `wants` matches (modulo metas) some member of `haves`.
+// A bare meta may stand for no members at all, so it needs none.
 fn regionCovers(
     context: *const Context,
     theorem: *const TheoremContext,
-    wants: []const AcuiMember,
-    haves: []const AcuiMember,
+    wants: []const ExprId,
+    haves: []const ExprId,
 ) bool {
     outer: for (wants) |want| {
-        if (isAcuiUnitExpr(context, theorem, want.expr)) continue;
+        if (isAcuiUnitExpr(context, theorem, want)) continue;
+        if (theorem.interner.node(want).* == .placeholder) continue;
         for (haves) |have| {
-            if (exprUnifiesModuloMeta(theorem, want.expr, have.expr)) continue :outer;
+            if (exprUnifiesModuloMeta(theorem, want, have)) continue :outer;
         }
         return false;
     }
@@ -1512,38 +1291,21 @@ fn acuiRegionRefCompatible(
     head_id: u32,
     bindings: []const ?ExprId,
 ) bool {
-    var buf: [max_acui_members]AcuiMember = undefined;
-    var n: usize = 0;
-    if (!collectAcuiMembers(theorem, container, head_id, &buf, &n)) return true;
-
-    var members: [max_acui_members]ExprId = undefined;
-    var m: usize = 0;
-    for (buf[0..n]) |item| {
-        if (isAcuiUnitExpr(context, theorem, item.expr)) continue;
-        switch (theorem.interner.node(item.expr).*) {
+    const flat = bag.flatten(context, theorem, head_id, container) orelse return true;
+    var members = bag.ExprBag{};
+    for (flat.slice()) |item| {
+        if (isAcuiUnitExpr(context, theorem, item)) continue;
+        switch (theorem.interner.node(item).*) {
             .variable, .placeholder => return true,
             else => {},
         }
-        members[m] = item.expr;
-        m += 1;
+        _ = members.appendDistinct(item);
     }
-
-    var distinct: usize = 0;
-    for (members[0..m], 0..) |mem, i| {
-        var seen = false;
-        for (members[0..i]) |prev| {
-            if (prev == mem) {
-                seen = true;
-                break;
-            }
-        }
-        if (!seen) distinct += 1;
-    }
-    if (distinct > countTemplateSlots(context, theorem, template, head_id, bindings)) {
+    if (members.len > countTemplateSlots(context, theorem, template, head_id, bindings)) {
         return false;
     }
 
-    for (members[0..m]) |mem| {
+    for (members.slice()) |mem| {
         if (!templateRegionHasMemberMatching(
             context,
             theorem,
@@ -1605,14 +1367,10 @@ fn boundRegionSlots(
     head_id: u32,
 ) usize {
     if (isAcuiUnitExpr(context, theorem, bound)) return 0;
-    var buf: [max_acui_members]AcuiMember = undefined;
-    var n: usize = 0;
-    if (!collectAcuiMembers(theorem, bound, head_id, &buf, &n)) {
-        return max_acui_members;
-    }
+    const members = bag.flatten(context, theorem, head_id, bound) orelse return bag.capacity;
     var slots: usize = 0;
-    for (buf[0..n]) |item| {
-        if (isAcuiUnitExpr(context, theorem, item.expr)) continue;
+    for (members.slice()) |item| {
+        if (isAcuiUnitExpr(context, theorem, item)) continue;
         slots += 1;
     }
     return slots;
@@ -1642,15 +1400,13 @@ fn templateRegionHasMemberMatching(
                     // concrete member (`P c`); degenerates to identity for
                     // meta-free bindings, matching the relaxed `.app` leaf below.
                     if (exprUnifiesModuloMeta(theorem, bound, ref_member)) return true;
-                    var buf: [max_acui_members]AcuiMember = undefined;
-                    var n: usize = 0;
-                    if (!collectAcuiMembers(theorem, bound, head_id, &buf, &n)) {
-                        return true; // overflow: no opinion (could match)
-                    }
+                    // Overflow: no opinion (could match).
+                    const members = bag.flatten(context, theorem, head_id, bound) orelse
+                        return true;
                     // A non-region value flattens to itself; the loop then just
                     // re-checks the unify above (already handled).
-                    for (buf[0..n]) |item| {
-                        if (exprUnifiesModuloMeta(theorem, item.expr, ref_member)) return true;
+                    for (members.slice()) |item| {
+                        if (exprUnifiesModuloMeta(theorem, item, ref_member)) return true;
                     }
                     return false;
                 }

@@ -24,6 +24,7 @@ const NameExprMap = helpers.NameExprMap;
 const apply = helpers.apply;
 const exact = helpers.exact;
 const fixtureFor = helpers.fixtureFor;
+const ruleArgIndex = helpers.ruleArgIndex;
 const parseGoal = helpers.parseGoal;
 const readProofCase = helpers.readProofCase;
 const ContextHarness = helpers.ContextHarness;
@@ -91,14 +92,6 @@ test "conclusion seed unfolds transparent template head" {
 
     try std.testing.expectEqual(@as(?ExprId, a_expr), candidate.bindings[p_idx]);
     try std.testing.expectEqual(@as(?ExprId, b_expr), candidate.bindings[q_idx]);
-}
-
-fn ruleArgIndex(rule: anytype, name: []const u8) !usize {
-    for (rule.arg_names, 0..) |maybe_name, idx| {
-        const arg_name = maybe_name orelse continue;
-        if (std.mem.eql(u8, arg_name, name)) return idx;
-    }
-    return error.MissingArg;
 }
 
 test "multiHypBinderMask flags binders occurring in more than one hypothesis" {
@@ -708,7 +701,7 @@ test "dependency prune keeps an occurrence a def unfold can remove" {
     try std.testing.expect(counters.full_try_candidate_calls > 0);
 }
 
-// Abstentions of the multiplicity half (`acuiDistinctMembersPlausible`). Each
+// Abstentions of the multiplicity matching (`acuiRequiredMembersPlausible`). Each
 // runs `weaken2` against a context that shows one entry after `g`, which the
 // ordered theory prunes (see "counts distinct members" above), in a setting
 // where the entry count is not fixed.
@@ -853,6 +846,42 @@ test "ACUI member prune keeps a required member an open meta may supply" {
     const open_ctx = try theorem.interner.internApp(join_id, &.{ g, meta });
     const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
     try std.testing.expect(prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, open_goal, bindings));
+}
+
+test "ACUI member prunes keep a def leaf that unfolds to the unit" {
+    // `nil` unfolds to `emp`, so `g , nil` matches the empty context with
+    // `g := emp`: the leaf needs no member, and the goal has none to offer.
+    const mm0_src = ordered_ctx_theory ++
+        \\def nil: ctx = $ emp $;
+        \\axiom wk_nil (g: ctx) (J: wff): $ nd g J $ > $ nd (join g nil) J $;
+        \\theorem t (z: tm): $ nd emp (has z Nat) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId("wk_nil") orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+    const goal = try theorem.internParsedExpr(fixture.assertion.concl);
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+
+    try std.testing.expect(prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, goal, bindings));
+    try std.testing.expect(!acui.acuiBoundMembersDeepMismatch(
+        &context,
+        &theorem,
+        rule.concl,
+        goal,
+        bindings,
+        helpers.plausible.unfoldedExprMismatch,
+        null,
+    ));
 }
 
 // The dependency prune's exemption (`ruleMayRechooseBound`): the pruned
@@ -1200,6 +1229,18 @@ test "closed-region prune refutes a ref context unequal to a bound context binde
     try std.testing.expect(plausible(&context, &theorem, template, ab, g_b));
     const ida_b = try theorem.interner.internApp(join, &.{ h_ida, hb });
     try std.testing.expect(plausible(&context, &theorem, template, ab, ida_b));
+    // A bound value of open metas may be empty, so it meets the empty context;
+    // a rigid member beside them may not.
+    const emp = try theorem.interner.internApp(
+        fixture.env.term_names.get("emp") orelse return error.MissingTerm,
+        &.{},
+    );
+    const m1 = try theorem.addMetaPlaceholderResolved("ctx");
+    const m2 = try theorem.addMetaPlaceholderResolved("ctx");
+    const metas = try theorem.interner.internApp(join, &.{ m1, m2 });
+    try std.testing.expect(plausible(&context, &theorem, template, metas, emp));
+    const a_meta = try theorem.interner.internApp(join, &.{ ha, m1 });
+    try std.testing.expect(!plausible(&context, &theorem, template, a_meta, emp));
 }
 
 test "exprUnifiesModuloMeta treats search metas as wildcards but prunes rigid clashes" {

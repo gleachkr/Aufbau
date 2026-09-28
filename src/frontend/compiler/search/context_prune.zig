@@ -36,12 +36,12 @@ const ViewDecl = @import("../../views.zig").ViewDecl;
 const types = @import("./types.zig");
 const Context = types.Context;
 const def_match = @import("./backward/def_match.zig");
+const bag = @import("./backward/bag.zig");
 const semantic = @import("./backward/semantic.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
 const Fill = @import("./abstract_prune.zig").Fill;
 
 const max_hyps = 24;
-const max_members = 64;
 const max_binders = 128;
 const max_discharged_members = 8;
 
@@ -49,7 +49,6 @@ pub const Info = struct {
     turnstile_term_id: u32,
     ctx_arg_index: u32,
     acui_head_id: u32,
-    unit_term_id: ?u32,
     num_hyps: usize,
     /// Per hypothesis discharge budget (max ref-context members that may be
     /// absent from the goal context). `null` = abstain on this hypothesis.
@@ -99,22 +98,13 @@ pub fn analyzeTemplates(
         return null;
     const k = site.ctx_arg_index;
     const acui_head = site.acui_head_id;
-    const unit = unitId(context, acui_head);
-
-    var concl_members: [max_members]TemplateExpr = undefined;
-    var concl_len: usize = 0;
-    if (!flattenAcuiTemplate(
-        concl.app.args[k],
-        acui_head,
-        &concl_members,
-        &concl_len,
-    )) return null;
+    const concl_members = bag.flattenTemplate(context, acui_head, concl.app.args[k]) orelse
+        return null;
 
     var info = Info{
         .turnstile_term_id = turnstile,
         .ctx_arg_index = @intCast(k),
         .acui_head_id = acui_head,
-        .unit_term_id = unit,
         .num_hyps = hyps.len,
         .hyp_budgets = [_]?u8{null} ** max_hyps,
         .discharged = undefined,
@@ -127,8 +117,7 @@ pub fn analyzeTemplates(
             turnstile,
             k,
             acui_head,
-            unit,
-            concl_members[0..concl_len],
+            concl_members.slice(),
             arg_infos,
             &info.discharged[i],
             &info.discharged_has_bound[i],
@@ -203,12 +192,6 @@ fn templateSortName(
     };
 }
 
-fn unitId(context: *const Context, acui_head: u32) ?u32 {
-    const combiner = context.registry.acui_by_head.get(acui_head) orelse return null;
-    if (combiner.unit_term_id) |u| return u;
-    return context.env.term_names.get(combiner.unit_term_name);
-}
-
 /// Discharge budget for one hypothesis: the count of context-member templates
 /// that are NOT carried into the conclusion context, provided each is a rigid
 /// single-member shape. Returns null (abstain) when any member could expand to an
@@ -220,20 +203,16 @@ fn hypBudget(
     turnstile: u32,
     k: usize,
     acui_head: u32,
-    unit: ?u32,
     concl_members: []const TemplateExpr,
     arg_infos: []const ArgInfo,
     discharged: *[max_discharged_members]TemplateExpr,
     discharged_has_bound: *[max_discharged_members]bool,
 ) ?u8 {
     if (h != .app or h.app.term_id != turnstile or k >= h.app.args.len) return null;
-    var members: [max_members]TemplateExpr = undefined;
-    var len: usize = 0;
-    if (!flattenAcuiTemplate(h.app.args[k], acui_head, &members, &len)) return null;
+    const members = bag.flattenTemplate(context, acui_head, h.app.args[k]) orelse return null;
 
     var budget: u8 = 0;
-    for (members[0..len]) |m| {
-        if (templateIsUnit(m, unit)) continue;
+    for (members.slice()) |m| {
         if (templateCarriedByConclusion(m, concl_members)) continue;
 
         switch (m) {
@@ -254,11 +233,6 @@ fn hypBudget(
         }
     }
     return budget;
-}
-
-fn templateIsUnit(t: TemplateExpr, unit: ?u32) bool {
-    const u = unit orelse return false;
-    return t == .app and t.app.term_id == u and t.app.args.len == 0;
 }
 
 fn templateCarriedByConclusion(
@@ -301,29 +275,6 @@ fn templateEqual(a: TemplateExpr, b: TemplateExpr) bool {
     }
 }
 
-fn flattenAcuiTemplate(
-    t: TemplateExpr,
-    acui_head: u32,
-    out: *[max_members]TemplateExpr,
-    len: *usize,
-) bool {
-    switch (t) {
-        .app => |a| {
-            if (a.term_id == acui_head) {
-                for (a.args) |arg| {
-                    if (!flattenAcuiTemplate(arg, acui_head, out, len)) return false;
-                }
-                return true;
-            }
-        },
-        else => {},
-    }
-    if (len.* >= out.len) return false;
-    out[len.*] = t;
-    len.* += 1;
-    return true;
-}
-
 /// True when, for some assigned hypothesis, the ref's context contributes more
 /// rigid members absent from the goal context than the rule can discharge, or a
 /// binding-aware discharged template shape makes such a member impossible.
@@ -340,16 +291,12 @@ pub fn contextInfeasible(
     if (gn.* != .app or gn.app.term_id != info.turnstile_term_id) return false;
     if (info.ctx_arg_index >= gn.app.args.len) return false;
 
-    var goal_members: [max_members]ExprId = undefined;
-    var goal_len: usize = 0;
-    if (!flattenAcuiExpr(
+    const goal_members = bag.flatten(
+        context,
         theorem,
-        gn.app.args[info.ctx_arg_index],
         info.acui_head_id,
-        info.unit_term_id,
-        &goal_members,
-        &goal_len,
-    )) return false;
+        gn.app.args[info.ctx_arg_index],
+    ) orelse return false;
 
     for (fills) |fill| {
         if (fill.hyp_index >= info.num_hyps) continue;
@@ -359,44 +306,39 @@ pub fn contextInfeasible(
         if (rn.* != .app or rn.app.term_id != info.turnstile_term_id) continue;
         if (info.ctx_arg_index >= rn.app.args.len) continue;
 
-        var ref_members: [max_members]ExprId = undefined;
-        var ref_len: usize = 0;
-        if (!flattenAcuiExpr(
+        const ref_members = bag.flatten(
+            context,
             theorem,
-            rn.app.args[info.ctx_arg_index],
             info.acui_head_id,
-            info.unit_term_id,
-            &ref_members,
-            &ref_len,
-        )) continue;
+            rn.app.args[info.ctx_arg_index],
+        ) orelse continue;
 
-        var absent_members: [max_members]ExprId = undefined;
-        var absent_len: usize = 0;
-        for (ref_members[0..ref_len]) |m| {
+        var absent_members = bag.ExprBag{};
+        for (ref_members.slice()) |m| {
             const mn = theorem.interner.node(m);
             // Only a rigid-headed app can be a definite mismatch. Variables (the
             // absorbing/ambient context binders) and reducible heads are
             // no-opinion — they might unify with or rewrite to a goal member.
             if (mn.* != .app) continue;
             if (def_match.rigidHeadOf(context, mn.app.term_id) == null) continue;
-            if (memberPossiblyInList(context, theorem, m, goal_members[0..goal_len])) continue;
-            appendDistinctExpr(&absent_members, &absent_len, m);
+            if (memberPossiblyInList(context, theorem, m, goal_members.slice())) continue;
+            _ = absent_members.appendDistinct(m);
         }
-        if (absent_len > budget) return true;
+        if (absent_members.len > budget) return true;
         if (bindings) |b| {
             const patterns = info.discharged[fill.hyp_index][0..budget];
             const has_bound = info.discharged_has_bound[fill.hyp_index][0..budget];
             if (!absentMembersFitPatterns(
                 context,
                 theorem,
-                absent_members[0..absent_len],
+                absent_members.slice(),
                 patterns,
                 b,
             )) return true;
             if (!dischargedPatternsSupported(
                 context,
                 theorem,
-                ref_members[0..ref_len],
+                ref_members.slice(),
                 patterns,
                 has_bound,
                 b,
@@ -404,19 +346,6 @@ pub fn contextInfeasible(
         }
     }
     return false;
-}
-
-fn appendDistinctExpr(
-    out: *[max_members]ExprId,
-    len: *usize,
-    item: ExprId,
-) void {
-    for (out[0..len.*]) |existing| {
-        if (item == existing) return;
-    }
-    if (len.* >= out.len) return;
-    out[len.*] = item;
-    len.* += 1;
 }
 
 fn absentMembersFitPatterns(
@@ -591,30 +520,4 @@ fn memberPossiblyInList(
         }
     }
     return false;
-}
-
-fn flattenAcuiExpr(
-    theorem: *const TheoremContext,
-    e: ExprId,
-    acui_head: u32,
-    unit: ?u32,
-    out: *[max_members]ExprId,
-    len: *usize,
-) bool {
-    const n = theorem.interner.node(e);
-    if (n.* == .app) {
-        if (n.app.term_id == acui_head) {
-            for (n.app.args) |arg| {
-                if (!flattenAcuiExpr(theorem, arg, acui_head, unit, out, len)) return false;
-            }
-            return true;
-        }
-        if (unit) |u| {
-            if (n.app.term_id == u and n.app.args.len == 0) return true;
-        }
-    }
-    if (len.* >= out.len) return false;
-    out[len.*] = e;
-    len.* += 1;
-    return true;
 }

@@ -172,8 +172,8 @@ Why they cannot collapse into one (verified empirically, 2026-06-24):
 A deletion-based unification (the abandoned `noble-squishing-falcon` /
 `matchAcuiSide` plan) is therefore **unreachable**: there is no redundant
 duplicate to delete. If you want to reduce the special-casing, the lever is
-*shared helpers* (`backward/acui.zig`: `collectAcuiMembers`,
-`templateMatchesExprReadOnly`, `isCommutative`, `acuiUnitIdForHead`,
+*shared helpers* (`backward/bag.zig`: `flatten`, `lawOf`, `unitOf`;
+`backward/acui.zig`: `templateMatchesExprReadOnly`, `isCommutative`,
 `consumeBoundLeafMembers`), not merging the three drivers.
 
 ### ACUI subset soundness
@@ -247,8 +247,10 @@ which the persisted-memo covering rule requires:
 4. **Phase 4 — principal retention** (`allow_retain_principal = true`). Only on
    a clean core miss, and only when the theory declares an **idempotent**
    structural combiner (`hasIdempotentCombiner`). Lets the ACUI split enumerator
-   keep a member already claimed by a fixed principal in the open rest binder —
-   the non-minimal complement `g , g = g` permits (`split.buildEnumerator`).
+   keep a member already claimed by a fixed principal in the open rest binder of
+   a set combiner — the non-minimal complement `g , g = g` permits — and lets an
+   ordered idempotent combiner's rest overlap its neighbours, as any contiguous
+   run (`split.buildEnumerator`).
    Needed when a proof must retain the principal *and* its decomposition (a
    `lan`/`lim` premise that keeps `a∧b` alongside `a , b`) and the principal
    cannot be rebuilt. Broadens every additive split node, hence last and gated;
@@ -908,10 +910,11 @@ over-approximation (never reject a provable candidate):
   `acui.acuiBoundMembersPlausible`, counter `conclusion_member_prunes`) — every
   fully-bound required member of an ACUI conclusion must have a candidate in
   the goal. Presence needs only associativity, so it holds for every
-  combiner. Multiplicity (`acuiDistinctMembersPlausible`) applies only without
-  idempotence: a rule needing two distinct entries after `g` cannot match a
-  context holding one. An open meta in the goal (the rest of a context a
-  premise left unresolved) may hold any member, so it never refutes one.
+  combiner. Without idempotence each required member needs a goal member of
+  its own (one bipartite matching, `acuiRequiredMembersPlausible`): a rule
+  needing two distinct entries after `g` cannot match a context holding one.
+  An open meta in the goal (the rest of a context a premise left unresolved)
+  may hold any member, so it never refutes one.
 - **redex conclusion prune** (`plausible.redexConclusionMismatch`, called from
   `validateSelectedRefs`; counter `redex_conclusion_prunes`) — a `@rewrite`
   head in the conclusion gives the plain checks no opinion. Once the refs are
@@ -965,6 +968,21 @@ candidates and the validator checks each one.
   ACUI conclusion distributes context members. A binder inside a fixed summand
   (the `A` of `g , x : A`) is not a context, and enumerating contexts for it
   would be ill-sorted, so it is never a split site.
+- **Split candidates** (`split.buildEnumerator`) follow the combiner's laws
+  (`bag.lawOf`). A set (ACUI) offers sub-sets of the distinct members, since
+  siblings may overlap. A multiset (ACU) offers sub-multisets of what the
+  principals and bound siblings leave (so `a , a` is a candidate), forced when
+  no sibling is open. A sequence (AU) offers contiguous runs, each end pinned
+  when the summands on that side have a known member count: `g , x : A`
+  against a three-entry context offers only the first two entries. A bound
+  sibling holding a meta or a def may stand for any number of entries, so it
+  leaves its end open.
+
+Every flattening of a combiner application in the search goes through
+`backward/bag.zig`: `flatten` splices nested applications, drops the
+combiner's own unit and keeps duplicates in order, returning null on overflow
+so callers abstain rather than read a truncated bag. The exception is
+`witness.flattenRegion`, which also dereferences solved metas.
 
 The same `finalConclusionPlausible`/`tryCandidate` path also carries the
 **reject-verdict memo** (`candidate.zig`, `types.VerdictMemo`): a `tryCandidate`
@@ -1209,6 +1227,7 @@ width is real.
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?` thin variant |
 | `backward/seed.zig` | seed-phase binder extraction + non-view principal fan-out + eliminator reconciliation seed (`partitionSeedBindings`) |
+| `backward/bag.zig` | one flattening of an ACUI combiner application: members, unit, laws (set / multiset / sequence), rebuild |
 | `backward/acui.zig` | ACUI member math (shared by all three principal mechanisms) |
 | `backward/split.zig` | multiplicative context-partition search |
 | `backward/witness.zig` | ACUI member-witness enumeration for open existentials |

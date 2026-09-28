@@ -57,7 +57,6 @@ const extractHypPartialBindings = prune.extractHypPartialBindings;
 const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
 const acuiClosedRegionPlausible = prune.acuiClosedRegionPlausible;
 const normalizeAcuiUnits = prune.normalizeAcuiUnits;
-const acuiUnitIdForHead = prune.acuiUnitIdForHead;
 const defBodyForUnfold = prune.defBodyForUnfold;
 const unfoldDefBody = prune.unfoldDefBody;
 const templateNeedsSemantic = prune.templateNeedsSemantic;
