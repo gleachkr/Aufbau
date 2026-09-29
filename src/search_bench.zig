@@ -491,8 +491,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_and_comm_split.auf",
         .marker = "auto?",
-        .expected_replacement = "and_intro (G := $ p ∧ q $, H := $ p ∧ q $) " ++
-            "[and_elim_r [l1], and_elim_l [l1]]",
+        .expected_replacement = "and_intro [and_elim_r [l1], and_elim_l [l1]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -502,8 +501,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_ext_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [imp_intro [ext " ++
-            "(G := $ A ⊆ B $, H := $ B ⊆ A $) [ax [], ax []]]]",
+        .expected_replacement = "imp_intro [imp_intro [ext [ax [], ax []]]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -513,8 +511,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_sep_intro_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [imp_intro [sep_intro " ++
-            "(G := $ a e. A $, H := $ [ x / a ] p $) [ax [], ax []]]]",
+        .expected_replacement = "imp_intro [imp_intro [sep_intro [ax [], ax []]]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -532,8 +529,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_or_comm.auf",
         .marker = "auto?",
-        .expected_replacement = "or_elim (H := $ _ $, K := $ _ $) " ++
-            "[l1, or_intro_r [l2], or_intro_l [l4]]",
+        .expected_replacement = "or_elim [l1, or_intro_r [l2], or_intro_l [l4]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -543,17 +539,18 @@ const scenarios = [_]Scenario{
         // already solved to apply at all). Stage 5 enumerates the target's own
         // concrete ACUI context members as the finite witness domain: matching
         // the fragment `?t ∈ A` against the member `A ∈ A` assigns `?t := A`,
-        // the concrete target is closed by `ax []`, and the witness renders as
-        // an explicit binding. Was the "no result, Stage 5" probe before
+        // the concrete target is closed by `ax []`, and the witness is printed
+        // as an explicit binding. Was the "no result, Stage 5" probe before
         // member enumeration landed.
         .name = "zermelo nd_exists_intro_mem auto? (Stage 5 ACUI witness)",
         .mm0_path = "tests/search_bench_cases/zermelo_exists_intro_stage5.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_intro_mem_auto.auf",
         .marker = "auto?",
-        // The witness `t` AND the `@recover` pattern binder `p` both render as
-        // explicit bindings: the inline assembly is re-validated bottom-up and
-        // the principal `∃ x p` can't be reconstructed from `t` alone.
-        .expected_replacement = "imp_intro [ex_intro (t := $ A $, p := $ x e. A $) [ax []]]",
+        // The search validates the inline `ex_intro` with its `@recover`
+        // pattern binder `p` given (bottom-up, `∃ x p` can't be rebuilt from
+        // `t` alone), but the whole line re-infers `p` from the goal, so only
+        // the witness is printed.
+        .expected_replacement = "imp_intro [ex_intro (t := $ A $) [ax []]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -565,9 +562,9 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/zermelo_exists_intro_stage5.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_intro_self_auto.auf",
         .marker = "auto?",
-        // Witness `t` plus the rendered `@recover` pattern binder `p` (the
-        // repeated-meta body `?t ∈ ?t` → `x ∈ x`).
-        .expected_replacement = "imp_intro [ex_intro (t := $ A $, p := $ x e. x $) [ax []]]",
+        // Only the witness `t` is printed; the whole line re-infers the
+        // repeated-meta body `?t ∈ ?t` → `x ∈ x` from the goal.
+        .expected_replacement = "imp_intro [ex_intro (t := $ A $) [ax []]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -593,9 +590,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/zermelo_exists_intro_stage5.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_intro_ambiguous_auto.auf",
         .marker = "auto?",
-        // Meta-solved witness `t` also renders the `@recover` pattern binder `p`
-        // (the tagged finite domain + repeated-meta body `mem x x`).
-        .expected_replacement = "ex_intro (t := $ A $, p := $ tag (A e. A , B e. B) (x e. x) $) [tag_member []]",
+        .expected_replacement = "ex_intro (t := $ A $) [tag_member []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
         .expected_suggestion_count = 2,
     },
@@ -625,8 +620,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_union_intro_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "union_intro " ++
-            "(G := $ x e. y $, H := $ y e. A $, y := $ y $) [ax [], ax []]",
+        .expected_replacement = "union_intro (y := $ y $) [ax [], ax []]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -640,8 +634,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_elim_split.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [imp_elim (H := $ E. x p $) " ++
-            "[l2, ex_elim [l1, l3]]]",
+        .expected_replacement = "imp_intro [imp_elim [l2, ex_elim [l1, l3]]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -829,27 +822,27 @@ const scenarios = [_]Scenario{
         // STAGE 4 flagship (existential regular meta — SUPPORTED). The open
         // backward path defers `hyp_only_use`'s hyp-only witness x as an
         // existential meta, the child search solves the structured target
-        // `P ?x` with `pred_K`, and the match-back pins x := K, rendered as
-        // an explicit binding. Was the "no result, Stage 4" probe before the
-        // open path landed.
+        // `P ?x` with `pred_K`, and the match-back pins x := K, which the
+        // printed line leaves to the checker (it reads x off `pred_K`). Was the
+        // "no result, Stage 4" probe before the open path landed.
         .name = "hyp-only witness auto? (Stage 4 open backward)",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_hyp_only_witness.auf",
         .marker = "auto?",
-        .expected_replacement = "hyp_only_use (x := $ K $) [pred_K []]",
+        .expected_replacement = "hyp_only_use [pred_K []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
         // STAGE 4 (generated child pins parent meta — SUPPORTED). Solving `C`
         // opens `N ?x` under `generated_child_parent`; the recursive child
         // opens `M ?x'` under `child_from_mark`, closes it with `mark_K`, and
-        // the nested match-backs propagate K upward into both bindings.
+        // the nested match-backs propagate K upward into both bindings (which
+        // the printed line leaves to the checker).
         .name = "generated child pins parent auto? (Stage 4 open backward)",
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_child_pins_parent.auf",
         .marker = "auto?",
-        .expected_replacement = "generated_child_parent (x := $ K $) " ++
-            "[child_from_mark (x := $ K $) [mark_K []]]",
+        .expected_replacement = "generated_child_parent [child_from_mark [mark_K []]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -860,8 +853,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_repeated_unknown.auf",
         .marker = "auto?",
-        .expected_replacement = "repeated_unknown_use (x := $ K $) " ++
-            "[left_K [], right_K []]",
+        .expected_replacement = "repeated_unknown_use [left_K [], right_K []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -912,16 +904,14 @@ const scenarios = [_]Scenario{
         // recover-shaped surface `emp ⊢ ?t = 0` (matrix with one leaf swap,
         // NOT the raw `[x/?t]`-headed template); the generated child
         // `eq_intro_nd` proves `emp ⊢ 0 = 0`, and the match-back reads the
-        // witness t := 0 off the child conclusion. The explicit bindings now
-        // render with notation (`0` for the term `d0`, `n = 0` for `eq n d0`)
-        // via the notation-aware pretty-printer (a059e67).
+        // witness t := 0 off the child conclusion. The printed witness uses
+        // notation (`0` for the term `d0`) via the notation-aware
+        // pretty-printer (a059e67).
         .name = "euclid ex_intro open witness auto? (Stage 4 open backward)",
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_ex_intro_open_auto.auf",
         .marker = "auto?",
-        // Meta-solved witness `t` also renders the `@recover` pattern binder `p`
-        // (the matrix `n = 0`), same as the Stage 5 ACUI-witness suggestions.
-        .expected_replacement = "ex_intro (t := $ 0 $, p := $ n = 0 $) [eq_intro_nd []]",
+        .expected_replacement = "ex_intro (t := $ 0 $) [eq_intro_nd []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -937,7 +927,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/metavariable_capabilities.mm0",
         .proof_path = "tests/search_bench_cases/meta_plain_hyp_only.auf",
         .marker = "auto?",
-        .expected_replacement = "plain_only_use (x := $ K $) [pred_K []]",
+        .expected_replacement = "plain_only_use [pred_K []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -998,14 +988,15 @@ const scenarios = [_]Scenario{
         // backward `all_elim` premise slot, the `@recover` correspondence
         // solves `?t := u` from the goal, and the materialized recipe renders
         // explicit bindings (hidden unfold dummies named from the theorem's
-        // bound vars). This was the "no result, Stage 7" probe before the
-        // forward layer landed.
+        // bound vars), of which the printed line keeps the inner `t` and `p`.
+        // This was the "no result, Stage 7" probe before the forward layer
+        // landed.
         .name = "all_elim forward instantiation auto? (Stage 7 forward)",
         .mm0_path = "tests/search_bench_cases/all_elim_forward.mm0",
         .proof_path = "tests/search_bench_cases/all_elim_forward.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim [all_elim (x := $ a $, t := $ u $, " ++
-            "p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
+        .expected_replacement = "all_elim [all_elim (t := $ u $, p := $ ∀ b (pair f a = pair f " ++
+            "b → a = b) $) [#1]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -1027,15 +1018,14 @@ const scenarios = [_]Scenario{
         // deriving the two-hole surface `(pair f ?t = pair f ?t2) → (?t = ?t2)`
         // with the layer-1 hole shared. The goal matches the surface directly,
         // and ONE solve instantiates both layers of the nested recipe
-        // consistently (?t := u, ?t2 := v).
+        // consistently (?t := u, ?t2 := v). Printed with only the bindings
+        // the checker needs, it reads the same as the Stage 7 proof.
         .name = "all_elim two-layer derived direct auto? (Stage 8 forward)",
         .mm0_path = "tests/search_bench_cases/all_elim_forward.mm0",
         .proof_path = "tests/search_bench_cases/all_elim_forward.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim (x := $ a $, t := $ v $, " ++
-            "p := $ pair f u = pair f a → u = a $) " ++
-            "[all_elim (x := $ b $, t := $ u $, " ++
-            "p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
+        .expected_replacement = "all_elim [all_elim (t := $ u $, p := $ ∀ b (pair f a = pair f " ++
+            "b → a = b) $) [#1]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -1048,12 +1038,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/all_elim_forward.mm0",
         .proof_path = "tests/search_bench_cases/all_elim_forward3.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim (x := $ a $, t := $ w $, " ++
-            "p := $ pair (pair g u) v = pair v a → u = a $) " ++
-            "[all_elim (x := $ b $, t := $ v $, " ++
-            "p := $ ∀ a (pair (pair g u) b = pair b a → u = a) $) " ++
-            "[all_elim (x := $ c $, t := $ u $, " ++
-            "p := $ ∀ b ∀ a (pair (pair g c) b = pair b a → c = a) $) [#1]]]",
+        .expected_replacement = "all_elim [all_elim (t := $ v $) [all_elim (t := $ u $, p := $ " ++
+            "∀ a ∀ b (pair (pair g c) a = pair a b → c = b) $) [#1]]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -1065,10 +1051,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_le_total_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim (x := $ j $, g := $ _ $, " ++
-            "t := $ b $, p := $ a <= j ∨ j <= a $) " ++
-            "[all_elim (x := $ i $, g := $ _ $, t := $ a $, " ++
-            "p := $ A. j (i <= j ∨ j <= i) $) [l1]]",
+        .expected_replacement = "all_elim (p := $ a <= j ∨ j <= a $) [all_elim [l1]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -1092,9 +1075,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_dvd_fact_chain_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "le_iff_add [lt_implies_le_ax " ++
-            "[and_elim_l (g := $ suc 0 < d ∧ d <= 0 $, " ++
-            "a := $ suc 0 < d $, b := $ d <= 0 $) [l1]]]",
+        .expected_replacement = "le_iff_add [lt_implies_le_ax [and_elim_l [l1]]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -1136,15 +1117,14 @@ const scenarios = [_]Scenario{
     .{
         // Forward-layer boundary guard for the composition theory: the
         // derived family fact's materialized recipe closes `P K → Q K`
-        // directly (the backward `@recover` route `all_elim [#1]` is also
-        // offered). Declared LAST in the .mm0 so it cannot serve as a lemma
+        // directly; printed with only the bindings the checker needs, it reads
+        // the same as the backward `@recover` route. Declared LAST in the .mm0 so it cannot serve as a lemma
         // for the composition theorems.
         .name = "fwd/bwd compose hilbert forward-direct auto? (Stage 7)",
         .mm0_path = "tests/search_bench_cases/forward_backward_compose.mm0",
         .proof_path = "tests/search_bench_cases/fwd_direct_probe.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim (x := $ x $, t := $ K $, " ++
-            "p := $ P x → Q x $) [#1]",
+        .expected_replacement = "all_elim [#1]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -1207,40 +1187,15 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/forward_chain.mm0",
         .proof_path = "tests/search_bench_cases/forward_chain.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_elim (g := $ g $, h := $ g $, a := $ R b j $, b := $ R a " ++
-            "j $) [imp_elim (g := $ g $, h := $ g $, a := $ R a b $, b := " ++
-            "$ R b j → R a j $) [all_elim (x := $ z $, g := $ g $, t := $ " ++
-            "j $, p := $ R a b → R b z → R a z $) [all_elim (x := $ y $, " ++
-            "g := $ g $, t := $ b $, p := $ ∀ z (R a y → R y z → R a z) " ++
-            "$) [all_elim (x := $ x $, g := $ g $, t := $ a $, p := $ ∀ y " ++
-            "∀ z (R x y → R y z → R x z) $) [#1]]], #2], imp_elim (g := $ " ++
-            "g $, h := $ g $, a := $ R d j $, b := $ R b j $) [imp_elim " ++
-            "(g := $ g $, h := $ g $, a := $ R b d $, b := $ R d j → R b " ++
-            "j $) [all_elim (x := $ z $, g := $ g $, t := $ j $, p := $ R " ++
-            "b d → R d z → R b z $) [all_elim (x := $ y $, g := $ g $, t " ++
-            ":= $ d $, p := $ ∀ z (R b y → R y z → R b z) $) [all_elim (x " ++
-            ":= $ x $, g := $ g $, t := $ b $, p := $ ∀ y ∀ z (R x y → R " ++
-            "y z → R x z) $) [#1]]], imp_elim (g := $ g $, h := $ g $, a " ++
-            ":= $ R c d $, b := $ R b d $) [imp_elim (g := $ g $, h := $ " ++
-            "g $, a := $ R b c $, b := $ R c d → R b d $) [all_elim (x := " ++
-            "$ z $, g := $ g $, t := $ d $, p := $ R b c → R c z → R b z " ++
-            "$) [all_elim (x := $ y $, g := $ g $, t := $ c $, p := $ ∀ z " ++
-            "(R b y → R y z → R b z) $) [all_elim (x := $ x $, g := $ g " ++
-            "$, t := $ b $, p := $ ∀ y ∀ z (R x y → R y z → R x z) $) " ++
-            "[#1]]], #3], #4]], imp_elim (g := $ g $, h := $ g $, a := $ " ++
-            "R e j $, b := $ R d j $) [imp_elim (g := $ g $, h := $ g $, " ++
-            "a := $ R d e $, b := $ R e j → R d j $) [all_elim (x := $ z " ++
-            "$, g := $ g $, t := $ j $, p := $ R d e → R e z → R d z $) " ++
-            "[all_elim (x := $ y $, g := $ g $, t := $ e $, p := $ ∀ z (R " ++
-            "d y → R y z → R d z) $) [all_elim (x := $ x $, g := $ g $, t " ++
-            ":= $ d $, p := $ ∀ y ∀ z (R x y → R y z → R x z) $) [#1]]], " ++
-            "#5], imp_elim (g := $ g $, h := $ g $, a := $ R i j $, b := " ++
-            "$ R e j $) [imp_elim (g := $ g $, h := $ g $, a := $ R e i " ++
-            "$, b := $ R i j → R e j $) [all_elim (x := $ z $, g := $ g " ++
-            "$, t := $ j $, p := $ R e i → R i z → R e z $) [all_elim (x " ++
-            ":= $ y $, g := $ g $, t := $ i $, p := $ ∀ z (R e y → R y z " ++
-            "→ R e z) $) [all_elim (x := $ x $, g := $ g $, t := $ e $, p " ++
-            ":= $ ∀ y ∀ z (R x y → R y z → R x z) $) [#1]]], #6], #7]]]]",
+        .expected_replacement = "imp_elim [imp_elim [all_elim (t := $ j $) [all_elim (t := $ b " ++
+            "$) [all_elim (t := $ a $) [#1]]], #2], imp_elim [imp_elim " ++
+            "[all_elim (t := $ j $) [all_elim (t := $ d $) [all_elim (t := " ++
+            "$ b $) [#1]]], imp_elim [imp_elim [all_elim (t := $ d $) " ++
+            "[all_elim (t := $ c $) [all_elim (t := $ b $) [#1]]], #3], " ++
+            "#4]], imp_elim [imp_elim [all_elim (t := $ j $) [all_elim (t " ++
+            ":= $ e $) [all_elim (t := $ d $) [#1]]], #5], imp_elim " ++
+            "[imp_elim [all_elim (t := $ j $) [all_elim (t := $ i $) " ++
+            "[all_elim (t := $ e $) [#1]]], #6], #7]]]]",
         .generate = .{
             .enabled = true,
             .max_depth = 6,

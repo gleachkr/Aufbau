@@ -54,7 +54,7 @@ test "forward saturation derives a concrete ref usable by auto" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "qr [pq (x := $ K $) [#1]]",
+        "qr [pq [#1]]",
     });
     // `pq` fired on `P K` concretely. `pq2`'s unbound conclusion binder `y`
     // is deferred as a universal meta, deriving the family fact
@@ -106,7 +106,7 @@ test "forward family fact from unbound conclusion binder solves at the goal" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "bot_elim (g := $ G $, a := $ q $) [#1]",
+        "bot_elim [#1]",
     });
     // `bot_elim` derived the family fact; `anything`'s bare-meta surface
     // was rejected by the absorber guard.
@@ -363,14 +363,10 @@ test "derived ref with universal meta matches a later concrete goal" {
     );
     defer suggestions.deinit();
 
-    // The goal-direct derived use renders explicit bindings for the solved
-    // universal meta (`t := u`) and the premise-match binders. The plain
-    // backward `all_elim [#1]` is also offered (supported boundary).
-    try expectOffered(suggestions.items, &.{
-        "all_elim [#1]",
-        "all_elim (x := $ x $, t := $ u $, " ++
-            "p := $ pair f x = pair x f $) [#1]",
-    });
+    // The goal-direct derived use and the plain backward route (supported
+    // boundary) both print as `all_elim [#1]`: the checker reads the solved
+    // universal meta (`t := u`) and the premise binders off the goal.
+    try expectOffered(suggestions.items, &.{"all_elim [#1]"});
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
     try std.testing.expectEqual(@as(usize, 1), counters.universal_metas_created);
     // The repeated meta occurrence (`pair f ?t` / `pair ?t f`) was assigned
@@ -433,7 +429,7 @@ test "auto solves the nested forward-instantiation flagship (Stage 7)" {
     // from the goal. The hidden unfold dummies are named from the theorem's
     // unused bound vars (a, b).
     try expectOffered(suggestions.items, &.{
-        "all_elim [all_elim (x := $ a $, t := $ u $, " ++
+        "all_elim [all_elim (t := $ u $, " ++
             "p := $ ∀ b (pair f a = pair f b → a = b) $) [#1]]",
     });
     try std.testing.expect(counters.derived_ref_count > 0);
@@ -604,7 +600,7 @@ test "two-step forward chain renders a nested recipe" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "rs [qr (x := $ K $) [pq (x := $ K $) [#1]]]",
+        "rs [qr [pq [#1]]]",
     });
     // Layer 1: `Q K`; layer 2: `R K`; layer 3 derives nothing (fixpoint —
     // a clean stop, not budget exhaustion).
@@ -646,7 +642,7 @@ test "multi-premise forward rule fires on a source tuple" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "rs [pqr (x := $ K $) [#1, #2]]",
+        "rs [pqr [#1, #2]]",
     });
     // One tuple (#1, #2) matches both premises consistently (x := K at both
     // positions); the cross pairings reject on the shared binder.
@@ -687,7 +683,7 @@ test "duplicate derivations collapse to one derived ref" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "qr [pq (x := $ K $) [#1]]",
+        "qr [pq [#1]]",
     });
     try std.testing.expectEqual(@as(usize, 1), counters.derived_ref_count);
 }
@@ -769,8 +765,8 @@ test "two-layer derived ref solves a shared hole in both recipe layers" {
     // Layer 1 derives `∀ b ((pair f ?t = pair f b) → (?t = b))`; layer 2
     // fires on that shape, deriving `(pair f ?t = pair f ?t2) → (?t = ?t2)`
     // with the layer-1 hole ?t shared. The goal-direct use solves ?t := u,
-    // ?t2 := v in ONE walk, and the rendered two-layer recipe shows the
-    // shared witness consistently: inner `t := u`, outer `p` mentioning `u`.
+    // ?t2 := v in ONE walk. The search validates the rendered two-layer
+    // recipe; the printed line keeps only the inner witness `t := u`.
     const proof_src =
         \\fwd_nested
         \\----------
@@ -789,11 +785,7 @@ test "two-layer derived ref solves a shared hole in both recipe layers" {
     defer suggestions.deinit();
 
     try expectOffered(suggestions.items, &.{
-        "all_elim (x := $ b $, t := $ v $, " ++
-            "p := $ pair f u = pair f b → u = b $) " ++
-            "[all_elim (x := $ a $, t := $ u $, " ++
-            "p := $ ∀ b (pair f a = pair f b → a = b) $) " ++
-            "[#1]]",
+        "all_elim [all_elim (t := $ u $) [#1]]",
     });
     try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
     try std.testing.expectEqual(@as(usize, 2), counters.universal_metas_created);

@@ -42,6 +42,15 @@ the generation-only behavior is gated on `options.generator != null` (in
 reading `backward/backtrack.zig`, "is `generator` null?" is the single most important branch
 to track — it separates plain `exact?` (must stay untouched) from `auto?`.
 
+Inside the search, validation renders every binder the search chose
+(existential metas, bound witnesses, ACUI split and principal choices) as an
+explicit binding, so the checker never has to re-derive a choice
+(`backward/validate.zig`). The suggestion text is a separate matter:
+`source.zig:withNeededBindings` drops each binding, outermost application
+first, whose line still checks without it, so a suggestion names only what
+the checker cannot infer. This costs checker runs per surfaced suggestion
+only, never search ticks, and cannot change what is found.
+
 ## Conversion-search entry point
 
 **`conversion?`** is a separate engine (`conversion.zig:run`, dispatched

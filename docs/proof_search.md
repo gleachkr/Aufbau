@@ -93,6 +93,12 @@ bounded (see *Budgets and determinism* below), so on a goal it cannot
 prove it will give up rather than run forever — but a hard goal can still
 take a couple of seconds before it does.
 
+A suggestion from `exact?` or `auto?` names a rule argument only when the
+checker cannot infer it from the goal and the cited references, as with
+the witness in `ex_intro (t := $ 0 $) [eq_intro_nd []]`. Each omitted
+argument is checked before the suggestion is offered, so the suggestion
+compiles as printed.
+
 **Which to reach for.** Start with `exact?` when you expect a one-step
 close; it is fast and its answer is unambiguous. Use `auto?` when the
 step is genuinely a small proof and you want the compiler to find the

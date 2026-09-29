@@ -406,16 +406,22 @@ pub fn suggestionsAtSourceOffset(
         if (options.exact_result_limit) |limit| {
             exact_options.max_results = @min(options.max_results, limit);
         }
+        const site = SuggestionSite{
+            .compiler = &compiler,
+            .context = &context,
+            .line = target_line,
+            .line_goal = line_goal,
+            .path = target.path,
+            .theorem = &theorem,
+            .theorem_vars = &theorem_vars,
+        };
         var suggestions = if (target.path.len == 0)
             try topLevelExactSuggestions(
                 work,
-                &compiler,
                 &session,
-                search_goal,
+                site,
                 target_application.span,
                 target_application.rule_name,
-                &theorem,
-                &theorem_vars,
                 exact_options,
             )
         else
@@ -439,12 +445,9 @@ pub fn suggestionsAtSourceOffset(
         if (is_auto and options.generate.enabled and target.path.len == 0) {
             suggestions = try appendGeneratedSuggestions(
                 work,
-                &compiler,
                 &session,
-                search_goal,
+                site,
                 target_application.span,
-                &theorem,
-                &theorem_vars,
                 exact_options,
                 suggestions,
             );
@@ -1249,21 +1252,18 @@ fn applicationAtPath(
 
 fn topLevelExactSuggestions(
     allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
     session: *session_mod.SearchSession,
-    goal: Goal,
+    site: SuggestionSite,
     replace_span: Span,
     keyword: []const u8,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
     options: SourceSuggestionOptions,
 ) !SourceSuggestions {
     var results = try exactWithSession(
-        compiler,
+        site.compiler,
         session,
-        goal,
-        theorem,
-        theorem_vars,
+        site.line_goal,
+        site.theorem,
+        site.theorem_vars,
         .{
             .max_results = options.max_results,
             .counters = options.counters,
@@ -1272,6 +1272,7 @@ fn topLevelExactSuggestions(
     defer results.deinit();
     return try renderExactSourceSuggestions(
         allocator,
+        site,
         results.candidates,
         replace_span,
         keyword,
@@ -1283,12 +1284,9 @@ fn topLevelExactSuggestions(
 /// replacement text and respecting `max_results`. Takes ownership of `existing`.
 fn appendGeneratedSuggestions(
     allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
     session: *session_mod.SearchSession,
-    goal: Goal,
+    site: SuggestionSite,
     replace_span: Span,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
     options: SourceSuggestionOptions,
     existing: SourceSuggestions,
 ) !SourceSuggestions {
@@ -1307,17 +1305,18 @@ fn appendGeneratedSuggestions(
     var gen_options = options.generate;
     gen_options.max_results = options.max_results - items.items.len;
     var generated = try generate_mod.generateTopLevel(
-        compiler,
+        site.compiler,
         session,
-        goal,
-        theorem,
-        theorem_vars,
+        site.line_goal,
+        site.theorem,
+        site.theorem_vars,
         gen_options,
     );
     defer generated.deinit();
 
-    for (generated.applications) |app| {
+    for (generated.applications) |generated_app| {
         if (items.items.len >= options.max_results) break;
+        const app = try withNeededBindings(allocator, site, generated_app);
         const replacement = try renderApplication(
             allocator,
             app.rule_name,
@@ -1451,6 +1450,7 @@ fn inlineExactSuggestions(
 
 fn renderExactSourceSuggestions(
     allocator: std.mem.Allocator,
+    site: SuggestionSite,
     candidates: []const ExactCandidate,
     replace_span: Span,
     keyword: []const u8,
@@ -1458,11 +1458,12 @@ fn renderExactSourceSuggestions(
     var items = std.ArrayListUnmanaged(SourceSuggestion){};
     errdefer deinitSourceSuggestionItems(allocator, items.items);
     for (candidates) |candidate| {
+        const app = try withNeededBindings(allocator, site, candidate.application);
         const replacement = try renderApplication(
             allocator,
-            candidate.rule_name,
-            candidate.application.arg_bindings,
-            candidate.refs,
+            app.rule_name,
+            app.arg_bindings,
+            app.refs,
         );
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
@@ -1598,11 +1599,20 @@ fn appendInlineExactApplications(
             theorem,
             theorem_vars,
         )) continue;
+        const app = try withNeededBindings(allocator, .{
+            .compiler = compiler,
+            .context = context,
+            .line = line,
+            .line_goal = line_goal,
+            .path = path,
+            .theorem = theorem,
+            .theorem_vars = theorem_vars,
+        }, candidate.application);
         const replacement = try renderApplication(
             allocator,
-            candidate.rule_name,
-            candidate.application.arg_bindings,
-            candidate.refs,
+            app.rule_name,
+            app.arg_bindings,
+            app.refs,
         );
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
@@ -1657,9 +1667,9 @@ fn appendInlineGeneratedApplications(
     );
     defer generated.deinit();
 
-    for (generated.applications) |app| {
+    for (generated.applications) |generated_app| {
         if (items.items.len >= max_results) return;
-        const replacement_ref = Ref{ .application = app };
+        const replacement_ref = Ref{ .application = generated_app };
         const application = try applicationWithReplacedRef(
             allocator,
             line.application,
@@ -1675,6 +1685,15 @@ fn appendInlineGeneratedApplications(
             theorem,
             theorem_vars,
         )) continue;
+        const app = try withNeededBindings(allocator, .{
+            .compiler = compiler,
+            .context = context,
+            .line = line,
+            .line_goal = line_goal,
+            .path = path,
+            .theorem = theorem,
+            .theorem_vars = theorem_vars,
+        }, generated_app);
         const replacement = try renderApplication(
             allocator,
             app.rule_name,
@@ -1753,6 +1772,116 @@ fn validateReplacementApplication(
         return false;
     };
     return true;
+}
+
+/// Where a suggestion lands: the proof line holding the search placeholder,
+/// and the path to the placeholder inside it (empty for a whole line).
+const SuggestionSite = struct {
+    compiler: *CompilerContext,
+    context: *const Context,
+    line: ProofScript.ProofLine,
+    line_goal: Goal,
+    path: []const usize,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+
+    /// Whether the line checks with `app` in the placeholder's place.
+    fn validates(
+        self: SuggestionSite,
+        allocator: std.mem.Allocator,
+        app: RuleApplication,
+    ) !bool {
+        const line_app = if (self.path.len == 0)
+            app
+        else
+            try applicationWithReplacedRef(
+                allocator,
+                self.line.application,
+                self.path,
+                .{ .application = app },
+            );
+        return validateReplacementApplication(
+            self.compiler,
+            self.context,
+            line_app,
+            self.line,
+            self.line_goal,
+            self.theorem,
+            self.theorem_vars,
+        );
+    }
+};
+
+/// Drop the explicit bindings of `app` the checker does not need. The search
+/// renders every binder it chose (existential metas, bound witnesses, ACUI
+/// split and principal choices) so that its own validation cannot misread
+/// them; most of them the checker re-derives from the refs and the goal. Each
+/// binding, outermost application first, is dropped when the line still
+/// checks without it, so the result checks whenever `app` does. Allocates on
+/// the per-call work arena and frees nothing.
+fn withNeededBindings(
+    allocator: std.mem.Allocator,
+    site: SuggestionSite,
+    app: RuleApplication,
+) !RuleApplication {
+    const count = bindingCount(app);
+    if (count == 0) return app;
+    const drop = try allocator.alloc(bool, count);
+    @memset(drop, true);
+    const bare = try withBindingsDropped(allocator, app, drop);
+    if (try site.validates(allocator, bare)) return bare;
+    @memset(drop, false);
+    for (drop) |*dropped| {
+        dropped.* = true;
+        const trial = try withBindingsDropped(allocator, app, drop);
+        if (!try site.validates(allocator, trial)) dropped.* = false;
+    }
+    return withBindingsDropped(allocator, app, drop);
+}
+
+fn bindingCount(app: RuleApplication) usize {
+    var count = app.arg_bindings.len;
+    for (app.refs) |ref| switch (ref) {
+        .application => |child| count += bindingCount(child),
+        .hyp, .line => {},
+    };
+    return count;
+}
+
+/// A copy of `app` without the bindings `drop` selects, indexed in preorder
+/// (an application's own bindings, then each nested ref's).
+fn withBindingsDropped(
+    allocator: std.mem.Allocator,
+    app: RuleApplication,
+    drop: []const bool,
+) !RuleApplication {
+    var next: usize = 0;
+    return withBindingsDroppedFrom(allocator, app, drop, &next);
+}
+
+fn withBindingsDroppedFrom(
+    allocator: std.mem.Allocator,
+    app: RuleApplication,
+    drop: []const bool,
+    next: *usize,
+) !RuleApplication {
+    var copy = app;
+    var kept = std.ArrayListUnmanaged(ProofScript.ArgBinding){};
+    for (app.arg_bindings) |binding| {
+        if (!drop[next.*]) try kept.append(allocator, binding);
+        next.* += 1;
+    }
+    copy.arg_bindings = kept.items;
+    if (kept.items.len == 0) copy.binding_list_span = null;
+    const refs = try allocator.dupe(Ref, app.refs);
+    for (refs) |*ref| switch (ref.*) {
+        .application => |child| ref.* = .{
+            .application = try withBindingsDroppedFrom(allocator, child, drop, next),
+        },
+        .hyp, .line => {},
+    };
+    copy.refs = refs;
+    return copy;
 }
 
 fn applicationWithReplacedRef(
