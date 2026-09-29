@@ -1213,9 +1213,16 @@ fn tryGenerateSlot(
     // existential is propagated or invented (the non-`@auto` branch of
     // `emitOpenTarget` is child-search-first with no var-pool fallback). If no
     // child conclusion determines the binder, the slot simply fails.
+    //
+    // Constrained MP skips a slot whose open binders the conclusion already
+    // fixes up to an ACUI choice: the split and principal steps own those
+    // choices. Opened here instead, such a binder leaves the child a bare
+    // meta context or principal that every rule matches, and each of those
+    // rules opens its own again.
     if (ctx.candidates.items.len != candidates_before_split) return;
-    if (hook.solveOpenFn != null and
-        openMode(context, candidate.rule_id, hook.allow_constrained_mp) != .none)
+    const open_mode = openMode(context, candidate.rule_id, hook.allow_constrained_mp);
+    if (hook.solveOpenFn != null and open_mode != .none and
+        !(open_mode == .constrained and allOpenAcuiOwned(ctx, slot)))
     {
         try tryOpenGenerateSlot(ctx, hook, slot, .{});
         if (ctx.candidates.items.len != candidates_before_split) return;
@@ -1225,6 +1232,41 @@ fn tryGenerateSlot(
     // principal-selection gap (e.g. `de_morgan`). Reached only when split and
     // open generation both produced nothing for this slot, so it is additive.
     try tryPrincipalEnumerate(ctx, hook, slot);
+}
+
+/// Every open binder of the slot's premise is fixed by the conclusion up to
+/// an ACUI choice: a spine binder of a conclusion split site, or a binder
+/// inside one of its fixed summands. A rule with a `@view` opens the view's
+/// premise, not the rule's, so it never qualifies.
+fn allOpenAcuiOwned(ctx: *const SlotCtx, slot: Slot) bool {
+    if (ctx.context.views.contains(ctx.candidate.rule_id)) return false;
+    const goal_expr = ctx.goal.concreteOrHint() orelse return false;
+    const hyp = templateBinderMask(ctx.rule.hyps[slot.hyp_index]);
+    const all = templateBinderMask(ctx.rule.concl);
+    if (hyp.overflow or all.overflow) return false;
+    var owned: u64 = 0;
+    var m = all.mask;
+    while (m != 0) {
+        const idx: u6 = @intCast(@ctz(m));
+        m &= m - 1;
+        const site = split.findSplitSite(ctx.context, &ctx.candidate.theorem, ctx.rule.concl, goal_expr, idx) orelse continue;
+        for (site.spine[0..site.spine_len]) |sb| {
+            if (sb < 64) owned |= @as(u64, 1) << @intCast(sb);
+        }
+        for (site.fixed[0..site.fixed_len]) |f| {
+            const fm = templateBinderMask(f);
+            if (!fm.overflow) owned |= fm.mask;
+        }
+    }
+    var open: u64 = 0;
+    m = hyp.mask;
+    while (m != 0) {
+        const idx: u6 = @intCast(@ctz(m));
+        m &= m - 1;
+        if (idx < ctx.bindings.len and ctx.bindings[idx] != null) continue;
+        open |= @as(u64, 1) << idx;
+    }
+    return open != 0 and open & ~owned == 0;
 }
 
 /// Emit a single generated slot: canonicalize ACUI units out of the (now
@@ -1310,6 +1352,8 @@ fn trySplitGenerate(
             )) orelse continue;
             const saved = bindings[b];
             bindings[b] = cand;
+            const handed = try handSplitChoice(candidate, b, cand);
+            defer restoreSplitChoice(candidate, handed);
             if (!splitSiteBindingsPlausible(
                 context,
                 &candidate.theorem,
@@ -1476,6 +1520,17 @@ fn tryPrincipalEnumerate(
             .{},
         );
         if (matched) {
+            // The binders this member just bound are the search's choice of
+            // principal, as much as the split of the rest is.
+            var handed: [64]?HandedFlag = @splat(null);
+            defer for (handed) |h| restoreSplitChoice(candidate, h);
+            pm = pmask.mask;
+            while (pm != 0) {
+                const idx: u6 = @intCast(@ctz(pm));
+                pm &= pm - 1;
+                if (idx < bindings.len and saved[idx] == null)
+                    handed[idx] = try handSplitChoice(candidate, idx, bindings[idx]);
+            }
             try trySplitGenerate(ctx, hook, slot);
         }
         pm = pmask.mask;
@@ -2273,10 +2328,10 @@ fn continueOpenTargetSolved(
     const flag_restores = try slot.ctx.allocator.alloc(?bool, flagged.items.len);
     defer slot.ctx.allocator.free(flag_restores);
     for (flagged.items, 0..) |f, i| {
-        flag_restores[i] = try setMetaSolvedFlag(slot.ctx.candidate, f.idx);
+        flag_restores[i] = try setExplicitFlag(slot.ctx.candidate, f.idx);
     }
     defer for (flagged.items, 0..) |f, i| {
-        restoreMetaSolvedFlag(slot.ctx.candidate, f.idx, flag_restores[i]);
+        restoreExplicitFlag(slot.ctx.candidate, f.idx, flag_restores[i]);
     };
 
     if (proof) |p| {
@@ -2727,15 +2782,15 @@ fn mintStoreMeta(
     return store.mint(theorem, sort_name, std.math.maxInt(u55), kind);
 }
 
-/// Set the candidate's meta-solved flag for one rule binder, returning the
+/// Set the candidate's explicit flag for one rule binder, returning the
 /// previous value for restoration (null when the flag array did not exist
 /// before — restoration then just clears the bit).
-fn setMetaSolvedFlag(candidate: *ApplyCandidate, idx: usize) !?bool {
+fn setExplicitFlag(candidate: *ApplyCandidate, idx: usize) !?bool {
     const flags = blk: {
-        if (candidate.meta_solved) |flags| break :blk flags;
+        if (candidate.explicit) |flags| break :blk flags;
         const flags = try candidate.allocator.alloc(bool, candidate.bindings.len);
         @memset(flags, false);
-        candidate.meta_solved = flags;
+        candidate.explicit = flags;
         break :blk flags;
     };
     if (idx >= flags.len) return null;
@@ -2744,12 +2799,36 @@ fn setMetaSolvedFlag(candidate: *ApplyCandidate, idx: usize) !?bool {
     return prev;
 }
 
-fn restoreMetaSolvedFlag(
+fn restoreExplicitFlag(
     candidate: *ApplyCandidate,
     idx: usize,
     prev: ?bool,
 ) void {
-    const flags = candidate.meta_solved orelse return;
+    const flags = candidate.explicit orelse return;
     if (idx >= flags.len) return;
     flags[idx] = prev orelse false;
+}
+
+/// Mark binder `idx`, just bound to `value` by an ACUI split or principal
+/// choice, for explicit rendering. The checker re-derives such a binder by
+/// its own positional reading of the bag, which need not agree with the
+/// search's choice, least of all inside a nested inline application.
+/// A value holding a goal meta is not a choice the checker can take, so it
+/// stays unmarked. Returns what `restoreSplitChoice` needs to undo the mark,
+/// or null when nothing was marked.
+fn handSplitChoice(candidate: *ApplyCandidate, idx: usize, value: ?ExprId) !?HandedFlag {
+    const expr = value orelse return null;
+    if (candidate.theorem.exprAny(expr, {}, isPlaceholderNode)) return null;
+    return .{ .idx = idx, .prev = try setExplicitFlag(candidate, idx) };
+}
+
+const HandedFlag = struct { idx: usize, prev: ?bool };
+
+fn restoreSplitChoice(candidate: *ApplyCandidate, handed: ?HandedFlag) void {
+    const h = handed orelse return;
+    restoreExplicitFlag(candidate, h.idx, h.prev);
+}
+
+fn isPlaceholderNode(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+    return theorem.interner.node(expr).* == .placeholder;
 }

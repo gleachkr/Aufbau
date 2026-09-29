@@ -284,14 +284,15 @@ pub fn validateSelectedRefs(
         selected,
         generated,
     );
-    // Binders solved through existential metas (or enumerated bound
-    // witnesses) are rendered as explicit bindings, so the suggestion checks
-    // robustly without re-deriving the witness. Validation below runs WITH
-    // the bindings, exercising the same parse path the final source will.
+    // Binders whose values the search chose (existential metas, enumerated
+    // bound witnesses, ACUI split and principal choices) are rendered as
+    // explicit bindings, so the suggestion checks without re-deriving the
+    // choice. Validation below runs WITH the bindings, exercising the same
+    // parse path the final source will.
     var arg_bindings: []ProofScript.ArgBinding = &.{};
     var bindings_transferred = false;
-    if (candidate.meta_solved) |flags| {
-        arg_bindings = try renderMetaSolvedBindings(
+    if (candidate.explicit) |flags| {
+        arg_bindings = try renderExplicitBindings(
             allocator,
             context,
             candidate,
@@ -345,8 +346,9 @@ pub fn validateSelectedRefs(
         // search-resolved binder (a branching rule's context `g`/principal whose
         // value the search pinned by ACUI distribution but replay can't recover
         // from the reassociated premise refs). Retry once, handing the checker
-        // every resolved binding explicitly. Only on an already-failing candidate
-        // that carried no explicit bindings, so passing suggestions are untouched.
+        // every resolved binding explicitly. Only on an already-failing
+        // candidate, so passing suggestions are untouched, and only when that
+        // hands over more than the search's own choices already did.
         //
         // `HypothesisMismatch` on a holey (open-generation) goal is the
         // carried-witness case: a nested `@auto backward` view rule whose matrix
@@ -369,10 +371,9 @@ pub fn validateSelectedRefs(
         // without ever succeeding. Gated to holey goals so the concrete-goal
         // corpus pays no second `tryCandidate` on its ordinary mismatches.
         const unify_retry = err == error.UnifyMismatch and unify_retry_scope;
-        if (((err == error.MissingBinderAssignment) or
+        if (err == error.MissingBinderAssignment or
             (err == error.HypothesisMismatch and goal == .implicit_whole_conclusion) or
-            unify_retry) and
-            arg_bindings.len == 0)
+            unify_retry)
         blk_retry: {
             const hint = if (err == error.MissingBinderAssignment) goal.expectedHint() else null;
             const fresh_bindings = if (hint) |goal_expr|
@@ -390,7 +391,11 @@ pub fn validateSelectedRefs(
                 if (rerr == error.OutOfMemory) return rerr;
                 break :blk_retry;
             };
-            if (retry_bindings.len == 0) break :blk_retry;
+            if (retry_bindings.len <= arg_bindings.len) {
+                freeRenderedBindings(allocator, retry_bindings);
+                break :blk_retry;
+            }
+            freeRenderedBindings(allocator, arg_bindings);
             arg_bindings = retry_bindings;
 
             // A probe never writes to its inputs, so the retry runs
@@ -405,7 +410,7 @@ pub fn validateSelectedRefs(
                 .{
                     .counters = counters,
                     .runtime = runtime,
-                    .unify_retry_eligible = unify_retry_scope,
+                    .final_attempt = true,
                 },
             ) catch |err2| {
                 if (err2 == error.OutOfMemory) return err2;
@@ -430,9 +435,8 @@ pub fn validateSelectedRefs(
     // application so every level of the spliced tree carries its own values.
     // Suggestions surfaced to the user (non-internal candidates) are untouched,
     // as is every theory without eager annotations. Best-effort: a render
-    // failure just leaves the bare application (status quo).
+    // failure just leaves the application as validated.
     if (candidate.internal_child and
-        arg_bindings.len == 0 and
         context.registry.eagerPriority(candidate.rule_id) != null)
     {
         const rendered: []ProofScript.ArgBinding = renderAllResolvedBindings(
@@ -445,7 +449,12 @@ pub fn validateSelectedRefs(
             if (rerr == error.OutOfMemory) return rerr;
             break :blk &.{};
         };
-        if (rendered.len != 0) arg_bindings = rendered;
+        if (rendered.len > arg_bindings.len) {
+            freeRenderedBindings(allocator, arg_bindings);
+            arg_bindings = rendered;
+        } else {
+            freeRenderedBindings(allocator, rendered);
+        }
     }
     const owned_refs = try allocator.dupe(ProofScript.Ref, refs);
     errdefer allocator.free(owned_refs);
@@ -463,12 +472,12 @@ pub fn validateSelectedRefs(
     bindings_transferred = true;
 }
 
-/// Render the meta-solved binder values of `candidate` as explicit
-/// `(name := $ … $)` bindings, in ascending binder order. Unrenderable
-/// values (unnamed binder, unnamed variable, leftover placeholder) are
-/// skipped rather than failing the candidate — the bindings are a
-/// robustness aid; validation still arbitrates.
-fn renderMetaSolvedBindings(
+/// Render the search-chosen binder values of `candidate` (its `explicit`
+/// flags) as `(name := $ … $)` bindings, in ascending binder order.
+/// Unrenderable values (unnamed binder, unnamed variable, leftover
+/// placeholder) are skipped rather than failing the candidate — the bindings
+/// are a robustness aid; validation still arbitrates.
+fn renderExplicitBindings(
     allocator: std.mem.Allocator,
     context: *const Context,
     candidate: *ApplyCandidate,
@@ -483,7 +492,7 @@ fn renderMetaSolvedBindings(
     if (!any) return &.{};
 
     const rule = &context.env.rules.items[candidate.rule_id];
-    // Binders to render: the meta-solved ones, PLUS the `@recover` pattern
+    // Binders to render: the flagged ones, PLUS the `@recover` pattern
     // binder (`p`, the `wff x` principal) of any witness rule whose witness is
     // here meta-solved. When such a witness rule is assembled INLINE (a deep
     // generated sub-proof, no stated conclusion), the checker re-validates it

@@ -370,6 +370,13 @@ const proof_cases = [_]ProofCase{
     // replay cannot read `a` out of `emp , a` against the ref's one-member
     // context, so the implicit conclusion falls back to ACUI-aware inference.
     .{ .stem = "pass_acui_unit_context_member", .outcome = .pass },
+    // The same gap on a concrete line: every context binder is given
+    // (`g := emp`), so only an omitted member binder asks for the
+    // structural solver.
+    .{ .stem = "pass_acui_unit_context_line", .outcome = .pass },
+    // A view that cannot read a line whose binders are all given does not
+    // veto it: only the rule decides.
+    .{ .stem = "pass_view_explicit_member", .outcome = .pass },
     .{
         .stem = "fail_hole_mm0_not_allowed",
         .outcome = .{ .fail = error.UnknownMathToken },
@@ -599,9 +606,10 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_def_unfold_mismatch",
         .outcome = .{ .fail = error.HypothesisMismatch },
     },
+    // Every binder is given, so the rule, not its view, rejects the line.
     .{
         .stem = "fail_def_view_mismatch",
-        .outcome = .{ .fail = error.ViewHypothesisMismatch },
+        .outcome = .{ .fail = error.HypothesisMismatch },
     },
     .{
         .stem = "pass_def_infer_ambiguous",

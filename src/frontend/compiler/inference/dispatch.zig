@@ -43,6 +43,7 @@ const tryConcreteStructuralSolver = Strategies.tryConcreteStructuralSolver;
 const tryConcreteRuleMatchSessionFallback =
     Strategies.tryConcreteRuleMatchSessionFallback;
 const hasOmittedStructuralBindings = Strategies.hasOmittedStructuralBindings;
+const hasOmittedStructuralMember = Strategies.hasOmittedStructuralMember;
 
 const StrictReplayFailure = struct {
     err: anyerror,
@@ -60,6 +61,37 @@ fn clonePartialBindings(
     bindings: []const ?ExprId,
 ) ![]const ?ExprId {
     return try allocator.dupe(?ExprId, bindings);
+}
+
+/// Trace, then run the concrete structural (ACUI-aware) solver.
+fn attemptStructuralSolver(
+    self: *CompilerContext,
+    context: *const RuleInferenceContext,
+    line: anytype,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
+) ![]const ExprId {
+    try traceInferenceAttempt(
+        self.debug,
+        context.allocator,
+        context.theorem,
+        context.env,
+        context.rule,
+        .structural_solver,
+        partial_bindings,
+        partial_bindings,
+    );
+    return tryConcreteStructuralSolver(
+        self,
+        context,
+        line,
+        partial_bindings,
+        ref_exprs,
+        line_expr,
+        fresh_context,
+    );
 }
 
 fn inferBindingsNoView(
@@ -128,7 +160,35 @@ fn inferBindingsNoView(
                 failure.partial_bindings,
             );
 
-            if (!prefer_structural) {
+            // A preferred structural solve goes first, so it ranks the
+            // ACUI-compatible completions before a greedy fallback commits
+            // to one. Finding none is not the last word: `g` given in
+            // `g , h ⊢ a` prefers it, yet a premise it cannot read (a
+            // substitution redex) is still the fallbacks' to solve, as it
+            // is when `g` is omitted. Its failure is reported if they fail.
+            var structural_failure: ?struct {
+                err: anyerror,
+                diag: @TypeOf(self.getDiagnostic()),
+            } = null;
+            if (prefer_structural) {
+                if (attemptStructuralSolver(
+                    self,
+                    context,
+                    line,
+                    partial_bindings,
+                    ref_exprs,
+                    line_expr,
+                    fresh_context,
+                )) |bindings| {
+                    return bindings;
+                } else |err| {
+                    if (err == error.OutOfMemory) return err;
+                    structural_failure = .{ .err = err, .diag = self.getDiagnostic() };
+                    self.restoreDiagnostic(null);
+                }
+            }
+
+            {
                 try traceInferenceAttempt(
                     self.debug,
                     allocator,
@@ -186,18 +246,12 @@ fn inferBindingsNoView(
                 }
             }
 
-            if (prefer_structural or has_structural) {
-                try traceInferenceAttempt(
-                    self.debug,
-                    allocator,
-                    theorem,
-                    env,
-                    rule,
-                    .structural_solver,
-                    partial_bindings,
-                    partial_bindings,
-                );
-                return try tryConcreteStructuralSolver(
+            if (structural_failure) |failed| {
+                self.restoreDiagnostic(failed.diag);
+                return failed.err;
+            }
+            if (has_structural) {
+                return try attemptStructuralSolver(
                     self,
                     context,
                     line,
@@ -246,6 +300,27 @@ fn inferBindingsNoView(
                 }
                 self.restoreDiagnostic(null);
                 return bindings;
+            }
+
+            // Every structural-sort binder is given, but one inside a
+            // member of an ACUI region is not: `a` in `g , a ⊢ b` with `g`
+            // given, even as the unit. The tiers above are ACUI-blind, so
+            // only the structural solver can read it out of the line.
+            if (try hasOmittedStructuralMember(env, registry, rule, partial_bindings)) {
+                if (attemptStructuralSolver(
+                    self,
+                    context,
+                    line,
+                    partial_bindings,
+                    ref_exprs,
+                    line_expr,
+                    fresh_context,
+                )) |bindings| {
+                    return bindings;
+                } else |err| {
+                    if (err == error.OutOfMemory) return err;
+                    self.restoreDiagnostic(null);
+                }
             }
 
             if (failure.err == error.MissingBinderAssignment) {

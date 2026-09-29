@@ -69,8 +69,9 @@ arguments in the following order:
    inference begins. `@fresh` selects a suitable variable from the binder
    sort's `@vars` pool, preferring reuse when the chosen variable is
    absent from the current concrete inputs.
-3. **`@view` matching** unifies the view's conclusion and hypotheses against
-   the user's line and cited references, solving view binders. If a view
+3. **`@view` matching**, when some rule binder is omitted, unifies the view's
+   conclusion and hypotheses against the user's line and cited references,
+   solving view binders. If a view
    binder maps to a real rule binder, the solution is copied across. When
    all arguments can be determined directly from the line and refs, this
    matching takes a simple direct path. When normalization-aware inference
@@ -95,6 +96,8 @@ The practical contract for these annotations is:
 
 - explicit bindings still win; `@view`, `@recover`, and `@abstract` do not
   override a user-written `(name := ...)` assignment;
+- a line that gives every rule binder is checked against the rule alone: the
+  view has nothing to infer, so it is not consulted and cannot reject the line;
 - `@view` only sees the proof line assertion and the cited references for that
   application;
 - `@recover` and `@abstract` only run after `@view` has solved the binders they
@@ -192,7 +195,8 @@ form. The phantom `q` can then be used by `@recover` to extract `t`.
 Explicit binder assignments on the proof line take precedence. If the user
 supplies `(t := $ u $)` and the view would solve `t` to a different value,
 the compiler reports a binding conflict. Partial explicit assignments are
-fine: the view fills in what is missing.
+fine: the view fills in what is missing. When every rule binder is given, the
+view is skipped and the rule alone checks the line.
 
 ### Validation still applies
 
@@ -592,8 +596,8 @@ annotations is:
    reuse when the chosen variable is absent from the current concrete
    inputs.
 
-3. **Match the `@view`.** Unify the view's conclusion and hypotheses against
-   the user's line and cited references. Map solved view binders to their
+3. **Match the `@view`.** If some rule binder is omitted, unify the view's
+   conclusion and hypotheses against the user's line and cited references. Map solved view binders to their
    corresponding rule binders. Check for conflicts with explicit bindings.
    When all arguments can be determined directly from the line and refs, this
    matching takes a simple direct path. When normalization-aware inference is

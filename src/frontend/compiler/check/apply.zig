@@ -560,38 +560,10 @@ fn applyRuleCandidateCore(
     const use_advanced_inference = had_omitted and
         rule_has_advanced_inference;
 
-    if (maybe_view) |view| {
-        if (!use_advanced_inference) {
-            switch (line_assertion) {
-                .concrete => |line_expr| {
-                    CompilerViews.applyViewBindings(
-                        allocator,
-                        theorem,
-                        env,
-                        registry,
-                        &view,
-                        line_expr,
-                        ref_exprs,
-                        partial_bindings,
-                        null,
-                        null,
-                        self.debug.views,
-                    ) catch |err| {
-                        self.setProof(CompilerDiag.withPhase(.{
-                            .kind = .generic,
-                            .err = CompilerDiag.narrowDiagnosticError(err),
-                            .theorem_name = assertion.name,
-                            .line_label = line.label,
-                            .rule_name = line.application.rule_name,
-                            .span = line.ruleApplicationSpan(),
-                        }, .theorem_application));
-                        return err;
-                    };
-                },
-                .holey, .implicit_whole_conclusion => {},
-            }
-        }
-    }
+    // A view only guides inference. With every rule binder given there is
+    // nothing to infer, and the rule's own check decides: the view's match
+    // can reject a line the rule accepts (`rex` with `d` and `x` given
+    // leaves only the member `q` of its premise bag open).
 
     const fresh_context: Inference.HiddenWitnessFreshContext = .{
         .parser = parser,

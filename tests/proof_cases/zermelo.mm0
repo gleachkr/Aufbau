@@ -854,6 +854,14 @@ theorem cb_prefixed_elim (G H: ctx) (A B f g X x: set):
   $ G ⊢ X ∈ cb_prefixeds A B f g $ >
   $ H ⊢ x ∈ cb_step A B f g X $ > $ G , H ⊢ x ∈ X $;
 
+-- The same, with `G` given and the prefixed premise read through `sep`: a
+-- given context binder beside an omitted one favours the ACUI solver, which
+-- cannot read the substitution redex `sep_elim_right` leaves, so the line
+-- must still reach the fallbacks that can.
+theorem cb_prefixed_elim_ctx_given (G H: ctx) (A B f g X x: set):
+  $ G ⊢ X ∈ cb_prefixeds A B f g $ >
+  $ H ⊢ x ∈ cb_step A B f g X $ > $ G , H ⊢ x ∈ X $;
+
 theorem cb_core_in_power (G: ctx) (A B f g: set):
   $ G ⊢ cb_core A B f g ∈ 𝒫 A $;
 

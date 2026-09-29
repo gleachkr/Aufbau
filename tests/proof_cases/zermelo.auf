@@ -531,6 +531,10 @@ cb_prefixed_elim
 l1: $ G ⊢ cb_prefixed A B f g X $ by cb_prefixeds_elim_prefixed [#1]
 l2: $ G , H ⊢ x ∈ X $ by subset_elim [l1, #2]
 
+cb_prefixed_elim_ctx_given
+--------------------------
+l1: $ G , H ⊢ x ∈ X $ by subset_elim (G := $ G $) [sep_elim_right [#1], #2]
+
 cb_core_in_power
 ----------------
 l1: $ G ⊢ cb_core A B f g ⊆ A $ by cb_core_subset

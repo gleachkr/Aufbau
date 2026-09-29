@@ -1,0 +1,4 @@
+view_explicit_member
+--------------------
+
+l1: $ PA , PB ⊢ PP $ by drop (g := $ PB $, p := $ PA $) [#1]

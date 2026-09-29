@@ -463,7 +463,7 @@ const scenarios = [_]Scenario{
         .proof_path = "tests/search_bench_cases/nd_and_comm.auf",
         .marker = "auto?",
         .expected_replacement = "imp_intro [and_intro " ++
-            "(G := $ p ∧ q $, H := $ p ∧ q $, p := $ q $, q := $ p $) " ++
+            "(G := $ p ∧ q $, H := $ p ∧ q $) " ++
             "[and_elim_r (p := $ p $) [ax []], and_elim_l (q := $ q $) [ax []]]]",
         .generate = .{ .enabled = true },
     },
@@ -491,7 +491,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_and_comm_split.auf",
         .marker = "auto?",
-        .expected_replacement = "and_intro [and_elim_r [l1], and_elim_l [l1]]",
+        .expected_replacement = "and_intro (G := $ p ∧ q $, H := $ p ∧ q $) " ++
+            "[and_elim_r [l1], and_elim_l [l1]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -501,7 +502,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_ext_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [imp_intro [ext [ax [], ax []]]]",
+        .expected_replacement = "imp_intro [imp_intro [ext " ++
+            "(G := $ A ⊆ B $, H := $ B ⊆ A $) [ax [], ax []]]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -511,7 +513,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_sep_intro_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [imp_intro [sep_intro [ax [], ax []]]]",
+        .expected_replacement = "imp_intro [imp_intro [sep_intro " ++
+            "(G := $ a e. A $, H := $ [ x / a ] p $) [ax [], ax []]]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -529,7 +532,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_or_comm.auf",
         .marker = "auto?",
-        .expected_replacement = "or_elim [l1, or_intro_r [l2], or_intro_l [l4]]",
+        .expected_replacement = "or_elim (H := $ _ $, K := $ _ $) " ++
+            "[l1, or_intro_r [l2], or_intro_l [l4]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -621,7 +625,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_union_intro_imp.auf",
         .marker = "auto?",
-        .expected_replacement = "union_intro (y := $ y $) [ax [], ax []]",
+        .expected_replacement = "union_intro " ++
+            "(G := $ x e. y $, H := $ y e. A $, y := $ y $) [ax [], ax []]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -635,7 +640,8 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_elim_split.auf",
         .marker = "auto?",
-        .expected_replacement = "imp_intro [imp_elim [l2, ex_elim [l1, l3]]]",
+        .expected_replacement = "imp_intro [imp_elim (H := $ E. x p $) " ++
+            "[l2, ex_elim [l1, l3]]]",
         .generate = .{ .enabled = true },
     },
     .{

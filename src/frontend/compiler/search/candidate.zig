@@ -14,19 +14,20 @@ const Context = types.Context;
 const AttemptOptions = types.AttemptOptions;
 const NameExprMap = types.NameExprMap;
 
-/// Mirror of `validateSelectedRefs`' explicit-binding retry guard: a bare
-/// assembly (no rendered bindings) that fails with one of these errors is NOT a
-/// terminal reject — the caller retries it with explicit bindings and may
-/// succeed. Such rejects must not be memoized (see `tryCandidate`). The
-/// UnifyMismatch arm's view/meta scoping lives with the caller and arrives via
+/// Mirror of `validateSelectedRefs`' explicit-binding retry guard: an
+/// assembly that fails with one of these errors is NOT a terminal reject — the
+/// caller retries it with every resolved binding rendered and may succeed.
+/// Whether that retry adds a binding depends on the candidate, not on the
+/// application, so the rendered bindings do not decide it here. Such rejects
+/// must not be memoized (see `tryCandidate`), unless the attempt is the retry
+/// itself (`AttemptOptions.final_attempt`). The UnifyMismatch arm's view/meta
+/// scoping lives with the caller and arrives via
 /// `AttemptOptions.unify_retry_eligible`, so the two gates cannot drift.
 fn retryEligibleReject(
     err: anyerror,
-    application: RuleApplication,
     goal: Goal,
     unify_retry_eligible: bool,
 ) bool {
-    if (application.arg_bindings.len != 0) return false;
     return err == error.MissingBinderAssignment or
         (err == error.HypothesisMismatch and goal == .implicit_whole_conclusion) or
         (err == error.UnifyMismatch and unify_retry_eligible);
@@ -240,16 +241,18 @@ fn tryCandidate(
             }
         }
         // A checker rejection is a monotone verdict for THIS assembly — but only
-        // a TERMINAL one. A bare assembly (no explicit bindings) that fails with
-        // a retry-eligible error is not terminal: `validateSelectedRefs` retries
-        // it with explicitly rendered bindings and can SUCCEED, so memoizing the
-        // bare reject would make a later re-encounter short-circuit to
-        // `error.MemoizedReject` and skip that retry, losing a winnable proof.
+        // a TERMINAL one. An assembly that fails with a retry-eligible error is
+        // not terminal: `validateSelectedRefs` retries it with more explicitly
+        // rendered bindings and can SUCCEED, so memoizing the reject would make
+        // a later re-encounter short-circuit to `error.MemoizedReject` and skip
+        // that retry, losing a winnable proof.
         // Mirror the caller's retry guard exactly, and never memoize OOM (a
-        // transient resource error, not a verdict).
+        // transient resource error, not a verdict). The retry itself is
+        // terminal.
         if (verdict_memo) |m| {
             if (err != error.OutOfMemory and
-                !retryEligibleReject(err, application, goal, options.unify_retry_eligible))
+                (options.final_attempt or
+                    !retryEligibleReject(err, goal, options.unify_retry_eligible)))
             {
                 m.recordReject(verdict_sig);
             }

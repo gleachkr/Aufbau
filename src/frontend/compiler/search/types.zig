@@ -119,11 +119,14 @@ pub const AttemptOptions = struct {
     runtime: SearchRuntime = .{},
     /// Caller-computed scope of `validateSelectedRefs`' UnifyMismatch retry arm
     /// (holey goal + view rule + meta-bearing candidate theorem). The verdict
-    /// memo consults it so a bare-assembly UnifyMismatch reject that the caller
-    /// WILL retry with explicit bindings is never memoized as terminal — the
+    /// memo consults it so a UnifyMismatch reject that the caller WILL retry
+    /// with more explicit bindings is never memoized as terminal — the
     /// memo's retry-eligibility predicate must mirror the caller's gate exactly,
     /// and only the caller has the rule/theorem context to compute this arm.
     unify_retry_eligible: bool = false,
+    /// The caller will not retry a reject of this attempt (it is already the
+    /// retry), so the verdict memo records it whatever its error.
+    final_attempt: bool = false,
 };
 
 pub const UnresolvedHypothesis = Check.UnresolvedHypothesis;
@@ -143,12 +146,14 @@ pub const ApplyCandidate = struct {
     /// the `@recover` pruning guard during hypothesis matching. `null` when
     /// the rule has no view or the goal is not concrete.
     view_concl_seed: ?[]const ?ExprId = null,
-    /// Open backward generation: rule binders whose current value was
-    /// solved through an existential meta (or an enumerated bound witness)
-    /// rather than pinned by the goal or a ref. Validation renders these as
-    /// explicit bindings so the suggestion checks robustly. Allocated lazily
-    /// by the open-target path; null on every other path.
-    meta_solved: ?[]bool = null,
+    /// Rule binders whose current value the search chose rather than read
+    /// off the goal or a ref: an existential meta's solution, an enumerated
+    /// bound witness, or an ACUI split or principal choice. The checker
+    /// cannot always re-derive such a choice (an ACUI bag need not
+    /// decompose one way), so validation renders these as explicit
+    /// bindings. Allocated lazily by the first path that sets one; null
+    /// when the search chose nothing.
+    explicit: ?[]bool = null,
     /// Set when a generated slot of this candidate launched a child solve
     /// (`emitGeneratedSlot`'s hook call): the application matched the goal
     /// and reached its subgoals. For an `@auto eager` candidate this is the
@@ -168,7 +173,7 @@ pub const ApplyCandidate = struct {
         self.allocator.free(self.bindings);
         self.allocator.free(self.unresolved_hyps);
         if (self.view_concl_seed) |seed| self.allocator.free(seed);
-        if (self.meta_solved) |flags| self.allocator.free(flags);
+        if (self.explicit) |flags| self.allocator.free(flags);
         self.theorem.deinit();
         self.* = undefined;
     }
