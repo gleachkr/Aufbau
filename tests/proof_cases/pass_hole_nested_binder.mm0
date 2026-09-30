@@ -1,0 +1,34 @@
+-- A rule binder facing a subterm with a hole in it (`P _obj` against `a`)
+-- fixes nothing, like a bare hole; the rest of the line still binds it.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @hole _obj
+sort obj;
+term c: obj;
+term f (x: obj): obj;
+term P (x: obj): wff;
+term Q: wff;
+term R: wff;
+term eq (a b: obj): wff;
+term and (a b: wff): wff;
+infixl and: $/\$ prec 20;
+term or (a b: wff): wff;
+infixl or: $\/$ prec 30;
+
+axiom pc: $ P c $;
+axiom q: $ Q $;
+axiom refl (x: obj): $ eq x x $;
+axiom and_intro (a b: wff): $ a $ > $ b $ > $ a /\ b $;
+axiom or_l (a b: wff): $ a $ > $ a \/ b $;
+axiom or_r (a b: wff): $ b $ > $ a \/ b $;
+
+-- The hole sits in `a`; `b` still hands `or_l` its hint.
+theorem hint_past_hole: $ P c /\ (Q \/ R) $;
+-- `x` faces the holey side first and the concrete side second, then the
+-- reverse.
+theorem repeated_hole_first: $ eq (f c) (f c) $;
+theorem repeated_hole_last: $ eq (f c) (f c) $;
+-- The cited premise fixes `b`.
+theorem premise_fixes: $ Q \/ P c $;

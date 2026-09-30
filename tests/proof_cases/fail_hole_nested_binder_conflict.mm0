@@ -1,0 +1,16 @@
+-- `x` is left unbound by the holey `f _obj` and bound to `g c` by the other
+-- side; the visible `f` must still reject the line.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @hole _obj
+sort obj;
+term c: obj;
+term f (x: obj): obj;
+term g (x: obj): obj;
+term eq (a b: obj): wff;
+
+axiom refl (x: obj): $ eq x x $;
+
+theorem bad: $ eq (g c) (g c) $;

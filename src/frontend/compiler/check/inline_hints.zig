@@ -127,21 +127,18 @@ fn inferExpectedRefsForInlineApplicationsWithContext(
         // determines (`λ x : a. x` fixes `A` and `t` in `t_lam`'s
         // conclusion); fold them all-or-nothing, so a child's hint is as
         // concrete as the parent's visible part allows. A binder facing a
-        // subterm with a hole in it fixes nothing (`HoleNotConcrete`), and
-        // an ACUI spine binder's position is only a guess, as in
+        // subterm with a hole in it fixes nothing, and an ACUI spine
+        // binder's position is only a guess, as in
         // `seedBindingsFromHoleyHint`.
         .holey => |holey| {
             var report = Holes.InferenceReport{};
-            const matched = Holes.matchTemplateToSurfaceDetailed(
+            const matched = try Holes.matchTemplateToSurfaceDetailed(
                 theorem,
                 rule.concl,
                 holey,
                 contextual,
                 &report,
-            ) catch |err| switch (err) {
-                error.HoleNotConcrete => false,
-                else => return err,
-            };
+            );
             if (matched) {
                 demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, snapshot, contextual);
             } else {

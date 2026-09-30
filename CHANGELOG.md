@@ -119,6 +119,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 - A holey line whose visible parts equal the rule's conclusion only up to
   ACUI (a context rebuilt from a sub-proof in another association or member
   order) is accepted.
+- A hole nested inside a rule variable's part of a holey line no longer
+  fails the line. `$ P _obj /\ (Q \/ R) $ by and_intro [pc [], or_l [q []]]`
+  and `$ eq (f _obj) (f c) $ by refl []` now check: the other parts of
+  the line and the cited premises determine the variable. Before, such a line
+  failed with "a proof hole is not allowed here" or a missing variable.
 - `auto?` now accepts a step whose conclusion matches the goal only once a
   definition is unfolded. In the Zermelo example `sep_elim_right [#1]`
   proves `in_all_subsets S x`, which by definition is

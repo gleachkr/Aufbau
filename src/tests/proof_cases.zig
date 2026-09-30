@@ -322,6 +322,10 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_hole_semantic_match", .outcome = .pass },
     .{ .stem = "pass_hole_under_binder", .outcome = .pass },
     .{ .stem = "pass_hole_under_binder_irrel", .outcome = .pass },
+    // A binder facing a subterm with a hole in it stays unbound; concrete
+    // positions and cited premises still fix it, and the line's visible
+    // structure is checked afterwards (the `fail_hole_nested_binder_*` pair).
+    .{ .stem = "pass_hole_nested_binder", .outcome = .pass },
     .{ .stem = "pass_hole_abstract", .outcome = .pass },
     .{ .stem = "pass_hole_abstract_matrix", .outcome = .pass },
     .{ .stem = "pass_prawitz_holes", .outcome = .pass },
@@ -436,6 +440,14 @@ const proof_cases = [_]ProofCase{
     .{
         .stem = "fail_hole_fallback_first_diag",
         .outcome = .{ .fail = error.HoleConclusionMismatch },
+    },
+    .{
+        .stem = "fail_hole_nested_binder_conflict",
+        .outcome = .{ .fail = error.HoleConclusionMismatch },
+    },
+    .{
+        .stem = "fail_hole_nested_binder_missing",
+        .outcome = .{ .fail = error.MissingBinderAssignment },
     },
     .{ .stem = "tseitin", .outcome = .pass },
     .{ .stem = "robinson", .outcome = .pass },

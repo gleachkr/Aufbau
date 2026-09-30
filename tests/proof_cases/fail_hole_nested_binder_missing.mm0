@@ -1,0 +1,18 @@
+-- Nothing fixes `or_l`'s `b`: the only place it shows is the holey `P _obj`.
+-- The line reports the missing binder, not a misplaced hole.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @hole _obj
+sort obj;
+term c: obj;
+term P (x: obj): wff;
+term Q: wff;
+term or (a b: wff): wff;
+infixl or: $\/$ prec 30;
+
+axiom q: $ Q $;
+axiom or_l (a b: wff): $ a $ > $ a \/ b $;
+
+theorem bad: $ Q \/ P c $;

@@ -1,0 +1,5 @@
+bad
+---
+
+l1: $ eq (f _obj) (g c) $ by refl []
+l2: $ eq (g c) (g c) $ by refl []

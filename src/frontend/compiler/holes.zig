@@ -244,6 +244,10 @@ pub fn matchTemplateToSurfaceDetailed(
         },
         .term => |holey_term| switch (template) {
             .binder => |idx| {
+                // Like a bare hole, a subterm with a hole in it fixes
+                // nothing; the binder keeps whatever the rest of the match
+                // gives it, and holey validation checks the line later.
+                if (SurfaceExpr.containsHole(holey)) return true;
                 const expr_id = try theorem.internParsedExpr(holey);
                 if (idx >= bindings.len) {
                     setInferenceFailure(
@@ -770,4 +774,48 @@ test "holey template matching binds visible conclusion structure" {
     ));
     try std.testing.expect(partial[0] == null);
     try std.testing.expect(partial[1] != null);
+}
+
+test "holey template matching leaves a binder facing a holey subterm unbound" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var fixture = try TestFixture.init(arena.allocator());
+    defer fixture.deinit();
+
+    const rule = &fixture.env.rules.items[fixture.rule_id];
+    const partial = try arena.allocator().alloc(?ExprId, rule.args.len);
+    const a = try fixture.theorem.internParsedExpr(fixture.vars.get("a").?);
+    const b = try fixture.theorem.internParsedExpr(fixture.vars.get("b").?);
+
+    // `a` first faces `a -> _wff`, which fixes nothing, then binds to the
+    // concrete `a -> b` at its second occurrence.
+    @memset(partial, null);
+    const later_concrete = try fixture.parser.parseHoleyFormulaText(
+        "(a -> _wff) -> b -> (a -> b)",
+        &fixture.vars,
+    );
+    try std.testing.expect(try matchTemplateToSurface(
+        &fixture.theorem,
+        rule.concl,
+        later_concrete,
+        partial,
+    ));
+    try std.testing.expect(partial[0] != null);
+    try std.testing.expectEqual(b, partial[1].?);
+
+    // A binding made before the holey subterm is kept as it is.
+    @memset(partial, null);
+    partial[0] = a;
+    const holey_only = try fixture.parser.parseHoleyFormulaText(
+        "(b -> _wff) -> b -> _wff",
+        &fixture.vars,
+    );
+    try std.testing.expect(try matchTemplateToSurface(
+        &fixture.theorem,
+        rule.concl,
+        holey_only,
+        partial,
+    ));
+    try std.testing.expectEqual(a, partial[0].?);
+    try std.testing.expectEqual(b, partial[1].?);
 }
