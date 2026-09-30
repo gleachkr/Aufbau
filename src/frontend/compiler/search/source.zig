@@ -1316,7 +1316,12 @@ fn appendGeneratedSuggestions(
 
     for (generated.applications) |generated_app| {
         if (items.items.len >= options.max_results) break;
-        const app = try withNeededBindings(allocator, site, generated_app);
+        const trimmed = try trimBindings(allocator, site, generated_app);
+        const app = trimmed.app;
+        // A holey goal was searched with metas for its holes; the line itself
+        // must check with the rendered proof in place, filling them.
+        if (site.line_goal == .holey and !trimmed.validated and
+            !try site.validates(allocator, app)) continue;
         const replacement = try renderApplication(
             allocator,
             app.rule_name,
@@ -1419,9 +1424,9 @@ fn inlineExactSuggestions(
     // `auto?` in a slot position layers bounded recursive generation on top of
     // the direct results, exactly as the top-level path does — but only when the
     // slot goal is fully concrete. An open slot goal (an undetermined rule
-    // argument) needs `generateTopLevel` to accept a goal carrying `.existential`
-    // metas, which it does not yet (the deferred holey-goal path); until then an
-    // open inline slot stays exact-only. See
+    // argument) would reach `generateTopLevel` as a meta-bearing expected ref;
+    // only a top-level holey line is searched that way today (its holes become
+    // metas in `generateTopLevel`), so an open inline slot stays exact-only. See
     // docs/design_notes/inline_auto_open_slot_existential_gap.md.
     if (is_auto and options.generate.enabled and items.items.len < max_results) {
         if (inline_expectation) |expected| {
@@ -1817,26 +1822,55 @@ const SuggestionSite = struct {
 /// split and principal choices) so that its own validation cannot misread
 /// them; most of them the checker re-derives from the refs and the goal. Each
 /// binding, outermost application first, is dropped when the line still
-/// checks without it, so the result checks whenever `app` does. Allocates on
-/// the per-call work arena and frees nothing.
+/// checks without it, so the result checks whenever `app` does. On a holey
+/// line that `app` checks, the innermost go first instead: the root's
+/// bindings carry what fills the holes (the inferred type), and a child
+/// checks from its parent's hint once the root states them. Allocates on the
+/// per-call work arena and frees nothing.
 fn withNeededBindings(
     allocator: std.mem.Allocator,
     site: SuggestionSite,
     app: RuleApplication,
 ) !RuleApplication {
+    return (try trimBindings(allocator, site, app)).app;
+}
+
+const TrimmedApplication = struct {
+    app: RuleApplication,
+    /// The line was checked with `app` in place and passed. False when no
+    /// trial ran on `app` itself (it has no bindings, or every drop failed
+    /// and the full application was never tried).
+    validated: bool,
+};
+
+/// `withNeededBindings`, also reporting whether the result was validated.
+fn trimBindings(
+    allocator: std.mem.Allocator,
+    site: SuggestionSite,
+    app: RuleApplication,
+) !TrimmedApplication {
     const count = bindingCount(app);
-    if (count == 0) return app;
+    if (count == 0) return .{ .app = app, .validated = false };
     const drop = try allocator.alloc(bool, count);
     @memset(drop, true);
     const bare = try withBindingsDropped(allocator, app, drop);
-    if (try site.validates(allocator, bare)) return bare;
+    if (try site.validates(allocator, bare)) return .{ .app = bare, .validated = true };
     @memset(drop, false);
-    for (drop) |*dropped| {
-        dropped.* = true;
+    const inner_first = site.line_goal == .holey and try site.validates(allocator, app);
+    // The current drop set is validated once the full application passed or
+    // any drop was kept: a rejected trial restores the last accepted set.
+    var validated = inner_first;
+    for (0..count) |step| {
+        const idx = if (inner_first) count - 1 - step else step;
+        drop[idx] = true;
         const trial = try withBindingsDropped(allocator, app, drop);
-        if (!try site.validates(allocator, trial)) dropped.* = false;
+        if (try site.validates(allocator, trial)) {
+            validated = true;
+        } else {
+            drop[idx] = false;
+        }
     }
-    return withBindingsDropped(allocator, app, drop);
+    return .{ .app = try withBindingsDropped(allocator, app, drop), .validated = validated };
 }
 
 fn bindingCount(app: RuleApplication) usize {

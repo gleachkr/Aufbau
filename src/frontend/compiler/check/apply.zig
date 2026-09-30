@@ -463,6 +463,7 @@ fn applyRuleCandidateCore(
         expected_refs = try inferExpectedRefsForInlineApplications(
             allocator,
             theorem,
+            registry,
             rule,
             line_assertion,
             expected_conclusion_hint,

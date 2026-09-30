@@ -69,6 +69,7 @@ const restoreDiagnostic = @import("./types.zig").restoreDiagnostic;
 pub fn inferExpectedRefsForInlineApplications(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
+    registry: *const RewriteRegistry,
     rule: *const RuleDecl,
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
@@ -79,6 +80,7 @@ pub fn inferExpectedRefsForInlineApplications(
     return inferExpectedRefsForInlineApplicationsWithContext(
         allocator,
         theorem,
+        registry,
         rule,
         line_assertion,
         expected_conclusion_hint,
@@ -107,6 +109,7 @@ pub fn foldTemplateOrRestore(
 fn inferExpectedRefsForInlineApplicationsWithContext(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
+    registry: *const RewriteRegistry,
     rule: *const RuleDecl,
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
@@ -116,13 +119,40 @@ fn inferExpectedRefsForInlineApplicationsWithContext(
     errdefer allocator.free(expected_refs);
     @memset(expected_refs, null);
 
-    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
-        .concrete => |expr| expr,
-        .holey, .implicit_whole_conclusion => return expected_refs,
-    };
-
     const snapshot = try allocator.dupe(?ExprId, contextual);
     defer allocator.free(snapshot);
+    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
+        .concrete => |expr| expr,
+        // A holey line still fixes the binders its visible structure
+        // determines (`λ x : a. x` fixes `A` and `t` in `t_lam`'s
+        // conclusion); fold them all-or-nothing, so a child's hint is as
+        // concrete as the parent's visible part allows. A binder facing a
+        // subterm with a hole in it fixes nothing (`HoleNotConcrete`), and
+        // an ACUI spine binder's position is only a guess, as in
+        // `seedBindingsFromHoleyHint`.
+        .holey => |holey| {
+            var report = Holes.InferenceReport{};
+            const matched = Holes.matchTemplateToSurfaceDetailed(
+                theorem,
+                rule.concl,
+                holey,
+                contextual,
+                &report,
+            ) catch |err| switch (err) {
+                error.HoleNotConcrete => false,
+                else => return err,
+            };
+            if (matched) {
+                demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, snapshot, contextual);
+            } else {
+                @memcpy(contextual, snapshot);
+            }
+            try instantiateExpectedRefs(theorem, rule, contextual, expected_refs);
+            return expected_refs;
+        },
+        .implicit_whole_conclusion => return expected_refs,
+    };
+
     foldTemplateOrRestore(theorem, rule.concl, line_expr, contextual, snapshot);
 
     try instantiateExpectedRefs(theorem, rule, contextual, expected_refs);

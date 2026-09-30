@@ -428,7 +428,8 @@ pub fn witnessClass(context: *const Context, rule_id: u32) u8 {
 ///
 /// `.constrained` — a structured open target is built, but the child proof
 /// must determine every meta by read-back; no meta propagates into nested
-/// open slots and nothing is invented. Un-enrolled rules get it in phase 5
+/// open slots (except under a holey root, `hook.open_root`) and nothing is
+/// invented. Un-enrolled rules get it in phase 5
 /// (constrained backward modus ponens, `hook.allow_constrained_mp`), and
 /// `@abstract` motive inference rides that branch too. A premise that only
 /// opens a hidden bound variable gets it in every phase
@@ -2045,8 +2046,10 @@ fn emitOpenTarget(
     // needs the ancestor leaves bindable, and `solveOpen`'s hint reintern
     // bails outright on an unregistered meta. Registration is trailed and
     // unwound by `tryOpenGenerateSlot`'s outer mark, so it does not leak past
-    // this slot. Only `.witness` open slots carry witness metas.
-    if (slot.mode == .witness) {
+    // this slot. Only `.witness` open slots carry witness metas, except under
+    // an open root (`hook.open_root`): there a constrained slot carries its
+    // ancestors' metas too, the root's hole metas and those minted between.
+    if (slot.mode == .witness or (slot.mode == .constrained and slot.hook.open_root)) {
         try registerAncestorMetas(slot.store, theorem, raw_target);
     }
     if (slot.store.isFullySolved(theorem, raw_target)) {

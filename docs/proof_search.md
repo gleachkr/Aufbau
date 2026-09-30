@@ -104,6 +104,21 @@ close; it is fast and its answer is unambiguous. Use `auto?` when the
 step is genuinely a small proof and you want the compiler to find the
 chain.
 
+**Holes in the goal: type inference.** The goal may contain
+[proof holes](holes.md). `auto?` then searches for a proof that fills
+them too, so on a typing judgment whose type is a hole it infers the
+type:
+
+```text
+l1: $ g ⊢ (λ f : b → c. λ n : a → b. λ x : a. f · (n · x)) : _ty $ by auto?
+```
+
+suggests `t_lam (B := $ (a -> b) -> a -> c $) [...]`: the binding on the
+outermost rule states the type the line gets. A suggestion is offered only
+if the line checks with it in place. The search returns *a* type, the one
+its first proof fixes; when a theory's types are not unique (subtyping,
+conversion rules), that need not be the most general one.
+
 ### `conversion?` — rewrite the goal to an existing reference
 
 `conversion?` answers a different question from the other three: is the

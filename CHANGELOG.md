@@ -5,6 +5,14 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- `auto?` on a line with proof holes finds a proof that fills them. On a
+  typing judgment whose type is a hole, `$ g ⊢ (λ x : a. x) : _ty $ by auto?`,
+  it acts as type inference and suggests `t_lam (B := $ a $) [t_var []]`, the
+  binding stating the type. Before, `auto?` tried only one-step proofs on
+  such lines.
+
 ### Changed
 
 - The Martin-Löf example no longer assumes regularity. Its nine axioms
@@ -103,6 +111,14 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A holey line's inline sub-proofs now get the conclusion the line's visible
+  parts and explicit bindings determine as their expected goal. Before they
+  got none, so `$ g ⊢ (λ x : a. x) : _ty $ by t_lam (B := $ a $) [t_var []]`
+  failed (`t_var`'s `g` could not be determined) though the same proof
+  checks with the type written out.
+- A holey line whose visible parts equal the rule's conclusion only up to
+  ACUI (a context rebuilt from a sub-proof in another association or member
+  order) is accepted.
 - `auto?` now accepts a step whose conclusion matches the goal only once a
   definition is unfolded. In the Zermelo example `sep_elim_right [#1]`
   proves `in_all_subsets S x`, which by definition is

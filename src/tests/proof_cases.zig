@@ -545,6 +545,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "church", .outcome = .pass },
     .{ .stem = "pass_church_holes", .outcome = .pass },
     .{ .stem = "pass_church_holes_hard", .outcome = .pass },
+    .{ .stem = "pass_holey_type_inference", .outcome = .pass },
     .{ .stem = "mltt_min", .outcome = .pass },
     .{ .stem = "mltt", .outcome = .pass },
     .{ .stem = "martin_lof", .outcome = .pass },

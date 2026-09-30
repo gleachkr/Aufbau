@@ -41,11 +41,14 @@ The same idea covers more interesting cases:
 - ordered fallback rule chains, where the first candidate to fully
   succeed is the one that fills the holes.
 
-Holes are intentionally *not* a proof-search facility. Each hole is
+Holes themselves are *not* a proof-search facility. Each hole is
 filled by one selected rule application, by reading the concrete subtree
 that the application's binders force into that position. For inline rule
-applications, a parent may provide an expected-conclusion hint, but there
-is still no global backtracking across parent and child choices.
+applications, a parent passes each child an expected-conclusion hint built
+from the binders the line's visible parts determine, but there is still no
+global backtracking across parent and child choices. To have a proof
+*found* that fills the holes, write `auto?` as the line's justification
+(see [Proof search](proof_search.md)).
 
 ---
 
@@ -347,8 +350,9 @@ This is the v1 surface. The following are deliberately out of scope:
 - a generic untyped `_`;
 - holes in bound-variable positions or in explicit binding formulas;
 - named or shared holes;
-- proof search beyond existing inference, view, normalization, and
-  fallback machinery;
+- proof search during elaboration beyond existing inference, view,
+  normalization, and fallback machinery (`auto?` searches, but only
+  when asked, and its suggestion then elaborates like any other line);
 - theorem-local dummy creation triggered by a hole.
 
 These restrictions keep holes a local, line-scoped elaboration step

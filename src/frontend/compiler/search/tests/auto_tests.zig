@@ -565,6 +565,54 @@ test "generated child conclusion is checked against the target" {
     );
 }
 
+/// `auto?` in place of `theorem`'s one proof line in
+/// `pass_holey_type_inference`, whose assertion leaves the type as the hole
+/// `_ty`. Requires the first suggestion to compile in place: the line is the
+/// theorem's last, so the type it fills must be the stated one.
+fn expectHoleyTypeInferred(theorem: []const u8, expected: []const u8) !void {
+    const allocator = std.testing.allocator;
+    const mm0_src = try readProofCase(allocator, "pass_holey_type_inference", "mm0");
+    defer allocator.free(mm0_src);
+    const full_proof = try readProofCase(allocator, "pass_holey_type_inference", "auf");
+    defer allocator.free(full_proof);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const header = try std.fmt.allocPrint(arena.allocator(), "{s}\n", .{theorem});
+    const block = std.mem.indexOf(u8, full_proof, header) orelse return error.MissingTheorem;
+    const by = block + (std.mem.indexOf(u8, full_proof[block..], " $ by ") orelse
+        return error.MissingProof) + " $ by ".len;
+    const line_end = std.mem.indexOfScalarPos(u8, full_proof, by, '\n') orelse full_proof.len;
+    const proof_src = try std.mem.concat(arena.allocator(), u8, &.{
+        full_proof[0..by], "auto?", full_proof[line_end..],
+    });
+
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{expected});
+    try helpers.expectConversionCompiles(&arena, mm0_src, proof_src, suggestions.items[0]);
+}
+
+test "auto infers the type of a holey typing goal" {
+    try expectHoleyTypeInferred(
+        "infer_compose",
+        "t_lam (B := $ (a -> b) -> a -> c $) [t_lam [t_lam [t_app (A := $ b $) " ++
+            "[t_var [], t_app (A := $ a $) [t_var [], t_var []]]]]]",
+    );
+}
+
+// The function position `f · x` is itself open: its type `?A → ?T` carries
+// the root's hole meta `?T` into a constrained open slot, where `f`'s context
+// entry solves it two levels down.
+test "auto infers a type through a nested application" {
+    try expectHoleyTypeInferred(
+        "infer_app2",
+        "t_app (A := $ b $, B := $ c $) [t_app (A := $ a $) [t_var [], t_var []], t_var []]",
+    );
+}
+
 test "exact does not generate the chain" {
     const proof_src =
         \\t

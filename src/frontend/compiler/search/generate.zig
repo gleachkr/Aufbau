@@ -41,6 +41,8 @@ const DeepVerdictCache = types.DeepVerdictCache;
 const NameExprMap = types.NameExprMap;
 const GenerateOptions = types.GenerateOptions;
 const GenerationHook = types.GenerationHook;
+const Expr = @import("../../../trusted/expressions.zig").Expr;
+const SurfaceExpr = @import("../../surface_expr.zig");
 
 /// Generated full proof trees for a goal. The trees are owned by `arena`; they
 /// stay valid until `deinit`, which the caller invokes after rendering.
@@ -240,6 +242,9 @@ const Driver = struct {
     /// Carried-meta dependency bans (eigenvariable conditions), narrowed and
     /// rolled back by open slots. See `MetaDepBans`.
     meta_dep_bans: MetaDepBans,
+    /// The root goal is a holey line: its holes are metas, and each pass
+    /// searches it as an open whole-conclusion hint (`internHoleyGoal`).
+    open_root: bool = false,
     /// Expensive-op budget for the currently running phase, shared by all
     /// recursive sub-solves. Each retry phase owns one fuel pool spanning all
     /// its depths (the per-depth bound is `nodes`); the ladder swaps the
@@ -249,6 +254,9 @@ const Driver = struct {
 
 /// Top-level entry: find proof trees for `goal` that use at least one generated
 /// inline application (so they are genuinely novel relative to direct `exact?`).
+/// A holey goal is searched with a meta in place of each hole, so the proof
+/// found fills the holes too (`auto?` on `g ⊢ t : _` infers a type). An
+/// implicit whole-conclusion goal gets no generation.
 pub fn generateTopLevel(
     compiler: *CompilerContext,
     session: *session_mod.SearchSession,
@@ -281,11 +289,10 @@ pub fn generateTopLevel(
     if (budget_ptr) |budget| compiler.work_budget = budget.workBudget();
     defer compiler.work_budget = saved_work_budget;
 
-    const goal_expr = switch (goal) {
-        .concrete => |expr| expr,
-        // Holey / whole-conclusion goals are deferred (Step 4).
-        else => return .{ .arena = arena, .applications = &.{} },
-    };
+    switch (goal) {
+        .concrete, .holey => {},
+        .implicit_whole_conclusion => return .{ .arena = arena, .applications = &.{} },
+    }
     if (options.max_depth == 0) {
         return .{ .arena = arena, .applications = &.{} };
     }
@@ -339,6 +346,20 @@ pub fn generateTopLevel(
         }
         effective_vars = &vars_clone.?;
     }
+
+    // The metas for a holey goal's holes are numbered before any open slot
+    // mints one, from the counter the driver continues below.
+    var next_meta_id: u64 = 0;
+    const goal_expr: ExprId = switch (goal) {
+        .concrete => |expr| expr,
+        .holey => |holey| (try internHoleyGoal(
+            &work_theorem,
+            session.context,
+            holey,
+            &next_meta_id,
+        )) orelse return .{ .arena = arena, .applications = &.{} },
+        .implicit_whole_conclusion => unreachable,
+    };
 
     // Bounded multi-layer forward saturation over the ref pool
     // before backward search. Skipped entirely (no cost) when the theory
@@ -410,6 +431,8 @@ pub fn generateTopLevel(
         .has_acui = session.context.registry.acui_by_head.count() > 0,
         .has_comm_acui = acui.hasCommutativeCombiner(session.context),
         .meta_dep_bans = MetaDepBans.init(session.allocator),
+        .next_meta_id = next_meta_id,
+        .open_root = goal == .holey,
     };
     driver.hook = .{
         .ctx = &driver,
@@ -418,6 +441,7 @@ pub fn generateTopLevel(
         .allow_split = false,
         .meta_id_counter = &driver.next_meta_id,
         .meta_dep_bans = &driver.meta_dep_bans,
+        .open_root = driver.open_root,
     };
     defer driver.meta_dep_bans.deinit();
     defer driver.visited.deinit(driver.scratch);
@@ -473,7 +497,9 @@ pub fn generateTopLevel(
     // re-run on its first tick.
     var seeded_pool: ?types.DerivedPool = null;
     defer if (seeded_pool) |*dpool| dpool.deinit();
+    // A holey goal's holes are metas, not subterms to seed from.
     if (applications.items.len == 0 and ladder != .stopped and
+        !driver.open_root and
         session.context.registry.triggerRuleCount() > 0)
     {
         const seeds = try trigger.harvestSeeds(
@@ -567,6 +593,39 @@ pub fn generateTopLevel(
             applications.items,
         ),
     };
+}
+
+/// Intern a holey line assertion into `theorem` with a fresh meta of the
+/// hole's sort in place of each hole. The metas carry stable ids from
+/// `next_meta_id`, so an open slot's store registers them as carried ancestor
+/// metas and a descendant leaf can solve them. Null for a hole of an unknown
+/// sort.
+fn internHoleyGoal(
+    theorem: *TheoremContext,
+    context: *const Context,
+    expr: *const Expr,
+    next_meta_id: *u64,
+) anyerror!?ExprId {
+    if (!SurfaceExpr.containsHole(expr)) return try theorem.internParsedExpr(expr);
+    switch (expr.*) {
+        .hole => |hole| {
+            const sort_name = SurfaceExpr.sortNameById(context.env, hole.sort) orelse
+                return null;
+            const meta_id = next_meta_id.*;
+            next_meta_id.* += 1;
+            return try theorem.addMetaPlaceholderWithMetaId(sort_name, meta_id);
+        },
+        .variable => unreachable,
+        .term => |term| {
+            const args = try theorem.allocator.alloc(ExprId, term.args.len);
+            defer theorem.allocator.free(args);
+            for (term.args, 0..) |arg, idx| {
+                args[idx] = (try internHoleyGoal(theorem, context, arg, next_meta_id)) orelse
+                    return null;
+            }
+            return try theorem.interner.internApp(term.id, args);
+        },
+    }
 }
 
 /// Bounded forward saturation over the theorem's ref pool, with `seeds` as
@@ -957,7 +1016,10 @@ fn runDepthPass(
     var results = backtrack.exactWithSession(
         driver.compiler,
         driver.session,
-        Goal{ .concrete = goal_expr },
+        if (driver.open_root)
+            Goal{ .implicit_whole_conclusion = goal_expr }
+        else
+            Goal{ .concrete = goal_expr },
         driver.work_theorem,
         driver.theorem_vars,
         .{

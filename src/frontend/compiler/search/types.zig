@@ -880,6 +880,14 @@ pub const GenerationHook = struct {
     /// phases never pay the cost. `exact?`/`apply?` never set it.
     allow_constrained_mp: bool = false,
 
+    /// When true, the root goal is a holey line whose holes are metas (see
+    /// `generate.generateTopLevel`). A constrained open slot then registers
+    /// the metas it carries from enclosing open slots, as a `.witness` slot
+    /// always does, so a nested child can solve a hole's meta at its leaf
+    /// (`f · x · y : _` needs `f`'s type read off two levels down). Off for
+    /// concrete goals, whose search it would widen (#331).
+    open_root: bool = false,
+
     /// When false, the backtracker ignores the `@auto eager` set-commit cut:
     /// the eager band is still tried first and its applications stay exempt
     /// from `max_depth`, but after the band is exhausted the remaining

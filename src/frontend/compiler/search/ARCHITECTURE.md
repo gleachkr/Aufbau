@@ -51,6 +51,21 @@ first, whose line still checks without it, so a suggestion names only what
 the checker cannot infer. This costs checker runs per surfaced suggestion
 only, never search ticks, and cannot change what is found.
 
+**Holey goals (type inference).** A line whose assertion has proof holes
+(`g ⊢ t : _ty`) reaches `generateTopLevel` as `Goal.holey`. It interns the
+assertion with a meta per hole (`internHoleyGoal`, stable `meta_id`s from the
+driver's counter) and every pass searches that as an open
+`implicit_whole_conclusion` hint, so the ladder runs as for an open child
+target and the proof found fills the holes. `Driver.open_root` /
+`GenerationHook.open_root` mark such a search: phase-6 trigger seeding is
+skipped (holes are not subterms), and a constrained open slot registers its
+carried ancestor metas as a `.witness` slot does, so a hole's meta is
+solvable at a leaf two open levels down (`f · x · y : _`; #331 is the
+general-goal version, which costs ticks there). Search validates against the
+hint, so `source.zig` surfaces a suggestion only if the holey line itself
+checks with it, and `withNeededBindings` drops innermost bindings first there,
+keeping the root's (the filled type).
+
 ## Conversion-search entry point
 
 **`conversion?`** is a separate engine (`conversion.zig:run`, dispatched

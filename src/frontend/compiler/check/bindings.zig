@@ -32,6 +32,7 @@ const HoleInferenceSink = @import("../context.zig").HoleInferenceSink;
 const InlineConclusionSink = @import("../context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Normalize = @import("../normalize.zig");
+const Canonicalizer = @import("../../canonicalizer.zig").Canonicalizer;
 const ViewTrace = @import("../../view_trace.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const CheckedIr = @import("../../checked_ir.zig");
@@ -832,6 +833,29 @@ fn validateHoleyAssertionAgainstCandidate(
             return materialized_line;
         } else if (materialized_report.failure != null) {
             hole_report = materialized_report;
+        }
+    }
+
+    // The visible parts can equal the candidate only up to ACUI: a context
+    // the rule rebuilt from a child's conclusion comes back in the child's
+    // association and member order, not the line's. Keep the line's visible
+    // structure when both canonicalize to one expression; the conclusion line
+    // then bridges it to the raw conclusion like any normalized one.
+    var acui_report = Holes.ConcreteMatchReport{};
+    if (try Holes.materializeSurfaceWithCandidate(
+        parser,
+        theorem,
+        env,
+        holey,
+        normalized_line,
+        &acui_report,
+    )) |materialized_line| {
+        var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env);
+        defer canonicalizer.cache.deinit();
+        if (try canonicalizer.canonicalize(materialized_line) ==
+            try canonicalizer.canonicalize(normalized_line))
+        {
+            return materialized_line;
         }
     }
 
