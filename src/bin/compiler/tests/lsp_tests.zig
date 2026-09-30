@@ -1360,7 +1360,10 @@ test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
     ));
 }
 
-test "LSP proof hole hover shows the inferred expression" {
+/// Hover `_wff` in a one-line holey proof. With `open`, the proof is
+/// opened first, so the diagnostics pass records every block in the
+/// check memo, without a hole sink, before the hover builds its snapshot.
+fn expectProofHoleHover(open: bool) !void {
     const mm0_uri = "file:///tmp/lsp-hole-hover.mm0";
     const proof_uri = "file:///tmp/lsp-hole-hover.auf";
     const mm0_text =
@@ -1386,11 +1389,22 @@ test "LSP proof hole hover shows the inferred expression" {
         &transport_state.transport,
     );
     defer handler.deinit();
-    try handler.putDocument(mm0_uri, mm0_text, 1);
-    try handler.putDocument(proof_uri, proof_text, 1);
-
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    if (open) {
+        try handler.@"textDocument/didOpen"(arena_state.allocator(), .{ .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "aufbau",
+            .version = 1,
+            .text = proof_text,
+        } });
+        try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
+        try std.testing.expectEqual(@as(usize, 0), handler.check_memo.hits);
+    } else {
+        try handler.putDocument(proof_uri, proof_text, 1);
+    }
+
     const hover_result = try handler.@"textDocument/hover"(
         arena_state.allocator(),
         .{
@@ -1412,6 +1426,14 @@ test "LSP proof hole hover shows the inferred expression" {
         1,
         "$ r -> s $",
     ));
+}
+
+test "LSP proof hole hover shows the inferred expression" {
+    try expectProofHoleHover(false);
+}
+
+test "LSP proof hole hover survives the diagnostics pass's check memo" {
+    try expectProofHoleHover(true);
 }
 
 test "LSP proof hover resolves rule applications" {

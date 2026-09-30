@@ -135,7 +135,7 @@ pub fn checkTheoremBlockMemoized(
     }
     const mm0_pos = parser.core.pos;
     const key = memo.keyForBlock(self.source, mm0_pos, self.proof_source.?, block);
-    if (memo.find(key, rule_catalog)) |entry| {
+    if (memo.find(key, rule_catalog, self)) |entry| {
         try entry.replay(self, block.span.start);
         if (entry.outcome) |err| return err;
         return &.{};

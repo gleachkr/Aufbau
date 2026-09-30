@@ -4,7 +4,8 @@
 //! span, note, sink entry and error — under the edits an editor makes:
 //! nothing (all hits), a body edit that only shifts later blocks, a body
 //! edit that flips an outcome, and a theory edit that shifts every `.mm0`
-//! position.
+//! position. It also mixes analyses with and without the sinks, as the
+//! editor's diagnostics and navigation passes do.
 
 const std = @import("std");
 const mm0 = @import("../lib.zig");
@@ -19,6 +20,7 @@ fn analyzeDump(
     mm0_text: []const u8,
     proof_text: []const u8,
     memo: ?*CheckMemo,
+    sinks: bool,
 ) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -28,8 +30,10 @@ fn analyzeDump(
     var inlines = mm0.CompilerSupport.Context.InlineConclusionSink{ .allocator = arena };
     var compiler = Compiler.initWithProof(arena, mm0_text, proof_text);
     compiler.allow_search_placeholders = true;
-    compiler.hole_inference_sink = &holes;
-    compiler.inline_conclusion_sink = &inlines;
+    if (sinks) {
+        compiler.hole_inference_sink = &holes;
+        compiler.inline_conclusion_sink = &inlines;
+    }
     compiler.check_memo = memo;
 
     var out = std.ArrayListUnmanaged(u8){};
@@ -138,6 +142,8 @@ const Scenario = struct {
     name: []const u8,
     mm0_text: []const u8,
     proof_text: []const u8,
+    /// Attach the hole and inline conclusion sinks.
+    sinks: bool = true,
 };
 
 /// Cold vs warm must agree; returns the warm dump's hit delta.
@@ -147,9 +153,9 @@ fn expectSameAnalysis(
     stem: []const u8,
     scenario: Scenario,
 ) !void {
-    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null);
+    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null, scenario.sinks);
     defer allocator.free(cold);
-    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo);
+    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo, scenario.sinks);
     defer allocator.free(warm);
     if (!std.mem.eql(u8, cold, warm)) {
         std.debug.print(
@@ -219,7 +225,16 @@ fn runFixture(
     const mm0_text = pair.mm0.text;
     const proof_text = (pair.proof orelse return).text;
 
-    // Cold population, then a verbatim rerun: every block must hit.
+    // Cold population without the sinks (the editor's diagnostics
+    // pass), then with them (its navigation pass): entries recorded
+    // without a sink must not replay into one. Then a verbatim rerun:
+    // every block must hit.
+    try expectSameAnalysis(allocator, memo, stem, .{
+        .name = "populate without sinks",
+        .mm0_text = mm0_text,
+        .proof_text = proof_text,
+        .sinks = false,
+    });
     try expectSameAnalysis(allocator, memo, stem, .{
         .name = "populate",
         .mm0_text = mm0_text,
@@ -267,7 +282,7 @@ fn runFixture(
                 .proof_text = edited,
             });
             if (memo.misses - misses > unrecordable + 1) {
-                const dump = try analyzeDump(allocator, mm0_text, edited, null);
+                const dump = try analyzeDump(allocator, mm0_text, edited, null, true);
                 defer allocator.free(dump);
                 std.debug.print(
                     "check memo shift over-miss: {s} block {d}/{d} ({s}): {d} misses, {d} unrecordable\n--- edited analysis ---\n{s}\n--- edited text ---\n{s}\n",
@@ -388,10 +403,10 @@ test "check memo evicts least recently used entries past its cap" {
         \\---
         \\p: $ top $ by ax_top []
     ;
-    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo);
+    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
     defer allocator.free(first);
     try std.testing.expect(memo.entries.count() <= 4);
-    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo);
+    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
     defer allocator.free(second);
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expect(memo.entries.count() <= 4);

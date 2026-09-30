@@ -21,6 +21,10 @@
 //! the block body; the value is everything the check emitted: its
 //! error, the diagnostics and warnings it added, its hole and inline
 //! conclusion sink entries, and the `last_diagnostic` it left behind.
+//! The sinks are optional outputs, so an entry records only those that
+//! were attached; a run that attaches a sink the entry lacks (the editor's
+//! navigation pass after its sink-less diagnostics pass) re-checks the
+//! block, and the fuller recording replaces the entry.
 //!
 //! One thing a check reads outside the hashed prefix is the rule catalog
 //! (`RuleCatalog`), built from the whole `.mm0` up front and consulted
@@ -51,7 +55,7 @@ const InlineConclusion = Context.InlineConclusion;
 pub const CheckMemo = struct {
     /// Bumped when what a check observes, or what an entry stores, changes
     /// shape, so a stale entry can never match.
-    const schema_version: u32 = 1;
+    const schema_version: u32 = 2;
     pub const default_max_entries: usize = 4096;
 
     pub const Key = struct {
@@ -79,12 +83,22 @@ pub const CheckMemo = struct {
         primary: []const Diagnostic,
         warnings: []const Diagnostic,
         last_diagnostic: ?Diagnostic,
-        holes: []const HoleInference,
-        inlines: []const InlineConclusion,
+        /// Null when the check ran without the sink, so its entries
+        /// are unknown.
+        holes: ?[]const HoleInference,
+        inlines: ?[]const InlineConclusion,
         lookups: []const CatalogLookup,
 
+        /// Whether the recording holds every sink `ctx` collects into.
+        fn serves(self: *const Entry, ctx: *const CompilerContext) bool {
+            if (ctx.hole_inference_sink != null and self.holes == null) return false;
+            if (ctx.inline_conclusion_sink != null and self.inlines == null) return false;
+            return true;
+        }
+
         /// Re-emit everything the recorded check produced, with proof
-        /// spans moved to where the block lies now.
+        /// spans moved to where the block lies now. Only for an entry
+        /// `find` returned for `ctx`, so every attached sink was recorded.
         pub fn replay(
             self: *const Entry,
             ctx: *CompilerContext,
@@ -99,7 +113,7 @@ pub const CheckMemo = struct {
                 ctx.addWarning(relocateDiagnostic(diag, delta));
             }
             if (ctx.hole_inference_sink) |sink| {
-                for (self.holes) |hole| {
+                for (self.holes.?) |hole| {
                     try sink.addOwned(
                         shiftSpan(hole.span, delta),
                         try sink.allocator.dupe(u8, hole.expression),
@@ -107,7 +121,7 @@ pub const CheckMemo = struct {
                 }
             }
             if (ctx.inline_conclusion_sink) |sink| {
-                for (self.inlines) |inline_conclusion| {
+                for (self.inlines.?) |inline_conclusion| {
                     try sink.addOwned(
                         shiftSpan(inline_conclusion.span, delta),
                         try sink.allocator.dupe(u8, inline_conclusion.conclusion),
@@ -263,16 +277,22 @@ pub const CheckMemo = struct {
         return block.header_span.end;
     }
 
-    /// The entry for `key` whose recorded catalog lookups still hold.
+    /// The entry for `key` whose recorded catalog lookups still hold and
+    /// whose recording covers the sinks `ctx` collects into.
     pub fn find(
         self: *CheckMemo,
         key: Key,
         catalog: *const RuleCatalog.Catalog,
+        ctx: *const CompilerContext,
     ) ?*const Entry {
         const entry = self.entries.get(key) orelse {
             self.misses += 1;
             return null;
         };
+        if (!entry.serves(ctx)) {
+            self.misses += 1;
+            return null;
+        }
         for (entry.lookups) |lookup| {
             if (!catalogEntryEql(lookup.entry, catalog.get(lookup.name))) {
                 self.misses += 1;
@@ -353,8 +373,8 @@ pub const CheckMemo = struct {
             .primary = &.{},
             .warnings = &.{},
             .last_diagnostic = null,
-            .holes = &.{},
-            .inlines = &.{},
+            .holes = null,
+            .inlines = null,
             .lookups = &.{},
         };
         errdefer entry.arena.deinit();

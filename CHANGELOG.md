@@ -124,6 +124,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   and `$ eq (f _obj) (f c) $ by refl []` now check: the other parts of
   the line and the cited premises determine the variable. Before, such a line
   failed with "a proof hole is not allowed here" or a missing variable.
+- The language server again shows what a proof hole was filled with when
+  you hover it. Since 0.0.12 the hover was empty: the navigation pass reused
+  check results the diagnostics pass had recorded without the holes.
 - `auto?` now accepts a step whose conclusion matches the goal only once a
   definition is unfolded. In the Zermelo example `sep_elim_right [#1]`
   proves `in_all_subsets S x`, which by definition is
