@@ -619,14 +619,13 @@ pub const TheoremContext = struct {
     /// (see PLAN.md).
     /// Do NOT remove this API; only remove the accidental caller.
     fn ensureDepMaskCapacity(self: *const TheoremContext) !void {
-        const total_dep_uses = try std.math.add(
-            u32,
-            self.next_dummy_dep,
-            self.next_placeholder_dep,
-        );
-        if (total_dep_uses >= tracked_bound_dep_limit) {
-            return error.DependencySlotExhausted;
-        }
+        if (self.depSlotsLeft() == 0) return error.DependencySlotExhausted;
+    }
+
+    /// How many more dummies and placeholders the theorem can allocate, each
+    /// spending one dependency bit, before `DependencySlotExhausted`.
+    pub fn depSlotsLeft(self: *const TheoremContext) u32 {
+        return tracked_bound_dep_limit -| (self.next_dummy_dep +| self.next_placeholder_dep);
     }
 
     pub fn addDummyVarResolved(

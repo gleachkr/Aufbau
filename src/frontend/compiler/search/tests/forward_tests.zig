@@ -12,6 +12,7 @@ const ContextHarness = helpers.ContextHarness;
 const tunables = helpers.tunables;
 const suggestionsAtNeedle = helpers.suggestionsAtNeedle;
 const expectOffered = helpers.expectOffered;
+const forward = @import("../forward.zig");
 
 // Concrete forward chain: `pq` is fired forward on hyp #1 (`P K`),
 // deriving `Q K` with recipe `pq (x := $ K $) [#1]`. The backward
@@ -1184,3 +1185,161 @@ test "member witness match rejects values captured under a member binder" {
 
 // ---------------------------------------------------------------------------
 // Per-call tunables + failure detail (search/tunables.zig, buildStatusDetail)
+
+test "solveCorrespondenceUnfolding reads back through a def and mints only on success" {
+    // `allin s a` unfolds to `∀ y (y ∈ s → a ∈ y)`, `y` hidden. A child proof
+    // of `allin s a` reads back onto the open `∀ ?x ?p` only through that
+    // unfolding. Minting the hidden `y` spends a dependency slot of the
+    // theorem, so a failed match must mint nothing.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort set;
+        \\term im (a b: wff): wff;
+        \\term mem (a b: set): wff;
+        \\term eq (a b: set): wff;
+        \\term all {x: set} (p: wff x): wff;
+        \\term suc (a: set): set;
+        \\def allin (s a: set) (.y: set): wff = $ all y (im (mem y s) (mem a y)) $;
+        \\def allin2 (s a: set): wff = $ allin s a $;
+        \\def both (.y .z: set): wff = $ all y (all z (mem y z)) $;
+        \\def twice (s: set) (.y: set): wff = $ all y (im (mem y s) (mem y s)) $;
+        \\def once (s a: set) (.y: set): wff = $ all y (im (mem y s) (mem (suc a) s)) $;
+        \\theorem t (s: set) {a b: set}: $ allin s a $;
+    ;
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const term = struct {
+        fn id(f: anytype, name: []const u8) u32 {
+            return f.env.term_names.get(name).?;
+        }
+    };
+    const s = theorem.theorem_vars.items[0];
+    const a = theorem.theorem_vars.items[1];
+    const b = theorem.theorem_vars.items[2];
+    const app = struct {
+        fn of(th: *TheoremContext, head: u32, args: []const ExprId) !ExprId {
+            return th.interner.internApp(head, args);
+        }
+    }.of;
+    const all_id = term.id(&fixture, "all");
+    const im_id = term.id(&fixture, "im");
+    const mem_id = term.id(&fixture, "mem");
+    const allin_sa = try app(&theorem, term.id(&fixture, "allin"), &.{ s, a });
+    const body = struct {
+        fn over(th: *TheoremContext, ids: [3]u32, sv: ExprId, av: ExprId, y: ExprId) !ExprId {
+            return app(th, ids[1], &.{ try app(th, ids[2], &.{ y, sv }), try app(th, ids[2], &.{ av, y }) });
+        }
+    }.over;
+    const ids = [3]u32{ all_id, im_id, mem_id };
+
+    var store = MetaStore.init(allocator, &fixture.env);
+    defer store.deinit();
+    const x = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
+    const p = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
+    const target = try app(&theorem, all_id, &.{ x, p });
+    const before = theorem.next_placeholder_dep;
+
+    const Case = struct { source: ExprId, pattern: ExprId };
+    // Fails without minting: a mismatch inside the body (`?x ∈ a`, not
+    // `?x ∈ s`); the hidden `y` met by `a`, which the def's argument
+    // mentions (`∀ a (a ∈ s → a ∈ a)` captures it); and the two hidden
+    // variables of `both` met by the one `b`.
+    const q = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
+    const failing = [_]Case{
+        .{ .source = allin_sa, .pattern = try app(&theorem, all_id, &.{
+            x,
+            try app(&theorem, im_id, &.{ try app(&theorem, mem_id, &.{ x, a }), q }),
+        }) },
+        .{ .source = allin_sa, .pattern = try app(&theorem, all_id, &.{ a, p }) },
+        .{ .source = try app(&theorem, term.id(&fixture, "both"), &.{}), .pattern = try app(&theorem, all_id, &.{
+            b,
+            try app(&theorem, all_id, &.{ b, q }),
+        }) },
+    };
+    for (failing) |case| {
+        const mark = store.mark();
+        try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, case.source, case.pattern, true));
+        store.rollbackTo(mark);
+    }
+    try std.testing.expectEqual(before, theorem.next_placeholder_dep);
+
+    // A hidden variable met by a variable the arguments do not mention
+    // takes it; nothing minted.
+    var mark = store.mark();
+    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, allin_sa, try app(&theorem, all_id, &.{ b, p }), true));
+    try std.testing.expectEqual(before, theorem.next_placeholder_dep);
+    try std.testing.expectEqual(try body(&theorem, ids, s, a, b), try store.materialize(&theorem, p));
+    store.rollbackTo(mark);
+
+    // A probe of `∀ ?x ?p` succeeds without minting, `?x` left open.
+    mark = store.mark();
+    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, allin_sa, target, false));
+    try std.testing.expectEqual(before, theorem.next_placeholder_dep);
+    try std.testing.expect(!store.isFullySolved(&theorem, x));
+    store.rollbackTo(mark);
+
+    // Against `∀ ?x ?p`, the hidden `y` is minted once, `?x` names it, and
+    // `?p` is the body over it.
+    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, allin_sa, target, true));
+    try std.testing.expectEqual(before + 1, theorem.next_placeholder_dep);
+    const y = try store.materialize(&theorem, x);
+    try std.testing.expect(theorem.interner.node(y).* == .placeholder);
+    try std.testing.expectEqual(try body(&theorem, ids, s, a, y), try store.materialize(&theorem, p));
+
+    // The pattern's def unfolds too, its hidden variable matched against
+    // the source's own bound variable (`b`), so nothing is minted; and its
+    // body names another def (`allin2` is `allin`), which unfolds in turn.
+    // Against `∀ a (a ∈ s → a ∈ a)` the same fold would capture `a`.
+    const unfolded = try app(&theorem, all_id, &.{ b, try body(&theorem, ids, s, a, b) });
+    const captured = try app(&theorem, all_id, &.{ a, try body(&theorem, ids, s, a, a) });
+    const m = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
+    const minted = theorem.next_placeholder_dep;
+    for ([_][]const u8{ "allin", "allin2" }) |name| {
+        const folded = try app(&theorem, term.id(&fixture, name), &.{ s, m });
+        mark = store.mark();
+        try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, unfolded, folded, true));
+        try std.testing.expectEqual(a, try store.materialize(&theorem, m));
+        store.rollbackTo(mark);
+        try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, captured, folded, true));
+        store.rollbackTo(mark);
+        try std.testing.expectEqual(minted, theorem.next_placeholder_dep);
+    }
+
+    // A different head that is not a def does not unfold.
+    const eq_sa = try app(&theorem, term.id(&fixture, "eq"), &.{ s, a });
+    const r = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
+    try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, eq_sa, try app(&theorem, all_id, &.{ a, r }), true));
+
+    // A meta met twice, first by a subtree over the hidden variable: the
+    // second meeting is checked against the first. `twice s` against
+    // `∀ ?u (?v → ?v)` agrees, and mints the one hidden variable; `once s a`
+    // would need the hidden variable to stand for `suc a`.
+    const u = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
+    const v = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
+    const imp_vv = try app(&theorem, all_id, &.{ u, try app(&theorem, im_id, &.{ v, v }) });
+    const minted_before_twice = theorem.next_placeholder_dep;
+    mark = store.mark();
+    try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, try app(&theorem, term.id(&fixture, "once"), &.{ s, a }), imp_vv, false));
+    store.rollbackTo(mark);
+    try std.testing.expect(try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, try app(&theorem, term.id(&fixture, "twice"), &.{s}), imp_vv, true));
+    try std.testing.expectEqual(minted_before_twice + 1, theorem.next_placeholder_dep);
+    const w = try store.materialize(&theorem, u);
+    try std.testing.expectEqual(try app(&theorem, mem_id, &.{ w, s }), try store.materialize(&theorem, v));
+    store.rollbackTo(mark);
+
+    // A hidden variable may not stand for a placeholder a def argument
+    // mentions, any more than for a variable: `allin s P` against `∀ P ?p`.
+    const placeholder = try theorem.addPlaceholderResolved("set");
+    const t_meta = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
+    try std.testing.expect(!try forward.solveCorrespondenceUnfolding(&context, &store, &theorem, try app(&theorem, term.id(&fixture, "allin"), &.{ s, placeholder }), try app(&theorem, all_id, &.{ placeholder, t_meta }), false));
+}

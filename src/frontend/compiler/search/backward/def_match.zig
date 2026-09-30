@@ -451,7 +451,7 @@ pub fn unfoldDefBody(
 
 // Bound on nested def unfolding. Def bodies reference only earlier-declared
 // terms, so the chain is acyclic; this caps pathologically deep stacks.
-const max_def_unfold_depth = 64;
+pub const max_def_unfold_depth = 64;
 
 pub fn projectViewBindingsIntoRule(
     view: types.ViewDecl,

@@ -2322,7 +2322,7 @@ fn runFrontierSearch(
 fn printRunCounters(writer: anytype, counters: *const Search.SearchCounters) !void {
     try writer.print(
         "       tc={} acc={} rej={} chain={} pool={} derived={} " ++
-            "fwd_attempts={} abstract_prune={} context_prune={} hyp_ref_prune={} acui_rb={}/{} tc_apply=",
+            "fwd_attempts={} abstract_prune={} context_prune={} hyp_ref_prune={} acui_rb={}/{} unfold_rb={} tc_apply=",
         .{
             counters.full_try_candidate_calls,
             counters.accepted_candidates,
@@ -2336,6 +2336,7 @@ fn printRunCounters(writer: anytype, counters: *const Search.SearchCounters) !vo
             counters.hyp_ref_prunes,
             counters.readback_acui_recovered,
             counters.readback_acui_misalign,
+            counters.readback_unfold_recovered,
         },
     );
     try printDurationCompact(writer, counters.tc_apply_ns);

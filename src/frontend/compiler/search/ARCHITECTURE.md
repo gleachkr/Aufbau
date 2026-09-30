@@ -290,6 +290,31 @@ which the persisted-memo covering rule requires:
    expensive per-validation cost, a pre-existing condition phase 5 only makes
    visible (a hard miss that used to fail slowly now succeeds slowly). The fix
    is the global per-call budget below.
+
+   Three pieces let the child search pin the cut when a definition hides it
+   (zermelo `range_sub_elim`: `imp_elim [all_elim [#1], ex_intro [#2]]`,
+   where `#1` is `range_sub f B`):
+   - **Premise order.** `buildHypPlans` sorts a *wildcard sequent* premise
+     (every argument a bare unpinned binder, `imp_elim`'s minor `?H ⊢ ?p`)
+     after a sibling holding one of those binders under rigid structure (the
+     major `?G ⊢ ?p → y ∈ B`), phase 5 only (`HypPlan.defer_wildcard`). Filled
+     first, the minor matches every pool ref and pins `p` to each hypothesis
+     in turn; the cut the proof needs exists only as what the major's child
+     search proves.
+   - **Recover from the goal hint.** The major's child tries `all_elim [#1]`
+     against `?G ⊢ ?p → y ∈ B`. `all_elim`'s `@recover` source is its
+     conclusion, and the checker treats the hint's metas as rigid, so its
+     view match fails and `t` stays unbound. The explicit-binding retry in
+     `validateSelectedRefs` reads the law off the hint instead, skipping the
+     open subterms (`withRecoveredFromHint`): `y ∈ B` forces `t := y`.
+   - **Read-back through definitions.** A view rule's conclusion `q` matches
+     any target, so a child can prove `in_all_subsets S x` for the open
+     `∀ ?x ?p`, equal only after unfolding. `readBackOpen`'s fourth pass
+     (`forward.solveCorrespondenceUnfolding`) unfolds the child's def where
+     the heads disagree. It walks the def body as a template and mints each
+     hidden variable only after the whole match succeeds: minting spends a
+     dependency slot of the parent theorem, and read-backs fail far more
+     often than they succeed.
 6. **Phase 6 — `@auto trigger` seeding** (`trigger.zig`; design:
    `docs/design_notes/trigger_seeding.md`). Only on a miss of the whole
    phase-1–5 ladder that did not stop the search (a phase's own fuel running
@@ -731,7 +756,7 @@ recursion).
 
 The generated-sub-proof path reads the witness back by matching the child's
 checker-accepted conclusion against the open target (`generate.zig
-hookSolveOpen`), in **three passes**: plain positional `solveCorrespondence`;
+hookSolveOpen`), in **four passes**: plain positional `solveCorrespondence`;
 the ACUI-unit-normalized retry (a stray `emp` in the child conclusion); and a
 **member-wise ACUI-aware pass** (`witness.solveCorrespondenceAcui`) for
 conclusions that are ACUI-equal but reordered/reassociated — the checker
@@ -748,6 +773,17 @@ propagates, and the pass is skipped entirely when no commutative combiner is
 registered. The unit-normalized second pass is NOT subsumed: it alone covers
 non-commutative (AU) subsets. Diagnostics: `acui_rb=recovered/plausibly-missed`
 (disjoint outcomes) in the bench `--counters` dump.
+
+The fourth pass (`forward.solveCorrespondenceUnfolding`) matches up to
+transparent def unfolding, on either side, and relabels as the third does
+(`unfold_rb=` in the `--counters` dump). A hidden variable of an unfolded def
+must stand for a bound variable the def's arguments do not mention, distinct
+from its siblings'; one met against a meta is minted as a placeholder (a
+dependency slot of the parent theorem) only after every other check, the
+solve of the whole target, and a check that enough slots remain have
+succeeded. A body subtree over a hidden variable met by an open meta waits
+until the rest of the body is walked; if something else solved the meta
+meanwhile, the subtree is walked against that value like any other.
 
 The coupled pass has three sweeps. The equal-unify sweep pairs meta-bearing
 region members that unify *equal* (`witness.unifyMembers`). On its
@@ -810,7 +846,10 @@ factor. Ranking it by `0` would sort it first; instead it is costed as
 (cost 1–3) but ahead of a loose bare-binder one (cost > 4). This generalizes the
 `defer_generate` `!is_app` guard to the whole comparator. The value 4 is the
 swept optimum on the depth frontier; higher costs defer gen-only behind loose
-refs and plateau lower.
+refs and plateau lower. In phase 5 one key ranks above cost:
+`defer_wildcard` (see phase 5 above) sorts a wildcard-sequent premise after
+the rigid occurrences of its shared binders, including after a
+`defer_generate` major, which is the occurrence that must pin them.
 
 **Relation-transport screen (`isRelationTransport`, `backward/backtrack.zig`).** A `@relation`
 bundle's *transport* rule (e.g. `mpbi`: `a ↔ b, a ⊢ b`) has a **bare binder

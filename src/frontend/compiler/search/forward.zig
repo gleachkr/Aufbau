@@ -42,6 +42,7 @@ const PlaceholderId = ExprModule.PlaceholderId;
 const TheoremContext = ExprModule.TheoremContext;
 const RuleDecl = @import("../../env.zig").RuleDecl;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("../../rules.zig").templateMentionsBinder;
 const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
@@ -1315,6 +1316,361 @@ pub fn solveCorrespondence(
         },
     }
 }
+
+/// `solveCorrespondence` up to transparent def unfolding: where the heads
+/// differ and `source` applies a def, match its body instead
+/// (`in_all_subsets S x` against `∀ ?x ?p`); failing that, where `pattern`
+/// applies one (`?p → y ∈ image f X B` against a proof of the `sep` it
+/// abbreviates). The checker accepts the same unfolding when it validates the
+/// spliced proof.
+///
+/// Each hidden variable of an unfolded def is a fresh bound variable: it must
+/// stand for a variable no argument of that def mentions, and for a
+/// different one from its sibling hidden variables. The body is walked as a
+/// template, so nothing is minted while the match can still fail: a hidden
+/// variable met against a meta is minted (as a placeholder, which spends one
+/// of the theorem's dependency slots) only once the walk, those checks, and
+/// the solve of every meta in `pattern` have all succeeded. A rolled-back
+/// store does not return the slot, so a caller that only asks whether the
+/// match succeeds passes `mint = false`: it stops just before minting, with
+/// those metas unassigned. Returns false, with the store possibly partly
+/// assigned (the caller rolls back), on any mismatch or when the dependency
+/// slots run out.
+pub fn solveCorrespondenceUnfolding(
+    context: *const Context,
+    store: *MetaStore,
+    theorem: *TheoremContext,
+    source: ExprId,
+    pattern: ExprId,
+    mint: bool,
+) !bool {
+    var arena = std.heap.ArenaAllocator.init(theorem.allocator);
+    defer arena.deinit();
+    var walk = UnfoldWalk{
+        .context = context,
+        .store = store,
+        .theorem = theorem,
+        .arena = arena.allocator(),
+    };
+    if (!try walk.exprs(source, pattern, 0)) return false;
+    return walk.finish(pattern, mint) catch |err| switch (err) {
+        error.DependencySlotExhausted => false,
+        else => return err,
+    };
+}
+
+const UnfoldWalk = struct {
+    context: *const Context,
+    store: *MetaStore,
+    theorem: *TheoremContext,
+    arena: std.mem.Allocator,
+    /// Every unfolded def application, on either side.
+    frames: std.ArrayListUnmanaged(*Frame) = .{},
+    /// Metas paired with a body subtree that mentions a hidden variable;
+    /// solved in `finish`, once the hidden variables exist.
+    deferred: std.ArrayListUnmanaged(Deferred) = .{},
+
+    /// One unfolded def application.
+    const Frame = struct {
+        info: prune.UnfoldDefInfo,
+        args: []const ExprId,
+        /// Per hidden variable: the other side's expression it was matched
+        /// against, or null while unmatched.
+        hidden: []?ExprId,
+    };
+
+    const Deferred = struct {
+        meta: ExprId,
+        template: TemplateExpr,
+        frame: *Frame,
+        depth: usize,
+    };
+
+    /// `store.assign`, with a refusal (sort, dependency, occurs check, a
+    /// second assignment) reported as a mismatch.
+    fn assign(self: *UnfoldWalk, pid: PlaceholderId, value: ExprId) !bool {
+        self.store.assign(self.theorem, pid, value) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return false,
+        };
+        return true;
+    }
+
+    fn exprs(self: *UnfoldWalk, source: ExprId, pattern: ExprId, depth: usize) anyerror!bool {
+        ExprModule.work_ticks_walk +%= 1;
+        switch (self.theorem.interner.node(pattern).*) {
+            .placeholder => |pid| {
+                // Standard placeholders are not metas: no opinion.
+                if (self.store.info(pid) == null) return true;
+                if (self.store.lookup(pid)) |value| return self.exprs(source, value, depth);
+                return self.assign(pid, source);
+            },
+            .variable => return source == pattern,
+            .app => |pattern_app| {
+                const source_app = switch (self.theorem.interner.node(source).*) {
+                    .placeholder => return true,
+                    .variable => return false,
+                    .app => |app| app,
+                };
+                if (source_app.term_id == pattern_app.term_id) {
+                    if (source_app.args.len != pattern_app.args.len) return false;
+                    for (source_app.args, pattern_app.args) |s_arg, p_arg| {
+                        if (!try self.exprs(s_arg, p_arg, depth)) return false;
+                    }
+                    return true;
+                }
+                if (depth >= prune.max_def_unfold_depth) return false;
+                const source_def = prune.defBodyForUnfold(self.context, source_app.term_id, true);
+                const pattern_def = prune.defBodyForUnfold(self.context, pattern_app.term_id, true);
+                // A def body mentions only earlier terms, so unfolding the
+                // later of two defs can reach the earlier one's head; the
+                // other way round never can.
+                const unfold_source = if (source_def != null and pattern_def != null)
+                    source_app.term_id > pattern_app.term_id
+                else
+                    source_def != null;
+                if (unfold_source) {
+                    const info = source_def.?;
+                    if (source_app.args.len != info.nargs) return false;
+                    return self.template(try self.newFrame(info, source_app.args), info.body, pattern, depth + 1);
+                }
+                const info = pattern_def orelse return false;
+                if (pattern_app.args.len != info.nargs) return false;
+                return self.patternTemplate(try self.newFrame(info, pattern_app.args), source, info.body, depth + 1);
+            },
+        }
+    }
+
+    /// Heads differ inside a def body (`add`'s body names the def `suc_fn`
+    /// where the other side has its unfolding `λ k. suc k`). A body subtree
+    /// that mentions none of the def's hidden variables instantiates without
+    /// minting, and the ordinary walk can unfold either side of it again.
+    fn nestedUnfold(
+        self: *UnfoldWalk,
+        frame: *Frame,
+        body: TemplateExpr,
+        other: ExprId,
+        depth: usize,
+        side: enum { source, pattern },
+    ) anyerror!bool {
+        if (mentionsHidden(frame, body)) return false;
+        const expr = try self.theorem.instantiateTemplate(body, frame.args);
+        return switch (side) {
+            .source => self.exprs(expr, other, depth),
+            .pattern => self.exprs(other, expr, depth),
+        };
+    }
+
+    fn newFrame(self: *UnfoldWalk, info: prune.UnfoldDefInfo, args: []const ExprId) !*Frame {
+        const frame = try self.arena.create(Frame);
+        frame.* = .{
+            .info = info,
+            .args = try self.arena.dupe(ExprId, args),
+            .hidden = try self.arena.alloc(?ExprId, info.dummies.len),
+        };
+        @memset(frame.hidden, null);
+        try self.frames.append(self.arena, frame);
+        return frame;
+    }
+
+    /// `source` against the body of a def the PATTERN applies. Its hidden
+    /// variables are matched against the source's variables, so nothing is
+    /// minted on this side.
+    fn patternTemplate(self: *UnfoldWalk, frame: *Frame, source: ExprId, body: TemplateExpr, depth: usize) anyerror!bool {
+        ExprModule.work_ticks_walk +%= 1;
+        switch (body) {
+            .binder => |idx| {
+                if (idx < frame.info.nargs) return self.exprs(source, frame.args[idx], depth);
+                const k = idx - frame.info.nargs;
+                if (self.theorem.interner.node(source).* == .app) return false;
+                if (frame.hidden[k]) |seen| return seen == source;
+                frame.hidden[k] = source;
+                return true;
+            },
+            .app => |app| switch (self.theorem.interner.node(source).*) {
+                .placeholder => return true,
+                .variable => return false,
+                .app => |source_app| {
+                    if (source_app.term_id != app.term_id or source_app.args.len != app.args.len) {
+                        return self.nestedUnfold(frame, body, source, depth, .pattern);
+                    }
+                    for (source_app.args, app.args) |s_arg, t_arg| {
+                        if (!try self.patternTemplate(frame, s_arg, t_arg, depth)) return false;
+                    }
+                    return true;
+                },
+            },
+        }
+    }
+
+    fn template(self: *UnfoldWalk, frame: *Frame, body: TemplateExpr, pattern: ExprId, depth: usize) anyerror!bool {
+        ExprModule.work_ticks_walk +%= 1;
+        if (body == .binder and body.binder < frame.info.nargs) {
+            return self.exprs(frame.args[body.binder], pattern, depth);
+        }
+        if (body == .binder) return self.hidden(frame, body.binder - frame.info.nargs, pattern);
+        switch (self.theorem.interner.node(pattern).*) {
+            .placeholder => |pid| {
+                if (self.store.info(pid) == null) return true;
+                if (self.store.lookup(pid)) |value| return self.template(frame, body, value, depth);
+                if (mentionsHidden(frame, body)) {
+                    try self.deferred.append(self.arena, .{ .meta = pattern, .template = body, .frame = frame, .depth = depth });
+                    return true;
+                }
+                return self.assign(pid, try self.theorem.instantiateTemplate(body, frame.args));
+            },
+            .variable => return false,
+            .app => |pattern_app| {
+                const app = body.app;
+                if (app.term_id != pattern_app.term_id or app.args.len != pattern_app.args.len) {
+                    return self.nestedUnfold(frame, body, pattern, depth, .source);
+                }
+                for (app.args, pattern_app.args) |t_arg, p_arg| {
+                    if (!try self.template(frame, t_arg, p_arg, depth)) return false;
+                }
+                return true;
+            },
+        }
+    }
+
+    /// Hidden variable `k` of `frame` against `pattern`: a bound variable, so
+    /// it matches a variable, a meta, or a standard placeholder, and every
+    /// occurrence must match the same thing.
+    fn hidden(self: *UnfoldWalk, frame: *Frame, k: usize, pattern: ExprId) anyerror!bool {
+        const resolved = try self.store.deref(self.theorem, pattern);
+        if (self.theorem.interner.node(resolved).* == .app) return false;
+        if (frame.hidden[k]) |recorded| {
+            const seen = try self.store.deref(self.theorem, recorded);
+            if (seen == resolved) return true;
+            // One side is still an unassigned meta: the other fixes it.
+            if (self.unassignedMeta(seen)) |pid| {
+                if (!try self.assign(pid, resolved)) return false;
+                frame.hidden[k] = resolved;
+                return true;
+            }
+            if (self.unassignedMeta(resolved)) |pid| return self.assign(pid, seen);
+            return false;
+        }
+        frame.hidden[k] = resolved;
+        return true;
+    }
+
+    fn unassignedMeta(self: *UnfoldWalk, expr: ExprId) ?PlaceholderId {
+        const pid = switch (self.theorem.interner.node(expr).*) {
+            .placeholder => |pid| pid,
+            else => return null,
+        };
+        if (self.store.info(pid) == null or self.store.lookup(pid) != null) return null;
+        return pid;
+    }
+
+    fn finish(self: *UnfoldWalk, pattern: ExprId, mint: bool) anyerror!bool {
+        // The deferred subtrees, in order. A meta something else has solved
+        // since is matched like any pattern, the template walk holding each
+        // hidden variable to a leaf; one still open takes the subtree over
+        // the hidden variables' values. Walking a subtree may defer more.
+        var next: usize = 0;
+        while (next < self.deferred.items.len) : (next += 1) {
+            const d = self.deferred.items[next];
+            const pid = self.unassignedMeta(try self.store.deref(self.theorem, d.meta)) orelse {
+                if (!try self.template(d.frame, d.template, d.meta, d.depth)) return false;
+                continue;
+            };
+            const binders = try self.arena.alloc(ExprId, d.frame.info.nargs + d.frame.hidden.len);
+            @memcpy(binders[0..d.frame.info.nargs], d.frame.args);
+            for (d.frame.hidden, binders[d.frame.info.nargs..], 0..) |*slot, *binder, k| {
+                if (slot.* == null) {
+                    // Unmatched and unmentioned by this subtree: any id does.
+                    if (!templateMentionsBinder(d.template, d.frame.info.nargs + k)) {
+                        binder.* = d.meta;
+                        continue;
+                    }
+                    // Unmatched but mentioned: a meta of its own until minted.
+                    slot.* = try self.store.mint(self.theorem, d.frame.info.dummies[k].sort_name, std.math.maxInt(u55), .existential);
+                }
+                binder.* = try self.store.deref(self.theorem, slot.*.?);
+            }
+            if (!try self.assign(pid, try self.theorem.instantiateTemplate(d.template, binders))) return false;
+        }
+        // Every check that can fail runs before the first mint.
+        var fresh = std.ArrayListUnmanaged(PlaceholderId){};
+        for (self.frames.items) |frame| {
+            for (frame.hidden, 0..) |maybe, k| {
+                const value = try self.store.deref(self.theorem, maybe orelse continue);
+                if (!try self.freshFor(frame, k, value)) return false;
+                const pid = self.unassignedMeta(value) orelse continue;
+                if (std.mem.indexOfScalar(PlaceholderId, fresh.items, pid) == null) try fresh.append(self.arena, pid);
+            }
+        }
+        if (self.hasOtherUnsolvedMeta(pattern, fresh.items)) return false;
+        if (fresh.items.len > self.theorem.depSlotsLeft()) return false;
+        if (!mint) return true;
+        for (self.frames.items) |frame| {
+            for (frame.hidden, frame.info.dummies) |maybe, dummy| {
+                const pid = self.unassignedMeta(try self.store.deref(self.theorem, maybe orelse continue)) orelse continue;
+                const minted = try self.theorem.addPlaceholderResolved(dummy.sort_name);
+                if (!try self.assign(pid, minted)) return false;
+            }
+        }
+        return true;
+    }
+
+    /// Whether hidden variable `k` of `frame` may stand for `value`: a leaf
+    /// of the hidden variable's sort, distinct from its siblings' values,
+    /// that no argument of the def mentions. Otherwise the "unfolding"
+    /// captured a free variable, or merged two bound ones. An open meta
+    /// passes if `finish` may mint for it; any other leaf must be bound.
+    fn freshFor(self: *UnfoldWalk, frame: *const Frame, k: usize, value: ExprId) !bool {
+        const leaf = (self.theorem.leafInfoWithArgs(self.theorem.arg_infos, value) catch return false) orelse return false;
+        if (!std.mem.eql(u8, leaf.sort_name, frame.info.dummies[k].sort_name)) return false;
+        if (self.unassignedMeta(value)) |pid| {
+            if (!self.store.canBind(self.store.info(pid).?)) return false;
+        } else if (!leaf.bound) return false;
+        for (frame.args) |arg| {
+            if (self.mentions(arg, value)) return false;
+        }
+        for (frame.hidden[0..k]) |other| {
+            if (try self.store.deref(self.theorem, other orelse continue) == value) return false;
+        }
+        return true;
+    }
+
+    /// Whether `expr`, through the store's assignments, mentions `leaf`.
+    fn mentions(self: *UnfoldWalk, expr: ExprId, leaf: ExprId) bool {
+        if (expr == leaf) return true;
+        return switch (self.theorem.interner.node(expr).*) {
+            .variable => false,
+            .placeholder => |pid| if (self.store.lookup(pid)) |value| self.mentions(value, leaf) else false,
+            .app => |app| for (app.args) |arg| {
+                if (self.mentions(arg, leaf)) break true;
+            } else false,
+        };
+    }
+
+    /// Whether `expr` still reaches an unassigned meta outside `allowed`.
+    fn hasOtherUnsolvedMeta(self: *UnfoldWalk, expr: ExprId, allowed: []const PlaceholderId) bool {
+        return switch (self.theorem.interner.node(expr).*) {
+            .variable => false,
+            .placeholder => |pid| blk: {
+                if (self.store.info(pid) == null) break :blk false;
+                if (self.store.lookup(pid)) |value| break :blk self.hasOtherUnsolvedMeta(value, allowed);
+                break :blk std.mem.indexOfScalar(PlaceholderId, allowed, pid) == null;
+            },
+            .app => |app| for (app.args) |arg| {
+                if (self.hasOtherUnsolvedMeta(arg, allowed)) break true;
+            } else false,
+        };
+    }
+
+    fn mentionsHidden(frame: *const Frame, body: TemplateExpr) bool {
+        return switch (body) {
+            .binder => |idx| idx >= frame.info.nargs,
+            .app => |app| for (app.args) |arg| {
+                if (mentionsHidden(frame, arg)) break true;
+            } else false,
+        };
+    }
+};
 
 /// Materialize a derived ref's proof recipe at the store's current (solved)
 /// assignments: dereference every recorded binder value in every layer of

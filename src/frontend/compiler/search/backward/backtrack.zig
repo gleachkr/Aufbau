@@ -774,6 +774,7 @@ fn enumerateCandidateRefs(
         ref_index,
         candidate,
         generator != null,
+        generator != null and generator.?.allow_constrained_mp,
         derived,
         counters,
     );

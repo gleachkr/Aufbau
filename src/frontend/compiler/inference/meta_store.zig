@@ -301,6 +301,16 @@ pub const MetaStore = struct {
         return self.metas.get(meta_id);
     }
 
+    /// Whether `assign` can bind `meta` at all: a wildcard never binds, and
+    /// a universal only in the open phase.
+    pub fn canBind(self: *const MetaStore, meta: MetaInfo) bool {
+        return switch (meta.kind) {
+            .wildcard => false,
+            .universal => self.universal_use_open,
+            .existential, .bound_choice => true,
+        };
+    }
+
     pub fn lookup(self: *const MetaStore, meta_id: PlaceholderId) ?ExprId {
         return self.assignments.get(meta_id);
     }
@@ -357,12 +367,8 @@ pub const MetaStore = struct {
         value: ExprId,
     ) !void {
         const meta = self.metas.get(meta_id) orelse return error.UnknownMeta;
-        switch (meta.kind) {
-            .wildcard => return error.WildcardNeverBinds,
-            .universal => if (!self.universal_use_open) {
-                return error.UniversalWrongPhase;
-            },
-            .existential, .bound_choice => {},
+        if (!self.canBind(meta)) {
+            return if (meta.kind == .wildcard) error.WildcardNeverBinds else error.UniversalWrongPhase;
         }
         if (self.assignments.contains(meta_id)) {
             return error.MetaAlreadyAssigned;

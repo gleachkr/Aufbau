@@ -357,6 +357,33 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/euclid_frontier.auf",
         .mode = "depth",
     },
+    // A cut formula that a definition hides (task #321). zermelo
+    // `range_sub_elim` (`imp_elim [all_elim [#1], ex_intro [#2]]`, `#1` a
+    // `range_sub`): phase 5 must fill `imp_elim`'s major before its wildcard
+    // minor (`HypPlan.defer_wildcard`), and the major's child must read
+    // `all_elim`'s `t` off the goal hint `?G ⊢ ?p → y ∈ B`
+    // (`withRecoveredFromHint`). `inter_subsets_elim` adds the read-back
+    // through a definition: `sep_elim_right [#1]` proves `in_all_subsets S x`
+    // for the open `∀ ?x ?p` (`forward.solveCorrespondenceUnfolding`).
+    // church `andR1` needs only the read-back.
+    .{
+        .filter = "range_sub_elim",
+        .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
+            "tests/search_bench_cases/zermelo_frontier.auf",
+        .mode = "depth",
+    },
+    .{
+        .filter = "inter_subsets_elim",
+        .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
+            "tests/search_bench_cases/zermelo_frontier.auf",
+        .mode = "depth",
+    },
+    .{
+        .filter = "andR1",
+        .files = "tests/search_bench_cases/church_frontier.mm0:" ++
+            "tests/search_bench_cases/church_frontier.auf",
+        .mode = "depth",
+    },
     // Forward-JOIN depth guards (∀∃ quantifier alternation, META_STRESS.md
     // "Bespoke theory #3"). These pin the forward-join meta grounding: a
     // universal family fact (`P ?t → Q ?t`, from `all_elim`) joined with a

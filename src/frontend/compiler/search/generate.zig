@@ -1096,7 +1096,7 @@ fn hookSolveOpen(
             target_theorem,
             proof.back,
             target,
-            null,
+            .commit,
         )) orelse continue;
         if (try sink.accept(.{
             .application = proof.application,
@@ -1281,7 +1281,7 @@ fn collectOpenProofs(
             accepted,
         )) orelse continue;
         const mark = store.mark();
-        if (try readBackOpen(driver, store, target_theorem, back, target, driver.counters) == null) continue;
+        if (try readBackOpen(driver, store, target_theorem, back, target, .probe) == null) continue;
         store.rollbackTo(mark);
         try out.append(driver.scratch, .{
             .application = try cloneApplication(driver.arena, candidate.application),
@@ -1337,16 +1337,20 @@ fn collectOpenProofs(
 /// Match an open-target child proof's conclusion `back` onto `target`,
 /// solving the target's metas in `store`. On success the assignments are left
 /// in place and the conclusion to splice is returned (the target itself,
-/// materialized, when only the ACUI-aware pass aligns them); on failure the
-/// store is rolled back. `counters` is null when replaying an earlier match.
+/// materialized, when only the ACUI-aware or def-unfolding pass aligns
+/// them); on failure the store is rolled back. A `.probe` asks only whether
+/// the match succeeds (the caller rolls back either way): it counts the
+/// outcome, and its def-unfolding pass mints nothing. A `.commit` replays
+/// the match for real.
 fn readBackOpen(
     driver: *Driver,
     store: *MetaStore,
     target_theorem: *TheoremContext,
     back: ExprId,
     target: ExprId,
-    counters: ?*SearchCounters,
+    mode: enum { probe, commit },
 ) anyerror!?ExprId {
+    const counters = if (mode == .probe) driver.counters else null;
     const mark = store.mark();
     if (forward.solveCorrespondence(
         store,
@@ -1429,6 +1433,34 @@ fn readBackOpen(
             }
         }
     }
+    // Fourth pass: the child's conclusion may equal the target only up to
+    // transparent def unfolding. A view rule's conclusion `q` matches any
+    // target, so `sep_elim_right` can prove `in_all_subsets S x` for the open
+    // `∀ ?x ?p` its parent opened. Relabeled to the materialized target, as
+    // in the third pass; the recompile checks the unfolding. Minting a
+    // hidden variable spends a dependency slot of the target's theorem that
+    // no rollback returns, so a probe stops short of it.
+    if (try forward.solveCorrespondenceUnfolding(
+        driver.context,
+        store,
+        target_theorem,
+        back,
+        target,
+        mode == .commit,
+    )) {
+        if (mode == .probe) {
+            if (counters) |c| c.readback_unfold_recovered += 1;
+            return target;
+        }
+        if (store.isFullySolved(target_theorem, target)) {
+            const relabeled: ?ExprId = store.materialize(target_theorem, target) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
+            if (relabeled) |conclusion| return conclusion;
+        }
+    }
+    store.rollbackTo(mark);
     return null;
 }
 

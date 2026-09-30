@@ -628,6 +628,11 @@ pub const SearchCounters = struct {
     // Read-backs the member-wise ACUI-aware third pass actually recovered
     // (witness solved from an ACUI-equal but reordered child conclusion).
     readback_acui_recovered: usize = 0,
+    // Read-backs the def-unfolding fourth pass recovered (the child's
+    // conclusion equals the target only through a transparent def). Counted
+    // at the probe, which stops before minting and materializing; the
+    // commit re-runs the same checks, so it fails only on OOM.
+    readback_unfold_recovered: usize = 0,
     // Per-call-site work done by the validation-time per-hyp `@recover` clash
     // guard, split by the path that reached it (clean view match vs. partial
     // extraction after a structural match failure).

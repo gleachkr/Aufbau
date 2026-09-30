@@ -15,6 +15,7 @@ const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const GlobalEnv = @import("../../../env.zig").GlobalEnv;
+const RewriteRegistry = @import("../../../rewrite_registry.zig").RewriteRegistry;
 const Context = types.Context;
 const SearchCounters = types.SearchCounters;
 const ApplyCandidate = types.ApplyCandidate;
@@ -53,6 +54,20 @@ pub const HypPlan = struct {
     // deferring behind bare-binder hyps of bystander rules like `mpbi`/`bitr`
     // blew the per-depth node budget; see search_bench `nested all_intro`.)
     defer_generate: bool,
+    // Phase-5 (constrained backward MP) occurrence ordering: true when this
+    // slot's template is a *wildcard sequent* — an app whose every argument is
+    // a bare, still-unpinned binder (e.g. `imp_elim`'s minor `?H ⊢ ?p`) — and a
+    // sibling shares one of those unpinned binders under RIGID nested structure
+    // (e.g. the major `?G ⊢ ?p → r`, where `p` sits under `im`). Sorted last
+    // (first comparator key, above `defer_generate`): the shared meta's most
+    // rigid occurrence is solved first, so the child search runs on the
+    // constrained target (`? ⊢ ?p → r` only admits →-conclusions) instead of
+    // the wildcard (`nd(?,?)` accepts every ref-tuple of every intro rule —
+    // the cut-formula ACCEPT-flood). Because the DFS is sequential per
+    // candidate, the ordering is also a gate: if the rigid sibling fails, the
+    // wildcard slot is never opened. Set ONLY when `buildHypPlans` runs with
+    // `constrained_mp` (phase 5), so phases 1–4 plans are byte-identical.
+    defer_wildcard: bool,
 };
 
 pub fn buildHypPlans(
@@ -61,6 +76,7 @@ pub fn buildHypPlans(
     ref_index: *const ref_index_mod.Index,
     candidate: *const ApplyCandidate,
     generate_present: bool,
+    constrained_mp: bool,
     derived: ?*DerivedPool,
     counters: ?*SearchCounters,
 ) ![]HypPlan {
@@ -89,12 +105,20 @@ pub fn buildHypPlans(
         defer lookup.deinit();
         const template = rule.hyps[hyp.index];
         const binders = templateBinderMask(template);
+        const unpinned = unpinnedBinderMask(binders.mask, candidate.bindings);
+        const rigid = if (constrained_mp)
+            rigidNestedBinderMask(context.registry, template)
+        else
+            TemplateBinderMask{};
         slots[position] = .{
             .initial_len = lookup.pool.indices.len,
             .is_app = template == .app,
             .mask = binders.mask,
-            .unpinned = unpinnedBinderMask(binders.mask, candidate.bindings),
+            .unpinned = unpinned,
             .overflow = binders.overflow,
+            .wildcard = constrained_mp and
+                isWildcardSequent(template, candidate.bindings),
+            .rigid_mask = rigid.mask,
         };
         var seeded_len: usize = 0;
         if (lookup.pool.indices.len == 0) {
@@ -122,12 +146,18 @@ pub fn buildHypPlans(
                 candidate.bindings,
             ),
             .defer_generate = false, // resolved in the second pass
+            .defer_wildcard = false, // resolved in the second pass
         };
     }
 
     if (generate_present) {
         for (0..n) |i| {
             plans[i].defer_generate = shouldDeferGenerate(slots, i);
+        }
+    }
+    if (constrained_mp) {
+        for (0..n) |i| {
+            plans[i].defer_wildcard = shouldDeferWildcard(slots, i);
         }
     }
 
@@ -199,6 +229,14 @@ const SlotShape = struct {
     unpinned: u64,
     /// A referenced binder index exceeded the 64-bit mask.
     overflow: bool,
+    /// Wildcard sequent: the template is an app whose every argument is a
+    /// bare, still-unpinned binder (`?H ⊢ ?p`). Computed only under
+    /// `constrained_mp`, false otherwise. See `HypPlan.defer_wildcard`.
+    wildcard: bool = false,
+    /// Binders occurring under rigid nested structure (inside a non-ACUI app
+    /// below the template's top-level app). Computed only under
+    /// `constrained_mp`, zero otherwise. See `HypPlan.defer_wildcard`.
+    rigid_mask: u64 = 0,
 };
 
 /// Whether generate-only slot `i` should be deferred to last. True only when an
@@ -220,6 +258,96 @@ fn shouldDeferGenerate(slots: []const SlotShape, i: usize) bool {
         if (other.mask & self.unpinned != 0) return true;
     }
     return false;
+}
+
+/// Whether wildcard-sequent slot `i` should sort last under phase-5 occurrence
+/// ordering: some sibling shares one of `i`'s unpinned binders under rigid
+/// nested structure, so that sibling determines the shared meta on a
+/// constrained child target before the wildcard is ever opened. See
+/// `HypPlan.defer_wildcard`. Overflowed masks (binder index ≥ 64) disable the
+/// demotion — a wrong ordering decision is worse than the flood.
+fn shouldDeferWildcard(slots: []const SlotShape, i: usize) bool {
+    const self = slots[i];
+    if (!self.wildcard) return false;
+    if (self.overflow or self.unpinned == 0) return false;
+    for (slots, 0..) |other, j| {
+        if (j == i) continue;
+        if (other.overflow) continue; // rigid_mask may be incomplete
+        if (other.rigid_mask & self.unpinned != 0) return true;
+    }
+    return false;
+}
+
+/// Wildcard sequent test for `HypPlan.defer_wildcard`: an app whose every
+/// argument is a bare binder with no current binding. Instantiated, such a
+/// template is rigid ONLY at its root — in a sequent-style theory that root
+/// (`nd`, `has_ty`, …) is shared by every rule conclusion, so the open target
+/// matches the entire catalog (`nd(?,?)` is the cut-formula-enumeration flood
+/// shape). A pinned argument, or any nested app, keeps the slot out of this
+/// class: it constrains the child match.
+fn isWildcardSequent(template: TemplateExpr, bindings: []const ?ExprId) bool {
+    switch (template) {
+        .binder => return false,
+        .app => |app| {
+            if (app.args.len == 0) return false;
+            for (app.args) |arg| switch (arg) {
+                .app => return false,
+                .binder => |idx| {
+                    if (idx < bindings.len and bindings[idx] != null) {
+                        return false;
+                    }
+                },
+            };
+            return true;
+        },
+    }
+}
+
+/// Binders of `template` occurring under rigid nested structure: inside an
+/// argument subtree of the top-level app, below at least one app whose head
+/// term is NOT an ACUI structural combiner. The top-level head is excluded
+/// (every hypothesis of a sequent-style rule shares it — it discriminates
+/// nothing), and ACUI combiners grant no rigidity (their matching is
+/// associative/commutative with unit absorption, so a binder directly under
+/// `join` is as loose as a top-level one; a binder under `hyp` inside `join`
+/// IS rigid). `imp_elim`'s major `nd(G, im(p, q))` yields `{p, q}`.
+fn rigidNestedBinderMask(
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+) TemplateBinderMask {
+    var result = TemplateBinderMask{};
+    switch (template) {
+        .binder => {},
+        .app => |app| for (app.args) |arg| {
+            collectRigidNestedMask(registry, arg, false, &result);
+        },
+    }
+    return result;
+}
+
+fn collectRigidNestedMask(
+    registry: *const RewriteRegistry,
+    template: TemplateExpr,
+    under_rigid: bool,
+    out: *TemplateBinderMask,
+) void {
+    switch (template) {
+        .binder => |idx| {
+            if (!under_rigid) return;
+            if (idx >= 64) {
+                out.overflow = true;
+            } else {
+                out.mask |= @as(u64, 1) << @intCast(idx);
+            }
+        },
+        .app => |app| {
+            const rigid = under_rigid or
+                !registry.hasStructuralCombiner(app.term_id);
+            for (app.args) |arg| {
+                collectRigidNestedMask(registry, arg, rigid, out);
+            }
+        },
+    }
 }
 
 /// Bitset of binder indices a template references, plus an overflow flag for any
@@ -279,6 +407,14 @@ fn hypSlotCost(plan: HypPlan) usize {
 }
 
 fn hypPlanLessThan(_: void, lhs: HypPlan, rhs: HypPlan) bool {
+    // Phase-5 occurrence ordering, above every other key: a wildcard-sequent
+    // slot goes after the rigid occurrences of its shared binders — including
+    // after `defer_generate` slots, because the deferred generate-only major
+    // IS the rigid occurrence that must determine the meta first (see
+    // `HypPlan.defer_wildcard`). Always false outside phase 5.
+    if (lhs.defer_wildcard != rhs.defer_wildcard) {
+        return !lhs.defer_wildcard;
+    }
     // Generate-only slots go last: they pin no binders for siblings and need
     // their own binders pinned first (see `HypPlan.defer_generate`).
     if (lhs.defer_generate != rhs.defer_generate) {
@@ -428,4 +564,137 @@ fn exprConstraintStrength(
             break :blk strength;
         },
     };
+}
+
+// ---------------------------------------------------------------------------
+// Tests (phase-5 occurrence ordering helpers)
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+// Template literals for an `imp_elim`-shaped rule over binders
+// 0=G, 1=H, 2=p, 3=q: conclusion `G u H |- q`, major `G |- p -> q`,
+// minor `H |- p`. Term ids: 10=nd (sequent head), 11=im, 12=join, 13=hyp.
+const t_G = TemplateExpr{ .binder = 0 };
+const t_H = TemplateExpr{ .binder = 1 };
+const t_p = TemplateExpr{ .binder = 2 };
+const t_q = TemplateExpr{ .binder = 3 };
+const t_im_pq = TemplateExpr{ .app = .{ .term_id = 11, .args = &.{ t_p, t_q } } };
+const t_major = TemplateExpr{ .app = .{ .term_id = 10, .args = &.{ t_G, t_im_pq } } };
+const t_minor = TemplateExpr{ .app = .{ .term_id = 10, .args = &.{ t_H, t_p } } };
+const t_hyp_p = TemplateExpr{ .app = .{ .term_id = 13, .args = &.{t_p} } };
+const t_join_G_hyp_p = TemplateExpr{ .app = .{
+    .term_id = 12,
+    .args = &.{ t_G, t_hyp_p },
+} };
+const t_or_minor = TemplateExpr{ .app = .{
+    .term_id = 10,
+    .args = &.{ t_join_G_hyp_p, t_q },
+} };
+
+test "isWildcardSequent classifies bare-unpinned-arg apps only" {
+    const none = [_]?ExprId{ null, null, null, null };
+    // `?H |- ?p`: every arg a bare unpinned binder -> wildcard.
+    try testing.expect(isWildcardSequent(t_minor, &none));
+    // Nested app arg (`?G |- ?p -> ?q`) -> not wildcard.
+    try testing.expect(!isWildcardSequent(t_major, &none));
+    // A pinned argument -> not wildcard.
+    var pinned_p = none;
+    pinned_p[2] = 7;
+    try testing.expect(!isWildcardSequent(t_minor, &pinned_p));
+    // Bare binder template and nullary app -> not wildcard.
+    try testing.expect(!isWildcardSequent(t_p, &none));
+    const nullary = TemplateExpr{ .app = .{ .term_id = 10, .args = &.{} } };
+    try testing.expect(!isWildcardSequent(nullary, &none));
+}
+
+test "rigidNestedBinderMask skips the top level and ACUI combiners" {
+    // The registry has no deinit (it is arena-backed in production); give it
+    // a test-local arena so the map allocations are reclaimed.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var registry = RewriteRegistry.init(arena.allocator());
+    // `join` (term 12) is the ACUI context combiner.
+    try registry.acui_by_head.put(12, .{
+        .unit_term_name = "emp",
+        .assoc_name = "join_assoc",
+        .comm_name = null,
+        .idem_name = null,
+    });
+
+    // Major `nd(G, im(p, q))`: G is a top-level arg (not rigid); p, q sit
+    // under the nested rigid `im`.
+    const major = rigidNestedBinderMask(&registry, t_major);
+    try testing.expect(!major.overflow);
+    try testing.expectEqual(@as(u64, 0b1100), major.mask);
+
+    // Minor `nd(H, p)`: no nested structure at all.
+    const minor = rigidNestedBinderMask(&registry, t_minor);
+    try testing.expectEqual(@as(u64, 0), minor.mask);
+
+    // `nd(join(G, hyp(p)), q)`: G sits only under the ACUI `join` (loose),
+    // p is under the rigid `hyp` inside it, q is top-level.
+    const or_minor = rigidNestedBinderMask(&registry, t_or_minor);
+    try testing.expectEqual(@as(u64, 0b0100), or_minor.mask);
+}
+
+test "shouldDeferWildcard demotes the wildcard minor behind the rigid major" {
+    // Slot 0 = minor `?H |- ?p` (wildcard, matches the whole pool), slot 1 =
+    // major `?G |- ?p -> r` (generate-only, rigid occurrence of the shared
+    // `p`). The minor must defer; the major must not.
+    const slots = [_]SlotShape{
+        .{
+            .initial_len = 3,
+            .is_app = true,
+            .mask = 0b0110,
+            .unpinned = 0b0110,
+            .overflow = false,
+            .wildcard = true,
+            .rigid_mask = 0,
+        },
+        .{
+            .initial_len = 0,
+            .is_app = true,
+            .mask = 0b1101,
+            .unpinned = 0b0101,
+            .overflow = false,
+            .wildcard = false,
+            .rigid_mask = 0b0100,
+        },
+    };
+    try testing.expect(shouldDeferWildcard(&slots, 0));
+    try testing.expect(!shouldDeferWildcard(&slots, 1));
+
+    // No rigid occurrence of a shared binder anywhere -> no demotion.
+    var loose = slots;
+    loose[1].rigid_mask = 0b1000; // rigid only at a binder the minor lacks
+    try testing.expect(!shouldDeferWildcard(&loose, 0));
+
+    // Overflowed sibling masks are incomplete -> conservative, no demotion.
+    var overflowed = slots;
+    overflowed[1].overflow = true;
+    try testing.expect(!shouldDeferWildcard(&overflowed, 0));
+}
+
+test "hypPlanLessThan sorts defer_wildcard last, above defer_generate" {
+    const wildcard_minor = HypPlan{
+        .position = 0,
+        .initial_len = 3,
+        .seeded_len = 0,
+        .strength = 1,
+        .defer_generate = false,
+        .defer_wildcard = true,
+    };
+    const generate_major = HypPlan{
+        .position = 1,
+        .initial_len = 0,
+        .seeded_len = 0,
+        .strength = 3,
+        .defer_generate = true,
+        .defer_wildcard = false,
+    };
+    // The deferred-generate major still sorts BEFORE the wildcard minor: it
+    // is the rigid occurrence that determines the shared meta.
+    try testing.expect(hypPlanLessThan({}, generate_major, wildcard_minor));
+    try testing.expect(!hypPlanLessThan({}, wildcard_minor, generate_major));
 }

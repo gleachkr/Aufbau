@@ -81,6 +81,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   though each unfolds with a fresh bound variable, but the search used to
   hold no opinion on such a pair. In the Martin-Löf example this lets
   `auto?` find `add_comm` at greater depth.
+- When `auto?` falls back to its last-resort modus ponens step, it now
+  proves first the premise that determines the cut formula: for `imp_elim`,
+  the major `G ⊢ p → q` before the minor `H ⊢ p`, which any hypothesis
+  matches. Before, the minor tried each hypothesis as `p`, and the formula
+  the proof needs, which only the major's proof reveals, was never tried. In
+  the Zermelo example `auto?` now finds
+  `imp_elim (p := $ E. z maps f z y $) [all_elim [#1], ex_intro [#2]]` for
+  `range_sub_elim`, and similar proofs of `domain_on_maps_mem` and
+  `functional_elim`.
 - A failed `auto?` now names every limit that cut it short and suggests
   raising them together with the budget, for example
   `auto? (nodes: 512, fuel: 8192, budget: 14)`. Editors offer the same
@@ -94,6 +103,18 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` now accepts a step whose conclusion matches the goal only once a
+  definition is unfolded. In the Zermelo example `sep_elim_right [#1]`
+  proves `in_all_subsets S x`, which by definition is
+  `∀ X (X ∈ S → x ∈ X)`, but the search rejected it as a proof of that
+  `∀`. `auto?` now finds `imp_elim [all_elim [sep_elim_right [#1]], #2]`
+  for `inter_subsets_elim`, and proves seven Church theorems such as `andR1`
+  with every intermediate line removed.
+- `auto?` now instantiates a rule like `all_elim` from the part of the goal
+  it already knows. Proving `G ⊢ ?p → y ∈ B` by `all_elim [#1]`, where `#1`
+  says `range_sub f B`, needs the `∀` instantiated at `y`, and `y ∈ B` says
+  so. Because `?p` was still open, the search did not read the instance
+  off the goal and dropped the step.
 - `auto?` now splits a context between a rule's premises by the context's
   own laws. For a context that is not idempotent, such as linear logic's, it
   counts repeated entries, so `a , a , b` can give one premise `a , a`. For

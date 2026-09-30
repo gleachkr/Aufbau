@@ -12,6 +12,7 @@ const ref_index_mod = @import("../ref_index.zig");
 const forward = @import("../forward.zig");
 const candidate_mod = @import("../candidate.zig");
 const plausible = @import("./plausible.zig");
+const match = @import("./match.zig");
 const prune = @import("./prune.zig");
 const lockstep = @import("./lockstep.zig");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
@@ -376,17 +377,19 @@ pub fn validateSelectedRefs(
             unify_retry)
         blk_retry: {
             const hint = if (err == error.MissingBinderAssignment) goal.expectedHint() else null;
-            const fresh_bindings = if (hint) |goal_expr|
-                try withFreshBoundVars(allocator, context, candidate, theorem_vars, bindings, goal_expr)
+            // A view rule's unbound binder is a recover target; any other
+            // rule's is a bound variable the goal hides inside a meta.
+            const filled = if (hint) |goal_expr| (if (context.views.contains(candidate.rule_id))
+                try withRecoveredFromHint(allocator, context, candidate, bindings, goal_expr)
             else
-                null;
-            defer if (fresh_bindings) |fresh| allocator.free(fresh);
+                try withFreshBoundVars(allocator, context, candidate, theorem_vars, bindings, goal_expr)) else null;
+            defer if (filled) |named| allocator.free(named);
             const retry_bindings = renderAllResolvedBindings(
                 allocator,
                 context,
                 candidate,
                 theorem_vars,
-                fresh_bindings orelse bindings,
+                filled orelse bindings,
             ) catch |rerr| {
                 if (rerr == error.OutOfMemory) return rerr;
                 break :blk_retry;
@@ -605,6 +608,101 @@ fn renderAllResolvedBindings(
     return renderBindings(allocator, context, candidate, theorem_vars, bindings, null);
 }
 
+/// A `@view` rule whose `@recover` source is its conclusion (`all_elim`'s
+/// `q`), checked against a goal hint that still carries metas: the checker
+/// treats those metas as rigid, so its view match fails and the recover
+/// target stays unbound (`MissingBinderAssignment`). But the hint often shows
+/// the target anyway: against `?p → y ∈ B`, `[x/t] ((∃ u maps f u x) → x ∈ B)`
+/// forces `t := y`. Read each such law off the hint, skipping its open
+/// subterms. Returns a copy of `bindings` with the recovered targets set, or
+/// null when none is. Caller frees.
+fn withRecoveredFromHint(
+    allocator: std.mem.Allocator,
+    context: *const Context,
+    candidate: *ApplyCandidate,
+    bindings: []const ?ExprId,
+    goal_expr: ExprId,
+) !?[]?ExprId {
+    const view = context.views.get(candidate.rule_id) orelse return null;
+    const theorem = &candidate.theorem;
+    // A concrete hint is the checker's own case.
+    if (!hasPlaceholder(theorem, goal_expr)) return null;
+    const view_bindings = try allocator.alloc(?ExprId, view.num_binders);
+    defer allocator.free(view_bindings);
+    match.seedViewBindingsFromRule(view, bindings, view_bindings);
+    prune.extractHypPartialBindings(context, theorem, view.concl, goal_expr, view_bindings);
+    var filled: ?[]?ExprId = null;
+    errdefer if (filled) |named| allocator.free(named);
+    for (view.derived_bindings) |derived| {
+        const law = switch (derived) {
+            .recover => |r| r,
+            .abstract => continue,
+        };
+        if (view_bindings[law.target_view_idx] != null) continue;
+        const source = view_bindings[law.source_view_idx] orelse continue;
+        const pattern = view_bindings[law.pattern_view_idx] orelse continue;
+        const hole = view_bindings[law.hole_view_idx] orelse continue;
+        // A concrete source is the checker's own case.
+        if (!hasPlaceholder(theorem, source)) continue;
+        var found: ?ExprId = null;
+        if (!recoverFromOpenSource(theorem, source, pattern, hole, &found)) continue;
+        const target = found orelse continue;
+        view_bindings[law.target_view_idx] = target;
+        // Only the target: the rest of what the extraction read off the
+        // hint is the search's to choose, not the retry's.
+        const rule_idx = view.binder_map[law.target_view_idx] orelse continue;
+        if (rule_idx >= bindings.len or bindings[rule_idx] != null) continue;
+        if (filled == null) filled = try allocator.dupe(?ExprId, bindings);
+        filled.?[rule_idx] = target;
+    }
+    return filled;
+}
+
+/// Walk `pattern` against `source` in lockstep and read the hole's value
+/// where the source shows it concretely. A placeholder on either side (other
+/// than at the hole) has no opinion; a hole whose source subterm is still
+/// open is skipped. False on a rigid conflict, including two different
+/// values for the hole.
+fn recoverFromOpenSource(
+    theorem: *const TheoremContext,
+    source: ExprId,
+    pattern: ExprId,
+    hole: ExprId,
+    found: *?ExprId,
+) bool {
+    if (pattern == hole) {
+        if (hasPlaceholder(theorem, source)) return true;
+        if (found.*) |existing| return existing == source;
+        found.* = source;
+        return true;
+    }
+    const source_node = theorem.interner.node(source);
+    if (source_node.* == .placeholder) return true;
+    return switch (theorem.interner.node(pattern).*) {
+        .placeholder => true,
+        .variable => source == pattern,
+        .app => |pattern_app| switch (source_node.*) {
+            .app => |source_app| {
+                if (source_app.term_id != pattern_app.term_id) return false;
+                if (source_app.args.len != pattern_app.args.len) return false;
+                for (source_app.args, pattern_app.args) |s_arg, p_arg| {
+                    if (!recoverFromOpenSource(theorem, s_arg, p_arg, hole, found)) return false;
+                }
+                return true;
+            },
+            else => false,
+        },
+    };
+}
+
+fn hasPlaceholder(theorem: *const TheoremContext, expr: ExprId) bool {
+    return theorem.exprAny(expr, {}, isPlaceholder);
+}
+
+fn isPlaceholder(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+    return theorem.interner.node(expr).* == .placeholder;
+}
+
 /// Close out a candidate against a holey goal: a bound binder the search left
 /// null has an occurrence in the conclusion strictly inside what a goal meta
 /// stands for (`T_DEF`'s `{x}` in `G ⊩ ≃[𝔹] T = ?b`, which reads back as
@@ -625,7 +723,6 @@ fn withFreshBoundVars(
     bindings: []const ?ExprId,
     goal_expr: ExprId,
 ) !?[]?ExprId {
-    if (context.views.contains(candidate.rule_id)) return null;
     const rule = &context.env.rules.items[candidate.rule_id];
     const theorem = &candidate.theorem;
     var any = false;

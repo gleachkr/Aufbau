@@ -5,6 +5,7 @@ pub const recoverDefiniteMismatch = def_match.recoverDefiniteMismatch;
 pub const templateDefiniteMismatch = def_match.templateDefiniteMismatch;
 pub const rigidExprMismatch = def_match.rigidExprMismatch;
 pub const UnfoldDefInfo = def_match.UnfoldDefInfo;
+pub const max_def_unfold_depth = def_match.max_def_unfold_depth;
 pub const defBodyForUnfold = def_match.defBodyForUnfold;
 pub const unfoldDefBody = def_match.unfoldDefBody;
 pub const projectViewBindingsIntoRule = def_match.projectViewBindingsIntoRule;
