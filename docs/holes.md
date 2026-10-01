@@ -184,6 +184,12 @@ so a theorem can hold any number of holey lines. A hole the proof does
 not determine still fails: `or_l [q []]` in place of `or_r [pc []]`
 leaves `or_l`'s `b` open (`MissingBinderAssignment`).
 
+A rule variable that occurs more than once in the line takes what every
+occurrence shows. Under `both (a): $ a $ > $ a /\ a $`, the line
+`$ (Q \/ _wff) /\ (_wff \/ P c) $` gives `a := Q \/ P c`. Parts under
+an ACUI combiner are not combined, since their order is not fixed; the
+first occurrence stands there, unless a later one has no hole.
+
 ### Diagnostics surface for failed lines
 
 When no candidate succeeds, the compiler raises one of:

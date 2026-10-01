@@ -330,6 +330,8 @@ const proof_cases = [_]ProofCase{
     // with the hole in it (`fail_hole_child_hint_undetermined` when the proof
     // leaves the hole open).
     .{ .stem = "pass_hole_child_hint", .outcome = .pass },
+    // A variable met twice under holes takes both visible parts.
+    .{ .stem = "pass_hole_merged_faces", .outcome = .pass },
     .{ .stem = "pass_hole_abstract", .outcome = .pass },
     .{ .stem = "pass_hole_abstract_matrix", .outcome = .pass },
     .{ .stem = "pass_prawitz_holes", .outcome = .pass },

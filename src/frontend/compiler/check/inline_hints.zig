@@ -640,7 +640,7 @@ fn holeyGoalBindings(
         .concrete, .implicit_whole_conclusion => return null,
     };
     const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
-    if (!matchTemplateHoley(theorem, rule.concl, goal, bindings, .bind)) {
+    if (!try matchTemplateHoley(theorem, context.registry, rule.concl, goal, bindings, .bind)) {
         context.allocator.free(bindings);
         return null;
     }
@@ -1001,7 +1001,7 @@ pub fn demoteAcuiSpineBindingsForRule(
 /// cannot match. Caller owns the result.
 pub fn seedBindingsFromHoleyHint(
     allocator: std.mem.Allocator,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     registry: *const RewriteRegistry,
     rule: *const RuleDecl,
     hint: ExprId,
@@ -1010,7 +1010,7 @@ pub fn seedBindingsFromHoleyHint(
     if (!theorem.containsPlaceholder(hint)) return null;
     const seeded = try allocator.dupe(?ExprId, partial_bindings);
     errdefer allocator.free(seeded);
-    if (matchTemplateHoley(theorem, rule.concl, hint, seeded, .skip)) {
+    if (try matchTemplateHoley(theorem, registry, rule.concl, hint, seeded, .skip)) {
         demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, partial_bindings, seeded);
         if (!std.mem.eql(?ExprId, seeded, partial_bindings)) return seeded;
     }
@@ -1023,44 +1023,76 @@ pub fn seedBindingsFromHoleyHint(
 const HoleyFace = enum {
     /// Leave the binder alone: only hole-free faces bind.
     skip,
-    /// Bind the holey face when the binder is unbound; a later hole-free
-    /// face replaces it.
+    /// Bind the holey face, merged with the binder's other faces.
     bind,
 };
 
 /// Match `template` against `expr`, which may hold placeholders, extending
 /// `bindings`. A placeholder matches anything.
 fn matchTemplateHoley(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
+    registry: *const RewriteRegistry,
     template: TemplateExpr,
     expr: ExprId,
     bindings: []?ExprId,
     holey_face: HoleyFace,
-) bool {
+) !bool {
     if (theorem.isPlaceholder(expr)) return true;
-    return switch (template) {
-        .binder => |idx| blk: {
-            if (idx >= bindings.len) break :blk false;
+    switch (template) {
+        .binder => |idx| {
+            if (idx >= bindings.len) return false;
             const holey = theorem.containsPlaceholder(expr);
             const existing = bindings[idx] orelse {
                 if (!holey or holey_face == .bind) bindings[idx] = expr;
-                break :blk true;
+                return true;
             };
-            if (existing == expr or holey) break :blk true;
-            if (holey_face == .skip or !theorem.containsPlaceholder(existing)) break :blk false;
-            bindings[idx] = expr;
-            break :blk true;
+            if (existing == expr) return true;
+            const existing_holey = theorem.containsPlaceholder(existing);
+            if (!holey and !existing_holey) return false;
+            if (holey_face == .skip) return holey;
+            // Two faces of one binder: each shows part of it. On a clash
+            // (or through an ACUI combiner, where faces line up only modulo
+            // order) the first face stays unless the new one is hole-free.
+            bindings[idx] = try mergeHoleyFaces(theorem, registry, existing, expr) orelse
+                if (holey) existing else expr;
+            return true;
         },
-        .app => |app| blk: {
+        .app => |app| {
             const node = theorem.interner.node(expr);
             if (node.* != .app or node.app.term_id != app.term_id or
-                node.app.args.len != app.args.len) break :blk false;
+                node.app.args.len != app.args.len) return false;
             for (app.args, node.app.args) |targ, earg| {
-                if (!matchTemplateHoley(theorem, targ, earg, bindings, holey_face)) break :blk false;
+                if (!try matchTemplateHoley(theorem, registry, targ, earg, bindings, holey_face)) return false;
             }
-            break :blk true;
+            return true;
         },
-    };
+    }
+}
+
+/// The most specific expression both faces show, or null when their visible
+/// parts clash. A placeholder gives way to the other face; heads must agree
+/// and not be an ACUI combiner, whose arguments are not positional.
+fn mergeHoleyFaces(
+    theorem: *TheoremContext,
+    registry: *const RewriteRegistry,
+    a: ExprId,
+    b: ExprId,
+) !?ExprId {
+    if (a == b or theorem.isPlaceholder(b)) return a;
+    if (theorem.isPlaceholder(a)) return b;
+    const a_node = theorem.interner.node(a);
+    const b_node = theorem.interner.node(b);
+    if (a_node.* != .app or b_node.* != .app) return null;
+    const a_app = a_node.app;
+    const b_app = b_node.app;
+    if (a_app.term_id != b_app.term_id or a_app.args.len != b_app.args.len or
+        registry.hasStructuralCombiner(a_app.term_id)) return null;
+    const args = try theorem.allocator.alloc(ExprId, a_app.args.len);
+    defer theorem.allocator.free(args);
+    for (a_app.args, b_app.args, args) |a_arg, b_arg, *arg| {
+        arg.* = try mergeHoleyFaces(theorem, registry, a_arg, b_arg) orelse return null;
+    }
+    return try theorem.interner.internApp(a_app.term_id, args);
 }
 
 fn demoteAcuiSpineBindingsInTemplate(
@@ -1233,4 +1265,110 @@ fn collectExprSpine(
         return;
     }
     try out.append(allocator, expr);
+}
+
+const HoleyFaceFixture = struct {
+    arena: std.heap.ArenaAllocator,
+    registry: RewriteRegistry,
+    theorem: TheoremContext,
+    a: ExprId,
+    b: ExprId,
+
+    // Term ids: `f` is a free constructor, `comma` an ACUI combiner.
+    const f: u32 = 0;
+    const comma: u32 = 1;
+
+    fn init(self: *HoleyFaceFixture) !void {
+        self.arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        self.registry = RewriteRegistry.init(self.arena.allocator());
+        try self.registry.acui_by_head.put(comma, .{
+            .unit_term_name = "emp",
+            .assoc_name = "comma_assoc",
+            .comm_name = "comma_comm",
+            .idem_name = "comma_idem",
+        });
+        self.theorem = TheoremContext.init(std.testing.allocator);
+        try self.theorem.seedBinderCount(2);
+        self.a = self.theorem.theorem_vars.items[0];
+        self.b = self.theorem.theorem_vars.items[1];
+    }
+
+    fn deinit(self: *HoleyFaceFixture) void {
+        self.theorem.deinit();
+        self.arena.deinit();
+    }
+
+    fn app(self: *HoleyFaceFixture, head: u32, x: ExprId, y: ExprId) !ExprId {
+        return self.theorem.interner.internApp(head, &.{ x, y });
+    }
+
+    fn hole(self: *HoleyFaceFixture) !ExprId {
+        return self.theorem.addLineHolePlaceholder("obj");
+    }
+
+    fn merge(self: *HoleyFaceFixture, x: ExprId, y: ExprId) !?ExprId {
+        return mergeHoleyFaces(&self.theorem, &self.registry, x, y);
+    }
+};
+
+test "two holey faces of one binder merge into what both show" {
+    var fx: HoleyFaceFixture = undefined;
+    try fx.init();
+    defer fx.deinit();
+    const f = HoleyFaceFixture.f;
+
+    // A hole gives way to the other face, on either side.
+    const h = try fx.hole();
+    try std.testing.expectEqual(@as(?ExprId, fx.a), try fx.merge(h, fx.a));
+    try std.testing.expectEqual(@as(?ExprId, fx.a), try fx.merge(fx.a, h));
+
+    // f(A, _) and f(_, B) give f(A, B).
+    const left = try fx.app(f, fx.a, try fx.hole());
+    const right = try fx.app(f, try fx.hole(), fx.b);
+    try std.testing.expectEqual(@as(?ExprId, try fx.app(f, fx.a, fx.b)), try fx.merge(left, right));
+
+    // f(A, _) and f(B, _) clash.
+    const clash = try fx.app(f, fx.b, try fx.hole());
+    try std.testing.expectEqual(@as(?ExprId, null), try fx.merge(left, clash));
+}
+
+test "holey faces under an ACUI combiner are not merged by position" {
+    var fx: HoleyFaceFixture = undefined;
+    try fx.init();
+    defer fx.deinit();
+    const comma = HoleyFaceFixture.comma;
+
+    // `A , _` and `_ , A` line up only modulo order: merging by position
+    // would guess `A , A`.
+    const left = try fx.app(comma, fx.a, try fx.hole());
+    const right = try fx.app(comma, try fx.hole(), fx.a);
+    try std.testing.expectEqual(@as(?ExprId, null), try fx.merge(left, right));
+    try std.testing.expectEqual(@as(?ExprId, left), try fx.merge(left, left));
+}
+
+test "a binder's holey faces merge; on a clash the first stands unless the new face is hole-free" {
+    var fx: HoleyFaceFixture = undefined;
+    try fx.init();
+    defer fx.deinit();
+    const f = HoleyFaceFixture.f;
+    const g: u32 = 2;
+
+    // Template f(x, x) against f(g(A, _), <second face>).
+    const tmpl_args = [_]TemplateExpr{ .{ .binder = 0 }, .{ .binder = 0 } };
+    const template: TemplateExpr = .{ .app = .{ .term_id = f, .args = &tmpl_args } };
+    const first = try fx.app(g, fx.a, try fx.hole());
+    const cases = [_]struct { second: ExprId, want: ExprId }{
+        // Holes on both sides: the faces merge.
+        .{ .second = try fx.app(g, try fx.hole(), fx.b), .want = try fx.app(g, fx.a, fx.b) },
+        // A holey face that clashes leaves the first.
+        .{ .second = try fx.app(g, fx.b, try fx.hole()), .want = first },
+        // A hole-free face replaces the first, as before.
+        .{ .second = try fx.app(g, fx.b, fx.b), .want = try fx.app(g, fx.b, fx.b) },
+    };
+    for (cases) |case| {
+        var bindings = [_]?ExprId{null};
+        const goal = try fx.app(f, first, case.second);
+        try std.testing.expect(try matchTemplateHoley(&fx.theorem, &fx.registry, template, goal, &bindings, .bind));
+        try std.testing.expectEqual(@as(?ExprId, case.want), bindings[0]);
+    }
 }

@@ -1,0 +1,22 @@
+-- A rule variable that occurs twice in the conclusion, each occurrence
+-- showing a different part of it: the sub-proof's hint combines the two
+-- (`a := Q \/ P c` from `Q \/ _wff` and `_wff \/ P c`).
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @hole _obj
+sort obj;
+term c: obj;
+term P (x: obj): wff;
+term Q: wff;
+term and (a b: wff): wff;
+infixl and: $/\$ prec 20;
+term or (a b: wff): wff;
+infixl or: $\/$ prec 30;
+
+axiom q: $ Q $;
+axiom both (a: wff): $ a $ > $ a /\ a $;
+axiom or_l (a b: wff): $ a $ > $ a \/ b $;
+
+theorem merged: $ (Q \/ P c) /\ (Q \/ P c) $;

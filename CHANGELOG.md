@@ -125,6 +125,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   `$ g ⊢ (λ x : a. x) : _ty $ by t_lam [t_var []]` now check. Before, the
   sub-proof got no expected goal, so `or_r`'s `a` and `t_var`'s type could
   not be determined, and only `t_lam (B := $ a $) [t_var []]` checked.
+- When a rule variable occurs twice in a holey line and each occurrence shows
+  a different part of it, an inline sub-proof's expected goal combines the
+  two. `$ (Q \/ _wff) /\ (_wff \/ P c) $ by both [or_l [q []]]` now checks,
+  with `both`'s `a := Q \/ P c`. Before, the sub-proof got only the first
+  occurrence, `Q \/ ‹hole›`, so `or_l`'s `b` could not be determined.
 - When a line's rule variable cannot be determined, the error names one the
   cited premises leave open too. Before, `or_l [q []]` with its `b` hidden
   by a hole was reported as missing `a`, which `q` determines.

@@ -1,0 +1,5 @@
+merged
+------
+
+l1: $ (Q \/ _wff) /\ (_wff \/ P c) $ by both [or_l [q []]]
+l2: $ (Q \/ P c) /\ (Q \/ P c) $ by both [or_l [q []]]
