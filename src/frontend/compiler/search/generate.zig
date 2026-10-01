@@ -41,7 +41,6 @@ const DeepVerdictCache = types.DeepVerdictCache;
 const NameExprMap = types.NameExprMap;
 const GenerateOptions = types.GenerateOptions;
 const GenerationHook = types.GenerationHook;
-const Expr = @import("../../../trusted/expressions.zig").Expr;
 const SurfaceExpr = @import("../../surface_expr.zig");
 
 /// Generated full proof trees for a goal. The trees are owned by `arena`; they
@@ -243,7 +242,7 @@ const Driver = struct {
     /// rolled back by open slots. See `MetaDepBans`.
     meta_dep_bans: MetaDepBans,
     /// The root goal is a holey line: its holes are metas, and each pass
-    /// searches it as an open whole-conclusion hint (`internHoleyGoal`).
+    /// searches it as an open whole-conclusion hint (`mintNumberedMeta`).
     open_root: bool = false,
     /// Expensive-op budget for the currently running phase, shared by all
     /// recursive sub-solves. Each retry phase owns one fuel pool spanning all
@@ -352,11 +351,12 @@ pub fn generateTopLevel(
     var next_meta_id: u64 = 0;
     const goal_expr: ExprId = switch (goal) {
         .concrete => |expr| expr,
-        .holey => |holey| (try internHoleyGoal(
+        .holey => |holey| (try SurfaceExpr.internHoley(
             &work_theorem,
-            session.context,
+            session.context.env,
             holey,
             &next_meta_id,
+            mintNumberedMeta,
         )) orelse return .{ .arena = arena, .applications = &.{} },
         .implicit_whole_conclusion => unreachable,
     };
@@ -595,37 +595,18 @@ pub fn generateTopLevel(
     };
 }
 
-/// Intern a holey line assertion into `theorem` with a fresh meta of the
-/// hole's sort in place of each hole. The metas carry stable ids from
-/// `next_meta_id`, so an open slot's store registers them as carried ancestor
-/// metas and a descendant leaf can solve them. Null for a hole of an unknown
-/// sort.
-fn internHoleyGoal(
-    theorem: *TheoremContext,
-    context: *const Context,
-    expr: *const Expr,
+/// A fresh meta of the hole's sort for each hole of a holey line assertion.
+/// The metas carry stable ids from `next_meta_id`, so an open slot's store
+/// registers them as carried ancestor metas and a descendant leaf can solve
+/// them.
+fn mintNumberedMeta(
     next_meta_id: *u64,
+    theorem: *TheoremContext,
+    sort_name: []const u8,
 ) anyerror!?ExprId {
-    if (!SurfaceExpr.containsHole(expr)) return try theorem.internParsedExpr(expr);
-    switch (expr.*) {
-        .hole => |hole| {
-            const sort_name = SurfaceExpr.sortNameById(context.env, hole.sort) orelse
-                return null;
-            const meta_id = next_meta_id.*;
-            next_meta_id.* += 1;
-            return try theorem.addMetaPlaceholderWithMetaId(sort_name, meta_id);
-        },
-        .variable => unreachable,
-        .term => |term| {
-            const args = try theorem.allocator.alloc(ExprId, term.args.len);
-            defer theorem.allocator.free(args);
-            for (term.args, 0..) |arg, idx| {
-                args[idx] = (try internHoleyGoal(theorem, context, arg, next_meta_id)) orelse
-                    return null;
-            }
-            return try theorem.interner.internApp(term.id, args);
-        },
-    }
+    const meta_id = next_meta_id.*;
+    next_meta_id.* += 1;
+    return try theorem.addMetaPlaceholderWithMetaId(sort_name, meta_id);
 }
 
 /// Bounded forward saturation over the theorem's ref pool, with `seeds` as

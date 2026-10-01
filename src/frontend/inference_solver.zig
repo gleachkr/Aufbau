@@ -614,7 +614,7 @@ pub const Solver = struct {
         space: BinderSpace,
         state: BranchState,
     ) anyerror![]BranchState {
-        if (!self.theorem.exprAny(actual, {}, isPlaceholder)) {
+        if (!self.theorem.containsPlaceholder(actual)) {
             return try StructuralMatcher.matchExpr(self, template, actual, space, state);
         }
         const node = self.theorem.interner.node(actual);
@@ -639,10 +639,6 @@ pub const Solver = struct {
             states = next;
         }
         return try states.toOwnedSlice(self.allocator);
-    }
-
-    fn isPlaceholder(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
-        return theorem.interner.node(expr).* == .placeholder;
     }
 
     pub fn argInfosForSpace(

@@ -1150,7 +1150,7 @@ fn tryInferHoleyStructuralSolver(
 }
 
 /// Infer an inline minor's bindings from its refs and a hint with holes in it
-/// (`Holes.internWithPlaceholders`), or null when the structural solver finds
+/// (`Holes.internWithLineHoles`), or null when the structural solver finds
 /// no unique solution.
 pub fn tryInferHoleyHintStructuralSolver(
     self: *CompilerContext,

@@ -581,7 +581,7 @@ fn fillRuleHoleyInlineHints(
             bindings,
             .{ .placeholder_factory = .{ .makeFn = mintHintHole } },
         ) orelse continue;
-        if (!isPlaceholderNode({}, theorem, holey)) hint.* = holey;
+        if (!theorem.isPlaceholder(holey)) hint.* = holey;
     }
 }
 
@@ -625,7 +625,7 @@ fn holeyGoalBindings(
         if (!isHoleyGoalHint(theorem, hint)) return null;
         break :blk hint;
     } else switch (line_assertion) {
-        .holey => |holey| (try Holes.internWithPlaceholders(
+        .holey => |holey| (try Holes.internWithLineHoles(
             theorem,
             context.env,
             holey,
@@ -633,47 +633,12 @@ fn holeyGoalBindings(
         .concrete, .implicit_whole_conclusion => return null,
     };
     const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
-    if (!matchTemplateHoleyGoal(theorem, rule.concl, goal, bindings)) {
+    if (!matchTemplateHoley(theorem, rule.concl, goal, bindings, .bind)) {
         context.allocator.free(bindings);
         return null;
     }
     demoteAcuiSpineBindingsInTemplate(context.registry, rule.concl, false, partial_bindings, bindings);
     return bindings;
-}
-
-/// Like `matchTemplateHoleyHint`, but a binder facing a holey subterm takes
-/// it unless a visible occurrence fixes the binder; a placeholder matches
-/// anything.
-fn matchTemplateHoleyGoal(
-    theorem: *const TheoremContext,
-    template: TemplateExpr,
-    expr: ExprId,
-    bindings: []?ExprId,
-) bool {
-    if (isPlaceholderNode({}, theorem, expr)) return true;
-    return switch (template) {
-        .binder => |idx| blk: {
-            if (idx >= bindings.len) break :blk false;
-            const existing = bindings[idx] orelse {
-                bindings[idx] = expr;
-                break :blk true;
-            };
-            if (existing == expr) break :blk true;
-            if (theorem.exprAny(expr, {}, isPlaceholderNode)) break :blk true;
-            if (!theorem.exprAny(existing, {}, isPlaceholderNode)) break :blk false;
-            bindings[idx] = expr;
-            break :blk true;
-        },
-        .app => |app| blk: {
-            const node = theorem.interner.node(expr);
-            if (node.* != .app or node.app.term_id != app.term_id or
-                node.app.args.len != app.args.len) break :blk false;
-            for (app.args, node.app.args) |targ, earg| {
-                if (!matchTemplateHoleyGoal(theorem, targ, earg, bindings)) break :blk false;
-            }
-            break :blk true;
-        },
-    };
 }
 
 fn wantsHoleyHint(
@@ -1035,10 +1000,10 @@ pub fn seedBindingsFromHoleyHint(
     hint: ExprId,
     partial_bindings: []const ?ExprId,
 ) !?[]?ExprId {
-    if (!theorem.exprAny(hint, {}, isPlaceholderNode)) return null;
+    if (!theorem.containsPlaceholder(hint)) return null;
     const seeded = try allocator.dupe(?ExprId, partial_bindings);
     errdefer allocator.free(seeded);
-    if (matchTemplateHoleyHint(theorem, rule.concl, hint, seeded)) {
+    if (matchTemplateHoley(theorem, rule.concl, hint, seeded, .skip)) {
         demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, partial_bindings, seeded);
         if (!std.mem.eql(?ExprId, seeded, partial_bindings)) return seeded;
     }
@@ -1046,18 +1011,36 @@ pub fn seedBindingsFromHoleyHint(
     return null;
 }
 
-fn matchTemplateHoleyHint(
+/// How `matchTemplateHoley` treats a binder facing a subterm with a
+/// placeholder in it. Either way the face never contradicts the binding.
+const HoleyFace = enum {
+    /// Leave the binder alone: only hole-free faces bind.
+    skip,
+    /// Bind the holey face when the binder is unbound; a later hole-free
+    /// face replaces it.
+    bind,
+};
+
+/// Match `template` against `expr`, which may hold placeholders, extending
+/// `bindings`. A placeholder matches anything.
+fn matchTemplateHoley(
     theorem: *const TheoremContext,
     template: TemplateExpr,
     expr: ExprId,
     bindings: []?ExprId,
+    holey_face: HoleyFace,
 ) bool {
-    if (isPlaceholderNode({}, theorem, expr)) return true;
+    if (theorem.isPlaceholder(expr)) return true;
     return switch (template) {
         .binder => |idx| blk: {
             if (idx >= bindings.len) break :blk false;
-            if (theorem.exprAny(expr, {}, isPlaceholderNode)) break :blk true;
-            if (bindings[idx]) |existing| break :blk existing == expr;
+            const holey = theorem.containsPlaceholder(expr);
+            const existing = bindings[idx] orelse {
+                if (!holey or holey_face == .bind) bindings[idx] = expr;
+                break :blk true;
+            };
+            if (existing == expr or holey) break :blk true;
+            if (holey_face == .skip or !theorem.containsPlaceholder(existing)) break :blk false;
             bindings[idx] = expr;
             break :blk true;
         },
@@ -1066,7 +1049,7 @@ fn matchTemplateHoleyHint(
             if (node.* != .app or node.app.term_id != app.term_id or
                 node.app.args.len != app.args.len) break :blk false;
             for (app.args, node.app.args) |targ, earg| {
-                if (!matchTemplateHoleyHint(theorem, targ, earg, bindings)) break :blk false;
+                if (!matchTemplateHoley(theorem, targ, earg, bindings, holey_face)) break :blk false;
             }
             break :blk true;
         },
@@ -1162,7 +1145,7 @@ pub fn ambiguousPrincipalPins(
     for (expr_members.items) |member| {
         // A holey hint's placeholder member is no candidate: pinning a binder
         // to a placeholder would fix a guess, not a member.
-        if (theorem.exprAny(member, {}, isPlaceholderNode)) continue;
+        if (theorem.containsPlaceholder(member)) continue;
         @memcpy(scratch, explicit);
         if (!theorem.matchTemplate(principal_template, member, scratch)) continue;
         const duplicate = for (pins.items) |pin| {
@@ -1182,10 +1165,6 @@ pub fn ambiguousPrincipalPins(
 pub fn freePrincipalPins(allocator: std.mem.Allocator, pins: []const []?ExprId) void {
     for (pins) |pin| allocator.free(pin);
     allocator.free(pins);
-}
-
-fn isPlaceholderNode(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
-    return theorem.interner.node(expr).* == .placeholder;
 }
 
 const PrincipalSite = struct {

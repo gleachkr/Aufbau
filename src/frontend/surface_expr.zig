@@ -106,40 +106,54 @@ pub fn containsStructuralHole(
     };
 }
 
+/// Intern a holey surface into `theorem`, with `mint(context, theorem,
+/// sort_name)` in place of each hole. Null when a hole's sort is unknown or
+/// `mint` declines it. A hole-free subtree is interned as parsed.
+pub fn internHoley(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    expr: *const Expr,
+    context: anytype,
+    comptime mint: fn (@TypeOf(context), *TheoremContext, []const u8) anyerror!?ExprId,
+) anyerror!?ExprId {
+    if (!containsHole(expr)) return try theorem.internParsedExpr(expr);
+    switch (expr.*) {
+        .hole => |hole| {
+            const sort_name = sortNameById(env, hole.sort) orelse return null;
+            return try mint(context, theorem, sort_name);
+        },
+        .variable => unreachable,
+        .term => |term| {
+            const args = try theorem.allocator.alloc(ExprId, term.args.len);
+            defer theorem.allocator.free(args);
+            for (term.args, 0..) |arg, idx| {
+                args[idx] = (try internHoley(theorem, env, arg, context, mint)) orelse
+                    return null;
+            }
+            return try theorem.interner.internApp(term.id, args);
+        },
+    }
+}
+
+/// Intern a holey surface with each hole replaced by its sort's structural
+/// unit. Null when a hole's sort has no structural combiner.
 pub fn lowerStructuralHolesToUnits(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
     expr: *const Expr,
 ) !?ExprId {
-    return switch (expr.*) {
-        .hole => |hole| blk: {
-            const sort_name = sortNameById(env, hole.sort) orelse return null;
-            const acui = try registry.resolveStructuralCombinerForSort(
-                env,
+    const Units = struct {
+        env: *const GlobalEnv,
+        registry: *RewriteRegistry,
+
+        fn mint(self: @This(), t: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
+            const acui = try self.registry.resolveStructuralCombinerForSort(
+                self.env,
                 sort_name,
             ) orelse return null;
-            break :blk try theorem.interner.internApp(
-                acui.unit_term_id,
-                &.{},
-            );
-        },
-        .variable => try theorem.internParsedExpr(expr),
-        .term => |term| blk: {
-            const args = try theorem.allocator.alloc(ExprId, term.args.len);
-            errdefer theorem.allocator.free(args);
-            for (term.args, 0..) |arg, idx| {
-                args[idx] = (try lowerStructuralHolesToUnits(
-                    theorem,
-                    env,
-                    registry,
-                    arg,
-                )) orelse {
-                    theorem.allocator.free(args);
-                    return null;
-                };
-            }
-            break :blk try theorem.interner.internAppOwned(term.id, args);
-        },
+            return try t.interner.internApp(acui.unit_term_id, &.{});
+        }
     };
+    return internHoley(theorem, env, expr, Units{ .env = env, .registry = registry }, Units.mint);
 }

@@ -858,6 +858,20 @@ pub const TheoremContext = struct {
         }
     }
 
+    /// True when `expr` is itself a placeholder leaf.
+    pub fn isPlaceholder(self: *const TheoremContext, expr: ExprId) bool {
+        return self.interner.node(expr).* == .placeholder;
+    }
+
+    /// True when a placeholder leaf occurs anywhere in `root`.
+    pub fn containsPlaceholder(self: *const TheoremContext, root: ExprId) bool {
+        return self.exprAny(root, {}, isPlaceholderPred);
+    }
+
+    fn isPlaceholderPred(_: void, self: *const TheoremContext, expr: ExprId) bool {
+        return self.isPlaceholder(expr);
+    }
+
     /// Side-effecting companion to `exprAny`: apply `visit` to every node
     /// reachable from `root` in pre-order (the root included). Errors from
     /// `visit` abort the walk and propagate.

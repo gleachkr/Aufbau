@@ -53,7 +53,7 @@ only, never search ticks, and cannot change what is found.
 
 **Holey goals (type inference).** A line whose assertion has proof holes
 (`g ⊢ t : _ty`) reaches `generateTopLevel` as `Goal.holey`. It interns the
-assertion with a meta per hole (`internHoleyGoal`, stable `meta_id`s from the
+assertion with a meta per hole (`mintNumberedMeta`, stable `meta_id`s from the
 driver's counter) and every pass searches that as an open
 `implicit_whole_conclusion` hint, so the ladder runs as for an open child
 target and the proof found fills the holes. `Driver.open_root` /

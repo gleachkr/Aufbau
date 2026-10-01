@@ -626,7 +626,7 @@ fn withRecoveredFromHint(
     const view = context.views.get(candidate.rule_id) orelse return null;
     const theorem = &candidate.theorem;
     // A concrete hint is the checker's own case.
-    if (!hasPlaceholder(theorem, goal_expr)) return null;
+    if (!theorem.containsPlaceholder(goal_expr)) return null;
     const view_bindings = try allocator.alloc(?ExprId, view.num_binders);
     defer allocator.free(view_bindings);
     match.seedViewBindingsFromRule(view, bindings, view_bindings);
@@ -643,7 +643,7 @@ fn withRecoveredFromHint(
         const pattern = view_bindings[law.pattern_view_idx] orelse continue;
         const hole = view_bindings[law.hole_view_idx] orelse continue;
         // A concrete source is the checker's own case.
-        if (!hasPlaceholder(theorem, source)) continue;
+        if (!theorem.containsPlaceholder(source)) continue;
         var found: ?ExprId = null;
         if (!recoverFromOpenSource(theorem, source, pattern, hole, &found)) continue;
         const target = found orelse continue;
@@ -671,7 +671,7 @@ fn recoverFromOpenSource(
     found: *?ExprId,
 ) bool {
     if (pattern == hole) {
-        if (hasPlaceholder(theorem, source)) return true;
+        if (theorem.containsPlaceholder(source)) return true;
         if (found.*) |existing| return existing == source;
         found.* = source;
         return true;
@@ -693,14 +693,6 @@ fn recoverFromOpenSource(
             else => false,
         },
     };
-}
-
-fn hasPlaceholder(theorem: *const TheoremContext, expr: ExprId) bool {
-    return theorem.exprAny(expr, {}, isPlaceholder);
-}
-
-fn isPlaceholder(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
-    return theorem.interner.node(expr).* == .placeholder;
 }
 
 /// Close out a candidate against a holey goal: a bound binder the search left

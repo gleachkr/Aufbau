@@ -2822,7 +2822,7 @@ fn restoreExplicitFlag(
 /// or null when nothing was marked.
 fn handSplitChoice(candidate: *ApplyCandidate, idx: usize, value: ?ExprId) !?HandedFlag {
     const expr = value orelse return null;
-    if (candidate.theorem.exprAny(expr, {}, isPlaceholderNode)) return null;
+    if (candidate.theorem.containsPlaceholder(expr)) return null;
     return .{ .idx = idx, .prev = try setExplicitFlag(candidate, idx) };
 }
 
@@ -2831,8 +2831,4 @@ const HandedFlag = struct { idx: usize, prev: ?bool };
 fn restoreSplitChoice(candidate: *ApplyCandidate, handed: ?HandedFlag) void {
     const h = handed orelse return;
     restoreExplicitFlag(candidate, h.idx, h.prev);
-}
-
-fn isPlaceholderNode(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
-    return theorem.interner.node(expr).* == .placeholder;
 }
