@@ -660,6 +660,36 @@ test "redex conclusion prune abstains on a rewrite-headed premise" {
     try std.testing.expect(counters.full_try_candidate_calls > 0);
 }
 
+test "redex conclusion prune holds when the theorem has no dependency slots left" {
+    // The ref gives `x := y` and `t := z`, and `sb y ?u z` reduces to `z`, not
+    // the goal's `o`. The hole for the unbound `u` spends no dependency slot,
+    // so the prune holds even with every slot already taken.
+    const mm0_src = redex_theory ++
+        \\theorem t {y: tm}: $ pr (lam y z) $ > $ pr z $ > $ pr o $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId("sub") orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+    const ref = (try parseGoal(&fixture, &theorem, &theorem_vars, "pr (lam y z)")).concrete;
+    const goal = (try parseGoal(&fixture, &theorem, &theorem_vars, "pr o")).concrete;
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    while (theorem.depSlotsLeft() > 0) _ = try theorem.addPlaceholderResolved("tm");
+
+    try std.testing.expect(helpers.plausible.redexConclusionMismatch(&context, &theorem, rule, goal, bindings, &.{ ref, null }));
+}
+
 test "ACUI member prune counts distinct members without idempotence" {
     // `weaken2` needs two entries after `g`; the goal context has one. Each
     // required `hyp` leaf finds a compatible member on its own, but not a

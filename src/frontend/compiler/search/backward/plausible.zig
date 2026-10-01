@@ -400,7 +400,7 @@ pub fn templateHasRewriteHead(context: *const Context, template: TemplateExpr) b
 /// A `@rewrite` head in the conclusion gives `templateDefiniteMismatch` no
 /// opinion, since it can reduce to any head. But the redex usually reduces far
 /// enough to be compared: with martin_lof's substitution, `[x/?u] Nat` is
-/// `Nat` whatever `u` is. Instantiate each redex, with a placeholder for every
+/// `Nat` whatever `u` is. Instantiate each redex, with a hole for every
 /// unbound ordinary binder, reduce it, and compare the result against the goal
 /// subterm at the same position. A placeholder is never a definite mismatch,
 /// so this only rejects what no choice of the unbound binders could match.
@@ -485,8 +485,12 @@ fn redexTemplateMismatch(
     return false;
 }
 
-/// `bindings` with a fresh placeholder in each unbound ordinary slot. Unbound
-/// bound-variable slots stay null, so a redex over one abstains.
+/// `bindings` with a fresh meta hole, an unknown term that spends no
+/// dependency slot, in each unbound ordinary slot. Unbound bound-variable
+/// slots stay null, so a redex over one abstains. A hole has no dependencies,
+/// so every "x not free" side condition fires on it. That never prunes
+/// wrongly: a value that would block the rewrite leaves a stuck redex, and a
+/// reducible head is never a definite mismatch.
 fn fillOrdinaryBinders(
     theorem: *TheoremContext,
     rule: *const RuleDecl,
@@ -496,7 +500,7 @@ fn fillOrdinaryBinders(
     errdefer theorem.allocator.free(out);
     for (out, 0..) |*slot, idx| {
         if (slot.* != null or idx >= rule.args.len or rule.args[idx].bound) continue;
-        slot.* = try theorem.addPlaceholderResolved(rule.args[idx].sort_name);
+        slot.* = try theorem.addMetaPlaceholderResolved(rule.args[idx].sort_name);
     }
     return out;
 }
