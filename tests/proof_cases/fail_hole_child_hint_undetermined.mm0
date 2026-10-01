@@ -1,0 +1,21 @@
+-- The hole hides `or_l`'s `b`, and nothing in the proof determines it.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @hole _obj
+sort obj;
+term c: obj;
+term P (x: obj): wff;
+term Q: wff;
+term and (a b: wff): wff;
+infixl and: $/\$ prec 20;
+term or (a b: wff): wff;
+infixl or: $\/$ prec 30;
+
+axiom pc: $ P c $;
+axiom q: $ Q $;
+axiom and_intro (a b: wff): $ a $ > $ b $ > $ a /\ b $;
+axiom or_l (a b: wff): $ a $ > $ a \/ b $;
+
+theorem bad: $ (Q \/ P c) /\ P c $;

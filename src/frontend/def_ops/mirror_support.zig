@@ -113,16 +113,20 @@ pub fn copyExprBetweenTheorems(
             const placeholder = try source.requirePlaceholderInfo(idx);
             // Preserve the placeholder class across the mirror: re-minting a
             // search meta as a standard placeholder would silently consume a
-            // dep bit and hide the meta from the kind-aware leakage guard.
+            // dep bit and hide the meta from the kind-aware leakage guard. A
+            // line hole stays one, or its hint would lose the holey solver.
             // (Live metas should never reach def_ops — they are solved before
             // tryCandidate — so the .meta arm is a defensive backstop.)
             break :blk switch (placeholder.class) {
                 .standard => try target.addPlaceholderResolved(
                     placeholder.sort_name,
                 ),
-                .meta => try target.addMetaPlaceholderResolved(
-                    placeholder.sort_name,
-                ),
+                .meta => if (placeholder.line_hole)
+                    try target.addLineHolePlaceholder(placeholder.sort_name)
+                else
+                    try target.addMetaPlaceholderResolved(
+                        placeholder.sort_name,
+                    ),
             };
         },
         .app => |app| blk: {

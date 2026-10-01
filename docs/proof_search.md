@@ -113,9 +113,10 @@ type:
 l1: $ g ⊢ (λ f : b → c. λ n : a → b. λ x : a. f · (n · x)) : _ty $ by auto?
 ```
 
-suggests `t_lam (B := $ (a -> b) -> a -> c $) [...]`: the binding on the
-outermost rule states the type the line gets. A suggestion is offered only
-if the line checks with it in place. The search returns *a* type, the one
+suggests `t_lam [t_lam [t_lam [t_app [t_var [], t_app [t_var [], t_var []]]]]]`;
+hovering the hole shows the type the line gets, and the **Fill in the holes**
+code action writes it in. A suggestion is offered only if the line checks
+with it in place. The search returns *a* type, the one
 its first proof fixes; when a theory's types are not unique (subtyping,
 conversion rules), that need not be the most general one.
 

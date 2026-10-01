@@ -1149,6 +1149,50 @@ fn tryInferHoleyStructuralSolver(
     return bindings;
 }
 
+/// Infer an inline minor's bindings from its refs and a hint with holes in it
+/// (`Holes.internWithPlaceholders`), or null when the structural solver finds
+/// no unique solution.
+pub fn tryInferHoleyHintStructuralSolver(
+    self: *CompilerContext,
+    context: *const RuleInferenceContext,
+    line: anytype,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    hint: ExprId,
+    maybe_view: ?ViewDecl,
+) !?[]const ExprId {
+    var solver = InferenceSolver.init(
+        context.allocator,
+        context.env,
+        context.theorem,
+        context.registry,
+        context.rule_id,
+        context.rule,
+        if (maybe_view) |*view| view else null,
+        context.scratch,
+        self.debug,
+    );
+    defer solver.deinit();
+    solver.budget = self.work_budget;
+    defer self.recordSolverBranches(solver.peak_branches);
+
+    const bindings = solver.solveHoleyHint(
+        partial_bindings,
+        ref_exprs,
+        hint,
+    ) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        DebugTrace.traceInference(
+            self.debug,
+            "holey hint structural solver failed for rule {s}: {s}",
+            .{ context.rule.name, @errorName(err) },
+        );
+        return null;
+    };
+    maybeAddStructuralAmbiguityWarning(self, context.assertion, line, &solver);
+    return bindings;
+}
+
 pub fn maybeAddStructuralAmbiguityWarning(
     self: *CompilerContext,
     assertion: AssertionStmt,

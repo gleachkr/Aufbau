@@ -41,6 +41,9 @@ pub const AmbiguityReport = Ambiguity.AmbiguityReport;
 const ConclusionConstraint = union(enum) {
     concrete: ExprId,
     surface: *const Expr,
+    /// An interned conclusion whose placeholders are holes: an inline
+    /// minor's hint from a holey goal.
+    holey: ExprId,
 };
 
 /// Which rule-application region a constraint filters against. Hypothesis
@@ -277,6 +280,21 @@ pub const Solver = struct {
         );
     }
 
+    /// Solve against a hint whose placeholders are holes, as
+    /// `solveHoleyConclusion` does against a surface with holes.
+    pub fn solveHoleyHint(
+        self: *Solver,
+        partial_bindings: []const ?ExprId,
+        ref_exprs: []const ExprId,
+        hint: ExprId,
+    ) anyerror![]const ExprId {
+        return try self.solveWithConclusion(
+            partial_bindings,
+            ref_exprs,
+            .{ .holey = hint },
+        );
+    }
+
     fn solveWithConclusion(
         self: *Solver,
         partial_bindings: []const ?ExprId,
@@ -410,6 +428,12 @@ pub const Solver = struct {
                 );
             },
             .surface => |actual| try self.applySurfaceConstraint(
+                states,
+                template,
+                actual,
+                space,
+            ),
+            .holey => |actual| try self.applyHoleyConstraint(
                 states,
                 template,
                 actual,
@@ -559,6 +583,66 @@ pub const Solver = struct {
                 break :blk try states.toOwnedSlice(self.allocator);
             },
         };
+    }
+
+    fn applyHoleyConstraint(
+        self: *Solver,
+        states: []const BranchState,
+        template: TemplateExpr,
+        actual: ExprId,
+        space: BinderSpace,
+    ) anyerror!std.ArrayListUnmanaged(BranchState) {
+        var next = std.ArrayListUnmanaged(BranchState){};
+        for (states) |state| {
+            const matches = try self.matchHoleyExpr(template, actual, space, state);
+            try next.appendSlice(self.allocator, matches);
+        }
+        if (next.items.len == 0) {
+            self.failure = .{ .region = .conclusion, .actual = null };
+            return error.UnifyMismatch;
+        }
+        return next;
+    }
+
+    /// `matchSurfaceExpr` over an interned expression whose placeholders are
+    /// holes: a placeholder matches anything, a binder facing a subterm with
+    /// one fixes nothing, and a placeholder-free subterm matches structurally.
+    fn matchHoleyExpr(
+        self: *Solver,
+        template: TemplateExpr,
+        actual: ExprId,
+        space: BinderSpace,
+        state: BranchState,
+    ) anyerror![]BranchState {
+        if (!self.theorem.exprAny(actual, {}, isPlaceholder)) {
+            return try StructuralMatcher.matchExpr(self, template, actual, space, state);
+        }
+        const node = self.theorem.interner.node(actual);
+        if (node.* == .placeholder or template == .binder) {
+            const out = try self.allocator.alloc(BranchState, 1);
+            out[0] = try BranchStateOps.cloneState(self, state);
+            return out;
+        }
+        const app = template.app;
+        if (node.* != .app or node.app.term_id != app.term_id or
+            node.app.args.len != app.args.len) return &.{};
+
+        var states = std.ArrayListUnmanaged(BranchState){};
+        try states.append(self.allocator, try BranchStateOps.cloneState(self, state));
+        for (app.args, node.app.args) |tmpl_arg, actual_arg| {
+            var next = std.ArrayListUnmanaged(BranchState){};
+            for (states.items) |current| {
+                const matches = try self.matchHoleyExpr(tmpl_arg, actual_arg, space, current);
+                try next.appendSlice(self.allocator, matches);
+            }
+            if (next.items.len == 0) return &.{};
+            states = next;
+        }
+        return try states.toOwnedSlice(self.allocator);
+    }
+
+    fn isPlaceholder(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+        return theorem.interner.node(expr).* == .placeholder;
     }
 
     pub fn argInfosForSpace(

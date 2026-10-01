@@ -1805,6 +1805,26 @@ test "placeholder deps share the global u55 mask budget" {
     try std.testing.expectEqual(@as(usize, 1), ctx.theorem_placeholders.items.len);
 }
 
+test "line holes spend no dep slot and leave the search meta count alone" {
+    var ctx = FrontendExpr.TheoremContext.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const hole = try ctx.addLineHolePlaceholder("wff");
+    try std.testing.expectEqual(@as(u32, 0), ctx.next_placeholder_dep);
+    try std.testing.expect(ctx.hasLineHoles());
+    try std.testing.expect(!ctx.hasMetaPlaceholders());
+    const idx = switch (ctx.interner.node(hole).*) {
+        .placeholder => |idx| idx,
+        else => return error.UnexpectedExprNode,
+    };
+    try std.testing.expectEqual(FrontendExpr.PlaceholderClass.meta, ctx.placeholderClass(idx));
+
+    var copy = try ctx.clone();
+    defer copy.deinit();
+    try std.testing.expect(copy.hasLineHoles());
+    try std.testing.expect(!copy.hasMetaPlaceholders());
+}
+
 test "dummy allocation respects placeholder dep reservations" {
     var ctx = FrontendExpr.TheoremContext.init(std.testing.allocator);
     defer ctx.deinit();

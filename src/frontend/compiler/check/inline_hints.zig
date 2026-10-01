@@ -544,13 +544,136 @@ fn fillRuleHoleyInlineHints(
     defer allocator.free(probe.contextual_bindings);
     defer allocator.free(probe.expected_refs);
 
+    var still_missing = false;
     for (application.refs, expected_refs, probe.expected_refs) |ref, *hint, holey| {
         if (hint.* == null and
             wantsHoleyHint(context.env, context.registry, parent_acui_rest, ref))
         {
             hint.* = holey;
+            if (holey == null) still_missing = true;
         }
     }
+    if (!still_missing) return;
+
+    // The goal itself is holey (a holey line, or a hint with holes from the
+    // parent), so neither pass above could match the conclusion. Match
+    // it with holes as wildcards instead: a binder facing a holey subterm
+    // takes that subterm, placeholders and all, so the minor still sees the
+    // visible part (`Q` in `Q ∨ P ‹hole›`).
+    const bindings = try holeyGoalBindings(
+        context,
+        rule,
+        theorem,
+        line_assertion,
+        expected_conclusion_hint,
+        partial_bindings,
+    ) orelse return;
+    defer allocator.free(bindings);
+    for (application.refs, expected_refs, rule.hyps) |ref, *hint, hyp| {
+        if (hint.* != null or
+            !wantsHoleyHint(context.env, context.registry, parent_acui_rest, ref)) continue;
+        const holey = try OpenTerms.instantiateTemplateHoley(
+            theorem,
+            context.env,
+            context.registry,
+            rule,
+            hyp,
+            bindings,
+            .{ .placeholder_factory = .{ .makeFn = mintHintHole } },
+        ) orelse continue;
+        if (!isPlaceholderNode({}, theorem, holey)) hint.* = holey;
+    }
+}
+
+/// True when `hint` came from a holey goal: it holds a line hole (a line's
+/// hole, or a binder the goal left open). Other holey hints use standard
+/// placeholders, and search's hints carry its own metas.
+pub fn isHoleyGoalHint(theorem: *const TheoremContext, hint: ExprId) bool {
+    if (!theorem.hasLineHoles()) return false;
+    return theorem.exprAny(hint, {}, isLineHoleNode);
+}
+
+fn isLineHoleNode(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => |id| if (theorem.placeholderInfo(id)) |info| info.line_hole else false,
+        else => false,
+    };
+}
+
+/// An open binder in a holey goal's hint is a line hole, like the line's own
+/// holes: a wildcard that spends no dependency slot.
+fn mintHintHole(
+    _: ?*anyopaque,
+    theorem: *TheoremContext,
+    sort_name: []const u8,
+    _: OpenTerms.MetaKind,
+) anyerror!ExprId {
+    return theorem.addLineHolePlaceholder(sort_name);
+}
+
+/// `rule`'s bindings from a holey goal, or null when the goal is not holey or
+/// its visible structure does not match the conclusion. Caller owns the result.
+fn holeyGoalBindings(
+    context: *const RuleApplyContext,
+    rule: *const RuleDecl,
+    theorem: *TheoremContext,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    partial_bindings: []const ?ExprId,
+) !?[]?ExprId {
+    const goal = if (expected_conclusion_hint) |hint| blk: {
+        if (!isHoleyGoalHint(theorem, hint)) return null;
+        break :blk hint;
+    } else switch (line_assertion) {
+        .holey => |holey| (try Holes.internWithPlaceholders(
+            theorem,
+            context.env,
+            holey,
+        )) orelse return null,
+        .concrete, .implicit_whole_conclusion => return null,
+    };
+    const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
+    if (!matchTemplateHoleyGoal(theorem, rule.concl, goal, bindings)) {
+        context.allocator.free(bindings);
+        return null;
+    }
+    demoteAcuiSpineBindingsInTemplate(context.registry, rule.concl, false, partial_bindings, bindings);
+    return bindings;
+}
+
+/// Like `matchTemplateHoleyHint`, but a binder facing a holey subterm takes
+/// it unless a visible occurrence fixes the binder; a placeholder matches
+/// anything.
+fn matchTemplateHoleyGoal(
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+    bindings: []?ExprId,
+) bool {
+    if (isPlaceholderNode({}, theorem, expr)) return true;
+    return switch (template) {
+        .binder => |idx| blk: {
+            if (idx >= bindings.len) break :blk false;
+            const existing = bindings[idx] orelse {
+                bindings[idx] = expr;
+                break :blk true;
+            };
+            if (existing == expr) break :blk true;
+            if (theorem.exprAny(expr, {}, isPlaceholderNode)) break :blk true;
+            if (!theorem.exprAny(existing, {}, isPlaceholderNode)) break :blk false;
+            bindings[idx] = expr;
+            break :blk true;
+        },
+        .app => |app| blk: {
+            const node = theorem.interner.node(expr);
+            if (node.* != .app or node.app.term_id != app.term_id or
+                node.app.args.len != app.args.len) break :blk false;
+            for (app.args, node.app.args) |targ, earg| {
+                if (!matchTemplateHoleyGoal(theorem, targ, earg, bindings)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
 }
 
 fn wantsHoleyHint(
@@ -600,6 +723,9 @@ fn fillViewInlineHints(
         .concrete => |expr| expr,
         .holey, .implicit_whole_conclusion => return,
     };
+    // Under a holey line, open binders become line holes too: a standard
+    // placeholder per binder would spend a dependency slot on every line.
+    const holey_parent = isHoleyGoalHint(theorem, line_expr);
 
     const allocator = context.allocator;
     const explicit = try allocator.alloc(?ExprId, view.num_binders);
@@ -629,7 +755,10 @@ fn fillViewInlineHints(
             &view_rule,
             hyp,
             bindings,
-            .{},
+            if (holey_parent)
+                .{ .placeholder_factory = .{ .makeFn = mintHintHole } }
+            else
+                .{},
         );
     }
 }

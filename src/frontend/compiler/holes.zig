@@ -306,6 +306,35 @@ pub fn matchTemplateToSurfaceDetailed(
     }
 }
 
+/// Intern a holey surface with a fresh line hole for each hole, for use as an
+/// inline minor's holey hint. Line holes are meta wildcards that spend no
+/// dependency slot, so a theorem may check any number of holey lines. Null
+/// when a hole's sort is unknown.
+pub fn internWithPlaceholders(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    holey: *const Expr,
+) !?ExprId {
+    switch (holey.*) {
+        .hole => |hole| {
+            const sort_name = sortNameById(env, hole.sort) orelse return null;
+            return try theorem.addLineHolePlaceholder(sort_name);
+        },
+        .variable => return try theorem.internParsedExpr(holey),
+        .term => |term| {
+            const args = try theorem.allocator.alloc(ExprId, term.args.len);
+            errdefer theorem.allocator.free(args);
+            for (term.args, 0..) |arg, idx| {
+                args[idx] = (try internWithPlaceholders(theorem, env, arg)) orelse {
+                    theorem.allocator.free(args);
+                    return null;
+                };
+            }
+            return try theorem.interner.internAppOwned(term.id, args);
+        },
+    }
+}
+
 pub fn matchesConcrete(
     parser: *MM0Parser,
     theorem: *const TheoremContext,

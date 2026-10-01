@@ -160,16 +160,17 @@ pub const InferenceContext = struct {
     }
 
     /// True when `expr_id` contains a meta-class placeholder leaf — a Stage 4
-    /// open-target hole lifted into an implicit conclusion hint. Such a leaf
-    /// is a wildcard: it matches anything and must bind nothing (the witness
-    /// is solved by the open path's match-back, never by hint inference).
-    /// Ordinary compiles never intern meta-class placeholders, so this is
-    /// always false outside open backward search.
+    /// open-target hole lifted into an implicit conclusion hint, or a line
+    /// hole in an inline minor's hint under a holey line. Such a leaf is a
+    /// wildcard: it matches anything and must bind nothing (the witness is
+    /// solved by the open path's match-back, never by hint inference).
+    /// Otherwise ordinary compiles never intern meta-class placeholders.
     fn exprContainsMetaWildcard(
         self: *const InferenceContext,
         expr_id: ExprId,
     ) bool {
-        if (!self.theorem.hasMetaPlaceholders()) return false;
+        if (!self.theorem.hasMetaPlaceholders() and
+            !self.theorem.hasLineHoles()) return false;
         return self.exprContainsMetaWildcardWalk(expr_id);
     }
 

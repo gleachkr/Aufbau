@@ -1,40 +1,48 @@
 infer_id
 --------
 
-l1: $ g ⊢ (λ x : a. x) : _ty $ by t_lam (B := $ a $) [t_var []]
+l1: $ g ⊢ (λ x : a. x) : _ty $ by t_lam [t_var []]
+l2: $ g ⊢ (λ x : a. x) : _ty $ by t_lam (B := $ a $) [t_var []]
 
 infer_const
 -----------
 
-l1: $ g ⊢ (λ x : a. λ y : b. x) : _ty $ by t_lam (B := $ b -> a $) [t_lam [t_var []]]
+l1: $ g ⊢ (λ x : a. λ y : b. x) : _ty $ by t_lam [t_lam [t_var []]]
+l2: $ g ⊢ (λ x : a. λ y : b. x) : _ty $ by t_lam (B := $ b -> a $) [t_lam [t_var []]]
 
 infer_app
 ---------
 
-l1: $ g , f : a → b , x : a ⊢ f · x : _ty $ by t_app (A := $ a $, B := $ b $) [t_var [], t_var []]
+l1: $ g , f : a → b , x : a ⊢ f · x : _ty $ by t_app [t_var [], t_var []]
+l2: $ g , f : a → b , x : a ⊢ f · x : _ty $ by t_app (A := $ a $, B := $ b $) [t_var [], t_var []]
 
 infer_app2
 ----------
 
-l1: $ g , f : a → b → c , x : a , y : b ⊢ f · x · y : _ty $ by t_app (A := $ b $, B := $ c $) [t_app (A := $ a $) [t_var [], t_var []], t_var []]
+l1: $ g , f : a → b → c , x : a , y : b ⊢ f · x · y : _ty $ by t_app [t_app [t_var [], t_var []], t_var []]
+l2: $ g , f : a → b → c , x : a , y : b ⊢ f · x · y : _ty $ by t_app (A := $ b $, B := $ c $) [t_app (A := $ a $) [t_var [], t_var []], t_var []]
 
 infer_compose
 -------------
 
-l1: $ g ⊢ (λ f : b → c. λ n : a → b. λ x : a. f · (n · x)) : _ty $ by t_lam (B := $ (a -> b) -> a -> c $) [t_lam [t_lam [t_app (A := $ b $) [t_var [], t_app (A := $ a $) [t_var [], t_var []]]]]]
+l1: $ g ⊢ (λ f : b → c. λ n : a → b. λ x : a. f · (n · x)) : _ty $ by t_lam [t_lam [t_lam [t_app [t_var [], t_app [t_var [], t_var []]]]]]
+l2: $ g ⊢ (λ f : b → c. λ n : a → b. λ x : a. f · (n · x)) : _ty $ by t_lam (B := $ (a -> b) -> a -> c $) [t_lam [t_lam [t_app (A := $ b $) [t_var [], t_app (A := $ a $) [t_var [], t_var []]]]]]
 
 infer_flip
 ----------
 
-l1: $ g ⊢ (λ f : a → b → c. λ y : b. λ x : a. f · x · y) : _ty $ by t_lam (B := $ b -> a -> c $) [t_lam [t_lam [t_app (A := $ b $) [t_app (A := $ a $) [t_var [], t_var []], t_var []]]]]
+l1: $ g ⊢ (λ f : a → b → c. λ y : b. λ x : a. f · x · y) : _ty $ by t_lam [t_lam [t_lam [t_app [t_app [t_var [], t_var []], t_var []]]]]
+l2: $ g ⊢ (λ f : a → b → c. λ y : b. λ x : a. f · x · y) : _ty $ by t_lam (B := $ b -> a -> c $) [t_lam [t_lam [t_app (A := $ b $) [t_app (A := $ a $) [t_var [], t_var []], t_var []]]]]
 
 infer_poly_id
 -------------
 
-l1: $ g ⊢ (Λ a. λ x : a. x) : _ty $ by t_tlam (B := $ a -> a $) [t_lam [t_var []]]
+l1: $ g ⊢ (Λ a. λ x : a. x) : _ty $ by t_tlam [t_lam [t_var []]]
+l2: $ g ⊢ (Λ a. λ x : a. x) : _ty $ by t_tlam (B := $ a -> a $) [t_lam [t_var []]]
 
 infer_tapp
 ----------
 
-l1: $ g ⊢ (Λ a. λ x : a. x) @ b : _ty $ by t_tapp (a := $ a $, B := $ a -> a $) [t_tlam [t_lam [t_var []]]]
+l1: $ g ⊢ (Λ a. λ x : a. x) @ b : _ty $ by t_tapp [t_tlam [t_lam [t_var []]]]
+l2: $ g ⊢ (Λ a. λ x : a. x) @ b : _ty $ by t_tapp (a := $ a $, B := $ a -> a $) [t_tlam [t_lam [t_var []]]]
 

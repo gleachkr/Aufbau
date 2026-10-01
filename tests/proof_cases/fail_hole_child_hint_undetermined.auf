@@ -1,0 +1,5 @@
+bad
+---
+
+l1: $ (Q \/ P _obj) /\ P c $ by and_intro [or_l [q []], pc []]
+l2: $ (Q \/ P c) /\ P c $ by and_intro [or_l [q []], pc []]

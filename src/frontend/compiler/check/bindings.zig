@@ -117,27 +117,44 @@ fn requireConcreteBindingsWithDiagnostic(
     rule: *const RuleDecl,
     line: ApplicationLine,
     partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
 ) ![]const ExprId {
-    for (partial_bindings, 0..) |binding, idx| {
-        if (binding != null) continue;
-        self.setProof(
-            try Inference.buildMissingBinderDiagnostic(
-                allocator,
-                env,
-                theorem,
-                assertion,
-                rule,
-                line,
-                .strict_replay,
-                partial_bindings,
-                partial_bindings,
-                idx,
-                null,
-            ),
-        );
-        return error.MissingBinderAssignment;
+    if (!Inference.hasOmittedBindings(partial_bindings)) {
+        return try Inference.requireConcreteBindings(allocator, partial_bindings);
     }
-    return try Inference.requireConcreteBindings(allocator, partial_bindings);
+    // Report a binder the refs leave open too, not merely the first one
+    // without an explicit value: `or_l [q []]` fixes `a`, so `b` is missing.
+    const inferred = try allocator.dupe(?ExprId, partial_bindings);
+    defer allocator.free(inferred);
+    const snap = try allocator.alloc(?ExprId, inferred.len);
+    defer allocator.free(snap);
+    if (rule.hyps.len == ref_exprs.len) {
+        for (rule.hyps, ref_exprs) |hyp, ref_expr| {
+            @memcpy(snap, inferred);
+            if (!theorem.matchTemplate(hyp, ref_expr, inferred)) @memcpy(inferred, snap);
+        }
+    }
+    const reported = if (std.mem.indexOfScalar(?ExprId, inferred, null) != null)
+        inferred
+    else
+        partial_bindings;
+    const idx = std.mem.indexOfScalar(?ExprId, reported, null).?;
+    self.setProof(
+        try Inference.buildMissingBinderDiagnostic(
+            allocator,
+            env,
+            theorem,
+            assertion,
+            rule,
+            line,
+            .strict_replay,
+            partial_bindings,
+            reported,
+            idx,
+            null,
+        ),
+    );
+    return error.MissingBinderAssignment;
 }
 
 fn concreteBindingsToOptional(
@@ -526,7 +543,31 @@ pub fn inferCandidateBindings(
         },
         .implicit_whole_conclusion => blk: {
             if (had_omitted) {
-                if (expected_conclusion_hint) |hint| {
+                // A hint from a holey goal has holes in it (meta wildcards,
+                // `InlineHints.isHoleyGoalHint`): solve against it as a holey
+                // line, since exact replay skips a whole repeated subterm
+                // that holds a hole, ACUI guesses included.
+                const holey_goal_hint = if (expected_conclusion_hint) |hint|
+                    InlineHints.isHoleyGoalHint(theorem, hint)
+                else
+                    false;
+                if (expected_conclusion_hint) |hint| holey_hint: {
+                    if (!holey_goal_hint) break :holey_hint;
+                    if (try Inference.tryInferHoleyHintStructuralSolver(
+                        self,
+                        context,
+                        line,
+                        partial_bindings,
+                        base_ref_exprs,
+                        hint,
+                        maybe_view,
+                    )) |hint_bindings| {
+                        restoreDiagnostic(self, null);
+                        break :blk hint_bindings;
+                    }
+                }
+                if (expected_conclusion_hint) |hint| plain_hint: {
+                    if (holey_goal_hint) break :plain_hint;
                     if (Inference.inferBindings(
                         self,
                         context,
@@ -674,6 +715,7 @@ pub fn inferCandidateBindings(
                 rule,
                 line,
                 partial_bindings,
+                base_ref_exprs,
             );
         },
         .concrete => |line_expr| blk: {

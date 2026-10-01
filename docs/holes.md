@@ -128,9 +128,10 @@ tokens). Hole identity belongs to the user's line, not to any one
 candidate rule, so the same parsed surface expression is shared across
 the entire `@fallback` chain.
 
-The theorem-local interner stays concrete-only: a holey surface
-expression is never lowered into the theorem DAG until every hole has
-been filled. As a result, the checked IR and MMB emitter remain unchanged.
+The checked lines stay concrete: a holey surface expression never
+reaches the checked IR until every hole has been filled, so the checked
+IR and MMB emitter remain unchanged. The one holey thing interned is an
+inline sub-proof's expected goal (below), which is only a hint.
 
 ### Hole-free fast path is preserved
 
@@ -162,6 +163,26 @@ For a holey line, every candidate (the named rule plus any
 The first candidate that fully succeeds wins. Its concrete conclusion
 is what the rest of the checked-line pipeline sees, and holes are
 gone from that point on.
+
+### Inline sub-proofs
+
+An inline sub-proof gets the part of the line its rule's premise
+covers as its expected goal. When that part has a hole in it, or a
+rule variable the holes leave open, the sub-proof still gets it, with
+an anonymous meta hole in each such place:
+
+```text
+l1: $ (Q \/ P _obj) /\ P c $ by and_intro [or_r [pc []], pc []]
+```
+
+Here `or_r` expects `Q \/ P ‹hole›`, reads `a := Q` from the visible
+part, and its own premise `pc` gives `b := P c`. The sub-proof solves
+against the goal as against a holey line, with the structural solver: a
+rule variable facing a part with a hole takes nothing from it, and the
+hole-free parts match as usual. Meta holes spend no dependency slot,
+so a theorem can hold any number of holey lines. A hole the proof does
+not determine still fails: `or_l [q []]` in place of `or_r [pc []]`
+leaves `or_l`'s `b` open (`MissingBinderAssignment`).
 
 ### Diagnostics surface for failed lines
 

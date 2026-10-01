@@ -1127,6 +1127,53 @@ test "compiler reports which binder assignment is missing" {
     );
 }
 
+test "compiler names the binder an inline minor's refs leave open" {
+    // `q` fixes `or_l`'s `a`; the hole hides `b`, which nothing determines.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\--| @hole _obj
+        \\sort obj;
+        \\term c: obj;
+        \\term P (x: obj): wff;
+        \\term Q: wff;
+        \\term and (a b: wff): wff;
+        \\infixl and: $/\$ prec 20;
+        \\term or (a b: wff): wff;
+        \\infixl or: $\/$ prec 30;
+        \\axiom pc: $ P c $;
+        \\axiom q: $ Q $;
+        \\axiom and_intro (a b: wff): $ a $ > $ b $ > $ a /\ b $;
+        \\axiom or_l (a b: wff): $ a $ > $ a \/ b $;
+        \\theorem bad: $ (Q \/ P c) /\ P c $;
+    ;
+    const proof_src =
+        \\bad
+        \\---
+        \\l1: $ (Q \/ P _obj) /\ P c $ by and_intro [or_l [q []], pc []]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.MissingBinderAssignment,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("or_l", diag.rule_name.?);
+    try std.testing.expectEqualStrings("b", diag.name.?);
+    try std.testing.expectEqual(@as(usize, 1), diag.noteSlice().len);
+    try expectNoteText(
+        "inferred bindings before failure: a = Q",
+        diag.noteSlice()[0],
+    );
+}
+
 test "inference failure names the clashing operator in the conclusion" {
     const mm0_src =
         \\delimiter $ ( ) $;

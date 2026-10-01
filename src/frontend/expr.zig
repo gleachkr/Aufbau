@@ -99,6 +99,11 @@ pub const PlaceholderInfo = struct {
     /// metas, which must stay deferred to leaf forcing. Travels with the leaf
     /// across `clone()`, so no candidate-side bookkeeping is needed.
     reconciliation_meta: bool = false,
+    /// True for a hole the checker put in an inline sub-proof's expected goal
+    /// (`addLineHolePlaceholder`): a line's hole or a binder the holey line
+    /// leaves open. An anonymous meta otherwise; the flag tells the checker
+    /// such a hint from one carrying search metas.
+    line_hole: bool = false,
 };
 
 pub const ExprLeafInfo = struct {
@@ -371,10 +376,15 @@ pub const TheoremContext = struct {
     // freshening code still reasons over one shared u55 dep universe.
     next_placeholder_dep: u32 = 0,
     next_dummy_dep: u32 = 0,
-    /// Count of `.meta`-class placeholders ever minted in this context.
-    /// Lets meta-aware matching short-circuit to "no metas anywhere" in O(1)
-    /// for ordinary theorems (everything outside Stage 4 open search).
+    /// Count of `.meta`-class placeholders ever minted in this context, line
+    /// holes aside. Lets meta-aware matching short-circuit to "no metas
+    /// anywhere" in O(1) for ordinary theorems (everything outside Stage 4
+    /// open search).
     meta_placeholder_count: u32 = 0,
+    /// Count of line holes ever minted (`PlaceholderInfo.line_hole`). Kept
+    /// apart from `meta_placeholder_count` so a holey line's hints leave the
+    /// search gates on that count unchanged for later `auto?` lines.
+    line_hole_count: u32 = 0,
     /// Count of `reconciliation_meta`-flagged placeholders ever minted (a subset
     /// of `meta_placeholder_count`). Lets the eliminator meta-aware match gate
     /// out candidates that carry *only* carry-to-leaf/witness metas (common —
@@ -507,6 +517,7 @@ pub const TheoremContext = struct {
         copy.next_placeholder_dep = self.next_placeholder_dep;
         copy.next_dummy_dep = self.next_dummy_dep;
         copy.meta_placeholder_count = self.meta_placeholder_count;
+        copy.line_hole_count = self.line_hole_count;
         copy.reconciliation_meta_count = self.reconciliation_meta_count;
 
         try copy.parser_vars.ensureTotalCapacity(
@@ -692,7 +703,11 @@ pub const TheoremContext = struct {
             1,
         );
         try self.theorem_placeholders.append(self.allocator, info);
-        self.meta_placeholder_count += 1;
+        if (info.line_hole) {
+            self.line_hole_count += 1;
+        } else {
+            self.meta_placeholder_count += 1;
+        }
         if (info.reconciliation_meta) self.reconciliation_meta_count += 1;
         return try self.interner.internPlaceholder(placeholder_id);
     }
@@ -707,6 +722,20 @@ pub const TheoremContext = struct {
         sort_name: []const u8,
     ) !ExprId {
         return self.mintMetaPlaceholder(.{ .sort_name = sort_name, .deps = 0, .class = .meta });
+    }
+
+    /// Allocate a line hole: an `addMetaPlaceholderResolved` leaf flagged
+    /// `line_hole` (see `PlaceholderInfo`).
+    pub fn addLineHolePlaceholder(
+        self: *TheoremContext,
+        sort_name: []const u8,
+    ) !ExprId {
+        return self.mintMetaPlaceholder(.{
+            .sort_name = sort_name,
+            .deps = 0,
+            .class = .meta,
+            .line_hole = true,
+        });
     }
 
     /// Allocate an eliminator-reconciliation seed meta — an
@@ -757,6 +786,11 @@ pub const TheoremContext = struct {
 
     pub fn hasMetaPlaceholders(self: *const TheoremContext) bool {
         return self.meta_placeholder_count != 0;
+    }
+
+    /// True when any line hole has been minted in this context.
+    pub fn hasLineHoles(self: *const TheoremContext) bool {
+        return self.line_hole_count != 0;
     }
 
     /// True when any `reconciliation_meta` leaf has been minted in this context.

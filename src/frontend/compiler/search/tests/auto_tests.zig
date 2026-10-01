@@ -565,7 +565,7 @@ test "generated child conclusion is checked against the target" {
     );
 }
 
-/// `auto?` in place of `theorem`'s one proof line in
+/// `auto?` in place of `theorem`'s last proof line in
 /// `pass_holey_type_inference`, whose assertion leaves the type as the hole
 /// `_ty`. Requires the first suggestion to compile in place: the line is the
 /// theorem's last, so the type it fills must be the stated one.
@@ -579,8 +579,12 @@ fn expectHoleyTypeInferred(theorem: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const header = try std.fmt.allocPrint(arena.allocator(), "{s}\n", .{theorem});
-    const block = std.mem.indexOf(u8, full_proof, header) orelse return error.MissingTheorem;
-    const by = block + (std.mem.indexOf(u8, full_proof[block..], " $ by ") orelse
+    const header_pos = std.mem.indexOf(u8, full_proof, header) orelse return error.MissingTheorem;
+    // The proof lines run from the blank line under the header to the next.
+    const block = (std.mem.indexOfPos(u8, full_proof, header_pos, "\n\n") orelse
+        return error.MissingProof) + 2;
+    const block_end = std.mem.indexOfPos(u8, full_proof, block, "\n\n") orelse full_proof.len;
+    const by = block + (std.mem.lastIndexOf(u8, full_proof[block..block_end], " $ by ") orelse
         return error.MissingProof) + " $ by ".len;
     const line_end = std.mem.indexOfScalarPos(u8, full_proof, by, '\n') orelse full_proof.len;
     const proof_src = try std.mem.concat(arena.allocator(), u8, &.{
@@ -598,8 +602,7 @@ fn expectHoleyTypeInferred(theorem: []const u8, expected: []const u8) !void {
 test "auto infers the type of a holey typing goal" {
     try expectHoleyTypeInferred(
         "infer_compose",
-        "t_lam (B := $ (a -> b) -> a -> c $) [t_lam [t_lam [t_app (A := $ b $) " ++
-            "[t_var [], t_app (A := $ a $) [t_var [], t_var []]]]]]",
+        "t_lam [t_lam [t_lam [t_app [t_var [], t_app [t_var [], t_var []]]]]]",
     );
 }
 
@@ -609,7 +612,7 @@ test "auto infers the type of a holey typing goal" {
 test "auto infers a type through a nested application" {
     try expectHoleyTypeInferred(
         "infer_app2",
-        "t_app (A := $ b $, B := $ c $) [t_app (A := $ a $) [t_var [], t_var []], t_var []]",
+        "t_app [t_app [t_var [], t_var []], t_var []]",
     );
 }
 

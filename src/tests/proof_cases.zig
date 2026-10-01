@@ -326,6 +326,10 @@ const proof_cases = [_]ProofCase{
     // positions and cited premises still fix it, and the line's visible
     // structure is checked afterwards (the `fail_hole_nested_binder_*` pair).
     .{ .stem = "pass_hole_nested_binder", .outcome = .pass },
+    // A hole inside an inline sub-proof's hint: the sub-proof gets a hint
+    // with the hole in it (`fail_hole_child_hint_undetermined` when the proof
+    // leaves the hole open).
+    .{ .stem = "pass_hole_child_hint", .outcome = .pass },
     .{ .stem = "pass_hole_abstract", .outcome = .pass },
     .{ .stem = "pass_hole_abstract_matrix", .outcome = .pass },
     .{ .stem = "pass_prawitz_holes", .outcome = .pass },
@@ -447,6 +451,10 @@ const proof_cases = [_]ProofCase{
     },
     .{
         .stem = "fail_hole_nested_binder_missing",
+        .outcome = .{ .fail = error.MissingBinderAssignment },
+    },
+    .{
+        .stem = "fail_hole_child_hint_undetermined",
         .outcome = .{ .fail = error.MissingBinderAssignment },
     },
     .{ .stem = "tseitin", .outcome = .pass },

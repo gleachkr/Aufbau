@@ -9,8 +9,8 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 - `auto?` on a line with proof holes finds a proof that fills them. On a
   typing judgment whose type is a hole, `$ g ⊢ (λ x : a. x) : _ty $ by auto?`,
-  it acts as type inference and suggests `t_lam (B := $ a $) [t_var []]`, the
-  binding stating the type. Before, `auto?` tried only one-step proofs on
+  it acts as type inference and suggests `t_lam [t_var []]`; hovering the
+  hole shows the type it gets. Before, `auto?` tried only one-step proofs on
   such lines.
 - The language server offers a **Fill in the holes** code action on a line
   with proof holes. It rewrites the line's assertion with every hole filled
@@ -119,6 +119,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   got none, so `$ g ⊢ (λ x : a. x) : _ty $ by t_lam (B := $ a $) [t_var []]`
   failed (`t_var`'s `g` could not be determined) though the same proof
   checks with the type written out.
+- An inline sub-proof whose expected goal has a hole in it, or a rule
+  variable the holes leave open, now gets that goal with the hole in it.
+  `$ (Q \/ P _obj) /\ P c $ by and_intro [or_r [pc []], pc []]` and
+  `$ g ⊢ (λ x : a. x) : _ty $ by t_lam [t_var []]` now check. Before, the
+  sub-proof got no expected goal, so `or_r`'s `a` and `t_var`'s type could
+  not be determined, and only `t_lam (B := $ a $) [t_var []]` checked.
+- When a line's rule variable cannot be determined, the error names one the
+  cited premises leave open too. Before, `or_l [q []]` with its `b` hidden
+  by a hole was reported as missing `a`, which `q` determines.
 - A holey line whose visible parts equal the rule's conclusion only up to
   ACUI (a context rebuilt from a sub-proof in another association or member
   order) is accepted.
