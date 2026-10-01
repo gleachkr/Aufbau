@@ -38,7 +38,9 @@ pub const PlaceholderFactory = struct {
     /// Like `make`, but mints with an explicit kind, overriding `self.kind`.
     /// Used by the open walk to mint a bound-class binder as a `.bound_choice`
     /// meta (grounded to an `@vars`-pool dummy) while the rest of the template
-    /// defers to the factory's default `.existential` kind.
+    /// defers to the factory's default `.existential` kind. Without `makeFn`
+    /// it mints an anonymous hole: an unknown of the sort that matches anything
+    /// and spends no dependency slot.
     pub fn makeKind(
         self: PlaceholderFactory,
         theorem: *TheoremContext,
@@ -48,7 +50,7 @@ pub const PlaceholderFactory = struct {
         if (self.makeFn) |make_fn| {
             return try make_fn(self.context, theorem, sort_name, kind);
         }
-        return try theorem.addPlaceholderResolved(sort_name);
+        return try theorem.addMetaPlaceholderResolved(sort_name);
     }
 };
 
@@ -70,6 +72,10 @@ pub const TargetMatchOptions = struct {
     target_placeholders: TargetPlaceholderMode = .rigid,
 };
 
+/// `bindings` with a stand-in for each unknown argument. The stand-ins are
+/// bindings the probe's dependency checks read, so a bound binder gets a fresh
+/// bound-variable placeholder (a distinct variable) and an ordinary one an
+/// anonymous meta hole, which spends no dependency slot.
 pub fn fillOptionalBindingsForProbe(
     theorem: *TheoremContext,
     rule: *const RuleDecl,
@@ -79,8 +85,11 @@ pub fn fillOptionalBindingsForProbe(
     const concrete = try allocator.alloc(ExprId, bindings.len);
     errdefer allocator.free(concrete);
     for (bindings, 0..) |binding, idx| {
-        concrete[idx] = binding orelse
-            try theorem.addPlaceholderResolved(rule.args[idx].sort_name);
+        const arg = rule.args[idx];
+        concrete[idx] = binding orelse if (arg.bound)
+            try theorem.addPlaceholderResolved(arg.sort_name)
+        else
+            try theorem.addMetaPlaceholderResolved(arg.sort_name);
     }
     return concrete;
 }
@@ -712,6 +721,52 @@ test "unresolved binder under ACUI combiner collapses to whole wildcard" {
     );
 }
 
+test "holey instantiation renders every unknown as a hole" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var env = GlobalEnv.init(allocator);
+    var registry = RewriteRegistry.init(allocator);
+    const f = try appendTerm(&env, "f", "wff");
+    const comma = try appendTerm(&env, "comma", "ctx");
+    try registry.acui_by_head.put(comma, StructuralCombiner{
+        .unit_term_name = "emp",
+        .assoc_name = "comma_assoc",
+        .comm_name = "comma_comm",
+        .idem_name = "comma_idem",
+    });
+    var theorem = TheoremContext.init(std.testing.allocator);
+    defer theorem.deinit();
+
+    // f(a, x, comma(g, g')): `a` ordinary, `x` bound, the comma subtree open.
+    // Each is an unknown in a pattern, so each is a hole, the bound one too.
+    const args = [_]ArgInfo{
+        argInfo("obj"),
+        .{ .sort_name = "obj", .bound = true, .deps = 1 },
+        argInfo("ctx"),
+    };
+    const ctx_args = [_]TemplateExpr{ .{ .binder = 2 }, .{ .binder = 2 } };
+    const tmpl_args = [_]TemplateExpr{ .{ .binder = 0 }, .{ .binder = 1 }, tmplApp(comma, &ctx_args) };
+    const template = tmplApp(f, &tmpl_args);
+    const rule = testRule(&args, template);
+    const bindings = [_]?ExprId{ null, null, null };
+
+    const result = (try instantiateTemplateHoley(
+        &theorem,
+        &env,
+        &registry,
+        &rule,
+        template,
+        &bindings,
+        .{},
+    )) orelse return error.ExpectedHoleyInstantiation;
+    const result_args = theorem.interner.node(result).*.app.args;
+    for (result_args) |arg| {
+        try std.testing.expectEqual(.meta, theorem.placeholderClass(theorem.interner.node(arg).*.placeholder));
+    }
+}
+
 test "wildcard target matching binds no rule binders" {
     var theorem = TheoremContext.init(std.testing.allocator);
     defer theorem.deinit();
@@ -726,6 +781,30 @@ test "wildcard target matching binds no rule binders" {
         .{ .target_placeholders = .wildcard },
     ));
     try std.testing.expect(bindings[0] == null);
+}
+
+test "probe fill spends a dependency slot only on a bound binder" {
+    var theorem = TheoremContext.init(std.testing.allocator);
+    defer theorem.deinit();
+    const args = [_]ArgInfo{
+        argInfo("obj"),
+        .{ .sort_name = "obj", .bound = true, .deps = 1 },
+    };
+    const rule = testRule(&args, .{ .binder = 0 });
+
+    const filled = try fillOptionalBindingsForProbe(&theorem, &rule, &.{ null, null });
+    defer std.testing.allocator.free(filled);
+    const ordinary = theorem.interner.node(filled[0]).*.placeholder;
+    const bound = theorem.interner.node(filled[1]).*.placeholder;
+    try std.testing.expectEqual(.meta, theorem.placeholderClass(ordinary));
+    try std.testing.expectEqual(.standard, theorem.placeholderClass(bound));
+
+    // A hole needs no slot, so the probe still fills the ordinary binder
+    // once every slot is taken.
+    while (theorem.depSlotsLeft() > 0) _ = try theorem.addPlaceholderResolved("obj");
+    const refilled = try fillOptionalBindingsForProbe(&theorem, &rule, &.{ null, filled[1] });
+    defer std.testing.allocator.free(refilled);
+    try std.testing.expect(theorem.isPlaceholder(refilled[0]));
 }
 
 test "repeated unresolved binder can share one logical unknown" {

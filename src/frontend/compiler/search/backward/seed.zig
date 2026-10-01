@@ -348,7 +348,7 @@ fn makeViewConclSeed(
     return seed;
 }
 
-fn exprContainsMetaLeaf(
+pub fn exprContainsMetaLeaf(
     theorem: *const TheoremContext,
     expr_id: ExprId,
 ) bool {

@@ -2154,9 +2154,8 @@ fn instantiateTemplateQueryInner(
                 return error.TemplateBinderOutOfRange;
             }
             if (bindings[idx]) |expr| break :blk expr;
-            const placeholder = try theorem.addPlaceholderResolved(
-                args[idx].sort_name,
-            );
+            // The query is a goal to match, so an unknown is a hole.
+            const placeholder = try theorem.addMetaPlaceholderResolved(args[idx].sort_name);
             bindings[idx] = placeholder;
             has_placeholder.* = true;
             break :blk placeholder;

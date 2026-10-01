@@ -551,6 +551,9 @@ const proof_cases = [_]ProofCase{
     // An inline minor under a @view rule takes its hint from the view premise
     // while the rule premise is blocked on the open witness.
     .{ .stem = "pass_view_inline_minor_hint", .outcome = .pass },
+    // An inline minor's hint holds a hole for the parent's unknown witness;
+    // the hole must constrain nothing, not stand in for a bound variable.
+    .{ .stem = "pass_inline_hint_unknown_witness", .outcome = .pass },
     .{ .stem = "pass_view_materialized_nonderived", .outcome = .pass },
     .{ .stem = "pass_view_recover_free_hole_auto", .outcome = .pass },
     .{ .stem = "pass_view_recover_symbolic_hole", .outcome = .pass },

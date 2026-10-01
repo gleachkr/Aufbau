@@ -15,6 +15,7 @@ const plausible = @import("./plausible.zig");
 const match = @import("./match.zig");
 const prune = @import("./prune.zig");
 const lockstep = @import("./lockstep.zig");
+const seed = @import("./seed.zig");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const PoolVars = @import("../../vars.zig").PoolVars;
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -311,7 +312,7 @@ pub fn validateSelectedRefs(
     // retry below can rescue must never be memoized as terminal.
     const unify_retry_scope = (goal == .implicit_whole_conclusion and
         context.views.contains(candidate.rule_id) and
-        candidate.theorem.hasMetaPlaceholders()) or
+        goalCarriesMeta(&candidate.theorem, goal)) or
         // `@auto eager` candidates: the search fully resolves an eager rule's
         // binders (class-1 shape + forced split complement), but the eager
         // ladder freely reorders ACUI members, so the ACUI-blind strict
@@ -364,7 +365,7 @@ pub fn validateSelectedRefs(
         // a whole subtree at the wildcard, so inference itself dies before the
         // hypothesis comparison. Either way the search already resolved the
         // binder; hand the checker the values. The UnifyMismatch arm is scoped
-        // to meta-bearing VIEW-rule candidates — the only population
+        // to VIEW-rule candidates whose goal carries a meta — the only population
         // `solveCarriedViewMetas` rewrites — because eliminator-seed-meta
         // candidates (martin_lof `nat_ind_elim`) reject with UnifyMismatch in
         // bulk and a blanket retry re-runs the checker on every one of them
@@ -861,4 +862,11 @@ fn slotRankIndex(
 ) usize {
     if (idx < generated.len and generated[idx] != null) return pool_len;
     return maybe_pool_index orelse 0;
+}
+
+/// True when the goal's hint holds a meta leaf, i.e. a witness the search
+/// carried down from an ancestor goal.
+fn goalCarriesMeta(theorem: *const TheoremContext, goal: Goal) bool {
+    const hint = goal.expectedHint() orelse return false;
+    return seed.exprContainsMetaLeaf(theorem, hint);
 }

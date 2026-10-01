@@ -548,9 +548,9 @@ const scenarios = [_]Scenario{
         .marker = "auto?",
         // The search validates the inline `ex_intro` with its `@recover`
         // pattern binder `p` given (bottom-up, `∃ x p` can't be rebuilt from
-        // `t` alone), but the whole line re-infers `p` from the goal, so only
-        // the witness is printed.
-        .expected_replacement = "imp_intro [ex_intro (t := $ A $) [ax []]]",
+        // `t` alone), but the whole line re-infers `p` from the goal, and the
+        // checker recovers the witness from `ax []`, so no binding is printed.
+        .expected_replacement = "imp_intro [ex_intro [ax []]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{
@@ -562,9 +562,9 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/zermelo_exists_intro_stage5.mm0",
         .proof_path = "tests/search_bench_cases/nd_exists_intro_self_auto.auf",
         .marker = "auto?",
-        // Only the witness `t` is printed; the whole line re-infers the
-        // repeated-meta body `?t ∈ ?t` → `x ∈ x` from the goal.
-        .expected_replacement = "imp_intro [ex_intro (t := $ A $) [ax []]]",
+        // No binding is printed: the whole line re-infers the repeated-meta
+        // body `?t ∈ ?t` → `x ∈ x` from the goal, and the witness from `ax []`.
+        .expected_replacement = "imp_intro [ex_intro [ax []]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{

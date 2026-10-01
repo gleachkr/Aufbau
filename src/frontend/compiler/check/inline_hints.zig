@@ -217,8 +217,7 @@ pub fn inferExpectedRefsForInlineApplicationProbe(
     };
 
     // Under a holey line, open binders become line holes, as in
-    // `fillViewInlineHints`: a standard placeholder per binder would spend a
-    // dependency slot on every nested line.
+    // `fillViewInlineHints`, so the minor's hint is itself a holey goal hint.
     const missing: OpenTerms.MissingBinderContext = if (mode == .holey and
         isHoleyGoalHint(theorem, line_expr))
         .{ .placeholder_factory = .{ .makeFn = mintHintHole } }
@@ -594,8 +593,8 @@ fn fillRuleHoleyInlineHints(
 }
 
 /// True when `hint` came from a holey goal: it holds a line hole (a line's
-/// hole, or a binder the goal left open). Other holey hints use standard
-/// placeholders, and search's hints carry its own metas.
+/// hole, or a binder the goal left open). Other holey hints hold plain meta
+/// holes, and search's hints carry its own metas.
 pub fn isHoleyGoalHint(theorem: *const TheoremContext, hint: ExprId) bool {
     if (!theorem.hasLineHoles()) return false;
     return theorem.exprAny(hint, {}, isLineHoleNode);
@@ -696,8 +695,8 @@ fn fillViewInlineHints(
         .concrete => |expr| expr,
         .holey, .implicit_whole_conclusion => return,
     };
-    // Under a holey line, open binders become line holes too: a standard
-    // placeholder per binder would spend a dependency slot on every line.
+    // Under a holey line, open binders become line holes too, so the minor's
+    // hint is itself a holey goal hint.
     const holey_parent = isHoleyGoalHint(theorem, line_expr);
 
     const allocator = context.allocator;

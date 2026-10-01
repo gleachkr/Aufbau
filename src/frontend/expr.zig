@@ -1027,10 +1027,10 @@ pub const TheoremContext = struct {
                     // A meta stands for an arbitrary expression of its sort,
                     // not a bound-variable stand-in, except a seed meta, which
                     // stands for a def's hidden variable and carries its dep
-                    // bit. Live
-                    // metas must be solved before validation ever consults
-                    // leaf info, so this is a conservative default, not a
-                    // load-bearing answer.
+                    // bit. Search metas are solved before validation consults
+                    // leaf info, and a hole in a hint or query is never bound,
+                    // so this is a conservative default, not a load-bearing
+                    // answer.
                     .meta => .{
                         .sort_name = placeholder.sort_name,
                         .bound = placeholder.reconciliation_meta,

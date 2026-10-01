@@ -108,20 +108,6 @@ fn snapshotEmbedsMeta(theorem: *const TheoremContext, snapshot: []const ?ExprId)
     return false;
 }
 
-/// Mint a dep-free `.meta`-class placeholder for an open binder of a holey
-/// instantiation. Used instead of the default (standard, dep-consuming) factory
-/// so the meta-aware hypothesis match — which re-instantiates per ref attempt —
-/// cannot exhaust the scarce u55 dependency-bit space (`DependencySlotExhausted`).
-/// Unregistered in any store, so `solveCorrespondence` treats it as a wildcard.
-fn mintMetaPlaceholder(
-    _: ?*anyopaque,
-    theorem: *TheoremContext,
-    sort_name: []const u8,
-    _: OpenTerms.MetaKind,
-) anyerror!ExprId {
-    return theorem.addMetaPlaceholderResolved(sort_name);
-}
-
 /// True when `expr_id` mentions a reconciliation seed meta.
 fn exprMentionsReconciliationMeta(
     theorem: *const TheoremContext,
@@ -190,9 +176,10 @@ fn tryMetaAwareHypMatch(
     if (!has_meta) return false;
 
     // Instantiate the hypothesis with the current (meta-laden) bindings; open
-    // binders render as dep-free, store-unregistered meta placeholders so they
+    // binders render as holes, store-unregistered meta placeholders, so they
     // match the ref freely (`solveCorrespondence` has no opinion on a placeholder
-    // absent from the store) without consuming dependency slots.
+    // absent from the store). A hole spends no dependency slot, so the per-ref
+    // re-instantiation cannot exhaust them.
     const pattern = (try OpenTerms.instantiateTemplateHoley(
         theorem,
         context.env,
@@ -200,7 +187,7 @@ fn tryMetaAwareHypMatch(
         rule,
         template,
         bindings,
-        .{ .placeholder_factory = .{ .makeFn = mintMetaPlaceholder } },
+        .{},
     )) orelse return false;
 
     // NOTE on ACUI soundness: `solveCorrespondence` matches a commutative-ACUI
