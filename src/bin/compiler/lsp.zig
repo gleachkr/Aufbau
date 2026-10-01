@@ -1001,6 +1001,9 @@ pub const Handler = struct {
         if (try self.unpackCodeAction(arena, nav, offset)) |action| {
             try actions.append(arena, .{ .CodeAction = action });
         }
+        if (try self.fillHolesCodeAction(arena, nav, offset)) |action| {
+            try actions.append(arena, .{ .CodeAction = action });
+        }
         if (actions.items.len == 0) return null;
         return try actions.toOwnedSlice(arena);
     }
@@ -1034,6 +1037,25 @@ pub const Handler = struct {
             .@"refactor.rewrite",
             suggestion.replace_span,
             suggestion.replacement,
+        );
+    }
+
+    /// Offer to write a checked holey line's conclusion over its assertion,
+    /// filling in every hole on the line.
+    fn fillHolesCodeAction(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        nav: NavigationSnapshot,
+        offset: usize,
+    ) !?types.CodeAction {
+        const fill = nav.snapshot.holeFillAt(offset) orelse return null;
+        return try self.replacementCodeAction(
+            arena,
+            nav.side().*,
+            "Fill in the holes",
+            .@"refactor.rewrite",
+            .{ .start = fill.assertion.start, .end = fill.assertion.end },
+            fill.replacement,
         );
     }
 

@@ -467,6 +467,14 @@ fn collectHoleInferences(
         surface,
         concrete,
     );
+    const filled = try ViewTrace.formatExprSource(
+        sink.allocator,
+        theorem,
+        env,
+        &names,
+        concrete,
+    ) orelse return;
+    try sink.addAssertionOwned(line.span, line.assertion.span, filled);
 }
 
 fn collectHoleInferencesRecursive(

@@ -68,6 +68,15 @@ fn analyzeDump(
             hole.expression,
         });
     }
+    for (holes.assertions.items) |filled| {
+        try writer.print("filled {d}-{d} {d}-{d} {s}\n", .{
+            filled.line.start,
+            filled.line.end,
+            filled.assertion.start,
+            filled.assertion.end,
+            filled.text,
+        });
+    }
     for (inlines.items.items) |item| {
         try writer.print("inline {d}-{d} {s}\n", .{
             item.span.start,

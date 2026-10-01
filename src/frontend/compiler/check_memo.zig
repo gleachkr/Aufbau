@@ -50,12 +50,13 @@ const RuleCatalog = @import("./rule_catalog.zig");
 const Context = @import("./context.zig");
 const CompilerContext = Context.CompilerContext;
 const HoleInference = Context.HoleInference;
+const FilledAssertion = Context.FilledAssertion;
 const InlineConclusion = Context.InlineConclusion;
 
 pub const CheckMemo = struct {
     /// Bumped when what a check observes, or what an entry stores, changes
     /// shape, so a stale entry can never match.
-    const schema_version: u32 = 2;
+    const schema_version: u32 = 3;
     pub const default_max_entries: usize = 4096;
 
     pub const Key = struct {
@@ -86,6 +87,8 @@ pub const CheckMemo = struct {
         /// Null when the check ran without the sink, so its entries
         /// are unknown.
         holes: ?[]const HoleInference,
+        /// Recorded with `holes`, from the same sink.
+        assertions: []const FilledAssertion,
         inlines: ?[]const InlineConclusion,
         lookups: []const CatalogLookup,
 
@@ -119,6 +122,13 @@ pub const CheckMemo = struct {
                         try sink.allocator.dupe(u8, hole.expression),
                     );
                 }
+                for (self.assertions) |filled| {
+                    try sink.addAssertionOwned(
+                        shiftSpan(filled.line, delta),
+                        shiftSpan(filled.assertion, delta),
+                        try sink.allocator.dupe(u8, filled.text),
+                    );
+                }
             }
             if (ctx.inline_conclusion_sink) |sink| {
                 for (self.inlines.?) |inline_conclusion| {
@@ -147,6 +157,7 @@ pub const CheckMemo = struct {
         dropped_primary: usize,
         dropped_warnings: usize,
         holes: usize,
+        assertions: usize,
         inlines: usize,
     };
 
@@ -315,6 +326,7 @@ pub const CheckMemo = struct {
             .dropped_primary = ctx.diagnostics.dropped_primary_diagnostic_count,
             .dropped_warnings = ctx.diagnostics.dropped_warning_count,
             .holes = if (ctx.hole_inference_sink) |sink| sink.items.items.len else 0,
+            .assertions = if (ctx.hole_inference_sink) |sink| sink.assertions.items.len else 0,
             .inlines = if (ctx.inline_conclusion_sink) |sink| sink.items.items.len else 0,
         };
     }
@@ -374,6 +386,7 @@ pub const CheckMemo = struct {
             .warnings = &.{},
             .last_diagnostic = null,
             .holes = null,
+            .assertions = &.{},
             .inlines = null,
             .lookups = &.{},
         };
@@ -407,7 +420,18 @@ pub const CheckMemo = struct {
                     .expression = try arena.dupe(u8, item.expression),
                 };
             }
+            const filled_items = holes.assertions.items[recording.assertions..];
+            const filled_copies = try arena.alloc(FilledAssertion, filled_items.len);
+            for (filled_items, filled_copies) |item, *copy| {
+                if (!spanWithin(item.line, block)) return;
+                copy.* = .{
+                    .line = item.line,
+                    .assertion = item.assertion,
+                    .text = try arena.dupe(u8, item.text),
+                };
+            }
             entry.holes = copies;
+            entry.assertions = filled_copies;
         }
         if (ctx.inline_conclusion_sink) |inlines| {
             const items = inlines.items.items[recording.inlines..];

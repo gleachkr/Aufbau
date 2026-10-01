@@ -240,6 +240,44 @@ pub fn formatExprNamed(
     return try formatExpr(allocator, theorem, env, expr_id);
 }
 
+/// Render `expr_id` as math text a proof can contain: notation-aware, with
+/// every variable under its source name. Null when some variable or
+/// placeholder has no source name (an anonymous dummy, a search
+/// placeholder), since no text would parse back to it.
+pub fn formatExprSource(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names: *const DiagNames,
+    expr_id: ExprId,
+) !?[]const u8 {
+    const view = interner_view.View(SourceResolver){
+        .resolver = .{ .names = names },
+        .theorem = theorem,
+        .env = env,
+    };
+    return try pretty_print.render(allocator, names.parser, view, expr_id);
+}
+
+const SourceResolver = struct {
+    names: *const DiagNames,
+
+    pub fn variableAtom(
+        self: SourceResolver,
+        var_id: VarId,
+    ) pretty_print.NodeInfo(ExprId) {
+        if (self.names.lookup(var_id)) |name| return .{ .atom = name };
+        return .missing;
+    }
+
+    pub fn placeholderAtom(
+        _: SourceResolver,
+        _: PlaceholderId,
+    ) pretty_print.NodeInfo(ExprId) {
+        return .missing;
+    }
+};
+
 /// Name resolver for the diagnostic `interner_view.View`. Resolves real source
 /// names through `DiagNames`, and synthesizes an internal coordinate (`v#`,
 /// `.d#`, `.p#`) for any variable/placeholder without one — so a diagnostic
@@ -565,4 +603,58 @@ fn containsIndex(items: []const usize, needle: usize) bool {
         if (item == needle) return true;
     }
     return false;
+}
+
+test "formatExprSource prints source names and refuses an unnamed variable" {
+    const src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term and (a b: wff): wff;
+        \\infixl and: $/\$ prec 30;
+        \\theorem thm (a b: wff): $ a $;
+    ;
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var parser = MM0Parser.init(src, arena);
+    var env = GlobalEnv.init(arena);
+    var theorem = TheoremContext.init(arena);
+    defer theorem.deinit();
+    var name_exprs = std.StringHashMap(*const Expr).init(arena);
+    while (try parser.next()) |stmt| {
+        try env.addStmt(stmt);
+        switch (stmt) {
+            .assertion => |assertion| {
+                try theorem.seedAssertion(assertion);
+                for (assertion.arg_names, assertion.arg_exprs) |name, expr| {
+                    try name_exprs.put(name.?, expr);
+                }
+            },
+            else => {},
+        }
+    }
+    var names = try DiagNames.build(arena, &theorem, &parser, &name_exprs);
+    defer names.deinit(arena);
+
+    const named = try theorem.internParsedExpr(
+        try parser.parseFormulaText("(a -> b) /\\ a", &name_exprs),
+    );
+    const text = try formatExprSource(arena, &theorem, &env, &names, named);
+    try std.testing.expectEqualStrings("(a -> b) /\\ a", text.?);
+
+    const dummy = try theorem.addDummyVarResolved("wff", 0);
+    const with_dummy = try theorem.interner.internApp(
+        env.term_names.get("imp").?,
+        &.{ theorem.theorem_vars.items[0], dummy },
+    );
+    try std.testing.expect(
+        (try formatExprSource(arena, &theorem, &env, &names, with_dummy)) == null,
+    );
+    const placeholder = try theorem.interner.internPlaceholder(0);
+    try std.testing.expect(
+        (try formatExprSource(arena, &theorem, &env, &names, placeholder)) == null,
+    );
 }

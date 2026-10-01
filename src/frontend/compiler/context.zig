@@ -16,16 +16,47 @@ pub const HoleInference = struct {
     expression: []const u8,
 };
 
+/// A holey line's assertion with every hole filled in, printed so it
+/// parses back to the line's checked conclusion.
+pub const FilledAssertion = struct {
+    /// The whole proof line.
+    line: Span,
+    /// The assertion's math string, `$` delimiters included.
+    assertion: Span,
+    /// The filled math text, without delimiters.
+    text: []const u8,
+};
+
 pub const HoleInferenceSink = struct {
     allocator: std.mem.Allocator,
     items: std.ArrayListUnmanaged(HoleInference) = .{},
+    /// Only for lines whose conclusion prints with source names.
+    assertions: std.ArrayListUnmanaged(FilledAssertion) = .{},
 
     pub fn deinit(self: *HoleInferenceSink) void {
         for (self.items.items) |item| {
             self.allocator.free(item.expression);
         }
         self.items.deinit(self.allocator);
+        for (self.assertions.items) |item| {
+            self.allocator.free(item.text);
+        }
+        self.assertions.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    pub fn addAssertionOwned(
+        self: *HoleInferenceSink,
+        line: Span,
+        assertion: Span,
+        text: []const u8,
+    ) !void {
+        errdefer self.allocator.free(text);
+        try self.assertions.append(self.allocator, .{
+            .line = line,
+            .assertion = assertion,
+            .text = text,
+        });
     }
 
     pub fn addOwned(

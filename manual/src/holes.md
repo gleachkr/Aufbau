@@ -38,7 +38,8 @@ Each hole is filled from the rule application on its own line. `and_elim_l`
 carries the context of `l1` down to `l2`, `not_elim` joins the contexts of its
 two premises, and `or_elim` joins three contexts. You can hover a hole to see
 what it was filled with: the `_ctx` on `l9` should become `a ∨ b , ¬ a ∧ ¬ b ,
-¬ a ∧ ¬ b`.
+¬ a ∧ ¬ b`. To write the fillings into the proof, use the **Fill in the
+holes** code action on the line.
 
 Line `l2` shows that a line may have more than one hole, and that holes are not
 restricted to contexts. Each occurrence of a hole token is a separate hole, so

@@ -1436,6 +1436,135 @@ test "LSP proof hole hover survives the diagnostics pass's check memo" {
     try expectProofHoleHover(true);
 }
 
+/// The fill-holes code action offered at `offset` of the proof text, or
+/// null when there is none.
+fn fillHolesAction(
+    handler: *Handler,
+    arena: std.mem.Allocator,
+    proof_uri: []const u8,
+    proof_text: []const u8,
+    offset: usize,
+) !?types.CodeAction {
+    const position = lsp.offsets.indexToPosition(proof_text, offset, .@"utf-16");
+    const result = try handler.@"textDocument/codeAction"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .range = .{ .start = position, .end = position },
+        .context = .{ .diagnostics = &.{} },
+    });
+    const items = result orelse return null;
+    for (items) |item| switch (item) {
+        .CodeAction => |action| {
+            if (std.mem.eql(u8, action.title, "Fill in the holes")) return action;
+        },
+        .Command => {},
+    };
+    return null;
+}
+
+/// Fill a holey line's holes from the code action. With `open`, the
+/// diagnostics pass records the blocks in the check memo first.
+fn expectFillHolesAction(open: bool) !void {
+    const mm0_uri = "file:///tmp/lsp-fill-holes.mm0";
+    const proof_uri = "file:///tmp/lsp-fill-holes.auf";
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\term pair (a b: wff): wff;
+        \\term imp (a b: wff): wff;
+        \\infixr imp: $->$ prec 25;
+        \\term and (a b: wff): wff;
+        \\infixr and: $/\$ prec 30;
+        \\axiom select_left (a b: wff): $ pair a b $ > $ a $;
+        \\axiom select_right (a b: wff): $ pair a b $ > $ b $;
+        \\axiom and_i (a b: wff): $ a $ > $ b $ > $ a /\ b $;
+        \\theorem main (p r s: wff):
+        \\  $ pair p (r -> s) $ > $ (r -> s) /\ p $;
+    ;
+    // No newline at the end: the last line's range ends with the text.
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ p $ by select_left [#1]
+        \\l2: $ _wff $ by select_right [#1]
+        \\l3: $ _wff /\ p $ by and_i [l2, l1]
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    if (open) {
+        try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "aufbau",
+            .version = 1,
+            .text = proof_text,
+        } });
+        try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
+    } else {
+        try handler.putDocument(proof_uri, proof_text, 1);
+    }
+
+    const l1 = std.mem.indexOf(u8, proof_text, "l1:").?;
+    const l2 = std.mem.indexOf(u8, proof_text, "l2:").?;
+    const l3 = std.mem.indexOf(u8, proof_text, "l3:").?;
+
+    // A line without holes offers nothing.
+    try std.testing.expect(
+        (try fillHolesAction(&handler, arena, proof_uri, proof_text, l1)) == null,
+    );
+
+    const whole = (try fillHolesAction(
+        &handler,
+        arena,
+        proof_uri,
+        proof_text,
+        l2 + 8,
+    )) orelse return error.ExpectedFillAction;
+    try std.testing.expectEqual(
+        types.CodeActionKind.@"refactor.rewrite",
+        whole.kind.?,
+    );
+    const whole_edit = codeActionSingleEdit(whole, proof_uri) orelse
+        return error.ExpectedCodeActionEdit;
+    try expectRangeText(proof_text, whole_edit.range, "$ _wff $");
+    try std.testing.expectEqualStrings("$ r -> s $", whole_edit.newText);
+
+    // The start of l3 is just past l2's newline: the fill is l3's, and the
+    // looser `->` filling gets parentheses under `/\`.
+    for ([_]usize{ l3, proof_text.len }) |offset| {
+        const nested = (try fillHolesAction(
+            &handler,
+            arena,
+            proof_uri,
+            proof_text,
+            offset,
+        )) orelse return error.ExpectedFillAction;
+        const nested_edit = codeActionSingleEdit(nested, proof_uri) orelse
+            return error.ExpectedCodeActionEdit;
+        try expectRangeText(proof_text, nested_edit.range, "$ _wff /\\ p $");
+        try std.testing.expectEqualStrings(
+            "$ (r -> s) /\\ p $",
+            nested_edit.newText,
+        );
+    }
+}
+
+test "LSP code action fills a holey line's holes" {
+    try expectFillHolesAction(false);
+}
+
+test "LSP fill-holes code action survives the diagnostics pass's check memo" {
+    try expectFillHolesAction(true);
+}
+
 test "LSP proof hover resolves rule applications" {
     const mm0_uri = "file:///tmp/lsp-stage2.mm0";
     const proof_uri = "file:///tmp/lsp-stage2.auf";

@@ -3,6 +3,7 @@ comptime {
     _ = @import("./tests/fresh.zig");
     _ = @import("./frontend/pretty_print.zig");
     _ = @import("./frontend/text_util.zig");
+    _ = @import("./frontend/view_trace.zig");
     _ = @import("./frontend/compiler/check_memo.zig");
     // Must be a same-module comptime import: the test runner only collects
     // test decls reachable from the root module, so the previous routing

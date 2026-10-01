@@ -12,6 +12,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   it acts as type inference and suggests `t_lam (B := $ a $) [t_var []]`, the
   binding stating the type. Before, `auto?` tried only one-step proofs on
   such lines.
+- The language server offers a **Fill in the holes** code action on a line
+  with proof holes. It rewrites the line's assertion with every hole filled
+  in, so `$ _wff /\ p $` becomes `$ (r -> s) /\ p $`.
 
 ### Changed
 

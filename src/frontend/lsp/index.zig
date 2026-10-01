@@ -35,6 +35,21 @@ const InferredHoleHover = struct {
     markdown: []const u8,
 };
 
+/// A holey proof line's assertion with its holes filled in.
+pub const HoleFill = struct {
+    /// The whole proof line.
+    line: SourceRange,
+    /// The assertion's math string, `$` delimiters included.
+    assertion: SourceRange,
+    /// The math string to put in its place, delimiters included.
+    replacement: []const u8,
+};
+
+const HoleInfo = struct {
+    hovers: []const InferredHoleHover = &.{},
+    fills: []const HoleFill = &.{},
+};
+
 pub const Snapshot = struct {
     arena: std.heap.ArenaAllocator,
     mm0_uri: []const u8,
@@ -45,6 +60,7 @@ pub const Snapshot = struct {
     decl_by_name: std.StringHashMapUnmanaged(usize),
     symbols: []const NavigationSymbol,
     inferred_hole_hovers: []const InferredHoleHover,
+    hole_fills: []const HoleFill,
     mm0_outline: []const OutlineSymbol,
     proof_outline: []const OutlineSymbol,
     proof_blocks: []const ProofBlockInfo,
@@ -80,10 +96,10 @@ pub const Snapshot = struct {
         if (proof_text) |text| {
             try builder.indexProof(text);
         }
-        const inferred_hole_hovers = if (proof_text) |text|
-            try buildInferredHoleHovers(arena, mm0_text, text, input.check_memo)
+        const hole_info: HoleInfo = if (proof_text) |text|
+            try buildHoleInfo(arena, mm0_text, text, input.check_memo)
         else
-            &.{};
+            .{};
 
         return .{
             .arena = arena_state,
@@ -94,7 +110,8 @@ pub const Snapshot = struct {
             .declarations = try builder.declarations.toOwnedSlice(arena),
             .decl_by_name = builder.decl_by_name,
             .symbols = try builder.symbols.toOwnedSlice(arena),
-            .inferred_hole_hovers = inferred_hole_hovers,
+            .inferred_hole_hovers = hole_info.hovers,
+            .hole_fills = hole_info.fills,
             .mm0_outline = try builder.mm0_outline.toOwnedSlice(arena),
             .proof_outline = try builder.proof_outline.toOwnedSlice(arena),
             .proof_blocks = try builder.proof_blocks.toOwnedSlice(arena),
@@ -132,6 +149,23 @@ pub const Snapshot = struct {
             .range = hit.source_range,
             .markdown = hit.markdown,
         };
+    }
+
+    /// The fill for the holey proof line containing `offset`, if its
+    /// filled assertion can be written in the proof. A line's range ends
+    /// past its newline, so only a line ending the text also takes the
+    /// offset just past its end.
+    pub fn holeFillAt(self: *const Snapshot, offset: usize) ?HoleFill {
+        const text_len = if (self.proof_text) |text| text.len else 0;
+        for (self.hole_fills) |fill| {
+            if (offset < fill.line.start) continue;
+            if (offset < fill.line.end or
+                (offset == fill.line.end and offset == text_len))
+            {
+                return fill;
+            }
+        }
+        return null;
     }
 
     pub fn definitionAt(
@@ -291,13 +325,13 @@ pub const Snapshot = struct {
     }
 };
 
-fn buildInferredHoleHovers(
+fn buildHoleInfo(
     allocator: std.mem.Allocator,
     mm0_text: []const u8,
     proof_text: []const u8,
     check_memo: ?*CompilerModule.CheckMemo,
-) ![]const InferredHoleHover {
-    if (std.mem.indexOf(u8, mm0_text, "@hole") == null) return &.{};
+) !HoleInfo {
+    if (std.mem.indexOf(u8, mm0_text, "@hole") == null) return .{};
 
     var sink = CompilerModule.HoleInferenceSink{
         .allocator = allocator,
@@ -330,7 +364,30 @@ fn buildInferredHoleHovers(
             ),
         });
     }
-    return try hovers.toOwnedSlice(allocator);
+    const fills = try allocator.alloc(HoleFill, sink.assertions.items.len);
+    for (sink.assertions.items, fills) |filled, *fill| {
+        fill.* = .{
+            .line = .{
+                .document = .proof,
+                .start = filled.line.start,
+                .end = filled.line.end,
+            },
+            .assertion = .{
+                .document = .proof,
+                .start = filled.assertion.start,
+                .end = filled.assertion.end,
+            },
+            .replacement = try std.fmt.allocPrint(
+                allocator,
+                "$ {s} $",
+                .{filled.text},
+            ),
+        };
+    }
+    return .{
+        .hovers = try hovers.toOwnedSlice(allocator),
+        .fills = fills,
+    };
 }
 
 fn rangeContains(range: SourceRange, document: DocumentId, offset: usize) bool {

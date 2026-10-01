@@ -326,6 +326,20 @@ that allocation goes through the same `@vars`-pool path used by
 
 ---
 
+## Editor support
+
+The language server reports what each hole was filled with on hover. On
+a holey line it also offers a **Fill in the holes** code action, which
+replaces the whole assertion with the line's checked conclusion. It
+reprints the whole assertion rather than splicing each filling, so the
+printer adds whatever parentheses the surrounding notation needs. The
+action is not offered when the conclusion mentions a variable with no
+source name, such as an anonymous dummy, since no text would parse back
+to it. Both come from `HoleInferenceSink`, which the check memo records
+and replays with the block.
+
+---
+
 ## What never sees a hole
 
 The trust boundary holds:
