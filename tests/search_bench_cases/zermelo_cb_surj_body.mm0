@@ -398,6 +398,11 @@ axiom cb_branch_congr (A C B D f h g k x u y v: set):
   $ x = u $ > $ y = v $ >
   $ cb_branch A B f g x y ↔ cb_branch C D h k u v $;
 
+--| @congr
+axiom sb_f_congr {x: set} (t1 t2: set x) (p1 p2: wff x):
+  $ t1 = t2 $ > $ p1 ↔ p2 $ >
+  $ [x/t1] p1 ↔ [x/t2] p2 $;
+
 def cb_bijection (A B f g: set) (.p .x .y: set): set =
   $ {p ∈ pair_carrier A B |
       ∃ x ∃ y

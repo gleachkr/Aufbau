@@ -104,6 +104,11 @@ axiom mem_congr (x y A B: set):
 axiom tag_congr (D E: ctx) (p q: wff):
   $ ctx_eq D E $ > $ p ↔ q $ > $ tag D p ↔ tag E q $;
 
+--| @congr
+axiom sb_f_congr {x: set} (t1 t2: set x) (p1 p2: wff x):
+  $ t1 = t2 $ > $ p1 ↔ p2 $ >
+  $ [x/t1] p1 ↔ [x/t2] p2 $;
+
 axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
 
 axiom tag_member (D: ctx) (p: wff): $ D , p ⊢ tag D p $;

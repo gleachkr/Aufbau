@@ -228,6 +228,11 @@ axiom ht_congr (p1 p2: form) (a1 a2: prog) (q1 q2: form):
   $ p1 ≃ p2 $ > $ a1 ≡ a2 $ > $ q1 ≃ q2 $ >
   $ (⦃ p1 ⦄ a1 ⟦ q1 ⟧) ↔ (⦃ p2 ⦄ a2 ⟦ q2 ⟧) $;
 
+--| @congr
+axiom sb_f_congr {x: obj} (t1 t2: obj x) (p1 p2: form x):
+  $ t1 ≐ t2 $ > $ p1 ≃ p2 $ >
+  $ ⌊ x / t1 ⌋ p1 ≃ ⌊ x / t2 ⌋ p2 $;
+
 -- ============================================================
 -- Substitution computation
 -- ============================================================

@@ -525,6 +525,11 @@ prefix the: $the$ prec 41;
 axiom the_congr (A B: set):
   $ A == B $ > $ nat_eq (the A) (the B) $;
 
+--| @congr
+axiom sb_f_congr {x: nat} (t1 t2: nat x) (p1 p2: wff x):
+  $ nat_eq t1 t2 $ > $ p1 ↔ p2 $ >
+  $ sb_f x t1 p1 ↔ sb_f x t2 p2 $;
+
 -- Positive definite description.  This follows peano.mm1's singleton
 -- set premise, but lets the set argument depend on the displayed binder.
 -- That avoids an alpha-freshening detour when the singleton proof is

@@ -1047,11 +1047,13 @@ const scenarios = [_]Scenario{
         // goal is an instance of the ∀i∀j totality fact with the
         // intermediate single-instantiation line omitted, so both witnesses
         // must come from the forward layer's shared-hole two-layer recipe.
+        // The inner `(t := $ a $)` form checks only with `sb_f_congr`: the
+        // outer `all_elim` reads its `∀` through the unreduced substitution.
         .name = "euclid le_total two-layer instantiation auto? (Stage 8)",
         .mm0_path = "tests/search_bench_cases/euclid.mm0",
         .proof_path = "tests/search_bench_cases/euclid_le_total_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "all_elim (p := $ a <= j ∨ j <= a $) [all_elim [l1]]",
+        .expected_replacement = "all_elim [all_elim (t := $ a $) [l1]]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{

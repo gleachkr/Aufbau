@@ -130,6 +130,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 - The language server again shows what a proof hole was filled with when
   you hover it. Since 0.0.12 the hover was empty: the navigation pass reused
   check results the diagnostics pass had recorded without the holes.
+- The Prawitz, Euclid, Peano, Hoare, Tait and Zermelo–Hilbert examples now
+  declare the substitution congruence `sb_f_congr`. Without it, a written-out
+  line citing an unreduced substitution such as `[x/w] ∀ y p` could fail with
+  "missing @congr for term sb_f", even when the same line with a hole in its
+  context checked.
 - `auto?` now accepts a step whose conclusion matches the goal only once a
   definition is unfolded. In the Zermelo example `sep_elim_right [#1]`
   proves `in_all_subsets S x`, which by definition is

@@ -588,6 +588,11 @@ def prime {.d: nat} (p: nat): wff =
 --| @congr
 axiom prime_congr (a b: nat):
   $ a = b $ > $ prime a ↔ prime b $;
+
+--| @congr
+axiom sb_f_congr {x: nat} (t1 t2: nat x) (p1 p2: wff x):
+  $ t1 = t2 $ > $ p1 ↔ p2 $ >
+  $ [x/t1] p1 ↔ [x/t2] p2 $;
 --| @rewrite
 axiom sb_f_prime {x: nat} (t: nat x) (p: nat x):
   $ [x/t] (prime p) ↔ prime (⟦ x/t ⟧ p) $;

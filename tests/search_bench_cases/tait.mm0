@@ -178,6 +178,11 @@ axiom Q_congr (a b: obj): $ a = b $ > $ Q a ↔ Q b $;
 axiom R_congr (a b c d: obj):
   $ a = b $ > $ c = d $ > $ R a c ↔ R b d $;
 
+--| @congr
+axiom sb_f_congr {x: obj} (t1 t2: obj x) (p1 p2: wff x):
+  $ t1 = t2 $ > $ p1 ↔ p2 $ >
+  $ [x/t1] p1 ↔ [x/t2] p2 $;
+
 -- Alpha-renaming rules used by @freshen when a context contains the same
 -- bound variable a quantifier rule is trying to bind.
 --| @alpha x y
