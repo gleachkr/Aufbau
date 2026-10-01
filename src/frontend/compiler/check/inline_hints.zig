@@ -216,6 +216,14 @@ pub fn inferExpectedRefsForInlineApplicationProbe(
         },
     };
 
+    // Under a holey line, open binders become line holes, as in
+    // `fillViewInlineHints`: a standard placeholder per binder would spend a
+    // dependency slot on every nested line.
+    const missing: OpenTerms.MissingBinderContext = if (mode == .holey and
+        isHoleyGoalHint(theorem, line_expr))
+        .{ .placeholder_factory = .{ .makeFn = mintHintHole } }
+    else
+        .{};
     for (rule.hyps, 0..) |_, child_idx| {
         const child_bindings = try semanticBindingsForChildExpectation(
             self,
@@ -244,7 +252,7 @@ pub fn inferExpectedRefsForInlineApplicationProbe(
                 rule,
                 rule.hyps[child_idx],
                 child_bindings,
-                .{},
+                missing,
             ),
         };
     }

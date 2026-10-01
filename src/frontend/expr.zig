@@ -657,6 +657,67 @@ pub const TheoremContext = struct {
         return try self.interner.internVar(.{ .dummy_var = dummy_id });
     }
 
+    /// The placeholder dependency slots taken so far, for `releaseDepSlots`.
+    pub fn depSlotMark(self: *const TheoremContext) u32 {
+        return self.next_placeholder_dep;
+    }
+
+    /// Give back every placeholder dependency slot taken since `mark`. Only a
+    /// probe that returns a verdict may call this: the placeholders it minted
+    /// stay interned, but nothing may hold one, since the next mint reuses its
+    /// dependency bit.
+    pub fn releaseDepSlots(self: *TheoremContext, mark: u32) void {
+        std.debug.assert(mark <= self.next_placeholder_dep);
+        self.next_placeholder_dep = mark;
+    }
+
+    /// Give back the placeholder dependency slots taken since `mark` except
+    /// those a placeholder under `roots` still holds, its own or a copy
+    /// (`addReconciliationMetaPlaceholderResolved`). Slots go out in order, so
+    /// this keeps every slot up to the newest one held. Only for a caller that
+    /// holds its placeholders through `roots` alone.
+    pub fn releaseUnheldDepSlots(
+        self: *TheoremContext,
+        mark: u32,
+        roots: []const []const ?ExprId,
+    ) void {
+        if (self.next_placeholder_dep == mark) return;
+        var held = HeldDepSlots{ .count = mark };
+        walk: for (roots) |group| for (group) |root| {
+            // Stop once every slot since `mark` is held.
+            if (self.exprAny(root orelse continue, &held, HeldDepSlots.visit)) break :walk;
+        };
+        self.releaseDepSlots(held.count);
+    }
+
+    const HeldDepSlots = struct {
+        count: u32,
+
+        /// Raise `count` past the slot `expr` holds; true once every slot is held.
+        fn visit(self: *HeldDepSlots, theorem: *const TheoremContext, expr: ExprId) bool {
+            const pid = switch (theorem.interner.node(expr).*) {
+                .placeholder => |pid| pid,
+                else => return false,
+            };
+            const deps = (theorem.placeholderInfo(pid) orelse return false).deps;
+            if (deps == 0) return false;
+            // A placeholder's bit is always one placeholder slot's, its own or
+            // a copy; a slot at or past the count is one a probe gave back.
+            std.debug.assert(@popCount(deps) == 1);
+            const slot = placeholderDepSlotBit(@ctz(deps));
+            std.debug.assert(slot < theorem.next_placeholder_dep);
+            self.count = @max(self.count, slot + 1);
+            return self.count == theorem.next_placeholder_dep;
+        }
+    };
+
+    /// Placeholder dependency slot `k` holds bit `tracked_bound_dep_limit - 1 -
+    /// k`: slots fill the mask from the top, theorem dummies from the bottom.
+    /// The map is its own inverse, so it also takes a bit to its slot.
+    fn placeholderDepSlotBit(slot_or_bit: u32) u32 {
+        return tracked_bound_dep_limit - 1 - slot_or_bit;
+    }
+
     /// Allocate a frontend-only placeholder. These never reach emission, but
     /// they still participate in internal dep-sensitive matching and freshening
     /// logic. So they get synthetic dep bits from the top of the same u55 mask
@@ -673,7 +734,7 @@ pub const TheoremContext = struct {
             placeholder_id,
             1,
         );
-        const dep_bit = tracked_bound_dep_limit - 1 - self.next_placeholder_dep;
+        const dep_bit = placeholderDepSlotBit(self.next_placeholder_dep);
         self.next_placeholder_dep = try std.math.add(
             u32,
             self.next_placeholder_dep,

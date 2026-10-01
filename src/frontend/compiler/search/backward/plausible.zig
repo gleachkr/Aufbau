@@ -349,6 +349,9 @@ fn conclusionTemplatePlausible(
     goal_expr: ExprId,
     bindings: []const ?ExprId,
 ) bool {
+    // A verdict only: give back the slots its def unfolds spend.
+    const mark = theorem.depSlotMark();
+    defer theorem.releaseDepSlots(mark);
     if (templateDefiniteMismatch(
         context,
         theorem,
@@ -465,7 +468,7 @@ fn redexTemplateMismatch(
         ) catch return false) orelse return false;
         const reduced = redex.reduceRedexOnly(context, theorem, concrete) catch
             return false;
-        return unfoldedExprMismatch(context, theorem, reduced, goal_expr, 0);
+        return unfoldedMismatch(context, theorem, reduced, goal_expr, 0);
     }
     var args = lockstep.templateArgs(context, theorem, app, goal_expr) orelse return false;
     while (args.next()) |pair| {
@@ -1074,7 +1077,7 @@ fn foldedGoalBodyMismatch(
         .binder => |idx| {
             if (idx >= bindings.len) return false;
             const bound = bindings[idx] orelse return false;
-            return unfoldedExprMismatch(
+            return unfoldedMismatch(
                 context,
                 theorem,
                 bound,
@@ -1147,7 +1150,7 @@ fn templateArgMismatchAfterGoalUnfold(
             bindings,
         );
     };
-    return unfoldedExprMismatch(
+    return unfoldedMismatch(
         context,
         theorem,
         instantiated,
@@ -1156,7 +1159,22 @@ fn templateArgMismatchAfterGoalUnfold(
     );
 }
 
+/// Whether `a` and `b` differ rigidly once transparent defs are unfolded on
+/// both sides. Gives back the dependency slots its unfolds spend: they mint
+/// one placeholder per def dummy, and the verdict holds none of them.
 pub fn unfoldedExprMismatch(
+    context: *const Context,
+    theorem: *TheoremContext,
+    a: ExprId,
+    b: ExprId,
+    depth: usize,
+) bool {
+    const mark = theorem.depSlotMark();
+    defer theorem.releaseDepSlots(mark);
+    return unfoldedMismatch(context, theorem, a, b, depth);
+}
+
+fn unfoldedMismatch(
     context: *const Context,
     theorem: *TheoremContext,
     a: ExprId,
@@ -1189,7 +1207,7 @@ pub fn unfoldedExprMismatch(
     const ua = unfoldExprOnce(context, theorem, a) catch return false;
     const ub = unfoldExprOnce(context, theorem, b) catch return false;
     if (ua != a or ub != b) {
-        return unfoldedExprMismatch(context, theorem, ua, ub, depth + 1);
+        return unfoldedMismatch(context, theorem, ua, ub, depth + 1);
     }
     const nua = theorem.interner.node(a);
     const nub = theorem.interner.node(b);
@@ -1216,7 +1234,7 @@ pub fn unfoldedExprMismatch(
                 // still reduce: compare only the args the head determines.
                 var args = lockstep.exprArgs(context, theorem, a, b) orelse return false;
                 while (args.next()) |pair| {
-                    if (unfoldedExprMismatch(
+                    if (unfoldedMismatch(
                         context,
                         theorem,
                         pair.a,

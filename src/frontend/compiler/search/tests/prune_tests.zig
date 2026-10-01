@@ -94,6 +94,58 @@ test "conclusion seed unfolds transparent template head" {
     try std.testing.expectEqual(@as(?ExprId, b_expr), candidate.bindings[q_idx]);
 }
 
+/// Dependency slots the `ex_i` candidate for theorem `name`'s goal spends
+/// beyond the theorem's own.
+fn seedSlotSpend(comptime name: []const u8) !u32 {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort tm;
+        \\term ex {x: tm} (p: wff x): wff;
+        \\term pr (t: tm): wff;
+        \\term z: tm;
+        \\def ez {.x: tm}: wff = $ ex x (pr z) $;
+        \\def ex_self {.x: tm}: wff = $ ex x (pr x) $;
+        \\def ex_low {.x .y: tm}: wff = $ ex x (ex y (pr y)) $;
+        \\def ex_high {.x .y: tm}: wff = $ ex y (ex x (pr x)) $;
+        \\axiom ex_i {x: tm} (p: wff x): $ p $ > $ ex x p $;
+        \\theorem scrubbed: $ ez $;
+        \\theorem kept: $ ex_self $;
+        \\theorem low_scrubbed: $ ex_low $;
+        \\theorem high_scrubbed: $ ex_high $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, name);
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal: Goal = .{ .concrete = try theorem.internParsedExpr(fixture.assertion.concl) };
+    const rule_id = fixture.env.getRuleId("ex_i") orelse return error.MissingRule;
+    var candidate = try seed.makeExactRuleCandidate(allocator, &context, goal, &theorem, rule_id);
+    defer candidate.deinit();
+    return theorem.depSlotsLeft() - candidate.theorem.depSlotsLeft();
+}
+
+test "rule seed gives back the dependency slots of the def dummies it scrubs" {
+    // Unfolding `ez` pins `x` to its hidden variable alone, which the seed
+    // scrubs: the slot comes back. In `ex_self` the hidden variable also sits
+    // in `p := pr x`, kept as a reconciliation meta on the same bit: the slot
+    // stays.
+    try std.testing.expectEqual(@as(u32, 0), try seedSlotSpend("scrubbed"));
+    try std.testing.expectEqual(@as(u32, 1), try seedSlotSpend("kept"));
+    // Two hidden variables take slots 0 (`x`) and 1 (`y`); the one bound by
+    // `ex_i`'s own `x` is scrubbed, the one inside `p` is kept. Release gives
+    // back only slots past the newest one held: a scrubbed last slot comes
+    // back, a scrubbed slot below a held one stays.
+    try std.testing.expectEqual(@as(u32, 1), try seedSlotSpend("high_scrubbed"));
+    try std.testing.expectEqual(@as(u32, 2), try seedSlotSpend("low_scrubbed"));
+}
+
 test "multiHypBinderMask flags binders occurring in more than one hypothesis" {
     // arg0 in hyp0 & hyp1 (multi); arg1 in hyp0 only (single); arg2 in hyp0 &
     // hyp1 (multi); arg3 in hyp1 only (single).
@@ -907,6 +959,78 @@ test "ACUI member prunes keep a def leaf that unfolds to the unit" {
         helpers.plausible.unfoldedExprMismatch,
         null,
     ));
+}
+
+test "unfolded mismatch gives back the dependency slots its def unfolds spend" {
+    // Both sides present a `lam` head, so telling `z` from `o` means unfolding
+    // `lz`, which mints a placeholder for its hidden `x`. The verdict holds
+    // none of it, so the slot comes back.
+    const mm0_src = redex_theory ++
+        \\def lz {.x: tm}: tm = $ lam x z $;
+        \\theorem t {w: tm}: $ teq lz (lam w o) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal = theorem.interner.node(try theorem.internParsedExpr(fixture.assertion.concl)).app;
+    const slots = theorem.depSlotsLeft();
+
+    try std.testing.expect(helpers.plausible.unfoldedExprMismatch(&context, &theorem, goal.args[0], goal.args[1], 0));
+    try std.testing.expectEqual(slots, theorem.depSlotsLeft());
+}
+
+test "conclusion plausibility gives back the dependency slots its def unfolds spend" {
+    // `lam_o`'s conclusion has a `lam` head where the goal has `lz`, so the
+    // folded-goal check unfolds `lz`, minting a placeholder for its hidden
+    // `x`. The verdict holds none of it, so the slot comes back.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort tm;
+        \\term teq (s t: tm): wff;
+        \\term lam {x: tm} (t: tm x): tm;
+        \\term z: tm;
+        \\term o: tm;
+        \\def lz {.x: tm}: tm = $ lam x z $;
+        \\axiom lam_o {x: tm} (t: tm x): $ teq (lam x t) o $;
+        \\theorem t: $ teq lz o $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal: Goal = .{ .concrete = try theorem.internParsedExpr(fixture.assertion.concl) };
+    const rule_id = fixture.env.getRuleId("lam_o") orelse return error.MissingRule;
+    const bindings = try allocator.alloc(?ExprId, context.env.rules.items[rule_id].args.len);
+    @memset(bindings, null);
+    var candidate = types.ApplyCandidate{
+        .allocator = allocator,
+        .rule_id = rule_id,
+        .rule_name = "lam_o",
+        .declaration_order = 0,
+        .theorem = try theorem.clone(),
+        .bindings = try allocator.alloc(?ExprId, 0),
+        .conclusion = goal.concrete,
+        .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
+    };
+    defer candidate.deinit();
+    const slots = candidate.theorem.depSlotsLeft();
+
+    try std.testing.expect(helpers.plausible.finalConclusionPlausible(&context, &candidate, goal, bindings, .{}, null));
+    try std.testing.expectEqual(slots, candidate.theorem.depSlotsLeft());
 }
 
 // The dependency prune's exemption (`ruleMayRechooseBound`): the pruned

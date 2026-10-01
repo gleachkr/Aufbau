@@ -41,6 +41,7 @@ pub fn makeExactRuleCandidate(
     // extracted bindings stay valid against this same interner.
     var candidate_theorem = try theorem.clone();
     errdefer candidate_theorem.deinit();
+    const slot_mark = candidate_theorem.depSlotMark();
     try seedBindingsFromGoal(context, &candidate_theorem, goal, rule_id, bindings);
     // Scrub seeded rule bindings that cannot serve as a rigid constraint:
     //
@@ -85,6 +86,13 @@ pub fn makeExactRuleCandidate(
         rule_id,
     );
     errdefer if (view_concl_seed) |seed| allocator.free(seed);
+    // Seeding mints a placeholder for each hidden variable of a def it
+    // unfolds, and the partition scrubs most of them. Keep only the slots the
+    // candidate still holds.
+    candidate_theorem.releaseUnheldDepSlots(
+        slot_mark,
+        &.{ bindings, view_concl_seed orelse &.{} },
+    );
     return .{
         .allocator = allocator,
         .rule_id = rule_id,
@@ -246,10 +254,11 @@ fn walkForFanout(
 // Clone `base` and additionally pin the principal `leaf`'s binders from one
 // enumerated `member`, yielding a fan-out variant. The clone's interner shares
 // `base`'s ids (copy-on-write), so `member` and the subterms
-// `extractHypPartialBindings` reads off it stay valid. No seed scrub is needed:
+// `extractHypPartialBindings` reads off it stay valid. No seed scrub runs here:
 // `findAmbiguousPrincipal`'s rigid-member gate guarantees every `member` is
-// placeholder-free, so the pinned binders can never be the def-unfold dummies or
-// meta leaves `makeExactRuleCandidate` scrubs. View rules are excluded upstream
+// placeholder-free, but extraction can still unfold a binder def inside it
+// (`unfoldForeignRefDef`), so a pinned binder can be a def-unfold dummy the base
+// seed would have scrubbed. View rules are excluded upstream
 // (`detectPrincipalFanout`), so `base.view_concl_seed` is null on this path.
 fn cloneCandidateWithPrincipalPin(
     allocator: std.mem.Allocator,
@@ -262,6 +271,7 @@ fn cloneCandidateWithPrincipalPin(
     errdefer candidate_theorem.deinit();
     const bindings = try allocator.dupe(?ExprId, base.bindings);
     errdefer allocator.free(bindings);
+    const slot_mark = candidate_theorem.depSlotMark();
     def_match.extractHypPartialBindings(
         context,
         &candidate_theorem,
@@ -269,6 +279,9 @@ fn cloneCandidateWithPrincipalPin(
         member,
         bindings,
     );
+    // Extraction can unfold a def inside `member`; keep only the slots the
+    // pinned bindings hold.
+    candidate_theorem.releaseUnheldDepSlots(slot_mark, &.{bindings});
     // The variant's COW clone borrows `base.theorem` as its immutable base, but
     // `appendRuleCandidates` deinits `base` as soon as the variants are built —
     // the variants outlive it. Materialize a standalone interner so the variant
