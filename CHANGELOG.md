@@ -92,6 +92,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   though each unfolds with a fresh bound variable, but the search used to
   hold no opinion on such a pair. In the Martin-Löf example this lets
   `auto?` find `add_comm` at greater depth.
+- `auto?` no longer searches below a premise for a bound variable that the
+  premise substitutes away. In `nat_ind_elim`'s base case
+  `g ⊢ z : [k/zero] C`, the premise is the same whichever `k` is meant, so
+  the search now picks an unused variable from `@vars` at once.
+  In the Martin-Löf example `auto?` now finds `add_comm` with 25 of its 32
+  lines removed instead of 8, and `add_suc_right` with 7 instead of 4.
 - When `auto?` falls back to its last-resort modus ponens step, it now
   proves first the premise that determines the cut formula: for `imp_elim`,
   the major `G ⊢ p → q` before the minor `H ⊢ p`, which any hypothesis

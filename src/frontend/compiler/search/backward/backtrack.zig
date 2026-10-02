@@ -2135,6 +2135,12 @@ fn emitOpenTarget(
         return;
     }
 
+    // A variable the premise substitutes away goes straight to the pool rung
+    // (`freshNamesReduceOut`).
+    if (slot.fresh_bound and try freshNamesReduceOut(slot, raw_target)) {
+        try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
+        return;
+    }
     // Witness-free open target (e.g. `@abstract` motive inference): keep the
     // original child-search-first ordering, with member/coupled witness
     // enumeration as the fallback.
@@ -2689,23 +2695,66 @@ fn tryPoolWitnesses(
     try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
     if (unsolved.items.len == 0) return;
 
-    var taken: u55 = 0;
-    if (pick == .fresh) {
-        for (slot.ctx.bindings) |maybe| {
-            const value = maybe orelse continue;
-            taken |= exprDeps(slot.ctx.context, theorem, value);
-        }
-    }
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
-    for (unsolved.items) |meta_id| {
-        const meta = slot.store.info(meta_id) orelse return;
-        if (pick == .fresh and meta.kind != .bound_choice) return;
-        const avoid: ?*u55 = if (pick == .fresh) &taken else null;
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, avoid)) return;
+    switch (pick) {
+        .shared => for (unsolved.items) |meta_id| {
+            const meta = slot.store.info(meta_id) orelse return;
+            if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, null)) return;
+        },
+        .fresh => if (!try assignFreshNames(slot, theorem, unsolved.items)) return,
     }
     if (!slot.store.isFullySolved(theorem, raw_target)) return;
     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
+}
+
+/// Give each of `unsolved` a `@vars` variable that occurs in no binding of
+/// the rule and differs from the other fills (`PoolPick.fresh`). False when
+/// one is not a `.bound_choice` meta or its sort has no such variable; the
+/// caller's rollback undoes any fills made before that.
+fn assignFreshNames(
+    slot: *OpenSlot,
+    theorem: *TheoremContext,
+    unsolved: []const PlaceholderId,
+) !bool {
+    var taken: u55 = 0;
+    for (slot.ctx.bindings) |maybe| {
+        const value = maybe orelse continue;
+        taken |= exprDeps(slot.ctx.context, theorem, value);
+    }
+    for (unsolved) |meta_id| {
+        const meta = slot.store.info(meta_id) orelse return false;
+        if (meta.kind != .bound_choice) return false;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, &taken)) return false;
+    }
+    return true;
+}
+
+/// True when the slot's unsolved metas are all `.bound_choice` and fresh
+/// names for them all reduce out of `raw_target`, as `k` does from
+/// `nat_ind_elim`'s base case `g ⊢ z : [k/zero] C`. Every fresh name then
+/// gives the same premise, so naming it from the pool loses no proof of the
+/// premise, and the child search can at best pick the name. It could do so
+/// only through a child rule whose conclusion keeps the substitution
+/// unreduced, matched position by position on read-back; no bench theorem
+/// does, while the doomed child search cost martin_lof `add_comm` most of
+/// its budget.
+fn freshNamesReduceOut(slot: *OpenSlot, raw_target: ExprId) !bool {
+    const theorem = &slot.ctx.candidate.theorem;
+    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+    defer unsolved.deinit(slot.ctx.allocator);
+    try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
+    if (unsolved.items.len == 0) return false;
+    const mark = slot.store.mark();
+    defer slot.store.rollbackTo(mark);
+    if (!try assignFreshNames(slot, theorem, unsolved.items)) return false;
+    const filled = slot.store.materialize(theorem, raw_target) catch return false;
+    const reduced = try Redex.reduceRedexOnly(slot.ctx.context, theorem, filled);
+    for (unsolved.items) |meta_id| {
+        const name = slot.store.assignments.get(meta_id) orelse return false;
+        if (theorem.exprAny(reduced, name, isExpr)) return false;
+    }
+    return true;
 }
 
 /// Collect witness metas that dangle in the slot's bindings after the open

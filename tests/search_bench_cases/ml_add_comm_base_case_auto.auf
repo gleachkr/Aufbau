@@ -1,0 +1,41 @@
+add_comm
+--------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ ok (g , k : Nat) $ by ext_ok [#1, l1]
+l3: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l4: $ g , k : Nat ⊢ n : Nat $ by weaken [l1, #3]
+l5: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l2, l3, l4]
+l6: $ g , k : Nat ⊢ n + k : Nat $ by add_ty [l2, l4, l3]
+l7: $ g , k : Nat ⊢ Ty (Id Nat (k + n) (n + k)) $
+  by Id_form [l5, l6]
+l8: $ g ⊢ zero : Nat $ by zero_intro [#1]
+l9: $ g ⊢ zero + n : Nat $ by add_ty [#1, l8, #3]
+l10: $ g ⊢ refl Nat (zero + n) : Id Nat (zero + n) n $
+  by add_zero_left_path [#1, #3]
+l11: $ g ⊢ add_zero_right_p n : Id Nat (n + zero) n $
+  by add_zero_right [#1, #3]
+l12: $ g ⊢ n + zero : Nat $ by add_ty [#1, #3, l8]
+l13: $ g ⊢ id_sym Nat (n + zero) n (add_zero_right_p n) :
+  Id Nat n (n + zero) $ by id_sym_ty [l1, l12, #3, l11]
+l14: $ g ⊢ id_trans Nat (zero + n) n (n + zero)
+  (refl Nat (zero + n)) (id_sym Nat (n + zero) n (add_zero_right_p n)) :
+  Id Nat (zero + n) (n + zero) $
+  by id_trans_ty [l1, l9, #3, l12, l10, l13]
+l15: $ ok (g , k : Nat , ih : Id Nat (k + n) (n + k)) $ by ext_ok [l2, l7]
+l16: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ k : Nat $ by var_wk [l1, l7]
+l17: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ n : Nat $ by weaken [l7, l4]
+l18: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢ Ty Nat $ by nat_form [l15]
+l19: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  suc k : Nat $ by suc_intro [l16]
+l20: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  (suc k) + n : Nat $ by add_ty [l15, l19, l17]
+l21: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  refl Nat ((suc k) + n) : Id Nat ((suc k) + n) (suc (k + n)) $
+  by add_suc_left_path [l15, l16, l17]
+l22: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  ih : Id Nat (k + n) (n + k) $ by var [l7]
+l23: $ g , k : Nat , ih : Id Nat (k + n) (n + k) ⊢
+  k + n : Nat $ by add_ty [l15, l16, l17]
+l33: $ g ⊢ add_comm_p m n : Id Nat (m + n) (n + m) $
+  by auto?

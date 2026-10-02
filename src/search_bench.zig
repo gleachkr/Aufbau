@@ -744,6 +744,26 @@ const scenarios = [_]Scenario{
         .expected_suggestion_count = 4,
     },
     .{
+        // martin_lof add_comm with the step case's last nine lines removed
+        // (the depth frontier's k=9 cut). `nat_ind_elim`'s base premise
+        // `g ⊢ z : [k/zero] C` opens the def's hidden `k`, which the
+        // substitution reduces away, so the pool rung names it at once
+        // (`backtrack.freshNamesReduceOut`). A child search there first,
+        // which never names it, spends the budget the step case needs.
+        .name = "auto martin_lof add_comm base case auto?",
+        .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
+        .proof_path = "tests/search_bench_cases/ml_add_comm_base_case_auto.auf",
+        .marker = "auto?",
+        .expected_replacement = "nat_ind_elim [l7, l14, id_trans_ty [l18, l20, suc_intro [l23], " ++
+            "add_ty [l15, l17, l19], l21, id_trans_ty [l18, suc_intro " ++
+            "[l23], weaken [l7, suc_intro [l6]], add_ty [l15, l17, l19], " ++
+            "J_elim [ap_suc_motive [l15], ap_suc_branch [l15], l23, weaken " ++
+            "[l7, l6], l22], J_elim [id_sym_motive [l18], refl_intro [var " ++
+            "[l18]], add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
+            "add_suc_right [l15, l17, l16]]]], #2]",
+        .generate = .{ .enabled = true, .max_depth = 6 },
+    },
+    .{
         // martin_lof add_comm: rebuild the WHOLE tail of the `id_trans` DAG
         // (l14, l16, l17, l18, l19) from a trimmed pool, then close l20. A
         // multi-step concrete regeneration that drives iterative deepening
