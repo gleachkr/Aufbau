@@ -1,0 +1,11 @@
+add_comm
+--------
+
+l1: $ g ⊢ Ty Nat $ by nat_form [#1]
+l2: $ ok (g , k : Nat) $ by ext_ok [#1, l1]
+l3: $ g , k : Nat ⊢ k : Nat $ by var [l1]
+l4: $ g , k : Nat ⊢ n : Nat $ by weaken [l1, #3]
+l5: $ g , k : Nat ⊢ k + n : Nat $ by add_ty [l2, l3, l4]
+l6: $ g , k : Nat ⊢ n + k : Nat $ by add_ty [l2, l4, l3]
+l33: $ g ⊢ add_comm_p m n : Id Nat (m + n) (n + m) $
+  by auto?

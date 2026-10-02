@@ -98,6 +98,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   the search now picks an unused variable from `@vars` at once.
   In the Martin-Löf example `auto?` now finds `add_comm` with 25 of its 32
   lines removed instead of 8, and `add_suc_right` with 7 instead of 4.
+- When `auto?` has to name a bound variable that nothing in the goal fixes,
+  it now first tries the names your earlier lines use in the same place,
+  and only then the first unused names from `@vars`. A name decides which
+  lines can match later, since MM0 does not identify alpha-equivalent
+  statements. Before, the induction step `g , k : Nat , ih : C ⊢ …`
+  got `ih` for `k` and `k` for `ih` (they sort that way), and no
+  `g , k : Nat ⊢ …` line fit. `add_comm` is now found with 28 of 32 lines
+  removed instead of 25, and the depth benchmarks find 14 more proofs.
 - When `auto?` falls back to its last-resort modus ponens step, it now
   proves first the premise that determines the cut formula: for `imp_elim`,
   the major `G ⊢ p → q` before the minor `H ⊢ p`, which any hypothesis

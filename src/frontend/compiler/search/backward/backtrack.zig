@@ -2666,7 +2666,10 @@ const PoolPick = enum {
     /// `fresh_bound`, after the child search left the slot's opened bound
     /// metas unsolved: each takes a variable occurring in no binding of the
     /// rule, distinct from every variable of the instance and from the other
-    /// fills. Any other meta (a view binder) must come from the child search.
+    /// fills. Names the refs use in the same place come first
+    /// (`assignRefNames`), then the first free `@vars` names
+    /// (`assignFreshNames`). Any other meta (a view binder) must come from
+    /// the child search.
     fresh,
 };
 
@@ -2702,11 +2705,173 @@ fn tryPoolWitnesses(
             const meta = slot.store.info(meta_id) orelse return;
             if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, null)) return;
         },
-        .fresh => if (!try assignFreshNames(slot, theorem, unsolved.items)) return,
+        .fresh => {
+            const ref_names = try slot.ctx.allocator.alloc(ExprId, unsolved.items.len);
+            defer slot.ctx.allocator.free(ref_names);
+            if (try assignRefNames(slot, theorem, raw_target, unsolved.items)) {
+                for (unsolved.items, ref_names) |meta_id, *name| name.* = slot.store.lookup(meta_id).?;
+                const before = slot.ctx.candidates.items.len;
+                if (slot.store.isFullySolved(theorem, raw_target)) {
+                    try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
+                }
+                if (slot.ctx.candidates.items.len != before) return;
+                slot.store.rollbackTo(mark);
+                if (!try assignFreshNames(slot, theorem, unsolved.items)) return;
+                // The blind pick repeats the ref-named attempt.
+                for (unsolved.items, ref_names) |meta_id, name| {
+                    if (slot.store.lookup(meta_id).? != name) break;
+                } else return;
+            } else if (!try assignFreshNames(slot, theorem, unsolved.items)) return;
+        },
     }
     if (!slot.store.isFullySolved(theorem, raw_target)) return;
     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
 }
+
+/// The dependency bits of every variable the rule's bindings mention: what a
+/// fresh variable must avoid.
+fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
+    var taken: u55 = 0;
+    for (slot.ctx.bindings) |maybe| {
+        const value = maybe orelse continue;
+        taken |= exprDeps(slot.ctx.context, theorem, value);
+    }
+    return taken;
+}
+
+/// Name the slot's fresh variables after the refs. MM0 has no
+/// alpha-equivalence, so the name decides which refs a proof of the premise
+/// can use. The first free `@vars` names in sorted order give
+/// `nat_ind_elim`'s step premise `g , k : Nat , ih : C ⊢ …` the names
+/// `ih` for `k` and `k` for `ih`, and no add_comm line `g , k : Nat ⊢ …`
+/// fits it any more. So every part of the target that mentions an unsolved
+/// variable is matched against every same-headed subterm of the refs
+/// (`g , ?k : Nat` against `g , k : Nat`), and each variable takes the bound
+/// variable those matches put in its place most often, ties going to the
+/// first seen. A name must still occur in no binding and differ from the
+/// other fills; a variable no ref names takes the first free `@vars` name
+/// (`assignPoolWitness`). Returns false, with nothing assigned, when no ref
+/// names any variable or one of them is not a `.bound_choice` meta.
+fn assignRefNames(
+    slot: *OpenSlot,
+    theorem: *TheoremContext,
+    raw_target: ExprId,
+    unsolved: []const PlaceholderId,
+) !bool {
+    const allocator = slot.ctx.allocator;
+    for (unsolved) |meta_id| {
+        const meta = slot.store.info(meta_id) orelse return false;
+        if (meta.kind != .bound_choice) return false;
+    }
+    var tally = RefNameTally{
+        .slot = slot,
+        .theorem = theorem,
+        .unsolved = unsolved,
+    };
+    defer tally.deinit(allocator);
+    try tally.collectParts(raw_target);
+    if (tally.parts.items.len == 0) return false;
+    for (slot.ctx.ref_index.entries) |entry| {
+        try theorem.exprForEach(entry.expr, &tally, RefNameTally.visit);
+    }
+    if (tally.votes.count() == 0) return false;
+
+    var taken = bindingDeps(slot, theorem);
+    var named = false;
+    for (unsolved) |meta_id| {
+        // Most votes first; `votes` keeps first-seen order for ties.
+        var best: ?ExprId = null;
+        var best_deps: u55 = 0;
+        var best_count: u32 = 0;
+        var it = tally.votes.iterator();
+        while (it.next()) |vote| {
+            if (vote.key_ptr.meta != meta_id or vote.value_ptr.* <= best_count) continue;
+            const info = (theorem.currentLeafInfo(vote.key_ptr.name) catch null) orelse continue;
+            if (info.deps & taken != 0) continue;
+            best = vote.key_ptr.name;
+            best_deps = info.deps;
+            best_count = vote.value_ptr.*;
+        }
+        const name = best orelse continue;
+        slot.store.assign(theorem, meta_id, name) catch continue;
+        taken |= best_deps;
+        named = true;
+    }
+    if (!named) return false;
+    for (unsolved) |meta_id| {
+        if (slot.store.lookup(meta_id) != null) continue;
+        const meta = slot.store.info(meta_id).?;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, &taken)) return false;
+    }
+    return true;
+}
+
+/// `assignRefNames`'s tally: which bound variable each ref subterm puts in
+/// place of each unsolved variable, matched against the target's parts.
+const RefNameTally = struct {
+    slot: *OpenSlot,
+    theorem: *TheoremContext,
+    unsolved: []const PlaceholderId,
+    /// App subterms of the target that mention an unsolved variable.
+    parts: std.ArrayListUnmanaged(ExprId) = .{},
+    /// Ref subterms already matched (refs share subterms).
+    seen: std.AutoHashMapUnmanaged(ExprId, void) = .{},
+    votes: std.AutoArrayHashMapUnmanaged(Vote, u32) = .{},
+
+    const Vote = struct { meta: PlaceholderId, name: ExprId };
+
+    fn deinit(self: *RefNameTally, allocator: std.mem.Allocator) void {
+        self.parts.deinit(allocator);
+        self.seen.deinit(allocator);
+        self.votes.deinit(allocator);
+    }
+
+    fn collectParts(self: *RefNameTally, expr: ExprId) !void {
+        const app = switch (self.theorem.interner.node(expr).*) {
+            .app => |app| app,
+            .variable, .placeholder => return,
+        };
+        if (!self.mentionsUnsolved(expr)) return;
+        for (self.parts.items) |part| {
+            if (part == expr) return;
+        }
+        try self.parts.append(self.slot.ctx.allocator, expr);
+        for (app.args) |arg| try self.collectParts(arg);
+    }
+
+    fn mentionsUnsolved(self: *const RefNameTally, expr: ExprId) bool {
+        return switch (self.theorem.interner.node(expr).*) {
+            .variable => false,
+            .placeholder => |pid| std.mem.indexOfScalar(PlaceholderId, self.unsolved, pid) != null,
+            .app => |app| for (app.args) |arg| {
+                if (self.mentionsUnsolved(arg)) break true;
+            } else false,
+        };
+    }
+
+    fn visit(self: *RefNameTally, theorem: *const TheoremContext, sub: ExprId) anyerror!void {
+        const sub_app = switch (theorem.interner.node(sub).*) {
+            .app => |app| app,
+            .variable, .placeholder => return,
+        };
+        const allocator = self.slot.ctx.allocator;
+        if ((try self.seen.getOrPut(allocator, sub)).found_existing) return;
+        const store = self.slot.store;
+        for (self.parts.items) |part| {
+            if (theorem.interner.node(part).app.term_id != sub_app.term_id) continue;
+            const mark = store.mark();
+            defer store.rollbackTo(mark);
+            if (forward.solveCorrespondence(store, self.theorem, sub, part, null) != .ok) continue;
+            for (self.unsolved) |meta_id| {
+                const name = store.lookup(meta_id) orelse continue;
+                const info = (theorem.currentLeafInfo(name) catch null) orelse continue;
+                if (!info.bound) continue;
+                const gop = try self.votes.getOrPut(allocator, .{ .meta = meta_id, .name = name });
+                gop.value_ptr.* = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+            }
+        }
+    }
+};
 
 /// Give each of `unsolved` a `@vars` variable that occurs in no binding of
 /// the rule and differs from the other fills (`PoolPick.fresh`). False when
@@ -2717,11 +2882,7 @@ fn assignFreshNames(
     theorem: *TheoremContext,
     unsolved: []const PlaceholderId,
 ) !bool {
-    var taken: u55 = 0;
-    for (slot.ctx.bindings) |maybe| {
-        const value = maybe orelse continue;
-        taken |= exprDeps(slot.ctx.context, theorem, value);
-    }
+    var taken = bindingDeps(slot, theorem);
     for (unsolved) |meta_id| {
         const meta = slot.store.info(meta_id) orelse return false;
         if (meta.kind != .bound_choice) return false;
