@@ -348,10 +348,14 @@ pub const ExprInterner = struct {
     }
 };
 
+/// The theorem-lifetime def_ops verdict memos key on the match mode as well
+/// as the exprs: under `line_holes_match_anything` a line hole matches
+/// anything, so a pair holding one has a different verdict there.
 pub const DefCacheKey = struct {
     def_expr: ExprId,
     target_expr: ExprId,
     has_registry: bool,
+    line_holes_match_anything: bool,
 };
 
 pub const AcuiCacheKey = struct {
@@ -359,6 +363,7 @@ pub const AcuiCacheKey = struct {
     item_expr: ExprId,
     head_term_id: u32,
     has_registry: bool,
+    line_holes_match_anything: bool,
 };
 
 pub const TheoremContext = struct {
@@ -959,6 +964,23 @@ pub const TheoremContext = struct {
 
     fn isPlaceholderPred(_: void, self: *const TheoremContext, expr: ExprId) bool {
         return self.isPlaceholder(expr);
+    }
+
+    /// True when a line hole (`addLineHolePlaceholder`) occurs anywhere in
+    /// `root`.
+    pub fn containsLineHole(self: *const TheoremContext, root: ExprId) bool {
+        if (!self.hasLineHoles()) return false;
+        return self.exprAny(root, {}, isLineHolePred);
+    }
+
+    fn isLineHolePred(_: void, self: *const TheoremContext, expr: ExprId) bool {
+        return switch (self.interner.node(expr).*) {
+            .placeholder => |id| if (self.placeholderInfo(id)) |info|
+                info.line_hole
+            else
+                false,
+            else => false,
+        };
     }
 
     /// Side-effecting companion to `exprAny`: apply `visit` to every node

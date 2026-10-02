@@ -1565,6 +1565,62 @@ test "LSP fill-holes code action survives the diagnostics pass's check memo" {
     try expectFillHolesAction(true);
 }
 
+test "LSP fill-holes code action keeps a definition the rule unfolds" {
+    const mm0_uri = "file:///tmp/lsp-fill-holes-def.mm0";
+    const proof_uri = "file:///tmp/lsp-fill-holes-def.auf";
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @hole _wff
+        \\provable sort wff;
+        \\--| @vars x y z
+        \\sort set;
+        \\term im (a b: wff): wff;
+        \\infixr im: $->$ prec 25;
+        \\term mem (a b: set): wff;
+        \\infixl mem: $e.$ prec 50;
+        \\term R (a b: set): wff;
+        \\term sep {x: set} (A: set) (p: wff x): set;
+        \\def img (f B: set) {.y: set}: set = $ sep y B (R f y) $;
+        \\axiom sep_in_imp {x: set} (t A: set) (p: wff x):
+        \\  $ t e. A $ > $ t e. A -> t e. sep x A p $;
+        \\theorem main (f B c: set): $ c e. B $ > $ c e. B -> c e. img f B $;
+    ;
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ _wff -> c e. img f B $ by sep_in_imp [#1]
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+
+    // The rule's conclusion has `img` unfolded; the fill keeps the line's
+    // `img f B` and fills only the hole.
+    const l1 = std.mem.indexOf(u8, proof_text, "l1:").?;
+    const action = (try fillHolesAction(
+        &handler,
+        arena,
+        proof_uri,
+        proof_text,
+        l1 + 8,
+    )) orelse return error.ExpectedFillAction;
+    const edit = codeActionSingleEdit(action, proof_uri) orelse
+        return error.ExpectedCodeActionEdit;
+    try std.testing.expectEqualStrings(
+        "$ c e. B -> c e. img f B $",
+        edit.newText,
+    );
+}
+
 test "LSP proof hover resolves rule applications" {
     const mm0_uri = "file:///tmp/lsp-stage2.mm0";
     const proof_uri = "file:///tmp/lsp-stage2.auf";

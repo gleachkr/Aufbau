@@ -1,0 +1,4 @@
+open_arg
+--------
+l1: $ c e. B -> c e. img _set B $ by sep_in_imp [#1]
+l2: $ c e. B -> c e. img f B $ by sep_in_imp [#1]

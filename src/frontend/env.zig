@@ -123,6 +123,14 @@ pub const GlobalEnv = struct {
         self.terms.items[self.terms.items.len - 1] = invalidTermDecl(name);
     }
 
+    /// The definition `term_id` names, when it has a body to unfold.
+    pub fn openableDef(self: *const GlobalEnv, term_id: u32) ?*const TermDecl {
+        if (term_id >= self.terms.items.len) return null;
+        const term = &self.terms.items[term_id];
+        if (!term.is_def or term.body == null) return null;
+        return term;
+    }
+
     pub fn hasAvailableTerm(self: *const GlobalEnv, term_id: u32) bool {
         return term_id < self.terms.items.len and
             self.terms.items[term_id].available;

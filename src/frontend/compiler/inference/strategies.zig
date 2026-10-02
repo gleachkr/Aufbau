@@ -18,6 +18,7 @@ const ViewDecl = CompilerViews.ViewDecl;
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const FreshSelect = @import("../fresh_select.zig");
+const Holes = @import("../holes.zig");
 const DebugTrace = @import("../../debug.zig");
 const NormalizedCompare = @import("../../normalized_compare.zig");
 const InferenceContextModule = @import("context.zig");
@@ -723,18 +724,38 @@ pub fn inferBindingsByRuleMatchSession(
     explicit_bindings: []const ?ExprId,
     rewrite_fuel_exhausted: ?*bool,
 ) !RuleMatchResult {
-    const allocator = context.allocator;
-    const rule = context.rule;
+    return try runRuleMatchSession(
+        context,
+        seeds,
+        fresh_context,
+        ref_exprs,
+        line_expr,
+        explicit_bindings,
+        rewrite_fuel_exhausted,
+        false,
+    );
+}
 
+fn runRuleMatchSession(
+    context: *const RuleInferenceContext,
+    seeds: []const DefOps.BindingSeed,
+    fresh_context: ?HiddenWitnessFreshContext,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+    explicit_bindings: []const ?ExprId,
+    rewrite_fuel_exhausted: ?*bool,
+    line_holes_match_anything: bool,
+) !RuleMatchResult {
     var def_ops = DefOps.Context.initWithRegistry(
-        allocator,
+        context.allocator,
         context.theorem,
         context.env,
         context.registry,
     );
     defer def_ops.deinit();
+    def_ops.shared.line_holes_match_anything = line_holes_match_anything;
 
-    var session = try def_ops.beginRuleMatch(rule.args, seeds);
+    var session = try def_ops.beginRuleMatch(context.rule.args, seeds);
     defer session.deinit();
 
     return try finishRuleMatchSession(
@@ -746,6 +767,50 @@ pub fn inferBindingsByRuleMatchSession(
         explicit_bindings,
         rewrite_fuel_exhausted,
     );
+}
+
+/// Infer an inline minor's bindings from its refs and a hint with line
+/// holes by transparent rule matching, the holes matching anything
+/// (`line_holes_match_anything`). This reaches what the structural solver
+/// cannot: a hint whose visible part needs a definition unfolded, whose
+/// hidden variable then takes a fresh variable. Null when no concrete
+/// solution comes out.
+pub fn tryInferHoleyHintBySession(
+    context: *const RuleInferenceContext,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    hint: ExprId,
+    fresh_context: ?HiddenWitnessFreshContext,
+) !?[]const ExprId {
+    const allocator = context.allocator;
+    const seeds = try DefOps.BindingSeed.fromOptionalBindings(
+        allocator,
+        partial_bindings,
+    );
+    defer allocator.free(seeds);
+
+    const result = runRuleMatchSession(
+        context,
+        seeds,
+        fresh_context,
+        ref_exprs,
+        hint,
+        partial_bindings,
+        null,
+        true,
+    ) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return null;
+    };
+    const bindings = switch (result) {
+        .concrete => |bindings| bindings,
+        .no_match, .unresolved_dummy_witness => return null,
+    };
+    if (holdsLineHole(context.theorem, bindings)) {
+        allocator.free(bindings);
+        return null;
+    }
+    return bindings;
 }
 
 pub fn inferBindingsByMatchSeedState(
@@ -792,9 +857,7 @@ fn matchRulePartSurfaceWithRollback(
     template: TemplateExpr,
     actual: *const Expr,
 ) !bool {
-    const seeds = try session.resolveBindingSeeds();
-    errdefer allocator.free(seeds);
-    var snapshot = try session.exportMatchSeedState(seeds);
+    var snapshot = try session.saveSeedState();
     defer snapshot.deinit(allocator);
 
     if (try matchRulePartSurface(theorem, session, template, actual)) {
@@ -839,6 +902,30 @@ fn matchRulePartSurface(
             break :blk true;
         },
     };
+}
+
+/// Match a holey line's conclusion by transparent rule matching, with the
+/// holes interned as line holes that match anything
+/// (`line_holes_match_anything`). This reaches a hole under a definition the
+/// rule has unfolded: `img f _set` against `sep x A p`.
+fn matchRulePartHoleyInterned(
+    allocator: std.mem.Allocator,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    session: *DefOps.RuleMatchSession,
+    template: TemplateExpr,
+    actual: *const Expr,
+) !bool {
+    const holey_id = try Holes.internWithLineHoles(theorem, env, actual) orelse
+        return false;
+    var snapshot = try session.saveSeedState();
+    defer snapshot.deinit(allocator);
+
+    session.shared.line_holes_match_anything = true;
+    defer session.shared.line_holes_match_anything = false;
+    if (try session.matchTransparentOrSemantic(template, holey_id)) return true;
+    try session.restoreFromSeedState(&snapshot);
+    return false;
 }
 
 fn finishHoleyRuleMatchSession(
@@ -887,10 +974,17 @@ fn finishHoleyRuleMatchSession(
         session,
         rule.concl,
         holey_concl,
+    ) or try matchRulePartHoleyInterned(
+        allocator,
+        theorem,
+        env,
+        session,
+        rule.concl,
+        holey_concl,
     );
     if (!matched_concl) return .{ .no_match = conclusionMismatch() };
 
-    return tryFinalizeRuleMatchSession(
+    const result = tryFinalizeRuleMatchSession(
         allocator,
         env,
         session,
@@ -941,6 +1035,20 @@ fn finishHoleyRuleMatchSession(
         }
         return err;
     };
+    // A rule variable that faced only a hole of the line is open, whatever
+    // the matcher bound it to.
+    if (result == .concrete and holdsLineHole(theorem, result.concrete)) {
+        allocator.free(result.concrete);
+        return .{ .no_match = conclusionMismatch() };
+    }
+    return result;
+}
+
+fn holdsLineHole(theorem: *const TheoremContext, bindings: []const ExprId) bool {
+    for (bindings) |binding| {
+        if (theorem.containsLineHole(binding)) return true;
+    }
+    return false;
 }
 
 pub fn inferBindingsFromHoleyAdvanced(

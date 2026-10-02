@@ -641,7 +641,7 @@ fn matchViewAgainstConclusion(
         state.deinit(session.shared.allocator);
     };
     if (conclusion != null and ref_exprs.len != 0 and surface_bindings == null) {
-        initial_state = try saveViewMatchState(session);
+        initial_state = try session.saveSeedState();
     }
 
     if (conclusion) |actual_conclusion| {
@@ -686,14 +686,6 @@ fn matchViewAgainstConclusion(
         )) return;
         return err;
     };
-}
-
-fn saveViewMatchState(
-    session: *DefOps.RuleMatchSession,
-) !DefOps.MatchSeedState {
-    const seeds = try session.resolveBindingSeeds();
-    errdefer session.shared.allocator.free(seeds);
-    return try session.exportMatchSeedState(seeds);
 }
 
 fn matchViewHypsBeforeConclusion(
@@ -1187,7 +1179,7 @@ fn matchViewAgainstConclusionDebug(
         state.deinit(session.shared.allocator);
     };
     if (conclusion != null and ref_exprs.len != 0 and surface_bindings == null) {
-        initial_state = try saveViewMatchState(session);
+        initial_state = try session.saveSeedState();
     }
 
     if (conclusion) |actual_conclusion| {
@@ -1773,7 +1765,7 @@ fn trialSplitCandidates(
     const allocator = session.shared.allocator;
     const theorem = session.shared.theorem;
 
-    var state = try saveViewMatchState(session);
+    var state = try session.saveSeedState();
     defer state.deinit(allocator);
 
     var survivor: ?ExprId = null;

@@ -596,15 +596,7 @@ fn fillRuleHoleyInlineHints(
 /// hole, or a binder the goal left open). Other holey hints hold plain meta
 /// holes, and search's hints carry its own metas.
 pub fn isHoleyGoalHint(theorem: *const TheoremContext, hint: ExprId) bool {
-    if (!theorem.hasLineHoles()) return false;
-    return theorem.exprAny(hint, {}, isLineHoleNode);
-}
-
-fn isLineHoleNode(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => |id| if (theorem.placeholderInfo(id)) |info| info.line_hole else false,
-        else => false,
-    };
+    return theorem.containsLineHole(hint);
 }
 
 /// An open binder in a holey goal's hint is a line hole, like the line's own

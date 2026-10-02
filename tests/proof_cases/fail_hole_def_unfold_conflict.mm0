@@ -1,0 +1,19 @@
+-- A hole under a definition the rule unfolds matches anything, but the
+-- visible parts beside it must still agree: the premise `R f c` fixes
+-- `sep_R`'s `f`, and the line shows `img g _`.
+
+delimiter $ ( ) $;
+--| @vars x y z
+--| @hole _set
+sort set;
+provable sort wff;
+term mem (a b: set): wff;
+infixl mem: $e.$ prec 50;
+term R (a b: set): wff;
+term sep {x: set} (A: set) (p: wff x): set;
+def img (f B: set) {.y: set}: set = $ sep y B (R f y) $;
+
+axiom sep_R {x: set} (t A f: set):
+  $ t e. A $ > $ R f t $ > $ t e. sep x A (R f x) $;
+
+theorem conflict (f g B c: set): $ c e. B $ > $ R f c $ > $ c e. img f B $;

@@ -336,7 +336,9 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_hole_child_hint", .outcome = .pass },
     // A variable met twice under holes takes both visible parts.
     .{ .stem = "pass_hole_merged_faces", .outcome = .pass },
-    // A hole-free part of a holey line is matched with def unfolding.
+    // A holey line or inline hint whose visible parts match the rule only
+    // through a definition, with the hole beside it or under it
+    // (`fail_hole_def_unfold_conflict` when a visible part disagrees).
     .{ .stem = "pass_hole_def_unfold", .outcome = .pass },
     .{ .stem = "pass_hole_abstract", .outcome = .pass },
     .{ .stem = "pass_hole_abstract_matrix", .outcome = .pass },
@@ -478,6 +480,18 @@ const proof_cases = [_]ProofCase{
     .{
         .stem = "fail_hole_child_hint_undetermined",
         .outcome = .{ .fail = error.MissingBinderAssignment },
+    },
+    .{
+        .stem = "fail_hole_def_unfold_conflict",
+        .outcome = .{ .fail = error.HoleyInferenceMismatch },
+    },
+    .{
+        .stem = "fail_hole_def_unfold_open",
+        .outcome = .{ .fail = error.HoleyInferenceMismatch },
+    },
+    .{
+        .stem = "fail_hole_def_unfold_rewrite",
+        .outcome = .{ .fail = error.HoleConclusionMismatch },
     },
     .{ .stem = "tseitin", .outcome = .pass },
     .{ .stem = "robinson", .outcome = .pass },

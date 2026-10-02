@@ -272,6 +272,49 @@ This avoids inventing rewrite semantics for `.hole`, and it lines up
 with user intent: a hole means "fill whatever subtree belongs here
 once the rule has been elaborated", not "normalize a placeholder".
 
+## Interaction with definitions
+
+A holey line may keep a definition folded where the rule's conclusion has
+it unfolded. With `def img (f B: set) {.y: set}: set = $ sep y B (R f y) $`
+and a rule concluding `t e. sep x A p`, both of these check:
+
+```proof
+l1: $ _wff -> c e. img f B $ by sep_in_imp [#1]
+l2: $ c e. B -> c e. img f _set $ by sep_in_imp [#1]
+```
+
+Hole-free parts of the line are matched with definition unfolding, as on
+a concrete line. When that walk fails, the line's holes are interned as
+wildcards and the rule is matched against the whole line by transparent
+matching: a hole matches anything, and a rule variable facing a part with
+a hole in it stays unbound, so the other parts and the cited premises must
+fix it. The rule's bound `x` takes `img`'s hidden `y`, which gets a fresh
+variable from the `@vars` pool. The holes are then filled through the
+definition: `img`'s body is matched against the instantiated conclusion,
+and each argument is filled from the value its variable took. The filled
+line must equal the conclusion up to unfolding.
+
+The other direction works too: a line may write out a definition the
+rule's conclusion keeps folded, as in `$ c e. sep x _set (R f x) $` for a
+rule concluding `t e. img f B`. The fill matches the definition's body,
+with the conclusion's arguments, against the line to name its hidden
+variable (`x`), then fills from the unfolded conclusion.
+
+An inline sub-proof whose expected goal has a hole under a definition
+(`mp [sep_in_imp [#1], #1]` on `$ c e. img f _set $`) gets the same
+wildcard matching when the structural solver cannot use its goal.
+
+Hover and the **Fill in the holes** action report the line as written,
+with only its holes filled: the checked conclusion may have a definition
+unfolded where the line keeps it folded.
+
+One limit: a rule variable that faces only parts with holes stays open,
+even when a `@recover` could read it back from a cited premise. With
+`has_preimage f X y` defined as `∃ x (x ∈ X ∧ maps f x y)`,
+`$ has_preimage f _set y $ by ex_intro [l1]` fails: `ex_intro`'s `p` meets
+`x ∈ _set ∧ maps f x y`, so it stays unbound, and the `@recover` that
+would find `t` from `l1` needs `p`. Writing the line out in full works.
+
 ---
 
 ## Interaction with ACUI contexts

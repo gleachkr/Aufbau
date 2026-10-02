@@ -167,6 +167,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's
   conclusion has `sep` where the line has `img`, though the same line
   without the hole checked.
+- A hole may also sit inside such a definition.
+  `$ c e. B -> c e. img f _set $ by sep_in_imp [#1]` now checks, filling
+  `_set` with `B` and giving the rule's bound variable a fresh name for
+  `img`'s hidden one. The same holds for an inline sub-proof whose expected
+  goal has the hole: `$ c e. img f _set $ by mp [sep_in_imp [#1], #1]`,
+  and for a line that writes out a definition the rule keeps folded:
+  `$ c e. sep x _set (R f x) $ by img_in [#1]`. The language server's
+  **Fill in the holes** action keeps the line's definitions as written:
+  for `$ _wff -> c e. img f B $` it offers `$ c e. B -> c e. img f B $`,
+  not the rule's unfolded `sep x B (R f x)`.
 - The language server again shows what a proof hole was filled with when
   you hover it. Since 0.0.12 the hover was empty: the navigation pass reused
   check results the diagnostics pass had recorded without the holes.

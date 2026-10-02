@@ -443,14 +443,30 @@ fn collectHoleInferences(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     theorem_vars: *const NameExprMap,
     line: ProofLine,
     surface: *const Expr,
-    concrete: ExprId,
+    checked_line: ExprId,
 ) !void {
     const sink = self.hole_inference_sink orelse return;
+    // Report the line as written with its holes filled. The checked line can
+    // differ in shape: it unfolds a definition the line keeps folded
+    // (`_wff -> c e. img f B` checks as `... sep x B (R f x)`). Keep the
+    // checked line when the filled one is not the same up to unfolding.
+    const concrete = fillAsWritten(
+        allocator,
+        parser,
+        theorem,
+        env,
+        surface,
+        checked_line,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        // Editor-only display: a failed fill must not fail the check.
+        else => checked_line,
+    };
     var names = try ViewTrace.DiagNames.build(
         allocator,
         theorem,
@@ -475,6 +491,36 @@ fn collectHoleInferences(
         concrete,
     ) orelse return;
     try sink.addAssertionOwned(line.span, line.assertion.span, filled);
+}
+
+/// `surface` filled from `checked_line`, when that is `checked_line` up to
+/// unfolding; `checked_line` otherwise.
+fn fillAsWritten(
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    surface: *const Expr,
+    checked_line: ExprId,
+) !ExprId {
+    var report = Holes.ConcreteMatchReport{};
+    const filled = try Holes.materializeSurfaceWithCandidate(
+        parser,
+        theorem,
+        env,
+        surface,
+        checked_line,
+        &report,
+    ) orelse return checked_line;
+    if (filled == checked_line) return checked_line;
+    if (!try Inference.canConvertTransparent(
+        allocator,
+        theorem,
+        env,
+        checked_line,
+        filled,
+    )) return checked_line;
+    return filled;
 }
 
 fn collectHoleInferencesRecursive(

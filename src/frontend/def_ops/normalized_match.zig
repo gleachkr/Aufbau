@@ -680,6 +680,14 @@ pub const RuleMatchSession = struct {
         };
     }
 
+    /// Snapshot the session's current bindings as a seed state, for
+    /// `restoreFromSeedState` to roll back to. Caller deinits it.
+    pub fn saveSeedState(self: *RuleMatchSession) !MatchSeedState {
+        const seeds = try self.resolveBindingSeeds();
+        errdefer self.shared.allocator.free(seeds);
+        return try self.exportMatchSeedState(seeds);
+    }
+
     pub fn exportMatchSeedState(
         self: *RuleMatchSession,
         bindings: []BindingSeed,

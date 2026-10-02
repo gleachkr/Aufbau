@@ -1,0 +1,23 @@
+-- A rule variable that faces only a part of the line with a hole in it is
+-- left open: `sep_in_imp`'s `p` meets `R _set y` once `img _set B` is
+-- unfolded, and nothing else fixes it. The line fails instead of filling
+-- `p` with the hole.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @vars x y z
+--| @hole _set
+sort set;
+term im (a b: wff): wff;
+infixr im: $->$ prec 25;
+term mem (a b: set): wff;
+infixl mem: $e.$ prec 50;
+term R (a b: set): wff;
+term sep {x: set} (A: set) (p: wff x): set;
+def img (f B: set) {.y: set}: set = $ sep y B (R f y) $;
+
+axiom sep_in_imp {x: set} (t A: set) (p: wff x):
+  $ t e. A $ > $ t e. A -> t e. sep x A p $;
+
+theorem open_arg (f B c: set): $ c e. B $ > $ c e. B -> c e. img f B $;

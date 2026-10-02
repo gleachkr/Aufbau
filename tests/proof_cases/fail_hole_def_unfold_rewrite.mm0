@@ -1,0 +1,34 @@
+-- A fill through a definition takes the line's visible parts as written:
+-- with rewrites the checker fills `pr g _mor` from the rule's `f o f` as
+-- `pr g f`, and must not keep it, since that is not `f o f`.
+
+import "lib/iff.mm0";
+
+--| @hole _mor
+sort mor;
+term mor_eq (f g: mor): wff;
+infixl mor_eq: $~$ prec 15;
+term comp (f g: mor): mor;
+infixl comp: $o$ prec 35;
+def pr (f g: mor): mor = $ f o g $;
+
+--| @relation mor mor_eq mor_refl mor_trans mor_sym _
+axiom mor_refl (f: mor): $ f ~ f $;
+axiom mor_trans (f g h: mor): $ f ~ g $ > $ g ~ h $ > $ f ~ h $;
+axiom mor_sym (f g: mor): $ f ~ g $ > $ g ~ f $;
+
+--| @congr
+axiom mor_eq_congr (f1 f2 g1 g2: mor):
+  $ f1 ~ f2 $ > $ g1 ~ g2 $ > $ (f1 ~ g1) ↔ (f2 ~ g2) $;
+
+--| @congr
+axiom comp_congr (f1 f2 g1 g2: mor):
+  $ f1 ~ f2 $ > $ g1 ~ g2 $ > $ f1 o g1 ~ f2 o g2 $;
+
+--| @rewrite
+axiom comp_assoc (f g h: mor): $ (f o g) o h ~ f o (g o h) $;
+
+axiom comp_right (f h i: mor): $ f ~ h $ > $ f o i ~ h o i $;
+
+theorem badd (f g a b c: mor):
+  $ f ~ (a o b) o c $ > $ f o f ~ ((a o b) o c) o f $;

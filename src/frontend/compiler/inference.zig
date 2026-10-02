@@ -35,6 +35,7 @@ pub const inferBindingsFromHoleyAdvanced =
     Strategies.inferBindingsFromHoleyAdvanced;
 pub const tryInferHoleyHintStructuralSolver =
     Strategies.tryInferHoleyHintStructuralSolver;
+pub const tryInferHoleyHintBySession = Strategies.tryInferHoleyHintBySession;
 pub const inferBindings = Dispatch.inferBindings;
 pub const inferOptionalBindingsAllowUnresolved =
     Dispatch.inferOptionalBindingsAllowUnresolved;

@@ -1,0 +1,4 @@
+badd
+----
+l1: $ pr g _mor ~ _mor $ by comp_right (h := $ (a o b) o c $, i := $ f $) [#1]
+l2: $ f o f ~ ((a o b) o c) o f $ by comp_right (h := $ (a o b) o c $, i := $ f $) [#1]

@@ -165,6 +165,10 @@ pub const SharedContext = struct {
         std.ArrayListUnmanaged(u32),
     ) = .empty,
     def_compression_index_built: bool = false,
+    /// Holey proof lines: a line hole in an actual expression matches any
+    /// template part and fixes nothing (`transparent_match.holeyActual`).
+    /// Off everywhere else, so search's metas keep their meaning.
+    line_holes_match_anything: bool = false,
     /// Session-independent representative memo (one map per non-exact
     /// `BindingMode`): input expr → its plain concrete representative.
     /// Populated only when the input is placeholder-free and the computed

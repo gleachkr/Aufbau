@@ -565,6 +565,16 @@ pub fn inferCandidateBindings(
                         restoreDiagnostic(self, null);
                         break :blk hint_bindings;
                     }
+                    if (try Inference.tryInferHoleyHintBySession(
+                        context,
+                        partial_bindings,
+                        base_ref_exprs,
+                        hint,
+                        fresh_context,
+                    )) |hint_bindings| {
+                        restoreDiagnostic(self, null);
+                        break :blk hint_bindings;
+                    }
                 }
                 if (expected_conclusion_hint) |hint| plain_hint: {
                     if (holey_goal_hint) break :plain_hint;
@@ -912,6 +922,29 @@ fn validateHoleyAssertionAgainstCandidate(
         }
     }
 
+    // The visible parts can equal the candidate only after unfolding a
+    // definition the line keeps folded: `img f _set` against the rule's
+    // `sep z B (R f z)`. The fill sees through the definition; keep it when
+    // the filled line is the candidate up to unfolding.
+    if (try fillThroughDefs(
+        allocator,
+        parser,
+        theorem,
+        env,
+        holey,
+        expected_line,
+    )) |filled_line| return filled_line;
+    if (normalized_line != expected_line) {
+        if (try fillThroughDefs(
+            allocator,
+            parser,
+            theorem,
+            env,
+            holey,
+            normalized_line,
+        )) |filled_line| return filled_line;
+    }
+
     const general_report = if (hole_report.failure) |failure|
         failure == .visible_structure_mismatch
     else
@@ -938,6 +971,36 @@ fn validateHoleyAssertionAgainstCandidate(
     addHoleConcreteMatchNotes(&diag, line, hole_report);
     self.setProof(diag);
     return error.HoleConclusionMismatch;
+}
+
+/// The fill of `holey` from `candidate` through the definitions the line
+/// keeps folded (`Holes.materializeSurfaceWithCandidate`), when the filled
+/// line equals `candidate` up to unfolding. Null otherwise.
+fn fillThroughDefs(
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    holey: *const Expr,
+    candidate: ExprId,
+) !?ExprId {
+    var report = Holes.ConcreteMatchReport{};
+    const filled = try Holes.materializeSurfaceWithCandidate(
+        parser,
+        theorem,
+        env,
+        holey,
+        candidate,
+        &report,
+    ) orelse return null;
+    if (!try Inference.canConvertTransparent(
+        allocator,
+        theorem,
+        env,
+        candidate,
+        filled,
+    )) return null;
+    return filled;
 }
 
 /// The out-of-order fill of an ACUI combination's hole, when the positional

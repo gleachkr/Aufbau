@@ -5,9 +5,11 @@ const Expr = ExprModule.Expr;
 const SourceSpan = ExprModule.SourceSpan;
 const SurfaceExpr = @import("../surface_expr.zig");
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
+const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
 const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
+const TermDecl = @import("../env.zig").TermDecl;
 const RuleDecl = @import("../env.zig").RuleDecl;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
@@ -429,7 +431,7 @@ pub fn materializeSurfaceWithCandidate(
     holey: *const Expr,
     candidate: ExprId,
     report: *ConcreteMatchReport,
-) !?ExprId {
+) anyerror!?ExprId {
     if (!contains(holey)) {
         const visible = try theorem.internParsedExpr(holey);
         const visible_sort = try exprIdSortName(theorem, env, visible);
@@ -467,6 +469,22 @@ pub fn materializeSurfaceWithCandidate(
             if (holey_term.id != candidate_app.term_id or
                 holey_term.args.len != candidate_app.args.len)
             {
+                if (try materializeThroughDef(
+                    parser,
+                    theorem,
+                    env,
+                    holey_term,
+                    candidate,
+                    report,
+                )) |filled| return filled;
+                if (try materializeAgainstUnfolded(
+                    parser,
+                    theorem,
+                    env,
+                    holey,
+                    candidate,
+                    report,
+                )) |filled| return filled;
                 setConcreteFailure(report, .visible_structure_mismatch);
                 return null;
             }
@@ -493,6 +511,158 @@ pub fn materializeSurfaceWithCandidate(
             return try theorem.interner.internAppOwned(holey_term.id, args);
         },
     }
+}
+
+/// Fill a holey application of a definition from a candidate that has the
+/// definition unfolded: match the body, with the definition's arguments and
+/// hidden variables as binders, against the candidate, then fill each
+/// argument from the value its binder took. Null when the head is not a
+/// definition, the body does not match, or it leaves an argument open.
+fn materializeThroughDef(
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    holey_term: anytype,
+    candidate: ExprId,
+    report: *ConcreteMatchReport,
+) anyerror!?ExprId {
+    const term = env.openableDef(holey_term.id) orelse return null;
+    if (term.args.len != holey_term.args.len) return null;
+    const values = try matchDefBody(theorem, env, term, candidate, null) orelse
+        return null;
+    defer theorem.allocator.free(values);
+
+    const allocator = theorem.allocator;
+    const args = try allocator.alloc(ExprId, holey_term.args.len);
+    errdefer allocator.free(args);
+    for (holey_term.args, values[0..holey_term.args.len], 0..) |arg, value, idx| {
+        args[idx] = (try materializeSurfaceWithCandidate(
+            parser,
+            theorem,
+            env,
+            arg,
+            value orelse {
+                allocator.free(args);
+                return null;
+            },
+            report,
+        )) orelse {
+            allocator.free(args);
+            return null;
+        };
+    }
+    const filled = try theorem.interner.internAppOwned(holey_term.id, args);
+    return try keepIfConverts(theorem, env, candidate, filled);
+}
+
+/// Fill `holey` from a candidate that keeps a definition folded where the
+/// line has it unfolded: match the definition's body, its arguments fixed to
+/// the candidate's and its hidden variables free, against the line with its
+/// holes as wildcards, then fill from the candidate unfolded with the hidden
+/// variables the line names. Null when the candidate's head is not a
+/// definition or the line leaves a hidden variable open.
+fn materializeAgainstUnfolded(
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    holey: *const Expr,
+    candidate: ExprId,
+    report: *ConcreteMatchReport,
+) anyerror!?ExprId {
+    const candidate_app = theorem.interner.node(candidate).app;
+    const term = env.openableDef(candidate_app.term_id) orelse return null;
+    if (term.args.len != candidate_app.args.len) return null;
+    // The line writes out the body, so it has the body's head. Checked
+    // first: interning the line mints line holes in the theorem.
+    const body_head = switch (term.body.?) {
+        .app => |app| app.term_id,
+        .binder => return null,
+    };
+    if (holey.* != .term or holey.term.id != body_head) return null;
+    const holey_id = try internWithLineHoles(theorem, env, holey) orelse
+        return null;
+    const values = try matchDefBody(
+        theorem,
+        env,
+        term,
+        holey_id,
+        candidate_app.args,
+    ) orelse return null;
+    defer theorem.allocator.free(values);
+
+    const binders = try theorem.allocator.alloc(ExprId, values.len);
+    defer theorem.allocator.free(binders);
+    for (values, 0..) |value, idx| {
+        const expr = value orelse return null;
+        if (theorem.containsLineHole(expr)) return null;
+        binders[idx] = expr;
+    }
+    const unfolded = try theorem.instantiateTemplate(term.body.?, binders);
+    const filled = try materializeSurfaceWithCandidate(
+        parser,
+        theorem,
+        env,
+        holey,
+        unfolded,
+        report,
+    ) orelse return null;
+    return try keepIfConverts(theorem, env, candidate, filled);
+}
+
+/// `filled` when it is `candidate` up to unfolding. A fill takes the line's
+/// hole-free parts as written, so a fill through a definition can disagree
+/// with the candidate where the def's body put them.
+fn keepIfConverts(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    candidate: ExprId,
+    filled: ExprId,
+) !?ExprId {
+    var def_ops = DefOps.Context.init(theorem.allocator, theorem, env);
+    defer def_ops.deinit();
+    if (try def_ops.compareTransparent(candidate, filled) == null) return null;
+    return filled;
+}
+
+/// The values a definition's arguments and hidden variables take when its
+/// body is matched against `target` by transparent matching (`args` fixes
+/// the arguments; line holes in `target` match anything). Caller frees.
+/// Null when the body does not match.
+fn matchDefBody(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    term: *const TermDecl,
+    target: ExprId,
+    args: ?[]const ExprId,
+) !?[]?ExprId {
+    const allocator = theorem.allocator;
+    const arg_infos = try allocator.alloc(
+        ArgInfo,
+        term.args.len + term.dummy_args.len,
+    );
+    defer allocator.free(arg_infos);
+    @memcpy(arg_infos[0..term.args.len], term.args);
+    @memcpy(arg_infos[term.args.len..], term.dummy_args);
+    const seeds = try allocator.alloc(DefOps.BindingSeed, arg_infos.len);
+    defer allocator.free(seeds);
+    @memset(seeds, .none);
+    if (args) |fixed| for (fixed, 0..) |arg, idx| {
+        seeds[idx] = .{ .exact = arg };
+    };
+
+    var def_ops = DefOps.Context.init(allocator, theorem, env);
+    defer def_ops.deinit();
+    def_ops.shared.line_holes_match_anything = true;
+    var session = try def_ops.beginRuleMatch(arg_infos, seeds);
+    defer session.deinit();
+    // A fill is a fallback on the way to a diagnosed mismatch: a match
+    // error is no match.
+    const matched = session.matchTransparent(term.body.?, target) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return null;
+    };
+    if (!matched) return null;
+    return try session.materializeOptionalBindings();
 }
 
 /// Fill holes like `materializeSurfaceWithCandidate`, except under an ACUI

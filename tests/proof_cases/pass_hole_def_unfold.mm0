@@ -1,6 +1,9 @@
--- A holey line whose visible part needs a def unfolded: `img f B` is a
--- separation `sep y B (R f y)` with a hidden bound `y`, so `sep_in_imp`
--- applies only after unfolding it, and its bound `x` takes `img`'s `y`.
+-- Holey lines whose visible parts match the rule only through a
+-- definition: `img f B` is a separation `sep y B (R f y)` with a hidden
+-- bound `y`, so `sep_in_imp` applies only after unfolding it, and its
+-- bound `x` takes `img`'s `y`. The hole may sit beside the definition,
+-- under it, or in an inline sub-proof's expected goal; and a line may
+-- unfold a definition that `img_in`'s conclusion keeps folded.
 
 delimiter $ ( ) $;
 --| @hole _wff
@@ -16,7 +19,13 @@ term R (a b: set): wff;
 term sep {x: set} (A: set) (p: wff x): set;
 def img (f B: set) {.y: set}: set = $ sep y B (R f y) $;
 
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
 axiom sep_in_imp {x: set} (t A: set) (p: wff x):
   $ t e. A $ > $ t e. A -> t e. sep x A p $;
+axiom img_in (f B c: set): $ c e. B $ > $ c e. img f B $;
 
 theorem hole_beside_def (f B c: set): $ c e. B $ > $ c e. B -> c e. img f B $;
+theorem hole_under_def (f B c: set): $ c e. B $ > $ c e. B -> c e. img f B $;
+theorem hint_hole_under_def (f B c: set): $ c e. B $ > $ c e. img f B $;
+theorem hole_in_unfolded_def (f B c: set) {x: set}:
+  $ c e. B $ > $ c e. sep x B (R f x) $;
