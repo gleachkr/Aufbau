@@ -1,0 +1,29 @@
+-- On a holey line, an inline sub-proof's hint also takes what the sibling
+-- refs to its left fix. In `mp [#1, or_r [q []]]` the line `_wff` fixes
+-- none of `mp`'s variables, but `#1` fixes `a := R \/ Q`, so `or_r` gets
+-- the hint `R \/ Q` and reads its `a := R` from it.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @hole _obj
+sort obj;
+term c: obj;
+term P (x: obj): wff;
+term Q: wff;
+term R: wff;
+term S: wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term or (a b: wff): wff;
+infixl or: $\/$ prec 30;
+
+axiom q: $ Q $;
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+axiom tr (a b d: wff): $ a -> b $ > $ b -> d $ > $ a -> d $;
+axiom or_r (a b: wff): $ b $ > $ a \/ b $;
+
+-- The sibling is a cited premise or an earlier line.
+theorem sibling_ref: $ (R \/ Q) -> P c $ > $ P c $;
+-- The sibling is itself an inline sub-proof, checked before the child.
+theorem sibling_inline: $ (R \/ Q) -> S $ > $ S -> P c $ > $ P c $;

@@ -1533,7 +1533,9 @@ fn recordInlineConclusion(
 ///     on failure), so nothing speculative is committed; the conclusion is folded
 ///     first, and only if that leaves the minor open are the siblings folded
 ///     first instead (a sibling that differs from the conclusion only up to ACUI
-///     would otherwise be rolled back whole);
+///     would otherwise be rolled back whole); a holey line's conclusion fold
+///     reads only its hole-free parts, so `$ _wff $ by mp [#1, or_r [..]]`
+///     still takes `mp`'s `a` from `#1`;
 ///   - bare ACUI-combiner-spine binders are demoted before instantiation, so a
 ///     positional context split (`g,h ⊢ …` matched member-wise) declines to
 ///     refine rather than emit a wrong-but-concrete hint;
@@ -1562,9 +1564,12 @@ fn refinedInlineHint(
         if (!holey) return existing_hint;
     }
 
-    const line_expr = expected_conclusion_hint orelse switch (line_assertion) {
-        .concrete => |expr| expr,
-        .holey, .implicit_whole_conclusion => return existing_hint,
+    const goal: LineGoal = if (expected_conclusion_hint) |hint|
+        .{ .expr = hint }
+    else switch (line_assertion) {
+        .concrete => |expr| .{ .expr = expr },
+        .holey => |holey| .{ .holey = holey },
+        .implicit_whole_conclusion => return existing_hint,
     };
 
     const allocator = context.allocator;
@@ -1581,15 +1586,11 @@ fn refinedInlineHint(
     const orders: []const bool = if (idx == 0) &.{true} else &.{ true, false };
     for (orders) |conclusion_first| {
         @memcpy(bindings, partial_bindings);
-        if (conclusion_first) {
-            foldTemplateOrRestore(theorem, rule.concl, line_expr, bindings, snap);
-        }
+        if (conclusion_first) try foldLineGoal(theorem, rule, goal, bindings, snap);
         for (0..idx) |j| {
             foldTemplateOrRestore(theorem, rule.hyps[j], ref_exprs[j], bindings, snap);
         }
-        if (!conclusion_first) {
-            foldTemplateOrRestore(theorem, rule.concl, line_expr, bindings, snap);
-        }
+        if (!conclusion_first) try foldLineGoal(theorem, rule, goal, bindings, snap);
 
         // Drop any positional ACUI-spine commitment so a context split cannot
         // leak a wrong-but-concrete hint (the fold declines rather than guesses).
@@ -1602,6 +1603,38 @@ fn refinedInlineHint(
         )) |refined| return refined;
     }
     return existing_hint;
+}
+
+/// The goal `refinedInlineHint` folds through the rule's conclusion: an
+/// interned expression, or a holey line's surface.
+const LineGoal = union(enum) {
+    expr: ExprId,
+    holey: *const Expr,
+};
+
+/// Fold `goal` through `rule`'s conclusion all-or-nothing. A holey line fixes
+/// only the binders its hole-free parts determine.
+fn foldLineGoal(
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    goal: LineGoal,
+    bindings: []?ExprId,
+    snap: []?ExprId,
+) !void {
+    switch (goal) {
+        .expr => |expr| foldTemplateOrRestore(theorem, rule.concl, expr, bindings, snap),
+        .holey => |holey| {
+            @memcpy(snap, bindings);
+            var report = Holes.InferenceReport{};
+            if (!try Holes.matchTemplateToSurfaceDetailed(
+                theorem,
+                rule.concl,
+                holey,
+                bindings,
+                &report,
+            )) @memcpy(bindings, snap);
+        },
+    }
 }
 
 fn refSpan(ref: Ref) Span {

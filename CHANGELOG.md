@@ -162,6 +162,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   and `$ eq (f _obj) (f c) $ by refl []` now check: the other parts of
   the line and the cited premises determine the variable. Before, such a line
   failed with "a proof hole is not allowed here" or a missing variable.
+- On a holey line, an inline sub-proof's expected goal now also takes the
+  rule variables that the refs to its left fix. With `#1` stating
+  `(R \/ Q) -> P c`, `$ _wff $ by mp [#1, or_r [q []]]` now checks. Before,
+  `or_r` expected only a hole, so its `a` could not be determined, though
+  the same proof checked with the line written out.
 - A holey line whose visible parts match the rule only after unfolding a
   definition now checks. With `img f B` defined as `sep y B (R f y)`,
   `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's

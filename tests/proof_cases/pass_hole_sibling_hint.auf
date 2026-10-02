@@ -1,0 +1,11 @@
+sibling_ref
+-----------
+
+l1: $ _wff $ by mp [#1, or_r [q []]]
+l2: $ P c $ by mp [#1, or_r [q []]]
+
+sibling_inline
+--------------
+
+l1: $ P _obj $ by mp [tr [#1, #2], or_r [q []]]
+l2: $ P c $ by mp [tr [#1, #2], or_r [q []]]

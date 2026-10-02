@@ -190,6 +190,19 @@ occurrence shows. Under `both (a): $ a $ > $ a /\ a $`, the line
 an ACUI combiner are not combined, since their order is not fixed; the
 first occurrence stands there, unless a later one has no hole.
 
+The refs to an inline sub-proof's left fix rule variables too, as on a
+line without holes. In
+
+```text
+l1: $ _wff $ by mp [#1, or_r [q []]]
+```
+
+with `#1` stating `(R \/ Q) -> P c`, the line fixes none of `mp`'s
+variables, but `#1` gives `a := R \/ Q`, so `or_r` expects `R \/ Q` and
+reads its `a := R` from it. An earlier inline sub-proof counts once it
+has checked: `mp [tr [#1, #2], or_r [q []]]` works the same way. A ref
+to the right does not help, since it is checked after the sub-proof.
+
 ### Diagnostics surface for failed lines
 
 When no candidate succeeds, the compiler raises one of:
