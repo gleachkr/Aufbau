@@ -299,6 +299,12 @@ pub const NoteMessage = union(enum) {
         expected_sort: []const u8,
         actual_sort: []const u8,
     },
+    acui_several_holes: struct {
+        combiner: []const u8,
+    },
+    acui_hole_in_member: struct {
+        combiner: []const u8,
+    },
     expected_expr: struct {
         text: []const u8,
     },
@@ -1778,6 +1784,8 @@ pub fn renderNoteMessage(writer: anytype, message: NoteMessage) !void {
         .in_the_statement => |info| try printT(writer, "note_in_the_statement", .{info.text}),
         .at_the_mismatch => |info| try printT(writer, "note_at_the_mismatch", .{info.text}),
         .hole_sort_mismatch => |info| try printT(writer, "note_hole_sort_mismatch", .{ info.token, info.expected_sort, info.actual_sort }),
+        .acui_several_holes => |info| try printT(writer, "note_acui_several_holes", .{info.combiner}),
+        .acui_hole_in_member => |info| try printT(writer, "note_acui_hole_in_member", .{info.combiner}),
         .expected_expr => |info| try printT(writer, "note_expected_expr", .{info.text}),
         .actual_expr => |info| try printT(writer, "note_actual_expr", .{info.text}),
         .normalized_expected_expr => |info| try printT(writer, "note_normalized_expected_expr", .{info.text}),

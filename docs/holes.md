@@ -285,6 +285,21 @@ l1: $ _ctx ==> _ctx $ by pair_cut [#1, #2]
 l2: $ _ctx ==> a , b $ by discharge [#1]
 ```
 
+A hole can also stand for part of a context, and the visible members need
+not come in the order the rule builds the context in. When the line does
+not match by position, the hole takes the members the visible ones leave
+over: the fewest, under idempotence, and the unit when none are left. With
+`dup (g): $ ok g $ > $ ok2 g g $` and a premise `ok (A , B)`,
+
+```proof
+l1: $ ok2 (A , _ctx) (_ctx , A) $ by dup [ok_ab []]
+```
+
+checks, with each `_ctx` standing for `B`. This takes exactly one hole
+among a context's members. A context with two holes, or with a hole inside
+a member such as `wk _ctx`, is filled by position only; when the line then
+fails, the error says which hole is in the way.
+
 ACUI matching can sometimes admit more than one valid context
 binding — for example, both `g = ∅` and `g = P` may satisfy
 `g ⊢ P → Q` when the cited ref is `P ⊢ Q`. The compiler does not

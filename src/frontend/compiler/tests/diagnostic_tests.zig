@@ -1779,3 +1779,124 @@ test "exhausted @vars pool is reported, not a later tier's mismatch" {
         else => return error.ExpectedInferenceFailureDetail,
     }
 }
+
+const acui_hole_ctx_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term iff (a b: wff): wff;
+    \\infixr iff: $<->$ prec 20;
+    \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+    \\axiom iff_refl (a: wff): $ a <-> a $;
+    \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+    \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+    \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+    \\--| @hole _ctx
+    \\sort ctx;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (g h: ctx): ctx;
+    \\infixl join: $,$ prec 5;
+    \\term wk (g: ctx): ctx;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+    \\--| @congr
+    \\axiom join_congr (g1 g2 h1 h2: ctx):
+    \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+    \\--| @congr
+    \\axiom wk_congr (g h: ctx): $ ctx_eq g h $ > $ ctx_eq (wk g) (wk h) $;
+    \\term A: ctx;
+    \\term B: ctx;
+    \\term C: ctx;
+    \\term ok (g: ctx): wff;
+    \\term ok2 (g h: ctx): wff;
+    \\--| @congr
+    \\axiom ok2_congr (g h i j: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq i j $ > $ ok2 g i <-> ok2 h j $;
+    \\axiom ok_ab: $ ok (A , B) $;
+    \\axiom ok_abc: $ ok ((A , B) , C) $;
+    \\axiom ok_abwc: $ ok ((A , B) , wk C) $;
+    \\axiom dup (g: ctx): $ ok g $ > $ ok2 g g $;
+    \\theorem t: $ ok2 (A , B) (A , B) $;
+;
+
+/// Compile `line` as the one proof line of `t` and expect `err` with `note`
+/// on the hole at `token_offset` in `line`.
+fn expectAcuiHoleNote(
+    line: []const u8,
+    err: anyerror,
+    note: []const u8,
+    token_offset: usize,
+) !void {
+    const header = "t\n---\n";
+    const proof_src = try std.mem.concat(std.testing.allocator, u8, &.{
+        header, line, "\n",
+    });
+    defer std.testing.allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        acui_hole_ctx_mm0,
+        proof_src,
+    );
+    try std.testing.expectError(err, compiler.compileMmb(std.testing.allocator));
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    for (diag.noteSlice()) |found| {
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(std.testing.allocator);
+        const text = try helpers.renderedNoteText(&buf, found);
+        if (!std.mem.eql(u8, text, note)) continue;
+        const span = found.span orelse return error.ExpectedDiagnosticSpan;
+        try std.testing.expectEqual(header.len + token_offset, span.start);
+        try std.testing.expectEqualStrings(
+            "_ctx",
+            proof_src[span.start..span.end],
+        );
+        return;
+    }
+    return error.MissingExpectedNote;
+}
+
+test "two holes in one reordered ACUI context say why they were not filled" {
+    const line = "l1: $ ok2 (A , B) (B , _ctx , _ctx) $ by dup [ok_ab []]";
+    try expectAcuiHoleNote(
+        line,
+        error.HoleConclusionMismatch,
+        "this 'join' combination has more than one hole; its members " ++
+            "are filled out of order only when a single hole stands for " ++
+            "all the members left over",
+        std.mem.lastIndexOf(u8, line, "_ctx").?,
+    );
+}
+
+test "a hole inside a member of a reordered ACUI context says why it was not filled" {
+    const line = "l1: $ ok2 _ctx (B , wk _ctx , A) $ by dup [ok_abwc []]";
+    try expectAcuiHoleNote(
+        line,
+        error.HoleConclusionMismatch,
+        "a hole inside a member of a 'join' combination is filled by " ++
+            "position only; if the rule's conclusion lists the members in " ++
+            "another order, write that member out or reorder the members",
+        std.mem.lastIndexOf(u8, line, "_ctx").?,
+    );
+}
+
+test "a wrong positional fill of two holes in one ACUI context says why" {
+    const line = "l1: $ ok2 _ctx ((_ctx , _ctx) , A) $ by dup [ok_abc []]";
+    try expectAcuiHoleNote(
+        line,
+        error.ConclusionMismatch,
+        "this 'join' combination has more than one hole; its members " ++
+            "are filled out of order only when a single hole stands for " ++
+            "all the members left over",
+        std.mem.indexOf(u8, line, ", _ctx)").? + 2,
+    );
+}

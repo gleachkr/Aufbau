@@ -108,6 +108,14 @@ pub fn concreteMatchFailureSpan(
             line,
             mismatch.token_span,
         ),
+        .acui_several_holes => |info| proofSpanForSourceSpan(
+            line,
+            info.token_span,
+        ),
+        .acui_hole_in_member => |info| proofSpanForSourceSpan(
+            line,
+            info.token_span,
+        ),
         .visible_structure_mismatch => null,
     };
 }
@@ -364,7 +372,36 @@ pub fn addHoleConcreteMatchNotes(
                 .actual_sort = mismatch.actual_sort_name,
             } }, proofSpanForSourceSpan(line, mismatch.token_span));
         },
+        .acui_several_holes => |info| addProofNoteSpan(
+            diag,
+            .{ .acui_several_holes = .{ .combiner = info.combiner_name } },
+            proofSpanForSourceSpan(line, info.token_span),
+        ),
+        .acui_hole_in_member => |info| addProofNoteSpan(
+            diag,
+            .{ .acui_hole_in_member = .{ .combiner = info.combiner_name } },
+            proofSpanForSourceSpan(line, info.token_span),
+        ),
     }
+}
+
+/// Say when a failed holey line has an ACUI combination whose holes are
+/// filled only by position.
+pub fn addAcuiFrameObstacleNote(
+    allocator: std.mem.Allocator,
+    diag: *Diagnostic,
+    line: anytype,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    holey: *const Expr,
+) !void {
+    const obstacle = try Holes.acuiFrameObstacle(
+        allocator,
+        env,
+        registry,
+        holey,
+    ) orelse return;
+    addHoleConcreteMatchNotes(diag, line, .{ .failure = obstacle });
 }
 
 pub fn addComparisonSnapshotNotes(

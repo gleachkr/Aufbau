@@ -1,0 +1,38 @@
+-- Without idempotence a context is a multiset: each visible member accounts
+-- for one occurrence, and the hole takes the occurrences left over.
+import "lib/iff.mm0";
+
+--| @hole _ctx
+sort ctx;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+
+term A: ctx;
+term B: ctx;
+term ok (g: ctx): wff;
+term ok2 (g h: ctx): wff;
+--| @congr
+axiom ok2_congr (g h i j: ctx):
+  $ ctx_eq g h $ > $ ctx_eq i j $ > $ ok2 g i <-> ok2 h j $;
+
+axiom ok_aab: $ ok ((A , A) , B) $;
+axiom dup (g: ctx): $ ok g $ > $ ok2 g g $;
+
+theorem frame_multiset: $ ok2 ((A , A) , B) ((A , B) , A) $;

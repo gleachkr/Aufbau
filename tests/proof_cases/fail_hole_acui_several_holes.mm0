@@ -1,0 +1,5 @@
+-- Two holes in one ACUI context: which members each stands for is not
+-- determined, so they are filled only by position.
+import "lib/hole_ctx.mm0";
+
+theorem several_holes: $ ok2 (A , B) (A , B) $;

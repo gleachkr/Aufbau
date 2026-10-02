@@ -130,6 +130,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   two. `$ (Q \/ _wff) /\ (_wff \/ P c) $ by both [or_l [q []]]` now checks,
   with `both`'s `a := Q \/ P c`. Before, the sub-proof got only the first
   occurrence, `Q \/ ‹hole›`, so `or_l`'s `b` could not be determined.
+- A hole among the members of an ACUI context takes the members the visible
+  ones leave over, whatever order the rule built the context in.
+  `$ ok2 (A , _ctx) (_ctx , A) $ by dup [ok_ab []]` now checks against
+  `ok2 (A , B) (A , B)`, with each `_ctx` standing for `B`. Before, holes
+  were filled by position, so the second `_ctx` took `A`. A context with two
+  holes, or with a hole inside a member, is still filled by position, and a
+  line that fails because of it now says so.
 - When a line's rule variable cannot be determined, the error names one the
   cited premises leave open too. Before, `or_l [q []]` with its `b` hidden
   by a hole was reported as missing `a`, which `q` determines.

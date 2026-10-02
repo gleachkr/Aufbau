@@ -11,6 +11,11 @@ const GlobalEnv = @import("../env.zig").GlobalEnv;
 const RuleDecl = @import("../env.zig").RuleDecl;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
+const AcuiSupport = @import("../acui_support.zig");
+const Canonicalizer = @import("../canonicalizer.zig").Canonicalizer;
+const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
+const ResolvedStructuralCombiner =
+    @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
 const CompilerVars = @import("./vars.zig");
 const Idents = @import("../idents.zig");
 
@@ -107,6 +112,17 @@ pub const ConcreteMatchFailure = union(enum) {
         token_span: ?SourceSpan,
         expected_sort_name: []const u8,
         actual_sort_name: []const u8,
+    },
+    /// Out-of-order filling needs one hole per ACUI combination.
+    acui_several_holes: struct {
+        combiner_name: []const u8,
+        token_span: ?SourceSpan,
+    },
+    /// A hole inside one member of an ACUI combination is filled only by
+    /// position.
+    acui_hole_in_member: struct {
+        combiner_name: []const u8,
+        token_span: ?SourceSpan,
     },
 };
 
@@ -477,6 +493,326 @@ pub fn materializeSurfaceWithCandidate(
             return try theorem.interner.internAppOwned(holey_term.id, args);
         },
     }
+}
+
+/// Fill holes like `materializeSurfaceWithCandidate`, except under an ACUI
+/// combiner: there one hole standing for whole members takes the members of
+/// the candidate the visible ones leave over, in any order (the fewest, under
+/// idempotence; the unit when none are left). Null for a combination with
+/// several holes or a hole inside a member (`acuiFrameObstacle` says which),
+/// and wherever the visible parts do not fit.
+///
+/// Like the positional fill, the result is only a proposal: callers compare
+/// it with the candidate modulo ACUI.
+pub fn materializeSurfaceModuloAcui(
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    canonicalizer: *Canonicalizer,
+    holey: *const Expr,
+    candidate: ExprId,
+) !?ExprId {
+    var report = ConcreteMatchReport{};
+    const holey_term = switch (holey.*) {
+        .term => |term| term,
+        else => return try materializeSurfaceWithCandidate(
+            parser,
+            theorem,
+            env,
+            holey,
+            candidate,
+            &report,
+        ),
+    };
+    if (!contains(holey)) {
+        return try materializeSurfaceWithCandidate(
+            parser,
+            theorem,
+            env,
+            holey,
+            candidate,
+            &report,
+        );
+    }
+    if (holey_term.args.len == 2) {
+        if (try registry.resolveStructuralCombiner(env, holey_term.id)) |acui| {
+            return try fillAcuiFrame(
+                parser,
+                theorem,
+                env,
+                canonicalizer,
+                acui,
+                holey,
+                candidate,
+            );
+        }
+    }
+
+    const candidate_app = switch (theorem.interner.node(candidate).*) {
+        .app => |app| app,
+        else => return null,
+    };
+    if (holey_term.id != candidate_app.term_id or
+        holey_term.args.len != candidate_app.args.len)
+    {
+        return null;
+    }
+    const args = try theorem.allocator.alloc(ExprId, holey_term.args.len);
+    errdefer theorem.allocator.free(args);
+    for (holey_term.args, candidate_app.args, 0..) |arg, candidate_arg, idx| {
+        args[idx] = (try materializeSurfaceModuloAcui(
+            parser,
+            theorem,
+            env,
+            registry,
+            canonicalizer,
+            arg,
+            candidate_arg,
+        )) orelse {
+            theorem.allocator.free(args);
+            return null;
+        };
+    }
+    return try theorem.interner.internAppOwned(holey_term.id, args);
+}
+
+fn fillAcuiFrame(
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    canonicalizer: *Canonicalizer,
+    acui: ResolvedStructuralCombiner,
+    holey: *const Expr,
+    candidate: ExprId,
+) !?ExprId {
+    const allocator = theorem.allocator;
+    var members = std.ArrayListUnmanaged(*const Expr){};
+    defer members.deinit(allocator);
+    try collectSurfaceMembers(allocator, holey, acui.head_term_id, &members);
+    const frame_hole = switch (frameOf(env, acui, members.items)) {
+        .frame => |hole| hole,
+        .obstacle => return null,
+    };
+
+    var items = std.ArrayListUnmanaged(ExprId){};
+    defer items.deinit(allocator);
+    try collectAcuiItems(
+        theorem,
+        allocator,
+        try canonicalizer.canonicalize(candidate),
+        acui,
+        &items,
+    );
+    const taken = try allocator.alloc(bool, items.items.len);
+    defer allocator.free(taken);
+    @memset(taken, false);
+    for (members.items) |member| {
+        if (member == frame_hole) continue;
+        const visible = try canonicalizer.canonicalize(
+            try theorem.internParsedExpr(member),
+        );
+        if (isAcuiUnit(theorem, visible, acui)) continue;
+        if (takeItem(items.items, taken, visible)) continue;
+        // Under idempotence a member may repeat one already taken.
+        if (acui.idem_id != null and
+            std.mem.indexOfScalar(ExprId, items.items, visible) != null)
+        {
+            continue;
+        }
+        return null;
+    }
+
+    var rest = std.ArrayListUnmanaged(ExprId){};
+    defer rest.deinit(allocator);
+    for (items.items, taken) |item, is_taken| {
+        if (!is_taken) try rest.append(allocator, item);
+    }
+    var support = AcuiSupport.Context.init(
+        allocator,
+        theorem,
+        env,
+        canonicalizer.registry,
+    );
+    defer support.deinit();
+    var report = ConcreteMatchReport{};
+    const filled = (try materializeSurfaceWithCandidate(
+        parser,
+        theorem,
+        env,
+        frame_hole,
+        try support.rebuildAcuiTree(
+            rest.items,
+            acui.head_term_id,
+            acui.unit_term_id,
+        ),
+        &report,
+    )) orelse return null;
+    return try internWithFrame(
+        theorem,
+        holey,
+        acui.head_term_id,
+        frame_hole,
+        filled,
+    );
+}
+
+/// Why the first ACUI combination of `holey` that holds a hole cannot be
+/// filled out of order, if one cannot.
+pub fn acuiFrameObstacle(
+    allocator: std.mem.Allocator,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    holey: *const Expr,
+) !?ConcreteMatchFailure {
+    if (!contains(holey)) return null;
+    const term = switch (holey.*) {
+        .term => |term| term,
+        else => return null,
+    };
+    if (term.args.len == 2) {
+        if (try registry.resolveStructuralCombiner(env, term.id)) |acui| {
+            var members = std.ArrayListUnmanaged(*const Expr){};
+            defer members.deinit(allocator);
+            try collectSurfaceMembers(
+                allocator,
+                holey,
+                acui.head_term_id,
+                &members,
+            );
+            // A member holding a hole is itself an obstacle, so there is
+            // nothing further down to report.
+            return switch (frameOf(env, acui, members.items)) {
+                .frame => null,
+                .obstacle => |obstacle| obstacle,
+            };
+        }
+    }
+    for (term.args) |arg| {
+        if (try acuiFrameObstacle(allocator, env, registry, arg)) |obstacle| {
+            return obstacle;
+        }
+    }
+    return null;
+}
+
+const Frame = union(enum) {
+    /// The combination's one hole, standing for whole members.
+    frame: *const Expr,
+    obstacle: ConcreteMatchFailure,
+};
+
+/// The hole that stands for the leftover members of a combination holding
+/// at least one hole.
+fn frameOf(
+    env: *const GlobalEnv,
+    acui: ResolvedStructuralCombiner,
+    members: []const *const Expr,
+) Frame {
+    const combiner_name = env.terms.items[acui.head_term_id].name;
+    var frame: ?*const Expr = null;
+    for (members) |member| {
+        switch (member.*) {
+            .hole => |hole| {
+                if (frame != null) return .{ .obstacle = .{
+                    .acui_several_holes = .{
+                        .combiner_name = combiner_name,
+                        .token_span = hole.token_span,
+                    },
+                } };
+                frame = member;
+            },
+            else => if (contains(member)) return .{ .obstacle = .{
+                .acui_hole_in_member = .{
+                    .combiner_name = combiner_name,
+                    .token_span = firstHoleSourceSpan(member),
+                },
+            } },
+        }
+    }
+    return .{ .frame = frame.? };
+}
+
+/// The members of a surface combination: its leaves under `head`.
+fn collectSurfaceMembers(
+    allocator: std.mem.Allocator,
+    expr: *const Expr,
+    head: u32,
+    out: *std.ArrayListUnmanaged(*const Expr),
+) !void {
+    switch (expr.*) {
+        .term => |term| if (term.id == head and term.args.len == 2) {
+            try collectSurfaceMembers(allocator, term.args[0], head, out);
+            try collectSurfaceMembers(allocator, term.args[1], head, out);
+            return;
+        },
+        else => {},
+    }
+    try out.append(allocator, expr);
+}
+
+/// The members of a canonical combination, without its unit.
+fn collectAcuiItems(
+    theorem: *const TheoremContext,
+    allocator: std.mem.Allocator,
+    expr: ExprId,
+    acui: ResolvedStructuralCombiner,
+    out: *std.ArrayListUnmanaged(ExprId),
+) !void {
+    switch (theorem.interner.node(expr).*) {
+        .app => |app| if (app.term_id == acui.head_term_id and
+            app.args.len == 2)
+        {
+            try collectAcuiItems(theorem, allocator, app.args[0], acui, out);
+            try collectAcuiItems(theorem, allocator, app.args[1], acui, out);
+            return;
+        },
+        else => {},
+    }
+    if (isAcuiUnit(theorem, expr, acui)) return;
+    try out.append(allocator, expr);
+}
+
+fn isAcuiUnit(
+    theorem: *const TheoremContext,
+    expr: ExprId,
+    acui: ResolvedStructuralCombiner,
+) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .app => |app| app.term_id == acui.unit_term_id and app.args.len == 0,
+        else => false,
+    };
+}
+
+fn takeItem(items: []const ExprId, taken: []bool, item: ExprId) bool {
+    for (items, taken) |candidate, *is_taken| {
+        if (is_taken.* or candidate != item) continue;
+        is_taken.* = true;
+        return true;
+    }
+    return false;
+}
+
+/// Intern a surface combination as written, with `filled` in place of the
+/// frame hole.
+fn internWithFrame(
+    theorem: *TheoremContext,
+    expr: *const Expr,
+    head: u32,
+    frame: *const Expr,
+    filled: ExprId,
+) !ExprId {
+    if (expr == frame) return filled;
+    switch (expr.*) {
+        .term => |term| if (term.id == head and term.args.len == 2) {
+            return try theorem.interner.internApp(head, &.{
+                try internWithFrame(theorem, term.args[0], head, frame, filled),
+                try internWithFrame(theorem, term.args[1], head, frame, filled),
+            });
+        },
+        else => {},
+    }
+    return try theorem.internParsedExpr(expr);
 }
 
 /// Match a holey assertion against a selected concrete candidate.

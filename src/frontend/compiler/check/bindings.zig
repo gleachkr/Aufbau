@@ -864,14 +864,25 @@ fn validateHoleyAssertionAgainstCandidate(
         try Holes.containsStructuralHole(env, registry, holey);
     if (can_materialize) {
         var materialized_report = Holes.ConcreteMatchReport{};
-        if (try Holes.materializeSurfaceWithCandidate(
+        const positional = try Holes.materializeSurfaceWithCandidate(
             parser,
             theorem,
             env,
             holey,
             expected_line,
             &materialized_report,
-        )) |materialized_line| {
+        );
+        if (try fillAcuiFrameIfPositionalMisses(
+            allocator,
+            parser,
+            theorem,
+            env,
+            registry,
+            holey,
+            expected_line,
+            positional,
+        )) |framed_line| return framed_line;
+        if (positional) |materialized_line| {
             return materialized_line;
         } else if (materialized_report.failure != null) {
             hole_report = materialized_report;
@@ -901,6 +912,20 @@ fn validateHoleyAssertionAgainstCandidate(
         }
     }
 
+    const general_report = if (hole_report.failure) |failure|
+        failure == .visible_structure_mismatch
+    else
+        true;
+    if (general_report) {
+        if (try Holes.acuiFrameObstacle(
+            allocator,
+            env,
+            registry,
+            holey,
+        )) |obstacle| {
+            hole_report = .{ .failure = obstacle };
+        }
+    }
     var diag = CompilerDiag.withPhase(.{
         .kind = .conclusion_mismatch,
         .err = error.HoleConclusionMismatch,
@@ -913,6 +938,40 @@ fn validateHoleyAssertionAgainstCandidate(
     addHoleConcreteMatchNotes(&diag, line, hole_report);
     self.setProof(diag);
     return error.HoleConclusionMismatch;
+}
+
+/// The out-of-order fill of an ACUI combination's hole, when the positional
+/// fill does not equal `candidate` modulo ACUI and the out-of-order one does.
+/// Null leaves the positional fill to the later checks, as before.
+fn fillAcuiFrameIfPositionalMisses(
+    allocator: std.mem.Allocator,
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    holey: *const Expr,
+    candidate: ExprId,
+    positional: ?ExprId,
+) !?ExprId {
+    if (!registry.hasStructuralCombiners()) return null;
+    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env);
+    defer canonicalizer.cache.deinit();
+    const canonical_candidate = try canonicalizer.canonicalize(candidate);
+    if (positional) |materialized_line| {
+        const canonical = try canonicalizer.canonicalize(materialized_line);
+        if (canonical == canonical_candidate) return null;
+    }
+    const framed_line = try Holes.materializeSurfaceModuloAcui(
+        parser,
+        theorem,
+        env,
+        registry,
+        &canonicalizer,
+        holey,
+        candidate,
+    ) orelse return null;
+    const canonical = try canonicalizer.canonicalize(framed_line);
+    return if (canonical == canonical_candidate) framed_line else null;
 }
 
 fn holeyAssertionMatchesCandidate(

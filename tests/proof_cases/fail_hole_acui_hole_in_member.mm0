@@ -1,0 +1,4 @@
+-- A hole inside one member of an ACUI context is filled only by position.
+import "lib/hole_ctx.mm0";
+
+theorem hole_in_member: $ ok2 ((A , B) , wk C) ((A , B) , wk C) $;

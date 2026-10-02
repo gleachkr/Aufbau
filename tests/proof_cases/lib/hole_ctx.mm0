@@ -1,0 +1,46 @@
+-- Shared prelude: an ACUI context sort with a hole token, and judgments
+-- whose contexts a rule rebuilds in its own member order.
+import "iff.mm0";
+
+--| @hole _ctx
+sort ctx;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term wk (g: ctx): ctx;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom wk_congr (g h: ctx): $ ctx_eq g h $ > $ ctx_eq (wk g) (wk h) $;
+
+term A: ctx;
+term B: ctx;
+term C: ctx;
+term ok (g: ctx): wff;
+term ok2 (g h: ctx): wff;
+
+--| @congr
+axiom ok_congr (g h: ctx): $ ctx_eq g h $ > $ ok g <-> ok h $;
+--| @congr
+axiom ok2_congr (g h i j: ctx):
+  $ ctx_eq g h $ > $ ctx_eq i j $ > $ ok2 g i <-> ok2 h j $;
+
+axiom ok_ab: $ ok (A , B) $;
+axiom ok_abwc: $ ok ((A , B) , wk C) $;
+axiom ok_abc: $ ok ((A , B) , C) $;
+axiom dup (g: ctx): $ ok g $ > $ ok2 g g $;

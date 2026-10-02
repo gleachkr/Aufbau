@@ -1150,6 +1150,17 @@ fn applyRuleCandidateCore(
             .rule_name = line.application.rule_name,
             .span = line.assertion_span,
         }, .theorem_application);
+        switch (line_assertion) {
+            .holey => |holey| try DiagNotes.addAcuiFrameObstacleNote(
+                allocator,
+                &diag,
+                line,
+                env,
+                registry,
+                holey,
+            ),
+            else => {},
+        }
         try addComparisonSnapshotNotes(
             allocator,
             &diag,

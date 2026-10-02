@@ -1,0 +1,3 @@
+several_holes
+-------------
+l1: $ ok2 (A , B) (B , _ctx , _ctx) $ by dup [ok_ab []]

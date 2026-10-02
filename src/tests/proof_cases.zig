@@ -318,6 +318,10 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_hole_acui_min_ctx", .outcome = .pass },
     .{ .stem = "pass_hole_acui_disambiguate", .outcome = .pass },
     .{ .stem = "pass_hole_acui_ambiguous", .outcome = .pass },
+    // A hole standing for whole members of a reordered ACUI context takes
+    // the members the visible ones leave over.
+    .{ .stem = "pass_hole_acui_frame", .outcome = .pass },
+    .{ .stem = "pass_hole_acui_frame_multiset", .outcome = .pass },
     .{ .stem = "pass_hole_final_reconcile", .outcome = .pass },
     .{ .stem = "pass_hole_semantic_match", .outcome = .pass },
     .{ .stem = "pass_hole_under_binder", .outcome = .pass },
@@ -402,6 +406,20 @@ const proof_cases = [_]ProofCase{
     .{
         .stem = "fail_hole_structure_mismatch",
         .outcome = .{ .fail = error.HoleConclusionMismatch },
+    },
+    // Holes that cannot be filled out of order: several in one ACUI
+    // context, or one inside a member.
+    .{
+        .stem = "fail_hole_acui_several_holes",
+        .outcome = .{ .fail = error.HoleConclusionMismatch },
+    },
+    .{
+        .stem = "fail_hole_acui_hole_in_member",
+        .outcome = .{ .fail = error.HoleConclusionMismatch },
+    },
+    .{
+        .stem = "fail_hole_acui_positional_wrong",
+        .outcome = .{ .fail = error.ConclusionMismatch },
     },
     .{
         .stem = "fail_hole_missing_binder",

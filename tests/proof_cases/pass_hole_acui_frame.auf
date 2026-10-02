@@ -1,0 +1,17 @@
+frame_reordered
+---------------
+l1: $ ok2 (A , _ctx) (_ctx , A) $ by dup [ok_ab []]
+
+frame_empty_rest
+----------------
+-- Nothing is left over for the hole: it stands for the unit.
+l1: $ ok2 _ctx (B , _ctx , A) $ by dup [ok_ab []]
+
+frame_several_members
+---------------------
+l1: $ ok2 _ctx (C , _ctx) $ by dup [ok_abc []]
+
+frame_repeated_member
+---------------------
+-- Under idempotence a visible member may repeat one already accounted for.
+l1: $ ok2 _ctx (A , C , A , _ctx) $ by dup [ok_abc []]

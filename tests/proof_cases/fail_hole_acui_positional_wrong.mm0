@@ -1,0 +1,5 @@
+-- The positional fill of two holes in one ACUI context yields a wrong line;
+-- the mismatch says why the holes were not filled out of order.
+import "lib/hole_ctx.mm0";
+
+theorem positional_wrong: $ ok2 ((A , B) , C) ((A , B) , C) $;

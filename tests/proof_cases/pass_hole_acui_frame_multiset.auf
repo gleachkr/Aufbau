@@ -1,0 +1,3 @@
+frame_multiset
+--------------
+l1: $ ok2 _ctx (A , _ctx , A) $ by dup [ok_aab []]

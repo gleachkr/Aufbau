@@ -1,0 +1,8 @@
+-- A hole standing for whole members of an ACUI context takes the members the
+-- visible ones leave over, whatever order the rule built the context in.
+import "lib/hole_ctx.mm0";
+
+theorem frame_reordered: $ ok2 (A , B) (B , A) $;
+theorem frame_empty_rest: $ ok2 (A , B) (B , A) $;
+theorem frame_several_members: $ ok2 ((A , B) , C) (C , (A , B)) $;
+theorem frame_repeated_member: $ ok2 ((A , B) , C) ((A , B) , C) $;
