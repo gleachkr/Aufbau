@@ -99,6 +99,11 @@ pub const PlaceholderInfo = struct {
     /// metas, which must stay deferred to leaf forcing. Travels with the leaf
     /// across `clone()`, so no candidate-side bookkeeping is needed.
     reconciliation_meta: bool = false,
+    /// True for a `.bound_choice` search meta: it stands for a bound
+    /// variable not yet named, so leaf info reports it bound with its own
+    /// dependency bit, and a substitution over it reduces as over that
+    /// variable (`MetaStore.mintBoundVar`).
+    bound_var: bool = false,
     /// True for a hole the checker put in an inline sub-proof's expected goal
     /// (`addLineHolePlaceholder`): a line's hole or a binder the holey line
     /// leaves open. An anonymous meta otherwise; the flag tells the checker
@@ -726,25 +731,48 @@ pub const TheoremContext = struct {
         self: *TheoremContext,
         sort_name: []const u8,
     ) !ExprId {
-        try self.ensureDepMaskCapacity();
-
+        const deps = try self.takePlaceholderDep();
         const placeholder_id = self.next_placeholder_id;
         self.next_placeholder_id = try std.math.add(
             PlaceholderId,
             placeholder_id,
             1,
         );
+        try self.theorem_placeholders.append(self.allocator, .{
+            .sort_name = sort_name,
+            .deps = deps,
+        });
+        return try self.interner.internPlaceholder(placeholder_id);
+    }
+
+    /// Spend one synthetic placeholder dependency bit (see
+    /// `addPlaceholderResolved`) and return it as a mask.
+    pub fn takePlaceholderDep(self: *TheoremContext) !u55 {
+        try self.ensureDepMaskCapacity();
         const dep_bit = placeholderDepSlotBit(self.next_placeholder_dep);
         self.next_placeholder_dep = try std.math.add(
             u32,
             self.next_placeholder_dep,
             1,
         );
-        try self.theorem_placeholders.append(self.allocator, .{
+        return @as(u55, 1) << @intCast(dep_bit);
+    }
+
+    /// Allocate a bound-variable search meta (`PlaceholderInfo.bound_var`)
+    /// standing for a variable with dependency bit(s) `deps`.
+    pub fn addBoundVarMetaPlaceholder(
+        self: *TheoremContext,
+        sort_name: []const u8,
+        deps: u55,
+        meta_id: ?u64,
+    ) !ExprId {
+        return self.mintMetaPlaceholder(.{
             .sort_name = sort_name,
-            .deps = @as(u55, 1) << @intCast(dep_bit),
+            .deps = deps,
+            .class = .meta,
+            .meta_id = meta_id,
+            .bound_var = true,
         });
-        return try self.interner.internPlaceholder(placeholder_id);
     }
 
     /// Shared mint path for every `.meta`-class leaf: advances the placeholder
@@ -1026,14 +1054,13 @@ pub const TheoremContext = struct {
                     },
                     // A meta stands for an arbitrary expression of its sort,
                     // not a bound-variable stand-in, except a seed meta, which
-                    // stands for a def's hidden variable and carries its dep
-                    // bit. Search metas are solved before validation consults
-                    // leaf info, and a hole in a hint or query is never bound,
-                    // so this is a conservative default, not a load-bearing
-                    // answer.
+                    // stands for a def's hidden variable, and a `.bound_choice`
+                    // meta, which stands for a variable not yet named. Both
+                    // carry a dep bit. A hole in a hint or query is never
+                    // bound.
                     .meta => .{
                         .sort_name = placeholder.sort_name,
-                        .bound = placeholder.reconciliation_meta,
+                        .bound = placeholder.reconciliation_meta or placeholder.bound_var,
                         .deps = placeholder.deps,
                     },
                 };

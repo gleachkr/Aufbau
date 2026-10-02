@@ -1565,7 +1565,10 @@ fn reinternHint(
                 // descendant slot can re-register and bind it at the leaf
                 // (carry-to-leaf). Falls back to a plain hole for metas with
                 // no stable id (legacy path).
-                gop.value_ptr.* = if (src.placeholderMetaId(pid)) |meta_id|
+                const src_info = src.placeholderInfo(pid).?;
+                gop.value_ptr.* = if (src_info.bound_var)
+                    try dst.addBoundVarMetaPlaceholder(info.sort_name, src_info.deps, src_info.meta_id)
+                else if (src_info.meta_id) |meta_id|
                     try dst.addMetaPlaceholderWithMetaId(info.sort_name, meta_id)
                 else
                     try dst.addMetaPlaceholderResolved(info.sort_name);

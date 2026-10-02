@@ -33,7 +33,10 @@ pub const MetaKind = enum {
     /// Schematic variable in a derived forward ref; solved transiently when
     /// the derived ref is used (Stage 7 use-time discipline).
     universal,
-    /// Search unknown that may need a theorem-local dummy from an @vars pool.
+    /// A bound variable not yet named: it reads as bound with its own dep
+    /// bit, takes only a bound variable as its value (a ref's, or a
+    /// theorem-local dummy from an @vars pool), and keeps its kind across
+    /// interner boundaries (`PlaceholderInfo.bound_var`).
     bound_choice,
 };
 
@@ -41,7 +44,8 @@ pub const MetaInfo = struct {
     sort_name: []const u8,
     /// Allowed-dependency constraint set: the theorem dep bits an assignment
     /// is permitted to mention. NOT an allocated dep bit — meta leaves are
-    /// minted dep-free (`addMetaPlaceholderResolved`).
+    /// minted dep-free (`addMetaPlaceholderResolved`), except a
+    /// `.bound_choice` meta's (`mintBoundVar`).
     allowed_deps: u55,
     kind: MetaKind,
     /// True for a meta minted by an *enclosing* open slot and registered here
@@ -170,6 +174,9 @@ pub const MetaStore = struct {
         allowed_deps: u55,
         kind: MetaKind,
     ) !ExprId {
+        if (kind == .bound_choice) {
+            return self.mintBoundVar(theorem, sort_name, try theorem.takePlaceholderDep(), allowed_deps);
+        }
         const expr_id = if (self.meta_id_counter) |counter| blk: {
             const meta_id = counter.*;
             counter.* += 1;
@@ -203,6 +210,34 @@ pub const MetaStore = struct {
     /// it; the value then flows up via the materialized conclusion. No-op if
     /// already registered or if the leaf carries no `meta_id`. Trailed, so it
     /// rolls back with the branch.
+    /// Mint a `.bound_choice` meta: a bound variable not yet named. Its leaf
+    /// reads as bound with dependency bit(s) `deps` (a fresh placeholder bit,
+    /// or the bit of the hidden variable it replaces), so dependency checks
+    /// and substitution reduction treat it as the variable it will become.
+    pub fn mintBoundVar(
+        self: *MetaStore,
+        theorem: *TheoremContext,
+        sort_name: []const u8,
+        deps: u55,
+        allowed_deps: u55,
+    ) !ExprId {
+        const meta_id: ?u64 = if (self.meta_id_counter) |counter| blk: {
+            const id = counter.*;
+            counter.* += 1;
+            break :blk id;
+        } else null;
+        const expr_id = try theorem.addBoundVarMetaPlaceholder(sort_name, deps, meta_id);
+        const placeholder_id = theorem.interner.node(expr_id).placeholder;
+        try self.metas.put(self.allocator, placeholder_id, .{
+            .sort_name = sort_name,
+            .allowed_deps = allowed_deps,
+            .kind = .bound_choice,
+        });
+        try self.trail.append(self.allocator, .{ .minted = placeholder_id });
+        self.stats.bound_choice_created += 1;
+        return expr_id;
+    }
+
     pub fn registerAncestorMeta(
         self: *MetaStore,
         theorem: *const TheoremContext,
@@ -216,24 +251,30 @@ pub const MetaStore = struct {
         const ph_info = theorem.placeholderInfo(pid) orelse return;
         const meta_id = ph_info.meta_id orelse return;
         const banned = if (self.dep_bans) |bans| bans.get(meta_id) else 0;
-        try self.putRegistration(pid, ph_info.sort_name, ~banned, true);
+        try self.putRegistration(pid, ph_info.sort_name, ~banned, true, kindOf(ph_info));
     }
 
     /// Shared registration body for `registerAncestorMeta` / `registerLocalMeta`:
     /// record the leaf as an existential meta and trail it for
     /// rollback. Callers apply their own eligibility guard and the
     /// already-registered short-circuit first.
+    /// The kind a re-registered meta leaf keeps across an interner boundary.
+    fn kindOf(leaf: ExprModule.PlaceholderInfo) MetaKind {
+        return if (leaf.bound_var) .bound_choice else .existential;
+    }
+
     fn putRegistration(
         self: *MetaStore,
         pid: PlaceholderId,
         sort_name: []const u8,
         allowed_deps: u55,
         ancestor: bool,
+        kind: MetaKind,
     ) !void {
         try self.metas.put(self.allocator, pid, .{
             .sort_name = sort_name,
             .allowed_deps = allowed_deps,
-            .kind = .existential,
+            .kind = kind,
             .ancestor = ancestor,
         });
         try self.trail.append(self.allocator, .{ .minted = pid });
@@ -261,7 +302,7 @@ pub const MetaStore = struct {
         if (self.metas.contains(pid)) return;
         const ph_info = theorem.placeholderInfo(pid) orelse return;
         if (ph_info.class != .meta) return;
-        try self.putRegistration(pid, ph_info.sort_name, std.math.maxInt(u55), false);
+        try self.putRegistration(pid, ph_info.sort_name, std.math.maxInt(u55), false, kindOf(ph_info));
     }
 
     /// True if `expr` mentions an ancestor meta (solved or not). Used to find
@@ -388,7 +429,11 @@ pub const MetaStore = struct {
             if ((value_info.deps & ~meta.allowed_deps) != 0) {
                 return error.DependencyViolation;
             }
-        } else |_| {}
+            // A bound-variable meta can only become a bound variable.
+            if (meta.kind == .bound_choice and !value_info.bound) return error.NotBoundVariable;
+        } else |_| {
+            if (meta.kind == .bound_choice) return error.NotBoundVariable;
+        }
         try self.trail.append(self.allocator, .{ .assigned = meta_id });
         errdefer _ = self.trail.pop();
         try self.assignments.put(self.allocator, meta_id, resolved);
@@ -801,6 +846,53 @@ test "dependency violation rejects assignment" {
     const open = try setup.store.mint(theorem, "obj", 1, .existential);
     const open_id = setup.store.metaIdOf(theorem, open).?;
     try setup.store.assign(theorem, open_id, dummy);
+}
+
+test "a bound_choice meta reads as a bound variable with its own dep bit" {
+    var setup = try TestSetup.init();
+    defer setup.deinit();
+    const theorem = &setup.theorem;
+
+    const dep_watermark = theorem.next_placeholder_dep;
+    const meta = try setup.store.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
+    try std.testing.expectEqual(dep_watermark + 1, theorem.next_placeholder_dep);
+    const leaf = (try theorem.currentLeafInfo(meta)).?;
+    try std.testing.expect(leaf.bound);
+    try std.testing.expectEqual(@as(u32, 1), @popCount(leaf.deps));
+}
+
+test "a bound_choice meta takes only a bound variable" {
+    var setup = try TestSetup.init();
+    defer setup.deinit();
+    const theorem = &setup.theorem;
+
+    const c = try appendTerm(&setup.env, "c", "obj");
+    const term = try theorem.interner.internApp(c, &.{});
+    const dummy = try theorem.addDummyVarResolved("obj", 0);
+
+    const meta = try setup.store.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
+    const meta_id = setup.store.metaIdOf(theorem, meta).?;
+    try std.testing.expectError(
+        error.NotBoundVariable,
+        setup.store.assign(theorem, meta_id, term),
+    );
+    try setup.store.assign(theorem, meta_id, dummy);
+}
+
+test "a bound_choice meta keeps its kind when another store registers it" {
+    var setup = try TestSetup.init();
+    defer setup.deinit();
+    const theorem = &setup.theorem;
+
+    var counter: u64 = 0;
+    setup.store.meta_id_counter = &counter;
+    const meta = try setup.store.mint(theorem, "obj", std.math.maxInt(u55), .bound_choice);
+
+    var child = MetaStore.init(std.testing.allocator, &setup.env);
+    defer child.deinit();
+    try child.registerAncestorMeta(theorem, meta);
+    const info = child.info(child.metaIdOf(theorem, meta).?).?;
+    try std.testing.expectEqual(MetaKind.bound_choice, info.kind);
 }
 
 test "wildcard metas never bind" {

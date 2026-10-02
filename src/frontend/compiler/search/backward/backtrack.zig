@@ -1676,7 +1676,7 @@ fn rebindHiddenVars(
             const leaf = firstHiddenVarLeaf(theorem, value) orelse break;
             const pid = theorem.interner.node(leaf).placeholder;
             const info = theorem.placeholderInfo(pid) orelse break;
-            const meta = try store.mint(theorem, info.sort_name, std.math.maxInt(u55), .bound_choice);
+            const meta = try store.mintBoundVar(theorem, info.sort_name, info.deps, std.math.maxInt(u55));
             for (bindings, 0..) |*binding, other| {
                 const other_value = binding.* orelse continue;
                 const swapped = try forward.leafSwap(theorem, other_value, leaf, meta);
@@ -1884,14 +1884,19 @@ fn openSlotRaw(slot: *OpenSlot) anyerror!void {
     };
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
-    const target = (try OpenTerms.instantiateTemplateOpen(
+    // A bound binder opens as a variable with its own dependency bit; with
+    // the theorem's bits spent, the slot cannot open.
+    const target = (OpenTerms.instantiateTemplateOpen(
         &slot.ctx.candidate.theorem,
         slot.ctx.context.env,
         slot.ctx.context.registry,
         template,
         slot.ctx.bindings,
         &options,
-    )) orelse return;
+    ) catch |err| switch (err) {
+        error.DependencySlotExhausted => return,
+        else => return err,
+    }) orelse return;
     try emitOpenTarget(slot, target, unknowns, null, null);
 }
 
@@ -1994,14 +1999,19 @@ fn instantiateAndEmitView(
     };
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
-    const target = (try OpenTerms.instantiateTemplateOpen(
+    // A bound binder opens as a variable with its own dependency bit; with
+    // the theorem's bits spent, the slot cannot open.
+    const target = (OpenTerms.instantiateTemplateOpen(
         &slot.ctx.candidate.theorem,
         slot.ctx.context.env,
         slot.ctx.context.registry,
         view.hyps[slot.at.hyp_index],
         view_bindings,
         &options,
-    )) orelse return;
+    ) catch |err| switch (err) {
+        error.DependencySlotExhausted => return,
+        else => return err,
+    }) orelse return;
 
     // Overlay the freshly minted per-binder metas into a local copy of the
     // view bindings so the match-back materialization covers them.
@@ -2053,6 +2063,14 @@ fn emitOpenTarget(
         try registerAncestorMetas(slot.store, theorem, raw_target);
     }
     if (slot.store.isFullySolved(theorem, raw_target)) {
+        // A fresh variable the premise substitutes away (`nat_ind_elim`'s
+        // base case `g ⊢ z : [k/zero] C`) reduced out of the target while the
+        // bindings still hold it (in `C`). No proof of the premise can name
+        // it, so it takes a name now, before the premise is generated.
+        if (slot.fresh_bound and try freshMetasDangle(slot, unknowns)) {
+            try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
+            return;
+        }
         const solved_before = slot.ctx.candidates.items.len;
         // Bound-witness enumeration closed every open binder: this is an
         // ordinary concrete generated slot (for view rules, a concrete
@@ -2135,12 +2153,6 @@ fn emitOpenTarget(
         return;
     }
 
-    // A variable the premise substitutes away goes straight to the pool rung
-    // (`freshNamesReduceOut`).
-    if (slot.fresh_bound and try freshNamesReduceOut(slot, raw_target)) {
-        try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
-        return;
-    }
     // Witness-free open target (e.g. `@abstract` motive inference): keep the
     // original child-search-first ordering, with member/coupled witness
     // enumeration as the fallback.
@@ -2696,6 +2708,7 @@ fn tryPoolWitnesses(
     var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
     defer unsolved.deinit(slot.ctx.allocator);
     try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
+    if (pick == .fresh) try collectSlotUnsolved(slot, unknowns, &unsolved);
     if (unsolved.items.len == 0) return;
 
     const mark = slot.store.mark();
@@ -2708,7 +2721,7 @@ fn tryPoolWitnesses(
         .fresh => {
             const ref_names = try slot.ctx.allocator.alloc(ExprId, unsolved.items.len);
             defer slot.ctx.allocator.free(ref_names);
-            if (try assignRefNames(slot, theorem, raw_target, unsolved.items)) {
+            if (try assignRefNames(slot, theorem, raw_target, unknowns, unsolved.items)) {
                 for (unsolved.items, ref_names) |meta_id, *name| name.* = slot.store.lookup(meta_id).?;
                 const before = slot.ctx.candidates.items.len;
                 if (slot.store.isFullySolved(theorem, raw_target)) {
@@ -2728,6 +2741,36 @@ fn tryPoolWitnesses(
     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
 }
 
+/// Append the unsolved `.bound_choice` metas the slot's bindings and opened
+/// binders still hold to `out`, skipping those already listed. Other metas
+/// there (an open root's carried ones) are not this slot's to name.
+fn collectSlotUnsolved(
+    slot: *const OpenSlot,
+    unknowns: []const ?ExprId,
+    out: *std.ArrayListUnmanaged(PlaceholderId),
+) !void {
+    const theorem = &slot.ctx.candidate.theorem;
+    var found = std.ArrayListUnmanaged(PlaceholderId){};
+    defer found.deinit(slot.store.allocator);
+    for (slot.ctx.bindings) |maybe| if (maybe) |value| try slot.store.collectUnsolved(theorem, value, &found);
+    for (unknowns) |maybe| if (maybe) |value| try slot.store.collectUnsolved(theorem, value, &found);
+    for (found.items) |meta_id| {
+        if (slot.store.info(meta_id).?.kind != .bound_choice) continue;
+        if (std.mem.indexOfScalar(PlaceholderId, out.items, meta_id) != null) continue;
+        try out.append(slot.store.allocator, meta_id);
+    }
+}
+
+/// True when a `fresh_bound` slot's bindings or opened binders still hold an
+/// unsolved `.bound_choice` meta its (fully solved) target no longer
+/// mentions.
+fn freshMetasDangle(slot: *const OpenSlot, unknowns: []const ?ExprId) !bool {
+    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+    defer unsolved.deinit(slot.ctx.allocator);
+    try collectSlotUnsolved(slot, unknowns, &unsolved);
+    return unsolved.items.len != 0;
+}
+
 /// The dependency bits of every variable the rule's bindings mention: what a
 /// fresh variable must avoid.
 fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
@@ -2744,8 +2787,9 @@ fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
 /// can use. The first free `@vars` names in sorted order give
 /// `nat_ind_elim`'s step premise `g , k : Nat , ih : C ⊢ …` the names
 /// `ih` for `k` and `k` for `ih`, and no add_comm line `g , k : Nat ⊢ …`
-/// fits it any more. So every part of the target that mentions an unsolved
-/// variable is matched against every same-headed subterm of the refs
+/// fits it any more. So every part of the target or the bindings that
+/// mentions an unsolved variable (the bindings still hold one the target
+/// substituted away) is matched against every same-headed subterm of the refs
 /// (`g , ?k : Nat` against `g , k : Nat`), and each variable takes the bound
 /// variable those matches put in its place most often, ties going to the
 /// first seen. A name must still occur in no binding and differ from the
@@ -2756,6 +2800,7 @@ fn assignRefNames(
     slot: *OpenSlot,
     theorem: *TheoremContext,
     raw_target: ExprId,
+    unknowns: []const ?ExprId,
     unsolved: []const PlaceholderId,
 ) !bool {
     const allocator = slot.ctx.allocator;
@@ -2770,6 +2815,8 @@ fn assignRefNames(
     };
     defer tally.deinit(allocator);
     try tally.collectParts(raw_target);
+    for (slot.ctx.bindings) |maybe| if (maybe) |value| try tally.collectParts(value);
+    for (unknowns) |maybe| if (maybe) |value| try tally.collectParts(value);
     if (tally.parts.items.len == 0) return false;
     for (slot.ctx.ref_index.entries) |entry| {
         try theorem.exprForEach(entry.expr, &tally, RefNameTally.visit);
@@ -2812,7 +2859,8 @@ const RefNameTally = struct {
     slot: *OpenSlot,
     theorem: *TheoremContext,
     unsolved: []const PlaceholderId,
-    /// App subterms of the target that mention an unsolved variable.
+    /// App subterms of the target and bindings that mention an unsolved
+    /// variable.
     parts: std.ArrayListUnmanaged(ExprId) = .{},
     /// Ref subterms already matched (refs share subterms).
     seen: std.AutoHashMapUnmanaged(ExprId, void) = .{},
@@ -2887,33 +2935,6 @@ fn assignFreshNames(
         const meta = slot.store.info(meta_id) orelse return false;
         if (meta.kind != .bound_choice) return false;
         if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, &taken)) return false;
-    }
-    return true;
-}
-
-/// True when the slot's unsolved metas are all `.bound_choice` and fresh
-/// names for them all reduce out of `raw_target`, as `k` does from
-/// `nat_ind_elim`'s base case `g ⊢ z : [k/zero] C`. Every fresh name then
-/// gives the same premise, so naming it from the pool loses no proof of the
-/// premise, and the child search can at best pick the name. It could do so
-/// only through a child rule whose conclusion keeps the substitution
-/// unreduced, matched position by position on read-back; no bench theorem
-/// does, while the doomed child search cost martin_lof `add_comm` most of
-/// its budget.
-fn freshNamesReduceOut(slot: *OpenSlot, raw_target: ExprId) !bool {
-    const theorem = &slot.ctx.candidate.theorem;
-    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.ctx.allocator);
-    try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
-    if (unsolved.items.len == 0) return false;
-    const mark = slot.store.mark();
-    defer slot.store.rollbackTo(mark);
-    if (!try assignFreshNames(slot, theorem, unsolved.items)) return false;
-    const filled = slot.store.materialize(theorem, raw_target) catch return false;
-    const reduced = try Redex.reduceRedexOnly(slot.ctx.context, theorem, filled);
-    for (unsolved.items) |meta_id| {
-        const name = slot.store.assignments.get(meta_id) orelse return false;
-        if (theorem.exprAny(reduced, name, isExpr)) return false;
     }
     return true;
 }

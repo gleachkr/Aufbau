@@ -748,7 +748,7 @@ const scenarios = [_]Scenario{
         // (the depth frontier's k=9 cut). `nat_ind_elim`'s base premise
         // `g ⊢ z : [k/zero] C` opens the def's hidden `k`, which the
         // substitution reduces away, so the pool rung names it at once
-        // (`backtrack.freshNamesReduceOut`). A child search there first,
+        // (`backtrack.freshMetasDangle`). A child search there first,
         // which never names it, spends the budget the step case needs.
         .name = "auto martin_lof add_comm base case auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",

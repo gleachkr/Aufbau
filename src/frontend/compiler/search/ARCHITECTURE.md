@@ -549,13 +549,13 @@ subterms), and only then the first free `@vars` names, which would give
 `nat_ind_elim`'s step `k` the name `ih` because `ih` sorts first. Guard: the
 `add_comm step names` scenario. Picking a name before the child search is
 equally complete (the open path is still the fallback) but slower: each miss
-costs a doomed concrete child search first. The exception is a variable that
-fresh names
-reduce out of the premise (`nat_ind_elim`'s base case `g ⊢ z : [k/zero] C`).
-Every fresh name gives the same premise, and a child proof can name the
-variable only if its rule's conclusion keeps the substitution unreduced, so
-`freshNamesReduceOut` sends the slot straight to the pool rung. Guard: the
-`add_comm base case` scenario. The criteria exclude two shapes. `inst`'s `x`
+costs a doomed concrete child search first. The exception is a variable the
+premise substitutes away (`nat_ind_elim`'s base case `g ⊢ z : [k/zero] C`).
+A `.bound_choice` meta reads as a bound variable with its own dep bit, so the
+substitution reduces and the variable leaves the target while the bindings
+(`C`) still hold it. No proof of the premise can name it, so
+`freshMetasDangle` sends the slot straight to the pool rung, whose ref names
+come from the bindings. Guard: the `add_comm base case` scenario. The criteria exclude two shapes. `inst`'s `x`
 may be a variable its fixed `a : term x` already mentions, so a fresh fill is
 a wrong guess (church `SPEC`). `dvd_elim`'s `k` sits in an elim-shaped
 premise whose other binders come from a sibling ref, so fills are mostly
