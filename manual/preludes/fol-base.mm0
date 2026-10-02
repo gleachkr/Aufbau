@@ -4,11 +4,11 @@ delimiter $ [ ] $;
 sort obj;
 
 term all {x: obj} (p: wff x): wff;
-prefix all: $∀$ prec 41;
 prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
 term ex {x: obj} (p: wff x): wff;
-prefix ex: $∃$ prec 41;
 prefix ex: $E.$ prec 41;
+prefix ex: $∃$ prec 41;
 
 term P (t: obj): wff;
 prefix P: $P$ prec 50;

@@ -16,8 +16,8 @@ strict provable sort wff;
 delimiter $ ( @ [ / ! ? ~ $ $ . : , ) ] $;
 
 term iff: wff > wff > wff;
-infixr iff: $↔$ prec 20;
 infixr iff: $<->$ prec 20;
+infixr iff: $↔$ prec 20;
 
 --| @relation wff iff iff_refl iff_trans iff_sym iff_mp
 axiom iff_refl (P: wff): $ P ↔ P $;
@@ -33,8 +33,8 @@ term bool: type;
 notation bool: type = ($𝔹$:max);
 
 term fun: type > type > type;
-infixr fun: $→$ prec 25;
 infixr fun: $->$ prec 25;
+infixr fun: $→$ prec 25;
 
 term tyeq: type > type > wff;
 infixl tyeq: $≐$ prec 15;
@@ -52,35 +52,35 @@ term ty: term > type > wff;
 infixl ty: $:$ prec 2;
 
 term app: term > term > term;
-infixl app: $·$ prec 1000;
 infixl app: $@$ prec 1000;
+infixl app: $·$ prec 1000;
 
 term lam {x: term}: type > term x > term;
 notation lam {x: term} (A: type) (t: term x): term =
-  ($λ$:20) x ($:$:2) A ($.$:0) t;
-notation lam {x: term} (A: type) (t: term x): term =
   ($\\$:20) x ($:$:2) A ($.$:0) t;
+notation lam {x: term} (A: type) (t: term x): term =
+  ($λ$:20) x ($:$:2) A ($.$:0) t;
 
 term eq: type > term;
 
 def eqc (A: type) (t u: term): term = $ eq A · t · u $;
 notation eqc (A: type) (t u: term): term =
-  ($≃[$:50) A ($]$:0) t ($=$:50) u;
-notation eqc (A: type) (t u: term): term =
   ($=[$:50) A ($]$:0) t ($=$:50) u;
+notation eqc (A: type) (t u: term): term =
+  ($≃[$:50) A ($]$:0) t ($=$:50) u;
 
 term jeq: type > term > term > wff;
 notation jeq (A: type) (t u: term): wff =
-  ($≡[$:50) A ($]$:0) t ($=$:50) u;
-notation jeq (A: type) (t u: term): wff =
   ($==[$:50) A ($]$:0) t ($=$:50) u;
+notation jeq (A: type) (t u: term): wff =
+  ($≡[$:50) A ($]$:0) t ($=$:50) u;
 
 term thm: term > wff;
 coercion thm: term > wff;
 
 def bic (p q: term): term = $ ≃[𝔹] p = q $;
-infixr bic: $⇔$ prec 20;
 infixr bic: $<=>$ prec 20;
+infixr bic: $⇔$ prec 20;
 
 -- Raw term-level equality used by the normalization machinery.
 
@@ -515,8 +515,8 @@ theorem orT (G: ctx):
 
 
 def orc (p q: term): term = $ or · p · q $;
-infixl orc: $∨$ prec 31;
 infixl orc: $\/$ prec 31;
+infixl orc: $∨$ prec 31;
 
 theorem orcT (G: ctx) (p q: term):
  $ G ⊩ p: 𝔹 $ > $ G ⊩ q: 𝔹 $ > $ G ⊩ p ∨ q: 𝔹 $;
@@ -566,8 +566,8 @@ theorem notT (G: ctx):
  $ G ⊩ not: 𝔹 → 𝔹 $;
 
 def notc (p: term): term = $ not · p $;
-prefix notc: $¬$ prec 100;
 prefix notc: $~$ prec 100;
+prefix notc: $¬$ prec 100;
 
 theorem notcT (G: ctx) (p: term):
  $ G ⊩ p: 𝔹 $ > $ G ⊩ ¬ p: 𝔹 $;

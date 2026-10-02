@@ -5,8 +5,8 @@ sort clause;
 sort cnf;
 
 term iff (a b: wff): wff;
-infixr iff: $↔$ prec 20;
 infixr iff: $<->$ prec 20;
+infixr iff: $↔$ prec 20;
 term clause_eq (a b: clause): wff;
 term cnf_eq (a b: cnf): wff;
 term derives (s: cnf): wff;
@@ -16,23 +16,23 @@ term p: lit;
 term q: lit;
 term r: lit;
 term neg (x: lit): lit;
-prefix neg: $¬$ prec 100;
 prefix neg: $~$ prec 100;
+prefix neg: $¬$ prec 100;
 
 term clause_bot: clause;
 notation clause_bot: clause = ($⊥$:max);
 --| @acui clause_assoc clause_comm clause_bot clause_idem
 term disj (a b: clause): clause;
-infixr disj: $∨$ prec 35;
 infixr disj: $\/$ prec 35;
+infixr disj: $∨$ prec 35;
 term clit (x: lit): clause;
 coercion clit: lit > clause;
 term cnf_top: cnf;
 notation cnf_top: cnf = ($⊤$:max);
 --| @acui cnf_assoc cnf_comm cnf_top cnf_idem
 term join (a b: cnf): cnf;
-infixr join: $∧$ prec 30;
 infixr join: $/\$ prec 30;
+infixr join: $∧$ prec 30;
 term cl (c: clause): cnf;
 coercion cl: clause > cnf;
 

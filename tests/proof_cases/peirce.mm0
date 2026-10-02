@@ -3,15 +3,15 @@ provable sort wff;
 sort ctx;
 
 term imp (a b: wff): wff;
-infixr imp: $→$ prec 25;
 infixr imp: $->$ prec 25;
+infixr imp: $→$ prec 25;
 term not (a: wff): wff;
-prefix not: $¬$ prec 35;
 prefix not: $~$ prec 35;
+prefix not: $¬$ prec 35;
 term bot: wff;
 term iff (a b: wff): wff;
-infixr iff: $↔$ prec 20;
 infixr iff: $<->$ prec 20;
+infixr iff: $↔$ prec 20;
 term ctx_eq (g h: ctx): wff;
 term emp: ctx;
 notation emp: ctx = ($_$:max);

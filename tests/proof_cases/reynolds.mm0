@@ -110,8 +110,8 @@ axiom hyp_congr (J K: jdg): $ J <=> K $ > $ hyp J ≋ hyp K $;
 -- ==================================================================
 
 term arr (A B: ty): ty;
-infixr arr: $→$ prec 25;
 infixr arr: $->$ prec 25;
+infixr arr: $→$ prec 25;
 term all {a: ty} (B: ty a): ty;
 notation all {a: ty} (B: ty a): ty = ($∀$:20) a ($.$:0) B;
 

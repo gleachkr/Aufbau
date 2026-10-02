@@ -17,11 +17,11 @@ Two connectives suffice, implication and negation:
 delimiter $ ( ) $;
 provable sort wff;
 term imp (a b: wff): wff;
-infixr imp: $→$ prec 25;
 infixr imp: $->$ prec 25;
+infixr imp: $→$ prec 25;
 term not (a: wff): wff;
-prefix not: $¬$ prec 40;
 prefix not: $~$ prec 40;
+prefix not: $¬$ prec 40;
 ```
 
 Each connective registers its notation twice, giving every Unicode token an

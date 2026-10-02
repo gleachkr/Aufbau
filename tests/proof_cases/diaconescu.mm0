@@ -48,32 +48,32 @@ sort ctx;
 -- --------------------------------------------------------------------------
 
 term im (p q: wff): wff;
-infixr im: $→$ prec 25;
 infixr im: $->$ prec 25;
+infixr im: $→$ prec 25;
 
 term not (p: wff): wff;
-prefix not: $¬$ prec 41;
 prefix not: $~$ prec 41;
+prefix not: $¬$ prec 41;
 
 term and (p q: wff): wff;
-infixr and: $∧$ prec 30;
 infixr and: $/\\$ prec 30;
+infixr and: $∧$ prec 30;
 
 term or (p q: wff): wff;
-infixr or: $∨$ prec 28;
 infixr or: $\\/$ prec 28;
+infixr or: $∨$ prec 28;
 
 term bi (p q: wff): wff;
-infixr bi: $↔$ prec 20;
 infixr bi: $<->$ prec 20;
+infixr bi: $↔$ prec 20;
 
 term bot: wff;
-prefix bot: $⊥$ prec max;
 prefix bot: $F.$ prec max;
+prefix bot: $⊥$ prec max;
 
 term all {x: set} (p: wff x): wff;
-prefix all: $∀$ prec 41;
 prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
 
 term sb_f {x: set} (t: set x) (p: wff x): wff;
 notation sb_f {x: set} (t: set x) (p: wff x): wff =
@@ -86,8 +86,8 @@ term set_eq (a b: set): wff;
 infixl set_eq: $=$ prec 50;
 
 term mem (x A: set): wff;
-infixl mem: $∈$ prec 50;
 infixl mem: $e.$ prec 50;
+infixl mem: $∈$ prec 50;
 
 -- --------------------------------------------------------------------------
 -- Natural-deduction context syntax (ACUI hypothesis multiset)

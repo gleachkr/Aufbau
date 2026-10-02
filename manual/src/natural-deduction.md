@@ -15,17 +15,17 @@ sort ctx;
 provable sort seq;
 
 term imp (a b: wff): wff;
-infixr imp: $→$ prec 25;
 infixr imp: $->$ prec 25;
+infixr imp: $→$ prec 25;
 term and (a b: wff): wff;
-infixr and: $∧$ prec 30;
 infixr and: $/\$ prec 30;
+infixr and: $∧$ prec 30;
 term or (a b: wff): wff;
-infixr or: $∨$ prec 28;
 infixr or: $\/$ prec 28;
+infixr or: $∨$ prec 28;
 term not (a: wff): wff;
-prefix not: $¬$ prec 40;
 prefix not: $~$ prec 40;
+prefix not: $¬$ prec 40;
 term bot: wff; notation bot: wff = ($⊥$:max);
 ```
 
@@ -39,8 +39,8 @@ Unicode notation.
 
 ```aufbau-theory doc=nd
 term iff (a b: wff): seq;
-infixr iff: $↔$ prec 20;
 infixr iff: $<->$ prec 20;
+infixr iff: $↔$ prec 20;
 term ctx_eq (g h: ctx): seq;
 term emp: ctx; notation emp: ctx = ($_$:max);
 
@@ -48,11 +48,11 @@ term emp: ctx; notation emp: ctx = ($_$:max);
 term join (g h: ctx): ctx; infixl join: $,$ prec 5;
 term hyp (a: wff): ctx; coercion hyp: wff > ctx;
 term nd (g: ctx) (a: wff): seq;
-infixl nd: $⊢$ prec 0;
 infixl nd: $|-$ prec 0;
+infixl nd: $⊢$ prec 0;
 term seq_eq (s t: seq): seq;
-infixl seq_eq: $⟚$ prec 1;
 infixl seq_eq: $<==>$ prec 1;
+infixl seq_eq: $⟚$ prec 1;
 ```
 
 This cell declares judgment forms. A sequent like `g ⊢ a` is what deduction
@@ -201,11 +201,11 @@ delimiter $ [ ] $;
 sort obj;
 
 term all {x: obj} (p: wff x): wff;
-prefix all: $∀$ prec 41;
 prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
 term ex {x: obj} (p: wff x): wff;
-prefix ex: $∃$ prec 41;
 prefix ex: $E.$ prec 41;
+prefix ex: $∃$ prec 41;
 
 term P (t: obj): wff;
 prefix P: $P$ prec 50;

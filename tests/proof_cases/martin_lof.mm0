@@ -90,13 +90,13 @@ infixl nd: $⊢$ prec 0;
 -- `eq_ty` and `eq_tm` are typed judgemental equalities. Their laws belong
 -- to the typed equality section below; here we only reserve the notation.
 term eq_ty (A B: ty): jdg;
-infixl eq_ty: $≡$ prec 15;
 infixl eq_ty: $==$ prec 15;
+infixl eq_ty: $≡$ prec 15;
 term eq_tm (A: ty) (s t: tm): jdg;
 notation eq_tm (A: ty) (s t: tm): jdg =
-  ($≡[$:50) A ($]$:0) s ($=$:50) t;
-notation eq_tm (A: ty) (s t: tm): jdg =
   ($==[$:50) A ($]$:0) s ($=$:50) t;
+notation eq_tm (A: ty) (s t: tm): jdg =
+  ($≡[$:50) A ($]$:0) s ($=$:50) t;
 
 -- Even before the typed equality laws are introduced, the judgment forms
 -- need congruence metadata so normalization can lift raw equalities through

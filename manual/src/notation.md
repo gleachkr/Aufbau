@@ -152,4 +152,5 @@ infixr imp: $→$ prec 25;
 ```
 
 Both parse to `imp`, so a proof may use whichever reads better or is easier to
-type. A rule stated with one applies to a goal written with the other.
+type. A rule stated with one applies to a goal written with the other. Search
+suggestions and diagnostics print with the notation declared last.

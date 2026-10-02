@@ -22,11 +22,11 @@ sort ctx;
 -- Multiplicatives: tensor is "both, using disjoint resources", and linear
 -- implication consumes its argument.  `1` is the unit of tensor.
 term tensor (a b: wff): wff;
-infixr tensor: $⊗$ prec 35;
 infixr tensor: $**$ prec 35;
+infixr tensor: $⊗$ prec 35;
 term lolli (a b: wff): wff;
-infixr lolli: $⊸$ prec 25;
 infixr lolli: $-o$ prec 25;
+infixr lolli: $⊸$ prec 25;
 term one: wff;
 notation one: wff = ($1$:max);
 
@@ -35,8 +35,8 @@ notation one: wff = ($1$:max);
 term with_ (a b: wff): wff;
 infixr with_: $&$ prec 33;
 term plus (a b: wff): wff;
-infixr plus: $⊕$ prec 31;
 infixr plus: $++$ prec 31;
+infixr plus: $⊕$ prec 31;
 term top: wff;
 notation top: wff = ($⊤$:max);
 term zero: wff;
@@ -48,8 +48,8 @@ term bang (a: wff): wff;
 prefix bang: $!$ prec 40;
 
 term iff (a b: wff): wff;
-infixr iff: $↔$ prec 20;
 infixr iff: $<->$ prec 20;
+infixr iff: $↔$ prec 20;
 
 term ctx_eq (g h: ctx): wff;
 term emp: ctx;

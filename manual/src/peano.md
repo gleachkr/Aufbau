@@ -14,12 +14,12 @@ delimiter $ ( { ~ $  $ } ) , $;
 strict provable sort wff;
 
 term im (p q: wff): wff;
-infixr im: $→$ prec 25;
 infixr im: $->$ prec 25;
+infixr im: $→$ prec 25;
 
 term not (p: wff): wff;
-prefix not: $¬$ prec 41;
 prefix not: $~$ prec 41;
+prefix not: $¬$ prec 41;
 
 axiom ax_1 (a b: wff): $ a → b → a $;
 axiom ax_2 (a b c: wff): $ (a → b → c) → (a → b) → a → c $;
@@ -111,8 +111,8 @@ normalization](equality-and-normalization.md) chapter:
 
 ```aufbau-theory doc=peano
 term bi (a b: wff): wff;
-infixl bi: $↔$ prec 20;
 infixl bi: $<->$ prec 20;
+infixl bi: $↔$ prec 20;
 
 --| @relation wff bi biid bitr bisym mpbi
 axiom biid (a: wff): $ a ↔ a $;
@@ -153,8 +153,8 @@ connects it back to `=` formulas.
 
 ```aufbau-theory doc=peano
 term all {x: nat} (p: wff x): wff;
-prefix all: $∀$ prec 41;
 prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
 
 --| @congr
 axiom all_congr {x: nat} (p q: wff x):

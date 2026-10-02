@@ -47,29 +47,29 @@ sort nat;
 -- ============================================================
 
 term im (a b: wff): wff;
-infixr im: $→$ prec 25;
 infixr im: $->$ prec 25;
+infixr im: $→$ prec 25;
 term and (a b: wff): wff;
-infixr and: $∧$ prec 30;
 infixr and: $/\\$ prec 30;
+infixr and: $∧$ prec 30;
 term or (a b: wff): wff;
-infixr or: $∨$ prec 28;
 infixr or: $\\/$ prec 28;
+infixr or: $∨$ prec 28;
 term not (a: wff): wff;
-prefix not: $¬$ prec 35;
 prefix not: $~$ prec 35;
+prefix not: $¬$ prec 35;
 term bot: wff;
 notation bot: wff = ($⊥$:max);
 term bi (a b: wff): wff;
-infixl bi: $↔$ prec 20;
 infixl bi: $<->$ prec 20;
+infixl bi: $↔$ prec 20;
 
 term all {x: nat} (p: wff x): wff;
-prefix all: $∀$ prec 41;
 prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
 term ex {x: nat} (p: wff x): wff;
-prefix ex: $∃$ prec 41;
 prefix ex: $E.$ prec 41;
+prefix ex: $∃$ prec 41;
 
 term sb_f {x: nat} (t: nat x) (p: wff x): wff;
 notation sb_f {x: nat} (t: nat x) (p: wff x): wff =
@@ -94,8 +94,8 @@ infixl nd: $⊢$ prec 0;
 term eq (a b: nat): wff;
 infixl eq: $=$ prec 50;
 term ne (a b: nat): wff;
-infixl ne: $≠$ prec 50;
 infixl ne: $!=$ prec 50;
+infixl ne: $≠$ prec 50;
 
 -- The bi-conditional is the rewrite relation on wff.
 --| @relation wff bi biid bitr bisym mpbi
@@ -430,8 +430,8 @@ axiom mul_cancel_left_ax (g: ctx) (x y z: nat):
 -- are proved from the definitions instead of trusted as primitives.
 
 def le {.k: nat} (a b: nat): wff = $ ∃ k (a + k = b) $;
-infixl le: $≤$ prec 45;
 infixl le: $<=$ prec 45;
+infixl le: $≤$ prec 45;
 def lt (a b: nat): wff = $ suc a ≤ b $;
 infixl lt: $<$ prec 45;
 
@@ -530,8 +530,8 @@ theorem lt_suc_self_ax (g: ctx) (a: nat): $ g ⊢ a < suc a $;
 -- theorems below recover the old user-facing surface while delegating
 -- the logical content to ∃-introduction and ∃-elimination.
 def dvd {.k: nat} (a b: nat): wff = $ ∃ k (b = a * k) $;
-infixl dvd: $∣$ prec 50;
 infixl dvd: $||$ prec 50;
+infixl dvd: $∣$ prec 50;
 
 -- These normalization helpers remain trusted for now.  Proving them
 -- from the ∃-definition needs more quantified rewrite plumbing than

@@ -25,12 +25,12 @@ delimiter $ ( { ~ $  $ } ) , $;
 strict provable sort wff;
 
 term im (p q: wff): wff;
-infixr im: $→$ prec 25;
 infixr im: $->$ prec 25;
+infixr im: $→$ prec 25;
 
 term not (p: wff): wff;
-prefix not: $¬$ prec 41;
 prefix not: $~$ prec 41;
+prefix not: $¬$ prec 41;
 
 -- Lukasiewicz' axioms for classical propositional logic.
 axiom ax_1 (a b: wff): $ a → b → a $;
@@ -142,8 +142,8 @@ theorem suc_cancel (a b: nat):
 -- ---------------------------------------------------------------
 
 term bi (a b: wff): wff;
-infixl bi: $↔$ prec 20;
 infixl bi: $<->$ prec 20;
+infixl bi: $↔$ prec 20;
 
 --| @relation wff bi biid bitr bisym mpbi
 axiom biid (a: wff): $ a ↔ a $;
@@ -190,8 +190,8 @@ axiom suc_congr (a b: nat):
 -- ---------------------------------------------------------------
 
 term all {x: nat} (p: wff x): wff;
-prefix all: $∀$ prec 41;
 prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
 
 --| @congr
 axiom all_congr {x: nat} (p q: wff x):
@@ -255,8 +255,8 @@ axiom ax_inst {x: nat} (t: nat x) (p: wff x):
 -- ---------------------------------------------------------------
 
 def ne (a b: nat): wff = $ ¬ a = b $;
-infixl ne: $≠$ prec 50;
 infixl ne: $!=$ prec 50;
+infixl ne: $≠$ prec 50;
 
 --| @congr
 axiom ne_congr (a b c d: nat):
@@ -483,8 +483,8 @@ notation ab {x: nat} (p: wff x): set =
   (${$:max) x ($|$:0) p ($}$:0);
 
 term el (a: nat) (A: set): wff;
-infixl el: $∈$ prec 50;
 infixl el: $e.$ prec 50;
+infixl el: $∈$ prec 50;
 
 -- Membership in an abstraction computes by substitution.
 axiom elab (a: nat) {x: nat} (p: wff x):
