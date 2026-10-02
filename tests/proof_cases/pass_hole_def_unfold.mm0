@@ -1,0 +1,22 @@
+-- A holey line whose visible part needs a def unfolded: `img f B` is a
+-- separation `sep y B (R f y)` with a hidden bound `y`, so `sep_in_imp`
+-- applies only after unfolding it, and its bound `x` takes `img`'s `y`.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+--| @vars x y z
+--| @hole _set
+sort set;
+term im (a b: wff): wff;
+infixr im: $->$ prec 25;
+term mem (a b: set): wff;
+infixl mem: $e.$ prec 50;
+term R (a b: set): wff;
+term sep {x: set} (A: set) (p: wff x): set;
+def img (f B: set) {.y: set}: set = $ sep y B (R f y) $;
+
+axiom sep_in_imp {x: set} (t A: set) (p: wff x):
+  $ t e. A $ > $ t e. A -> t e. sep x A p $;
+
+theorem hole_beside_def (f B c: set): $ c e. B $ > $ c e. B -> c e. img f B $;

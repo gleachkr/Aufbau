@@ -162,6 +162,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   and `$ eq (f _obj) (f c) $ by refl []` now check: the other parts of
   the line and the cited premises determine the variable. Before, such a line
   failed with "a proof hole is not allowed here" or a missing variable.
+- A holey line whose visible parts match the rule only after unfolding a
+  definition now checks. With `img f B` defined as `sep y B (R f y)`,
+  `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's
+  conclusion has `sep` where the line has `img`, though the same line
+  without the hole checked.
 - The language server again shows what a proof hole was filled with when
   you hover it. Since 0.0.12 the hover was empty: the navigation pass reused
   check results the diagnostics pass had recorded without the holes.

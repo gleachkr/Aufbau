@@ -1,0 +1,4 @@
+hole_beside_def
+---------------
+l1: $ _wff -> c e. img f B $ by sep_in_imp [#1]
+l2: $ c e. B -> c e. img f B $ by sep_in_imp [#1]

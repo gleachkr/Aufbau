@@ -336,6 +336,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_hole_child_hint", .outcome = .pass },
     // A variable met twice under holes takes both visible parts.
     .{ .stem = "pass_hole_merged_faces", .outcome = .pass },
+    // A hole-free part of a holey line is matched with def unfolding.
+    .{ .stem = "pass_hole_def_unfold", .outcome = .pass },
     .{ .stem = "pass_hole_abstract", .outcome = .pass },
     .{ .stem = "pass_hole_abstract_matrix", .outcome = .pass },
     .{ .stem = "pass_prawitz_holes", .outcome = .pass },

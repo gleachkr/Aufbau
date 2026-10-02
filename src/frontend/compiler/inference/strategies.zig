@@ -811,15 +811,14 @@ fn matchRulePartSurface(
     actual: *const Expr,
 ) !bool {
     if (actual.* == .hole) return true;
+    // A hole-free part is an ordinary expression: match it with def
+    // unfolding, like a concrete line, rather than head by head.
+    if (!SurfaceExpr.containsHole(actual)) {
+        const actual_id = try theorem.internParsedExpr(actual);
+        return try session.matchTransparentOrSemantic(template, actual_id);
+    }
     return switch (template) {
-        .binder => blk: {
-            if (SurfaceExpr.containsHole(actual)) break :blk true;
-            const actual_id = try theorem.internParsedExpr(actual);
-            break :blk try session.matchTransparentOrSemantic(
-                template,
-                actual_id,
-            );
-        },
+        .binder => true,
         .app => |app| blk: {
             const actual_term = switch (actual.*) {
                 .term => |term| term,
