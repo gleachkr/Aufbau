@@ -254,12 +254,15 @@ fn walkForFanout(
 // Clone `base` and additionally pin the principal `leaf`'s binders from one
 // enumerated `member`, yielding a fan-out variant. The clone's interner shares
 // `base`'s ids (copy-on-write), so `member` and the subterms
-// `extractHypPartialBindings` reads off it stay valid. No seed scrub runs here:
-// `findAmbiguousPrincipal`'s rigid-member gate guarantees every `member` is
-// placeholder-free, but extraction can still unfold a binder def inside it
-// (`unfoldForeignRefDef`), so a pinned binder can be a def-unfold dummy the base
-// seed would have scrubbed. View rules are excluded upstream
-// (`detectPrincipalFanout`), so `base.view_concl_seed` is null on this path.
+// `extractHypPartialBindings` reads off it stay valid. No seed scrub is needed:
+// `findAmbiguousPrincipal`'s rigid-member gate (`exprFullyRigid`) admits only a
+// placeholder-free `member` whose every head is rigid. Extraction mints
+// placeholders only by unfolding a ref-side def (`defBodyForUnfold`), which
+// needs a def with a body, and no rigid head is one. So every pin is a concrete
+// subterm of `member`. Re-running `partitionSeedBindings` would do harm: it
+// would scrub the bare reconciliation metas the base seed's partition kept.
+// View rules are excluded upstream (`detectPrincipalFanout`), so
+// `base.view_concl_seed` is null on this path.
 fn cloneCandidateWithPrincipalPin(
     allocator: std.mem.Allocator,
     context: *const Context,
@@ -279,9 +282,8 @@ fn cloneCandidateWithPrincipalPin(
         member,
         bindings,
     );
-    // Extraction can unfold a def inside `member`; keep only the slots the
-    // pinned bindings hold.
-    candidate_theorem.releaseUnheldDepSlots(slot_mark, &.{bindings});
+    // Extraction unfolded no def inside the rigid `member`.
+    std.debug.assert(candidate_theorem.depSlotMark() == slot_mark);
     // The variant's COW clone borrows `base.theorem` as its immutable base, but
     // `appendRuleCandidates` deinits `base` as soon as the variants are built —
     // the variants outlive it. Materialize a standalone interner so the variant
