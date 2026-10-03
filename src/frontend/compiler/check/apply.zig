@@ -558,13 +558,12 @@ fn applyRuleCandidateCore(
     const rule_has_advanced_inference =
         maybe_view != null or
         has_omitted_structural;
-    const use_advanced_inference = had_omitted and
-        rule_has_advanced_inference;
-
     // A view only guides inference. With every rule binder given there is
     // nothing to infer, and the rule's own check decides: the view's match
     // can reject a line the rule accepts (`rex` with `d` and `x` given
     // leaves only the member `q` of its premise bag open).
+    const use_advanced_inference = had_omitted and
+        rule_has_advanced_inference;
 
     const fresh_context: Inference.HiddenWitnessFreshContext = .{
         .parser = parser,

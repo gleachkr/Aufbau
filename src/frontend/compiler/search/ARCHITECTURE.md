@@ -63,8 +63,9 @@ carried ancestor metas as a `.witness` slot does, so a hole's meta is
 solvable at a leaf two open levels down (`f · x · y : _`; #331 is the
 general-goal version, which costs ticks there). Search validates against the
 hint, so `source.zig` surfaces a suggestion only if the holey line itself
-checks with it, and `withNeededBindings` drops innermost bindings first there,
-keeping the root's (the filled type).
+checks with it. `withNeededBindings` first tries the suggestion with no
+bindings; failing that, on a holey line it drops the innermost bindings
+first, so the root's (the filled type) are the last to go.
 
 ## Conversion-search entry point
 
@@ -218,7 +219,8 @@ for *committing*. See the `@acui can be a subset` note.
 seeded derived pool. The phases' capabilities and gates are a table
 (`ladder_phases`), and the order the ladder visits its (depth, phase) cells is
 a list built from it (`buildSchedule`), so a schedule change is a change to
-that list. Since 2026-07-05 the ladder is a **hybrid nesting**:
+that list. Since 2026-07-05 the ladder is a **hybrid nesting**, and since
+2026-10-02 (#300) every phase first searches depth 1:
 
 - **Phases 1–3 form a depth-major core** — outer iterative deepening
   1..`max_depth`, inner phases per depth, stopping at the first
@@ -228,24 +230,29 @@ that list. Since 2026-07-05 the ladder is a **hybrid nesting**:
   under the same global budget. (Phase-major reordered the sequence as
   `max_depth` grew — a shallow later-phase proof was reachable only after
   the earlier phases exhausted ALL depths, so the budget died inside doomed
-  deep passes: the tait `drinker` md≥8 flood, now fixed and guarded.) A core
+  deep passes: the tait `drinker` md≥8 flood, now fixed and guarded.) Any
   phase whose own fuel runs dry is *retired* (its remaining cells skipped)
-  rather than aborting its siblings; only global-budget exhaustion aborts.
-- **Phases 4–5 stay phase-major tails** (full ladders, each only on a clean
-  miss of everything before it, exactly as before). Reason: depth-major's
+  without ending the ladder; a retired core phase also skips the remaining
+  tail cells. Only the global budget or the stack guard aborts.
+- **Phases 4–5 run at depth 1 right after the core's depth 1, then as
+  phase-major tails from depth 2**, each only while no core phase has
+  retired. Reason: depth-major's
   cost ordering assumes fixed-depth cost is roughly phase-uniform, which
   holds for phases 1–3 (their extra mechanisms fire only at split sites /
   open witness slots) but not for retention and constrained MP, which
   broaden EVERY additive split node / implication-shaped goal — interleaved
   below a core find they inflated found cost ~3x (measured, tait
-  ex_swap/all_an_dist_fwd). The md-monotonicity guarantee therefore covers
-  phase-1–3 proofs; phase-4/5 proofs keep the old behavior.
+  ex_swap/all_an_dist_fwd). At depth 1 their larger branching has not
+  compounded yet. The md-monotonicity guarantee covers phase-1–3 proofs and
+  depth-1 proofs of phases 4–5; deeper phase-4/5 proofs keep the old
+  behavior.
 
 The ordering is load-bearing: within a core depth an anchored proof still
 wins (split-free beats split at equal height, and within any single
 application an anchored witness beats an invented one — invention is the
 last rung of the slot-local witness ladder, not a phase capability), and
-phases 4–5 still fire only on clean misses and phase 6 only on misses that
+phases 4–5 go past depth 1 only after the core missed at every depth with no
+core phase retired, and phase 6 runs only on misses that
 did not stop the search, so they can only *add* found-ness. What the reorder changed is the cross-depth preference within
 the core — a shallow invented-witness proof now beats a deeper split-free
 one (measured impact: none — breadth corpus byte-identical). Flag sets are
@@ -273,8 +280,9 @@ which the persisted-memo covering rule requires:
    rung of the slot-local witness ladder (`emitOpenTarget`), a single
    deterministic continuation per slot (measured outcome-identical to the
    historical phase-3 gating).
-4. **Phase 4 — principal retention** (`allow_retain_principal = true`). Only on
-   a clean core miss, and only when the theory declares an **idempotent**
+4. **Phase 4 — principal retention** (`allow_retain_principal = true`). At
+   depth 1 right after the core's depth-1 cells; deeper only as a tail (see
+   above). Only when the theory declares an **idempotent**
    structural combiner (`AcuiBag.anyLaw(…, Law.isIdempotent)`). Lets the ACUI split enumerator
    keep a member already claimed by a fixed principal in the open rest binder of
    a set combiner — the non-minimal complement `g , g = g` permits — and lets an
@@ -286,7 +294,8 @@ which the persisted-memo covering rule requires:
    the minimal-complement majority never pays. Guarded by the
    `idem_complement_probe` depth-frontier regression test.
 5. **Phase 5 — constrained backward modus ponens** (`allow_constrained_mp =
-   true`). Only on a clean miss of everything before it. Lets the open-generation path
+   true`). At depth 1 after phase 4's depth-1 cell; deeper only as the last
+   tail. Lets the open-generation path
    (`tryOpenGenerateSlot`) fire for **any** backward candidate, not just `@auto
    backward` rules: a binder the goal does not pin (e.g. `ax_mp`'s cut `a`) is
    opened as a meta, and the child search must close that hypothesis with a rule
@@ -296,7 +305,7 @@ which the persisted-memo covering rule requires:
    whose cut is structurally determined by a congruence/implication rule (e.g.
    `suc_chain` = `ax_mp [peano2r, …]`), which the forward/backward annotation
    discipline otherwise leaves unreachable. It opens every implication-shaped
-   goal, so — like phases 2–4 — it is last and runs only on a clean miss. Its
+   goal, so it goes past depth 1 only as the last tail. Its
    fuel is `GenerateOptions.phase5_fuel` (defaults to the main `fuel`); phase 5
    is intrinsically cheap (the gains solve shallow), so a tighter budget caps
    the doomed-miss exploration with little loss. ⚠ The high *worst-case*
@@ -362,10 +371,10 @@ which the persisted-memo covering rule requires:
 "Clean miss" means two different things, and the difference is deliberate:
 
 - **Ladder gating** (`LadderOutcome` in `generate.zig`) decides whether the
-  tails and retries run. A node-capped cell still ends as a plain `miss`, so
-  a core whose cells hit `max_nodes` is `clean` and the tails run after it. Only a
-  retired core phase (`exhausted`) or the global budget / stack guard
-  (`stopped`) change the gating.
+  tails and retries run. A node-capped cell still ends as a plain `miss`. A
+  retired core phase skips the remaining tail cells. Any retired phase makes
+  the ladder `exhausted`: phase 6 still runs, but the eager-cut valve does
+  not. The global budget or the stack guard (`stopped`) blocks both.
 - **The failure report** (`miss.MissReport`, read by `source.zig`'s status and
   detail, the retry code action, and the bench's miss causes) calls a miss
   *truncated* when any limit cut it short: the global budget, the stack guard,
@@ -393,7 +402,7 @@ weights (`types.zig`): intern probe levels (COW base-chain hops, x600),
 def-eq symbolic-node allocations (x190), non-interning tree-walk node visits
 (shape builder / meta walks / suggestion rendering, x110), and a fixed
 per-`tryCandidate` charge (x100k) for the clone/session overhead no per-node
-tick sees. Units ≈ ns of calibrated wall, so the default reads as "≈3s of
+tick sees. Units ≈ ns of calibrated wall, so the default reads as "≈6s of
 work". Checked at candidate granularity (`Fuel.spend` + the generation node
 entries), so a candidate mid-validation always completes; exhaustion unwinds
 as `error.SearchBudgetExhausted`, exactly like per-phase fuel. Because tick
@@ -534,7 +543,11 @@ in every phase, not only phase 5. It also takes a bare unfold placeholder
 left on a bound binder by ref-side extraction (`app_elim`'s `f : A → B`), and
 an intro rule's eigenvariable (`subset_intro`'s `x` in `G , x ∈ A ⊢ x ∈ B`):
 a bound binder absent from the conclusion, where the goal fixes every other
-binder of the premise and no fixed binding may mention the variable. The
+binder of the premise and no fixed binding may mention the variable. These
+criteria exclude two shapes. `inst`'s `x` may be a variable its fixed
+`a : term x` already mentions, so a fresh fill is a wrong guess (church
+`SPEC`). `dvd_elim`'s `k` sits in an elim-shaped premise whose other binders
+come from a sibling ref, so fills are mostly doomed (euclid). The
 binders open as `.bound_choice` metas in a `fresh_bound` open slot, which
 runs the constrained child-search-first ladder, so a proof below can still
 name the variable however deep its ref sits. Only when the child search
@@ -554,13 +567,11 @@ costs a doomed concrete child search first. The exception is a variable the
 premise substitutes away (`nat_ind_elim`'s base case `g ⊢ z : [k/zero] C`).
 A `.bound_choice` meta reads as a bound variable with its own dep bit, so the
 substitution reduces and the variable leaves the target while the bindings
-(`C`) still hold it. No proof of the premise can name it, so
-`freshMetasDangle` sends the slot straight to the pool rung, whose ref names
-come from the bindings. Guard: the `add_comm base case` scenario. The criteria exclude two shapes. `inst`'s `x`
-may be a variable its fixed `a : term x` already mentions, so a fresh fill is
-a wrong guess (church `SPEC`). `dvd_elim`'s `k` sits in an elim-shaped
-premise whose other binders come from a sibling ref, so fills are mostly
-doomed (euclid). Guard: the `arr_` depth rows of `martin_lof`.
+(`C`) still hold it. No proof of the premise can name it, so the
+fully-solved check in `emitOpenTarget` sends the slot straight to the pool
+rung, whose ref names come from the bindings. Guard: the `add_comm base case`
+scenario. Guards for the fresh premise itself: the `arr_form` and `arr_elim`
+depth rows of `martin_lof_frontier`.
 
 A hidden variable inside a fixed binding of the premise qualifies the same
 way: a kept seed meta a bound binder still holds (`ih`, when no ref pinned
@@ -574,7 +585,7 @@ slot's solve cannot fill another premise's. A seed meta keeps its dummy's dep bi
 bound variable (`TheoremContext.leafInfoWithArgs`), so a substitution over
 it reduces as over the dummy: `sep_intro`'s `[x/t] p` under `image` must
 reduce before its premise can be generated. Guards: the `add_zero_right`
-depth rows of `martin_lof`, and church `TRUTH`.
+depth rows of `martin_lof_regular`, and church `TRUTH`.
 
 The dual case is a bound binder of a child-search candidate with an
 occurrence strictly inside what a goal meta stands for. In phase 5, `eqTR1`
@@ -612,7 +623,7 @@ place* inside its ACUI context combiner rather than hard-blocked — via
 `slot.mode != .witness` (see `OpenMode` below) so the witness path (which
 resolves such binders by enumeration) keeps the old block; and the substitution
 redexes in a generated target (`[k/n] C` = `sb_ty …`) are reduced for emission by
-`backward/backtrack.zig:reduceRedexOnly` (structural recursion that reduces only
+`backward/redex.zig:reduceRedexOnly` (structural recursion that reduces only
 `rewrites_by_head`-rooted subtrees, leaving ACUI association byte-identical to the
 pool refs). Full rationale + benchmarks:
 `docs/design_notes/induction_eliminator_metavar.md`.
@@ -863,7 +874,7 @@ breadth-byte-identical (they never change a one-shot suggestion; they only move
 the multi-line **depth frontier** — how much of a real proof `auto?` can
 regenerate from the bare goal).
 
-**Generate-only slot cost (`hypSlotCost`, `backward/backtrack.zig`).** When a rule has several
+**Generate-only slot cost (`hypSlotCost`, `backward/plan.zig`).** When a rule has several
 unresolved hypotheses, `buildHypPlans` orders them most-constrained-first
 (`hypPlanLessThan`). A slot's cost is its initial ref-pool size — *except* a
 **generate-only** slot (`initial_len == 0`, no pool ref fits it at seed time) is
@@ -878,7 +889,7 @@ refs and plateau lower. In phase 5 one key ranks above cost:
 the rigid occurrences of its shared binders, including after a
 `defer_generate` major, which is the occurrence that must pin them.
 
-**Relation-transport screen (`isRelationTransport`, `backward/backtrack.zig`).** A `@relation`
+**Relation-transport screen (`RewriteRegistry.isRelationTransport`, applied in `backward/backtrack.zig`).** A `@relation`
 bundle's *transport* rule (e.g. `mpbi`: `a ↔ b, a ⊢ b`) has a **bare binder
 conclusion**, so backward it is a candidate for *every* goal — yet it is a
 rewrite/congruence tool, never a backward proof step. Left unscreened it floods
@@ -1040,8 +1051,8 @@ trap) does not; a binder-introducing def is no exception, since its dummies are
 fresh on both sides. An ACUI combiner, a `@rewrite` head and an unavailable
 term determine none.
 
-Every such walk takes its argument pairs from `backward/lockstep.zig`
-(`templateArgs`, `exprArgs`), which pairs only determined arguments of
+The prunes, seeds and extractors take their argument pairs from
+`backward/lockstep.zig` (`templateArgs`, `exprArgs`), which pairs only determined arguments of
 applications with the same head and arity. That covers the conclusion and hyp
 prunes (`templateDefiniteMismatch`, `rigidExprMismatch`, the member, redex,
 closed-region and recover checks), the seeds and extractors
@@ -1051,10 +1062,13 @@ provable candidate and every mismatch they report is real. The walks that only
 stop at binders and combiner regions (the re-pin, the repeated-binder conflict,
 the closed-region and hyp-ref region collectors, the fan-out locator) share
 `lockstep.walk`, and both seeds read through a template-side def unfolding
-with `def_match.walkDefBody`. The split-site
-locator (`split.findSplitSite`) is the one exception: it descends every
-argument of a same-head application, because the split pass only adds
-candidates and the validator checks each one.
+with `def_match.walkDefBody`. Walks outside `lockstep.zig` either descend
+only rigid heads, which determine every argument (`abstract_prune`'s
+`matchTemplateStructural` and `abstractDefiniteMismatch`), or build a solution
+the validator re-checks: `forward.solveCorrespondence*`, `witness.zig`'s
+read-back and anchor walks, `trigger.matchTriggerPattern`, and the split-site
+locator (`split.findSplitSite`), which descends every argument of a same-head
+application because the split pass only adds candidates.
 
 ### Contexts that are ordered, and where a split can happen
 
@@ -1342,7 +1356,7 @@ width is real.
 | `backward/def_match.zig` | transparent-def-aware matching: the rigid mismatch probes, one-layer unfolding (`unfoldAppOnce`), the def-body walk (`walkDefBody`), hyp-side extraction |
 | `backward/lockstep.zig` | the determined argument pairs of a template/goal walk, and `walk` over them |
 | `backward/redex.zig` | reduce `@rewrite` redexes in generated emit targets, leaving ACUI context structure as the pool writes it |
-| `backward/semantic.zig` | head classification and strict-comparability helpers |
+| `backward/semantic.zig` | the search's view of `../../head_class.zig` (head classes, determined arguments) plus strict-comparability helpers |
 | `abstract_prune.zig` / `context_prune.zig` | broad-slot prefilters |
 | `forward.zig` | forward saturation (`@auto forward`) |
 | `shape.zig` / `clipper.zig` | shape extraction + discrimination index |

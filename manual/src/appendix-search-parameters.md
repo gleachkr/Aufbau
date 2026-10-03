@@ -41,7 +41,7 @@ repeated, the last occurrence wins.
 |---|---|---|---|
 | `depth` | 6 | 1–64 | Iterative-deepening limit: maximum nesting of *generated* proof steps. `@auto eager` steps are exempt. Deepening stops at the shallowest depth that closes the goal, but the most expensive search phases go past depth 1 only after every depth has missed, so a higher limit can spend the work budget before they find a deeper proof. |
 | `nodes` | 256 | 1–1 000 000 | Budget of distinct generated sub-goal solves per pass (one depth of one search phase), reset at each pass. |
-| `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase |
+| `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase, refilled for each retry of the whole ladder. |
 | `budget` | ≈6 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 6.3 units). `budget: 0` is legal and disables the cap entirely. |
 
 When `auto?` fails, the failure report names every limit it hit and suggests

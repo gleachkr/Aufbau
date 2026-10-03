@@ -47,8 +47,9 @@ pub fn makeExactRuleCandidate(
     //     the rule's binders). The unfold materializes the def's bound vars as
     //     fresh STANDARD placeholders; a binder pinned to a placeholder-laden
     //     subterm (e.g. the step term `s`, mentioning the def's bound `ih`)
-    //     must not reach validation/emission as a rule binding. Scrub those,
-    //     keeping the concrete pins (e.g. `n = m`) that narrow the lookups.
+    //     must not reach validation/emission as a raw placeholder.
+    //     `partitionSeedBindings` keeps such terms (and shared dummies) as
+    //     reconciliation metas and scrubs the other bare dummies.
     //
     //   * A goal hint from open backward generation carries
     //     meta-class wildcard leaves (lifted open targets). A binder pinned to
@@ -59,8 +60,8 @@ pub fn makeExactRuleCandidate(
     // embedded ancestor-witness metas ride forward to the open leaf where they
     // are solved (e.g. `rex`'s context `g := … , R ?t v` carries the `lall`
     // witness so the coupled `ax` member identity can force it). Concrete goals
-    // never contain meta-class leaves, so for the whole non-meta corpus this
-    // collapses to plain "scrub any placeholder-bearing binding".
+    // never contain meta-class leaves, so for the whole non-meta corpus only
+    // the unfolded-dummy partition above applies.
     try partitionSeedBindings(
         allocator,
         &candidate_theorem,
@@ -729,9 +730,9 @@ fn seedBindingsFromTemplateGoal(
     // `add_suc_right_p m n` exposes its `nat_ind k ih C z s n` body so the
     // rule's binders can pin). This seed feeds the *rule* bindings that drive
     // validation and emission, so the placeholders such an unfold materializes
-    // must not survive as binds — `makeExactRuleCandidate` scrubs any binding
-    // that still contains a placeholder, keeping only the forced placeholder-free
-    // pins (e.g. `n = m`).
+    // must not survive as raw binds — `makeExactRuleCandidate` partitions them
+    // (`partitionSeedBindings`): placeholder-laden terms and shared dummies
+    // are kept as reconciliation metas, and other bare dummies are scrubbed.
     try partialMatchTemplate(context, theorem, template, goal_expr, scratch, true, true);
     _ = mergeOptionalBindings(bindings, scratch);
 }

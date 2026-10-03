@@ -29,3 +29,5 @@ theorem hole_under_def (f B c: set): $ c e. B $ > $ c e. B -> c e. img f B $;
 theorem hint_hole_under_def (f B c: set): $ c e. B $ > $ c e. img f B $;
 theorem hole_in_unfolded_def (f B c: set) {x: set}:
   $ c e. B $ > $ c e. sep x B (R f x) $;
+theorem hole_in_unfolded_def_bare (f B c: set) {x: set}:
+  $ c e. B $ > $ c e. sep x B (R f x) $;

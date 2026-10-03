@@ -202,8 +202,10 @@ holey assertion via the trusted hole-aware parser entry point,
 matching visible structure against rule templates while deferring hole
 positions, materializing filled surface lines from selected candidates,
 and validating them against the candidate's concrete conclusion (with
-sort checks at every hole). Holes never reach the theorem-local DAG, the
-checked IR, or the MMB emitter.
+sort checks at every hole). Holes never reach the checked IR or the MMB
+emitter. For matching, a holey line is interned once (`HoleyLine`), with a
+line hole for each hole: a meta wildcard that spends no dependency slot.
+Fills and diagnostics work on the written surface.
 
 View, recover, and derived-binding vocabulary (shared by the compiler
 pipeline and the standalone inference solver, so it lives at frontend
@@ -224,6 +226,7 @@ Definition-aware matching and normalization support:
 - `def_ops/normalized_match.zig`
 - `def_ops/mirror_support.zig`
 - `def_ops/tests/`
+- `head_class.zig`
 - `inference_solver.zig`
 - `canonicalizer.zig`
 - `acui_bag.zig`
@@ -621,7 +624,8 @@ submodules that it re-exports where they form the public checking API —
 rule-application core and ref elaboration, plus the conclusion/ref probes
 used by the search frontends), `bindings.zig` (explicit-binding parsing,
 binder inference, candidate elaboration/validation), `inline_hints.zig`
-(expected-ref inference for inline minors and ACUI-spine hint demotion),
+(expected-ref inference for inline minors, holey hint filling,
+sibling/semantic refinement, ACUI-spine demotion),
 `suggest.zig` (diagnostic name suggestions and label lookup),
 `checked_range.zig` (checked-IR ownership/leak validation), plus the
 older `matching.zig`, `diag_notes.zig`, and `freshen_retry.zig`.
@@ -674,16 +678,10 @@ mode from the user-written formula. Inline applications pass
 `implicit_whole_conclusion`, which accepts the selected candidate rule's
 instantiated conclusion as the hidden line's assertion.
 
-Child applications may receive a contextual expected-conclusion hint from
-the parent. The checker computes the parent's expected hypothesis when it
-can match the parent conclusion against the line assertion and the
-candidate's explicit bindings. That expected hypothesis is passed to an
-inline child as a first inference attempt.
-
-This is still not global proof search. If the hinted child attempt fails,
-the child falls back to ordinary inference from its own rule name,
-bindings, refs, and metadata. The parent does not backtrack across child
-choices. The resulting hidden line then becomes an ordinary checked-line
+Child applications may receive an expected-conclusion hint from the
+parent; `check/inline_hints.zig` computes it. See docs/proof.md, "Chained
+rule applications", for what the hint contains and how a child uses it.
+The parent does not backtrack across child choices. The resulting hidden line then becomes an ordinary checked-line
 reference for the parent, which still validates the corresponding
 hypothesis in the normal way.
 
@@ -732,9 +730,9 @@ pipeline concrete:
   hole sort is not itself structural, so an outer `_wff` can still let an
   inner ACUI context binder be recovered from the rule's hypotheses.
 
-The theorem-local interner stays concrete-only. Surface `.hole` leaves
-are never lowered into the theorem DAG; the checked IR and MMB emitter
-remain unchanged. Trust boundaries are unaffected: the verifier and
+Checked lines stay concrete. A holey line enters the theorem DAG only as
+something to match against, interned once with a line hole for each hole;
+the checked IR and MMB emitter remain unchanged. Trust boundaries are unaffected: the verifier and
 cross-checker do not know holes exist.
 
 ### Checked-line IR and emission boundary

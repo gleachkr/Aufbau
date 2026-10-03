@@ -60,24 +60,23 @@ This file records notable user-facing changes to Aufbau. The project follows
   entry finds a candidate on its own. A rule is also dropped before any
   search when its conclusion forces a variable into a binder that may not
   depend on it, such as `weaken`'s `g , x : T ⊢ J` against
-  `g , k : Nat ⊢ suc k : Nat`. In the Martin-Löf example this lets
-  `auto?` find proofs at greater depth, for example of `double_step_ty`.
-- `auto?` can now supply a bound variable that a definition hides. In the
+  `g , k : Nat ⊢ suc k : Nat`.
+- `auto?` can now supply a bound variable that no goal names. In the
   Martin-Löf example `A → B` stands for `Π x : A. B`, so proving
   `g ⊢ Ty (A → B)` by `pi_form` needs `g , x : A ⊢ Ty B` for some `x` the
-  goal never names. `auto?` now takes `x` from the proof of that premise
-  when some hypothesis names it, and otherwise picks an unused variable
-  from `@vars`, finding `pi_form [#1, weaken [#1, #2]]`. The same applies
-  to eigenvariables of introduction rules such as `subset_intro`, which
-  lets `auto?` find deeper proofs in the Zermelo examples.
-- `auto?` proves induction steps it used to miss. For a goal such as
-  `g ⊢ add_suc_right_p m n : Id Nat (m + suc n) (suc (m + n))`, unfolding
-  the definition gives the step term of `nat_ind_elim`, but that term
-  mentions the definition's hidden `ih`, so the search dropped it and had
-  to find a step term from its type alone. It now keeps the step term and
-  supplies `ih` like any other hidden variable. In the Martin-Löf example
-  `auto?` now reconstructs `add_comm`, `add_zero_right` and `ap_suc_ty`
-  from their hypotheses with every intermediate line removed.
+  goal never names; `auto?` now finds `pi_form [#1, weaken [#1, #2]]`. To
+  name such a variable it first tries the names your earlier lines use in
+  the same place, then an unused variable from `@vars`, since a name
+  decides which lines can match later (MM0 does not identify
+  alpha-equivalent statements). A variable that a premise substitutes away,
+  as in `nat_ind_elim`'s base case `g ⊢ z : [k/zero] C`, gets an unused name
+  at once. The same holds for eigenvariables of introduction rules such as
+  `subset_intro`, for rules marked `@auto backward`, and for a definition's
+  hidden variable inside a step term, such as the `ih` of
+  `add_suc_right_p`. In the Martin-Löf example `auto?` now reconstructs
+  `add_comm` with 28 of its 32 lines removed (1 in 0.0.12), `add_zero_right`
+  with 18 of 20 (1), `add_suc_right` with 7 of 42 (none), and `ap_suc_ty`
+  with every line removed.
 - `auto?` and `exact?` try fewer rules whose conclusion contains a
   `@rewrite` head. Such a term can rewrite to almost anything, so the goal
   alone says little about it, and the search used to hand every choice of
@@ -92,63 +91,57 @@ This file records notable user-facing changes to Aufbau. The project follows
   though each unfolds with a fresh bound variable, but the search used to
   hold no opinion on such a pair. In the Martin-Löf example this lets
   `auto?` find `add_comm` at greater depth.
-- `auto?` no longer searches below a premise for a bound variable that the
-  premise substitutes away. In `nat_ind_elim`'s base case
-  `g ⊢ z : [k/zero] C`, the premise is the same whichever `k` is meant, so
-  the search now picks an unused variable from `@vars` at once.
-  In the Martin-Löf example `auto?` now finds `add_comm` with 25 of its 32
-  lines removed instead of 8, and `add_suc_right` with 7 instead of 4.
-- When `auto?` has to name a bound variable that nothing in the goal fixes,
-  it now first tries the names your earlier lines use in the same place,
-  and only then the first unused names from `@vars`. A name decides which
-  lines can match later, since MM0 does not identify alpha-equivalent
-  statements. Before, the induction step `g , k : Nat , ih : C ⊢ …`
-  got `ih` for `k` and `k` for `ih` (they sort that way), and no
-  `g , k : Nat ⊢ …` line fit. `add_comm` is now found with 28 of 32 lines
-  removed instead of 25, and the depth benchmarks find 14 more proofs.
 - When `auto?` falls back to its last-resort modus ponens step, it now
   proves first the premise that determines the cut formula: for `imp_elim`,
   the major `G ⊢ p → q` before the minor `H ⊢ p`, which any hypothesis
   matches. Before, the minor tried each hypothesis as `p`, and the formula
   the proof needs, which only the major's proof reveals, was never tried. In
   the Zermelo example `auto?` now finds
-  `imp_elim (p := $ E. z maps f z y $) [all_elim [#1], ex_intro [#2]]` for
+  `imp_elim (p := $ ∃ z maps f z y $) [all_elim [#1], ex_intro [#2]]` for
   `range_sub_elim`, and similar proofs of `domain_on_maps_mem` and
   `functional_elim`.
 - A failed `auto?` now names every limit that cut it short and suggests
   raising them together with the budget, for example
   `auto? (nodes: 512, fuel: 8192, budget: 14)`. Editors offer the same
   retry as a **Retry with …** code action on the placeholder. Before, the
-  report named one limit and suggested raising only that one, but about
-  half of the misses that a limit cut short had hit more than one. On the
-  search benchmark, re-running each of 282 misses with the suggested retry
-  found 26 of the missed proofs, against 10 for the old advice, and every
-  proof the old advice found. In the additive FOL example it found all 8
-  misses, most of them proofs just deeper than the depth limit.
-- `auto?` suggestions print fewer explicit bindings, since the checker now
-  infers more of them: `mp [bi1 [], biid []]` in place of
-  `mp (p := $ p <-> p $) [bi1 [], biid []]`.
-- `auto?` now tries its most expensive search phases at depth 1 before it
-  searches deeper with the others. A proof that needs one of those phases
-  for a single step no longer waits until every deeper search has missed:
-  in the Church example `auto?` finds `CONTR` and `MP` in under 0.1s
-  instead of about 2s. Deeper proofs pay for the extra pass. On the search
-  benchmark, 47 found proofs got more than half a second faster and 3 got
-  more than half a second slower.
+  report named one limit and suggested raising only that one, and it said
+  "the search space was exhausted" when the per-pass subgoal limit
+  (`nodes`) had cut the search short. On the search benchmark, re-running
+  each of 277 misses with the suggested retry finds 40 of them, among them
+  all 8 in the additive FOL example.
+- `auto?` suggestions print fewer explicit bindings, because the checker
+  infers more of them. An inline sub-proof gets the part of its premise the
+  line fixes even when a rule variable in it is still open, with a hole in
+  that place: `$ p -> p $ by mp [bi1 [], biid []]` now checks, where `bi1`'s
+  variables could not be determined without `mp (a := $ p <-> p $)`. A rule
+  variable that an inline sub-proof's expected goal leaves unknown is a hole
+  too: `$ _ ⊢ A ∈ A → ∃ x (x ∈ A) $ by imp_intro [ex_intro [ax []]]` now
+  checks, `ax` reading its formula from the context and `ex_intro`
+  recovering the witness, where it needed `ex_intro (t := $ A $)`.
+- `auto?` now tries every search phase at depth 1 before it searches
+  deeper. A proof that needs one of the expensive phases for a single step
+  no longer waits until every deeper search has missed: in the Church
+  example `auto?` finds `CONTR` and `MP` in under 0.1s instead of more than
+  2s. A phase that runs out of its own fuel is now set aside while the
+  others go on; before, a late phase that did so ended the search.
+- On the search benchmark, `auto?` regenerates 93 of 843 theorems from more
+  removed lines than 0.0.12 did and 2 from fewer, and does 16% less work in
+  total. Of the theorems whose result is unchanged, 33 are found more than
+  half a second faster and 2 more slower.
+- The example theories and the manual's preludes print Unicode notation,
+  such as `∃` and `→`, in suggestions, hovers and diagnostics. The printer
+  uses the last notation declared for a term, and these theories declared
+  the ASCII spelling last. Both spellings still parse.
 
 ### Fixed
 
-- A holey line's inline sub-proofs now get the conclusion the line's visible
-  parts and explicit bindings determine as their expected goal. Before they
-  got none, so `$ g ⊢ (λ x : a. x) : _ty $ by t_lam (B := $ a $) [t_var []]`
-  failed (`t_var`'s `g` could not be determined) though the same proof
-  checks with the type written out.
-- An inline sub-proof whose expected goal has a hole in it, or a rule
-  variable the holes leave open, now gets that goal with the hole in it.
-  `$ (Q \/ P _obj) /\ P c $ by and_intro [or_r [pc []], pc []]` and
-  `$ g ⊢ (λ x : a. x) : _ty $ by t_lam [t_var []]` now check. Before, the
-  sub-proof got no expected goal, so `or_r`'s `a` and `t_var`'s type could
-  not be determined, and only `t_lam (B := $ a $) [t_var []]` checked.
+- On a holey line, an inline sub-proof now gets the conclusion that the
+  line's visible parts and explicit bindings determine as its expected goal,
+  with a hole wherever the line has one or leaves a rule variable open.
+  `$ g ⊢ (λ x : a. x) : _ty $ by t_lam [t_var []]` and
+  `$ (Q \/ P _obj) /\ P c $ by and_intro [or_r [pc []], pc []]` now check.
+  Before, the sub-proof got no expected goal, so `t_var`'s type and `or_r`'s
+  `a` could not be determined unless the line wrote them out.
 - When a rule variable occurs twice in a holey line and each occurrence shows
   a different part of it, an inline sub-proof's expected goal combines the
   two. `$ (Q \/ _wff) /\ (_wff \/ P c) $ by both [or_l [q []]]` now checks,
@@ -179,12 +172,6 @@ This file records notable user-facing changes to Aufbau. The project follows
   `(R \/ Q) -> P c`, `$ _wff $ by mp [#1, or_r [q []]]` now checks. Before,
   `or_r` expected only a hole, so its `a` could not be determined, though
   the same proof checked with the line written out.
-- On a concrete line, an inline sub-proof now gets the part of its premise
-  the line fixes even when a rule variable in it is still open, with a hole
-  in that place. `$ p -> p $ by mp [bi1 [], biid []]` now checks: `bi1`
-  gets `‹hole› -> (p -> p)`. Before, `mp`'s `a` was open until a child was
-  checked and each child needed the other's `a`, so `bi1`'s variables could
-  not be determined without `mp (a := $ p <-> p $)`.
 - A holey line, and an inline sub-proof solved against a goal with a hole
   in it, now keep to the visible structure around the hole.
   `$ p , p -> q |- _wff -> q $ by ax []` and `$ p , p -> q |- q $ by
@@ -196,6 +183,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   `+` (unit `0`) and `*` (unit `1`) both `@acui` on one sort, the search read
   `x + 1` as `x`, so two different subgoals could share a memo entry and a
   provable one could be missed.
+- A line that gives every rule variable explicitly is checked against the
+  rule alone; a `@view` on the rule only guides inference. Before, a view
+  that read the context by position could reject such a line:
+  `$ PA , PB ⊢ PP $ by drop (g := $ PB $, p := $ PA $) [#1]` failed.
 - A holey line whose visible parts match the rule only after unfolding a
   definition now checks. With `img f B` defined as `sep y B (R f y)`,
   `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's
@@ -203,8 +194,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   without the hole checked.
 - A hole may also sit inside such a definition.
   `$ c e. B -> c e. img f _set $ by sep_in_imp [#1]` now checks, filling
-  `_set` with `B` and giving the rule's bound variable a fresh name for
-  `img`'s hidden one. The same holds for an inline sub-proof whose expected
+  `_set` with `B`; the rule's bound variable takes a fresh name in place of
+  the variable `img` hides. The same holds for an inline sub-proof whose expected
   goal has the hole: `$ c e. img f _set $ by mp [sep_in_imp [#1], #1]`,
   and for a line that writes out a definition the rule keeps folded:
   `$ c e. sep x _set (R f x) $ by img_in [#1]`. The language server's
@@ -253,11 +244,6 @@ This file records notable user-facing changes to Aufbau. The project follows
   `@vars` variable when nothing can. On the depth benchmark, Church's `TT`,
   `FT`, `TRUTH` and `andT` through `exT` are now found, as are three
   lemmas that instantiate a `∀` lemma, such as Euclid's `fact_pos_inst`.
-- `auto?` now invents a fresh bound variable for a rule marked
-  `@auto backward` too. With `pi_form` enrolled, it could not prove
-  `g ⊢ Ty (A → B)` from `g ⊢ Ty A` and `g ⊢ Ty B`, because the premise
-  `g , x : A ⊢ Ty B` needs an `x` that nothing else names. Unenrolled,
-  `pi_form` already got one.
 - `auto?` no longer skips rules because part of a goal it has not chosen
   yet looks empty. In the additive FOL example, `ror` leaves `d` open in its
   premise `g ⊢ a , b , d`, since `d` may be the goal's whole right-hand side
@@ -270,13 +256,8 @@ This file records notable user-facing changes to Aufbau. The project follows
 - When `auto?`'s call-stack guard trips, the search now stops, as its
   report says. Before, it abandoned only the current phase and went on with
   the others, each of which walked back into the same limit.
-- A failed `auto?` no longer claims it searched the whole space when its
-  per-pass subgoal limit (`nodes`) cut it short. It used to say "the search
-  space was exhausted" and suggest more depth. It now names the limit. On
-  the search benchmark, 132 of the 137 misses reported as exhausted had hit
-  this limit.
-- A line whose rule conclusion differs from it only under a definition that
-  drops the differing argument is now accepted. With `def K (a b) = a`, a
+- A line is now accepted when it differs from the rule's conclusion only in
+  an argument that a definition ignores. With `def K (a b) = a`, a
   rule concluding `pair (K y x) x` proves `pair (K a b) c` with `x := c`,
   since `K a b` and `K a c` unfold to the same `a`.
 - `auto?`, `exact?` and `apply?` no longer discard a valid rule whose
@@ -303,9 +284,7 @@ This file records notable user-facing changes to Aufbau. The project follows
   variable, so renaming captured it. The Martin-Löf example proved
   `Id Nat (suc zero) zero`, and the FOL prelude proved `P y → ∀ y (P y)`.
   `lam_alpha`, `all_alpha` and `ex_alpha` now declare the body as depending
-  on the old variable only. `exchange` in the Martin-Löf example likewise
-  let the moved entry's type mention its own variable; it has since been
-  removed.
+  on the old variable only.
   Theories copied from these examples should make the same changes.
 - `auto?` now proves goals that need a rule like `var` (`g , x : A ⊢ x : A`)
   on the last entry of a context with two or more entries, when that context

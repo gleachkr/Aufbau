@@ -36,6 +36,7 @@ Flags (after `--`):
 | `--counters`      | Under each breadth MISS/SLOW row, print key counters (tryCandidate calls/rejects, pool sizes, top rules by validation attempts). |
 | `--require-no-miss` | Exit nonzero on any breadth MISS/ERR or non-`FULL` depth theorem (the regression guards below). |
 | `--retry-misses`  | Depth mode: re-run each theorem's first miss with the retry its failure report suggests, and append `[retry PARAMS FOUND\|miss\|err t=…M]` (or `[retry none]`) to its row. |
+| `--max-k=N`       | Depth mode: cut at most N lines; a theorem whose frontier reaches N counts as FULL. Lets a guard pin a shallow frontier. |
 | `--no-search-memo`, `--no-shape-cache`, `--no-deep-member-prune`, `--no-persist-negative` | A/B switches: turn off one search optimization that is on in production. |
 | `--track-sites`   | Attribute live bytes to allocation call sites (leak hunting; inflates wall time). |
 | `--alloc-trap=MIB` | Panic with a stack trace once live bytes exceed MIB, to attribute a memory peak. |
@@ -211,9 +212,11 @@ Known exception / drift risk: several existing `auto?` scenarios still reference
 `tests/proof_cases/zermelo.mm0` and `zermelo_hilbert.mm0` (~2300 lines of
 shared theory). These predate this convention and are candidates for migration
 to bench-only copies. The `martin_lof` scenarios have moved to
-`martin_lof_regular.mm0`, a bench copy of the earlier Martin-Löf theory (kept
-as `tests/proof_cases/martin_lof_regular` too); `martin_lof_frontier` tracks the
-current example. New cases should not add to that list.
+`martin_lof_regular.mm0`, a bench copy of the earlier Martin-Löf theory;
+`martin_lof_frontier` tracks the current example. The proof case
+`tests/proof_cases/martin_lof_regular` has the same proofs, a header comment,
+and none of the bench copy's eight `@auto` annotations: it checks that the
+theory compiles, while the bench copy is tuned for search. New cases should not add to that list.
 
 ## Baseline
 

@@ -555,6 +555,7 @@ pub fn build(b: *std.Build) void {
         });
         if (guard.filter) |needle| run.addArg(b.fmt("--filter={s}", .{needle}));
         if (guard.max_depth) |d| run.addArg(b.fmt("--max-depth={d}", .{d}));
+        if (guard.max_k) |k| run.addArg(b.fmt("--max-k={d}", .{k}));
         if (guard.gen_nodes) |n| run.addArg(b.fmt("--gen-nodes={d}", .{n}));
         if (guard.gen_fuel) |f| run.addArg(b.fmt("--gen-fuel={d}", .{f}));
         if (guard.global_budget) |g| run.addArg(b.fmt("--global-budget={d}", .{g}));

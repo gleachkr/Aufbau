@@ -497,8 +497,9 @@ l2: $ c $ by outer [middle (a := $ t $) [inner [l1]], #1]
 ```
 
 The checker may give the child a contextual hint from the parent rule's
-expected hypothesis when the parent conclusion and explicit bindings make
-that hypothesis predictable. The child first tries to use that expected
+expected hypothesis, built from the parent conclusion, explicit bindings,
+and the refs to the child's left (holes and still-unknown parent variables
+become holes in the hint). The child first tries to use that expected
 conclusion as an extra inference constraint. If the hinted attempt fails,
 the child falls back to ordinary inference from its own rule name,
 bindings, refs, and metadata.

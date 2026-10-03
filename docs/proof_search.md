@@ -330,20 +330,10 @@ bindings):
 l1: $ hard goal $ by auto? (depth: 8, budget: 13)
 ```
 
-| parameter | default | meaning |
-|---|---|---|
-| `depth` | 6 | iterative-deepening limit: the maximum nesting of generated (synthesized) proof steps |
-| `nodes` | 256 | distinct sub-goal solves per pass (one depth of one search phase) |
-| `fuel` | 4096 | candidate validations per retry phase |
-| `budget` | ≈6 | whole-call work cap, in units of ≈1 second of calibrated work; `0` disables the cap |
-
-`conversion?` accepts its own pair, tuning the egraph instead of the
-generator:
-
-| parameter | default | meaning |
-|---|---|---|
-| `iters` | 16 | saturation iterations (match-all → instantiate → rebuild rounds) |
-| `nodes` | 10000 | e-node cap: distinct term shapes the egraph may hold |
+The parameters (`depth`, `nodes`, `fuel` and `budget` for `auto?`;
+`iters` and `nodes` for `conversion?`), their defaults and their ranges are
+listed in the manual's
+[search parameters appendix](../manual/src/appendix-search-parameters.md).
 
 The parameters scope to **that one placeholder** — the engine defaults
 never move. This is deliberate: the defaults are tuned so that the

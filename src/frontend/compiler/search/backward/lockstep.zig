@@ -1,13 +1,17 @@
 //! Lockstep descent: which argument pairs a structural walk of a rule
 //! template against an expression (or of two expressions) may compare, pin,
-//! or descend into. Every such walk descends through here, so they agree on
-//! the rule: the two sides must be applications of the same head at the same
-//! arity, and only the arguments that head determines are paired
+//! or descend into. The prunes, seeds and extractors descend through here, so
+//! they agree on the rule: the two sides must be applications of the same head
+//! at the same arity, and only the arguments that head determines are paired
 //! (`semantic.argDetermined`). A pair of any other argument need not be equal
 //! even when the applications are (an erasing def, a `@rewrite` head, an ACUI
-//! combiner), so reading a binding or a mismatch off it would be a guess. The
-//! split-site locator is the one exception: it only adds candidates, which the
-//! validator checks, so a guess there is harmless.
+//! combiner), so reading a binding or a mismatch off it would be a guess.
+//! Walks outside this file either descend only rigid heads, which determine
+//! every argument (`abstract_prune`'s `matchTemplateStructural` and
+//! `abstractDefiniteMismatch`), or build a solution the validator re-checks
+//! (`forward.solveCorrespondence*`, `witness.zig`'s read-back and anchor
+//! walks, `trigger.matchTriggerPattern`, `split.findSplitSite`), so a guess
+//! there is harmless.
 
 const types = @import("../types.zig");
 const semantic = @import("./semantic.zig");

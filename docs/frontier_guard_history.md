@@ -82,7 +82,7 @@ miss at k=1 on both files: `arr_form` and `arr_elim` without
 placeholder arm.
 
 The `nat_rec_step_ty` guard (added with the ACUI multiplicity reject,
-`acuiDistinctMembersPlausible`, on 2026-09-25) was retired. With the reject
+now `acuiRequiredMembersPlausible`, on 2026-09-25) was retired. With the reject
 disabled the theorem stays FULL 5/5 on both files; the cost rises from
 21.8M to 84.9M ticks (48 to 312 candidate tries) but never reaches a miss,
 so the depth run no longer caught the regression. The unit test "ACUI

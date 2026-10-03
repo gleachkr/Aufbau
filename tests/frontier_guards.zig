@@ -20,6 +20,9 @@ pub const FrontierGuard = struct {
     // search defaults (which must stay low — raising the global `max_depth`
     // destroys corpus wall-clock on doomed searches for no found-ness gain).
     max_depth: ?usize = null,
+    // Depth mode: cut at most this many lines; the guard then requires the
+    // frontier to reach this cap rather than the whole proof.
+    max_k: ?usize = null,
     gen_nodes: ?usize = null,
     gen_fuel: ?usize = null,
     global_budget: ?u64 = null,
@@ -161,7 +164,7 @@ pub const guards = [_]FrontierGuard{
         .mode = "depth",
     },
     // Depth guard for a kept step term (`seed.partitionSeedBindings`,
-    // `backtrack.rebindSeedMetas`): unfolding `add_zero_right_p m` pins
+    // `backtrack.rebindHiddenVars`): unfolding `add_zero_right_p m` pins
     // `nat_ind_elim`'s step term `s` over the def's hidden `ih`. Scrubbed, the
     // step premise's subject is a hole and induction floods it; the search
     // misses from k=2.
@@ -328,6 +331,19 @@ pub const guards = [_]FrontierGuard{
         .files = "tests/search_bench_cases/church_frontier.mm0:" ++
             "tests/search_bench_cases/church_frontier.auf",
         .mode = "depth",
+    },
+    // Depth guard for the phase schedule (`generate.buildSchedule`): every
+    // phase runs at depth 1 before any deeper pass, so `CONTR`'s k=2 step,
+    // which needs a late phase, is found in about 70M ticks. When late
+    // phases waited for every deeper pass to miss it took about 5G; the 1G
+    // budget catches a return to that. Capped at k=2, the frontier.
+    .{
+        .filter = "CONTR",
+        .files = "tests/search_bench_cases/church_frontier.mm0:" ++
+            "tests/search_bench_cases/church_frontier.auf",
+        .mode = "depth",
+        .max_k = 2,
+        .global_budget = 1_000_000_000,
     },
     // Bound variables no goal names (task #318). `TT` (`eqTR1 [T_DEF]`):
     // phase 5 opens `eqTR1`'s cut as `?b`, and `T_DEF`'s `{x}` lies inside

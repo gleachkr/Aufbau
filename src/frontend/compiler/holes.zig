@@ -1125,7 +1125,7 @@ test "hole detection walks nested surface expressions" {
     try std.testing.expect(contains(term));
 }
 
-test "holey assertion parse keeps holes out of the theorem dag" {
+test "holey assertion parse interns nothing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var fixture = try TestFixture.init(arena.allocator());

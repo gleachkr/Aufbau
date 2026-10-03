@@ -17,3 +17,8 @@ hole_in_unfolded_def
 --------------------
 l1: $ c e. sep x _set (R f x) $ by img_in (f := $ f $) [#1]
 l2: $ c e. sep x B (R f x) $ by img_in (f := $ f $) [#1]
+
+hole_in_unfolded_def_bare
+-------------------------
+l1: $ c e. sep x _set (R f x) $ by img_in [#1]
+l2: $ c e. sep x B (R f x) $ by img_in [#1]

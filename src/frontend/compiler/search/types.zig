@@ -538,7 +538,7 @@ pub const SearchCounters = struct {
     /// the (depth, phase) of the last generation ladder cell that STARTED.
     /// When the global budget or the stack guard ended the call, this is the
     /// cell they ended it in. Otherwise it is just the last cell run: fuel
-    /// retires a core phase without ending the ladder, and the node cap only
+    /// retires a phase without ending the ladder, and the node cap only
     /// stops a cell expanding. After a full ladder the depth is `max_depth`.
     /// Phase is 1-based (1 non-splitting .. 5 constrained MP); 0 =
     /// generation never ran.
@@ -852,7 +852,8 @@ pub const GenerationHook = struct {
 
     /// When true, an open witness slot whose existential meta has no concrete
     /// member or coupled-member anchor may *invent* a witness by grounding the
-    /// meta to a reused `@vars`-pool dummy (`backward/backtrack.zig` `tryVarPoolWitnesses`).
+    /// meta to a reused `@vars`-pool dummy (`backward/backtrack.zig`
+    /// `tryPoolWitnesses`, pick `.shared`).
     /// This is the only place search picks an underdetermined witness rather
     /// than forcing one, but it needs no phase gate: it is the last rung of
     /// the slot-local witness ladder (forced-member, child-search, and
@@ -867,10 +868,10 @@ pub const GenerationHook = struct {
     /// retain a member already claimed by a fixed principal summand in the
     /// open rest binder — the non-minimal complement `g , g = g` allows (for an
     /// ordered combiner, any contiguous run; see `split.buildEnumerator`). Broadens
-    /// every additive split node, so it
-    /// is gated to a final phase run with fresh fuel only on a clean miss
-    /// (mirrors `allow_constrained_mp`): theories whose proofs use the minimal
-    /// complement never pay the cost. `exact?`/`apply?` never set it.
+    /// every additive split node, so it is set only in phases 4–5 (with an
+    /// idempotent combiner): at depth 1 right after the core's depth-1 pass,
+    /// deeper only as a tail after the core misses (mirrors
+    /// `allow_constrained_mp`). `exact?`/`apply?` never set it.
     allow_retain_principal: bool = false,
 
     /// When true, *any* backward candidate (not only `@auto backward` rules)
@@ -880,10 +881,9 @@ pub const GenerationHook = struct {
     /// child-search-first and never invents a witness). This is the constrained
     /// backward modus-ponens path: `ax_mp`'s cut `a` is determined by the major
     /// premise's proving rule (e.g. a congruence axiom), never propagated or
-    /// guessed. Broadens every implication-shaped goal, so — like
-    /// `allow_retain_principal` — it is gated to a final phase run with
-    /// fresh fuel only on a clean miss; proofs found by the ordinary
-    /// phases never pay the cost. `exact?`/`apply?` never set it.
+    /// guessed. Broadens every implication-shaped goal, so it is set only in
+    /// phase 5, whose depth-1 cell runs after the core's depth 1 and whose
+    /// deeper cells form the last tail. `exact?`/`apply?` never set it.
     allow_constrained_mp: bool = false,
 
     /// When true, the root goal is a holey line whose holes are metas (see
@@ -1279,13 +1279,14 @@ pub const SourceSuggestions = struct {
 /// so they never pay generation cost.
 pub const GenerateOptions = struct {
     enabled: bool = false,
-    /// Maximum generation depth. The core phases (1–3) deepen together,
-    /// depth 1 then 2 ... up to this, and stop at the first (depth, phase)
-    /// cell that yields a proof (generate.zig:`runPhaseLadder`); the tail
-    /// phases (4–5) each run their own full 1..max ladder only after the
-    /// core misses. For proofs the core finds, raising the limit keeps the
-    /// same cell order and so never loses them. It can lose a tail-phase
-    /// or trigger-seeded proof: the core runs every extra depth first and
+    /// Maximum generation depth. Every phase first searches depth 1; the
+    /// core phases (1–3) then deepen together from depth 2 up to this, and
+    /// the search stops at the first (depth, phase) cell that yields a proof
+    /// (generate.zig:`runPhaseLadder`). The tail phases (4–5) each run
+    /// depths 2..max only after the core misses with no core phase retired.
+    /// For proofs the core finds, and depth-1 proofs of any phase, raising
+    /// the limit keeps the same cell order and so never loses them. It can
+    /// lose a deeper tail-phase or trigger-seeded proof: the core runs every extra depth first and
     /// may spend the shared `global_budget` before the tail reaches it
     /// (#295: the depth corpus went 363→361→360 FULL rows at 6, 7, 8).
     /// A finite limit keeps a miss bounded, since a goal with no proof runs
@@ -1308,9 +1309,9 @@ pub const GenerateOptions = struct {
     /// Per-phase `tryCandidate` budget. Each ladder phase draws from its own
     /// pool across all its depths, and every ladder run (the retries of
     /// phase 6 and the eager-cut valve included) starts each phase with a
-    /// fresh pool. A core phase that runs dry is retired for the rest of the
-    /// ladder while the other phases continue; a tail phase that runs dry
-    /// ends the ladder. Sized generously so ordinary proofs never hit it.
+    /// fresh pool. A phase that runs dry is retired for the rest of the
+    /// ladder while the other phases continue; a retired core phase also
+    /// skips the remaining tail cells. Sized generously so ordinary proofs never hit it.
     /// Lowered in tests to assert clean budget-exhausted behaviour.
     fuel: usize = 4096,
     /// Cap on generated top-level suggestions. Set by the dispatch to the number

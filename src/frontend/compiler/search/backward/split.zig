@@ -277,8 +277,9 @@ fn enumerateSet(
     // A goal member may sit in BOTH a fixed principal summand AND the open rest
     // binder (`g , g = g`), so with `retain_claimed` claimed members stay as
     // OPTIONAL rest members instead of being removed. That principal-retaining
-    // split broadens every additive node, so the driver only enables it in a
-    // final phase on a clean miss (see `GenerationHook.allow_retain_principal`).
+    // split broadens every additive node, so the driver enables it only in
+    // phases 4–5: at depth 1, and deeper only after the core misses (see
+    // `GenerationHook.allow_retain_principal`).
     var optional_claimed: u64 = 0;
     for (distinct.slice(), 0..) |member, i| {
         if (!free[i]) {

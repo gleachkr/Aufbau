@@ -89,9 +89,7 @@ l1: $ _ ⊢ ∃ x ∃ y (P x ∧ Q y) $ by auto?
 The suggestion is
 
 ```
-ex_intro (t := $ c $, p := $ E. y (P x /\ Q y) $)
-  [ex_intro (x := $ y $, g := $ _ $, t := $ d $, p := $ P c /\ Q y $)
-    [and_intro [#1, #2]]]
+ex_intro [ex_intro (x := $ y $, p := $ P c ∧ Q y $) [and_intro [#1, #2]]]
 ```
 
 Here's how we get there:
@@ -120,7 +118,7 @@ l1: $ _ ⊢ ∃ x (P x → P x) $ by auto?
 The suggestion is
 
 ```
-ex_intro (t := $ u $, p := $ P x -> P x $) [imp_intro [ax []]]
+ex_intro (t := $ u $) [imp_intro [ax []]]
 ```
 
 The search created a metavariable `?t`, proved the tautology `P ?t → P ?t`, and
@@ -129,12 +127,12 @@ same search fails:
 
 ```
 auto? search failed: the search was cut short: the limit of 256 subgoals per
-pass was reached in 1 pass. 97 applications validated (55 accepted). Every
+pass was reached in 1 pass. 153 applications validated (55 accepted). Every
 depth below 6 was searched, so the proof may also be deeper. These limits share
 one work budget, so raise them together: try 'auto? (depth: 8, nodes: 512,
 budget: 14)'. A larger search finds only some of the proofs a smaller one
 misses; if it fails too, try proving an intermediate lemma first. Most-tried
-rules: not_intro (42 tried, 42 accepted), ax (25 tried, 2 accepted), all_intro
+rules: ax (81 tried, 2 accepted), not_intro (42 tried, 42 accepted), all_intro
 (19 tried, 0 accepted).
 ```
 
@@ -184,6 +182,7 @@ term all {x: obj} (p: wff x): wff; prefix all: $∀$ prec 41;
 term ex {x: obj} (p: wff x): wff; prefix ex: $∃$ prec 41;
 term P (a: obj): wff; prefix P: $P$ prec 50;
 term Q (a: obj): wff; prefix Q: $Q$ prec 50;
+term R (a: obj): wff; prefix R: $R$ prec 50;
 term c: obj;
 term sb {x: obj} (t: obj x) (p: wff x): wff;
 notation sb {x: obj} (t: obj x) (p: wff x): wff =
@@ -208,6 +207,8 @@ axiom sb_P {x: obj} (t: obj x): $ [x := t] (P x) ↔ P t $;
 --| @rewrite
 axiom sb_Q {x: obj} (t: obj x): $ [x := t] (Q x) ↔ Q t $;
 --| @rewrite
+axiom sb_R {x: obj} (t: obj x): $ [x := t] (R x) ↔ R t $;
+--| @rewrite
 axiom sb_imp {x: obj} (t: obj x) (p q: wff x):
   $ [x := t] (p → q) ↔ ([x := t] p → [x := t] q) $;
 
@@ -225,30 +226,29 @@ axiom ex_intro {x: obj} (t: obj x) (p: wff x): $ [x := t] p $ > $ ∃ x p $;
 --| @auto backward
 axiom mp (a b: wff): $ a → b $ > $ a $ > $ b $;
 @@auf
-lemma anchor {x y: obj}: $ ∀ x (P x → Q x) $ > $ P c $ > $ ∃ y (Q y) $
+lemma anchor {x y: obj}:
+  $ ∀ x (P x → Q x) $ > $ ∀ x (Q x → R x) $ > $ P c $ > $ ∃ y (R y) $
 ----
-l1: $ ∃ y (Q y) $ by auto?
+l1: $ ∃ y (R y) $ by auto?
 ```
 
-The useful route to the existential goal is to derive `Q c` from `∀ x (P x →
-Q x)` and `P c`. Forward saturation can find that route: `all_elim` turns
-`#1` into the family `P ?t → Q ?t`, and `mp` (enrolled forward as well as
-backward) joins the family with `P c`, instantiating `t := c`. The derived
-`Q c` determines the metavariable introduced by backward `ex_intro`. Search
-suggests a three-step chain:
+The useful route to the existential goal is to derive `R c` from the two
+universal facts and `P c`. Forward saturation finds that route: `all_elim`
+turns `#1` into the family `P ?t → Q ?t`, and `mp` (enrolled forward as well
+as backward) joins the family with `P c`, instantiating `t := c`. The derived
+`Q c` joins `#2`'s family the same way, giving `R c`, which determines the
+metavariable introduced by backward `ex_intro`. Search suggests:
 
 ```
-ex_intro [mp (a := $ P c $, b := $ Q c $)
-             [all_elim (x := $ x $, t := $ c $, p := $ P x → Q x $) [#1], #2]]
+ex_intro [mp (a := $ Q c $, b := $ R c $) [all_elim [#2], mp [all_elim [#1], #3]]]
 ```
 
-If you delete the two `@auto forward` lines, the same search reports an
-exhausted space at depth 6 even though the proof we're looking for is only
-three applications deep. Backward search reaches `mp` with two unresolved
-premises, `?a → Q ?t` and `?a`. These patterns do not constrain the search
-enough to find `t := c`. Forward search instead matches the derived
-implication family against the known fact `P c`, which determines the
-bindings.
+If you delete the two `@auto forward` lines, the same search runs out of
+subgoals at every depth, though the proof is only five applications deep.
+Backward search reaches `mp` with two unresolved premises, `?a → R ?t` and
+`?a`. These patterns do not constrain the search enough to find `t := c`. 
+Forward search instead matches each derived implication family against a known 
+fact, which determines the bindings.
 
 By contrast, `∀ x (P x) > ∃ y (P y)` needs no join: any instance proves the
 goal. Backward search alone can prove it by choosing a witness from the

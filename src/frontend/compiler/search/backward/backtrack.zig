@@ -2794,8 +2794,9 @@ fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
 /// first seen. A name must still occur in no binding and differ from the
 /// other fills; a variable no ref names takes the first free `@vars` name
 /// (`fillFromPool`). Returns false when no ref names any variable, one of
-/// them is not a `.bound_choice` meta, or one cannot be filled; the caller's
-/// rollback undoes any fills made before that.
+/// them is not a `.bound_choice` meta, or one cannot be filled. Fills made
+/// before a false return stay in the store; the pool fill skips them, and
+/// validation rejects a collision.
 fn assignRefNames(
     slot: *OpenSlot,
     theorem: *TheoremContext,

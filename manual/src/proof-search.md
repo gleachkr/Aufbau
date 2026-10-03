@@ -128,12 +128,8 @@ that call:
 l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 13)
 ```
 
-| parameter | default | meaning |
-|---|---|---|
-| `depth` | 6 | how deeply generated steps may nest |
-| `nodes` | 256 | distinct sub-goals per pass (one depth of one search phase) |
-| `fuel` | 4096 | candidate validations per phase |
-| `budget` | ≈6 | whole-call work cap, in units of about a second; `0` removes it |
+The parameters, their defaults and their ranges are listed in
+[Search parameters](appendix-search-parameters.md).
 
 ## Computation as search: `conversion?`
 

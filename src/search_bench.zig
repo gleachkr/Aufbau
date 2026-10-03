@@ -93,6 +93,10 @@ const BenchOptions = struct {
     /// wire a filtered breadth run into `zig build test` as a regression
     /// guard for matcher gaps the corpus has no other automated coverage of.
     require_no_miss: bool = false,
+    /// Depth mode: cut at most this many lines (default: all but the last).
+    /// A theorem counts as FULL when it reaches the cap, so a guard can pin
+    /// a shallow frontier without the deeper misses failing it.
+    max_k: ?usize = null,
     /// A/B switch for the Driver-owned search-reuse memos (reject-verdict memo +
     /// re-pin prune), default on (matches production). `--no-search-memo` turns
     /// them off to measure their effect.
@@ -748,7 +752,8 @@ const scenarios = [_]Scenario{
         // (the depth frontier's k=9 cut). `nat_ind_elim`'s base premise
         // `g ⊢ z : [k/zero] C` opens the def's hidden `k`, which the
         // substitution reduces away, so the pool rung names it at once
-        // (`backtrack.freshMetasDangle`). A child search there first,
+        // (the fully-solved check in `backtrack.emitOpenTarget`). A child
+        // search there first,
         // which never names it, spends the budget the step case needs.
         .name = "auto martin_lof add_comm base case auto?",
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
@@ -1441,6 +1446,10 @@ fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
             options.gen_fuel = try std.fmt.parseInt(usize, arg["--gen-fuel=".len..], 10);
             continue;
         }
+        if (std.mem.startsWith(u8, arg, "--max-k=")) {
+            options.max_k = try std.fmt.parseInt(usize, arg["--max-k=".len..], 10);
+            continue;
+        }
         if (std.mem.startsWith(u8, arg, "--global-budget=")) {
             options.global_budget = try std.fmt.parseInt(u64, arg["--global-budget=".len..], 10);
             continue;
@@ -1537,7 +1546,7 @@ fn printUsage() !void {
             "       [--exclude=TEXT[,TEXT...]]\n" ++
             "       [--marker=auto?|exact?|apply?] [--max-depth=N]\n" ++
             "       [--slow-ms=N] [--verbose|-v] [--counters] [--track-sites]\n" ++
-            "       [--require-no-miss] [--retry-misses]\n" ++
+            "       [--require-no-miss] [--retry-misses] [--max-k=N]\n" ++
             "       [--no-search-memo] [--no-deep-member-prune]\n" ++
             "       [--no-persist-negative]\n" ++
             "       [--no-shape-cache]\n" ++
@@ -3162,7 +3171,7 @@ fn runDepthFixture(
 
         const n = block.lines.len;
         const target = block.lines[n - 1];
-        const max_k = n - 1;
+        const max_k = @min(n - 1, options.max_k orelse n - 1);
         const human = try normalizeWhitespace(
             arena,
             proof_src[target.application.span.start..target.application.span.end],

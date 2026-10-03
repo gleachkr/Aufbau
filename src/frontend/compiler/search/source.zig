@@ -1789,10 +1789,11 @@ const SuggestionSite = struct {
 /// Drop the explicit bindings of `app` the checker does not need. The search
 /// renders every binder it chose (existential metas, bound witnesses, ACUI
 /// split and principal choices) so that its own validation cannot misread
-/// them; most of them the checker re-derives from the refs and the goal. Each
-/// binding, outermost application first, is dropped when the line still
-/// checks without it, so the result checks whenever `app` does. On a holey
-/// line that `app` checks, the innermost go first instead: the root's
+/// them; most of them the checker re-derives from the refs and the goal. The
+/// bare application, with every binding dropped, is tried first. Failing
+/// that, each binding, outermost application first, is dropped when the line
+/// still checks without it, so the result checks whenever `app` does. On a
+/// holey line that `app` checks, the innermost go first instead: the root's
 /// bindings carry what fills the holes (the inferred type), and a child
 /// checks from its parent's hint once the root states them. Allocates on the
 /// per-call work arena and frees nothing.

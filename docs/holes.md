@@ -196,18 +196,9 @@ occurrence shows. Under `both (a): $ a $ > $ a /\ a $`, the line
 an ACUI combiner are not combined, since their order is not fixed; the
 first occurrence stands there, unless a later one has no hole.
 
-The refs to an inline sub-proof's left fix rule variables too, as on a
-line without holes. In
-
-```text
-l1: $ _wff $ by mp [#1, or_r [q []]]
-```
-
-with `#1` stating `(R \/ Q) -> P c`, the line fixes none of `mp`'s
-variables, but `#1` gives `a := R \/ Q`, so `or_r` expects `R \/ Q` and
-reads its `a := R` from it. An earlier inline sub-proof counts once it
-has checked: `mp [tr [#1, #2], or_r [q []]]` works the same way. A ref
-to the right does not help, since it is checked after the sub-proof.
+The rest of the hint (the refs to the sub-proof's left, explicit
+bindings, fallback to plain inference) works as on a line without holes;
+see `docs/proof.md`, "Chained rule applications".
 
 ### Diagnostics surface for failed lines
 
@@ -450,8 +441,9 @@ and replays with the block.
 
 The trust boundary holds:
 
-- the theorem-local DAG is concrete; only the surface `Expr` carries
-  `.hole`;
+- checked lines are concrete; a holey line or hint enters the theorem DAG
+  only as a match target, with a meta line hole (no dependency slot) per
+  hole;
 - `checked_ir.zig` and `compiler/emit.zig` reject any leftover
   surface placeholder, so a bug that lets a hole survive surfaces as a
   loud frontend error rather than as suspect MMB output;

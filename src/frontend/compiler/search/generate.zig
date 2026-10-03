@@ -663,8 +663,8 @@ fn buildDerivedIndex(
 }
 
 /// How a full ladder ended without a proof: every cell ran (`clean`), a
-/// phase's own fuel ran dry (`exhausted`; later retries still run with fresh
-/// fuel), or the search must end now (`stopped`: the global tick budget or
+/// phase's own fuel ran dry (`exhausted`; the phase-6 retry still runs with
+/// fresh fuel, the eager-cut valve does not), or the search must end now (`stopped`: the global tick budget or
 /// the stack guard, which every later cell would hit again).
 const LadderOutcome = enum { clean, exhausted, stopped };
 
@@ -881,8 +881,10 @@ const LadderState = struct {
 ///   within any single application an anchored witness beats an invented
 ///   one (invention is the last rung of the slot-local ladder, tried only
 ///   after forced-member, child-search, and coupled solving miss);
-///   retention and constrained-MP proofs rank last overall exactly as
-///   before. Phase flags stay monotone along the ladder (see the flag docs
+///   retention and constrained-MP proofs rank after every core proof at
+///   the same depth, and below depth 1 after every core proof at any
+///   depth; a depth-1 retention or constrained-MP proof beats any deeper
+///   core proof. Phase flags stay monotone along the ladder (see the flag docs
 ///   on `GenerationHook`). What changes is the CROSS-depth preference
 ///   within the core: a shallow invented-witness proof now beats a deeper
 ///   split-free proof.
