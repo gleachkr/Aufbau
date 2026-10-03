@@ -1,0 +1,73 @@
+-- Typing with the generic `ax` (`g , a ⊢ a`) as the variable rule. On a
+-- holey line, or for an inline sub-proof under a holey type, `ax` must
+-- take the context member whose visible part fits: in
+-- `_ , f : b ⇒ c , k : a ⇒ b , x : a ⊢ k : _ty`, only `k : a ⇒ b`.
+
+delimiter $ ( ) , $;
+delimiter $ . : $;
+--| @hole _wff
+sort wff;
+--| @hole _ctx
+sort ctx;
+provable sort seq;
+
+term iff (a b: wff): seq;
+infixr iff: $↔$ prec 20;
+term ctx_eq (g h: ctx): seq;
+term emp: ctx; notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+term nd (g: ctx) (a: wff): seq;
+infixl nd: $⊢$ prec 0;
+term seq_eq (s t: seq): seq;
+infixl seq_eq: $⟚$ prec 1;
+
+--| @relation wff iff iff_refl iff_trans iff_sym _
+axiom iff_refl (a: wff): $ a ↔ a $;
+axiom iff_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom iff_sym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+
+--| @relation seq seq_eq seq_refl seq_trans seq_sym seq_mp
+axiom seq_refl (s: seq): $ s ⟚ s $;
+axiom seq_trans (s t u: seq): $ s ⟚ t $ > $ t ⟚ u $ > $ s ⟚ u $;
+axiom seq_sym (s t: seq): $ s ⟚ t $ > $ t ⟚ s $;
+axiom seq_mp (s t: seq): $ s ⟚ t $ > $ s $ > $ t $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a ↔ b $ > $ (g ⊢ a) ⟚ (h ⊢ b) $;
+axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+
+--| @hole _ty
+sort ty;
+sort tm;
+term arr (A B: ty): ty; infixr arr: $⇒$ prec 25;
+term lam (A: ty) {x: tm} (t: tm x): tm;
+notation lam (A: ty) {x: tm} (t: tm x): tm = ($λ$:20) x ($:$:12) A ($.$:0) t;
+term app (f u: tm): tm; infixl app: $·$ prec 70;
+term has_ty (t: tm) (A: ty): wff; infixl has_ty: $:$ prec 12;
+
+axiom t_lam (g: ctx) (A B: ty) {x: tm} (t: tm x):
+  $ g , x : A ⊢ t : B $ > $ g ⊢ (λ x : A. t) : A ⇒ B $;
+axiom t_app (g: ctx) (A B: ty) (f u: tm):
+  $ g ⊢ f : A ⇒ B $ > $ g ⊢ u : A $ > $ g ⊢ f · u : B $;
+
+theorem var_line (a b c: ty) {f k x: tm}:
+  $ _ , f : b ⇒ c , k : a ⇒ b , x : a ⊢ k : a ⇒ b $;
+theorem compose (a b c: ty) {f k x: tm}:
+  $ _ ⊢ (λ f : b ⇒ c. λ k : a ⇒ b. λ x : a. f · (k · x)) : (b ⇒ c) ⇒ (a ⇒ b) ⇒ a ⇒ c $;

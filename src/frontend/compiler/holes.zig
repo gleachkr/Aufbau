@@ -20,6 +20,7 @@ const ResolvedStructuralCombiner =
     @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
 const CompilerVars = @import("./vars.zig");
 const Idents = @import("../idents.zig");
+const Inference = @import("./inference.zig");
 
 const annotationMatchesTag = Idents.annotationMatchesTag;
 
@@ -28,13 +29,9 @@ pub const SortVarRegistry = CompilerVars.SortVarRegistry;
 
 pub const contains = SurfaceExpr.containsHole;
 pub const firstHoleSourceSpan = SurfaceExpr.firstHoleSourceSpan;
-pub const sortNameById = SurfaceExpr.sortNameById;
-pub const exprIdSortName = SurfaceExpr.exprIdSortName;
-pub const exprIdSort = SurfaceExpr.exprIdSort;
-pub const sortName = SurfaceExpr.parserSortName;
+const exprIdSortName = SurfaceExpr.exprIdSortName;
+const sortName = SurfaceExpr.parserSortName;
 pub const containsStructuralHole = SurfaceExpr.containsStructuralHole;
-pub const lowerStructuralHolesToUnits =
-    SurfaceExpr.lowerStructuralHolesToUnits;
 
 pub fn processSortHoleAnnotations(
     parser: *MM0Parser,
@@ -151,26 +148,6 @@ pub fn parseAssertion(
     return .{ .concrete = try theorem.internParsedExpr(expr) };
 }
 
-pub fn inferBindingsFromAssertion(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    rule: *const RuleDecl,
-    partial_bindings: []const ?ExprId,
-    ref_exprs: []const ExprId,
-    holey: *const Expr,
-) ![]const ExprId {
-    var report = InferenceReport{};
-    return try inferBindingsFromAssertionDetailed(
-        allocator,
-        theorem,
-        rule,
-        partial_bindings,
-        ref_exprs,
-        holey,
-        &report,
-    );
-}
-
 pub fn inferBindingsFromAssertionDetailed(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
@@ -193,7 +170,7 @@ pub fn inferBindingsFromAssertionDetailed(
         }
     }
 
-    if (!try matchTemplateToSurfaceDetailed(
+    if (!try matchTemplateToSurface(
         theorem,
         rule.concl,
         holey,
@@ -223,23 +200,7 @@ pub fn matchTemplateToSurface(
     template: TemplateExpr,
     holey: *const Expr,
     bindings: []?ExprId,
-) !bool {
-    var report = InferenceReport{};
-    return try matchTemplateToSurfaceDetailed(
-        theorem,
-        template,
-        holey,
-        bindings,
-        &report,
-    );
-}
-
-pub fn matchTemplateToSurfaceDetailed(
-    theorem: *TheoremContext,
-    template: TemplateExpr,
-    holey: *const Expr,
-    bindings: []?ExprId,
-    report: *InferenceReport,
+    report: ?*InferenceReport,
 ) !bool {
     switch (holey.*) {
         .hole => return true,
@@ -310,7 +271,7 @@ pub fn matchTemplateToSurfaceDetailed(
                     return false;
                 }
                 for (tmpl_app.args, holey_term.args) |tmpl_arg, holey_arg| {
-                    if (!try matchTemplateToSurfaceDetailed(
+                    if (!try matchTemplateToSurface(
                         theorem,
                         tmpl_arg,
                         holey_arg,
@@ -322,6 +283,21 @@ pub fn matchTemplateToSurfaceDetailed(
             },
         },
     }
+}
+
+/// `matchTemplateToSurface`, all or nothing: on a mismatch `bindings` goes
+/// back to what it was, using `snap` as scratch.
+pub fn foldTemplateToSurface(
+    theorem: *TheoremContext,
+    template: TemplateExpr,
+    holey: *const Expr,
+    bindings: []?ExprId,
+    snap: []?ExprId,
+) !bool {
+    @memcpy(snap, bindings);
+    if (try matchTemplateToSurface(theorem, template, holey, bindings, null)) return true;
+    @memcpy(bindings, snap);
+    return false;
 }
 
 /// Intern a holey surface with a fresh line hole for each hole, for use as an
@@ -336,87 +312,8 @@ pub fn internWithLineHoles(
     return SurfaceExpr.internHoley(theorem, env, holey, {}, mintLineHole);
 }
 
-fn mintLineHole(_: void, theorem: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
+pub fn mintLineHole(_: void, theorem: *TheoremContext, sort_name: []const u8) anyerror!?ExprId {
     return try theorem.addLineHolePlaceholder(sort_name);
-}
-
-pub fn matchesConcrete(
-    parser: *MM0Parser,
-    theorem: *const TheoremContext,
-    env: *const GlobalEnv,
-    holey: *const Expr,
-    concrete: ExprId,
-) !bool {
-    var report = ConcreteMatchReport{};
-    return try matchesConcreteDetailed(
-        parser,
-        theorem,
-        env,
-        holey,
-        concrete,
-        &report,
-    );
-}
-
-pub fn matchesConcreteDetailed(
-    parser: *MM0Parser,
-    theorem: *const TheoremContext,
-    env: *const GlobalEnv,
-    holey: *const Expr,
-    concrete: ExprId,
-    report: *ConcreteMatchReport,
-) !bool {
-    switch (holey.*) {
-        .hole => |hole| {
-            const actual_sort_name = try exprIdSortName(theorem, env, concrete);
-            const actual_sort = parser.core.sort_names.get(actual_sort_name) orelse {
-                return error.UnknownSort;
-            };
-            if (hole.sort == actual_sort) return true;
-            setConcreteFailure(report, .{ .hole_sort_mismatch = .{
-                .token = hole.token,
-                .token_span = hole.token_span,
-                .expected_sort_name = sortName(parser, hole.sort),
-                .actual_sort_name = actual_sort_name,
-            } });
-            return false;
-        },
-        .variable => {
-            const expr_id = try @constCast(theorem).internParsedExpr(holey);
-            if (expr_id == concrete) return true;
-            setConcreteFailure(report, .visible_structure_mismatch);
-            return false;
-        },
-        .term => |holey_term| {
-            const node = theorem.interner.node(concrete);
-            const concrete_app = switch (node.*) {
-                .app => |app| app,
-                else => {
-                    setConcreteFailure(report, .visible_structure_mismatch);
-                    return false;
-                },
-            };
-            if (holey_term.id != concrete_app.term_id) {
-                setConcreteFailure(report, .visible_structure_mismatch);
-                return false;
-            }
-            if (holey_term.args.len != concrete_app.args.len) {
-                setConcreteFailure(report, .visible_structure_mismatch);
-                return false;
-            }
-            for (holey_term.args, concrete_app.args) |arg, actual_arg| {
-                if (!try matchesConcreteDetailed(
-                    parser,
-                    theorem,
-                    env,
-                    arg,
-                    actual_arg,
-                    report,
-                )) return false;
-            }
-            return true;
-        },
-    }
 }
 
 /// Fill holes from the same visible positions in a selected candidate.
@@ -442,20 +339,10 @@ pub fn materializeSurfaceWithCandidate(
     }
 
     switch (holey.*) {
-        .hole => |hole| {
-            const actual_sort_name = try exprIdSortName(theorem, env, candidate);
-            const actual_sort = parser.core.sort_names.get(actual_sort_name) orelse {
-                return error.UnknownSort;
-            };
-            if (hole.sort == actual_sort) return candidate;
-            setConcreteFailure(report, .{ .hole_sort_mismatch = .{
-                .token = hole.token,
-                .token_span = hole.token_span,
-                .expected_sort_name = sortName(parser, hole.sort),
-                .actual_sort_name = actual_sort_name,
-            } });
-            return null;
-        },
+        .hole => |hole| return if (try holeFits(parser, theorem, env, hole, candidate, report))
+            candidate
+        else
+            null,
         .variable => unreachable,
         .term => |holey_term| {
             const node = theorem.interner.node(candidate);
@@ -615,16 +502,37 @@ fn materializeAgainstUnfolded(
 /// `filled` when it is `candidate` up to unfolding. A fill takes the line's
 /// hole-free parts as written, so a fill through a definition can disagree
 /// with the candidate where the def's body put them.
-fn keepIfConverts(
+pub fn keepIfConverts(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     candidate: ExprId,
     filled: ExprId,
 ) !?ExprId {
-    var def_ops = DefOps.Context.init(theorem.allocator, theorem, env);
-    defer def_ops.deinit();
-    if (try def_ops.compareTransparent(candidate, filled) == null) return null;
+    if (!try Inference.canConvertTransparent(theorem.allocator, theorem, env, candidate, filled))
+        return null;
     return filled;
+}
+
+/// The fill of `holey` from `candidate` (`materializeSurfaceWithCandidate`,
+/// which sees through the definitions the line keeps folded), when the filled
+/// line is `candidate` up to unfolding. Null otherwise.
+pub fn fillThroughDefs(
+    parser: *MM0Parser,
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    holey: *const Expr,
+    candidate: ExprId,
+) !?ExprId {
+    var report = ConcreteMatchReport{};
+    const filled = try materializeSurfaceWithCandidate(
+        parser,
+        theorem,
+        env,
+        holey,
+        candidate,
+        &report,
+    ) orelse return null;
+    return try keepIfConverts(theorem, env, candidate, filled);
 }
 
 /// The values a definition's arguments and hidden variables take when its
@@ -995,7 +903,7 @@ fn internWithFrame(
 /// with no nested holes may match either exactly or by transparent definition
 /// conversion; mixed trees still require the same visible head and arity before
 /// recursing into their arguments.
-pub fn matchesConcreteSemanticallyDetailed(
+pub fn matchesConcrete(
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
     theorem: *TheoremContext,
@@ -1037,20 +945,7 @@ fn matchesConcreteSemanticallyWithContext(
     }
 
     switch (holey.*) {
-        .hole => |hole| {
-            const actual_sort_name = try exprIdSortName(theorem, env, concrete);
-            const actual_sort = parser.core.sort_names.get(actual_sort_name) orelse {
-                return error.UnknownSort;
-            };
-            if (hole.sort == actual_sort) return true;
-            setConcreteFailure(report, .{ .hole_sort_mismatch = .{
-                .token = hole.token,
-                .token_span = hole.token_span,
-                .expected_sort_name = sortName(parser, hole.sort),
-                .actual_sort_name = actual_sort_name,
-            } });
-            return false;
-        },
+        .hole => |hole| return try holeFits(parser, theorem, env, hole, concrete, report),
         .variable => unreachable,
         .term => |holey_term| {
             const node = theorem.interner.node(concrete);
@@ -1085,10 +980,33 @@ fn matchesConcreteSemanticallyWithContext(
     }
 }
 
+/// True when `expr` has the sort of `hole`; otherwise records the mismatch.
+fn holeFits(
+    parser: *MM0Parser,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    hole: anytype,
+    expr: ExprId,
+    report: *ConcreteMatchReport,
+) !bool {
+    const actual_sort_name = try exprIdSortName(theorem, env, expr);
+    const actual_sort = parser.core.sort_names.get(actual_sort_name) orelse
+        return error.UnknownSort;
+    if (hole.sort == actual_sort) return true;
+    setConcreteFailure(report, .{ .hole_sort_mismatch = .{
+        .token = hole.token,
+        .token_span = hole.token_span,
+        .expected_sort_name = sortName(parser, hole.sort),
+        .actual_sort_name = actual_sort_name,
+    } });
+    return false;
+}
+
 fn setInferenceFailure(
-    report: *InferenceReport,
+    maybe_report: ?*InferenceReport,
     failure: InferenceFailure,
 ) void {
+    const report = maybe_report orelse return;
     if (report.failure == null) report.failure = failure;
 }
 
@@ -1255,12 +1173,15 @@ test "holey matching checks concrete hole sorts" {
         "_wff -> b -> _wff",
         &fixture.vars,
     );
+    var report = ConcreteMatchReport{};
     try std.testing.expect(try matchesConcrete(
+        arena.allocator(),
         &fixture.parser,
         &fixture.theorem,
         &fixture.env,
         holey,
         concrete,
+        &report,
     ));
 
     const wrong_hole = try arena.allocator().create(Expr);
@@ -1269,12 +1190,15 @@ test "holey matching checks concrete hole sorts" {
         .token = "_obj",
     } };
     try std.testing.expect(!try matchesConcrete(
+        arena.allocator(),
         &fixture.parser,
         &fixture.theorem,
         &fixture.env,
         wrong_hole,
         fixture.theorem.theorem_vars.items[0],
+        &report,
     ));
+    try std.testing.expectEqual(.hole_sort_mismatch, std.meta.activeTag(report.failure.?));
 }
 
 test "holey template matching binds visible conclusion structure" {
@@ -1296,6 +1220,7 @@ test "holey template matching binds visible conclusion structure" {
         rule.concl,
         holey,
         partial,
+        null,
     ));
     try std.testing.expect(partial[0] == null);
     try std.testing.expect(partial[1] != null);
@@ -1324,6 +1249,7 @@ test "holey template matching leaves a binder facing a holey subterm unbound" {
         rule.concl,
         later_concrete,
         partial,
+        null,
     ));
     try std.testing.expect(partial[0] != null);
     try std.testing.expectEqual(b, partial[1].?);
@@ -1340,6 +1266,7 @@ test "holey template matching leaves a binder facing a holey subterm unbound" {
         rule.concl,
         holey_only,
         partial,
+        null,
     ));
     try std.testing.expectEqual(a, partial[0].?);
     try std.testing.expectEqual(b, partial[1].?);

@@ -130,8 +130,10 @@ the entire `@fallback` chain.
 
 The checked lines stay concrete: a holey surface expression never
 reaches the checked IR until every hole has been filled, so the checked
-IR and MMB emitter remain unchanged. The one holey thing interned is an
-inline sub-proof's expected goal (below), which is only a hint.
+IR and MMB emitter remain unchanged. A holey expression is interned only
+as something to match against, with a line hole for each hole: the line
+itself during inference, and an inline sub-proof's expected goal
+(below), which is only a hint.
 
 ### Hole-free fast path is preserved
 
@@ -149,7 +151,10 @@ For a holey line, every candidate (the named rule plus any
 2. match the visible (non-hole) structure of the user's assertion
    against the candidate's conclusion template, using `@view`,
    `@recover`, `@abstract`, and automatic normalized comparison where
-   needed;
+   needed. A rule variable facing a part with a hole takes nothing from
+   it, but the value it gets elsewhere must fit that part's visible
+   structure: `$ p , p -> q |- _wff -> q $ by ax []` takes `a := p -> q`,
+   not the smaller split `a := p`;
 3. instantiate the candidate's concrete conclusion;
 4. compare that concrete conclusion against the holey surface
    assertion: every visible position must match (exactly or via

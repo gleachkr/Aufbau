@@ -2,7 +2,6 @@ const std = @import("std");
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RuleDecl = @import("./env.zig").RuleDecl;
 const Expr = @import("../trusted/expressions.zig").Expr;
-const SurfaceExpr = @import("./surface_expr.zig");
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const ExprModule = @import("./expr.zig");
 const ExprId = @import("./expr.zig").ExprId;
@@ -40,10 +39,12 @@ pub const AmbiguityReport = Ambiguity.AmbiguityReport;
 
 const ConclusionConstraint = union(enum) {
     concrete: ExprId,
-    surface: *const Expr,
-    /// An interned conclusion whose placeholders are holes: an inline
-    /// minor's hint from a holey goal.
+    /// An interned conclusion whose placeholders are holes: a holey line
+    /// (`Holes.internWithLineHoles`) or an inline minor's hint from a holey
+    /// goal.
     holey: ExprId,
+    /// A whole-line hole: the conclusion constrains nothing.
+    unconstrained,
 };
 
 /// Which rule-application region a constraint filters against. Hypothesis
@@ -267,31 +268,18 @@ pub const Solver = struct {
         );
     }
 
-    pub fn solveHoleyConclusion(
+    /// Solve against a conclusion whose placeholders are holes: a holey line
+    /// or a holey hint. Null is a whole-line hole.
+    pub fn solveHoley(
         self: *Solver,
         partial_bindings: []const ?ExprId,
         ref_exprs: []const ExprId,
-        holey_concl: *const Expr,
+        holey: ?ExprId,
     ) anyerror![]const ExprId {
         return try self.solveWithConclusion(
             partial_bindings,
             ref_exprs,
-            .{ .surface = holey_concl },
-        );
-    }
-
-    /// Solve against a hint whose placeholders are holes, as
-    /// `solveHoleyConclusion` does against a surface with holes.
-    pub fn solveHoleyHint(
-        self: *Solver,
-        partial_bindings: []const ?ExprId,
-        ref_exprs: []const ExprId,
-        hint: ExprId,
-    ) anyerror![]const ExprId {
-        return try self.solveWithConclusion(
-            partial_bindings,
-            ref_exprs,
-            .{ .holey = hint },
+            if (holey) |expr| .{ .holey = expr } else .unconstrained,
         );
     }
 
@@ -344,9 +332,9 @@ pub const Solver = struct {
             );
             states = try self.materializeMatchStates(states.items, .rule);
             states = try self.finalizeStructuralStates(states.items, .rule);
-            if (conclusion == .holey) {
-                states = try self.keepStatesFittingHint(states.items, conclusion.holey);
-            }
+        }
+        if (conclusion == .holey) {
+            states = try self.keepStatesFittingHint(states.items, conclusion.holey);
         }
 
         // The result and ambiguity report must outlive the arena, so build them
@@ -430,18 +418,17 @@ pub const Solver = struct {
                     .conclusion,
                 );
             },
-            .surface => |actual| try self.applySurfaceConstraint(
-                states,
-                template,
-                actual,
-                space,
-            ),
             .holey => |actual| try self.applyHoleyConstraint(
                 states,
                 template,
                 actual,
                 space,
             ),
+            .unconstrained => blk: {
+                var next = std.ArrayListUnmanaged(BranchState){};
+                try next.appendSlice(self.allocator, states);
+                break :blk next;
+            },
         };
     }
 
@@ -499,95 +486,6 @@ pub const Solver = struct {
         return current;
     }
 
-    fn applySurfaceConstraint(
-        self: *Solver,
-        states: []const BranchState,
-        template: TemplateExpr,
-        actual: *const Expr,
-        space: BinderSpace,
-    ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var next = std.ArrayListUnmanaged(BranchState){};
-        for (states) |state| {
-            const matches = try self.matchSurfaceExpr(
-                template,
-                actual,
-                space,
-                state,
-            );
-            try next.appendSlice(self.allocator, matches);
-        }
-        if (next.items.len == 0) {
-            self.failure = .{ .region = .conclusion, .actual = null };
-            return error.UnifyMismatch;
-        }
-        return next;
-    }
-
-    fn matchSurfaceExpr(
-        self: *Solver,
-        template: TemplateExpr,
-        actual: *const Expr,
-        space: BinderSpace,
-        state: BranchState,
-    ) anyerror![]BranchState {
-        if (actual.* == .hole) {
-            const out = try self.allocator.alloc(BranchState, 1);
-            out[0] = try BranchStateOps.cloneState(self, state);
-            return out;
-        }
-
-        if (!SurfaceExpr.containsHole(actual)) {
-            const actual_id = try self.theorem.internParsedExpr(actual);
-            return try StructuralMatcher.matchExpr(
-                self,
-                template,
-                actual_id,
-                space,
-                state,
-            );
-        }
-
-        return switch (template) {
-            .binder => blk: {
-                const out = try self.allocator.alloc(BranchState, 1);
-                out[0] = try BranchStateOps.cloneState(self, state);
-                break :blk out;
-            },
-            .app => |app| blk: {
-                const actual_term = switch (actual.*) {
-                    .term => |term| term,
-                    .variable, .hole => break :blk &.{},
-                };
-                if (actual_term.id != app.term_id or
-                    actual_term.args.len != app.args.len)
-                {
-                    break :blk &.{};
-                }
-
-                var states = std.ArrayListUnmanaged(BranchState){};
-                try states.append(
-                    self.allocator,
-                    try BranchStateOps.cloneState(self, state),
-                );
-                for (app.args, actual_term.args) |tmpl_arg, actual_arg| {
-                    var next = std.ArrayListUnmanaged(BranchState){};
-                    for (states.items) |current| {
-                        const matches = try self.matchSurfaceExpr(
-                            tmpl_arg,
-                            actual_arg,
-                            space,
-                            current,
-                        );
-                        try next.appendSlice(self.allocator, matches);
-                    }
-                    if (next.items.len == 0) break :blk &.{};
-                    states = next;
-                }
-                break :blk try states.toOwnedSlice(self.allocator);
-            },
-        };
-    }
-
     fn applyHoleyConstraint(
         self: *Solver,
         states: []const BranchState,
@@ -607,8 +505,8 @@ pub const Solver = struct {
         return next;
     }
 
-    /// `matchSurfaceExpr` over an interned expression whose placeholders are
-    /// holes: a placeholder matches anything, a binder facing a subterm with
+    /// Match against an interned expression whose placeholders are holes: a
+    /// placeholder matches anything, a binder facing a subterm with
     /// one fixes nothing, and a placeholder-free subterm matches structurally.
     fn matchHoleyExpr(
         self: *Solver,
@@ -662,7 +560,7 @@ pub const Solver = struct {
             } else true;
             if (complete) {
                 const concl = try self.theorem.instantiateTemplate(self.rule.concl, bindings);
-                if (!fitsHoleySkeleton(self.theorem, self.registry, concl, hint)) continue;
+                if (!try self.fitsHoleySkeleton(concl, hint)) continue;
             }
             try next.append(self.allocator, state);
         }
@@ -673,24 +571,24 @@ pub const Solver = struct {
         return next;
     }
 
-    /// True unless `expr` and `hint` differ at a head both show: a hole
-    /// matches anything, and a hole-free part was matched already. Under an
-    /// ACUI combiner members line up only modulo order, so it is not checked.
-    fn fitsHoleySkeleton(
-        theorem: *const TheoremContext,
-        registry: *const RewriteRegistry,
-        expr: ExprId,
-        hint: ExprId,
-    ) bool {
-        if (expr == hint or !theorem.containsPlaceholder(hint)) return true;
-        const hint_node = theorem.interner.node(hint);
+    /// True unless `expr` and `hint` differ where the hint shows something:
+    /// a hole matches anything, and a hole-free part must agree. That part
+    /// was not necessarily matched already: a rule variable facing a holey
+    /// subterm took nothing from it. Under an ACUI combiner members line up
+    /// only modulo order, so it is not checked.
+    fn fitsHoleySkeleton(self: *Solver, expr: ExprId, hint: ExprId) anyerror!bool {
+        if (expr == hint) return true;
+        if (!self.theorem.containsPlaceholder(hint)) {
+            return try SemanticCompare.bindingCompatible(self, expr, hint);
+        }
+        const hint_node = self.theorem.interner.node(hint);
         if (hint_node.* != .app) return true;
-        const node = theorem.interner.node(expr);
+        const node = self.theorem.interner.node(expr);
         if (node.* != .app or node.app.term_id != hint_node.app.term_id or
             node.app.args.len != hint_node.app.args.len) return false;
-        if (registry.hasStructuralCombiner(hint_node.app.term_id)) return true;
+        if (self.registry.hasStructuralCombiner(hint_node.app.term_id)) return true;
         for (node.app.args, hint_node.app.args) |arg, hint_arg| {
-            if (!fitsHoleySkeleton(theorem, registry, arg, hint_arg)) return false;
+            if (!try self.fitsHoleySkeleton(arg, hint_arg)) return false;
         }
         return true;
     }

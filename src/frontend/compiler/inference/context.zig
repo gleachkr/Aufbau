@@ -169,8 +169,7 @@ pub const InferenceContext = struct {
         self: *const InferenceContext,
         expr_id: ExprId,
     ) bool {
-        if (!self.theorem.hasMetaPlaceholders() and
-            !self.theorem.hasLineHoles()) return false;
+        if (!self.theorem.mayHoldMetaLeaves()) return false;
         return self.exprContainsMetaWildcardWalk(expr_id);
     }
 

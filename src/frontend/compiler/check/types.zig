@@ -110,6 +110,32 @@ pub const LineAssertion = union(enum) {
     }
 };
 
+/// What a line asks of its rule's conclusion: the expected-conclusion hint
+/// when there is one, else the line's own assertion. Null for an implicit
+/// whole conclusion with no hint.
+pub const LineGoal = union(enum) {
+    expr: ExprId,
+    holey: *const Expr,
+
+    pub fn of(hint: ?ExprId, line_assertion: LineAssertion) ?LineGoal {
+        if (hint) |expr| return .{ .expr = expr };
+        return switch (line_assertion) {
+            .concrete => |expr| .{ .expr = expr },
+            .holey => |holey| .{ .holey = holey },
+            .implicit_whole_conclusion => null,
+        };
+    }
+
+    /// The goal when it is an interned expression; null for a holey line or
+    /// no goal.
+    pub fn interned(hint: ?ExprId, line_assertion: LineAssertion) ?ExprId {
+        return switch (of(hint, line_assertion) orelse return null) {
+            .expr => |expr| expr,
+            .holey => null,
+        };
+    }
+};
+
 pub const CandidateElaboration = struct {
     resolved_bindings: []const ExprId,
     raw_conclusion: ExprId,

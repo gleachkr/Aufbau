@@ -183,11 +183,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   gets `‹hole› -> (p -> p)`. Before, `mp`'s `a` was open until a child was
   checked and each child needed the other's `a`, so `bi1`'s variables could
   not be determined without `mp (a := $ p <-> p $)`.
-- An inline sub-proof solved against a goal with a hole in it now keeps to
-  the goal's visible structure around the hole. `$ p , p -> q |- q $ by
-  imp_elim [ax [], ax []]` now checks. Before, the first `ax` took `a := p`
-  from the context, though its goal `p , p -> q |- ‹hole› -> q` needs a
-  member of the shape `_ -> q`.
+- A holey line, and an inline sub-proof solved against a goal with a hole
+  in it, now keep to the visible structure around the hole.
+  `$ p , p -> q |- _wff -> q $ by ax []` and `$ p , p -> q |- q $ by
+  imp_elim [ax [], ax []]` now check. Before, `ax` took `a := p` from the
+  context, though the goal needs a member of the shape `_ -> q`. With the
+  generic `ax` as the typing rule for variables,
+  `$ _ , f : b ⇒ c , k : a ⇒ b ⊢ k : _ty $ by ax []` now picks `k`'s entry.
 - A holey line whose visible parts match the rule only after unfolding a
   definition now checks. With `img f B` defined as `sep y B (R f y)`,
   `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's

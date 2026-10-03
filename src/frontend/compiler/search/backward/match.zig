@@ -100,7 +100,7 @@ fn templateHasNewBinding(
 /// open carry-to-leaf witness rides inside a (possibly rigid) bound value.
 /// O(1) short-circuit when the theorem has no metas at all.
 fn snapshotEmbedsMeta(theorem: *const TheoremContext, snapshot: []const ?ExprId) bool {
-    if (!theorem.hasMetaPlaceholders()) return false;
+    if (!theorem.mayHoldMetaLeaves()) return false;
     for (snapshot) |maybe| {
         const v = maybe orelse continue;
         if (seed.exprContainsMetaLeafWalk(theorem, v)) return true;

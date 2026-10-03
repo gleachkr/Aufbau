@@ -1,0 +1,7 @@
+var_line
+--------
+l1: $ _ , f : b ⇒ c , k : a ⇒ b , x : a ⊢ k : _ty $ by ax []
+
+compose
+-------
+l1: $ _ ⊢ (λ f : b ⇒ c. λ k : a ⇒ b. λ x : a. f · (k · x)) : _ty $ by t_lam [t_lam [t_lam [t_app [ax [], t_app [ax [], ax []]]]]]

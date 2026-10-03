@@ -1,0 +1,62 @@
+-- A holey line drops a context split its visible parts rule out, as an
+-- inline sub-proof's holey hint does. In `$ p , p -> q |- _wff -> q $` by
+-- `ax`, `a` must be `p -> q`: the smaller split `a := p` would leave the
+-- visible `-> q` unmatched.
+
+delimiter $ ( ) $;
+--| @hole _wff
+provable sort wff;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @hole _ctx
+sort ctx;
+
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($E$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $|-$ prec 0;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ (g |- a) <-> (h |- b) $;
+
+axiom ax (g: ctx) (a: wff): $ g , a |- a $;
+axiom imp_elim (g: ctx) (a b: wff):
+  $ g |- a -> b $ > $ g |- a $ > $ g |- b $;
+
+theorem mp_ax (p q: wff): $ p , p -> q |- q $;

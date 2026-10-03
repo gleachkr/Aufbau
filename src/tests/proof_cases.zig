@@ -336,6 +336,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_hole_child_hint", .outcome = .pass },
     // A variable met twice under holes takes both visible parts.
     .{ .stem = "pass_hole_merged_faces", .outcome = .pass },
+    .{ .stem = "pass_hole_line_hint_skeleton", .outcome = .pass },
+    .{ .stem = "pass_hole_generic_ax_typing", .outcome = .pass },
     // On a holey line, the sibling refs to an inline sub-proof's left fix
     // the variables its hint needs.
     .{ .stem = "pass_hole_sibling_hint", .outcome = .pass },

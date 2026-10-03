@@ -457,8 +457,7 @@ fn collectHoleInferences(
     // differ in shape: it unfolds a definition the line keeps folded
     // (`_wff -> c e. img f B` checks as `... sep x B (R f x)`). Keep the
     // checked line when the filled one is not the same up to unfolding.
-    const concrete = fillAsWritten(
-        allocator,
+    const fill = Holes.fillThroughDefs(
         parser,
         theorem,
         env,
@@ -467,8 +466,9 @@ fn collectHoleInferences(
     ) catch |err| switch (err) {
         error.OutOfMemory => return err,
         // Editor-only display: a failed fill must not fail the check.
-        else => checked_line,
+        else => null,
     };
+    const concrete = fill orelse checked_line;
     var names = try ViewTrace.DiagNames.build(
         allocator,
         theorem,
@@ -576,36 +576,6 @@ fn filledLineChecks(
     CheckedIr.validateLinesCached(&probe_theorem, scratch.items[checked_mark..]) catch
         return false;
     return true;
-}
-
-/// `surface` filled from `checked_line`, when that is `checked_line` up to
-/// unfolding; `checked_line` otherwise.
-fn fillAsWritten(
-    allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    theorem: *TheoremContext,
-    env: *const GlobalEnv,
-    surface: *const Expr,
-    checked_line: ExprId,
-) !ExprId {
-    var report = Holes.ConcreteMatchReport{};
-    const filled = try Holes.materializeSurfaceWithCandidate(
-        parser,
-        theorem,
-        env,
-        surface,
-        checked_line,
-        &report,
-    ) orelse return checked_line;
-    if (filled == checked_line) return checked_line;
-    if (!try Inference.canConvertTransparent(
-        allocator,
-        theorem,
-        env,
-        checked_line,
-        filled,
-    )) return checked_line;
-    return filled;
 }
 
 fn collectHoleInferencesRecursive(

@@ -354,7 +354,7 @@ pub fn exprContainsMetaLeaf(
     theorem: *const TheoremContext,
     expr_id: ExprId,
 ) bool {
-    if (!theorem.hasMetaPlaceholders()) return false;
+    if (!theorem.mayHoldMetaLeaves()) return false;
     return exprContainsMetaLeafWalk(theorem, expr_id);
 }
 

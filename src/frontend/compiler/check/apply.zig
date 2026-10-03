@@ -62,6 +62,7 @@ const UnresolvedHypothesis = @import("./types.zig").UnresolvedHypothesis;
 const ConclusionProbe = @import("./types.zig").ConclusionProbe;
 const RefExpectationProbe = @import("./types.zig").RefExpectationProbe;
 const LineAssertion = @import("./types.zig").LineAssertion;
+const LineGoal = @import("./types.zig").LineGoal;
 const ApplicationDiagnosticContext = @import("./types.zig").ApplicationDiagnosticContext;
 const ApplicationLine = @import("./types.zig").ApplicationLine;
 const RuleApplyContext = @import("./types.zig").RuleApplyContext;
@@ -1564,13 +1565,8 @@ fn refinedInlineHint(
         if (!holey) return existing_hint;
     }
 
-    const goal: LineGoal = if (expected_conclusion_hint) |hint|
-        .{ .expr = hint }
-    else switch (line_assertion) {
-        .concrete => |expr| .{ .expr = expr },
-        .holey => |holey| .{ .holey = holey },
-        .implicit_whole_conclusion => return existing_hint,
-    };
+    const goal = LineGoal.of(expected_conclusion_hint, line_assertion) orelse
+        return existing_hint;
 
     const allocator = context.allocator;
     const bindings = try allocator.alloc(?ExprId, partial_bindings.len);
@@ -1605,13 +1601,6 @@ fn refinedInlineHint(
     return existing_hint;
 }
 
-/// The goal `refinedInlineHint` folds through the rule's conclusion: an
-/// interned expression, or a holey line's surface.
-const LineGoal = union(enum) {
-    expr: ExprId,
-    holey: *const Expr,
-};
-
 /// Fold `goal` through `rule`'s conclusion all-or-nothing. A holey line fixes
 /// only the binders its hole-free parts determine.
 fn foldLineGoal(
@@ -1623,17 +1612,7 @@ fn foldLineGoal(
 ) !void {
     switch (goal) {
         .expr => |expr| foldTemplateOrRestore(theorem, rule.concl, expr, bindings, snap),
-        .holey => |holey| {
-            @memcpy(snap, bindings);
-            var report = Holes.InferenceReport{};
-            if (!try Holes.matchTemplateToSurfaceDetailed(
-                theorem,
-                rule.concl,
-                holey,
-                bindings,
-                &report,
-            )) @memcpy(bindings, snap);
-        },
+        .holey => |holey| _ = try Holes.foldTemplateToSurface(theorem, rule.concl, holey, bindings, snap),
     }
 }
 

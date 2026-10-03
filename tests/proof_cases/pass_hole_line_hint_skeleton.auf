@@ -1,0 +1,5 @@
+mp_ax
+-----
+l1: $ p , p -> q |- _wff -> q $ by ax []
+l2: $ p , p -> q |- p $ by ax []
+l3: $ p , p -> q |- q $ by imp_elim [l1, l2]

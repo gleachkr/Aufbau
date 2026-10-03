@@ -285,16 +285,8 @@ fn matchRawTemplateToHoleyConclusion(
     bindings: []?ExprId,
     holey: *const Expr,
 ) !void {
-    var report = Holes.InferenceReport{};
-    if (!try Holes.matchTemplateToSurfaceDetailed(
-        theorem,
-        rule.concl,
-        holey,
-        bindings,
-        &report,
-    )) {
+    if (!try Holes.matchTemplateToSurface(theorem, rule.concl, holey, bindings, null))
         return error.HoleyInferenceMismatch;
-    }
 }
 
 pub fn validateOptionalBindingsForProbe(
@@ -553,13 +545,14 @@ pub fn inferCandidateBindings(
                     false;
                 if (expected_conclusion_hint) |hint| holey_hint: {
                     if (!holey_goal_hint) break :holey_hint;
-                    if (try Inference.tryInferHoleyHintStructuralSolver(
+                    if (try Inference.tryInferHoleyStructuralSolver(
                         self,
                         context,
                         line,
                         partial_bindings,
                         base_ref_exprs,
                         hint,
+                        null,
                         maybe_view,
                     )) |hint_bindings| {
                         restoreDiagnostic(self, null);
@@ -831,7 +824,7 @@ fn validateHoleyAssertionAgainstCandidate(
     // does not match the visible surface, normalized and materialized checks
     // below still handle normalized conclusions.
     var hole_report = Holes.ConcreteMatchReport{};
-    if (try holeyAssertionMatchesCandidate(
+    if (try Holes.matchesConcrete(
         allocator,
         parser,
         theorem,
@@ -856,7 +849,7 @@ fn validateHoleyAssertionAgainstCandidate(
     );
     if (normalized_line != expected_line) {
         var normalized_report = Holes.ConcreteMatchReport{};
-        if (try holeyAssertionMatchesCandidate(
+        if (try Holes.matchesConcrete(
             allocator,
             parser,
             theorem,
@@ -870,6 +863,12 @@ fn validateHoleyAssertionAgainstCandidate(
         hole_report = normalized_report;
     }
 
+    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env);
+    defer canonicalizer.cache.deinit();
+
+    // Each fill below is computed once. When the normalized line differs,
+    // `can_materialize` holds, and a positional fill of `expected_line` that
+    // is not null is returned at once.
     const can_materialize = normalized_line != expected_line or
         try Holes.containsStructuralHole(env, registry, holey);
     if (can_materialize) {
@@ -883,11 +882,11 @@ fn validateHoleyAssertionAgainstCandidate(
             &materialized_report,
         );
         if (try fillAcuiFrameIfPositionalMisses(
-            allocator,
             parser,
             theorem,
             env,
             registry,
+            &canonicalizer,
             holey,
             expected_line,
             positional,
@@ -905,16 +904,18 @@ fn validateHoleyAssertionAgainstCandidate(
     // structure when both canonicalize to one expression; the conclusion line
     // then bridges it to the raw conclusion like any normalized one.
     var acui_report = Holes.ConcreteMatchReport{};
-    if (try Holes.materializeSurfaceWithCandidate(
-        parser,
-        theorem,
-        env,
-        holey,
-        normalized_line,
-        &acui_report,
-    )) |materialized_line| {
-        var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env);
-        defer canonicalizer.cache.deinit();
+    const normalized_fill = if (normalized_line == expected_line and can_materialize)
+        null
+    else
+        try Holes.materializeSurfaceWithCandidate(
+            parser,
+            theorem,
+            env,
+            holey,
+            normalized_line,
+            &acui_report,
+        );
+    if (normalized_fill) |materialized_line| {
         if (try canonicalizer.canonicalize(materialized_line) ==
             try canonicalizer.canonicalize(normalized_line))
         {
@@ -925,24 +926,11 @@ fn validateHoleyAssertionAgainstCandidate(
     // The visible parts can equal the candidate only after unfolding a
     // definition the line keeps folded: `img f _set` against the rule's
     // `sep z B (R f z)`. The fill sees through the definition; keep it when
-    // the filled line is the candidate up to unfolding.
-    if (try fillThroughDefs(
-        allocator,
-        parser,
-        theorem,
-        env,
-        holey,
-        expected_line,
-    )) |filled_line| return filled_line;
-    if (normalized_line != expected_line) {
-        if (try fillThroughDefs(
-            allocator,
-            parser,
-            theorem,
-            env,
-            holey,
-            normalized_line,
-        )) |filled_line| return filled_line;
+    // the filled line is the candidate up to unfolding. (The fill of
+    // `expected_line` is null here when it differs from `normalized_line`.)
+    if (normalized_fill) |filled| {
+        if (try Holes.keepIfConverts(theorem, env, normalized_line, filled)) |line_expr|
+            return line_expr;
     }
 
     const general_report = if (hole_report.failure) |failure|
@@ -973,52 +961,20 @@ fn validateHoleyAssertionAgainstCandidate(
     return error.HoleConclusionMismatch;
 }
 
-/// The fill of `holey` from `candidate` through the definitions the line
-/// keeps folded (`Holes.materializeSurfaceWithCandidate`), when the filled
-/// line equals `candidate` up to unfolding. Null otherwise.
-fn fillThroughDefs(
-    allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    theorem: *TheoremContext,
-    env: *const GlobalEnv,
-    holey: *const Expr,
-    candidate: ExprId,
-) !?ExprId {
-    var report = Holes.ConcreteMatchReport{};
-    const filled = try Holes.materializeSurfaceWithCandidate(
-        parser,
-        theorem,
-        env,
-        holey,
-        candidate,
-        &report,
-    ) orelse return null;
-    if (!try Inference.canConvertTransparent(
-        allocator,
-        theorem,
-        env,
-        candidate,
-        filled,
-    )) return null;
-    return filled;
-}
-
 /// The out-of-order fill of an ACUI combination's hole, when the positional
 /// fill does not equal `candidate` modulo ACUI and the out-of-order one does.
 /// Null leaves the positional fill to the later checks, as before.
 fn fillAcuiFrameIfPositionalMisses(
-    allocator: std.mem.Allocator,
     parser: *MM0Parser,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
+    canonicalizer: *Canonicalizer,
     holey: *const Expr,
     candidate: ExprId,
     positional: ?ExprId,
 ) !?ExprId {
     if (!registry.hasStructuralCombiners()) return null;
-    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env);
-    defer canonicalizer.cache.deinit();
     const canonical_candidate = try canonicalizer.canonicalize(candidate);
     if (positional) |materialized_line| {
         const canonical = try canonicalizer.canonicalize(materialized_line);
@@ -1029,50 +985,12 @@ fn fillAcuiFrameIfPositionalMisses(
         theorem,
         env,
         registry,
-        &canonicalizer,
+        canonicalizer,
         holey,
         candidate,
     ) orelse return null;
     const canonical = try canonicalizer.canonicalize(framed_line);
     return if (canonical == canonical_candidate) framed_line else null;
-}
-
-fn holeyAssertionMatchesCandidate(
-    allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    theorem: *TheoremContext,
-    env: *const GlobalEnv,
-    holey: *const Expr,
-    candidate: ExprId,
-    report: *Holes.ConcreteMatchReport,
-) !bool {
-    var exact_report = Holes.ConcreteMatchReport{};
-    if (try Holes.matchesConcreteDetailed(
-        parser,
-        theorem,
-        env,
-        holey,
-        candidate,
-        &exact_report,
-    )) {
-        return true;
-    }
-
-    var semantic_report = Holes.ConcreteMatchReport{};
-    if (try Holes.matchesConcreteSemanticallyDetailed(
-        allocator,
-        parser,
-        theorem,
-        env,
-        holey,
-        candidate,
-        &semantic_report,
-    )) {
-        return true;
-    }
-
-    report.* = semantic_report;
-    return false;
 }
 
 pub fn parseBindings(

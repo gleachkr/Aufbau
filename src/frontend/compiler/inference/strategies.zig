@@ -850,60 +850,6 @@ pub fn inferBindingsByMatchSeedState(
     );
 }
 
-fn matchRulePartSurfaceWithRollback(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    session: *DefOps.RuleMatchSession,
-    template: TemplateExpr,
-    actual: *const Expr,
-) !bool {
-    var snapshot = try session.saveSeedState();
-    defer snapshot.deinit(allocator);
-
-    if (try matchRulePartSurface(theorem, session, template, actual)) {
-        return true;
-    }
-    try session.restoreFromSeedState(&snapshot);
-    return false;
-}
-
-fn matchRulePartSurface(
-    theorem: *TheoremContext,
-    session: *DefOps.RuleMatchSession,
-    template: TemplateExpr,
-    actual: *const Expr,
-) !bool {
-    if (actual.* == .hole) return true;
-    // A hole-free part is an ordinary expression: match it with def
-    // unfolding, like a concrete line, rather than head by head.
-    if (!SurfaceExpr.containsHole(actual)) {
-        const actual_id = try theorem.internParsedExpr(actual);
-        return try session.matchTransparentOrSemantic(template, actual_id);
-    }
-    return switch (template) {
-        .binder => true,
-        .app => |app| blk: {
-            const actual_term = switch (actual.*) {
-                .term => |term| term,
-                .variable, .hole => break :blk false,
-            };
-            if (actual_term.id != app.term_id) break :blk false;
-            if (actual_term.args.len != app.args.len) break :blk false;
-            for (app.args, actual_term.args) |tmpl_arg, actual_arg| {
-                if (!try matchRulePartSurface(
-                    theorem,
-                    session,
-                    tmpl_arg,
-                    actual_arg,
-                )) {
-                    break :blk false;
-                }
-            }
-            break :blk true;
-        },
-    };
-}
-
 /// Match a holey line's conclusion by transparent rule matching, with the
 /// holes interned as line holes that match anything
 /// (`line_holes_match_anything`). This reaches a hole under a definition the
@@ -921,8 +867,9 @@ fn matchRulePartHoleyInterned(
     var snapshot = try session.saveSeedState();
     defer snapshot.deinit(allocator);
 
+    const saved = session.shared.line_holes_match_anything;
     session.shared.line_holes_match_anything = true;
-    defer session.shared.line_holes_match_anything = false;
+    defer session.shared.line_holes_match_anything = saved;
     if (try session.matchTransparentOrSemantic(template, holey_id)) return true;
     try session.restoreFromSeedState(&snapshot);
     return false;
@@ -960,13 +907,8 @@ fn finishHoleyRuleMatchSession(
         return .{ .no_match = hypothesisMismatch(hyp_idx, ref_expr) };
     }
 
-    const matched_concl = try matchRulePartSurfaceWithRollback(
-        allocator,
-        theorem,
-        session,
-        rule.concl,
-        holey_concl,
-    ) or try matchRulePartNormalizedSurface(
+    // A whole-line hole matches any conclusion.
+    const matched_concl = holey_concl.* == .hole or try matchRulePartNormalizedSurface(
         allocator,
         env,
         registry,
@@ -1068,7 +1010,7 @@ pub fn inferBindingsFromHoleyAdvanced(
     const assertion = context.assertion;
     const rule = context.rule;
 
-    if (try tryInferHoleyStructuralSolver(
+    if (try tryInferHoleyLineStructuralSolver(
         self,
         context,
         line,
@@ -1175,7 +1117,7 @@ pub fn inferBindingsFromHoleyAdvanced(
 // Use the structural solver for holey conclusions, even when the visible
 // hole is not itself a structural sort. A whole-line `_wff` can hide an `nd`
 // conclusion whose context binder is recoverable only from ACUI hypotheses.
-fn tryInferHoleyStructuralSolver(
+fn tryInferHoleyLineStructuralSolver(
     self: *CompilerContext,
     context: *const RuleInferenceContext,
     line: anytype,
@@ -1184,88 +1126,52 @@ fn tryInferHoleyStructuralSolver(
     holey_concl: *const Expr,
     maybe_view: ?ViewDecl,
 ) !?[]const ExprId {
-    const allocator = context.allocator;
-    const env = context.env;
-    const registry = context.registry;
-    const scratch = context.scratch;
-    const theorem = context.theorem;
-    const assertion = context.assertion;
-    const rule_id = context.rule_id;
-    const rule = context.rule;
-
-    const has_structural_hole = try SurfaceExpr.containsStructuralHole(
-        env,
-        registry,
-        holey_concl,
-    );
-    if (!has_structural_hole and !SurfaceExpr.containsHole(holey_concl)) {
-        return null;
-    }
-
-    const minimal_line = if (has_structural_hole)
-        try SurfaceExpr.lowerStructuralHolesToUnits(
-            theorem,
-            env,
-            registry,
-            holey_concl,
-        )
+    if (!SurfaceExpr.containsHole(holey_concl)) return null;
+    // A whole-line hole needs no line hole minted: it constrains nothing.
+    const holey = if (holey_concl.* == .hole)
+        null
     else
-        null;
-
-    var solver = InferenceSolver.init(
-        allocator,
-        env,
-        theorem,
-        registry,
-        rule_id,
-        rule,
-        if (maybe_view) |*view| view else null,
-        scratch,
-        self.debug,
-    );
-    defer solver.deinit();
-    solver.budget = self.work_budget;
-    defer self.recordSolverBranches(solver.peak_branches);
-
-    const bindings = solver.solveHoleyConclusion(
+        try Holes.internWithLineHoles(
+            context.theorem,
+            context.env,
+            holey_concl,
+        ) orelse return null;
+    const minimal = if (try SurfaceExpr.containsStructuralHole(
+        context.env,
+        context.registry,
+        holey_concl,
+    )) try SurfaceExpr.lowerStructuralHolesToUnits(
+        context.theorem,
+        context.env,
+        context.registry,
+        holey_concl,
+    ) else null;
+    return try tryInferHoleyStructuralSolver(
+        self,
+        context,
+        line,
         partial_bindings,
         ref_exprs,
-        holey_concl,
-    ) catch |holey_err| blk: {
-        DebugTrace.traceInference(
-            self.debug,
-            "holey structural solver failed for rule {s}: {s}",
-            .{ rule.name, @errorName(holey_err) },
-        );
-        const lowered = minimal_line orelse return null;
-        break :blk solver.solve(
-            partial_bindings,
-            ref_exprs,
-            lowered,
-        ) catch |minimal_err| {
-            DebugTrace.traceInference(
-                self.debug,
-                "minimal structural solver failed for rule {s}: {s}",
-                .{ rule.name, @errorName(minimal_err) },
-            );
-            return null;
-        };
-    };
-
-    maybeAddStructuralAmbiguityWarning(self, assertion, line, &solver);
-    return bindings;
+        holey,
+        minimal,
+        maybe_view,
+    );
 }
 
-/// Infer an inline minor's bindings from its refs and a hint with holes in it
-/// (`Holes.internWithLineHoles`), or null when the structural solver finds
-/// no unique solution.
-pub fn tryInferHoleyHintStructuralSolver(
+/// Infer a rule's bindings from its refs and a conclusion with holes in it
+/// (`Holes.internWithLineHoles`): a holey line, or an inline minor's hint
+/// from a holey goal; null for a whole-line hole. If that has no unique
+/// solution, solve against `minimal`, the line with each structural hole
+/// lowered to its unit, when there is one. Null when neither solve finds a
+/// unique solution.
+pub fn tryInferHoleyStructuralSolver(
     self: *CompilerContext,
     context: *const RuleInferenceContext,
     line: anytype,
     partial_bindings: []const ?ExprId,
     ref_exprs: []const ExprId,
-    hint: ExprId,
+    holey: ?ExprId,
+    minimal: ?ExprId,
     maybe_view: ?ViewDecl,
 ) !?[]const ExprId {
     var solver = InferenceSolver.init(
@@ -1283,18 +1189,31 @@ pub fn tryInferHoleyHintStructuralSolver(
     solver.budget = self.work_budget;
     defer self.recordSolverBranches(solver.peak_branches);
 
-    const bindings = solver.solveHoleyHint(
+    const bindings = solver.solveHoley(
         partial_bindings,
         ref_exprs,
-        hint,
-    ) catch |err| {
-        if (err == error.OutOfMemory) return err;
+        holey,
+    ) catch |holey_err| blk: {
+        if (holey_err == error.OutOfMemory) return holey_err;
         DebugTrace.traceInference(
             self.debug,
-            "holey hint structural solver failed for rule {s}: {s}",
-            .{ context.rule.name, @errorName(err) },
+            "holey structural solver failed for rule {s}: {s}",
+            .{ context.rule.name, @errorName(holey_err) },
         );
-        return null;
+        const lowered = minimal orelse return null;
+        break :blk solver.solve(
+            partial_bindings,
+            ref_exprs,
+            lowered,
+        ) catch |minimal_err| {
+            if (minimal_err == error.OutOfMemory) return minimal_err;
+            DebugTrace.traceInference(
+                self.debug,
+                "minimal structural solver failed for rule {s}: {s}",
+                .{ context.rule.name, @errorName(minimal_err) },
+            );
+            return null;
+        };
     };
     maybeAddStructuralAmbiguityWarning(self, context.assertion, line, &solver);
     return bindings;

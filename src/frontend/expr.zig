@@ -391,10 +391,10 @@ pub const TheoremContext = struct {
     /// anywhere" in O(1) for ordinary theorems (everything outside Stage 4
     /// open search).
     meta_placeholder_count: u32 = 0,
-    /// Count of line holes ever minted (`PlaceholderInfo.line_hole`). Kept
-    /// apart from `meta_placeholder_count` so a holey line's hints leave the
-    /// search gates on that count unchanged for later `auto?` lines.
-    line_hole_count: u32 = 0,
+    /// True once a line hole is minted (`PlaceholderInfo.line_hole`). Kept
+    /// apart from `meta_placeholder_count`, which the search gates read on
+    /// its own (`hasMetaPlaceholders`).
+    has_line_holes: bool = false,
     /// Count of `reconciliation_meta`-flagged placeholders ever minted (a subset
     /// of `meta_placeholder_count`). Lets the eliminator meta-aware match gate
     /// out candidates that carry *only* carry-to-leaf/witness metas (common —
@@ -527,7 +527,7 @@ pub const TheoremContext = struct {
         copy.next_placeholder_dep = self.next_placeholder_dep;
         copy.next_dummy_dep = self.next_dummy_dep;
         copy.meta_placeholder_count = self.meta_placeholder_count;
-        copy.line_hole_count = self.line_hole_count;
+        copy.has_line_holes = self.has_line_holes;
         copy.reconciliation_meta_count = self.reconciliation_meta_count;
 
         try copy.parser_vars.ensureTotalCapacity(
@@ -798,7 +798,7 @@ pub const TheoremContext = struct {
         );
         try self.theorem_placeholders.append(self.allocator, info);
         if (info.line_hole) {
-            self.line_hole_count += 1;
+            self.has_line_holes = true;
         } else {
             self.meta_placeholder_count += 1;
         }
@@ -884,7 +884,13 @@ pub const TheoremContext = struct {
 
     /// True when any line hole has been minted in this context.
     pub fn hasLineHoles(self: *const TheoremContext) bool {
-        return self.line_hole_count != 0;
+        return self.has_line_holes;
+    }
+
+    /// False when no meta-class leaf can occur in this context: no search
+    /// meta and no line hole has been minted.
+    pub fn mayHoldMetaLeaves(self: *const TheoremContext) bool {
+        return self.hasMetaPlaceholders() or self.hasLineHoles();
     }
 
     /// True when any `reconciliation_meta` leaf has been minted in this context.
