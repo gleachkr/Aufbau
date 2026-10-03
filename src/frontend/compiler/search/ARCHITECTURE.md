@@ -540,7 +540,8 @@ runs the constrained child-search-first ladder, so a proof below can still
 name the variable however deep its ref sits. Only when the child search
 leaves one unsolved (`weaken`'s conclusion just echoes it back) does
 `tryPoolWitnesses(.fresh)` give it a variable that occurs in no binding, and
-generate the now-concrete premise. Every fresh choice gives the same instance
+generate the now-concrete premise. The slot's later open fallbacks skip a
+premise opened this way. Every fresh choice gives the same instance
 up to renaming, since the variable must avoid every variable of the instance,
 but not the same refs: MM0 has no alpha-equivalence. So `assignRefNames`
 first tries the bound variables the refs put in the same place (matching
@@ -1062,7 +1063,9 @@ candidates and the validator checks each one.
   between. martin_lof's `var` (`g , x : A ⊢ x : A`) against
   `g , k : Nat , ih : Nat` in any association pins `x : A := ih : Nat` and
   `g := g , k : Nat`. Commutative combiners use the multiset extractor
-  (`acui.extractAcuiMemberBindings`) instead.
+  (`acui.extractAcuiMemberBindings`) instead. Under idempotence a member a
+  bound sibling holds may serve another leaf as well, so that extractor (and
+  the principal fan-out) consumes nothing there.
 - **Split sites** (`split.findSplitSite`) — only a bare spine binder of an
   ACUI conclusion distributes context members. A binder inside a fixed summand
   (the `A` of `g , x : A`) is not a context, and enumerating contexts for it

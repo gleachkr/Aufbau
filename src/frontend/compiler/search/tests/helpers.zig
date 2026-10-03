@@ -36,6 +36,8 @@ pub const split = @import("../backward/split.zig");
 
 pub const Witness = @import("../backward/witness.zig");
 
+pub const forward = @import("../forward.zig");
+
 pub const MetaStore = @import("../../inference/meta_store.zig").MetaStore;
 
 pub const TemplateExpr = @import("../../../rules.zig").TemplateExpr;

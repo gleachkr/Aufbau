@@ -5,6 +5,7 @@ const prune = helpers.prune;
 const def_match = helpers.def_match;
 const acui = helpers.acui;
 const split = helpers.split;
+const backtrack = helpers.backtrack;
 const TemplateExpr = helpers.TemplateExpr;
 const ExprId = helpers.ExprId;
 const TheoremContext = helpers.TheoremContext;
@@ -1874,4 +1875,40 @@ test "split of an idempotent sequence context retains principals as any run" {
     try expectSplitCandidates(splitLawMm0("_", "ctx_idem"), "u", "ext", null, false, &.{
         "join (hyp A) (hyp B)",
     });
+}
+
+/// `premiseOpenAcuiOwned` for premise `hyp_index` of `rule_name` against the
+/// goal of theorem `w`, with only the conclusion binders the goal pins
+/// outside the context bound.
+fn premiseOwned(mm0_src: []const u8, rule_name: []const u8, hyp_index: usize, pinned: []const []const u8) !bool {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "w");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
+    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    const goal_ctx = theorem.interner.node(goal_expr).app.args[0];
+    for (pinned) |name| bindings[try ruleArgIndex(rule, name)] = goal_ctx;
+    return backtrack.premiseOpenAcuiOwned(&context, &theorem, rule, hyp_index, goal_expr, bindings);
+}
+
+test "constrained MP leaves a premise whose open binders an ACUI split owns" {
+    const mm0_src = comptime splitLawMm0("ctx_comm", "_") ++
+        \\axiom cut (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) P $ > $ seq g P $;
+        \\theorem w: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
+        \\
+    ;
+    // `two`'s `g` is a spine binder of the conclusion's context split.
+    try std.testing.expect(try premiseOwned(mm0_src, "two", 0, &.{}));
+    // `cut`'s `a` occurs nowhere in the conclusion, so no step owns it.
+    try std.testing.expect(!try premiseOwned(mm0_src, "cut", 0, &.{"g"}));
 }

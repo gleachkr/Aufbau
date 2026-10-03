@@ -345,7 +345,7 @@ fn pinRigidBinders(
     }
 }
 
-fn conclusionTemplatePlausible(
+pub fn conclusionTemplatePlausible(
     context: *const Context,
     theorem: *TheoremContext,
     concl: TemplateExpr,
@@ -643,6 +643,16 @@ fn repeatedBinderMemberMismatch(
     ) orelse return false;
     if (goal_members.len == 0) return false;
 
+    // The enumeration below is strict, so it abstains wherever strict matching
+    // could miss a match: a def or meta on either side.
+    for (members) |m| {
+        if (!templateMentionsBinder(m, b)) continue;
+        if (!semantic.templateStrictlyComparable(context, theorem, m, bindings)) return false;
+    }
+    for (goal_members.slice()) |gm| {
+        if (!semantic.exprStrictlyComparable(context, theorem, gm)) return false;
+    }
+
     // A member mentioning `b`, used to enumerate `b`'s candidate values off the
     // goal (matchTemplate reads through the `hyp(...)` coercion structurally).
     var seed: ?TemplateExpr = null;
@@ -788,12 +798,11 @@ pub fn hypRefMembersPlausible(
             r.app.term_id,
         ) orelse return true;
         // The strict `matchTemplate` enumeration below cannot see through a
-        // def unfolding, a `@rewrite` reduction, or an ACUI rearrangement, so
-        // a goal member with such a head could hide the true assignment —
-        // abstain.
+        // def unfolding, a `@rewrite` reduction, an ACUI rearrangement, or a
+        // meta, anywhere in a goal member, so such a member could hide the
+        // true assignment — abstain.
         for (state.goal_members[i].slice()) |gm| {
-            const node = theorem.interner.node(gm);
-            if (node.* == .app and !semantic.isRigidHead(context, node.app.term_id)) return true;
+            if (!semantic.exprStrictlyComparable(context, theorem, gm)) return true;
         }
     }
 
@@ -824,9 +833,9 @@ pub fn hypRefMembersPlausible(
                     state.consumed_len[ridx] += 1;
                     if (split.templateFullyBound(m, bindings)) continue;
                     // A member template that itself embeds an ACUI, def, or
-                    // `@rewrite` head can match goal members in ways the strict
-                    // matcher misses — abstain.
-                    if (semantic.templateNeedsSemantic(context, m)) return true;
+                    // `@rewrite` head, or a bound value that does, can match
+                    // goal members in ways the strict matcher misses — abstain.
+                    if (!semantic.templateStrictlyComparable(context, theorem, m, bindings)) return true;
                     if (item_len == max_hypref_items) return true;
                     items[item_len] = .{ .member = m, .region = ridx };
                     item_len += 1;

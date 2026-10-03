@@ -7,7 +7,7 @@
 const std = @import("std");
 const types = @import("../types.zig");
 const prune = @import("./prune.zig");
-const seed = @import("./seed.zig");
+const semantic = @import("./semantic.zig");
 const forward = @import("../forward.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const ExprMod = @import("../../../expr.zig");
@@ -35,13 +35,14 @@ pub const HypMatchResult = enum {
     unknown,
 };
 
-// A successful positional match through an ACUI combiner is not a canonical
-// decomposition if it assigned any binder inside that combiner.  For example,
-// matching `Δ , p` against `p , F , p` may bind `Δ := p , F`, while the global
-// validation can instead consume one `p` explicitly and use `Δ := F`.  Roll such
-// matches back to `.unknown`; only a whole-region bare binder (`Δ`) is safe to
-// assign structurally.
-fn structuralMatchAssignsUnderAcui(
+// A successful positional match is not a canonical decomposition if it
+// assigned a binder inside an argument its head does not determine
+// (`lockstep`): an ACUI combiner's, a `@rewrite` head's, or a def argument the
+// body drops. For example, matching `Δ , p` against `p , F , p` may bind
+// `Δ := p , F`, while the global validation can instead consume one `p`
+// explicitly and use `Δ := F`. Roll such matches back to `.unknown`; only a
+// whole-region bare binder (`Δ`) is safe to assign structurally.
+fn structuralMatchGuesses(
     context: *const Context,
     theorem: *const TheoremContext,
     template: TemplateExpr,
@@ -59,11 +60,13 @@ fn structuralMatchAssignsUnderAcui(
             };
             if (concrete.term_id != app.term_id) return false;
             if (concrete.args.len != app.args.len) return false;
-            if (context.registry.acui_by_head.contains(app.term_id)) {
-                return templateHasNewBinding(template, before, after);
-            }
-            for (app.args, concrete.args) |tmpl_arg, conc_arg| {
-                if (structuralMatchAssignsUnderAcui(
+            const class = semantic.headClass(context, app.term_id);
+            for (app.args, concrete.args, 0..) |tmpl_arg, conc_arg, i| {
+                const determined = class == .rigid or
+                    (class == .def and semantic.argDetermined(context, app.term_id, i));
+                if (!determined) {
+                    if (templateHasNewBinding(tmpl_arg, before, after)) return true;
+                } else if (structuralMatchGuesses(
                     context,
                     theorem,
                     tmpl_arg,
@@ -96,14 +99,13 @@ fn templateHasNewBinding(
     }
 }
 
-/// True when any binding embeds a search-meta-class placeholder leaf — i.e. an
-/// open carry-to-leaf witness rides inside a (possibly rigid) bound value.
-/// O(1) short-circuit when the theorem has no metas at all.
-fn snapshotEmbedsMeta(theorem: *const TheoremContext, snapshot: []const ?ExprId) bool {
-    if (!theorem.mayHoldMetaLeaves()) return false;
+/// True when any binding embeds a placeholder leaf: a meta or a def-unfold
+/// dummy. O(1) short-circuit when the theorem has no placeholders at all.
+fn snapshotHoldsPlaceholder(theorem: *const TheoremContext, snapshot: []const ?ExprId) bool {
+    if (theorem.theorem_placeholders.items.len == 0) return false;
     for (snapshot) |maybe| {
         const v = maybe orelse continue;
-        if (seed.exprContainsMetaLeafWalk(theorem, v)) return true;
+        if (theorem.containsPlaceholder(v)) return true;
     }
     return false;
 }
@@ -194,7 +196,7 @@ fn tryMetaAwareHypMatch(
     // combiner positionally, so in principle a reconciliation meta under a
     // combiner whose members are genuinely reorderable could be pinned to the
     // wrong member. We deliberately do NOT pre-guard that here: the normal path's
-    // `structuralMatchAssignsUnderAcui` rollback cannot be reused (it would
+    // `structuralMatchGuesses` rollback cannot be reused (it would
     // discard the reconciliation), and a blanket "bail if a meta sits under any
     // ACUI head" is wrong — the eliminator motive's context `join(g, k:Nat)` has
     // a concrete `g` that anchors the position, so `?k` is unambiguous there and
@@ -285,7 +287,7 @@ pub fn matchOneHypWithSnapshot(
         // unless it returns true.
     }
     if (theorem.matchTemplate(template, ref_expr, bindings)) {
-        if (structuralMatchAssignsUnderAcui(
+        if (structuralMatchGuesses(
             context,
             theorem,
             template,
@@ -332,15 +334,17 @@ pub fn matchOneHypWithSnapshot(
         if (templateNeedsSemantic(context, template)) break :blk .unknown;
         if (exprNeedsSemantic(context, theorem, ref_expr)) break :blk .unknown;
         if (bindingsNeedSemantic(context, theorem, snapshot)) break :blk .unknown;
-        // Carry-to-leaf witness: a binding embedding an open search meta (e.g.
-        // `rim`'s antecedent seeded to `P ?t` from an open-backward `rex`
-        // premise) survived the definite-mismatch and ACUI plausibility gates,
-        // so the meta could still unify with this ref's concrete member and
-        // pin the witness. Defer to full validation rather than hard-pruning;
-        // `exprNeedsSemantic` ignores placeholders, so this is the only escape
-        // for the pure-meta (no transparent-def) case. Inert for concrete
-        // searches (`hasMetaPlaceholders` is O(1) false).
-        if (snapshotEmbedsMeta(theorem, snapshot)) break :blk .unknown;
+        // A placeholder on either side survived the definite-mismatch and ACUI
+        // plausibility gates: a carry-to-leaf witness meta (e.g. `rim`'s
+        // antecedent seeded to `P ?t` from an open-backward `rex` premise)
+        // could still unify with this ref's member and pin the witness, and a
+        // def-unfold dummy (from `extractHypPartialBindings`) stands for
+        // whichever variable the def is unfolded with. Defer to full
+        // validation rather than hard-pruning; `exprNeedsSemantic` ignores
+        // placeholders, so this is their only escape.
+        if (snapshotHoldsPlaceholder(theorem, snapshot)) break :blk .unknown;
+        if (theorem.theorem_placeholders.items.len != 0 and
+            theorem.containsPlaceholder(ref_expr)) break :blk .unknown;
         break :blk .mismatch;
     };
     rollbackOneHypMatch(bindings, snapshot);
@@ -385,7 +389,7 @@ fn matchOneHypViaView(
     }
 
     if (theorem.matchTemplate(view.hyps[hyp_index], ref_expr, view_bindings) and
-        !structuralMatchAssignsUnderAcui(
+        !structuralMatchGuesses(
             context,
             theorem,
             view.hyps[hyp_index],

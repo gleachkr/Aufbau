@@ -467,21 +467,22 @@ pub fn openMode(
 /// variable of the instance, so any fresh one gives the same instance up to
 /// renaming. `@auto backward` rules take this route too: their witness
 /// ladder has no fresh-variable rung. A holey goal may still carry the
-/// variable as a meta. Returns true iff the premise produced a candidate;
-/// otherwise the other fallbacks still run.
+/// variable as a meta. Reports whether the premise opened this way and
+/// whether that produced a candidate; either way the other fallbacks run,
+/// but an opened premise is not opened again.
 fn tryFreshBoundGenerate(
     ctx: *const SlotCtx,
     hook: *const GenerationHook,
     at: Slot,
-) anyerror!bool {
+) anyerror!FreshBound {
     const context = ctx.context;
     const candidate = ctx.candidate;
     const rule = ctx.rule;
     const bindings = ctx.bindings;
-    if (ctx.goal != .concrete) return false;
+    if (ctx.goal != .concrete) return .skipped;
     const cand_theorem = &candidate.theorem;
     const mask = plan.templateBinderMask(rule.hyps[at.hyp_index]);
-    if (mask.overflow) return false;
+    if (mask.overflow) return .skipped;
     // A null conclusion binder of a non-view rule met a def's dummy in the
     // concrete goal (the seed scrubs it). A view rule's raw conclusion is not
     // what matched the goal, so there only the placeholder case applies.
@@ -495,7 +496,7 @@ fn tryFreshBoundGenerate(
     while (rest != 0) {
         const idx: u6 = @intCast(@ctz(rest));
         rest &= rest - 1;
-        if (idx >= bindings.len) return false;
+        if (idx >= bindings.len) return .skipped;
         const bit = @as(u64, 1) << idx;
         if (bindings[idx]) |value| {
             // Still standing in for a def's hidden variable: the unfolded
@@ -511,13 +512,13 @@ fn tryFreshBoundGenerate(
             if (kind != .dummy and kind != .seed_meta) continue;
         } else if (concl_mask & bit == 0 and
             !(noFixedBindingMayMention(rule, bindings, idx) and
-                otherHypBindersInConclusion(rule, mask.mask, idx))) return false;
-        if (!rule.args[idx].bound) return false;
+                otherHypBindersInConclusion(rule, mask.mask, idx))) return .skipped;
+        if (!rule.args[idx].bound) return .skipped;
         open |= bit;
     }
-    if (open == 0 and hosts == 0) return false;
+    if (open == 0 and hosts == 0) return .skipped;
 
-    if (hook.solveOpenFn == null) return false;
+    if (hook.solveOpenFn == null) return .skipped;
     // Open the def-unfold placeholders too, so the child search can fix them.
     // A seed meta stays put: other kept bindings mention it (`s` under `ih`),
     // and `tryOpenGenerateSlot` rebinds it everywhere at once. So does a
@@ -548,8 +549,11 @@ fn tryFreshBoundGenerate(
 
     const before = ctx.candidates.items.len;
     try tryOpenGenerateSlot(ctx, hook, at, .{ .binders = open, .hosts = hosts });
-    return ctx.candidates.items.len != before;
+    return if (ctx.candidates.items.len != before) .found else .opened;
 }
+
+/// What `tryFreshBoundGenerate` did with a premise.
+const FreshBound = enum { skipped, opened, found };
 
 /// True when every non-bound binder of the premise other than `idx` occurs in
 /// the rule's conclusion, so the goal alone fixes the premise (intro-shaped,
@@ -1181,8 +1185,12 @@ fn tryGenerateSlot(
     const context = ctx.context;
     const candidate = ctx.candidate;
     // A premise whose only open binders are bound variables (a def's hidden
-    // binder, `pi_form`'s `x` under `A → B`) takes fresh ones.
-    if (try tryFreshBoundGenerate(ctx, hook, slot)) return;
+    // binder, `pi_form`'s `x` under `A → B`) takes fresh ones. Once opened
+    // that way it is not opened again below: the open path already ran the
+    // child search on it.
+    const fresh = try tryFreshBoundGenerate(ctx, hook, slot);
+    if (fresh == .found) return;
+    const opened = fresh == .opened;
 
     if (try OpenTerms.instantiateTemplateConcrete(
         &candidate.theorem,
@@ -1190,7 +1198,7 @@ fn tryGenerateSlot(
         ctx.bindings,
     )) |raw_target| {
         if (carriesAncestorWitness(context, candidate, hook, raw_target)) {
-            try tryOpenGenerateSlot(ctx, hook, slot, .{});
+            if (!opened) try tryOpenGenerateSlot(ctx, hook, slot, .{});
             return;
         }
         try emitGeneratedSlot(ctx, hook, slot, raw_target);
@@ -1203,7 +1211,7 @@ fn tryGenerateSlot(
     // Speculatively distribute the goal context across the open binder and recurse
     // per candidate; the validator confirms each assembly.
     const candidates_before_split = ctx.candidates.items.len;
-    try trySplitGenerate(ctx, hook, slot);
+    const split_step = try trySplitGenerate(ctx, hook, slot);
 
     // Structured open backward generation. Strictly the
     // LAST fallback (concrete and ACUI split-generate both failed for this
@@ -1220,12 +1228,14 @@ fn tryGenerateSlot(
     // fixes up to an ACUI choice: the split and principal steps own those
     // choices. Opened here instead, such a binder leaves the child a bare
     // meta context or principal that every rule matches, and each of those
-    // rules opens its own again.
+    // rules opens its own again. The skip holds only where those steps
+    // enumerate: when either abstains (a cap, a placeholder member, several
+    // unbound principals), the slot still opens, after them.
     if (ctx.candidates.items.len != candidates_before_split) return;
     const open_mode = openMode(context, candidate.rule_id, hook.allow_constrained_mp);
-    if (hook.solveOpenFn != null and open_mode != .none and
-        !(open_mode == .constrained and allOpenAcuiOwned(ctx, slot)))
-    {
+    const may_open = !opened and hook.solveOpenFn != null and open_mode != .none;
+    const acui_owned = may_open and open_mode == .constrained and allOpenAcuiOwned(ctx, slot);
+    if (may_open and !acui_owned) {
         try tryOpenGenerateSlot(ctx, hook, slot, .{});
         if (ctx.candidates.items.len != candidates_before_split) return;
     }
@@ -1233,8 +1243,17 @@ fn tryGenerateSlot(
     // Final fallback: ACUI principal enumeration for the order-sensitive
     // principal-selection gap (e.g. `de_morgan`). Reached only when split and
     // open generation both produced nothing for this slot, so it is additive.
-    try tryPrincipalEnumerate(ctx, hook, slot);
+    const principal = try tryPrincipalEnumerate(ctx, hook, slot);
+    if (acui_owned and ctx.candidates.items.len == candidates_before_split and
+        (split_step == .abstained or principal == .abstained))
+    {
+        try tryOpenGenerateSlot(ctx, hook, slot, .{});
+    }
 }
+
+/// What an ACUI step did with a slot: no site applied, it abstained on one,
+/// or it enumerated the choices.
+const AcuiStep = enum { none, abstained, enumerated };
 
 /// Every open binder of the slot's premise is fixed by the conclusion up to
 /// an ACUI choice: a spine binder of a conclusion split site, or a binder
@@ -1243,15 +1262,34 @@ fn tryGenerateSlot(
 fn allOpenAcuiOwned(ctx: *const SlotCtx, slot: Slot) bool {
     if (ctx.context.views.contains(ctx.candidate.rule_id)) return false;
     const goal_expr = ctx.goal.concreteOrHint() orelse return false;
-    const hyp = templateBinderMask(ctx.rule.hyps[slot.hyp_index]);
-    const all = templateBinderMask(ctx.rule.concl);
+    return premiseOpenAcuiOwned(
+        ctx.context,
+        &ctx.candidate.theorem,
+        ctx.rule,
+        slot.hyp_index,
+        goal_expr,
+        ctx.bindings,
+    );
+}
+
+/// `allOpenAcuiOwned` for premise `hyp_index` of a rule without a view.
+pub fn premiseOpenAcuiOwned(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    rule: *const RuleDecl,
+    hyp_index: usize,
+    goal_expr: ExprId,
+    bindings: []const ?ExprId,
+) bool {
+    const hyp = templateBinderMask(rule.hyps[hyp_index]);
+    const all = templateBinderMask(rule.concl);
     if (hyp.overflow or all.overflow) return false;
     var owned: u64 = 0;
     var m = all.mask;
     while (m != 0) {
         const idx: u6 = @intCast(@ctz(m));
         m &= m - 1;
-        const site = split.findSplitSite(ctx.context, &ctx.candidate.theorem, ctx.rule.concl, goal_expr, idx) orelse continue;
+        const site = split.findSplitSite(context, theorem, rule.concl, goal_expr, idx) orelse continue;
         for (site.spine[0..site.spine_len]) |sb| {
             if (sb < 64) owned |= @as(u64, 1) << @intCast(sb);
         }
@@ -1265,7 +1303,7 @@ fn allOpenAcuiOwned(ctx: *const SlotCtx, slot: Slot) bool {
     while (m != 0) {
         const idx: u6 = @intCast(@ctz(m));
         m &= m - 1;
-        if (idx < ctx.bindings.len and ctx.bindings[idx] != null) continue;
+        if (idx < bindings.len and bindings[idx] != null) continue;
         open |= @as(u64, 1) << idx;
     }
     return open != 0 and open & ~owned == 0;
@@ -1313,15 +1351,16 @@ fn trySplitGenerate(
     ctx: *const SlotCtx,
     hook: *const GenerationHook,
     slot: Slot,
-) anyerror!void {
-    if (!hook.allow_split) return; // first (non-splitting) generation pass
+) anyerror!AcuiStep {
+    if (!hook.allow_split) return .none; // first (non-splitting) generation pass
     const context = ctx.context;
     const candidate = ctx.candidate;
     const bindings = ctx.bindings;
-    const goal_expr = ctx.goal.concreteOrHint() orelse return;
+    const goal_expr = ctx.goal.concreteOrHint() orelse return .none;
     const hyp_template = ctx.rule.hyps[slot.hyp_index];
     const binders = templateBinderMask(hyp_template);
-    if (binders.overflow) return;
+    if (binders.overflow) return .abstained;
+    var step: AcuiStep = .none;
 
     var bits = binders.mask;
     while (bits != 0) {
@@ -1343,7 +1382,10 @@ fn trySplitGenerate(
             bindings,
             b,
             hook.allow_retain_principal,
-        ) orelse continue;
+        ) orelse {
+            step = .abstained;
+            continue;
+        };
 
         var i: usize = 0;
         while (i < enumerator.count()) : (i += 1) {
@@ -1396,8 +1438,9 @@ fn trySplitGenerate(
         }
         // One open binder enumerated; sibling open binders are split at their own
         // slots, with this binder's choice now pinning their intervals.
-        return;
+        return .enumerated;
     }
+    return step;
 }
 
 /// Final-fallback ACUI *principal* enumeration for a generate-only slot.
@@ -1425,8 +1468,8 @@ fn tryPrincipalEnumerate(
     ctx: *const SlotCtx,
     hook: *const GenerationHook,
     slot: Slot,
-) anyerror!void {
-    if (!hook.allow_split) return;
+) anyerror!AcuiStep {
+    if (!hook.allow_split) return .none;
     const context = ctx.context;
     const candidate = ctx.candidate;
     const bindings = ctx.bindings;
@@ -1436,10 +1479,10 @@ fn tryPrincipalEnumerate(
     // seed-time `detectPrincipalFanout`, which is likewise
     // annotation-independent. The seed-time/generation-time pair differ by
     // *phase*, not by author permission.
-    const goal_expr = ctx.goal.concreteOrHint() orelse return;
+    const goal_expr = ctx.goal.concreteOrHint() orelse return .none;
     const hyp_template = ctx.rule.hyps[slot.hyp_index];
     const hyp_binders = templateBinderMask(hyp_template);
-    if (hyp_binders.overflow) return;
+    if (hyp_binders.overflow) return .abstained;
 
     // Locate the conclusion's ACUI split site that carries an *unbound*
     // structured principal summand (the additive rule's principal formula whose
@@ -1451,6 +1494,7 @@ fn tryPrincipalEnumerate(
     // to a future extension rather than enumerated as a cross-product here.
     var ftmpl: ?TemplateExpr = null;
     var found_site: ?split.SplitSite = null;
+    var skipped = false;
     var bits = hyp_binders.mask;
     site_search: while (bits != 0) {
         const b: usize = @ctz(bits);
@@ -1466,7 +1510,10 @@ fn tryPrincipalEnumerate(
         var f: usize = 0;
         while (f < s.fixed_len) : (f += 1) {
             if (split.templateFullyBound(s.fixed[f], bindings)) continue;
-            if (only_unbound != null) continue :site_search; // >1 unbound: skip
+            if (only_unbound != null) {
+                skipped = true; // >1 unbound: skip
+                continue :site_search;
+            }
             only_unbound = s.fixed[f];
         }
         if (only_unbound) |p| {
@@ -1475,18 +1522,18 @@ fn tryPrincipalEnumerate(
             break;
         }
     }
-    const site = found_site orelse return;
-    const principal_template = ftmpl orelse return;
+    const site = found_site orelse return if (skipped) .abstained else .none;
+    const principal_template = ftmpl.?;
 
     const members = collectSplitMembers(
         context,
         &candidate.theorem,
         site.container,
         site.head_id,
-    ) orelse return;
+    ) orelse return .abstained;
 
     const pmask = templateBinderMask(principal_template);
-    if (pmask.overflow) return;
+    if (pmask.overflow) return .abstained;
 
     // Only enumerate when 2+ distinct members genuinely compete for the
     // principal; a single match is forced and already handled positionally.
@@ -1496,7 +1543,8 @@ fn tryPrincipalEnumerate(
         members.slice(),
         bindings,
     );
-    if (choices.len < 2) return;
+    // A single match is the forced case.
+    if (choices.len < 2) return .none;
 
     for (choices.slice()) |member| {
         // Snapshot the principal's binder slots so a failed (or completed)
@@ -1527,7 +1575,7 @@ fn tryPrincipalEnumerate(
                 if (idx < bindings.len and saved[idx] == null)
                     handed[idx] = try handSplitChoice(candidate, idx, bindings[idx]);
             }
-            try trySplitGenerate(ctx, hook, slot);
+            _ = try trySplitGenerate(ctx, hook, slot);
         }
         pm = pmask.mask;
         while (pm != 0) {
@@ -1536,6 +1584,7 @@ fn tryPrincipalEnumerate(
             if (idx < bindings.len) bindings[idx] = saved[idx];
         }
     }
+    return .enumerated;
 }
 
 /// State for one open-slot attempt, on top of the candidate's `SlotCtx`. The
@@ -1587,6 +1636,12 @@ fn tryOpenGenerateSlot(
     const candidate = ctx.candidate;
     const bindings = ctx.bindings;
     const fresh_bound = fresh.binders != 0 or fresh.hosts != 0;
+    // Each `.bound_choice` meta the open path mints takes a dependency slot.
+    // Candidates leave as proof text and the bindings roll back below, so
+    // nothing holds those slots once the slot attempt is over: give them back
+    // (this defer runs after the rollback).
+    const slot_mark = candidate.theorem.depSlotMark();
+    defer candidate.theorem.releaseUnheldDepSlots(slot_mark, &.{bindings});
     var store = MetaStore.init(ctx.allocator, context.env);
     // Share the driver's global meta-id counter so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
@@ -2298,6 +2353,9 @@ fn continueOpenTargetSolved(
             if (already) continue;
             const rebound = idx < 64 and slot.rebound & (@as(u64, 1) << @intCast(idx)) != 0;
             if (!rebound and !slot.store.exprMentionsAncestor(theorem, val)) continue;
+            // A value still holding an unsolved meta is not this leaf's to
+            // fill (another slot's witness): it stays unrendered, for the
+            // checker to infer.
             const concrete = slot.store.materialize(theorem, val) catch continue;
             if (concrete == val) continue;
             slot.ctx.bindings[idx] = concrete;
@@ -2507,13 +2565,8 @@ fn tryCoupledWitnesses(
 ) anyerror!void {
     const theorem = &slot.ctx.candidate.theorem;
 
-    // Carry-to-leaf: register any ancestor witness metas (stable-`meta_id`
-    // leaves threaded in from an enclosing open slot) so the unification can
-    // bind them here. Done only on this fallback so the concrete member pass
-    // above stays byte-identical. No-op unless the shared `meta_id` counter is
-    // active (the generation recursion).
-    try registerAncestorMetas(slot.store, theorem, raw_target);
-
+    // The ancestor witness metas this pass may bind were registered by
+    // `emitOpenTarget`, under its open-root gate.
     var members: [Witness.max_domain_members]ExprId = undefined;
     const member_count = Witness.collectMetaMembers(
         slot.ctx.context,
@@ -2708,9 +2761,12 @@ fn tryPoolWitnesses(
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
     switch (pick) {
-        .shared => for (unsolved.items) |meta_id| {
-            const meta = slot.store.info(meta_id) orelse return;
-            if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, null)) return;
+        .shared => {
+            var taken = bindingDeps(slot, theorem);
+            for (unsolved.items) |meta_id| {
+                const meta = slot.store.info(meta_id) orelse return;
+                if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, boundAvoid(meta.kind, &taken))) return;
+            }
         },
         .fresh => {
             const ref_names = try slot.ctx.allocator.alloc(ExprId, unsolved.items.len);
@@ -2957,11 +3013,19 @@ fn groundDanglingWitnessMetas(
         try slot.store.collectUnsolved(theorem, b, &unsolved);
     }
     if (unsolved.items.len == 0) return false;
+    var taken = bindingDeps(slot, theorem);
     for (unsolved.items) |meta_id| {
         const meta = slot.store.info(meta_id) orelse return false;
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, null)) return false;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, boundAvoid(meta.kind, &taken))) return false;
     }
     return true;
+}
+
+/// The avoid set for a pool fill of a meta of `kind`: a `.bound_choice` meta
+/// is a bound variable, so it must be none of the instance's variables and
+/// none of the other fills; a witness may be any of them.
+fn boundAvoid(kind: OpenTerms.MetaKind, taken: *u55) ?*u55 {
+    return if (kind == .bound_choice) taken else null;
 }
 
 /// Assign `meta_id` a `@vars`-pool dummy of `sort_name`, trying tokens in sorted

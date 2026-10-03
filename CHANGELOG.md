@@ -289,6 +289,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   pattern `P (K x z)`, since both unfold to `P x`, but the search pruned
   it. Nor does the search read bindings off such an argument, or off a
   `@rewrite` head's arguments, when it seeds a rule from the goal.
+- `auto?`, `exact?` and `apply?` no longer discard a rule because a context
+  member holds a definition or a hole. With `not a` defined as `a → ⊥`, a
+  rule whose context needs both `a` and `not a` was pruned against a context
+  holding `p` and `p → ⊥`.
+- `auto?` returns the dependency slots its open subgoals and unfolded
+  definitions take once it is done with them. Long searches in theories with
+  binder-hiding definitions could use up all 55 slots and then miss proofs
+  without saying why; on the Church benchmark the peak use drops from 55 to
+  23.
 - The alpha-renaming axioms in the example theories and the manual's FOL
   prelude were unsound: they let the renamed body mention the new bound
   variable, so renaming captured it. The Martin-Löf example proved

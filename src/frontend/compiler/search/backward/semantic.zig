@@ -61,6 +61,44 @@ pub fn exprNeedsSemantic(
     };
 }
 
+/// Strict `matchTemplate` decides `expr` exactly: no head a conversion can
+/// change, and no placeholder. A meta may still become, and a def-unfold
+/// dummy may still be renamed to, a different value.
+pub fn exprStrictlyComparable(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr_id: ExprId,
+) bool {
+    if (exprNeedsSemantic(context, theorem, expr_id)) return false;
+    if (theorem.theorem_placeholders.items.len == 0) return true;
+    return !theorem.containsPlaceholder(expr_id);
+}
+
+/// Strict `matchTemplate` of `template` under `bindings` decides exactly: the
+/// template needs no semantics and every bound value it mentions is
+/// `exprStrictlyComparable`.
+pub fn templateStrictlyComparable(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    bindings: []const ?ExprId,
+) bool {
+    return switch (template) {
+        .binder => |idx| blk: {
+            if (idx >= bindings.len) break :blk true;
+            const bound = bindings[idx] orelse break :blk true;
+            break :blk exprStrictlyComparable(context, theorem, bound);
+        },
+        .app => |app| blk: {
+            if (!isRigidHead(context, app.term_id)) break :blk false;
+            for (app.args) |arg| {
+                if (!templateStrictlyComparable(context, theorem, arg, bindings)) break :blk false;
+            }
+            break :blk true;
+        },
+    };
+}
+
 pub fn bindingsNeedSemantic(
     context: *const Context,
     theorem: *const TheoremContext,

@@ -265,13 +265,13 @@ fn extractOrderedSpineBindings(
         if (!exprIsSingleMember(context, theorem, member)) return;
     }
     for (leaves[0..prefix_len], members[0..prefix_len]) |leaf, member| {
-        extractHypPartialBindings(context, theorem, leaf, member, bindings);
+        extractPartial(context, theorem, leaf, member, bindings);
     }
     for (
         leaves[leaf_len - suffix_len .. leaf_len],
         members[member_len - suffix_len .. member_len],
     ) |leaf, member| {
-        extractHypPartialBindings(context, theorem, leaf, member, bindings);
+        extractPartial(context, theorem, leaf, member, bindings);
     }
 
     if (multi_count != 1) return;
@@ -476,7 +476,23 @@ pub fn projectViewBindingsIntoRule(
 // the worst outcome is some wasted exploration of refs that wouldn't have
 // matched. Existing bindings (from goal seed or earlier hyps) are
 // trusted: this walk never overwrites them.
+//
+// Unfolding a binder-introducing def on the ref side mints a placeholder per
+// hidden variable, each taking a dependency slot. Only `bindings` can hold
+// one afterwards, so every other slot the walk took is given back.
 pub fn extractHypPartialBindings(
+    context: *const Context,
+    theorem: *TheoremContext,
+    template: TemplateExpr,
+    expr_id: ExprId,
+    bindings: []?ExprId,
+) void {
+    const mark = theorem.depSlotMark();
+    extractPartial(context, theorem, template, expr_id, bindings);
+    theorem.releaseUnheldDepSlots(mark, &.{bindings});
+}
+
+fn extractPartial(
     context: *const Context,
     theorem: *TheoremContext,
     template: TemplateExpr,
@@ -496,7 +512,7 @@ pub fn extractHypPartialBindings(
             // sequence to align, so unfold it first.
             if (acuiIsOrdered(context, app.term_id)) {
                 if (unfoldForeignRefDef(context, theorem, app.term_id, expr_id)) |unfolded| {
-                    extractHypPartialBindings(context, theorem, template, unfolded, bindings);
+                    extractPartial(context, theorem, template, unfolded, bindings);
                     return;
                 }
                 extractOrderedSpineBindings(
@@ -520,7 +536,7 @@ pub fn extractHypPartialBindings(
                 // a def arg its body drops, where the value would be a guess.
                 var args = aligned;
                 while (args.next()) |pair| {
-                    extractHypPartialBindings(
+                    extractPartial(
                         context,
                         theorem,
                         pair.template,
@@ -566,7 +582,7 @@ pub fn extractHypPartialBindings(
                     // for the paired hypothesis stays inert. Unfold the ref one
                     // layer and re-extract against the same template, exposing
                     // the `∃` so `p` binds.
-                    extractHypPartialBindings(
+                    extractPartial(
                         context,
                         theorem,
                         template,
@@ -594,7 +610,7 @@ pub fn extractHypPartialBindings(
                     template,
                     expr_id,
                     bindings,
-                    extractHypPartialBindings,
+                    extractPartial,
                 );
             }
         },
@@ -656,7 +672,7 @@ fn extractScopedBindings(
             switch (scope.kind) {
                 // Outermost def parameter: resolve to the rule template argument
                 // and hand back to the binder-aware extractor.
-                .template_root => |r| extractHypPartialBindings(
+                .template_root => |r| extractPartial(
                     context,
                     theorem,
                     r.t_args[idx],

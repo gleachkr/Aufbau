@@ -73,9 +73,10 @@ pub fn extractAcuiMemberBindings(
     // truncating the multiset, which could make a member look spuriously unique.
     if (!collectAcuiMembers(context, theorem, container, head_id, &members, &count)) return;
     const pool = members[0..count];
+    const consume = consumesClaimed(context, head_id);
 
     // Pass 1: consume ref members claimed by the bound sibling leaves.
-    consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
+    if (consume) consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
     // Pass 2: pin each unbound leaf from a unique remaining member.
     extractUnboundLeafMembers(
         context,
@@ -84,8 +85,18 @@ pub fn extractAcuiMemberBindings(
         template,
         bindings,
         pool,
+        consume,
         extract_fn,
     );
+}
+
+/// Whether a member one leaf claims is spent for the others. Under
+/// idempotence (`g , g = g`) a leaf may repeat a member a sibling holds, so
+/// claiming one rules out nothing, and a leaf whose only unclaimed match is
+/// unique may still take a claimed one instead.
+fn consumesClaimed(context: *const Context, head_id: u32) bool {
+    const law = bag.lawOf(context, head_id) orelse return true;
+    return !law.isIdempotent();
 }
 
 // The members of `container` under `head_id` (see `bag.flatten`) as an
@@ -159,6 +170,7 @@ fn extractUnboundLeafMembers(
     template: TemplateExpr,
     bindings: []?ExprId,
     pool: []AcuiMember,
+    consume: bool,
     comptime extract_fn: fn (
         *const Context,
         *TheoremContext,
@@ -180,6 +192,7 @@ fn extractUnboundLeafMembers(
                         arg,
                         bindings,
                         pool,
+                        consume,
                         extract_fn,
                     );
                 }
@@ -198,7 +211,7 @@ fn extractUnboundLeafMembers(
             if (matches == 1) {
                 const idx = found.?;
                 extract_fn(context, theorem, template, pool[idx].expr, bindings);
-                pool[idx].consumed = true;
+                pool[idx].consumed = consume;
             }
         },
     }
@@ -274,7 +287,9 @@ pub fn findAmbiguousPrincipal(
     }
     // Pass 1 (as in `extractAcuiMemberBindings`): consume members claimed by
     // already-bound sibling leaves, so they don't inflate a principal's count.
-    consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
+    if (consumesClaimed(context, head_id)) {
+        consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
+    }
     return findAmbiguousLeaf(allocator, theorem, head_id, template, bindings, pool);
 }
 

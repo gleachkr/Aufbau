@@ -30,6 +30,7 @@
 //! forward derivation can never yield an accepted proof.
 
 const std = @import("std");
+const BindingValidation = @import("../../binding_validation.zig");
 const types = @import("./types.zig");
 const refs_mod = @import("./refs.zig");
 const ref_index_mod = @import("./ref_index.zig");
@@ -1628,11 +1629,22 @@ const UnfoldWalk = struct {
         } else if (!leaf.bound) return false;
         for (frame.args) |arg| {
             if (self.mentions(arg, value)) return false;
+            // An argument may depend on the variable without naming it (a
+            // variable `p : wff x`).
+            if (leaf.bound and try self.argDeps(arg) & leaf.deps != 0) return false;
         }
         for (frame.hidden[0..k]) |other| {
             if (try self.store.deref(self.theorem, other orelse continue) == value) return false;
         }
         return true;
+    }
+
+    /// The dependency bits of `arg` through the store's assignments; none for
+    /// an expression the checker rejects.
+    fn argDeps(self: *UnfoldWalk, arg: ExprId) !u55 {
+        const resolved = try self.store.deref(self.theorem, arg);
+        const info = BindingValidation.currentExprInfo(self.context.env, self.theorem, resolved) catch return 0;
+        return info.deps;
     }
 
     /// Whether `expr`, through the store's assignments, mentions `leaf`.

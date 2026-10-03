@@ -991,6 +991,120 @@ test "ACUI member prunes keep a def leaf that unfolds to the unit" {
     ));
 }
 
+/// `ordered_ctx_theory` with a commutative context combiner and a negation
+/// def.
+const comm_ctx_theory = replaceOnce(
+    ordered_ctx_theory,
+    "@acui ctx_assoc _ emp _",
+    "@acui ctx_assoc ctx_comm emp _",
+) ++
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+    \\term imp (a b: wff): wff;
+    \\term bot: wff;
+    \\def not (a: wff): wff = $ imp a bot $;
+    \\
+;
+
+/// `comm_ctx_theory` with two `ax`-shaped rules whose `a` sits in two
+/// context members.
+const repeated_binder_theory = comm_ctx_theory ++
+    \\axiom cax (a: wff) (d: ctx): $ nd (join (hyp a) (join (hyp (not a)) d)) bot $;
+    \\axiom cax_imp (a: wff) (d: ctx): $ nd (join (hyp a) (join (hyp (imp a bot)) d)) bot $;
+    \\theorem t (p q: wff): $ nd emp bot $;
+;
+
+/// `conclusionTemplatePlausible` of rule `rule_name` against `goal_src`, with
+/// every binder unbound, as the seed leaves an ACUI region's binders. With
+/// `meta_for`, that variable of the goal is replaced by an open meta first.
+fn repeatedBinderPlausible(rule_name: []const u8, goal_src: []const u8, meta_for: ?[]const u8) !bool {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, repeated_binder_theory, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+    var goal = (try parseGoal(&fixture, &theorem, &theorem_vars, goal_src)).concrete;
+    var store = MetaStore.init(allocator, &fixture.env);
+    defer store.deinit();
+    if (meta_for) |name| {
+        const meta = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
+        const leaf = try theorem.internParsedExpr(theorem_vars.get(name).?);
+        goal = try helpers.forward.leafSwap(&theorem, goal, leaf, meta);
+    }
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    return helpers.plausible.conclusionTemplatePlausible(&context, &theorem, rule.concl, goal, bindings);
+}
+
+test "repeated-binder prune refutes a goal no value of the binder covers" {
+    try std.testing.expect(!try repeatedBinderPlausible(
+        "cax_imp",
+        "nd (join (hyp p) (hyp (imp q bot))) bot",
+        null,
+    ));
+}
+
+test "repeated-binder prune abstains on a def member" {
+    // `not p` unfolds to `imp p bot`, which the goal holds.
+    try std.testing.expect(try repeatedBinderPlausible(
+        "cax",
+        "nd (join (hyp p) (hyp (imp p bot))) bot",
+        null,
+    ));
+}
+
+test "repeated-binder prune abstains on a goal member holding a meta" {
+    // The meta may become `p`.
+    try std.testing.expect(try repeatedBinderPlausible(
+        "cax_imp",
+        "nd (join (hyp p) (hyp (imp q bot))) bot",
+        "q",
+    ));
+}
+
+test "auto? hands a generated context split to the checker as explicit bindings" {
+    // Both premises of `two` are generated, and `la`'s conclusion depends on
+    // the context it is given, so only the search knows which members each
+    // side took. The checker's positional reading of `B , (A , B)` gives
+    // `g := hyp B`, against which `la` cannot be checked.
+    const mm0_src = comm_ctx_theory ++
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx):
+        \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (join g1 h1) (join g2 h2) $;
+        \\--| @congr
+        \\axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+        \\--| @congr
+        \\axiom nd_congr (g h: ctx) (a b: wff):
+        \\  $ ctx_eq g h $ > $ a <-> b $ > $ nd g a <-> nd h b $;
+        \\term A: wff;
+        \\term B: wff;
+        \\axiom two (g h: ctx) (a: wff): $ nd g a $ > $ nd h a $ > $ nd (join g h) a $;
+        \\axiom la (g: ctx): $ nd (join g (hyp A)) bot $;
+        \\axiom lb: $ nd (hyp B) bot $;
+        \\theorem u: $ nd (join (hyp B) (join (hyp A) (hyp B))) bot $;
+    ;
+    const proof_src =
+        \\u
+        \\------
+        \\l1: $ nd (join (hyp B) (join (hyp A) (hyp B))) bot $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{"two (h := $ hyp B $) [la [], lb []]"});
+}
+
 test "unfolded mismatch gives back the dependency slots its def unfolds spend" {
     // Both sides present a `lam` head, so telling `z` from `o` means unfolding
     // `lz`, which mints a placeholder for its hidden `x`. The verdict holds
@@ -1196,6 +1310,55 @@ test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
     const f = fixture.env.term_names.get("f") orelse return error.MissingTerm;
     fixture.env.terms.items[f].available = false;
     try std.testing.expect(!semantic.argDetermined(&context, f, 0));
+}
+
+const lw_rules =
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+    \\term A: wff;
+    \\term B: wff;
+    \\axiom lw (g: ctx) (a J: wff): $ nd (join g (hyp a)) J $ > $ nd g J $;
+    \\theorem t: $ nd (join (hyp A) (hyp B)) bot $;
+;
+const lw_multiset_theory = comm_ctx_theory ++ lw_rules;
+const lw_set_theory = replaceOnce(
+    comm_ctx_theory,
+    "@acui ctx_assoc ctx_comm emp _",
+    "@acui ctx_assoc ctx_comm emp ctx_idem",
+) ++ lw_rules;
+
+/// `a` of `lw`'s premise `g , hyp a ⊢ J` as `extractHypPartialBindings`
+/// reads it off `hyp A , hyp B ⊢ bot` with `g := hyp A` bound, under a
+/// commutative context combiner that is idempotent or not.
+fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
+    const mm0_src = if (idempotent) lw_set_theory else lw_multiset_theory;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const rule_id = fixture.env.getRuleId("lw") orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[rule_id];
+    const ref = try theorem.internParsedExpr(fixture.assertion.concl);
+    const ctx = theorem.interner.node(ref).app.args[0];
+    const bindings = try allocator.alloc(?ExprId, rule.args.len);
+    @memset(bindings, null);
+    bindings[try ruleArgIndex(rule, "g")] = theorem.interner.node(ctx).app.args[0];
+    prune.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
+    const a = bindings[try ruleArgIndex(rule, "a")] orelse return null;
+    const a_id = theorem.interner.node(a).app.term_id;
+    return fixture.env.terms.items[a_id].name;
+}
+
+test "extractHypPartialBindings pins a leaf by elimination only without idempotence" {
+    // `g` claims `hyp A`, leaving `hyp B` as the only member for `hyp a`.
+    try std.testing.expectEqualStrings("B", (try extractedLeafAfterBoundSibling(false)).?);
+    // Under `g , g = g`, `hyp a` may repeat `hyp A` as well: nothing is forced.
+    try std.testing.expectEqual(@as(?[]const u8, null), try extractedLeafAfterBoundSibling(true));
 }
 
 test "extractHypPartialBindings aligns an ordered context entry by entry" {
