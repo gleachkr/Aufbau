@@ -376,7 +376,6 @@ pub const CheckMemo = struct {
     ) !void {
         const mm0_limit = recording.mm0_limit;
         const entry = try self.allocator.create(Entry);
-        errdefer self.allocator.destroy(entry);
         entry.* = .{
             .arena = std.heap.ArenaAllocator.init(self.allocator),
             .last_used = self.run,
@@ -390,7 +389,10 @@ pub const CheckMemo = struct {
             .inlines = null,
             .lookups = &.{},
         };
-        errdefer entry.arena.deinit();
+        // Every early return below means the output cannot be replayed, so
+        // the entry is dropped unless it reaches the table.
+        var stored = false;
+        defer if (!stored) self.destroyEntry(entry);
         const arena = entry.arena.allocator();
 
         const sink = ctx.diagnostics;
@@ -457,6 +459,7 @@ pub const CheckMemo = struct {
         const gop = try self.entries.getOrPut(self.allocator, key);
         if (gop.found_existing) self.destroyEntry(gop.value_ptr.*);
         gop.value_ptr.* = entry;
+        stored = true;
     }
 
     fn destroyEntry(self: *CheckMemo, entry: *Entry) void {

@@ -420,3 +420,30 @@ test "check memo evicts least recently used entries past its cap" {
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expect(memo.entries.count() <= 4);
 }
+
+test "check memo drops a block whose output it cannot record" {
+    const allocator = std.testing.allocator;
+    var memo = CheckMemo.init(allocator);
+    defer memo.deinit();
+
+    // The rule is declared after the theorem, so the diagnostic points past
+    // the theorem's place in the .mm0 text and cannot be replayed.
+    const mm0_text =
+        \\provable sort wff;
+        \\term top: wff;
+        \\theorem t1: $ top $;
+        \\axiom ax_top: $ top $;
+    ;
+    const proof_text =
+        \\t1
+        \\---
+        \\p: $ top $ by ax_top []
+    ;
+    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
+    defer allocator.free(first);
+    try std.testing.expectEqual(@as(usize, 0), memo.entries.count());
+    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
+    defer allocator.free(second);
+    try std.testing.expectEqualStrings(first, second);
+    try std.testing.expectEqual(@as(usize, 0), memo.entries.count());
+}

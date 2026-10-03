@@ -1565,6 +1565,51 @@ test "LSP fill-holes code action survives the diagnostics pass's check memo" {
     try expectFillHolesAction(true);
 }
 
+/// The fill on the second line of pass_prawitz_holes, `$ _ctx ⊢ ∀ z … $`
+/// by `all_elim [l1]`, where `l1` proves the unreduced substitution
+/// `[x/w] ∀ y …`. With `congr`, the theory declares `sb_f_congr` as a
+/// congruence; without it, the written-out line does not check.
+fn prawitzCitingLineFill(arena: std.mem.Allocator, congr: bool) !?types.CodeAction {
+    const mm0_uri = "file:///tmp/lsp-fill-holes-sb.mm0";
+    const proof_uri = "file:///tmp/lsp-fill-holes-sb.auf";
+    const fixture_mm0 = try std.fs.cwd().readFileAlloc(
+        arena,
+        "tests/proof_cases/pass_prawitz_holes.mm0",
+        std.math.maxInt(usize),
+    );
+    const proof_text = try std.fs.cwd().readFileAlloc(
+        arena,
+        "tests/proof_cases/pass_prawitz_holes.auf",
+        std.math.maxInt(usize),
+    );
+    const annotated = "--| @congr\naxiom sb_f_congr";
+    if (std.mem.indexOf(u8, fixture_mm0, annotated) == null) return error.FixtureChanged;
+    const mm0_text = if (congr)
+        fixture_mm0
+    else
+        try std.mem.replaceOwned(u8, arena, fixture_mm0, annotated, "axiom sb_f_congr");
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(std.testing.allocator, &transport_state.transport);
+    defer handler.deinit();
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.putDocument(proof_uri, proof_text, 1);
+    const l2 = std.mem.indexOf(u8, proof_text, "l2:").?;
+    const l8 = std.mem.indexOf(u8, proof_text, "l8:").?;
+    // A line that does not need the congruence offers its fill either way.
+    _ = (try fillHolesAction(&handler, arena, proof_uri, proof_text, l8)) orelse
+        return error.ExpectedFillAction;
+    return try fillHolesAction(&handler, arena, proof_uri, proof_text, l2);
+}
+
+test "LSP fill-holes code action is offered only when the filled line checks" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    if ((try prawitzCitingLineFill(arena, true)) == null) return error.FillMissingWithCongr;
+    if ((try prawitzCitingLineFill(arena, false)) != null) return error.FillOfferedWithoutCongr;
+}
+
 test "LSP fill-holes code action keeps a definition the rule unfolds" {
     const mm0_uri = "file:///tmp/lsp-fill-holes-def.mm0";
     const proof_uri = "file:///tmp/lsp-fill-holes-def.auf";

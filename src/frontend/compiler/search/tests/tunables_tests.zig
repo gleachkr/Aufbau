@@ -351,7 +351,7 @@ test "auto? budget truncation names every limit that was hit" {
     // got near the depth limit.
     const detail = try budgetDetail(.{
         .gen_budget_exhausted = true,
-        .recursive_budget_exhausted = true,
+        .phase_fuel_exhausted = true,
         .gen_node_capped_passes = 3,
         .gen_last_phase = 1,
         .gen_last_depth = 4,

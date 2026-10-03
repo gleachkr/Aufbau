@@ -38,7 +38,7 @@ pub const MissReport = struct {
                 .budget
             else
                 .none,
-            .fuel = counters.recursive_budget_exhausted,
+            .fuel = counters.phase_fuel_exhausted,
             .nodes = counters.gen_node_capped_passes > 0,
             .forward = counters.forward_saturation_exhausted,
             .generation_ran = counters.gen_last_phase != 0,

@@ -601,10 +601,10 @@ pub const SearchCounters = struct {
     full_try_candidate_calls: usize = 0,
     recursive_apply_calls: usize = 0,
     generated_chain_attempts: usize = 0,
-    /// Set when recursive `auto?` generation hit the global fuel floor and
-    /// stopped early (distinct from an ordinary no-result miss); read by
-    /// `miss.MissReport`.
-    recursive_budget_exhausted: bool = false,
+    /// Set when a ladder phase ran out of its own fuel and was retired. A
+    /// stop on the shared global budget sets `gen_budget_exhausted` instead.
+    /// Read by `miss.MissReport`.
+    phase_fuel_exhausted: bool = false,
     /// Set when the call-stack guard stopped the generation descent: one
     /// branch recursed close enough to the runtime stack limit that
     /// continuing would risk overflow (on wasm, silent linear-memory

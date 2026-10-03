@@ -1038,9 +1038,10 @@ fn runDepthPass(
         // Phase fuel and the global budget share the error; `GlobalBudget`
         // marks itself exhausted before erroring, which tells them apart.
         error.SearchBudgetExhausted => {
-            if (driver.counters) |c| c.recursive_budget_exhausted = true;
             const global = if (driver.fuel.global) |budget| budget.exhausted else false;
-            return if (global) .stop else .fuel;
+            if (global) return .stop;
+            if (driver.counters) |c| c.phase_fuel_exhausted = true;
+            return .fuel;
         },
         // The call-stack guard tripped mid-descent. The stack has unwound
         // safely; stop the ladder and report like a budget exhaustion —

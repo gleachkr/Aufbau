@@ -533,25 +533,28 @@ fn materializeThroughDef(
     defer theorem.allocator.free(values);
 
     const allocator = theorem.allocator;
-    const args = try allocator.alloc(ExprId, holey_term.args.len);
-    errdefer allocator.free(args);
-    for (holey_term.args, values[0..holey_term.args.len], 0..) |arg, value, idx| {
-        args[idx] = (try materializeSurfaceWithCandidate(
-            parser,
-            theorem,
-            env,
-            arg,
-            value orelse {
+    const filled = filled: {
+        const args = try allocator.alloc(ExprId, holey_term.args.len);
+        // The interner owns `args` once `internAppOwned` succeeds.
+        errdefer allocator.free(args);
+        for (holey_term.args, values[0..holey_term.args.len], 0..) |arg, value, idx| {
+            args[idx] = (try materializeSurfaceWithCandidate(
+                parser,
+                theorem,
+                env,
+                arg,
+                value orelse {
+                    allocator.free(args);
+                    return null;
+                },
+                report,
+            )) orelse {
                 allocator.free(args);
                 return null;
-            },
-            report,
-        )) orelse {
-            allocator.free(args);
-            return null;
-        };
-    }
-    const filled = try theorem.interner.internAppOwned(holey_term.id, args);
+            };
+        }
+        break :filled try theorem.interner.internAppOwned(holey_term.id, args);
+    };
     return try keepIfConverts(theorem, env, candidate, filled);
 }
 

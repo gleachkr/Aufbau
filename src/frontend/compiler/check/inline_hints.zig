@@ -692,6 +692,7 @@ fn goalBindings(
         .implicit_whole_conclusion => return null,
     };
     const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
+    errdefer context.allocator.free(bindings);
     if (!try matchTemplateHoley(theorem, context.registry, rule.concl, goal, bindings, .bind)) {
         context.allocator.free(bindings);
         return null;

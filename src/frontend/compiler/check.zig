@@ -298,6 +298,7 @@ pub fn checkTheoremBlock(
             .diag_scratch = &diag_scratch,
             .rule_unify_cache = &rule_unify_cache,
         };
+        const checked_mark = checked.items.len;
         const line_idx = try applyRuleApplication(
             self,
             &apply_context,
@@ -313,10 +314,9 @@ pub fn checkTheoremBlock(
         if (parsed_assertion == .holey) {
             try collectHoleInferences(
                 self,
-                allocator,
-                parser,
+                &apply_context,
+                checked_mark,
                 theorem,
-                env,
                 &theorem_vars,
                 line,
                 parsed_assertion.holey,
@@ -441,16 +441,18 @@ pub fn checkTheoremBlock(
 
 fn collectHoleInferences(
     self: *CompilerContext,
-    allocator: std.mem.Allocator,
-    parser: *MM0Parser,
+    apply_context: *const RuleApplyContext,
+    checked_mark: usize,
     theorem: *TheoremContext,
-    env: *const GlobalEnv,
     theorem_vars: *const NameExprMap,
     line: ProofLine,
     surface: *const Expr,
     checked_line: ExprId,
 ) !void {
     const sink = self.hole_inference_sink orelse return;
+    const allocator = apply_context.allocator;
+    const parser = apply_context.parser;
+    const env = apply_context.env;
     // Report the line as written with its holes filled. The checked line can
     // differ in shape: it unfolds a definition the line keeps folded
     // (`_wff -> c e. img f B` checks as `... sep x B (R f x)`). Keep the
@@ -490,7 +492,90 @@ fn collectHoleInferences(
         &names,
         concrete,
     ) orelse return;
+    // Offer the filled line only if it checks as written: a holey line can
+    // check where its filled form does not (a rewrite the concrete path
+    // needs a congruence for, or a print that does not parse back).
+    const checks = filledLineChecks(
+        self,
+        apply_context,
+        checked_mark,
+        theorem,
+        theorem_vars,
+        line,
+        filled,
+    ) catch |err| {
+        sink.allocator.free(filled);
+        return err;
+    };
+    if (!checks) {
+        sink.allocator.free(filled);
+        return;
+    }
     try sink.addAssertionOwned(line.span, line.assertion.span, filled);
+}
+
+/// Whether `line` checks with the assertion `text` against the lines checked
+/// before it (`apply_context.checked` up to `checked_mark`). Runs on clones
+/// and leaves the diagnostics and sinks as they were.
+fn filledLineChecks(
+    self: *CompilerContext,
+    apply_context: *const RuleApplyContext,
+    checked_mark: usize,
+    theorem: *const TheoremContext,
+    theorem_vars: *const NameExprMap,
+    line: ProofLine,
+    text: []const u8,
+) !bool {
+    const allocator = apply_context.allocator;
+    var probe_theorem = try theorem.clone();
+    defer probe_theorem.deinit();
+    var probe_vars = try cloneNameExprMap(allocator, theorem_vars);
+    defer probe_vars.deinit();
+
+    const saved_diag = self.getDiagnostic();
+    defer self.restoreDiagnostic(saved_diag);
+    const diag_mark = apply_context.diag_scratch.mark();
+    defer apply_context.diag_scratch.discard(diag_mark);
+    const inline_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0;
+    defer if (self.inline_conclusion_sink) |sink| sink.rollback(inline_mark);
+
+    const parsed = Holes.parseAssertion(
+        apply_context.parser,
+        &probe_theorem,
+        &probe_vars,
+        apply_context.sort_vars,
+        text,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    if (parsed == .holey) return false;
+
+    var scratch: std.ArrayListUnmanaged(CheckedLine) = .{};
+    defer {
+        CheckedIr.rollbackToMark(allocator, &scratch, checked_mark);
+        scratch.deinit(allocator);
+    }
+    try scratch.appendSlice(allocator, apply_context.checked.items[0..checked_mark]);
+    var probe_context = apply_context.*;
+    probe_context.checked = &scratch;
+    _ = applyRuleApplication(
+        self,
+        &probe_context,
+        line.application,
+        LineAssertion.fromParsed(parsed),
+        null,
+        ApplicationDiagnosticContext.fromLine(apply_context.assertion, line),
+        ApplicationLine.fromLine(line),
+        &probe_theorem,
+        &probe_vars,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return false,
+    };
+    CheckedIr.validateLinesCached(&probe_theorem, scratch.items[checked_mark..]) catch
+        return false;
+    return true;
 }
 
 /// `surface` filled from `checked_line`, when that is `checked_line` up to

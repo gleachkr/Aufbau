@@ -757,11 +757,41 @@ test "auto global fuel floor stops the search and reports exhaustion" {
     defer suggestions.deinit();
     // Budget exhaustion is reported distinctly, and surfaces no suggestion.
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expect(counters.recursive_budget_exhausted);
+    try std.testing.expect(counters.phase_fuel_exhausted);
     try std.testing.expectEqual(
         types.SearchStatus.budget_exhausted,
         suggestions.status,
     );
+}
+
+test "auto global budget stop is not reported as a phase fuel-out" {
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ R $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    // A one-tick budget runs out at the first candidate, with every phase's
+    // fuel still left.
+    const gen = types.GenerateOptions{ .enabled = true, .global_budget = 1 };
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        auto_depth2_mm0,
+        proof_src,
+        "auto?",
+        .{ .counters = &counters, .generate = gen },
+    );
+    defer suggestions.deinit();
+    try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+    try std.testing.expect(counters.gen_budget_exhausted);
+    try std.testing.expect(!counters.phase_fuel_exhausted);
+    // The retry raises the budget, not the fuel nothing ran out of.
+    const retry = helpers.miss.retryFor(helpers.miss.MissReport.of(&counters), gen) orelse
+        return error.MissingRetry;
+    try std.testing.expect(retry.budget != null);
+    try std.testing.expectEqual(@as(?u64, null), retry.fuel);
 }
 
 test "auto stack guard stops the search and reports exhaustion" {
@@ -818,7 +848,7 @@ test "auto with ample fuel finds the chain without tripping the floor" {
 
     try expectOffered(suggestions.items, &.{"qr [pq [p []]]"});
     // The default fuel floor is generous; a normal proof never trips it.
-    try std.testing.expect(!counters.recursive_budget_exhausted);
+    try std.testing.expect(!counters.phase_fuel_exhausted);
     // Same for the default call-stack guard.
     try std.testing.expect(!counters.stack_guard_exhausted);
     try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
