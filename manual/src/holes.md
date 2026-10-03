@@ -102,3 +102,53 @@ the rule.
 This resembles a `calc` block in a proof assistant like Lean, but requires no
 separate construct: these are ordinary proof lines using the same holes as the
 context example above.
+
+## Type inference
+
+`auto?` can be applied to a goal that contains holes. It searches for a proof
+of any instance of the goal, and the discovered proof determines what fills
+each hole. This can be used to perform, for example, simple type inference.
+
+The following cell extends the natural deduction base with a simply typed
+lambda calculus. A typing statement `t : A` is a formula, so a typing context
+is an ordinary context of such statements. `λ x : A. t` abstracts a variable
+of type `A`, `f · u` applies a function, and `⇒` builds function types,
+since `→` is already implication.
+
+```aufbau-proof prelude=nd-base
+@@mm0
+delimiter $ . : $;
+--| @hole _ty
+sort ty;
+sort tm;
+term arr (A B: ty): ty; infixr arr: $⇒$ prec 25;
+term lam (A: ty) {x: tm} (t: tm x): tm;
+notation lam (A: ty) {x: tm} (t: tm x): tm = ($λ$:20) x ($:$:12) A ($.$:0) t;
+term app (f u: tm): tm; infixl app: $·$ prec 70;
+term has_ty (t: tm) (A: ty): wff; infixl has_ty: $:$ prec 12;
+
+axiom t_var (g: ctx) {x: tm} (A: ty): $ g , x : A ⊢ x : A $;
+axiom t_lam (g: ctx) (A B: ty) {x: tm} (t: tm x):
+  $ g , x : A ⊢ t : B $ > $ g ⊢ (λ x : A. t) : A ⇒ B $;
+axiom t_app (g: ctx) (A B: ty) (f u: tm):
+  $ g ⊢ f : A ⇒ B $ > $ g ⊢ u : A $ > $ g ⊢ f · u : B $;
+@@auf
+lemma compose (a b c: ty) {f k x: tm}:
+  $ _ ⊢ (λ f : b ⇒ c. λ k : a ⇒ b. λ x : a. f · (k · x)) : (b ⇒ c) ⇒ (a ⇒ b) ⇒ a ⇒ c $
+----
+l1: $ _ ⊢ (λ f : b ⇒ c. λ k : a ⇒ b. λ x : a. f · (k · x)) : _ty $ by auto?
+```
+
+The search suggests
+
+```
+t_lam [t_lam [t_lam [t_app [t_var [], t_app [t_var [], t_var []]]]]]
+```
+
+The three `t_lam` steps move the bound variables' typings into the context,
+the two `t_app` steps type the applications, and `t_var` reads each variable's
+type from the context. The line itself never states the type: the search
+determines it while building the proof. After accepting the suggestion, hover
+`_ty` to see `(b ⇒ c) ⇒ (a ⇒ b) ⇒ a ⇒ c`, or use the **Fill in the holes** code
+action to write it into the line. The lemma states the type only because a
+proof's last line must match its statement.
