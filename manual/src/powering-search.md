@@ -56,11 +56,13 @@ entirely within the proof.
 
 ### Scheduling
 
-Search runs in phases that use increasingly expensive strategies. Each phase
-searches for a proof sequentially at increasing depths, iteratively deepening 
-the search space and caching partial results for future phases. For unannotated 
-rules, introducing metavariables is a last resort, available only in a late 
-phase.
+Search runs in phases that use increasingly expensive strategies. Every phase
+first searches at depth 1. The less expensive phases then deepen together,
+searching each depth before moving to the next. The other phases become
+particularly costly at greater depths, so they are applied to depths past the
+first only after the earlier phases have missed at every allowed depth. For
+unannotated rules, introducing metavariables is a last resort, available only
+in a late phase.
 
 `@auto backward` makes metavariable introduction available in earlier
 phases. At each depth, search still tries cheaper candidates first:

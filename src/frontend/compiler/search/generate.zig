@@ -733,11 +733,10 @@ const LadderGates = struct {
     }
 };
 
-/// What a cell's outcomes mean. A `core` cell whose phase fuel runs dry
-/// retires that phase: its later cells are skipped and the rest of the core
-/// continues. Core depths searched in full are what `gen_core_depth_done`
-/// reports. A `tail` cell runs only while no core phase has retired, and its
-/// phase fuel running dry ends the ladder.
+/// What a cell's outcomes mean. Any cell whose phase fuel runs dry retires
+/// that phase: its later cells are skipped and the rest of the ladder
+/// continues. A `tail` cell runs only while no `core` phase has retired.
+/// Core depths searched in full are what `gen_core_depth_done` reports.
 const Band = enum { core, tail };
 
 /// One (depth, phase) cell of the ladder schedule.
@@ -747,9 +746,9 @@ const Cell = struct {
     band: Band,
 };
 
-/// The ladder's cells in visit order: the depth-major core over phases 1–3,
-/// then a phase-major tail for each of phases 4–5 (see `runPhaseLadder`
-/// for why).
+/// The ladder's cells in visit order: depth 1 of every phase, then the
+/// depth-major core over phases 1–3, then a phase-major tail for each of
+/// phases 4–5 from depth 2 (see `runPhaseLadder` for why).
 fn buildSchedule(
     allocator: std.mem.Allocator,
     max_depth: usize,
@@ -758,32 +757,52 @@ fn buildSchedule(
     var cells = std.ArrayListUnmanaged(Cell){};
     errdefer cells.deinit(allocator);
     for (1..max_depth + 1) |depth| {
-        for (ladder_phases[0..core_phase_count], 0..) |phase, index| {
-            if (!gates.allows(phase)) continue;
-            try cells.append(allocator, .{ .phase = index, .depth = depth, .band = .core });
+        for (0..core_phase_count) |index| {
+            try appendCell(allocator, &cells, gates, index, depth, .core);
+        }
+        if (depth == 1) {
+            for (core_phase_count..ladder_phases.len) |index| {
+                try appendCell(allocator, &cells, gates, index, depth, .tail);
+            }
         }
     }
-    for (ladder_phases[core_phase_count..], core_phase_count..) |phase, index| {
-        if (!gates.allows(phase)) continue;
-        for (1..max_depth + 1) |depth| {
-            try cells.append(allocator, .{ .phase = index, .depth = depth, .band = .tail });
+    for (core_phase_count..ladder_phases.len) |index| {
+        for (2..max_depth + 1) |depth| {
+            try appendCell(allocator, &cells, gates, index, depth, .tail);
         }
     }
     return cells.toOwnedSlice(allocator);
 }
 
+/// Append the cell for phase `index` at `depth` if the theory allows it.
+fn appendCell(
+    allocator: std.mem.Allocator,
+    cells: *std.ArrayListUnmanaged(Cell),
+    gates: LadderGates,
+    index: usize,
+    depth: usize,
+    band: Band,
+) !void {
+    if (!gates.allows(ladder_phases[index])) return;
+    try cells.append(allocator, .{ .phase = index, .depth = depth, .band = band });
+}
+
 /// Phases 1–3 (indices 0–2) form the depth-major core of the schedule;
-/// phases 4–5 run as phase-major tails. See `runPhaseLadder` for why the
-/// boundary sits here (fixed-depth cost growth across phases).
+/// phases 4–5 run as phase-major tails after their depth-1 cells. See
+/// `runPhaseLadder` for why the boundary sits here (fixed-depth cost growth
+/// across phases).
 const core_phase_count = 3;
 
 /// What one run of the ladder carries from cell to cell.
 const LadderState = struct {
     /// Each phase draws on its own fuel pool across all of its cells.
     fuel: [ladder_phases.len]usize,
-    /// Core phases whose fuel ran dry; their later cells are skipped.
+    /// Phases whose fuel ran dry; their later cells are skipped.
     retired: [ladder_phases.len]bool = @splat(false),
     any_retired: bool = false,
+    /// A core phase retired, so the core miss is not clean: no further tail
+    /// cell runs.
+    core_retired: bool = false,
     /// A core cell hit the node cap, so it was not searched in full: its
     /// depth and every deeper one stop counting toward
     /// `gen_core_depth_done`, as after a retired phase.
@@ -797,18 +816,17 @@ const LadderState = struct {
     }
 
     fn runs(self: *const LadderState, cell: Cell) bool {
-        return switch (cell.band) {
-            .core => !self.retired[cell.phase],
-            .tail => !self.any_retired,
-        };
+        return !self.retired[cell.phase] and
+            (cell.band == .core or !self.core_retired);
     }
 };
 
 /// The retry-phase ladder (phases 1–5): runs `schedule` (`buildSchedule`) in
-/// order, stopping at the first cell that yields results. The core is
-/// depth-major over phases 1–3 (outer iterative deepening 1..max_depth,
-/// inner phases per depth); phases 4–5 follow as phase-major tails, only on
-/// a clean core miss. Extracted so the phase-6 trigger-seeding retry and the
+/// order, stopping at the first cell that yields results. Every phase first
+/// searches depth 1. The core then continues depth-major over phases 1–3
+/// (outer iterative deepening 2..max_depth, inner phases per depth), and
+/// phases 4–5 follow as phase-major tails from depth 2, only while no core
+/// phase has retired. Extracted so the phase-6 trigger-seeding retry and the
 /// eager-cut valve can re-run the whole ladder. Returns how the ladder ended
 /// without a proof.
 ///
@@ -836,9 +854,16 @@ const LadderState = struct {
 /// respectively: their fixed-depth cost has a strictly larger exponential
 /// base. Interleaved below a core find they inflate found cost ~3x and blow
 /// budget-marginal finds (measured on tait ex_swap/all_an_dist_fwd,
-/// 2026-07-05); as clean-miss tails they cost exactly what they do today.
-/// The md-monotonicity guarantee therefore covers proofs reachable by
-/// phases 1–3; phase-4/5 proofs keep the old phase-major behavior.
+/// 2026-07-05); as tails they add nothing to the cost of a core find.
+/// Their depth-1 cells are the exception: at depth 1 the larger base has not
+/// compounded yet, so they run right after core depth 1. A proof that needs
+/// retention or constrained MP at depth 1 then no longer waits for every
+/// deeper core pass to miss first (church CONTR/MP/CONJUNCT1 ~2s → <0.1s,
+/// 2026-10-02). The price is that on sequent theories phase 5's depth-1
+/// pass is still broad, and a find at core depth 2 or deeper now pays for it
+/// (tait found cost up to ~4×, at most ~0.4s). The md-monotonicity guarantee
+/// covers proofs reachable by phases 1–3 and depth-1 proofs of phases 4–5;
+/// deeper phase-4/5 proofs keep the old phase-major behavior.
 ///
 /// What phase-major guaranteed and how it is preserved:
 /// - Within a core depth, phase order still runs anchored-first: a
@@ -857,15 +882,16 @@ const LadderState = struct {
 ///   same cell as before; only the interleaving with other phases' cells
 ///   changed.
 /// - Exhaustion of the GLOBAL tick budget (or a stack-guard trip) aborts the
-///   whole ladder, exactly as before. Exhaustion of one core phase's own fuel, however, only
-///   RETIRES that phase (its remaining cells are skipped); the other phases
-///   keep their pools and continue. Phase-major could afford to abort
-///   everything on any exhaustion because an exhausted phase had, by the
-///   clean-miss gating, no earlier phase left to hurt — here an expensive
-///   phase flooding out at a shallow cell must not kill a sibling phase's
-///   deeper find. A retirement still reports the ladder as budget-truncated
-///   (the miss is not clean, so the tail phases and the eager-cut valve stay
-///   exactly as conservative as before). Abort and
+///   whole ladder, exactly as before. Exhaustion of one phase's own fuel,
+///   however, only RETIRES that phase (its remaining cells are skipped); the
+///   other phases keep their pools and continue. Phase-major could afford to
+///   abort everything on any exhaustion because an exhausted phase had, by
+///   the clean-miss gating, no earlier phase left to hurt — here an
+///   expensive phase flooding out at a shallow cell must not kill a sibling
+///   phase's deeper find. A retirement still reports the ladder as
+///   budget-truncated (the miss is not clean, so the eager-cut valve stays
+///   exactly as conservative as before), and a retired core phase also
+///   skips the remaining tail cells. Abort and
 ///   retire points depend only on cumulative work along the fixed visit
 ///   order, so md monotonicity holds even on truncated calls.
 fn runPhaseLadder(
@@ -882,12 +908,10 @@ fn runPhaseLadder(
             switch (try runCell(driver, &state, gates, cell, goal_expr, applications, budget_ptr)) {
                 .miss => {},
                 .found => return .clean,
-                .fuel => switch (cell.band) {
-                    .core => {
-                        state.retired[cell.phase] = true;
-                        state.any_retired = true;
-                    },
-                    .tail => return .exhausted,
+                .fuel => {
+                    state.retired[cell.phase] = true;
+                    state.any_retired = true;
+                    if (cell.band == .core) state.core_retired = true;
                 },
                 .stop => return .stopped,
             }
@@ -895,15 +919,13 @@ fn runPhaseLadder(
         const next: ?Cell = if (index + 1 < schedule.len) schedule[index + 1] else null;
         const ends_core_depth = cell.band == .core and
             (next == null or next.?.band != .core or next.?.depth != cell.depth);
-        if (ends_core_depth and !state.any_retired and !state.core_capped) {
+        if (ends_core_depth and !state.core_retired and !state.core_capped) {
             if (driver.counters) |c| {
                 c.gen_core_depth_done = @max(c.gen_core_depth_done, cell.depth);
             }
         }
     }
-    // A retired core phase means the miss is not clean; stay exactly as
-    // conservative as phase-major (where any fuel exhaustion blocked all
-    // later phases).
+    // A retired phase means the miss is not clean.
     return if (state.any_retired) .exhausted else .clean;
 }
 

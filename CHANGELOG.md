@@ -128,6 +128,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `auto?` suggestions print fewer explicit bindings, since the checker now
   infers more of them: `mp [bi1 [], biid []]` in place of
   `mp (p := $ p <-> p $) [bi1 [], biid []]`.
+- `auto?` now tries its most expensive search phases at depth 1 before it
+  searches deeper with the others. A proof that needs one of those phases
+  for a single step no longer waits until every deeper search has missed:
+  in the Church example `auto?` finds `CONTR` and `MP` in under 0.1s
+  instead of about 2s. Deeper proofs pay for the extra pass. On the search
+  benchmark, 47 found proofs got more than half a second faster and 3 got
+  more than half a second slower.
 
 ### Fixed
 
