@@ -1130,6 +1130,33 @@ test "unfolded mismatch gives back the dependency slots its def unfolds spend" {
     try std.testing.expectEqual(slots, theorem.depSlotsLeft());
 }
 
+test "unfolded mismatch compares a shared def head's arguments without unfolding it" {
+    // Both sides apply `wrap`, so they differ only where their arguments do:
+    // `lz` against `lam w o`. Telling those apart unfolds `lz`, one
+    // placeholder for its hidden `x`. Unfolding `wrap` on each side as well
+    // would mint one more per side.
+    const mm0_src = redex_theory ++
+        \\def lz {.x: tm}: tm = $ lam x z $;
+        \\def wrap (a: tm) {.y: tm}: tm = $ lam y a $;
+        \\theorem t {w: tm}: $ teq (wrap lz) (wrap (lam w o)) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal = theorem.interner.node(try theorem.internParsedExpr(fixture.assertion.concl)).app;
+    const minted = theorem.next_placeholder_id;
+
+    try std.testing.expect(helpers.plausible.unfoldedExprMismatch(&context, &theorem, goal.args[0], goal.args[1], 0));
+    try std.testing.expectEqual(minted + 1, theorem.next_placeholder_id);
+}
+
 test "conclusion plausibility gives back the dependency slots its def unfolds spend" {
     // `lam_o`'s conclusion has a `lam` head where the goal has `lz`, so the
     // folded-goal check unfolds `lz`, minting a placeholder for its hidden

@@ -1166,17 +1166,18 @@ fn unfoldedMismatch(
         },
     }
     if (def_match.rigidExprMismatch(context, theorem, a, b)) return true;
+    // Two applications of one head differ only where their arguments do, so
+    // compare the arguments the head determines. Unfolding both sides instead
+    // would give each its own placeholders for the def's hidden variables.
+    if (lockstep.exprArgs(context, theorem, a, b)) |aligned| {
+        var args = aligned;
+        while (args.next()) |pair| {
+            if (unfoldedMismatch(context, theorem, pair.a, pair.b, depth + 1)) return true;
+        }
+        return false;
+    }
     const ua = (def_match.unfoldAppOnce(context, theorem, a, true) catch return false) orelse a;
     const ub = (def_match.unfoldAppOnce(context, theorem, b, true) catch return false) orelse b;
-    if (ua != a or ub != b) {
-        return unfoldedMismatch(context, theorem, ua, ub, depth + 1);
-    }
-    // Neither side unfolds further, and the rigid comparison found no clash, so
-    // only an argument their shared head determines can still diverge after
-    // unfolding inside it.
-    var args = lockstep.exprArgs(context, theorem, a, b) orelse return false;
-    while (args.next()) |pair| {
-        if (unfoldedMismatch(context, theorem, pair.a, pair.b, depth + 1)) return true;
-    }
-    return false;
+    if (ua == a and ub == b) return false;
+    return unfoldedMismatch(context, theorem, ua, ub, depth + 1);
 }
