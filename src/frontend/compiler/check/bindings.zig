@@ -101,7 +101,7 @@ pub fn resolveLineAssertionForBindings(
                 diag_scratch,
                 assertion,
                 line,
-                holey,
+                holey.surface,
                 expected_line,
             );
         },
@@ -241,7 +241,7 @@ fn inferHoleyOptionalBindingsForProbe(
     partial_bindings: []const ?ExprId,
     base_ref_exprs: []const ExprId,
     maybe_view: ?ViewDecl,
-    holey: *const Expr,
+    holey: Holes.HoleyLine,
 ) ![]const ?ExprId {
     const allocator = context.allocator;
     const theorem = context.theorem;
@@ -256,13 +256,13 @@ fn inferHoleyOptionalBindingsForProbe(
     }
 
     if (maybe_view) |view| {
-        CompilerViews.applyViewBindingsSurfaceConclusion(
+        CompilerViews.applyViewBindingsHoleyConclusion(
             allocator,
             theorem,
             context.env,
             context.registry,
             &view,
-            holey,
+            holey.interned,
             base_ref_exprs,
             optional,
             null,
@@ -270,10 +270,10 @@ fn inferHoleyOptionalBindingsForProbe(
             false,
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
-            try matchRawTemplateToHoleyConclusion(theorem, rule, optional, holey);
+            try matchRawTemplateToHoleyConclusion(theorem, rule, optional, holey.surface);
         };
     } else {
-        try matchRawTemplateToHoleyConclusion(theorem, rule, optional, holey);
+        try matchRawTemplateToHoleyConclusion(theorem, rule, optional, holey.surface);
     }
 
     return optional;
@@ -424,7 +424,7 @@ pub fn inferCandidateBindings(
             const has_structural_hole = try Holes.containsStructuralHole(
                 env,
                 registry,
-                holey,
+                holey.surface,
             );
             // Exact refs can identify a candidate before the visible holey
             // assertion is checked.  Keep this shortcut conservative: it must
@@ -467,7 +467,7 @@ pub fn inferCandidateBindings(
                             assertion,
                             line,
                             rule,
-                            holey,
+                            holey.surface,
                             err,
                             .{},
                             fresh_context,
@@ -489,7 +489,7 @@ pub fn inferCandidateBindings(
                 rule,
                 partial_bindings,
                 base_ref_exprs,
-                holey,
+                holey.surface,
                 &hole_report,
             ) catch |err| {
                 // The lightweight hole matcher is deliberately exact.  If
@@ -525,7 +525,7 @@ pub fn inferCandidateBindings(
                     assertion,
                     line,
                     rule,
-                    holey,
+                    holey.surface,
                     err,
                     hole_report,
                     fresh_context,
@@ -665,6 +665,10 @@ pub fn inferCandidateBindings(
                         .sort = try templateSort(env, rule, rule.concl),
                         .token = "<implicit>",
                     } };
+                    const whole_line = Holes.HoleyLine{
+                        .surface = &whole_hole,
+                        .interned = null,
+                    };
                     // A holey hint that failed as a whole may still fix some
                     // binders (the context of `¬D ⊢ ‹hole›`); without them
                     // the whole-hole solve can pick another ACUI split.
@@ -685,7 +689,7 @@ pub fn inferCandidateBindings(
                                 line,
                                 seeded,
                                 base_ref_exprs,
-                                &whole_hole,
+                                whole_line,
                                 maybe_view,
                                 fresh_context,
                             )) |bindings| {
@@ -703,7 +707,7 @@ pub fn inferCandidateBindings(
                         line,
                         partial_bindings,
                         base_ref_exprs,
-                        &whole_hole,
+                        whole_line,
                         maybe_view,
                         fresh_context,
                     );
@@ -793,7 +797,7 @@ pub fn elaborateCandidateLine(
             diag_scratch,
             assertion,
             line,
-            holey,
+            holey.surface,
             raw_conclusion,
         ),
     };
@@ -1102,7 +1106,7 @@ pub fn lineAssertionKnownDeps(
             theorem.arg_infos,
             expr_id,
         )).deps,
-        .holey => |expr| expr.deps(),
+        .holey => |holey| holey.surface.deps(),
         .implicit_whole_conclusion => try templateKnownDeps(
             env,
             theorem,

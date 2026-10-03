@@ -51,7 +51,9 @@ const traceInferenceFailure = InferenceDiagnostics.traceInferenceFailure;
 
 const InferenceConclusion = union(enum) {
     concrete: ExprId,
-    surface: *const Expr,
+    /// A holey line with a line hole for each hole
+    /// (`Holes.internWithLineHoles`); null for a whole-line hole.
+    holey: ?ExprId,
 };
 
 pub const ViewSeedSetup = struct {
@@ -243,14 +245,14 @@ pub fn buildViewSeedSetup(
                 return .{ .setup = setup };
             };
         },
-        .surface => |surface_concl| {
-            CompilerViews.applyViewBindingsSurfaceConclusion(
+        .holey => |holey_concl| {
+            CompilerViews.applyViewBindingsHoleyConclusion(
                 allocator,
                 theorem,
                 env,
                 registry,
                 &actual_view,
-                surface_concl,
+                holey_concl,
                 ref_exprs,
                 seeded,
                 view_seed_overrides,
@@ -498,26 +500,6 @@ pub fn inferBindingsFromRefsOnly(
         concrete[idx] = binding.?;
     }
     return concrete;
-}
-
-fn matchRulePartNormalizedSurface(
-    allocator: std.mem.Allocator,
-    env: *const GlobalEnv,
-    registry: *RewriteRegistry,
-    scratch: *CompilerDiag.Scratch,
-    session: *DefOps.RuleMatchSession,
-    template: TemplateExpr,
-    actual: *const Expr,
-) !bool {
-    return try NormalizedCompare.matchSurface(
-        allocator,
-        env,
-        registry,
-        scratch,
-        session,
-        template,
-        actual,
-    );
 }
 
 fn sortUnresolvedFinalizationRoots(
@@ -847,26 +829,34 @@ pub fn inferBindingsByMatchSeedState(
     );
 }
 
-/// Match a holey line's conclusion by transparent rule matching, with the
-/// holes interned as line holes that match anything
-/// (`line_holes_match_anything`). This reaches a hole under a definition the
-/// rule has unfolded: `img f _set` against `sep x A p`.
+/// Match a holey line's conclusion with its holes interned as line holes
+/// that match anything (`line_holes_match_anything`): first with both sides
+/// normalized, then by transparent rule matching, which reaches a hole under
+/// a definition the rule has unfolded: `img f _set` against `sep x A p`.
 fn matchRulePartHoleyInterned(
     allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
     env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    scratch: *CompilerDiag.Scratch,
     session: *DefOps.RuleMatchSession,
     template: TemplateExpr,
-    actual: *const Expr,
+    holey_id: ExprId,
 ) !bool {
-    const holey_id = try Holes.internWithLineHoles(theorem, env, actual) orelse
-        return false;
-    var snapshot = try session.saveSeedState();
-    defer snapshot.deinit(allocator);
-
     const saved = session.shared.line_holes_match_anything;
     session.shared.line_holes_match_anything = true;
     defer session.shared.line_holes_match_anything = saved;
+    if (try matchRulePartNormalized(
+        allocator,
+        env,
+        registry,
+        scratch,
+        session,
+        template,
+        holey_id,
+    )) return true;
+
+    var snapshot = try session.saveSeedState();
+    defer snapshot.deinit(allocator);
     if (try session.matchTransparentOrSemantic(template, holey_id)) return true;
     try session.restoreFromSeedState(&snapshot);
     return false;
@@ -880,7 +870,7 @@ fn finishHoleyRuleMatchSession(
     fresh_context: ?HiddenWitnessFreshContext,
     partial_bindings: []const ?ExprId,
     ref_exprs: []const ExprId,
-    holey_concl: *const Expr,
+    holey: Holes.HoleyLine,
     diagnostic_bindings: []const ?ExprId,
 ) !RuleMatchResult {
     const allocator = context.allocator;
@@ -905,29 +895,22 @@ fn finishHoleyRuleMatchSession(
     }
 
     // A whole-line hole matches any conclusion.
-    const matched_concl = holey_concl.* == .hole or try matchRulePartNormalizedSurface(
+    const matched_concl = if (holey.interned) |holey_id| try matchRulePartHoleyInterned(
         allocator,
         env,
         registry,
         scratch,
         session,
         rule.concl,
-        holey_concl,
-    ) or try matchRulePartHoleyInterned(
-        allocator,
-        theorem,
-        env,
-        session,
-        rule.concl,
-        holey_concl,
-    );
+        holey_id,
+    ) else true;
     if (!matched_concl) return .{ .no_match = conclusionMismatch() };
 
     const result = tryFinalizeRuleMatchSession(
         allocator,
         session,
         fresh_context,
-        holey_concl.deps(),
+        holey.surface.deps(),
         ref_exprs,
         partial_bindings,
     ) catch |err| {
@@ -995,7 +978,7 @@ pub fn inferBindingsFromHoleyAdvanced(
     line: anytype,
     partial_bindings: []const ?ExprId,
     ref_exprs: []const ExprId,
-    holey_concl: *const Expr,
+    holey: Holes.HoleyLine,
     maybe_view: ?ViewDecl,
     fresh_context: ?HiddenWitnessFreshContext,
 ) ![]const ExprId {
@@ -1012,7 +995,7 @@ pub fn inferBindingsFromHoleyAdvanced(
         line,
         partial_bindings,
         ref_exprs,
-        holey_concl,
+        holey,
         maybe_view,
     )) |bindings| {
         self.restoreDiagnostic(null);
@@ -1027,7 +1010,7 @@ pub fn inferBindingsFromHoleyAdvanced(
         theorem,
         rule,
         maybe_view,
-        .{ .surface = holey_concl },
+        .{ .holey = holey.interned },
         ref_exprs,
         partial_bindings,
         null,
@@ -1062,7 +1045,7 @@ pub fn inferBindingsFromHoleyAdvanced(
         fresh_context,
         partial_bindings,
         ref_exprs,
-        holey_concl,
+        holey,
         diagnostic_bindings,
     ) catch |err| {
         return err;
@@ -1119,28 +1102,18 @@ fn tryInferHoleyLineStructuralSolver(
     line: anytype,
     partial_bindings: []const ?ExprId,
     ref_exprs: []const ExprId,
-    holey_concl: *const Expr,
+    holey: Holes.HoleyLine,
     maybe_view: ?ViewDecl,
 ) !?[]const ExprId {
-    if (!SurfaceExpr.containsHole(holey_concl)) return null;
-    // A whole-line hole needs no line hole minted: it constrains nothing.
-    const holey = if (holey_concl.* == .hole)
-        null
-    else
-        try Holes.internWithLineHoles(
-            context.theorem,
-            context.env,
-            holey_concl,
-        ) orelse return null;
     const minimal = if (try SurfaceExpr.containsStructuralHole(
         context.env,
         context.registry,
-        holey_concl,
+        holey.surface,
     )) try SurfaceExpr.lowerStructuralHolesToUnits(
         context.theorem,
         context.env,
         context.registry,
-        holey_concl,
+        holey.surface,
     ) else null;
     return try tryInferHoleyStructuralSolver(
         self,
@@ -1148,7 +1121,7 @@ fn tryInferHoleyLineStructuralSolver(
         line,
         partial_bindings,
         ref_exprs,
-        holey,
+        holey.interned,
         minimal,
         maybe_view,
     );

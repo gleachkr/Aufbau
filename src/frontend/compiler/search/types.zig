@@ -36,10 +36,16 @@ pub const Goal = union(enum) {
     holey: *const Expr,
     implicit_whole_conclusion: ?ExprId,
 
-    pub fn lineAssertion(self: Goal) Check.LineAssertion {
+    /// The goal as a line assertion checked in `theorem`, a holey goal
+    /// interned there with its line holes.
+    pub fn lineAssertion(
+        self: Goal,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+    ) !Check.LineAssertion {
         return switch (self) {
             .concrete => |expr| .{ .concrete = expr },
-            .holey => |expr| .{ .holey = expr },
+            .holey => |expr| .{ .holey = try Check.HoleyLine.init(theorem, env, expr) },
             .implicit_whole_conclusion => .implicit_whole_conclusion,
         };
     }

@@ -92,7 +92,7 @@ pub fn addFallbackFailureNote(
             addProofNoteSpan(
                 diag,
                 .holey_fallback_exhausted,
-                firstHoleProofSpan(line, holey),
+                firstHoleProofSpan(line, holey.surface),
             );
         },
     }

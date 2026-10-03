@@ -69,6 +69,40 @@ pub const ParsedAssertion = union(enum) {
     holey: *const Expr,
 };
 
+/// A holey assertion in both forms: as written, for diagnostics and fills,
+/// and interned once with a line hole for each hole (`internWithLineHoles`),
+/// for the matchers.
+pub const HoleyLine = struct {
+    surface: *const Expr,
+    /// Null for a whole-line hole: it constrains nothing, and minting a line
+    /// hole for it would cost every unhinted inline step.
+    interned: ?ExprId,
+
+    pub fn init(
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        surface: *const Expr,
+    ) !HoleyLine {
+        if (surface.* == .hole) return .{ .surface = surface, .interned = null };
+        return .{
+            .surface = surface,
+            .interned = try internWithLineHoles(theorem, env, surface) orelse
+                return error.UnknownSort,
+        };
+    }
+
+    /// The interned line, a whole-line hole minted as one line hole.
+    pub fn internedIn(
+        self: HoleyLine,
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+    ) !ExprId {
+        if (self.interned) |interned| return interned;
+        return try internWithLineHoles(theorem, env, self.surface) orelse
+            error.UnknownSort;
+    }
+};
+
 pub const InferenceFailure = union(enum) {
     hypothesis_mismatch: struct {
         /// Source-order index of the cited premise / rule hypothesis.
@@ -301,10 +335,10 @@ pub fn foldTemplateToSurface(
     return false;
 }
 
-/// Intern a holey surface with a fresh line hole for each hole, for use as an
-/// inline minor's holey hint. Line holes are meta wildcards that spend no
-/// dependency slot, so a theorem may check any number of holey lines. Null
-/// when a hole's sort is unknown.
+/// Intern a holey surface with a fresh line hole for each hole: a holey line
+/// (`HoleyLine`) or an inline minor's holey hint. Line holes are meta
+/// wildcards that spend no dependency slot, so a theorem may check any
+/// number of holey lines. Null when a hole's sort is unknown.
 pub fn internWithLineHoles(
     theorem: *TheoremContext,
     env: *const GlobalEnv,

@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
+const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RuleDecl = @import("../../env.zig").RuleDecl;
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
@@ -99,13 +100,19 @@ pub const RefExpectationProbe = struct {
 
 pub const LineAssertion = union(enum) {
     concrete: ExprId,
-    holey: *const Expr,
+    holey: Holes.HoleyLine,
     implicit_whole_conclusion,
 
-    pub fn fromParsed(parsed: Holes.ParsedAssertion) LineAssertion {
+    /// Interns a holey assertion once, with its line holes, for the
+    /// matchers (`Holes.HoleyLine`).
+    pub fn fromParsed(
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        parsed: Holes.ParsedAssertion,
+    ) !LineAssertion {
         return switch (parsed) {
             .concrete => |expr_id| .{ .concrete = expr_id },
-            .holey => |expr| .{ .holey = expr },
+            .holey => |expr| .{ .holey = try Holes.HoleyLine.init(theorem, env, expr) },
         };
     }
 };
@@ -115,7 +122,7 @@ pub const LineAssertion = union(enum) {
 /// whole conclusion with no hint.
 pub const LineGoal = union(enum) {
     expr: ExprId,
-    holey: *const Expr,
+    holey: Holes.HoleyLine,
 
     pub fn of(hint: ?ExprId, line_assertion: LineAssertion) ?LineGoal {
         if (hint) |expr| return .{ .expr = expr };

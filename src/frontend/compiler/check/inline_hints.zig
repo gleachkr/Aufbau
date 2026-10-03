@@ -137,7 +137,7 @@ fn inferExpectedRefsForInlineApplicationsWithContext(
         .holey => |holey| {
             const scratch = try allocator.alloc(?ExprId, contextual.len);
             defer allocator.free(scratch);
-            if (try Holes.foldTemplateToSurface(theorem, rule.concl, holey, contextual, scratch)) {
+            if (try Holes.foldTemplateToSurface(theorem, rule.concl, holey.surface, contextual, scratch)) {
                 demoteAcuiSpineBindingsInTemplate(registry, rule.concl, false, snapshot, contextual);
             }
             try instantiateExpectedRefs(theorem, rule, contextual, expected_refs);
@@ -679,7 +679,7 @@ fn goalBindings(
         else
             return null,
         .holey => |holey| if (kind == .holey)
-            (try Holes.internWithLineHoles(theorem, context.env, holey)) orelse return null
+            try holey.internedIn(theorem, context.env)
         else
             return null,
     };

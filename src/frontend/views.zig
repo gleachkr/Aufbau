@@ -12,7 +12,6 @@ const DefOps = @import("./def_ops.zig");
 const DerivedBindings = @import("./derived_bindings.zig");
 const BindingValidation = @import("./binding_validation.zig");
 const Expr = @import("../trusted/expressions.zig").Expr;
-const SurfaceExpr = @import("./surface_expr.zig");
 const ArgInfo = @import("./parse_recovery.zig").ArgInfo;
 const AssertionStmt = @import("./parse_recovery.zig").AssertionStmt;
 const MM0Parser = @import("./parse_recovery.zig").MM0Parser;
@@ -154,7 +153,9 @@ pub fn processViewAnnotations(
 
 const ViewConclusion = union(enum) {
     concrete: ExprId,
-    surface: *const Expr,
+    /// A holey line with a line hole for each hole
+    /// (`Holes.internWithLineHoles`).
+    holey: ExprId,
 };
 
 pub fn applyViewBindings(
@@ -185,13 +186,13 @@ pub fn applyViewBindings(
     );
 }
 
-pub fn applyViewBindingsSurfaceConclusion(
+pub fn applyViewBindingsHoleyConclusion(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
     view: *const ViewDecl,
-    surface_concl: *const Expr,
+    holey_concl: ?ExprId,
     ref_exprs: []const ExprId,
     partial_bindings: []?ExprId,
     seed_overrides: ?[]const DefOps.BindingSeed,
@@ -204,7 +205,8 @@ pub fn applyViewBindingsSurfaceConclusion(
         env,
         registry,
         view,
-        .{ .surface = surface_concl },
+        // A whole-line hole (null) constrains nothing: only the refs match.
+        if (holey_concl) |holey| .{ .holey = holey } else null,
         ref_exprs,
         partial_bindings,
         seed_overrides,
@@ -287,17 +289,16 @@ fn applyViewBindingsWithConclusion(
     var session = try def_ops.beginRuleMatch(view.arg_infos, seeds);
     defer session.deinit();
 
-    var surface_bindings: ?[]?*const Expr = null;
-    defer if (surface_bindings) |bindings| allocator.free(bindings);
+    // The holey part of the line each bare view binder faced, for
+    // @abstract to read back.
+    var holey_bindings: ?[]?ExprId = null;
+    defer if (holey_bindings) |bindings| allocator.free(bindings);
     if (conclusion) |actual_conclusion| {
         switch (actual_conclusion) {
-            .surface => {
-                const bindings = try allocator.alloc(
-                    ?*const Expr,
-                    view.num_binders,
-                );
+            .holey => {
+                const bindings = try allocator.alloc(?ExprId, view.num_binders);
                 @memset(bindings, null);
-                surface_bindings = bindings;
+                holey_bindings = bindings;
             },
             .concrete => {},
         }
@@ -311,7 +312,7 @@ fn applyViewBindingsWithConclusion(
             &session,
             view,
             conclusion,
-            surface_bindings,
+            holey_bindings,
             ref_exprs,
         );
     } else {
@@ -320,7 +321,7 @@ fn applyViewBindingsWithConclusion(
             &session,
             view,
             conclusion,
-            surface_bindings,
+            holey_bindings,
             ref_exprs,
         );
     }
@@ -388,8 +389,8 @@ fn applyViewBindingsWithConclusion(
     defer allocator.free(view_snapshot.view_seeds.?);
     defer allocator.free(view_snapshot.dummy_witnesses.?);
 
-    if (surface_bindings) |bindings| {
-        try applySurfaceDerivedBindings(
+    if (holey_bindings) |bindings| {
+        try applyHoleyDerivedBindings(
             theorem,
             env,
             view,
@@ -634,24 +635,23 @@ fn matchViewAgainstConclusion(
     session: *DefOps.RuleMatchSession,
     view: *const ViewDecl,
     conclusion: ?ViewConclusion,
-    surface_bindings: ?[]?*const Expr,
+    holey_bindings: ?[]?ExprId,
     ref_exprs: []const ExprId,
 ) !void {
     var initial_state: ?DefOps.MatchSeedState = null;
     defer if (initial_state) |*state| {
         state.deinit(session.shared.allocator);
     };
-    if (conclusion != null and ref_exprs.len != 0 and surface_bindings == null) {
+    if (conclusion != null and ref_exprs.len != 0 and holey_bindings == null) {
         initial_state = try session.saveSeedState();
     }
 
     if (conclusion) |actual_conclusion| {
         const matched = try matchViewConclusion(
-            env,
             session,
             view,
             actual_conclusion,
-            surface_bindings,
+            holey_bindings,
         );
         if (!matched) {
             const state = initial_state orelse {
@@ -837,7 +837,7 @@ fn matchConclusionMaybeTraced(
             null,
         );
     }
-    return try matchViewConclusion(env, session, view, conclusion, null);
+    return try matchViewConclusion(session, view, conclusion, null);
 }
 
 fn matchHypRef(
@@ -1139,11 +1139,10 @@ fn assignAcuiResidualBag(
 }
 
 fn matchViewConclusion(
-    env: *const GlobalEnv,
     session: *DefOps.RuleMatchSession,
     view: *const ViewDecl,
     conclusion: ViewConclusion,
-    surface_bindings: ?[]?*const Expr,
+    holey_bindings: ?[]?ExprId,
 ) !bool {
     return switch (conclusion) {
         .concrete => |line_expr| try matchConcreteViewConclusion(
@@ -1151,12 +1150,11 @@ fn matchViewConclusion(
             view,
             line_expr,
         ),
-        .surface => |surface| try matchSurfaceViewConclusion(
-            env,
+        .holey => |holey| try matchHoleyViewConclusion(
             session,
             view,
-            surface,
-            surface_bindings,
+            holey,
+            holey_bindings,
         ),
     };
 }
@@ -1168,14 +1166,14 @@ fn matchViewAgainstConclusionDebug(
     session: *DefOps.RuleMatchSession,
     view: *const ViewDecl,
     conclusion: ?ViewConclusion,
-    surface_bindings: ?[]?*const Expr,
+    holey_bindings: ?[]?ExprId,
     ref_exprs: []const ExprId,
 ) !void {
     var initial_state: ?DefOps.MatchSeedState = null;
     defer if (initial_state) |*state| {
         state.deinit(session.shared.allocator);
     };
-    if (conclusion != null and ref_exprs.len != 0 and surface_bindings == null) {
+    if (conclusion != null and ref_exprs.len != 0 and holey_bindings == null) {
         initial_state = try session.saveSeedState();
     }
 
@@ -1187,7 +1185,7 @@ fn matchViewAgainstConclusionDebug(
             session,
             view,
             actual_conclusion,
-            surface_bindings,
+            holey_bindings,
         )) {
             const state = initial_state orelse {
                 return error.ViewConclusionMismatch;
@@ -1266,7 +1264,7 @@ fn matchViewConclusionDebug(
     session: *DefOps.RuleMatchSession,
     view: *const ViewDecl,
     conclusion: ViewConclusion,
-    surface_bindings: ?[]?*const Expr,
+    holey_bindings: ?[]?ExprId,
 ) !bool {
     switch (conclusion) {
         .concrete => |line_expr| {
@@ -1301,22 +1299,21 @@ fn matchViewConclusionDebug(
             );
             return false;
         },
-        .surface => |surface| {
-            if (try matchSurfaceViewConclusion(
-                env,
+        .holey => |holey| {
+            if (try matchHoleyViewConclusion(
                 session,
                 view,
-                surface,
-                surface_bindings,
+                holey,
+                holey_bindings,
             )) {
                 ViewTrace.printMessage(
-                    "view conclusion matched holey surface assertion",
+                    "view conclusion matched holey assertion",
                     .{},
                 );
                 return true;
             }
             ViewTrace.printMessage(
-                "view conclusion mismatch with holey surface assertion",
+                "view conclusion mismatch with holey assertion",
                 .{},
             );
             return false;
@@ -1332,27 +1329,26 @@ fn matchConcreteViewConclusion(
     return try session.matchTransparentOrSemantic(view.concl, line_expr);
 }
 
-fn matchSurfaceViewConclusion(
-    env: *const GlobalEnv,
+/// Match a view conclusion against a holey line, its line holes matching
+/// anything. A bare view binder facing the line stays unbound: its holey
+/// value goes to `holey_bindings` for @abstract.
+fn matchHoleyViewConclusion(
     session: *DefOps.RuleMatchSession,
     view: *const ViewDecl,
-    surface: *const Expr,
-    surface_bindings: ?[]?*const Expr,
+    holey: ExprId,
+    holey_bindings: ?[]?ExprId,
 ) !bool {
-    if (SurfaceExpr.containsHole(surface)) {
-        if (view.concl == .binder) {
-            if (surface_bindings) |bindings| {
-                bindings[view.concl.binder] = surface;
-            }
-            return true;
+    if (view.concl == .binder and session.shared.theorem.containsLineHole(holey)) {
+        if (holey_bindings) |bindings| {
+            bindings[view.concl.binder] = holey;
         }
+        return true;
     }
 
-    var comparison = try session.beginNormalizedSurfaceComparison(
-        env,
-        view.concl,
-        surface,
-    );
+    const saved = session.shared.line_holes_match_anything;
+    session.shared.line_holes_match_anything = true;
+    defer session.shared.line_holes_match_anything = saved;
+    var comparison = try session.beginNormalizedComparison(view.concl, holey);
     defer comparison.deinit();
     return try comparison.finish(
         comparison.expected_expr,
@@ -1360,11 +1356,11 @@ fn matchSurfaceViewConclusion(
     );
 }
 
-fn applySurfaceDerivedBindings(
+fn applyHoleyDerivedBindings(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     view: *const ViewDecl,
-    surface_bindings: []const ?*const Expr,
+    holey_bindings: []const ?ExprId,
     view_bindings: []?ExprId,
 ) !void {
     for (view.derived_bindings) |binding| {
@@ -1373,8 +1369,8 @@ fn applySurfaceDerivedBindings(
             .recover => continue,
         };
         if (view_bindings[abstract.target_view_idx] != null) continue;
-        const right_surface =
-            surface_bindings[abstract.right_view_idx] orelse continue;
+        const right_holey =
+            holey_bindings[abstract.right_view_idx] orelse continue;
         const left_expr = view_bindings[abstract.left_view_idx] orelse {
             continue;
         };
@@ -1403,11 +1399,11 @@ fn applySurfaceDerivedBindings(
             .base = base,
             .scratch = scratch,
         };
-        const candidate = abstractContextSurface(
+        const candidate = abstractContextHoley(
             &walk,
             env,
             left_expr,
-            right_surface,
+            right_holey,
         ) catch |err| switch (err) {
             error.AbstractStructureMismatch => continue,
             else => return err,
@@ -1421,22 +1417,25 @@ fn applySurfaceDerivedBindings(
     }
 }
 
-fn abstractContextSurface(
+/// The @abstract context of `left_expr` against the holey right side: a
+/// line hole matches a subterm of its sort, and a hole of the right plug's
+/// sort may be a plug site.
+fn abstractContextHoley(
     walk: *DerivedBindings.PlugWalk,
     env: *const GlobalEnv,
     left_expr: ExprId,
-    right_surface: *const Expr,
+    right: ExprId,
 ) !ExprId {
     const theorem = walk.theorem;
-    if (right_surface.* == .hole) {
+    if (lineHoleSort(theorem, right) != null) {
         // A hole of the right plug's sort is a plug site for the bare form.
         if (walk.abstract.left_plug.bareBinder()) |left_idx| {
             if (walk.abstract.right_plug.bareBinder()) |right_idx| {
                 if (left_expr == walk.bindings[left_idx].? and
-                    try surfaceMatchesConcrete(
+                    try holeyMatchesConcrete(
                         theorem,
                         env,
-                        right_surface,
+                        right,
                         walk.bindings[right_idx].?,
                     ))
                 {
@@ -1445,59 +1444,44 @@ fn abstractContextSurface(
                 }
             }
         }
-        if (!try surfaceMatchesConcrete(
-            theorem,
-            env,
-            right_surface,
-            left_expr,
-        )) return error.AbstractStructureMismatch;
+        if (!try holeyMatchesConcrete(theorem, env, right, left_expr)) {
+            return error.AbstractStructureMismatch;
+        }
         return left_expr;
     }
 
-    if (!SurfaceExpr.containsHole(right_surface)) {
-        const maybe_right = theorem.internParsedExpr(right_surface) catch |err|
-            switch (err) {
-                error.UnknownTheoremVariable => null,
-                else => return err,
-            };
-        if (maybe_right) |right_expr| {
-            if (walk.identityFirst() and left_expr == right_expr) {
-                return left_expr;
-            }
-            if (walk.trySite(left_expr, right_expr)) return walk.hole_expr;
-        }
+    if (!theorem.containsLineHole(right)) {
+        if (walk.identityFirst() and left_expr == right) return left_expr;
+        if (walk.trySite(left_expr, right)) return walk.hole_expr;
     }
 
     const left_node = theorem.interner.node(left_expr);
     return switch (left_node.*) {
         .variable, .placeholder => blk: {
-            if (!try surfaceMatchesConcrete(
-                theorem,
-                env,
-                right_surface,
-                left_expr,
-            )) return error.AbstractStructureMismatch;
+            if (!try holeyMatchesConcrete(theorem, env, right, left_expr)) {
+                return error.AbstractStructureMismatch;
+            }
             break :blk left_expr;
         },
         .app => |left_app| blk: {
-            const right_term = switch (right_surface.*) {
-                .term => |term| term,
-                .variable, .hole => return error.AbstractStructureMismatch,
+            const right_app = switch (theorem.interner.node(right).*) {
+                .app => |app| app,
+                .variable, .placeholder => return error.AbstractStructureMismatch,
             };
-            if (left_app.term_id != right_term.id) {
+            if (left_app.term_id != right_app.term_id) {
                 return error.AbstractStructureMismatch;
             }
-            if (left_app.args.len != right_term.args.len) {
+            if (left_app.args.len != right_app.args.len) {
                 return error.AbstractStructureMismatch;
             }
             const args = try theorem.allocator.alloc(ExprId, left_app.args.len);
             errdefer theorem.allocator.free(args);
-            for (left_app.args, right_term.args, 0..) |
+            for (left_app.args, right_app.args, 0..) |
                 left_arg,
                 right_arg,
                 idx,
             | {
-                args[idx] = try abstractContextSurface(
+                args[idx] = try abstractContextHoley(
                     walk,
                     env,
                     left_arg,
@@ -1512,16 +1496,25 @@ fn abstractContextSurface(
     };
 }
 
-fn surfaceMatchesConcrete(
+/// The sort of `expr` when it is a line hole.
+fn lineHoleSort(theorem: *const TheoremContext, expr: ExprId) ?[]const u8 {
+    const idx = switch (theorem.interner.node(expr).*) {
+        .placeholder => |idx| idx,
+        .variable, .app => return null,
+    };
+    const info = theorem.placeholderInfo(idx) orelse return null;
+    return if (info.line_hole) info.sort_name else null;
+}
+
+/// True when `holey` can stand for `expr_id`: a line hole of its sort, or
+/// `expr_id` itself.
+fn holeyMatchesConcrete(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
-    surface: *const Expr,
+    holey: ExprId,
     expr_id: ExprId,
 ) !bool {
-    if (surface.* == .hole) {
-        const hole_sort = SurfaceExpr.sortNameById(env, surface.hole.sort) orelse {
-            return error.UnknownSort;
-        };
+    if (lineHoleSort(theorem, holey)) |hole_sort| {
         const info = try BindingValidation.currentExprInfo(
             env,
             theorem,
@@ -1529,8 +1522,7 @@ fn surfaceMatchesConcrete(
         );
         return std.mem.eql(u8, hole_sort, info.sort_name);
     }
-    if (SurfaceExpr.containsHole(surface)) return false;
-    return (try theorem.internParsedExpr(surface)) == expr_id;
+    return holey == expr_id;
 }
 
 fn matchViewHypsAgainstConcreteExprs(

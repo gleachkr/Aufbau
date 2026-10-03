@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const DefOps = @import("./def_ops.zig");
-const Expr = @import("../trusted/expressions.zig").Expr;
 const ExprId = @import("./expr.zig").ExprId;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
@@ -82,30 +81,6 @@ pub fn matchTemplate(
     actual: ExprId,
 ) !bool {
     var comparison = try session.beginNormalizedComparison(template, actual);
-    defer comparison.deinit();
-    return try finish(
-        allocator,
-        env,
-        registry,
-        scratch,
-        &comparison,
-    );
-}
-
-pub fn matchSurface(
-    allocator: std.mem.Allocator,
-    env: *const GlobalEnv,
-    registry: *RewriteRegistry,
-    scratch: *CompilerDiag.Scratch,
-    session: *DefOps.RuleMatchSession,
-    template: TemplateExpr,
-    actual: *const Expr,
-) !bool {
-    var comparison = try session.beginNormalizedSurfaceComparison(
-        env,
-        template,
-        actual,
-    );
     defer comparison.deinit();
     return try finish(
         allocator,

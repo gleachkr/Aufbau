@@ -65,6 +65,7 @@ pub const UnresolvedHypothesis = @import("./check/types.zig").UnresolvedHypothes
 pub const ConclusionProbe = @import("./check/types.zig").ConclusionProbe;
 pub const RefExpectationProbe = @import("./check/types.zig").RefExpectationProbe;
 pub const LineAssertion = @import("./check/types.zig").LineAssertion;
+pub const HoleyLine = Holes.HoleyLine;
 pub const ApplicationDiagnosticContext = @import("./check/types.zig").ApplicationDiagnosticContext;
 pub const ApplicationLine = @import("./check/types.zig").ApplicationLine;
 pub const RuleApplyContext = @import("./check/types.zig").RuleApplyContext;
@@ -261,7 +262,11 @@ pub fn checkTheoremBlock(
             assertion,
             line,
         );
-        const line_assertion = LineAssertion.fromParsed(parsed_assertion);
+        const line_assertion = try LineAssertion.fromParsed(
+            theorem,
+            env,
+            parsed_assertion,
+        );
 
         if (ProofScript.isSorryRuleName(line.application.rule_name)) {
             const line_idx = try admitSorryLine(
@@ -562,7 +567,7 @@ fn filledLineChecks(
         self,
         &probe_context,
         line.application,
-        LineAssertion.fromParsed(parsed),
+        .{ .concrete = parsed.concrete },
         null,
         ApplicationDiagnosticContext.fromLine(apply_context.assertion, line),
         ApplicationLine.fromLine(line),

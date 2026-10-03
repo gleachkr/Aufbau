@@ -1157,7 +1157,7 @@ fn applyRuleCandidateCore(
                 line,
                 env,
                 registry,
-                holey,
+                holey.surface,
             ),
             else => {},
         }
@@ -1608,7 +1608,7 @@ fn foldLineGoal(
 ) !void {
     switch (goal) {
         .expr => |expr| foldTemplateOrRestore(theorem, rule.concl, expr, bindings, snap),
-        .holey => |holey| _ = try Holes.foldTemplateToSurface(theorem, rule.concl, holey, bindings, snap),
+        .holey => |holey| _ = try Holes.foldTemplateToSurface(theorem, rule.concl, holey.surface, bindings, snap),
     }
 }
 

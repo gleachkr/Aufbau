@@ -2010,7 +2010,7 @@ fn expectedRefForApplication(
         compiler,
         &rule_context,
         application,
-        goal.lineAssertion(),
+        try goal.lineAssertion(theorem, context.env),
         goal.expectedHint(),
         .{
             .theorem_name = context.assertion.name,

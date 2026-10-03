@@ -110,7 +110,7 @@ pub fn applyWithSession(
             compiler,
             &apply_context,
             application,
-            goal.lineAssertion(),
+            try goal.lineAssertion(&attempt_theorem, context.env),
             goal.expectedHint(),
             diag_context,
             line,

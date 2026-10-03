@@ -527,6 +527,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "smullyan", .outcome = .pass },
     .{ .stem = "mac_lane", .outcome = .pass },
     .{ .stem = "pass_mac_lane_holes", .outcome = .pass },
+    .{ .stem = "pass_hole_view_recover_body", .outcome = .pass },
     .{ .stem = "mac_lane_unfold", .outcome = .pass },
     .{ .stem = "mac_lane_unfold_2", .outcome = .pass },
     .{ .stem = "mac_lane_unfold_3", .outcome = .pass },

@@ -1,0 +1,71 @@
+ecr_hole_t
+----------
+l1: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ epi (g ∘ f) $ by ax
+l2: $ _ctx ⊢ ∀ x ((alpha ∘ (g ∘ f) ~ x ∘ (g ∘ f)) → (alpha ~ x)) $ by all_elim [l1]
+l3: $ _ctx ⊢ (alpha ∘ (g ∘ f) ~ _mor ∘ (g ∘ f)) → (alpha ~ beta) $ by all_elim [l2]
+l4: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ alpha ∘ g ~ beta ∘ g $ by ax
+l5: $ _ctx ⊢ (alpha ∘ g) ∘ f ~ (beta ∘ g) ∘ f $ by comp_right [l4]
+l6: $ _ctx ⊢ alpha ~ beta $ by imp_elim [l3, l5]
+l7: $ _ctx ⊢ (alpha ∘ g ~ beta ∘ g) → (alpha ~ beta) $ by imp_intro [l6]
+l8: $ _ctx ⊢ ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l7]
+l9: $ _ctx ⊢ ∀ alpha ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l8]
+
+ecr_hole_g
+----------
+l1: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ epi (g ∘ f) $ by ax
+l2: $ _ctx ⊢ ∀ x ((alpha ∘ (g ∘ f) ~ x ∘ (g ∘ f)) → (alpha ~ x)) $ by all_elim [l1]
+l3: $ _ctx ⊢ (alpha ∘ (g ∘ f) ~ beta ∘ _mor) → (alpha ~ beta) $ by all_elim [l2]
+l4: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ alpha ∘ g ~ beta ∘ g $ by ax
+l5: $ _ctx ⊢ (alpha ∘ g) ∘ f ~ (beta ∘ g) ∘ f $ by comp_right [l4]
+l6: $ _ctx ⊢ alpha ~ beta $ by imp_elim [l3, l5]
+l7: $ _ctx ⊢ (alpha ∘ g ~ beta ∘ g) → (alpha ~ beta) $ by imp_intro [l6]
+l8: $ _ctx ⊢ ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l7]
+l9: $ _ctx ⊢ ∀ alpha ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l8]
+
+ecr_hole_ref_body
+-----------------
+l1: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ epi (g ∘ f) $ by ax
+l2: $ _ctx ⊢ ∀ x ((alpha ∘ _mor ~ x ∘ (g ∘ f)) → (alpha ~ x)) $ by all_elim [l1]
+l3: $ _ctx ⊢ (alpha ∘ (g ∘ f) ~ beta ∘ (g ∘ f)) → (alpha ~ beta) $ by all_elim [l2]
+l4: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ alpha ∘ g ~ beta ∘ g $ by ax
+l5: $ _ctx ⊢ (alpha ∘ g) ∘ f ~ (beta ∘ g) ∘ f $ by comp_right [l4]
+l6: $ _ctx ⊢ alpha ~ beta $ by imp_elim [l3, l5]
+l7: $ _ctx ⊢ (alpha ∘ g ~ beta ∘ g) → (alpha ~ beta) $ by imp_intro [l6]
+l8: $ _ctx ⊢ ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l7]
+l9: $ _ctx ⊢ ∀ alpha ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l8]
+
+ecr_hole_rhs
+------------
+l1: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ epi (g ∘ f) $ by ax
+l2: $ _ctx ⊢ ∀ x ((alpha ∘ (g ∘ f) ~ x ∘ (g ∘ f)) → (alpha ~ x)) $ by all_elim [l1]
+l3: $ _ctx ⊢ (alpha ∘ (g ∘ f) ~ _mor) → (alpha ~ beta) $ by all_elim [l2]
+l4: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ alpha ∘ g ~ beta ∘ g $ by ax
+l5: $ _ctx ⊢ (alpha ∘ g) ∘ f ~ (beta ∘ g) ∘ f $ by comp_right [l4]
+l6: $ _ctx ⊢ alpha ~ beta $ by imp_elim [l3, l5]
+l7: $ _ctx ⊢ (alpha ∘ g ~ beta ∘ g) → (alpha ~ beta) $ by imp_intro [l6]
+l8: $ _ctx ⊢ ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l7]
+l9: $ _ctx ⊢ ∀ alpha ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l8]
+
+ecr_hole_lhs
+------------
+l1: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ epi (g ∘ f) $ by ax
+l2: $ _ctx ⊢ ∀ x ((alpha ∘ (g ∘ f) ~ x ∘ (g ∘ f)) → (alpha ~ x)) $ by all_elim [l1]
+l3: $ _ctx ⊢ (_mor ~ beta ∘ (g ∘ f)) → (alpha ~ beta) $ by all_elim [l2]
+l4: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ alpha ∘ g ~ beta ∘ g $ by ax
+l5: $ _ctx ⊢ (alpha ∘ g) ∘ f ~ (beta ∘ g) ∘ f $ by comp_right [l4]
+l6: $ _ctx ⊢ alpha ~ beta $ by imp_elim [l3, l5]
+l7: $ _ctx ⊢ (alpha ∘ g ~ beta ∘ g) → (alpha ~ beta) $ by imp_intro [l6]
+l8: $ _ctx ⊢ ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l7]
+l9: $ _ctx ⊢ ∀ alpha ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l8]
+
+ecr_hole_ctx_body
+-----------------
+l1: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ epi (g ∘ f) $ by ax
+l2: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ ∀ x ((alpha ∘ (g ∘ f) ~ x ∘ _mor) → (alpha ~ x)) $ by all_elim [l1]
+l3: $ _ctx ⊢ (alpha ∘ (g ∘ f) ~ beta ∘ (g ∘ f)) → (alpha ~ beta) $ by all_elim [l2]
+l4: $ epi (g ∘ f), alpha ∘ g ~ beta ∘ g ⊢ alpha ∘ g ~ beta ∘ g $ by ax
+l5: $ _ctx ⊢ (alpha ∘ g) ∘ f ~ (beta ∘ g) ∘ f $ by comp_right [l4]
+l6: $ _ctx ⊢ alpha ~ beta $ by imp_elim [l3, l5]
+l7: $ _ctx ⊢ (alpha ∘ g ~ beta ∘ g) → (alpha ~ beta) $ by imp_intro [l6]
+l8: $ _ctx ⊢ ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l7]
+l9: $ _ctx ⊢ ∀ alpha ∀ beta ((alpha ∘ g ~ beta ∘ g) → (alpha ~ beta)) $ by all_intro [l8]
