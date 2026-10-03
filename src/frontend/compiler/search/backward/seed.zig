@@ -19,7 +19,6 @@ const unfoldDefBody = prune.unfoldDefBody;
 const rigidExprMismatch = prune.rigidExprMismatch;
 const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
 const bag = @import("./bag.zig");
-const isAcuiUnitExpr = prune.isAcuiUnitExpr;
 const bindAcuiSpineToUnit = prune.bindAcuiSpineToUnit;
 
 pub fn makeExactRuleCandidate(
@@ -886,10 +885,8 @@ fn partialMatchScoped(
                 // Inside an unfolded def body the spine binders are def
                 // parameters — treat the combiner as fully opaque there.
                 if (scope == null) {
-                    if (bag.unitOf(context, app.term_id)) |_| {
-                        if (isAcuiUnitExpr(context, theorem, expr_id)) {
-                            bindAcuiSpineToUnit(template, app.term_id, expr_id, bindings);
-                        }
+                    if (bag.isUnitOf(context, theorem, app.term_id, expr_id)) {
+                        bindAcuiSpineToUnit(template, app.term_id, expr_id, bindings);
                     }
                     // Forced structured-member recovery (conclusion seed only).
                     // Under C, `extractHypPartialBindings` treats the combiner's

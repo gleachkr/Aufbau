@@ -122,6 +122,9 @@ fn memberPossiblyInList(
     member: ExprId,
     list: bag.ExprBag,
 ) bool {
+    // A member under a def or `@rewrite` head may convert to the unit (a
+    // `wk_nil`-style def of the empty context), so it needs no partner.
+    if (!acui.memberIsFixed(context, theorem, member)) return true;
     for (list.slice()) |candidate| {
         if (!prune.rigidExprMismatch(
             context,

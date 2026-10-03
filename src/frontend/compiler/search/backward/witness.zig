@@ -53,16 +53,25 @@ pub fn collectDomainMembers(
     buf: *[max_domain_members]ExprId,
 ) usize {
     var count: usize = 0;
-    collectFromExpr(context, theorem, target, buf, &count);
+    collectRegionMembersWhere(context, theorem, target, buf, &count, {}, concreteMember);
     return count;
 }
 
-fn collectFromExpr(
+fn concreteMember(_: void, theorem: *const TheoremContext, member: ExprId) bool {
+    return exprIsConcrete(theorem, member);
+}
+
+/// Append the distinct members of every ACUI region in `expr` that `keep`
+/// accepts. A region whose bag overflows contributes nothing; its members are
+/// still searched for nested regions.
+fn collectRegionMembersWhere(
     context: *const Context,
     theorem: *const TheoremContext,
     expr: ExprId,
     buf: *[max_domain_members]ExprId,
     count: *usize,
+    keep_ctx: anytype,
+    comptime keep: fn (@TypeOf(keep_ctx), *const TheoremContext, ExprId) bool,
 ) void {
     const app = switch (theorem.interner.node(expr).*) {
         .app => |app| app,
@@ -72,10 +81,14 @@ fn collectFromExpr(
     for (app.args, 0..) |arg, idx| {
         if (idx < decl.args.len) {
             if (carrierCombinerHead(context, decl.args[idx].sort_name)) |head_id| {
-                collectRegionMembers(context, theorem, arg, head_id, buf, count);
+                if (bag.flatten(context, theorem, head_id, arg)) |members| {
+                    for (members.slice()) |member| {
+                        if (keep(keep_ctx, theorem, member)) appendDomainMember(buf, count, member);
+                    }
+                }
             }
         }
-        collectFromExpr(context, theorem, arg, buf, count);
+        collectRegionMembersWhere(context, theorem, arg, buf, count, keep_ctx, keep);
     }
 }
 
@@ -88,35 +101,18 @@ fn termDecl(
 }
 
 /// The registered ACUI combiner whose carrier (return) sort is `sort_name`,
-/// or null when the sort is not an ACUI carrier.
+/// or null when the sort is not an ACUI carrier or carries several (ring `+`
+/// and `*`), where no one reading of a region is the right one.
 fn carrierCombinerHead(context: *const Context, sort_name: []const u8) ?u32 {
-    var it = context.registry.acui_by_head.iterator();
-    while (it.next()) |entry| {
-        const decl = termDecl(context, entry.key_ptr.*) orelse continue;
-        if (std.mem.eql(u8, decl.ret_sort_name, sort_name)) {
-            return entry.key_ptr.*;
-        }
+    var found: ?u32 = null;
+    var it = context.registry.acui_by_head.keyIterator();
+    while (it.next()) |head_id| {
+        const decl = termDecl(context, head_id.*) orelse continue;
+        if (!std.mem.eql(u8, decl.ret_sort_name, sort_name)) continue;
+        if (found != null) return null;
+        found = head_id.*;
     }
-    return null;
-}
-
-/// Append the concrete non-unit members of the region rooted at `container`
-/// by `head_id` (see `bag.flatten`). A singleton region (no combiner node) is
-/// one member.
-fn collectRegionMembers(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    container: ExprId,
-    head_id: u32,
-    buf: *[max_domain_members]ExprId,
-    count: *usize,
-) void {
-    const members = bag.flatten(context, theorem, head_id, container) orelse return;
-    for (members.slice()) |member| {
-        if (!exprIsConcrete(theorem, member)) continue;
-        if (acui.isAcuiUnitExpr(context, theorem, member)) continue;
-        appendDomainMember(buf, count, member);
-    }
+    return found;
 }
 
 /// Append `member` unless present; past `max_domain_members` it is ignored.
@@ -435,46 +431,8 @@ pub fn collectMetaMembers(
     buf: *[max_domain_members]ExprId,
 ) usize {
     var count: usize = 0;
-    collectMetaFromExpr(context, store, theorem, target, buf, &count);
+    collectRegionMembersWhere(context, theorem, target, buf, &count, store, exprHasRegisteredMeta);
     return count;
-}
-
-fn collectMetaFromExpr(
-    context: *const Context,
-    store: *const MetaStore,
-    theorem: *const TheoremContext,
-    expr: ExprId,
-    buf: *[max_domain_members]ExprId,
-    count: *usize,
-) void {
-    const app = switch (theorem.interner.node(expr).*) {
-        .app => |app| app,
-        else => return,
-    };
-    const decl = termDecl(context, app.term_id) orelse return;
-    for (app.args, 0..) |arg, idx| {
-        if (idx < decl.args.len) {
-            if (carrierCombinerHead(context, decl.args[idx].sort_name)) |head_id| {
-                collectMetaRegionMembers(context, store, theorem, arg, head_id, buf, count);
-            }
-        }
-        collectMetaFromExpr(context, store, theorem, arg, buf, count);
-    }
-}
-
-fn collectMetaRegionMembers(
-    context: *const Context,
-    store: *const MetaStore,
-    theorem: *const TheoremContext,
-    container: ExprId,
-    head_id: u32,
-    buf: *[max_domain_members]ExprId,
-    count: *usize,
-) void {
-    const members = bag.flatten(context, theorem, head_id, container) orelse return;
-    for (members.slice()) |member| {
-        if (exprHasRegisteredMeta(store, theorem, member)) appendDomainMember(buf, count, member);
-    }
 }
 
 fn exprHasRegisteredMeta(
@@ -565,12 +523,12 @@ fn solveAcuiInner(
         .variable => return source == dp,
         .app => |pattern_app| {
             const region_head: ?u32 = blk: {
-                if (acui.isCommutative(context, pattern_app.term_id)) {
+                if (bag.isCommutative(context, pattern_app.term_id)) {
                     break :blk pattern_app.term_id;
                 }
                 switch (theorem.interner.node(source).*) {
                     .app => |source_app| {
-                        if (acui.isCommutative(context, source_app.term_id)) {
+                        if (bag.isCommutative(context, source_app.term_id)) {
                             break :blk source_app.term_id;
                         }
                     },
@@ -790,14 +748,7 @@ fn joinLeftoverMembers(
         kept[kept_n] = member;
         kept_n += 1;
     }
-    if (kept_n == 0) {
-        const unit_id = bag.unitOf(context, head) orelse return null;
-        return theorem.interner.internApp(unit_id, &.{}) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return null,
-        };
-    }
-    return bag.rightFold(theorem, head, kept[0..kept_n]) catch |err| switch (err) {
+    return bag.build(context, theorem, head, kept[0..kept_n]) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return null,
     };
@@ -880,8 +831,9 @@ pub fn collectComplementShapes(
     return count;
 }
 
-/// Mirror of `collectFromExpr` over a rule-conclusion template: analyze every
-/// argument position whose declared sort is an ACUI carrier as a region.
+/// Mirror of `collectRegionMembersWhere` over a rule-conclusion template:
+/// analyze every argument position whose declared sort is an ACUI carrier as a
+/// region.
 fn complementWalkTemplate(
     context: *const Context,
     rule: *const RuleDecl,

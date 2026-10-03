@@ -7,6 +7,7 @@ const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
 const ResolvedStructuralCombiner =
     @import("./rewrite_registry.zig").ResolvedStructuralCombiner;
 const DefOps = @import("./def_ops.zig");
+const AcuiBag = @import("./acui_bag.zig");
 
 pub const LeafInfo = struct {
     expr_id: ExprId,
@@ -258,29 +259,6 @@ pub const Context = struct {
         }
     }
 
-    pub fn rebuildAcuiTree(
-        self: *Context,
-        items: []const ExprId,
-        head_term_id: u32,
-        unit_term_id: u32,
-    ) anyerror!ExprId {
-        if (items.len == 0) {
-            return try self.theorem.interner.internApp(unit_term_id, &.{});
-        }
-        if (items.len == 1) return items[0];
-
-        var current = items[items.len - 1];
-        var idx = items.len - 1;
-        while (idx > 0) {
-            idx -= 1;
-            current = try self.theorem.interner.internApp(
-                head_term_id,
-                &[_]ExprId{ items[idx], current },
-            );
-        }
-        return current;
-    }
-
     pub fn buildCanonicalAcuiFromItems(
         self: *Context,
         items: []const ExprId,
@@ -317,11 +295,7 @@ pub const Context = struct {
             }
             try unique.append(self.allocator, item);
         }
-        return try self.rebuildAcuiTree(
-            unique.items,
-            acui.head_term_id,
-            acui.unit_term_id,
-        );
+        return (try AcuiBag.Combiner.fromResolved(acui).build(self.theorem, unique.items)).?;
     }
 
     pub fn computeSameSideTargets(
@@ -369,11 +343,7 @@ pub const Context = struct {
         );
         defer self.allocator.free(targets);
 
-        const rebuilt = try self.rebuildAcuiTree(
-            targets,
-            acui.head_term_id,
-            acui.unit_term_id,
-        );
+        const rebuilt = (try AcuiBag.Combiner.fromResolved(acui).build(self.theorem, targets)).?;
         return try self.canonicalizeAcuiExact(rebuilt, acui);
     }
 
@@ -1057,11 +1027,10 @@ test "ACUI canonicalization normalizes arbitrary trees and law subsets" {
                     len += 1;
                 }
             }
-            const expected = try support.rebuildAcuiTree(
+            const expected = (try AcuiBag.Combiner.fromResolved(acui).build(
+                &theorem,
                 expected_items[0..len],
-                acui.head_term_id,
-                acui.unit_term_id,
-            );
+            )).?;
             const w = leaves[0];
             const x = leaves[1];
             const y = leaves[2];

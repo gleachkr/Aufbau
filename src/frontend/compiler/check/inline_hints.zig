@@ -21,6 +21,7 @@ const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const templateMentionsBinder = @import("../../rules.zig").templateMentionsBinder;
 const TheoremBlock = @import("../../proof_script.zig").TheoremBlock;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
+const AcuiBag = @import("../../acui_bag.zig");
 const CompilerViews = @import("../../views.zig");
 const FreshSelect = @import("../fresh_select.zig");
 const AlphaRewrite = @import("../alpha_rewrite.zig");
@@ -1184,6 +1185,7 @@ fn demoteAcuiSpineBindingsInTemplate(
 pub fn ambiguousPrincipalPins(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
+    env: *const GlobalEnv,
     registry: *const RewriteRegistry,
     rule: *const RuleDecl,
     expected: ExprId,
@@ -1196,13 +1198,12 @@ pub fn ambiguousPrincipalPins(
     }
     const site = findPrincipalSite(theorem, registry, rule.concl, expected) orelse
         return &.{};
+    const combiner = AcuiBag.Combiner.of(registry, env, site.head_id) orelse return &.{};
 
-    var template_members = std.ArrayListUnmanaged(TemplateExpr){};
-    defer template_members.deinit(allocator);
-    try collectTemplateSpine(allocator, site.head_id, site.template, &template_members);
+    const template_members = combiner.flattenTemplate(site.template) orelse return &.{};
     var principal: ?TemplateExpr = null;
     var has_open_rest = false;
-    for (template_members.items) |member| switch (member) {
+    for (template_members.slice()) |member| switch (member) {
         .binder => |idx| {
             if (idx >= explicit.len or explicit[idx] == null) has_open_rest = true;
         },
@@ -1214,13 +1215,11 @@ pub fn ambiguousPrincipalPins(
     const principal_template = principal orelse return &.{};
     if (!has_open_rest) return &.{};
 
-    var expr_members = std.ArrayListUnmanaged(ExprId){};
-    defer expr_members.deinit(allocator);
-    try collectExprSpine(allocator, theorem, site.head_id, site.expr, &expr_members);
+    const expr_members = combiner.flatten(theorem, site.expr) orelse return &.{};
 
     const scratch = try allocator.alloc(?ExprId, explicit.len);
     defer allocator.free(scratch);
-    for (expr_members.items) |member| {
+    for (expr_members.slice()) |member| {
         // A holey hint's placeholder member is no candidate: pinning a binder
         // to a placeholder would fix a guess, not a member.
         if (theorem.containsPlaceholder(member)) continue;
@@ -1273,37 +1272,6 @@ fn findPrincipalSite(
         if (findPrincipalSite(theorem, registry, targ, earg)) |site| return site;
     }
     return null;
-}
-
-fn collectTemplateSpine(
-    allocator: std.mem.Allocator,
-    head_id: u32,
-    template: TemplateExpr,
-    out: *std.ArrayListUnmanaged(TemplateExpr),
-) !void {
-    switch (template) {
-        .app => |a| if (a.term_id == head_id) {
-            for (a.args) |arg| try collectTemplateSpine(allocator, head_id, arg, out);
-            return;
-        },
-        .binder => {},
-    }
-    try out.append(allocator, template);
-}
-
-fn collectExprSpine(
-    allocator: std.mem.Allocator,
-    theorem: *const TheoremContext,
-    head_id: u32,
-    expr: ExprId,
-    out: *std.ArrayListUnmanaged(ExprId),
-) !void {
-    const node = theorem.interner.node(expr);
-    if (node.* == .app and node.app.term_id == head_id) {
-        for (node.app.args) |arg| try collectExprSpine(allocator, theorem, head_id, arg, out);
-        return;
-    }
-    try out.append(allocator, expr);
 }
 
 const HoleyFaceFixture = struct {

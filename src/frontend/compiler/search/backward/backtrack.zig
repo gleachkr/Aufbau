@@ -1490,21 +1490,15 @@ fn tryPrincipalEnumerate(
 
     // Only enumerate when 2+ distinct members genuinely compete for the
     // principal; a single match is forced and already handled positionally.
-    var match_count: usize = 0;
-    var ci: usize = 0;
-    while (ci < members.len) : (ci += 1) {
-        if (acui.templateMatchesExprReadOnly(
-            &candidate.theorem,
-            principal_template,
-            members.items[ci],
-            bindings,
-        )) match_count += 1;
-    }
-    if (match_count < 2) return;
+    const choices = acui.principalChoices(
+        &candidate.theorem,
+        principal_template,
+        members.slice(),
+        bindings,
+    );
+    if (choices.len < 2) return;
 
-    var mi: usize = 0;
-    while (mi < members.len) : (mi += 1) {
-        const member = members.items[mi];
+    for (choices.slice()) |member| {
         // Snapshot the principal's binder slots so a failed (or completed)
         // match rolls back cleanly before the next member is tried.
         var saved: [64]?ExprId = undefined;

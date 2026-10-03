@@ -22,6 +22,7 @@ const ref_index_mod = @import("./ref_index.zig");
 const session_mod = @import("./session.zig");
 const candidate_mod = @import("./candidate.zig");
 const expr_mod = @import("../../expr.zig");
+const AcuiBag = @import("../../acui_bag.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const PlaceholderId = @import("../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
@@ -429,7 +430,7 @@ pub fn generateTopLevel(
         .derived = if (derived_pool) |*dpool| dpool else null,
         .fuel = .{ .remaining = options.fuel, .global = budget_ptr },
         .has_acui = session.context.registry.acui_by_head.count() > 0,
-        .has_comm_acui = acui.hasCommutativeCombiner(session.context),
+        .has_comm_acui = AcuiBag.anyLaw(session.context.registry, AcuiBag.Law.isCommutative),
         .meta_dep_bans = MetaDepBans.init(session.allocator),
         .next_meta_id = next_meta_id,
         .open_root = goal == .holey,
@@ -466,7 +467,7 @@ pub fn generateTopLevel(
 
     const gates = LadderGates{
         .witness_pool = can_invent_witness,
-        .idempotent = hasIdempotentCombiner(session.context),
+        .idempotent = AcuiBag.anyLaw(session.context.registry, AcuiBag.Law.isIdempotent),
     };
     const schedule = try buildSchedule(session.allocator, options.max_depth, gates);
     defer session.allocator.free(schedule);
@@ -960,17 +961,6 @@ fn runCell(
         if (cell.band == .core) state.core_capped = true;
     }
     return end;
-}
-
-/// True when the theory declares at least one *idempotent* structural combiner
-/// (`@acui ... idem`). Gates the phase-4 principal-retention pass so a theory
-/// without an idempotent context never pays even the extra clean-miss pass.
-fn hasIdempotentCombiner(context: *const Context) bool {
-    var it = context.registry.acui_by_head.valueIterator();
-    while (it.next()) |combiner| {
-        if (combiner.idem_name != null) return true;
-    }
-    return false;
 }
 
 /// One single-depth generation pass over `goal_expr` under the driver's

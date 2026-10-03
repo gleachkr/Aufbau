@@ -7,6 +7,7 @@ const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
 const ResolvedStructuralCombiner =
     @import("./rewrite_registry.zig").ResolvedStructuralCombiner;
 const AcuiSupport = @import("./acui_support.zig");
+const AcuiBag = @import("./acui_bag.zig");
 const DefOps = @import("./def_ops.zig");
 const DerivedBindings = @import("./derived_bindings.zig");
 const BindingValidation = @import("./binding_validation.zig");
@@ -1131,11 +1132,7 @@ fn assignAcuiResidualBag(
     }
     // Goal order is kept so combiners without commutativity still line up;
     // the validating re-match canonicalizes when commutativity is available.
-    const value = try support.rebuildAcuiTree(
-        residual.items,
-        acui.head_term_id,
-        acui.unit_term_id,
-    );
+    const value = (try AcuiBag.Combiner.fromResolved(acui).build(theorem, residual.items)).?;
     if (try session.matchTransparent(.{ .binder = target_idx }, value)) {
         assigned.* = true;
     }
@@ -1813,7 +1810,7 @@ fn trialSplitCandidates(
             .{},
         );
     }
-    if (!try seedSplitCandidate(env, session, plan, member)) {
+    if (!try seedSplitCandidate(session, plan, member)) {
         // The survivor validated under this same state, so replay cannot
         // fail; restore anyway so a partial seed never escapes.
         try session.restoreFromSeedState(&state);
@@ -1850,7 +1847,7 @@ fn trialCandidate(
     plan: *const SplitPlan,
     member: ExprId,
 ) anyerror!bool {
-    if (!try seedSplitCandidate(env, session, plan, member)) return false;
+    if (!try seedSplitCandidate(session, plan, member)) return false;
     if (!try matchHypRef(
         env,
         session,
@@ -1880,14 +1877,12 @@ fn trialCandidate(
 /// run this under a saved match state so a partial seed never outlives the
 /// trial.
 fn seedSplitCandidate(
-    env: *const GlobalEnv,
     session: *DefOps.RuleMatchSession,
     plan: *const SplitPlan,
     member: ExprId,
 ) !bool {
     if (!try session.matchTransparent(plan.src_leaf, member)) return false;
     const rest_binder = plan.rest_idx orelse return true;
-    const registry = session.shared.registry orelse return false;
     const theorem = session.shared.theorem;
     const allocator = session.shared.allocator;
     var remaining = (try subtractMembers(
@@ -1899,13 +1894,8 @@ fn seedSplitCandidate(
         true,
     )) orelse return false;
     defer remaining.deinit(allocator);
-    var support = AcuiSupport.Context.init(allocator, theorem, env, registry);
-    defer support.deinit();
-    const rest_value = try support.rebuildAcuiTree(
-        remaining.items,
-        plan.bag.acui.head_term_id,
-        plan.bag.acui.unit_term_id,
-    );
+    const combiner = AcuiBag.Combiner.fromResolved(plan.bag.acui);
+    const rest_value = (try combiner.build(theorem, remaining.items)).?;
     return try session.matchTransparent(.{ .binder = rest_binder }, rest_value);
 }
 

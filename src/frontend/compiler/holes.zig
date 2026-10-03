@@ -13,7 +13,8 @@ const TermDecl = @import("../env.zig").TermDecl;
 const RuleDecl = @import("../env.zig").RuleDecl;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
-const AcuiSupport = @import("../acui_support.zig");
+const AcuiBag = @import("../acui_bag.zig");
+const Views = @import("../views.zig");
 const Canonicalizer = @import("../canonicalizer.zig").Canonicalizer;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const ResolvedStructuralCombiner =
@@ -676,57 +677,59 @@ fn fillAcuiFrame(
         .obstacle => return null,
     };
 
-    var items = std.ArrayListUnmanaged(ExprId){};
-    defer items.deinit(allocator);
-    try collectAcuiItems(
+    const combiner = AcuiBag.Combiner.fromResolved(acui);
+    const items_bag = combiner.flatten(
         theorem,
-        allocator,
         try canonicalizer.canonicalize(candidate),
-        acui,
-        &items,
-    );
-    const taken = try allocator.alloc(bool, items.items.len);
-    defer allocator.free(taken);
-    @memset(taken, false);
+    ) orelse return null;
+    const items = items_bag.slice();
+    var before = AcuiBag.ExprBag{};
+    var after = AcuiBag.ExprBag{};
+    var past_hole = false;
     for (members.items) |member| {
-        if (member == frame_hole) continue;
+        if (member == frame_hole) {
+            past_hole = true;
+            continue;
+        }
         const visible = try canonicalizer.canonicalize(
             try theorem.internParsedExpr(member),
         );
-        if (isAcuiUnit(theorem, visible, acui)) continue;
-        if (takeItem(items.items, taken, visible)) continue;
-        // Under idempotence a member may repeat one already taken.
-        if (acui.idem_id != null and
-            std.mem.indexOfScalar(ExprId, items.items, visible) != null)
-        {
-            continue;
-        }
-        return null;
+        if (combiner.isUnit(theorem, visible)) continue;
+        if (!(if (past_hole) after.append(visible) else before.append(visible))) return null;
     }
 
-    var rest = std.ArrayListUnmanaged(ExprId){};
+    // The hole takes the members the visible ones leave. Under C that is a
+    // bag difference; in a sequence the visible members must be the
+    // candidate's leading and trailing ones, and the hole takes the run
+    // between them.
+    var rest: std.ArrayListUnmanaged(ExprId) = .empty;
     defer rest.deinit(allocator);
-    for (items.items, taken) |item, is_taken| {
-        if (!is_taken) try rest.append(allocator, item);
+    if (combiner.law.isCommutative()) {
+        var visible = before;
+        for (after.slice()) |member| if (!visible.append(member)) return null;
+        rest = (try Views.subtractMembers(
+            allocator,
+            theorem,
+            items,
+            visible.slice(),
+            combiner.law.isIdempotent(),
+            true,
+        )) orelse return null;
+    } else {
+        if (before.len + after.len > items.len) return null;
+        const tail = items.len - after.len;
+        if (!std.mem.eql(ExprId, items[0..before.len], before.slice())) return null;
+        if (!std.mem.eql(ExprId, items[tail..], after.slice())) return null;
+        try rest.appendSlice(allocator, items[before.len..tail]);
     }
-    var support = AcuiSupport.Context.init(
-        allocator,
-        theorem,
-        env,
-        canonicalizer.registry,
-    );
-    defer support.deinit();
+
     var report = ConcreteMatchReport{};
     const filled = (try materializeSurfaceWithCandidate(
         parser,
         theorem,
         env,
         frame_hole,
-        try support.rebuildAcuiTree(
-            rest.items,
-            acui.head_term_id,
-            acui.unit_term_id,
-        ),
+        (try combiner.build(theorem, rest.items)) orelse return null,
         &report,
     )) orelse return null;
     return try internWithFrame(
@@ -830,48 +833,6 @@ fn collectSurfaceMembers(
         else => {},
     }
     try out.append(allocator, expr);
-}
-
-/// The members of a canonical combination, without its unit.
-fn collectAcuiItems(
-    theorem: *const TheoremContext,
-    allocator: std.mem.Allocator,
-    expr: ExprId,
-    acui: ResolvedStructuralCombiner,
-    out: *std.ArrayListUnmanaged(ExprId),
-) !void {
-    switch (theorem.interner.node(expr).*) {
-        .app => |app| if (app.term_id == acui.head_term_id and
-            app.args.len == 2)
-        {
-            try collectAcuiItems(theorem, allocator, app.args[0], acui, out);
-            try collectAcuiItems(theorem, allocator, app.args[1], acui, out);
-            return;
-        },
-        else => {},
-    }
-    if (isAcuiUnit(theorem, expr, acui)) return;
-    try out.append(allocator, expr);
-}
-
-fn isAcuiUnit(
-    theorem: *const TheoremContext,
-    expr: ExprId,
-    acui: ResolvedStructuralCombiner,
-) bool {
-    return switch (theorem.interner.node(expr).*) {
-        .app => |app| app.term_id == acui.unit_term_id and app.args.len == 0,
-        else => false,
-    };
-}
-
-fn takeItem(items: []const ExprId, taken: []bool, item: ExprId) bool {
-    for (items, taken) |candidate, *is_taken| {
-        if (is_taken.* or candidate != item) continue;
-        is_taken.* = true;
-        return true;
-    }
-    return false;
 }
 
 /// Intern a surface combination as written, with `filled` in place of the

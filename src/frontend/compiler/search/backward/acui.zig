@@ -4,7 +4,6 @@ const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
-const StructuralCombiner = @import("../../../rewrite_registry.zig").StructuralCombiner;
 const Context = types.Context;
 const semantic = @import("./semantic.zig");
 const exprNeedsSemantic = semantic.exprNeedsSemantic;
@@ -50,7 +49,7 @@ const AcuiMember = struct {
 // only cost completeness, which the uniqueness gate prevents.
 //
 // Treating the args as a multiset assumes commutativity, so callers gate this
-// on it (`isCommutative`). A combiner that is neither commutative
+// on it (`bag.isCommutative`). A combiner that is neither commutative
 // nor idempotent is a sequence and goes through
 // `def_match.extractOrderedSpineBindings` instead.
 pub fn extractAcuiMemberBindings(
@@ -256,7 +255,7 @@ pub fn findAmbiguousPrincipal(
     container: ExprId,
     bindings: []const ?ExprId,
 ) !?PrincipalFanout {
-    if (!isCommutative(context, head_id)) return null;
+    if (!bag.isCommutative(context, head_id)) return null;
     var members: [bag.capacity]AcuiMember = undefined;
     var count: usize = 0;
     if (!collectAcuiMembers(context, theorem, container, head_id, &members, &count)) return null;
@@ -277,6 +276,25 @@ pub fn findAmbiguousPrincipal(
     // already-bound sibling leaves, so they don't inflate a principal's count.
     consumeBoundLeafMembers(context, theorem, head_id, template, bindings, pool);
     return findAmbiguousLeaf(allocator, theorem, head_id, template, bindings, pool);
+}
+
+/// The distinct `members` the principal leaf `leaf` could match under
+/// `bindings` (read-only): the legal principal choices. An idempotent bag may
+/// list one member twice, and both copies would pin the principal alike, so
+/// each is offered once.
+pub fn principalChoices(
+    theorem: *const TheoremContext,
+    leaf: TemplateExpr,
+    members: []const ExprId,
+    bindings: []const ?ExprId,
+) bag.ExprBag {
+    var choices = bag.ExprBag{};
+    for (members) |member| {
+        if (templateMatchesExprReadOnly(theorem, leaf, member, bindings)) {
+            _ = choices.appendDistinct(member);
+        }
+    }
+    return choices;
 }
 
 // A member is fan-out-safe only if the strict read-only matcher sees its true
@@ -327,57 +345,20 @@ fn findAmbiguousLeaf(
                 return null;
             }
             if (!templateHasUnboundBinder(template, bindings)) return null;
-            var matches = std.ArrayListUnmanaged(ExprId){};
-            errdefer matches.deinit(allocator);
+            var open = bag.ExprBag{};
             for (pool) |slot| {
-                if (slot.consumed) continue;
-                if (!templateMatchesExprReadOnly(theorem, template, slot.expr, bindings)) continue;
-                // Dedup idempotent-ACUI duplicates: the same interned member can
-                // appear twice in the flattened multiset (e.g. `g , a , a`), and
-                // each would pin the principal identically — a byte-identical
-                // variant that only wastes node budget. Skip the repeat.
-                var seen = false;
-                for (matches.items) |m| {
-                    if (m == slot.expr) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen) try matches.append(allocator, slot.expr);
+                if (!slot.consumed) _ = open.append(slot.expr);
             }
-            // matches == 1 is the seed's existing single-candidate case (left to
-            // `extractUnboundLeafMembers`); only >1 needs fan-out.
-            if (matches.items.len > 1) {
-                return PrincipalFanout{
-                    .leaf = template,
-                    .members = try matches.toOwnedSlice(allocator),
-                };
-            }
-            matches.deinit(allocator);
-            return null;
+            // One choice is the seed's existing single-candidate case (left to
+            // `extractUnboundLeafMembers`); only more needs fan-out.
+            const choices = principalChoices(theorem, template, open.slice(), bindings);
+            if (choices.len < 2) return null;
+            return PrincipalFanout{
+                .leaf = template,
+                .members = try allocator.dupe(ExprId, choices.slice()),
+            };
         },
     }
-}
-
-/// Whether `term_id` is an `@acui` combiner declared commutative, so that its
-/// arguments may be treated as a multiset. `comm_name` is the declaration-time
-/// signal (null iff `_` was given for the commutativity slot); `comm_id` is
-/// resolved lazily and may still be null.
-pub fn isCommutative(context: *const Context, term_id: u32) bool {
-    const combiner = context.registry.acui_by_head.get(term_id) orelse return false;
-    return combiner.comm_name != null;
-}
-
-/// True when ANY registered structural combiner declares commutativity — the
-/// precondition for the member-wise ACUI read-back pass to be able to do
-/// anything at all. Cached per generation driver so theories without
-/// commutative combiners skip that pass entirely.
-pub fn hasCommutativeCombiner(context: *const Context) bool {
-    var it = context.registry.acui_by_head.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.comm_name != null) return true;
-    }
-    return false;
 }
 
 // When the template uses an associative combiner (one registered as @acui),
@@ -488,12 +469,12 @@ fn acuiRequiredMembersPlausible(
     head_id: u32,
     bindings: []const ?ExprId,
 ) bool {
-    const combiner = context.registry.acui_by_head.get(head_id) orelse return true;
+    const law = bag.lawOf(context, head_id) orelse return true;
     const leaf_bag = bag.flattenTemplate(context, head_id, template) orelse return true;
     const member_bag = bag.flatten(context, theorem, head_id, container) orelse return true;
     const leaves = leaf_bag.slice();
     const members = member_bag.slice();
-    const distinct = combiner.idem_name == null and bagIsFixed(context, theorem, members);
+    const distinct = !law.isIdempotent() and bagIsFixed(context, theorem, members);
 
     // owner[m] = leaf currently matched to member m.
     var owner: [bag.capacity]?usize = @splat(null);
@@ -885,27 +866,6 @@ pub fn exprUnifiesModuloMeta(
     }
 }
 
-// Is `expr_id` the unit element of some registered ACUI combiner (e.g. `emp`)?
-// A unit is a nullary application of the combiner's declared unit term.
-pub fn isAcuiUnitExpr(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    const node = theorem.interner.node(expr_id);
-    const app = switch (node.*) {
-        .app => |a| a,
-        else => return false,
-    };
-    if (app.args.len != 0) return false;
-    var it = context.registry.acui_by_head.iterator();
-    while (it.next()) |entry| {
-        const unit_id = context.env.term_names.get(entry.value_ptr.unit_term_name) orelse continue;
-        if (unit_id == app.term_id) return true;
-    }
-    return false;
-}
-
 // Canonicalize ACUI units away: under any registered combiner head (e.g. `join`
 // / `,`), drop unit operands (`emp`) and flatten nested same-head combiners, so
 // `combine(emp, X) ≡ X` structurally. Non-combiner apps are rebuilt with
@@ -924,59 +884,7 @@ pub fn normalizeAcuiUnits(
     theorem: *TheoremContext,
     expr_id: ExprId,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    var term_id: u32 = undefined;
-    var arg_count: usize = 0;
-    switch (theorem.interner.node(expr_id).*) {
-        .app => |a| {
-            term_id = a.term_id;
-            arg_count = a.args.len;
-        },
-        else => return expr_id,
-    }
-    if (arg_count == 0) return expr_id;
-
-    if (context.registry.acui_by_head.get(term_id) != null) {
-        return normalizeAcuiCombiner(context, theorem, term_id, expr_id);
-    }
-
-    // Non-combiner application: normalize children, rebuild only if one changed.
-    const args = try theorem.allocator.alloc(ExprId, arg_count);
-    defer theorem.allocator.free(args);
-    @memcpy(args, theorem.interner.node(expr_id).app.args);
-    var changed = false;
-    for (args) |*a| {
-        const normalized = try normalizeAcuiUnits(context, theorem, a.*);
-        if (normalized != a.*) changed = true;
-        a.* = normalized;
-    }
-    if (!changed) return expr_id;
-    return theorem.interner.internApp(term_id, args);
-}
-
-fn normalizeAcuiCombiner(
-    context: *const Context,
-    theorem: *TheoremContext,
-    head_id: u32,
-    expr_id: ExprId,
-) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    // Bail unchanged on an oversized multiset rather than truncate it.
-    const raw = bag.flatten(context, theorem, head_id, expr_id) orelse return expr_id;
-
-    var kept: [bag.capacity]ExprId = undefined;
-    var kept_n: usize = 0;
-    for (raw.slice()) |member| {
-        const normalized = try normalizeAcuiUnits(context, theorem, member);
-        if (isAcuiUnitExpr(context, theorem, normalized)) continue;
-        kept[kept_n] = normalized;
-        kept_n += 1;
-    }
-
-    if (kept_n == 0) {
-        // Every member was a unit ⇒ the whole region is the unit element.
-        const unit_term = bag.unitOf(context, head_id) orelse return expr_id;
-        return theorem.interner.internApp(unit_term, &.{});
-    }
-    return bag.rightFold(theorem, head_id, kept[0..kept_n]);
+    return rebuildAcui(context, theorem, expr_id, .unit_free);
 }
 
 /// Canonical `ExprId` for ACUI-equality memo keying. Like `normalizeAcuiUnits`
@@ -987,10 +895,10 @@ fn normalizeAcuiCombiner(
 /// cached application is spliced — see `generate.zig` `concrete_ok`).
 ///
 /// Conservative: it only collapses differences the *registered subset* actually
-/// licenses — reordering only when `comm_name != null`, duplicates only when
-/// `idem_name != null` (and only after a sort, so duplicates are adjacent). It
-/// therefore never maps two genuinely-unequal expressions to the same id; the
-/// worst case is under-collision (a missed reuse), never a false one.
+/// licenses — reordering only under C, duplicates only under C and I (after the
+/// sort, so duplicates are adjacent). It therefore never maps two
+/// genuinely-unequal expressions to the same id; the worst case is
+/// under-collision (a missed reuse), never a false one.
 ///
 /// The result is used *only* as a hash key, never as a proof term, so its own
 /// identity is irrelevant beyond equality — the replayed proof is relabeled to
@@ -999,6 +907,22 @@ pub fn canonicalizeAcui(
     context: *const Context,
     theorem: *TheoremContext,
     expr_id: ExprId,
+) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
+    return rebuildAcui(context, theorem, expr_id, .memo_key);
+}
+
+const AcuiForm = enum {
+    /// Association flattened and this combiner's units dropped.
+    unit_free,
+    /// `unit_free`, with members sorted under C and deduped under C and I.
+    memo_key,
+};
+
+fn rebuildAcui(
+    context: *const Context,
+    theorem: *TheoremContext,
+    expr_id: ExprId,
+    comptime form: AcuiForm,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
     var term_id: u32 = undefined;
     var arg_count: usize = 0;
@@ -1011,63 +935,65 @@ pub fn canonicalizeAcui(
     }
     if (arg_count == 0) return expr_id;
 
-    if (context.registry.acui_by_head.get(term_id)) |combiner| {
-        return canonicalizeAcuiCombiner(context, theorem, term_id, combiner, expr_id);
+    if (bag.combinerOf(context, term_id)) |combiner| {
+        return rebuildAcuiCombiner(context, theorem, combiner, expr_id, form);
     }
 
-    // Non-combiner application: canonicalize children, rebuild only if changed.
+    // Non-combiner application: rebuild children, rebuild only if one changed.
     const args = try theorem.allocator.alloc(ExprId, arg_count);
     defer theorem.allocator.free(args);
     @memcpy(args, theorem.interner.node(expr_id).app.args);
     var changed = false;
     for (args) |*a| {
-        const canonical = try canonicalizeAcui(context, theorem, a.*);
-        if (canonical != a.*) changed = true;
-        a.* = canonical;
+        const rebuilt = try rebuildAcui(context, theorem, a.*, form);
+        if (rebuilt != a.*) changed = true;
+        a.* = rebuilt;
     }
     if (!changed) return expr_id;
     return theorem.interner.internApp(term_id, args);
 }
 
-fn canonicalizeAcuiCombiner(
+fn rebuildAcuiCombiner(
     context: *const Context,
     theorem: *TheoremContext,
-    head_id: u32,
-    combiner: StructuralCombiner,
+    combiner: bag.Combiner,
     expr_id: ExprId,
+    comptime form: AcuiForm,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    const raw = bag.flatten(context, theorem, head_id, expr_id) orelse return expr_id;
+    // Bail unchanged on an oversized bag rather than truncate it.
+    const raw = combiner.flatten(theorem, expr_id) orelse return expr_id;
 
-    // Each canonicalization step is gated on the law the *registered subset*
-    // actually declares, so this never equates two genuinely-unequal expressions
-    // (worst case: a missed reuse). The minimum subset is AU — the DSL makes the
-    // associativity rule and unit term mandatory while `comm`/`idem` are optional
-    // — so flattening (above, A) and unit removal (here, U) are always licensed;
-    // ordering and multiplicity are only collapsed under C and I respectively.
+    // Each step is gated on the law the *registered subset* actually declares,
+    // so this never equates two genuinely-unequal expressions (worst case: a
+    // missed reuse). The minimum subset is AU — the DSL makes the associativity
+    // rule and unit term mandatory while `comm`/`idem` are optional — so
+    // flattening (A) and unit removal (U) are always licensed; ordering and
+    // multiplicity are only collapsed under C and I respectively.
 
-    // U (always): drop unit members. `isAcuiUnitExpr` is false for everything if
-    // the unit term is unresolvable, so a malformed unit-less declaration is inert
-    // here rather than wrong.
+    // U (always): drop this combiner's unit members, including a member that
+    // rebuilds to it (a member that is another combiner's unit stays). Nothing
+    // is a unit if the unit term is unresolvable, so a malformed unit-less
+    // declaration is inert here rather than wrong.
     var kept: [bag.capacity]ExprId = undefined;
     var kept_n: usize = 0;
     for (raw.slice()) |member| {
-        const canonical = try canonicalizeAcui(context, theorem, member);
-        if (isAcuiUnitExpr(context, theorem, canonical)) continue;
-        kept[kept_n] = canonical;
+        const rebuilt = try rebuildAcui(context, theorem, member, form);
+        if (combiner.isUnit(theorem, rebuilt)) continue;
+        kept[kept_n] = rebuilt;
         kept_n += 1;
     }
 
     // C (only when commutative): order is immaterial, so sort to collide
     // order-variant regions. Under a non-commutative subset (AU/AUI) order is
     // significant and must be preserved — we leave the members as written.
-    if (combiner.comm_name != null) {
+    if (form == .memo_key and combiner.law.isCommutative()) {
         std.mem.sort(ExprId, kept[0..kept_n], {}, std.sort.asc(ExprId));
         // I (only when also commutative): collapse duplicates, now adjacent after
         // the sort. We deliberately do NOT dedup an idempotent-but-non-commutative
         // (AUI) combiner: collapsing only *adjacent* duplicates there would be a
         // partial, order-dependent canonicalization, so we conservatively skip it
         // (a missed reuse, never an unsound collision).
-        if (combiner.idem_name != null) {
+        if (combiner.law.isIdempotent()) {
             var w: usize = 0;
             var i: usize = 0;
             while (i < kept_n) : (i += 1) {
@@ -1080,11 +1006,8 @@ fn canonicalizeAcuiCombiner(
         }
     }
 
-    if (kept_n == 0) {
-        const unit_term = bag.unitOf(context, head_id) orelse return expr_id;
-        return theorem.interner.internApp(unit_term, &.{});
-    }
-    return bag.rightFold(theorem, head_id, kept[0..kept_n]);
+    // Every member was a unit ⇒ the whole region is the unit element.
+    return (try combiner.build(theorem, kept[0..kept_n])) orelse expr_id;
 }
 
 // Unit law: in an ACUI monoid with a unit, `combine(a, b, …) = unit` forces
@@ -1143,10 +1066,11 @@ pub fn acuiClosedRegionPlausible(
         .binder => |idx| {
             if (idx < bindings.len) {
                 if (bindings[idx]) |bound| {
-                    // A binder pinned to the unit closes its position to the
-                    // empty region: the ref here must be that same unit.
-                    if (isAcuiUnitExpr(context, theorem, bound)) {
-                        return isAcuiUnitExpr(context, theorem, expr_id);
+                    // A binder pinned to a combiner's unit closes its
+                    // position to the empty region: the ref here must hold no
+                    // members of that combiner.
+                    if (unitRefPlausible(context, theorem, bound, expr_id)) |plausible| {
+                        return plausible;
                     }
                     // A bound binder is a closed one-summand region: when
                     // either side is a combiner region, the ref must hold
@@ -1192,6 +1116,28 @@ pub fn acuiClosedRegionPlausible(
     }
 }
 
+// When `bound` is the unit of some combiner: whether `ref` can equal it,
+// i.e. flattens to no members under that combiner (`emp , emp` does). A meta
+// member may stand for nothing, so it abstains. Null when `bound` is no unit.
+fn unitRefPlausible(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    bound: ExprId,
+    ref: ExprId,
+) ?bool {
+    var is_unit = false;
+    var it = context.registry.acui_by_head.keyIterator();
+    while (it.next()) |head_id| {
+        if (!bag.isUnitOf(context, theorem, head_id.*, bound)) continue;
+        is_unit = true;
+        const members = bag.flatten(context, theorem, head_id.*, ref) orelse return true;
+        for (members.slice()) |member| {
+            if (theorem.interner.node(member).* != .placeholder) break;
+        } else return true;
+    }
+    return if (is_unit) false else null;
+}
+
 fn combinerHeadOf(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -1230,20 +1176,19 @@ fn boundRegionRefEqualPlausible(
     for (bound_members.slice()) |item| {
         if (exprNeedsSemantic(context, theorem, item)) return true;
     }
-    return regionCovers(context, theorem, bound_members.slice(), ref_members.slice()) and
-        regionCovers(context, theorem, ref_members.slice(), bound_members.slice());
+    return regionCovers(theorem, bound_members.slice(), ref_members.slice()) and
+        regionCovers(theorem, ref_members.slice(), bound_members.slice());
 }
 
-// Every non-unit member of `wants` matches (modulo metas) some member of `haves`.
-// A bare meta may stand for no members at all, so it needs none.
+// Every member of `wants` matches (modulo metas) some member of `haves`. Both
+// come from `bag.flatten`, so neither holds the unit. A bare meta may stand for
+// no members at all, so it needs none.
 fn regionCovers(
-    context: *const Context,
     theorem: *const TheoremContext,
     wants: []const ExprId,
     haves: []const ExprId,
 ) bool {
     outer: for (wants) |want| {
-        if (isAcuiUnitExpr(context, theorem, want)) continue;
         if (theorem.interner.node(want).* == .placeholder) continue;
         for (haves) |have| {
             if (exprUnifiesModuloMeta(theorem, want, have)) continue :outer;
@@ -1294,7 +1239,6 @@ fn acuiRegionRefCompatible(
     const flat = bag.flatten(context, theorem, head_id, container) orelse return true;
     var members = bag.ExprBag{};
     for (flat.slice()) |item| {
-        if (isAcuiUnitExpr(context, theorem, item)) continue;
         switch (theorem.interner.node(item).*) {
             .variable, .placeholder => return true,
             else => {},
@@ -1366,14 +1310,8 @@ fn boundRegionSlots(
     bound: ExprId,
     head_id: u32,
 ) usize {
-    if (isAcuiUnitExpr(context, theorem, bound)) return 0;
     const members = bag.flatten(context, theorem, head_id, bound) orelse return bag.capacity;
-    var slots: usize = 0;
-    for (members.slice()) |item| {
-        if (isAcuiUnitExpr(context, theorem, item)) continue;
-        slots += 1;
-    }
-    return slots;
+    return members.len;
 }
 
 // Does the template's ACUI region contain a member that (read-only) could match
@@ -1394,7 +1332,7 @@ fn templateRegionHasMemberMatching(
         .binder => |idx| {
             if (idx < bindings.len) {
                 if (bindings[idx]) |bound| {
-                    if (isAcuiUnitExpr(context, theorem, bound)) return false;
+                    if (bag.isUnitOf(context, theorem, head_id, bound)) return false;
                     // Unify-modulo-meta so a binder bound to a carry-to-leaf
                     // witness value (e.g. `P ?t`) stays plausible against a
                     // concrete member (`P c`); degenerates to identity for

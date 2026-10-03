@@ -189,8 +189,7 @@ fn resolveRigidHead(context: *const Context, term_id: u32) ?u32 {
 // commutativity nor idempotence, so its members form a sequence: two spines
 // are equal exactly when their flattened, unit-free member lists are.
 fn acuiIsOrdered(context: *const Context, term_id: u32) bool {
-    const combiner = context.registry.acui_by_head.get(term_id) orelse return false;
-    return combiner.comm_name == null and combiner.idem_name == null;
+    return bag.lawOf(context, term_id) == .sequence;
 }
 
 // Whether a sequence entry is exactly one member: an application whose head
@@ -587,7 +586,7 @@ pub fn extractHypPartialBindings(
             // C. An ordered combiner (neither C nor I) returned above through
             // `extractOrderedSpineBindings`; an idempotent non-commutative one
             // keeps only the positional walk.
-            if (acui.isCommutative(context, app.term_id)) {
+            if (bag.isCommutative(context, app.term_id)) {
                 acui.extractAcuiMemberBindings(
                     context,
                     theorem,

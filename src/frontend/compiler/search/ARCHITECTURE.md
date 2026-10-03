@@ -198,13 +198,13 @@ Why they cannot collapse into one (verified empirically, 2026-06-24):
 A deletion-based unification (the abandoned `noble-squishing-falcon` /
 `matchAcuiSide` plan) is therefore **unreachable**: there is no redundant
 duplicate to delete. If you want to reduce the special-casing, the lever is
-*shared helpers* (`backward/bag.zig`: `flatten`, `lawOf`, `unitOf`;
-`backward/acui.zig`: `templateMatchesExprReadOnly`, `isCommutative`,
-`consumeBoundLeafMembers`), not merging the three drivers.
+*shared helpers* (`backward/bag.zig`: `flatten`, `lawOf`, `isCommutative`,
+`unitOf`; `backward/acui.zig`: `templateMatchesExprReadOnly`,
+`principalChoices`, `consumeBoundLeafMembers`), not merging the three drivers.
 
 ### ACUI subset soundness
 
-`isCommutative` (`backward/acui.zig`) gates every force-the-rest / fan-out step.
+`bag.isCommutative` gates every force-the-rest / fan-out step.
 Under a non-commutative subset (AU; `StructuralCombiner.comm_name == null`) the
 leftover is an *order-constrained remainder*, not a free multiset complement, so
 committing a rest-binding is unsound — keep the conservative path. The
@@ -275,7 +275,7 @@ which the persisted-memo covering rule requires:
    historical phase-3 gating).
 4. **Phase 4 — principal retention** (`allow_retain_principal = true`). Only on
    a clean core miss, and only when the theory declares an **idempotent**
-   structural combiner (`hasIdempotentCombiner`). Lets the ACUI split enumerator
+   structural combiner (`AcuiBag.anyLaw(…, Law.isIdempotent)`). Lets the ACUI split enumerator
    keep a member already claimed by a fixed principal in the open rest binder of
    a set combiner — the non-minimal complement `g , g = g` permits — and lets an
    ordered idempotent combiner's rest overlap its neighbours, as any contiguous
@@ -1071,16 +1071,18 @@ candidates and the validator checks each one.
   (`bag.lawOf`). A set (ACUI) offers sub-sets of the distinct members, since
   siblings may overlap. A multiset (ACU) offers sub-multisets of what the
   principals and bound siblings leave (so `a , a` is a candidate), forced when
-  no sibling is open. A sequence (AU) offers contiguous runs, each end pinned
-  when the summands on that side have a known member count: `g , x : A`
-  against a three-entry context offers only the first two entries. A bound
-  sibling holding a meta or a def may stand for any number of entries, so it
-  leaves its end open.
+  no sibling is open. A sequence (AU, or AUI) offers contiguous runs, each end
+  pinned when the summands on that side have a known member count:
+  `g , x : A` against a three-entry context offers only the first two entries.
+  A bound sibling holding a meta or a def may stand for any number of entries,
+  so it leaves its end open, and in a set or multiset split it counts as an
+  open sibling.
 
 Every flattening of a combiner application in the search goes through
-`backward/bag.zig`: `flatten` splices nested applications, drops the
-combiner's own unit and keeps duplicates in order, returning null on overflow
-so callers abstain rather than read a truncated bag. The exception is
+`backward/bag.zig`, the search's handle on `acui_bag.zig`, which the checker
+shares: `flatten` splices nested applications, drops the combiner's own unit
+(never another combiner's) and keeps duplicates in order, returning null on
+overflow so callers abstain rather than read a truncated bag. The exception is
 `witness.flattenRegion`, which also dereferences solved metas.
 
 The same `finalConclusionPlausible`/`tryCandidate` path also carries the
@@ -1326,7 +1328,7 @@ width is real.
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?` thin variant |
 | `backward/seed.zig` | seed-phase binder extraction + non-view principal fan-out + eliminator reconciliation seed (`partitionSeedBindings`) |
-| `backward/bag.zig` | one flattening of an ACUI combiner application: members, unit, laws (set / multiset / sequence), rebuild |
+| `backward/bag.zig` | the search's handle on `acui_bag.zig` (one flattening of an ACUI combiner application: members, unit, laws, rebuild), with the combiner looked up from the search context |
 | `backward/acui.zig` | ACUI member math (shared by all three principal mechanisms) |
 | `backward/split.zig` | multiplicative context-partition search |
 | `backward/witness.zig` | ACUI member-witness enumeration for open existentials |

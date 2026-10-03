@@ -226,6 +226,7 @@ Definition-aware matching and normalization support:
 - `def_ops/tests/`
 - `inference_solver.zig`
 - `canonicalizer.zig`
+- `acui_bag.zig`
 - `acui_support.zig`
 - `rewrite_registry.zig`
 - `normalized_compare.zig`
@@ -966,6 +967,12 @@ semantics shared by:
 
 This shared module matters because the project previously had a real risk
 of drift between the canonicalizer and the proof-producing normalizer.
+
+Below it, `src/frontend/acui_bag.zig` is the one reading of a combiner
+application as a bag of members, shared by the checker and the search. It
+flattens (dropping the combiner's *own* unit only: ring `+` and `*` on one sort
+do not share units), rebuilds, and reports the declared laws as one `Law`
+(set, multiset, sequence, or idempotent sequence).
 
 The current shared ACUI model includes:
 

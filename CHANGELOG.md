@@ -160,7 +160,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   `ok2 (A , B) (A , B)`, with each `_ctx` standing for `B`. Before, holes
   were filled by position, so the second `_ctx` took `A`. A context with two
   holes, or with a hole inside a member, is still filled by position, and a
-  line that fails because of it now says so.
+  line that fails because of it now says so. Under a combiner declared
+  without commutativity, order still counts: the visible members must be the
+  context's first and last ones, and the hole takes the run between them.
 - When a line's rule variable cannot be determined, the error names one the
   cited premises leave open too. Before, `or_l [q []]` with its `b` hidden
   by a hole was reported as missing `a`, which `q` determines.
@@ -190,6 +192,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   context, though the goal needs a member of the shape `_ -> q`. With the
   generic `ax` as the typing rule for variables,
   `$ _ , f : b ⇒ c , k : a ⇒ b ⊢ k : _ty $ by ax []` now picks `k`'s entry.
+- `auto?` no longer drops a member that is another combiner's unit. With
+  `+` (unit `0`) and `*` (unit `1`) both `@acui` on one sort, the search read
+  `x + 1` as `x`, so two different subgoals could share a memo entry and a
+  provable one could be missed.
 - A holey line whose visible parts match the rule only after unfolding a
   definition now checks. With `img f B` defined as `sep y B (R f y)`,
   `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's

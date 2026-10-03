@@ -239,7 +239,16 @@ pub fn buildEnumerator(
     const ok = switch (law) {
         .set => enumerateSet(context, theorem, site, bindings, target_b, retain_claimed, goal, &en),
         .multiset => enumerateMultiset(context, theorem, site, bindings, target_b, goal, &en),
-        .sequence => enumerateSequence(context, theorem, site, bindings, target_b, retain_claimed, goal, &en),
+        .sequence, .idempotent_sequence => enumerateSequence(
+            context,
+            theorem,
+            site,
+            bindings,
+            target_b,
+            retain_claimed and law.isIdempotent(),
+            goal,
+            &en,
+        ),
     };
     if (!ok) return null;
     std.sort.insertion(u64, en.masks[0..en.mask_len], {}, lessPopcount);
@@ -324,8 +333,9 @@ fn enumerateSet(
 }
 
 /// What the spine binders other than `target_b` can hold in a set split: true
-/// when that is anything (an open sibling, or one too large to read), else
-/// exactly the members collected into `covered`.
+/// when that is anything (an open sibling, one too large to read, or one with
+/// a meta or def member, which may stand for any members), else exactly the
+/// members collected into `covered`.
 fn siblingsCover(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -339,6 +349,7 @@ fn siblingsCover(
         const value = boundValue(bindings, b) orelse return true;
         const held = bag.flatten(context, theorem, site.head_id, value) orelse return true;
         for (held.slice()) |member| {
+            if (!acui.memberIsFixed(context, theorem, member)) return true;
             if (!covered.appendDistinct(member)) return true;
         }
     }
@@ -371,6 +382,9 @@ fn enumerateMultiset(
         };
         const held = bag.flatten(context, theorem, site.head_id, value) orelse return false;
         for (held.slice()) |member| {
+            // A meta or def member may stand for any number of members, so
+            // the sibling is as good as open.
+            if (!acui.memberIsFixed(context, theorem, member)) open_sibling = true;
             // A member the goal lacks may still match after conversion; the
             // validator decides.
             _ = takeCopy(members, free[0..members.len], member);
@@ -433,15 +447,16 @@ fn enumerateMultiset(
 /// end of the run is pinned when every summand on that side has a known member
 /// count (a rigid fixed summand holds one member, a bound binder its own);
 /// otherwise that end ranges over what is left. Under idempotence (AUI) a
-/// summand may overlap its neighbours (`a , a = a`), so with `retain_claimed`
-/// the run may be any contiguous run, as the set split retains principals.
+/// summand may overlap its neighbours (`a , a = a`), so when the caller
+/// retains claimed members (`overlap`) the run may be any contiguous run, as
+/// the set split retains principals.
 fn enumerateSequence(
     context: *const Context,
     theorem: *const TheoremContext,
     site: SplitSite,
     bindings: []const ?ExprId,
     target_b: usize,
-    retain_claimed: bool,
+    overlap: bool,
     goal: bag.ExprBag,
     en: *SplitEnumerator,
 ) bool {
@@ -454,8 +469,6 @@ fn enumerateSequence(
         if (summand == .binder and summand.binder == target_b) break i;
     } else return false;
 
-    const overlap = retain_claimed and
-        context.registry.acui_by_head.get(site.head_id).?.idem_name != null;
     const before = if (overlap)
         Span{ .exact = false }
     else

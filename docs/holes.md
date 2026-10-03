@@ -357,8 +357,10 @@ over: the fewest, under idempotence, and the unit when none are left. With
 l1: $ ok2 (A , _ctx) (_ctx , A) $ by dup [ok_ab []]
 ```
 
-checks, with each `_ctx` standing for `B`. This takes exactly one hole
-among a context's members. A context with two holes, or with a hole inside
+checks, with each `_ctx` standing for `B`. Order is ignored only under a
+commutative combiner. Without commutativity the visible members must be the
+context's first and last ones, in order, and the hole takes the run between
+them. This takes exactly one hole among a context's members. A context with two holes, or with a hole inside
 a member such as `wk _ctx`, is filled by position only; when the line then
 fails, the error says which hole is in the way.
 

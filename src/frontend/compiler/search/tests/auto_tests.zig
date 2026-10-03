@@ -1506,6 +1506,19 @@ test "canonicalizeAcui respects the registered combiner subset" {
     );
     // U still holds: the unit member drops.
     try std.testing.expectEqual(ca, try canon(&context, &theorem, try j(&theorem, ti_seq, ca, semp)));
+
+    // --- U drops only the combiner's OWN unit ---
+    // The three combiners share the sort `ctx`, like ring `+` (unit `0`) and
+    // `*` (unit `1`): `bemp` is a real member of a `join`, as `x + 1` keeps its
+    // `1`.
+    const join_bemp = try j(&theorem, ti_join, ca, bemp);
+    try std.testing.expect((try canon(&context, &theorem, join_bemp)) != ca);
+    try std.testing.expectEqual(join_bemp, try acui.normalizeAcuiUnits(&context, &theorem, join_bemp));
+    // A member that rebuilds to the combiner's own unit still drops.
+    try std.testing.expectEqual(
+        ca,
+        try canon(&context, &theorem, try j(&theorem, ti_join, ca, try j(&theorem, ti_join, emp, emp))),
+    );
 }
 
 test "source exact inside inline or_elim uses sibling branch" {

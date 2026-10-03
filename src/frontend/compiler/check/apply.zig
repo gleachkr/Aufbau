@@ -1339,6 +1339,7 @@ fn principalPinsFor(
     return ambiguousPrincipalPins(
         allocator,
         theorem,
+        context.env,
         context.registry,
         rule,
         expected,
