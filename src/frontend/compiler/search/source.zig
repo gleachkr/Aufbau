@@ -1286,8 +1286,11 @@ fn appendGeneratedSuggestions(
         const app = trimmed.app;
         // A holey goal was searched with metas for its holes; the line itself
         // must check with the rendered proof in place, filling them.
-        if (site.line_goal == .holey and !trimmed.validated and
-            !try site.validates(allocator, app)) continue;
+        if (site.line_goal == .holey) switch (trimmed.verdict) {
+            .passed => {},
+            .failed => continue,
+            .unchecked => if (!try site.validates(allocator, app)) continue,
+        };
         const replacement = try renderApplication(
             allocator,
             app.rule_name,
@@ -1803,10 +1806,19 @@ fn withNeededBindings(
 
 const TrimmedApplication = struct {
     app: RuleApplication,
-    /// The line was checked with `app` in place and passed. False when no
-    /// trial ran on `app` itself (it has no bindings, or every drop failed
-    /// and the full application was never tried).
-    validated: bool,
+    /// What the trials said about the line with `app` in place.
+    verdict: Verdict,
+
+    const Verdict = enum {
+        passed,
+        /// Only on a holey line, where the full application is tried
+        /// first: it failed, and so did every drop.
+        failed,
+        /// No trial ran on `app` itself (it has no bindings, or every drop
+        /// failed on a concrete line, where the full application is never
+        /// tried).
+        unchecked,
+    };
 };
 
 /// `withNeededBindings`, also reporting whether the result was validated.
@@ -1816,27 +1828,30 @@ fn trimBindings(
     app: RuleApplication,
 ) !TrimmedApplication {
     const count = bindingCount(app);
-    if (count == 0) return .{ .app = app, .validated = false };
+    if (count == 0) return .{ .app = app, .verdict = .unchecked };
     const drop = try allocator.alloc(bool, count);
     @memset(drop, true);
     const bare = try withBindingsDropped(allocator, app, drop);
-    if (try site.validates(allocator, bare)) return .{ .app = bare, .validated = true };
+    if (try site.validates(allocator, bare)) return .{ .app = bare, .verdict = .passed };
     @memset(drop, false);
-    const inner_first = site.line_goal == .holey and try site.validates(allocator, app);
     // The current drop set is validated once the full application passed or
     // any drop was kept: a rejected trial restores the last accepted set.
-    var validated = inner_first;
+    var verdict: TrimmedApplication.Verdict = .unchecked;
+    if (site.line_goal == .holey) {
+        verdict = if (try site.validates(allocator, app)) .passed else .failed;
+    }
+    const inner_first = verdict == .passed;
     for (0..count) |step| {
         const idx = if (inner_first) count - 1 - step else step;
         drop[idx] = true;
         const trial = try withBindingsDropped(allocator, app, drop);
         if (try site.validates(allocator, trial)) {
-            validated = true;
+            verdict = .passed;
         } else {
             drop[idx] = false;
         }
     }
-    return .{ .app = try withBindingsDropped(allocator, app, drop), .validated = validated };
+    return .{ .app = try withBindingsDropped(allocator, app, drop), .verdict = verdict };
 }
 
 fn bindingCount(app: RuleApplication) usize {

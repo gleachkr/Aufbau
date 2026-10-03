@@ -510,10 +510,11 @@ between trusted parser trees and frontend proof elaboration.
   can observe (the theory text up to the parser's position, the proof
   text up to the block, and each earlier block's outcome in place of its
   body), keys a check by that fingerprint plus the block body, and on a
-  hit replays the recorded diagnostics, sink entries and error with
-  proof spans relocated to the block's new position. Rule-catalog
-  lookups, the one thing a check reads beyond that prefix, are recorded
-  and re-verified. `src/tests/check_memo_corpus.zig` is the guard: on
+  hit replays the recorded diagnostics, hole sink entries and error with
+  proof spans relocated to the block's new position. Only runs that
+  collect holes and no inline conclusions use it, so every entry records
+  the same output. Rule-catalog lookups, the one thing a check reads
+  beyond that prefix, are recorded and re-verified. `src/tests/check_memo_corpus.zig` is the guard: on
   every fixture, a warm analysis must equal a cold one under body edits
   that shift or break later blocks and theory edits that shift
   everything.
@@ -1188,7 +1189,9 @@ The important lifetimes are:
 navigation snapshots, search results, placeholder outcomes, and the
 proof-block check memo every analysis it runs shares (`check_memo.zig`),
 so an edit re-checks only the blocks it can affect and a root that imports
-a library replays the library's blocks instead of re-checking them. Cache
+a library replays the library's blocks instead of re-checking them. The
+diagnostics pass collects hole inferences it does not publish, so the
+navigation snapshot's analysis replays every block it checked. Cache
 invalidation is centralized in `Handler.invalidateCachesForUri`; the memo
 needs none, being keyed by content.
 `src/frontend/lsp/index.zig` owns arena-backed navigation snapshots; its

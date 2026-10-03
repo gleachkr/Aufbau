@@ -4,8 +4,7 @@
 //! span, note, sink entry and error — under the edits an editor makes:
 //! nothing (all hits), a body edit that only shifts later blocks, a body
 //! edit that flips an outcome, and a theory edit that shifts every `.mm0`
-//! position. It also mixes analyses with and without the sinks, as the
-//! editor's diagnostics and navigation passes do.
+//! position. A run with the inline conclusion sink must bypass the memo.
 
 const std = @import("std");
 const mm0 = @import("../lib.zig");
@@ -20,7 +19,7 @@ fn analyzeDump(
     mm0_text: []const u8,
     proof_text: []const u8,
     memo: ?*CheckMemo,
-    sinks: bool,
+    inlines_sink: bool,
 ) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
@@ -30,10 +29,8 @@ fn analyzeDump(
     var inlines = mm0.CompilerSupport.Context.InlineConclusionSink{ .allocator = arena };
     var compiler = Compiler.initWithProof(arena, mm0_text, proof_text);
     compiler.allow_search_placeholders = true;
-    if (sinks) {
-        compiler.hole_inference_sink = &holes;
-        compiler.inline_conclusion_sink = &inlines;
-    }
+    compiler.hole_inference_sink = &holes;
+    if (inlines_sink) compiler.inline_conclusion_sink = &inlines;
     compiler.check_memo = memo;
 
     var out = std.ArrayListUnmanaged(u8){};
@@ -151,8 +148,8 @@ const Scenario = struct {
     name: []const u8,
     mm0_text: []const u8,
     proof_text: []const u8,
-    /// Attach the hole and inline conclusion sinks.
-    sinks: bool = true,
+    /// Also attach the inline conclusion sink.
+    inlines_sink: bool = false,
 };
 
 /// Cold vs warm must agree; returns the warm dump's hit delta.
@@ -162,9 +159,9 @@ fn expectSameAnalysis(
     stem: []const u8,
     scenario: Scenario,
 ) !void {
-    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null, scenario.sinks);
+    const cold = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, null, scenario.inlines_sink);
     defer allocator.free(cold);
-    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo, scenario.sinks);
+    const warm = try analyzeDump(allocator, scenario.mm0_text, scenario.proof_text, memo, scenario.inlines_sink);
     defer allocator.free(warm);
     if (!std.mem.eql(u8, cold, warm)) {
         std.debug.print(
@@ -234,16 +231,7 @@ fn runFixture(
     const mm0_text = pair.mm0.text;
     const proof_text = (pair.proof orelse return).text;
 
-    // Cold population without the sinks (the editor's diagnostics
-    // pass), then with them (its navigation pass): entries recorded
-    // without a sink must not replay into one. Then a verbatim rerun:
-    // every block must hit.
-    try expectSameAnalysis(allocator, memo, stem, .{
-        .name = "populate without sinks",
-        .mm0_text = mm0_text,
-        .proof_text = proof_text,
-        .sinks = false,
-    });
+    // Cold population, then a verbatim rerun: every block must hit.
     try expectSameAnalysis(allocator, memo, stem, .{
         .name = "populate",
         .mm0_text = mm0_text,
@@ -291,7 +279,7 @@ fn runFixture(
                 .proof_text = edited,
             });
             if (memo.misses - misses > unrecordable + 1) {
-                const dump = try analyzeDump(allocator, mm0_text, edited, null, true);
+                const dump = try analyzeDump(allocator, mm0_text, edited, null, false);
                 defer allocator.free(dump);
                 std.debug.print(
                     "check memo shift over-miss: {s} block {d}/{d} ({s}): {d} misses, {d} unrecordable\n--- edited analysis ---\n{s}\n--- edited text ---\n{s}\n",
@@ -345,6 +333,21 @@ fn runFixture(
             .proof_text = proof_text,
         });
         try std.testing.expectEqual(unrecordable, memo.misses - misses);
+    }
+
+    // The memo records no inline conclusions, so a run that collects them
+    // checks every block.
+    {
+        const hits = memo.hits;
+        const misses = memo.misses;
+        try expectSameAnalysis(allocator, memo, stem, .{
+            .name = "inline sink",
+            .mm0_text = mm0_text,
+            .proof_text = proof_text,
+            .inlines_sink = true,
+        });
+        try std.testing.expectEqual(hits, memo.hits);
+        try std.testing.expectEqual(misses, memo.misses);
     }
 }
 
@@ -412,10 +415,10 @@ test "check memo evicts least recently used entries past its cap" {
         \\---
         \\p: $ top $ by ax_top []
     ;
-    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
+    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, false);
     defer allocator.free(first);
     try std.testing.expect(memo.entries.count() <= 4);
-    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
+    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, false);
     defer allocator.free(second);
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expect(memo.entries.count() <= 4);
@@ -439,10 +442,10 @@ test "check memo drops a block whose output it cannot record" {
         \\---
         \\p: $ top $ by ax_top []
     ;
-    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
+    const first = try analyzeDump(allocator, mm0_text, proof_text, &memo, false);
     defer allocator.free(first);
     try std.testing.expectEqual(@as(usize, 0), memo.entries.count());
-    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, true);
+    const second = try analyzeDump(allocator, mm0_text, proof_text, &memo, false);
     defer allocator.free(second);
     try std.testing.expectEqualStrings(first, second);
     try std.testing.expectEqual(@as(usize, 0), memo.entries.count());

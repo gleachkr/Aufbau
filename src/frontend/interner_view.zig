@@ -8,48 +8,68 @@ const GlobalEnv = @import("./env.zig").GlobalEnv;
 const Expr = @import("../trusted/expressions.zig").Expr;
 const pretty_print = @import("./pretty_print.zig");
 
-/// Shared `pretty_print` view adapter over the frontend interner. Both the
-/// search recipe renderer (`forward.Namer`) and the diagnostic renderer
-/// (`view_trace`) read the identical representation — `theorem.interner` nodes
-/// plus `env.terms` for term names — and differ only in how a variable or
-/// placeholder leaf resolves to a printable name. That single difference is the
-/// `Resolver` type parameter, which must expose:
-///
-///   pub fn variableAtom(self, var_id: VarId) pretty_print.NodeInfo(ExprId)
-///   pub fn placeholderAtom(self, pid: PlaceholderId) pretty_print.NodeInfo(ExprId)
-///
-/// Each returns `.atom` for a resolved name or `.missing` to fail the render
-/// (search returns `.missing` for unnamed leaves; diagnostics synthesize an
-/// internal coordinate so they never fail).
-pub fn View(comptime Resolver: type) type {
-    return struct {
-        resolver: Resolver,
-        theorem: *const TheoremContext,
-        env: *const GlobalEnv,
+/// How a variable or placeholder leaf prints. Real variables print under
+/// their source name; what happens to a leaf without one is the caller's
+/// choice.
+pub const Names = struct {
+    /// Encoded VarId -> source name.
+    vars: *const std.AutoHashMapUnmanaged(u64, []const u8),
+    /// Names chosen for placeholders (the search's stand-ins), if any.
+    placeholders: ?*const std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = null,
+    /// Where to write an internal coordinate (`v#`, `.d#`, `.p#`) for a leaf
+    /// without a name, so the render never fails (diagnostics). Null fails
+    /// the render instead, for text that must parse back. The printer copies
+    /// each atom before asking for the next, so one buffer serves them all.
+    coord_buf: ?*[24]u8 = null,
 
-        const Self = @This();
-        pub const Node = ExprId;
+    fn variableAtom(self: Names, var_id: VarId) pretty_print.NodeInfo(ExprId) {
+        if (self.vars.get(var_id.hashKey())) |name| return .{ .atom = name };
+        const buf = self.coord_buf orelse return .missing;
+        return .{ .atom = switch (var_id) {
+            .theorem_var => |idx| std.fmt.bufPrint(buf, "v{d}", .{idx}),
+            .dummy_var => |idx| std.fmt.bufPrint(buf, ".d{d}", .{idx}),
+        } catch unreachable };
+    }
 
-        pub fn nodeInfo(self: Self, node: ExprId) pretty_print.NodeInfo(ExprId) {
-            return switch (self.theorem.interner.node(node).*) {
-                .variable => |var_id| self.resolver.variableAtom(var_id),
-                .placeholder => |pid| self.resolver.placeholderAtom(pid),
-                .app => |app| if (app.term_id >= self.env.terms.items.len)
-                    .missing
-                else
-                    .{ .app = .{
-                        .term_id = app.term_id,
-                        .args = app.args,
-                    } },
-            };
+    fn placeholderAtom(self: Names, pid: PlaceholderId) pretty_print.NodeInfo(ExprId) {
+        if (self.placeholders) |chosen| {
+            if (chosen.get(pid)) |name| return .{ .atom = name };
         }
+        const buf = self.coord_buf orelse return .missing;
+        return .{ .atom = std.fmt.bufPrint(buf, ".p{d}", .{pid}) catch unreachable };
+    }
+};
 
-        pub fn termName(self: Self, term_id: u32) ?[]const u8 {
-            if (term_id >= self.env.terms.items.len) return null;
-            return self.env.terms.items[term_id].name;
-        }
-    };
-}
+/// `pretty_print` view over the frontend interner: `theorem.interner` nodes,
+/// `env.terms` for term names, and `names` for the leaves. Shared by the
+/// search's recipe renderer (`forward.Namer`) and the diagnostic and source
+/// renderers (`view_trace`).
+pub const View = struct {
+    names: Names,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+
+    pub const Node = ExprId;
+
+    pub fn nodeInfo(self: View, node: ExprId) pretty_print.NodeInfo(ExprId) {
+        return switch (self.theorem.interner.node(node).*) {
+            .variable => |var_id| self.names.variableAtom(var_id),
+            .placeholder => |pid| self.names.placeholderAtom(pid),
+            .app => |app| if (app.term_id >= self.env.terms.items.len)
+                .missing
+            else
+                .{ .app = .{
+                    .term_id = app.term_id,
+                    .args = app.args,
+                } },
+        };
+    }
+
+    pub fn termName(self: View, term_id: u32) ?[]const u8 {
+        if (term_id >= self.env.terms.items.len) return null;
+        return self.env.terms.items[term_id].name;
+    }
+};
 
 /// Populate `out` with `VarId.hashKey -> source name` by inverting a
 /// `name -> *const Expr` binder map (the checker's `NameExprMap`) through the

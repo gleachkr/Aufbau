@@ -2,8 +2,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const ExprId = @import("./expr.zig").ExprId;
-const VarId = @import("./expr.zig").VarId;
-const PlaceholderId = @import("./expr.zig").PlaceholderId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
 const Expr = @import("../trusted/expressions.zig").Expr;
 const MM0Parser = @import("./parse_recovery.zig").MM0Parser;
@@ -171,10 +169,6 @@ pub const DiagNames = struct {
     pub fn deinit(self: *DiagNames, allocator: std.mem.Allocator) void {
         self.map.deinit(allocator);
     }
-
-    fn lookup(self: *const DiagNames, var_id: VarId) ?[]const u8 {
-        return self.map.get(var_id.hashKey());
-    }
 };
 
 /// `DiagNames` for a diagnostic renderer, when they can be had: present
@@ -229,8 +223,8 @@ pub fn formatExprNamed(
     expr_id: ExprId,
 ) ![]const u8 {
     var coord_buf: [24]u8 = undefined;
-    const view = interner_view.View(DiagResolver){
-        .resolver = .{ .names = names, .coord_buf = &coord_buf },
+    const view: interner_view.View = .{
+        .names = .{ .vars = &names.map, .coord_buf = &coord_buf },
         .theorem = theorem,
         .env = env,
     };
@@ -251,72 +245,13 @@ pub fn formatExprSource(
     names: *const DiagNames,
     expr_id: ExprId,
 ) !?[]const u8 {
-    const view = interner_view.View(SourceResolver){
-        .resolver = .{ .names = names },
+    const view: interner_view.View = .{
+        .names = .{ .vars = &names.map },
         .theorem = theorem,
         .env = env,
     };
     return try pretty_print.render(allocator, names.parser, view, expr_id);
 }
-
-const SourceResolver = struct {
-    names: *const DiagNames,
-
-    pub fn variableAtom(
-        self: SourceResolver,
-        var_id: VarId,
-    ) pretty_print.NodeInfo(ExprId) {
-        if (self.names.lookup(var_id)) |name| return .{ .atom = name };
-        return .missing;
-    }
-
-    pub fn placeholderAtom(
-        _: SourceResolver,
-        _: PlaceholderId,
-    ) pretty_print.NodeInfo(ExprId) {
-        return .missing;
-    }
-};
-
-/// Name resolver for the diagnostic `interner_view.View`. Resolves real source
-/// names through `DiagNames`, and synthesizes an internal coordinate (`v#`,
-/// `.d#`, `.p#`) for any variable/placeholder without one — so a diagnostic
-/// render never fails on naming. The shared `coord_buf` is safe because the
-/// printer copies each `nodeInfo` atom before the next call.
-const DiagResolver = struct {
-    names: *const DiagNames,
-    coord_buf: *[24]u8,
-
-    pub fn variableAtom(
-        self: DiagResolver,
-        var_id: VarId,
-    ) pretty_print.NodeInfo(ExprId) {
-        if (self.names.lookup(var_id)) |name| return .{ .atom = name };
-        return .{ .atom = switch (var_id) {
-            .theorem_var => |idx| std.fmt.bufPrint(
-                self.coord_buf,
-                "v{d}",
-                .{idx},
-            ) catch unreachable,
-            .dummy_var => |idx| std.fmt.bufPrint(
-                self.coord_buf,
-                ".d{d}",
-                .{idx},
-            ) catch unreachable,
-        } };
-    }
-
-    pub fn placeholderAtom(
-        self: DiagResolver,
-        pid: PlaceholderId,
-    ) pretty_print.NodeInfo(ExprId) {
-        return .{ .atom = std.fmt.bufPrint(
-            self.coord_buf,
-            ".p{d}",
-            .{pid},
-        ) catch unreachable };
-    }
-};
 
 pub fn formatBindingSeed(
     allocator: std.mem.Allocator,

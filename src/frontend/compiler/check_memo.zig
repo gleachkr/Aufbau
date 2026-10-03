@@ -19,12 +19,12 @@
 //! parse garbage all lie in the hashed ranges, so they invalidate what
 //! follows, as they should. The memo key is that fingerprint plus a hash of
 //! the block body; the value is everything the check emitted: its
-//! error, the diagnostics and warnings it added, its hole and inline
-//! conclusion sink entries, and the `last_diagnostic` it left behind.
-//! The sinks are optional outputs, so an entry records only those that
-//! were attached; a run that attaches a sink the entry lacks (the editor's
-//! navigation pass after its sink-less diagnostics pass) re-checks the
-//! block, and the fuller recording replaces the entry.
+//! error, the diagnostics and warnings it added, its hole sink entries,
+//! and the `last_diagnostic` it left behind. So a memo-backed run
+//! collects holes, and only holes: a run without the hole sink, or with
+//! the inline-conclusion or stats sink, checks every block (`beginRun`).
+//! The editor's diagnostics and navigation passes both collect holes, so
+//! a block is checked once per edit and the second pass replays it.
 //!
 //! One thing a check reads outside the hashed prefix is the rule catalog
 //! (`RuleCatalog`), built from the whole `.mm0` up front and consulted
@@ -51,21 +51,13 @@ const Context = @import("./context.zig");
 const CompilerContext = Context.CompilerContext;
 const HoleInference = Context.HoleInference;
 const FilledAssertion = Context.FilledAssertion;
-const InlineConclusion = Context.InlineConclusion;
 
 pub const CheckMemo = struct {
-    /// Bumped when what a check observes, or what an entry stores, changes
-    /// shape, so a stale entry can never match.
-    const schema_version: u32 = 3;
     pub const default_max_entries: usize = 4096;
 
     pub const Key = struct {
         fingerprint: u64,
         body: u64,
-    };
-
-    pub const RunConfig = struct {
-        allow_search_placeholders: bool,
     };
 
     /// One rule-catalog lookup a check made, with what it saw.
@@ -84,24 +76,12 @@ pub const CheckMemo = struct {
         primary: []const Diagnostic,
         warnings: []const Diagnostic,
         last_diagnostic: ?Diagnostic,
-        /// Null when the check ran without the sink, so its entries
-        /// are unknown.
-        holes: ?[]const HoleInference,
-        /// Recorded with `holes`, from the same sink.
+        holes: []const HoleInference,
         assertions: []const FilledAssertion,
-        inlines: ?[]const InlineConclusion,
         lookups: []const CatalogLookup,
 
-        /// Whether the recording holds every sink `ctx` collects into.
-        fn serves(self: *const Entry, ctx: *const CompilerContext) bool {
-            if (ctx.hole_inference_sink != null and self.holes == null) return false;
-            if (ctx.inline_conclusion_sink != null and self.inlines == null) return false;
-            return true;
-        }
-
         /// Re-emit everything the recorded check produced, with proof
-        /// spans moved to where the block lies now. Only for an entry
-        /// `find` returned for `ctx`, so every attached sink was recorded.
+        /// spans moved to where the block lies now.
         pub fn replay(
             self: *const Entry,
             ctx: *CompilerContext,
@@ -115,28 +95,19 @@ pub const CheckMemo = struct {
             for (self.warnings) |diag| {
                 ctx.addWarning(relocateDiagnostic(diag, delta));
             }
-            if (ctx.hole_inference_sink) |sink| {
-                for (self.holes.?) |hole| {
-                    try sink.addOwned(
-                        shiftSpan(hole.span, delta),
-                        try sink.allocator.dupe(u8, hole.expression),
-                    );
-                }
-                for (self.assertions) |filled| {
-                    try sink.addAssertionOwned(
-                        shiftSpan(filled.line, delta),
-                        shiftSpan(filled.assertion, delta),
-                        try sink.allocator.dupe(u8, filled.text),
-                    );
-                }
+            const sink = ctx.hole_inference_sink.?;
+            for (self.holes) |hole| {
+                try sink.addOwned(
+                    shiftSpan(hole.span, delta),
+                    try sink.allocator.dupe(u8, hole.expression),
+                );
             }
-            if (ctx.inline_conclusion_sink) |sink| {
-                for (self.inlines.?) |inline_conclusion| {
-                    try sink.addOwned(
-                        shiftSpan(inline_conclusion.span, delta),
-                        try sink.allocator.dupe(u8, inline_conclusion.conclusion),
-                    );
-                }
+            for (self.assertions) |filled| {
+                try sink.addAssertionOwned(
+                    shiftSpan(filled.line, delta),
+                    shiftSpan(filled.assertion, delta),
+                    try sink.allocator.dupe(u8, filled.text),
+                );
             }
             if (self.last_diagnostic) |diag| {
                 ctx.setDiagnostic(relocateDiagnostic(diag, delta));
@@ -158,7 +129,6 @@ pub const CheckMemo = struct {
         dropped_warnings: usize,
         holes: usize,
         assertions: usize,
-        inlines: usize,
     };
 
     const Domain = enum(u8) { config = 1, mm0 = 2, proof = 3, outcome = 4 };
@@ -191,18 +161,20 @@ pub const CheckMemo = struct {
         self.* = undefined;
     }
 
-    pub fn beginRun(self: *CheckMemo, config: RunConfig) void {
+    /// Start a run over `ctx`'s sources. The memo stays inactive, and every
+    /// block is checked, unless the run collects exactly what an entry
+    /// records: hole inferences, and neither inline conclusions nor solver
+    /// stats (whose running maximum cannot be replayed).
+    pub fn beginRun(self: *CheckMemo, ctx: *const CompilerContext) void {
         self.run +%= 1;
-        self.active = true;
+        self.active = ctx.hole_inference_sink != null and
+            ctx.inline_conclusion_sink == null and
+            ctx.inference_stats_sink == null;
         self.fingerprint = 0;
         self.mm0_cursor = 0;
         self.proof_cursor = 0;
         self.recording = false;
-        const bytes = [_]u8{
-            @intCast(schema_version),
-            @intFromBool(config.allow_search_placeholders),
-        };
-        self.feed(.config, &bytes);
+        self.feed(.config, &.{@intFromBool(ctx.allow_search_placeholders)});
     }
 
     pub fn endRun(self: *CheckMemo) void {
@@ -288,22 +260,16 @@ pub const CheckMemo = struct {
         return block.header_span.end;
     }
 
-    /// The entry for `key` whose recorded catalog lookups still hold and
-    /// whose recording covers the sinks `ctx` collects into.
+    /// The entry for `key` whose recorded catalog lookups still hold.
     pub fn find(
         self: *CheckMemo,
         key: Key,
         catalog: *const RuleCatalog.Catalog,
-        ctx: *const CompilerContext,
     ) ?*const Entry {
         const entry = self.entries.get(key) orelse {
             self.misses += 1;
             return null;
         };
-        if (!entry.serves(ctx)) {
-            self.misses += 1;
-            return null;
-        }
         for (entry.lookups) |lookup| {
             if (!catalogEntryEql(lookup.entry, catalog.get(lookup.name))) {
                 self.misses += 1;
@@ -325,9 +291,8 @@ pub const CheckMemo = struct {
             .warning_count = ctx.diagnostics.warning_count,
             .dropped_primary = ctx.diagnostics.dropped_primary_diagnostic_count,
             .dropped_warnings = ctx.diagnostics.dropped_warning_count,
-            .holes = if (ctx.hole_inference_sink) |sink| sink.items.items.len else 0,
-            .assertions = if (ctx.hole_inference_sink) |sink| sink.assertions.items.len else 0,
-            .inlines = if (ctx.inline_conclusion_sink) |sink| sink.items.items.len else 0,
+            .holes = ctx.hole_inference_sink.?.items.items.len,
+            .assertions = ctx.hole_inference_sink.?.assertions.items.len,
         };
     }
 
@@ -384,9 +349,8 @@ pub const CheckMemo = struct {
             .primary = &.{},
             .warnings = &.{},
             .last_diagnostic = null,
-            .holes = null,
+            .holes = &.{},
             .assertions = &.{},
-            .inlines = null,
             .lookups = &.{},
         };
         // Every early return below means the output cannot be replayed, so
@@ -412,41 +376,28 @@ pub const CheckMemo = struct {
             if (!spansRecordable(diag, block, mm0_limit)) return;
             entry.last_diagnostic = try dupeDiagnostic(arena, diag);
         }
-        if (ctx.hole_inference_sink) |holes| {
-            const items = holes.items.items[recording.holes..];
-            const copies = try arena.alloc(HoleInference, items.len);
-            for (items, copies) |item, *copy| {
-                if (!spanWithin(item.span, block)) return;
-                copy.* = .{
-                    .span = item.span,
-                    .expression = try arena.dupe(u8, item.expression),
-                };
-            }
-            const filled_items = holes.assertions.items[recording.assertions..];
-            const filled_copies = try arena.alloc(FilledAssertion, filled_items.len);
-            for (filled_items, filled_copies) |item, *copy| {
-                if (!spanWithin(item.line, block)) return;
-                copy.* = .{
-                    .line = item.line,
-                    .assertion = item.assertion,
-                    .text = try arena.dupe(u8, item.text),
-                };
-            }
-            entry.holes = copies;
-            entry.assertions = filled_copies;
+        const holes = ctx.hole_inference_sink.?;
+        const items = holes.items.items[recording.holes..];
+        const copies = try arena.alloc(HoleInference, items.len);
+        for (items, copies) |item, *copy| {
+            if (!spanWithin(item.span, block)) return;
+            copy.* = .{
+                .span = item.span,
+                .expression = try arena.dupe(u8, item.expression),
+            };
         }
-        if (ctx.inline_conclusion_sink) |inlines| {
-            const items = inlines.items.items[recording.inlines..];
-            const copies = try arena.alloc(InlineConclusion, items.len);
-            for (items, copies) |item, *copy| {
-                if (!spanWithin(item.span, block)) return;
-                copy.* = .{
-                    .span = item.span,
-                    .conclusion = try arena.dupe(u8, item.conclusion),
-                };
-            }
-            entry.inlines = copies;
+        entry.holes = copies;
+        const filled_items = holes.assertions.items[recording.assertions..];
+        const filled_copies = try arena.alloc(FilledAssertion, filled_items.len);
+        for (filled_items, filled_copies) |item, *copy| {
+            if (!spanWithin(item.line, block)) return;
+            copy.* = .{
+                .line = item.line,
+                .assertion = item.assertion,
+                .text = try arena.dupe(u8, item.text),
+            };
         }
+        entry.assertions = filled_copies;
         const lookups = try arena.alloc(CatalogLookup, self.lookups.items.len);
         for (self.lookups.items, lookups) |lookup, *copy| {
             copy.* = .{

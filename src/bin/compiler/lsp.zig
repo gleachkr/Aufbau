@@ -1651,6 +1651,10 @@ pub const Handler = struct {
             unit.proof.?.joined.text,
         );
         compiler.allow_search_placeholders = true;
+        // Collected only so the check memo records each block's holes: the
+        // navigation pass then replays this pass's checks.
+        var holes = mm0.CompilerSupport.Context.HoleInferenceSink{ .allocator = arena };
+        compiler.hole_inference_sink = &holes;
         compiler.check_memo = &self.check_memo;
         compiler.analyze() catch |err| {
             if (hasDiagnostics(&compiler)) {

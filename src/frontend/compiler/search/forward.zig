@@ -38,7 +38,6 @@ const def_match = @import("./backward/def_match.zig");
 const acui_mod = @import("./backward/acui.zig");
 const ExprModule = @import("../../expr.zig");
 const ExprId = ExprModule.ExprId;
-const VarId = ExprModule.VarId;
 const PlaceholderId = ExprModule.PlaceholderId;
 const TheoremContext = ExprModule.TheoremContext;
 const RuleDecl = @import("../../env.zig").RuleDecl;
@@ -2088,25 +2087,6 @@ pub const Namer = struct {
         return false;
     }
 
-    /// Name resolver for the shared `interner_view.View`. Returns `.missing`
-    /// for an unnamed variable or an unchosen placeholder, which fails the
-    /// render cleanly (search never fabricates a coordinate name).
-    pub fn variableAtom(
-        self: *const Namer,
-        var_id: VarId,
-    ) pretty_print.NodeInfo(ExprId) {
-        if (self.names.get(var_id.hashKey())) |name| return .{ .atom = name };
-        return .missing;
-    }
-
-    pub fn placeholderAtom(
-        self: *const Namer,
-        pid: PlaceholderId,
-    ) pretty_print.NodeInfo(ExprId) {
-        if (self.chosen.get(pid)) |name| return .{ .atom = name };
-        return .missing;
-    }
-
     /// Render `expr_id` as parseable math text using the declared notation
     /// (with minimal parenthesization), falling back to prefix application form
     /// (`term arg1 (inner arg) …`) for terms without notation. Variables and
@@ -2119,8 +2099,10 @@ pub const Namer = struct {
         theorem: *const TheoremContext,
         expr_id: ExprId,
     ) !?[]const u8 {
-        const view = interner_view.View(*const Namer){
-            .resolver = self,
+        // An unnamed variable or unchosen placeholder fails the render:
+        // search never fabricates a coordinate name.
+        const view: interner_view.View = .{
+            .names = .{ .vars = &self.names, .placeholders = &self.chosen },
             .theorem = theorem,
             .env = context.env,
         };

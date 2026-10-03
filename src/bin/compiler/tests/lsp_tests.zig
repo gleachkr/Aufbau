@@ -1362,7 +1362,8 @@ test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
 
 /// Hover `_wff` in a one-line holey proof. With `open`, the proof is
 /// opened first, so the diagnostics pass records every block in the
-/// check memo, without a hole sink, before the hover builds its snapshot.
+/// check memo before the hover builds its snapshot, which then replays
+/// the block instead of checking it again.
 fn expectProofHoleHover(open: bool) !void {
     const mm0_uri = "file:///tmp/lsp-hole-hover.mm0";
     const proof_uri = "file:///tmp/lsp-hole-hover.auf";
@@ -1404,6 +1405,7 @@ fn expectProofHoleHover(open: bool) !void {
     } else {
         try handler.putDocument(proof_uri, proof_text, 1);
     }
+    const misses_before_hover = handler.check_memo.misses;
 
     const hover_result = try handler.@"textDocument/hover"(
         arena_state.allocator(),
@@ -1426,6 +1428,10 @@ fn expectProofHoleHover(open: bool) !void {
         1,
         "$ r -> s $",
     ));
+    if (open) {
+        try std.testing.expectEqual(misses_before_hover, handler.check_memo.misses);
+        try std.testing.expectEqual(@as(usize, 1), handler.check_memo.hits);
+    }
 }
 
 test "LSP proof hole hover shows the inferred expression" {
@@ -1461,9 +1467,19 @@ fn fillHolesAction(
     return null;
 }
 
-/// Fill a holey line's holes from the code action. With `open`, the
-/// diagnostics pass records the blocks in the check memo first.
-fn expectFillHolesAction(open: bool) !void {
+const FillSetup = enum {
+    /// The proof is never opened: the code action checks every block.
+    closed,
+    /// The proof is opened first, so the diagnostics pass records the
+    /// blocks in the check memo and the code action replays them.
+    open,
+    /// As `open`, but the proof is opened with another text and then
+    /// edited into this one, so the replayed recordings are the edit's.
+    edited,
+};
+
+/// Fill a holey line's holes from the code action.
+fn expectFillHolesAction(setup: FillSetup) !void {
     const mm0_uri = "file:///tmp/lsp-fill-holes.mm0";
     const proof_uri = "file:///tmp/lsp-fill-holes.auf";
     const mm0_text =
@@ -1500,17 +1516,28 @@ fn expectFillHolesAction(open: bool) !void {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     try handler.putDocument(mm0_uri, mm0_text, 1);
-    if (open) {
-        try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
-            .uri = proof_uri,
-            .languageId = "aufbau",
-            .version = 1,
-            .text = proof_text,
-        } });
-        try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
-    } else {
-        try handler.putDocument(proof_uri, proof_text, 1);
+    switch (setup) {
+        .closed => try handler.putDocument(proof_uri, proof_text, 1),
+        .open, .edited => {
+            try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+                .uri = proof_uri,
+                .languageId = "aufbau",
+                .version = 1,
+                .text = if (setup == .open)
+                    proof_text
+                else
+                    try std.mem.replaceOwned(u8, arena, proof_text, "_wff $", "p $"),
+            } });
+            if (setup == .edited) {
+                try handler.@"textDocument/didChange"(arena, .{
+                    .textDocument = .{ .uri = proof_uri, .version = 2 },
+                    .contentChanges = &.{.{ .literal_1 = .{ .text = proof_text } }},
+                });
+            }
+            try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
+        },
     }
+    const misses_before_actions = handler.check_memo.misses;
 
     const l1 = std.mem.indexOf(u8, proof_text, "l1:").?;
     const l2 = std.mem.indexOf(u8, proof_text, "l2:").?;
@@ -1555,14 +1582,21 @@ fn expectFillHolesAction(open: bool) !void {
             nested_edit.newText,
         );
     }
+    if (setup != .closed) {
+        try std.testing.expectEqual(misses_before_actions, handler.check_memo.misses);
+    }
 }
 
 test "LSP code action fills a holey line's holes" {
-    try expectFillHolesAction(false);
+    try expectFillHolesAction(.closed);
 }
 
 test "LSP fill-holes code action survives the diagnostics pass's check memo" {
-    try expectFillHolesAction(true);
+    try expectFillHolesAction(.open);
+}
+
+test "LSP fill-holes code action replays the checks of an edit" {
+    try expectFillHolesAction(.edited);
 }
 
 /// The fill on the second line of pass_prawitz_holes, `$ _ctx ⊢ ∀ z … $`

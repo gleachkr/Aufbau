@@ -154,11 +154,7 @@ fn analyzeInternal(
         self.proof_source,
         with_proof,
     );
-    if (self.check_memo) |memo| {
-        memo.beginRun(.{
-            .allow_search_placeholders = self.allow_search_placeholders,
-        });
-    }
+    if (self.check_memo) |memo| memo.beginRun(self);
     defer if (self.check_memo) |memo| memo.endRun();
     // Snapshot pretty-printed statements on every exit path (recovery bails
     // early in several places), while the parser and env are still alive.

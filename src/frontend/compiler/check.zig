@@ -114,8 +114,7 @@ pub fn checkTheoremBlockMemoized(
         theorem,
         theorem_concl,
     );
-    // The stats sink's running maximum cannot be replayed; leave it exact.
-    if (!memo.active or self.inference_stats_sink != null) {
+    if (!memo.active) {
         return checkTheoremBlock(
             self,
             allocator,
@@ -135,7 +134,7 @@ pub fn checkTheoremBlockMemoized(
     }
     const mm0_pos = parser.core.pos;
     const key = memo.keyForBlock(self.source, mm0_pos, self.proof_source.?, block);
-    if (memo.find(key, rule_catalog, self)) |entry| {
+    if (memo.find(key, rule_catalog)) |entry| {
         try entry.replay(self, block.span.start);
         if (entry.outcome) |err| return err;
         return &.{};
