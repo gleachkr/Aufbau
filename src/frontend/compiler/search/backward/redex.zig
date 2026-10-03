@@ -5,7 +5,6 @@
 //! structure byte-identical to the pool refs. These are pure functions over
 //! `context`/`theorem`/`Canonicalizer` — they hold no search state.
 
-const std = @import("std");
 const types = @import("../types.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;

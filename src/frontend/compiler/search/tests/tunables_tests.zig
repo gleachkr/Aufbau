@@ -7,6 +7,7 @@ const apply = helpers.apply;
 const exact = helpers.exact;
 const tunables = helpers.tunables;
 const miss_mod = helpers.miss;
+const generate = helpers.generate;
 const tunable_chain_mm0 = helpers.tunable_chain_mm0;
 
 fn testParam(name: []const u8, value: u64) ProofScript.SearchParam {
@@ -361,7 +362,7 @@ test "auto? budget truncation names every limit that was hit" {
     const where = try std.fmt.allocPrint(
         std.testing.allocator,
         "ran out during {s} at depth 4 of 6",
-        .{source.ladderPhaseName(1)},
+        .{generate.phaseName(1)},
     );
     defer std.testing.allocator.free(where);
     try std.testing.expect(std.mem.indexOf(u8, detail, where) != null);

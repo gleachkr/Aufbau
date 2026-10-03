@@ -10,25 +10,16 @@ const candidate_mod = @import("./candidate.zig");
 const generate_mod = @import("./generate.zig");
 const refs_mod = @import("./refs.zig");
 const session_mod = @import("./session.zig");
-const prune = @import("./backward/prune.zig");
+const def_match = @import("./backward/def_match.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
-const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const ParseRecovery = @import("../../parse_recovery.zig");
-const AssertionStmt = ParseRecovery.AssertionStmt;
-const SortStmt = ParseRecovery.SortStmt;
-const TermStmt = ParseRecovery.TermStmt;
-const MM0Parser = ParseRecovery.MM0Parser;
-const MM0Stmt = ParseRecovery.MM0Stmt;
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const Ref = ProofScript.Ref;
 const Span = ProofScript.Span;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
-const RuleCatalog = @import("../rule_catalog.zig");
-const CompilerViews = @import("../../views.zig");
-const FreshSelect = @import("../fresh_select.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CheckedIr = @import("../../checked_ir.zig");
@@ -36,11 +27,7 @@ const CheckedLine = CheckedIr.CheckedLine;
 const Inference = @import("../inference.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
 const Check = @import("../check.zig");
-const CompilerVars = @import("../vars.zig");
-const Metadata = @import("../metadata.zig");
-const Holes = @import("../holes.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
-const PipelineCommon = @import("../pipeline/common.zig");
 const ProofParser = ProofScript.Parser;
 const Goal = types.Goal;
 const Context = types.Context;
@@ -51,13 +38,9 @@ const SourceSuggestionOptions = types.SourceSuggestionOptions;
 const SourceSuggestions = types.SourceSuggestions;
 const NameExprMap = types.NameExprMap;
 const LabelIndexMap = types.LabelIndexMap;
-const FreshDecl = types.FreshDecl;
-const FreshenDecl = types.FreshenDecl;
-const ViewDecl = types.ViewDecl;
-const SortVarRegistry = types.SortVarRegistry;
 const applyWithSession = apply_mod.applyWithSession;
 const exactWithSession = backtrack.exactWithSession;
-const extractHypPartialBindings = prune.extractHypPartialBindings;
+const extractHypPartialBindings = def_match.extractHypPartialBindings;
 const fixture_mod = @import("./fixture.zig");
 const SourceTarget = fixture_mod.SourceTarget;
 const fixtureForSourceTarget = fixture_mod.fixtureForSourceTarget;
@@ -721,16 +704,6 @@ fn searchStatus(
     return .miss;
 }
 
-// Phase 3 has the same capabilities as phase 2, with its own fuel; it runs
-// only for theories with a `@vars` witness pool (generate.zig:`ladder_phases`).
-const ladder_phase_names = [_][]const u8{
-    "non-splitting generation",
-    "context splitting",
-    "a retry of context splitting",
-    "principal retention",
-    "constrained modus ponens",
-};
-
 /// Elaborate a failed search into the user-facing detail string: which
 /// limits cut it short, how far the generation ladder got, how many
 /// candidates were validated vs. accepted, and the per-call parameters to
@@ -801,7 +774,7 @@ pub fn buildStatusDetail(
                         "was abandoned. A proof may still exist — try a " ++
                         "smaller goal or prove an intermediate lemma first.",
                     .{
-                        ladderPhaseName(counters.gen_last_phase),
+                        generate_mod.phaseName(counters.gen_last_phase),
                         counters.gen_last_depth,
                         gen.max_depth,
                     },
@@ -825,7 +798,7 @@ pub fn buildStatusDetail(
                                 gen.global_budget orelse 0,
                                 tunables.ticks_per_budget_unit,
                             ) catch unreachable,
-                            ladderPhaseName(counters.gen_last_phase),
+                            generate_mod.phaseName(counters.gen_last_phase),
                             counters.gen_last_depth,
                             gen.max_depth,
                         },
@@ -953,13 +926,6 @@ fn retrySuggestion(
                 application.rule_span).end,
         },
     };
-}
-
-pub fn ladderPhaseName(phase_1based: usize) []const u8 {
-    if (phase_1based == 0 or phase_1based > ladder_phase_names.len) {
-        return "generation";
-    }
-    return ladder_phase_names[phase_1based - 1];
 }
 
 /// Append a "Most-tried rules: ..." sentence listing the top 3 rules by

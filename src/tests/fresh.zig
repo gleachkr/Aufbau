@@ -161,7 +161,6 @@ test "fresh helper reuses existing theorem-local vars" {
     const assignments = try FreshSelect.assignHiddenRootsFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,
@@ -203,7 +202,6 @@ test "fresh helper lazily allocates from the vars pool" {
     const assignments = try FreshSelect.assignHiddenRootsFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,
@@ -241,7 +239,6 @@ test "fresh helper gives distinct vars to distinct hidden roots" {
     const assignments = try FreshSelect.assignHiddenRootsFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,
@@ -285,7 +282,6 @@ test "fresh helper respects deps already visible on the line" {
     const assignments = try FreshSelect.assignHiddenRootsFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,
@@ -327,7 +323,6 @@ test "recover-hole seeding allocates distinct vars per omitted hole" {
     const seeds = try FreshSelect.seedRecoverHolesFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,
@@ -389,7 +384,6 @@ test "recover-hole seeding skips holes visible in the conclusion" {
     const seeds = try FreshSelect.seedRecoverHolesFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,
@@ -439,7 +433,6 @@ test "recover-hole seeding skips non-bound holes" {
     const seeds = try FreshSelect.seedRecoverHolesFromVarsPool(
         std.testing.allocator,
         &fixture.parser,
-        &fixture.env,
         &fixture.theorem,
         &fixture.theorem_vars,
         &fixture.sort_vars,

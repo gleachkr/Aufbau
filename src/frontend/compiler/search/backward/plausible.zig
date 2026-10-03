@@ -9,7 +9,7 @@
 //! scratch nodes while unfolding defs to test the goal.
 
 const types = @import("../types.zig");
-const prune = @import("./prune.zig");
+const def_match = @import("./def_match.zig");
 const semantic = @import("./semantic.zig");
 const acui = @import("./acui.zig");
 const match = @import("./match.zig");
@@ -27,11 +27,9 @@ const Goal = types.Goal;
 const ApplyCandidate = types.ApplyCandidate;
 const SearchCounters = types.SearchCounters;
 const SearchRuntime = types.SearchRuntime;
-const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
+const acuiBoundMembersPlausible = acui.acuiBoundMembersPlausible;
 const bag = @import("./bag.zig");
-const defBodyForUnfold = prune.defBodyForUnfold;
-const templateDefiniteMismatch = prune.templateDefiniteMismatch;
-const unfoldDefBody = prune.unfoldDefBody;
+const templateDefiniteMismatch = def_match.templateDefiniteMismatch;
 const lockstep = @import("./lockstep.zig");
 
 pub fn splitSiteBindingsPlausible(
@@ -86,12 +84,12 @@ pub fn splitSiteBindingsPlausible(
     if (!all_bound) return true;
 
     for (bound_members.slice()) |member| {
-        if (!memberPossiblyInList(context, theorem, member, goal_members)) {
+        if (!acui.memberPossiblyIn(context, theorem, member, goal_members.slice())) {
             return false;
         }
     }
     for (goal_members.slice()) |member| {
-        if (!memberPossiblyInList(context, theorem, member, bound_members)) {
+        if (!acui.memberPossiblyIn(context, theorem, member, bound_members.slice())) {
             return false;
         }
     }
@@ -114,26 +112,6 @@ pub fn collectSplitMembers(
         _ = out.appendDistinct(member);
     }
     return out;
-}
-
-fn memberPossiblyInList(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    member: ExprId,
-    list: bag.ExprBag,
-) bool {
-    // A member under a def or `@rewrite` head may convert to the unit (a
-    // `wk_nil`-style def of the empty context), so it needs no partner.
-    if (!acui.memberIsFixed(context, theorem, member)) return true;
-    for (list.slice()) |candidate| {
-        if (!prune.rigidExprMismatch(
-            context,
-            theorem,
-            member,
-            candidate,
-        )) return true;
-    }
-    return false;
 }
 
 pub fn finalConclusionPlausible(
@@ -324,25 +302,25 @@ fn pinRigidBinders(
     expr_id: ExprId,
     bindings: []?ExprId,
 ) bool {
-    switch (template) {
-        .binder => |idx| {
-            if (idx < bindings.len and bindings[idx] == null) {
-                bindings[idx] = expr_id;
-                return true;
+    const Pin = struct {
+        bindings: []?ExprId,
+        added: bool = false,
+
+        pub fn binder(self: *@This(), idx: usize, expr: ExprId) bool {
+            if (idx < self.bindings.len and self.bindings[idx] == null) {
+                self.bindings[idx] = expr;
+                self.added = true;
             }
             return false;
-        },
-        .app => |app| {
-            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
-            var added = false;
-            while (args.next()) |pair| {
-                if (pinRigidBinders(context, theorem, pair.template, pair.expr, bindings)) {
-                    added = true;
-                }
-            }
-            return added;
-        },
-    }
+        }
+
+        pub fn combiner(_: *@This(), _: TemplateExpr.App, _: ExprId) bool {
+            return false;
+        }
+    };
+    var pin = Pin{ .bindings = bindings };
+    _ = lockstep.walk(context, theorem, template, expr_id, &pin);
+    return pin.added;
 }
 
 pub fn conclusionTemplatePlausible(
@@ -430,7 +408,7 @@ pub fn redexConclusionMismatch(
     for (refs, 0..) |maybe_ref, idx| {
         const ref_expr = maybe_ref orelse continue;
         if (idx >= rule.hyps.len) break;
-        prune.extractHypPartialBindings(context, &scratch, rule.hyps[idx], ref_expr, enriched);
+        def_match.extractHypPartialBindings(context, &scratch, rule.hyps[idx], ref_expr, enriched);
     }
     var filled: ?[]?ExprId = null;
     defer if (filled) |f| scratch.allocator.free(f);
@@ -515,49 +493,39 @@ fn closedAcuiTemplateMismatch(
     goal_expr: ExprId,
     bindings: []const ?ExprId,
 ) bool {
-    switch (template) {
-        .binder => return false,
-        .app => |app| {
-            if (context.registry.acui_by_head.contains(app.term_id)) {
-                const concrete = (OpenTerms.instantiateTemplateConcrete(
-                    theorem,
-                    template,
-                    bindings,
-                ) catch return false) orelse
-                    // The region could not be concretized — a binder is unbound.
-                    // The fully-bound member-list compare below can't run, but the
-                    // unbound-repeated-binder case (e.g. `ax`'s `a` in `⊢ a,¬a,d`,
-                    // present in two ACUI members with no rigid anchor for Lever B)
-                    // is still refutable by enumerating that binder over the goal
-                    // members.
-                    return repeatedBinderMemberMismatch(
-                        context,
-                        theorem,
-                        app,
-                        goal_expr,
-                        bindings,
-                    );
-                return acuiMemberListsMismatch(
-                    context,
-                    theorem,
-                    app.term_id,
-                    concrete,
-                    goal_expr,
-                );
-            }
-            var args = lockstep.templateArgs(context, theorem, app, goal_expr) orelse return false;
-            while (args.next()) |pair| {
-                if (closedAcuiTemplateMismatch(
-                    context,
-                    theorem,
-                    pair.template,
-                    pair.expr,
-                    bindings,
-                )) return true;
-            }
+    const Regions = struct {
+        context: *const Context,
+        theorem: *TheoremContext,
+        bindings: []const ?ExprId,
+
+        pub fn binder(_: *@This(), _: usize, _: ExprId) bool {
             return false;
-        },
-    }
+        }
+
+        pub fn combiner(self: *@This(), app: TemplateExpr.App, expr: ExprId) bool {
+            const concrete = (OpenTerms.instantiateTemplateConcrete(
+                self.theorem,
+                .{ .app = app },
+                self.bindings,
+            ) catch return false) orelse
+                // The region could not be concretized — a binder is unbound.
+                // The fully-bound member-list compare below can't run, but the
+                // unbound-repeated-binder case (e.g. `ax`'s `a` in `⊢ a,¬a,d`,
+                // present in two ACUI members with no rigid anchor for Lever B)
+                // is still refutable by enumerating that binder over the goal
+                // members.
+                return repeatedBinderMemberMismatch(
+                    self.context,
+                    self.theorem,
+                    app,
+                    expr,
+                    self.bindings,
+                );
+            return acuiMemberListsMismatch(self.context, self.theorem, app.term_id, concrete, expr);
+        }
+    };
+    var regions = Regions{ .context = context, .theorem = theorem, .bindings = bindings };
+    return lockstep.walk(context, theorem, template, goal_expr, &regions) == .stopped;
 }
 
 fn acuiMemberListsMismatch(
@@ -580,12 +548,12 @@ fn acuiMemberListsMismatch(
         head_id,
     ) orelse return false;
     for (candidate_members.slice()) |member| {
-        if (!memberPossiblyInList(context, theorem, member, goal_members)) {
+        if (!acui.memberPossiblyIn(context, theorem, member, goal_members.slice())) {
             return true;
         }
     }
     for (goal_members.slice()) |member| {
-        if (!memberPossiblyInList(context, theorem, member, candidate_members)) {
+        if (!acui.memberPossiblyIn(context, theorem, member, candidate_members.slice())) {
             return true;
         }
     }
@@ -850,6 +818,9 @@ pub fn hypRefMembersPlausible(
     return outcome != .exhausted;
 }
 
+/// The combiner regions of `template` against `expr_id`, or false when there
+/// are more than `max_hypref_regions` or a head mismatch, which a def could
+/// bridge, cut part of the walk off.
 fn collectLockstepRegions(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -858,34 +829,23 @@ fn collectLockstepRegions(
     out: *[max_hypref_regions]RegionPair,
     len: *usize,
 ) bool {
-    switch (template) {
-        // A binder in a rigid position imposes no member constraint here.
-        .binder => return true,
-        .app => |app| {
-            if (context.registry.acui_by_head.contains(app.term_id)) {
-                if (len.* == max_hypref_regions) return false;
-                out[len.*] = .{ .app = app, .expr = expr_id };
-                len.* += 1;
-                return true;
-            }
-            // Head/arity mismatch: a def could bridge — abstain by reporting a
-            // structural surprise to the caller. An arg the head does not
-            // determine need not equal the goal's, so it imposes no member
-            // constraint and is skipped.
-            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
-            while (args.next()) |pair| {
-                if (!collectLockstepRegions(
-                    context,
-                    theorem,
-                    pair.template,
-                    pair.expr,
-                    out,
-                    len,
-                )) return false;
-            }
-            return true;
-        },
-    }
+    const Collect = struct {
+        out: *[max_hypref_regions]RegionPair,
+        len: *usize,
+
+        pub fn binder(_: *@This(), _: usize, _: ExprId) bool {
+            return false;
+        }
+
+        pub fn combiner(self: *@This(), app: TemplateExpr.App, expr: ExprId) bool {
+            if (self.len.* == max_hypref_regions) return true;
+            self.out[self.len.*] = .{ .app = app, .expr = expr };
+            self.len.* += 1;
+            return false;
+        }
+    };
+    var collect = Collect{ .out = out, .len = len };
+    return lockstep.walk(context, theorem, template, expr_id, &collect) == .done;
 }
 
 fn hypRefDfs(
@@ -1029,23 +989,18 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
             // Direction 1: every determined hypothesis member must possibly
             // appear in the ref's conclusion.
             for (inst.slice()) |v| {
-                if (!memberPossiblyInList(context, theorem, v, ref_members)) {
+                if (!acui.memberPossiblyIn(context, theorem, v, ref_members.slice())) {
                     return .fail;
                 }
             }
             // Direction 2: every ref member must be accounted for by a
             // determined member or by a rest binder's goal-member pool.
             for (ref_members.slice()) |r| {
-                var ok = memberPossiblyInList(context, theorem, r, inst);
+                var ok = acui.memberPossiblyIn(context, theorem, r, inst.slice());
                 if (!ok and has_rest) {
                     for (rest_mask, 0..) |used, ridx| {
                         if (!used) continue;
-                        if (memberPossiblyInList(
-                            context,
-                            theorem,
-                            r,
-                            state.goal_members[ridx],
-                        )) {
+                        if (acui.memberPossiblyIn(context, theorem, r, state.goal_members[ridx].slice())) {
                             ok = true;
                             break;
                         }
@@ -1062,13 +1017,8 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                 if (hyp_rest_count[ridx] != state.rest_count[ridx]) continue;
                 const gms = &state.goal_members[ridx];
                 for (gms.slice()) |gm| {
-                    if (memberPossiblyInList(
-                        context,
-                        theorem,
-                        gm,
-                        consumed_vals[ridx],
-                    )) continue;
-                    if (!memberPossiblyInList(context, theorem, gm, ref_members)) {
+                    if (acui.memberPossiblyIn(context, theorem, gm, consumed_vals[ridx].slice())) continue;
+                    if (!acui.memberPossiblyIn(context, theorem, gm, ref_members.slice())) {
                         return .fail;
                     }
                 }
@@ -1122,12 +1072,8 @@ fn foldedGoalBodyMismatch(
                 }
                 return false;
             }
-            const unfolded_goal = unfoldExprOnce(
-                context,
-                theorem,
-                goal_expr,
-            ) catch return false;
-            if (unfolded_goal == goal_expr) return false;
+            const unfolded_goal = (def_match.unfoldAppOnce(context, theorem, goal_expr, true) catch
+                return false) orelse return false;
             var args = lockstep.templateArgs(context, theorem, app, unfolded_goal) orelse
                 return false;
             while (args.next()) |pair| {
@@ -1219,62 +1165,18 @@ fn unfoldedMismatch(
             return false;
         },
     }
-    if (prune.rigidExprMismatch(context, theorem, a, b)) return true;
-    const ua = unfoldExprOnce(context, theorem, a) catch return false;
-    const ub = unfoldExprOnce(context, theorem, b) catch return false;
+    if (def_match.rigidExprMismatch(context, theorem, a, b)) return true;
+    const ua = (def_match.unfoldAppOnce(context, theorem, a, true) catch return false) orelse a;
+    const ub = (def_match.unfoldAppOnce(context, theorem, b, true) catch return false) orelse b;
     if (ua != a or ub != b) {
         return unfoldedMismatch(context, theorem, ua, ub, depth + 1);
     }
-    const nua = theorem.interner.node(a);
-    const nub = theorem.interner.node(b);
-    switch (nua.*) {
-        .placeholder => return false,
-        .variable => switch (nub.*) {
-            .placeholder => return false,
-            .variable => return true,
-            .app => return prune.rigidExprMismatch(context, theorem, a, b),
-        },
-        .app => |aa| switch (nub.*) {
-            .placeholder => return false,
-            .variable => return prune.rigidExprMismatch(context, theorem, a, b),
-            .app => |bb| {
-                if (aa.term_id != bb.term_id) {
-                    if (semantic.isRigidHead(context, aa.term_id) and
-                        semantic.isRigidHead(context, bb.term_id))
-                    {
-                        return true;
-                    }
-                    return prune.rigidExprMismatch(context, theorem, a, b);
-                }
-                // Neither side unfolds further, but a `@rewrite` head can
-                // still reduce: compare only the args the head determines.
-                var args = lockstep.exprArgs(context, theorem, a, b) orelse return false;
-                while (args.next()) |pair| {
-                    if (unfoldedMismatch(
-                        context,
-                        theorem,
-                        pair.a,
-                        pair.b,
-                        depth + 1,
-                    )) return true;
-                }
-                return false;
-            },
-        },
+    // Neither side unfolds further, and the rigid comparison found no clash, so
+    // only an argument their shared head determines can still diverge after
+    // unfolding inside it.
+    var args = lockstep.exprArgs(context, theorem, a, b) orelse return false;
+    while (args.next()) |pair| {
+        if (unfoldedMismatch(context, theorem, pair.a, pair.b, depth + 1)) return true;
     }
-}
-
-fn unfoldExprOnce(
-    context: *const Context,
-    theorem: *TheoremContext,
-    expr: ExprId,
-) !ExprId {
-    const node = theorem.interner.node(expr);
-    const app = switch (node.*) {
-        .app => |concrete| concrete,
-        else => return expr,
-    };
-    const info = defBodyForUnfold(context, app.term_id, true) orelse return expr;
-    if (app.args.len != info.nargs) return expr;
-    return try unfoldDefBody(theorem, info, app.args);
+    return false;
 }

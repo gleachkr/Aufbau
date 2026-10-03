@@ -16,8 +16,6 @@ pub const apply_mod = @import("../apply.zig");
 
 pub const backtrack = @import("../backward/backtrack.zig");
 
-pub const prune = @import("../backward/prune.zig");
-
 pub const semantic = @import("../backward/semantic.zig");
 
 pub const plausible = @import("../backward/plausible.zig");
@@ -709,6 +707,7 @@ pub fn expectFirstExactRefs(
 pub const tunables = @import("../tunables.zig");
 
 pub const miss = @import("../miss.zig");
+pub const generate = @import("../generate.zig");
 
 // End-to-end fixture: `R` needs a two-level generated chain
 // (`qr [pq [p []]]`), `S` is unprovable.

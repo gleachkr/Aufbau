@@ -154,6 +154,16 @@ pub const PoolVars = struct {
         }
         return null;
     }
+
+    /// The next pool variable that avoids `taken` (`PoolVar.avoids`), or,
+    /// with `taken` null, the next one whatever its bits.
+    pub fn nextAvoiding(self: *PoolVars, taken: ?u55) !?PoolVar {
+        while (try self.next()) |pool_var| {
+            const mask = taken orelse return pool_var;
+            if (pool_var.avoids(mask)) return pool_var;
+        }
+        return null;
+    }
 };
 
 pub fn processSortVarAnnotations(

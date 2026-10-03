@@ -1047,7 +1047,11 @@ prunes (`templateDefiniteMismatch`, `rigidExprMismatch`, the member, redex,
 closed-region and recover checks), the seeds and extractors
 (`partialMatchTemplate`, `extractHypPartialBindings`, `pinRigidBinders`), and
 the fan-out locator, so every pin they make is forced by the goal for any
-provable candidate and every mismatch they report is real. The split-site
+provable candidate and every mismatch they report is real. The walks that only
+stop at binders and combiner regions (the re-pin, the repeated-binder conflict,
+the closed-region and hyp-ref region collectors, the fan-out locator) share
+`lockstep.walk`, and both seeds read through a template-side def unfolding
+with `def_match.walkDefBody`. The split-site
 locator (`split.findSplitSite`) is the one exception: it descends every
 argument of a same-head application, because the split pass only adds
 candidates and the validator checks each one.
@@ -1335,9 +1339,10 @@ width is real.
 | `backward/acui.zig` | ACUI member math (shared by all three principal mechanisms) |
 | `backward/split.zig` | multiplicative context-partition search |
 | `backward/witness.zig` | ACUI member-witness enumeration for open existentials |
-| `backward/def_match.zig` | transparent-def-aware matching |
+| `backward/def_match.zig` | transparent-def-aware matching: the rigid mismatch probes, one-layer unfolding (`unfoldAppOnce`), the def-body walk (`walkDefBody`), hyp-side extraction |
+| `backward/lockstep.zig` | the determined argument pairs of a template/goal walk, and `walk` over them |
 | `backward/redex.zig` | reduce `@rewrite` redexes in generated emit targets, leaving ACUI context structure as the pool writes it |
-| `backward/prune.zig` / `backward/semantic.zig` | small prune/semantic helpers |
+| `backward/semantic.zig` | head classification and strict-comparability helpers |
 | `abstract_prune.zig` / `context_prune.zig` | broad-slot prefilters |
 | `forward.zig` | forward saturation (`@auto forward`) |
 | `shape.zig` / `clipper.zig` | shape extraction + discrimination index |

@@ -1,6 +1,5 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const prune = @import("./prune.zig");
 const def_match = @import("./def_match.zig");
 const lockstep = @import("./lockstep.zig");
 const acui = @import("./acui.zig");
@@ -14,12 +13,11 @@ const TemplateBinderMask = @import("./plan.zig").TemplateBinderMask;
 const Goal = types.Goal;
 const Context = types.Context;
 const ApplyCandidate = types.ApplyCandidate;
-const defBodyForUnfold = prune.defBodyForUnfold;
-const unfoldDefBody = prune.unfoldDefBody;
-const rigidExprMismatch = prune.rigidExprMismatch;
-const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
+const defBodyForUnfold = def_match.defBodyForUnfold;
+const rigidExprMismatch = def_match.rigidExprMismatch;
+const acuiBoundMembersPlausible = acui.acuiBoundMembersPlausible;
 const bag = @import("./bag.zig");
-const bindAcuiSpineToUnit = prune.bindAcuiSpineToUnit;
+const bindAcuiSpineToUnit = acui.bindAcuiSpineToUnit;
 
 pub fn makeExactRuleCandidate(
     allocator: std.mem.Allocator,
@@ -216,38 +214,46 @@ fn walkForFanout(
     expr_id: ExprId,
     bindings: []const ?ExprId,
 ) anyerror!?acui.PrincipalFanout {
-    switch (template) {
-        .binder => return null,
-        .app => |app| {
-            // A commutative ACUI combiner (the sequent's antecedent/succedent
-            // `join`): enumerate its ambiguous principal here.
-            if (context.registry.hasStructuralCombiner(app.term_id)) {
-                return acui.findAmbiguousPrincipal(
-                    allocator,
-                    context,
-                    theorem,
-                    app.term_id,
-                    template,
-                    expr_id,
-                    bindings,
-                );
-            }
-            // A plain term (`seq`, `hyp`, …): descend into the args the goal
-            // forces, so we reach each side's ACUI context.
-            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return null;
-            while (args.next()) |pair| {
-                if (try walkForFanout(
-                    allocator,
-                    context,
-                    theorem,
-                    pair.template,
-                    pair.expr,
-                    bindings,
-                )) |fan| return fan;
-            }
-            return null;
-        },
-    }
+    // Enumerate the ambiguous principal at the first commutative ACUI combiner
+    // (the sequent's antecedent/succedent `join`) that has one, descending
+    // plain terms (`seq`, `hyp`, …) through the args the goal forces.
+    const Fanout = struct {
+        allocator: std.mem.Allocator,
+        context: *const Context,
+        theorem: *TheoremContext,
+        bindings: []const ?ExprId,
+        fan: ?acui.PrincipalFanout = null,
+        err: ?anyerror = null,
+
+        pub fn binder(_: *@This(), _: usize, _: ExprId) bool {
+            return false;
+        }
+
+        pub fn combiner(self: *@This(), app: TemplateExpr.App, expr: ExprId) bool {
+            self.fan = acui.findAmbiguousPrincipal(
+                self.allocator,
+                self.context,
+                self.theorem,
+                app.term_id,
+                .{ .app = app },
+                expr,
+                self.bindings,
+            ) catch |err| {
+                self.err = err;
+                return true;
+            };
+            return self.fan != null;
+        }
+    };
+    var fanout = Fanout{
+        .allocator = allocator,
+        .context = context,
+        .theorem = theorem,
+        .bindings = bindings,
+    };
+    _ = lockstep.walk(context, theorem, template, expr_id, &fanout);
+    if (fanout.err) |err| return err;
+    return fanout.fan;
 }
 
 // Clone `base` and additionally pin the principal `leaf`'s binders from one
@@ -349,25 +355,6 @@ fn makeViewConclSeed(
     return seed;
 }
 
-pub fn exprContainsMetaLeaf(
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    if (!theorem.mayHoldMetaLeaves()) return false;
-    return exprContainsMetaLeafWalk(theorem, expr_id);
-}
-
-pub fn exprContainsMetaLeafWalk(
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    return theorem.exprAny(expr_id, {}, bareMetaLeafPred);
-}
-
-fn bareMetaLeafPred(_: void, theorem: *const TheoremContext, expr_id: ExprId) bool {
-    return isBareMetaLeaf(theorem, expr_id);
-}
-
 /// The expression is itself a single meta-class placeholder leaf (an open
 /// backward-generation hole). Such a binding constrains nothing.
 fn isBareMetaLeaf(theorem: *const TheoremContext, expr_id: ExprId) bool {
@@ -389,7 +376,7 @@ fn exprContainsStandardPlaceholder(
 /// A seed value that holds a meta leaf or a def-unfold dummy, and so could
 /// still equal a different concrete value.
 fn seedValueIsLoose(theorem: *const TheoremContext, expr_id: ExprId) bool {
-    return exprContainsMetaLeaf(theorem, expr_id) or
+    return theorem.containsMetaLeaf(expr_id) or
         exprContainsStandardPlaceholder(theorem, expr_id);
 }
 
@@ -691,35 +678,32 @@ fn repeatedBinderConflictWalk(
     expr_id: ExprId,
     bindings: []?ExprId,
 ) bool {
-    switch (template) {
-        .binder => |idx| {
-            if (idx >= bindings.len) return false;
-            if (bindings[idx]) |existing| {
+    // Only args the head determines are forced to coincide: not an ACUI
+    // spine's (its association and order are arbitrary), a `@rewrite` head's,
+    // or a def arg its body drops. A head/arity mismatch could be bridged by
+    // unfolding, so it forms no opinion.
+    const Conflict = struct {
+        context: *const Context,
+        theorem: *const TheoremContext,
+        bindings: []?ExprId,
+
+        pub fn binder(self: *@This(), idx: usize, expr: ExprId) bool {
+            if (idx >= self.bindings.len) return false;
+            if (self.bindings[idx]) |existing| {
                 // Second occurrence of this template var: the goal subterms it
                 // pins must coincide, or the conclusion is unsatisfiable.
-                return rigidExprMismatch(context, theorem, existing, expr_id);
+                return rigidExprMismatch(self.context, self.theorem, existing, expr);
             }
-            bindings[idx] = expr_id;
+            self.bindings[idx] = expr;
             return false;
-        },
-        .app => |app| {
-            // Only args the head determines are forced to coincide: not an
-            // ACUI spine's (its association and order are arbitrary), a
-            // `@rewrite` head's, or a def arg its body drops. A head/arity
-            // mismatch could be bridged by unfolding, so it forms no opinion.
-            var args = lockstep.templateArgs(context, theorem, app, expr_id) orelse return false;
-            while (args.next()) |pair| {
-                if (repeatedBinderConflictWalk(
-                    context,
-                    theorem,
-                    pair.template,
-                    pair.expr,
-                    bindings,
-                )) return true;
-            }
+        }
+
+        pub fn combiner(_: *@This(), _: TemplateExpr.App, _: ExprId) bool {
             return false;
-        },
-    }
+        }
+    };
+    var conflict = Conflict{ .context = context, .theorem = theorem, .bindings = bindings };
+    return lockstep.walk(context, theorem, template, expr_id, &conflict) == .stopped;
 }
 
 fn seedBindingsFromTemplateGoal(
@@ -752,46 +736,10 @@ fn seedBindingsFromTemplateGoal(
     _ = mergeOptionalBindings(bindings, scratch);
 }
 
-// A frame in the template-side def-unfold chain. When `partialMatchTemplate`
-// unfolds a transparent-def-headed *template* node (e.g. `bic`), the def body's
-// binders index the def's parameters, not the rule's. `args` holds the original
-// application's argument templates (interpreted in `parent`, or in rule-binder
-// space when `parent == null`); a def-body binder `idx < nargs` resolves through
-// this chain back to a rule-binder template. Dummy binders (`idx >= nargs`) are
-// fresh in the body and carry no opinion. Mirrors `def_match`'s
-// `ExtractScope` for the hyp side.
-const SeedScope = struct {
-    nargs: usize,
-    args: []const TemplateExpr,
-    parent: ?*const SeedScope,
-};
-
 fn partialMatchTemplate(
     context: *const Context,
     theorem: *TheoremContext,
     template: TemplateExpr,
-    expr_id: ExprId,
-    bindings: []?ExprId,
-    allow_binder_defs: bool,
-    extract_members: bool,
-) !void {
-    return partialMatchScoped(
-        context,
-        theorem,
-        template,
-        null,
-        expr_id,
-        bindings,
-        allow_binder_defs,
-        extract_members,
-    );
-}
-
-fn partialMatchScoped(
-    context: *const Context,
-    theorem: *TheoremContext,
-    template: TemplateExpr,
-    scope: ?*const SeedScope,
     expr_id: ExprId,
     bindings: []?ExprId,
     allow_binder_defs: bool,
@@ -807,26 +755,9 @@ fn partialMatchScoped(
     // view seeds. Under an ordered combiner (neither C nor I) the split is
     // unique, so the one rest-binder it may pin is forced.
     extract_members: bool,
-) !void {
+) error{OutOfMemory}!void {
     switch (template) {
         .binder => |idx| {
-            // Inside an unfolded def body: resolve the def-parameter binder back
-            // through the scope chain to a rule-binder template (or drop a dummy
-            // binder as no-opinion), then match that against the same goal node.
-            if (scope) |s| {
-                if (idx >= s.nargs) return; // dummy of this def: no opinion
-                try partialMatchScoped(
-                    context,
-                    theorem,
-                    s.args[idx],
-                    s.parent,
-                    expr_id,
-                    bindings,
-                    allow_binder_defs,
-                    extract_members,
-                );
-                return;
-            }
             if (idx >= bindings.len) return;
             // A goal hint from open backward generation can carry meta-class
             // wildcard leaves (lifted open targets). We still bind a
@@ -880,48 +811,42 @@ fn partialMatchScoped(
             // `g = h = emp`, so a major ref with a non-empty context, or a minor
             // ref whose context holds more than the single witness, is doomed.
             if (context.registry.hasStructuralCombiner(app.term_id)) {
-                // The unit-law spine binding writes rule binders by template
-                // index, so it is only valid at rule-binder depth (no scope).
-                // Inside an unfolded def body the spine binders are def
-                // parameters — treat the combiner as fully opaque there.
-                if (scope == null) {
-                    if (bag.isUnitOf(context, theorem, app.term_id, expr_id)) {
-                        bindAcuiSpineToUnit(template, app.term_id, expr_id, bindings);
-                    }
-                    // Forced structured-member recovery (conclusion seed only).
-                    // Under C, `extractHypPartialBindings` treats the combiner's
-                    // args as a multiset and pins a structured leaf's binders
-                    // only when exactly one goal member is shape-compatible,
-                    // leaving the bare context rest-binder open. Under an
-                    // ordered combiner it aligns the member sequences instead. For rim's succedent `(a→b), d` against goal `P c → P c`
-                    // this pins `a = b = P c` while `d` stays open for generation.
-                    if (extract_members) {
-                        def_match.extractHypPartialBindings(
-                            context,
-                            theorem,
-                            template,
-                            expr_id,
-                            bindings,
-                        );
-                    }
+                if (bag.isUnitOf(context, theorem, app.term_id, expr_id)) {
+                    bindAcuiSpineToUnit(template, app.term_id, expr_id, bindings);
+                }
+                // Forced structured-member recovery (conclusion seed only).
+                // Under C, `extractHypPartialBindings` treats the combiner's
+                // args as a multiset and pins a structured leaf's binders only
+                // when exactly one goal member is shape-compatible, leaving the
+                // bare context rest-binder open. Under an ordered combiner it
+                // aligns the member sequences instead. For rim's succedent
+                // `(a→b), d` against goal `P c → P c` this pins `a = b = P c`
+                // while `d` stays open for generation.
+                if (extract_members) {
+                    def_match.extractHypPartialBindings(
+                        context,
+                        theorem,
+                        template,
+                        expr_id,
+                        bindings,
+                    );
                 }
                 return;
             }
             const node = theorem.interner.node(expr_id);
             switch (node.*) {
                 .variable, .placeholder => return,
-                .app => |concrete| {
+                .app => {
                     if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
                         // Same head: seed from the args it forces. A `@rewrite`
                         // head's arg or one a def drops need not match the
                         // goal's, so its value would be a guess.
                         var args = aligned;
                         while (args.next()) |pair| {
-                            try partialMatchScoped(
+                            try partialMatchTemplate(
                                 context,
                                 theorem,
                                 pair.template,
-                                scope,
                                 pair.expr,
                                 bindings,
                                 allow_binder_defs,
@@ -933,33 +858,38 @@ fn partialMatchScoped(
                     // Head mismatch, template side. If the TEMPLATE head is a
                     // transparent first-order def whose head differs from the
                     // goal's (e.g. `bic`/`⇔` over goal `eqc`/`≃[𝔹]`), unfold the
-                    // template one layer and retry against the same goal, pushing
-                    // a scope so the def body's parameter binders resolve back to
-                    // the rule-binder argument templates. Without this, a rule
+                    // template one layer and walk its body against the same goal
+                    // (`def_match.walkDefBody`), whose parameter binders resolve
+                    // back to the rule-binder argument templates. Without this, a rule
                     // whose conclusion folds tighter than the goal (`ded`'s
                     // `P ⇔ Q` against a `≃[𝔹] a = b` goal) pins only the context,
                     // leaving the payload binders `P,Q` open and the per-hyp
                     // lookups broad. First-order only (`allow_binder_defs = false`
                     // here): def dummies cannot be represented as rule-binder
-                    // templates, and the scoped `.binder` arm drops them as
-                    // no-opinion. Mirrors the hyp-side `extractScopedBindings`
-                    // template-unfold; terminates because the def graph is acyclic.
+                    // templates, so the body walk drops them as no-opinion. The
+                    // hyp-side extraction walks def bodies the same way.
                     if (defBodyForUnfold(context, app.term_id, false)) |tinfo| {
                         if (app.args.len == tinfo.nargs) {
-                            const child = SeedScope{
+                            const root = def_match.DefScope{
                                 .nargs = tinfo.nargs,
                                 .args = app.args,
-                                .parent = scope,
+                                .parent = null,
                             };
-                            try partialMatchScoped(
+                            try def_match.walkDefBody(
+                                SeedRoot{
+                                    .context = context,
+                                    .theorem = theorem,
+                                    .bindings = bindings,
+                                    .allow_binder_defs = allow_binder_defs,
+                                    .extract_members = extract_members,
+                                },
                                 context,
                                 theorem,
                                 tinfo.body,
-                                &child,
+                                &root,
                                 expr_id,
-                                bindings,
                                 allow_binder_defs,
-                                extract_members,
+                                0,
                             );
                         }
                         return;
@@ -976,10 +906,7 @@ fn partialMatchScoped(
                     // the ref index reject rules whose unfolded conclusion can't
                     // be assembled from the available refs (and_intro hyp `H ⊢ q`
                     // with `q = domain_on f A ∧ range_sub f B` matches no ref).
-                    // Mirrors the hyp-side `extractScopedBindings`; terminates
-                    // because the def-dependency graph is acyclic. `concrete` is
-                    // a copy of the node payload and its `args` slice is a stable
-                    // heap allocation, so interning here cannot invalidate it.
+                    // Terminates because the def-dependency graph is acyclic.
                     //
                     // With `allow_binder_defs`, this also unfolds
                     // binder-introducing defs (each dummy materialized as a fresh
@@ -988,46 +915,56 @@ fn partialMatchScoped(
                     // `∃ x (x∈A ∧ maps f x y)` and pins the existential body for
                     // the `@recover` guard. Sound only because placeholders loosen
                     // matching; the matcher's mismatch logic must stay first-order.
-                    if (defBodyForUnfold(
+                    //
+                    // Placeholder dep slots are a finite resource (u55, shared
+                    // with dummies); running out merely means this seed walk
+                    // learns nothing more from the unfolding — a no-opinion,
+                    // never a reason to abort the whole search.
+                    const unfolded = def_match.unfoldAppOnce(
                         context,
-                        concrete.term_id,
+                        theorem,
+                        expr_id,
                         allow_binder_defs,
-                    )) |info| {
-                        if (concrete.args.len == info.nargs) {
-                            // Placeholder dep slots are a finite resource
-                            // (u55, shared with dummies); running out merely
-                            // means this seed walk learns nothing more from
-                            // the unfolding — a no-opinion, never a reason to
-                            // abort the whole search.
-                            const unfolded = unfoldDefBody(
-                                theorem,
-                                info,
-                                concrete.args,
-                            ) catch |err| switch (err) {
-                                error.OutOfMemory => return err,
-                                else => return,
-                            };
-                            try partialMatchScoped(
-                                context,
-                                theorem,
-                                template,
-                                scope,
-                                unfolded,
-                                bindings,
-                                allow_binder_defs,
-                                extract_members,
-                            );
-                        }
-                        return;
-                    }
-                    // Template head is ACUI, or a plain mismatch we can't bridge:
-                    // nothing to learn here, but don't poison the wider walk.
+                    ) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => return,
+                    } orelse return;
+                    try partialMatchTemplate(
+                        context,
+                        theorem,
+                        template,
+                        unfolded,
+                        bindings,
+                        allow_binder_defs,
+                        extract_members,
+                    );
                     return;
                 },
             }
         },
     }
 }
+
+/// `walkDefBody`'s root callback for the goal seed.
+const SeedRoot = struct {
+    context: *const Context,
+    theorem: *TheoremContext,
+    bindings: []?ExprId,
+    allow_binder_defs: bool,
+    extract_members: bool,
+
+    pub fn root(self: SeedRoot, template: TemplateExpr, expr_id: ExprId) error{OutOfMemory}!void {
+        try partialMatchTemplate(
+            self.context,
+            self.theorem,
+            template,
+            expr_id,
+            self.bindings,
+            self.allow_binder_defs,
+            self.extract_members,
+        );
+    }
+};
 
 fn seedBindingsFromViewGoal(
     allocator: std.mem.Allocator,

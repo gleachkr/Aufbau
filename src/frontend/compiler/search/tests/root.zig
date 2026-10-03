@@ -15,6 +15,8 @@ comptime {
     _ = @import("./alpha_tests.zig");
     _ = @import("./conditional_tests.zig");
     _ = @import("./ring_tests.zig");
-    // Inline unit tests of the phase-5 premise ordering.
+    // Inline unit tests of the phase-5 premise ordering and the ladder
+    // schedule.
     _ = @import("../backward/plan.zig");
+    _ = @import("../generate.zig");
 }

@@ -34,7 +34,7 @@ const BindingValidation = @import("../../binding_validation.zig");
 const types = @import("./types.zig");
 const refs_mod = @import("./refs.zig");
 const ref_index_mod = @import("./ref_index.zig");
-const prune = @import("./backward/prune.zig");
+const def_match = @import("./backward/def_match.zig");
 const acui_mod = @import("./backward/acui.zig");
 const ExprModule = @import("../../expr.zig");
 const ExprId = ExprModule.ExprId;
@@ -992,7 +992,6 @@ fn matchForwardTemplate(
                 theorem,
                 cache,
                 expr_id,
-                concrete,
             ) orelse break :blk false;
             break :blk try matchForwardTemplate(
                 context,
@@ -1191,24 +1190,11 @@ fn unfoldConcreteHeadOnce(
     theorem: *TheoremContext,
     cache: *UnfoldCache,
     expr_id: ExprId,
-    app: ExprModule.ExprNode.App,
 ) !?ExprId {
     if (cache.map.get(expr_id)) |cached| return cached;
-    const result: ?ExprId = blk: {
-        const info = prune.defBodyForUnfold(
-            context,
-            app.term_id,
-            true,
-        ) orelse break :blk null;
-        if (app.args.len != info.nargs) break :blk null;
-        break :blk prune.unfoldDefBody(
-            theorem,
-            info,
-            app.args,
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => null,
-        };
+    const result = def_match.unfoldAppOnce(context, theorem, expr_id, true) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => null,
     };
     try cache.map.put(cache.allocator, expr_id, result);
     return result;
@@ -1373,7 +1359,7 @@ const UnfoldWalk = struct {
 
     /// One unfolded def application.
     const Frame = struct {
-        info: prune.UnfoldDefInfo,
+        info: def_match.UnfoldDefInfo,
         args: []const ExprId,
         /// Per hidden variable: the other side's expression it was matched
         /// against, or null while unmatched.
@@ -1420,9 +1406,9 @@ const UnfoldWalk = struct {
                     }
                     return true;
                 }
-                if (depth >= prune.max_def_unfold_depth) return false;
-                const source_def = prune.defBodyForUnfold(self.context, source_app.term_id, true);
-                const pattern_def = prune.defBodyForUnfold(self.context, pattern_app.term_id, true);
+                if (depth >= def_match.max_def_unfold_depth) return false;
+                const source_def = def_match.defBodyForUnfold(self.context, source_app.term_id, true);
+                const pattern_def = def_match.defBodyForUnfold(self.context, pattern_app.term_id, true);
                 // A def body mentions only earlier terms, so unfolding the
                 // later of two defs can reach the earlier one's head; the
                 // other way round never can.
@@ -1462,7 +1448,7 @@ const UnfoldWalk = struct {
         };
     }
 
-    fn newFrame(self: *UnfoldWalk, info: prune.UnfoldDefInfo, args: []const ExprId) !*Frame {
+    fn newFrame(self: *UnfoldWalk, info: def_match.UnfoldDefInfo, args: []const ExprId) !*Frame {
         const frame = try self.arena.create(Frame);
         frame.* = .{
             .info = info,
@@ -1603,7 +1589,12 @@ const UnfoldWalk = struct {
                 if (std.mem.indexOfScalar(PlaceholderId, fresh.items, pid) == null) try fresh.append(self.arena, pid);
             }
         }
-        if (self.hasOtherUnsolvedMeta(pattern, fresh.items)) return false;
+        var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+        defer unsolved.deinit(self.store.allocator);
+        try self.store.collectUnsolved(self.theorem, pattern, &unsolved);
+        for (unsolved.items) |pid| {
+            if (std.mem.indexOfScalar(PlaceholderId, fresh.items, pid) == null) return false;
+        }
         if (fresh.items.len > self.theorem.depSlotsLeft()) return false;
         if (!mint) return true;
         for (self.frames.items) |frame| {
@@ -1655,21 +1646,6 @@ const UnfoldWalk = struct {
             .placeholder => |pid| if (self.store.lookup(pid)) |value| self.mentions(value, leaf) else false,
             .app => |app| for (app.args) |arg| {
                 if (self.mentions(arg, leaf)) break true;
-            } else false,
-        };
-    }
-
-    /// Whether `expr` still reaches an unassigned meta outside `allowed`.
-    fn hasOtherUnsolvedMeta(self: *UnfoldWalk, expr: ExprId, allowed: []const PlaceholderId) bool {
-        return switch (self.theorem.interner.node(expr).*) {
-            .variable => false,
-            .placeholder => |pid| blk: {
-                if (self.store.info(pid) == null) break :blk false;
-                if (self.store.lookup(pid)) |value| break :blk self.hasOtherUnsolvedMeta(value, allowed);
-                break :blk std.mem.indexOfScalar(PlaceholderId, allowed, pid) == null;
-            },
-            .app => |app| for (app.args) |arg| {
-                if (self.hasOtherUnsolvedMeta(arg, allowed)) break true;
             } else false,
         };
     }

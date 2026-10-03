@@ -53,7 +53,6 @@
 //! binder cannot be pinned cleanly — so a binding the real, normalization-aware
 //! view match would only discover after unfolding is never the basis for a prune.
 
-const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;

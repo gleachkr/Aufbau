@@ -173,7 +173,6 @@ pub fn chooseFreshBinding(
 }
 
 pub fn collectUsedDeps(
-    env: *const GlobalEnv,
     theorem: *const TheoremContext,
     line_expr: ExprId,
     ref_exprs: []const ExprId,
@@ -181,9 +180,8 @@ pub fn collectUsedDeps(
     extra_used_deps: u55,
 ) !u55 {
     return try collectUsedDepsFromLineDeps(
-        env,
         theorem,
-        try exprDeps(env, theorem, line_expr),
+        try theorem.exprDeps(line_expr, .{}),
         ref_exprs,
         bindings,
         extra_used_deps,
@@ -191,7 +189,6 @@ pub fn collectUsedDeps(
 }
 
 pub fn collectUsedDepsFromLineDeps(
-    env: *const GlobalEnv,
     theorem: *const TheoremContext,
     line_deps: u55,
     ref_exprs: []const ExprId,
@@ -200,11 +197,11 @@ pub fn collectUsedDepsFromLineDeps(
 ) !u55 {
     var deps = extra_used_deps | line_deps;
     for (ref_exprs) |expr_id| {
-        deps |= try exprDeps(env, theorem, expr_id);
+        deps |= try theorem.exprDeps(expr_id, .{});
     }
     for (bindings) |maybe_expr_id| {
         if (maybe_expr_id) |expr_id| {
-            deps |= try exprDeps(env, theorem, expr_id);
+            deps |= try theorem.exprDeps(expr_id, .{});
         }
     }
     return deps;
@@ -213,7 +210,6 @@ pub fn collectUsedDepsFromLineDeps(
 pub fn assignHiddenRootsFromVarsPool(
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
-    env: *const GlobalEnv,
     theorem: *TheoremContext,
     theorem_vars: anytype,
     sort_vars: *const SortVarRegistry,
@@ -223,15 +219,13 @@ pub fn assignHiddenRootsFromVarsPool(
     extra_used_deps: u55,
     needs: []const HiddenRootNeed,
 ) ![]HiddenRootAssignment {
-    const line_deps = try exprDeps(env, theorem, line_expr);
     return try assignHiddenRootsFromVarsPoolWithLineDeps(
         allocator,
         parser,
-        env,
         theorem,
         theorem_vars,
         sort_vars,
-        line_deps,
+        try theorem.exprDeps(line_expr, .{}),
         ref_exprs,
         explicit_bindings,
         extra_used_deps,
@@ -242,7 +236,6 @@ pub fn assignHiddenRootsFromVarsPool(
 pub fn assignHiddenRootsFromVarsPoolWithLineDeps(
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
-    env: *const GlobalEnv,
     theorem: *TheoremContext,
     theorem_vars: anytype,
     sort_vars: *const SortVarRegistry,
@@ -253,7 +246,6 @@ pub fn assignHiddenRootsFromVarsPoolWithLineDeps(
     needs: []const HiddenRootNeed,
 ) ![]HiddenRootAssignment {
     const used_deps = try collectUsedDepsFromLineDeps(
-        env,
         theorem,
         line_deps,
         ref_exprs,
@@ -287,7 +279,6 @@ pub fn assignHiddenRootsFromVarsPoolWithLineDeps(
 pub fn seedRecoverHolesFromVarsPool(
     allocator: std.mem.Allocator,
     parser: *MM0Parser,
-    env: *const GlobalEnv,
     theorem: *TheoremContext,
     theorem_vars: anytype,
     sort_vars: *const SortVarRegistry,
@@ -306,7 +297,6 @@ pub fn seedRecoverHolesFromVarsPool(
     @memset(seeds, .none);
 
     const used_deps = try collectUsedDeps(
-        env,
         theorem,
         line_expr,
         ref_exprs,
@@ -471,17 +461,4 @@ fn parseFreshenAnnotation(
         .target_arg_idx = target_arg_idx,
         .blocker_arg_idx = blocker_arg_idx,
     };
-}
-
-fn exprDeps(
-    env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) !u55 {
-    return (try Inference.exprInfo(
-        env,
-        theorem,
-        theorem.arg_infos,
-        expr_id,
-    )).deps;
 }

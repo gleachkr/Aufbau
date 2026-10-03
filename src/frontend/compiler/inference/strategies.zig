@@ -536,7 +536,6 @@ fn sortUnresolvedFinalizationRoots(
 
 fn tryFinalizeRuleMatchSession(
     allocator: std.mem.Allocator,
-    env: *const GlobalEnv,
     session: *DefOps.RuleMatchSession,
     fresh_context: ?HiddenWitnessFreshContext,
     line_deps: u55,
@@ -577,7 +576,6 @@ fn tryFinalizeRuleMatchSession(
     const hidden_assignments = FreshSelect.assignHiddenRootsFromVarsPoolWithLineDeps(
         allocator,
         fresh.parser,
-        env,
         session.shared.theorem,
         fresh.theorem_vars,
         fresh.sort_vars,
@@ -706,7 +704,6 @@ fn finishRuleMatchSession(
     )).deps;
     return try tryFinalizeRuleMatchSession(
         allocator,
-        env,
         session,
         fresh_context,
         line_deps,
@@ -928,7 +925,6 @@ fn finishHoleyRuleMatchSession(
 
     const result = tryFinalizeRuleMatchSession(
         allocator,
-        env,
         session,
         fresh_context,
         holey_concl.deps(),

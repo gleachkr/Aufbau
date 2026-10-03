@@ -3,7 +3,6 @@ const types = @import("../types.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
-const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const Context = types.Context;
 const semantic = @import("./semantic.zig");
 const exprNeedsSemantic = semantic.exprNeedsSemantic;
@@ -11,6 +10,7 @@ const templateNeedsSemantic = semantic.templateNeedsSemantic;
 const isRigidHead = semantic.isRigidHead;
 const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
+const def_match = @import("./def_match.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const DeepVerdictCache = types.DeepVerdictCache;
 
@@ -503,7 +503,7 @@ fn acuiRequiredMembersPlausible(
                 return false;
         } else {
             for (members) |member| {
-                if (templateMatchesExprPlausible(context, theorem, leaf, member, bindings)) break;
+                if (!def_match.templateDefiniteMismatch(context, theorem, leaf, member, bindings)) break;
             } else return false;
         }
     }
@@ -537,6 +537,22 @@ pub fn memberIsFixed(
     };
 }
 
+/// Whether `member` could equal some member of `list`. A member that is not
+/// fixed (`memberIsFixed`) may convert to the unit (a `wk_nil`-style def of the
+/// empty context), so it needs no partner.
+pub fn memberPossiblyIn(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    member: ExprId,
+    list: []const ExprId,
+) bool {
+    if (!memberIsFixed(context, theorem, member)) return true;
+    for (list) |candidate| {
+        if (!def_match.rigidExprMismatch(context, theorem, member, candidate)) return true;
+    }
+    return false;
+}
+
 fn augmentLeaf(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -549,7 +565,7 @@ fn augmentLeaf(
 ) bool {
     for (members, 0..) |member, m| {
         if (visited[m]) continue;
-        if (!templateMatchesExprPlausible(context, theorem, leaves[leaf_idx], member, bindings))
+        if (def_match.templateDefiniteMismatch(context, theorem, leaves[leaf_idx], member, bindings))
             continue;
         visited[m] = true;
         if (owner[m]) |other| {
@@ -566,8 +582,8 @@ fn augmentLeaf(
 // Deep-unfold ACUI member check (Lever E).
 //
 // `acuiBoundMembersPlausible` abstains the moment a transparent-def head differs
-// between a required member leaf and a container member (`templateMatchesExprPlausible`
-// → `exprNeedsSemantic`). For def-dense theories (church) every leaf/member pair
+// between a required member leaf and a container member (`templateDefiniteMismatch`
+// finds no rigid clash through a def). For def-dense theories (church) every leaf/member pair
 // involves a def, so the check never rejects — the eqmp/ax reject-flood. This
 // variant instead instantiates each FULLY-BOUND required leaf concretely and
 // requires SOME container member to survive a COMPLETE (to-fixpoint) def-unfold
@@ -765,80 +781,6 @@ fn templateMatchesExprImpl(
                     return true;
                 },
                 else => return false,
-            }
-        },
-    }
-}
-
-// Membership variant for the conclusion/hyp ACUI *plausibility* prune. Same
-// structural walk as `templateMatchesExprReadOnly`, but a bound-binder leaf
-// whose value differs from the member is treated as a definite mismatch ONLY
-// when both sides are rigid (no transparent def / ACUI). When a def on either
-// side could unfold to bridge them — e.g. `ax`'s required member `hyp(a)` with
-// `a := suc x ≤ y` (`le …`) against a context member `x < y` (`lt …`), where
-// `lt` unfolds to `le (suc …)` — we yield "no opinion" (plausible) and leave
-// the verdict to the validator's def-aware matcher. Extraction callers keep the
-// strict `templateMatchesExprReadOnly`, since over-eager def matching there
-// would consume/pin the wrong member.
-fn templateMatchesExprPlausible(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    template: TemplateExpr,
-    expr_id: ExprId,
-    bindings: []const ?ExprId,
-) bool {
-    switch (template) {
-        .binder => |idx| {
-            if (idx >= bindings.len) return true;
-            if (bindings[idx]) |bound| {
-                if (bound == expr_id) return true;
-                // Carry-to-leaf witness: a bound value embedding an open
-                // search meta (e.g. `rim`'s antecedent binder seeded to
-                // `P ?t` from an open-backward `rex` premise) can still unify
-                // with a concrete member (`P c`) — the meta absorbs the
-                // difference, pinning the witness. Treat as plausible when the
-                // rigid skeleton agrees and defer the actual unification to
-                // full validation, rather than hard-pruning the ref.
-                if (exprUnifiesModuloMeta(theorem, bound, expr_id)) return true;
-                return exprNeedsSemantic(context, theorem, bound) or
-                    exprNeedsSemantic(context, theorem, expr_id);
-            }
-            return true;
-        },
-        .app => |app| {
-            const node = theorem.interner.node(expr_id);
-            switch (node.*) {
-                .app => |concrete| {
-                    // Heads differ but a transparent def on either side could
-                    // unfold to align them — no opinion rather than a hard
-                    // mismatch (mirrors the binder case above).
-                    if (concrete.term_id != app.term_id) {
-                        return exprNeedsSemantic(context, theorem, expr_id) or
-                            templateNeedsSemantic(context, .{ .app = app });
-                    }
-                    // Same semantic head: transparent defs are not injective,
-                    // and an ACUI-headed member may match after canonicalizing.
-                    // Do not judge this by positional argument equality.
-                    if (!isRigidHead(context, app.term_id)) return true;
-                    if (concrete.args.len != app.args.len) return false;
-                    for (app.args, concrete.args) |tmpl_arg, conc_arg| {
-                        if (!templateMatchesExprPlausible(
-                            context,
-                            theorem,
-                            tmpl_arg,
-                            conc_arg,
-                            bindings,
-                        )) return false;
-                    }
-                    return true;
-                },
-                .variable => {
-                    return templateNeedsSemantic(context, .{ .app = app });
-                },
-                // An open meta, such as the rest of a context that a
-                // premise leaves unresolved, may stand for anything,
-                // including a context that holds the leaf.
-                .placeholder => return true,
             }
         },
     }

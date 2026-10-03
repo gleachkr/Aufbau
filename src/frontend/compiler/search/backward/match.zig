@@ -6,28 +6,29 @@
 
 const std = @import("std");
 const types = @import("../types.zig");
-const prune = @import("./prune.zig");
+const def_match = @import("./def_match.zig");
+const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
 const forward = @import("../forward.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const ExprMod = @import("../../../expr.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
-const PlaceholderId = @import("../../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const MetaStore = @import("../../inference/meta_store.zig").MetaStore;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("../../../rules.zig").templateMentionsBinder;
 const Context = types.Context;
 const SearchCounters = types.SearchCounters;
-const recoverDefiniteMismatch = prune.recoverDefiniteMismatch;
-const templateDefiniteMismatch = prune.templateDefiniteMismatch;
-const projectViewBindingsIntoRule = prune.projectViewBindingsIntoRule;
-const extractHypPartialBindings = prune.extractHypPartialBindings;
-const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
-const acuiClosedRegionPlausible = prune.acuiClosedRegionPlausible;
-const templateNeedsSemantic = prune.templateNeedsSemantic;
-const exprNeedsSemantic = prune.exprNeedsSemantic;
-const bindingsNeedSemantic = prune.bindingsNeedSemantic;
+const recoverDefiniteMismatch = def_match.recoverDefiniteMismatch;
+const templateDefiniteMismatch = def_match.templateDefiniteMismatch;
+const projectViewBindingsIntoRule = def_match.projectViewBindingsIntoRule;
+const extractHypPartialBindings = def_match.extractHypPartialBindings;
+const acuiBoundMembersPlausible = acui.acuiBoundMembersPlausible;
+const acuiClosedRegionPlausible = acui.acuiClosedRegionPlausible;
+const templateNeedsSemantic = semantic.templateNeedsSemantic;
+const exprNeedsSemantic = semantic.exprNeedsSemantic;
+const bindingsNeedSemantic = semantic.bindingsNeedSemantic;
 
 pub const HypMatchResult = enum {
     matched,
@@ -634,18 +635,6 @@ pub const RecoverSourceLocation = struct {
     wrapper_arg_pos: usize,
 };
 
-pub fn templateReferencesBinder(template: TemplateExpr, idx: usize) bool {
-    switch (template) {
-        .binder => |i| return i == idx,
-        .app => |app| {
-            for (app.args) |arg| {
-                if (templateReferencesBinder(arg, idx)) return true;
-            }
-            return false;
-        },
-    }
-}
-
 // Find the app that *directly* wraps binder `idx` (the `hyp(q)` injector around
 // a recover source), returning its head term and the argument position holding
 // the binder.
@@ -688,7 +677,7 @@ pub fn findRecoverSourceLocation(
         };
         var ctx_arg_index: ?usize = null;
         for (top.args, 0..) |arg, ai| {
-            if (templateReferencesBinder(arg, source_view_idx)) {
+            if (templateMentionsBinder(arg, source_view_idx)) {
                 ctx_arg_index = ai;
                 break;
             }

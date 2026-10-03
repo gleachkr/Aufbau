@@ -63,7 +63,6 @@ const HiddenWitnessProviderContext = struct {
             .assignHiddenRootsFromVarsPoolWithLineDeps(
             allocator,
             self.fresh.parser,
-            self.env,
             self.theorem,
             self.fresh.theorem_vars,
             self.fresh.sort_vars,

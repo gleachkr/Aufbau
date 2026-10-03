@@ -12,23 +12,14 @@ const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
 
 const isRigidHead = semantic.isRigidHead;
-pub const templateNeedsSemantic = semantic.templateNeedsSemantic;
-pub const exprNeedsSemantic = semantic.exprNeedsSemantic;
-pub const bindingsNeedSemantic = semantic.bindingsNeedSemantic;
-// Decide whether `source` provably cannot be `pattern` with the `@recover`
-// hole replaced by a single witness term — accounting for the reconciliation
-// the full validator is still allowed to perform.
-//
-// The validator's recover only unfolds transparent defs and canonicalizes
-// ACUI terms before re-running the structural comparison. Neither operation
-// can change a *rigid* head (an available, non-def, non-ACUI term) into a
-// different one. So the only divergence we may treat as a hard mismatch is
-// two app nodes at corresponding positions whose heads differ and are *both*
-// rigid (e.g. `∧` vs `=`). Any other shape — a def/ACUI head that could
-// unfold, a variable/placeholder that could be a wrapper or identity witness,
-// or a position sitting at the hole — is left to the validator (return
-// false). This keeps the guard sound: it never drops a ref the validator
-// would accept, only ones whose rigid logical skeleton already clashes.
+
+/// Whether `source` provably cannot be `pattern` with the `@recover` `hole`
+/// replaced by a single witness term. The validator's recover unfolds
+/// transparent defs and canonicalizes ACUI terms before comparing, and neither
+/// changes a rigid head, so this is `rigidExprMismatch` with every position at
+/// the hole, or at a coercion chain around it, left open: the validator
+/// re-sorts that subtree through the coercion graph (cross-sort `@recover`,
+/// #215), so `F (v2t x)` against `F (n2t b)` recovers `b`.
 pub fn recoverDefiniteMismatch(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -36,71 +27,7 @@ pub fn recoverDefiniteMismatch(
     pattern: ExprId,
     hole: ExprId,
 ) bool {
-    if (pattern == hole) return false;
-    if (source == pattern) return false;
-    // A coercion chain around the hole is itself a recovery site: the
-    // validator re-sorts the source subtree through the coercion graph
-    // (cross-sort `@recover`, #215), so the chain's heads are not a rigid
-    // skeleton to clash on — `F (v2t x)` against `F (n2t b)` recovers `b`.
-    if (coercedHole(context, theorem, pattern, hole)) return false;
-    const pattern_node = theorem.interner.node(pattern);
-    const source_node = theorem.interner.node(source);
-    const pattern_app = switch (pattern_node.*) {
-        .placeholder => return false,
-        // A non-hole pattern variable is a fixed ground leaf: the recover law
-        // never instantiates it (only the hole becomes the witness), so the
-        // source must equal it verbatim at this position. When the source is a
-        // *distinct* variable leaf it is a hard mismatch. `source != pattern`
-        // (checked above) is ExprId inequality, and within one interner a
-        // variable id is a unique allocation — `theorem_var` ids are stable,
-        // `dummy_var` ids come from the monotonic `next_dummy_id` counter, and
-        // the two kinds are disjoint — so distinct ids are distinct variables
-        // and no def-unfold/ACUI step can reconcile two ground leaves. (Source
-        // apps/placeholders could still reduce/instantiate — no opinion.)
-        .variable => return switch (source_node.*) {
-            .variable => true,
-            else => false,
-        },
-        .app => |app| app,
-    };
-    const source_app = switch (source_node.*) {
-        // A placeholder is a genuinely unfilled position; later matching may
-        // instantiate it to an app that agrees with the pattern, so we hold no
-        // opinion here (unlike the validator, which only sees it post-fill).
-        .placeholder => return false,
-        // A bound variable is a ground, irreducible leaf — both `theorem_var`
-        // and `dummy_var` key the search index as nullary atoms, and the
-        // validator's recover never unfolds a leaf into an app. So when the
-        // pattern's head resolves to a rigid root (no def-unfold/ACUI step can
-        // collapse that app to a bare leaf), the ref provably can't be the
-        // pattern. This mirrors `recoverBindingCandidate`, which returns
-        // `RecoverStructureMismatch` for exactly this pattern-app/source-var
-        // shape (derived_bindings.zig:625).
-        .variable => return resolveRigidHead(context, pattern_app.term_id) != null,
-        .app => |app| app,
-    };
-    if (source_app.term_id != pattern_app.term_id) {
-        // Heads differ. Resolve each through any transparent-def head chain (the
-        // validator's recover unfolds defs before comparing) to its rigid root.
-        // If both resolve to *distinct* rigid roots, no unfolding/canonicalization
-        // can reconcile them, so the ref provably can't be the pattern — e.g. a
-        // ref `has_preimage(…)` unfolds to `∃ …` (head `ex`, rigid) which clashes
-        // with a pattern `∧`. When either side resolves through an ACUI combiner
-        // or a binder-rooted body, or to the *same* root, we hold no opinion.
-        const source_head = resolveRigidHead(context, source_app.term_id) orelse
-            return false;
-        const pattern_head = resolveRigidHead(context, pattern_app.term_id) orelse
-            return false;
-        return source_head != pattern_head;
-    }
-    // Same head: only the args it forces must agree. A def arg the body drops
-    // (`K x y ≡ K x z` for `K a b := a`) or a `@rewrite` head's arg can differ
-    // in a source the validator still accepts.
-    var args = lockstep.exprArgs(context, theorem, source, pattern) orelse return false;
-    while (args.next()) |pair| {
-        if (recoverDefiniteMismatch(context, theorem, pair.a, pair.b, hole)) return true;
-    }
-    return false;
+    return rigidMismatch(context, theorem, source, pattern, hole);
 }
 
 // Whether `expr` is the hole wrapped in nothing but declared coercions.
@@ -124,49 +51,27 @@ fn coercedHole(
     return true;
 }
 
-// True when the node is an application whose head term can be rewritten away
-// by a `@rewrite` rule (so its head is not a reliable rigid key). Used to
-// withhold a definite-mismatch verdict, mirroring the reducible-head guards in
-// shape.zig and `semantic.isRigidHead`.
-fn headIsReducibleNode(context: *const Context, node: *const ExprNode) bool {
-    return switch (node.*) {
-        .app => |app| context.registry.rewrites_by_head.contains(app.term_id),
-        else => false,
-    };
-}
-
-// Resolve the outermost RIGID head a term presents after the validator's
-// def-unfolding alignment: follow transparent-def heads through their body
-// templates until reaching a non-def app head (the rigid root). Head-only, so it
-// neither interns nor inspects dummy-bearing arguments — a head term's identity
-// is independent of the def's dummies. Returns null when the chain hits an ACUI combiner (canonicalization could
-// rewrite it), a `@rewrite` LHS head (could rewrite to a different head), an
-// unavailable term, or a body rooted at a binder rather than an app — i.e. cases
-// where we hold no opinion.
+// Whether two heads resolve to distinct rigid roots (see `rigidHeadOf`), which
+// no def unfolding or canonicalization can reconcile.
 pub fn rigidHeadMismatch(
     context: *const Context,
     a_term_id: u32,
     b_term_id: u32,
 ) bool {
-    const a_head = resolveRigidHead(context, a_term_id) orelse return false;
-    const b_head = resolveRigidHead(context, b_term_id) orelse return false;
+    const a_head = rigidHeadOf(context, a_term_id) orelse return false;
+    const b_head = rigidHeadOf(context, b_term_id) orelse return false;
     return a_head != b_head;
 }
 
-/// Public view of `resolveRigidHead`: the outermost RIGID head `term_id` presents
-/// after transparent-def head-chain unfolding, or null when the chain bottoms out
-/// on an ACUI / `@rewrite` / unavailable / binder-rooted-body head (no stable
-/// rigid root). Read-only and head-only — it never interns, mints placeholders,
-/// or inspects dummy-bearing arguments. The key invariant for callers reasoning
-/// about the validator's preprocessing: that preprocessing (transparent-def
-/// unfold + ACUI/`@rewrite` canonicalize) preserves this head whenever it is
-/// non-null, because resolveRigidHead returns null on exactly the heads
-/// canonicalization could rewrite.
+/// The outermost RIGID head `term_id` presents after transparent-def head-chain
+/// unfolding, or null when the chain bottoms out on an ACUI / `@rewrite` /
+/// unavailable / binder-rooted-body head (no stable rigid root). Read-only and
+/// head-only — it never interns, mints placeholders, or inspects dummy-bearing
+/// arguments. The key invariant for callers reasoning about the validator's
+/// preprocessing: that preprocessing (transparent-def unfold + ACUI/`@rewrite`
+/// canonicalize) preserves this head whenever it is non-null, because it is null
+/// on exactly the heads canonicalization could rewrite.
 pub fn rigidHeadOf(context: *const Context, term_id: u32) ?u32 {
-    return resolveRigidHead(context, term_id);
-}
-
-fn resolveRigidHead(context: *const Context, term_id: u32) ?u32 {
     var current = term_id;
     var depth: usize = 0;
     while (depth < max_def_unfold_depth) : (depth += 1) {
@@ -323,7 +228,7 @@ pub fn templateDefiniteMismatch(
                 // A placeholder may still stand for anything.
                 .placeholder => return false,
                 // A compound with a rigid root can't equal a bare atom.
-                .variable => return resolveRigidHead(context, app.term_id) != null,
+                .variable => return rigidHeadOf(context, app.term_id) != null,
                 .app => |concrete| {
                     // Same head: compare the args it forces. No def is assumed
                     // injective: an arg its body drops (the `const` trap) or
@@ -362,33 +267,51 @@ pub fn rigidExprMismatch(
     a: ExprId,
     b: ExprId,
 ) bool {
+    return rigidMismatch(context, theorem, a, b, null);
+}
+
+// `rigidExprMismatch`, holding no opinion at `hole` in `b` or at a coercion
+// chain around it.
+fn rigidMismatch(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    a: ExprId,
+    b: ExprId,
+    hole: ?ExprId,
+) bool {
     if (a == b) return false;
+    if (hole) |h| {
+        if (b == h or coercedHole(context, theorem, b, h)) return false;
+    }
     const na = theorem.interner.node(a);
     const nb = theorem.interner.node(b);
     // A `@rewrite`-reducible head on either side can rewrite to a different
     // head, so a rigid clash is never definite — e.g. a bound motive value
     // `const_ty k A` (reducible to `A` via `const_ty_eval`) compared against a
     // ref's `A`.
-    if (headIsReducibleNode(context, na) or headIsReducibleNode(context, nb)) {
-        return false;
-    }
+    for ([_]*const ExprNode{ na, nb }) |n| switch (n.*) {
+        .app => |app| if (semantic.headClass(context, app.term_id) == .rewrite) return false,
+        else => {},
+    };
     switch (na.*) {
         .placeholder => return false,
         .variable => switch (nb.*) {
             // Distinct interned atoms are genuinely different and nothing
-            // reconciles them.
+            // reconciles them: a `theorem_var` id is stable and a `dummy_var`
+            // id comes from a monotonic counter, so distinct ids are distinct
+            // variables.
             .variable => return true,
-            .app => |bb| return resolveRigidHead(context, bb.term_id) != null,
+            .app => |bb| return rigidHeadOf(context, bb.term_id) != null,
             .placeholder => return false,
         },
         .app => |aa| switch (nb.*) {
             .placeholder => return false,
-            .variable => return resolveRigidHead(context, aa.term_id) != null,
+            .variable => return rigidHeadOf(context, aa.term_id) != null,
             .app => |bb| {
                 if (lockstep.exprArgs(context, theorem, a, b)) |aligned| {
                     var args = aligned;
                     while (args.next()) |pair| {
-                        if (rigidExprMismatch(context, theorem, pair.a, pair.b)) return true;
+                        if (rigidMismatch(context, theorem, pair.a, pair.b, hole)) return true;
                     }
                     return false;
                 }
@@ -446,6 +369,26 @@ pub fn unfoldDefBody(
         );
     }
     return try theorem.instantiateTemplate(info.body, binders);
+}
+
+// `expr` unfolded one layer when it is an application of an available
+// transparent def at its full arity, else null. `allow_binder_defs` is as for
+// `defBodyForUnfold`.
+pub fn unfoldAppOnce(
+    context: *const Context,
+    theorem: *TheoremContext,
+    expr: ExprId,
+    allow_binder_defs: bool,
+) !?ExprId {
+    // A copy of the node payload: its `args` slice is a stable heap
+    // allocation, so interning the unfolded body cannot invalidate it.
+    const app = switch (theorem.interner.node(expr).*) {
+        .app => |app| app,
+        else => return null,
+    };
+    const info = defBodyForUnfold(context, app.term_id, allow_binder_defs) orelse return null;
+    if (app.args.len != info.nargs) return null;
+    return try unfoldDefBody(theorem, info, app.args);
 }
 
 // Bound on nested def unfolding. Def bodies reference only earlier-declared
@@ -557,19 +500,17 @@ fn extractPartial(
                     // and first-order, so the binder values are forced by the
                     // ref.
                     if (app.args.len == info.nargs) {
-                        const root = ExtractScope{
-                            .nargs = info.nargs,
-                            .kind = .{ .template_root = .{ .t_args = app.args } },
-                        };
-                        extractScopedBindings(
+                        const root = DefScope{ .nargs = info.nargs, .args = app.args, .parent = null };
+                        walkDefBody(
+                            ExtractRoot{ .context = context, .theorem = theorem, .bindings = bindings },
                             context,
                             theorem,
                             info.body,
                             &root,
                             expr_id,
-                            bindings,
+                            true,
                             0,
-                        );
+                        ) catch {};
                     }
                 } else if (unfoldForeignRefDef(context, theorem, app.term_id, expr_id)) |unfolded| {
                     // Symmetric case: the *ref* head is a def folded over the
@@ -629,138 +570,86 @@ fn unfoldForeignRefDef(
     head: u32,
     expr_id: ExprId,
 ) ?ExprId {
-    const concrete = switch (theorem.interner.node(expr_id).*) {
-        .app => |concrete| concrete,
+    switch (theorem.interner.node(expr_id).*) {
+        .app => |concrete| if (concrete.term_id == head) return null,
         else => return null,
-    };
-    if (concrete.term_id == head) return null;
-    const info = defBodyForUnfold(context, concrete.term_id, true) orelse return null;
-    if (concrete.args.len != info.nargs) return null;
-    return unfoldDefBody(theorem, info, concrete.args) catch null;
+    }
+    return unfoldAppOnce(context, theorem, expr_id, true) catch null;
 }
 
-// Scope for extraction through transparent-def unfoldings. A `template_root` carries the rule template's argument
-// trees (binders index into `bindings`); each `nested` level carries a def
-// application's argument templates plus the enclosing scope they are read in.
-const ExtractScope = struct {
+/// One level of transparent-def unfolding on the template side of a walk: the
+/// def application's argument templates, read in `parent`, or at rule-binder
+/// level when `parent` is null. A body binder `idx < nargs` resolves to
+/// `args[idx]`; a higher one is a hidden variable of the def and carries no
+/// opinion.
+pub const DefScope = struct {
     nargs: usize,
-    kind: union(enum) {
-        template_root: struct { t_args: []const TemplateExpr },
-        nested: struct { args: []const TemplateExpr, parent: *const ExtractScope },
-    },
+    args: []const TemplateExpr,
+    parent: ?*const DefScope,
 };
 
-// Walk a def `body` (interpreted through `scope`) against `expr_id` in lockstep,
-// pinning forced binder values into `bindings`. Unfolds transparent first-order
-// defs *lazily* — only when the current head fails to align with the ref's head —
-// so a ref written at any folding level (`bic` ↔ `eqc` ↔ `eq · _ · _`) is matched
-// without over-unfolding past the ref's own representation. Soundness mirrors
-// `extractHypPartialBindings`: only binders forced by the ref's structure are set.
-fn extractScopedBindings(
+/// Walk a def `body`, read through `scope`, against `expr_id` in lockstep,
+/// handing each body binder that resolves to a rule-level template to
+/// `walker.root(template, expr)`. Transparent defs unfold lazily, only where
+/// heads fail to align: first the body's own first-order def head (pushing a
+/// scope), else the expression's head (`allow_ref_binder_defs` as for
+/// `defBodyForUnfold`), so an expression written at any folding level
+/// (`bic` ↔ `eqc` ↔ `eq · _ · _`) lines up without over-unfolding. A combiner
+/// node, a variable, or a placeholder holds no opinion: a combiner's binders
+/// are def parameters here, not rule binders, so no member pass applies.
+pub fn walkDefBody(
+    walker: anytype,
     context: *const Context,
     theorem: *TheoremContext,
     body: TemplateExpr,
-    scope: *const ExtractScope,
+    scope: *const DefScope,
     expr_id: ExprId,
-    bindings: []?ExprId,
+    allow_ref_binder_defs: bool,
     depth: usize,
-) void {
+) error{OutOfMemory}!void {
     if (depth >= max_def_unfold_depth) return;
     switch (body) {
         .binder => |idx| {
-            if (idx >= scope.nargs) return; // dummy of this def: no opinion
-            switch (scope.kind) {
-                // Outermost def parameter: resolve to the rule template argument
-                // and hand back to the binder-aware extractor.
-                .template_root => |r| extractPartial(
-                    context,
-                    theorem,
-                    r.t_args[idx],
-                    expr_id,
-                    bindings,
-                ),
-                // Nested def parameter: continue with the substituted argument,
-                // interpreted one scope out.
-                .nested => |n| extractScopedBindings(
-                    context,
-                    theorem,
-                    n.args[idx],
-                    n.parent,
-                    expr_id,
-                    bindings,
-                    depth + 1,
-                ),
-            }
+            if (idx >= scope.nargs) return;
+            const arg = scope.args[idx];
+            const parent = scope.parent orelse return walker.root(arg, expr_id);
+            return walkDefBody(walker, context, theorem, arg, parent, expr_id, allow_ref_binder_defs, depth + 1);
         },
         .app => |app| {
-            const node = theorem.interner.node(expr_id);
+            if (context.registry.hasStructuralCombiner(app.term_id)) return;
+            if (theorem.interner.node(expr_id).* != .app) return;
             if (lockstep.templateArgs(context, theorem, app, expr_id)) |aligned| {
-                // Heads aligned at this folding level: descend into the args
-                // the head forces.
                 var args = aligned;
                 while (args.next()) |pair| {
-                    extractScopedBindings(
-                        context,
-                        theorem,
-                        pair.template,
-                        scope,
-                        pair.expr,
-                        bindings,
-                        depth + 1,
-                    );
+                    try walkDefBody(walker, context, theorem, pair.template, scope, pair.expr, allow_ref_binder_defs, depth + 1);
                 }
                 return;
             }
-            // Heads differ: unfold one more transparent-def layer on the template
-            // side and retry against the same ref.
             if (defBodyForUnfold(context, app.term_id, false)) |info| {
                 if (app.args.len != info.nargs) return;
-                const child = ExtractScope{
-                    .nargs = info.nargs,
-                    .kind = .{ .nested = .{ .args = app.args, .parent = scope } },
-                };
-                extractScopedBindings(
-                    context,
-                    theorem,
-                    info.body,
-                    &child,
-                    expr_id,
-                    bindings,
-                    depth + 1,
-                );
-                return;
+                const child = DefScope{ .nargs = info.nargs, .args = app.args, .parent = scope };
+                return walkDefBody(walker, context, theorem, info.body, &child, expr_id, allow_ref_binder_defs, depth + 1);
             }
-            // Symmetric: the ref may be folded *tighter* than the current
-            // body level (ref `bic X Y` against body head `eq ·`-spine, where
-            // bic ↦ eqc ↦ eq · _ · _). Template-side unfolding can never
-            // align those — the productive move is unfolding the ref one
-            // layer and retrying this same body level. Sound for the same
-            // reason as the ref-side unfold in `extractHypPartialBindings`:
-            // only binders forced by the (unfolded) ref's structure are set,
-            // and the full validator still confirms every assembly. `concrete`
-            // is a value copy whose `args` slice is stable, so interning the
-            // unfolded body cannot invalidate it.
-            if (node.* == .app) {
-                const concrete = node.app;
-                if (defBodyForUnfold(context, concrete.term_id, true)) |rinfo| {
-                    if (concrete.args.len == rinfo.nargs) {
-                        const unfolded = unfoldDefBody(
-                            theorem,
-                            rinfo,
-                            concrete.args,
-                        ) catch return;
-                        extractScopedBindings(
-                            context,
-                            theorem,
-                            body,
-                            scope,
-                            unfolded,
-                            bindings,
-                            depth + 1,
-                        );
-                    }
-                }
-            }
+            // The expression may be folded tighter than this body level (`bic X
+            // Y` against an `eq ·`-spine, where bic ↦ eqc ↦ eq · _ · _), which no
+            // template-side unfolding can align. A dependency slot running out
+            // merely means the walk learns nothing more here.
+            const unfolded = unfoldAppOnce(context, theorem, expr_id, allow_ref_binder_defs) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return,
+            } orelse return;
+            return walkDefBody(walker, context, theorem, body, scope, unfolded, allow_ref_binder_defs, depth + 1);
         },
     }
 }
+
+/// `walkDefBody`'s root callback for hyp-side extraction.
+const ExtractRoot = struct {
+    context: *const Context,
+    theorem: *TheoremContext,
+    bindings: []?ExprId,
+
+    pub fn root(self: ExtractRoot, template: TemplateExpr, expr_id: ExprId) error{OutOfMemory}!void {
+        extractPartial(self.context, self.theorem, template, expr_id, self.bindings);
+    }
+};

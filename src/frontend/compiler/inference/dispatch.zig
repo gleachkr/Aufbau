@@ -409,7 +409,6 @@ fn inferOptionalBindingsFromViewSeed(
             try FreshSelect.seedRecoverHolesFromVarsPool(
                 allocator,
                 fresh.parser,
-                context.env,
                 context.theorem,
                 fresh.theorem_vars,
                 fresh.sort_vars,
@@ -496,7 +495,6 @@ pub fn inferBindings(
                 try FreshSelect.seedRecoverHolesFromVarsPool(
                     allocator,
                     fresh.parser,
-                    env,
                     theorem,
                     fresh.theorem_vars,
                     fresh.sort_vars,

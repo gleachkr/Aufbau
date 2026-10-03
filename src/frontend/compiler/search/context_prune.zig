@@ -36,6 +36,7 @@ const ViewDecl = @import("../../views.zig").ViewDecl;
 const types = @import("./types.zig");
 const Context = types.Context;
 const def_match = @import("./backward/def_match.zig");
+const acui = @import("./backward/acui.zig");
 const bag = @import("./backward/bag.zig");
 const semantic = @import("./backward/semantic.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
@@ -240,7 +241,7 @@ fn templateCarriedByConclusion(
     concl_members: []const TemplateExpr,
 ) bool {
     for (concl_members) |candidate| {
-        if (templateEqual(member, candidate)) return true;
+        if (member.eql(candidate)) return true;
     }
     return false;
 }
@@ -256,21 +257,6 @@ fn templateHasBoundBinder(
                 if (templateHasBoundBinder(arg, arg_infos)) return true;
             }
             return false;
-        },
-    }
-}
-
-fn templateEqual(a: TemplateExpr, b: TemplateExpr) bool {
-    switch (a) {
-        .binder => |ai| return b == .binder and b.binder == ai,
-        .app => |aa| {
-            if (b != .app) return false;
-            if (aa.term_id != b.app.term_id) return false;
-            if (aa.args.len != b.app.args.len) return false;
-            for (aa.args, b.app.args) |la, rb| {
-                if (!templateEqual(la, rb)) return false;
-            }
-            return true;
         },
     }
 }
@@ -321,7 +307,7 @@ pub fn contextInfeasible(
             // no-opinion — they might unify with or rewrite to a goal member.
             if (mn.* != .app) continue;
             if (def_match.rigidHeadOf(context, mn.app.term_id) == null) continue;
-            if (memberPossiblyInList(context, theorem, m, goal_members.slice())) continue;
+            if (acui.memberPossiblyIn(context, theorem, m, goal_members.slice())) continue;
             _ = absent_members.appendDistinct(m);
         }
         if (absent_members.len > budget) return true;
@@ -414,10 +400,10 @@ fn dischargedPatternsSupported(
             }
             continue;
         };
-        const deps = exprDeps(theorem, concrete) catch return true;
+        const deps = theorem.exprDeps(concrete, .{}) catch return true;
         const has_bound = exprHasBoundLeaf(theorem, concrete) catch return true;
         if (patternCouldBeHidden(theorem, ref_members, deps, has_bound)) continue;
-        if (!memberPossiblyInList(context, theorem, concrete, ref_members)) {
+        if (!acui.memberPossiblyIn(context, theorem, concrete, ref_members)) {
             return false;
         }
     }
@@ -431,7 +417,7 @@ fn templateCouldBeHidden(
     for (ref_members) |member| {
         switch (theorem.interner.node(member).*) {
             .variable, .placeholder => {
-                const deps = exprDeps(theorem, member) catch return true;
+                const deps = theorem.exprDeps(member, .{}) catch return true;
                 if (deps != 0) return true;
             },
             .app => {},
@@ -469,7 +455,7 @@ fn patternCouldBeHidden(
         const node = theorem.interner.node(member);
         switch (node.*) {
             .variable, .placeholder => {
-                const deps = exprDeps(theorem, member) catch return true;
+                const deps = theorem.exprDeps(member, .{}) catch return true;
                 if (pattern_has_bound_leaf and deps == 0) continue;
                 if ((pattern_deps & ~deps) == 0) return true;
             },
@@ -477,20 +463,6 @@ fn patternCouldBeHidden(
         }
     }
     return false;
-}
-
-fn exprDeps(theorem: *const TheoremContext, expr: ExprId) !u55 {
-    return switch (theorem.interner.node(expr).*) {
-        .variable, .placeholder => blk: {
-            const info = (try theorem.currentLeafInfo(expr)) orelse break :blk 0;
-            break :blk info.deps;
-        },
-        .app => |app| blk: {
-            var deps: u55 = 0;
-            for (app.args) |arg| deps |= try exprDeps(theorem, arg);
-            break :blk deps;
-        },
-    };
 }
 
 fn exprHasBoundLeaf(theorem: *const TheoremContext, expr: ExprId) !bool {
@@ -506,18 +478,4 @@ fn exprHasBoundLeaf(theorem: *const TheoremContext, expr: ExprId) !bool {
             break :blk false;
         },
     };
-}
-
-fn memberPossiblyInList(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    member: ExprId,
-    list: []const ExprId,
-) bool {
-    for (list) |candidate| {
-        if (!def_match.rigidExprMismatch(context, theorem, member, candidate)) {
-            return true;
-        }
-    }
-    return false;
 }

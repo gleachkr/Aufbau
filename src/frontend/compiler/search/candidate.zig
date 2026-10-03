@@ -4,7 +4,6 @@ const timer = @import("./timer.zig");
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
-const Span = ProofScript.Span;
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CheckedIr = @import("../../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;

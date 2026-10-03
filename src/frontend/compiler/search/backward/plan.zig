@@ -21,7 +21,7 @@ const SearchCounters = types.SearchCounters;
 const ApplyCandidate = types.ApplyCandidate;
 const DerivedPool = types.DerivedPool;
 const findRecoverSourceLocation = match.findRecoverSourceLocation;
-const templateReferencesBinder = match.templateReferencesBinder;
+const templateMentionsBinder = @import("../../../rules.zig").templateMentionsBinder;
 const lookupHypReferences = lookup_mod.lookupHypReferences;
 
 pub const HypPlan = struct {
@@ -468,8 +468,8 @@ fn orderRecoverDeps(
             const hyp = candidate.unresolved_hyps[plan.position];
             if (hyp.index >= view.hyps.len) continue;
             const provides_pattern =
-                templateReferencesBinder(view.hyps[hyp.index], rec.pattern_view_idx) or
-                templateReferencesBinder(view.hyps[hyp.index], rec.hole_view_idx);
+                templateMentionsBinder(view.hyps[hyp.index], rec.pattern_view_idx) or
+                templateMentionsBinder(view.hyps[hyp.index], rec.hole_view_idx);
             if (!provides_pattern) continue;
             preds[source_slot] |= @as(u64, 1) << @intCast(provider_slot);
             any = true;

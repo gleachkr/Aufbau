@@ -159,36 +159,6 @@ pub const InferenceContext = struct {
         self.ustack.deinit(self.allocator);
     }
 
-    /// True when `expr_id` contains a meta-class placeholder leaf — a Stage 4
-    /// open-target hole lifted into an implicit conclusion hint, or a hole in
-    /// an inline minor's holey hint (a line hole under a holey line, else an
-    /// unknown rule argument). Such a leaf is a wildcard: it matches anything
-    /// and must bind nothing (the witness is solved by the open path's
-    /// match-back or by the minor's own refs, never by hint inference).
-    fn exprContainsMetaWildcard(
-        self: *const InferenceContext,
-        expr_id: ExprId,
-    ) bool {
-        if (!self.theorem.mayHoldMetaLeaves()) return false;
-        return self.exprContainsMetaWildcardWalk(expr_id);
-    }
-
-    fn exprContainsMetaWildcardWalk(
-        self: *const InferenceContext,
-        expr_id: ExprId,
-    ) bool {
-        return switch (self.theorem.interner.node(expr_id).*) {
-            .variable => false,
-            .placeholder => |pid| self.theorem.placeholderClass(pid) == .meta,
-            .app => |app| blk: {
-                for (app.args) |arg| {
-                    if (self.exprContainsMetaWildcardWalk(arg)) break :blk true;
-                }
-                break :blk false;
-            },
-        };
-    }
-
     pub fn uopRef(self: *InferenceContext, heap_id: u32) !void {
         if (self.ustack.items.len == 0) return error.UStackUnderflow;
         const expr_id = self.ustack.pop().?;
@@ -197,10 +167,10 @@ pub const InferenceContext = struct {
         // solve a binder with it (a later concrete occurrence may still
         // solve the same binder) and do not report a mismatch against an
         // already-solved binder.
-        if (self.exprContainsMetaWildcard(expr_id)) return;
+        if (self.theorem.containsMetaLeaf(expr_id)) return;
         if (self.uheap.items[heap_id]) |expected| {
             if (expr_id != expected and
-                self.exprContainsMetaWildcard(expected))
+                self.theorem.containsMetaLeaf(expected))
             {
                 // The saved entry (a `UTermSave` subtree) straddles a meta
                 // wildcard; identity cannot be required against it.

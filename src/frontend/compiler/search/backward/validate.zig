@@ -13,17 +13,17 @@ const forward = @import("../forward.zig");
 const candidate_mod = @import("../candidate.zig");
 const plausible = @import("./plausible.zig");
 const match = @import("./match.zig");
-const prune = @import("./prune.zig");
+const def_match = @import("./def_match.zig");
 const lockstep = @import("./lockstep.zig");
 const seed = @import("./seed.zig");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("../../../rules.zig").templateMentionsBinder;
 const PoolVars = @import("../../vars.zig").PoolVars;
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const ProofScript = @import("../../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const CompilerContext = @import("../../context.zig").CompilerContext;
-const Check = @import("../../check.zig");
 const Context = types.Context;
 const Goal = types.Goal;
 const ApplyCandidate = types.ApplyCandidate;
@@ -631,7 +631,7 @@ fn withRecoveredFromHint(
     const view_bindings = try allocator.alloc(?ExprId, view.num_binders);
     defer allocator.free(view_bindings);
     match.seedViewBindingsFromRule(view, bindings, view_bindings);
-    prune.extractHypPartialBindings(context, theorem, view.concl, goal_expr, view_bindings);
+    def_match.extractHypPartialBindings(context, theorem, view.concl, goal_expr, view_bindings);
     var filled: ?[]?ExprId = null;
     errdefer if (filled) |named| allocator.free(named);
     for (view.derived_bindings) |derived| {
@@ -728,9 +728,13 @@ fn withFreshBoundVars(
     }
     if (!any) return null;
 
-    var taken: u55 = varDeps(theorem, goal_expr);
+    // The dependency bits of the variables only. Placeholders count for
+    // nothing: a goal meta's mask is not a variable's, and every placeholder
+    // bit is disjoint from the dummy bits a pool variable carries
+    // (`TheoremContext.next_placeholder_dep`).
+    var taken: u55 = theorem.exprDeps(goal_expr, .{ .placeholders = false }) catch 0;
     for (bindings) |maybe| {
-        if (maybe) |value| taken |= varDeps(theorem, value);
+        if (maybe) |value| taken |= theorem.exprDeps(value, .{ .placeholders = false }) catch 0;
     }
     const named = try allocator.dupe(?ExprId, bindings);
     errdefer allocator.free(named);
@@ -744,9 +748,7 @@ fn withFreshBoundVars(
             theorem_vars,
         );
         defer pool.deinit();
-        const fresh = while (try pool.next()) |pool_var| {
-            if (pool_var.avoids(taken)) break pool_var;
-        } else {
+        const fresh = (try pool.nextAvoiding(taken)) orelse {
             allocator.free(named);
             return null;
         };
@@ -770,40 +772,12 @@ fn binderInsideMeta(
         .binder => return false,
         .app => |app| app,
     };
-    if (theorem.interner.node(expr).* == .placeholder) return templateMentions(template, idx);
+    if (theorem.interner.node(expr).* == .placeholder) return templateMentionsBinder(template, idx);
     var pairs = lockstep.templateArgs(context, theorem, app, expr) orelse return false;
     while (pairs.next()) |pair| {
         if (binderInsideMeta(context, theorem, pair.template, pair.expr, idx)) return true;
     }
     return false;
-}
-
-fn templateMentions(template: TemplateExpr, idx: usize) bool {
-    return switch (template) {
-        .binder => |b| b == idx,
-        .app => |app| for (app.args) |arg| {
-            if (templateMentions(arg, idx)) break true;
-        } else false,
-    };
-}
-
-/// The dependency bits of the variables in `expr`. Placeholders count for
-/// nothing: a goal meta's mask is not a variable's, and every placeholder bit
-/// is disjoint from the dummy bits a pool variable carries
-/// (`TheoremContext.next_placeholder_dep`).
-fn varDeps(theorem: *const TheoremContext, expr: ExprId) u55 {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => 0,
-        .variable => blk: {
-            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk 0;
-            break :blk info.deps;
-        },
-        .app => |app| blk: {
-            var deps: u55 = 0;
-            for (app.args) |arg| deps |= varDeps(theorem, arg);
-            break :blk deps;
-        },
-    };
 }
 
 fn refsFromSelected(
@@ -868,5 +842,5 @@ fn slotRankIndex(
 /// carried down from an ancestor goal.
 fn goalCarriesMeta(theorem: *const TheoremContext, goal: Goal) bool {
     const hint = goal.expectedHint() orelse return false;
-    return seed.exprContainsMetaLeaf(theorem, hint);
+    return theorem.containsMetaLeaf(hint);
 }

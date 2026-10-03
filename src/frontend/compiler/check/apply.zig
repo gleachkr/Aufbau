@@ -517,7 +517,6 @@ fn applyRuleCandidateCore(
         try applyFreshBindings(
             self,
             parser,
-            env,
             theorem,
             theorem_vars,
             context.sort_vars,
@@ -1559,11 +1558,7 @@ fn refinedInlineHint(
 
     // A concrete existing hint is authoritative; only null/holey ones are eligible.
     if (existing_hint) |hint| {
-        const holey = blk: {
-            CheckedIr.validateNoPlaceholderExpr(theorem, hint) catch break :blk true;
-            break :blk false;
-        };
-        if (!holey) return existing_hint;
+        if (!theorem.containsPlaceholder(hint)) return existing_hint;
     }
 
     const goal = LineGoal.of(expected_conclusion_hint, line_assertion) orelse

@@ -972,6 +972,44 @@ pub const TheoremContext = struct {
         return self.isPlaceholder(expr);
     }
 
+    /// The union of the dependency bits of the leaves of `root`, the bits a
+    /// binding of it carries. A placeholder counts for nothing when
+    /// `!opts.placeholders`.
+    pub fn exprDeps(
+        self: *const TheoremContext,
+        root: ExprId,
+        opts: struct { placeholders: bool = true },
+    ) !u55 {
+        return switch (self.interner.node(root).*) {
+            .placeholder => if (opts.placeholders) self.leafDeps(root) else 0,
+            .variable => self.leafDeps(root),
+            .app => |app| blk: {
+                var deps: u55 = 0;
+                for (app.args) |arg| deps |= try self.exprDeps(arg, .{ .placeholders = opts.placeholders });
+                break :blk deps;
+            },
+        };
+    }
+
+    fn leafDeps(self: *const TheoremContext, leaf: ExprId) !u55 {
+        const info = (try self.currentLeafInfo(leaf)) orelse return 0;
+        return info.deps;
+    }
+
+    /// True when a meta-class placeholder leaf (a search meta or a line hole)
+    /// occurs anywhere in `root`.
+    pub fn containsMetaLeaf(self: *const TheoremContext, root: ExprId) bool {
+        if (!self.mayHoldMetaLeaves()) return false;
+        return self.exprAny(root, {}, isMetaLeafPred);
+    }
+
+    fn isMetaLeafPred(_: void, self: *const TheoremContext, expr: ExprId) bool {
+        return switch (self.interner.node(expr).*) {
+            .placeholder => |id| self.placeholderClass(id) == .meta,
+            else => false,
+        };
+    }
+
     /// True when a line hole (`addLineHolePlaceholder`) occurs anywhere in
     /// `root`.
     pub fn containsLineHole(self: *const TheoremContext, root: ExprId) bool {

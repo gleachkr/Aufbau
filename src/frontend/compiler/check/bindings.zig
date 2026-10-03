@@ -1164,7 +1164,6 @@ pub fn validateFreshBindingsAgainstLine(
     }
 
     const used_deps = try FreshSelect.collectUsedDeps(
-        env,
         theorem,
         line_expr,
         ref_exprs,
@@ -1197,7 +1196,6 @@ pub fn validateFreshBindingsAgainstLine(
 pub fn applyFreshBindings(
     self: *CompilerContext,
     parser: *MM0Parser,
-    env: *const GlobalEnv,
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
     sort_vars: *const SortVarRegistry,
@@ -1210,7 +1208,6 @@ pub fn applyFreshBindings(
     fresh_list: []const FreshDecl,
 ) !void {
     const used_deps = try FreshSelect.collectUsedDepsFromLineDeps(
-        env,
         theorem,
         line_deps,
         ref_exprs,

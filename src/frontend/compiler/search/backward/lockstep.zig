@@ -99,3 +99,54 @@ pub fn Args(comptime Left: type, comptime Pair: type) type {
         }
     };
 }
+
+/// How a `walk` ended.
+pub const WalkEnd = enum {
+    /// The visitor ended the walk.
+    stopped,
+    /// Every node was reached.
+    done,
+    /// A head or arity mismatch, which a def could bridge, cut part of the
+    /// template off; the rest was still walked.
+    partial,
+};
+
+/// Walk `template` against `expr` through the arguments each head determines,
+/// handing each binder to `visitor.binder(idx, expr)` and each combiner node to
+/// `visitor.combiner(app, expr)`, whose members a positional walk cannot pair.
+/// Either returns true to end the walk.
+pub fn walk(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+    visitor: anytype,
+) WalkEnd {
+    var partial = false;
+    if (walkNode(context, theorem, template, expr, visitor, &partial)) return .stopped;
+    return if (partial) .partial else .done;
+}
+
+fn walkNode(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+    visitor: anytype,
+    partial: *bool,
+) bool {
+    switch (template) {
+        .binder => |idx| return visitor.binder(idx, expr),
+        .app => |app| {
+            if (context.registry.hasStructuralCombiner(app.term_id)) return visitor.combiner(app, expr);
+            var args = templateArgs(context, theorem, app, expr) orelse {
+                partial.* = true;
+                return false;
+            };
+            while (args.next()) |pair| {
+                if (walkNode(context, theorem, pair.template, pair.expr, visitor, partial)) return true;
+            }
+            return false;
+        },
+    }
+}

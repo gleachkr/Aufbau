@@ -193,7 +193,7 @@ fn matchTriggerPattern(
         .wildcard => return true,
         .binder => |idx| {
             if (idx >= bindings.len) return false;
-            if (exprEmbedsPlaceholder(theorem, expr_id)) return false;
+            if (theorem.containsPlaceholder(expr_id)) return false;
             if (bindings[idx]) |existing| return existing == expr_id;
             bindings[idx] = expr_id;
             return true;
@@ -213,22 +213,6 @@ fn matchTriggerPattern(
             return true;
         },
     }
-}
-
-fn exprEmbedsPlaceholder(
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    return switch (theorem.interner.node(expr_id).*) {
-        .variable => false,
-        .placeholder => true,
-        .app => |app| blk: {
-            for (app.args) |arg| {
-                if (exprEmbedsPlaceholder(theorem, arg)) break :blk true;
-            }
-            break :blk false;
-        },
-    };
 }
 
 /// The nullary unit expression of the ACUI combiner returning `sort_name`,

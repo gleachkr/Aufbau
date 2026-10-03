@@ -93,7 +93,6 @@ pub fn tryFreshenBindings(
         optional_bindings[idx] = binding;
     }
     const used_deps = try FreshSelect.collectUsedDeps(
-        env,
         theorem,
         line_expr,
         ref_exprs,

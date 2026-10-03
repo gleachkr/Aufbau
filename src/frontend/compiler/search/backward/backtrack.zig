@@ -2,9 +2,8 @@ const std = @import("std");
 const types = @import("../types.zig");
 const refs_mod = @import("../refs.zig");
 const ref_index_mod = @import("../ref_index.zig");
-const clipper = @import("../clipper.zig");
 const rank = @import("../rank.zig");
-const prune = @import("./prune.zig");
+const def_match = @import("./def_match.zig");
 const semantic = @import("./semantic.zig");
 const abstract_prune = @import("../abstract_prune.zig");
 const context_prune = @import("../context_prune.zig");
@@ -18,7 +17,6 @@ const lookup_mod = @import("./lookup.zig");
 const plan = @import("./plan.zig");
 const validate = @import("./validate.zig");
 const forward = @import("../forward.zig");
-const candidate_mod = @import("../candidate.zig");
 const session_mod = @import("../session.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const PlaceholderId = @import("../../../expr.zig").PlaceholderId;
@@ -29,7 +27,6 @@ const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const ProofScript = @import("../../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const CompilerContext = @import("../../context.zig").CompilerContext;
-const Check = @import("../../check.zig");
 const OpenTerms = @import("../../inference/open_terms.zig");
 const Redex = @import("./redex.zig");
 const MetaStoreMod = @import("../../inference/meta_store.zig");
@@ -48,21 +45,10 @@ const NameExprMap = types.NameExprMap;
 const GenerationHook = types.GenerationHook;
 const DerivedPool = types.DerivedPool;
 const Fuel = types.Fuel;
-const rankReferenceIndices = refs_mod.rankReferenceIndices;
 const exactCandidateLessThan = rank.exactCandidateLessThan;
 const isBroadWholeLineHole = rank.isBroadWholeLineHole;
-const recoverDefiniteMismatch = prune.recoverDefiniteMismatch;
-const templateDefiniteMismatch = prune.templateDefiniteMismatch;
-const projectViewBindingsIntoRule = prune.projectViewBindingsIntoRule;
-const extractHypPartialBindings = prune.extractHypPartialBindings;
-const acuiBoundMembersPlausible = prune.acuiBoundMembersPlausible;
-const acuiClosedRegionPlausible = prune.acuiClosedRegionPlausible;
-const normalizeAcuiUnits = prune.normalizeAcuiUnits;
-const defBodyForUnfold = prune.defBodyForUnfold;
-const unfoldDefBody = prune.unfoldDefBody;
-const templateNeedsSemantic = prune.templateNeedsSemantic;
-const exprNeedsSemantic = prune.exprNeedsSemantic;
-const bindingsNeedSemantic = prune.bindingsNeedSemantic;
+const normalizeAcuiUnits = acui.normalizeAcuiUnits;
+const unfoldDefBody = def_match.unfoldDefBody;
 
 const matchOneHypWithSnapshot = match.matchOneHypWithSnapshot;
 const seedViewBindingsForMatch = match.seedViewBindingsForMatch;
@@ -218,7 +204,6 @@ pub fn exactWithSession(
         const results_before = candidates.items.len;
         try enumerateCandidateRefs(
             compiler,
-            allocator,
             context,
             ref_index,
             pool,
@@ -596,13 +581,6 @@ fn noFixedBindingMayMention(
     return true;
 }
 
-/// The dependency bits of `expr`, as the checker computes them
-/// (`BindingValidation.currentExprInfo`); none for an expression it rejects.
-fn exprDeps(context: *const Context, theorem: *const TheoremContext, expr: ExprId) u55 {
-    const info = BindingValidation.currentExprInfo(context.env, theorem, expr) catch return 0;
-    return info.deps;
-}
-
 /// True when a generated slot's otherwise concrete target still carries a
 /// witness meta threaded in from an enclosing open slot (e.g. `imp_intro`'s
 /// premise `Γ , P ?t ⊢ ∀y P y` inside the child search for `ex_intro`'s
@@ -618,7 +596,7 @@ fn carriesAncestorWitness(
 ) bool {
     if (hook.solveOpenFn == null) return false;
     if (openMode(context, candidate.rule_id, hook.allow_constrained_mp) != .witness) return false;
-    return seed.exprContainsMetaLeafWalk(&candidate.theorem, target);
+    return candidate.theorem.containsMetaLeaf(target);
 }
 
 fn exactRuleCandidates(
@@ -681,7 +659,6 @@ fn deinitApplyCandidateItems(candidates: []ApplyCandidate) void {
 /// for each slot); everything else is fixed for the candidate.
 const SlotCtx = struct {
     compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
     context: *const Context,
     ref_index: *const ref_index_mod.Index,
     pool: []const refs_mod.RefPoolEntry,
@@ -715,7 +692,7 @@ const SlotCtx = struct {
     fn validate(self: *const SlotCtx) !void {
         try validateSelectedRefs(
             self.compiler,
-            self.allocator,
+            self.context.allocator,
             self.context,
             self.pool,
             self.candidate,
@@ -756,7 +733,6 @@ const Slot = struct {
 
 fn enumerateCandidateRefs(
     compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
     context: *const Context,
     ref_index: *const ref_index_mod.Index,
     pool: []const refs_mod.RefPoolEntry,
@@ -771,6 +747,7 @@ fn enumerateCandidateRefs(
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) !void {
+    const allocator = context.allocator;
     const rule = &context.env.rules.items[candidate.rule_id];
     const hyp_count = candidate.unresolved_hyps.len;
     const plans: []const HypPlan = if (hyp_count == 0) &.{} else try buildHypPlans(
@@ -806,7 +783,6 @@ fn enumerateCandidateRefs(
 
     const ctx = SlotCtx{
         .compiler = compiler,
-        .allocator = allocator,
         .context = context,
         .ref_index = ref_index,
         .pool = pool,
@@ -901,7 +877,7 @@ fn backtrackRefs(ctx: *const SlotCtx, depth: usize) anyerror!void {
     const snapshot = ctx.snapshotAt(depth);
     for (lookup.pool.indices) |pool_index| {
         switch (try matchOneHypWithSnapshot(
-            ctx.allocator,
+            ctx.context.allocator,
             context,
             &candidate.theorem,
             candidate.rule_id,
@@ -1061,7 +1037,7 @@ fn tryDerivedSlots(
         defer dpool.store.universal_use_open = was_open;
 
         var ok = switch (try matchOneHypWithSnapshot(
-            ctx.allocator,
+            ctx.context.allocator,
             context,
             &candidate.theorem,
             candidate.rule_id,
@@ -1082,11 +1058,11 @@ fn tryDerivedSlots(
         // matched pattern.
         if (ok and dref.has_universal_meta) {
             if (context.views.get(candidate.rule_id)) |cview| {
-                const view_bindings = try ctx.allocator.alloc(
+                const view_bindings = try ctx.context.allocator.alloc(
                     ?ExprId,
                     cview.num_binders,
                 );
-                defer ctx.allocator.free(view_bindings);
+                defer ctx.context.allocator.free(view_bindings);
                 seedViewBindingsForMatch(
                     cview,
                     bindings,
@@ -1397,7 +1373,7 @@ fn trySplitGenerate(
             const saved = bindings[b];
             bindings[b] = cand;
             const handed = try handSplitChoice(candidate, b, cand);
-            defer restoreSplitChoice(candidate, handed);
+            defer if (handed) |h| h.restore(candidate);
             if (!splitSiteBindingsPlausible(
                 context,
                 &candidate.theorem,
@@ -1566,8 +1542,8 @@ fn tryPrincipalEnumerate(
         if (matched) {
             // The binders this member just bound are the search's choice of
             // principal, as much as the split of the rest is.
-            var handed: [64]?HandedFlag = @splat(null);
-            defer for (handed) |h| restoreSplitChoice(candidate, h);
+            var handed: [64]?ExplicitFlag = @splat(null);
+            defer for (handed) |maybe| if (maybe) |h| h.restore(candidate);
             pm = pmask.mask;
             while (pm != 0) {
                 const idx: u6 = @intCast(@ctz(pm));
@@ -1642,7 +1618,7 @@ fn tryOpenGenerateSlot(
     // (this defer runs after the rollback).
     const slot_mark = candidate.theorem.depSlotMark();
     defer candidate.theorem.releaseUnheldDepSlots(slot_mark, &.{bindings});
-    var store = MetaStore.init(ctx.allocator, context.env);
+    var store = MetaStore.init(ctx.context.allocator, context.env);
     // Share the driver's global meta-id counter so witness metas keep a stable
     // identity across the open-target recursion's interner clones.
     store.meta_id_counter = hook.meta_id_counter;
@@ -1657,7 +1633,7 @@ fn tryOpenGenerateSlot(
     // candidate's bindings are fixed for everything opened beneath it.
     const ban_mark = if (hook.meta_dep_bans) |bans| blk: {
         const mark = bans.mark();
-        try banCarriedMetaDeps(context, ctx.rule, &candidate.theorem, bindings, bans);
+        try banCarriedMetaDeps(ctx.rule, &candidate.theorem, bindings, bans);
         break :blk mark;
     } else 0;
     defer if (hook.meta_dep_bans) |bans| bans.rollback(ban_mark);
@@ -1775,7 +1751,6 @@ fn firstHiddenVarLeaf(theorem: *const TheoremContext, expr: ExprId) ?ExprId {
 /// clones); `MetaStore.registerAncestorMeta` turns the ban into the meta's
 /// `allowed_deps`.
 fn banCarriedMetaDeps(
-    context: *const Context,
     rule: *const RuleDecl,
     theorem: *const TheoremContext,
     bindings: []const ?ExprId,
@@ -1784,8 +1759,8 @@ fn banCarriedMetaDeps(
     for (rule.args, 0..) |arg, idx| {
         if (arg.bound) continue;
         const value = bindings[idx] orelse continue;
-        if (!seed.exprContainsMetaLeafWalk(theorem, value)) continue;
-        const banned = bannedDeps(context, theorem, rule, bindings, idx);
+        if (!theorem.containsMetaLeaf(value)) continue;
+        const banned = bannedDeps(theorem, rule, bindings, idx);
         if (banned != 0) try banMetasIn(theorem, value, banned, bans);
     }
 }
@@ -1794,7 +1769,6 @@ fn banCarriedMetaDeps(
 /// checker's dependency condition reads them: those of the values of the bound
 /// binders `idx`'s `ArgInfo.deps` omits.
 fn bannedDeps(
-    context: *const Context,
     theorem: *const TheoremContext,
     rule: *const RuleDecl,
     bindings: []const ?ExprId,
@@ -1805,7 +1779,7 @@ fn bannedDeps(
     for (rule.args, 0..) |bound_arg, bound_idx| {
         if (!bound_arg.bound or deps & bound_arg.deps != 0) continue;
         const bound_value = bindings[bound_idx] orelse continue;
-        banned |= exprDeps(context, theorem, bound_value);
+        banned |= (theorem.exprDeps(bound_value, .{}) catch 0);
     }
     return banned;
 }
@@ -1838,7 +1812,7 @@ fn bindingsDepHit(
     for (rule.args, 0..) |arg, idx| {
         if (arg.bound) continue;
         const value = bindings[idx] orelse continue;
-        const banned = bannedDeps(context, theorem, rule, bindings, idx);
+        const banned = bannedDeps(theorem, rule, bindings, idx);
         if (banned == 0) continue;
         const hit = exprDepHit(context, theorem, value, banned);
         if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
@@ -1916,8 +1890,8 @@ fn openSlotRaw(slot: *OpenSlot) anyerror!void {
     const template = slot.ctx.rule.hyps[slot.at.hyp_index];
     // See `openSlotView`: open bound binders defer to the existential-meta path
     // (carry-to-leaf) rather than enumerating a concrete witness pool.
-    const unknowns = try slot.ctx.allocator.alloc(?ExprId, slot.ctx.bindings.len);
-    defer slot.ctx.allocator.free(unknowns);
+    const unknowns = try slot.ctx.context.allocator.alloc(?ExprId, slot.ctx.bindings.len);
+    defer slot.ctx.context.allocator.free(unknowns);
     @memset(unknowns, null);
     var options = OpenTerms.OpenInstantiateOptions{
         .factory = .{
@@ -1958,8 +1932,8 @@ fn openSlotRaw(slot: *OpenSlot) anyerror!void {
 fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
     if (slot.at.hyp_index >= view.hyps.len) return;
     const theorem = &slot.ctx.candidate.theorem;
-    const view_bindings = try slot.ctx.allocator.alloc(?ExprId, view.num_binders);
-    defer slot.ctx.allocator.free(view_bindings);
+    const view_bindings = try slot.ctx.context.allocator.alloc(?ExprId, view.num_binders);
+    defer slot.ctx.context.allocator.free(view_bindings);
     seedViewBindingsForMatch(
         view,
         slot.ctx.bindings,
@@ -1967,8 +1941,8 @@ fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
         view_bindings,
     );
 
-    const excluded = try slot.ctx.allocator.alloc(bool, view.num_binders);
-    defer slot.ctx.allocator.free(excluded);
+    const excluded = try slot.ctx.context.allocator.alloc(bool, view.num_binders);
+    defer slot.ctx.context.allocator.free(excluded);
     @memset(excluded, false);
 
     const mark = slot.store.mark();
@@ -2031,8 +2005,8 @@ fn instantiateAndEmitView(
     view_bindings: []?ExprId,
     excluded: []const bool,
 ) anyerror!void {
-    const unknowns = try slot.ctx.allocator.alloc(?ExprId, view.num_binders);
-    defer slot.ctx.allocator.free(unknowns);
+    const unknowns = try slot.ctx.context.allocator.alloc(?ExprId, view.num_binders);
+    defer slot.ctx.context.allocator.free(unknowns);
     @memset(unknowns, null);
     var options = OpenTerms.OpenInstantiateOptions{
         .factory = .{
@@ -2064,8 +2038,8 @@ fn instantiateAndEmitView(
 
     // Overlay the freshly minted per-binder metas into a local copy of the
     // view bindings so the match-back materialization covers them.
-    const effective = try slot.ctx.allocator.dupe(?ExprId, view_bindings);
-    defer slot.ctx.allocator.free(effective);
+    const effective = try slot.ctx.context.allocator.dupe(?ExprId, view_bindings);
+    defer slot.ctx.context.allocator.free(effective);
     for (unknowns, 0..) |maybe_meta, vi| {
         if (maybe_meta) |meta| {
             if (effective[vi] == null) effective[vi] = meta;
@@ -2112,48 +2086,23 @@ fn emitOpenTarget(
         try registerAncestorMetas(slot.store, theorem, raw_target);
     }
     if (slot.store.isFullySolved(theorem, raw_target)) {
-        // A fresh variable the premise substitutes away (`nat_ind_elim`'s
-        // base case `g ⊢ z : [k/zero] C`) reduced out of the target while the
-        // bindings still hold it (in `C`). No proof of the premise can name
-        // it, so it takes a name now, before the premise is generated.
-        if (slot.fresh_bound and try freshMetasDangle(slot, unknowns)) {
-            try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
-            return;
-        }
-        const solved_before = slot.ctx.candidates.items.len;
+        // A meta the bindings still hold but the target no longer mentions
+        // dangles: a fresh variable the premise substitutes away
+        // (`nat_ind_elim`'s base case `g ⊢ z : [k/zero] C` still holds `k`
+        // in `C`), or an erased witness (`PoolPick.dangling`). No proof of
+        // the premise can determine it, so the concrete route below could
+        // only send the branch to validation with it undeterminable. It takes
+        // a `@vars` name now instead, and the solved-target pinning path
+        // renders the explicit binding the validator requires.
+        if (slot.fresh_bound and
+            try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh)) return;
+        if (slot.mode == .witness and slot.hook.allow_invent_witness and
+            try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .dangling)) return;
         // Bound-witness enumeration closed every open binder: this is an
         // ordinary concrete generated slot (for view rules, a concrete
         // view-surface target the validator reconciles through the view
         // machinery).
         try emitGeneratedSlot(slot.ctx, slot.hook, slot.at, raw_target);
-        if (slot.ctx.candidates.items.len != solved_before) return;
-        // A witness meta can be *erased* from a fully-solved target: a vacuous
-        // `@recover` body makes the leaf swap `p[x ↦ ?t]` a no-op, and redex
-        // reduction can likewise collapse `[x/?t]p` to `p` when `x` is not
-        // free in `p`. The minted meta then dangles in the bindings while the
-        // target mentions it nowhere, so the concrete route above carried the
-        // branch to validation with the witness binder undeterminable and
-        // produced nothing. Such a witness is genuinely unconstrained — exactly
-        // the invention rung's charter ("invent it, last — only for a witness
-        // nothing else determines") — so as the last resort ground it from the
-        // `@vars` pool and continue through the solved-target pinning path,
-        // which renders the explicit binding the validator requires. If no
-        // meta dangles, or the pool cannot supply the sort, this is inert and
-        // the branch fails as before.
-        if (slot.mode == .witness and slot.hook.allow_invent_witness) {
-            const mark2 = slot.store.mark();
-            defer slot.store.rollbackTo(mark2);
-            if (try groundDanglingWitnessMetas(slot, unknowns, view_bindings)) {
-                try continueOpenTargetSolved(
-                    slot,
-                    raw_target,
-                    unknowns,
-                    view,
-                    if (view_bindings) |vb| vb else null,
-                    null,
-                );
-            }
-        }
         return;
     }
     // Steps 4–5: reject bare-meta targets and targets with no rigid root (the
@@ -2197,7 +2146,7 @@ fn emitOpenTarget(
         // this rung is reached only when they leave metas unsolved.
         if (slot.hook.allow_invent_witness) {
             slot.store.rollbackTo(mark);
-            try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .shared);
+            _ = try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .shared);
         }
         return;
     }
@@ -2214,7 +2163,7 @@ fn emitOpenTarget(
     // any fresh one will do.
     if (slot.fresh_bound) {
         slot.store.rollbackTo(mark);
-        try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
+        _ = try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
     }
 }
 
@@ -2296,11 +2245,11 @@ fn continueOpenTargetSolved(
     // branch and render as explicit bindings on the final application.
     const Flag = struct { idx: usize, orig: ?ExprId };
     var flagged = std.ArrayListUnmanaged(Flag){};
-    defer flagged.deinit(slot.ctx.allocator);
+    defer flagged.deinit(slot.ctx.context.allocator);
     var solve_failed = false;
     if (view) |v| {
-        const vb = try slot.ctx.allocator.dupe(?ExprId, view_bindings.?);
-        defer slot.ctx.allocator.free(vb);
+        const vb = try slot.ctx.context.allocator.dupe(?ExprId, view_bindings.?);
+        defer slot.ctx.context.allocator.free(vb);
         for (vb) |*entry| {
             const value = entry.* orelse continue;
             // A view binder whose meta is still unsolved is left unpinned (the
@@ -2311,15 +2260,13 @@ fn continueOpenTargetSolved(
             // never appeared in the now-concrete `raw_target`.
             entry.* = slot.store.materialize(theorem, value) catch null;
         }
-        if (!solve_failed) {
-            for (v.binder_map, 0..) |maybe_rule_idx, vi| {
-                const rule_idx = maybe_rule_idx orelse continue;
-                if (rule_idx >= slot.ctx.bindings.len) continue;
-                if (slot.ctx.bindings[rule_idx] != null) continue;
-                const value = vb[vi] orelse continue;
-                slot.ctx.bindings[rule_idx] = value;
-                try flagged.append(slot.ctx.allocator, .{ .idx = rule_idx, .orig = null });
-            }
+        for (v.binder_map, 0..) |maybe_rule_idx, vi| {
+            const rule_idx = maybe_rule_idx orelse continue;
+            if (rule_idx >= slot.ctx.bindings.len) continue;
+            if (slot.ctx.bindings[rule_idx] != null) continue;
+            const value = vb[vi] orelse continue;
+            slot.ctx.bindings[rule_idx] = value;
+            try flagged.append(slot.ctx.context.allocator, .{ .idx = rule_idx, .orig = null });
         }
     } else {
         for (unknowns, 0..) |maybe_meta, idx| {
@@ -2330,7 +2277,7 @@ fn continueOpenTargetSolved(
             };
             if (slot.ctx.bindings[idx] == null) {
                 slot.ctx.bindings[idx] = value;
-                try flagged.append(slot.ctx.allocator, .{ .idx = idx, .orig = null });
+                try flagged.append(slot.ctx.context.allocator, .{ .idx = idx, .orig = null });
             }
         }
     }
@@ -2359,7 +2306,7 @@ fn continueOpenTargetSolved(
             const concrete = slot.store.materialize(theorem, val) catch continue;
             if (concrete == val) continue;
             slot.ctx.bindings[idx] = concrete;
-            try flagged.append(slot.ctx.allocator, .{ .idx = idx, .orig = val });
+            try flagged.append(slot.ctx.context.allocator, .{ .idx = idx, .orig = val });
             coupled = true;
         }
     }
@@ -2383,7 +2330,7 @@ fn continueOpenTargetSolved(
                 }
             }
             if (already) continue;
-            try flagged.append(slot.ctx.allocator, .{ .idx = idx, .orig = val });
+            try flagged.append(slot.ctx.context.allocator, .{ .idx = idx, .orig = val });
         }
     }
     defer for (flagged.items) |f| {
@@ -2399,14 +2346,10 @@ fn continueOpenTargetSolved(
         return;
     }
 
-    const flag_restores = try slot.ctx.allocator.alloc(?bool, flagged.items.len);
-    defer slot.ctx.allocator.free(flag_restores);
-    for (flagged.items, 0..) |f, i| {
-        flag_restores[i] = try setExplicitFlag(slot.ctx.candidate, f.idx);
-    }
-    defer for (flagged.items, 0..) |f, i| {
-        restoreExplicitFlag(slot.ctx.candidate, f.idx, flag_restores[i]);
-    };
+    const explicit = try slot.ctx.context.allocator.alloc(ExplicitFlag, flagged.items.len);
+    defer slot.ctx.context.allocator.free(explicit);
+    for (flagged.items, explicit) |f, *e| e.* = try setExplicitFlag(slot.ctx.candidate, f.idx);
+    defer for (explicit) |e| e.restore(slot.ctx.candidate);
 
     if (proof) |p| {
         try slot.ctx.descendGenerated(slot.at.depth, slot.at.position, p.application);
@@ -2727,9 +2670,17 @@ const PoolPick = enum {
     /// rule, distinct from every variable of the instance and from the other
     /// fills. Names the refs use in the same place come first
     /// (`assignRefNames`), then the first free `@vars` names
-    /// (`assignFreshNames`). Any other meta (a view binder) must come from
+    /// (`fillFromPool`). Any other meta (a view binder) must come from
     /// the child search.
     fresh,
+    /// A witness meta *erased* from a fully solved target, the invention
+    /// rung's last resort: a vacuous `@recover` body makes the leaf swap
+    /// `p[x ↦ ?t]` a no-op, and redex reduction can collapse `[x/?t]p` to `p`
+    /// when `x` is not free in `p`. The meta then dangles in the bindings, so
+    /// the concrete route sends the branch to validation with the witness
+    /// binder undeterminable. Such a witness is genuinely unconstrained; each
+    /// one the bindings or the view's still hold is filled like `shared`.
+    dangling,
 };
 
 /// Ground every unsolved meta of `raw_target` to a `@vars`-pool dummy per
@@ -2742,7 +2693,7 @@ const PoolPick = enum {
 /// tokens (generate.zig), reinterned by `internParsedExpr`, so no dependency
 /// bit is consumed however many slots request one. A meta whose sort has no
 /// acceptable pool token fails the branch. `tryCandidate` revalidates every
-/// fill.
+/// fill. Returns whether any meta needed a fill.
 fn tryPoolWitnesses(
     slot: *OpenSlot,
     raw_target: ExprId,
@@ -2750,45 +2701,53 @@ fn tryPoolWitnesses(
     view: ?types.ViewDecl,
     view_bindings: ?[]const ?ExprId,
     pick: PoolPick,
-) anyerror!void {
+) anyerror!bool {
     const theorem = &slot.ctx.candidate.theorem;
     var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.ctx.allocator);
+    defer unsolved.deinit(slot.ctx.context.allocator);
     try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
-    if (pick == .fresh) try collectSlotUnsolved(slot, unknowns, &unsolved);
-    if (unsolved.items.len == 0) return;
+    switch (pick) {
+        .shared => {},
+        .fresh => try collectSlotUnsolved(slot, unknowns, &unsolved),
+        .dangling => {
+            if (view_bindings) |vb| {
+                for (vb) |maybe| if (maybe) |b| try slot.store.collectUnsolved(theorem, b, &unsolved);
+            }
+            for (unknowns) |maybe| if (maybe) |b| try slot.store.collectUnsolved(theorem, b, &unsolved);
+        },
+    }
+    if (unsolved.items.len == 0) return false;
 
     const mark = slot.store.mark();
     defer slot.store.rollbackTo(mark);
     switch (pick) {
-        .shared => {
+        .shared, .dangling => {
             var taken = bindingDeps(slot, theorem);
-            for (unsolved.items) |meta_id| {
-                const meta = slot.store.info(meta_id) orelse return;
-                if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, boundAvoid(meta.kind, &taken))) return;
-            }
+            if (!try fillFromPool(slot, theorem, unsolved.items, &taken, false)) return true;
         },
         .fresh => {
-            const ref_names = try slot.ctx.allocator.alloc(ExprId, unsolved.items.len);
-            defer slot.ctx.allocator.free(ref_names);
+            var taken = bindingDeps(slot, theorem);
+            const ref_names = try slot.ctx.context.allocator.alloc(ExprId, unsolved.items.len);
+            defer slot.ctx.context.allocator.free(ref_names);
             if (try assignRefNames(slot, theorem, raw_target, unknowns, unsolved.items)) {
                 for (unsolved.items, ref_names) |meta_id, *name| name.* = slot.store.lookup(meta_id).?;
                 const before = slot.ctx.candidates.items.len;
                 if (slot.store.isFullySolved(theorem, raw_target)) {
                     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
                 }
-                if (slot.ctx.candidates.items.len != before) return;
+                if (slot.ctx.candidates.items.len != before) return true;
                 slot.store.rollbackTo(mark);
-                if (!try assignFreshNames(slot, theorem, unsolved.items)) return;
+                if (!try fillFromPool(slot, theorem, unsolved.items, &taken, true)) return true;
                 // The blind pick repeats the ref-named attempt.
                 for (unsolved.items, ref_names) |meta_id, name| {
                     if (slot.store.lookup(meta_id).? != name) break;
-                } else return;
-            } else if (!try assignFreshNames(slot, theorem, unsolved.items)) return;
+                } else return true;
+            } else if (!try fillFromPool(slot, theorem, unsolved.items, &taken, true)) return true;
         },
     }
-    if (!slot.store.isFullySolved(theorem, raw_target)) return;
+    if (!slot.store.isFullySolved(theorem, raw_target)) return true;
     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
+    return true;
 }
 
 /// Append the unsolved `.bound_choice` metas the slot's bindings and opened
@@ -2811,23 +2770,13 @@ fn collectSlotUnsolved(
     }
 }
 
-/// True when a `fresh_bound` slot's bindings or opened binders still hold an
-/// unsolved `.bound_choice` meta its (fully solved) target no longer
-/// mentions.
-fn freshMetasDangle(slot: *const OpenSlot, unknowns: []const ?ExprId) !bool {
-    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.ctx.allocator);
-    try collectSlotUnsolved(slot, unknowns, &unsolved);
-    return unsolved.items.len != 0;
-}
-
 /// The dependency bits of every variable the rule's bindings mention: what a
 /// fresh variable must avoid.
 fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
     var taken: u55 = 0;
     for (slot.ctx.bindings) |maybe| {
         const value = maybe orelse continue;
-        taken |= exprDeps(slot.ctx.context, theorem, value);
+        taken |= (theorem.exprDeps(value, .{}) catch 0);
     }
     return taken;
 }
@@ -2844,8 +2793,9 @@ fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
 /// variable those matches put in its place most often, ties going to the
 /// first seen. A name must still occur in no binding and differ from the
 /// other fills; a variable no ref names takes the first free `@vars` name
-/// (`assignPoolWitness`). Returns false, with nothing assigned, when no ref
-/// names any variable or one of them is not a `.bound_choice` meta.
+/// (`fillFromPool`). Returns false when no ref names any variable, one of
+/// them is not a `.bound_choice` meta, or one cannot be filled; the caller's
+/// rollback undoes any fills made before that.
 fn assignRefNames(
     slot: *OpenSlot,
     theorem: *TheoremContext,
@@ -2853,7 +2803,7 @@ fn assignRefNames(
     unknowns: []const ?ExprId,
     unsolved: []const PlaceholderId,
 ) !bool {
-    const allocator = slot.ctx.allocator;
+    const allocator = slot.ctx.context.allocator;
     for (unsolved) |meta_id| {
         const meta = slot.store.info(meta_id) orelse return false;
         if (meta.kind != .bound_choice) return false;
@@ -2895,12 +2845,7 @@ fn assignRefNames(
         named = true;
     }
     if (!named) return false;
-    for (unsolved) |meta_id| {
-        if (slot.store.lookup(meta_id) != null) continue;
-        const meta = slot.store.info(meta_id).?;
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, &taken)) return false;
-    }
-    return true;
+    return fillFromPool(slot, theorem, unsolved, &taken, true);
 }
 
 /// `assignRefNames`'s tally: which bound variable each ref subterm puts in
@@ -2933,7 +2878,7 @@ const RefNameTally = struct {
         for (self.parts.items) |part| {
             if (part == expr) return;
         }
-        try self.parts.append(self.slot.ctx.allocator, expr);
+        try self.parts.append(self.slot.ctx.context.allocator, expr);
         for (app.args) |arg| try self.collectParts(arg);
     }
 
@@ -2952,7 +2897,7 @@ const RefNameTally = struct {
             .app => |app| app,
             .variable, .placeholder => return,
         };
-        const allocator = self.slot.ctx.allocator;
+        const allocator = self.slot.ctx.context.allocator;
         if ((try self.seen.getOrPut(allocator, sub)).found_existing) return;
         const store = self.slot.store;
         for (self.parts.items) |part| {
@@ -2971,52 +2916,23 @@ const RefNameTally = struct {
     }
 };
 
-/// Give each of `unsolved` a `@vars` variable that occurs in no binding of
-/// the rule and differs from the other fills (`PoolPick.fresh`). False when
-/// one is not a `.bound_choice` meta or its sort has no such variable; the
-/// caller's rollback undoes any fills made before that.
-fn assignFreshNames(
+/// Fill each still unassigned meta of `metas` from the `@vars` pool, a
+/// `.bound_choice` one with a variable outside `taken` that then joins it
+/// (`boundAvoid`). With `require_bound`, every meta must be a `.bound_choice`
+/// one. False when one cannot be filled; the caller's rollback undoes the
+/// fills made before it.
+fn fillFromPool(
     slot: *OpenSlot,
     theorem: *TheoremContext,
-    unsolved: []const PlaceholderId,
+    metas: []const PlaceholderId,
+    taken: *u55,
+    require_bound: bool,
 ) !bool {
-    var taken = bindingDeps(slot, theorem);
-    for (unsolved) |meta_id| {
+    for (metas) |meta_id| {
+        if (slot.store.lookup(meta_id) != null) continue;
         const meta = slot.store.info(meta_id) orelse return false;
-        if (meta.kind != .bound_choice) return false;
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, &taken)) return false;
-    }
-    return true;
-}
-
-/// Collect witness metas that dangle in the slot's bindings after the open
-/// target came out fully solved (an erased witness: the instance does not
-/// mention it), and ground each from the `@vars` pool. Returns true iff at
-/// least one dangling meta existed and every one was grounded; on any failure
-/// the caller's rollback restores the store untouched.
-fn groundDanglingWitnessMetas(
-    slot: *OpenSlot,
-    unknowns: []const ?ExprId,
-    view_bindings: ?[]?ExprId,
-) !bool {
-    const theorem = &slot.ctx.candidate.theorem;
-    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
-    defer unsolved.deinit(slot.ctx.allocator);
-    if (view_bindings) |vb| {
-        for (vb) |maybe| {
-            const b = maybe orelse continue;
-            try slot.store.collectUnsolved(theorem, b, &unsolved);
-        }
-    }
-    for (unknowns) |maybe| {
-        const b = maybe orelse continue;
-        try slot.store.collectUnsolved(theorem, b, &unsolved);
-    }
-    if (unsolved.items.len == 0) return false;
-    var taken = bindingDeps(slot, theorem);
-    for (unsolved.items) |meta_id| {
-        const meta = slot.store.info(meta_id) orelse return false;
-        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, boundAvoid(meta.kind, &taken))) return false;
+        if (require_bound and meta.kind != .bound_choice) return false;
+        if (!try assignPoolWitness(slot, theorem, meta_id, meta.sort_name, boundAvoid(meta.kind, taken))) return false;
     }
     return true;
 }
@@ -3046,17 +2962,14 @@ fn assignPoolWitness(
     avoid: ?*u55,
 ) !bool {
     var pool = try PoolVars.init(
-        slot.ctx.allocator,
+        slot.ctx.context.allocator,
         slot.ctx.context.sort_vars,
         sort_name,
         theorem,
         slot.ctx.theorem_vars,
     );
     defer pool.deinit();
-    while (try pool.next()) |pool_var| {
-        if (avoid) |taken| {
-            if (!pool_var.avoids(taken.*)) continue;
-        }
+    while (try pool.nextAvoiding(if (avoid) |taken| taken.* else null)) |pool_var| {
         slot.store.assign(theorem, meta_id, pool_var.expr) catch continue;
         if (avoid) |taken| taken.* |= pool_var.deps;
         return true;
@@ -3075,10 +2988,23 @@ fn mintStoreMeta(
     return store.mint(theorem, sort_name, std.math.maxInt(u55), kind);
 }
 
-/// Set the candidate's explicit flag for one rule binder, returning the
-/// previous value for restoration (null when the flag array did not exist
-/// before — restoration then just clears the bit).
-fn setExplicitFlag(candidate: *ApplyCandidate, idx: usize) !?bool {
+/// A rule binder's explicit-rendering flag as `setExplicitFlag` set it, with
+/// what `restore` puts back.
+const ExplicitFlag = struct {
+    idx: usize,
+    /// The previous value; null when the flag array did not exist before, so
+    /// restoring just clears the bit.
+    prev: ?bool,
+
+    fn restore(self: ExplicitFlag, candidate: *ApplyCandidate) void {
+        const flags = candidate.explicit orelse return;
+        if (self.idx >= flags.len) return;
+        flags[self.idx] = self.prev orelse false;
+    }
+};
+
+/// Set the candidate's explicit flag for rule binder `idx`.
+fn setExplicitFlag(candidate: *ApplyCandidate, idx: usize) !ExplicitFlag {
     const flags = blk: {
         if (candidate.explicit) |flags| break :blk flags;
         const flags = try candidate.allocator.alloc(bool, candidate.bindings.len);
@@ -3086,20 +3012,9 @@ fn setExplicitFlag(candidate: *ApplyCandidate, idx: usize) !?bool {
         candidate.explicit = flags;
         break :blk flags;
     };
-    if (idx >= flags.len) return null;
-    const prev = flags[idx];
-    flags[idx] = true;
-    return prev;
-}
-
-fn restoreExplicitFlag(
-    candidate: *ApplyCandidate,
-    idx: usize,
-    prev: ?bool,
-) void {
-    const flags = candidate.explicit orelse return;
-    if (idx >= flags.len) return;
-    flags[idx] = prev orelse false;
+    if (idx >= flags.len) return .{ .idx = idx, .prev = null };
+    defer flags[idx] = true;
+    return .{ .idx = idx, .prev = flags[idx] };
 }
 
 /// Mark binder `idx`, just bound to `value` by an ACUI split or principal
@@ -3107,17 +3022,9 @@ fn restoreExplicitFlag(
 /// its own positional reading of the bag, which need not agree with the
 /// search's choice, least of all inside a nested inline application.
 /// A value holding a goal meta is not a choice the checker can take, so it
-/// stays unmarked. Returns what `restoreSplitChoice` needs to undo the mark,
-/// or null when nothing was marked.
-fn handSplitChoice(candidate: *ApplyCandidate, idx: usize, value: ?ExprId) !?HandedFlag {
+/// stays unmarked (null).
+fn handSplitChoice(candidate: *ApplyCandidate, idx: usize, value: ?ExprId) !?ExplicitFlag {
     const expr = value orelse return null;
     if (candidate.theorem.containsPlaceholder(expr)) return null;
-    return .{ .idx = idx, .prev = try setExplicitFlag(candidate, idx) };
-}
-
-const HandedFlag = struct { idx: usize, prev: ?bool };
-
-fn restoreSplitChoice(candidate: *ApplyCandidate, handed: ?HandedFlag) void {
-    const h = handed orelse return;
-    restoreExplicitFlag(candidate, h.idx, h.prev);
+    return try setExplicitFlag(candidate, idx);
 }

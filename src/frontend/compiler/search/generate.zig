@@ -179,6 +179,8 @@ const Driver = struct {
     /// `runPhaseLadder` next to the capability flags; keys the persisted
     /// failure memos below by the capability set they were recorded under.
     phase_index: usize = 0,
+    /// What the theory offers the ladder; fixed for the whole call.
+    gates: LadderGates,
     /// Cross-cell persisted failure memos (`GenerateOptions.
     /// persist_negative`, default on). Unlike the per-cell memos above,
     /// these survive the whole retry ladder: a genuinely-exhaustive
@@ -429,6 +431,10 @@ pub fn generateTopLevel(
         .stack_base = @frameAddress(),
         .derived = if (derived_pool) |*dpool| dpool else null,
         .fuel = .{ .remaining = options.fuel, .global = budget_ptr },
+        .gates = .{
+            .witness_pool = can_invent_witness,
+            .idempotent = AcuiBag.anyLaw(session.context.registry, AcuiBag.Law.isIdempotent),
+        },
         .has_acui = session.context.registry.acui_by_head.count() > 0,
         .has_comm_acui = AcuiBag.anyLaw(session.context.registry, AcuiBag.Law.isCommutative),
         .meta_dep_bans = MetaDepBans.init(session.allocator),
@@ -465,20 +471,14 @@ pub fn generateTopLevel(
         driver.persist_open_fail.deinit(driver.scratch);
     }
 
-    const gates = LadderGates{
-        .witness_pool = can_invent_witness,
-        .idempotent = AcuiBag.anyLaw(session.context.registry, AcuiBag.Law.isIdempotent),
-    };
-    const schedule = try buildSchedule(session.allocator, options.max_depth, gates);
+    const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
     defer session.allocator.free(schedule);
     var applications = std.ArrayListUnmanaged(RuleApplication){};
     var ladder = try runPhaseLadder(
         &driver,
         goal_expr,
         &applications,
-        budget_ptr,
         schedule,
-        gates,
     );
 
     // Phase 6: on a miss of the whole ladder, and only when the theory
@@ -527,9 +527,7 @@ pub fn generateTopLevel(
                 &driver,
                 goal_expr,
                 &applications,
-                budget_ptr,
                 schedule,
-                gates,
             );
         }
     }
@@ -555,9 +553,7 @@ pub fn generateTopLevel(
             &driver,
             goal_expr,
             &applications,
-            budget_ptr,
             schedule,
-            gates,
         );
     }
 
@@ -677,6 +673,8 @@ const LadderOutcome = enum { clean, exhausted, stopped };
 /// a phase capability: it is the last rung of `emitOpenTarget`'s slot-local
 /// witness ladder, on in every phase whenever the theory has a `@vars` pool.
 const Phase = struct {
+    /// What the phase adds, for the miss report.
+    name: []const u8,
     split: bool = false,
     retain_principal: bool = false,
     constrained_mp: bool = false,
@@ -698,12 +696,18 @@ const Phase = struct {
 /// A gated-off phase contributes neither its cells nor its capability to
 /// later phases: phase 5 retains principals only where phase 4 runs.
 const ladder_phases = [_]Phase{
-    .{},
-    .{ .split = true },
-    .{ .split = true, .requires = .witness_pool },
-    .{ .split = true, .retain_principal = true, .requires = .idempotent },
-    .{ .split = true, .retain_principal = true, .constrained_mp = true },
+    .{ .name = "non-splitting generation" },
+    .{ .name = "context splitting", .split = true },
+    .{ .name = "a retry of context splitting", .split = true, .requires = .witness_pool },
+    .{ .name = "principal retention", .split = true, .retain_principal = true, .requires = .idempotent },
+    .{ .name = "constrained modus ponens", .split = true, .retain_principal = true, .constrained_mp = true },
 };
+
+/// The name of ladder phase `phase_1based` (`SearchCounters.gen_last_phase`).
+pub fn phaseName(phase_1based: usize) []const u8 {
+    if (phase_1based == 0 or phase_1based > ladder_phases.len) return "generation";
+    return ladder_phases[phase_1based - 1].name;
+}
 
 // A persisted failure recorded under phase p covers re-solves under any
 // phase ≤ p (`persist*Covered`), which is sound only while each phase's
@@ -734,17 +738,18 @@ const LadderGates = struct {
     }
 };
 
-/// What a cell's outcomes mean. Any cell whose phase fuel runs dry retires
-/// that phase: its later cells are skipped and the rest of the ladder
-/// continues. A `tail` cell runs only while no `core` phase has retired.
-/// Core depths searched in full are what `gen_core_depth_done` reports.
-const Band = enum { core, tail };
-
-/// One (depth, phase) cell of the ladder schedule.
+/// One (depth, phase) cell of the ladder schedule. Any cell whose phase fuel
+/// runs dry retires that phase: its later cells are skipped and the rest of
+/// the ladder continues. A cell of a core phase (`core_phase_count`) belongs
+/// to the core; a tail cell runs only while no core phase has retired. Core
+/// depths searched in full are what `gen_core_depth_done` reports.
 const Cell = struct {
     phase: usize,
     depth: usize,
-    band: Band,
+
+    fn isCore(self: Cell) bool {
+        return self.phase < core_phase_count;
+    }
 };
 
 /// The ladder's cells in visit order: depth 1 of every phase, then the
@@ -759,17 +764,17 @@ fn buildSchedule(
     errdefer cells.deinit(allocator);
     for (1..max_depth + 1) |depth| {
         for (0..core_phase_count) |index| {
-            try appendCell(allocator, &cells, gates, index, depth, .core);
+            try appendCell(allocator, &cells, gates, index, depth);
         }
         if (depth == 1) {
             for (core_phase_count..ladder_phases.len) |index| {
-                try appendCell(allocator, &cells, gates, index, depth, .tail);
+                try appendCell(allocator, &cells, gates, index, depth);
             }
         }
     }
     for (core_phase_count..ladder_phases.len) |index| {
         for (2..max_depth + 1) |depth| {
-            try appendCell(allocator, &cells, gates, index, depth, .tail);
+            try appendCell(allocator, &cells, gates, index, depth);
         }
     }
     return cells.toOwnedSlice(allocator);
@@ -782,10 +787,9 @@ fn appendCell(
     gates: LadderGates,
     index: usize,
     depth: usize,
-    band: Band,
 ) !void {
     if (!gates.allows(ladder_phases[index])) return;
-    try cells.append(allocator, .{ .phase = index, .depth = depth, .band = band });
+    try cells.append(allocator, .{ .phase = index, .depth = depth });
 }
 
 /// Phases 1–3 (indices 0–2) form the depth-major core of the schedule;
@@ -800,10 +804,6 @@ const LadderState = struct {
     fuel: [ladder_phases.len]usize,
     /// Phases whose fuel ran dry; their later cells are skipped.
     retired: [ladder_phases.len]bool = @splat(false),
-    any_retired: bool = false,
-    /// A core phase retired, so the core miss is not clean: no further tail
-    /// cell runs.
-    core_retired: bool = false,
     /// A core cell hit the node cap, so it was not searched in full: its
     /// depth and every deeper one stop counting toward
     /// `gen_core_depth_done`, as after a retired phase.
@@ -817,8 +817,17 @@ const LadderState = struct {
     }
 
     fn runs(self: *const LadderState, cell: Cell) bool {
-        return !self.retired[cell.phase] and
-            (cell.band == .core or !self.core_retired);
+        return !self.retired[cell.phase] and (cell.isCore() or !self.coreRetired());
+    }
+
+    fn anyRetired(self: *const LadderState) bool {
+        return std.mem.indexOfScalar(bool, &self.retired, true) != null;
+    }
+
+    /// A core phase retired, so the core miss is not clean: no further tail
+    /// cell runs.
+    fn coreRetired(self: *const LadderState) bool {
+        return std.mem.indexOfScalar(bool, self.retired[0..core_phase_count], true) != null;
     }
 };
 
@@ -899,35 +908,29 @@ fn runPhaseLadder(
     driver: *Driver,
     goal_expr: ExprId,
     applications: *std.ArrayListUnmanaged(RuleApplication),
-    budget_ptr: ?*types.GlobalBudget,
     schedule: []const Cell,
-    gates: LadderGates,
 ) anyerror!LadderOutcome {
     var state = LadderState.init(driver.options);
     for (schedule, 0..) |cell, index| {
         if (state.runs(cell)) {
-            switch (try runCell(driver, &state, gates, cell, goal_expr, applications, budget_ptr)) {
+            switch (try runCell(driver, &state, cell, goal_expr, applications)) {
                 .miss => {},
                 .found => return .clean,
-                .fuel => {
-                    state.retired[cell.phase] = true;
-                    state.any_retired = true;
-                    if (cell.band == .core) state.core_retired = true;
-                },
+                .fuel => state.retired[cell.phase] = true,
                 .stop => return .stopped,
             }
         }
         const next: ?Cell = if (index + 1 < schedule.len) schedule[index + 1] else null;
-        const ends_core_depth = cell.band == .core and
-            (next == null or next.?.band != .core or next.?.depth != cell.depth);
-        if (ends_core_depth and !state.core_retired and !state.core_capped) {
+        const ends_core_depth = cell.isCore() and
+            (next == null or !next.?.isCore() or next.?.depth != cell.depth);
+        if (ends_core_depth and !state.coreRetired() and !state.core_capped) {
             if (driver.counters) |c| {
                 c.gen_core_depth_done = @max(c.gen_core_depth_done, cell.depth);
             }
         }
     }
     // A retired phase means the miss is not clean.
-    return if (state.any_retired) .exhausted else .clean;
+    return if (state.anyRetired()) .exhausted else .clean;
 }
 
 /// How one ladder cell ended: it ran in full without a proof (`miss`), it
@@ -940,25 +943,23 @@ const CellEnd = enum { miss, found, fuel, stop };
 fn runCell(
     driver: *Driver,
     state: *LadderState,
-    gates: LadderGates,
     cell: Cell,
     goal_expr: ExprId,
     applications: *std.ArrayListUnmanaged(RuleApplication),
-    budget_ptr: ?*types.GlobalBudget,
 ) anyerror!CellEnd {
     const phase = ladder_phases[cell.phase];
     driver.hook.allow_split = phase.split;
-    driver.hook.allow_invent_witness = gates.witness_pool;
-    driver.hook.allow_retain_principal = phase.retain_principal and gates.idempotent;
+    driver.hook.allow_invent_witness = driver.gates.witness_pool;
+    driver.hook.allow_retain_principal = phase.retain_principal and driver.gates.idempotent;
     driver.hook.allow_constrained_mp = phase.constrained_mp;
     driver.phase_index = cell.phase;
-    driver.fuel = .{ .remaining = state.fuel[cell.phase], .global = budget_ptr };
+    driver.fuel.remaining = state.fuel[cell.phase];
     const trips_at_start = driver.node_cap_trips;
     const end = try runDepthPass(driver, goal_expr, cell.depth, applications);
     state.fuel[cell.phase] = driver.fuel.remaining;
     if (driver.node_cap_trips != trips_at_start) {
         if (driver.counters) |c| c.gen_node_capped_passes += 1;
-        if (cell.band == .core) state.core_capped = true;
+        if (cell.isCore()) state.core_capped = true;
     }
     return end;
 }
@@ -2249,4 +2250,49 @@ fn applicationUsesInlineApp(app: RuleApplication) bool {
         }
     }
     return false;
+}
+
+fn expectSchedule(max_depth: usize, gates: LadderGates, expected: []const [2]usize) !void {
+    const schedule = try buildSchedule(std.testing.allocator, max_depth, gates);
+    defer std.testing.allocator.free(schedule);
+    try std.testing.expectEqual(expected.len, schedule.len);
+    for (expected, schedule) |want, cell| {
+        try std.testing.expectEqual(want[0], cell.phase);
+        try std.testing.expectEqual(want[1], cell.depth);
+    }
+}
+
+test "buildSchedule runs depth 1 of every phase, the core depth-major, then the tails" {
+    // {phase index, depth}
+    try expectSchedule(3, .{ .witness_pool = true, .idempotent = true }, &.{
+        .{ 0, 1 }, .{ 1, 1 }, .{ 2, 1 }, .{ 3, 1 }, .{ 4, 1 },
+        .{ 0, 2 }, .{ 1, 2 }, .{ 2, 2 }, .{ 0, 3 }, .{ 1, 3 },
+        .{ 2, 3 }, .{ 3, 2 }, .{ 3, 3 }, .{ 4, 2 }, .{ 4, 3 },
+    });
+}
+
+test "buildSchedule leaves out the phases the theory cannot run" {
+    try expectSchedule(2, .{ .witness_pool = false, .idempotent = false }, &.{
+        .{ 0, 1 }, .{ 1, 1 }, .{ 4, 1 },
+        .{ 0, 2 }, .{ 1, 2 }, .{ 4, 2 },
+    });
+}
+
+test "a retired core phase stops the tails; a retired tail phase stops only itself" {
+    var state = LadderState{ .fuel = @splat(0) };
+    try std.testing.expect(!state.anyRetired());
+    try std.testing.expect(state.runs(.{ .phase = 4, .depth = 2 }));
+
+    state.retired[3] = true;
+    try std.testing.expect(state.anyRetired());
+    try std.testing.expect(!state.coreRetired());
+    try std.testing.expect(!state.runs(.{ .phase = 3, .depth = 2 }));
+    try std.testing.expect(state.runs(.{ .phase = 4, .depth = 2 }));
+    try std.testing.expect(state.runs(.{ .phase = 1, .depth = 3 }));
+
+    state.retired[1] = true;
+    try std.testing.expect(state.coreRetired());
+    try std.testing.expect(!state.runs(.{ .phase = 1, .depth = 3 }));
+    try std.testing.expect(state.runs(.{ .phase = 0, .depth = 3 }));
+    try std.testing.expect(!state.runs(.{ .phase = 4, .depth = 2 }));
 }

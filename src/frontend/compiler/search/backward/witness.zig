@@ -58,7 +58,7 @@ pub fn collectDomainMembers(
 }
 
 fn concreteMember(_: void, theorem: *const TheoremContext, member: ExprId) bool {
-    return exprIsConcrete(theorem, member);
+    return !theorem.containsPlaceholder(member);
 }
 
 /// Append the distinct members of every ACUI region in `expr` that `keep`
@@ -125,21 +125,6 @@ fn appendDomainMember(
     if (count.* >= buf.len) return;
     buf[count.*] = member;
     count.* += 1;
-}
-
-/// No placeholder leaf at all — neither a live meta nor a standard
-/// placeholder. Domain values must be plain concrete expressions.
-fn exprIsConcrete(theorem: *const TheoremContext, expr: ExprId) bool {
-    return switch (theorem.interner.node(expr).*) {
-        .variable => true,
-        .placeholder => false,
-        .app => |app| blk: {
-            for (app.args) |arg| {
-                if (!exprIsConcrete(theorem, arg)) break :blk false;
-            }
-            break :blk true;
-        },
-    };
 }
 
 /// Collect the app-rooted subterms of `target` that contain at least one

@@ -3,12 +3,12 @@ const std = helpers.std;
 const types = helpers.types;
 const fixture_mod = helpers.fixture_mod;
 const backtrack = helpers.backtrack;
-const prune = helpers.prune;
 const semantic = helpers.semantic;
 const abstract_prune = helpers.abstract_prune;
 const context_prune = helpers.context_prune;
 const seed = helpers.seed;
 const acui = helpers.acui;
+const def_match = helpers.def_match;
 const Witness = helpers.Witness;
 const MetaStore = helpers.MetaStore;
 const TemplateExpr = helpers.TemplateExpr;
@@ -891,7 +891,7 @@ test "ACUI member prune does not count a placeholder member" {
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
     bindings[0] = g;
-    try std.testing.expect(!prune.acuiBoundMembersPlausible(
+    try std.testing.expect(!acui.acuiBoundMembersPlausible(
         &context,
         &theorem,
         rule.concl,
@@ -905,7 +905,7 @@ test "ACUI member prune does not count a placeholder member" {
     const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
     const open_ctx = try theorem.interner.internApp(join_id, &.{ nd.args[0], meta });
     const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
-    try std.testing.expect(prune.acuiBoundMembersPlausible(
+    try std.testing.expect(acui.acuiBoundMembersPlausible(
         &context,
         &theorem,
         rule.concl,
@@ -944,7 +944,7 @@ test "ACUI member prune keeps a required member an open meta may supply" {
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
     bindings[0] = g;
-    try std.testing.expect(!prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, bare, bindings));
+    try std.testing.expect(!acui.acuiBoundMembersPlausible(&context, &theorem, rule.concl, bare, bindings));
 
     var store = MetaStore.init(allocator, &fixture.env);
     defer store.deinit();
@@ -952,7 +952,7 @@ test "ACUI member prune keeps a required member an open meta may supply" {
     const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
     const open_ctx = try theorem.interner.internApp(join_id, &.{ g, meta });
     const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
-    try std.testing.expect(prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, open_goal, bindings));
+    try std.testing.expect(acui.acuiBoundMembersPlausible(&context, &theorem, rule.concl, open_goal, bindings));
 }
 
 test "ACUI member prunes keep a def leaf that unfolds to the unit" {
@@ -979,7 +979,7 @@ test "ACUI member prunes keep a def leaf that unfolds to the unit" {
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
 
-    try std.testing.expect(prune.acuiBoundMembersPlausible(&context, &theorem, rule.concl, goal, bindings));
+    try std.testing.expect(acui.acuiBoundMembersPlausible(&context, &theorem, rule.concl, goal, bindings));
     try std.testing.expect(!acui.acuiBoundMembersDeepMismatch(
         &context,
         &theorem,
@@ -1348,7 +1348,7 @@ fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
     bindings[try ruleArgIndex(rule, "g")] = theorem.interner.node(ctx).app.args[0];
-    prune.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
+    def_match.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
     const a = bindings[try ruleArgIndex(rule, "a")] orelse return null;
     const a_id = theorem.interner.node(a).app.term_id;
     return fixture.env.terms.items[a_id].name;
@@ -1413,7 +1413,7 @@ test "extractHypPartialBindings aligns an ordered context entry by entry" {
     for ([_]ExprId{ spelled, folded }) |ref| {
         const bindings = try allocator.alloc(?ExprId, rule.args.len);
         @memset(bindings, null);
-        prune.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
+        def_match.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
 
         try std.testing.expectEqual(@as(?ExprId, expected_g), bindings[0]);
         try std.testing.expectEqual(@as(?ExprId, m_has.args[0]), bindings[1]);
@@ -1485,7 +1485,7 @@ test "ACUI member prune allows transparent def matching variable member" {
     defer candidate.deinit();
     const rule = &fixture.env.rules.items[@intCast(rule_id)];
 
-    try std.testing.expect(prune.acuiBoundMembersPlausible(
+    try std.testing.expect(acui.acuiBoundMembersPlausible(
         &context,
         &candidate.theorem,
         rule.concl,
@@ -1555,7 +1555,7 @@ test "closed-region prune refutes a ref context unequal to a bound context binde
     const plausible = struct {
         fn f(ctx: *const Context, th: *const TheoremContext, t: TemplateExpr, bound: ExprId, ref: ExprId) bool {
             const bindings = [_]?ExprId{bound};
-            return prune.acuiClosedRegionPlausible(ctx, th, t, ref, &bindings);
+            return acui.acuiClosedRegionPlausible(ctx, th, t, ref, &bindings);
         }
     }.f;
 
@@ -1608,7 +1608,7 @@ test "exprUnifiesModuloMeta treats search metas as wildcards but prunes rigid cl
     const p_d = try theorem.interner.internApp(term_p, &.{d});
     const q_c = try theorem.interner.internApp(term_q, &.{c});
 
-    const unifies = prune.exprUnifiesModuloMeta;
+    const unifies = acui.exprUnifiesModuloMeta;
     // Meta absorbs the difference — buried (either side) or bare.
     try std.testing.expect(unifies(&theorem, p_meta, p_c));
     try std.testing.expect(unifies(&theorem, p_c, p_meta));
