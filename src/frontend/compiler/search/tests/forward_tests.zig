@@ -159,11 +159,12 @@ test "forward join grounds a nested family meta into a concrete fact" {
     );
     defer suggestions.deinit();
 
-    // The witness `c` must ride the join into the nested family instance: the
-    // recipe renders `genimp (x := $ c $)` (the pin), wrapped by `mp` and `qr`.
+    // The witness `c` must ride the join into the nested family instance. The
+    // checker reads it back from `#2` through `mp`'s hint, so the recipe
+    // prints no pin: `qr [mp [genimp [#1], #2]]`.
     var found = false;
     for (suggestions.items) |item| {
-        if (std.mem.indexOf(u8, item.replacement, "genimp (x := $ c $)") != null and
+        if (std.mem.indexOf(u8, item.replacement, "genimp [#1]") != null and
             std.mem.indexOf(u8, item.replacement, "mp ") != null)
         {
             found = true;

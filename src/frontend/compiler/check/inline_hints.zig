@@ -463,6 +463,12 @@ fn scanAcuiSpine(
 /// splitting happens here: the open context becomes a wildcard placeholder, not
 /// an enumeration of candidate members (that lives only in search-side
 /// `backward/split.zig`).
+///
+/// After the probe and the `@view` pass, a hint still missing on a concrete
+/// goal comes from the goal alone, each binder it leaves open a line hole:
+/// `mp [sep_intro_imp [#1], ex_intro [l1]]` over `y ∈ image f X B` gives
+/// `sep_intro_imp` the hint `‹hole› → y ∈ image f X B`, though neither child
+/// can be checked before the other fixes `mp`'s `a`.
 pub fn fillHoleyInlineHints(
     self: *CompilerContext,
     context: *const RuleApplyContext,
@@ -503,6 +509,19 @@ pub fn fillHoleyInlineHints(
         theorem,
         partial_bindings,
         expected_refs,
+    );
+    // Last: the view pass fills only null hints, and a view rule's literal
+    // premise (`g ⊢ [x/‹hole›] p`) would hide the view premise it reads.
+    try fillHintsFromGoal(
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        rule,
+        theorem,
+        partial_bindings,
+        expected_refs,
+        .concrete,
     );
 }
 
@@ -567,15 +586,53 @@ fn fillRuleHoleyInlineHints(
     // it with holes as wildcards instead: a binder facing a holey subterm
     // takes that subterm, placeholders and all, so the minor still sees the
     // visible part (`Q` in `Q ∨ P ‹hole›`).
-    const bindings = try holeyGoalBindings(
+    try fillHintsFromGoal(
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        rule,
+        theorem,
+        partial_bindings,
+        expected_refs,
+        .holey,
+    );
+}
+
+const GoalKind = enum { holey, concrete };
+
+/// Fill each still-missing hint a minor wants from `rule`'s bindings against
+/// the goal, an open binder becoming a line hole. `.holey` reads a holey goal
+/// with its holes as wildcards; `.concrete` reads a concrete goal, so a minor
+/// whose own refs cannot pin it still sees the parts the goal fixes
+/// (`‹hole› → y ∈ image f X B` for `mp`'s first premise).
+fn fillHintsFromGoal(
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    rule: *const RuleDecl,
+    theorem: *TheoremContext,
+    partial_bindings: []const ?ExprId,
+    expected_refs: []?ExprId,
+    kind: GoalKind,
+) !void {
+    const parent_acui_rest = hasAcuiRestBinder(context.registry, rule, application);
+    const missing = for (application.refs, expected_refs) |ref, hint| {
+        if (hint == null and
+            wantsHoleyHint(context.env, context.registry, parent_acui_rest, ref)) break true;
+    } else false;
+    if (!missing) return;
+    const bindings = try goalBindings(
         context,
         rule,
         theorem,
         line_assertion,
         expected_conclusion_hint,
         partial_bindings,
+        kind,
     ) orelse return;
-    defer allocator.free(bindings);
+    defer context.allocator.free(bindings);
     for (application.refs, expected_refs, rule.hyps) |ref, *hint, hyp| {
         if (hint.* != null or
             !wantsHoleyHint(context.env, context.registry, parent_acui_rest, ref)) continue;
@@ -610,26 +667,29 @@ fn mintHintHole(
     return theorem.addLineHolePlaceholder(sort_name);
 }
 
-/// `rule`'s bindings from a holey goal, or null when the goal is not holey or
-/// its visible structure does not match the conclusion. Caller owns the result.
-fn holeyGoalBindings(
+/// `rule`'s bindings from a goal of `kind`, or null when the goal is of the
+/// other kind or its visible structure does not match the conclusion. Caller
+/// owns the result.
+fn goalBindings(
     context: *const RuleApplyContext,
     rule: *const RuleDecl,
     theorem: *TheoremContext,
     line_assertion: LineAssertion,
     expected_conclusion_hint: ?ExprId,
     partial_bindings: []const ?ExprId,
+    kind: GoalKind,
 ) !?[]?ExprId {
     const goal = if (expected_conclusion_hint) |hint| blk: {
-        if (!isHoleyGoalHint(theorem, hint)) return null;
+        const holey = isHoleyGoalHint(theorem, hint);
+        if (holey != (kind == .holey)) return null;
         break :blk hint;
     } else switch (line_assertion) {
-        .holey => |holey| (try Holes.internWithLineHoles(
-            theorem,
-            context.env,
-            holey,
-        )) orelse return null,
-        .concrete, .implicit_whole_conclusion => return null,
+        .holey => |holey| if (kind == .holey)
+            (try Holes.internWithLineHoles(theorem, context.env, holey)) orelse return null
+        else
+            return null,
+        .concrete => |expr| if (kind == .concrete) expr else return null,
+        .implicit_whole_conclusion => return null,
     };
     const bindings = try context.allocator.dupe(?ExprId, partial_bindings);
     if (!try matchTemplateHoley(theorem, context.registry, rule.concl, goal, bindings, .bind)) {

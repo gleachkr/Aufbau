@@ -1,0 +1,7 @@
+imp_id
+------
+l1: $ p -> p $ by mp [bi1 [], biid []]
+
+self_imp_id
+-----------
+l1: $ self_imp p $ by mp [bi1 [], biid []]

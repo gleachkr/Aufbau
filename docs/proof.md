@@ -503,6 +503,19 @@ conclusion as an extra inference constraint. If the hinted attempt fails,
 the child falls back to ordinary inference from its own rule name,
 bindings, refs, and metadata.
 
+The hint may be partial. When neither the parent conclusion nor the refs
+to the child's left fix a parent variable the hypothesis mentions, the
+child still gets the rest of the hypothesis, with a hole in each such
+place. In
+
+```text
+l1: $ p -> p $ by mp [bi1 [], biid []]
+```
+
+`mp`'s `a` is open until a child is checked, so `bi1` gets the hint
+`‹hole› -> (p -> p)` and reads its own variables from it. `biid` is then
+checked against `p <-> p`, from `bi1`'s conclusion.
+
 This is still not global proof search. The parent does not backtrack
 over child choices, and the child must still elaborate to one concrete
 hidden line before the parent application can finish. After that, the

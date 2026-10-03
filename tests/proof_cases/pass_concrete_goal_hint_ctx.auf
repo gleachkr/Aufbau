@@ -1,0 +1,7 @@
+mp_ax
+-----
+l1: $ p , p -> q |- q $ by imp_elim [ax [], ax []]
+
+mp_weak
+-------
+l1: $ p , p -> q |- q $ by imp_elim [weak [#1], ax []]

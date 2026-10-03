@@ -125,6 +125,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   found 26 of the missed proofs, against 10 for the old advice, and every
   proof the old advice found. In the additive FOL example it found all 8
   misses, most of them proofs just deeper than the depth limit.
+- `auto?` suggestions print fewer explicit bindings, since the checker now
+  infers more of them: `mp [bi1 [], biid []]` in place of
+  `mp (p := $ p <-> p $) [bi1 [], biid []]`.
 
 ### Fixed
 
@@ -167,6 +170,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   `(R \/ Q) -> P c`, `$ _wff $ by mp [#1, or_r [q []]]` now checks. Before,
   `or_r` expected only a hole, so its `a` could not be determined, though
   the same proof checked with the line written out.
+- On a concrete line, an inline sub-proof now gets the part of its premise
+  the line fixes even when a rule variable in it is still open, with a hole
+  in that place. `$ p -> p $ by mp [bi1 [], biid []]` now checks: `bi1`
+  gets `‹hole› -> (p -> p)`. Before, `mp`'s `a` was open until a child was
+  checked and each child needed the other's `a`, so `bi1`'s variables could
+  not be determined without `mp (a := $ p <-> p $)`.
+- An inline sub-proof solved against a goal with a hole in it now keeps to
+  the goal's visible structure around the hole. `$ p , p -> q |- q $ by
+  imp_elim [ax [], ax []]` now checks. Before, the first `ax` took `a := p`
+  from the context, though its goal `p , p -> q |- ‹hole› -> q` needs a
+  member of the shape `_ -> q`.
 - A holey line whose visible parts match the rule only after unfolding a
   definition now checks. With `img f B` defined as `sep y B (R f y)`,
   `$ _wff -> c e. img f B $ by sep_in_imp [#1]` failed because the rule's

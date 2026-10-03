@@ -1,0 +1,54 @@
+-- A concrete line's hint for an inline sub-proof shows the context too.
+-- In `imp_elim [ax [], ax []]` over `p , p -> q |- q`, the first `ax`
+-- gets `p , p -> q |- ‹hole› -> q`: its `a` must be the member of the
+-- shape `_ -> q`, though `p` would leave the smaller remainder. In
+-- `imp_elim [weak [#1], ax []]`, the hint's context fixes `weak`'s `h`.
+
+import "lib/iff.mm0";
+
+sort ctx;
+
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($E$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (a: wff): ctx;
+coercion hyp: wff > ctx;
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $|-$ prec 0;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (E , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ (g |- a) <-> (h |- b) $;
+
+axiom ax (g: ctx) (a: wff): $ g , a |- a $;
+axiom imp_elim (g: ctx) (a b: wff):
+  $ g |- a -> b $ > $ g |- a $ > $ g |- b $;
+axiom weak (g h: ctx) (a: wff): $ g |- a $ > $ g , h |- a $;
+
+theorem mp_ax (p q: wff): $ p , p -> q |- q $;
+theorem mp_weak (p q: wff): $ p -> q |- p -> q $ > $ p , p -> q |- q $;

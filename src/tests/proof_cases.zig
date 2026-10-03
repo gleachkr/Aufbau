@@ -339,6 +339,10 @@ const proof_cases = [_]ProofCase{
     // On a holey line, the sibling refs to an inline sub-proof's left fix
     // the variables its hint needs.
     .{ .stem = "pass_hole_sibling_hint", .outcome = .pass },
+    // On a concrete line, an inline sub-proof its refs and left siblings
+    // cannot pin gets the part of its premise the line fixes.
+    .{ .stem = "pass_concrete_goal_hint", .outcome = .pass },
+    .{ .stem = "pass_concrete_goal_hint_ctx", .outcome = .pass },
     // A holey line or inline hint whose visible parts match the rule only
     // through a definition, with the hole beside it or under it
     // (`fail_hole_def_unfold_conflict` when a visible part disagrees).

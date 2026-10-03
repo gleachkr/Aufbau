@@ -344,6 +344,9 @@ pub const Solver = struct {
             );
             states = try self.materializeMatchStates(states.items, .rule);
             states = try self.finalizeStructuralStates(states.items, .rule);
+            if (conclusion == .holey) {
+                states = try self.keepStatesFittingHint(states.items, conclusion.holey);
+            }
         }
 
         // The result and ambiguity report must outlive the arena, so build them
@@ -639,6 +642,57 @@ pub const Solver = struct {
             states = next;
         }
         return try states.toOwnedSlice(self.allocator);
+    }
+
+    /// Drop each complete branch whose conclusion contradicts the visible
+    /// structure of the holey `hint`. `matchHoleyExpr` lets a binder facing
+    /// a holey subterm take nothing from it, so against `p , p → q ⊢ ‹hole› → q`
+    /// a branch can split `ax`'s `g , a ⊢ a` as `a := p`, which the visible
+    /// `→ q` rules out.
+    fn keepStatesFittingHint(
+        self: *Solver,
+        states: []const BranchState,
+        hint: ExprId,
+    ) anyerror!std.ArrayListUnmanaged(BranchState) {
+        const bindings = try self.allocator.alloc(ExprId, self.rule.args.len);
+        var next = std.ArrayListUnmanaged(BranchState){};
+        for (states) |state| {
+            const complete = for (state.rule_bindings, bindings) |binding, *slot| {
+                slot.* = binding orelse break false;
+            } else true;
+            if (complete) {
+                const concl = try self.theorem.instantiateTemplate(self.rule.concl, bindings);
+                if (!fitsHoleySkeleton(self.theorem, self.registry, concl, hint)) continue;
+            }
+            try next.append(self.allocator, state);
+        }
+        if (next.items.len == 0) {
+            self.failure = .{ .region = .conclusion, .actual = null };
+            return error.UnifyMismatch;
+        }
+        return next;
+    }
+
+    /// True unless `expr` and `hint` differ at a head both show: a hole
+    /// matches anything, and a hole-free part was matched already. Under an
+    /// ACUI combiner members line up only modulo order, so it is not checked.
+    fn fitsHoleySkeleton(
+        theorem: *const TheoremContext,
+        registry: *const RewriteRegistry,
+        expr: ExprId,
+        hint: ExprId,
+    ) bool {
+        if (expr == hint or !theorem.containsPlaceholder(hint)) return true;
+        const hint_node = theorem.interner.node(hint);
+        if (hint_node.* != .app) return true;
+        const node = theorem.interner.node(expr);
+        if (node.* != .app or node.app.term_id != hint_node.app.term_id or
+            node.app.args.len != hint_node.app.args.len) return false;
+        if (registry.hasStructuralCombiner(hint_node.app.term_id)) return true;
+        for (node.app.args, hint_node.app.args) |arg, hint_arg| {
+            if (!fitsHoleySkeleton(theorem, registry, arg, hint_arg)) return false;
+        }
+        return true;
     }
 
     pub fn argInfosForSpace(

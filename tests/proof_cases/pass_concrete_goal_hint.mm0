@@ -1,0 +1,22 @@
+-- On a concrete line, an inline sub-proof whose rule variables neither
+-- its own refs nor its left siblings fix still gets the part of its
+-- premise the line fixes. In `mp [bi1 [], biid []]` over `p -> p`, `mp`'s
+-- `a` is open until a child is checked, and each child needs the other's
+-- `a`; `bi1` gets the hint `‹hole› -> (p -> p)`, which fixes its own.
+
+delimiter $ ( ) $;
+provable sort wff;
+term p: wff;
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term iff (a b: wff): wff;
+infixl iff: $<->$ prec 20;
+def self_imp (a: wff): wff = $ a -> a $;
+
+axiom mp (a b: wff): $ a -> b $ > $ a $ > $ b $;
+axiom bi1 (a b: wff): $ (a <-> b) -> (a -> b) $;
+axiom biid (a: wff): $ a <-> a $;
+
+theorem imp_id: $ p -> p $;
+-- The line folds a definition the hint's visible part must see through.
+theorem self_imp_id: $ self_imp p $;

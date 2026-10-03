@@ -464,7 +464,7 @@ const scenarios = [_]Scenario{
         .marker = "auto?",
         .expected_replacement = "imp_intro [and_intro " ++
             "(G := $ p ∧ q $, H := $ p ∧ q $) " ++
-            "[and_elim_r (p := $ p $) [ax []], and_elim_l (q := $ q $) [ax []]]]",
+            "[and_elim_r [ax []], and_elim_l [ax []]]]",
         .generate = .{ .enabled = true },
     },
     .{
@@ -863,7 +863,7 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/proof_cases/zermelo_hilbert.mm0",
         .proof_path = "tests/search_bench_cases/zh_imp_id_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "mp (p := $ p <-> p $) [bi1 [], biid []]",
+        .expected_replacement = "mp [bi1 [], biid []]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{

@@ -178,8 +178,9 @@ l1: $ (Q \/ P _obj) /\ P c $ by and_intro [or_r [pc []], pc []]
 Here `or_r` expects `Q \/ P ‹hole›`, reads `a := Q` from the visible
 part, and its own premise `pc` gives `b := P c`. The sub-proof solves
 against the goal as against a holey line, with the structural solver: a
-rule variable facing a part with a hole takes nothing from it, and the
-hole-free parts match as usual. Meta holes spend no dependency slot,
+rule variable facing a part with a hole takes nothing from it, though
+the value it gets elsewhere must fit that part's visible structure, and
+the hole-free parts match as usual. Meta holes spend no dependency slot,
 so a theorem can hold any number of holey lines. A hole the proof does
 not determine still fails: `or_l [q []]` in place of `or_r [pc []]`
 leaves `or_l`'s `b` open (`MissingBinderAssignment`).
