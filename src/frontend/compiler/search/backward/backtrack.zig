@@ -2782,7 +2782,12 @@ fn tryPoolWitnesses(
                 for (unsolved.items, ref_names) |meta_id, name| {
                     if (slot.store.lookup(meta_id).? != name) break;
                 } else return true;
-            } else if (!try fillFromPool(slot, theorem, unsolved.items, &taken, true)) return true;
+            } else {
+                // A false return can leave some names assigned; the blind
+                // pick names every variable afresh.
+                slot.store.rollbackTo(mark);
+                if (!try fillFromPool(slot, theorem, unsolved.items, &taken, true)) return true;
+            }
         },
     }
     if (!slot.store.isFullySolved(theorem, raw_target)) return true;
@@ -2834,9 +2839,8 @@ fn bindingDeps(slot: *const OpenSlot, theorem: *const TheoremContext) u55 {
 /// first seen. A name must still occur in no binding and differ from the
 /// other fills; a variable no ref names takes the first free `@vars` name
 /// (`fillFromPool`). Returns false when no ref names any variable, one of
-/// them is not a `.bound_choice` meta, or one cannot be filled. Fills made
-/// before a false return stay in the store; the pool fill skips them, and
-/// validation rejects a collision.
+/// them is not a `.bound_choice` meta, or one cannot be filled; the caller's
+/// rollback undoes any fills made before that.
 fn assignRefNames(
     slot: *OpenSlot,
     theorem: *TheoremContext,
