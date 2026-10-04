@@ -378,10 +378,14 @@ pub const guards = [_]FrontierGuard{
     // `range_sub`): phase 5 must fill `imp_elim`'s major before its wildcard
     // minor (`HypPlan.defer_wildcard`), and the major's child must read
     // `all_elim`'s `t` off the goal hint `?G ⊢ ?p → y ∈ B`
-    // (`withRecoveredFromHint`). `inter_subsets_elim` adds the read-back
+    // (`withRecoveredFromHint`). `inter_subsets_probe` (zermelo's
+    // `inter_subsets_elim` on the rules its proof uses) adds the read-back
     // through a definition: `sep_elim_right [#1]` proves `in_all_subsets S x`
-    // for the open `∀ ?x ?p` (`forward.solveCorrespondenceUnfolding`).
-    // church `andR1` needs only the read-back.
+    // for the open `∀ ?x ?p` (`forward.solveCorrespondenceUnfolding`). In the
+    // full zermelo theory its many membership lemmas now go before
+    // `imp_elim` and spend the node budget, so the probe keeps the read-back
+    // guarded apart from candidate order. church `andR1` needs only the
+    // read-back.
     .{
         .filter = "range_sub_elim",
         .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
@@ -389,9 +393,9 @@ pub const guards = [_]FrontierGuard{
         .mode = "depth",
     },
     .{
-        .filter = "inter_subsets_elim",
-        .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
-            "tests/search_bench_cases/zermelo_frontier.auf",
+        .filter = "inter_subsets_probe",
+        .files = "tests/search_bench_cases/inter_subsets_probe.mm0:" ++
+            "tests/search_bench_cases/inter_subsets_probe.auf",
         .mode = "depth",
     },
     .{

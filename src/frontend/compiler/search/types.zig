@@ -174,6 +174,8 @@ pub const ApplyCandidate = struct {
     /// so the parent's re-check never has to re-infer them from an
     /// ACUI-reassociated hint (the nested-inline binder-extraction gap).
     internal_child: bool = false,
+    /// Generation order: rigid conclusion structure that matched the goal.
+    match_specificity: u16 = 0,
 
     pub fn deinit(self: *ApplyCandidate) void {
         self.allocator.free(self.bindings);

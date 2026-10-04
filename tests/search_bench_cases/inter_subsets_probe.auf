@@ -1,0 +1,6 @@
+inter_subsets_probe
+-------------------
+
+l1: $ G ⊢ in_all_subsets S x $ by sep_elim_right [#1]
+l2: $ G ⊢ X ∈ S → x ∈ X $ by all_elim [l1]
+l3: $ G , H ⊢ x ∈ X $ by imp_elim [l2, #2]

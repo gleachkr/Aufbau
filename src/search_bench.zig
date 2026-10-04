@@ -762,9 +762,8 @@ const scenarios = [_]Scenario{
         .expected_replacement = "nat_ind_elim [l7, l14, id_trans_ty [l18, l20, suc_intro [l23], " ++
             "add_ty [l15, l17, l19], l21, id_trans_ty [l18, suc_intro " ++
             "[l23], weaken [l7, suc_intro [l6]], add_ty [l15, l17, l19], " ++
-            "J_elim [ap_suc_motive [l15], ap_suc_branch [l15], l23, weaken " ++
-            "[l7, l6], l22], J_elim [id_sym_motive [l18], refl_intro [var " ++
-            "[l18]], add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
+            "ap_suc_ty [l15, l23, weaken [l7, l6], l22], id_sym_ty [l18, " ++
+            "add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
             "add_suc_right [l15, l17, l16]]]], #2]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
@@ -778,43 +777,31 @@ const scenarios = [_]Scenario{
         .mm0_path = "tests/search_bench_cases/martin_lof_frontier.mm0",
         .proof_path = "tests/search_bench_cases/ml_add_comm_step_names_auto.auf",
         .marker = "auto?",
-        .expected_replacement = "nat_ind_elim (s := $ id_trans Nat (suc k + n) (suc (k + n)) (n " ++
-            "+ suc k) (refl Nat (suc k + n)) (id_trans Nat (suc (k + n)) " ++
-            "(suc (n + k)) (n + suc k) (ap_suc (k + n) (n + k) ih) (id_sym " ++
-            "Nat (n + suc k) (suc (n + k)) (add_suc_right_p n k))) $) " ++
-            "[Id_form [l5, l6], id_trans_ty [l1, nat_ind_elim [weaken [l1, " ++
-            "l1], #3, nat_rec_step_ty [#1, l1, suc_fn_ty [#1]], zero_intro " ++
-            "[#1]], #3, nat_ind_elim [weaken [l1, l1], zero_intro [#1], " ++
-            "nat_rec_step_ty [#1, l1, suc_fn_ty [#1]], #3], eq_tm_to_Id " ++
-            "[l1, nat_ind_elim [weaken [l1, l1], #3, nat_rec_step_ty [#1, " ++
-            "l1, suc_fn_ty [#1]], zero_intro [#1]], nat_ind_zero (k := $ k " ++
-            "$) [weaken [l1, l1], #3, nat_rec_step_ty [#1, l1, suc_fn_ty " ++
-            "[#1]]]], J_elim (x := $ k $, y := $ ih $, C := $ Id Nat ih k " ++
-            "$) [weaken [id_ctx_ty [l1], Id_form [var [weaken [l1, l1]], " ++
-            "weaken [weaken [l1, l1], l3]]], eq_tm_to_Id [weaken [l1, l1], " ++
-            "l3, eq_tm_refl [l3]], nat_ind_elim [weaken [l1, l1], " ++
-            "zero_intro [#1], nat_rec_step_ty [#1, l1, suc_fn_ty [#1]], " ++
-            "#3], #3, add_zero_right [#1, #3]]], id_trans_ty [weaken " ++
-            "[Id_form [l5, l6], weaken [l1, l1]], weaken [Id_form [l5, l6], " ++
-            "nat_ind_elim [weaken [weaken [l1, l1], weaken [l1, l1]], l4, " ++
-            "nat_rec_step_ty [l2, weaken [l1, l1], suc_fn_ty [l2]], " ++
-            "suc_intro [l3]]], weaken [Id_form [l5, l6], suc_intro [l5]], " ++
-            "weaken [Id_form [l5, l6], nat_rec_ty [l2, weaken [l1, l1], " ++
-            "suc_intro [l3], suc_fn_ty [l2], l4]], weaken [Id_form [l5, " ++
-            "l6], eq_tm_to_Id [weaken [l1, l1], nat_ind_elim [weaken " ++
-            "[weaken [l1, l1], weaken [l1, l1]], l4, nat_rec_step_ty [l2, " ++
-            "weaken [l1, l1], suc_fn_ty [l2]], suc_intro [l3]], " ++
-            "add_suc_left [l2, l3, l4]]], id_trans_ty [weaken [Id_form [l5, " ++
-            "l6], weaken [l1, l1]], weaken [Id_form [l5, l6], suc_intro " ++
-            "[l5]], weaken [Id_form [l5, l6], suc_intro [l6]], weaken " ++
-            "[Id_form [l5, l6], nat_rec_ty [l2, weaken [l1, l1], suc_intro " ++
-            "[l3], suc_fn_ty [l2], l4]], J_elim (q := $ u $) [ap_suc_motive " ++
-            "[ext_ok [l2, Id_form [l5, l6]]], ap_suc_branch [ext_ok [l2, " ++
-            "Id_form [l5, l6]]], weaken [Id_form [l5, l6], l5], weaken " ++
-            "[Id_form [l5, l6], l6], var [Id_form [l5, l6]]], weaken " ++
-            "[Id_form [l5, l6], id_sym_ty [weaken [l1, l1], nat_rec_ty [l2, " ++
-            "weaken [l1, l1], suc_intro [l3], suc_fn_ty [l2], l4], " ++
-            "suc_intro [l6], add_suc_right [l2, l4, l3]]]]], #2]",
+        .expected_replacement = "nat_ind_elim [Id_form [l5, l6], id_trans_ty [l1, add_ty [#1, " ++
+            "zero_intro [#1], #3], #3, add_ty [#1, #3, zero_intro [#1]], " ++
+            "add_zero_left_path [#1, #3], id_sym_ty [l1, add_ty [#1, #3, " ++
+            "zero_intro [#1]], #3, add_zero_right [#1, #3]]], id_trans_ty " ++
+            "[nat_form [ext_ok [l2, Id_form [l5, l6]]], add_ty [ext_ok [l2, " ++
+            "Id_form [l5, l6]], weaken [Id_form [l5, l6], suc_intro [l3]], " ++
+            "weaken [Id_form [l5, l6], l4]], weaken [Id_form [l5, l6], " ++
+            "suc_intro [l5]], add_ty [ext_ok [l2, Id_form [l5, l6]], weaken " ++
+            "[Id_form [l5, l6], l4], weaken [Id_form [l5, l6], suc_intro " ++
+            "[l3]]], add_suc_left_path [ext_ok [l2, Id_form [l5, l6]], " ++
+            "var_wk [l1, Id_form [l5, l6]], weaken [Id_form [l5, l6], l4]], " ++
+            "id_trans_ty [nat_form [ext_ok [l2, Id_form [l5, l6]]], weaken " ++
+            "[Id_form [l5, l6], suc_intro [l5]], weaken [Id_form [l5, l6], " ++
+            "suc_intro [l6]], add_ty [ext_ok [l2, Id_form [l5, l6]], weaken " ++
+            "[Id_form [l5, l6], l4], weaken [Id_form [l5, l6], suc_intro " ++
+            "[l3]]], ap_suc_ty [ext_ok [l2, Id_form [l5, l6]], add_ty " ++
+            "[ext_ok [l2, Id_form [l5, l6]], var_wk [l1, Id_form [l5, l6]], " ++
+            "weaken [Id_form [l5, l6], l4]], add_ty [ext_ok [l2, Id_form " ++
+            "[l5, l6]], weaken [Id_form [l5, l6], l4], var_wk [l1, Id_form " ++
+            "[l5, l6]]], var [Id_form [l5, l6]]], id_sym_ty [nat_form " ++
+            "[ext_ok [l2, Id_form [l5, l6]]], add_ty [ext_ok [l2, Id_form " ++
+            "[l5, l6]], weaken [Id_form [l5, l6], l4], weaken [Id_form [l5, " ++
+            "l6], suc_intro [l3]]], weaken [Id_form [l5, l6], suc_intro " ++
+            "[l6]], weaken [Id_form [l5, l6], add_suc_right [l2, l4, " ++
+            "l3]]]]], #2]",
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     .{

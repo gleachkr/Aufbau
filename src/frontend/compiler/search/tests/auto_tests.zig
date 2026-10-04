@@ -565,24 +565,26 @@ test "generated child conclusion is checked against the target" {
     );
 }
 
-/// `auto?` in place of `theorem`'s last proof line in
-/// `pass_holey_type_inference`, whose assertion leaves the type as the hole
-/// `_ty`. Requires the first suggestion to compile in place: the line is the
-/// theorem's last, so the type it fills must be the stated one.
-fn expectHoleyTypeInferred(theorem: []const u8, expected: []const u8) !void {
+/// `auto?` in place of `theorem`'s last proof line in the proof case `stem`,
+/// whose assertion leaves the type as the hole `_ty`. Requires the first
+/// suggestion to compile in place: the line is the theorem's last, so the type
+/// it fills must be the stated one.
+fn expectHoleyTypeInferred(stem: []const u8, theorem: []const u8, expected: []const u8) !void {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCase(allocator, "pass_holey_type_inference", "mm0");
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
     defer allocator.free(mm0_src);
-    const full_proof = try readProofCase(allocator, "pass_holey_type_inference", "auf");
+    const full_proof = try readProofCase(allocator, stem, "auf");
     defer allocator.free(full_proof);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const header = try std.fmt.allocPrint(arena.allocator(), "{s}\n", .{theorem});
     const header_pos = std.mem.indexOf(u8, full_proof, header) orelse return error.MissingTheorem;
-    // The proof lines run from the blank line under the header to the next.
-    const block = (std.mem.indexOfPos(u8, full_proof, header_pos, "\n\n") orelse
-        return error.MissingProof) + 2;
+    // The proof lines run from under the header's underline to the next blank
+    // line.
+    const underline = (std.mem.indexOfScalarPos(u8, full_proof, header_pos + header.len, '\n') orelse
+        return error.MissingProof) + 1;
+    const block = underline + @intFromBool(std.mem.startsWith(u8, full_proof[underline..], "\n"));
     const block_end = std.mem.indexOfPos(u8, full_proof, block, "\n\n") orelse full_proof.len;
     const by = block + (std.mem.lastIndexOf(u8, full_proof[block..block_end], " $ by ") orelse
         return error.MissingProof) + " $ by ".len;
@@ -601,6 +603,7 @@ fn expectHoleyTypeInferred(theorem: []const u8, expected: []const u8) !void {
 
 test "auto infers the type of a holey typing goal" {
     try expectHoleyTypeInferred(
+        "pass_holey_type_inference",
         "infer_compose",
         "t_lam [t_lam [t_lam [t_app [t_var [], t_app [t_var [], t_var []]]]]]",
     );
@@ -611,8 +614,22 @@ test "auto infers the type of a holey typing goal" {
 // entry solves it two levels down.
 test "auto infers a type through a nested application" {
     try expectHoleyTypeInferred(
+        "pass_holey_type_inference",
         "infer_app2",
         "t_app [t_app [t_var [], t_var []], t_var []]",
+    );
+}
+
+// With the generic `ax` (`g , a ⊢ a`) as the variable rule, every elimination
+// rule's conclusion `g ⊢ b` also fits each open typing goal `g ⊢ t : ?T`, and
+// under the holey root their cuts carry to full depth. The candidate order
+// tries the rule whose conclusion matches more of the goal first: `t_lam` for
+// a λ, `t_app` for an application.
+test "auto infers a type with the generic ax as the variable rule" {
+    try expectHoleyTypeInferred(
+        "pass_hole_generic_ax_typing",
+        "compose",
+        "t_lam [t_lam [t_lam [t_app [ax [], t_app [ax [], ax []]]]]]",
     );
 }
 

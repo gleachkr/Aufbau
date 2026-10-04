@@ -124,9 +124,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   example `auto?` finds `CONTR` and `MP` in under 0.1s instead of more than
   2s. A phase that runs out of its own fuel is now set aside while the
   others go on; before, a late phase that did so ended the search.
-- On the search benchmark, `auto?` regenerates 93 of 843 theorems from more
-  removed lines than 0.0.12 did and 2 from fewer, and does 16% less work in
-  total. Of the theorems whose result is unchanged, 33 are found more than
+- `auto?` now tries first the rules whose conclusion matches more of the
+  goal. An elimination rule whose conclusion fits any judgment no longer
+  goes before `t_lam` on a λ: with the generic `ax` as the variable rule,
+  `$ _ ⊢ (λ f : b ⇒ c. λ k : a ⇒ b. λ x : a. f · (k · x)) : _ty $ by auto?`
+  now finds `t_lam [t_lam [t_lam [t_app [ax [], t_app [ax [], ax []]]]]]`,
+  where before it ran out of nodes.
+- On the search benchmark, `auto?` regenerates 129 of 843 theorems from more
+  removed lines than 0.0.12 did and 9 from fewer, and does 24% less work in
+  total. Of the theorems whose result is unchanged, 32 are found more than
   half a second faster and 2 more slower.
 - The example theories and the manual's preludes print Unicode notation,
   such as `∃` and `→`, in suggestions, hovers and diagnostics. The printer

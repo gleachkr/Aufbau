@@ -9,6 +9,7 @@ const abstract_prune = @import("../abstract_prune.zig");
 const context_prune = @import("../context_prune.zig");
 const seed = @import("./seed.zig");
 const split = @import("./split.zig");
+const lockstep = @import("./lockstep.zig");
 const acui = @import("./acui.zig");
 const Witness = @import("./witness.zig");
 const match = @import("./match.zig");
@@ -136,9 +137,21 @@ pub fn exactWithSession(
 
     // When generating, try non-splitting (additive) rules before split-capable
     // (multiplicative) ones, so a goal solvable without a speculative context
-    // split claims the bounded generation budget first. Stable, and only on the
-    // generation path — plain `exact?` ordering is untouched.
+    // split claims the bounded generation budget first. Within a band, the rule
+    // whose conclusion matches more of the goal goes first (`matchSpecificity`).
+    // Stable, and only on the generation path — plain `exact?` ordering is
+    // untouched.
     if (options.generator != null) {
+        if (goal.concreteOrHint()) |goal_expr| {
+            for (apply_candidates) |*apply_candidate| {
+                apply_candidate.match_specificity = matchSpecificity(
+                    context,
+                    &apply_candidate.theorem,
+                    context.env.rules.items[apply_candidate.rule_id].concl,
+                    goal_expr,
+                );
+            }
+        }
         std.sort.insertion(
             ApplyCandidate,
             apply_candidates,
@@ -362,7 +375,34 @@ fn nonSplitCandidateFirst(
     // fallbacks.
     const a_ord = generationOrderClass(ctx.context, a.rule_id);
     const b_ord = generationOrderClass(ctx.context, b.rule_id);
-    return a_ord < b_ord;
+    if (a_ord != b_ord) return a_ord < b_ord;
+    // Within a band, the rule whose conclusion matches more of the goal first:
+    // `t_lam` (`g ⊢ λ x : A. t : A ⇒ B`) before an elimination whose
+    // conclusion `g ⊢ b` fits every goal. Under a holey root the elimination's
+    // cut carries to full depth, so trying it first spends the node budget.
+    return a.match_specificity > b.match_specificity;
+}
+
+/// Rigid application nodes of `template` that met the same head in `expr`,
+/// counted through the arguments each head determines. A binder, an ACUI
+/// combiner, a meta or a head mismatch contributes nothing.
+fn matchSpecificity(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    template: TemplateExpr,
+    expr: ExprId,
+) u16 {
+    const app = switch (template) {
+        .binder => return 0,
+        .app => |app| app,
+    };
+    if (context.registry.hasStructuralCombiner(app.term_id)) return 0;
+    var args = lockstep.templateArgs(context, theorem, app, expr) orelse return 0;
+    var count: u16 = 1;
+    while (args.next()) |pair| {
+        count +|= matchSpecificity(context, theorem, pair.template, pair.expr);
+    }
+    return count;
 }
 
 /// Generation-order band of a rule within equal split-ness: witness class 0

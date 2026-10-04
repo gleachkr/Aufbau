@@ -1,0 +1,180 @@
+-- Depth-frontier probe for reading a cut back through a definition (#321).
+--
+-- Wired as a depth-frontier regression guard (tests/frontier_guards.zig):
+-- `auto?` must regenerate the whole proof from the bare goal (frontier FULL).
+-- The proof is `imp_elim [all_elim [sep_elim_right [#1]], #2]`. Phase 5
+-- fills `imp_elim`'s major `?G ⊢ ?p → x ∈ X` first, and its child must read
+-- `all_elim`'s `∀ ?x ?p` back from `sep_elim_right [#1]`, whose conclusion
+-- `in_all_subsets S x` reaches that shape only through the definition
+-- (`forward.solveCorrespondenceUnfolding`). The rules are the Zermelo
+-- fixture's, cut down to what the proof touches, so the guard tests the
+-- read-back and not where `imp_elim` falls in a long candidate list.
+
+delimiter $ ( ) { } [ / ] , | $;
+
+strict provable sort wff;
+--| @vars x y z u v w X Y a b c d
+sort set;
+sort ctx;
+
+term im (p q: wff): wff;
+infixr im: $→$ prec 25;
+
+term bi (p q: wff): wff;
+infixr bi: $↔$ prec 20;
+
+term all {x: set} (p: wff x): wff;
+prefix all: $∀$ prec 41;
+
+term sb_f {x: set} (t: set x) (p: wff x): wff;
+notation sb_f {x: set} (t: set x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_s {x: set} (t: set x) (s: set x): set;
+notation sb_s {x: set} (t: set x) (s: set x): set =
+  ($⟦$:41) x ($/$:0) t ($⟧$:0) s;
+
+term set_eq (a b: set): wff;
+infixl set_eq: $=$ prec 50;
+
+term mem (x A: set): wff;
+infixl mem: $∈$ prec 50;
+
+term ctx_eq (G H: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (G H: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+
+term nd (G: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (p: wff): $ p ↔ p $;
+axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation set set_eq setid settr setsym _
+axiom setid (a: set): $ a = a $;
+axiom settr (a b c: set): $ a = b $ > $ b = c $ > $ a = c $;
+axiom setsym (a b: set): $ a = b $ > $ b = a $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+axiom ctx_trans (G H K: ctx):
+  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+axiom ctx_assoc (G H K: ctx):
+  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
+
+--| @congr
+axiom join_congr (G1 G2 H1 H2: ctx):
+  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+  $ ctx_eq (G1 , H1) (G2 , H2) $;
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+--| @congr
+axiom nd_congr (G H: ctx) (p q: wff):
+  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+--| @congr
+axiom im_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p → r) ↔ (q → s) $;
+--| @congr
+axiom all_congr {x: set} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+--| @congr
+axiom mem_congr (x y A B: set):
+  $ x = y $ > $ A = B $ > $ (x ∈ A) ↔ (y ∈ B) $;
+--| @congr
+axiom sb_f_congr {x: set} (t u: set x) (p q: wff x):
+  $ t = u $ > $ p ↔ q $ > $ [x/t] p ↔ [x/u] q $;
+
+--| @auto trigger (hyp p)
+--| @auto trigger (im p _)
+axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+
+--| @auto backward
+axiom imp_intro (G: ctx) (p q: wff):
+  $ G , p ⊢ q $ > $ G ⊢ p → q $;
+
+--| @auto forward
+axiom imp_elim (G H: ctx) (p q: wff):
+  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+
+--| @freshen G x
+--| @auto backward
+axiom all_intro (G: ctx) {x: set} (p: wff x):
+  $ G ⊢ p $ > $ G ⊢ ∀ x p $;
+
+--| @view {x:set}(G:ctx x)(t:set x)(p:wff x)(q:wff): $ G ⊢ ∀ x p $ > $ G ⊢ q $
+--| @recover t q p x
+--| @auto forward
+axiom all_elim {x: set} (G: ctx x) (t: set x) (p: wff x):
+  $ G ⊢ ∀ x p $ > $ G ⊢ [x/t] p $;
+
+term sep (A: set) {x: set} (p: wff x): set;
+notation sep (A: set) {x: set} (p: wff x): set =
+  (${$:max) x ($∈$:50) A ($|$:0) p ($}$:0);
+
+def in_all_subsets (S x: set) (.X: set): wff =
+  $ ∀ X (X ∈ S → x ∈ X) $;
+
+--| @congr
+axiom in_all_subsets_congr (S T x y: set):
+  $ S = T $ > $ x = y $ >
+  $ in_all_subsets S x ↔ in_all_subsets T y $;
+
+def inter_subsets (A S: set) (.x: set): set =
+  $ {x ∈ A | in_all_subsets S x} $;
+
+--| @view {x:set}(G H:ctx x)(t A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ A $ > $ H ⊢ q $ > $ G,H ⊢ t ∈ {x ∈ A | p} $
+--| @recover t q p x
+axiom sep_intro {x: set} (G H: ctx x) (t A: set) (p: wff x):
+  $ G ⊢ t ∈ A $ > $ H ⊢ [x/t] p $ >
+  $ G , H ⊢ t ∈ {x ∈ A | p} $;
+
+axiom sep_elim_left {x: set} (G: ctx x) (t A: set) (p: wff x):
+  $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ t ∈ A $;
+
+--| @view {x:set}(G:ctx x)(t A:set)(p:wff x)(q:wff): $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ q $
+--| @recover t q p x
+axiom sep_elim_right {x: set} (G: ctx x) (t A: set) (p: wff x):
+  $ G ⊢ t ∈ {x ∈ A | p} $ > $ G ⊢ [x/t] p $;
+
+--| @rewrite
+axiom sb_s_var {x: set} (t: set x): $ (⟦ x / t ⟧ x) = t $;
+--| @rewrite
+axiom sb_s_other {x y: set} (t: set x): $ (⟦ x / t ⟧ y) = y $;
+--| @rewrite
+axiom sb_s_irrel {x: set} (t: set x) (s: set): $ (⟦ x / t ⟧ s) = s $;
+--| @rewrite
+axiom sb_s_sep {x y: set} (t A: set x) (p: wff x y):
+  $ (⟦ x / t ⟧ {y ∈ A | p}) =
+    {y ∈ (⟦ x / t ⟧ A) | [x/t] p} $;
+--| @rewrite
+axiom sb_f_mem {x: set} (t a A: set x):
+  $ [x/t] (a ∈ A) ↔ (⟦ x / t ⟧ a) ∈ (⟦ x / t ⟧ A) $;
+--| @rewrite
+axiom sb_f_im {x: set} (t: set x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+--| @rewrite
+axiom sb_f_all {x y: set} (t: set x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y [x/t] p $;
+--| @rewrite
+axiom sb_f_id {x: set} (p: wff x): $ [x/x] p ↔ p $;
+--| @rewrite
+axiom sb_f_in_all_subsets {x: set} (t S a: set x):
+  $ [x/t] (in_all_subsets S a) ↔
+    in_all_subsets (⟦ x / t ⟧ S) (⟦ x / t ⟧ a) $;
+
+theorem inter_subsets_probe (G H: ctx) (A S x X: set):
+  $ G ⊢ x ∈ inter_subsets A S $ > $ H ⊢ X ∈ S $ >
+  $ G , H ⊢ x ∈ X $;
