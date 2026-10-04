@@ -16,6 +16,7 @@ const match = @import("./match.zig");
 const def_match = @import("./def_match.zig");
 const lockstep = @import("./lockstep.zig");
 const seed = @import("./seed.zig");
+const Witness = @import("./witness.zig");
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 const templateMentionsBinder = @import("../../../rules.zig").templateMentionsBinder;
 const PoolVars = @import("../../vars.zig").PoolVars;
@@ -87,14 +88,31 @@ pub fn appendDerivedDirectCandidates(
         dpool.store.openUniversalUse();
         defer dpool.store.universal_use_open = was_open;
 
-        var application: ?RuleApplication = null;
-        if (forward.solveCorrespondence(
+        // The positional walk cannot see that a derived fact's context
+        // `?g , p` covers the goal's `p` with `?g := ∅`, nor a context
+        // listed in another order: on a conflict, match commutative ACUI
+        // regions member-wise, the region's one open meta taking the
+        // members left over. `probe` re-checks the result; the checker
+        // bridges the ACUI difference between the fact and the goal.
+        var matched = forward.solveCorrespondence(
             &dpool.store,
             &scratch,
             goal_expr,
             dref.shape,
             null,
-        ) == .ok) {
+        ) == .ok;
+        if (!matched) {
+            dpool.store.rollbackTo(mark);
+            matched = try Witness.solveCorrespondenceAcui(
+                context,
+                &dpool.store,
+                &scratch,
+                goal_expr,
+                dref.shape,
+            );
+        }
+        var application: ?RuleApplication = null;
+        if (matched) {
             application = try forward.materializeApplication(
                 dpool,
                 context,

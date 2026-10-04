@@ -440,8 +440,10 @@ fn registeredMetaPred(
 }
 
 /// ACUI-aware variant of `forward.solveCorrespondence` for the open-target
-/// read-back: walk the meta-bearing `pattern` (the open target) against the
-/// concrete `source` (the child's accepted conclusion) in lockstep, but where
+/// read-back and for matching a derived fact directly against the goal
+/// (`validate.appendDerivedDirectCandidates`): walk the meta-bearing `pattern`
+/// (the open target, or the derived fact's shape) against the concrete
+/// `source` (the child's accepted conclusion, or the goal) in lockstep, but where
 /// the two sides meet in a region of a registered COMMUTATIVE ACUI combiner,
 /// match member-wise as multisets instead of positionally: identical members
 /// cancel, structured members unify recursively (deterministic first-fit with
@@ -451,7 +453,7 @@ fn registeredMetaPred(
 /// ACUI, but the checked line keeps the child rule's own association, so the
 /// positional walk conflicts on an ACUI-equal conclusion.
 ///
-/// No `hole` handling (the read-back passes none). Abstains (returns false)
+/// No `hole` handling (neither caller passes one). Abstains (returns false)
 /// on non-commutative subsets (an AU leftover is order-constrained, not a
 /// free multiset — see the @acui-subset note), on more than one whole-member
 /// meta per region (no forced partition exists), on region overflow, and when

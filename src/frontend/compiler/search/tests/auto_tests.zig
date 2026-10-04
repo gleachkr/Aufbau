@@ -610,6 +610,83 @@ test "auto keeps a redex the checker cannot convert in a generated premise" {
     try helpers.expectConversionCompiles(&arena, mm0_src, proof_src, suggestions.items[0]);
 }
 
+// Forward saturation derives `?G , p ⊢ q` from `⊨ p → q` and `p ⊢ p`: the
+// context `?G` of `valid_elim`'s conclusion is fixed by no premise. That fact
+// proves the goal `p ⊢ q` only with `?G := ∅`, which a positional match of
+// `?G , p` against `p` cannot find. A fuel of 1 leaves no room for the
+// backward route (`imp_elim` over a generated `valid_elim` child), so only the
+// derived fact's direct use can offer the proof.
+test "auto closes a goal with a forward-derived fact modulo ACUI on its context meta" {
+    const mm0_src =
+        \\delimiter $ ( ) , $;
+        \\strict provable sort wff;
+        \\sort ctx;
+        \\term im (p q: wff): wff;
+        \\infixr im: $→$ prec 25;
+        \\term bi (p q: wff): wff;
+        \\infixr bi: $↔$ prec 20;
+        \\term valid (p: wff): wff;
+        \\prefix valid: $⊨$ prec 3;
+        \\term ctx_eq (G H: ctx): wff;
+        \\term emp: ctx;
+        \\notation emp: ctx = ($∅$:max);
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (G H: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (p: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term nd (G: ctx) (p: wff): wff;
+        \\infixl nd: $⊢$ prec 0;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (p: wff): $ p ↔ p $;
+        \\axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+        \\axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+        \\axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+        \\axiom ctx_trans (G H K: ctx):
+        \\  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+        \\axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+        \\axiom ctx_assoc (G H K: ctx):
+        \\  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+        \\axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+        \\axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+        \\axiom ctx_unit (G: ctx): $ ctx_eq (∅ , G) G $;
+        \\--| @congr
+        \\axiom join_congr (G1 G2 H1 H2: ctx):
+        \\  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+        \\  $ ctx_eq (G1 , H1) (G2 , H2) $;
+        \\--| @congr
+        \\axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+        \\--| @congr
+        \\axiom nd_congr (G H: ctx) (p q: wff):
+        \\  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+        \\axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+        \\--| @auto forward
+        \\axiom imp_elim (G H: ctx) (p q: wff):
+        \\  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+        \\--| @auto forward
+        \\axiom valid_elim (G: ctx) (p: wff): $ ⊨ p $ > $ G ⊢ p $;
+        \\theorem valid_mp (p q: wff): $ ⊨ p → q $ > $ p ⊢ q $;
+    ;
+    const proof_src =
+        \\valid_mp
+        \\--------
+        \\
+        \\l1: $ p ⊢ p $ by ax []
+        \\l2: $ p ⊢ q $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true, .fuel = 1 },
+    });
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"imp_elim [valid_elim [#1], l1]"});
+    try helpers.expectConversionCompiles(&arena, mm0_src, proof_src, suggestions.items[0]);
+}
+
 /// `auto?` in place of `theorem`'s last proof line in the proof case `stem`,
 /// whose assertion leaves the type as the hole `_ty`. Requires the first
 /// suggestion to compile in place: the line is the theorem's last, so the type

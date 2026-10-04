@@ -1249,7 +1249,8 @@ pub const SolveResult = enum { ok, conflict };
 /// bug.
 ///
 /// TWIN: `witness.solveAcuiInner` is the ACUI-aware variant of this
-/// walk for the open-target read-back. They deliberately stay separate: it
+/// walk for the open-target read-back and the derived-fact direct match.
+/// They deliberately stay separate: it
 /// matches commutative regions member-wise, derefs the pattern up front,
 /// threads an attempt budget, and PROPAGATES OutOfMemory (this one folds
 /// every failure into `.conflict`, which callers rely on being error-free).

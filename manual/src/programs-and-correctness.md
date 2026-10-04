@@ -361,7 +361,7 @@ is a deliberate proof step. `star_ind` is the corresponding induction rule.
 ```aufbau-theory doc=hoare
 axiom valid_intro {w: world} (p: form):
   $ ∅ ⊢ w : p $ > $ ⊨ p $;
---| @auto backward
+--| @auto forward
 axiom valid_elim (g: ctx) (w: world) (p: form):
   $ ⊨ p $ > $ g ⊢ w : p $;
 

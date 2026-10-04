@@ -435,7 +435,12 @@ cost profile shifts.
 Forward saturation (`forward.zig`, Stages 7–8) runs *before* backward search
 when the theory declares `@auto forward` rules: bounded multi-layer forward
 chaining over the ref pool produces a `DerivedPool` of derived facts, indexed
-so backward search pre-filters them per slot.
+so backward search pre-filters them per slot. A derived fact that matches the
+goal is itself a candidate (`validate.appendDerivedDirectCandidates`). When the
+positional match conflicts, it retries member-wise through
+`witness.solveCorrespondenceAcui`, so a context meta that no premise fixed
+(`valid_elim`'s `?G` in `?G , p ⊢ q`) takes the goal members the fact leaves
+over, `∅` when there are none.
 
 ### Metas must reach a solvable leaf
 

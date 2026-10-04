@@ -54,6 +54,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   mention the bound variable, like `sb_tm_congr`. New lemmas `arr_intro`,
   `arr_beta`, `add_zero_left_path` and `add_suc_left_path` shorten the
   proofs.
+- The Hoare example marks `valid_elim` (`⊨ p` > `g ⊢ w : p`) `@auto forward`
+  instead of `@auto backward`, like its other elimination rules. `auto?` now
+  proves `u : q ⊢ u : (⌊ x / e ⌋ p)` in `hoare_assign_wp` from the hypothesis
+  `⊨ (q → (⌊ x / e ⌋ p))` and the line `u : q ⊢ u : q`, and regenerates the
+  `countdown` proof with its last five lines removed, up from two.
 - `auto?` wastes less time on rules that cannot match. When a context is
   not idempotent, a rule needing two entries after `g`
   no longer matches a goal context with one, even though each required
@@ -304,6 +309,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   `feq_sym [red_seq []]`. Before, the search reduced the premise
   `([ a ⨟ b ] p) ≃ ([ a ] ([ b ] p))` to `([ a ] ([ b ] p)) ≃ ([ a ] ([ b ] p))`,
   but `≃` has no `@congr`, so no proof of the reduced form checked.
+- `auto?` proves a goal from a fact its `@auto forward` rules derive when the
+  fact's context matches the goal's only up to ACUI. With `valid_elim`
+  (`⊨ p` > `G ⊢ p`) and `imp_elim` both forward, the derived fact
+  `G , p ⊢ q` now proves `p ⊢ q` as `imp_elim [valid_elim [#1], l1]`, with
+  `G` as `∅`. Before, the fact's context had to match the goal's member for
+  member, in order, so such a goal fell to backward search.
 
 ## [0.0.12] - 2026-09-24
 
