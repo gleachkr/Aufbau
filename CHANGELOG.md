@@ -3,6 +3,18 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The editor checks the lines after an `auto?`, `exact?`, `apply?` or
+  `conversion?` line. A search line with a concrete assertion counts as
+  proved for the lines below it, both in the editor's diagnostics and in
+  later searches, which can cite it. A search line with holes in its
+  assertion has nothing to admit, so a line citing it gets a warning naming
+  it. Before, the editor stopped checking a block at its first search line.
+  `abc compile` still rejects search lines.
+
 ## [0.0.13] - 2026-10-04
 
 ### Added

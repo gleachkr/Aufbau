@@ -1624,3 +1624,28 @@ pub fn applicationHasSearchPlaceholder(application: RuleApplication) bool {
     }
     return false;
 }
+
+pub fn containsLabel(labels: []const []const u8, label: []const u8) bool {
+    for (labels) |candidate| {
+        if (std.mem.eql(u8, candidate, label)) return true;
+    }
+    return false;
+}
+
+/// The first reference in `application`, inline applications included,
+/// to a line labelled in `labels`.
+pub fn findLineRef(
+    application: RuleApplication,
+    labels: []const []const u8,
+) ?LineRef {
+    for (application.refs) |ref| {
+        switch (ref) {
+            .line => |line| if (containsLabel(labels, line.label)) return line,
+            .application => |child| {
+                if (findLineRef(child, labels)) |line| return line;
+            },
+            .hyp => {},
+        }
+    }
+    return null;
+}

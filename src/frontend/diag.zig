@@ -92,6 +92,7 @@ pub const DiagnosticKind = enum {
     unused_definition_parameter,
     sorry_line,
     sorry_line_arguments,
+    cites_unfinished_line,
 };
 
 pub const Scratch = DiagScratch.Scratch;
@@ -554,6 +555,7 @@ pub const DiagnosticError = error{
     RuleNotYetAvailable,
     SorryLine,
     SorryLineArguments,
+    CitesUnfinishedLine,
     SortMismatch,
     TermMismatch,
     TheoremNameMismatch,
@@ -1316,6 +1318,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .unused_definition_parameter => t("kind_unused_definition_parameter"),
         .sorry_line => t("kind_sorry_line"),
         .sorry_line_arguments => t("kind_sorry_line_arguments"),
+        .cites_unfinished_line => t("kind_cites_unfinished_line"),
     };
 }
 
@@ -1571,6 +1574,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.UnusedDefinitionParameter => t("kind_unused_definition_parameter"),
         error.SorryLine => t("kind_sorry_line"),
         error.SorryLineArguments => t("kind_sorry_line_arguments"),
+        error.CitesUnfinishedLine => t("kind_cites_unfinished_line"),
     };
 }
 

@@ -150,8 +150,9 @@ fn compileUnit(unit: Unit) u32 {
         var analysis_compiler = unit.compiler();
         // Match the LSP's analysis posture: a search placeholder (`auto?` /
         // `exact?` / `apply?`) is an unfilled hole, not an unknown rule — the
-        // checker stops cleanly at it, and a warning-severity diagnostic per
-        // placeholder is synthesized below (`writePlaceholderDiagnostics`).
+        // checker admits its line and goes on, and a warning-severity
+        // diagnostic per placeholder is synthesized below
+        // (`writePlaceholderDiagnostics`).
         analysis_compiler.allow_search_placeholders = true;
         analysis_compiler.statement_sink = &statements;
         analysis_compiler.analyze() catch {};

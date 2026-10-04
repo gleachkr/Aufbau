@@ -130,32 +130,42 @@ pub fn suggestionsAtSourceOffset(
     var cache = Inference.RuleUnifyCache.init(work);
     defer cache.deinit();
 
+    // Labels of earlier lines with no statement to admit, as in the
+    // checker's analysis: a holey placeholder line, or a holey line citing one.
+    var unfinished = std.ArrayListUnmanaged([]const u8){};
+    defer unfinished.deinit(work);
     for (target.block.lines[0..target.line_index]) |line| {
-        // An incomplete line has no rule to run, same as a placeholder:
-        // stop accumulating context, but keep searching at the target with
-        // the lines checked so far.
-        if (line.incomplete or
-            ProofScript.applicationHasSearchPlaceholder(line.application))
+        // An incomplete line has no rule to run: stop accumulating context,
+        // but keep searching at the target with the lines checked so far.
+        if (line.incomplete) break;
+        // An admitted line (`by sorry!`), an earlier placeholder, and a line
+        // citing an unfinished line have no rule to run either, but each
+        // names its goal: keep a concrete one in the context so a later
+        // search can cite it, as the checker does. A goal that does not
+        // parse ends the context like an incomplete line.
+        const is_sorry = ProofScript.isSorryRuleName(line.application.rule_name);
+        if (is_sorry or
+            ProofScript.applicationHasSearchPlaceholder(line.application) or
+            ProofScript.findLineRef(line.application, unfinished.items) != null)
         {
-            break;
-        }
-        // An admitted line (`by sorry!`) has no rule to run either, but it
-        // does name a proved goal: keep it in the context so a later search
-        // can cite it, as the checker does.
-        if (ProofScript.isSorryRuleName(line.application.rule_name)) {
             const goal = parseGoal(
                 &fixture,
                 &theorem,
                 &theorem_vars,
                 line.assertion.text,
-            ) catch return .{ .allocator = allocator, .items = &.{} };
-            const expr = switch (goal) {
-                .concrete => |expr| expr,
-                else => break,
-            };
-            const line_idx = CheckedIr.appendSorryLine(&checked, work, expr) catch
-                return error.OutOfMemory;
-            labels.put(line.label, line_idx) catch return error.OutOfMemory;
+            ) catch break;
+            switch (goal) {
+                .concrete => |expr| {
+                    const line_idx = CheckedIr.appendSorryLine(&checked, work, expr) catch
+                        return error.OutOfMemory;
+                    labels.put(line.label, line_idx) catch return error.OutOfMemory;
+                },
+                else => {
+                    if (is_sorry) break;
+                    unfinished.append(work, line.label) catch
+                        return error.OutOfMemory;
+                },
+            }
             continue;
         }
         const line_idx = commitSearchLine(

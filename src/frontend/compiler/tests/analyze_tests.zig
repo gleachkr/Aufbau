@@ -1049,3 +1049,135 @@ test "compiler analyze keeps no inline conclusion from an aborted fallback attem
     }
     try std.testing.expectEqual(@as(usize, 1), count);
 }
+
+const placeholder_chain_mm0 =
+    \\delimiter $ ( ) $;
+    \\--| @hole HOLE
+    \\provable sort wff;
+    \\term P: wff;
+    \\term Q: wff;
+    \\term R: wff;
+    \\axiom pq: $ P $ > $ Q $;
+    \\axiom qr: $ Q $ > $ R $;
+    \\axiom r: $ R $;
+    \\theorem t: $ R $;
+;
+
+test "analysis admits a concrete placeholder line and checks past it" {
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ P $ by auto?
+        \\l2: $ Q $ by pq [l1]
+        \\l3: $ R $ by qr [l2]
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        proof_src,
+    );
+    compiler.allow_search_placeholders = true;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    try std.testing.expectEqual(@as(usize, 0), compiler.warningDiagnostics().len);
+
+    // A mistake after the placeholder is reported.
+    const broken_src =
+        \\t
+        \\---
+        \\l1: $ P $ by exact?
+        \\l2: $ R $ by pq [l1]
+    ;
+    var broken = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        broken_src,
+    );
+    broken.allow_search_placeholders = true;
+    try broken.analyze();
+    const diags = broken.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqualStrings("l2", diags[0].line_label.?);
+}
+
+test "analysis warns on a line citing a holey placeholder line" {
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ HOLE $ by auto?
+        \\l2: $ Q $ by pq [l1]
+        \\l3: $ R $ by qr [l2]
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        proof_src,
+    );
+    compiler.allow_search_placeholders = true;
+    try compiler.analyze();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(.cites_unfinished_line, warnings[0].kind);
+    try std.testing.expectEqualStrings("l2", warnings[0].line_label.?);
+    try std.testing.expectEqualStrings("l1", warnings[0].name.?);
+    try std.testing.expectEqualStrings(
+        "l1",
+        proof_src[warnings[0].span.?.start..warnings[0].span.?.end],
+    );
+
+    // A holey line citing one is unfinished too; a block ending on an
+    // unfinished line has no final line to reconcile.
+    const chain_src =
+        \\t
+        \\---
+        \\l1: $ HOLE $ by auto?
+        \\l2: $ HOLE $ by pq [l1]
+        \\l3: $ R $ by r []
+        \\l4: $ R $ by qr [l2]
+    ;
+    var chain = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        chain_src,
+    );
+    chain.allow_search_placeholders = true;
+    try chain.analyze();
+    try std.testing.expectEqual(@as(usize, 0), chain.primaryDiagnostics().len);
+    const chain_warnings = chain.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), chain_warnings.len);
+    try std.testing.expectEqualStrings("l1", chain_warnings[0].name.?);
+    try std.testing.expectEqualStrings("l2", chain_warnings[1].name.?);
+
+    const trailing_src =
+        \\t
+        \\---
+        \\l1: $ HOLE $ by auto?
+    ;
+    var trailing = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        trailing_src,
+    );
+    trailing.allow_search_placeholders = true;
+    try trailing.analyze();
+    try std.testing.expectEqual(@as(usize, 0), trailing.primaryDiagnostics().len);
+}
+
+test "compile still rejects an admitted placeholder line" {
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ P $ by auto?
+        \\l2: $ Q $ by pq [l1]
+        \\l3: $ R $ by qr [l2]
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        proof_src,
+    );
+    try std.testing.expectError(error.UnknownRule, compiler.check());
+    const diag = compiler.getDiagnostic() orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.unresolved_search_placeholder, diag.kind);
+}

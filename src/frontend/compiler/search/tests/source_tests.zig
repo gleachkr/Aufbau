@@ -221,6 +221,60 @@ test "source suggestions survive a broken sibling line" {
     try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
 }
 
+// An earlier placeholder line is admitted like `sorry!` when its assertion
+// is concrete, so a later search can cite it. A holey one is unfinished; a
+// line citing it is admitted on its own concrete assertion.
+test "source suggestions cite earlier placeholder lines" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\--| @hole HOLE
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\term R: wff;
+        \\axiom pq: $ P $ > $ Q $;
+        \\axiom qr: $ Q $ > $ R $;
+        \\theorem t: $ R $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const concrete_src =
+        \\t
+        \\---
+        \\l1: $ Q $ by apply?
+        \\l2: $ R $ by exact?
+    ;
+    var concrete = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        concrete_src,
+        "exact?",
+        .{},
+    );
+    defer concrete.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, concrete.status);
+    try expectOffered(concrete.items, &.{"qr [l1]"});
+
+    const holey_src =
+        \\t
+        \\---
+        \\l1: $ HOLE $ by apply?
+        \\l2: $ Q $ by pq [l1]
+        \\l3: $ R $ by exact?
+    ;
+    var holey = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        holey_src,
+        "exact?",
+        .{},
+    );
+    defer holey.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, holey.status);
+    try expectOffered(holey.items, &.{"qr [l2]"});
+}
+
 // Same story one block earlier: a local lemma before the target holds the
 // broken line. The lenient proof stream and the placeholder-tolerant fixture
 // compiler keep the fixture build alive.

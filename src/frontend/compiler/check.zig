@@ -195,12 +195,17 @@ pub fn checkTheoremBlock(
     var last_line_idx: ?usize = null;
     var last_label: ?[]const u8 = null;
     var last_span: ?Span = null;
+    // Analysis only: lines with no statement to admit. A placeholder line
+    // whose assertion has holes is unfinished, and so is a holey line that
+    // cites one.
+    var unfinished = std.ArrayListUnmanaged([]const u8){};
+    defer unfinished.deinit(allocator);
+    var ends_unfinished = false;
 
     for (block.lines) |line| {
         // A line the lenient parse could not finish. Only the analyze path
-        // parses leniently, so this mirrors the placeholder gate below:
-        // report the recorded parse failure and keep the lines checked so
-        // far, exactly as if the block ended here. The line contributes
+        // parses leniently: report the recorded parse failure and keep the
+        // lines checked so far, exactly as if the block ended here. The line contributes
         // nothing to the label environment and can never reach emission —
         // the compile path parses strictly and errors out instead.
         if (line.incomplete) {
@@ -216,10 +221,9 @@ pub fn checkTheoremBlock(
             return diag.err;
         }
 
-        if (ProofScript.applicationHasSearchPlaceholder(line.application)) {
-            if (self.allow_search_placeholders) {
-                return try checked.toOwnedSlice(allocator);
-            }
+        const has_placeholder =
+            ProofScript.applicationHasSearchPlaceholder(line.application);
+        if (has_placeholder and !self.allow_search_placeholders) {
             const placeholder =
                 findSearchPlaceholder(line.application) orelse line.application;
             var diag = CompilerDiag.withPhase(.{
@@ -241,7 +245,9 @@ pub fn checkTheoremBlock(
             return error.UnknownRule;
         }
 
-        if (labels.contains(line.label)) {
+        if (labels.contains(line.label) or
+            ProofScript.containsLabel(unfinished.items, line.label))
+        {
             self.setProof(CompilerDiag.withPhase(.{
                 .kind = .duplicate_label,
                 .err = error.DuplicateLabel,
@@ -267,6 +273,51 @@ pub fn checkTheoremBlock(
             env,
             parsed_assertion,
         );
+
+        // Analysis checks past a search placeholder: the line is admitted
+        // like `sorry!` when its assertion is concrete, so later lines can
+        // cite it. A line citing an unfinished line is admitted the same way
+        // and warned about. The compile path rejected placeholders above.
+        if (self.allow_search_placeholders) {
+            const cited = ProofScript.findLineRef(
+                line.application,
+                unfinished.items,
+            );
+            if (cited) |ref| {
+                self.addWarning(.{
+                    .kind = .cites_unfinished_line,
+                    .err = error.CitesUnfinishedLine,
+                    .source = .proof,
+                    .theorem_name = assertion.name,
+                    .line_label = line.label,
+                    .name = ref.label,
+                    .span = ref.span,
+                });
+            }
+            if (has_placeholder or cited != null) {
+                switch (parsed_assertion) {
+                    .concrete => |expr| {
+                        const line_idx = try CheckedIr.appendSorryLine(
+                            &checked,
+                            allocator,
+                            expr,
+                        );
+                        try labels.put(line.label, line_idx);
+                        last_line = expr;
+                        last_line_idx = line_idx;
+                        last_label = line.label;
+                        last_span = line.span;
+                        ends_unfinished = false;
+                    },
+                    .holey => {
+                        try unfinished.append(allocator, line.label);
+                        ends_unfinished = true;
+                    },
+                }
+                continue;
+            }
+        }
+        ends_unfinished = false;
 
         if (ProofScript.isSorryRuleName(line.application.rule_name)) {
             const line_idx = try admitSorryLine(
@@ -335,6 +386,9 @@ pub fn checkTheoremBlock(
         last_span = line.span;
     }
 
+    // The block ends on an unfinished line: there is no final statement to
+    // reconcile with the conclusion yet.
+    if (ends_unfinished) return try checked.toOwnedSlice(allocator);
     const final_line = last_line orelse {
         self.setProof(CompilerDiag.withPhase(.{
             .kind = .empty_proof_block,
