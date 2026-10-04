@@ -101,6 +101,11 @@ fn reduceRedexOnlyInner(
         return canon.canonicalize(expr_id);
     }
     if (arg_count == 0) return expr_id;
+    // The checker converts a line only through heads with a `@congr` rule, so
+    // a redex under any other head must stay: reducing it would emit a target
+    // that no proof of the rule's premise can be converted to (`feq_sym`'s
+    // premise `f p ≃ g p` reduced to `g p ≃ g p` when `≃` has no `@congr`).
+    if (context.registry.getCongruenceRule(term_id) == null) return expr_id;
     const args = try theorem.allocator.alloc(ExprId, arg_count);
     defer theorem.allocator.free(args);
     @memcpy(args, theorem.interner.node(expr_id).app.args);

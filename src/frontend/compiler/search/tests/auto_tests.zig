@@ -565,6 +565,51 @@ test "generated child conclusion is checked against the target" {
     );
 }
 
+// `red` rewrites `f p` to `g p`, but `feq` has no `@congr`, so the checker
+// cannot convert inside an `feq` judgment. The generated premise of `feq_sym`
+// must keep its redex `f p ~= g p` for `red` to prove it; reduced to
+// `g p ~= g p`, no proof of it would check as that premise.
+test "auto keeps a redex the checker cannot convert in a generated premise" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort form;
+        \\term iff (a b: wff): wff;
+        \\infixr iff: $<->$ prec 20;
+        \\term feq (p q: form): wff;
+        \\infixr feq: $~=$ prec 20;
+        \\term f (p: form): form;
+        \\term g (p: form): form;
+        \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+        \\axiom iff_refl (a: wff): $ a <-> a $;
+        \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\--| @relation form feq feq_refl feq_trans feq_sym _
+        \\axiom feq_refl (p: form): $ p ~= p $;
+        \\axiom feq_trans (p q r: form): $ p ~= q $ > $ q ~= r $ > $ p ~= r $;
+        \\axiom feq_sym (p q: form): $ p ~= q $ > $ q ~= p $;
+        \\--| @rewrite
+        \\axiom red (p: form): $ f p ~= g p $;
+        \\theorem red_sym (p: form): $ g p ~= f p $;
+    ;
+    const proof_src =
+        \\red_sym
+        \\-------
+        \\
+        \\l1: $ g p ~= f p $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{"feq_sym [red []]"});
+    try helpers.expectConversionCompiles(&arena, mm0_src, proof_src, suggestions.items[0]);
+}
+
 /// `auto?` in place of `theorem`'s last proof line in the proof case `stem`,
 /// whose assertion leaves the type as the hole `_ty`. Requires the first
 /// suggestion to compile in place: the line is the theorem's last, so the type

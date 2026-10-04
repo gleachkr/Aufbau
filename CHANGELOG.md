@@ -298,6 +298,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   against the goal's by its written grouping, so a context grouped as
   `g , (k : Nat , ih : Nat)` bound `g` to `g` alone, and the rule never
   applied. It now matches the entries in order, ignoring grouping.
+- `auto?` keeps a `@rewrite` redex in a subgoal it generates when the
+  redex sits under a term with no `@congr` rule. In the Hoare example,
+  `$ ([ a ] ([ b ] p)) ≃ ([ a ⨟ b ] p) $ by auto?` now finds
+  `feq_sym [red_seq []]`. Before, the search reduced the premise
+  `([ a ⨟ b ] p) ≃ ([ a ] ([ b ] p))` to `([ a ] ([ b ] p)) ≃ ([ a ] ([ b ] p))`,
+  but `≃` has no `@congr`, so no proof of the reduced form checked.
 
 ## [0.0.12] - 2026-09-24
 

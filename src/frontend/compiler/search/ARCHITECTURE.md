@@ -625,7 +625,9 @@ resolves such binders by enumeration) keeps the old block; and the substitution
 redexes in a generated target (`[k/n] C` = `sb_ty …`) are reduced for emission by
 `backward/redex.zig:reduceRedexOnly` (structural recursion that reduces only
 `rewrites_by_head`-rooted subtrees, leaving ACUI association byte-identical to the
-pool refs). Full rationale + benchmarks:
+pool refs). It descends only through heads with a `@congr` rule: the checker can
+convert a line only along such a path, so a redex under any other head (a
+relation without a `@congr`, say) stays as the rule states it. Full rationale + benchmarks:
 `docs/design_notes/induction_eliminator_metavar.md`.
 
 ## `@auto` rule annotations
@@ -1355,7 +1357,7 @@ width is real.
 | `backward/witness.zig` | ACUI member-witness enumeration for open existentials |
 | `backward/def_match.zig` | transparent-def-aware matching: the rigid mismatch probes, one-layer unfolding (`unfoldAppOnce`), the def-body walk (`walkDefBody`), hyp-side extraction |
 | `backward/lockstep.zig` | the determined argument pairs of a template/goal walk, and `walk` over them |
-| `backward/redex.zig` | reduce `@rewrite` redexes in generated emit targets, leaving ACUI context structure as the pool writes it |
+| `backward/redex.zig` | reduce `@rewrite` redexes in generated emit targets, under `@congr` heads only, leaving ACUI context structure as the pool writes it |
 | `backward/semantic.zig` | the search's view of `../../head_class.zig` (head classes, determined arguments) plus strict-comparability helpers |
 | `abstract_prune.zig` / `context_prune.zig` | broad-slot prefilters |
 | `forward.zig` | forward saturation (`@auto forward`) |
