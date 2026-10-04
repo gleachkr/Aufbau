@@ -67,7 +67,8 @@ in a late phase.
 `@auto backward` makes metavariable introduction available in earlier
 phases. At each depth, search still tries cheaper candidates first:
 unannotated rules, then annotated rules whose conclusions determine all
-their binders, then annotated rules with unresolved binders.
+their binders, then annotated rules with unresolved binders. Within each
+group, rules whose conclusions match more of the goal go first.
 
 ### Nested deferrals
 

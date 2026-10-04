@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.13] - 2026-10-04
 
 ### Added
 
@@ -80,7 +80,7 @@ This file records notable user-facing changes to Aufbau. The project follows
   hidden variable inside a step term, such as the `ih` of
   `add_suc_right_p`. In the Martin-Löf example `auto?` now reconstructs
   `add_comm` with 28 of its 32 lines removed (1 in 0.0.12), `add_zero_right`
-  with 18 of 20 (1), `add_suc_right` with 7 of 42 (none), and `ap_suc_ty`
+  with 18 of 20 (1), `add_suc_right` with 20 of 42 (none), and `ap_suc_ty`
   with every line removed.
 - `auto?` and `exact?` try fewer rules whose conclusion contains a
   `@rewrite` head. Such a term can rewrite to almost anything, so the goal
@@ -112,7 +112,7 @@ This file records notable user-facing changes to Aufbau. The project follows
   report named one limit and suggested raising only that one, and it said
   "the search space was exhausted" when the per-pass subgoal limit
   (`nodes`) had cut the search short. On the search benchmark, re-running
-  each of 277 misses with the suggested retry finds 40 of them, among them
+  each of 256 misses with the suggested retry finds 42 of them, among them
   all 8 in the additive FOL example.
 - `auto?` suggestions print fewer explicit bindings, because the checker
   infers more of them. An inline sub-proof gets the part of its premise the
@@ -135,10 +135,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   `$ _ ⊢ (λ f : b ⇒ c. λ k : a ⇒ b. λ x : a. f · (k · x)) : _ty $ by auto?`
   now finds `t_lam [t_lam [t_lam [t_app [ax [], t_app [ax [], ax []]]]]]`,
   where before it ran out of nodes.
-- On the search benchmark, `auto?` regenerates 129 of 843 theorems from more
+- On the search benchmark, `auto?` regenerates 133 of 846 theorems from more
   removed lines than 0.0.12 did and 9 from fewer, and does 24% less work in
-  total. Of the theorems whose result is unchanged, 32 are found more than
-  half a second faster and 2 more slower.
+  total.
 - The example theories and the manual's preludes print Unicode notation,
   such as `∃` and `→`, in suggestions, hovers and diagnostics. The printer
   uses the last notation declared for a term, and these theories declared
@@ -220,7 +219,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   declare the substitution congruence `sb_f_congr`. Without it, a written-out
   line citing an unreduced substitution such as `[x/w] ∀ y p` could fail with
   "missing @congr for term sb_f", even when the same line with a hole in its
-  context checked.
+  context checked. The manual's FOL prelude gains the same congruence,
+  `sb_congr`, and the equality on objects it needs, `obj_eq`, so a line such
+  as `$ g ⊢ [y := v] ([x := u] (P x ∧ P y)) $` now checks there.
 - `auto?` now accepts a step whose conclusion matches the goal only once a
   definition is unfolded. In the Zermelo example `sep_elim_right [#1]`
   proves `in_all_subsets S x`, which by definition is
@@ -288,8 +289,8 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `auto?` returns the dependency slots its open subgoals and unfolded
   definitions take once it is done with them. Long searches in theories with
   binder-hiding definitions could use up all 55 slots and then miss proofs
-  without saying why; on the Church benchmark the peak use drops from 55 to
-  23.
+  without saying why. On the Church and Martin-Löf benchmarks the peak use
+  drops from 55 to 23.
 - The alpha-renaming axioms in the example theories and the manual's FOL
   prelude were unsound: they let the renamed body mention the new bound
   variable, so renaming captured it. The Martin-Löf example proved
@@ -1349,6 +1350,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.13]: https://github.com/gleachkr/Aufbau/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/gleachkr/Aufbau/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/gleachkr/Aufbau/compare/v0.0.10...v0.0.11
 [0.0.10]: https://github.com/gleachkr/Aufbau/compare/v0.0.9...v0.0.10

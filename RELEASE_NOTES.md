@@ -1,3 +1,78 @@
+# Aufbau 0.0.13
+
+Aufbau 0.0.13 lets `auto?` fill in hole introduced with `@hole` symbols, 
+enabling thing like simple syntax-directed type inference. It also checks more 
+lines that contain holes and improves `@auto` search in a variety of ways.
+
+## Highlights
+
+### Type inference with `auto?`
+
+On a line with proof holes, `auto?` now searches for a proof that supplies the 
+missing terms. On a typing judgment whose type is a hole, this amounts to type 
+inference. For example:
+
+```
+l1: $ g ⊢ (λ x : a. x) : _ty $ by auto?
+```
+
+suggests `t_lam [t_var []]`. Hovering `_ty` shows the type the hole was
+filled with. Before, `auto?` tried only one-step proofs on such lines.
+
+The language server offers a **Fill in the holes** code action on a line
+with holes. It rewrites the line's assertion with every hole filled in, so
+something like `$ _wff /\ p $` becomes `$ (r -> s) /\ p $`. Definitions are 
+kept as the line wrote them.
+
+### Lines with holes
+
+A line with holes is now checked against its visible structure. So, lines like 
+these now check without explicit bindings:
+
+```
+$ g ⊢ (λ x : a. x) : _ty $ by t_lam [t_var []]
+$ (Q \/ _wff) /\ (_wff \/ P c) $ by both [or_l [q []]]
+$ ok2 (A , _ctx) (_ctx , A) $ by dup [ok_ab []]
+$ c e. B -> c e. img f _set $ by sep_in_imp [#1]
+```
+
+### Proof search
+
+`auto?` can now supply a bound variable that doesn't occur in a goal, such as 
+the `x` in `g , x : A ⊢ Ty B` when proving `g ⊢ Ty (A → B)` by `pi_form`. It 
+tries the names your earlier lines use in the same place first, then an unused
+`@vars` variable. Search is also faster and better ordered:
+
+- Every phase runs at depth 1 before any phase searches deeper, so a proof
+  that needs one step of an expensive phase is found early.
+- Rules whose conclusion matches more of the goal are tried first.
+- Rules are dropped before any search when their conclusion contains a
+  `@rewrite` head that cannot be rewritten to the goal, or when they differ
+  from the goal inside a binder-hiding definition such as `∃`.
+- The last-resort modus ponens step proves the premise that fixes the cut
+  formula first.
+- An `@auto forward` fact now proves a goal whose context matches its
+  context only up to ACUI.
+
+A failed `auto?` now names every limit that cut it short and suggests one
+retry that raises the limiting factors, such as `auto? (nodes: 512, fuel: 8192, 
+budget: 14)`. Editors offer that retry as a **Retry with …** code action. On 
+the search benchmark, the retry finds 42 of 256 misses.
+
+Suggestions print fewer explicit bindings, since the checker now infers
+more of them. Across the benchmark, `auto?` regenerates 133 of 846 theorems
+from more removed lines than 0.0.12 did and 9 from fewer, and does 24% less
+work in total.
+
+## Compatibility
+
+The MMB format, the verifier, the proof syntax and the package APIs are
+unchanged. Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.12
 
 Aufbau 0.0.12 adds import and include directives, makes the language server

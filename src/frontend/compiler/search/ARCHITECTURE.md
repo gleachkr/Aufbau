@@ -685,7 +685,10 @@ rationale):
   within equal split-ness, class 0 < eager (by priority 1..255) < class 1 <
   class 2. Closing rules stay first; the user's invertible ladder runs ahead
   of its unannotated class-1 peers, alpha (non-branching, priority 1) before
-  beta (branching, priority 2) if the theory says so.
+  beta (branching, priority 2) if the theory says so. Within a band,
+  candidates sort by `match_specificity` (rigid conclusion application
+  nodes that meet the same head in the goal), higher first, so `t_lam`
+  goes before an elimination whose conclusion fits any judgment.
 - **Set-commit cut** (`exactWithSession`): once an eager candidate *applies*
   — reaches a child solve (`ApplyCandidate.reached_child_solve`, set at
   `emitGeneratedSlot`'s hook call) or yields a validated result — the
