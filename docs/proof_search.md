@@ -690,15 +690,15 @@ An eager rule (which is implicitly `@auto backward` too) gets three things:
    but can never diverge.
 
 Because the engine cannot check invertibility, the keyword names the
-*scheduling behavior you are requesting*, not a verified property — but
-two guardrails keep a wrong annotation from costing proofs. Statically,
-an eager rule must be **invertible-shaped**: every hypothesis binder has
+*scheduling behavior you are requesting*, not a verified property, and
+the search trusts it: an eager rule that is not invertible can make
+`auto?` miss a proof it would otherwise find. One check is static: an
+eager rule must be **invertible-shaped**, so every hypothesis binder has
 to appear in the conclusion. A premise-only witness binder (an
 existential-introduction `t`, a contraction rule like tait's `rex`) is
 rejected at compile time — a depth-free self-feeding contraction would be
-catastrophic. Dynamically, if the whole search misses cleanly with the
-cut in force, the engine retries once with the cut disabled, so a
-mis-declared non-invertible rule costs miss-side latency, never a proof.
+catastrophic. A theory's own breadth benchmark (its hand proofs must stay
+re-discoverable) is the practical check on the rest.
 
 ### `@auto trigger PATTERN` — seed ground facts from the goal
 

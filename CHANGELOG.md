@@ -62,9 +62,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   find the same proofs.
 - An `@auto eager` rule no longer keeps the formula it decomposes alongside
   its parts. The rule is declared invertible, so its premises without that
-  formula are provable whenever the goal is; the retry with the eager cut
-  off still keeps it. On the tait benchmark searches take 57% fewer ticks,
-  on nd_fol 23% fewer, with the same suggestions everywhere.
+  formula are provable whenever the goal is. On the tait benchmark searches
+  take 57% fewer ticks, on nd_fol 23% fewer, with the same suggestions
+  everywhere.
+- `auto?` trusts `@auto eager` annotations. A search that missed while
+  committing to eager rules used to run again without committing; it now
+  reports the miss. A rule marked eager that is not invertible can
+  therefore cost proofs. The second run never found a proof on the
+  benchmarks, and a miss on a Tait sequent goal now takes 37 ms instead of
+  555 ms.
 
 ### Fixed
 

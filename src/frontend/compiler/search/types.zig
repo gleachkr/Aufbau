@@ -911,15 +911,6 @@ pub const GenerationHook = struct {
     /// concrete goals, whose search it would widen (#331).
     open_root: bool = false,
 
-    /// When false, the backtracker ignores the `@auto eager` set-commit cut:
-    /// the eager band is still tried first and its applications stay exempt
-    /// from `max_depth`, but after the band is exhausted the remaining
-    /// candidate bands are tried as usual. The driver honors the cut in every
-    /// ladder phase and flips this off only for a final clean-miss retry, so
-    /// a mis-annotated (non-invertible) eager rule costs miss-side latency,
-    /// never proofs. Irrelevant without eager rules (the cut never arms).
-    honor_eager_cut: bool = true,
-
     /// Shared global counter for stable `meta_id`s (see
     /// `MetaStore.meta_id_counter`). The generation driver owns the counter and
     /// points every open slot's store at it, so a witness meta keeps one
@@ -1327,9 +1318,8 @@ pub const GenerateOptions = struct {
     /// the tail phases of proofs they found before.
     max_nodes: usize = 256,
     /// Per-phase `tryCandidate` budget. Each ladder phase draws from its own
-    /// pool across all its depths, and every ladder run (the retries of
-    /// phase 6 and the eager-cut valve included) starts each phase with a
-    /// fresh pool. A phase that runs dry is retired for the rest of the
+    /// pool across all its depths, and every ladder run (the phase-6 retry
+    /// included) starts each phase with a fresh pool. A phase that runs dry is retired for the rest of the
     /// ladder while the other phases continue; a retired core phase also
     /// skips the remaining tail cells. Sized generously so ordinary proofs never hit it.
     /// Lowered in tests to assert clean budget-exhausted behaviour.

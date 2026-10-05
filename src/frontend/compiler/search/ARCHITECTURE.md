@@ -320,9 +320,8 @@ which the persisted-memo covering rule requires:
    cannot be rebuilt. Broadens every additive split node, hence last and gated;
    the minimal-complement majority never pays. Guarded by the
    `idem_complement_probe` depth-frontier regression test. An `@auto eager`
-   rule never retains while the eager cut is honored: it is declared
-   invertible, so the premises without the principal suffice (the cut-free
-   valve retains again). On tait this halves depth-frontier ticks.
+   rule never retains: it is declared invertible, so the premises without
+   the principal suffice. On tait this halves depth-frontier ticks.
 5. **Phase 5 — constrained backward modus ponens** (`allow_constrained_mp =
    true`). At depth 1 after phase 4's depth-1 cell; deeper only as the last
    tail. Lets the open-generation path
@@ -401,10 +400,10 @@ which the persisted-memo covering rule requires:
 "Clean miss" means two different things, and the difference is deliberate:
 
 - **Ladder gating** (`LadderOutcome` in `generate.zig`) decides whether the
-  tails and retries run. A node-capped cell still ends as a plain `miss`. A
-  retired core phase skips the remaining tail cells. Any retired phase makes
-  the ladder `exhausted`: phase 6 still runs, but the eager-cut valve does
-  not. The global budget or the stack guard (`stopped`) blocks both.
+  tails and the phase-6 retry run. A node-capped cell still ends as a plain
+  `miss`. A retired core phase skips the remaining tail cells; phase 6 still
+  runs after any retirement. The global budget or the stack guard
+  (`stopped`) blocks it.
 - **The failure report** (`miss.MissReport`, read by `source.zig`'s status and
   detail, the retry code action, and the bench's miss causes) calls a miss
   *truncated* when any limit cut it short: the global budget, the stack guard,
@@ -697,8 +696,8 @@ rule stays concrete-only, which is what keeps un-annotated theories byte-identic
 to pre-automation search. Annotating a rule never changes *validity* (every
 assembly still re-validates through `tryCandidate`); it only widens the *search*
 — except `@auto eager`, whose set-commit cut deliberately *narrows* it under
-the user's invertibility declaration (see "`@auto eager`" below; a clean-miss
-retry with the cut off is the completeness valve).
+the user's invertibility declaration, which the search trusts (see
+"`@auto eager`" below).
 
 ### `@auto eager [N]` — user-declared invertible rules
 
@@ -725,10 +724,10 @@ rationale):
   remaining non-eager candidates at that node are skipped. All eager
   candidates (other bag members, other eager rules) are still tried. The
   trigger is application-reached-children, NOT enumeration: a candidate
-  rejected at conclusion assembly never arms the cut. A clean miss of the
-  whole ladder retries once with `GenerationHook.honor_eager_cut = false`
-  (band order and depth exemption stay), so a mis-annotation costs miss-side
-  latency, never proofs.
+  rejected at conclusion assembly never arms the cut. There is no cut-free
+  retry: a mis-annotated (non-invertible) eager rule can lose proofs. Until
+  2026-10 a clean miss re-ran the whole ladder without the cut; it never
+  recovered a proof on the benchmarks and cost tait-style misses ~15×.
 - **Depth exemption** (`hookSolve`): an eager application's subgoal is solved
   at the parent's remaining depth (the level is added back), so counted depth
   ≈ number of genuine choice points, and tall deterministic ladders fit the
@@ -1324,9 +1323,8 @@ it is the identity, gated by `has_acui` so those theories pay nothing.
   child enumeration was NOT truncated by `open_child_max_results` (a
   truncated fail can flip when `concrete_ok` growth changes which child
   candidates surface — observed on euclid `dvd_add`); truncated open fails
-  keep their per-cell lifetime in `open_fail`. Both maps clear at the two
-  ladder-rerun boundaries whose inputs genuinely change (phase-6 seeded
-  pool, eager-cut valve). `concrete_ok` replay is checked BEFORE the
+  keep their per-cell lifetime in `open_fail`. Both maps clear at the
+  ladder rerun whose inputs genuinely change (the phase-6 seeded pool). `concrete_ok` replay is checked BEFORE the
   persisted fail (an ok entry found under stronger flags is consistent with
   a persisted weaker-phase fail and must win). Shadow-validated before
   landing: zero contradicted verdicts across ~550k would-skip re-solves;

@@ -203,8 +203,8 @@ const Driver = struct {
     /// Keys are scope-stable canonical content (the `contentKey` hash /
     /// the canonical open key bytes), values per-phase failure depths
     /// (max depth for concrete, depth bitset for open). Cleared at the
-    /// two ladder-rerun boundaries where the verdict inputs genuinely
-    /// change (phase-6 seeded pool, eager-cut valve). Open verdicts are
+    /// ladder-rerun boundary where the verdict inputs genuinely change
+    /// (the phase-6 seeded pool). Open verdicts are
     /// recorded only when the child enumeration was NOT truncated by
     /// `open_child_max_results` — a truncated fail ("the first N
     /// candidates didn't match back") is not a pure semantic fact and was
@@ -474,7 +474,7 @@ pub fn generateTopLevel(
     const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
     defer session.allocator.free(schedule);
     var applications = std.ArrayListUnmanaged(RuleApplication){};
-    var ladder = try runPhaseLadder(
+    const ladder = try runPhaseLadder(
         &driver,
         goal_expr,
         &applications,
@@ -523,38 +523,13 @@ pub fn generateTopLevel(
             // The seeded pool changes every failure verdict's inputs; the
             // persisted memos must not carry across.
             clearPersistedFails(&driver);
-            ladder = try runPhaseLadder(
+            _ = try runPhaseLadder(
                 &driver,
                 goal_expr,
                 &applications,
                 schedule,
             );
         }
-    }
-
-    // Eager-cut safety valve: still a clean miss and the theory declares
-    // `@auto eager` rules — the set-commit cut may have pruned the only
-    // proof (a mis-annotated, non-invertible eager rule). Re-run the whole
-    // ladder with the cut disabled; the eager band order and the depth
-    // exemption stay (they are scheduling, not commitment). Fresh per-phase
-    // fuel like every retry, same global tick budget. Theories without
-    // eager annotations never reach this, and annotated theories pay only
-    // on a clean miss — proofs the cut-honoring ladder finds never do.
-    if (applications.items.len == 0 and ladder == .clean and
-        session.context.registry.autoEagerRuleCount() > 0)
-    {
-        driver.hook.honor_eager_cut = false;
-        // Disabling the cut widens exploration relative to every verdict
-        // recorded with it honored; cut-honoring failures do not cover
-        // cut-free re-solves. (Depth-0 verdicts would survive — no hook at
-        // depth 0 — but clear conservatively.)
-        clearPersistedFails(&driver);
-        _ = try runPhaseLadder(
-            &driver,
-            goal_expr,
-            &applications,
-            schedule,
-        );
     }
 
     // Mirror the forward layer's meta-store activity into the bench counters
@@ -662,11 +637,11 @@ fn buildDerivedIndex(
     };
 }
 
-/// How a full ladder ended without a proof: every cell ran (`clean`), a
-/// phase's own fuel ran dry (`exhausted`; the phase-6 retry still runs with
-/// fresh fuel, the eager-cut valve does not), or the search must end now (`stopped`: the global tick budget or
-/// the stack guard, which every later cell would hit again).
-const LadderOutcome = enum { clean, exhausted, stopped };
+/// How a full ladder ended: it ran to the end or found a proof (`finished`;
+/// a phase whose own fuel ran dry was retired, and the phase-6 retry still
+/// runs with fresh fuel), or the search must end now (`stopped`: the global
+/// tick budget or the stack guard, which every later cell would hit again).
+const LadderOutcome = enum { finished, stopped };
 
 /// One phase of the retry ladder: the capabilities its cells search with, and
 /// what the theory needs for the phase to run at all. Witness invention is not
@@ -820,10 +795,6 @@ const LadderState = struct {
         return !self.retired[cell.phase] and (cell.isCore() or !self.coreRetired());
     }
 
-    fn anyRetired(self: *const LadderState) bool {
-        return std.mem.indexOfScalar(bool, &self.retired, true) != null;
-    }
-
     /// A core phase retired, so the core miss is not clean: no further tail
     /// cell runs.
     fn coreRetired(self: *const LadderState) bool {
@@ -836,9 +807,8 @@ const LadderState = struct {
 /// searches depth 1. The core then continues depth-major over phases 1–3
 /// (outer iterative deepening 2..max_depth, inner phases per depth), and
 /// phases 4–5 follow as phase-major tails from depth 2, only while no core
-/// phase has retired. Extracted so the phase-6 trigger-seeding retry and the
-/// eager-cut valve can re-run the whole ladder. Returns how the ladder ended
-/// without a proof.
+/// phase has retired. Extracted so the phase-6 trigger-seeding retry can
+/// re-run the whole ladder. Returns how the ladder ended.
 ///
 /// Why depth-major: `max_depth` monotonicity is a PREFIX property of the cell
 /// visit order. Depth-major makes a higher max_depth's cell sequence a strict
@@ -900,10 +870,9 @@ const LadderState = struct {
 ///   abort everything on any exhaustion because an exhausted phase had, by
 ///   the clean-miss gating, no earlier phase left to hurt — here an
 ///   expensive phase flooding out at a shallow cell must not kill a sibling
-///   phase's deeper find. A retirement still reports the ladder as
-///   budget-truncated (the miss is not clean, so the eager-cut valve stays
-///   exactly as conservative as before), and a retired core phase also
-///   skips the remaining tail cells. Abort and
+///   phase's deeper find. A retirement still reports the miss as
+///   budget-truncated, and a retired core phase also skips the remaining
+///   tail cells. Abort and
 ///   retire points depend only on cumulative work along the fixed visit
 ///   order, so md monotonicity holds even on truncated calls.
 fn runPhaseLadder(
@@ -917,7 +886,7 @@ fn runPhaseLadder(
         if (state.runs(cell)) {
             switch (try runCell(driver, &state, cell, goal_expr, applications)) {
                 .miss => {},
-                .found => return .clean,
+                .found => return .finished,
                 .fuel => state.retired[cell.phase] = true,
                 .stop => return .stopped,
             }
@@ -931,8 +900,7 @@ fn runPhaseLadder(
             }
         }
     }
-    // A retired phase means the miss is not clean.
-    return if (state.anyRetired()) .exhausted else .clean;
+    return .finished;
 }
 
 /// How one ladder cell ended: it ran in full without a proof (`miss`), it
@@ -2282,11 +2250,9 @@ test "buildSchedule leaves out the phases the theory cannot run" {
 
 test "a retired core phase stops the tails; a retired tail phase stops only itself" {
     var state = LadderState{ .fuel = @splat(0) };
-    try std.testing.expect(!state.anyRetired());
     try std.testing.expect(state.runs(.{ .phase = 4, .depth = 2 }));
 
     state.retired[3] = true;
-    try std.testing.expect(state.anyRetired());
     try std.testing.expect(!state.coreRetired());
     try std.testing.expect(!state.runs(.{ .phase = 3, .depth = 2 }));
     try std.testing.expect(state.runs(.{ .phase = 4, .depth = 2 }));

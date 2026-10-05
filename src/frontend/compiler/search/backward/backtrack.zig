@@ -176,18 +176,16 @@ pub fn exactWithSession(
     // fails. All eager candidates (other bag members, other eager rules) are
     // still tried; the sort placed the band contiguously after class 0, so
     // the first non-eager candidate after arming ends the enumeration. A
-    // final clean-miss retry with `honor_eager_cut` off is the completeness
-    // valve for a mis-annotation (see `generate.zig`'s ladder) — and the
-    // eager *depth exemption* rides on `emitGeneratedSlot`'s hook call, not
-    // on this cut. See docs/design_notes/eager_rule_scheduling.md.
-    const honor_eager_cut = if (options.generator) |hook|
-        hook.honor_eager_cut and context.registry.autoEagerRuleCount() > 0
-    else
-        false;
+    // mis-annotated (non-invertible) eager rule can therefore lose proofs;
+    // the annotation is trusted. The eager *depth exemption* rides on
+    // `emitGeneratedSlot`'s hook call, not on this cut. See
+    // docs/design_notes/eager_rule_scheduling.md.
+    const eager_cut = options.generator != null and
+        context.registry.autoEagerRuleCount() > 0;
     var eager_armed = false;
     for (apply_candidates) |*apply_candidate| {
         apply_candidate.internal_child = options.internal_open_child;
-        const is_eager = honor_eager_cut and
+        const is_eager = eager_cut and
             context.registry.eagerPriority(apply_candidate.rule_id) != null;
         if (eager_armed and !is_eager) break;
         const hyp_count = apply_candidate.unresolved_hyps.len;
@@ -1341,7 +1339,7 @@ fn emitGeneratedSlot(
     // the signal that arms the `@auto eager` set-commit cut (consulted only
     // for eager candidates). An eager application is also exempt from the
     // depth budget: `eager_step` tells the driver to solve the child at the
-    // parent's remaining depth (independent of `honor_eager_cut`).
+    // parent's remaining depth.
     candidate.reached_child_solve = true;
     const eager_step = ctx.context.registry.eagerPriority(candidate.rule_id) != null;
     const proof = (try hook.solve(target, &candidate.theorem, eager_step)) orelse {
@@ -1396,10 +1394,9 @@ fn trySplitGenerate(
             b,
             // An eager rule never keeps its principal: the user declared it
             // invertible, so its premises without the principal are provable
-            // whenever the goal is. Like the cut, this holds only while the
-            // cut is honored; the cut-free valve retains again.
-            hook.allow_retain_principal and !(hook.honor_eager_cut and
-                context.registry.eagerPriority(candidate.rule_id) != null),
+            // whenever the goal is.
+            hook.allow_retain_principal and
+                context.registry.eagerPriority(candidate.rule_id) == null,
         ) orelse {
             step = .abstained;
             continue;

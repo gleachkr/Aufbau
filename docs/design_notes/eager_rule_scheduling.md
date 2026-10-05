@@ -174,6 +174,11 @@ depth exemption coherent:
   rule simply doesn't fit this goal) must not arm the cut, or a stray
   eager annotation on a rule that never fits would suppress the whole
   search at every node.
+- **REMOVED 2026-10-05.** The valve below never recovered a proof on the
+  benchmarks, and once eager rules stopped retaining their principal
+  (phase 4) it was ~15× the cost of a clean tait miss (tf: 555 → 37 ms).
+  `@auto eager` is now a trusted invertibility claim, as Aesop's safe
+  rules are. Historical text follows.
 - **Completeness safety valve via the phase ladder** — the engine's
   existing idiom for accumulating permissiveness: a clean miss through the
   cut-honoring phases triggers a no-cut retry (phase-6-style, or a

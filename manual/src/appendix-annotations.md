@@ -174,7 +174,8 @@ search chooses one from the `@vars` pool.
 once applied, and does not count its applications toward the depth limit.
 The optional priority `N` is at least 1, defaults to 1, and runs earlier
 when smaller. It implies `backward`. The compiler checks that premises use
-only binders present in the conclusion, but cannot verify invertibility.
+only binders present in the conclusion, but cannot verify invertibility;
+a rule marked eager that is not invertible can make search miss proofs.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
 binders, and `_`. As a last resort, search matches it against subterms of

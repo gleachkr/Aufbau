@@ -290,10 +290,9 @@ generally be "invertible" rules that can safely be applied without producing
 unprovable goals.
 
 The compiler cannot prove that a rule is invertible; the annotation is the
-theory author's choice. It does reject `@auto eager` if a premise mentions a
-binder absent from the conclusion. If search fails without reaching its
-budget, it also retries once without committing to eager rules. Priority
-ordering and the depth exemption still apply on that retry.
+theory author's choice, and search trusts it. A rule marked eager that is
+not invertible can make `auto?` miss proofs. The compiler does reject
+`@auto eager` if a premise mentions a binder absent from the conclusion.
 
 ## `@auto trigger`: seed leaf facts
 
