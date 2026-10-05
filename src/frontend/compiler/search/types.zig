@@ -176,6 +176,13 @@ pub const ApplyCandidate = struct {
     internal_child: bool = false,
     /// Generation order: rigid conclusion structure that matched the goal.
     match_specificity: u16 = 0,
+    /// Generation order: the rule's conclusion can split an ACUI context
+    /// (`split.conclusionIsSplit`). Depends only on the rule, so it is set
+    /// once before the sort rather than in the comparator.
+    concl_is_split: bool = false,
+    /// Generation order: the rule's `generationOrderClass`, set with
+    /// `concl_is_split`.
+    order_class: u16 = 0,
 
     pub fn deinit(self: *ApplyCandidate) void {
         self.allocator.free(self.bindings);

@@ -1298,9 +1298,7 @@ fn hashExprNode(hasher: *std.hash.Wyhash, key: ExprNode) void {
         .app => |app| {
             hasher.update(&[_]u8{2});
             hasher.update(std.mem.asBytes(&app.term_id));
-            for (app.args) |arg| {
-                hasher.update(std.mem.asBytes(&arg));
-            }
+            hasher.update(std.mem.sliceAsBytes(app.args));
         },
     }
 }

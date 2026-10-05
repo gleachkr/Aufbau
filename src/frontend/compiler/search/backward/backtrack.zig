@@ -142,6 +142,13 @@ pub fn exactWithSession(
     // Stable, and only on the generation path — plain `exact?` ordering is
     // untouched.
     if (options.generator != null) {
+        for (apply_candidates) |*apply_candidate| {
+            apply_candidate.concl_is_split = split.conclusionIsSplit(
+                context,
+                context.env.rules.items[apply_candidate.rule_id].concl,
+            );
+            apply_candidate.order_class = generationOrderClass(context, apply_candidate.rule_id);
+        }
         if (goal.concreteOrHint()) |goal_expr| {
             for (apply_candidates) |*apply_candidate| {
                 apply_candidate.match_specificity = matchSpecificity(
@@ -155,7 +162,7 @@ pub fn exactWithSession(
         std.sort.insertion(
             ApplyCandidate,
             apply_candidates,
-            SplitOrderCtx{ .context = context },
+            {},
             nonSplitCandidateFirst,
         );
     }
@@ -346,22 +353,14 @@ fn computePruneSetup(context: *const Context, rule_id: u32) PruneSetup {
     };
 }
 
-const SplitOrderCtx = struct { context: *const Context };
-
 fn nonSplitCandidateFirst(
-    ctx: SplitOrderCtx,
+    _: void,
     a: ApplyCandidate,
     b: ApplyCandidate,
 ) bool {
-    const a_split = split.conclusionIsSplit(
-        ctx.context,
-        ctx.context.env.rules.items[a.rule_id].concl,
-    );
-    const b_split = split.conclusionIsSplit(
-        ctx.context,
-        ctx.context.env.rules.items[b.rule_id].concl,
-    );
-    if (a_split != b_split) return @intFromBool(a_split) < @intFromBool(b_split);
+    if (a.concl_is_split != b.concl_is_split) {
+        return @intFromBool(a.concl_is_split) < @intFromBool(b.concl_is_split);
+    }
     // Among same split-ness, order by witness class: non-`@auto` rules first
     // (closing/structural rules like `ax` and the eigenvariable rules
     // `lex`/`rall`, deliberately un-enrolled), then `@auto` rules whose binders
@@ -373,9 +372,7 @@ fn nonSplitCandidateFirst(
     // member-witness unification (`tryAcuiMemberWitnesses`) can read the
     // witness off an in-scope member instead of the search drowning in
     // fallbacks.
-    const a_ord = generationOrderClass(ctx.context, a.rule_id);
-    const b_ord = generationOrderClass(ctx.context, b.rule_id);
-    if (a_ord != b_ord) return a_ord < b_ord;
+    if (a.order_class != b.order_class) return a.order_class < b.order_class;
     // Within a band, the rule whose conclusion matches more of the goal first:
     // `t_lam` (`g ⊢ λ x : A. t : A ⇒ B`) before an elimination whose
     // conclusion `g ⊢ b` fits every goal. Under a holey root the elimination's
