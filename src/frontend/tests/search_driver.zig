@@ -23,7 +23,11 @@ const test_mm0 =
 ;
 
 fn run(proof_src: []const u8) !SearchDriver.Result {
-    return SearchDriver.run(std.testing.allocator, test_mm0, proof_src);
+    return runWith(proof_src, .{});
+}
+
+fn runWith(proof_src: []const u8, options: SearchDriver.Options) !SearchDriver.Result {
+    return SearchDriver.run(std.testing.allocator, test_mm0, proof_src, options);
 }
 
 /// `proof_src` with every marker's edits made, as `--fill` makes them.
@@ -217,4 +221,87 @@ test "search driver reports the hole values a find gives its line" {
         \\l2: $ isty o $ by o_ty
         ,
     ));
+}
+
+test "search driver retries a miss with the larger limits its report advises" {
+    const proof_src =
+        \\t1
+        \\---
+        \\l1: $ R $ by auto? (depth: 1)
+        \\
+        \\t2
+        \\---
+        \\l1: $ R $ by both [exact?, use [p []]]
+        \\
+        \\t3
+        \\---
+        \\l1: $ isty o $ by o_ty
+    ;
+    var once = try run(proof_src);
+    defer once.deinit();
+    try std.testing.expectEqual(.missed, once.markers[0].outcome);
+    try std.testing.expectEqual(@as(usize, 0), once.markers[0].rounds.len);
+    const retry = once.markers[0].retry.?;
+
+    var result = try runWith(proof_src, .{ .retries = 1 });
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.markers.len);
+    const marker = result.markers[0];
+    try std.testing.expectEqual(.found, marker.outcome);
+    try std.testing.expectEqual(@as(usize, 1), marker.rounds.len);
+    try std.testing.expectEqual(.missed, marker.rounds[0].outcome);
+    try std.testing.expectEqualStrings(retry, marker.rounds[0].retry);
+    try std.testing.expectEqual(.found, result.markers[1].outcome);
+    // The edits replace the markers as written, not as retried.
+    const filled = try applyEdits(proof_src, result.markers);
+    defer std.testing.allocator.free(filled);
+    try std.testing.expectEqualStrings(result.text, filled);
+    try std.testing.expect(std.mem.indexOf(u8, result.text, "auto?") == null);
+}
+
+test "search driver searches only the markers named, with default limits" {
+    const nowhere: mm0.CompilerSupport.Search.Span = .{ .start = 0, .end = 0 };
+    const depth_one: SearchDriver.Options = .{
+        .only = .{ .theorem = "t1" },
+        .params = &.{.{
+            .name = "depth",
+            .name_span = nowhere,
+            .value = 1,
+            .value_span = nowhere,
+            .span = nowhere,
+        }},
+    };
+    const blocks =
+        \\
+        \\t2
+        \\---
+        \\l1: $ R $ by auto?
+        \\
+        \\t3
+        \\---
+        \\l1: $ isty o $ by o_ty
+    ;
+
+    // `t2`'s marker is not searched, and `R` needs depth 2.
+    var limited = try runWith("t1\n---\nl1: $ R $ by auto?\n" ++ blocks, depth_one);
+    defer limited.deinit();
+    try std.testing.expectEqual(@as(usize, 1), limited.markers.len);
+    try std.testing.expectEqualStrings("t1", limited.markers[0].theorem);
+    try std.testing.expectEqual(.missed, limited.markers[0].outcome);
+
+    // A marker's own depth wins over the run's.
+    var own = try runWith("t1\n---\nl1: $ R $ by auto? (depth: 2)\n" ++ blocks, depth_one);
+    defer own.deinit();
+    try std.testing.expectEqual(@as(usize, 1), own.markers.len);
+    try std.testing.expectEqual(.found, own.markers[0].outcome);
+    try std.testing.expect(std.mem.endsWith(u8, own.text, blocks));
+
+    var line = try runWith(
+        "t1\n---\nl1: $ P $ by exact?\nl2: $ R $ by auto?\n" ++ blocks,
+        .{ .only = .{ .theorem = "t1", .label = "l2" } },
+    );
+    defer line.deinit();
+    try std.testing.expectEqual(@as(usize, 1), line.markers.len);
+    try std.testing.expectEqualStrings("l2", line.markers[0].label);
 }

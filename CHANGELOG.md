@@ -28,6 +28,12 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `abc search -v` adds what each search cost: work ticks, which repeat from
   run to run, wall time, and the depth and phase that found the proof.
   `-vv` adds why a search missed and the rules it tried most.
+- `abc search --retry N` searches a missed `auto?` again with the larger
+  limits its report advises, up to N times; a proof found that way replaces
+  the placeholder. `-v` and `--json` report each round.
+- `abc search --only THEOREM[:LABEL]` searches only one theorem's
+  placeholders, or one line's. `--depth N` and `--budget N` set the limits
+  of every `auto?` that does not set its own.
 - `abc compile` reads the proof file from standard input when given `-`
   for `INPUT.auf`, and writes the MMB to standard output when given `-` for
   `OUTPUT.mmb`. Diagnostics call the input `<stdin>`, and its `include`s

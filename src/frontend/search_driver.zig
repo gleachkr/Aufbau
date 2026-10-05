@@ -8,6 +8,10 @@
 //! `apply?` lists candidate rules rather than a proof, so its result is
 //! reported and never substituted. A marker after a line of its block that
 //! does not check is not searched: there is no context to search in.
+//!
+//! With `Options.retries`, a missed `auto?` whose report advises larger
+//! limits is rewritten with them and searched again. The rewrite stays in
+//! the working text only when that finds a proof, which then replaces it.
 
 const std = @import("std");
 const Search = @import("./compiler/search.zig");
@@ -67,6 +71,16 @@ pub const Outcome = enum {
     failed,
 };
 
+/// A search of a marker that missed and was searched again with larger
+/// limits.
+pub const Round = struct {
+    /// `missed` or `cut_short`.
+    outcome: Outcome,
+    cost: Cost,
+    /// The marker with the larger limits, which the next round searched.
+    retry: []const u8,
+};
+
 pub const Marker = struct {
     kind: Search.SearchPlaceholder.Kind,
     /// The marker's span in the proof text the run was given.
@@ -97,6 +111,34 @@ pub const Marker = struct {
     /// After a miss: why, and which limits cut it short.
     detail: ?[]const u8 = null,
     cost: Cost = .{},
+    /// The rounds before the last, when the marker was searched again
+    /// (`Options.retries`). The other fields describe the last round.
+    rounds: []const Round = &.{},
+};
+
+/// Names the markers a run searches: those of one theorem, or of one of
+/// its lines.
+pub const Only = struct {
+    theorem: []const u8,
+    /// Every line of the theorem when null.
+    label: ?[]const u8 = null,
+
+    fn selects(self: Only, placeholder: Search.SearchPlaceholder) bool {
+        if (!std.mem.eql(u8, self.theorem, placeholder.theorem)) return false;
+        const label = self.label orelse return true;
+        return std.mem.eql(u8, label, placeholder.label);
+    }
+};
+
+pub const Options = struct {
+    /// Search only these markers. The others stay as written, and the
+    /// analysis admits them like a miss.
+    only: ?Only = null,
+    /// How many times a missed `auto?` is searched again with the larger
+    /// limits its retry advice gives.
+    retries: usize = 0,
+    /// `auto?` parameters for every marker that does not set them itself.
+    params: []const ProofScript.SearchParam = &.{},
 };
 
 pub const Result = struct {
@@ -127,10 +169,15 @@ pub fn run(
     allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
+    options: Options,
 ) !Result {
     var result_arena = std.heap.ArenaAllocator.init(allocator);
     errdefer result_arena.deinit();
     const out = result_arena.allocator();
+
+    // A marker's own parameters are applied over these by the search.
+    var marker_options = search_options;
+    Search.tunables.applySearchParams(&marker_options.generate, options.params);
 
     var markers = std.ArrayListUnmanaged(Marker){};
     // The found markers whose lines may have holes: where each proof went
@@ -155,8 +202,12 @@ pub fn run(
         const next = for (placeholders) |placeholder| {
             if (placeholder.span.start >= cursor) break placeholder;
         } else break;
+        cursor = next.span.start + 1;
+        if (options.only) |only| {
+            if (!only.selects(next)) continue;
+        }
 
-        var marker: Marker = .{
+        const unsearched: Marker = .{
             .kind = next.kind,
             .span = .{
                 .start = shift(next.span.start, growth),
@@ -166,64 +217,56 @@ pub fn run(
             .label = try out.dupe(u8, next.label),
             .outcome = .missed,
         };
-        cursor = next.span.start + 1;
 
-        var counters = Search.SearchCounters{ .collect = true };
-        var options = search_options;
-        options.counters = &counters;
-        var search = Search.suggestionsAtSourceOffset(
-            allocator,
-            mm0_src,
-            working,
-            next.span.start,
-            options,
-        ) catch |err| {
-            if (err == error.OutOfMemory) return err;
-            marker.outcome = .failed;
-            marker.failure = err;
-            try markers.append(out, marker);
-            continue;
+        // After a retry, the working text with the marker rewritten, and
+        // how much longer that made it.
+        var retried: ?[]u8 = null;
+        defer if (retried) |text| allocator.free(text);
+        var retry_growth: isize = 0;
+        var rounds = std.ArrayListUnmanaged(Round){};
+        var offset = next.span.start;
+        var marker = unsearched;
+        const proof_span = while (true) {
+            marker = unsearched;
+            const spans = try searchMarker(
+                allocator,
+                out,
+                mm0_src,
+                retried orelse working,
+                offset,
+                marker_options,
+                &marker,
+            );
+            const retry_span = spans.retry orelse break spans.proof;
+            if (rounds.items.len == options.retries) break spans.proof;
+            try rounds.append(out, .{
+                .outcome = marker.outcome,
+                .cost = marker.cost,
+                .retry = marker.retry.?,
+            });
+            const text = try splice(
+                allocator,
+                retried orelse working,
+                retry_span,
+                marker.retry.?,
+            );
+            if (retried) |old| allocator.free(old);
+            retried = text;
+            retry_growth += growthOf(retry_span, marker.retry.?);
+            offset = retry_span.start;
         };
-        defer search.deinit();
+        marker.rounds = try rounds.toOwnedSlice(out);
 
-        if (search.target_span == null) {
-            marker.outcome = .not_searched;
-            if (search.blocked_by) |span| {
-                marker.blocked_by = try out.dupe(u8, working[span.start..span.end]);
-            }
-            try markers.append(out, marker);
-            continue;
-        }
-        marker.outcome = switch (search.status) {
-            .found => if (next.kind == .apply) .candidates else .found,
-            .miss => .missed,
-            .budget_exhausted => .cut_short,
-        };
-        marker.cost = try costOf(out, &counters);
-        if (search.status_detail) |detail| {
-            // `cost.rules` lists the most-tried rules, so drop the
-            // sentence that names them.
-            const kept = Search.statusDetailWithoutRules(detail);
-            if (kept.len != 0) marker.detail = try out.dupe(u8, kept);
-        }
-        if (search.retry) |retry| {
-            marker.retry = try out.dupe(u8, retry.replacement);
-        }
-        if (search.items.len != 0) {
-            const suggestions = try out.alloc([]const u8, search.items.len);
-            for (search.items, suggestions) |item, *text| {
-                text.* = try out.dupe(u8, item.replacement);
-            }
-            marker.suggestions = suggestions;
-        }
-        if (search.items.len != 0 and next.kind != .apply) {
-            const item = search.items[0];
+        if (proof_span) |span| {
+            const proof = marker.suggestions[0];
+            // A retry rewrote the marker inside `span`, so the growth it
+            // made lies before the span's end but not its start.
             marker.edit = .{
                 .span = .{
-                    .start = shift(item.replace_span.start, growth),
-                    .end = shift(item.replace_span.end, growth),
+                    .start = shift(span.start, growth),
+                    .end = shift(span.end, growth + retry_growth),
                 },
-                .text = marker.suggestions[0],
+                .text = proof,
             };
             // A `conversion?` proof replaces its whole line with a chain
             // of lines ending in it, so `at` would name the chain's first
@@ -232,20 +275,15 @@ pub fn run(
             if (next.kind != .conversion) {
                 try found_at.append(allocator, .{
                     .marker = markers.items.len,
-                    .at = item.replace_span.start,
+                    .at = span.start,
                     .growth = growth,
                 });
             }
-            const spliced = try std.mem.concat(allocator, u8, &.{
-                working[0..item.replace_span.start],
-                item.replacement,
-                working[item.replace_span.end..],
-            });
+            const text = try splice(allocator, retried orelse working, span, proof);
             allocator.free(working);
-            working = spliced;
-            growth += @as(isize, @intCast(item.replacement.len)) -
-                @as(isize, @intCast(item.replace_span.end - item.replace_span.start));
-            cursor = item.replace_span.start + item.replacement.len;
+            working = text;
+            growth += retry_growth + growthOf(span, proof);
+            cursor = span.start + proof.len;
         }
         try markers.append(out, marker);
     }
@@ -268,6 +306,97 @@ pub fn run(
         .markers = try markers.toOwnedSlice(out),
         .text = try out.dupe(u8, working),
     };
+}
+
+/// Where a search's results go in the text it searched.
+const Spans = struct {
+    /// The span the proof replaces, when one was found to put in place.
+    proof: ?Span = null,
+    /// The span a retry replaces, when the marker missed and larger
+    /// limits might find a proof.
+    retry: ?Span = null,
+};
+
+/// Search the marker at `offset` in `text` and record the result in
+/// `marker`.
+fn searchMarker(
+    allocator: std.mem.Allocator,
+    out: std.mem.Allocator,
+    mm0_src: []const u8,
+    text: []const u8,
+    offset: usize,
+    base_options: Search.SourceSuggestionOptions,
+    marker: *Marker,
+) !Spans {
+    var counters = Search.SearchCounters{ .collect = true };
+    var options = base_options;
+    options.counters = &counters;
+    var search = Search.suggestionsAtSourceOffset(
+        allocator,
+        mm0_src,
+        text,
+        offset,
+        options,
+    ) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        marker.outcome = .failed;
+        marker.failure = err;
+        return .{};
+    };
+    defer search.deinit();
+
+    if (search.target_span == null) {
+        marker.outcome = .not_searched;
+        if (search.blocked_by) |span| {
+            marker.blocked_by = try out.dupe(u8, text[span.start..span.end]);
+        }
+        return .{};
+    }
+    marker.outcome = switch (search.status) {
+        .found => if (marker.kind == .apply) .candidates else .found,
+        .miss => .missed,
+        .budget_exhausted => .cut_short,
+    };
+    marker.cost = try costOf(out, &counters);
+    if (search.status_detail) |detail| {
+        // `cost.rules` lists the most-tried rules, so drop the sentence
+        // that names them.
+        const kept = Search.statusDetailWithoutRules(detail);
+        if (kept.len != 0) marker.detail = try out.dupe(u8, kept);
+    }
+    var spans: Spans = .{};
+    if (search.retry) |retry| {
+        marker.retry = try out.dupe(u8, retry.replacement);
+        spans.retry = retry.replace_span;
+    }
+    if (search.items.len != 0) {
+        const suggestions = try out.alloc([]const u8, search.items.len);
+        for (search.items, suggestions) |item, *suggestion| {
+            suggestion.* = try out.dupe(u8, item.replacement);
+        }
+        marker.suggestions = suggestions;
+        if (marker.kind != .apply) spans.proof = search.items[0].replace_span;
+    }
+    return spans;
+}
+
+/// `text` with `span` replaced by `replacement`.
+fn splice(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    span: Span,
+    replacement: []const u8,
+) ![]u8 {
+    return std.mem.concat(allocator, u8, &.{
+        text[0..span.start],
+        replacement,
+        text[span.end..],
+    });
+}
+
+fn growthOf(span: Span, replacement: []const u8) isize {
+    return @as(isize, @intCast(replacement.len)) -
+        @as(isize, @intCast(span.end - span.start));
 }
 
 fn shift(offset: usize, growth: isize) usize {

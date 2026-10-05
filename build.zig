@@ -627,8 +627,10 @@ pub fn build(b: *std.Build) void {
         "Usage:\n" ++
         "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
         "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
-        "  abc search INPUT.mm0 INPUT.auf [--fill] [--json] [-v | -vv] " ++
-        "[--lang LANG]\n" ++
+        "  abc search INPUT.mm0 INPUT.auf [--fill] [--json] [-v | -vv]\n" ++
+        "             [--only THEOREM[:LABEL]] [--retry N] [--depth N] " ++
+        "[--budget N]\n" ++
+        "             [--lang LANG]\n" ++
         "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
         "  abc lsp [--lang LANG]\n" ++
         "  abc [--help | --version]\n" ++
@@ -646,6 +648,13 @@ pub fn build(b: *std.Build) void {
         "  --json           Report each search marker as one line of JSON\n" ++
         "  -v, -vv          Report what each search cost; -vv adds why it\n" ++
         "                   missed and the rules it tried most\n" ++
+        "  --only THEOREM[:LABEL]\n" ++
+        "                   Search only the markers of THEOREM, or of its line\n" ++
+        "                   LABEL\n" ++
+        "  --retry N        Search a missed auto? again with the larger limits\n" ++
+        "                   its report advises, up to N times\n" ++
+        "  --depth N, --budget N\n" ++
+        "                   Limits for each auto? that does not set its own\n" ++
         "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
         "                   the ABC_LANG environment variable\n" ++
         "\nExit status:\n" ++
@@ -789,7 +798,8 @@ pub fn build(b: *std.Build) void {
     abc_search_json.addCheck(.{ .expect_stdout_match = "\"depth\":1,\"phase\":1," ++
         "\"phase_name\":\"non-splitting generation\",\"rules\":[" ++
         "{\"name\":\"p\",\"attempts\":1,\"accepted\":1,\"rejected\":0}," ++
-        "{\"name\":\"use\",\"attempts\":1,\"accepted\":1,\"rejected\":0}]}\n" ++
+        "{\"name\":\"use\",\"attempts\":1,\"accepted\":1,\"rejected\":0}]," ++
+        "\"rounds\":[]}\n" ++
         "{\"file\":\"search.auf\",\"line\":7," });
     cli_smoke_step.dependOn(&abc_search_json.step);
 
@@ -809,6 +819,74 @@ pub fn build(b: *std.Build) void {
     abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall\n" ++
         "  why: no rule application closes this goal" });
     cli_smoke_step.dependOn(&abc_search_verbose.step);
+
+    // `--retry`: a miss whose report advises larger limits is searched
+    // again with them, and the find replaces the marker.
+    const abc_search_retry = b.addRunArtifact(compiler_exe);
+    abc_search_retry.setCwd(b.path("tests/cli"));
+    abc_search_retry.addArgs(&.{ "search", "--retry", "1", "retry.mm0", "retry.auf" });
+    abc_search_retry.expectExitCode(0);
+    abc_search_retry.expectStdOutEqual(
+        "retry.auf:3  near l1  auto?  found\n" ++
+            "  qr [pq [p []]]\n" ++
+            "retry.auf:7  far l1  auto?  found after 1 retry\n" ++
+            "  st [rs [near []]]\n" ++
+            "2 found, 0 missed\n",
+    );
+    cli_smoke_step.dependOn(&abc_search_retry.step);
+
+    // `--depth` limits each marker that sets no depth of its own.
+    const abc_search_depth = b.addRunArtifact(compiler_exe);
+    abc_search_depth.setCwd(b.path("tests/cli"));
+    abc_search_depth.addArgs(&.{ "search", "--depth", "1", "retry.mm0", "retry.auf" });
+    abc_search_depth.expectExitCode(4);
+    abc_search_depth.expectStdOutEqual(
+        "retry.auf:3  near l1  auto?  missed\n" ++
+            "  retry: auto? (depth: 3, budget: 14)\n" ++
+            "retry.auf:7  far l1  auto?  missed\n" ++
+            "  retry: auto? (depth: 3, budget: 14)\n" ++
+            "0 found, 2 missed\n",
+    );
+    cli_smoke_step.dependOn(&abc_search_depth.step);
+
+    // `--only` searches one theorem's markers; a marker's own depth wins
+    // over `--depth`.
+    const abc_search_only = b.addRunArtifact(compiler_exe);
+    abc_search_only.setCwd(b.path("tests/cli"));
+    abc_search_only.addArgs(&.{ "search", "--only", "far", "--depth", "4", "retry.mm0", "retry.auf" });
+    abc_search_only.expectExitCode(4);
+    abc_search_only.expectStdOutEqual(
+        "retry.auf:7  far l1  auto?  missed\n" ++
+            "  retry: auto? (depth: 3, budget: 14)\n" ++
+            "0 found, 1 missed\n",
+    );
+    cli_smoke_step.dependOn(&abc_search_only.step);
+
+    // `--json` lists the rounds before the last. Wall time varies, so
+    // match the rest.
+    const abc_search_retry_json = b.addRunArtifact(compiler_exe);
+    abc_search_retry_json.setCwd(b.path("tests/cli"));
+    abc_search_retry_json.addArgs(&.{ "search", "--json", "--retry", "1", "--only", "far:l1", "retry.mm0", "retry.auf" });
+    abc_search_retry_json.expectExitCode(0);
+    abc_search_retry_json.addCheck(.{ .expect_stdout_match = "\"status\":\"found\"," ++
+        "\"suggestions\":[\"st [rs [near []]]\"]," });
+    abc_search_retry_json.addCheck(.{ .expect_stdout_match = "\"rounds\":[{\"status\":\"missed\"," ++
+        "\"retry\":\"auto? (depth: 3, budget: 14)\",\"ticks\":" });
+    cli_smoke_step.dependOn(&abc_search_retry_json.step);
+
+    const abc_search_only_none = b.addRunArtifact(compiler_exe);
+    abc_search_only_none.setCwd(b.path("tests/cli"));
+    abc_search_only_none.addArgs(&.{ "search", "--only", "far:l2", "retry.mm0", "retry.auf" });
+    abc_search_only_none.expectExitCode(1);
+    abc_search_only_none.expectStdErrEqual("abc: no search marker matches --only far:l2\n");
+    cli_smoke_step.dependOn(&abc_search_only_none.step);
+
+    const abc_search_bad_depth = b.addRunArtifact(compiler_exe);
+    abc_search_bad_depth.setCwd(b.path("tests/cli"));
+    abc_search_bad_depth.addArgs(&.{ "search", "--depth", "0", "retry.mm0", "retry.auf" });
+    abc_search_bad_depth.expectExitCode(1);
+    abc_search_bad_depth.expectStdErrEqual("abc: 'depth' must be between 1 and 64\n");
+    cli_smoke_step.dependOn(&abc_search_bad_depth.step);
 
     // The proof file from standard input, the MMB to standard output.
     const abc_compile_stdin = b.addRunArtifact(compiler_exe);

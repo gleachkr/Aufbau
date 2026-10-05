@@ -1,0 +1,15 @@
+-- `abc search --retry/--only/--depth/--budget` smoke tests (build.zig test-cli).
+delimiter $ ( ) $;
+provable sort wff;
+term P: wff;
+term Q: wff;
+term R: wff;
+term S: wff;
+term T: wff;
+axiom p: $ P $;
+axiom pq: $ P $ > $ Q $;
+axiom qr: $ Q $ > $ R $;
+axiom rs: $ R $ > $ S $;
+axiom st: $ S $ > $ T $;
+theorem near: $ R $;
+theorem far: $ T $;

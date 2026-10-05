@@ -1,0 +1,7 @@
+near
+----
+l1: $ R $ by auto?
+
+far
+---
+l1: $ T $ by auto? (depth: 1)

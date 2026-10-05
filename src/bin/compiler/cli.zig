@@ -2,7 +2,10 @@ const std = @import("std");
 const build_options = @import("build_options");
 const mm0 = @import("mm0");
 const compiler_lsp = @import("./lsp.zig");
+const writeFields = @import("./diag_json.zig").writeFields;
 const DebugConfig = mm0.DebugConfig;
+const SearchDriver = mm0.CompilerSupport.SearchDriver;
+const SearchParam = mm0.CompilerSupport.Search.tunables.SearchParam;
 
 const CliError = error{
     InvalidUsage,
@@ -18,8 +21,10 @@ const usage_text =
     "Usage:\n" ++
     "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
     "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
-    "  abc search INPUT.mm0 INPUT.auf [--fill] [--json] [-v | -vv] " ++
-    "[--lang LANG]\n" ++
+    "  abc search INPUT.mm0 INPUT.auf [--fill] [--json] [-v | -vv]\n" ++
+    "             [--only THEOREM[:LABEL]] [--retry N] [--depth N] " ++
+    "[--budget N]\n" ++
+    "             [--lang LANG]\n" ++
     "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
     "  abc lsp [--lang LANG]\n" ++
     "  abc [--help | --version]\n" ++
@@ -38,6 +43,13 @@ const usage_text =
     "  --json           Report each search marker as one line of JSON\n" ++
     "  -v, -vv          Report what each search cost; -vv adds why it\n" ++
     "                   missed and the rules it tried most\n" ++
+    "  --only THEOREM[:LABEL]\n" ++
+    "                   Search only the markers of THEOREM, or of its line\n" ++
+    "                   LABEL\n" ++
+    "  --retry N        Search a missed auto? again with the larger limits\n" ++
+    "                   its report advises, up to N times\n" ++
+    "  --depth N, --budget N\n" ++
+    "                   Limits for each auto? that does not set its own\n" ++
     "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
     "                   the ABC_LANG environment variable\n" ++
     "\nExit status:\n" ++
@@ -67,6 +79,10 @@ const SearchCommand = struct {
     json: bool = false,
     /// 0, or 1 for `-v` and 2 for `-vv`.
     verbosity: u2 = 0,
+    only: ?SearchDriver.Only = null,
+    retries: usize = 0,
+    depth: ?u64 = null,
+    budget: ?u64 = null,
 };
 
 const JoinCommand = struct {
@@ -113,13 +129,61 @@ fn appendPositionalArg(
     positional.appendAssumeCapacity(arg);
 }
 
+/// The value after the flag at `i.*`, which `i.*` then indexes.
+fn flagValue(argv: []const []const u8, i: *usize) ![]const u8 {
+    i.* += 1;
+    if (i.* >= argv.len) return CliError.InvalidUsage;
+    return argv[i.*];
+}
+
+fn flagNumber(argv: []const []const u8, i: *usize) !u64 {
+    return std.fmt.parseInt(u64, try flagValue(argv, i), 10) catch
+        CliError.InvalidUsage;
+}
+
+/// `THEOREM` or `THEOREM:LABEL`.
+fn parseOnly(arg: []const u8) !SearchDriver.Only {
+    var parts = std.mem.splitScalar(u8, arg, ':');
+    const theorem = parts.first();
+    const label = parts.next();
+    if (theorem.len == 0 or parts.next() != null) return CliError.InvalidUsage;
+    if (label) |name| if (name.len == 0) return CliError.InvalidUsage;
+    return .{ .theorem = theorem, .label = label };
+}
+
+/// Read the `search` flag at `i.*` into `search`; false when `argv[i.*]`
+/// is not one.
+fn parseSearchFlag(
+    argv: []const []const u8,
+    i: *usize,
+    search: *SearchCommand,
+) !bool {
+    const arg = argv[i.*];
+    if (std.mem.eql(u8, arg, "--fill")) {
+        search.fill = true;
+    } else if (std.mem.eql(u8, arg, "--json")) {
+        search.json = true;
+    } else if (std.mem.eql(u8, arg, "-v")) {
+        search.verbosity = @max(search.verbosity, 1);
+    } else if (std.mem.eql(u8, arg, "-vv")) {
+        search.verbosity = 2;
+    } else if (std.mem.eql(u8, arg, "--only")) {
+        search.only = try parseOnly(try flagValue(argv, i));
+    } else if (std.mem.eql(u8, arg, "--retry")) {
+        search.retries = try flagNumber(argv, i);
+    } else if (std.mem.eql(u8, arg, "--depth")) {
+        search.depth = try flagNumber(argv, i);
+    } else if (std.mem.eql(u8, arg, "--budget")) {
+        search.budget = try flagNumber(argv, i);
+    } else return false;
+    return true;
+}
+
 fn parseCompileArgs(argv: []const []const u8) !Command {
     var debug = DebugConfig.none;
     var warnings_as_errors = false;
     var search_flags = false;
-    var fill = false;
-    var json = false;
-    var verbosity: u2 = 0;
+    var search: SearchCommand = .{ .input = "", .proof = "" };
     var positional = std.ArrayListUnmanaged([]const u8){};
     var buf: [64][]const u8 = undefined;
     positional.items = buf[0..0];
@@ -127,28 +191,17 @@ fn parseCompileArgs(argv: []const []const u8) !Command {
 
     var i: usize = 0;
     while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--debug")) {
-            i += 1;
-            if (i >= argv.len) return CliError.InvalidUsage;
-            debug = DebugConfig.parse(argv[i]) catch {
+        const arg = argv[i];
+        if (std.mem.eql(u8, arg, "--debug")) {
+            debug = DebugConfig.parse(try flagValue(argv, &i)) catch {
                 return CliError.InvalidUsage;
             };
-        } else if (std.mem.eql(u8, argv[i], "-Werror")) {
+        } else if (std.mem.eql(u8, arg, "-Werror")) {
             warnings_as_errors = true;
-        } else if (std.mem.eql(u8, argv[i], "--fill")) {
+        } else if (try parseSearchFlag(argv, &i, &search)) {
             search_flags = true;
-            fill = true;
-        } else if (std.mem.eql(u8, argv[i], "--json")) {
-            search_flags = true;
-            json = true;
-        } else if (std.mem.eql(u8, argv[i], "-v")) {
-            search_flags = true;
-            verbosity = @max(verbosity, 1);
-        } else if (std.mem.eql(u8, argv[i], "-vv")) {
-            search_flags = true;
-            verbosity = 2;
         } else {
-            try appendPositionalArg(&positional, argv[i]);
+            try appendPositionalArg(&positional, arg);
         }
     }
 
@@ -166,13 +219,9 @@ fn parseCompileArgs(argv: []const []const u8) !Command {
         if (pos.len != 3 or warnings_as_errors or debug.any()) {
             return CliError.InvalidUsage;
         }
-        return .{ .search = .{
-            .input = pos[1],
-            .proof = pos[2],
-            .fill = fill,
-            .json = json,
-            .verbosity = verbosity,
-        } };
+        search.input = pos[1];
+        search.proof = pos[2];
+        return .{ .search = search };
     }
     if (search_flags) return CliError.InvalidUsage;
     if (pos.len != 4 or !std.mem.eql(u8, pos[0], "compile")) {
@@ -364,6 +413,8 @@ fn runSearch(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
+    const params = try searchParams(arena.allocator(), cmd);
+
     var failure: ?mm0.Imports.LoadFailure = null;
     const pair = mm0.Imports.loadPair(
         arena.allocator(),
@@ -400,12 +451,21 @@ fn runSearch(
         }
     }
 
-    var result = try mm0.CompilerSupport.SearchDriver.run(
+    var result = try SearchDriver.run(
         allocator,
         pair.mm0.text,
         proof.text,
+        .{ .only = cmd.only, .retries = cmd.retries, .params = params },
     );
     defer result.deinit();
+    if (cmd.only) |only| if (result.markers.len == 0) {
+        std.debug.print("abc: no search marker matches --only {s}{s}{s}\n", .{
+            only.theorem,
+            if (only.label == null) "" else ":",
+            only.label orelse "",
+        });
+        return CliError.Reported;
+    };
 
     var buf: [4096]u8 = undefined;
     // With `--fill` the filled file takes standard output.
@@ -430,7 +490,33 @@ fn runSearch(
     }
 }
 
-const SearchMarker = mm0.CompilerSupport.SearchDriver.Marker;
+const SearchMarker = SearchDriver.Marker;
+
+/// `--depth` and `--budget` as `auto?` parameters. An out-of-range value
+/// gets the message it would get in a proof file.
+fn searchParams(arena: std.mem.Allocator, cmd: SearchCommand) ![]const SearchParam {
+    const Search = mm0.CompilerSupport.Search;
+    var params = std.ArrayListUnmanaged(SearchParam){};
+    const flags = [_]struct { name: []const u8, value: ?u64 }{
+        .{ .name = "depth", .value = cmd.depth },
+        .{ .name = "budget", .value = cmd.budget },
+    };
+    for (flags) |flag| {
+        const value = flag.value orelse continue;
+        const nowhere: Search.Span = .{ .start = 0, .end = 0 };
+        try params.append(arena, .{
+            .name = flag.name,
+            .name_span = nowhere,
+            .value = value,
+            .value_span = nowhere,
+            .span = nowhere,
+        });
+    }
+    const issues = try Search.tunables.validateSearchParams(arena, .auto, params.items);
+    for (issues) |issue| std.debug.print("abc: {s}\n", .{issue.message});
+    if (issues.len != 0) return CliError.Reported;
+    return params.items;
+}
 
 /// Write the root proof file to standard output with each proof found in
 /// it put in place. A proof found in another file is not written; a
@@ -443,7 +529,7 @@ fn writeFilled(
     // The root proof file is joined last.
     const root = mapping.files.len - 1;
     const root_text = mapping.files[root].text;
-    const Edit = mm0.CompilerSupport.SearchDriver.Edit;
+    const Edit = SearchDriver.Edit;
     var edits = std.ArrayListUnmanaged(Edit){};
     defer edits.deinit(allocator);
     for (markers) |marker| {
@@ -539,30 +625,35 @@ fn writeSearchReport(
         switch (marker.outcome) {
             .found => {
                 found += 1;
-                try w.writeAll("found\n");
+                try w.writeAll("found");
             },
             .candidates => {
                 candidates += 1;
-                try w.writeAll("candidates\n");
+                try w.writeAll("candidates");
             },
             .missed => {
                 missed += 1;
-                try w.writeAll("missed\n");
+                try w.writeAll("missed");
             },
             .cut_short => {
                 missed += 1;
-                try w.writeAll("missed (search cut short)\n");
+                try w.writeAll("missed (search cut short)");
             },
             .not_searched => {
                 not_searched += 1;
                 if (marker.blocked_by) |label| {
-                    try w.print("not searched: {s} does not check\n", .{label});
-                } else try w.writeAll("not searched\n");
+                    try w.print("not searched: {s} does not check", .{label});
+                } else try w.writeAll("not searched");
             },
             .failed => {
                 failed = true;
-                try w.print("failed: {s}\n", .{@errorName(marker.failure.?)});
+                try w.print("failed: {s}", .{@errorName(marker.failure.?)});
             },
+        }
+        switch (marker.rounds.len) {
+            0 => try w.writeAll("\n"),
+            1 => try w.writeAll(" after 1 retry\n"),
+            else => |n| try w.print(" after {d} retries\n", .{n}),
         }
         for (marker.suggestions) |suggestion| {
             try writeIndented(w, suggestion);
@@ -571,7 +662,17 @@ fn writeSearchReport(
             try w.print("  {s} := {s}\n", .{ hole.name, hole.value });
         }
         if (marker.retry) |retry| try w.print("  retry: {s}\n", .{retry});
-        if (verbosity >= 1) try writeCost(w, marker);
+        if (verbosity >= 1) {
+            // Each round in turn: what it cost, and what it retried with.
+            for (marker.rounds) |round| {
+                try writeCost(w, round.cost);
+                try w.print("  retried: {s}\n", .{round.retry});
+            }
+            switch (marker.outcome) {
+                .not_searched, .failed => {},
+                else => try writeCost(w, marker.cost),
+            }
+        }
         if (verbosity >= 2) try writeDetail(w, marker);
     }
     if (markers.len == 0) {
@@ -587,12 +688,7 @@ fn writeSearchReport(
 
 /// `-v`: what a search cost, work ticks first, since they repeat from run
 /// to run.
-fn writeCost(w: *std.Io.Writer, marker: SearchMarker) !void {
-    switch (marker.outcome) {
-        .not_searched, .failed => return,
-        else => {},
-    }
-    const cost = marker.cost;
+fn writeCost(w: *std.Io.Writer, cost: SearchDriver.Cost) !void {
     try w.writeAll("  cost: ");
     if (cost.phase != 0) try w.print("{d} ticks, ", .{cost.ticks});
     try w.print("{d} candidates, {f} ms wall", .{
@@ -650,9 +746,9 @@ fn writeSearchJson(
     for (markers) |marker| {
         if (marker.outcome == .failed) failed = true;
         const place = markerPlace(mapping, marker);
-        const cost = marker.cost;
-        const ran = cost.phase != 0;
-        try std.json.Stringify.value(.{
+        var jw: std.json.Stringify = .{ .writer = w };
+        try jw.beginObject();
+        try writeFields(&jw, .{
             .file = if (place) |p| p.label else null,
             .line = if (place) |p| p.line else null,
             .theorem = marker.theorem,
@@ -665,17 +761,34 @@ fn writeSearchJson(
             .blocked_by = marker.blocked_by,
             .failure = marker.failure,
             .detail = marker.detail,
-            .ticks = cost.ticks,
-            .candidates = cost.candidates,
-            .wall_ms = Milliseconds{ .ns = cost.wall_ns },
-            .depth = if (ran) cost.depth else null,
-            .phase = if (ran) cost.phase else null,
-            .phase_name = if (ran) mm0.CompilerSupport.Search.phaseName(cost.phase) else null,
-            .rules = cost.rules,
-        }, .{}, w);
+        });
+        try writeCostFields(&jw, marker.cost);
+        try jw.objectField("rounds");
+        try jw.beginArray();
+        for (marker.rounds) |round| {
+            try jw.beginObject();
+            try writeFields(&jw, .{ .status = round.outcome, .retry = round.retry });
+            try writeCostFields(&jw, round.cost);
+            try jw.endObject();
+        }
+        try jw.endArray();
+        try jw.endObject();
         try w.writeByte('\n');
     }
     return failed;
+}
+
+fn writeCostFields(jw: *std.json.Stringify, cost: SearchDriver.Cost) !void {
+    const ran = cost.phase != 0;
+    try writeFields(jw, .{
+        .ticks = cost.ticks,
+        .candidates = cost.candidates,
+        .wall_ms = Milliseconds{ .ns = cost.wall_ns },
+        .depth = if (ran) cost.depth else null,
+        .phase = if (ran) cost.phase else null,
+        .phase_name = if (ran) mm0.CompilerSupport.Search.phaseName(cost.phase) else null,
+        .rules = cost.rules,
+    });
 }
 
 fn writeIndented(w: *std.Io.Writer, text: []const u8) !void {
@@ -908,6 +1021,38 @@ test "parse search command" {
         CliError.InvalidUsage,
         parseArgs(&.{ "join", "a.mm0", "-v" }),
     );
+}
+
+test "parse search limits and --only" {
+    const cmd = try parseArgs(&.{
+        "search",  "a.mm0", "a.auf",   "--only", "thm:l2",
+        "--retry", "3",     "--depth", "8",      "--budget",
+        "0",
+    });
+    switch (cmd) {
+        .search => |search| {
+            try std.testing.expectEqualStrings("thm", search.only.?.theorem);
+            try std.testing.expectEqualStrings("l2", search.only.?.label.?);
+            try std.testing.expectEqual(@as(usize, 3), search.retries);
+            try std.testing.expectEqual(@as(?u64, 8), search.depth);
+            try std.testing.expectEqual(@as(?u64, 0), search.budget);
+        },
+        else => return error.TestUnexpectedCommand,
+    }
+    const theorem = try parseArgs(&.{ "search", "--only", "thm", "a.mm0", "a.auf" });
+    try std.testing.expect(theorem.search.only.?.label == null);
+    const bad = [_][]const []const u8{
+        &.{ "search", "a.mm0", "a.auf", "--retry" },
+        &.{ "search", "a.mm0", "a.auf", "--retry", "-1" },
+        &.{ "search", "a.mm0", "a.auf", "--depth", "x" },
+        &.{ "search", "a.mm0", "a.auf", "--only", ":l1" },
+        &.{ "search", "a.mm0", "a.auf", "--only", "thm:" },
+        &.{ "search", "a.mm0", "a.auf", "--only", "a:b:c" },
+        &.{ "compile", "a.mm0", "a.auf", "a.mmb", "--retry", "1" },
+    };
+    for (bad) |args| {
+        try std.testing.expectError(CliError.InvalidUsage, parseArgs(args));
+    }
 }
 
 test "parse compile command rejects invalid debug flags" {
