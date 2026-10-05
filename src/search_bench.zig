@@ -762,7 +762,7 @@ const scenarios = [_]Scenario{
         .expected_replacement = "nat_ind_elim [l7, l14, id_trans_ty [l18, l20, suc_intro [l23], " ++
             "add_ty [l15, l17, l19], l21, id_trans_ty [l18, suc_intro " ++
             "[l23], weaken [l7, suc_intro [l6]], add_ty [l15, l17, l19], " ++
-            "ap_suc_ty [l15, l23, weaken [l7, l6], l22], id_sym_ty [l18, " ++
+            "ap_suc_ty [l15, l23, add_ty [l15, l17, l16], l22], id_sym_ty [l18, " ++
             "add_ty [l15, l17, l19], weaken [l7, suc_intro [l6]], " ++
             "add_suc_right [l15, l17, l16]]]], #2]",
         .generate = .{ .enabled = true, .max_depth = 6 },

@@ -10,6 +10,7 @@ const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
 const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
+const Canonicalizer = @import("../../../canonicalizer.zig").Canonicalizer;
 
 const isRigidHead = semantic.isRigidHead;
 
@@ -49,6 +50,53 @@ fn coercedHole(
         current = app.args[0];
     }
     return true;
+}
+
+/// Whether `expr` is a `@rewrite`-headed term in normal form that no
+/// instantiation can change: it holds no placeholder, every head in it is
+/// rigid or a plain `@rewrite` head (no def to unfold, no ACUI combiner to
+/// rearrange), and no rewrite fires anywhere in it. The checker compares by
+/// normal form, so such a term converts only to terms whose normal form it is,
+/// and its head is as stable as a rigid one: a template with a rigid root
+/// never matches it.
+pub fn stuckRedex(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    expr: ExprId,
+) bool {
+    switch (theorem.interner.node(expr).*) {
+        .app => |app| if (semantic.headClass(context, app.term_id) != .rewrite) return false,
+        else => return false,
+    }
+    if (theorem.exprAny(expr, context, notStableNode)) return false;
+    var scratch = theorem.clone() catch return false;
+    defer scratch.deinit();
+    var canon = Canonicalizer.init(scratch.allocator, &scratch, context.registry, context.env);
+    defer canon.cache.deinit();
+    const normal = canon.canonicalize(expr) catch return false;
+    return normal == expr and canon.step_count == 0;
+}
+
+fn notStableNode(context: *const Context, theorem: *const TheoremContext, expr: ExprId) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .placeholder => true,
+        .variable => false,
+        .app => |app| switch (semantic.headClass(context, app.term_id)) {
+            .rigid => false,
+            .rewrite => !plainRewriteHead(context, app.term_id),
+            .def, .acui, .unavailable => true,
+        },
+    };
+}
+
+// A `@rewrite` head that is also an ACUI combiner or a transparent def classes
+// as `.rewrite`, yet it can change with no rewrite firing: the canonicalizer
+// rearranges an ACUI head without trying its rewrites, and the checker unfolds
+// the def.
+fn plainRewriteHead(context: *const Context, term_id: u32) bool {
+    if (context.registry.acui_by_head.contains(term_id)) return false;
+    const term = &context.env.terms.items[term_id];
+    return !(term.is_def and term.body != null);
 }
 
 // Whether two heads resolve to distinct rigid roots (see `rigidHeadOf`), which
@@ -247,8 +295,11 @@ pub fn templateDefiniteMismatch(
                         return false;
                     }
                     // Different heads are definite only when def unfolding
-                    // exposes distinct rigid roots on both sides.
-                    return rigidHeadMismatch(context, app.term_id, concrete.term_id);
+                    // exposes distinct rigid roots on both sides, or when the
+                    // ref is a stuck redex and the template has a rigid root.
+                    const root = rigidHeadOf(context, app.term_id) orelse return false;
+                    if (rigidHeadOf(context, concrete.term_id)) |ref_root| return root != ref_root;
+                    return stuckRedex(context, theorem, ref);
                 },
             }
         },

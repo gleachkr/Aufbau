@@ -613,6 +613,11 @@ fn seedBindingsFromGoal(
 // be supplied by the open binder, so this only ever prunes truly inapplicable
 // candidates; an open-binder leaf (e.g. `g`) is skipped, never demanded.
 //
+// A definite rigid clash (`templateDefiniteMismatch`) is rejected here too,
+// before any premise is generated. The later `finalConclusionPlausible` runs
+// only once a slot is filled, so an eager intro against a stuck redex (`∀ x p`
+// against `[x/t] p`) would otherwise open its premise child first.
+//
 // View rules are excluded: there the goal was matched against the *view*
 // conclusion (a different advertised surface form), so the raw `rule.concl`
 // need not line up positionally with the goal, and the hyp-side `@recover`
@@ -631,6 +636,13 @@ pub fn conclusionMembersPlausible(
         rule.concl,
         goal_expr,
         candidate.bindings.len,
+    )) return false;
+    if (def_match.templateDefiniteMismatch(
+        context,
+        &candidate.theorem,
+        rule.concl,
+        goal_expr,
+        candidate.bindings,
     )) return false;
     return acuiBoundMembersPlausible(
         context,

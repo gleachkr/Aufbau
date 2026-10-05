@@ -71,6 +71,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   therefore cost proofs. The second run never found a proof on the
   benchmarks, and a miss on a Tait sequent goal now takes 37 ms instead of
   555 ms.
+- `auto?` recognizes a `@rewrite` term that no rewrite reduces, such as
+  `[x/t] p` where `p` depends on `x`, as already in normal form, and no
+  longer tries rules whose conclusion cannot convert to it. On the depth
+  benchmarks two more proofs are found, one in nd_fol and one in
+  zermelo_hilbert, and searches take 4% less time (24% less on hoare).
 
 ### Fixed
 

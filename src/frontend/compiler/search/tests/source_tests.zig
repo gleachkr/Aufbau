@@ -8,6 +8,7 @@ const plausible = helpers.plausible;
 const seed = helpers.seed;
 const acui = helpers.acui;
 const ExprId = helpers.ExprId;
+const Canonicalizer = @import("../../../canonicalizer.zig").Canonicalizer;
 const TheoremContext = helpers.TheoremContext;
 const Check = helpers.Check;
 const apply = helpers.apply;
@@ -831,6 +832,144 @@ test "folded-body check compares only determined args of a same-head @rewrite" {
         bindings,
         .{ .repin_prune_enabled = true },
         null,
+    ));
+}
+
+test "a stuck @rewrite redex clashes with a rigid conclusion head" {
+    // `sb_irrel` fires only when `p` does not depend on `x`. With `p: wff x`
+    // the redex `sb x t p` is in normal form, so it can never become an `an`;
+    // with `q: wff` it reduces to `q`, which an instance of `an a b` may be.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\term bi (a b: wff): wff;
+        \\infixl bi: $<->$ prec 5;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ a <-> a $;
+        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\term an (a b: wff): wff;
+        \\term sb {x: obj} (t: obj) (p: wff x): wff;
+        \\--| @rewrite
+        \\axiom sb_irrel {x: obj} (t: obj) (p: wff): $ sb x t p <-> p $;
+        \\axiom r_an (a b: wff): $ an a b $;
+        \\theorem t {x: obj} (t: obj) (p: wff x) (q: wff): $ sb x t p $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const stuck = (try parseGoal(&fixture, &theorem, &theorem_vars, "sb x t p")).concrete;
+    const reducible = (try parseGoal(&fixture, &theorem, &theorem_vars, "sb x t q")).concrete;
+    try std.testing.expect(helpers.def_match.stuckRedex(&context, &theorem, stuck));
+    try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, reducible));
+
+    const rule_id = fixture.env.getRuleId("r_an") orelse return error.MissingRule;
+    const concl = fixture.env.rules.items[rule_id].concl;
+    const unbound = [_]?ExprId{ null, null };
+    try std.testing.expect(helpers.def_match.templateDefiniteMismatch(
+        &context,
+        &theorem,
+        concl,
+        stuck,
+        &unbound,
+    ));
+    try std.testing.expect(!helpers.def_match.templateDefiniteMismatch(
+        &context,
+        &theorem,
+        concl,
+        reducible,
+        &unbound,
+    ));
+}
+
+test "a @rewrite head that is also a def or an ACUI combiner is never stuck" {
+    // The canonicalizer fires no rewrite on either term, yet the checker
+    // changes both: it unfolds `sbd x t p` to `an p p`, an instance of
+    // `an a b`, and its normalizer rewrites `join (hyp q) (hyp r)` by
+    // `join_hyp`, which the canonicalizer never tries on an ACUI head.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort obj;
+        \\sort ctx;
+        \\term bi (a b: wff): wff;
+        \\infixl bi: $<->$ prec 5;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ a <-> a $;
+        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\term an (a b: wff): wff;
+        \\def sbd {x: obj} (t: obj) (p: wff x): wff = $ an p p $;
+        \\--| @rewrite
+        \\axiom sbd_irrel {x: obj} (t: obj) (p: wff): $ sbd x t p <-> p $;
+        \\axiom r_an (a b: wff): $ an a b $;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\term hyp (a: wff): ctx;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+        \\--| @rewrite
+        \\axiom join_hyp (a b: wff): $ ctx_eq (join (hyp a) (hyp b)) (hyp (an a b)) $;
+        \\theorem t {x: obj} (t: obj) (p: wff x) (q r: wff) (g: ctx): $ sbd x t p $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const def_redex = (try parseGoal(&fixture, &theorem, &theorem_vars, "sbd x t p")).concrete;
+    const bag_eq = (try parseGoal(&fixture, &theorem, &theorem_vars, "ctx_eq (join (hyp q) (hyp r)) g")).concrete;
+    // Put the bag in canonical order first, so only the head's class can make
+    // it not stuck.
+    var canon = Canonicalizer.init(allocator, &theorem, context.registry, context.env);
+    defer canon.cache.deinit();
+    const raw_bag = theorem.interner.node(bag_eq).app.args[0];
+    const bag = try canon.canonicalize(raw_bag);
+    try std.testing.expectEqual(
+        theorem.interner.node(raw_bag).app.term_id,
+        theorem.interner.node(bag).app.term_id,
+    );
+    try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, def_redex));
+    try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, bag));
+
+    const rule_id = fixture.env.getRuleId("r_an") orelse return error.MissingRule;
+    const unbound = [_]?ExprId{ null, null };
+    try std.testing.expect(!helpers.def_match.templateDefiniteMismatch(
+        &context,
+        &theorem,
+        fixture.env.rules.items[rule_id].concl,
+        def_redex,
+        &unbound,
     ));
 }
 

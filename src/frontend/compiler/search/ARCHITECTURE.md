@@ -1064,7 +1064,22 @@ over-approximation (never reject a provable candidate):
   its own (one bipartite matching, `acuiRequiredMembersPlausible`): a rule
   needing two distinct entries after `g` cannot match a context holding one.
   An open meta in the goal (the rest of a context a premise left unresolved)
-  may hold any member, so it never refutes one.
+  may hold any member, so it never refutes one. The same admission step
+  rejects a definite clash between the conclusion and the goal
+  (`templateDefiniteMismatch`) and a repeated-binder conflict, and the counter
+  covers all three. The clash check must run here because
+  `finalConclusionPlausible` runs only once a slot is filled, and an eager
+  intro would otherwise open its premises first.
+- **stuck redex** (`def_match.stuckRedex`, the different-heads case of
+  `templateDefiniteMismatch`) — a `@rewrite`-headed term that no rewrite
+  reduces is in normal form, and the checker compares normal forms, so its
+  head is as stable as a rigid one: a template with a rigid root never matches
+  it. The canonicalizer decides it. The term must hold no placeholder, every
+  head in it must be rigid or a plain `@rewrite` head (not also a def or an
+  ACUI combiner, which change without a rewrite firing), and canonicalizing it
+  must take no rewrite step. nd_fol's `[x/t] p` with `p` depending on `x` is
+  the case it was built for: the eager intros no longer open children against
+  it.
 - **redex conclusion prune** (`plausible.redexConclusionMismatch`, called from
   `validateSelectedRefs`; counter `redex_conclusion_prunes`) — a `@rewrite`
   head in the conclusion gives the plain checks no opinion. Once the refs are

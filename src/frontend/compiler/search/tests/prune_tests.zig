@@ -660,6 +660,26 @@ test "redex conclusion prune abstains on a rewrite-headed premise" {
     try std.testing.expect(counters.full_try_candidate_calls > 0);
 }
 
+test "a stuck redex in the goal prunes a rigid conclusion at admission" {
+    // `sb y o w` is in normal form: `sb_free` needs `w` to avoid `y`. So no
+    // instance of `lam_pr`'s `pr (lam x t)` converts to the goal, and the
+    // candidate is dropped before its premise is filled from the pool.
+    const mm0_src = redex_theory ++
+        \\axiom lam_pr {x: tm} (t: tm x): $ pr t $ > $ pr (lam x t) $;
+        \\theorem t {y: tm} (w: tm y): $ pr w $ > $ pr (sb y o w) $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ pr (sb y o w) $ by exact?
+    ;
+    var counters = types.SearchCounters{};
+    const count = try exactSuggestionCount(mm0_src, proof_src, &counters);
+
+    try std.testing.expectEqual(@as(usize, 0), count);
+    try std.testing.expect(counters.conclusion_member_prunes > 0);
+}
+
 test "redex conclusion prune holds when the theorem has no dependency slots left" {
     // The ref gives `x := y` and `t := z`, and `sb y ?u z` reduces to `z`, not
     // the goal's `o`. The hole for the unbound `u` spends no dependency slot,
