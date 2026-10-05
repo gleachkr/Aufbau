@@ -78,56 +78,37 @@ fn slicePtr(bytes: []const u8) u32 {
 }
 
 fn writeVerifySuccess() !void {
-    var out: std.io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-
-    try out.writer.writeAll("{");
-    try out.writer.writeAll("\"ok\":true,");
-    try out.writer.writeAll("\"phase\":\"verify\",");
-    try out.writer.writeAll("\"message\":\"ok\",");
-    try out.writer.writeAll("\"error\":null}");
-
-    result_json = try out.toOwnedSlice();
+    result_json = try std.json.Stringify.valueAlloc(allocator, .{
+        .ok = true,
+        .phase = "verify",
+        .message = "ok",
+        .@"error" = null,
+    }, .{});
 }
 
 /// The stream verified except for `count` statements admitted with sorry:
 /// not ok, but distinguishable from a malformed proof.
 fn writeVerifySorry(count: usize) !void {
-    var out: std.io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-
-    try out.writer.writeAll("{");
-    try out.writer.writeAll("\"ok\":false,");
-    try out.writer.writeAll("\"phase\":\"verify\",");
-    try out.writer.writeAll("\"error\":\"SorryUsed\",");
-    try out.writer.print("\"sorry\":{d},", .{count});
-    try out.writer.print(
-        "\"message\":\"incomplete: {d} statement(s) use sorry\"}}",
+    const message = try std.fmt.allocPrint(
+        allocator,
+        "incomplete: {d} statement(s) use sorry",
         .{count},
     );
-
-    result_json = try out.toOwnedSlice();
+    defer allocator.free(message);
+    result_json = try std.json.Stringify.valueAlloc(allocator, .{
+        .ok = false,
+        .phase = "verify",
+        .@"error" = error.SorryUsed,
+        .sorry = count,
+        .message = message,
+    }, .{});
 }
 
 fn writeVerifyFailure(err: anyerror) !void {
-    var out: std.io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-
-    try out.writer.writeAll("{");
-    try out.writer.writeAll("\"ok\":false,");
-    try out.writer.writeAll("\"phase\":\"verify\",");
-    try writeJsonStringField(&out.writer, "error", @errorName(err));
-    try out.writer.writeByte(',');
-    try writeJsonStringField(&out.writer, "message", @errorName(err));
-    try out.writer.writeAll("}");
-
-    result_json = try out.toOwnedSlice();
-}
-
-fn writeJsonStringField(
-    writer: anytype,
-    name: []const u8,
-    value: []const u8,
-) !void {
-    try writer.print("\"{s}\":\"{s}\"", .{ name, value });
+    result_json = try std.json.Stringify.valueAlloc(allocator, .{
+        .ok = false,
+        .phase = "verify",
+        .@"error" = err,
+        .message = @errorName(err),
+    }, .{});
 }

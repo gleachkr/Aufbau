@@ -2,7 +2,6 @@ const std = @import("std");
 const build_options = @import("build_options");
 const mm0 = @import("mm0");
 const compiler_lsp = @import("./lsp.zig");
-const json_out = @import("./json_out.zig");
 const DebugConfig = mm0.DebugConfig;
 
 const CliError = error{
@@ -596,9 +595,10 @@ fn writeCost(w: *std.Io.Writer, marker: SearchMarker) !void {
     const cost = marker.cost;
     try w.writeAll("  cost: ");
     if (cost.phase != 0) try w.print("{d} ticks, ", .{cost.ticks});
-    try w.print("{d} candidates, ", .{cost.candidates});
-    try writeMilliseconds(w, cost.wall_ns);
-    try w.writeAll(" ms wall");
+    try w.print("{d} candidates, {f} ms wall", .{
+        cost.candidates,
+        Milliseconds{ .ns = cost.wall_ns },
+    });
     if (cost.phase != 0) {
         try w.print(", depth {d} in {s}", .{
             cost.depth,
@@ -608,13 +608,21 @@ fn writeCost(w: *std.Io.Writer, marker: SearchMarker) !void {
     try w.writeAll("\n");
 }
 
-/// `ns` as milliseconds to the microsecond: "12.345".
-fn writeMilliseconds(w: *std.Io.Writer, ns: u64) !void {
-    try w.print("{d}.{d:0>3}", .{
-        ns / std.time.ns_per_ms,
-        (ns / std.time.ns_per_us) % 1000,
-    });
-}
+/// A duration, in milliseconds to the microsecond: "12.345".
+const Milliseconds = struct {
+    ns: u64,
+
+    pub fn format(self: Milliseconds, w: *std.Io.Writer) !void {
+        try w.print("{d}.{d:0>3}", .{
+            self.ns / std.time.ns_per_ms,
+            (self.ns / std.time.ns_per_us) % 1000,
+        });
+    }
+
+    pub fn jsonStringify(self: Milliseconds, jw: *std.json.Stringify) !void {
+        try jw.print("{f}", .{self});
+    }
+};
 
 /// `-vv`: why a search missed, and the rules it tried most.
 fn writeDetail(w: *std.Io.Writer, marker: SearchMarker) !void {
@@ -642,72 +650,30 @@ fn writeSearchJson(
     for (markers) |marker| {
         if (marker.outcome == .failed) failed = true;
         const place = markerPlace(mapping, marker);
-        try w.writeByte('{');
-        try json_out.writeOptionalStringField(w, "file", if (place) |p| p.label else null);
-        try w.writeAll(",\"line\":");
-        if (place) |p| try w.print("{d}", .{p.line}) else try w.writeAll("null");
-        try w.writeByte(',');
-        try json_out.writeStringField(w, "theorem", marker.theorem);
-        try w.writeByte(',');
-        try json_out.writeStringField(w, "label", marker.label);
-        try w.writeByte(',');
-        try json_out.writeStringField(w, "kind", marker.kind.keyword());
-        try w.writeByte(',');
-        try json_out.writeStringField(w, "status", @tagName(marker.outcome));
-        try w.writeAll(",\"suggestions\":[");
-        for (marker.suggestions, 0..) |suggestion, i| {
-            if (i != 0) try w.writeByte(',');
-            try json_out.writeString(w, suggestion);
-        }
-        try w.writeAll("],\"holes\":[");
-        for (marker.holes, 0..) |hole, i| {
-            if (i != 0) try w.writeByte(',');
-            try w.writeByte('{');
-            try json_out.writeStringField(w, "name", hole.name);
-            try w.writeByte(',');
-            try json_out.writeStringField(w, "value", hole.value);
-            try w.writeByte('}');
-        }
-        try w.writeAll("],");
-        try json_out.writeOptionalStringField(w, "retry", marker.retry);
-        try w.writeByte(',');
-        try json_out.writeOptionalStringField(w, "blocked_by", marker.blocked_by);
-        try w.writeByte(',');
-        try json_out.writeOptionalStringField(
-            w,
-            "failure",
-            if (marker.failure) |err| @errorName(err) else null,
-        );
-        try w.writeByte(',');
-        try json_out.writeOptionalStringField(w, "detail", marker.detail);
         const cost = marker.cost;
-        try w.print(",\"ticks\":{d},\"candidates\":{d},\"wall_ms\":", .{
-            cost.ticks,
-            cost.candidates,
-        });
-        try writeMilliseconds(w, cost.wall_ns);
-        if (cost.phase != 0) {
-            try w.print(",\"depth\":{d},\"phase\":{d},", .{ cost.depth, cost.phase });
-            try json_out.writeStringField(
-                w,
-                "phase_name",
-                mm0.CompilerSupport.Search.phaseName(cost.phase),
-            );
-        } else {
-            try w.writeAll(",\"depth\":null,\"phase\":null,\"phase_name\":null");
-        }
-        try w.writeAll(",\"rules\":[");
-        for (cost.rules, 0..) |rule, i| {
-            if (i != 0) try w.writeByte(',');
-            try w.writeByte('{');
-            try json_out.writeStringField(w, "name", rule.name);
-            try w.print(",\"attempts\":{d},\"accepted\":{d},\"rejected\":{d}}}", .{
-                rule.attempts,
-                rule.accepted,
-                rule.rejected,
-            });
-        }
-        try w.writeAll("]}\n");
+        const ran = cost.phase != 0;
+        try std.json.Stringify.value(.{
+            .file = if (place) |p| p.label else null,
+            .line = if (place) |p| p.line else null,
+            .theorem = marker.theorem,
+            .label = marker.label,
+            .kind = marker.kind.keyword(),
+            .status = marker.outcome,
+            .suggestions = marker.suggestions,
+            .holes = marker.holes,
+            .retry = marker.retry,
+            .blocked_by = marker.blocked_by,
+            .failure = marker.failure,
+            .detail = marker.detail,
+            .ticks = cost.ticks,
+            .candidates = cost.candidates,
+            .wall_ms = Milliseconds{ .ns = cost.wall_ns },
+            .depth = if (ran) cost.depth else null,
+            .phase = if (ran) cost.phase else null,
+            .phase_name = if (ran) mm0.CompilerSupport.Search.phaseName(cost.phase) else null,
+            .rules = cost.rules,
+        }, .{}, w);
+        try w.writeByte('\n');
     }
     return failed;
 }

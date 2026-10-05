@@ -147,12 +147,12 @@ const BrowserTransport = struct {
 };
 
 fn writeLspError(err: anyerror) !void {
-    var out: std.io.Writer.Allocating = .init(allocator);
+    var out: std.Io.Writer.Allocating = .init(allocator);
     errdefer out.deinit();
-    try out.writer.print(
-        "{{\"jsonrpc\":\"2.0\",\"error\":{{" ++
-            "\"code\":-32603,\"message\":\"{s}\"}}}}\n",
-        .{@errorName(err)},
-    );
+    try std.json.Stringify.value(.{
+        .jsonrpc = "2.0",
+        .@"error" = .{ .code = -32603, .message = @errorName(err) },
+    }, .{}, &out.writer);
+    try out.writer.writeByte('\n');
     result_lsp = try out.toOwnedSlice();
 }
