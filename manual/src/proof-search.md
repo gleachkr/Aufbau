@@ -131,6 +131,10 @@ l4: $ a → b , ¬ b ⊢ ¬ a $ by auto? (depth: 8, budget: 13)
 The parameters, their defaults and their ranges are listed in
 [Search parameters](appendix-search-parameters.md).
 
+Outside the editor, `abc search` runs every search placeholder in a file and
+reports what each search found or why it missed. It can retry misses: see
+[Install and run](install-and-run.md#search-from-the-command-line).
+
 ## Computation as search: `conversion?`
 
 `conversion?` looks for a rewrite chain from the goal to a member of the

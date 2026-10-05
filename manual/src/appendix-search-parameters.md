@@ -18,8 +18,9 @@ slot (`by mp [auto?, #1]`). `conversion?` can only be accepted on top-level
 proof lines, and only with a concrete goal (no holes).
 
 Search commands run in the editor and language server, which report the found
-proof as a suggestion. Batch compilation (`abc compile`) rejects proof scripts
-that contain unexpanded search commands.
+proof as a suggestion, and in `abc search` (see [Install and
+run](install-and-run.md)). Batch compilation (`abc compile`) rejects proof
+scripts that contain unexpanded search commands.
 
 ## Parameter syntax
 
@@ -44,11 +45,14 @@ repeated, the last occurrence wins.
 | `fuel` | 4096 | 1–100 000 000 | Candidate-validation budget per search phase, refilled for each retry of the whole ladder. |
 | `budget` | ≈6 | 0–100 000 | Whole-call cap on cost-weighted work, in units of roughly one second of search effort (the default is 6.3 units). `budget: 0` is legal and disables the cap entirely. |
 
-When `auto?` fails, the failure report names every limit it hit and suggests
-one retry that raises them together with the budget, e.g.
-`auto? (nodes: 512, fuel: 8192, budget: 14)`. Editors offer the same retry as a
-**Retry with …** code action. Start from that suggestion: the limits share one
-work budget, so raising one of them alone rarely helps.
+When `auto?` fails, the failure report indicates which limits it hit and 
+suggests a retry that raises them together with the budget, e.g.
+`auto? (nodes: 512, fuel: 8192, budget: 14)`. Retries are available in editors as a
+**Retry with …** code action, via `abc search --retry N`, which retries up to 
+`N` times.
+
+`abc search --depth N --budget N` adjusts `depth` and `budget` defaults for 
+for `auto?`.
 
 ## `conversion?` parameters
 

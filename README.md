@@ -45,6 +45,14 @@ to the joined theory, thus:
 abc join INPUT.mm0 | mm0-zig OUTPUT.mmb
 ```
 
+Run the search placeholders (`auto?`, `exact?`, `apply?`, `conversion?`)
+in a proof file, and compile the proofs they find:
+
+```sh
+abc search INPUT.mm0 INPUT.auf
+abc search --fill INPUT.mm0 INPUT.auf | abc compile INPUT.mm0 - OUTPUT.mmb
+```
+
 ## JavaScript packages
 
 WebAssembly and browser packages are published on npm:

@@ -167,6 +167,43 @@ for inline sources, to the file's own URL for sources loaded from one) and
 hand it to the compiler and the language server; other hosts supply a library 
 by opening it as a document under the URI its `import` resolves to.
 
+## Search from the command line
+
+`abc compile` requires finished proofs, and rejects any proof script that
+contains a search placeholder such as `auto?`. To make it possible to use 
+search in scripts and CI, `abc search` runs search placeholders. If you change the line in `hello.auf` to
+
+```
+l1: $ p -> (q -> p) $ by auto?
+```
+
+and run
+
+```sh
+zig-out/bin/abc search hello.mm0 hello.auf
+```
+
+You'll see one record per placeholder, with a generated proof:
+
+```
+hello.auf:3  weaken l1  auto?  found
+  h1
+1 found, 0 missed
+```
+
+A search that doesn't find anything prints the retry its failure report 
+suggests, and `abc search` then exits with status 4. `--fill` writes the proof script to standard output with every proof found in place, and `abc compile` reads the proof script from standard input when it is given `-`:
+
+```sh
+zig-out/bin/abc search --fill hello.mm0 hello.auf \
+  | zig-out/bin/abc compile hello.mm0 - hello.mmb
+```
+
+Further options search only one theorem or line (`--only`), set the default 
+limits for search (`--depth`, `--budget`), apply a fixed number of retries 
+(`--retry`), report what searches cost (`-v`), and print JSON (`--json`); `abc 
+--help` lists them.
+
 ## Command-line help
 
 The compiler also exposes the language server used by editor integrations:
@@ -183,7 +220,3 @@ zig-out/bin/abc --help
 zig-out/bin/mm0-zig --help
 ```
 
-The command-line compiler requires finished proofs. Search placeholders
-like `auto?` are an editor feature: in a cell or an LSP-connected editor
-they run the search and offer a concrete proof to accept, but `abc compile`
-rejects a proof script that still contains one.

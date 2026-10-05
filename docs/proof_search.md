@@ -40,9 +40,10 @@ Two consequences follow:
 
 - **A placeholder is scaffolding, not a finished step.** The compiler
   will not emit MMB for a theorem whose proof still contains an `auto?`,
-  `exact?`, or `apply?` line. You replace the placeholder with the
-  concrete line the search proposes, and *that* line is what gets
-  compiled and verified.
+  `exact?`, `apply?`, or `conversion?`. You replace the placeholder with
+  the concrete line the search proposes, in the editor or with
+  `abc search --fill` (see *Searching from the command line*), and
+  *that* line is what gets compiled and verified.
 - **Anything the search can do, you could have written by hand.** The
   placeholders are a convenience for finding the right rule and its
   arguments, not a separate proof language.
@@ -256,6 +257,11 @@ The search runs in your editor through the language server. The loop is:
 4. Accept one. The placeholder is rewritten to the real line, and the
    proof recompiles and re-verifies.
 
+The lines below a placeholder are still checked. A placeholder line whose
+assertion has no holes counts as proved for them, and later searches can
+cite it. One with holes in its assertion has no statement to stand for,
+so a line that cites it gets a warning naming it.
+
 If the search finds nothing, the line reports that it has no suggestion
 rather than silently doing nothing — so a failed search is
 distinguishable from one still in progress. The failure diagnostic also
@@ -306,6 +312,7 @@ In an editor, a failed `auto?` with a suggested retry also offers a
 the suggested values, keeping its bindings and any other parameters;
 request code actions on the placeholder again to run the larger search.
 If that search fails too, its report suggests the next step up.
+`abc search --retry N` takes up to N of these steps by itself.
 
 Failure reports end with a **"Most-tried rules"** list — each entry
 shows how many times a rule was *tried* against how many attempts were
@@ -341,7 +348,8 @@ common case (goals the search can crack) stays fast *and* the miss case
 (goals it can't) fails quickly; raising them globally makes every doomed
 search on every line pay the higher ceiling. A hard goal you are
 actively working on is exactly the place to spend more, so you raise
-the ceiling there and nowhere else.
+the ceiling there and nowhere else. To try a whole file at larger
+limits without editing it, use `abc search --depth N --budget N`.
 
 Rules of thumb:
 
@@ -363,6 +371,75 @@ it never silently changes what the search does. Parameters are
 meaningful only on `auto?`; `exact?` and `apply?` are single-shot
 searches with nothing to tune, and reject them with the same
 diagnostic.
+
+## Searching from the command line
+
+`abc search` runs every placeholder of a unit without an editor: those
+in the root `.auf`, in the files it includes, and in the `.auf` files
+paired with imported theories. It runs them in checking order and prints
+one record per placeholder, then a count. For a file with two `auto?`
+lines:
+
+```text
+$ abc search hello.mm0 hello.auf
+hello.auf:3  weaken l1  auto?  found
+  h1
+hello.auf:7  imp_id l1  auto?  missed
+  retry: auto? (depth: 8, budget: 14)
+1 found, 1 missed
+```
+
+Each record names the placeholder's file and line, its theorem and line
+label, and the outcome:
+
+- **found**: the proof, followed by the value of each of the line's
+  holes the proof determines. The proof is put in place for the searches
+  after it, so they can cite the line.
+- **candidates**: `apply?` lists the rules it found; none is put in place.
+- **missed**, or **missed (search cut short)** when a limit stopped it:
+  the retry the failure report suggests, if any. The line stays as
+  written and counts as proved for the lines and searches below it, as in
+  the editor.
+- **not searched**: an earlier line of the block does not check, so the
+  search has no goal to work from. The record names that line.
+
+The exit status is 0 when every placeholder found a proof, 4 when one
+missed or only listed candidates, and 1 on an error. Errors in the unit
+are printed, but the searches still run.
+
+**Options:**
+
+- `--fill` writes the root `.auf` to standard output with every proof put
+  in place and its line's holes filled. Misses are left as written. The
+  report goes to standard error. A proof found in another file is not
+  written, and a warning names it. The output compiles once no
+  placeholder is left in the unit:
+
+  ```text
+  abc search --fill x.mm0 x.auf | abc compile x.mm0 - x.mmb
+  ```
+
+- `--only THEOREM` searches only that theorem's placeholders, and
+  `--only THEOREM:LABEL` only those on one of its lines. The other
+  placeholders are left as written, not searched and not reported. An
+  `--only` that matches no placeholder is an error.
+- `--depth N` and `--budget N` set those limits for every `auto?` that
+  does not set them itself. A placeholder's own parameters win.
+- `--retry N` searches a missed `auto?` again with the parameters its
+  report suggests, up to N times. A proof found that way is reported as
+  `found after 1 retry` (or `after N retries`), and replaces the whole
+  placeholder, parameters included. A placeholder still missed after
+  the last round is left as written.
+- `-v` adds what each search cost: its work ticks, which repeat from run
+  to run, the number of candidates validated, the wall time, and the
+  depth and phase the search ended in, which for a find are the ones
+  that found the proof. With `--retry`, each round's
+  cost is listed, followed by the retry it led to. `-vv` also prints why
+  the search missed and the rules it tried most.
+- `--json` prints each record as one line of JSON with every field,
+  whatever the verbosity: the proofs or candidates, hole values, retry,
+  failure detail, cost, rules tried, and the earlier rounds of a retried
+  search.
 
 ## The `@auto` rule annotations
 
