@@ -114,11 +114,12 @@ jobs:
       - name: Build the manual
         run: nix develop .#ci --command mdbook build manual
 
-      # Compile every live cell in the manual and diff the per-document report
+      # Compile every live cell in the manual (running `abc search --fill` first
+      # on cells holding a search placeholder) and diff the per-document report
       # against the checked-in baseline. Some cells fail by design (error
-      # demonstrations, cells left holding a search placeholder), so the gate is
-      # the diff, not universal green — see manual/scripts/check-cells.mjs for
-      # how to regenerate the baseline.
+      # demonstrations, a search meant to miss), so the gate is the diff, not
+      # universal green — see manual/scripts/check-cells.mjs for how to
+      # regenerate the baseline.
       - name: Check manual cells against the baseline
         run: |
           nix develop .#ci --command bash -euo pipefail -c '

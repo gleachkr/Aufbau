@@ -6,12 +6,14 @@
 // their own document; cells sharing a `doc`/`theory` attribute are combined,
 // as a chain of per-cell `cN.mm0`/`cN.auf` files each importing the previous
 // cell's, behind a `prelude.mm0`), and runs `abc compile` on the last cell's
-// file of each. The report lists one line per document so runs can be
-// diffed: a page edit or prelude change that flips a cell from ok to error
-// shows up as a one-line diff.
+// file of each. A document left holding search placeholders goes through
+// `abc search --fill` first and the filled proof is compiled instead, so the
+// report says whether each search demo still finds its proof. The report
+// lists one line per document so runs can be diffed: a page edit or prelude
+// change that flips a cell from ok to error shows up as a one-line diff.
 //
-// Some cells fail by design (error demonstrations, cells left with search
-// placeholders); the point of the report is the *diff*, not universal green.
+// Some cells fail by design (error demonstrations, a search meant to miss);
+// the point of the report is the *diff*, not universal green.
 //
 // CI diffs this report (stdout only — the failure count goes to stderr)
 // against the checked-in `manual/cells.expected`. When a change moves a cell
@@ -130,23 +132,53 @@ for (const file of readdirSync(srcDir).sort()) {
       aufPath = mm0Path.replace(/\.mm0$/, ".auf");
       writeFileSync(aufPath, "");
     }
-    let status = "ok";
-    try {
-      execFileSync(abc, ["compile", mm0Path, aufPath, join(dir, "out.mmb")], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (err) {
-      if (err.status === 3) {
-        // Compiled, but a line is admitted with `sorry!` (abc's exit 3).
-        status = "sorry";
-      } else {
-        const firstLine = (err.stderr?.toString() ?? "").split("\n").find((l) => l.includes("error")) ?? "compile failed";
-        status = `error: ${firstLine.trim()}`;
-        failures += 1;
-      }
-    }
+    let status = compile(mm0Path, aufPath, dir);
+    if (status.includes("search placeholder")) status = searchThenCompile(mm0Path, aufPath, dir);
+    if (!status.startsWith("ok") && !status.startsWith("sorry")) failures += 1;
     console.log(`${file} ${key}: ${status}`);
   }
 }
 
 console.error(`\n${failures} document(s) with errors (see report above)`);
+
+// Compile one document (proof from `input` when given, as `abc compile` reads
+// `-` from stdin) and return its report status.
+function compile(mm0Path, aufPath, dir, input) {
+  try {
+    execFileSync(abc, ["compile", mm0Path, input == null ? aufPath : "-", join(dir, "out.mmb")], {
+      input,
+      stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+    return "ok";
+  } catch (err) {
+    // Compiled, but a line is admitted with `sorry!` (abc's exit 3).
+    if (err.status === 3) return "sorry";
+    return `error: ${firstError(err.stderr)}`;
+  }
+}
+
+// A document left holding search placeholders: run the search, then compile
+// the filled proof, so the baseline pins whether each demo still finds.
+function searchThenCompile(mm0Path, aufPath, dir) {
+  let filled;
+  try {
+    filled = execFileSync(abc, ["search", "--fill", mm0Path, aufPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    });
+  } catch (err) {
+    // Exit 4: a marker has no proof; the report's last line is the tally.
+    if (err.status === 4) return `search: ${lastLine(err.stderr)}`;
+    return `error: ${firstError(err.stderr)}`;
+  }
+  const status = compile(mm0Path, aufPath, dir, filled);
+  return status === "ok" ? "ok after search" : `${status} (after search)`;
+}
+
+function firstError(stderr) {
+  return ((stderr?.toString() ?? "").split("\n").find((l) => l.includes("error")) ?? "compile failed").trim();
+}
+
+function lastLine(stderr) {
+  return (stderr?.toString() ?? "").trim().split("\n").at(-1);
+}

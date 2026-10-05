@@ -88,8 +88,9 @@ The user-facing manual is an mdbook under `manual/`:
   turns fenced `aufbau-*` blocks into live editor web components, inlining
   shared theories from `manual/preludes/`
 - `manual/scripts/check-cells.mjs` compiles every live cell with the native
-  compiler and reports one line per document; CI diffs the report against
-  the `manual/cells.expected` baseline. To regenerate it:
+  compiler (a cell holding search placeholders goes through
+  `abc search --fill` first) and reports one line per document; CI diffs the
+  report against the `manual/cells.expected` baseline. To regenerate it:
 
   ```bash
   node manual/scripts/check-cells.mjs --abc zig-out/bin/abc \
