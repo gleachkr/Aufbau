@@ -235,6 +235,42 @@ test "auto? miss detail reports the exhausted space" {
     try std.testing.expectEqual(@as(?[]const u8, null), plain.status_detail);
 }
 
+test "miss detail without its rules sentence is the detail of a run with no tallies" {
+    var counters = types.SearchCounters{};
+    const without = (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .miss,
+        &counters,
+        .{ .enabled = true },
+    )).?;
+    defer std.testing.allocator.free(without);
+
+    counters.rule_attempt_diagnostics[0] = .{ .attempts = 3, .rejected = 3 };
+    counters.rule_attempt_diagnostics[0].rule_name.set("loop");
+    counters.rule_attempt_diagnostics_len = 1;
+    const with = (try source.buildStatusDetail(
+        std.testing.allocator,
+        "auto?",
+        true,
+        .miss,
+        &counters,
+        .{ .enabled = true },
+    )).?;
+    defer std.testing.allocator.free(with);
+
+    try std.testing.expect(std.mem.indexOf(u8, with, "loop (3 tried") != null);
+    try std.testing.expectEqualStrings(
+        without,
+        source.statusDetailWithoutRules(with),
+    );
+    try std.testing.expectEqualStrings(
+        without,
+        source.statusDetailWithoutRules(without),
+    );
+}
+
 test "exact? miss detail reports pool coverage and suggests auto?" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

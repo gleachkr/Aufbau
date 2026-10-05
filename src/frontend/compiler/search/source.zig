@@ -944,6 +944,16 @@ fn retrySuggestion(
     };
 }
 
+const top_rules_lead = " Most-tried rules: ";
+
+/// `detail` without the "Most-tried rules: ..." sentence that ends it, for
+/// a caller that reports the rule tallies itself.
+pub fn statusDetailWithoutRules(detail: []const u8) []const u8 {
+    const end = std.mem.lastIndexOf(u8, detail, top_rules_lead) orelse
+        detail.len;
+    return detail[0..end];
+}
+
 /// Append a "Most-tried rules: ..." sentence listing the top 3 rules by
 /// validation attempts. Silent when the per-rule tallies were not collected
 /// or nothing was attempted.
@@ -976,7 +986,7 @@ fn appendTopRuleAttempts(
         const tally = tallies[idx];
         if (tally.attempts == 0) continue;
         if (!wrote_header) {
-            try w.writeAll(" Most-tried rules: ");
+            try w.writeAll(top_rules_lead);
             wrote_header = true;
         } else {
             try w.writeAll(", ");

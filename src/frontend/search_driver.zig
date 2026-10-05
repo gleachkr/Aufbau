@@ -21,6 +21,37 @@ pub const HoleValue = struct {
     value: []const u8,
 };
 
+/// A replacement in the proof text the run was given.
+pub const Edit = struct {
+    span: Span,
+    text: []const u8,
+};
+
+pub const RuleTally = struct {
+    name: []const u8,
+    attempts: usize,
+    accepted: usize,
+    rejected: usize,
+};
+
+/// What a marker's search cost.
+pub const Cost = struct {
+    /// The weighted work ticks of `auto?` generation
+    /// (`Search.weightedTicks`), which the per-call budget charges. Unlike
+    /// wall time they repeat from run to run.
+    ticks: u64 = 0,
+    /// Rule applications validated.
+    candidates: usize = 0,
+    wall_ns: u64 = 0,
+    /// The generation cell that found the proof, or the last one started
+    /// on a miss: its depth and its 1-based phase (`Search.phaseName`).
+    /// Both 0 when generation did not run.
+    depth: usize = 0,
+    phase: usize = 0,
+    /// The rules with the most validation attempts, most first.
+    rules: []const RuleTally = &.{},
+};
+
 pub const Outcome = enum {
     /// A proof was found and put in the marker's place.
     found,
@@ -57,6 +88,15 @@ pub const Marker = struct {
     blocked_by: ?[]const u8 = null,
     /// When the search failed: its error.
     failure: ?anyerror = null,
+    /// When found: the proof put in place, as an edit.
+    edit: ?Edit = null,
+    /// When found: the line's assertion with its holes filled, as an edit.
+    /// Null when the line has no holes, or the filled assertion does not
+    /// print with source names.
+    filled_assertion: ?Edit = null,
+    /// After a miss: why, and which limits cut it short.
+    detail: ?[]const u8 = null,
+    cost: Cost = .{},
 };
 
 pub const Result = struct {
@@ -70,6 +110,9 @@ pub const Result = struct {
         self.* = undefined;
     }
 };
+
+/// How many of the most-tried rules `Cost.rules` lists.
+const max_rules = 5;
 
 const search_options: Search.SourceSuggestionOptions = .{
     // The editor's settings: one proof for `exact?`/`auto?`/`conversion?`,
@@ -90,8 +133,9 @@ pub fn run(
     const out = result_arena.allocator();
 
     var markers = std.ArrayListUnmanaged(Marker){};
-    // Working-text offsets of the found markers whose lines may have holes.
-    var found_at = std.ArrayListUnmanaged(struct { marker: usize, at: usize }){};
+    // The found markers whose lines may have holes: where each proof went
+    // in the working text, and the growth before it.
+    var found_at = std.ArrayListUnmanaged(FoundAt){};
     defer found_at.deinit(allocator);
 
     var working = try allocator.dupe(u8, proof_src);
@@ -124,12 +168,15 @@ pub fn run(
         };
         cursor = next.span.start + 1;
 
+        var counters = Search.SearchCounters{ .collect = true };
+        var options = search_options;
+        options.counters = &counters;
         var search = Search.suggestionsAtSourceOffset(
             allocator,
             mm0_src,
             working,
             next.span.start,
-            search_options,
+            options,
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
             marker.outcome = .failed;
@@ -152,6 +199,13 @@ pub fn run(
             .miss => .missed,
             .budget_exhausted => .cut_short,
         };
+        marker.cost = try costOf(out, &counters);
+        if (search.status_detail) |detail| {
+            // `cost.rules` lists the most-tried rules, so drop the
+            // sentence that names them.
+            const kept = Search.statusDetailWithoutRules(detail);
+            if (kept.len != 0) marker.detail = try out.dupe(u8, kept);
+        }
         if (search.retry) |retry| {
             marker.retry = try out.dupe(u8, retry.replacement);
         }
@@ -164,6 +218,24 @@ pub fn run(
         }
         if (search.items.len != 0 and next.kind != .apply) {
             const item = search.items[0];
+            marker.edit = .{
+                .span = .{
+                    .start = shift(item.replace_span.start, growth),
+                    .end = shift(item.replace_span.end, growth),
+                },
+                .text = marker.suggestions[0],
+            };
+            // A `conversion?` proof replaces its whole line with a chain
+            // of lines ending in it, so `at` would name the chain's first
+            // line; its goal is concrete, though, so it has no holes to
+            // report.
+            if (next.kind != .conversion) {
+                try found_at.append(allocator, .{
+                    .marker = markers.items.len,
+                    .at = item.replace_span.start,
+                    .growth = growth,
+                });
+            }
             const spliced = try std.mem.concat(allocator, u8, &.{
                 working[0..item.replace_span.start],
                 item.replacement,
@@ -174,16 +246,6 @@ pub fn run(
             growth += @as(isize, @intCast(item.replacement.len)) -
                 @as(isize, @intCast(item.replace_span.end - item.replace_span.start));
             cursor = item.replace_span.start + item.replacement.len;
-            // A `conversion?` proof replaces its whole line with a chain
-            // of lines ending in it, so `at` would name the chain's first
-            // line; its goal is concrete, though, so it has no holes to
-            // report.
-            if (next.kind != .conversion) {
-                try found_at.append(allocator, .{
-                    .marker = markers.items.len,
-                    .at = item.replace_span.start,
-                });
-            }
         }
         try markers.append(out, marker);
     }
@@ -212,15 +274,64 @@ fn shift(offset: usize, growth: isize) usize {
     return @intCast(@as(isize, @intCast(offset)) - growth);
 }
 
-/// Give each found marker the holes on its line, read off one analysis of
-/// the finished text.
+const FoundAt = struct {
+    marker: usize,
+    /// Where the proof went in the working text.
+    at: usize,
+    /// The growth of the working text before it, which also maps the
+    /// rest of its line before `at` back to the text the run was given.
+    growth: isize,
+};
+
+fn costOf(out: std.mem.Allocator, counters: *const Search.SearchCounters) !Cost {
+    const tallies = counters.rule_attempt_diagnostics[0..counters.rule_attempt_diagnostics_len];
+    var order_buf: [counters.rule_attempt_diagnostics.len]usize = undefined;
+    const order = order_buf[0..tallies.len];
+    for (order, 0..) |*index, i| index.* = i;
+    std.mem.sort(usize, order, tallies, struct {
+        fn moreAttempts(
+            context: []const Search.RuleAttemptDiagnostic,
+            a: usize,
+            b: usize,
+        ) bool {
+            return context[a].attempts > context[b].attempts;
+        }
+    }.moreAttempts);
+    const rules = try out.alloc(RuleTally, @min(order.len, max_rules));
+    for (rules, order[0..rules.len]) |*rule, index| {
+        const tally = &tallies[index];
+        rule.* = .{
+            .name = try out.dupe(u8, tally.rule_name.slice()),
+            .attempts = tally.attempts,
+            .accepted = tally.accepted,
+            .rejected = tally.rejected,
+        };
+    }
+    const generated = counters.gen_last_phase != 0;
+    return .{
+        .ticks = if (generated) Search.weightedTicks(
+            counters.gen_work_ticks,
+            counters.gen_sym_ticks,
+            counters.gen_walk_ticks,
+            counters.full_try_candidate_calls,
+        ) else 0,
+        .candidates = counters.full_try_candidate_calls,
+        .wall_ns = counters.cold_setup_ns + counters.warm_search_ns,
+        .depth = counters.gen_last_depth,
+        .phase = counters.gen_last_phase,
+        .rules = rules,
+    };
+}
+
+/// Give each found marker the holes on its line and its filled
+/// assertion, read off one analysis of the finished text.
 fn fillHoleValues(
     allocator: std.mem.Allocator,
     out: std.mem.Allocator,
     mm0_src: []const u8,
     text: []const u8,
     markers: []Marker,
-    found_at: anytype,
+    found_at: []const FoundAt,
 ) !void {
     var sink = CompilerModule.HoleInferenceSink{ .allocator = allocator };
     defer sink.deinit();
@@ -265,6 +376,18 @@ fn fillHoleValues(
                 .value = try out.dupe(u8, hole.expression),
             });
         }
-        markers[entry.marker].holes = try holes.toOwnedSlice(out);
+        const marker = &markers[entry.marker];
+        marker.holes = try holes.toOwnedSlice(out);
+        for (sink.assertions.items) |filled| {
+            if (filled.line.start != line.start) continue;
+            marker.filled_assertion = .{
+                .span = .{
+                    .start = shift(filled.assertion.start, entry.growth),
+                    .end = shift(filled.assertion.end, entry.growth),
+                },
+                .text = try std.fmt.allocPrint(out, "$ {s} $", .{filled.text}),
+            };
+            break;
+        }
     }
 }

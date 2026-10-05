@@ -16,6 +16,18 @@ This file records notable user-facing changes to Aufbau. The project follows
   in place. A placeholder after a line of its block that does not check is
   reported as not searched. The exit status is 4 unless every placeholder
   found a proof.
+- `abc search --fill` writes the proof file to standard output with every
+  proof found put in place and its line's holes filled, so
+  `abc search --fill x.mm0 x.auf | abc compile x.mm0 - x.mmb` compiles the
+  result. The report goes to standard error. Proofs found in other files
+  are not written; a warning names each one.
+- `abc search --json` reports each placeholder as one line of JSON, with
+  every field: the proofs or candidates, hole values, retry, why a search
+  missed, its work ticks, wall time, the depth and phase that found the
+  proof, and the rules it tried most.
+- `abc search -v` adds what each search cost: work ticks, which repeat from
+  run to run, wall time, and the depth and phase that found the proof.
+  `-vv` adds why a search missed and the rules it tried most.
 - `abc compile` reads the proof file from standard input when given `-`
   for `INPUT.auf`, and writes the MMB to standard output when given `-` for
   `OUTPUT.mmb`. Diagnostics call the input `<stdin>`, and its `include`s

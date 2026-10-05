@@ -13,6 +13,7 @@ pub const UnresolvedHypothesis = root.UnresolvedHypothesis;
 pub const ApplyCandidate = root.ApplyCandidate;
 pub const ApplyResults = root.ApplyResults;
 pub const SearchCounters = root.SearchCounters;
+pub const RuleAttemptDiagnostic = root.RuleAttemptDiagnostic;
 pub const HypLookupPhase = root.HypLookupPhase;
 pub const HypLookupFallback = root.HypLookupFallback;
 pub const ApplyOptions = root.ApplyOptions;
@@ -30,6 +31,8 @@ pub const miss = root.miss;
 pub const Span = root.Span;
 pub const GenerateOptions = root.GenerateOptions;
 pub const weightedTicks = root.weightedTicks;
+pub const phaseName = root.phaseName;
+pub const statusDetailWithoutRules = root.statusDetailWithoutRules;
 pub const SearchSession = root.SearchSession;
 
 pub const probe = root.probe;

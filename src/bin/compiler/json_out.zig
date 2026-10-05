@@ -1,4 +1,5 @@
-//! JSON string-emission helpers shared by the wasm compiler's result writer.
+//! JSON string-emission helpers shared by the wasm compiler's result writer
+//! and `abc search --json`.
 //!
 //! These live in their own module (rather than inline in `wasm.zig`) so they
 //! can be exercised by native unit tests — `wasm.zig` itself pins

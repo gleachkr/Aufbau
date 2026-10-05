@@ -26,6 +26,32 @@ fn run(proof_src: []const u8) !SearchDriver.Result {
     return SearchDriver.run(std.testing.allocator, test_mm0, proof_src);
 }
 
+/// `proof_src` with every marker's edits made, as `--fill` makes them.
+fn applyEdits(
+    proof_src: []const u8,
+    markers: []const SearchDriver.Marker,
+) ![]u8 {
+    var edits = std.ArrayListUnmanaged(SearchDriver.Edit){};
+    defer edits.deinit(std.testing.allocator);
+    for (markers) |marker| {
+        if (marker.filled_assertion) |edit| {
+            try edits.append(std.testing.allocator, edit);
+        }
+        if (marker.edit) |edit| try edits.append(std.testing.allocator, edit);
+    }
+    var text = std.ArrayListUnmanaged(u8){};
+    errdefer text.deinit(std.testing.allocator);
+    var at: usize = 0;
+    for (edits.items) |edit| {
+        try std.testing.expect(edit.span.start >= at);
+        try text.appendSlice(std.testing.allocator, proof_src[at..edit.span.start]);
+        try text.appendSlice(std.testing.allocator, edit.text);
+        at = edit.span.end;
+    }
+    try text.appendSlice(std.testing.allocator, proof_src[at..]);
+    return text.toOwnedSlice(std.testing.allocator);
+}
+
 test "search driver puts each find in place for the markers after it" {
     const proof_src =
         \\t1
@@ -72,6 +98,9 @@ test "search driver puts each find in place for the markers after it" {
             marker.kind.keyword(),
         ));
     }
+    const filled = try applyEdits(proof_src, result.markers);
+    defer std.testing.allocator.free(filled);
+    try std.testing.expectEqualStrings(result.text, filled);
 }
 
 test "search driver leaves a missed marker as written and continues" {
@@ -178,4 +207,14 @@ test "search driver reports the hole values a find gives its line" {
     try std.testing.expectEqual(@as(usize, 1), marker.holes.len);
     try std.testing.expectEqualStrings("_A", marker.holes[0].name);
     try std.testing.expectEqualStrings("o", marker.holes[0].value);
+
+    const filled = try applyEdits(proof_src, result.markers);
+    defer std.testing.allocator.free(filled);
+    try std.testing.expect(std.mem.endsWith(
+        u8,
+        filled,
+        \\l1: $ isty o $ by o_ty
+        \\l2: $ isty o $ by o_ty
+        ,
+    ));
 }

@@ -627,7 +627,8 @@ pub fn build(b: *std.Build) void {
         "Usage:\n" ++
         "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
         "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
-        "  abc search INPUT.mm0 INPUT.auf [--lang LANG]\n" ++
+        "  abc search INPUT.mm0 INPUT.auf [--fill] [--json] [-v | -vv] " ++
+        "[--lang LANG]\n" ++
         "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
         "  abc lsp [--lang LANG]\n" ++
         "  abc [--help | --version]\n" ++
@@ -640,6 +641,11 @@ pub fn build(b: *std.Build) void {
         "                   inference,views,dependency,freshen," ++
         "normalization,boundary,all)\n" ++
         "  -Werror          Treat compiler warnings as errors\n" ++
+        "  --fill           Write INPUT.auf to standard output with every proof\n" ++
+        "                   found put in place; the report goes to standard error\n" ++
+        "  --json           Report each search marker as one line of JSON\n" ++
+        "  -v, -vv          Report what each search cost; -vv adds why it\n" ++
+        "                   missed and the rules it tried most\n" ++
         "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
         "                   the ABC_LANG environment variable\n" ++
         "\nExit status:\n" ++
@@ -733,6 +739,76 @@ pub fn build(b: *std.Build) void {
             "2 found, 1 missed\n",
     );
     cli_smoke_step.dependOn(&abc_search_multi.step);
+
+    // `--fill` writes the proof file with its finds in place; the report
+    // goes to standard error.
+    const abc_search_fill = b.addRunArtifact(compiler_exe);
+    abc_search_fill.setCwd(b.path("tests/cli"));
+    abc_search_fill.addArgs(&.{ "search", "--fill", "search.mm0", "search.auf" });
+    abc_search_fill.expectExitCode(4);
+    abc_search_fill.expectStdOutEqual(
+        "found\n-----\nl1: $ Q $ by use [p []]\n" ++
+            "\nmissed\n------\nl1: $ S $ by exact?\n",
+    );
+    abc_search_fill.expectStdErrEqual(
+        "search.auf:3  found l1  auto?  found\n" ++
+            "  use [p []]\n" ++
+            "search.auf:7  missed l1  exact?  missed\n" ++
+            "1 found, 1 missed\n",
+    );
+    cli_smoke_step.dependOn(&abc_search_fill.step);
+
+    // `--fill` writes only the root proof file, and warns about each proof
+    // it found elsewhere.
+    const abc_search_fill_multi = b.addRunArtifact(compiler_exe);
+    abc_search_fill_multi.setCwd(b.path("tests/cli"));
+    abc_search_fill_multi.addArgs(&.{ "search", "--fill", "multi/main.mm0", "-" });
+    abc_search_fill_multi.setStdIn(.{ .lazy_path = b.path("tests/cli/multi/main.auf") });
+    abc_search_fill_multi.expectExitCode(4);
+    abc_search_fill_multi.expectStdOutEqual(
+        "include \"lemmas.auf\";\n" ++
+            "\nmain_q\n------\nl1: $ Q $ by lq []\n" ++
+            "\nmain_s\n------\nl1: $ S $ by exact?\n",
+    );
+    abc_search_fill_multi.addCheck(.{ .expect_stderr_match = "abc: warning: multi/base.auf:3: " ++
+        "a proof was found for base_q l1, but --fill writes only <stdin>\n" ++
+        "abc: warning: multi/lemmas.auf:3: " ++
+        "a proof was found for lq l1, but --fill writes only <stdin>\n" });
+    cli_smoke_step.dependOn(&abc_search_fill_multi.step);
+
+    // `--json`: one object per marker. Wall time varies, so match the
+    // rest.
+    const abc_search_json = b.addRunArtifact(compiler_exe);
+    abc_search_json.setCwd(b.path("tests/cli"));
+    abc_search_json.addArgs(&.{ "search", "--json", "search.mm0", "search.auf" });
+    abc_search_json.expectExitCode(4);
+    abc_search_json.addCheck(.{ .expect_stdout_match = "{\"file\":\"search.auf\"," ++
+        "\"line\":3,\"theorem\":\"found\",\"label\":\"l1\",\"kind\":\"auto?\"," ++
+        "\"status\":\"found\",\"suggestions\":[\"use [p []]\"],\"holes\":[]," ++
+        "\"retry\":null,\"blocked_by\":null,\"failure\":null,\"detail\":null," });
+    abc_search_json.addCheck(.{ .expect_stdout_match = "\"depth\":1,\"phase\":1," ++
+        "\"phase_name\":\"non-splitting generation\",\"rules\":[" ++
+        "{\"name\":\"p\",\"attempts\":1,\"accepted\":1,\"rejected\":0}," ++
+        "{\"name\":\"use\",\"attempts\":1,\"accepted\":1,\"rejected\":0}]}\n" ++
+        "{\"file\":\"search.auf\",\"line\":7," });
+    cli_smoke_step.dependOn(&abc_search_json.step);
+
+    // `-vv`: each search's cost, why it missed, and the rules it tried.
+    const abc_search_verbose = b.addRunArtifact(compiler_exe);
+    abc_search_verbose.setCwd(b.path("tests/cli"));
+    abc_search_verbose.addArgs(&.{ "search", "-vv", "search.mm0", "search.auf" });
+    abc_search_verbose.expectExitCode(4);
+    abc_search_verbose.addCheck(.{ .expect_stdout_match = "  use [p []]\n  cost: " });
+    abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall, depth 1 in " ++
+        "non-splitting generation\n" ++
+        "  rules tried most:\n" ++
+        "    p: 1 tried, 1 accepted, 0 rejected\n" ++
+        "    use: 1 tried, 1 accepted, 0 rejected\n" ++
+        "search.auf:7  missed l1  exact?  missed\n" ++
+        "  cost: 0 candidates, " });
+    abc_search_verbose.addCheck(.{ .expect_stdout_match = " ms wall\n" ++
+        "  why: no rule application closes this goal" });
+    cli_smoke_step.dependOn(&abc_search_verbose.step);
 
     // The proof file from standard input, the MMB to standard output.
     const abc_compile_stdin = b.addRunArtifact(compiler_exe);
