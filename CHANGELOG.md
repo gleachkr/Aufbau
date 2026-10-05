@@ -5,6 +5,22 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- `abc search INPUT.mm0 INPUT.auf` runs every `auto?`, `exact?`, `apply?`
+  and `conversion?` in a unit, including those in included files and
+  imported theories' proof files, and prints one record per placeholder:
+  its file and line, what it found, the hole values a find gives its line,
+  and the retry a miss suggests. Each proof found is put in place for the
+  searches after it. `apply?` lists its candidate rules and is never put
+  in place. A placeholder after a line of its block that does not check is
+  reported as not searched. The exit status is 4 unless every placeholder
+  found a proof.
+- `abc compile` reads the proof file from standard input when given `-`
+  for `INPUT.auf`, and writes the MMB to standard output when given `-` for
+  `OUTPUT.mmb`. Diagnostics call the input `<stdin>`, and its `include`s
+  resolve beside the `.mm0`.
+
 ### Changed
 
 - The editor checks the lines after an `auto?`, `exact?`, `apply?` or
@@ -20,6 +36,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   1.2 s to 40 ms. Across the search benchmarks the suggestions are
   unchanged except on 9 of 2,554 lines: 8 state fewer bindings, 1 states
   one more.
+
+### Fixed
+
+- An `exact?` or `auto?` inside a ref list that proves its goal with a rule
+  of no premises suggests `rule []`. It used to suggest the bare `rule`,
+  which reads there as a proof line label.
 
 ## [0.0.13] - 2026-10-04
 

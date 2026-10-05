@@ -1,0 +1,9 @@
+include "lemmas.auf";
+
+main_q
+------
+l1: $ Q $ by lq []
+
+main_s
+------
+l1: $ S $ by exact?

@@ -1,0 +1,3 @@
+lemma lq: $ Q $
+---
+l1: $ Q $ by use [exact?]

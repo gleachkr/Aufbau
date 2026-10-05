@@ -1,0 +1,10 @@
+-- `abc search` across files (build.zig test-cli): this theory is imported,
+-- and its proof file holds a marker.
+delimiter $ ( ) $;
+provable sort wff;
+term P: wff;
+term Q: wff;
+term S: wff;
+axiom p: $ P $;
+axiom use: $ P $ > $ Q $;
+theorem base_q: $ Q $;

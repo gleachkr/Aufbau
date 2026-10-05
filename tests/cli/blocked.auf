@@ -1,0 +1,9 @@
+found
+-----
+l1: $ Q $ by p []
+l2: $ Q $ by exact?
+
+missed
+------
+l1: $ Q $ by apply?
+l2: $ S $ by sorry!

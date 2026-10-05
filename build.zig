@@ -627,9 +627,12 @@ pub fn build(b: *std.Build) void {
         "Usage:\n" ++
         "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
         "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
+        "  abc search INPUT.mm0 INPUT.auf [--lang LANG]\n" ++
         "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
         "  abc lsp [--lang LANG]\n" ++
         "  abc [--help | --version]\n" ++
+        "\nAn INPUT.auf of - reads standard input; an OUTPUT.mmb of - writes\n" ++
+        "standard output.\n" ++
         "\nOptions:\n" ++
         "  -h, --help       Show this help and exit\n" ++
         "  -V, --version    Show the version and exit\n" ++
@@ -640,9 +643,10 @@ pub fn build(b: *std.Build) void {
         "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
         "                   the ABC_LANG environment variable\n" ++
         "\nExit status:\n" ++
-        "  0  compiled\n" ++
+        "  0  compiled, or found a proof for every search marker\n" ++
         "  1  failed\n" ++
-        "  3  compiled, but a proof line is admitted with sorry!\n";
+        "  3  compiled, but a proof line is admitted with sorry!\n" ++
+        "  4  searched, but a search marker has no proof\n";
 
     const abc_help = b.addRunArtifact(compiler_exe);
     abc_help.addArg("--help");
@@ -671,6 +675,84 @@ pub fn build(b: *std.Build) void {
         "abc: unable to read 'does-not-exist.mm0': FileNotFound\n",
     );
     cli_smoke_step.dependOn(&abc_missing.step);
+
+    // One marker found and one missed: every record, then exit status 4.
+    const abc_search = b.addRunArtifact(compiler_exe);
+    abc_search.setCwd(b.path("tests/cli"));
+    abc_search.addArgs(&.{ "search", "search.mm0", "search.auf" });
+    abc_search.expectExitCode(4);
+    abc_search.expectStdOutEqual(
+        "search.auf:3  found l1  auto?  found\n" ++
+            "  use [p []]\n" ++
+            "search.auf:7  missed l1  exact?  missed\n" ++
+            "1 found, 1 missed\n",
+    );
+    cli_smoke_step.dependOn(&abc_search.step);
+
+    // A marker after a line that does not check is not searched (the line's
+    // error fails the run); `apply?` lists candidates and is no find.
+    const abc_search_blocked = b.addRunArtifact(compiler_exe);
+    abc_search_blocked.setCwd(b.path("tests/cli"));
+    abc_search_blocked.addArgs(&.{ "search", "search.mm0", "blocked.auf" });
+    abc_search_blocked.expectExitCode(1);
+    abc_search_blocked.expectStdOutEqual(
+        "blocked.auf:4  found l2  exact?  not searched: l1 does not check\n" ++
+            "blocked.auf:8  missed l1  apply?  candidates\n" ++
+            "  use [ref1]\n" ++
+            "  found\n" ++
+            "0 found, 0 missed, 1 with candidates, 1 not searched\n",
+    );
+    abc_search_blocked.expectStdErrEqual(
+        "error: proof line assertion does not match the rule conclusion\n" ++
+            "  theorem: found\n" ++
+            "  line: l1\n" ++
+            "  rule: p\n" ++
+            "  phase: theorem application\n" ++
+            "  note: expected: P\n" ++
+            "  note: actual: Q\n" ++
+            "  --> blocked.auf:3:5\n" ++
+            "  | l1: $ Q $ by p []\n" ++
+            "  |     ^^^^^\n",
+    );
+    cli_smoke_step.dependOn(&abc_search_blocked.step);
+
+    // Markers in an imported theory's proof file and in an included file;
+    // the root proof comes from standard input, and its include resolves
+    // beside the `.mm0`, not the working directory.
+    const abc_search_multi = b.addRunArtifact(compiler_exe);
+    abc_search_multi.setCwd(b.path("tests/cli"));
+    abc_search_multi.addArgs(&.{ "search", "multi/main.mm0", "-" });
+    abc_search_multi.setStdIn(.{ .lazy_path = b.path("tests/cli/multi/main.auf") });
+    abc_search_multi.expectExitCode(4);
+    abc_search_multi.expectStdOutEqual(
+        "multi/base.auf:3  base_q l1  auto?  found\n" ++
+            "  use [p []]\n" ++
+            "multi/lemmas.auf:3  lq l1  exact?  found\n" ++
+            "  p []\n" ++
+            "<stdin>:9  main_s l1  exact?  missed\n" ++
+            "2 found, 1 missed\n",
+    );
+    cli_smoke_step.dependOn(&abc_search_multi.step);
+
+    // The proof file from standard input, the MMB to standard output.
+    const abc_compile_stdin = b.addRunArtifact(compiler_exe);
+    abc_compile_stdin.setCwd(b.path("tests/cli"));
+    abc_compile_stdin.addArgs(&.{ "compile", "search.mm0", "-", "-" });
+    abc_compile_stdin.setStdIn(.{ .bytes = "found\n-----\nl1: $ Q $ by use [p []]\n" ++
+        "\nmissed\n------\nl1: $ S $ by sorry!\n" });
+    abc_compile_stdin.expectExitCode(3);
+    // Diagnostics name the proof file `<stdin>`.
+    abc_compile_stdin.expectStdErrEqual(
+        "warning: proof line is admitted with sorry!; " ++
+            "the theorem is not verified\n" ++
+            "  theorem: missed\n" ++
+            "  line: l1\n" ++
+            "  rule: sorry!\n" ++
+            "  --> <stdin>:7:14\n" ++
+            "  | l1: $ S $ by sorry!\n" ++
+            "  |              ^^^^^^\n",
+    );
+    cli_smoke_step.dependOn(&abc_compile_stdin.step);
 
     const verifier_usage_text =
         "Usage: mm0-zig [OPTIONS] FILE.mmb < FILE.mm0\n" ++

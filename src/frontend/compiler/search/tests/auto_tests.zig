@@ -380,11 +380,10 @@ test "inline auto still resolves a slot from a direct ref without generating" {
     });
     defer suggestions.deinit();
 
-    // The direct exact pass renders a no-ref rule as `p` (brackets are only
-    // emitted for non-empty ref lists); the generation pass, which also runs,
-    // renders the same axiom as `p []`. Either way the slot resolves; the point
-    // is that a directly-provable slot does not depend on generation.
-    try expectOffered(suggestions.items, &.{"p"});
+    // The point is that a directly-provable slot does not depend on
+    // generation. Inline, a no-ref rule keeps its `[]` so it does not read as
+    // a line label.
+    try expectOffered(suggestions.items, &.{"p []"});
 }
 
 test "inline auto reports a miss on an unprovable slot" {
@@ -1039,7 +1038,8 @@ test "source exact completes inline application from parent expected goal" {
     defer suggestions.deinit();
 
     try std.testing.expect(suggestions.items.len > 0);
-    try std.testing.expectEqualStrings("p", suggestions.items[0].replacement);
+    // `[]` keeps the inline rule from re-parsing as a line label.
+    try std.testing.expectEqualStrings("p []", suggestions.items[0].replacement);
 }
 
 test "source exact inside inline application can resolve to direct ref" {

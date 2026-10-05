@@ -258,6 +258,8 @@ Editor indexing and source rendering:
 - `interner_view.zig` adapts theorem DAGs to the shared printer
 - `statement_sink.zig` captures statements before compilation arenas die
 - `unpack.zig` expands inline applications into source proof lines
+- `search_driver.zig` runs every search placeholder of a unit in checking
+  order for `abc search`, putting each find in place for the ones after it
 
 ### Wiring: `src/lib.zig` and `src/bin/`
 

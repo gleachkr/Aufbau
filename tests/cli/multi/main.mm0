@@ -1,0 +1,5 @@
+-- The root theory: its proof file is read from standard input and includes
+-- lemmas.auf, which resolves beside this file.
+import "base.mm0";
+theorem main_q: $ Q $;
+theorem main_s: $ S $;

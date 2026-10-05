@@ -180,7 +180,11 @@ pub fn suggestionsAtSourceOffset(
             &diag_scratch,
             &cache,
             line,
-        ) catch return .{ .allocator = allocator, .items = &.{} };
+        ) catch return .{
+            .allocator = allocator,
+            .items = &.{},
+            .blocked_by = line.label_span,
+        };
         labels.put(line.label, line_idx) catch return error.OutOfMemory;
     }
 
@@ -1042,6 +1046,10 @@ pub const SearchPlaceholder = struct {
     /// The LSP validates these per placeholder (`tunables.validateSearchParams`)
     /// to diagnose typos without running a search.
     params: []const ProofScript.SearchParam = &.{},
+    /// The proof block and the line the placeholder sits in (slices of the
+    /// proof source).
+    theorem: []const u8 = "",
+    label: []const u8 = "",
 };
 
 /// Enumerate every search placeholder (`exact?`/`apply?`/`auto?`) in
@@ -1063,7 +1071,13 @@ pub fn searchPlaceholders(
     var parser = ProofParser.initLenient(parse_arena.allocator(), proof_src);
     while (parser.nextBlockSkippingLocalItems() catch null) |block| {
         for (block.lines) |line| {
-            try collectSearchPlaceholders(allocator, &out, line.application);
+            try collectSearchPlaceholders(
+                allocator,
+                &out,
+                block.name,
+                line.label,
+                line.application,
+            );
         }
     }
     return try out.toOwnedSlice(allocator);
@@ -1072,6 +1086,8 @@ pub fn searchPlaceholders(
 fn collectSearchPlaceholders(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged(SearchPlaceholder),
+    theorem: []const u8,
+    label: []const u8,
     application: RuleApplication,
 ) !void {
     // Gate on the canonical predicate so this can't drift from what the
@@ -1103,12 +1119,16 @@ fn collectSearchPlaceholders(
             .kind = kind,
             .span = application.span,
             .params = params,
+            .theorem = theorem,
+            .label = label,
         });
     }
     for (application.refs) |ref| switch (ref) {
         .application => |child| try collectSearchPlaceholders(
             allocator,
             out,
+            theorem,
+            label,
             child,
         ),
         .hyp, .line => {},
@@ -1594,12 +1614,7 @@ fn appendInlineExactApplications(
             .theorem_vars = theorem_vars,
             .counters = counters,
         }, candidate.application);
-        const replacement = try renderApplication(
-            allocator,
-            app.rule_name,
-            app.arg_bindings,
-            app.refs,
-        );
+        const replacement = try renderInlineApplication(allocator, app);
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
             allocator,
@@ -1681,12 +1696,7 @@ fn appendInlineGeneratedApplications(
             .theorem_vars = theorem_vars,
             .counters = options.counters,
         }, generated_app);
-        const replacement = try renderApplication(
-            allocator,
-            app.rule_name,
-            app.arg_bindings,
-            app.refs,
-        );
+        const replacement = try renderInlineApplication(allocator, app);
         var duplicate = false;
         for (items.items) |item| {
             if (std.mem.eql(u8, item.replacement, replacement)) {
@@ -2344,6 +2354,17 @@ fn renderApplication(
         }
         try buf.append(allocator, ']');
     }
+    return try buf.toOwnedSlice(allocator);
+}
+
+/// An application rendered to stand in a ref list (see `renderRef`).
+fn renderInlineApplication(
+    allocator: std.mem.Allocator,
+    app: RuleApplication,
+) ![]const u8 {
+    var buf = std.ArrayListUnmanaged(u8){};
+    errdefer buf.deinit(allocator);
+    try renderRef(allocator, &buf, .{ .application = app });
     return try buf.toOwnedSlice(allocator);
 }
 

@@ -1257,6 +1257,9 @@ pub const SourceSuggestions = struct {
     /// `target_span` is set (a placeholder was actually searched); the early
     /// no-placeholder returns leave the default.
     status: SearchStatus = .miss,
+    /// Set instead of searching when an earlier line of the placeholder's
+    /// block does not check: that line's label span. `target_span` is null.
+    blocked_by: ?Span = null,
     /// Human-readable elaboration of a `.miss`/`.budget_exhausted` status —
     /// which bound truncated the search, how far it got, what to tune. Only
     /// built when `SourceSuggestionOptions.status_detail` is set (the LSP

@@ -939,12 +939,19 @@ pub const LoadFailure = union(enum) {
     read: struct { path: []const u8, err: anyerror },
 };
 
+/// The `proof_path` that reads the root's proof file from standard input,
+/// and the name that file goes by in diagnostics.
+pub const stdin_path = "-";
+pub const stdin_label = "<stdin>";
+
 /// Load `mm0_path` with its imports and the paired proof files. The root's
 /// proof file is `proof_path` when given (it need not sit next to the
-/// root); every imported file pairs with its `<stem>.auf` sibling when that
-/// exists. Display labels are `mm0_path`/`proof_path` for the roots and
-/// paths relative to the current directory for imports. Allocations come
-/// from `allocator` (use an arena).
+/// root), or standard input when that is `stdin_path`, its `include`s then
+/// resolving against the root's directory; every imported file pairs with
+/// its `<stem>.auf` sibling when that exists. Display labels are
+/// `mm0_path`/`proof_path` (`stdin_label` for standard input) for the roots
+/// and paths relative to the current directory for imports. Allocations
+/// come from `allocator` (use an arena).
 pub fn loadPair(
     allocator: std.mem.Allocator,
     mm0_path: []const u8,
@@ -991,13 +998,34 @@ pub fn loadPair(
     );
 
     var proof_files: std.ArrayListUnmanaged(File) = .{};
+    const from_stdin = if (proof_path) |path|
+        std.mem.eql(u8, path, stdin_path)
+    else
+        false;
     var proof_labeller = Labeller{
         .cwd = cwd,
         .root_key = "",
-        .root_label = proof_path orelse "",
+        .root_label = if (from_stdin) stdin_label else proof_path orelse "",
     };
     for (joined.files, 0..) |file, index| {
         const is_root = index + 1 == joined.files.len;
+        if (is_root and from_stdin) {
+            const text = std.fs.File.stdin().readToEndAlloc(
+                allocator,
+                std.math.maxInt(usize),
+            ) catch |err| {
+                failure.* = .{ .read = .{ .path = stdin_label, .err = err } };
+                return error.ReadFailed;
+            };
+            // A key beside the root `.mm0`, so `include`s resolve there.
+            const key = try std.fs.path.join(allocator, &.{
+                std.fs.path.dirname(root_key) orelse ".",
+                stdin_label,
+            });
+            try proof_files.append(allocator, .{ .key = key, .text = text });
+            proof_labeller.root_key = key;
+            continue;
+        }
         const explicit = is_root and proof_path != null;
         const path: []const u8 = if (explicit)
             proof_path.?

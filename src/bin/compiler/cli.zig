@@ -10,15 +10,20 @@ const CliError = error{
     /// The output was written, but a proof line is admitted with
     /// `sorry!`; the build is not verified (exit status 3, as mm0-c).
     Sorry,
+    /// `search` left a marker without a proof (exit status 4).
+    Missed,
 };
 
 const usage_text =
     "Usage:\n" ++
     "  abc compile INPUT.mm0 INPUT.auf OUTPUT.mmb " ++
     "[--debug SYSTEMS] [-Werror] [--lang LANG]\n" ++
+    "  abc search INPUT.mm0 INPUT.auf [--lang LANG]\n" ++
     "  abc join INPUT.mm0 [OUTPUT.mm0]\n" ++
     "  abc lsp [--lang LANG]\n" ++
     "  abc [--help | --version]\n" ++
+    "\nAn INPUT.auf of - reads standard input; an OUTPUT.mmb of - writes\n" ++
+    "standard output.\n" ++
     "\nOptions:\n" ++
     "  -h, --help       Show this help and exit\n" ++
     "  -V, --version    Show the version and exit\n" ++
@@ -30,9 +35,10 @@ const usage_text =
     "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
     "                   the ABC_LANG environment variable\n" ++
     "\nExit status:\n" ++
-    "  0  compiled\n" ++
+    "  0  compiled, or found a proof for every search marker\n" ++
     "  1  failed\n" ++
-    "  3  compiled, but a proof line is admitted with sorry!\n";
+    "  3  compiled, but a proof line is admitted with sorry!\n" ++
+    "  4  searched, but a search marker has no proof\n";
 
 const version_text = "abc " ++ build_options.version ++ "\n";
 
@@ -48,6 +54,11 @@ const CompileCommand = struct {
     warnings_as_errors: bool,
 };
 
+const SearchCommand = struct {
+    input: []const u8,
+    proof: []const u8,
+};
+
 const JoinCommand = struct {
     input: []const u8,
     /// Standard output when null.
@@ -56,6 +67,7 @@ const JoinCommand = struct {
 
 const Command = union(enum) {
     compile: CompileCommand,
+    search: SearchCommand,
     join: JoinCommand,
     lsp,
     help,
@@ -123,6 +135,12 @@ fn parseCompileArgs(argv: []const []const u8) !Command {
             .input = pos[1],
             .output = if (pos.len == 3) pos[2] else null,
         } };
+    }
+    if (pos.len >= 1 and std.mem.eql(u8, pos[0], "search")) {
+        if (pos.len != 3 or warnings_as_errors or debug.any()) {
+            return CliError.InvalidUsage;
+        }
+        return .{ .search = .{ .input = pos[1], .proof = pos[2] } };
     }
     if (pos.len != 4 or !std.mem.eql(u8, pos[0], "compile")) {
         return CliError.InvalidUsage;
@@ -275,7 +293,12 @@ fn runCompile(
                 }
         else
             cmd.paths.input;
-        std.debug.print("abc: failed to compile '{s}'\n", .{failed_path});
+        std.debug.print("abc: failed to compile '{s}'\n", .{
+            if (std.mem.eql(u8, failed_path, mm0.Imports.stdin_path))
+                mm0.Imports.stdin_label
+            else
+                failed_path,
+        });
         compiler.reportError(err);
         return CliError.Reported;
     };
@@ -283,7 +306,12 @@ fn runCompile(
 
     compiler.reportWarnings();
 
-    std.fs.cwd().writeFile(.{
+    if (std.mem.eql(u8, cmd.paths.output, "-")) {
+        writeToFile(std.fs.File.stdout(), mmb) catch |err| {
+            reportFileError("write", "standard output", err);
+            return CliError.Reported;
+        };
+    } else std.fs.cwd().writeFile(.{
         .sub_path = cmd.paths.output,
         .data = mmb,
     }) catch |err| {
@@ -294,6 +322,146 @@ fn runCompile(
     for (compiler.warningDiagnostics()) |diag| {
         if (diag.err == error.SorryLine) return CliError.Sorry;
     }
+}
+
+fn runSearch(
+    allocator: std.mem.Allocator,
+    cmd: SearchCommand,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var failure: ?mm0.Imports.LoadFailure = null;
+    const pair = mm0.Imports.loadPair(
+        arena.allocator(),
+        cmd.input,
+        cmd.proof,
+        &failure,
+    ) catch |err| {
+        reportLoadFailure(allocator, failure, err);
+        return CliError.Reported;
+    };
+    const proof = pair.proof.?;
+    const proof_mapping = pair.proof_mapping.?;
+
+    // Errors elsewhere in the unit fail the run, but the markers are still
+    // searched: the analysis around each one admits what it cannot check.
+    var compiler = mm0.Compiler.initWithProof(
+        allocator,
+        pair.mm0.text,
+        proof.text,
+    );
+    compiler.allow_search_placeholders = true;
+    compiler.diagnostics.setMapping(.mm0, pair.mm0_mapping);
+    compiler.diagnostics.setMapping(.proof, proof_mapping);
+    compiler.analyze() catch |err| {
+        if (err == error.OutOfMemory) return err;
+        compiler.reportError(err);
+        return CliError.Reported;
+    };
+    const errors = compiler.primaryDiagnostics();
+    for (errors) |diag| compiler.diagnostics.reportDiagnostic(diag);
+    for ([_]mm0.CompilerDiagnosticSource{ .mm0, .proof }) |source| {
+        if (compiler.omittedPrimaryDiagnostic(source)) |omitted| {
+            compiler.diagnostics.reportDiagnostic(omitted);
+        }
+    }
+
+    var result = try mm0.CompilerSupport.SearchDriver.run(
+        allocator,
+        pair.mm0.text,
+        proof.text,
+    );
+    defer result.deinit();
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const failed = try writeSearchReport(
+        &stdout.interface,
+        proof_mapping,
+        result.markers,
+    );
+    try stdout.interface.flush();
+    if (failed or errors.len != 0) return CliError.Reported;
+    for (result.markers) |marker| {
+        if (marker.outcome != .found) return CliError.Missed;
+    }
+}
+
+/// One record per marker, then a count; returns whether a search failed.
+fn writeSearchReport(
+    w: *std.Io.Writer,
+    mapping: mm0.Imports.Mapping,
+    markers: []const mm0.CompilerSupport.SearchDriver.Marker,
+) !bool {
+    var found: usize = 0;
+    var missed: usize = 0;
+    var candidates: usize = 0;
+    var not_searched: usize = 0;
+    var failed = false;
+    for (markers) |marker| {
+        if (mapping.locateSpan(.{
+            .start = marker.span.start,
+            .end = marker.span.end,
+        })) |hit| {
+            const pos = lineCol(hit.text, hit.span.start);
+            try w.print("{s}:{d}", .{ hit.label, pos.line });
+        } else try w.writeAll("?");
+        try w.print("  {s} {s}  {s}  ", .{
+            marker.theorem,
+            marker.label,
+            marker.kind.keyword(),
+        });
+        switch (marker.outcome) {
+            .found => {
+                found += 1;
+                try w.writeAll("found\n");
+            },
+            .candidates => {
+                candidates += 1;
+                try w.writeAll("candidates\n");
+            },
+            .missed => {
+                missed += 1;
+                try w.writeAll("missed\n");
+            },
+            .cut_short => {
+                missed += 1;
+                try w.writeAll("missed (search cut short)\n");
+            },
+            .not_searched => {
+                not_searched += 1;
+                if (marker.blocked_by) |label| {
+                    try w.print("not searched: {s} does not check\n", .{label});
+                } else try w.writeAll("not searched\n");
+            },
+            .failed => {
+                failed = true;
+                try w.print("failed: {s}\n", .{@errorName(marker.failure.?)});
+            },
+        }
+        for (marker.suggestions) |suggestion| {
+            try writeIndented(w, suggestion);
+        }
+        for (marker.holes) |hole| {
+            try w.print("  {s} := {s}\n", .{ hole.name, hole.value });
+        }
+        if (marker.retry) |retry| try w.print("  retry: {s}\n", .{retry});
+    }
+    if (markers.len == 0) {
+        try w.writeAll("no search markers\n");
+    } else {
+        try w.print("{d} found, {d} missed", .{ found, missed });
+        if (candidates != 0) try w.print(", {d} with candidates", .{candidates});
+        if (not_searched != 0) try w.print(", {d} not searched", .{not_searched});
+        try w.writeAll("\n");
+    }
+    return failed;
+}
+
+fn writeIndented(w: *std.Io.Writer, text: []const u8) !void {
+    var lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, text, "\n"), '\n');
+    while (lines.next()) |line| try w.print("  {s}\n", .{line});
 }
 
 const LangSplit = struct {
@@ -346,6 +514,7 @@ pub fn run(
     const cmd = try parseArgs(split.rest);
     switch (cmd) {
         .compile => |compile| try runCompile(allocator, compile),
+        .search => |search| try runSearch(allocator, search),
         .join => |join| try runJoin(allocator, join),
         .lsp => try compiler_lsp.run(allocator),
         .help => try usage(),
@@ -368,6 +537,7 @@ pub fn main() !void {
         },
         CliError.Reported => std.process.exit(1),
         CliError.Sorry => std.process.exit(3),
+        CliError.Missed => std.process.exit(4),
         else => {
             std.debug.print("abc: {s}\n", .{@errorName(err)});
             std.process.exit(1);
@@ -482,6 +652,25 @@ test "parse join command" {
     try std.testing.expectError(
         CliError.InvalidUsage,
         parseArgs(&.{ "join", "a.mm0", "-Werror" }),
+    );
+}
+
+test "parse search command" {
+    const cmd = try parseArgs(&.{ "search", "a.mm0", "a.auf" });
+    switch (cmd) {
+        .search => |search| {
+            try std.testing.expectEqualStrings("a.mm0", search.input);
+            try std.testing.expectEqualStrings("a.auf", search.proof);
+        },
+        else => return error.TestUnexpectedCommand,
+    }
+    try std.testing.expectError(
+        CliError.InvalidUsage,
+        parseArgs(&.{ "search", "a.mm0" }),
+    );
+    try std.testing.expectError(
+        CliError.InvalidUsage,
+        parseArgs(&.{ "search", "a.mm0", "a.auf", "-Werror" }),
     );
 }
 
