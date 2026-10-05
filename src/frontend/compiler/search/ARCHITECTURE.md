@@ -319,7 +319,10 @@ which the persisted-memo covering rule requires:
    `lan`/`lim` premise that keeps `a∧b` alongside `a , b`) and the principal
    cannot be rebuilt. Broadens every additive split node, hence last and gated;
    the minimal-complement majority never pays. Guarded by the
-   `idem_complement_probe` depth-frontier regression test.
+   `idem_complement_probe` depth-frontier regression test. An `@auto eager`
+   rule never retains while the eager cut is honored: it is declared
+   invertible, so the premises without the principal suffice (the cut-free
+   valve retains again). On tait this halves depth-frontier ticks.
 5. **Phase 5 — constrained backward modus ponens** (`allow_constrained_mp =
    true`). At depth 1 after phase 4's depth-1 cell; deeper only as the last
    tail. Lets the open-generation path

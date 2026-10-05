@@ -1394,7 +1394,12 @@ fn trySplitGenerate(
             site,
             bindings,
             b,
-            hook.allow_retain_principal,
+            // An eager rule never keeps its principal: the user declared it
+            // invertible, so its premises without the principal are provable
+            // whenever the goal is. Like the cut, this holds only while the
+            // cut is honored; the cut-free valve retains again.
+            hook.allow_retain_principal and !(hook.honor_eager_cut and
+                context.registry.eagerPriority(candidate.rule_id) != null),
         ) orelse {
             step = .abstained;
             continue;

@@ -679,7 +679,9 @@ An eager rule (which is implicitly `@auto backward` too) gets three things:
    — matched the goal and reached its subgoals — the search does not fall
    back to non-eager rules at that node: invertibility means that if the
    decomposition fails, the goal fails. All *eager* alternatives (other
-   matching formulas, other eager rules) are still tried.
+   matching formulas, other eager rules) are still tried. For the same
+   reason an eager rule's premises never keep the decomposed formula
+   alongside its parts.
 3. **Depth exemption.** Eager applications don't consume the `max_depth`
    budget. A proof that is a tall deterministic decomposition ladder plus
    one real choice point costs one depth level, not fifteen — which is

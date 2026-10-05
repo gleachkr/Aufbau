@@ -60,6 +60,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   also no longer recomputes each rule's properties at every comparison.
   The searches themselves are unchanged: they try the same candidates and
   find the same proofs.
+- An `@auto eager` rule no longer keeps the formula it decomposes alongside
+  its parts. The rule is declared invertible, so its premises without that
+  formula are provable whenever the goal is; the retry with the eager cut
+  off still keeps it. On the tait benchmark searches take 57% fewer ticks,
+  on nd_fol 23% fewer, with the same suggestions everywhere.
 
 ### Fixed
 
