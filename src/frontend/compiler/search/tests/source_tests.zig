@@ -1055,3 +1055,93 @@ test "source search declines a target that depends on a dropped declaration" {
         ),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Binding trimming through the `BindingOracle` (#374). Each case is an nd_fol
+// line whose bare suggestion fails, so trimming needs the oracle, and needs
+// the named part of it; `suggestionsAtNeedle` fails any suggestion that comes
+// back untrimmed.
+// ---------------------------------------------------------------------------
+
+fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const mm0_src = try std.fs.cwd().readFileAlloc(
+        arena.allocator(),
+        "tests/search_bench_cases/nd_fol.mm0",
+        std.math.maxInt(usize),
+    );
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .max_results = 3,
+        .exact_result_limit = 1,
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{expected});
+}
+
+test "trimming supplies an inline sub-proof the binders its hint lacks" {
+    // `weak [l2]` gets no hint from a bare `all_left`; the retry supplies the
+    // `t` its premise leaves open.
+    try expectNdFolTrim(
+        \\vac_all_or
+        \\----------
+        \\l1: $ (∀ x (s0 ∨ s0)) , s0 ⊢ s0 $ by ax
+        \\l2: $ (∀ x (s0 ∨ s0)) , (s0 ∨ s0) ⊢ s0 $ by or_left [l1, l1]
+        \\l4: $ ∅ ⊢ (∀ x (s0 ∨ s0)) → s0 $ by auto?
+    ,
+        "imp_intro [all_left (t := $ u $) [weak [l2]]]",
+    );
+}
+
+test "trimming forces the binders an inline sub-proof proved past" {
+    // Under a bare `not_left`, `ex_intro [ax []]` checks against a weak hint
+    // and proves something other than `not_left`'s premise; `not_left`'s
+    // binders are then supplied before inference, and `ex_intro`'s `p`,
+    // forced along with them, is dropped again.
+    try expectNdFolTrim(
+        \\not_ex_to_all_not
+        \\-----------------
+        \\l6: $ ∅ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $ by auto?
+    ,
+        "imp_intro [all_intro [not_intro [not_left (g := $ P y $, a := $ ∃ x P x $) " ++
+            "[ex_intro (t := $ y $) [ax []]]]]]",
+    );
+}
+
+test "trimming accepts an inferred binder equal to the search's up to ACUI" {
+    try expectNdFolTrim(
+        \\drinker
+        \\-------
+        \\l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ P y $ by ax
+        \\l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
+        \\l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y ⊢ ∀ y P y $ by raa [l2]
+        \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ P y → ∀ y P y $ by imp_intro [l3]
+        \\l5: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [l4]
+        \\l6: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ ⊥ $ by not_left [l5]
+        \\l7: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ P y $ by raa [l6]
+        \\l12: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by auto?
+    ,
+        "raa [not_left [ex_intro [imp_intro [all_intro (x := $ y $) [l7]]]]]",
+    );
+}
+
+test "trimming checks again with the kept bindings stated" {
+    // The first oracle check keeps a set the line rejects once the kept
+    // bindings are stated (a stated binder changes the hint an inline
+    // sub-proof gets); the second check, with them stated, keeps `t`.
+    try expectNdFolTrim(
+        \\drinker
+        \\-------
+        \\l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ P y $ by ax
+        \\l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
+        \\l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y ⊢ ∀ y P y $ by raa [l2]
+        \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ P y → ∀ y P y $ by imp_intro [l3]
+        \\l12: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by auto?
+    ,
+        "raa [not_left [ex_intro (t := $ C $) [imp_intro (g := $ ¬ ∃ x (P x → ∀ y P y) $, " ++
+            "a := $ P C $, b := $ ∀ y P y $) [all_intro (x := $ y $) [raa " ++
+            "(g := $ ¬ ∃ x (P x → ∀ y P y) , P C $, a := $ P y $) [not_left " ++
+            "(g := $ P C , ¬ P y $, a := $ ∃ x (P x → ∀ y P y) $) [ex_intro [l4]]]]]]]]",
+    );
+}

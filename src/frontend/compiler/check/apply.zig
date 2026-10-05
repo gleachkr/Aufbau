@@ -30,6 +30,7 @@ const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const HoleInferenceSink = @import("../context.zig").HoleInferenceSink;
 const InlineConclusionSink = @import("../context.zig").InlineConclusionSink;
+const BindingOracle = @import("../context.zig").BindingOracle;
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Normalize = @import("../normalize.zig");
 const ViewTrace = @import("../../view_trace.zig");
@@ -56,6 +57,8 @@ const addFreshenAttemptNotes = DiagNotes.addFreshenAttemptNotes;
 const addBoundaryAttemptNotes = DiagNotes.addBoundaryAttemptNotes;
 const applyFreshenedRuleLine = FreshenRetry.applyFreshenedRuleLine;
 const findRuleArgIndex = Idents.findRuleArgIndex;
+const templateMentionsBinder = @import("../../rules.zig").templateMentionsBinder;
+const Canonicalizer = @import("../../canonicalizer.zig").Canonicalizer;
 
 const NameExprMap = @import("./types.zig").NameExprMap;
 const UnresolvedHypothesis = @import("./types.zig").UnresolvedHypothesis;
@@ -118,6 +121,8 @@ pub fn applyRuleApplication(
     const allocator = context.allocator;
     const sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0;
     errdefer if (self.inline_conclusion_sink) |sink| sink.rollback(sink_mark);
+    const oracle_mark = if (self.binding_oracle) |oracle| oracle.mark() else 0;
+    errdefer if (self.binding_oracle) |oracle| oracle.rollback(oracle_mark);
     const initial_rule_id = try lookupRuleApplicationId(
         self,
         context.env,
@@ -458,19 +463,40 @@ fn applyRuleCandidateCore(
         }
     }
 
+    // A withheld search suggestion (`BindingOracle`): the values the search
+    // chose for this application's binders, supplied where the checker
+    // cannot do without them.
+    const withheld: ?BindingOracle.Withheld = blk: {
+        if (kind != .full_application) break :blk null;
+        const oracle = self.binding_oracle orelse break :blk null;
+        const full = oracle.lookup(application) orelse break :blk null;
+        var full_app = application;
+        full_app.arg_bindings = full;
+        break :blk .{
+            .oracle = oracle,
+            .rule = rule,
+            .full = full,
+            .values = try parseBindings(
+                self,
+                allocator,
+                parser,
+                theorem,
+                theorem_vars,
+                context.sort_vars,
+                assertion.name,
+                rule,
+                full_app,
+                line,
+            ),
+        };
+    };
+    defer if (withheld) |w| allocator.free(w.values);
+    if (withheld) |w| try w.supply(null, false, partial_bindings);
+
     var expected_refs: []?ExprId = &.{};
     defer allocator.free(expected_refs);
     if (kind == .full_application) {
-        expected_refs = try inferExpectedRefsForInlineApplications(
-            allocator,
-            theorem,
-            registry,
-            rule,
-            line_assertion,
-            expected_conclusion_hint,
-            partial_bindings,
-        );
-        try fillHoleyInlineHints(
+        expected_refs = try inlineHints(
             self,
             context,
             application,
@@ -478,11 +504,9 @@ fn applyRuleCandidateCore(
             expected_conclusion_hint,
             line,
             rule_id,
-            rule,
             theorem,
             theorem_vars,
             partial_bindings,
-            expected_refs,
         );
     }
 
@@ -492,8 +516,12 @@ fn applyRuleCandidateCore(
     const ref_exprs = try allocator.alloc(ExprId, expected_ref_count);
     defer allocator.free(ref_exprs);
 
-    if (kind == .full_application) {
-        try elaborateRefs(
+    if (kind == .full_application) while (true) {
+        const checked_mark = checked.items.len;
+        const sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0;
+        const oracle_mark = if (self.binding_oracle) |oracle| oracle.mark() else 0;
+        var failed_ref: ?usize = null;
+        elaborateRefs(
             self,
             context,
             line,
@@ -507,63 +535,51 @@ fn applyRuleCandidateCore(
             expected_refs,
             refs,
             ref_exprs,
-        );
-    }
-
-    const explicit_bindings = try allocator.dupe(?ExprId, partial_bindings);
-    defer allocator.free(explicit_bindings);
-
-    if (context.fresh_bindings.get(rule_id)) |rule_fresh| {
-        try applyFreshBindings(
-            self,
-            parser,
-            theorem,
-            theorem_vars,
-            context.sort_vars,
-            assertion.name,
-            rule,
-            line,
-            try lineAssertionKnownDeps(
-                env,
+            &failed_ref,
+        ) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            const w = withheld orelse return err;
+            const idx = failed_ref orelse return err;
+            if (application.refs[idx] != .application) return err;
+            const take = try allocator.alloc(bool, w.values.len);
+            defer allocator.free(take);
+            const widest = (try hintRetryBinders(
+                allocator,
                 theorem,
                 rule,
                 line_assertion,
+                expected_conclusion_hint,
                 partial_bindings,
-            ),
-            ref_exprs,
-            partial_bindings,
-            rule_fresh,
-        );
-    }
+                w.values,
+                ref_exprs[0..idx],
+                take,
+            )) orelse return err;
+            CheckedIr.rollbackToMark(allocator, checked, checked_mark);
+            if (self.inline_conclusion_sink) |sink| sink.rollback(sink_mark);
+            w.oracle.rollback(oracle_mark);
+            try w.supply(take, widest, partial_bindings);
+            restoreDiagnostic(self, null);
+            allocator.free(expected_refs);
+            expected_refs = &.{};
+            expected_refs = try inlineHints(
+                self,
+                context,
+                application,
+                line_assertion,
+                expected_conclusion_hint,
+                line,
+                rule_id,
+                theorem,
+                theorem_vars,
+                partial_bindings,
+            );
+            continue;
+        };
+        break;
+    };
 
-    var maybe_view = context.views.get(rule_id);
-    if (kind == .conclusion_probe) {
-        if (maybe_view) |*view| view.hyps = &.{};
-    }
-    const had_omitted = Inference.hasOmittedBindings(partial_bindings);
-    const has_omitted_structural = had_omitted and
-        try Inference.hasOmittedStructuralBindings(
-            env,
-            registry,
-            inference_rule,
-            partial_bindings,
-        );
-    const prefer_structural_solver = had_omitted and
-        try Inference.shouldPreferStructuralSolver(
-            env,
-            registry,
-            inference_rule,
-            partial_bindings,
-        );
-    const rule_has_advanced_inference =
-        maybe_view != null or
-        has_omitted_structural;
-    // A view only guides inference. With every rule binder given there is
-    // nothing to infer, and the rule's own check decides: the view's match
-    // can reject a line the rule accepts (`rex` with `d` and `x` given
-    // leaves only the member `q` of its premise bag open).
-    const use_advanced_inference = had_omitted and
-        rule_has_advanced_inference;
+    const explicit_bindings = try allocator.dupe(?ExprId, partial_bindings);
+    defer allocator.free(explicit_bindings);
 
     const fresh_context: Inference.HiddenWitnessFreshContext = .{
         .parser = parser,
@@ -584,8 +600,25 @@ fn applyRuleCandidateCore(
         else
             context.rule_unify_cache,
     };
+    const node: NodeInference = .{
+        .self = self,
+        .context = context,
+        .line = line,
+        .theorem = theorem,
+        .theorem_vars = theorem_vars,
+        .rule_id = rule_id,
+        .rule = rule,
+        .inference_rule = inference_rule,
+        .kind = kind,
+        .line_assertion = line_assertion,
+        .expected_conclusion_hint = expected_conclusion_hint,
+        .ref_exprs = ref_exprs,
+        .inference_context = &inference_context,
+        .fresh_context = fresh_context,
+    };
 
     if (kind == .conclusion_probe) {
+        const setup = try node.prepare(partial_bindings);
         const optional_bindings = try inferCandidateOptionalBindings(
             self,
             &inference_context,
@@ -595,12 +628,12 @@ fn applyRuleCandidateCore(
             ref_exprs,
             expected_conclusion_hint,
             fresh_context,
-            maybe_view,
-            had_omitted,
-            rule_has_advanced_inference,
-            use_advanced_inference,
-            has_omitted_structural,
-            prefer_structural_solver,
+            setup.maybe_view,
+            setup.had_omitted,
+            setup.rule_has_advanced_inference,
+            setup.use_advanced_inference,
+            setup.has_omitted_structural,
+            setup.prefer_structural_solver,
         );
         defer allocator.free(optional_bindings);
 
@@ -725,22 +758,13 @@ fn applyRuleCandidateCore(
         } };
     }
 
-    const bindings = try inferCandidateBindings(
-        self,
-        &inference_context,
-        line,
-        line_assertion,
-        partial_bindings,
-        ref_exprs,
-        expected_conclusion_hint,
-        fresh_context,
-        maybe_view,
-        had_omitted,
-        rule_has_advanced_inference,
-        use_advanced_inference,
-        has_omitted_structural,
-        prefer_structural_solver,
-    );
+    const bindings = if (withheld) |w| node.inferWithOracle(w, explicit_bindings) catch |err| {
+        // With every value supplied there is nothing left to disagree on:
+        // an inline sub-proof, checked against the weak hint the withheld
+        // binders left it, proved something else.
+        if (err != error.OutOfMemory) try w.forceStrayed(application.refs);
+        return err;
+    } else try node.infer(partial_bindings);
 
     var resolved_bindings = bindings;
     var freshen_steps: std.ArrayListUnmanaged(AlphaRewrite.FreshenResult) = .{};
@@ -1068,6 +1092,11 @@ fn applyRuleCandidateCore(
             true,
         );
         self.setProof(diag);
+        // The sub-proof checked against the weak hint the withheld binders
+        // left it, and proved something else.
+        if (withheld) |w| if (ref == .application) {
+            try w.forcePremise(rule.hyps[idx]);
+        };
         return error.HypothesisMismatch;
     }
 
@@ -1182,6 +1211,312 @@ fn applyRuleCandidateCore(
     return .{ .full_application = line_idx };
 }
 
+/// The binders to supply from a withheld application's `values` (#374)
+/// after inline sub-proof `siblings.len` failed on its hint: those its
+/// premise mentions that folding the line goal and the earlier `siblings`
+/// through `rule` leaves unbound or bound only to a placeholder; if none,
+/// every one its premise mentions; if none, every one (the fold that fills
+/// the rest of the premise may need them: an ACUI split's other side). The
+/// fold is `refinedInlineHint`'s first, without its ACUI-spine demotion, so
+/// a binder the child's hint lacked can look bound here; the wider tiers
+/// catch that. Fills `take`; null when the oracle has no value to add, else
+/// whether the tier taken is the last, which over-approximates (its
+/// bindings are forced).
+fn hintRetryBinders(
+    allocator: std.mem.Allocator,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    partial_bindings: []const ?ExprId,
+    values: []const ?ExprId,
+    siblings: []const ExprId,
+    take: []bool,
+) !?bool {
+    const premise = rule.hyps[siblings.len];
+    const folded = try allocator.alloc(?ExprId, partial_bindings.len);
+    defer allocator.free(folded);
+    const snap = try allocator.alloc(?ExprId, partial_bindings.len);
+    defer allocator.free(snap);
+    try foldGoalAndSiblings(
+        theorem,
+        rule,
+        LineGoal.of(expected_conclusion_hint, line_assertion),
+        partial_bindings,
+        siblings,
+        true,
+        folded,
+        snap,
+    );
+    const Tier = enum { open_mentioned, mentioned, any };
+    for ([_]Tier{ .open_mentioned, .mentioned, .any }) |tier| {
+        var any = false;
+        for (values, partial_bindings, folded, take, 0..) |value, given, fold, *slot, idx| {
+            const open = if (fold) |expr| theorem.containsPlaceholder(expr) else true;
+            slot.* = value != null and given == null and switch (tier) {
+                .open_mentioned => open and templateMentionsBinder(premise, idx),
+                .mentioned => templateMentionsBinder(premise, idx),
+                .any => true,
+            };
+            any = any or slot.*;
+        }
+        if (any) return tier == .any;
+    }
+    return null;
+}
+
+/// The expected conclusions of an application's inline sub-proofs, from
+/// its line goal and the bindings given so far.
+fn inlineHints(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    partial_bindings: []?ExprId,
+) ![]?ExprId {
+    const rule = &context.env.rules.items[rule_id];
+    const expected_refs = try inferExpectedRefsForInlineApplications(
+        context.allocator,
+        theorem,
+        context.registry,
+        rule,
+        line_assertion,
+        expected_conclusion_hint,
+        partial_bindings,
+    );
+    errdefer context.allocator.free(expected_refs);
+    try fillHoleyInlineHints(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        line,
+        rule_id,
+        rule,
+        theorem,
+        theorem_vars,
+        partial_bindings,
+        expected_refs,
+    );
+    return expected_refs;
+}
+
+/// Binder inference for one application, rerunnable from different given
+/// bindings (the oracle trials below).
+const NodeInference = struct {
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    line: ApplicationLine,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    rule_id: u32,
+    rule: *const RuleDecl,
+    inference_rule: *const RuleDecl,
+    kind: CandidateApplyKind,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    ref_exprs: []const ExprId,
+    inference_context: *const Inference.RuleInferenceContext,
+    fresh_context: Inference.HiddenWitnessFreshContext,
+
+    const Setup = struct {
+        maybe_view: ?ViewDecl,
+        had_omitted: bool,
+        rule_has_advanced_inference: bool,
+        use_advanced_inference: bool,
+        has_omitted_structural: bool,
+        prefer_structural_solver: bool,
+    };
+
+    /// Fill the rule's fresh binders into `given`, then pick the solvers.
+    fn prepare(n: NodeInference, given: []?ExprId) !Setup {
+        const env = n.context.env;
+        const registry = n.context.registry;
+        if (n.context.fresh_bindings.get(n.rule_id)) |rule_fresh| {
+            try applyFreshBindings(
+                n.self,
+                n.context.parser,
+                n.theorem,
+                n.theorem_vars,
+                n.context.sort_vars,
+                n.context.assertion.name,
+                n.rule,
+                n.line,
+                try lineAssertionKnownDeps(
+                    env,
+                    n.theorem,
+                    n.rule,
+                    n.line_assertion,
+                    given,
+                ),
+                n.ref_exprs,
+                given,
+                rule_fresh,
+            );
+        }
+        var maybe_view = n.context.views.get(n.rule_id);
+        if (n.kind == .conclusion_probe) {
+            if (maybe_view) |*view| view.hyps = &.{};
+        }
+        const had_omitted = Inference.hasOmittedBindings(given);
+        const has_omitted_structural = had_omitted and
+            try Inference.hasOmittedStructuralBindings(
+                env,
+                registry,
+                n.inference_rule,
+                given,
+            );
+        const prefer_structural_solver = had_omitted and
+            try Inference.shouldPreferStructuralSolver(
+                env,
+                registry,
+                n.inference_rule,
+                given,
+            );
+        const rule_has_advanced_inference =
+            maybe_view != null or
+            has_omitted_structural;
+        return .{
+            .maybe_view = maybe_view,
+            .had_omitted = had_omitted,
+            .rule_has_advanced_inference = rule_has_advanced_inference,
+            // A view only guides inference. With every rule binder given
+            // there is nothing to infer, and the rule's own check decides:
+            // the view's match can reject a line the rule accepts (`rex`
+            // with `d` and `x` given leaves only the member `q` of its
+            // premise bag open).
+            .use_advanced_inference = had_omitted and
+                rule_has_advanced_inference,
+            .has_omitted_structural = has_omitted_structural,
+            .prefer_structural_solver = prefer_structural_solver,
+        };
+    }
+
+    /// Every binder of the rule, from `given` and inference.
+    fn infer(n: NodeInference, given: []?ExprId) ![]const ExprId {
+        const setup = try n.prepare(given);
+        return inferCandidateBindings(
+            n.self,
+            n.inference_context,
+            n.line,
+            n.line_assertion,
+            given,
+            n.ref_exprs,
+            n.expected_conclusion_hint,
+            n.fresh_context,
+            setup.maybe_view,
+            setup.had_omitted,
+            setup.rule_has_advanced_inference,
+            setup.use_advanced_inference,
+            setup.has_omitted_structural,
+            setup.prefer_structural_solver,
+        );
+    }
+
+    /// `infer` on a withheld application (`BindingOracle`): with nothing
+    /// supplied when inference reproduces every value the search chose,
+    /// otherwise with every value supplied and then each one taken back,
+    /// in list order, that inference still reproduces. The values kept are
+    /// marked used and added to `explicit`. Fails only as inference with
+    /// every value supplied does.
+    fn inferWithOracle(
+        n: NodeInference,
+        w: BindingOracle.Withheld,
+        explicit: []?ExprId,
+    ) ![]const ExprId {
+        const allocator = n.context.allocator;
+        const values = w.values;
+        const supplied = try allocator.alloc(bool, values.len);
+        defer allocator.free(supplied);
+        @memset(supplied, false);
+
+        if (try n.agreeingTrial(explicit, values, supplied)) |bindings| {
+            return bindings;
+        }
+        for (values, explicit, supplied) |value, given, *slot| {
+            slot.* = value != null and given == null;
+        }
+        var bindings = try n.inferSupplied(explicit, values, supplied);
+        errdefer allocator.free(bindings);
+        for (w.full) |binding| {
+            const idx = findRuleArgIndex(n.rule, binding.name) orelse continue;
+            if (!supplied[idx]) continue;
+            supplied[idx] = false;
+            if (try n.agreeingTrial(explicit, values, supplied)) |fewer| {
+                allocator.free(bindings);
+                bindings = fewer;
+            } else {
+                supplied[idx] = true;
+            }
+        }
+        try w.supply(supplied, false, explicit);
+        return bindings;
+    }
+
+    /// `infer` from `explicit` plus the `supplied` values.
+    fn inferSupplied(
+        n: NodeInference,
+        explicit: []const ?ExprId,
+        values: []const ?ExprId,
+        supplied: []const bool,
+    ) ![]const ExprId {
+        const given = try n.context.allocator.dupe(?ExprId, explicit);
+        defer n.context.allocator.free(given);
+        for (given, values, supplied) |*slot, value, use| {
+            if (use) slot.* = value;
+        }
+        return n.infer(given);
+    }
+
+    /// `inferSupplied`, or null when it fails or lands anywhere but on the
+    /// values the search chose (up to ACUI). What a failed trial interned
+    /// stays in the theorem, which only a trimming check runs on and then
+    /// discards.
+    fn agreeingTrial(
+        n: NodeInference,
+        explicit: []const ?ExprId,
+        values: []const ?ExprId,
+        supplied: []const bool,
+    ) !?[]const ExprId {
+        const allocator = n.context.allocator;
+        const saved_diag = getDiagnostic(n.self);
+        const scratch_mark = n.context.diag_scratch.mark();
+        const bindings = n.inferSupplied(explicit, values, supplied) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            n.context.diag_scratch.discard(scratch_mark);
+            restoreDiagnostic(n.self, saved_diag);
+            return null;
+        };
+        errdefer allocator.free(bindings);
+        // Inference may land on an ACUI rearrangement of the search's value,
+        // which states the same line.
+        var canonicalizer = Canonicalizer.init(
+            allocator,
+            n.theorem,
+            n.context.registry,
+            n.context.env,
+        );
+        defer canonicalizer.cache.deinit();
+        for (values, 0..) |value, idx| {
+            const expected = value orelse continue;
+            if (idx < bindings.len) {
+                if (bindings[idx] == expected) continue;
+                if (try canonicalizer.canonicalize(bindings[idx]) ==
+                    try canonicalizer.canonicalize(expected)) continue;
+            }
+            allocator.free(bindings);
+            return null;
+        }
+        return bindings;
+    }
+};
+
 fn tryApplyRuleApplicationWithCandidate(
     self: *CompilerContext,
     context: *const RuleApplyContext,
@@ -1226,6 +1561,8 @@ const SpeculativeAttempt = struct {
     checked_mark: usize,
     sink: ?*InlineConclusionSink,
     sink_mark: usize,
+    oracle: ?*BindingOracle,
+    oracle_mark: usize,
     theorem: TheoremContext,
     theorem_vars: NameExprMap,
     line_idx: usize,
@@ -1257,6 +1594,8 @@ const SpeculativeAttempt = struct {
             .checked_mark = context.checked.items.len,
             .sink = self.inline_conclusion_sink,
             .sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0,
+            .oracle = self.binding_oracle,
+            .oracle_mark = if (self.binding_oracle) |oracle| oracle.mark() else 0,
             .theorem = attempt_theorem,
             .theorem_vars = attempt_theorem_vars,
             .line_idx = undefined,
@@ -1283,6 +1622,7 @@ const SpeculativeAttempt = struct {
     fn abort(attempt: *SpeculativeAttempt) void {
         CheckedIr.rollbackToMark(attempt.allocator, attempt.checked, attempt.checked_mark);
         if (attempt.sink) |sink| sink.rollback(attempt.sink_mark);
+        if (attempt.oracle) |oracle| oracle.rollback(attempt.oracle_mark);
         attempt.theorem_vars.deinit();
         attempt.theorem.deinit();
         attempt.* = undefined;
@@ -1359,9 +1699,12 @@ fn elaborateRefs(
     expected_ref_exprs: []const ?ExprId,
     refs: []CheckedRef,
     ref_exprs: []ExprId,
+    /// Set to the index of the ref that failed, on error.
+    failed_ref: *?usize,
 ) anyerror!void {
     const assertion = context.assertion;
     for (source_refs, 0..) |ref, idx| {
+        failed_ref.* = idx;
         ref_exprs[idx] = switch (ref) {
             .hyp => |hyp| blk: {
                 const resolved = ProofScript.resolveHypRef(
@@ -1576,12 +1919,16 @@ fn refinedInlineHint(
     // no siblings the two orders coincide.
     const orders: []const bool = if (idx == 0) &.{true} else &.{ true, false };
     for (orders) |conclusion_first| {
-        @memcpy(bindings, partial_bindings);
-        if (conclusion_first) try foldLineGoal(theorem, rule, goal, bindings, snap);
-        for (0..idx) |j| {
-            foldTemplateOrRestore(theorem, rule.hyps[j], ref_exprs[j], bindings, snap);
-        }
-        if (!conclusion_first) try foldLineGoal(theorem, rule, goal, bindings, snap);
+        try foldGoalAndSiblings(
+            theorem,
+            rule,
+            goal,
+            partial_bindings,
+            ref_exprs[0..idx],
+            conclusion_first,
+            bindings,
+            snap,
+        );
 
         // Drop any positional ACUI-spine commitment so a context split cannot
         // leak a wrong-but-concrete hint (the fold declines rather than guesses).
@@ -1594,6 +1941,27 @@ fn refinedInlineHint(
         )) |refined| return refined;
     }
     return existing_hint;
+}
+
+/// `partial_bindings` plus what folding `goal` through `rule`'s conclusion
+/// and each of `siblings` through its premise pins, into `bindings` (`snap`
+/// is scratch of the same length).
+fn foldGoalAndSiblings(
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    goal: ?LineGoal,
+    partial_bindings: []const ?ExprId,
+    siblings: []const ExprId,
+    conclusion_first: bool,
+    bindings: []?ExprId,
+    snap: []?ExprId,
+) !void {
+    @memcpy(bindings, partial_bindings);
+    if (conclusion_first) if (goal) |g| try foldLineGoal(theorem, rule, g, bindings, snap);
+    for (siblings, 0..) |expr, j| {
+        foldTemplateOrRestore(theorem, rule.hyps[j], expr, bindings, snap);
+    }
+    if (!conclusion_first) if (goal) |g| try foldLineGoal(theorem, rule, g, bindings, snap);
 }
 
 /// Fold `goal` through `rule`'s conclusion all-or-nothing. A holey line fixes

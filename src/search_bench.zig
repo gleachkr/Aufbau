@@ -1318,6 +1318,21 @@ const scenarios = [_]Scenario{
     },
 };
 
+/// Suggestions any search in this run returned untrimmed (`SearchCounters.
+/// untrimmed`): each one is a binding-oracle gap, so the run fails on any.
+var untrimmed_total: u64 = 0;
+
+/// Fail the run when any suggestion came back untrimmed.
+fn failOnUntrimmed() void {
+    if (untrimmed_total == 0) return;
+    std.debug.print(
+        "error: the binding oracle could not trim {d} suggestion(s); " ++
+            "depth rows under -v mark them UNTRIMMED\n",
+        .{untrimmed_total},
+    );
+    std.process.exit(1);
+}
+
 pub fn main() !void {
     const allocator = counting_allocator.allocator();
     const options = try parseOptions(allocator);
@@ -1331,12 +1346,14 @@ pub fn main() !void {
     if (options.sweep != null) {
         try runSweep(allocator, stdout, options);
         try stdout.flush();
+        failOnUntrimmed();
         return;
     }
 
     if (options.frontier) |mode| {
         const failed = try runFrontier(allocator, stdout, mode, options);
         try stdout.flush();
+        failOnUntrimmed();
         if (options.require_no_miss and failed) std.process.exit(1);
         return;
     }
@@ -1357,6 +1374,7 @@ pub fn main() !void {
         try runScenario(allocator, stdout, scenario, options);
         try stdout.flush();
     }
+    failOnUntrimmed();
 }
 
 fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
@@ -1596,6 +1614,7 @@ fn runScenario(
         },
     );
     defer suggestions.deinit();
+    untrimmed_total += counters.untrimmed;
 
     if (scenario.expect_result and
         !containsReplacement(suggestions.items, scenario.expected_replacement))
@@ -2339,6 +2358,7 @@ fn runFrontierSearch(
     // `collect` turns on the per-candidate diagnostics the bench reports (off in
     // production, where the counters block exists only as the memo carrier).
     var counters = Search.SearchCounters{ .collect = true };
+    defer untrimmed_total += counters.untrimmed;
     const run_start = std.time.nanoTimestamp();
     var suggestions = Search.suggestionsAtSourceOffset(
         allocator,
@@ -3225,6 +3245,9 @@ fn runDepthFixture(
                     },
                 );
                 try printDurationCompact(writer, run.search_ns);
+                try writer.writeAll(" trim=");
+                try printDurationCompact(writer, run.counters.trim_ns);
+                if (run.counters.untrimmed != 0) try writer.writeAll(" UNTRIMMED");
                 try printTicksCompact(writer, RunTicks.of(&run.counters));
                 if (run.err == null and !run.found) {
                     try writer.writeAll(" ");

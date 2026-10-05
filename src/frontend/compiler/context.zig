@@ -6,7 +6,14 @@ const CompilerDiag = @import("../diag.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticPhase = CompilerDiag.DiagnosticPhase;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
-const Span = @import("../proof_script.zig").Span;
+const RuleDecl = @import("../env.zig").RuleDecl;
+const findRuleArgIndex = @import("../idents.zig").findRuleArgIndex;
+const TemplateExpr = @import("../rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("../rules.zig").templateMentionsBinder;
+const ProofScript = @import("../proof_script.zig");
+const Span = ProofScript.Span;
+const ArgBinding = ProofScript.ArgBinding;
+const RuleApplication = ProofScript.RuleApplication;
 const StatementSink = @import("../statement_sink.zig").StatementSink;
 const CheckMemo = @import("./check_memo.zig").CheckMemo;
 const ExprModule = @import("../expr.zig");
@@ -120,6 +127,145 @@ pub const InlineConclusionSink = struct {
     }
 };
 
+/// A search suggestion's bindings, held back from the checker so it can
+/// learn which ones it needs (#374). The checker sees the suggestion with
+/// the withheld bindings dropped (`register`); an application whose binders
+/// inference cannot reproduce looks its full list up here (`Withheld`),
+/// supplies the values it needs, and marks them used. Speculative attempts
+/// roll their marks back like `InlineConclusionSink` entries.
+pub const BindingOracle = struct {
+    allocator: std.mem.Allocator,
+    /// Each withheld application's full binding list, keyed by the address
+    /// of the bindings its source still states (`register`).
+    full: std.AutoHashMapUnmanaged(usize, []const ArgBinding) = .{},
+    /// In the order taken, so `rollback` can truncate.
+    used: std.AutoArrayHashMapUnmanaged(*const ArgBinding, void) = .{},
+    /// Bindings a check found it needed before inference ran: an inline
+    /// sub-proof checked against the weak hint its withheld parent gave it,
+    /// and proved something other than the parent's premise, or failed even
+    /// with the parent's premise binders supplied. The next check supplies
+    /// them up front. Forcing over-approximates what the checker needs, so
+    /// trimming tries each forced binding away again once the suggestion
+    /// checks. Only ever grows (a rolled-back attempt's included, which
+    /// costs at most that one try), so a check that forced nothing new
+    /// shows as an unchanged count.
+    forced: std.AutoHashMapUnmanaged(*const ArgBinding, void) = .{},
+
+    pub fn deinit(self: *BindingOracle) void {
+        self.full.deinit(self.allocator);
+        self.used.deinit(self.allocator);
+        self.forced.deinit(self.allocator);
+        self.* = undefined;
+    }
+
+    /// Withhold `full` from an application whose source now states only
+    /// `stated`, a slice of its own (or `full[0..0]`, for none).
+    pub fn register(
+        self: *BindingOracle,
+        stated: []const ArgBinding,
+        full: []const ArgBinding,
+    ) !void {
+        try self.full.put(self.allocator, @intFromPtr(stated.ptr), full);
+    }
+
+    /// The full binding list behind a withheld application, if it had any.
+    pub fn lookup(self: *const BindingOracle, app: RuleApplication) ?[]const ArgBinding {
+        return self.full.get(@intFromPtr(app.arg_bindings.ptr));
+    }
+
+    /// Force every binding of the withheld inline sub-proofs among `refs`,
+    /// a level at a time: the nearest level that has one not forced before.
+    /// For a sub-proof that strayed below the level its parent can see.
+    pub fn forceNearestSubProofs(self: *BindingOracle, refs: []const ProofScript.Ref) !void {
+        var level = std.ArrayListUnmanaged(RuleApplication){};
+        defer level.deinit(self.allocator);
+        var next = std.ArrayListUnmanaged(RuleApplication){};
+        defer next.deinit(self.allocator);
+        try appendSubProofs(self.allocator, &level, refs);
+        while (level.items.len != 0) {
+            const before = self.forced.count();
+            for (level.items) |app| {
+                const full = self.lookup(app) orelse continue;
+                for (full) |*binding| try self.forced.put(self.allocator, binding, {});
+            }
+            if (self.forced.count() != before) return;
+            next.clearRetainingCapacity();
+            for (level.items) |app| try appendSubProofs(self.allocator, &next, app.refs);
+            std.mem.swap(std.ArrayListUnmanaged(RuleApplication), &level, &next);
+        }
+    }
+
+    fn appendSubProofs(
+        allocator: std.mem.Allocator,
+        out: *std.ArrayListUnmanaged(RuleApplication),
+        refs: []const ProofScript.Ref,
+    ) !void {
+        for (refs) |ref| switch (ref) {
+            .application => |app| try out.append(allocator, app),
+            .hyp, .line => {},
+        };
+    }
+
+    pub fn mark(self: *const BindingOracle) usize {
+        return self.used.count();
+    }
+
+    pub fn rollback(self: *BindingOracle, at: usize) void {
+        self.used.shrinkRetainingCapacity(at);
+    }
+
+    /// One withheld application as the checker sees it: its rule, its full
+    /// binding list, and the values parsed from that list.
+    pub const Withheld = struct {
+        oracle: *BindingOracle,
+        rule: *const RuleDecl,
+        full: []const ArgBinding,
+        values: []const ?ExprModule.ExprId,
+
+        /// Copy into `dest` each value that `mask` selects (null: each
+        /// forced one) and `dest` lacks, and mark its binding used (and
+        /// forced, if `force`).
+        pub fn supply(
+            w: Withheld,
+            mask: ?[]const bool,
+            force: bool,
+            dest: []?ExprModule.ExprId,
+        ) !void {
+            const oracle = w.oracle;
+            for (w.full) |*binding| {
+                const idx = findRuleArgIndex(w.rule, binding.name) orelse continue;
+                const want = if (mask) |m| m[idx] else oracle.forced.contains(binding);
+                if (!want or dest[idx] != null) continue;
+                dest[idx] = w.values[idx];
+                try oracle.used.put(oracle.allocator, binding, {});
+                if (force) try oracle.forced.put(oracle.allocator, binding, {});
+            }
+        }
+
+        /// Force each binding that `premise` mentions: an inline sub-proof
+        /// proved something other than it. One the application already had
+        /// is forced too, so trimming tries it away again.
+        pub fn forcePremise(w: Withheld, premise: TemplateExpr) !void {
+            for (w.full) |*binding| {
+                const idx = findRuleArgIndex(w.rule, binding.name) orelse continue;
+                if (!templateMentionsBinder(premise, idx)) continue;
+                try w.oracle.forced.put(w.oracle.allocator, binding, {});
+            }
+        }
+
+        /// Force what the premises of the inline sub-proofs among `refs`
+        /// mention, or, when that is nothing new, the sub-proofs' own
+        /// bindings (`forceNearestSubProofs`).
+        pub fn forceStrayed(w: Withheld, refs: []const ProofScript.Ref) !void {
+            const before = w.oracle.forced.count();
+            for (refs, w.rule.hyps) |ref, premise| {
+                if (ref == .application) try w.forcePremise(premise);
+            }
+            if (w.oracle.forced.count() == before) try w.oracle.forceNearestSubProofs(refs);
+        }
+    };
+};
+
 /// Observability counters from binder inference, collected across every
 /// solver the run constructs. Threaded like `HoleInferenceSink`: paths that
 /// do not attach one pay nothing.
@@ -141,6 +287,8 @@ pub const CompilerContext = struct {
     allow_search_placeholders: bool = false,
     hole_inference_sink: ?*HoleInferenceSink = null,
     inline_conclusion_sink: ?*InlineConclusionSink = null,
+    /// Set while a search trims a suggestion's bindings; null otherwise.
+    binding_oracle: ?*BindingOracle = null,
     statement_sink: ?*StatementSink = null,
     inference_stats_sink: ?*InferenceStatsSink = null,
     /// Work ceiling installed by a budgeted search for the duration of one

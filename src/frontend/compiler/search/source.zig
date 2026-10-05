@@ -22,6 +22,7 @@ const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
+const BindingOracle = @import("../context.zig").BindingOracle;
 const CheckedIr = @import("../../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
 const Inference = @import("../inference.zig");
@@ -402,6 +403,7 @@ pub fn suggestionsAtSourceOffset(
         const site = SuggestionSite{
             .compiler = &compiler,
             .context = &context,
+            .counters = options.counters,
             .line = target_line,
             .line_goal = line_goal,
             .path = target.path,
@@ -1293,14 +1295,11 @@ fn appendGeneratedSuggestions(
     for (generated.applications) |generated_app| {
         if (items.items.len >= options.max_results) break;
         const trimmed = try trimBindings(allocator, site, generated_app);
-        const app = trimmed.app;
+        const app = trimmed orelse generated_app;
         // A holey goal was searched with metas for its holes; the line itself
         // must check with the rendered proof in place, filling them.
-        if (site.line_goal == .holey) switch (trimmed.verdict) {
-            .passed => {},
-            .failed => continue,
-            .unchecked => if (!try site.validates(allocator, app)) continue,
-        };
+        if (site.line_goal == .holey and trimmed == null and
+            !try site.validates(allocator, app)) continue;
         const replacement = try renderApplication(
             allocator,
             app.rule_name,
@@ -1395,6 +1394,7 @@ fn inlineExactSuggestions(
             theorem,
             theorem_vars,
             results.candidates,
+            options.counters,
             &items,
             max_results,
         );
@@ -1562,6 +1562,7 @@ fn appendInlineExactApplications(
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
     candidates: []const ExactCandidate,
+    counters: ?*types.SearchCounters,
     items: *std.ArrayListUnmanaged(SourceSuggestion),
     max_results: usize,
 ) !void {
@@ -1591,6 +1592,7 @@ fn appendInlineExactApplications(
             .path = path,
             .theorem = theorem,
             .theorem_vars = theorem_vars,
+            .counters = counters,
         }, candidate.application);
         const replacement = try renderApplication(
             allocator,
@@ -1677,6 +1679,7 @@ fn appendInlineGeneratedApplications(
             .path = path,
             .theorem = theorem,
             .theorem_vars = theorem_vars,
+            .counters = options.counters,
         }, generated_app);
         const replacement = try renderApplication(
             allocator,
@@ -1768,6 +1771,9 @@ const SuggestionSite = struct {
     path: []const usize,
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
+    /// Receives the time spent trimming bindings (`trim_ns`) and the
+    /// suggestions left untrimmed (`untrimmed`).
+    counters: ?*types.SearchCounters,
 
     /// Whether the line checks with `app` in the placeholder's place.
     fn validates(
@@ -1794,102 +1800,153 @@ const SuggestionSite = struct {
             self.theorem_vars,
         );
     }
+
+    /// Check the line with the `drop`ped `bindings` of `app` withheld
+    /// behind a `BindingOracle`, and keep (clear in `drop`) those the
+    /// checker takes from it, setting `coarse` for those it took
+    /// over-approximately. A failed check that forced a binding reruns with
+    /// it supplied. Null when the check fails; otherwise whether it took
+    /// any. A check that takes none has checked exactly the suggestion
+    /// `drop` leaves.
+    fn neededBindings(
+        self: SuggestionSite,
+        allocator: std.mem.Allocator,
+        app: RuleApplication,
+        bindings: []const *const ProofScript.ArgBinding,
+        drop: []bool,
+        coarse: []bool,
+    ) !?bool {
+        var oracle = BindingOracle{ .allocator = allocator };
+        defer oracle.deinit();
+        var next: usize = 0;
+        const withheld = try withBindingsDroppedFrom(allocator, app, drop, &next, &oracle);
+        const saved = self.compiler.binding_oracle;
+        self.compiler.binding_oracle = &oracle;
+        defer self.compiler.binding_oracle = saved;
+        while (true) {
+            const forced = oracle.forced.count();
+            if (try self.validates(allocator, withheld)) break;
+            // Each rerun forces at least one more binding, so this ends.
+            if (oracle.forced.count() == forced) return null;
+            oracle.used.clearRetainingCapacity();
+        }
+        var took = false;
+        for (bindings, drop, coarse) |binding, *slot, *spare| {
+            if (!slot.* or !oracle.used.contains(binding)) continue;
+            slot.* = false;
+            spare.* = oracle.forced.contains(binding);
+            took = true;
+        }
+        return took;
+    }
+
+    /// Drop each `coarse` binding `drop` keeps whose line still checks
+    /// without it.
+    fn dropCoarse(
+        self: SuggestionSite,
+        allocator: std.mem.Allocator,
+        app: RuleApplication,
+        drop: []bool,
+        coarse: []const bool,
+    ) !void {
+        for (coarse, drop) |spare, *slot| {
+            if (!spare or slot.*) continue;
+            slot.* = true;
+            const trial = try withBindingsDropped(allocator, app, drop);
+            if (!try self.validates(allocator, trial)) slot.* = false;
+        }
+    }
 };
 
-/// Drop the explicit bindings of `app` the checker does not need. The search
-/// renders every binder it chose (existential metas, bound witnesses, ACUI
-/// split and principal choices) so that its own validation cannot misread
-/// them; most of them the checker re-derives from the refs and the goal. The
-/// bare application, with every binding dropped, is tried first. Failing
-/// that, each binding, outermost application first, is dropped when the line
-/// still checks without it, so the result checks whenever `app` does. On a
-/// holey line that `app` checks, the innermost go first instead: the root's
-/// bindings carry what fills the holes (the inferred type), and a child
-/// checks from its parent's hint once the root states them. Allocates on the
-/// per-call work arena and frees nothing.
+/// `app` without the explicit bindings the checker does not need, or
+/// `app` itself when trimming fails (`trimBindings`).
 fn withNeededBindings(
     allocator: std.mem.Allocator,
     site: SuggestionSite,
     app: RuleApplication,
 ) !RuleApplication {
-    return (try trimBindings(allocator, site, app)).app;
+    return (try trimBindings(allocator, site, app)) orelse app;
 }
 
-const TrimmedApplication = struct {
-    app: RuleApplication,
-    /// What the trials said about the line with `app` in place.
-    verdict: Verdict,
-
-    const Verdict = enum {
-        passed,
-        /// Only on a holey line, where the full application is tried
-        /// first: it failed, and so did every drop.
-        failed,
-        /// No trial ran on `app` itself (it has no bindings, or every drop
-        /// failed on a concrete line, where the full application is never
-        /// tried).
-        unchecked,
-    };
-};
-
-/// `withNeededBindings`, also reporting whether the result was validated.
+/// Drop the explicit bindings of `app` the checker does not need. The search
+/// renders every binder it chose (existential metas, bound witnesses, ACUI
+/// split and principal choices) so that its own validation cannot misread
+/// them; most of them the checker re-derives from the refs and the goal.
+/// The bare application, with every binding dropped, is tried first.
+/// Failing that, a check with the bindings withheld behind a
+/// `BindingOracle` keeps the ones the checker takes from the search
+/// (`SuggestionSite.neededBindings`), and one more validates the result;
+/// should that fail, the oracle checks again with the kept bindings stated,
+/// as the suggestion will state them. Each binding the oracle supplied
+/// over-approximately is then dropped if the line checks without it. The
+/// result has been validated. Null, with `app` unchecked, when it has no
+/// bindings or the oracle check fails; the latter counts as untrimmed
+/// (`SearchCounters.untrimmed`), which no corpus line may be. Allocates on
+/// the per-call work arena and frees nothing.
 fn trimBindings(
     allocator: std.mem.Allocator,
     site: SuggestionSite,
     app: RuleApplication,
-) !TrimmedApplication {
-    const count = bindingCount(app);
-    if (count == 0) return .{ .app = app, .verdict = .unchecked };
-    const drop = try allocator.alloc(bool, count);
+) !?RuleApplication {
+    const start = timer.timestampIf(site.counters != null);
+    defer if (site.counters) |counters| {
+        counters.trim_ns += timer.elapsedSince(start);
+    };
+    var list = std.ArrayListUnmanaged(*const ProofScript.ArgBinding){};
+    try appendPreorderBindings(allocator, &list, app);
+    const bindings = list.items;
+    if (bindings.len == 0) return null;
+    const drop = try allocator.alloc(bool, bindings.len);
     @memset(drop, true);
     const bare = try withBindingsDropped(allocator, app, drop);
-    if (try site.validates(allocator, bare)) return .{ .app = bare, .verdict = .passed };
-    @memset(drop, false);
-    // The current drop set is validated once the full application passed or
-    // any drop was kept: a rejected trial restores the last accepted set.
-    var verdict: TrimmedApplication.Verdict = .unchecked;
-    if (site.line_goal == .holey) {
-        verdict = if (try site.validates(allocator, app)) .passed else .failed;
-    }
-    const inner_first = verdict == .passed;
-    for (0..count) |step| {
-        const idx = if (inner_first) count - 1 - step else step;
-        drop[idx] = true;
-        const trial = try withBindingsDropped(allocator, app, drop);
-        if (try site.validates(allocator, trial)) {
-            verdict = .passed;
-        } else {
-            drop[idx] = false;
+    if (try site.validates(allocator, bare)) return bare;
+    const coarse = try allocator.alloc(bool, bindings.len);
+    @memset(coarse, false);
+    // Every check that takes a binding keeps at least one more, so this
+    // ends.
+    while (try site.neededBindings(allocator, app, bindings, drop, coarse)) |took| {
+        if (!took or try site.validates(allocator, try withBindingsDropped(allocator, app, drop))) {
+            try site.dropCoarse(allocator, app, drop, coarse);
+            return try withBindingsDropped(allocator, app, drop);
         }
     }
-    return .{ .app = try withBindingsDropped(allocator, app, drop), .verdict = verdict };
+    if (site.counters) |counters| counters.untrimmed += 1;
+    return null;
 }
 
-fn bindingCount(app: RuleApplication) usize {
-    var count = app.arg_bindings.len;
+/// `app`'s bindings in preorder (an application's own, then each nested
+/// ref's), the order a `drop` mask indexes.
+fn appendPreorderBindings(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayListUnmanaged(*const ProofScript.ArgBinding),
+    app: RuleApplication,
+) !void {
+    for (app.arg_bindings) |*binding| try out.append(allocator, binding);
     for (app.refs) |ref| switch (ref) {
-        .application => |child| count += bindingCount(child),
+        .application => |child| try appendPreorderBindings(allocator, out, child),
         .hyp, .line => {},
     };
-    return count;
 }
 
 /// A copy of `app` without the bindings `drop` selects, indexed in preorder
-/// (an application's own bindings, then each nested ref's).
+/// (`appendPreorderBindings`).
 fn withBindingsDropped(
     allocator: std.mem.Allocator,
     app: RuleApplication,
     drop: []const bool,
 ) !RuleApplication {
     var next: usize = 0;
-    return withBindingsDroppedFrom(allocator, app, drop, &next);
+    return withBindingsDroppedFrom(allocator, app, drop, &next, null);
 }
 
+/// `withBindingsDropped`, registering with `oracle`, if given, each
+/// application's full list against what the copy still states.
 fn withBindingsDroppedFrom(
     allocator: std.mem.Allocator,
     app: RuleApplication,
     drop: []const bool,
     next: *usize,
+    oracle: ?*BindingOracle,
 ) !RuleApplication {
     var copy = app;
     var kept = std.ArrayListUnmanaged(ProofScript.ArgBinding){};
@@ -1897,12 +1954,17 @@ fn withBindingsDroppedFrom(
         if (!drop[next.*]) try kept.append(allocator, binding);
         next.* += 1;
     }
-    copy.arg_bindings = kept.items;
+    // A slice of its own (the original's, when empty), so the oracle can key
+    // on it.
+    copy.arg_bindings = if (kept.items.len == 0) app.arg_bindings[0..0] else kept.items;
     if (kept.items.len == 0) copy.binding_list_span = null;
+    if (oracle) |o| if (app.arg_bindings.len != 0) {
+        try o.register(copy.arg_bindings, app.arg_bindings);
+    };
     const refs = try allocator.dupe(Ref, app.refs);
     for (refs) |*ref| switch (ref.*) {
         .application => |child| ref.* = .{
-            .application = try withBindingsDroppedFrom(allocator, child, drop, next),
+            .application = try withBindingsDroppedFrom(allocator, child, drop, next, oracle),
         },
         .hyp, .line => {},
     };

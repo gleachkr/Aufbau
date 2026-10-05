@@ -46,10 +46,39 @@ Inside the search, validation renders every binder the search chose
 (existential metas, bound witnesses, ACUI split and principal choices) as an
 explicit binding, so the checker never has to re-derive a choice
 (`backward/validate.zig`). The suggestion text is a separate matter:
-`source.zig:withNeededBindings` drops each binding, outermost application
-first, whose line still checks without it, so a suggestion names only what
-the checker cannot infer. This costs checker runs per surfaced suggestion
-only, never search ticks, and cannot change what is found.
+`source.zig:trimBindings` keeps only the bindings the checker cannot infer.
+It tries the suggestion with no bindings first. Failing that, it checks the
+line with every binding withheld behind a `BindingOracle`
+(`compiler/context.zig`), and the checker (`check/apply.zig`) takes from it
+what it needs:
+
+- where an application's inference fails, or lands on something other than
+  the search's value up to ACUI, the search's values, less each one
+  inference still reproduces;
+- where an inline sub-proof fails on the hint its parent gave it, the
+  parent's binders that the sub-proof's premise mentions and the goal leaves
+  open (failing that, all it mentions; failing that, all);
+- where an inline sub-proof checks against a weak hint but proves something
+  other than its parent's premise (the premise mismatches, or the parent's
+  inference fails even with every value supplied), the binders that premise
+  mentions, supplied up front from then on; when the parent's inference
+  failed and that forces nothing new, the bindings of the nearest level of
+  sub-proofs below (the check reruns, forcing more each time, if it already
+  failed).
+
+The bindings taken are kept, and one more check validates the result. A
+binder the source states can change how the checker reads the line (it
+decides which hints an inline sub-proof gets), so if that check fails the
+oracle checks again with the kept bindings stated, keeping whatever more it
+takes. Forcing and the widest retry over-approximate, so each binding they
+supplied is then dropped if the line still checks without it (one check
+each; the other paths cost none). Should an oracle check fail, the
+suggestion is offered untrimmed and counted in `SearchCounters.untrimmed`;
+the bench, and search tests that go through `tests/helpers.zig`, fail on
+any, so every corpus line must trim.
+Trimming costs checker runs per surfaced suggestion only, never search ticks
+(`SearchCounters.trim_ns` times it, and the bench's `-v` rows print it as
+`trim=`), and cannot change what is found.
 
 **Holey goals (type inference).** A line whose assertion has proof holes
 (`g ⊢ t : _ty`) reaches `generateTopLevel` as `Goal.holey`. It interns the
@@ -63,9 +92,7 @@ carried ancestor metas as a `.witness` slot does, so a hole's meta is
 solvable at a leaf two open levels down (`f · x · y : _`; #331 is the
 general-goal version, which costs ticks there). Search validates against the
 hint, so `source.zig` surfaces a suggestion only if the holey line itself
-checks with it. `withNeededBindings` first tries the suggestion with no
-bindings; failing that, on a holey line it drops the innermost bindings
-first, so the root's (the filled type) are the last to go.
+checks with it.
 
 ## Conversion-search entry point
 

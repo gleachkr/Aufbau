@@ -32,7 +32,7 @@ Flags (after `--`):
 | `--global-budget=TICKS` | Override the per-call work budget in weighted ticks; `0` disables it. |
 | `--fwd-facts=N`, `--fwd-layers=N`, `--fwd-attempts=N`, `--fwd-tuples=N` | Override the forward-saturation bounds (0 = the `ForwardOptions` default). |
 | `--slow-ms=N`     | Breadth lines slower than this (warm search) are flagged SLOW (default 2). |
-| `--verbose`, `-v` | Print every frontier line/theorem, not just misses, SLOW lines, and nonzero frontiers. |
+| `--verbose`, `-v` | Print every frontier line/theorem, not just misses, SLOW lines, and nonzero frontiers. Depth rows also give `trim=`, the part of the search time spent trimming the suggestion's bindings (checker runs, no ticks), marked `UNTRIMMED` when the binding oracle could not trim the suggestion. Any untrimmed suggestion, in any mode, fails the run. |
 | `--counters`      | Under each breadth MISS/SLOW row, print key counters (tryCandidate calls/rejects, pool sizes, top rules by validation attempts). |
 | `--require-no-miss` | Exit nonzero on any breadth MISS/ERR or non-`FULL` depth theorem (the regression guards below). |
 | `--retry-misses`  | Depth mode: re-run each theorem's first miss with the retry its failure report suggests, and append `[retry PARAMS FOUND\|miss\|err t=…M]` (or `[retry none]`) to its row. |

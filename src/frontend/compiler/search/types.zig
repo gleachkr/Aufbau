@@ -526,6 +526,14 @@ pub const SearchCounters = struct {
     deep_cache_misses: usize = 0,
     cold_setup_ns: u64 = 0,
     warm_search_ns: u64 = 0,
+    /// The part of `warm_search_ns` spent trimming a suggestion's bindings
+    /// (`source.zig:trimBindings`): checker runs, never ticks.
+    trim_ns: u64 = 0,
+    /// Suggestions that came back with every binding the search chose,
+    /// because the `BindingOracle` check failed (`source.zig:trimBindings`).
+    /// The bench, and search tests that go through `tests/helpers.zig`,
+    /// fail on any.
+    untrimmed: u32 = 0,
     /// Work ticks consumed by the whole generation call (all retry phases) —
     /// the raw counts behind the per-call `GlobalBudget`'s weighted cost.
     /// Zero when generation never ran. See `expr.zig` `work_ticks` /

@@ -14,6 +14,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   assertion has nothing to admit, so a line citing it gets a warning naming
   it. Before, the editor stopped checking a block at its first search line.
   `abc compile` still rejects search lines.
+- `auto?` and `exact?` choose which bindings a suggestion must state in a
+  pass or two of the checker, instead of one check per binding. On a deep
+  first-order proof with 116 candidate bindings this cut the time from
+  1.2 s to 40 ms. Across the search benchmarks the suggestions are
+  unchanged except on 9 of 2,554 lines: 8 state fewer bindings, 1 states
+  one more.
 
 ## [0.0.13] - 2026-10-04
 

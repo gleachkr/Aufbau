@@ -745,13 +745,24 @@ pub fn suggestionsAtNeedle(
 ) !types.SourceSuggestions {
     const offset = std.mem.indexOf(u8, proof_src, needle) orelse
         return error.MissingNeedle;
-    return source.suggestionsAtSourceOffset(
+    // Every suggestion must come back trimmed: an untrimmed one is a
+    // binding-oracle gap (`SearchCounters.untrimmed`).
+    var local_counters = types.SearchCounters{ .collect = options.status_detail };
+    var traced = options;
+    if (traced.counters == null) traced.counters = &local_counters;
+    var suggestions = try source.suggestionsAtSourceOffset(
         arena.allocator(),
         mm0_src,
         proof_src,
         offset,
-        options,
+        traced,
     );
+    if (traced.counters.?.untrimmed != 0) {
+        for (suggestions.items) |item| std.debug.print("  offered: {s}\n", .{item.replacement});
+        suggestions.deinit();
+        return error.UntrimmedSuggestion;
+    }
+    return suggestions;
 }
 
 pub fn conversionSuggestions(

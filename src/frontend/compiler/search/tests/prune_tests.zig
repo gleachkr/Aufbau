@@ -1074,7 +1074,8 @@ test "auto? hands a generated context split to the checker as explicit bindings"
     // Both premises of `two` are generated, and `la`'s conclusion depends on
     // the context it is given, so only the search knows which members each
     // side took. The checker's positional reading of `B , (A , B)` gives
-    // `g := hyp B`, against which `la` cannot be checked.
+    // `g := hyp B`, against which `la` cannot be checked, so the suggestion
+    // states the `g` that `la` needs.
     const mm0_src = comm_ctx_theory ++
         \\--| @congr
         \\axiom join_congr (g1 g2 h1 h2: ctx):
@@ -1102,7 +1103,7 @@ test "auto? hands a generated context split to the checker as explicit bindings"
         .generate = .{ .enabled = true },
     });
     defer suggestions.deinit();
-    try expectOffered(suggestions.items, &.{"two (h := $ hyp B $) [la [], lb []]"});
+    try expectOffered(suggestions.items, &.{"two (g := $ join (hyp B) (hyp A) $) [la [], lb []]"});
 }
 
 test "unfolded mismatch gives back the dependency slots its def unfolds spend" {
