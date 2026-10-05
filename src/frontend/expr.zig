@@ -129,6 +129,20 @@ const ExprNodeContext = struct {
     }
 };
 
+/// Probes an `ExprNodeMap` with a hash computed once up front; `value` must
+/// be `ExprNodeContext.hash` of the probed key, as the map stores it.
+const PrehashedContext = struct {
+    value: u64,
+
+    pub fn hash(self: PrehashedContext, _: ExprNode) u64 {
+        return self.value;
+    }
+
+    pub fn eql(_: PrehashedContext, a: ExprNode, b: ExprNode) bool {
+        return eqlExprNode(a, b);
+    }
+};
+
 const ExprNodeMap = std.HashMapUnmanaged(
     ExprNode,
     ExprId,
@@ -271,14 +285,19 @@ pub const ExprInterner = struct {
     /// id-space, else null. Checks the overlay, then walks the base chain,
     /// hiding base nodes added after this clone was taken (`< base_count`).
     fn find(self: *const ExprInterner, key: ExprNode) ?ExprId {
+        return self.findHashed(key, ExprNodeContext.hash(.{}, key));
+    }
+
+    /// `find` with the key's hash precomputed, so a base-chain walk hashes
+    /// the key once rather than at every level.
+    fn findHashed(self: *const ExprInterner, key: ExprNode, hash: u64) ?ExprId {
         // One work tick per PROBE LEVEL (not per intern attempt): a lookup
-        // through a deep copy-on-write base chain re-hashes the key at every
-        // level, so per-hop counting is what tracks the real cost (see
-        // `work_ticks`).
+        // through a deep copy-on-write base chain probes every level, so
+        // per-hop counting is what tracks the real cost (see `work_ticks`).
         work_ticks +%= 1;
-        if (self.index.getContext(key, .{})) |id| return id;
+        if (self.index.getAdapted(key, PrehashedContext{ .value = hash })) |id| return id;
         if (self.base) |b| {
-            if (b.find(key)) |r| {
+            if (b.findHashed(key, hash)) |r| {
                 if (r < self.base_count) return r;
             }
         }

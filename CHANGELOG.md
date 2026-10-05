@@ -54,6 +54,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   1.2 s to 40 ms. Across the search benchmarks the suggestions are
   unchanged except on 9 of 2,554 lines: 8 state fewer bindings, 1 states
   one more.
+- Searches run about 20% faster. A search works on layered copies of the
+  theorem's expressions, and looking an expression up hashed it again at
+  every layer; it now hashes it once. The searches themselves are
+  unchanged: they try the same candidates and find the same proofs.
 
 ### Fixed
 
