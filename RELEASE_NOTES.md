@@ -1,8 +1,8 @@
 # Aufbau 0.0.14
 
-Aufbau 0.0.14 adds `abc search`, which runs a unit's search placeholders
-from the command line. The editor now checks the lines below a search
-line, and `auto?` is fast again on first-order goals.
+Aufbau 0.0.14 adds `abc search`, which runs search placeholders from the 
+command line. The editor also now checks the lines below a search
+line, and a performance regression in `auto?` was fixed.
 
 ## Highlights
 
@@ -25,8 +25,7 @@ Each proof found is put in place for the searches after it. The exit
 status is 0 when every placeholder found a proof and 4 otherwise, so a
 script or CI job can check that a development's searches still succeed.
 
-`--fill` writes the proof file with every proof found in place, and
-`abc compile` now reads the proof file from standard input when given `-`:
+`--fill` writes the proof file with every found proof inserted in place. `abc compile` now reads the proof file from standard input when given `-`:
 
 ```sh
 abc search --fill x.mm0 x.auf | abc compile x.mm0 - x.mmb
@@ -63,19 +62,18 @@ choice now takes one or two checks. Timed through `@aufbau/lsp` on
 - `⊤ ↔ ⊥`, which has no proof: 580 ms, 2020 ms, 120 ms.
 
 Searches also take about 20% less wall time on first-order goals and on
-the breadth benchmark, and 5% less across the depth benchmarks, because
-an expression is hashed once per lookup. On Tait-style sequent theories
-`@auto eager` rules no longer keep the formula they decompose, which cuts
-the work on the tait benchmark by 57%. `auto?` also no longer tries rules
-whose conclusion cannot convert to a `@rewrite` term that no rewrite
-reduces, such as `[x/t] p` where `p` depends on `x`. This finds two more
-benchmark proofs.
+the breadth benchmark, and 5% less across the depth benchmarks. On Tait-style 
+sequent theories `@auto eager` rules no longer keep the formula they 
+decompose, which cuts the work on the tait benchmark by 57%. `auto?` also no 
+longer tries rules whose conclusion cannot convert to a `@rewrite` term that 
+no rewrite reduces, such as `[x/t] p` where `p` depends on `x`. This finds 
+two more benchmark proofs.
 
 ## Compatibility
 
 `auto?` now trusts `@auto eager` annotations. A search that missed while
 committing to eager rules used to run again without committing; it now
-reports the miss. A rule marked `@auto eager` that is not invertible can
+just reports the miss. A rule marked `@auto eager` that is not invertible can
 therefore cost proofs. On the benchmarks, the second run never found one.
 
 The MMB format, the verifier, the proof syntax and the package APIs are
