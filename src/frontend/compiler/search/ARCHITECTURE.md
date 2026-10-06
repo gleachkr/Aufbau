@@ -321,7 +321,10 @@ which the persisted-memo covering rule requires:
    the minimal-complement majority never pays. Guarded by the
    `idem_complement_probe` depth-frontier regression test. An `@auto eager`
    rule never retains: it is declared invertible, so the premises without
-   the principal suffice. On tait this halves depth-frontier ticks.
+   the principal suffice. On tait this halves depth-frontier ticks. Nor does
+   a rule whose premise restates the principal in a set context (`rex`'s
+   `[x/t] p , ∃x p , d`), where retaining it would only repeat a member
+   (`split.hypRestatesPrincipals`).
 5. **Phase 5 — constrained backward modus ponens** (`allow_constrained_mp =
    true`). At depth 1 after phase 4's depth-1 cell; deeper only as the last
    tail. Lets the open-generation path

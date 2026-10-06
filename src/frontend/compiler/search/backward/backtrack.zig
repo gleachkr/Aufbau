@@ -1394,9 +1394,11 @@ fn trySplitGenerate(
             b,
             // An eager rule never keeps its principal: the user declared it
             // invertible, so its premises without the principal are provable
-            // whenever the goal is.
+            // whenever the goal is. Nor does a rule whose premise restates
+            // the principal (`rex`): keeping it would only repeat it.
             hook.allow_retain_principal and
-                context.registry.eagerPriority(candidate.rule_id) == null,
+                context.registry.eagerPriority(candidate.rule_id) == null and
+                !split.hypRestatesPrincipals(context, site, hyp_template),
         ) orelse {
             step = .abstained;
             continue;

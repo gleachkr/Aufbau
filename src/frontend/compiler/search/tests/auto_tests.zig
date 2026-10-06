@@ -1886,6 +1886,8 @@ fn splitLawMm0(comptime comm: []const u8, comptime idem: []const u8) []const u8 
     \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
     \\axiom two (g h: ctx): $ seq g P $ > $ seq h P $ > $ seq (join g h) P $;
     \\axiom ext (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) a $;
+    \\axiom keep (g: ctx) (a: wff): $ seq (join (hyp B) (join (hyp a) g)) a $ >
+    \\  $ seq (join g (hyp a)) a $;
     \\theorem t: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
     \\theorem u: $ seq (join (join (hyp A) (hyp B)) (hyp A)) A $;
     ;
@@ -2013,6 +2015,37 @@ test "split of an idempotent sequence context retains principals as any run" {
     try expectSplitCandidates(splitLawMm0("_", "ctx_idem"), "u", "ext", null, false, &.{
         "join (hyp A) (hyp B)",
     });
+}
+
+/// Whether `rule_name`'s premise restates the principal its conclusion's
+/// context binder `g` is split around, against the goal of theorem `u`.
+fn restatesPrincipals(mm0_src: []const u8, rule_name: []const u8) !bool {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "u");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
+    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const g_idx = try ruleArgIndex(rule, "g");
+    const site = split.findSplitSite(&context, &theorem, rule.concl, goal_expr, g_idx) orelse
+        return error.MissingSplitSite;
+    return split.hypRestatesPrincipals(&context, site, rule.hyps[0]);
+}
+
+test "a premise that restates its principal does not retain it in a set context" {
+    // `keep`'s premise still holds `hyp a`, so a `g` that also holds it would
+    // only repeat it, which `a , a = a` erases.
+    try std.testing.expect(try restatesPrincipals(splitLawMm0("ctx_comm", "ctx_idem"), "keep"));
+    try std.testing.expect(!try restatesPrincipals(splitLawMm0("ctx_comm", "ctx_idem"), "ext"));
+    // In an ordered context the repeat may sit elsewhere in the sequence.
+    try std.testing.expect(!try restatesPrincipals(splitLawMm0("_", "ctx_idem"), "keep"));
 }
 
 /// `premiseOpenAcuiOwned` for premise `hyp_index` of `rule_name` against the

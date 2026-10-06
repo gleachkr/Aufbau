@@ -3,6 +3,16 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `auto?` no longer copies a rule's principal formula into the rest of the
+  context when the rule's premise already restates it, as an `∃` rule that
+  keeps its `∃` does. Under an idempotent context the copy was a repeat of
+  the same subgoal. A miss on `∀x∃y H(x,y) → ∃y∀x H(x,y)` in a one-sided
+  first-order calculus now takes about 20% less work.
+
 ## [0.0.14] - 2026-10-05
 
 ### Added

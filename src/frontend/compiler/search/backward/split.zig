@@ -181,6 +181,38 @@ fn collectSpine(context: *const Context, site: *SplitSite) bool {
     return true;
 }
 
+/// True when `hyp` restates every fixed principal summand of `site` as a
+/// summand of its own `site.head_id` combiner, as `rex`'s premise
+/// `[x/t] p , (∃ x p) , d` restates `∃ x p`. Retaining a claimed member in the
+/// open rest then only duplicates it, and a set combiner identifies that
+/// premise with the non-retaining split's. (An ordered idempotent combiner
+/// does not: `a , b , a` need not equal `a , b`.)
+pub fn hypRestatesPrincipals(context: *const Context, site: SplitSite, hyp: TemplateExpr) bool {
+    if (site.fixed_len == 0) return false;
+    if (bag.lawOf(context, site.head_id) != .set) return false;
+    const combiner = findCombiner(hyp, site.head_id) orelse return false;
+    const summands = bag.flattenTemplate(context, site.head_id, combiner) orelse return false;
+    for (site.fixed[0..site.fixed_len]) |principal| {
+        for (summands.slice()) |summand| {
+            if (summand.eql(principal)) break;
+        } else return false;
+    }
+    return true;
+}
+
+fn findCombiner(template: TemplateExpr, head_id: u32) ?TemplateExpr {
+    switch (template) {
+        .binder => return null,
+        .app => |app| {
+            if (app.term_id == head_id) return template;
+            for (app.args) |arg| {
+                if (findCombiner(arg, head_id)) |found| return found;
+            }
+            return null;
+        },
+    }
+}
+
 /// Enumerates candidate concrete contexts for one open spine binder, smallest
 /// first. Each candidate is a mask over `members`, the goal's members in order.
 pub const SplitEnumerator = struct {
