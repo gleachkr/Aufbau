@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.14] - 2026-10-05
 
 ### Added
 
@@ -54,12 +54,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   1.2 s to 40 ms. Across the search benchmarks the suggestions are
   unchanged except on 9 of 2,554 lines: 8 state fewer bindings, 1 states
   one more.
-- Searches run about 20–25% faster. A search works on layered copies of
-  the theorem's expressions, and looking an expression up hashed it again
-  at every layer; it now hashes it once. Ordering a goal's candidate rules
-  also no longer recomputes each rule's properties at every comparison.
-  The searches themselves are unchanged: they try the same candidates and
-  find the same proofs.
+- Searches take about 20% less wall time on first-order goals and on the
+  breadth benchmark, and 5% less across the depth benchmarks. A search
+  works on layered copies of the theorem's expressions, and looking an
+  expression up hashed it again at every layer; it now hashes it once.
+  Ordering a goal's candidate rules also no longer recomputes each rule's
+  properties at every comparison. The searches themselves are unchanged:
+  they try the same candidates and find the same proofs.
 - An `@auto eager` rule no longer keeps the formula it decomposes alongside
   its parts. The rule is declared invertible, so its premises without that
   formula are provable whenever the goal is. On the tait benchmark searches
@@ -1430,6 +1431,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.14]: https://github.com/gleachkr/Aufbau/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/gleachkr/Aufbau/compare/v0.0.12...v0.0.13
 [0.0.12]: https://github.com/gleachkr/Aufbau/compare/v0.0.11...v0.0.12
 [0.0.11]: https://github.com/gleachkr/Aufbau/compare/v0.0.10...v0.0.11
