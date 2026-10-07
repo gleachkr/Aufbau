@@ -192,7 +192,7 @@ pub const Verifier = struct {
         self.available_sorts = available_sorts;
         self.available_terms = available_terms;
         self.available_thms = available_thms;
-        try self.initHeapFromTermArgs(term);
+        const ret = try self.loadTermArgs(term);
         try self.runProofStream(proof_pos, proof_end);
         const stack = &self.stack;
         const top = try stack.pop();
@@ -200,7 +200,6 @@ pub const Verifier = struct {
             .expr => |e| e,
             else => return error.ExpectedExpr,
         };
-        const ret = try term.getRetArgChecked(self.file_bytes);
         try self.checkExprAgainstArg(def_expr, ret);
         if (stack.top != 0) return error.StackNotEmpty;
         try self.initUHeapFromHeapArgs(term.num_args);
@@ -210,6 +209,14 @@ pub const Verifier = struct {
             def_expr,
             .defn,
         );
+    }
+
+    // A plain term has no proof, but its binders and return type are checked
+    // like a definition's.
+    fn verifyTerm(self: *Verifier, term: Term, available_sorts: usize) !void {
+        defer self.reset();
+        self.available_sorts = available_sorts;
+        _ = try self.loadTermArgs(term);
     }
 
     fn verifyAxiom(
@@ -294,32 +301,51 @@ pub const Verifier = struct {
         try self.initHeapFromArgs(try thm.getArgsChecked(self.file_bytes));
     }
 
-    fn initHeapFromTermArgs(self: *Verifier, term: Term) !void {
+    // Load a term's binders, then check its return slot: mm0-c runs
+    // `load_args` over the binders and the return slot together, then
+    // demands the return slot be a regular binder of the term's own sort
+    // ("bad return type").
+    fn loadTermArgs(self: *Verifier, term: Term) !Arg {
+        if (term.ret_sort.sort >= self.available_sorts) return error.InvalidSort;
         try self.initHeapFromArgs(try term.getArgsChecked(self.file_bytes));
+        const ret = try term.getRetArgChecked(self.file_bytes);
+        if (ret.bound or ret.sort != term.ret_sort.sort) {
+            return error.BadReturnType;
+        }
+        try self.checkBinder(ret);
+        return ret;
     }
 
+    // mm0-c's `load_args`: check each binder, then push it onto the heap as
+    // a variable.
     fn initHeapFromArgs(self: *Verifier, args: []const Arg) !void {
-        var bv_idx: u6 = 0;
         for (args) |arg| {
+            try self.checkBinder(arg);
             const expr = try self.arena.allocator().create(Expr);
-            if (arg.bound) {
-                if (self.sort_table[arg.sort].strict) return error.StrictSort;
-                if (bv_idx >= MAX_BOUND_VARS) return error.TooManyBoundVars;
-                expr.* = .{ .variable = .{
-                    .sort = arg.sort,
-                    .bound = true,
-                    .deps = @as(u55, 1) << bv_idx,
-                } };
-                bv_idx += 1;
-                self.next_bv += 1;
-            } else {
-                expr.* = .{ .variable = .{
-                    .sort = arg.sort,
-                    .bound = false,
-                    .deps = arg.deps,
-                } };
-            }
+            expr.* = .{ .variable = .{
+                .sort = arg.sort,
+                .bound = arg.bound,
+                .deps = arg.deps,
+            } };
+            if (arg.bound) self.next_bv += 1;
             try self.heap.push(.{ .expr = expr });
+        }
+    }
+
+    // One binder of a statement, checked against the binders before it. Its
+    // sort must already be declared. A bound binder must not be in a strict
+    // sort, and its deps must be exactly the next free bit. A regular
+    // binder may depend only on bound binders that come before it.
+    fn checkBinder(self: *Verifier, arg: Arg) !void {
+        if (arg.sort >= self.available_sorts) return error.InvalidSort;
+        if (arg.bound) {
+            if (self.sort_table[arg.sort].strict) return error.StrictSort;
+            if (self.next_bv >= MAX_BOUND_VARS) return error.TooManyBoundVars;
+            const own_bit = @as(u55, 1) << @intCast(self.next_bv);
+            if (arg.deps != own_bit) return error.BadBinderDeps;
+        } else {
+            const later_bits = @as(u64, arg.deps) >> @intCast(self.next_bv);
+            if (later_bits != 0) return error.BadBinderDeps;
         }
     }
 
@@ -409,8 +435,9 @@ pub const Verifier = struct {
                             term_count,
                             thm_count,
                         );
-                    } else if (stmt_end != pos) {
-                        return error.NonDefTermHasProof;
+                    } else {
+                        if (stmt_end != pos) return error.NonDefTermHasProof;
+                        try self.verifyTerm(term, sort_count);
                     }
                     term_count += 1;
                     pos = stmt_end;
@@ -501,10 +528,15 @@ pub const Verifier = struct {
             }
         }
 
+        self.current_statement = .none;
         if (sort_count != self.sort_table.len) return error.SortCountMismatch;
         if (term_count != self.term_table.len) return error.TermCountMismatch;
         if (thm_count != self.thm_table.len) return error.TheoremCountMismatch;
         if (self.sorry_count != 0) return error.SorryUsed;
+        // mm0-c's closing `parse_until(CMD_END)`: every spec statement must
+        // have been matched by a proof-stream statement. Without this, an
+        // axiom or theorem appended to the spec is accepted unproved.
+        try checker.finish();
     }
 
     /// One line per admitted statement, then the count; the CLI prints this

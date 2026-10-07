@@ -150,6 +150,12 @@ pub const CrossChecker = struct {
         );
     }
 
+    /// Called once the proof stream ends: the spec must have no statements
+    /// left (trailing notation and other non-statement items are fine).
+    pub fn finish(self: *CrossChecker) !void {
+        if (try self.parser.next() != null) return error.MM0StatementNotProved;
+    }
+
     fn checkArgMetadata(
         self: *CrossChecker,
         mm0_args: []const parse.ArgInfo,

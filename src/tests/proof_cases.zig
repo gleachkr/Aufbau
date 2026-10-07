@@ -51,6 +51,9 @@ fn unsupportedReason(stem: []const u8) ?[]const u8 {
 const proof_case_ext = "auf";
 
 const proof_cases = [_]ProofCase{
+    // The kernel once sized the MMB name table in u8 arithmetic, so any
+    // file with 16 or more sorts failed to load.
+    .{ .stem = "pass_seventeen_sorts", .outcome = .pass },
     // Multi-file: `.mm0` imports joined in post-order, paired `.auf` files
     // concatenated in the same order (lib/prop_right.mm0 has none).
     .{ .stem = "pass_import_diamond", .outcome = .pass },

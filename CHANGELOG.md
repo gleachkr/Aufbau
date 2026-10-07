@@ -15,6 +15,23 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `mm0-zig` no longer accepts a `.mm0` spec that declares more than the
+  `.mmb` proves. An axiom or theorem added after the binary's last
+  statement used to be accepted with no proof, and trailing text after the
+  last statement was ignored. Both are now rejected, as `mm0-c` does.
+- `mm0-zig` now loads a binary with 16 or more sorts. It sized the name
+  table with 8-bit arithmetic, so such files, including `abc`'s own output
+  for theories with that many sorts, crashed it or were rejected. A header
+  claiming more than 128 sorts is rejected as too many, as in `mm0-c`.
+- `mm0-zig` now checks every statement's binders as `mm0-c` does: a bound
+  binder's dependency bit must be its own, a regular binder may depend only
+  on bound binders before it, every sort must already be declared, and a
+  term's return type must be a regular binder of its own sort. A plain
+  `term` was not checked at all, so `strict sort s; term f {x: s}: wff;`
+  verified.
+- A math string nested more than 1024 levels deep, by parentheses, prefix
+  operators or a right-associative chain, is a parse error. Some 20,000
+  levels used to overflow the stack of `mm0-zig` and `abc`.
 - The language server no longer crashes when a diagnostic covers part of a
   non-ASCII character, as one on a stray `⊢` outside `$ … $` does, or
   when a closed file it reads is not valid UTF-8. With VS Code's default

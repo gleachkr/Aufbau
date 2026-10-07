@@ -889,23 +889,24 @@ pub fn build(b: *std.Build) void {
     cli_smoke_step.dependOn(&abc_search_bad_depth.step);
 
     // The proof file from standard input, the MMB to standard output.
+    const sorry_auf = "found\n-----\nl1: $ Q $ by use [p []]\n" ++
+        "\nmissed\n------\nl1: $ S $ by sorry!\n";
+    // Diagnostics name the proof file `<stdin>`.
+    const sorry_warning =
+        "warning: proof line is admitted with sorry!; " ++
+        "the theorem is not verified\n" ++
+        "  theorem: missed\n" ++
+        "  line: l1\n" ++
+        "  rule: sorry!\n" ++
+        "  --> <stdin>:7:14\n" ++
+        "  | l1: $ S $ by sorry!\n" ++
+        "  |              ^^^^^^\n";
     const abc_compile_stdin = b.addRunArtifact(compiler_exe);
     abc_compile_stdin.setCwd(b.path("tests/cli"));
     abc_compile_stdin.addArgs(&.{ "compile", "search.mm0", "-", "-" });
-    abc_compile_stdin.setStdIn(.{ .bytes = "found\n-----\nl1: $ Q $ by use [p []]\n" ++
-        "\nmissed\n------\nl1: $ S $ by sorry!\n" });
+    abc_compile_stdin.setStdIn(.{ .bytes = sorry_auf });
     abc_compile_stdin.expectExitCode(3);
-    // Diagnostics name the proof file `<stdin>`.
-    abc_compile_stdin.expectStdErrEqual(
-        "warning: proof line is admitted with sorry!; " ++
-            "the theorem is not verified\n" ++
-            "  theorem: missed\n" ++
-            "  line: l1\n" ++
-            "  rule: sorry!\n" ++
-            "  --> <stdin>:7:14\n" ++
-            "  | l1: $ S $ by sorry!\n" ++
-            "  |              ^^^^^^\n",
-    );
+    abc_compile_stdin.expectStdErrEqual(sorry_warning);
     cli_smoke_step.dependOn(&abc_compile_stdin.step);
 
     const verifier_usage_text =
@@ -939,6 +940,41 @@ pub fn build(b: *std.Build) void {
         "mm0-zig: unable to read 'does-not-exist.mmb': FileNotFound\n",
     );
     cli_smoke_step.dependOn(&verifier_missing.step);
+
+    // End-to-end verdicts and exit codes, as mm0-c reports them: 0 verified,
+    // 1 rejected, 3 verified except for statements admitted with sorry.
+    const verifier_ok = b.addRunArtifact(verifier_exe);
+    verifier_ok.addFileArg(b.path("tests/mmb_mutants/tutorial.mmb"));
+    verifier_ok.setStdIn(.{ .lazy_path = b.path("tests/mmb_mutants/tutorial.mm0") });
+    verifier_ok.expectExitCode(0);
+    verifier_ok.expectStdOutEqual("Verification successful!\n");
+    cli_smoke_step.dependOn(&verifier_ok.step);
+
+    const verifier_rejected = b.addRunArtifact(verifier_exe);
+    verifier_rejected.addFileArg(b.path("tests/mmb_mutants/wrong_conclusion.mmb"));
+    verifier_rejected.setStdIn(.{ .lazy_path = b.path("tests/mmb_mutants/tutorial.mm0") });
+    verifier_rejected.expectExitCode(1);
+    verifier_rejected.expectStdErrEqual(
+        "Verification failed in theorem a1i: ExpectedTermApp\n",
+    );
+    cli_smoke_step.dependOn(&verifier_rejected.step);
+
+    // `abc compile` an admitted line, then verify its MMB.
+    const sorry_compile = b.addRunArtifact(compiler_exe);
+    sorry_compile.setCwd(b.path("tests/cli"));
+    sorry_compile.addArgs(&.{ "compile", "search.mm0", "-" });
+    const sorry_mmb = sorry_compile.addOutputFileArg("sorry.mmb");
+    sorry_compile.setStdIn(.{ .bytes = sorry_auf });
+    sorry_compile.expectExitCode(3);
+    sorry_compile.expectStdErrEqual(sorry_warning);
+
+    const verifier_sorry = b.addRunArtifact(verifier_exe);
+    verifier_sorry.addFileArg(sorry_mmb);
+    verifier_sorry.setStdIn(.{ .lazy_path = b.path("tests/cli/search.mm0") });
+    verifier_sorry.expectExitCode(3);
+    verifier_sorry.expectStdErrEqual("theorem missed uses sorry\n" ++
+        "Verification incomplete: 1 statement(s) use sorry\n");
+    cli_smoke_step.dependOn(&verifier_sorry.step);
 
     unit_step.dependOn(cli_smoke_step);
 

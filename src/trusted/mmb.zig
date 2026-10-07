@@ -4,6 +4,7 @@ const Sort = @import("./sorts.zig").Sort;
 const Term = @import("./terms.zig").Term;
 const Theorem = @import("./theorems.zig").Theorem;
 const Arg = @import("./args.zig").Arg;
+const MAX_SORTS = @import("./constants.zig").MAX_SORTS;
 
 const NAME_ID = [4]u8{ 'N', 'a', 'm', 'e' };
 const VAR_ID = [4]u8{ 'V', 'a', 'r', 'N' };
@@ -232,7 +233,8 @@ pub const Mmb = struct {
 };
 
 fn validateHeaderLayout(header: Header, file_len: usize) !void {
-    const header_end = @sizeOf(Header) + header.num_sorts;
+    if (header.num_sorts > MAX_SORTS) return error.TooManySorts;
+    const header_end = @sizeOf(Header) + @as(usize, header.num_sorts);
     const p_terms = try usizeFromU32(header.p_terms);
     const p_thms = try usizeFromU32(header.p_thms);
     const p_proof = try usizeFromU32(header.p_proof);
@@ -346,7 +348,7 @@ fn parseNameTable(
         error.BadIndexParse,
         error.MisalignedIndex,
     );
-    const terms_offset = offset + header.num_sorts * @sizeOf(NameEntry);
+    const terms_offset = try tableEnd(NameEntry, offset, header.num_sorts);
     const terms = try readTableSlice(
         NameEntry,
         file_bytes,
@@ -355,7 +357,7 @@ fn parseNameTable(
         error.BadIndexParse,
         error.MisalignedIndex,
     );
-    const thms_offset = terms_offset + header.num_terms * @sizeOf(NameEntry);
+    const thms_offset = try tableEnd(NameEntry, terms_offset, header.num_terms);
     const thms = try readTableSlice(
         NameEntry,
         file_bytes,
@@ -392,7 +394,7 @@ fn parseVarTable(
         error.BadIndexParse,
         error.MisalignedIndex,
     );
-    const thms_offset = offset + header.num_terms * @sizeOf(u64);
+    const thms_offset = try tableEnd(u64, offset, header.num_terms);
     const thm_vars = try readTableSlice(
         u64,
         file_bytes,
@@ -500,6 +502,13 @@ fn readScalar(
     return value;
 }
 
+/// The offset just past `len` entries of `T` starting at `offset`, computed
+/// in `usize` (the header counts are u8/u32, too narrow for the product).
+fn tableEnd(comptime T: type, offset: usize, len_raw: anytype) !usize {
+    const size = try std.math.mul(usize, try toUsize(len_raw), @sizeOf(T));
+    return try std.math.add(usize, offset, size);
+}
+
 fn readTableSlice(
     comptime T: type,
     file_bytes: []const u8,
@@ -510,8 +519,7 @@ fn readTableSlice(
 ) ![]const T {
     const offset = try toUsize(offset_raw);
     const len = try toUsize(len_raw);
-    const size = try std.math.mul(usize, len, @sizeOf(T));
-    const end = try std.math.add(usize, offset, size);
+    const end = try tableEnd(T, offset, len);
     if (end > file_bytes.len) return short_err;
 
     if (len == 0) return &.{};

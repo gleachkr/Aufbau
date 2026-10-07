@@ -43,6 +43,6 @@ pub const Theorem = extern struct {
             try std.math.mul(usize, self.num_args, @sizeOf(Arg)),
         );
         if (offset > file_bytes.len) return error.ShortTheoremData;
-        return @intCast(offset);
+        return std.math.cast(u32, offset) orelse error.ShortTheoremData;
     }
 };

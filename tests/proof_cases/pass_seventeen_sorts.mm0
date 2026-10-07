@@ -1,0 +1,23 @@
+-- Seventeen sorts: the MMB name table outgrows u8 offset arithmetic
+-- (16 entries of 16 bytes), which the kernel once used.
+sort s1;
+sort s2;
+sort s3;
+sort s4;
+sort s5;
+sort s6;
+sort s7;
+sort s8;
+sort s9;
+sort s10;
+sort s11;
+sort s12;
+sort s13;
+sort s14;
+sort s15;
+sort s16;
+provable sort wff;
+term imp: wff > wff > wff;
+infixr imp: $->$ prec 25;
+axiom ax1 (a b: wff): $ a -> b -> a $;
+theorem t1 (a b: wff): $ a -> b -> a $;

@@ -212,8 +212,10 @@ fn buildTheoremHypOrderCrossCheckBytes() [128]u8 {
     return bytes;
 }
 
-fn buildLocalDefDummyProof() [16]u8 {
-    var bytes: [16]u8 = std.mem.zeroes([16]u8);
+// `Sort; LocalDef { Dummy 0 }`, then a zeroed return slot at 8 (a regular
+// binder of sort 0) for the def's term entry to point at.
+fn buildLocalDefDummyProof() align(@alignOf(Arg)) [16]u8 {
+    var bytes: [16]u8 align(@alignOf(Arg)) = std.mem.zeroes([16]u8);
     bytes[0] = 0x44;
     bytes[1] = 0x02;
     bytes[2] = 0x4D;
@@ -240,15 +242,25 @@ const NoopChecker = struct {
         _: Theorem,
         _: []const u8,
     ) !void {}
+
+    pub fn finish(_: @This()) !void {}
 };
 
-fn buildSingleStmtProof(stmt_op: u8, body: []const u8) [32]u8 {
+// A proof stream declaring `sort_count` sorts (a statement's binders may
+// only use sorts declared before it), then one statement.
+fn buildSingleStmtProof(sort_count: usize, stmt_op: u8, body: []const u8) [32]u8 {
     var bytes: [32]u8 = std.mem.zeroes([32]u8);
-    bytes[0] = 0x40 | stmt_op;
-    bytes[1] = @intCast(2 + body.len + 1);
-    @memcpy(bytes[2 .. 2 + body.len], body);
-    bytes[2 + body.len] = 0x00;
-    bytes[3 + body.len] = 0x00;
+    for (0..sort_count) |i| {
+        // Sort statement (u8 length 2).
+        bytes[2 * i] = 0x44;
+        bytes[2 * i + 1] = 0x02;
+    }
+    const start = 2 * sort_count;
+    bytes[start] = 0x40 | stmt_op;
+    bytes[start + 1] = @intCast(2 + body.len + 1);
+    @memcpy(bytes[start + 2 ..][0..body.len], body);
+    bytes[start + 2 + body.len] = 0x00;
+    bytes[start + 3 + body.len] = 0x00;
     return bytes;
 }
 
@@ -277,12 +289,13 @@ fn collectStatementCmds(
 }
 
 fn buildAssertionFixture(
+    sort_count: usize,
     stmt_op: u8,
     args: []const Arg,
     body: []const u8,
 ) align(@alignOf(Arg)) [128]u8 {
     var bytes: [128]u8 align(@alignOf(Arg)) = std.mem.zeroes([128]u8);
-    const proof = buildSingleStmtProof(stmt_op, body);
+    const proof = buildSingleStmtProof(sort_count, stmt_op, body);
     @memcpy(bytes[0..proof.len], proof[0..]);
 
     const p_data: usize = 32;
@@ -293,13 +306,14 @@ fn buildAssertionFixture(
 }
 
 fn buildLocalDefFixture(
+    sort_count: usize,
     args: []const Arg,
     ret: Arg,
     unify: []const u8,
     body: []const u8,
 ) align(@alignOf(Arg)) [128]u8 {
     var bytes: [128]u8 align(@alignOf(Arg)) = std.mem.zeroes([128]u8);
-    const proof = buildSingleStmtProof(0x0D, body);
+    const proof = buildSingleStmtProof(sort_count, 0x0D, body);
     @memcpy(bytes[0..proof.len], proof[0..]);
 
     const p_data: usize = 32;
@@ -468,6 +482,53 @@ test "MM0 parser parses sort modifiers" {
     }
 
     try std.testing.expect((try parser.next()) == null);
+}
+
+fn parseNestedAxiom(
+    open: []const u8,
+    close: []const u8,
+    depth: usize,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var src: std.ArrayListUnmanaged(u8) = .{};
+    try src.appendSlice(allocator,
+        \\delimiter $ ( ) ~ $;
+        \\provable sort wff;
+        \\term imp: wff > wff > wff;
+        \\infixr imp: $->$ prec 25;
+        \\term not: wff > wff;
+        \\prefix not: $~$ prec 100;
+        \\axiom ax (a: wff): $
+    );
+    for (0..depth) |_| try src.appendSlice(allocator, open);
+    try src.appendSlice(allocator, " a ");
+    for (0..depth) |_| try src.appendSlice(allocator, close);
+    try src.appendSlice(allocator, " $;\n");
+
+    var parser = MM0Parser.init(src.items, allocator);
+    while (try parser.next()) |_| {}
+}
+
+test "MM0 parser bounds math nesting instead of overflowing the stack" {
+    // Every recursive cycle of the math parser passes through `parseExpr`,
+    // which allows 1024 levels: the outer expression plus 1023 groups.
+    try parseNestedAxiom("( ", " )", 1023);
+    try std.testing.expectError(
+        error.MathTooDeep,
+        parseNestedAxiom("( ", " )", 1024),
+    );
+    // Prefix notation and right-associative infix chains nest the same way.
+    try std.testing.expectError(
+        error.MathTooDeep,
+        parseNestedAxiom("~ ", "", 50_000),
+    );
+    try std.testing.expectError(
+        error.MathTooDeep,
+        parseNestedAxiom("a -> ", "", 50_000),
+    );
 }
 
 test "MM0 parser handles binders and dependencies" {
@@ -1556,10 +1617,10 @@ test "Verifier rejects dummy variables in free sorts" {
         .num_args = 0,
         .ret_sort = .{ .sort = 0, .is_def = true },
         .reserved = 0,
-        .p_data = 0,
+        .p_data = 8,
     }};
     const theorems = [_]Theorem{};
-    var proof = buildLocalDefDummyProof();
+    var proof: [16]u8 align(@alignOf(Arg)) = buildLocalDefDummyProof();
 
     const verifier = try Verifier.init(
         std.testing.allocator,
@@ -1679,7 +1740,7 @@ test "Verifier rejects strict bound theorem arguments" {
         .bound = true,
     }};
     var proof: [128]u8 align(@alignOf(Arg)) =
-        buildAssertionFixture(0x0E, &args, &.{});
+        buildAssertionFixture(sorts.len, 0x0E, &args, &.{});
     const terms = [_]Term{};
     const theorems = [_]Theorem{.{
         .num_args = 1,
@@ -1719,7 +1780,7 @@ test "Verifier rejects strict bound definition arguments" {
         .bound = false,
     };
     var proof: [128]u8 align(@alignOf(Arg)) =
-        buildLocalDefFixture(&args, ret, &.{ 0x72, 0x00, 0x00 }, &.{});
+        buildLocalDefFixture(sorts.len, &args, ret, &.{ 0x72, 0x00, 0x00 }, &.{});
     const terms = [_]Term{.{
         .num_args = 1,
         .ret_sort = .{ .sort = 0, .is_def = true },
@@ -1753,7 +1814,7 @@ test "Verifier rejects pure return sorts in local defs" {
         .sort = 0,
         .bound = false,
     };
-    var proof = buildLocalDefFixture(&.{}, ret, &.{0x00}, &.{});
+    var proof = buildLocalDefFixture(sorts.len, &.{}, ret, &.{0x00}, &.{});
     const terms = [_]Term{.{
         .num_args = 0,
         .ret_sort = .{ .sort = 0, .is_def = true },
@@ -1788,7 +1849,7 @@ test "Verifier rejects non-provable axiom conclusions" {
         .bound = false,
     }};
     var proof: [128]u8 align(@alignOf(Arg)) =
-        buildAssertionFixture(0x02, &args, &.{ 0x52, 0x00 });
+        buildAssertionFixture(sorts.len, 0x02, &args, &.{ 0x52, 0x00 });
     const terms = [_]Term{};
     const theorems = [_]Theorem{.{
         .num_args = 1,
@@ -1822,6 +1883,7 @@ test "Verifier rejects non-provable theorem conclusions" {
         .bound = false,
     }};
     var proof: [128]u8 align(@alignOf(Arg)) = buildAssertionFixture(
+        sorts.len,
         0x0E,
         &args,
         &.{ 0x52, 0x00, 0x20 },
@@ -1865,6 +1927,7 @@ test "Verifier checks definition return sorts" {
         .bound = false,
     };
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        sorts.len,
         &args,
         ret,
         &.{ 0x72, 0x00, 0x00 },
@@ -1910,6 +1973,7 @@ test "Verifier checks definition return dependencies" {
         .bound = false,
     };
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        sorts.len,
         &args,
         ret,
         &.{ 0x72, 0x00, 0x00 },
@@ -1945,6 +2009,7 @@ test "Verifier replays definition unify streams" {
     const sorts = [_]Sort{.{}};
     const args = [_]Arg{ wff_arg, wff_arg };
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        sorts.len,
         &args,
         wff_arg,
         &.{ 0x72, 0x01, 0x00 },
@@ -1980,6 +2045,7 @@ test "Verifier rejects a definition whose unify stream mentions itself" {
     const sorts = [_]Sort{.{}};
     const args = [_]Arg{wff_arg};
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        sorts.len,
         &args,
         wff_arg,
         &.{ 0x70, 0x00, 0x00 },
@@ -2117,11 +2183,8 @@ fn buildStatementFixture(
     body: []const u8,
 ) align(@alignOf(Arg)) [128]u8 {
     var bytes: [128]u8 align(@alignOf(Arg)) = std.mem.zeroes([128]u8);
-    // Sort statement (u8 length 2).
-    bytes[0] = 0x44;
-    bytes[1] = 0x02;
-    const proof = buildSingleStmtProof(stmt_op, body);
-    @memcpy(bytes[2 .. 2 + proof.len], proof[0..]);
+    const proof = buildSingleStmtProof(1, stmt_op, body);
+    @memcpy(bytes[0..proof.len], proof[0..]);
 
     for (args, 0..) |arg, i| {
         writeArg(bytes[0..], stmt_fixture_p_data + i * @sizeOf(Arg), arg);
@@ -2257,6 +2320,7 @@ test "Verifier rejects a definition whose value mentions itself" {
     const sorts = [_]Sort{.{}};
     const args = [_]Arg{wff_arg};
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        sorts.len,
         &args,
         wff_arg,
         // UTerm d; URef x; End
@@ -2401,6 +2465,7 @@ test "Verifier rejects sorry inside a definition" {
     const sorts = [_]Sort{.{}};
     const args = [_]Arg{wff_arg};
     var proof: [128]u8 align(@alignOf(Arg)) = buildLocalDefFixture(
+        sorts.len,
         &args,
         wff_arg,
         &.{ 0x72, 0x00, 0x00 },

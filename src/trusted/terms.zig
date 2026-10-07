@@ -66,10 +66,10 @@ pub const Term = extern struct {
         const offset = try std.math.add(
             usize,
             self.p_data,
-            try std.math.mul(usize, self.num_args + 1, @sizeOf(Arg)),
+            try std.math.mul(usize, @as(usize, self.num_args) + 1, @sizeOf(Arg)),
         );
         if (offset > file_bytes.len) return error.ShortTermData;
-        return @intCast(offset);
+        return std.math.cast(u32, offset) orelse error.ShortTermData;
     }
 };
 

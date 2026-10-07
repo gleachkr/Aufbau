@@ -11,7 +11,8 @@ pub const MAX_PRECEDENCE = std.math.maxInt(u16);
 /// `MAX_PRECEDENCE` so the pretty-printer parenthesizes application operands the
 /// same way the parser would.
 pub const APP_PRECEDENCE: u16 = 1024;
-const MAX_SORTS: usize = 128;
+const MAX_SORTS: usize = @import("./constants.zig").MAX_SORTS;
+const MAX_MATH_DEPTH = @import("./constants.zig").MAX_MATH_DEPTH;
 const PROV_COERCION_IDX: usize = MAX_SORTS;
 
 /// Every error this parser can raise. Declared explicitly — rather than
@@ -49,6 +50,7 @@ pub const ParseError = error{
     InvalidHoleAnnotation,
     InvalidNotationToken,
     InvalidNotationVariables,
+    MathTooDeep,
     MultiCharacterDelimiter,
     NotProvable,
     NotationFirstTokenConflict,
@@ -316,6 +318,9 @@ const MathCursor = struct {
     left_delims: [256]bool,
     right_delims: [256]bool,
     lookahead: ?MathTokenInfo = null,
+    // Nesting depth of `parseExpr`, which every recursive cycle of the math
+    // parser passes through.
+    depth: u32 = 0,
 
     fn skipWhitespace(self: *MathCursor) void {
         while (self.pos < self.src.len) {
@@ -1658,6 +1663,15 @@ pub const MM0Parser = struct {
         min_prec: u16,
         allow_holes: bool,
     ) ParseError!*const Expr {
+        if (cursor.depth >= MAX_MATH_DEPTH) {
+            self.last_math_error = if (cursor.peek()) |token|
+                .{ .unexpected_token = token }
+            else
+                .{ .unexpected_end = cursor.pos };
+            return error.MathTooDeep;
+        }
+        cursor.depth += 1;
+        defer cursor.depth -= 1;
         var lhs = try self.parsePrefixExpr(
             cursor,
             vars,
@@ -1686,80 +1700,85 @@ pub const MM0Parser = struct {
         min_prec: u16,
         allow_holes: bool,
     ) ParseError!*const Expr {
-        const token = cursor.next() orelse {
-            self.last_math_error = .{
-                .unexpected_end = cursor.pos,
-            };
-            return error.ExpectedMathToken;
-        };
-        if (std.mem.eql(u8, token.text, "(")) {
-            const expr = try self.parseExpr(cursor, vars, 0, allow_holes);
-            const close = cursor.next() orelse {
+        // A formula marker is skipped by looping, not recursing, so every
+        // recursive cycle of the math parser passes through `parseExpr`'s
+        // depth guard.
+        while (true) {
+            const token = cursor.next() orelse {
                 self.last_math_error = .{
                     .unexpected_end = cursor.pos,
                 };
-                return error.ExpectedCloseParen;
+                return error.ExpectedMathToken;
             };
-            if (!std.mem.eql(u8, close.text, ")")) {
-                self.last_math_error = .{
-                    .unexpected_token = close,
+            if (std.mem.eql(u8, token.text, "(")) {
+                const expr = try self.parseExpr(cursor, vars, 0, allow_holes);
+                const close = cursor.next() orelse {
+                    self.last_math_error = .{
+                        .unexpected_end = cursor.pos,
+                    };
+                    return error.ExpectedCloseParen;
                 };
-                return error.ExpectedCloseParen;
+                if (!std.mem.eql(u8, close.text, ")")) {
+                    self.last_math_error = .{
+                        .unexpected_token = close,
+                    };
+                    return error.ExpectedCloseParen;
+                }
+                return expr;
             }
-            return expr;
-        }
 
-        if (vars.get(token.text)) |expr| return expr;
+            if (vars.get(token.text)) |expr| return expr;
 
-        if (allow_holes) {
-            if (try self.parseHoleToken(token)) |hole| return hole;
-        }
-
-        if (self.formula_markers.contains(token.text)) {
-            return try self.parsePrefixExpr(cursor, vars, min_prec, allow_holes);
-        }
-
-        if (self.prefix_notations.get(token.text)) |prefix| {
-            if (prefix.prec < min_prec) {
-                self.last_math_error = .{
-                    .unexpected_token = token,
-                };
-                return error.PrecMismatch;
+            if (allow_holes) {
+                if (try self.parseHoleToken(token)) |hole| return hole;
             }
-            return try self.parsePrefixNotation(
-                cursor,
-                vars,
-                prefix,
-                allow_holes,
-            );
-        }
 
-        if (self.term_names.get(token.text)) |term_id| {
-            const term = self.terms.items[term_id];
-            if (term.args.len == 0) return try self.applyTerm(term_id, &.{});
-            if (APP_PRECEDENCE < min_prec) {
-                self.last_math_error = .{
-                    .unexpected_token = token,
-                };
-                return error.PrecMismatch;
+            if (self.formula_markers.contains(token.text)) {
+                continue;
             }
-            var args: std.ArrayListUnmanaged(*const Expr) = .{};
-            for (term.args) |_| {
-                const arg = try self.parseExpr(
+
+            if (self.prefix_notations.get(token.text)) |prefix| {
+                if (prefix.prec < min_prec) {
+                    self.last_math_error = .{
+                        .unexpected_token = token,
+                    };
+                    return error.PrecMismatch;
+                }
+                return try self.parsePrefixNotation(
                     cursor,
                     vars,
-                    MAX_PRECEDENCE,
+                    prefix,
                     allow_holes,
                 );
-                try args.append(self.allocator, arg);
             }
-            return try self.applyTerm(term_id, args.items);
-        }
 
-        self.last_math_error = .{
-            .unknown_token = token,
-        };
-        return error.UnknownMathToken;
+            if (self.term_names.get(token.text)) |term_id| {
+                const term = self.terms.items[term_id];
+                if (term.args.len == 0) return try self.applyTerm(term_id, &.{});
+                if (APP_PRECEDENCE < min_prec) {
+                    self.last_math_error = .{
+                        .unexpected_token = token,
+                    };
+                    return error.PrecMismatch;
+                }
+                var args: std.ArrayListUnmanaged(*const Expr) = .{};
+                for (term.args) |_| {
+                    const arg = try self.parseExpr(
+                        cursor,
+                        vars,
+                        MAX_PRECEDENCE,
+                        allow_holes,
+                    );
+                    try args.append(self.allocator, arg);
+                }
+                return try self.applyTerm(term_id, args.items);
+            }
+
+            self.last_math_error = .{
+                .unknown_token = token,
+            };
+            return error.UnknownMathToken;
+        }
     }
 
     pub fn isRegisteredHoleToken(

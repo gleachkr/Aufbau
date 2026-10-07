@@ -26,6 +26,8 @@ const NoopChecker = struct {
         _: mm0.Theorem,
         _: []const u8,
     ) !void {}
+
+    pub fn finish(_: @This()) !void {}
 };
 
 fn verifyNativeOnly(
