@@ -301,11 +301,14 @@ pub fn run(
         );
     }
 
-    return .{
-        .arena = result_arena,
+    // Copy the arena last: these allocations can add buffers to it.
+    var result: Result = .{
+        .arena = undefined,
         .markers = try markers.toOwnedSlice(out),
         .text = try out.dupe(u8, working),
     };
+    result.arena = result_arena;
+    return result;
 }
 
 /// Where a search's results go in the text it searched.

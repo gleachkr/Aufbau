@@ -691,6 +691,24 @@ pub const TheoremContext = struct {
         return self.next_placeholder_dep;
     }
 
+    /// Take here the placeholder dependency slot behind `deps`, a bit `src`
+    /// minted and a placeholder copied in from it keeps (`reinternHint`), so
+    /// no later mint here reuses the bit. A dummy's bit holds no slot.
+    pub fn holdDepSlotFrom(
+        self: *TheoremContext,
+        src: *const TheoremContext,
+        deps: u55,
+    ) !void {
+        if (deps == 0 or @ctz(deps) < src.next_dummy_dep) return;
+        std.debug.assert(@popCount(deps) == 1);
+        const slot = placeholderDepSlotBit(@ctz(deps));
+        if (slot < self.next_placeholder_dep) return;
+        if (self.next_dummy_dep +| slot >= tracked_bound_dep_limit) {
+            return error.DependencySlotExhausted;
+        }
+        self.next_placeholder_dep = slot + 1;
+    }
+
     /// Give back every placeholder dependency slot taken since `mark`. Only a
     /// probe that returns a verdict may call this: the placeholders it minted
     /// stay interned, but nothing may hold one, since the next mint reuses its

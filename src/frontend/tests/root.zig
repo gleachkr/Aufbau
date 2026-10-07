@@ -1825,6 +1825,43 @@ test "line holes spend no dep slot and leave the search meta count alone" {
     try std.testing.expect(!copy.hasMetaPlaceholders());
 }
 
+test "a bound-variable meta copied across theorems holds its dep slot there" {
+    var parent = FrontendExpr.TheoremContext.init(std.testing.allocator);
+    defer parent.deinit();
+    _ = try parent.addDummyVarResolved("wff", 0);
+
+    // A candidate mints a slot its parent never takes, as a search
+    // candidate's clone does.
+    var src = try parent.clone();
+    defer src.deinit();
+    const minted = try src.addPlaceholderResolved("wff");
+    const slot_deps = depsOf(&src, minted);
+
+    // A child search's scope theorem, cloned from the parent, copies a
+    // bound-variable meta standing for that slot's variable.
+    var dst = try parent.clone();
+    defer dst.deinit();
+    try dst.holdDepSlotFrom(&src, slot_deps);
+    const copy = try dst.addBoundVarMetaPlaceholder("wff", slot_deps, null);
+    const later = try dst.addPlaceholderResolved("wff");
+    try std.testing.expect(depsOf(&dst, later) & slot_deps == 0);
+    // The slot is held, so releasing what the copy does not hold keeps it.
+    dst.releaseUnheldDepSlots(0, &.{&.{copy}});
+    try std.testing.expectEqual(@as(u32, 1), dst.depSlotMark());
+
+    // A dummy's bit holds no slot.
+    const dummy_deps = dst.theorem_dummies.items[0].deps;
+    var other = try parent.clone();
+    defer other.deinit();
+    try other.holdDepSlotFrom(&src, dummy_deps);
+    try std.testing.expectEqual(@as(u32, 0), other.depSlotMark());
+}
+
+fn depsOf(ctx: *const FrontendExpr.TheoremContext, expr: FrontendExpr.ExprId) u55 {
+    const pid = ctx.interner.node(expr).placeholder;
+    return ctx.placeholderInfo(pid).?.deps;
+}
+
 test "dummy allocation respects placeholder dep reservations" {
     var ctx = FrontendExpr.TheoremContext.init(std.testing.allocator);
     defer ctx.deinit();

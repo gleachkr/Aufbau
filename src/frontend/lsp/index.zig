@@ -101,8 +101,9 @@ pub const Snapshot = struct {
         else
             .{};
 
-        return .{
-            .arena = arena_state,
+        // Copy the arena last: the slices below can add buffers to it.
+        var snapshot: Snapshot = .{
+            .arena = undefined,
             .mm0_uri = mm0_uri,
             .mm0_text = mm0_text,
             .proof_uri = proof_uri,
@@ -122,6 +123,8 @@ pub const Snapshot = struct {
             .left_delims = builder.left_delims,
             .right_delims = builder.right_delims,
         };
+        snapshot.arena = arena_state;
+        return snapshot;
     }
 
     pub fn deinit(self: *Snapshot) void {

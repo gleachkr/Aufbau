@@ -558,13 +558,9 @@ pub fn generateTopLevel(
         if (global_budget) |budget| c.gen_budget_exhausted = budget.exhausted;
     }
 
-    return .{
-        .arena = arena,
-        .applications = try driver.arena.dupe(
-            RuleApplication,
-            applications.items,
-        ),
-    };
+    // Copy the arena last: the dupe can add a buffer to it.
+    const owned = try driver.arena.dupe(RuleApplication, applications.items);
+    return .{ .arena = arena, .applications = owned };
 }
 
 /// A fresh meta of the hole's sort for each hole of a holey line assertion.
@@ -1550,9 +1546,11 @@ fn reinternHint(
                 // (carry-to-leaf). Falls back to a plain hole for metas with
                 // no stable id (legacy path).
                 const src_info = src.placeholderInfo(pid).?;
-                gop.value_ptr.* = if (src_info.bound_var)
-                    try dst.addBoundVarMetaPlaceholder(info.sort_name, src_info.deps, src_info.meta_id)
-                else if (src_info.meta_id) |meta_id|
+                gop.value_ptr.* = if (src_info.bound_var) blk: {
+                    // The copy keeps the variable's bit, so it holds its slot here too.
+                    try dst.holdDepSlotFrom(src, src_info.deps);
+                    break :blk try dst.addBoundVarMetaPlaceholder(info.sort_name, src_info.deps, src_info.meta_id);
+                } else if (src_info.meta_id) |meta_id|
                     try dst.addMetaPlaceholderWithMetaId(info.sort_name, meta_id)
                 else
                     try dst.addMetaPlaceholderResolved(info.sort_name);
