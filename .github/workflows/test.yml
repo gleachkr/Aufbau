@@ -77,35 +77,35 @@ jobs:
       - name: Build native binaries
         run: |
           nix develop .#ci --command zig build \
-            -Doptimize=ReleaseFast \
+            -Doptimize=ReleaseSafe \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
       - name: Run complete test suite
         run: |
           nix develop .#ci --command zig build test \
-            -Doptimize=ReleaseFast \
+            -Doptimize=ReleaseSafe \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
       - name: Build web packages
         run: |
           nix develop .#ci --command zig build web-packages \
-            -Doptimize=ReleaseFast \
+            -Doptimize=ReleaseSafe \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
       - name: Smoke-test the packed editor in Chromium
         run: |
           nix develop .#ci --command zig build test-editor-browser \
-            -Doptimize=ReleaseFast \
+            -Doptimize=ReleaseSafe \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
       - name: Test the cross-origin LSP worker in Chromium
         run: |
           nix develop .#ci --command zig build test-lsp-cross-origin \
-            -Doptimize=ReleaseFast \
+            -Doptimize=ReleaseSafe \
             --cache-dir .cache/zig-local \
             --global-cache-dir .cache/zig-global
 
