@@ -74,7 +74,7 @@ pub const Context = struct {
     parser: *MM0Parser,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
-    rule_catalog: *const RuleCatalog.Catalog,
+    rule_catalog: *RuleCatalog.Catalog,
     fresh_bindings: *const std.AutoHashMap(u32, []const FreshDecl),
     freshen_bindings: *const std.AutoHashMap(u32, []const FreshenDecl),
     views: *const std.AutoHashMap(u32, ViewDecl),

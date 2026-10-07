@@ -244,10 +244,7 @@ fn initSearchFixture(
         .parser = MM0Parser.init(mm0_src, allocator),
         .env = GlobalEnv.init(allocator),
         .registry = RewriteRegistry.init(allocator),
-        // As on the compile and analyze paths: the catalog is a convenience
-        // index, and a malformed statement must not abort the walk here.
-        .rule_catalog = RuleCatalog.build(allocator, mm0_src) catch
-            RuleCatalog.Catalog.init(allocator),
+        .rule_catalog = RuleCatalog.Catalog.init(allocator, mm0_src),
         .fresh_bindings = std.AutoHashMap(
             u32,
             []const FreshDecl,

@@ -108,8 +108,7 @@ const AnalysisState = struct {
     ) AnalysisState {
         return .{
             .parser = MM0Parser.init(source, allocator),
-            .rule_catalog = RuleCatalog.build(allocator, source) catch
-                RuleCatalog.Catalog.init(allocator),
+            .rule_catalog = RuleCatalog.Catalog.init(allocator, source),
             .env = GlobalEnv.init(allocator),
             .registry = RewriteRegistry.init(allocator),
             .fresh_bindings = FreshBindingMap.init(allocator),
@@ -800,7 +799,7 @@ fn analyzeTheoremProof(
     parser: *MM0Parser,
     env: *GlobalEnv,
     registry: *RewriteRegistry,
-    rule_catalog: *const RuleCatalog.Catalog,
+    rule_catalog: *RuleCatalog.Catalog,
     fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
     freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
     views: *std.AutoHashMap(u32, ViewDecl),

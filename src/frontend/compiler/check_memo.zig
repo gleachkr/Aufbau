@@ -27,8 +27,8 @@
 //! a block is checked once per edit and the second pass replays it.
 //!
 //! One thing a check reads outside the hashed prefix is the rule catalog
-//! (`RuleCatalog`), built from the whole `.mm0` up front and consulted
-//! for "rule declared later" diagnostics. Those lookups are recorded per
+//! (`RuleCatalog`), which spans the whole `.mm0` and is consulted for
+//! "rule declared later" diagnostics. Those lookups are recorded per
 //! entry and re-verified on a hit.
 //!
 //! Positions: identical hashed theory text means identical theory
@@ -264,7 +264,7 @@ pub const CheckMemo = struct {
     pub fn find(
         self: *CheckMemo,
         key: Key,
-        catalog: *const RuleCatalog.Catalog,
+        catalog: *RuleCatalog.Catalog,
     ) ?*const Entry {
         const entry = self.entries.get(key) orelse {
             self.misses += 1;

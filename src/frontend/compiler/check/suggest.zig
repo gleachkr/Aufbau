@@ -153,7 +153,7 @@ pub fn labelAppearsInBlock(
 pub fn lookupRuleApplicationId(
     self: *CompilerContext,
     env: *const GlobalEnv,
-    rule_catalog: *const RuleCatalog.Catalog,
+    rule_catalog: *RuleCatalog.Catalog,
     labels: *const LabelIndexMap,
     diag_context: ApplicationDiagnosticContext,
     application: RuleApplication,

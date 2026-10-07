@@ -9,14 +9,38 @@ pub const Entry = struct {
     name_span: Span,
 };
 
-pub const Catalog = std.StringHashMap(Entry);
+const EntryMap = std.StringHashMap(Entry);
 
-pub fn build(
+/// Every assertion of the `.mm0`, by name, with its declaration ordinal.
+/// Only a rule name the env does not know yet reads it, to tell a rule
+/// declared later from an unknown one, so the whole-file parse it takes
+/// runs on the first lookup rather than up front.
+pub const Catalog = struct {
     allocator: std.mem.Allocator,
     src: []const u8,
-) !Catalog {
+    entries: ?EntryMap = null,
+
+    pub fn init(allocator: std.mem.Allocator, src: []const u8) Catalog {
+        return .{ .allocator = allocator, .src = src };
+    }
+
+    pub fn get(self: *Catalog, name: []const u8) ?Entry {
+        if (self.entries == null) {
+            // A convenience index: a malformed statement ends the walk
+            // rather than failing the lookup.
+            self.entries = build(self.allocator, self.src) catch
+                EntryMap.init(self.allocator);
+        }
+        return self.entries.?.get(name);
+    }
+};
+
+fn build(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+) !EntryMap {
     var parser = MM0Parser.init(src, allocator);
-    var catalog = Catalog.init(allocator);
+    var catalog = EntryMap.init(allocator);
     var ordinal: u32 = 0;
 
     while (try parser.next()) |stmt| {
@@ -37,7 +61,7 @@ pub fn build(
 }
 
 fn recordAssertion(
-    catalog: *Catalog,
+    catalog: *EntryMap,
     assertion: AssertionStmt,
     ordinal: u32,
 ) !void {

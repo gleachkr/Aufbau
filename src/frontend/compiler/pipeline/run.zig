@@ -33,8 +33,7 @@ pub fn run(
     emit: ?*Output,
 ) !void {
     var parser = MM0Parser.init(self.source, allocator);
-    var rule_catalog = RuleCatalog.build(allocator, self.source) catch
-        RuleCatalog.Catalog.init(allocator);
+    var rule_catalog = RuleCatalog.Catalog.init(allocator, self.source);
     var env = GlobalEnv.init(allocator);
     // Snapshot pretty-printed statements on every exit path, while the parser
     // (the notation provider) and env still live in this call's arena.
