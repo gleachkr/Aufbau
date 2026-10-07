@@ -1,6 +1,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
+pub const offsets = @import("offsets.zig");
 
 pub const SERVER_NAME = "Aufbau";
 
@@ -286,7 +287,7 @@ fn clampedRange(
 ) types.Range {
     const start = @min(span.start, text.len);
     const end = @max(start, @min(span.end, text.len));
-    return lsp.offsets.locToRange(
+    return offsets.locToRange(
         text,
         .{ .start = start, .end = end },
         encoding,
@@ -297,7 +298,7 @@ pub fn zeroRange(
     text: []const u8,
     encoding: lsp.offsets.Encoding,
 ) types.Range {
-    return lsp.offsets.locToRange(
+    return offsets.locToRange(
         text,
         .{ .start = 0, .end = 0 },
         encoding,
@@ -497,7 +498,7 @@ pub fn compilerDiagnosticRelatedInformation(
         try result.append(arena, .{
             .location = .{
                 .uri = hit.uri,
-                .range = lsp.offsets.locToRange(
+                .range = offsets.locToRange(
                     hit.text,
                     .{ .start = hit.span.start, .end = hit.span.end },
                     encoding,
@@ -514,7 +515,7 @@ pub fn compilerDiagnosticRelatedInformation(
         try result.append(arena, .{
             .location = .{
                 .uri = hit.uri,
-                .range = lsp.offsets.locToRange(
+                .range = offsets.locToRange(
                     hit.text,
                     .{ .start = hit.span.start, .end = hit.span.end },
                     encoding,

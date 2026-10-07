@@ -2308,6 +2308,13 @@ test "uri path roundtrip" {
     try std.testing.expectEqualStrings(path, roundtrip);
 }
 
+test "uri path rejects an escaped NUL byte" {
+    try std.testing.expectError(
+        error.InvalidFormat,
+        uriToPath(std.testing.allocator, "file:///tmp/a%00b.auf"),
+    );
+}
+
 test "proof sibling path" {
     const allocator = std.testing.allocator;
     const path = try siblingPathForProof(allocator, "/tmp/demo.auf");
@@ -2759,6 +2766,117 @@ fn publishedEmpty(transport: *const TestTransport, uri: []const u8) bool {
         }
     }
     return false;
+}
+
+/// The ranges of the last diagnostics set the transport saw for `uri`.
+fn publishedRanges(
+    arena: std.mem.Allocator,
+    transport: *const TestTransport,
+    uri: []const u8,
+) ![]const types.Range {
+    const Published = struct {
+        params: struct {
+            uri: []const u8,
+            diagnostics: []const struct { range: types.Range },
+        },
+    };
+    var ranges: ?[]const types.Range = null;
+    for (transport.messages[0..transport.message_count]) |message| {
+        if (!std.mem.containsAtLeast(u8, message, 1, "publishDiagnostics")) continue;
+        const parsed = try std.json.parseFromSliceLeaky(
+            Published,
+            arena,
+            message,
+            .{ .ignore_unknown_fields = true },
+        );
+        if (!std.mem.eql(u8, parsed.params.uri, uri)) continue;
+        const out = try arena.alloc(types.Range, parsed.params.diagnostics.len);
+        for (parsed.params.diagnostics, out) |diagnostic, *range| range.* = diagnostic.range;
+        ranges = out;
+    }
+    return ranges orelse error.ExpectedDiagnostics;
+}
+
+test "LSP diagnostic on a stray non-ASCII character covers the whole character" {
+    const mm0_uri = "file:///tmp/lsp-stray-unicode.mm0";
+    const proof_uri = "file:///tmp/lsp-stray-unicode.auf";
+    // `⊢` outside `$ … $`: the parser's error span covers its first byte
+    // only, which the UTF-16 conversion must not split.
+    const proof_text =
+        \\main
+        \\----
+        \\l1: $ top $ by ⊢
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = mm0_uri,
+        .languageId = "mm0",
+        .version = 1,
+        .text = lsp_search_mm0_text,
+    } });
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = "auf",
+        .version = 1,
+        .text = proof_text,
+    } });
+
+    const ranges = try publishedRanges(arena, &transport_state, proof_uri);
+    const stray = try testPosition(proof_text, "⊢");
+    var covered = false;
+    for (ranges) |range| {
+        if (range.start.line == stray.line and range.start.character == stray.character) {
+            try std.testing.expectEqual(stray.character + 1, range.end.character);
+            covered = true;
+        }
+    }
+    try std.testing.expect(covered);
+}
+
+test "LSP reports on a closed sibling mm0 that is not valid UTF-8" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A Latin-1 `é` on the line of the error: read from disk, never
+    // decoded by a client.
+    const dir = try tmp.dir.realpathAlloc(arena, ".");
+    try tmp.dir.writeFile(.{
+        .sub_path = "main.mm0",
+        .data = "provable sort wff;\nterm caf\xe9 (a b: wff): wff; zzz\n",
+    });
+    const mm0_uri = try pathToUri(arena, try std.fs.path.join(arena, &.{ dir, "main.mm0" }));
+    const proof_uri = try pathToUri(arena, try std.fs.path.join(arena, &.{ dir, "main.auf" }));
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = "auf",
+        .version = 1,
+        .text = "",
+    } });
+
+    const ranges = try publishedRanges(arena, &transport_state, mm0_uri);
+    try std.testing.expect(ranges.len > 0);
+    for (ranges) |range| try std.testing.expectEqual(@as(u32, 1), range.start.line);
 }
 
 fn hoverMarkdown(result: lsp.ResultType("textDocument/hover")) ![]const u8 {

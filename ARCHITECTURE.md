@@ -255,6 +255,8 @@ Editor indexing and source rendering:
 - `lsp/index.zig` and `lsp/builder.zig` build navigation snapshots
 - `lsp/completion.zig` provides completion logic
 - `lsp/diagnostics.zig` translates compiler diagnostics to LSP records
+- `lsp/offsets.zig` converts byte offsets to LSP positions and back for any
+  bytes (lsp_kit's conversions assume valid UTF-8 and character boundaries)
 - `pretty_print.zig` renders expressions using MM0 notation
 - `interner_view.zig` adapts theorem DAGs to the shared printer
 - `statement_sink.zig` captures statements before compilation arenas die

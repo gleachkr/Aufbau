@@ -132,6 +132,11 @@ pub const Scanner = struct {
         const spec = self.src[quote_start + 1 .. self.pos];
         self.pos += 1;
         const quote_end = self.pos;
+        // No file path holds a NUL byte, and the OS calls assert on one.
+        if (std.mem.indexOfScalar(u8, spec, 0) != null) {
+            self.error_span = .{ .start = quote_start, .end = quote_end };
+            return error.MalformedImport;
+        }
         self.skipWhitespaceAndComments();
         if (self.pos >= self.src.len or self.src[self.pos] != ';') {
             self.error_span = .{ .start = start, .end = quote_end };
@@ -1272,6 +1277,8 @@ test "scanner reports malformed imports" {
     try std.testing.expectError(error.MalformedImport, scanner.next());
     scanner = Scanner.init("import \"a.mm0", .mm0);
     try std.testing.expectError(error.UnterminatedString, scanner.next());
+    scanner = Scanner.init("import \"lib/a\x00b.mm0\";", .mm0);
+    try std.testing.expectError(error.MalformedImport, scanner.next());
     // An unterminated math string is the parser's to report; it just ends
     // the scan.
     scanner = Scanner.init("axiom a: $ x;\nimport \"a.mm0\";", .mm0);

@@ -402,7 +402,7 @@ const NavigationSnapshot = struct {
         position: types.Position,
         encoding: lsp.offsets.Encoding,
     ) ?usize {
-        const offset = lsp.offsets.positionToIndex(
+        const offset = lsp_diagnostics.offsets.positionToIndex(
             self.file().text,
             position,
             encoding,
@@ -830,7 +830,7 @@ pub const Handler = struct {
         for (params.contentChanges) |change| {
             switch (change) {
                 .literal_0 => |partial| {
-                    const loc = lsp.offsets.rangeToLoc(
+                    const loc = lsp_diagnostics.offsets.rangeToLoc(
                         buffer.items,
                         partial.range,
                         self.offset_encoding,
@@ -1073,7 +1073,7 @@ pub const Handler = struct {
         const hit = proof_side.locate(span) orelse return null;
         const edits = try arena.alloc(types.TextEdit, 1);
         edits[0] = .{
-            .range = lsp.offsets.locToRange(
+            .range = lsp_diagnostics.offsets.locToRange(
                 hit.file.text,
                 .{ .start = hit.span.start, .end = hit.span.end },
                 self.offset_encoding,
@@ -1816,7 +1816,7 @@ pub const Handler = struct {
             .uri = hit.file.uri,
             .version = hit.file.version,
             .diagnostic = .{
-                .range = lsp.offsets.locToRange(
+                .range = lsp_diagnostics.offsets.locToRange(
                     hit.file.text,
                     .{ .start = hit.span.start, .end = hit.span.end },
                     self.offset_encoding,
@@ -2094,7 +2094,7 @@ pub const Handler = struct {
                 .uri = failure.file.uri,
                 .version = failure.file.version,
                 .diagnostic = .{
-                    .range = lsp.offsets.locToRange(
+                    .range = lsp_diagnostics.offsets.locToRange(
                         failure.file.text,
                         .{ .start = failure.span.start, .end = failure.span.end },
                         self.offset_encoding,
@@ -2573,6 +2573,15 @@ pub fn uriToPath(
         {
             return UnsupportedUriHost.UnsupportedUriHost;
         }
+    }
+    // No file path holds a NUL byte, and the OS calls assert on one.
+    const encoded = switch (uri.path) {
+        .raw, .percent_encoded => |text| text,
+    };
+    if (std.mem.indexOfScalar(u8, encoded, 0) != null or
+        (uri.path == .percent_encoded and std.mem.indexOf(u8, encoded, "%00") != null))
+    {
+        return error.InvalidFormat;
     }
     return try uri.path.toRawMaybeAlloc(allocator);
 }
