@@ -95,37 +95,8 @@ pub fn validateNoPlaceholderExprCached(
     theorem: *TheoremContext,
     expr: ExprId,
 ) LeakageError!void {
-    if (firstPlaceholderCached(theorem, expr)) |id| {
+    if (theorem.firstPlaceholder(expr)) |id| {
         return leakageError(theorem, id);
-    }
-}
-
-fn firstPlaceholderCached(
-    theorem: *TheoremContext,
-    expr: ExprId,
-) ?PlaceholderId {
-    switch (theorem.interner.node(expr).*) {
-        .variable => return null,
-        .placeholder => |id| return id,
-        .app => |app| {
-            if (theorem.placeholder_scan_cache.get(expr)) |verdict| {
-                return verdict;
-            }
-            var found: ?PlaceholderId = null;
-            for (app.args) |arg| {
-                if (firstPlaceholderCached(theorem, arg)) |id| {
-                    found = id;
-                    break;
-                }
-            }
-            // Memo-or-forget on OOM.
-            theorem.placeholder_scan_cache.put(
-                theorem.allocator,
-                expr,
-                found,
-            ) catch {};
-            return found;
-        },
     }
 }
 

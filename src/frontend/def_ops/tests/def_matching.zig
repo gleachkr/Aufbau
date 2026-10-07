@@ -1414,11 +1414,16 @@ fn expectRepresentative(
     const start_dummy_id = theorem.next_dummy_id;
     const start_dummy_dep = theorem.next_dummy_dep;
 
-    var def_ops = DefOps.Context.init(arena.allocator(), &theorem, &env);
-    defer def_ops.deinit();
-    for ([_]BindingMode{ .transparent, .normalized }) |mode| {
-        const repr = try def_ops.chooseRepresentative(actual, mode);
-        try std.testing.expectEqual(expected, repr);
+    // The second context starts cold but finds the first one's plain
+    // representatives on the theorem.
+    for (0..2) |pass| {
+        var def_ops = DefOps.Context.init(arena.allocator(), &theorem, &env);
+        defer def_ops.deinit();
+        for ([_]BindingMode{ .transparent, .normalized }) |mode| {
+            const repr = try def_ops.chooseRepresentative(actual, mode);
+            try std.testing.expectEqual(expected, repr);
+        }
+        if (pass == 0) try std.testing.expect(theorem.pure_reprs.count() > 0);
     }
     try std.testing.expectEqual(start_dummy_id, theorem.next_dummy_id);
     try std.testing.expectEqual(start_dummy_dep, theorem.next_dummy_dep);

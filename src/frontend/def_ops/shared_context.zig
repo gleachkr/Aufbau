@@ -2,6 +2,7 @@ const std = @import("std");
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
+const PureReprKey = @import("../expr.zig").PureReprKey;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const Types = @import("./types.zig");
@@ -169,20 +170,6 @@ pub const SharedContext = struct {
     /// template part and fixes nothing (`transparent_match.holeyActual`).
     /// Off everywhere else, so search's metas keep their meaning.
     line_holes_match_anything: bool = false,
-    /// Session-independent representative memo (one map per non-exact
-    /// `BindingMode`): input expr → its plain concrete representative.
-    /// Populated only when the input is placeholder-free and the computed
-    /// representative came out plain (`.fixed`) — in that case the whole
-    /// rebuild → canonicalize → def-compress computation never reads
-    /// match-session state (witnesses, bindings, dummy slots all enter only
-    /// through placeholder resymbolization), so the entry is valid for every
-    /// session in this context and survives `invalidateRepresentativeCaches`,
-    /// which wipes the per-session caches on every binder assignment.
-    pure_transparent_reprs: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
-    pure_normalized_reprs: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
-    /// Memo backing `exprIsPlaceholderFree` (true = no `.placeholder` node
-    /// anywhere in the expr). Sound to persist: interned exprs are immutable.
-    placeholder_free: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: ?*RewriteRegistry,
@@ -351,15 +338,41 @@ pub const SharedContext = struct {
         };
     }
 
-    fn pureRepresentativeCache(
-        self: *SharedContext,
+    /// Session-independent representative memo, kept on the theorem
+    /// (`TheoremContext.pure_reprs`) so it outlives this context. Populated
+    /// only when the input is placeholder-free and the computed
+    /// representative came out plain (`.fixed`): then the whole rebuild →
+    /// canonicalize → def-compress computation never reads match-session
+    /// state (witnesses, bindings, dummy slots all enter only through
+    /// placeholder resymbolization), so the entry is valid for every session
+    /// on the theorem and survives `invalidateRepresentativeCaches`, which
+    /// wipes the per-session caches on every binder assignment.
+    fn pureReprKey(
+        self: *const SharedContext,
         mode: Types.BindingMode,
-    ) *std.AutoHashMapUnmanaged(ExprId, ExprId) {
-        return switch (mode) {
-            .exact => unreachable,
-            .transparent => &self.pure_transparent_reprs,
-            .normalized => &self.pure_normalized_reprs,
+        expr_id: ExprId,
+    ) PureReprKey {
+        return .{
+            .expr = expr_id,
+            .normalized = switch (mode) {
+                .exact => unreachable,
+                .transparent => false,
+                .normalized => true,
+            },
+            .has_registry = self.registry != null,
+            .line_holes_match_anything = self.line_holes_match_anything,
         };
+    }
+
+    fn assertCacheIdentity(self: *const SharedContext) void {
+        const registry_addr: usize = if (self.registry) |registry|
+            @intFromPtr(registry)
+        else
+            0;
+        self.theorem.assertDefOpsCacheIdentity(
+            @intFromPtr(self.env),
+            registry_addr,
+        );
     }
 
     pub fn pureRepresentativeGet(
@@ -367,7 +380,8 @@ pub const SharedContext = struct {
         mode: Types.BindingMode,
         expr_id: ExprId,
     ) ?ExprId {
-        return self.pureRepresentativeCache(mode).get(expr_id);
+        self.assertCacheIdentity();
+        return self.theorem.pure_reprs.get(self.pureReprKey(mode, expr_id));
     }
 
     pub fn pureRepresentativePut(
@@ -376,38 +390,21 @@ pub const SharedContext = struct {
         expr_id: ExprId,
         repr: ExprId,
     ) !void {
-        try self.pureRepresentativeCache(mode).put(
-            self.allocator,
-            expr_id,
+        self.assertCacheIdentity();
+        try self.theorem.pure_reprs.put(
+            self.theorem.allocator,
+            self.pureReprKey(mode, expr_id),
             repr,
         );
     }
 
-    pub fn exprIsPlaceholderFree(
-        self: *SharedContext,
-        expr_id: ExprId,
-    ) !bool {
-        if (self.placeholder_free.get(expr_id)) |known| return known;
-        const result: bool = switch (self.theorem.interner.node(expr_id).*) {
-            .variable => true,
-            .placeholder => false,
-            .app => |app| blk: {
-                for (app.args) |arg| {
-                    if (!try self.exprIsPlaceholderFree(arg)) break :blk false;
-                }
-                break :blk true;
-            },
-        };
-        try self.placeholder_free.put(self.allocator, expr_id, result);
-        return result;
+    pub fn exprIsPlaceholderFree(self: *SharedContext, expr_id: ExprId) bool {
+        return self.theorem.firstPlaceholder(expr_id) == null;
     }
 
     pub fn deinit(self: *SharedContext) void {
         self.symbolic_intern.deinit(self.allocator);
         self.template_subst_memo.deinit(self.allocator);
-        self.pure_transparent_reprs.deinit(self.allocator);
-        self.pure_normalized_reprs.deinit(self.allocator);
-        self.placeholder_free.deinit(self.allocator);
         var index_it = self.def_compression_index.valueIterator();
         while (index_it.next()) |bucket| bucket.deinit(self.allocator);
         self.def_compression_index.deinit(self.allocator);

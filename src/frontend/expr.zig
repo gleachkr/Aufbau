@@ -385,6 +385,15 @@ pub const AcuiCacheKey = struct {
     line_holes_match_anything: bool,
 };
 
+/// Key for `TheoremContext.pure_reprs`. A representative also depends on the
+/// match mode and on the registry, which canonicalizes it when present.
+pub const PureReprKey = struct {
+    expr: ExprId,
+    normalized: bool,
+    has_registry: bool,
+    line_holes_match_anything: bool,
+};
+
 pub const TheoremContext = struct {
     allocator: std.mem.Allocator,
     interner: ExprInterner,
@@ -456,13 +465,14 @@ pub const TheoremContext = struct {
     /// table only changes between statements). Cleared on `clone`.
     def_bearing_cache: std.AutoHashMapUnmanaged(ExprId, bool) = .empty,
 
-    /// Memo for the checked-IR leakage walk (`checked_ir.*Cached`): the first
-    /// placeholder id found under an app node in pre-order, or null when the
-    /// subtree is placeholder-free. Node structure is immutable per id, so
-    /// entries never go stale. Populated per visited node — the validation
-    /// walks otherwise re-walk hash-consed shared subtrees once per occurrence
-    /// (a line's rule bindings are subtrees of the line expr, so every
-    /// per-candidate validation pays that at least twice). Cleared on `clone`.
+    /// Memo for `firstPlaceholder` (the checked-IR leakage walk and the def_ops
+    /// pure-representative gate): the first placeholder id found under an app
+    /// node in pre-order, or null when the subtree is placeholder-free. Node
+    /// structure is immutable per id, so entries never go stale. Populated per
+    /// visited node — the validation walks otherwise re-walk hash-consed
+    /// shared subtrees once per occurrence (a line's rule bindings are
+    /// subtrees of the line expr, so every per-candidate validation pays that
+    /// at least twice). Cleared on `clone`.
     placeholder_scan_cache: std.AutoHashMapUnmanaged(ExprId, ?PlaceholderId) = .empty,
 
     /// Memo for `binding_validation.currentExprInfoCached`: dep mask of an app
@@ -472,6 +482,14 @@ pub const TheoremContext = struct {
     /// current-args entry point may use it (`exprInfo` with caller-supplied
     /// binder infos stays uncached). Cleared on `clone`.
     expr_deps_cache: std.AutoHashMapUnmanaged(ExprId, u55) = .empty,
+
+    /// def_ops representative memo: a placeholder-free expr → its plain
+    /// representative, under the fixed env/registry invariant above. Such a
+    /// representative reads no match-session state, so every def_ops context
+    /// on this theorem computes the same one; keeping it here shares it
+    /// across proof lines (`SharedContext.pureRepresentativeGet`). Cleared on
+    /// `clone`.
+    pure_reprs: std.AutoHashMapUnmanaged(PureReprKey, ExprId) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) TheoremContext {
         return .{
@@ -493,6 +511,7 @@ pub const TheoremContext = struct {
         self.def_bearing_cache.deinit(self.allocator);
         self.placeholder_scan_cache.deinit(self.allocator);
         self.expr_deps_cache.deinit(self.allocator);
+        self.pure_reprs.deinit(self.allocator);
     }
 
     pub fn assertDefOpsCacheIdentity(
@@ -594,8 +613,10 @@ pub const TheoremContext = struct {
         arg_exprs: []const *const Expr,
     ) !void {
         self.arg_infos = arg_infos;
-        // Deps memoized under the previous arg_infos (if any) are stale now.
+        // Deps memoized under the previous arg_infos (if any) are stale now,
+        // and so are representatives, whose def compression reads deps.
         self.expr_deps_cache.clearRetainingCapacity();
+        self.pure_reprs.clearRetainingCapacity();
         try self.seedBinderCount(arg_exprs.len);
         var next_bound_dep: u32 = 0;
         for (arg_infos) |arg| {
@@ -1045,6 +1066,34 @@ pub const TheoremContext = struct {
             .placeholder => |id| self.placeholderClass(id) == .meta,
             else => false,
         };
+    }
+
+    /// The first placeholder under `expr` in pre-order, or null when it is
+    /// placeholder-free. Memoized per app node in `placeholder_scan_cache`;
+    /// memo-or-forget on OOM.
+    pub fn firstPlaceholder(self: *TheoremContext, expr: ExprId) ?PlaceholderId {
+        switch (self.interner.node(expr).*) {
+            .variable => return null,
+            .placeholder => |id| return id,
+            .app => |app| {
+                if (self.placeholder_scan_cache.get(expr)) |verdict| {
+                    return verdict;
+                }
+                var found: ?PlaceholderId = null;
+                for (app.args) |arg| {
+                    if (self.firstPlaceholder(arg)) |id| {
+                        found = id;
+                        break;
+                    }
+                }
+                self.placeholder_scan_cache.put(
+                    self.allocator,
+                    expr,
+                    found,
+                ) catch {};
+                return found;
+            },
+        }
     }
 
     /// True when a line hole (`addLineHolePlaceholder`) occurs anywhere in

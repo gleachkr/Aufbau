@@ -87,7 +87,7 @@ pub fn chooseRepresentativeSymbolic(
     if (cache.get(expr_id)) |cached| return cached;
     // Session-independent fast path: a placeholder-free input with a plain
     // representative computes to the same `.fixed` node in every session
-    // (see `SharedContext.pure_transparent_reprs`), and `allocSymbolic`
+    // (see `SharedContext.pureReprKey`), and `allocSymbolic`
     // re-interns to the identical pointer the original computation returned.
     if (self.shared.pureRepresentativeGet(mode, expr_id)) |plain| {
         return try self.allocSymbolic(.{ .fixed = plain });
@@ -100,7 +100,7 @@ pub fn chooseRepresentativeSymbolic(
     }
     try cache.put(self.shared.allocator, expr_id, current);
     if (current.* == .fixed) {
-        if (try self.shared.exprIsPlaceholderFree(expr_id)) {
+        if (self.shared.exprIsPlaceholderFree(expr_id)) {
             try self.shared.pureRepresentativePut(
                 mode,
                 expr_id,
