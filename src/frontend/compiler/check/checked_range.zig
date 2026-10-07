@@ -123,7 +123,7 @@ pub fn ensureConcreteCheckedIrRange(
         }, phase));
         return err;
     };
-    if (try CheckedIr.firstDepViolationCached(env, theorem, lines)) |failure| {
+    if (try CheckedIr.firstDepViolation(env, theorem, lines)) |failure| {
         var detail = failure.detail;
         var text_bufs: Inference.DepViolationTextBufs = .{};
         switch (lines[failure.line_idx].data) {

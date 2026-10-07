@@ -653,12 +653,12 @@ pub fn buildRuleUnifyStream(
 
 pub fn buildTheoremProofBody(
     allocator: std.mem.Allocator,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     lines: []const CheckedLine,
 ) ![]const u8 {
     try validateProofBoundaryExprs(theorem, theorem.theorem_hyps.items);
-    try CheckedIr.validateLines(theorem, lines);
+    try CheckedIr.validateLinesCached(theorem, lines);
     if (try CheckedIr.firstDepViolation(env, theorem, lines)) |_| {
         return error.DepViolation;
     }

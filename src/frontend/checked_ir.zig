@@ -176,32 +176,11 @@ pub fn validateLinesCached(
     }
 }
 
+/// Deps come from `BindingValidation.currentExprInfoCached`, which memoizes
+/// per app node on `theorem`, hence the mutable pointer.
 pub fn firstDepViolation(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    lines: []const CheckedLine,
-) !?DepViolation {
-    return firstDepViolationImpl(false, env, theorem, lines);
-}
-
-/// Memoized twin of `firstDepViolation` (deps via
-/// `BindingValidation.currentExprInfoCached`; identical verdicts).
-pub fn firstDepViolationCached(
-    env: *const GlobalEnv,
     theorem: *TheoremContext,
-    lines: []const CheckedLine,
-) !?DepViolation {
-    return firstDepViolationImpl(true, env, theorem, lines);
-}
-
-/// Shared body for the plain/memoized `firstDepViolation` twins. The only
-/// difference is which `currentExprInfo` variant computes each binding's deps
-/// (the cached one mutates `theorem`, hence the mutable pointer when `cached`);
-/// both produce identical verdicts, so keeping one body makes that structural.
-fn firstDepViolationImpl(
-    comptime cached: bool,
-    env: *const GlobalEnv,
-    theorem: if (cached) *TheoremContext else *const TheoremContext,
     lines: []const CheckedLine,
 ) !?DepViolation {
     for (lines, 0..) |line, line_idx| {
@@ -215,10 +194,11 @@ fn firstDepViolationImpl(
         var infos: [56]BindingValidation.ExprInfo = undefined;
         std.debug.assert(rule.bindings.len <= infos.len);
         for (rule.bindings, 0..) |binding, idx| {
-            infos[idx] = if (cached)
-                try BindingValidation.currentExprInfoCached(env, theorem, binding)
-            else
-                try BindingValidation.currentExprInfo(env, theorem, binding);
+            infos[idx] = try BindingValidation.currentExprInfoCached(
+                env,
+                theorem,
+                binding,
+            );
         }
         const violation = BindingValidation.firstDepViolation(
             rule_decl.args,
