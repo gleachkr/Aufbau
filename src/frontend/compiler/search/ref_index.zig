@@ -121,6 +121,8 @@ pub const Index = struct {
             context.registry,
             options,
         );
+        var seen = std.AutoHashMapUnmanaged(ExprId, void){};
+        defer seen.deinit(allocator);
         for (pool, 0..) |pool_entry, pool_index| {
             const item = result.clipper_index.addItem();
             std.debug.assert(item == pool_index);
@@ -136,6 +138,12 @@ pub const Index = struct {
                 .expr = expr,
                 .order = pool_entry.order,
             };
+            // A ref stating the same expression as an earlier one proves
+            // nothing new, and lookups never return it: every tuple citing
+            // it has a twin citing the earlier, better-ranked ref instead.
+            // Indexed, n identical hyps against n bare premises enumerate
+            // n^n tuples.
+            if ((try seen.getOrPut(allocator, expr)).found_existing) continue;
             var shapes = try builder.fromExprId(theorem, expr);
             defer shapes.deinit();
             for (shapes.variants) |variant| {

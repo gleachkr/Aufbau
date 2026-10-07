@@ -492,6 +492,41 @@ test "exact search propagates sibling hyp bindings while filtering refs" {
     try std.testing.expectEqual(@as(usize, 1), counters.full_try_candidate_calls);
 }
 
+// n identical hypotheses against n premises of one shape used to enumerate
+// all n^n ref tuples; with 16 of each the search ran out of memory. Refs
+// stating the same expression are one fact, cited by the first of them.
+test "exact search tries identical refs once per premise" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q (p: wff): wff;
+        \\axiom q3 (p: wff): $ p $ > $ p $ > $ p $ > $ Q p $;
+        \\theorem t: $ P $ > $ P $ > $ P $ > $ Q P $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ Q P $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        proof_src,
+        "exact?",
+        .{ .counters = &counters },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), suggestions.items.len);
+    try std.testing.expectEqualStrings("q3 [#1, #1, #1]", suggestions.items[0].replacement);
+    try std.testing.expectEqual(@as(usize, 3), counters.ref_pool_size);
+    try std.testing.expectEqual(@as(usize, 1), counters.full_try_candidate_calls);
+}
+
 test "exact search uses one theorem hypothesis" {
     const mm0_src =
         \\delimiter $ ( ) $;

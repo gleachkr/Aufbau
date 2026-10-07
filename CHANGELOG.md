@@ -29,6 +29,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   constant of its sort. Such theories used to compile to proofs the
   verifier rejects, and `@acui` on a one-argument term crashed `abc` and
   the language server.
+- `exact?` and `auto?` no longer run out of memory when several hypotheses
+  state the same thing and a rule has several premises they all fit. Every
+  combination of the identical hypotheses was tried, 16^16 of them for 16
+  each; now each such fact is tried once, cited by its first hypothesis.
 
 ## [0.0.14] - 2026-10-05
 
