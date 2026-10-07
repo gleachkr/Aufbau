@@ -117,36 +117,40 @@ pub const ExprLeafInfo = struct {
     deps: u55,
 };
 
-const ExprNodeContext = struct {
-    pub fn hash(_: ExprNodeContext, key: ExprNode) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hashExprNode(&hasher, key);
-        return hasher.final();
+/// The interner index stores ids; each overlay node's `hashExprNode` sits
+/// beside it in `ExprInterner.hashes`, so neither an insert nor a grow
+/// rehashes a node.
+const IdContext = struct {
+    interner: *const ExprInterner,
+
+    pub fn hash(self: IdContext, id: ExprId) u64 {
+        const interner = self.interner;
+        return interner.hashes.items[@intCast(id - interner.base_count)];
     }
 
-    pub fn eql(_: ExprNodeContext, a: ExprNode, b: ExprNode) bool {
-        return eqlExprNode(a, b);
+    pub fn eql(_: IdContext, a: ExprId, b: ExprId) bool {
+        return a == b;
     }
 };
 
-/// Probes an `ExprNodeMap` with a hash computed once up front; `value` must
-/// be `ExprNodeContext.hash` of the probed key, as the map stores it.
-const PrehashedContext = struct {
+/// Probes the index for a node with its hash computed once up front.
+const NodeAdapter = struct {
+    interner: *const ExprInterner,
     value: u64,
 
-    pub fn hash(self: PrehashedContext, _: ExprNode) u64 {
+    pub fn hash(self: NodeAdapter, _: ExprNode) u64 {
         return self.value;
     }
 
-    pub fn eql(_: PrehashedContext, a: ExprNode, b: ExprNode) bool {
-        return eqlExprNode(a, b);
+    pub fn eql(self: NodeAdapter, key: ExprNode, id: ExprId) bool {
+        return eqlExprNode(key, self.interner.node(id).*);
     }
 };
 
-const ExprNodeMap = std.HashMapUnmanaged(
-    ExprNode,
+const ExprIdIndex = std.HashMapUnmanaged(
     ExprId,
-    ExprNodeContext,
+    void,
+    IdContext,
     std.hash_map.default_max_load_percentage,
 );
 
@@ -203,13 +207,16 @@ pub const ExprInterner = struct {
     /// and does not move while it is alive (all call sites follow
     /// `var c = try t.clone(); defer c.deinit();`). The interner is append-only,
     /// so base ids never change. The base MAY keep growing after a clone is
-    /// taken (e.g. the shared `work_theorem` in recursive generation): `find`
-    /// hides any base node added after the clone with the `< base_count` range
-    /// check, so the clone's id-space stays a stable snapshot.
+    /// taken (e.g. the shared `work_theorem` in recursive generation):
+    /// `findHashed` hides any base node added after the clone with the
+    /// `< base_count` range check, so the clone's id-space stays a stable
+    /// snapshot.
     base: ?*const ExprInterner = null,
     base_count: ExprId = 0,
     nodes: std.ArrayListUnmanaged(ExprNode) = .{},
-    index: ExprNodeMap = .empty,
+    /// `hashExprNode` of each overlay node, aligned with `nodes`.
+    hashes: std.ArrayListUnmanaged(u64) = .{},
+    index: ExprIdIndex = .empty,
 
     pub fn init(allocator: std.mem.Allocator) ExprInterner {
         return .{ .allocator = allocator };
@@ -224,6 +231,7 @@ pub const ExprInterner = struct {
             }
         }
         self.nodes.deinit(self.allocator);
+        self.hashes.deinit(self.allocator);
         self.index.deinit(self.allocator);
     }
 
@@ -250,7 +258,12 @@ pub const ExprInterner = struct {
         var fresh = ExprInterner.init(self.allocator);
         errdefer fresh.deinit();
         try fresh.nodes.ensureTotalCapacity(self.allocator, total);
-        try fresh.index.ensureTotalCapacity(self.allocator, @intCast(total));
+        try fresh.hashes.ensureTotalCapacity(self.allocator, total);
+        try fresh.index.ensureTotalCapacityContext(
+            self.allocator,
+            @intCast(total),
+            .{ .interner = &fresh },
+        );
         var id: ExprId = 0;
         while (id < total) : (id += 1) {
             const original = self.node(id).*;
@@ -265,8 +278,13 @@ pub const ExprInterner = struct {
                 .variable, .placeholder => {},
                 .app => |app| self.allocator.free(app.args),
             };
-            try fresh.index.putContext(self.allocator, cloned, id, .{});
             fresh.nodes.appendAssumeCapacity(cloned);
+            fresh.hashes.appendAssumeCapacity(hashExprNode(cloned));
+            fresh.index.putAssumeCapacityNoClobberContext(
+                id,
+                {},
+                .{ .interner = &fresh },
+            );
         }
         self.deinit(); // frees only this clone's overlay; base is borrowed
         self.* = fresh;
@@ -281,21 +299,19 @@ pub const ExprInterner = struct {
         return &self.nodes.items[@intCast(id - self.base_count)];
     }
 
-    /// Canonical id for `key` if already interned anywhere in this interner's
-    /// id-space, else null. Checks the overlay, then walks the base chain,
-    /// hiding base nodes added after this clone was taken (`< base_count`).
-    fn find(self: *const ExprInterner, key: ExprNode) ?ExprId {
-        return self.findHashed(key, ExprNodeContext.hash(.{}, key));
-    }
-
-    /// `find` with the key's hash precomputed, so a base-chain walk hashes
-    /// the key once rather than at every level.
+    /// Canonical id for `key` (whose `hashExprNode` is `hash`) if already
+    /// interned anywhere in this interner's id-space, else null. Checks the
+    /// overlay, then walks the base chain, hiding base nodes added after this
+    /// clone was taken (`< base_count`).
     fn findHashed(self: *const ExprInterner, key: ExprNode, hash: u64) ?ExprId {
         // One work tick per PROBE LEVEL (not per intern attempt): a lookup
         // through a deep copy-on-write base chain probes every level, so
         // per-hop counting is what tracks the real cost (see `work_ticks`).
         work_ticks +%= 1;
-        if (self.index.getAdapted(key, PrehashedContext{ .value = hash })) |id| return id;
+        if (self.index.getKeyAdapted(key, NodeAdapter{
+            .interner = self,
+            .value = hash,
+        })) |id| return id;
         if (self.base) |b| {
             if (b.findHashed(key, hash)) |r| {
                 if (r < self.base_count) return r;
@@ -340,30 +356,36 @@ pub const ExprInterner = struct {
                 .args = args,
             },
         };
-        if (self.find(key)) |id| {
+        const hash = hashExprNode(key);
+        if (self.findHashed(key, hash)) |id| {
             self.allocator.free(args);
             return id;
         }
+        return try self.insertNew(key, hash);
+    }
 
+    /// Append `key`, known absent, with its precomputed hash.
+    fn insertNew(self: *ExprInterner, key: ExprNode, hash: u64) !ExprId {
         const id = std.math.cast(ExprId, self.count()) orelse {
             return error.TooManyTheoremExprs;
         };
         try self.nodes.append(self.allocator, key);
         errdefer _ = self.nodes.pop();
-        try self.index.putContext(self.allocator, key, id, .{});
+        try self.hashes.append(self.allocator, hash);
+        errdefer _ = self.hashes.pop();
+        try self.index.putNoClobberContext(
+            self.allocator,
+            id,
+            {},
+            .{ .interner = self },
+        );
         return id;
     }
 
     fn internNode(self: *ExprInterner, key: ExprNode) !ExprId {
-        if (self.find(key)) |id| return id;
-
-        const id = std.math.cast(ExprId, self.count()) orelse {
-            return error.TooManyTheoremExprs;
-        };
-        try self.nodes.append(self.allocator, key);
-        errdefer _ = self.nodes.pop();
-        try self.index.putContext(self.allocator, key, id, .{});
-        return id;
+        const hash = hashExprNode(key);
+        if (self.findHashed(key, hash)) |id| return id;
+        return try self.insertNew(key, hash);
     }
 };
 
@@ -1352,35 +1374,20 @@ pub const TheoremContext = struct {
     }
 };
 
-fn hashExprNode(hasher: *std.hash.Wyhash, key: ExprNode) void {
-    switch (key) {
-        .variable => |var_id| {
-            hasher.update(&[_]u8{0});
-            hashVarId(hasher, var_id);
+fn hashExprNode(key: ExprNode) u64 {
+    const Wyhash = std.hash.Wyhash;
+    return switch (key) {
+        .variable => |var_id| switch (var_id) {
+            .theorem_var => |id| Wyhash.hash(0, std.mem.asBytes(&id)),
+            .dummy_var => |id| Wyhash.hash(1, std.mem.asBytes(&id)),
         },
-        .placeholder => |id| {
-            hasher.update(&[_]u8{1});
-            hasher.update(std.mem.asBytes(&id));
-        },
-        .app => |app| {
-            hasher.update(&[_]u8{2});
-            hasher.update(std.mem.asBytes(&app.term_id));
-            hasher.update(std.mem.sliceAsBytes(app.args));
-        },
-    }
-}
-
-fn hashVarId(hasher: *std.hash.Wyhash, var_id: VarId) void {
-    switch (var_id) {
-        .theorem_var => |id| {
-            hasher.update(&[_]u8{0});
-            hasher.update(std.mem.asBytes(&id));
-        },
-        .dummy_var => |id| {
-            hasher.update(&[_]u8{1});
-            hasher.update(std.mem.asBytes(&id));
-        },
-    }
+        .placeholder => |id| Wyhash.hash(2, std.mem.asBytes(&id)),
+        // The seed keeps the tag and term apart from the leaf seeds above.
+        .app => |app| Wyhash.hash(
+            (@as(u64, app.term_id) << 2) | 3,
+            std.mem.sliceAsBytes(app.args),
+        ),
+    };
 }
 
 fn eqlExprNode(a: ExprNode, b: ExprNode) bool {
