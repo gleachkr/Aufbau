@@ -29,10 +29,6 @@ pub const RelationBundle = struct {
     trans_id: ?u32 = null,
     symm_id: ?u32 = null,
     transport_id: ?u32 = null,
-    /// Lazily-computed shape verdict: bundle rules must have no bound
-    /// binders, or the lines extraction emits from them carry
-    /// disjointness obligations nothing discharges.
-    shape_ok: ?bool = null,
 };
 
 /// Resolved relation with all IDs known.
@@ -361,7 +357,7 @@ pub const RewriteRegistry = struct {
         const directive = iter.next() orelse return;
 
         if (std.mem.eql(u8, directive, "@relation")) {
-            try self.processRelation(&iter);
+            try self.processRelation(env, &iter);
         } else if (std.mem.eql(u8, directive, "@rewrite")) {
             try self.processRewrite(env, stmt_name, &iter);
         } else if (std.mem.eql(u8, directive, "@alpha")) {
@@ -383,6 +379,7 @@ pub const RewriteRegistry = struct {
 
     fn processRelation(
         self: *RewriteRegistry,
+        env: *const GlobalEnv,
         iter: *std.mem.TokenIterator(u8, .any),
     ) !void {
         const sort_name = iter.next() orelse return;
@@ -392,14 +389,82 @@ pub const RewriteRegistry = struct {
         const symm = iter.next() orelse return;
         const transport = iter.next() orelse return;
 
-        try self.relations.put(sort_name, .{
+        const bundle: RelationBundle = .{
             .sort_name = sort_name,
             .rel_term_name = rel_term,
             .refl_name = refl,
             .trans_name = trans,
             .symm_name = symm,
             .transport_name = transport,
-        });
+        };
+        // Members usually follow the annotation and are checked as they
+        // are declared (`checkDeclaredMember`); these are the ones already
+        // in scope, along with the laws of the sort's `@acui` combiners,
+        // which relate by this relation.
+        for (env.rules.items) |*rule| {
+            try checkRelationMember(env, &bundle, rule);
+        }
+        if (env.term_names.get(rel_term)) |rel| {
+            var combiners = self.acui_by_head.iterator();
+            while (combiners.next()) |entry| {
+                const head = entry.key_ptr.*;
+                const head_sort = env.terms.items[head].ret_sort_name;
+                if (!std.mem.eql(u8, head_sort, sort_name)) continue;
+                for (env.rules.items) |*rule| {
+                    try checkAcuiLaw(env, head, entry.value_ptr, rel, rule);
+                }
+            }
+        }
+        try self.relations.put(sort_name, bundle);
+    }
+
+    /// Check a newly declared rule against every `@relation` and `@acui`
+    /// annotation that names it. Proof emission instantiates these laws
+    /// positionally, so a law of any other shape compiles to proofs the
+    /// verifier rejects. Run before the rule's own annotations; a rule
+    /// annotated with its own bundle is checked by `processRelation`. An
+    /// `@acui` law is checked once its sort has a `@relation` (emission
+    /// cannot use the combiner before then; search reads only law names).
+    pub fn checkDeclaredMember(
+        self: *const RewriteRegistry,
+        env: *const GlobalEnv,
+        rule_id: u32,
+    ) !void {
+        const rule = &env.rules.items[rule_id];
+        var relations = self.relations.valueIterator();
+        while (relations.next()) |bundle| {
+            try checkRelationMember(env, bundle, rule);
+        }
+        var combiners = self.acui_by_head.iterator();
+        while (combiners.next()) |entry| {
+            const head = entry.key_ptr.*;
+            const sort_name = env.terms.items[head].ret_sort_name;
+            const rel = self.relationTermIdForSort(env, sort_name) orelse continue;
+            try checkAcuiLaw(env, head, entry.value_ptr, rel, rule);
+        }
+    }
+
+    /// True when `term_id` is the registered `@relation` term for the
+    /// sort it relates.
+    fn isRelationTerm(
+        self: *const RewriteRegistry,
+        env: *const GlobalEnv,
+        term_id: u32,
+    ) bool {
+        if (term_id >= env.terms.items.len) return false;
+        const term = &env.terms.items[term_id];
+        if (!term.available or term.args.len != 2) return false;
+        return self.relationTermIdForSort(env, term.args[0].sort_name) ==
+            term_id;
+    }
+
+    fn relationTermIdForSort(
+        self: *const RewriteRegistry,
+        env: *const GlobalEnv,
+        sort_name: []const u8,
+    ) ?u32 {
+        const relation = self.getRelationForSort(sort_name) orelse return null;
+        return env.term_names.get(relation.rel_term_name);
     }
 
     fn processRewrite(
@@ -412,29 +477,32 @@ pub const RewriteRegistry = struct {
         const rule_id = env.getRuleId(stmt_name) orelse return;
         const rule = &env.rules.items[rule_id];
 
-        // The conclusion should be of the form `rel(lhs, rhs)` where rel
-        // is a registered relation term.
-        switch (rule.concl) {
-            .app => |app| {
-                if (app.args.len != 2) return;
-                const lhs = app.args[0];
-                const rhs = app.args[1];
-                const head_id = getHeadTermId(lhs) orelse return;
-
-                const gop = try self.rewrites_by_head.getOrPut(head_id);
-                if (!gop.found_existing) {
-                    gop.value_ptr.* = .{};
-                }
-                try gop.value_ptr.append(self.allocator, .{
-                    .rule_id = rule_id,
-                    .lhs = lhs,
-                    .rhs = rhs,
-                    .num_binders = rule.args.len,
-                    .head_term_id = head_id,
-                });
-            },
-            else => {},
+        // Normalization cites the rule as a bare `rel(lhs, rhs)` step: no
+        // premises to discharge, and `rel` the registered relation term
+        // its lines are composed with.
+        if (rule.hyps.len != 0) return error.RewriteRuleHasHypotheses;
+        const app = switch (rule.concl) {
+            .app => |app| app,
+            .binder => return error.RewriteConclusionNotRelation,
+        };
+        if (app.args.len != 2 or !self.isRelationTerm(env, app.term_id)) {
+            return error.RewriteConclusionNotRelation;
         }
+        const lhs = app.args[0];
+        const rhs = app.args[1];
+        const head_id = getHeadTermId(lhs) orelse return;
+
+        const gop = try self.rewrites_by_head.getOrPut(head_id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        try gop.value_ptr.append(self.allocator, .{
+            .rule_id = rule_id,
+            .lhs = lhs,
+            .rhs = rhs,
+            .num_binders = rule.args.len,
+            .head_term_id = head_id,
+        });
     }
 
     fn processConversion(
@@ -509,7 +577,11 @@ pub const RewriteRegistry = struct {
             else => return error.ConversionConclusionNotRelation,
         };
         if (app.args.len != 2) return error.ConversionConclusionNotRelation;
-        try self.validateConversionRelation(env, app.term_id);
+        // Proof extraction lowers a conversion chain with the relation's
+        // refl/trans/symm/transport laws.
+        if (!self.isRelationTerm(env, app.term_id)) {
+            return error.ConversionMissingRelation;
+        }
 
         const lhs = app.args[0];
         const rhs = app.args[1];
@@ -622,12 +694,9 @@ pub const RewriteRegistry = struct {
             else => return error.ComputeConclusionNotRelation,
         };
         if (app.args.len != 2) return error.ComputeConclusionNotRelation;
-        self.validateConversionRelation(env, app.term_id) catch |err| {
-            return switch (err) {
-                error.ConversionMissingRelation => error.ComputeMissingRelation,
-                else => err,
-            };
-        };
+        if (!self.isRelationTerm(env, app.term_id)) {
+            return error.ComputeMissingRelation;
+        }
 
         const lhs = app.args[0];
         const rhs = app.args[1];
@@ -691,10 +760,9 @@ pub const RewriteRegistry = struct {
         // Lowering states each def step as a `refl` line the checker
         // closes through transparent unfolding, so the def's sort needs
         // the full relation vocabulary.
-        const relation = self.getRelationForSort(
-            term.ret_sort_name,
-        ) orelse return error.ConversionMissingRelation;
-        try validateBundleRuleShapes(env, relation);
+        if (self.getRelationForSort(term.ret_sort_name) == null) {
+            return error.ConversionMissingRelation;
+        }
 
         // Synthesized `head args` side over the arg binders (hidden
         // dummies never appear on the head side).
@@ -722,31 +790,6 @@ pub const RewriteRegistry = struct {
             .fold = fold,
             .unfold = unfold,
         });
-    }
-
-    /// The conclusion head must be the registered `@relation` term for its
-    /// operand sort — otherwise proof extraction has no
-    /// refl/trans/symm/transport vocabulary to lower a conversion chain with.
-    fn validateConversionRelation(
-        self: *const RewriteRegistry,
-        env: *const GlobalEnv,
-        rel_term_id: u32,
-    ) !void {
-        if (rel_term_id >= env.terms.items.len) {
-            return error.ConversionMissingRelation;
-        }
-        const rel_term = &env.terms.items[rel_term_id];
-        if (!rel_term.available or rel_term.args.len != 2) {
-            return error.ConversionMissingRelation;
-        }
-        const relation = self.getRelationForSort(
-            rel_term.args[0].sort_name,
-        ) orelse return error.ConversionMissingRelation;
-        const expected = env.term_names.get(relation.rel_term_name) orelse {
-            return error.ConversionMissingRelation;
-        };
-        if (rel_term_id != expected) return error.ConversionMissingRelation;
-        try validateBundleRuleShapes(env, relation);
     }
 
     fn processAlpha(
@@ -950,7 +993,6 @@ pub const RewriteRegistry = struct {
         if (rel_term_id != expected_rel_term_id) {
             return error.InvalidCongruenceAnnotation;
         }
-        try validateBundleRuleShapes(env, relation);
     }
 
     fn validateCongrHyp(
@@ -1191,12 +1233,38 @@ pub const RewriteRegistry = struct {
         else
             null;
 
-        try self.acui_by_head.put(head_term_id, .{
+        // Bags flatten and rebuild `f(a, b)` over one sort, padding with
+        // the unit constant; anything else recurses without end or emits
+        // ill-sorted lines.
+        const head = &env.terms.items[head_term_id];
+        if (head.args.len != 2) return error.AcuiCombinerShape;
+        for (head.args) |arg| {
+            if (arg.bound or !std.mem.eql(u8, arg.sort_name, head.ret_sort_name)) {
+                return error.AcuiCombinerShape;
+            }
+        }
+        const unit_id = env.term_names.get(unit_term_name) orelse {
+            return error.AcuiUnitShape;
+        };
+        const unit = &env.terms.items[unit_id];
+        if (!unit.available or unit.args.len != 0 or
+            !std.mem.eql(u8, unit.ret_sort_name, head.ret_sort_name))
+        {
+            return error.AcuiUnitShape;
+        }
+
+        const combiner: StructuralCombiner = .{
             .unit_term_name = unit_term_name,
             .assoc_name = assoc_name,
             .comm_name = comm_name,
             .idem_name = idem_name,
-        });
+        };
+        if (self.relationTermIdForSort(env, head.ret_sort_name)) |rel| {
+            for (env.rules.items) |*rule| {
+                try checkAcuiLaw(env, head_term_id, &combiner, rel, rule);
+            }
+        }
+        try self.acui_by_head.put(head_term_id, combiner);
     }
 
     pub fn getRelationForSort(
@@ -1346,14 +1414,6 @@ pub const RewriteRegistry = struct {
             else
                 null,
         };
-        if (bundle.shape_ok == null) {
-            bundle.shape_ok = !ruleHasBoundBinder(env, resolved.refl_id) and
-                !ruleHasBoundBinder(env, resolved.trans_id) and
-                !ruleHasBoundBinder(env, resolved.symm_id) and
-                (resolved.transport_id == null or
-                    !ruleHasBoundBinder(env, resolved.transport_id.?));
-        }
-        if (!bundle.shape_ok.?) return null;
         return resolved;
     }
 
@@ -1726,41 +1786,158 @@ fn validateTriggerApp(
     }
 }
 
-/// One enrolled `@conversion` orientation: `match` is e-matched, `target` is
-/// instantiated. The match side must be a term application (a bare-binder
-/// match side would match every e-class), and it must bind every binder the
-/// target side uses (an egraph rule cannot invent fresh variables).
-/// Overflowed binder masks (>= 64 binders) conservatively fail coverage.
-fn ruleHasBoundBinder(env: *const GlobalEnv, rule_id: u32) bool {
-    if (rule_id >= env.rules.items.len) return false;
-    for (env.rules.items[rule_id].args) |arg| {
-        if (arg.bound) return true;
-    }
-    return false;
-}
+const RelationRole = enum { refl, trans, symm, transport };
 
-/// Relation-bundle rules (refl/trans/symm/transport) must have no bound
-/// binders: extraction cites them on arbitrary terms, and a bound binder
-/// would attach a disjointness obligation nothing discharges. Members not
-/// yet declared are skipped here — `resolveRelation` re-checks once the
-/// whole bundle resolves.
-fn validateBundleRuleShapes(
+const AcuiLaw = enum { assoc, comm, idem };
+
+/// Check `rule` against each role of `bundle` it is named as.
+fn checkRelationMember(
     env: *const GlobalEnv,
     bundle: *const RelationBundle,
+    rule: *const RuleDecl,
 ) !void {
-    const names = [_][]const u8{
-        bundle.refl_name,
-        bundle.trans_name,
-        bundle.symm_name,
-        bundle.transport_name,
+    const roles = [_]struct { name: []const u8, role: RelationRole }{
+        .{ .name = bundle.refl_name, .role = .refl },
+        .{ .name = bundle.trans_name, .role = .trans },
+        .{ .name = bundle.symm_name, .role = .symm },
+        .{ .name = bundle.transport_name, .role = .transport },
     };
-    for (names) |name| {
-        if (std.mem.eql(u8, name, "_")) continue;
-        const rule_id = env.getRuleId(name) orelse continue;
-        if (ruleHasBoundBinder(env, rule_id)) {
-            return error.RelationBundleBoundBinder;
+    for (roles) |entry| {
+        if (!std.mem.eql(u8, entry.name, rule.name)) continue;
+        const rel = env.term_names.get(bundle.rel_term_name);
+        if (rel == null or
+            !relationLawShapeOk(rule, bundle.sort_name, rel.?, entry.role))
+        {
+            return switch (entry.role) {
+                .refl => error.RelationReflShape,
+                .trans => error.RelationTransShape,
+                .symm => error.RelationSymmShape,
+                .transport => error.RelationTransportShape,
+            };
         }
     }
+}
+
+/// Check `rule` against each law of `combiner` (headed by `head_term_id`)
+/// it is named as, with `rel` the relation term of the combiner's sort.
+fn checkAcuiLaw(
+    env: *const GlobalEnv,
+    head_term_id: u32,
+    combiner: *const StructuralCombiner,
+    rel: u32,
+    rule: *const RuleDecl,
+) !void {
+    const laws = [_]struct { name: ?[]const u8, law: AcuiLaw }{
+        .{ .name = combiner.assoc_name, .law = .assoc },
+        .{ .name = combiner.comm_name, .law = .comm },
+        .{ .name = combiner.idem_name, .law = .idem },
+    };
+    const sort_name = env.terms.items[head_term_id].ret_sort_name;
+    for (laws) |entry| {
+        const name = entry.name orelse continue;
+        if (!std.mem.eql(u8, name, rule.name)) continue;
+        if (!acuiLawShapeOk(rule, sort_name, rel, head_term_id, entry.law)) {
+            return switch (entry.law) {
+                .assoc => error.AcuiAssocShape,
+                .comm => error.AcuiCommShape,
+                .idem => error.AcuiIdemShape,
+            };
+        }
+    }
+}
+
+/// The shapes `normalizer/proof_emit.zig` and the conversion lowerer cite
+/// relation laws at, binders in this order:
+/// refl `(a): rel a a`, trans `(a b c): rel a b > rel b c > rel a c`,
+/// symm `(a b): rel a b > rel b a`, transport `(a b): rel a b > a > b`.
+fn relationLawShapeOk(
+    rule: *const RuleDecl,
+    sort_name: []const u8,
+    rel: u32,
+    role: RelationRole,
+) bool {
+    const a: TemplateExpr = .{ .binder = 0 };
+    const b: TemplateExpr = .{ .binder = 1 };
+    const c: TemplateExpr = .{ .binder = 2 };
+    const aa = [_]TemplateExpr{ a, a };
+    const ab = [_]TemplateExpr{ a, b };
+    const ba = [_]TemplateExpr{ b, a };
+    const bc = [_]TemplateExpr{ b, c };
+    const ac = [_]TemplateExpr{ a, c };
+    const rel_ab = binaryApp(rel, &ab);
+    return switch (role) {
+        .refl => lawShapeOk(rule, sort_name, 1, &.{}, binaryApp(rel, &aa)),
+        .trans => lawShapeOk(
+            rule,
+            sort_name,
+            3,
+            &.{ rel_ab, binaryApp(rel, &bc) },
+            binaryApp(rel, &ac),
+        ),
+        .symm => lawShapeOk(rule, sort_name, 2, &.{rel_ab}, binaryApp(rel, &ba)),
+        .transport => lawShapeOk(rule, sort_name, 2, &.{ rel_ab, a }, b),
+    };
+}
+
+/// The shapes `normalizer/proof_emit.zig` cites ACUI laws at, for
+/// combiner `f`: assoc `(a b c): rel (f (f a b) c) (f a (f b c))`,
+/// comm `(a b): rel (f a b) (f b a)`, idem `(a): rel (f a a) a`.
+fn acuiLawShapeOk(
+    rule: *const RuleDecl,
+    sort_name: []const u8,
+    rel: u32,
+    f: u32,
+    law: AcuiLaw,
+) bool {
+    const a: TemplateExpr = .{ .binder = 0 };
+    const b: TemplateExpr = .{ .binder = 1 };
+    const c: TemplateExpr = .{ .binder = 2 };
+    const aa = [_]TemplateExpr{ a, a };
+    const ab = [_]TemplateExpr{ a, b };
+    const ba = [_]TemplateExpr{ b, a };
+    const bc = [_]TemplateExpr{ b, c };
+    switch (law) {
+        .assoc => {
+            const left = [_]TemplateExpr{ binaryApp(f, &ab), c };
+            const right = [_]TemplateExpr{ a, binaryApp(f, &bc) };
+            const sides = [_]TemplateExpr{
+                binaryApp(f, &left),
+                binaryApp(f, &right),
+            };
+            return lawShapeOk(rule, sort_name, 3, &.{}, binaryApp(rel, &sides));
+        },
+        .comm => {
+            const sides = [_]TemplateExpr{ binaryApp(f, &ab), binaryApp(f, &ba) };
+            return lawShapeOk(rule, sort_name, 2, &.{}, binaryApp(rel, &sides));
+        },
+        .idem => {
+            const sides = [_]TemplateExpr{ binaryApp(f, &aa), a };
+            return lawShapeOk(rule, sort_name, 1, &.{}, binaryApp(rel, &sides));
+        },
+    }
+}
+
+/// `rule` is exactly `binder_count` regular binders of `sort_name` with
+/// these hypotheses and conclusion.
+fn lawShapeOk(
+    rule: *const RuleDecl,
+    sort_name: []const u8,
+    binder_count: usize,
+    hyps: []const TemplateExpr,
+    concl: TemplateExpr,
+) bool {
+    if (rule.args.len != binder_count or rule.hyps.len != hyps.len) return false;
+    for (rule.args) |arg| {
+        if (arg.bound or !std.mem.eql(u8, arg.sort_name, sort_name)) return false;
+    }
+    for (rule.hyps, hyps) |actual, expected| {
+        if (!actual.eql(expected)) return false;
+    }
+    return rule.concl.eql(concl);
+}
+
+fn binaryApp(term_id: u32, args: *const [2]TemplateExpr) TemplateExpr {
+    return .{ .app = .{ .term_id = term_id, .args = args } };
 }
 
 /// `@conversion comm` certificate: `rel(t(a, b), t(b, a))` with exactly

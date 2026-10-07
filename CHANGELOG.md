@@ -13,6 +13,23 @@ This file records notable user-facing changes to Aufbau. The project follows
   the same subgoal. A miss on `∀x∃y H(x,y) → ∃y∀x H(x,y)` in a one-sided
   first-order calculus now takes about 20% less work.
 
+### Fixed
+
+- The language server no longer crashes when a diagnostic covers part of a
+  non-ASCII character, as one on a stray `⊢` outside `$ … $` does, or
+  when a closed file it reads is not valid UTF-8. With VS Code's default
+  UTF-16 positions it used to exit; elsewhere the reported range could be
+  wrong. A diagnostic range now covers every character it touches.
+- A NUL byte in an `import` or `include` path is reported as a malformed
+  statement, and a document URI containing `%00` is rejected. Both used to
+  crash `abc`.
+- A `@relation` member, `@rewrite` rule or `@acui` law whose shape differs
+  from the one proofs cite it at is now an error where it is declared, as
+  is an `@acui` combiner that is not binary or a unit that is not a
+  constant of its sort. Such theories used to compile to proofs the
+  verifier rejects, and `@acui` on a one-argument term crashed `abc` and
+  the language server.
+
 ## [0.0.14] - 2026-10-05
 
 ### Added

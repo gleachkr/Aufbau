@@ -48,10 +48,13 @@ files without Aufbau's annotations still show the text.
 ```
 
 The fields name the sort, relation term, and its reflexivity, transitivity,
-symmetry, and transport rules, in that order. `_` marks a missing symmetry or
-transport member. The declarative annotation may sit on any assertion; by
-convention it sits on the reflexivity axiom. Bundle members must use rule-form
-hypotheses (`>`, not object-level implications) and have no bound binders.
+symmetry, and transport rules, in that order. `_` marks a missing transport
+member. The declarative annotation may sit on any assertion; by convention it
+sits on the reflexivity axiom. Each member must have exactly the shape the
+compiler cites it at, binders in this order: `(a): rel a a`,
+`(a b c): rel a b > rel b c > rel a c`, `(a b): rel a b > rel b a`, and
+`(a b): rel a b > a > b`. Hypotheses are rule-form (`>`, not object-level
+implications) and no binder is bound.
 
 ```text
 --| @relation wff bi biid bitr bisym mpbi
@@ -65,7 +68,7 @@ hypotheses (`>`, not object-level implications) and have no bound binders.
 ```
 
 No arguments. The associated assertion's conclusion must be `rel lhs rhs`
-for a registered relation; it is indexed by the head term of `lhs` and
+for a registered relation, with no hypotheses; it is indexed by the head term of `lhs` and
 applied left to right during normalization. Rules with the same head are
 tried in declaration order; the first matching rule applies.
 
@@ -93,7 +96,10 @@ axiom; `_` marks an absent law, and the trailing `IDEM` may be omitted.
 Arguments of the combiner are flattened, units dropped, sorted (when
 commutative), deduplicated (when idempotent), and rebuilt, with a relation
 proof emitted during `.auf` compilation for every step. Requires a `@relation`
-for the result sort and a `@congr` rule for the combiner.
+for the result sort and a `@congr` rule for the combiner. The combiner takes
+two arguments of its result sort and the unit is a constant of that sort. With
+`∘` the combiner, the laws must be exactly `(a b c): rel ((a ∘ b) ∘ c) (a ∘ (b
+∘ c))`, `(a b): rel (a ∘ b) (b ∘ a)`, and `(a): rel (a ∘ a) a`.
 
 ```text
 --| @acui ctx_assoc ctx_comm emp ctx_idem

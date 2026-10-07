@@ -143,6 +143,9 @@ pub fn processAssertionMetadata(
     source: DiagnosticSource,
     fallback_span: ?Span,
 ) !void {
+    if (env.getRuleId(assertion.name)) |rule_id| {
+        try registry.checkDeclaredMember(env, rule_id);
+    }
     try registry.processAnnotations(env, assertion.name, annotations);
     try FreshSelect.processFreshAnnotations(
         allocator,

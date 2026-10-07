@@ -207,18 +207,22 @@ transitivity, symmetry, and (optionally) a modus-ponens-style transport rule.
 ```
 
 The annotation line may appear before an MM0 assertion or before a local
-`.auf` lemma. The named relation rules must be in scope when the
-annotation is processed. For local lemmas, that is after the lemma has
-been proved and added as a rule.
+`.auf` lemma. The named relation rules may be declared before or after it.
 
 | Field | Meaning |
 |-------|---------|
 | `sort` | The sort this relation operates on |
 | `rel_term` | The binary relation term (e.g. `bi` for biconditional) |
-| `refl` | Reflexivity: `rel(a, a)` |
-| `trans` | Transitivity: `rel(a,b) > rel(b,c) > rel(a,c)` |
-| `symm` | Symmetry: `rel(a,b) > rel(b,a)` |
-| `transport` | Modus ponens: `rel(a,b) > a > b`, or `_` if not applicable |
+| `refl` | Reflexivity: `(a): rel(a, a)` |
+| `trans` | Transitivity: `(a b c): rel(a, b) > rel(b, c) > rel(a, c)` |
+| `symm` | Symmetry: `(a b): rel(a, b) > rel(b, a)` |
+| `transport` | Modus ponens: `(a b): rel(a, b) > a > b`, or `_` if not applicable |
+
+The normalizer instantiates these rules positionally, so each must have
+exactly the shape in the table: its binders in that order, all regular
+binders of `sort`, and those hypotheses and that conclusion. A rule is
+checked once both it and the annotation exist, and a mismatch is an error
+on whichever of the two comes second.
 
 ### Provable sorts, non-provable sorts, and why transport matters
 
@@ -271,7 +275,8 @@ lifts them into the `wff` level, where `mpbi` can close the proof.
 
 `@rewrite` marks an axiom as an oriented rewrite rule. The axiom's conclusion
 must have the form `rel(lhs, rhs)` where `rel` is a relation previously
-declared with `@relation`. The normalizer interprets this as "whenever you
+declared with `@relation`, and the axiom must have no hypotheses; both are
+checked when the annotation is processed. The normalizer interprets this as "whenever you
 see an expression matching `lhs`, replace it with `rhs`."
 
 ### Syntax
@@ -433,8 +438,7 @@ negative.
 
 ### Requirements
 
-Checked at annotation time (unlike `@rewrite`, malformed `@conversion`
-annotations are hard errors):
+Checked at annotation time:
 
 - The conclusion has the shape `rel(lhs, rhs)` where `rel` is the
   registered `@relation` term for its operand sort (extraction needs the
@@ -817,6 +821,18 @@ term emp: ctx;
 term join (g h: ctx): ctx;
 --| @acui ctx_assoc ctx_comm emp ctx_idem
 ```
+
+The combiner must take two arguments of its own result sort, and the unit
+must be a constant of that sort declared before the annotation. Each law is
+checked against the shape the normalizer cites it at, with `f` the combiner
+and `rel` the `@relation` term of its sort, once the law, the annotation,
+and that `@relation` all exist:
+
+| Law | Shape |
+|-----|-------|
+| `assoc` | `(a b c): rel(f(f(a, b), c), f(a, f(b, c)))` |
+| `comm` | `(a b): rel(f(a, b), f(b, a))` |
+| `idem` | `(a): rel(f(a, a), a)` |
 
 ### What the normalizer does with an ACUI combiner
 

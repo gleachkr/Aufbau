@@ -53,7 +53,8 @@ same theory does this for its equivalences on formulas and on contexts:
 --| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
 ```
 
-The four bundle rules must not have bound binders, since the compiler
+The four bundle rules must have exactly the shapes shown above, with their
+binders in the same order and none of them bound, since the compiler
 instantiates them with arbitrary subexpressions when assembling a proof.
 
 ## Congruence rules

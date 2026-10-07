@@ -180,16 +180,170 @@ test "compiler rejects @relation bundle rule with a bound binder" {
     ;
 
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(
-        error.RelationBundleBoundBinder,
-        compiler.check(),
-    );
+    try std.testing.expectError(error.RelationSymmShape, compiler.check());
 
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
-    try std.testing.expectEqual(error.RelationBundleBoundBinder, diag.err);
-    try std.testing.expectEqualStrings("neg_invol", diag.name.?);
+    try std.testing.expectEqual(error.RelationSymmShape, diag.err);
+    try std.testing.expectEqualStrings("bisym", diag.name.?);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
-    try std.testing.expectEqualStrings("@conversion ltr", mm0_src[span.start..span.end]);
+    try std.testing.expectEqualStrings("bisym", mm0_src[span.start..span.end]);
+}
+
+/// Compile `mm0_src` and expect it rejected with `err`, reported on the
+/// statement `name` at the source text `span_text`.
+fn expectShapeError(
+    mm0_src: []const u8,
+    err: anyerror,
+    name: []const u8,
+    span_text: []const u8,
+) !void {
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(err, compiler.check());
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(err, diag.err);
+    try std.testing.expectEqualStrings(name, diag.name.?);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings(span_text, mm0_src[span.start..span.end]);
+}
+
+const relation_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\term bi (a b: wff): wff;
+    \\term imp (a b: wff): wff;
+    \\term neg (a: wff): wff;
+    \\
+;
+
+const relation_members =
+    \\--| @relation wff bi biid bitr bisym mpbi
+    \\axiom biid (a: wff): $ bi a a $;
+    \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+    \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+    \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+    \\
+;
+
+test "compiler checks @relation members against the shapes proofs cite" {
+    // A member declared after the annotation is checked at its declaration.
+    try expectShapeError(relation_prelude ++
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff): $ bi a a $ > $ bi b c $ > $ bi a c $;
+    , error.RelationTransShape, "bitr", "bitr");
+    try expectShapeError(relation_prelude ++
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ a $;
+    , error.RelationTransportShape, "mpbi", "mpbi");
+    // One rule named for two roles is checked against both.
+    try expectShapeError(relation_prelude ++
+        \\--| @relation wff bi bitr bitr bisym mpbi
+        \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+    , error.RelationReflShape, "bitr", "bitr");
+    // A member declared before the annotation is checked by the annotation.
+    try expectShapeError(relation_prelude ++
+        \\axiom bisym (a b: wff): $ bi a b $ > $ imp b a $;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+    , error.RelationSymmShape, "biid", "biid");
+
+    var compiler = Compiler.init(
+        std.testing.allocator,
+        relation_prelude ++ relation_members,
+    );
+    try compiler.check();
+}
+
+test "compiler rejects @rewrite rules that are not bare relation steps" {
+    try expectShapeError(relation_prelude ++ relation_members ++
+        \\--| @rewrite
+        \\axiom neg_neg (a: wff): $ imp (neg (neg a)) a $;
+    , error.RewriteConclusionNotRelation, "neg_neg", "@rewrite");
+    try expectShapeError(relation_prelude ++ relation_members ++
+        \\--| @rewrite
+        \\axiom neg_bi (a b: wff): $ a $ > $ bi (neg a) b $;
+    , error.RewriteRuleHasHypotheses, "neg_bi", "@rewrite");
+}
+
+const acui_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term ceq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\term top: wff;
+    \\term hyp (a: wff): ctx;
+    \\--| @relation ctx ceq crefl ctrans csym _
+    \\axiom crefl (g: ctx): $ ceq g g $;
+    \\axiom ctrans (g h i: ctx): $ ceq g h $ > $ ceq h i $ > $ ceq g i $;
+    \\axiom csym (g h: ctx): $ ceq g h $ > $ ceq h g $;
+    \\
+;
+
+const acui_assoc =
+    \\axiom cassoc (g h i: ctx):
+    \\  $ ceq (join (join g h) i) (join g (join h i)) $;
+    \\
+;
+
+const acui_comm =
+    \\axiom ccomm (g h: ctx): $ ceq (join g h) (join h g) $;
+    \\
+;
+
+test "compiler checks @acui combiners, units, and laws" {
+    // A unary combiner used to recurse without end in the ACUI matcher.
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc ccomm emp
+        \\term join (g: ctx): ctx;
+    , error.AcuiCombinerShape, "join", "@acui cassoc ccomm emp");
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc ccomm top
+        \\term join (g h: ctx): ctx;
+    , error.AcuiUnitShape, "join", "@acui cassoc ccomm top");
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc ccomm emp
+        \\term join (g h: ctx): ctx;
+        \\axiom cassoc (g h i: ctx):
+        \\  $ ceq (join g (join h i)) (join (join g h) i) $;
+    , error.AcuiAssocShape, "cassoc", "cassoc");
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc ccomm emp
+        \\term join (g h: ctx): ctx;
+    ++ acui_assoc ++
+        \\axiom ccomm (g h: ctx): $ ceq (join g h) (join g h) $;
+    , error.AcuiCommShape, "ccomm", "ccomm");
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc ccomm emp cidem
+        \\term join (g h: ctx): ctx;
+    ++ acui_assoc ++ acui_comm ++
+        \\axiom cidem (g: ctx): $ ceq (join g g) emp $;
+    , error.AcuiIdemShape, "cidem", "cidem");
+    // Without a relation the laws wait for one: emission cannot use the
+    // combiner before then.
+    try expectShapeError(
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term ceq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui cassoc _ emp
+        \\term join (g h: ctx): ctx;
+        \\axiom cassoc (g h i: ctx): $ ceq (join g h) (join h g) $;
+        \\--| @relation ctx ceq crefl ctrans csym _
+        \\axiom crefl (g: ctx): $ ceq g g $;
+    , error.AcuiAssocShape, "crefl", "crefl");
+
+    var compiler = Compiler.init(std.testing.allocator, acui_prelude ++
+        \\--| @acui cassoc ccomm emp cidem
+        \\term join (g h: ctx): ctx;
+    ++ acui_assoc ++ acui_comm ++
+        \\axiom cidem (g: ctx): $ ceq (join g g) g $;
+    );
+    try compiler.check();
 }
 
 test "compiler normalizes conclusions with automatic normalization" {
