@@ -12,6 +12,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   keeps its `∃` does. Under an idempotent context the copy was a repeat of
   the same subgoal. A miss on `∀x∃y H(x,y) → ∃y∀x H(x,y)` in a one-sided
   first-order calculus now takes about 20% less work.
+- `exact?` and `apply?` run under the same per-call work budget as
+  `auto?` (about 6 units by default; `abc search --budget N` sets it), and
+  offer what they found when it runs out. A goal whose premises each match
+  many references was tried in every combination: ten references for each
+  of six premises took a million checks and ignored `--budget`. The budget
+  of an `auto?` call now covers its direct pass too. Checking and trimming
+  the proofs a search found get a budget of the same size, so a search
+  that spent its own still offers them.
 - A unit includes each `.auf` file at most once: a second `include` of a
   file, directly or through another include, is an error. A second include
   declared the file's items again, and a chain of files each including the
@@ -47,6 +55,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   between lines is now walked once. A value whose text would pass 64 KiB is
   cut with `…` in hovers and messages, and no fill or `unpack` action is
   offered for it.
+- `auto?` no longer takes time exponential in the number of such doubling
+  lines either. Its forward pass, and two other walks it makes, went over
+  an expression shared between lines once for every path to it.
+- After an `@auto eager` rule applies, `auto?` still tries an eager rule
+  that splits the context. Such a rule sorts after every rule that does
+  not split it, and the search used to stop at the first rule that was not
+  eager.
 - The language server no longer crashes on an edit whose range ends before
   it starts.
 - The language server no longer crashes when a diagnostic covers part of a

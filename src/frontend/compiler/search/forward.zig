@@ -811,16 +811,20 @@ const Saturator = struct {
         return try out.toOwnedSlice(self.arena);
     }
 
-    /// Canonical surface key: tree-serialized with universal metas numbered
-    /// by first occurrence, so shapes differing only in fresh meta ids
-    /// collide. Concrete pool expressions serialize through the same walk.
+    /// Canonical surface key: serialized with universal metas numbered by
+    /// first occurrence, so shapes differing only in fresh meta ids collide.
+    /// An app node written before (past the first few) is written as a
+    /// back-reference to it, so the key is the size of the DAG, not the
+    /// tree. Concrete pool expressions serialize through the same walk.
     fn shapeKey(self: *Saturator, shape: ExprId) ![]u8 {
         var out = std.ArrayListUnmanaged(u8){};
         errdefer out.deinit(self.arena);
         try out.append(self.arena, 's');
         var meta_numbers = std.AutoHashMapUnmanaged(PlaceholderId, u32).empty;
         defer meta_numbers.deinit(self.scratch);
-        try self.appendShapeKey(&out, &meta_numbers, shape);
+        var node_numbers: TheoremContext.DagMemo(u32) = .{};
+        defer node_numbers.deinit(self.scratch);
+        try self.appendShapeKey(&out, &meta_numbers, &node_numbers, shape);
         return try out.toOwnedSlice(self.arena);
     }
 
@@ -828,6 +832,7 @@ const Saturator = struct {
         self: *Saturator,
         out: *std.ArrayListUnmanaged(u8),
         meta_numbers: *std.AutoHashMapUnmanaged(PlaceholderId, u32),
+        node_numbers: *TheoremContext.DagMemo(u32),
         expr_id: ExprId,
     ) !void {
         switch (self.theorem.interner.node(expr_id).*) {
@@ -857,12 +862,18 @@ const Saturator = struct {
                 }
             },
             .app => |app| {
+                if (node_numbers.get(expr_id)) |number| {
+                    try out.append(self.arena, 'n');
+                    try appendKeyInt(out, self.arena, number);
+                    return;
+                }
                 try out.append(self.arena, 'a');
                 try appendKeyInt(out, self.arena, app.term_id);
                 try appendKeyInt(out, self.arena, app.args.len);
                 for (app.args) |arg| {
-                    try self.appendShapeKey(out, meta_numbers, arg);
+                    try self.appendShapeKey(out, meta_numbers, node_numbers, arg);
                 }
+                try node_numbers.put(self.scratch, expr_id, node_numbers.values.count());
             },
         }
     }

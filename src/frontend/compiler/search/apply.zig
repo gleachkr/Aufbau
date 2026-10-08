@@ -74,6 +74,8 @@ pub fn applyWithSession(
         // never a backward proof step — screen them on all paths, matching the
         // `exact?` candidate loop. See `RewriteRegistry.isRelationTransport`.
         if (context.registry.isRelationTransport(context.env, rule_id)) continue;
+        // Out of budget: list what the probes so far found.
+        if (options.budget) |budget| budget.spendCandidate() catch break;
         const rule_idx: usize = @intCast(rule_id);
         const rule = context.env.rules.items[rule_idx];
         var attempt_theorem = try theorem.clone();

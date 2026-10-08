@@ -51,8 +51,10 @@ suggests a retry that raises them together with the budget, e.g.
 **Retry with …** code action, via `abc search --retry N`, which retries up to 
 `N` times.
 
-`abc search --depth N --budget N` adjusts `depth` and `budget` defaults for 
-for `auto?`.
+`abc search --depth N --budget N` adjusts the `depth` default for `auto?` and
+the `budget` default for every search. `exact?` and `apply?` take no parameters,
+but run under the same default budget and offer what they found when it runs
+out.
 
 ## `conversion?` parameters
 

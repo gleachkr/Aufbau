@@ -221,7 +221,7 @@ test "auto? miss detail reports the exhausted space" {
     // The core searched every depth in full, and nothing cut it short.
     try std.testing.expectEqual(@as(usize, 3), counters.gen_core_depth_done);
     try std.testing.expectEqual(@as(usize, 0), counters.gen_node_capped_passes);
-    try std.testing.expect(!counters.gen_budget_exhausted);
+    try std.testing.expect(!counters.work_budget_exhausted);
 
     // The detail is opt-in: the same miss without the flag carries none
     // (the bench/programmatic path stays untouched).
@@ -353,7 +353,7 @@ test "auto? node-cap truncation is reported as truncation with a nodes hint" {
     // out.
     try std.testing.expect(counters.gen_node_capped_passes > 0);
     try std.testing.expectEqual(@as(usize, 1), counters.gen_core_depth_done);
-    try std.testing.expect(!counters.gen_budget_exhausted);
+    try std.testing.expect(!counters.work_budget_exhausted);
     const detail = capped.status_detail orelse
         return error.MissingStatusDetail;
     try std.testing.expect(
@@ -387,7 +387,7 @@ test "auto? budget truncation names every limit that was hit" {
     // raised together with the budget; depth is not, since the core never
     // got near the depth limit.
     const detail = try budgetDetail(.{
-        .gen_budget_exhausted = true,
+        .work_budget_exhausted = true,
         .phase_fuel_exhausted = true,
         .gen_node_capped_passes = 3,
         .gen_last_phase = 1,
@@ -426,7 +426,7 @@ test "auto? budget truncation past every core depth suggests more depth" {
     // the budget ran out in the constrained-MP tail, where a pass also hit
     // the node cap.
     const detail = try budgetDetail(.{
-        .gen_budget_exhausted = true,
+        .work_budget_exhausted = true,
         .gen_node_capped_passes = 1,
         .gen_last_phase = 5,
         .gen_last_depth = 2,
@@ -447,7 +447,7 @@ test "auto? budget truncation past every core depth suggests more depth" {
 
 test "auto? budget truncation before the depth limit suggests only budget" {
     const detail = try budgetDetail(.{
-        .gen_budget_exhausted = true,
+        .work_budget_exhausted = true,
         .gen_last_phase = 1,
         .gen_last_depth = 4,
         .gen_core_depth_done = 3,
@@ -466,7 +466,7 @@ test "miss retry is null when no parameter can help" {
     ));
     // Generation never ran (an exact?-style miss).
     try std.testing.expectEqual(@as(?miss_mod.Retry, null), miss_mod.retryFor(
-        miss_mod.MissReport.of(&.{ .gen_budget_exhausted = true }),
+        miss_mod.MissReport.of(&.{ .work_budget_exhausted = true }),
         gen,
     ));
     // A clean miss already at the depth maximum.

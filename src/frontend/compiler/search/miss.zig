@@ -34,7 +34,7 @@ pub const MissReport = struct {
         return .{
             .stop = if (counters.stack_guard_exhausted)
                 .stack
-            else if (counters.gen_budget_exhausted)
+            else if (counters.work_budget_exhausted)
                 .budget
             else
                 .none,

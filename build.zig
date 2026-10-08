@@ -653,8 +653,8 @@ pub fn build(b: *std.Build) void {
         "                   LABEL\n" ++
         "  --retry N        Search a missed auto? again with the larger limits\n" ++
         "                   its report advises, up to N times\n" ++
-        "  --depth N, --budget N\n" ++
-        "                   Limits for each auto? that does not set its own\n" ++
+        "  --depth N        Depth limit for each auto? that does not set its own\n" ++
+        "  --budget N       Work budget for each search that does not set its own\n" ++
         "  --lang LANG      Diagnostic language (en, de); also read from\n" ++
         "                   the ABC_LANG environment variable\n" ++
         "\nExit status:\n" ++

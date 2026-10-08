@@ -527,6 +527,70 @@ test "exact search tries identical refs once per premise" {
     try std.testing.expectEqual(@as(usize, 1), counters.full_try_candidate_calls);
 }
 
+test "exact search stops at the call's work budget with the proofs it found" {
+    // Ten references fit each of the four premises: 10^4 proofs, all valid.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term T: wff;
+        \\term P0: wff; term P1: wff; term P2: wff; term P3: wff; term P4: wff;
+        \\term P5: wff; term P6: wff; term P7: wff; term P8: wff; term P9: wff;
+        \\axiom k (a b c d: wff): $ a $ > $ b $ > $ c $ > $ d $ > $ T $;
+        \\theorem t: $ P0 $ > $ P1 $ > $ P2 $ > $ P3 $ > $ P4 $ >
+        \\  $ P5 $ > $ P6 $ > $ P7 $ > $ P8 $ > $ P9 $ > $ T $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ T $ by exact?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "exact?", .{
+        .counters = &counters,
+        .generate = .{ .global_budget = 20 * types.candidate_weight },
+    });
+    defer suggestions.deinit();
+    try std.testing.expect(counters.work_budget_exhausted);
+    try std.testing.expect(counters.full_try_candidate_calls <= 20);
+    // The proofs validated before the budget ran out are offered, checked
+    // and trimmed under a budget of their own.
+    try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
+    try std.testing.expectEqualStrings("k [#1, #1, #1, #1]", suggestions.items[0].replacement);
+}
+
+test "apply search stops at the call's work budget" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term T: wff; term A: wff;
+        \\axiom r1: $ A $ > $ T $;
+        \\axiom r2: $ A $ > $ T $;
+        \\axiom r3: $ A $ > $ T $;
+        \\axiom r4: $ A $ > $ T $;
+        \\axiom r5: $ A $ > $ T $;
+        \\axiom r6: $ A $ > $ T $;
+        \\theorem t: $ T $;
+    ;
+    const proof_src =
+        \\t
+        \\------
+        \\l1: $ T $ by apply?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{};
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "apply?", .{
+        .counters = &counters,
+        .generate = .{ .global_budget = 3 * types.candidate_weight },
+    });
+    defer suggestions.deinit();
+    try std.testing.expect(counters.work_budget_exhausted);
+    try std.testing.expect(counters.conclusion_probes < 3);
+    try std.testing.expect(suggestions.items.len >= 1);
+}
+
 test "exact search uses one theorem hypothesis" {
     const mm0_src =
         \\delimiter $ ( ) $;

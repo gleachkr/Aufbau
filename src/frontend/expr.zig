@@ -1077,6 +1077,34 @@ pub const TheoremContext = struct {
         }
     };
 
+    /// The values a DAG walk computed for the app nodes it left, so a shared
+    /// node is computed once: `get` before computing a node, `put` after.
+    /// Like `DagWalk`, the first `plain_steps` app nodes go unrecorded.
+    pub fn DagMemo(comptime V: type) type {
+        return struct {
+            const Self = @This();
+
+            steps: usize = 0,
+            values: std.AutoHashMapUnmanaged(ExprId, V) = .empty,
+
+            pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+                self.values.deinit(allocator);
+            }
+
+            /// The value recorded for app node `id`, if any. Counts a step.
+            pub fn get(self: *Self, id: ExprId) ?V {
+                self.steps += 1;
+                if (self.steps <= DagWalk.plain_steps) return null;
+                return self.values.get(id);
+            }
+
+            pub fn put(self: *Self, allocator: std.mem.Allocator, id: ExprId, value: V) !void {
+                if (self.steps <= DagWalk.plain_steps) return;
+                try self.values.put(allocator, id, value);
+            }
+        };
+    }
+
     /// True when `expr` is itself a placeholder leaf.
     pub fn isPlaceholder(self: *const TheoremContext, expr: ExprId) bool {
         return self.interner.node(expr).* == .placeholder;

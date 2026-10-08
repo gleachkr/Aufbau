@@ -841,7 +841,7 @@ pub fn normalizeAcuiUnits(
     theorem: *TheoremContext,
     expr_id: ExprId,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    return rebuildAcui(context, theorem, expr_id, .unit_free);
+    return rebuildAcuiShared(context, theorem, expr_id, .unit_free);
 }
 
 /// Canonical `ExprId` for ACUI-equality memo keying. Like `normalizeAcuiUnits`
@@ -865,7 +865,7 @@ pub fn canonicalizeAcui(
     theorem: *TheoremContext,
     expr_id: ExprId,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
-    return rebuildAcui(context, theorem, expr_id, .memo_key);
+    return rebuildAcuiShared(context, theorem, expr_id, .memo_key);
 }
 
 const AcuiForm = enum {
@@ -875,9 +875,39 @@ const AcuiForm = enum {
     memo_key,
 };
 
+/// The rebuilt ids of the app nodes a rebuild has done, so a shared subterm
+/// is rebuilt once.
+const RebuildMemo = TheoremContext.DagMemo(ExprId);
+
+fn rebuildAcuiShared(
+    context: *const Context,
+    theorem: *TheoremContext,
+    expr_id: ExprId,
+    comptime form: AcuiForm,
+) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
+    var memo: RebuildMemo = .{};
+    defer memo.deinit(theorem.allocator);
+    return rebuildAcui(context, theorem, &memo, expr_id, form);
+}
+
 fn rebuildAcui(
     context: *const Context,
     theorem: *TheoremContext,
+    memo: *RebuildMemo,
+    expr_id: ExprId,
+    comptime form: AcuiForm,
+) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
+    if (theorem.interner.node(expr_id).* != .app) return expr_id;
+    if (memo.get(expr_id)) |rebuilt| return rebuilt;
+    const rebuilt = try rebuildAcuiNode(context, theorem, memo, expr_id, form);
+    try memo.put(theorem.allocator, expr_id, rebuilt);
+    return rebuilt;
+}
+
+fn rebuildAcuiNode(
+    context: *const Context,
+    theorem: *TheoremContext,
+    memo: *RebuildMemo,
     expr_id: ExprId,
     comptime form: AcuiForm,
 ) error{ OutOfMemory, TooManyTheoremExprs }!ExprId {
@@ -893,7 +923,7 @@ fn rebuildAcui(
     if (arg_count == 0) return expr_id;
 
     if (bag.combinerOf(context, term_id)) |combiner| {
-        return rebuildAcuiCombiner(context, theorem, combiner, expr_id, form);
+        return rebuildAcuiCombiner(context, theorem, memo, combiner, expr_id, form);
     }
 
     // Non-combiner application: rebuild children, rebuild only if one changed.
@@ -902,7 +932,7 @@ fn rebuildAcui(
     @memcpy(args, theorem.interner.node(expr_id).app.args);
     var changed = false;
     for (args) |*a| {
-        const rebuilt = try rebuildAcui(context, theorem, a.*, form);
+        const rebuilt = try rebuildAcui(context, theorem, memo, a.*, form);
         if (rebuilt != a.*) changed = true;
         a.* = rebuilt;
     }
@@ -913,6 +943,7 @@ fn rebuildAcui(
 fn rebuildAcuiCombiner(
     context: *const Context,
     theorem: *TheoremContext,
+    memo: *RebuildMemo,
     combiner: bag.Combiner,
     expr_id: ExprId,
     comptime form: AcuiForm,
@@ -934,7 +965,7 @@ fn rebuildAcuiCombiner(
     var kept: [bag.capacity]ExprId = undefined;
     var kept_n: usize = 0;
     for (raw.slice()) |member| {
-        const rebuilt = try rebuildAcui(context, theorem, member, form);
+        const rebuilt = try rebuildAcui(context, theorem, memo, member, form);
         if (combiner.isUnit(theorem, rebuilt)) continue;
         kept[kept_n] = rebuilt;
         kept_n += 1;

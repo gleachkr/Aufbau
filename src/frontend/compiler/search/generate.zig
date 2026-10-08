@@ -266,30 +266,18 @@ pub fn generateTopLevel(
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
     options: GenerateOptions,
+    budget_ptr: ?*types.GlobalBudget,
 ) !GeneratedResults {
     var arena = std.heap.ArenaAllocator.init(session.allocator);
     errdefer arena.deinit();
 
-    // Per-call cost budget (ticks), spanning forward saturation and all retry
-    // phases. Initialized before any work so the tick snapshot covers the
-    // whole call; every phase's fresh `Fuel` shares this one budget.
+    // The search call's cost budget (`budget_ptr`, from
+    // `options.global_budget`) spans forward saturation and all retry
+    // phases; every phase's fresh `Fuel` shares it. The caller installs it
+    // as `compiler.work_budget` for the whole call.
     const ticks_start = expr_mod.work_ticks;
     const sym_ticks_start = expr_mod.work_ticks_sym;
     const walk_ticks_start = expr_mod.work_ticks_walk;
-    var global_budget: ?types.GlobalBudget = if (options.global_budget) |limit|
-        types.GlobalBudget.init(limit)
-    else
-        null;
-    const budget_ptr: ?*types.GlobalBudget = if (global_budget) |*budget|
-        budget
-    else
-        null;
-    // Let the inference solvers run under this call poll the budget mid-
-    // candidate (`expr.zig` `WorkBudget`). A nested call without a budget of
-    // its own keeps the enclosing one.
-    const saved_work_budget = compiler.work_budget;
-    if (budget_ptr) |budget| compiler.work_budget = budget.workBudget();
-    defer compiler.work_budget = saved_work_budget;
     // Candidate checks run deep in the descent; the checker's stack guard
     // measures from here so it counts the descent's frames too.
     const saved_stack_base = compiler.stack_base;
@@ -560,7 +548,6 @@ pub fn generateTopLevel(
         c.gen_work_ticks = expr_mod.work_ticks -% ticks_start;
         c.gen_sym_ticks = expr_mod.work_ticks_sym -% sym_ticks_start;
         c.gen_walk_ticks = expr_mod.work_ticks_walk -% walk_ticks_start;
-        if (global_budget) |budget| c.gen_budget_exhausted = budget.exhausted;
     }
 
     // Copy the arena last: the dupe can add a buffer to it.

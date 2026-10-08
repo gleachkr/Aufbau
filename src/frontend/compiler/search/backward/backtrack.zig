@@ -168,14 +168,20 @@ pub fn exactWithSession(
     }
 
     const ref_index = try session.getRefIndex(theorem, counters);
+    // A direct search (no `fuel`) spends its candidates from the call's
+    // budget, and stops where it runs out with what it has validated.
+    var direct_fuel = Fuel{ .remaining = std.math.maxInt(usize), .global = options.budget };
+    const fuel: ?*Fuel = options.fuel orelse
+        if (options.budget != null) &direct_fuel else null;
     // `@auto eager` set-commit cut (generation path only, mirroring the sort
     // gate above — plain `exact?` never has an eager band). Once an eager
     // candidate has actually *applied* — reached a child solve or produced a
     // validated result — the remaining non-eager candidates are skipped: the
     // user declared the decomposition invertible, so if it fails, the goal
     // fails. All eager candidates (other bag members, other eager rules) are
-    // still tried; the sort placed the band contiguously after class 0, so
-    // the first non-eager candidate after arming ends the enumeration. A
+    // still tried. The eager band is not contiguous: split-ness sorts first,
+    // so a split eager rule comes after every non-split rule, and the cut
+    // skips the non-eager candidates rather than ending the enumeration. A
     // mis-annotated (non-invertible) eager rule can therefore lose proofs;
     // the annotation is trusted. The eager *depth exemption* rides on
     // `emitGeneratedSlot`'s hook call, not on this cut. See
@@ -187,7 +193,7 @@ pub fn exactWithSession(
         apply_candidate.internal_child = options.internal_open_child;
         const is_eager = eager_cut and
             context.registry.eagerPriority(apply_candidate.rule_id) != null;
-        if (eager_armed and !is_eager) break;
+        if (eager_armed and !is_eager) continue;
         const hyp_count = apply_candidate.unresolved_hyps.len;
         // An empty pool can't fill any hyp — unless a generator can synthesize
         // sub-proofs for them, or a derived ref can fill a slot.
@@ -220,7 +226,7 @@ pub fn exactWithSession(
         }
 
         const results_before = candidates.items.len;
-        try enumerateCandidateRefs(
+        enumerateCandidateRefs(
             compiler,
             context,
             ref_index,
@@ -233,9 +239,12 @@ pub fn exactWithSession(
             options.derived,
             runtime,
             counters,
-            options.fuel,
+            fuel,
             &candidates,
-        );
+        ) catch |err| switch (err) {
+            error.SearchBudgetExhausted => if (options.fuel == null) break else return err,
+            else => return err,
+        };
         // An eager candidate whose conclusion bindings may break the rule's
         // eigenvariable condition does not arm the cut: the step may not be
         // applicable as matched (e.g. `all_intro` over a context that
@@ -843,6 +852,9 @@ fn enumerateCandidateRefs(
 }
 
 fn backtrackRefs(ctx: *const SlotCtx, depth: usize) anyerror!void {
+    // Poll the call's budget at every node, not only where a candidate is
+    // spent: the cheap prunes can reject every tuple of a large subtree.
+    if (ctx.fuel) |fuel| if (fuel.global) |budget| try budget.check();
     if (depth == ctx.plans.len) {
         try ctx.validate();
         return;

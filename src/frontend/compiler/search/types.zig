@@ -548,9 +548,9 @@ pub const SearchCounters = struct {
     gen_work_ticks: u64 = 0,
     gen_sym_ticks: u64 = 0,
     gen_walk_ticks: u64 = 0,
-    /// Set when the generation call was truncated by the per-call
-    /// `GlobalBudget` (as opposed to per-phase fuel).
-    gen_budget_exhausted: bool = false,
+    /// Set when the per-call `GlobalBudget` ran out (as opposed to
+    /// per-phase fuel), in the direct pass or generation.
+    work_budget_exhausted: bool = false,
     /// Ladder progress observability (for the user-facing failure report):
     /// the (depth, phase) of the last generation ladder cell that STARTED.
     /// When the global budget or the stack guard ended the call, this is the
@@ -625,7 +625,7 @@ pub const SearchCounters = struct {
     recursive_apply_calls: usize = 0,
     generated_chain_attempts: usize = 0,
     /// Set when a ladder phase ran out of its own fuel and was retired. A
-    /// stop on the shared global budget sets `gen_budget_exhausted` instead.
+    /// stop on the shared global budget sets `work_budget_exhausted` instead.
     /// Read by `miss.MissReport`.
     phase_fuel_exhausted: bool = false,
     /// Set when the call-stack guard stopped the generation descent: one
@@ -748,6 +748,9 @@ pub const ApplyOptions = struct {
     max_results: ?usize = null,
     counters: ?*SearchCounters = null,
     use_rule_index: bool = true,
+    /// Per-call work budget: each rule probe spends a candidate from it,
+    /// and when it runs out the remaining rules are not probed.
+    budget: ?*GlobalBudget = null,
 };
 
 pub const ExactCandidate = struct {
@@ -953,13 +956,12 @@ pub const GenerationHook = struct {
 /// and, because the cascade is the arena-heavy engine, bounds memory too. It is a
 /// pure safety floor, not a per-candidate doomed-detector: the recon measurement
 /// showed cascade success and failure costs overlap, so a per-candidate cap
-/// cannot separate winnable from doomed. Plain
-/// `exact?`/`apply?` leave `ExactOptions.fuel` null and are unbounded by it.
+/// cannot separate winnable from doomed. Plain `exact?` leaves
+/// `ExactOptions.fuel` null and is bounded by `ExactOptions.budget` alone.
 pub const Fuel = struct {
     remaining: usize,
     /// Whole-call cost-weighted budget shared by every phase's fresh `Fuel`
-    /// (see `GlobalBudget`). Null for plain `exact?`/`apply?` and for
-    /// generation with no per-call cap configured.
+    /// (see `GlobalBudget`). Null when no per-call cap is configured.
     global: ?*GlobalBudget = null,
 
     /// Spend one unit. Returns `error.SearchBudgetExhausted` when empty — a
@@ -971,8 +973,9 @@ pub const Fuel = struct {
     }
 };
 
-/// Cost-weighted budget for one whole `auto?` generation call, spanning all
-/// retry phases (unlike `Fuel`, which each phase resets). The cost unit is the
+/// Cost-weighted budget for one whole search call (`exact?`, `apply?` or
+/// `auto?`): the direct pass and every generation retry phase (unlike `Fuel`,
+/// which each phase resets). The cost unit is the
 /// interner work tick (`expr.zig` `work_ticks`): one per intern attempt,
 /// everywhere on the thread. Unlike the per-phase `tryCandidate` count, tick
 /// consumption tracks how *expensive* each candidate's validation cascade
@@ -981,8 +984,9 @@ pub const Fuel = struct {
 /// more tightly than a candidate-count ceiling can. Deterministic: tick counts
 /// depend only on the operations performed, never on time or machine.
 ///
-/// Checked at candidate granularity (the `Fuel.spend` sites plus the
-/// generation node entries), so exhaustion normally truncates the un-tried
+/// Checked at candidate granularity (the `Fuel.spend` sites, the generation
+/// node entries and each node of a rule's reference enumeration), so
+/// exhaustion normally truncates the un-tried
 /// tail — exactly the failure mode per-phase fuel exhaustion already has,
 /// reported the same way (`error.SearchBudgetExhausted`). The one
 /// sub-candidate poll is the inference solver's (`expr.zig` `WorkBudget`,
@@ -1027,6 +1031,8 @@ pub const GlobalBudget = struct {
     candidates: u64 = 0,
     /// Set once exhausted; observability for the driver/bench.
     exhausted: bool = false,
+    /// `expr.work_ticks*` when `pause` was called; null while charging.
+    paused_at: ?[3]u64 = null,
 
     pub fn init(limit: u64) GlobalBudget {
         return .{
@@ -1037,11 +1043,38 @@ pub const GlobalBudget = struct {
         };
     }
 
+    /// A budget that charges nothing until `unpause`.
+    pub fn initPaused(limit: u64) GlobalBudget {
+        var budget = init(limit);
+        budget.pause();
+        return budget;
+    }
+
+    /// Stop charging the work done from now until `unpause`.
+    pub fn pause(self: *GlobalBudget) void {
+        std.debug.assert(self.paused_at == null);
+        self.paused_at = ticksNow();
+    }
+
+    pub fn unpause(self: *GlobalBudget) void {
+        const at = self.paused_at.?;
+        const now = ticksNow();
+        self.start_intern +%= now[0] -% at[0];
+        self.start_sym +%= now[1] -% at[1];
+        self.start_walk +%= now[2] -% at[2];
+        self.paused_at = null;
+    }
+
+    fn ticksNow() [3]u64 {
+        return .{ expr_mod.work_ticks, expr_mod.work_ticks_sym, expr_mod.work_ticks_walk };
+    }
+
     pub fn spent(self: *const GlobalBudget) u64 {
+        const now = self.paused_at orelse ticksNow();
         return weightedTicks(
-            expr_mod.work_ticks -% self.start_intern,
-            expr_mod.work_ticks_sym -% self.start_sym,
-            expr_mod.work_ticks_walk -% self.start_walk,
+            now[0] -% self.start_intern,
+            now[1] -% self.start_sym,
+            now[2] -% self.start_walk,
             self.candidates,
         );
     }
@@ -1079,6 +1112,10 @@ pub const ExactOptions = struct {
     generator: ?*const GenerationHook = null,
     /// Global recursive-search budget; null for non-generating `exact?`/`apply?`.
     fuel: ?*Fuel = null,
+    /// Per-call work budget for a search without `fuel` (the direct pass):
+    /// each candidate validation spends from it, and when it runs out the
+    /// enumeration stops and returns the candidates validated so far.
+    budget: ?*GlobalBudget = null,
     /// Derived-ref pool from forward saturation. Only the `auto?`
     /// generation driver ever sets this; plain `exact?`/`apply?` leave it null
     /// and never see derived refs.

@@ -427,17 +427,24 @@ stack guard, no generation, or every hit limit already at its maximum).
 Per-phase fuel counts `tryCandidate`s, but per-candidate cost varies ~100x, so
 fuel alone cannot bound wall-clock latency; a doomed miss used to burn up to
 ~12s across the five phases. `GenerateOptions.global_budget` (default 6.3e9,
-null = off) caps the **whole call** — forward saturation plus all five phases
-— in *weighted work ticks*: deterministic, machine-independent op counts
+null = off) caps the **whole call** — the direct pass, forward saturation and
+all five phases; for `exact?` and `apply?`, the direct pass alone — in
+*weighted work ticks*: deterministic, machine-independent op counts
 (`expr.zig` threadlocals) taken at four chokepoints with wall-calibrated
 weights (`types.zig`): intern probe levels (COW base-chain hops, x600),
 def-eq symbolic-node allocations (x190), non-interning tree-walk node visits
 (shape builder / meta walks / suggestion rendering, x110), and a fixed
 per-`tryCandidate` charge (x100k) for the clone/session overhead no per-node
 tick sees. Units ≈ ns of calibrated wall, so the default reads as "≈6s of
-work". Checked at candidate granularity (`Fuel.spend` + the generation node
-entries), so a candidate mid-validation always completes; exhaustion unwinds
-as `error.SearchBudgetExhausted`, exactly like per-phase fuel. Because tick
+work". Checked at candidate granularity (`Fuel.spend`, the generation node
+entries and each node of a rule's reference enumeration), so a candidate
+mid-validation always completes; exhaustion unwinds as
+`error.SearchBudgetExhausted`, exactly like per-phase fuel. A direct pass
+(`exact?`, `apply?`) stops there with the candidates it has validated.
+`source.zig` `CallBudgets` holds the call's budget and a second of the same
+size for checking and trimming the results found, each charged only for its
+own work (`GlobalBudget.pause`), so a search that spent its budget still has
+its results checked. Because tick
 counts are deterministic, any cap above the corpus's most expensive FOUND
 search provably preserves the frontier. The original 5e9 cap cut the depth
 corpus fail-max 12.4s -> 4.9s (fails >3s: 151 -> 18) with breadth and depth
@@ -531,9 +538,10 @@ not depend on `x`'s value. Two checks follow from it:
   `assign`. The ban is part of `canonicalOpenKey`, because it changes which
   fills are legal. Guard: `eigenvariable_ban_probe`.
 
-The eager cut relies on the eager band being contiguous, and
-`nonSplitCandidateFirst` sorts on split-ness before class. So
-`split.conclusionIsSplit` counts only distinct *bare* binders on an ACUI
+The eager cut skips the non-eager candidates after it arms, but it arms
+only once an eager rule is reached, and `nonSplitCandidateFirst` sorts on
+split-ness before class: a split eager rule comes after every non-split rule.
+So `split.conclusionIsSplit` counts only distinct *bare* binders on an ACUI
 spine: `weak`'s `g , h` is multiplicative, but `not_left`'s `g , ¬ a` is
 additive, because the `a` inside `¬ a` is a principal formula, not a context.
 When `not_left` counted as multiplicative it sorted behind `raa`, so its cut

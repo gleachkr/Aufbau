@@ -923,13 +923,135 @@ test "auto global budget stop is not reported as a phase fuel-out" {
     );
     defer suggestions.deinit();
     try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
-    try std.testing.expect(counters.gen_budget_exhausted);
+    try std.testing.expect(counters.work_budget_exhausted);
     try std.testing.expect(!counters.phase_fuel_exhausted);
     // The retry raises the budget, not the fuel nothing ran out of.
     const retry = helpers.miss.retryFor(helpers.miss.MissReport.of(&counters), gen) orelse
         return error.MissingRetry;
     try std.testing.expect(retry.budget != null);
     try std.testing.expectEqual(@as(?u64, null), retry.fuel);
+}
+
+// `@auto eager` set-commit cut. `e1` reaches its subgoal `A` (via `aD`)
+// and fails; `n1` proves the goal through `bC`.
+fn eagerCutSuggestions(
+    arena: *std.heap.ArenaAllocator,
+    e1: []const u8,
+    n1: []const u8,
+) !types.SourceSuggestions {
+    const mm0_template =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term G: wff; term A: wff; term B: wff; term C: wff; term D: wff;
+        \\--| @auto backward
+        \\axiom aD: $ D $ > $ A $;
+        \\--| @auto backward
+        \\axiom bC: $ C $ > $ B $;
+        \\--| @auto E1
+        \\axiom e1: $ A $ > $ G $;
+        \\--| @auto N1
+        \\axiom n1: $ B $ > $ G $;
+        \\theorem t (h: $ C $): $ G $;
+    ;
+    var mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0_template, "E1", e1);
+    mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0, "N1", n1);
+    const proof_src =
+        \\t
+        \\---
+        \\
+        \\l1: $ G $ by auto?
+    ;
+    return suggestionsAtNeedle(arena, mm0, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+}
+
+test "an @auto eager step that reaches its subgoals skips the non-eager rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Without the cut, `n1` proves the goal.
+    var uncut = try eagerCutSuggestions(&arena, "backward", "backward");
+    defer uncut.deinit();
+    try expectOffered(uncut.items, &.{"n1 [bC [#1]]"});
+    // `e1` is declared invertible, so once it applies, its failure is the
+    // goal's: `n1` is not tried.
+    var cut = try eagerCutSuggestions(&arena, "eager", "backward");
+    defer cut.deinit();
+    try std.testing.expectEqual(@as(usize, 0), cut.items.len);
+}
+
+test "the @auto eager cut still tries the other eager rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try eagerCutSuggestions(&arena, "eager", "eager 2");
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{"n1 [bC [#1]]"});
+}
+
+test "the @auto eager cut still tries an eager rule that splits the context" {
+    // Split-ness sorts before priority, so `mix` (which splits the context
+    // into `g , h`) comes after the non-split rules: after `wk`, which the
+    // cut skips once `rleft` or `ror` arms it at the root.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term or (a b: wff): wff;
+        \\infixr or: $|$ prec 30;
+        \\term an (a b: wff): wff;
+        \\infixr an: $&$ prec 35;
+        \\term P: wff; term Q: wff; term R: wff; term S1: wff; term S2: wff;
+        \\term bi (a b: wff): wff;
+        \\infixl bi: $<->$ prec 20;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ a <-> a $;
+        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term seq (d: ctx): wff;
+        \\prefix seq: $|-$ prec 1;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx): $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+        \\--| @congr
+        \\axiom seq_congr (e f: ctx): $ ctx_eq e f $ > $ (|- e) <-> (|- f) $;
+        \\--| @auto eager
+        \\axiom rleft (d: ctx) (a b: wff): $ |- a , d $ > $ |- (a | b) , d $;
+        \\--| @auto eager 2
+        \\axiom ror (d: ctx) (a b: wff): $ |- a , b , d $ > $ |- (a | b) , d $;
+        \\--| @auto eager 3
+        \\axiom mix (g h: ctx) (a b: wff): $ |- a , g $ > $ |- b , h $ > $ |- (a & b) , g , h $;
+        \\--| @auto backward
+        \\axiom wk (d: ctx) (a: wff): $ |- d $ > $ |- a , d $;
+        \\theorem split_after_cut (h1: $ |- R , (P | Q) $) (h2: $ |- S1 , S2 $): $ |- (P | Q) , (R & (S1 | S2)) $;
+    ;
+    const proof_src =
+        \\split_after_cut
+        \\---
+        \\
+        \\l1: $ |- (P | Q) , (R & (S1 | S2)) $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{"mix [#1, ror [#2]]"});
 }
 
 test "auto stack guard stops the search and reports exhaustion" {

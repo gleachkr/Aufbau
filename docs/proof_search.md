@@ -423,8 +423,9 @@ are printed, but the searches still run.
   `--only THEOREM:LABEL` only those on one of its lines. The other
   placeholders are left as written, not searched and not reported. An
   `--only` that matches no placeholder is an error.
-- `--depth N` and `--budget N` set those limits for every `auto?` that
-  does not set them itself. A placeholder's own parameters win.
+- `--depth N` sets the depth limit of every `auto?` that does not set
+  it itself, and `--budget N` the work budget of every search, `exact?`
+  and `apply?` included. A placeholder's own parameters win.
 - `--retry N` searches a missed `auto?` again with the parameters its
   report suggests, up to N times. A proof found that way is reported as
   `found after 1 retry` (or `after N retries`), and replaces the whole
@@ -748,11 +749,14 @@ l3: $ b $ by exact?      -- finds e.g.  ax_mp (a := $ a $, b := $ b $) [l1, l2]
 
 ## Budgets and determinism
 
-- **`auto?` is bounded.** It runs under a work budget (roughly a few
-  seconds of calibrated work) and an iterative-deepening depth limit, so
-  it always terminates. A goal it can't crack within budget yields "no
-  suggestion", not a hang. Very deep goals may approach the budget before
-  giving up.
+- **Every search is bounded.** `exact?`, `apply?` and `auto?` each run
+  under a work budget (roughly a few seconds of calibrated work), and
+  `auto?` also under an iterative-deepening depth limit, so they always
+  terminate. A goal they can't crack within budget yields "no
+  suggestion", not a hang; `exact?` and `apply?` offer whatever they found
+  before the budget ran out. Very deep goals may approach the budget before
+  giving up. Checking and trimming the proofs a search found run under a
+  budget of the same size of their own.
 - **Results are deterministic.** The same goal, theory, and reference
   pool always produce the same suggestions in the same order — the search
   does not depend on wall-clock timing or randomness. This is what makes

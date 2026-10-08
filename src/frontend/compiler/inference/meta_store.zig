@@ -546,10 +546,23 @@ pub const MetaStore = struct {
     }
 
     /// Collect the unsolved metas reachable from `expr_id`, each reported
-    /// once, for diagnostics before validation or rendering.
+    /// once, for diagnostics before validation or rendering. A shared app
+    /// node is visited once.
     pub fn collectUnsolved(
         self: *const MetaStore,
         theorem: *const TheoremContext,
+        expr_id: ExprId,
+        out: *std.ArrayListUnmanaged(PlaceholderId),
+    ) !void {
+        var visited: TheoremContext.DagMemo(void) = .{};
+        defer visited.deinit(self.allocator);
+        try self.collectUnsolvedIn(theorem, &visited, expr_id, out);
+    }
+
+    fn collectUnsolvedIn(
+        self: *const MetaStore,
+        theorem: *const TheoremContext,
+        visited: *TheoremContext.DagMemo(void),
         expr_id: ExprId,
         out: *std.ArrayListUnmanaged(PlaceholderId),
     ) !void {
@@ -558,7 +571,7 @@ pub const MetaStore = struct {
             .placeholder => |id| {
                 if (!self.metas.contains(id)) return;
                 if (self.assignments.get(id)) |value| {
-                    try self.collectUnsolved(theorem, value, out);
+                    try self.collectUnsolvedIn(theorem, visited, value, out);
                     return;
                 }
                 for (out.items) |seen| {
@@ -567,9 +580,11 @@ pub const MetaStore = struct {
                 try out.append(self.allocator, id);
             },
             .app => |app| {
+                if (visited.get(expr_id) != null) return;
                 for (app.args) |arg| {
-                    try self.collectUnsolved(theorem, arg, out);
+                    try self.collectUnsolvedIn(theorem, visited, arg, out);
                 }
+                try visited.put(self.allocator, expr_id, {});
             },
         }
     }

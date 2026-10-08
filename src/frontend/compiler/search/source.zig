@@ -395,6 +395,9 @@ pub fn suggestionsAtSourceOffset(
         return try copyOutSuggestions(allocator, conv_suggestions);
     }
 
+    var budgets: CallBudgets = undefined;
+    budgets.init(&compiler, options.generate.global_budget);
+
     if (is_exact_like) {
         // Single-proof modes (`exact?`/`auto?`) honor the tighter
         // `exact_result_limit` when set, so the editor gets one best proof and
@@ -407,6 +410,7 @@ pub fn suggestionsAtSourceOffset(
         const site = SuggestionSite{
             .compiler = &compiler,
             .context = &context,
+            .budgets = &budgets,
             .counters = options.counters,
             .line = target_line,
             .line_goal = line_goal,
@@ -437,6 +441,7 @@ pub fn suggestionsAtSourceOffset(
                 &theorem,
                 &theorem_vars,
                 is_auto,
+                &budgets,
                 exact_options,
             );
         // `auto?` appends bounded recursive generation to the direct
@@ -455,6 +460,7 @@ pub fn suggestionsAtSourceOffset(
             counters.warm_search_ns += timer.elapsedSince(search_start);
         }
         suggestions.target_span = match_span;
+        options.counters.?.work_budget_exhausted = budgets.searchExhausted();
         suggestions.status = searchStatus(
             suggestions.items.len,
             options.counters.?,
@@ -495,6 +501,7 @@ pub fn suggestionsAtSourceOffset(
         .{
             .max_results = options.max_results,
             .counters = options.counters,
+            .budget = budgets.searchBudget(),
         },
     );
     defer results.deinit();
@@ -511,6 +518,7 @@ pub fn suggestionsAtSourceOffset(
             "apply?",
     );
     apply_suggestions.target_span = match_span;
+    options.counters.?.work_budget_exhausted = budgets.searchExhausted();
     apply_suggestions.status = searchStatus(
         apply_suggestions.items.len,
         options.counters.?,
@@ -803,22 +811,31 @@ pub fn buildStatusDetail(
                 var first = true;
                 if (report.stop == .budget) {
                     first = false;
+                    const seconds = std.math.divCeil(
+                        u64,
+                        gen.global_budget orelse 0,
+                        tunables.ticks_per_budget_unit,
+                    ) catch unreachable;
                     // The call ends where the budget runs out, so the last
                     // cell started is the one that tripped it.
-                    try w.print(
-                        "the per-call work budget (~{d}s of work) ran out " ++
-                            "during {s} at depth {d} of {d}",
-                        .{
-                            std.math.divCeil(
-                                u64,
-                                gen.global_budget orelse 0,
-                                tunables.ticks_per_budget_unit,
-                            ) catch unreachable,
-                            generate_mod.phaseName(counters.gen_last_phase),
-                            counters.gen_last_depth,
-                            gen.max_depth,
-                        },
-                    );
+                    if (generation_ran) {
+                        try w.print(
+                            "the per-call work budget (~{d}s of work) ran out " ++
+                                "during {s} at depth {d} of {d}",
+                            .{
+                                seconds,
+                                generate_mod.phaseName(counters.gen_last_phase),
+                                counters.gen_last_depth,
+                                gen.max_depth,
+                            },
+                        );
+                    } else {
+                        try w.print(
+                            "the per-call work budget (~{d}s of work) ran out " ++
+                                "before every candidate was tried",
+                            .{seconds},
+                        );
+                    }
                 }
                 if (report.nodes) {
                     if (!first) try w.writeAll("; ");
@@ -1275,6 +1292,7 @@ fn topLevelExactSuggestions(
         .{
             .max_results = options.max_results,
             .counters = options.counters,
+            .budget = site.budgets.searchBudget(),
         },
     );
     defer results.deinit();
@@ -1319,6 +1337,7 @@ fn appendGeneratedSuggestions(
         site.theorem,
         site.theorem_vars,
         gen_options,
+        site.budgets.searchBudget(),
     );
     defer generated.deinit();
 
@@ -1376,27 +1395,32 @@ fn inlineExactSuggestions(
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
     is_auto: bool,
+    budgets: *CallBudgets,
     options: SourceSuggestionOptions,
 ) !SourceSuggestions {
     var items = std.ArrayListUnmanaged(SourceSuggestion){};
     errdefer deinitSourceSuggestionItems(allocator, items.items);
 
     const max_results = options.max_results;
+    const site = SuggestionSite{
+        .compiler = compiler,
+        .context = context,
+        .budgets = budgets,
+        .line = line,
+        .line_goal = line_goal,
+        .path = path,
+        .theorem = theorem,
+        .theorem_vars = theorem_vars,
+        .counters = options.counters,
+    };
     if (inline_expectation) |expected| {
         try appendDirectRefSuggestions(
             allocator,
-            compiler,
-            context,
+            site,
             session,
-            line,
-            line_goal,
-            path,
             expected,
-            theorem,
-            theorem_vars,
             &items,
             max_results,
-            options.counters,
         );
     }
 
@@ -1411,20 +1435,14 @@ fn inlineExactSuggestions(
             .{
                 .max_results = remaining,
                 .counters = options.counters,
+                .budget = budgets.searchBudget(),
             },
         );
         defer results.deinit();
         try appendInlineExactApplications(
             allocator,
-            compiler,
-            context,
-            line,
-            line_goal,
-            path,
-            theorem,
-            theorem_vars,
+            site,
             results.candidates,
-            options.counters,
             &items,
             max_results,
         );
@@ -1442,15 +1460,9 @@ fn inlineExactSuggestions(
             if (!expected.has_placeholder) {
                 try appendInlineGeneratedApplications(
                     allocator,
-                    compiler,
-                    context,
+                    site,
                     session,
-                    line,
-                    line_goal,
-                    path,
                     expected,
-                    theorem,
-                    theorem_vars,
                     options,
                     &items,
                     max_results,
@@ -1521,34 +1533,32 @@ fn renderApplySourceSuggestions(
     return .{ .allocator = allocator, .items = try items.toOwnedSlice(allocator) };
 }
 
+/// The pool refs that fill an inline slot directly. Each check is part of the
+/// search, so it spends from the search budget, not the checks budget.
 fn appendDirectRefSuggestions(
     allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
-    context: *const Context,
+    site: SuggestionSite,
     session: *session_mod.SearchSession,
-    line: ProofScript.ProofLine,
-    line_goal: Goal,
-    path: []const usize,
     expected: InlineExpectedRef,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
     items: *std.ArrayListUnmanaged(SourceSuggestion),
     max_results: usize,
-    counters: ?*types.SearchCounters,
 ) !void {
-    const ref_index = try session.getRefIndex(theorem, counters);
-    const rule = &context.env.rules.items[expected.rule_id];
+    const line = site.line;
+    const path = site.path;
+    const ref_index = try session.getRefIndex(site.theorem, site.counters);
+    const rule = &site.context.env.rules.items[expected.rule_id];
     if (expected.child_index >= rule.hyps.len) return;
     var lookup = try ref_index.lookupTemplate(
-        theorem,
+        site.theorem,
         rule.hyps[expected.child_index],
         rule.args,
         expected.bindings,
-        counters,
+        site.counters,
     );
     defer lookup.deinit();
     for (lookup.indices) |pool_index| {
         if (items.items.len >= max_results) return;
+        if (site.budgets.searchBudget()) |budget| budget.spendCandidate() catch return;
         const ref = ref_index.entries[pool_index].ref orelse continue;
         const application = try applicationWithReplacedRef(
             allocator,
@@ -1557,13 +1567,13 @@ fn appendDirectRefSuggestions(
             ref,
         );
         if (!try validateReplacementApplication(
-            compiler,
-            context,
+            site.compiler,
+            site.context,
             application,
             line,
-            line_goal,
-            theorem,
-            theorem_vars,
+            site.line_goal,
+            site.theorem,
+            site.theorem_vars,
         )) continue;
         const replacement = try renderRefString(allocator, ref);
         errdefer allocator.free(replacement);
@@ -1584,46 +1594,17 @@ fn appendDirectRefSuggestions(
 
 fn appendInlineExactApplications(
     allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
-    context: *const Context,
-    line: ProofScript.ProofLine,
-    line_goal: Goal,
-    path: []const usize,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
+    site: SuggestionSite,
     candidates: []const ExactCandidate,
-    counters: ?*types.SearchCounters,
     items: *std.ArrayListUnmanaged(SourceSuggestion),
     max_results: usize,
 ) !void {
+    const line = site.line;
+    const path = site.path;
     for (candidates) |candidate| {
         if (items.items.len >= max_results) return;
-        const replacement_ref = Ref{ .application = candidate.application };
-        const application = try applicationWithReplacedRef(
-            allocator,
-            line.application,
-            path,
-            replacement_ref,
-        );
-        if (!try validateReplacementApplication(
-            compiler,
-            context,
-            application,
-            line,
-            line_goal,
-            theorem,
-            theorem_vars,
-        )) continue;
-        const app = try withNeededBindings(allocator, .{
-            .compiler = compiler,
-            .context = context,
-            .line = line,
-            .line_goal = line_goal,
-            .path = path,
-            .theorem = theorem,
-            .theorem_vars = theorem_vars,
-            .counters = counters,
-        }, candidate.application);
+        if (!try site.validates(allocator, candidate.application)) continue;
+        const app = try withNeededBindings(allocator, site, candidate.application);
         const replacement = try renderInlineApplication(allocator, app);
         errdefer allocator.free(replacement);
         const title = try std.fmt.allocPrint(
@@ -1650,62 +1631,35 @@ fn appendInlineExactApplications(
 /// text and respects `max_results`.
 fn appendInlineGeneratedApplications(
     allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
-    context: *const Context,
+    site: SuggestionSite,
     session: *session_mod.SearchSession,
-    line: ProofScript.ProofLine,
-    line_goal: Goal,
-    path: []const usize,
     expected: InlineExpectedRef,
-    theorem: *const TheoremContext,
-    theorem_vars: *const NameExprMap,
     options: SourceSuggestionOptions,
     items: *std.ArrayListUnmanaged(SourceSuggestion),
     max_results: usize,
 ) !void {
+    const line = site.line;
+    const path = site.path;
     // Only concrete slot goals reach here (the caller gates on
     // `!expected.has_placeholder`); `generateTopLevel` accepts `.concrete` goals
     // exactly as it does for a top-level line.
     var gen_options = options.generate;
     gen_options.max_results = max_results - items.items.len;
     var generated = try generate_mod.generateTopLevel(
-        compiler,
+        site.compiler,
         session,
         Goal{ .concrete = expected.query },
-        theorem,
-        theorem_vars,
+        site.theorem,
+        site.theorem_vars,
         gen_options,
+        site.budgets.searchBudget(),
     );
     defer generated.deinit();
 
     for (generated.applications) |generated_app| {
         if (items.items.len >= max_results) return;
-        const replacement_ref = Ref{ .application = generated_app };
-        const application = try applicationWithReplacedRef(
-            allocator,
-            line.application,
-            path,
-            replacement_ref,
-        );
-        if (!try validateReplacementApplication(
-            compiler,
-            context,
-            application,
-            line,
-            line_goal,
-            theorem,
-            theorem_vars,
-        )) continue;
-        const app = try withNeededBindings(allocator, .{
-            .compiler = compiler,
-            .context = context,
-            .line = line,
-            .line_goal = line_goal,
-            .path = path,
-            .theorem = theorem,
-            .theorem_vars = theorem_vars,
-            .counters = options.counters,
-        }, generated_app);
+        if (!try site.validates(allocator, generated_app)) continue;
+        const app = try withNeededBindings(allocator, site, generated_app);
         const replacement = try renderInlineApplication(allocator, app);
         var duplicate = false;
         for (items.items) |item| {
@@ -1781,11 +1735,64 @@ fn validateReplacementApplication(
     return true;
 }
 
+/// The work budgets of one search call, each of `GenerateOptions.global_budget`
+/// (none when that is null). `search` bounds the search: the direct pass,
+/// generation, and the pool refs tried in an inline slot. `checks` bounds the
+/// checks of the results it found (`SuggestionSite.validates`: the line with
+/// a result in place, and trimming its bindings), so a search that spent its
+/// whole budget still has its results checked. Each is charged only for its
+/// own work, and the one charged is installed as `compiler.work_budget`.
+const CallBudgets = struct {
+    compiler: *CompilerContext,
+    search: ?types.GlobalBudget,
+    checks: ?types.GlobalBudget,
+
+    /// In place: `compiler.work_budget` points into `self`.
+    fn init(self: *CallBudgets, compiler: *CompilerContext, limit: ?u64) void {
+        self.* = .{
+            .compiler = compiler,
+            .search = if (limit) |l| types.GlobalBudget.init(l) else null,
+            .checks = if (limit) |l| types.GlobalBudget.initPaused(l) else null,
+        };
+        if (self.search) |*search| compiler.work_budget = search.workBudget();
+    }
+
+    fn searchBudget(self: *CallBudgets) ?*types.GlobalBudget {
+        return if (self.search) |*search| search else null;
+    }
+
+    fn searchExhausted(self: *const CallBudgets) bool {
+        return if (self.search) |search| search.exhausted else false;
+    }
+
+    fn checksExhausted(self: *const CallBudgets) bool {
+        return if (self.checks) |checks| checks.exhausted else false;
+    }
+
+    /// Charge the work until `endChecks` to the checks budget.
+    fn beginChecks(self: *CallBudgets) void {
+        const search = &(self.search orelse return);
+        const checks = &self.checks.?;
+        search.pause();
+        checks.unpause();
+        self.compiler.work_budget = checks.workBudget();
+    }
+
+    fn endChecks(self: *CallBudgets) void {
+        const search = &(self.search orelse return);
+        const checks = &self.checks.?;
+        checks.pause();
+        search.unpause();
+        self.compiler.work_budget = search.workBudget();
+    }
+};
+
 /// Where a suggestion lands: the proof line holding the search placeholder,
 /// and the path to the placeholder inside it (empty for a whole line).
 const SuggestionSite = struct {
     compiler: *CompilerContext,
     context: *const Context,
+    budgets: *CallBudgets,
     line: ProofScript.ProofLine,
     line_goal: Goal,
     path: []const usize,
@@ -1795,12 +1802,15 @@ const SuggestionSite = struct {
     /// suggestions left untrimmed (`untrimmed`).
     counters: ?*types.SearchCounters,
 
-    /// Whether the line checks with `app` in the placeholder's place.
+    /// Whether the line checks with `app` in the placeholder's place, within
+    /// the checks budget.
     fn validates(
         self: SuggestionSite,
         allocator: std.mem.Allocator,
         app: RuleApplication,
     ) !bool {
+        self.budgets.beginChecks();
+        defer self.budgets.endChecks();
         const line_app = if (self.path.len == 0)
             app
         else
@@ -1900,9 +1910,9 @@ fn withNeededBindings(
 /// as the suggestion will state them. Each binding the oracle supplied
 /// over-approximately is then dropped if the line checks without it. The
 /// result has been validated. Null, with `app` unchecked, when it has no
-/// bindings or the oracle check fails; the latter counts as untrimmed
-/// (`SearchCounters.untrimmed`), which no corpus line may be. Allocates on
-/// the per-call work arena and frees nothing.
+/// bindings, the checks budget runs out, or the oracle check fails; the last
+/// counts as untrimmed (`SearchCounters.untrimmed`), which no corpus line may
+/// be. Allocates on the per-call work arena and frees nothing.
 fn trimBindings(
     allocator: std.mem.Allocator,
     site: SuggestionSite,
@@ -1926,10 +1936,14 @@ fn trimBindings(
     // ends.
     while (try site.neededBindings(allocator, app, bindings, drop, coarse)) |took| {
         if (!took or try site.validates(allocator, try withBindingsDropped(allocator, app, drop))) {
+            // A check the budget cut short only keeps a binding.
             try site.dropCoarse(allocator, app, drop, coarse);
             return try withBindingsDropped(allocator, app, drop);
         }
+        if (site.budgets.checksExhausted()) return null;
     }
+    // A check the budget cut short failed for want of work, not bindings.
+    if (site.budgets.checksExhausted()) return null;
     if (site.counters) |counters| counters.untrimmed += 1;
     return null;
 }
