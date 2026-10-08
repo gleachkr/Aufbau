@@ -24,6 +24,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   file, directly or through another include, is an error. A second include
   declared the file's items again, and a chain of files each including the
   next twice doubled the joined text at every level.
+- Only a `.mm0` file pairs with a proof file. `abc` used to pair any
+  imported file with its `<stem>.auf` (`lib.mm1` with `lib.auf`), which the
+  language server and the browser editor did not, so a unit could check
+  differently in the editor. `abc`, the language server and the browser
+  now load a unit through one loader.
 
 ### Fixed
 
@@ -76,6 +81,16 @@ This file records notable user-facing changes to Aufbau. The project follows
 - In a sequent with two contexts, `auto?` checks the context it splits when
   deciding whether a premise restates the principal formula. It used to
   check the first context.
+- The language server keys a document whose path has `.` or `..` segments
+  by its plain path, as it keys the files that document imports. An import
+  leading back to the document used to be reported as a missing file
+  instead of a cycle.
+- Import and include failures, the search placeholder warning, rejected
+  search parameters, and the language server's messages about a document's
+  URI or its paired `.mm0` follow the diagnostic language (`--lang`,
+  `set_locale`); they were always in English. The browser and the language
+  server also worded the placeholder warning differently; both now use the
+  same text.
 - The browser language server answers a request that fails with an error
   under the request's id, and keeps the diagnostics it sent before it. The
   editor's request used to wait forever. It now also answers

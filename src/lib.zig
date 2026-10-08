@@ -27,6 +27,7 @@ pub const compilerNoteHeading = CompilerDiag.noteHeading;
 pub const compilerRelatedHeading = CompilerDiag.relatedHeading;
 pub const compilerDiagnosticSummary = CompilerDiag.diagnosticSummary;
 pub const compilerErrorSummary = CompilerDiag.errorSummary;
+pub const allocDiagnosticMessage = CompilerDiag.allocMessage;
 pub const renderCompilerDiagnostic = CompilerDiag.renderDiagnostic;
 pub const renderCompilerNoteMessage = CompilerDiag.renderNoteMessage;
 pub const renderCompilerRelatedLabel = CompilerDiag.renderRelatedLabel;

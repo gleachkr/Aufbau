@@ -1468,9 +1468,21 @@ pub const Handler = struct {
                 doc.version,
                 doc.text,
                 switch (err) {
-                    error.InvalidFormat => "document URI is not a valid URI",
-                    UnsupportedUriScheme.UnsupportedUriScheme => "document URI must use the file scheme",
-                    UnsupportedUriHost.UnsupportedUriHost => "file URI host must be empty or localhost",
+                    error.InvalidFormat => try mm0.allocDiagnosticMessage(
+                        arena,
+                        "document_uri_invalid",
+                        .{},
+                    ),
+                    UnsupportedUriScheme.UnsupportedUriScheme => try mm0.allocDiagnosticMessage(
+                        arena,
+                        "document_uri_scheme",
+                        .{},
+                    ),
+                    UnsupportedUriHost.UnsupportedUriHost => try mm0.allocDiagnosticMessage(
+                        arena,
+                        "document_uri_host",
+                        .{},
+                    ),
                     else => mm0.compilerErrorSummary(err),
                 },
             );
@@ -1593,7 +1605,11 @@ pub const Handler = struct {
                 proof_uri,
                 proof_version,
                 proof_text,
-                "proof files must end in .auf",
+                try mm0.allocDiagnosticMessage(
+                    arena,
+                    "proof_document_extension",
+                    .{},
+                ),
             );
             return;
         };
@@ -1602,10 +1618,14 @@ pub const Handler = struct {
             // includes: that root's analysis reports on it.
             if (err == error.FileNotFound and self.isDependency(proof_uri)) return;
             const message = switch (err) {
-                error.FileNotFound => "could not find sibling .mm0 file for this proof",
-                else => try std.fmt.allocPrint(
+                error.FileNotFound => try mm0.allocDiagnosticMessage(
                     arena,
-                    "could not read sibling .mm0 file: {s}",
+                    "proof_document_no_theory",
+                    .{},
+                ),
+                else => try mm0.allocDiagnosticMessage(
+                    arena,
+                    "proof_document_theory_unreadable",
                     .{@errorName(err)},
                 ),
             };
@@ -1712,9 +1732,11 @@ pub const Handler = struct {
         states: []const NavigationDocumentState,
     ) ![]const LocatedDiagnostic {
         const proof_side = unit.proof orelse return &.{};
-        const proof_text = proof_side.joined.text;
-        const placeholders = try Search.searchPlaceholders(arena, proof_text);
-        if (placeholders.len == 0) return &.{};
+        const notices = try Search.placeholderNotices(
+            arena,
+            proof_side.joined.text,
+        );
+        if (notices.len == 0) return &.{};
 
         var outcomes: []const PlaceholderOutcome = &.{};
         if (self.search_status.getPtr(proof_side.rootFile().uri)) |entry| {
@@ -1722,22 +1744,26 @@ pub const Handler = struct {
         }
 
         var diagnostics = std.ArrayListUnmanaged(LocatedDiagnostic){};
-        for (placeholders) |placeholder| {
-            const keyword = placeholder.kind.keyword();
-            var severity: types.DiagnosticSeverity = .Warning;
-            var message: []const u8 = try std.fmt.allocPrint(
-                arena,
-                "{s} placeholder: search not yet run " ++
-                    "(request code actions here to search)",
-                .{keyword},
-            );
-            if (outcomeForPlaceholder(outcomes, placeholder.span)) |outcome| {
+        for (notices) |notice| {
+            // A rejected parameter is an error; it never blocks the search,
+            // which simply does not apply it.
+            var severity: types.DiagnosticSeverity = switch (notice.kind) {
+                .placeholder => .Warning,
+                .parameter => .Error,
+            };
+            var message = notice.message;
+            const recorded = if (notice.kind == .placeholder)
+                outcomeForPlaceholder(outcomes, notice.span)
+            else
+                null;
+            if (recorded) |outcome| {
+                const keyword = notice.placeholder.kind.keyword();
                 switch (outcome.status) {
                     .found => {
                         severity = .Information;
-                        message = try std.fmt.allocPrint(
+                        message = try mm0.allocDiagnosticMessage(
                             arena,
-                            "{s} search succeeded: {s}",
+                            "search_succeeded",
                             .{ keyword, outcome.detail },
                         );
                     },
@@ -1747,22 +1773,24 @@ pub const Handler = struct {
                         // bound truncated the search, how far it got, what
                         // to tune); fall back to the generic wording for
                         // outcomes recorded without one.
-                        const fallback: []const u8 =
-                            if (outcome.status == .miss)
-                                "no proof found"
-                            else
-                                "budget exhausted before the search " ++
-                                    "completed (a proof may still exist)";
-                        message = try std.fmt.allocPrint(
+                        const detail = if (outcome.detail.len > 0)
+                            outcome.detail
+                        else if (outcome.status == .miss)
+                            try mm0.allocDiagnosticMessage(
+                                arena,
+                                "search_no_proof",
+                                .{},
+                            )
+                        else
+                            try mm0.allocDiagnosticMessage(
+                                arena,
+                                "search_budget_exhausted",
+                                .{},
+                            );
+                        message = try mm0.allocDiagnosticMessage(
                             arena,
-                            "{s} search failed: {s}",
-                            .{
-                                keyword,
-                                if (outcome.detail.len > 0)
-                                    outcome.detail
-                                else
-                                    fallback,
-                            },
+                            "search_failed",
+                            .{ keyword, detail },
                         );
                     },
                 }
@@ -1771,31 +1799,10 @@ pub const Handler = struct {
                 arena,
                 &diagnostics,
                 proof_side,
-                placeholder.span,
+                notice.span,
                 severity,
                 message,
             );
-            // Per-parameter validation (typo'd names, out-of-range values,
-            // parameters on a non-auto? placeholder): one error diagnostic
-            // per rejected entry, underlining the offending token. These
-            // never block the search — invalid entries are simply not
-            // applied — so the author sees the problem while the valid
-            // parameters still work.
-            const issues = try Search.tunables.validateSearchParams(
-                arena,
-                placeholder.kind.paramContext(),
-                placeholder.params,
-            );
-            for (issues) |issue| {
-                try self.appendLocated(
-                    arena,
-                    &diagnostics,
-                    proof_side,
-                    issue.span,
-                    .Error,
-                    issue.message,
-                );
-            }
         }
         return try diagnostics.toOwnedSlice(arena);
     }
@@ -1927,11 +1934,11 @@ pub const Handler = struct {
     }
 
     /// Join a root `.mm0` with its imports and, when `proof` is given, the
-    /// paired `.auf` files with their includes. A join that fails (a
-    /// missing file, a cycle, a malformed statement) degrades that side to
-    /// the root alone with its statements blanked, and records the failure
-    /// as a diagnostic on the file holding the statement. Everything the
-    /// unit references is allocated from `arena`.
+    /// paired `.auf` files with their includes (`Imports.loadUnit`). A join
+    /// that fails (a missing file, a cycle, a malformed statement) degrades
+    /// that side to its root alone with its statements blanked, and records
+    /// the failure as a diagnostic on the file holding the statement.
+    /// Everything the unit references is allocated from `arena`.
     fn buildUnit(
         self: *Handler,
         arena: std.mem.Allocator,
@@ -1941,82 +1948,45 @@ pub const Handler = struct {
         proof_path: ?[]const u8,
     ) !Unit {
         var loader = UnitLoader{ .handler = self, .arena = arena };
-        var failures = std.ArrayListUnmanaged(UnitFailure){};
-
         const mm0_root = try unitFileFrom(arena, mm0_loaded, mm0_path);
         try loader.put(mm0_root);
-        var failure: ?Imports.JoinFailure = null;
-        const mm0_joined = Imports.join(
+        var proof_root: ?UnitFile = null;
+        var proof: Imports.ProofRoot = .none;
+        if (proof_loaded) |loaded| {
+            proof_root = try unitFileFrom(arena, loaded, proof_path.?);
+            try loader.put(proof_root.?);
+            proof = .{ .file = .{
+                .key = proof_root.?.path,
+                .text = proof_root.?.text,
+            } };
+        }
+        // `.degrade` reports join failures in `unit.failures`; the loader
+        // only fails on running out of memory.
+        var failure: ?Imports.LoadFailure = null;
+        const unit = try Imports.loadUnit(
             arena,
             loader.resolver(),
-            mm0_root.path,
-            mm0_root.text,
+            .{ .key = mm0_root.path, .text = mm0_root.text },
+            proof,
+            .degrade,
             &failure,
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => blk: {
-                try recordJoinFailure(arena, &loader, &failures, failure);
-                break :blk try Imports.single(
-                    arena,
-                    mm0_root.path,
-                    try Imports.blankStatements(arena, .mm0, mm0_root.text),
-                );
-            },
-        };
-        const mm0_side: UnitSide = .{
-            .joined = mm0_joined,
-            .files = try loader.filesFor(mm0_joined),
-            .root = indexOfKey(mm0_joined, mm0_root.path),
-        };
+        );
 
-        var proof_side: ?UnitSide = null;
-        if (proof_loaded) |loaded| {
-            const proof_root = try unitFileFrom(arena, loaded, proof_path.?);
-            try loader.put(proof_root);
-            // Every joined `.mm0` pairs with its `<stem>.auf` sibling when
-            // one exists, in the same order; the root pairs with the given
-            // proof file.
-            var roots = std.ArrayListUnmanaged(Imports.File){};
-            for (mm0_joined.files) |file| {
-                if (std.mem.eql(u8, file.key, mm0_root.path)) {
-                    try roots.append(arena, .{
-                        .key = proof_root.path,
-                        .text = proof_root.text,
-                    });
-                    continue;
-                }
-                const sibling = siblingPathForMm0(arena, file.key) catch continue;
-                const paired = try loader.load(sibling, false) orelse continue;
-                try roots.append(arena, .{ .key = paired.path, .text = paired.text });
-            }
-            failure = null;
-            const proof_joined = Imports.joinAll(
-                arena,
-                loader.resolver(),
-                .auf,
-                roots.items,
-                &failure,
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => blk: {
-                    try recordJoinFailure(arena, &loader, &failures, failure);
-                    break :blk try Imports.single(
-                        arena,
-                        proof_root.path,
-                        try Imports.blankStatements(arena, .auf, proof_root.text),
-                    );
-                },
-            };
-            proof_side = .{
-                .joined = proof_joined,
-                .files = try loader.filesFor(proof_joined),
-                .root = indexOfKey(proof_joined, proof_root.path),
-            };
+        var failures = std.ArrayListUnmanaged(UnitFailure){};
+        for (unit.failures) |info| {
+            try recordJoinFailure(arena, &loader, &failures, info);
         }
-
         return .{
-            .mm0 = mm0_side,
-            .proof = proof_side,
+            .mm0 = .{
+                .joined = unit.mm0,
+                .files = try loader.filesFor(unit.mm0),
+                .root = indexOfKey(unit.mm0, mm0_root.path),
+            },
+            .proof = if (unit.proof) |joined| .{
+                .joined = joined,
+                .files = try loader.filesFor(joined),
+                .root = indexOfKey(joined, proof_root.?.path),
+            } else null,
             .failures = try failures.toOwnedSlice(arena),
         };
     }
@@ -2046,9 +2016,8 @@ pub const Handler = struct {
         arena: std.mem.Allocator,
         loader: *UnitLoader,
         failures: *std.ArrayListUnmanaged(UnitFailure),
-        failure: ?Imports.JoinFailure,
+        info: Imports.JoinFailure,
     ) !void {
-        const info = failure orelse return;
         const message = try info.message(arena);
         // The statement's file was loaded before its statements were
         // followed, so it is always on record.
@@ -2583,7 +2552,13 @@ pub fn uriToPath(
     {
         return error.InvalidFormat;
     }
-    return try uri.path.toRawMaybeAlloc(allocator);
+    // Decoded only when the path holds an escape; otherwise a slice of the
+    // URI.
+    const raw = try uri.path.toRawMaybeAlloc(allocator);
+    defer if (raw.ptr != encoded.ptr) allocator.free(raw);
+    // Keyed the way `Imports.resolveSpecPath` keys what the file imports,
+    // so an import leading back to it is recognised.
+    return try Imports.normalizePath(allocator, raw);
 }
 
 pub fn pathToUri(
@@ -2601,28 +2576,16 @@ pub fn siblingPathForProof(
     allocator: std.mem.Allocator,
     proof_path: []const u8,
 ) ![]const u8 {
-    if (!std.mem.endsWith(u8, proof_path, ".auf")) {
-        return UnsupportedDocument.UnsupportedDocument;
-    }
-    return try std.fmt.allocPrint(
-        allocator,
-        "{s}.mm0",
-        .{proof_path[0 .. proof_path.len - 4]},
-    );
+    return try Imports.theorySiblingKey(allocator, proof_path) orelse
+        UnsupportedDocument.UnsupportedDocument;
 }
 
 pub fn siblingPathForMm0(
     allocator: std.mem.Allocator,
     mm0_path: []const u8,
 ) ![]const u8 {
-    if (!std.mem.endsWith(u8, mm0_path, ".mm0")) {
-        return UnsupportedDocument.UnsupportedDocument;
-    }
-    return try std.fmt.allocPrint(
-        allocator,
-        "{s}.auf",
-        .{mm0_path[0 .. mm0_path.len - 4]},
-    );
+    return try Imports.proofSiblingKey(allocator, mm0_path) orelse
+        UnsupportedDocument.UnsupportedDocument;
 }
 
 pub fn documentKind(path: []const u8) DocumentKind {

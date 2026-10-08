@@ -23,6 +23,7 @@
 //! including its items twice. Cycles are still an error.
 const std = @import("std");
 const builtin = @import("builtin");
+const Diag = @import("./diag.zig");
 
 pub const Span = struct {
     start: usize,
@@ -384,37 +385,40 @@ pub const JoinFailure = struct {
     /// The resolver's error, for `unresolved`.
     err: ?anyerror = null,
 
-    /// The failure as one line of prose, without a location.
+    /// The failure as one line of prose, without a location, in the
+    /// active diagnostic locale.
     pub fn message(
         self: JoinFailure,
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error![]u8 {
-        const keyword = self.syntax.keyword();
-        return switch (self.kind) {
-            .cycle => std.fmt.allocPrint(
-                allocator,
-                "{s} cycle: '{s}' is already being {s}d",
-                .{ keyword, self.spec, keyword },
-            ),
-            .duplicate => std.fmt.allocPrint(
-                allocator,
-                "duplicate {s}: '{s}' is already {s}d",
-                .{ keyword, self.spec, keyword },
-            ),
-            .unresolved => std.fmt.allocPrint(
-                allocator,
-                "unable to {s} '{s}': {s}",
-                .{
-                    keyword,
-                    self.spec,
-                    if (self.err) |err| @errorName(err) else "unresolved",
-                },
-            ),
-            .malformed => std.fmt.allocPrint(
-                allocator,
-                "malformed {s} statement",
-                .{keyword},
-            ),
+        // Only `unresolved` carries the resolver's error.
+        const reason = if (self.err) |err| @errorName(err) else "";
+        return switch (self.syntax) {
+            inline else => |syntax| {
+                const keyword = comptime syntax.keyword();
+                return switch (self.kind) {
+                    .cycle => Diag.allocMessage(
+                        allocator,
+                        "join_" ++ keyword ++ "_cycle",
+                        .{self.spec},
+                    ),
+                    .duplicate => Diag.allocMessage(
+                        allocator,
+                        "join_duplicate_" ++ keyword,
+                        .{self.spec},
+                    ),
+                    .unresolved => Diag.allocMessage(
+                        allocator,
+                        "join_unresolved_" ++ keyword,
+                        .{ self.spec, reason },
+                    ),
+                    .malformed => Diag.allocMessage(
+                        allocator,
+                        "join_malformed_" ++ keyword,
+                        .{},
+                    ),
+                };
+            },
         };
     }
 };
@@ -786,6 +790,15 @@ pub fn resolveSpecPath(
     return try out.toOwnedSlice(allocator);
 }
 
+/// `path` with `.` and `..` segments collapsed (`resolveSpecPath` of a
+/// spec naming it), the form hosts without a filesystem key files by.
+pub fn normalizePath(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) std.mem.Allocator.Error![]const u8 {
+    return resolveSpecPath(allocator, "", path);
+}
+
 /// Resolver over an in-memory file table for hosts without a filesystem
 /// (the browser compiler). Keys are lexical paths; a spec resolves against
 /// the importing file's key with `resolveSpecPath`, so the host must key
@@ -833,71 +846,28 @@ pub fn loadPairFromTable(
         failure.* = .{ .read = .{ .path = root_key, .err = error.FileNotFound } };
         return error.ReadFailed;
     };
-    var join_failure: ?JoinFailure = null;
-    const joined = join(
+    var proof: ProofRoot = .sibling;
+    if (proof_key) |key| {
+        proof = .{ .file = table.get(key) orelse {
+            failure.* = .{ .read = .{ .path = key, .err = error.FileNotFound } };
+            return error.ReadFailed;
+        } };
+    }
+    const unit = try loadUnit(
         allocator,
         table.resolver(),
-        root.key,
-        root.text,
-        &join_failure,
-    ) catch |err| {
-        if (join_failure) |info| failure.* = .{ .join = info };
-        return err;
-    };
-    const mm0_mapping = try Mapping.fromJoined(
+        root,
+        proof,
+        .fail,
+        failure,
+    );
+    return labelPair(
         allocator,
-        joined,
+        unit,
         keyLabel,
         @ptrCast(&label_ctx),
+        @ptrCast(&label_ctx),
     );
-
-    var proof_files: std.ArrayListUnmanaged(File) = .{};
-    for (joined.files, 0..) |file, index| {
-        const is_root = index + 1 == joined.files.len;
-        if (is_root and proof_key != null) {
-            const proof = table.get(proof_key.?) orelse {
-                failure.* = .{
-                    .read = .{ .path = proof_key.?, .err = error.FileNotFound },
-                };
-                return error.ReadFailed;
-            };
-            try proof_files.append(allocator, proof);
-            continue;
-        }
-        const sibling = proofSibling(allocator, file.key) catch continue;
-        const paired = table.get(sibling) orelse continue;
-        try proof_files.append(allocator, paired);
-    }
-    if (proof_files.items.len == 0) {
-        return .{
-            .mm0 = joined,
-            .mm0_mapping = mm0_mapping,
-            .proof = null,
-            .proof_mapping = null,
-        };
-    }
-    join_failure = null;
-    const proof_joined = joinAll(
-        allocator,
-        table.resolver(),
-        .auf,
-        proof_files.items,
-        &join_failure,
-    ) catch |err| {
-        if (join_failure) |info| failure.* = .{ .join = info };
-        return err;
-    };
-    return .{
-        .mm0 = joined,
-        .mm0_mapping = mm0_mapping,
-        .proof = proof_joined,
-        .proof_mapping = try Mapping.fromJoined(
-            allocator,
-            proof_joined,
-            keyLabel,
-            @ptrCast(&label_ctx),
-        ),
-    };
 }
 
 var label_ctx: u8 = 0;
@@ -942,9 +912,8 @@ pub const Mapping = struct {
     }
 };
 
-/// A root `.mm0` joined with its imports, and the `.auf` files paired with
-/// every joined file (by name: `foo.mm0` <-> `foo.auf`), joined in the same
-/// order with their `include`s. Native hosts only.
+/// A `Unit` (see `loadUnit`) with the names its files go by in
+/// diagnostics.
 pub const LoadedPair = struct {
     mm0: Joined,
     mm0_mapping: Mapping,
@@ -961,6 +930,22 @@ pub const LoadFailure = union(enum) {
     join: JoinFailure,
     /// A file could not be read: the path and the error.
     read: struct { path: []const u8, err: anyerror },
+
+    /// The failure as one line of prose, without a location, in the
+    /// active diagnostic locale.
+    pub fn message(
+        self: LoadFailure,
+        allocator: std.mem.Allocator,
+    ) std.mem.Allocator.Error![]u8 {
+        return switch (self) {
+            .join => |join_failure| join_failure.message(allocator),
+            .read => |read| Diag.allocMessage(
+                allocator,
+                "load_unreadable",
+                .{ read.path, @errorName(read.err) },
+            ),
+        };
+    }
 };
 
 /// The `proof_path` that reads the root's proof file from standard input,
@@ -995,18 +980,6 @@ pub fn loadPair(
         failure.* = .{ .read = .{ .path = mm0_path, .err = err } };
         return error.ReadFailed;
     };
-    var fs = FsResolver{};
-    var join_failure: ?JoinFailure = null;
-    const joined = join(
-        allocator,
-        fs.resolver(),
-        root_key,
-        root_text,
-        &join_failure,
-    ) catch |err| {
-        if (join_failure) |info| failure.* = .{ .join = info };
-        return err;
-    };
 
     const cwd = std.process.getCwdAlloc(allocator) catch "";
     var labeller = Labeller{
@@ -1014,93 +987,250 @@ pub fn loadPair(
         .root_key = root_key,
         .root_label = mm0_path,
     };
-    const mm0_mapping = try Mapping.fromJoined(
-        allocator,
-        joined,
-        Labeller.label,
-        @ptrCast(&labeller),
-    );
-
-    var proof_files: std.ArrayListUnmanaged(File) = .{};
-    const from_stdin = if (proof_path) |path|
-        std.mem.eql(u8, path, stdin_path)
-    else
-        false;
-    var proof_labeller = Labeller{
-        .cwd = cwd,
-        .root_key = "",
-        .root_label = if (from_stdin) stdin_label else proof_path orelse "",
-    };
-    for (joined.files, 0..) |file, index| {
-        const is_root = index + 1 == joined.files.len;
-        if (is_root and from_stdin) {
-            const text = std.fs.File.stdin().readToEndAlloc(
+    var proof_labeller = Labeller{ .cwd = cwd, .root_key = "", .root_label = "" };
+    var proof: ProofRoot = .sibling;
+    if (proof_path) |path| {
+        const file: File = if (std.mem.eql(u8, path, stdin_path)) .{
+            // A key beside the root `.mm0`, so `include`s resolve there.
+            .key = try std.fs.path.join(allocator, &.{
+                std.fs.path.dirname(root_key) orelse ".",
+                stdin_label,
+            }),
+            .text = std.fs.File.stdin().readToEndAlloc(
                 allocator,
                 std.math.maxInt(usize),
             ) catch |err| {
                 failure.* = .{ .read = .{ .path = stdin_label, .err = err } };
                 return error.ReadFailed;
+            },
+        } else blk: {
+            const key = FsResolver.rootKey(allocator, path) catch |err| {
+                failure.* = .{ .read = .{ .path = path, .err = err } };
+                return error.ReadFailed;
             };
-            // A key beside the root `.mm0`, so `include`s resolve there.
-            const key = try std.fs.path.join(allocator, &.{
-                std.fs.path.dirname(root_key) orelse ".",
-                stdin_label,
-            });
-            try proof_files.append(allocator, .{ .key = key, .text = text });
-            proof_labeller.root_key = key;
-            continue;
-        }
-        const explicit = is_root and proof_path != null;
-        const path: []const u8 = if (explicit)
-            proof_path.?
+            const text = std.fs.cwd().readFileAlloc(
+                allocator,
+                key,
+                std.math.maxInt(usize),
+            ) catch |err| {
+                failure.* = .{ .read = .{ .path = path, .err = err } };
+                return error.ReadFailed;
+            };
+            break :blk .{ .key = key, .text = text };
+        };
+        proof = .{ .file = file };
+        proof_labeller.root_key = file.key;
+        proof_labeller.root_label = if (std.mem.eql(u8, path, stdin_path))
+            stdin_label
         else
-            proofSibling(allocator, file.key) catch continue;
-        const key = FsResolver.rootKey(allocator, path) catch |err| {
-            if (!explicit and err == error.FileNotFound) continue;
-            failure.* = .{ .read = .{ .path = path, .err = err } };
-            return error.ReadFailed;
-        };
-        const text = std.fs.cwd().readFileAlloc(
-            allocator,
-            key,
-            std.math.maxInt(usize),
-        ) catch |err| {
-            failure.* = .{ .read = .{ .path = path, .err = err } };
-            return error.ReadFailed;
-        };
-        try proof_files.append(allocator, .{ .key = key, .text = text });
-        if (explicit) proof_labeller.root_key = key;
+            path;
     }
-    if (proof_files.items.len == 0) {
-        return .{
-            .mm0 = joined,
-            .mm0_mapping = mm0_mapping,
-            .proof = null,
-            .proof_mapping = null,
-        };
-    }
-    join_failure = null;
-    const proof_joined = joinAll(
+
+    var fs = FsResolver{};
+    const unit = try loadUnit(
         allocator,
         fs.resolver(),
+        .{ .key = root_key, .text = root_text },
+        proof,
+        .fail,
+        failure,
+    );
+    return labelPair(
+        allocator,
+        unit,
+        Labeller.label,
+        @ptrCast(&labeller),
+        @ptrCast(&proof_labeller),
+    );
+}
+
+/// Where the root's proof file comes from in `loadUnit`.
+pub const ProofRoot = union(enum) {
+    /// No proof side: the theory is joined on its own.
+    none,
+    /// The root's `<stem>.auf` sibling, found like every other file's.
+    sibling,
+    /// This file, already read. Its key is where its `include`s resolve
+    /// from; it need not sit next to the root.
+    file: File,
+};
+
+/// What `loadUnit` does when a join fails.
+pub const OnJoinFailure = enum {
+    /// Return the join's error, with the failure in `failure`.
+    fail,
+    /// Fall back to that side's last root alone with its statements
+    /// blanked (`blankStatements`), record the failure in `Unit.failures`
+    /// and go on, so a host can still analyse the file being edited.
+    degrade,
+};
+
+/// A root `.mm0` joined with its imports, and the joined proof side.
+pub const Unit = struct {
+    mm0: Joined,
+    /// Null when no file of the join has a proof file.
+    proof: ?Joined,
+    /// The joins that failed under `.degrade`, at most one per side.
+    failures: []const JoinFailure,
+};
+
+/// The one way every host loads a unit: join `root` with its imports,
+/// pair every joined `.mm0` with its `<stem>.auf` sibling in the same
+/// order (the root with `proof` instead), and join those proof files with
+/// their includes. `resolver` finds imports, includes and siblings alike:
+/// a sibling it reports as `error.FileNotFound` does not exist, and any
+/// other error fails the load as a read of the sibling.
+pub fn loadUnit(
+    allocator: std.mem.Allocator,
+    resolver: Resolver,
+    root: File,
+    proof: ProofRoot,
+    on_failure: OnJoinFailure,
+    failure: *?LoadFailure,
+) LoadPairError!Unit {
+    var failures = std.ArrayListUnmanaged(JoinFailure){};
+    const mm0 = try joinSide(
+        allocator,
+        resolver,
+        .mm0,
+        &.{root},
+        on_failure,
+        &failures,
+        failure,
+    );
+    if (proof == .none) {
+        return .{
+            .mm0 = mm0,
+            .proof = null,
+            .failures = try failures.toOwnedSlice(allocator),
+        };
+    }
+
+    // The root comes last in the post-order file list.
+    var roots = std.ArrayListUnmanaged(File){};
+    for (mm0.files, 0..) |file, index| {
+        if (index + 1 == mm0.files.len and proof == .file) {
+            try roots.append(allocator, proof.file);
+            continue;
+        }
+        const paired = try pairedProof(allocator, resolver, file.key, failure);
+        try roots.append(allocator, paired orelse continue);
+    }
+    const proof_joined: ?Joined = if (roots.items.len == 0) null else try joinSide(
+        allocator,
+        resolver,
         .auf,
-        proof_files.items,
-        &join_failure,
-    ) catch |err| {
-        if (join_failure) |info| failure.* = .{ .join = info };
-        return err;
-    };
+        roots.items,
+        on_failure,
+        &failures,
+        failure,
+    );
     return .{
-        .mm0 = joined,
-        .mm0_mapping = mm0_mapping,
+        .mm0 = mm0,
         .proof = proof_joined,
-        .proof_mapping = try Mapping.fromJoined(
-            allocator,
-            proof_joined,
-            Labeller.label,
-            @ptrCast(&proof_labeller),
-        ),
+        .failures = try failures.toOwnedSlice(allocator),
     };
+}
+
+fn joinSide(
+    allocator: std.mem.Allocator,
+    resolver: Resolver,
+    syntax: Syntax,
+    roots: []const File,
+    on_failure: OnJoinFailure,
+    failures: *std.ArrayListUnmanaged(JoinFailure),
+    failure: *?LoadFailure,
+) LoadPairError!Joined {
+    var info: ?JoinFailure = null;
+    return joinAll(allocator, resolver, syntax, roots, &info) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        switch (on_failure) {
+            .fail => {
+                if (info) |actual| failure.* = .{ .join = actual };
+                return err;
+            },
+            .degrade => {
+                if (info) |actual| try failures.append(allocator, actual);
+                const last = roots[roots.len - 1];
+                return single(
+                    allocator,
+                    last.key,
+                    try blankStatements(allocator, syntax, last.text),
+                );
+            },
+        }
+    };
+}
+
+/// The proof file paired with the joined `.mm0` at `mm0_key`, or null when
+/// it has none.
+fn pairedProof(
+    allocator: std.mem.Allocator,
+    resolver: Resolver,
+    mm0_key: []const u8,
+    failure: *?LoadFailure,
+) LoadPairError!?File {
+    const path = try proofSiblingKey(allocator, mm0_key) orelse return null;
+    // A spec naming the sibling from its own directory.
+    const spec = std.fs.path.basenamePosix(path);
+    const resolved = resolver.resolve(allocator, mm0_key, spec) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound => return null,
+            else => {
+                failure.* = .{ .read = .{ .path = path, .err = err } };
+                return error.ReadFailed;
+            },
+        }
+    };
+    return .{ .key = resolved.key, .text = resolved.text };
+}
+
+/// `unit` with display labels for each side's files.
+fn labelPair(
+    allocator: std.mem.Allocator,
+    unit: Unit,
+    labelFn: *const fn (ctx: *anyopaque, key: []const u8) []const u8,
+    mm0_ctx: *anyopaque,
+    proof_ctx: *anyopaque,
+) std.mem.Allocator.Error!LoadedPair {
+    return .{
+        .mm0 = unit.mm0,
+        .mm0_mapping = try Mapping.fromJoined(allocator, unit.mm0, labelFn, mm0_ctx),
+        .proof = unit.proof,
+        .proof_mapping = if (unit.proof) |proof|
+            try Mapping.fromJoined(allocator, proof, labelFn, proof_ctx)
+        else
+            null,
+    };
+}
+
+/// The proof file paired with a theory file: `<stem>.auf` for `<stem>.mm0`.
+/// Null for a key without the `.mm0` extension, which pairs with nothing.
+pub fn proofSiblingKey(
+    allocator: std.mem.Allocator,
+    mm0_key: []const u8,
+) std.mem.Allocator.Error!?[]const u8 {
+    return swapExtension(allocator, mm0_key, ".mm0", ".auf");
+}
+
+/// The theory file a proof file pairs with: `<stem>.mm0` for `<stem>.auf`.
+/// Null for a key without the `.auf` extension.
+pub fn theorySiblingKey(
+    allocator: std.mem.Allocator,
+    proof_key: []const u8,
+) std.mem.Allocator.Error!?[]const u8 {
+    return swapExtension(allocator, proof_key, ".auf", ".mm0");
+}
+
+fn swapExtension(
+    allocator: std.mem.Allocator,
+    key: []const u8,
+    from: []const u8,
+    to: []const u8,
+) std.mem.Allocator.Error!?[]const u8 {
+    if (!std.mem.endsWith(u8, key, from)) return null;
+    return try std.mem.concat(allocator, u8, &.{ key[0 .. key.len - from.len], to });
 }
 
 const Labeller = struct {
@@ -1116,11 +1246,6 @@ const Labeller = struct {
         return displayPath(self.cwd, key);
     }
 };
-
-fn proofSibling(allocator: std.mem.Allocator, mm0_key: []const u8) ![]const u8 {
-    const ext = std.fs.path.extension(mm0_key);
-    return std.fmt.allocPrint(allocator, "{s}.auf", .{mm0_key[0 .. mm0_key.len - ext.len]});
-}
 
 /// Display name for a file key: the path relative to the current directory
 /// when it is underneath it, else the key as is.
@@ -1248,6 +1373,101 @@ test "table loader reports missing files and unresolved imports" {
         loadPairFromTable(arena.allocator(), &plain, "/d/b.mm0", "/d/b.auf", &failure),
     );
     try std.testing.expectEqualStrings("/d/b.auf", failure.?.read.path);
+}
+
+test "loadUnit pairs only .mm0 files and degrades a failed join" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const files = [_]File{
+        .{ .key = "/d/lib.mm1", .text = "sort s;\n" },
+        .{ .key = "/d/lib.auf", .text = "lib_thm\n" },
+        .{ .key = "/d/main.mm0", .text = "import \"lib.mm1\";\nterm t: s;\n" },
+        .{ .key = "/d/main.auf", .text = "main\n" },
+        .{ .key = "/d/broken.mm0", .text = "import \"gone.mm0\";\nsort s;\n" },
+        .{ .key = "/d/broken.auf", .text = "include \"gone.auf\";\nmain\n" },
+    };
+    var table = TableResolver{ .files = &files };
+    var failure: ?LoadFailure = null;
+
+    // `lib.mm1` has no proof sibling: only `<stem>.mm0` pairs with
+    // `<stem>.auf`, in every host.
+    const unit = try loadUnit(
+        allocator,
+        table.resolver(),
+        files[2],
+        .sibling,
+        .fail,
+        &failure,
+    );
+    try std.testing.expectEqual(@as(usize, 2), unit.mm0.files.len);
+    try std.testing.expectEqualStrings("main\n", unit.proof.?.text);
+
+    // Theory only.
+    const theory = try loadUnit(
+        allocator,
+        table.resolver(),
+        files[2],
+        .none,
+        .fail,
+        &failure,
+    );
+    try std.testing.expect(theory.proof == null);
+
+    // `.fail` stops at the first failed join; `.degrade` keeps each side's
+    // root with its statements blanked and records both failures.
+    try std.testing.expectError(error.ImportUnresolved, loadUnit(
+        allocator,
+        table.resolver(),
+        files[4],
+        .sibling,
+        .fail,
+        &failure,
+    ));
+    try std.testing.expectEqualStrings("gone.mm0", failure.?.join.spec);
+    const degraded = try loadUnit(
+        allocator,
+        table.resolver(),
+        files[4],
+        .{ .file = files[5] },
+        .degrade,
+        &failure,
+    );
+    try std.testing.expectEqual(@as(usize, 2), degraded.failures.len);
+    try std.testing.expectEqualStrings("gone.mm0", degraded.failures[0].spec);
+    try std.testing.expectEqualStrings("gone.auf", degraded.failures[1].spec);
+    try std.testing.expectEqualStrings("/d/broken.mm0", degraded.mm0.files[0].key);
+    try std.testing.expectEqualStrings(
+        "                  \nsort s;\n",
+        degraded.mm0.text,
+    );
+    try std.testing.expectEqualStrings("/d/broken.auf", degraded.proof.?.files[0].key);
+}
+
+test "join failures are worded in the active locale" {
+    const allocator = std.testing.allocator;
+    defer Diag.setLang(.en);
+    const failure = JoinFailure{
+        .kind = .cycle,
+        .syntax = .auf,
+        .file_key = "/d/a.auf",
+        .file_text = "",
+        .span = .{ .start = 0, .end = 0 },
+        .spec = "b.auf",
+    };
+    const english = try failure.message(allocator);
+    defer allocator.free(english);
+    try std.testing.expectEqualStrings(
+        "include cycle: 'b.auf' is already being included",
+        english,
+    );
+    Diag.setLang(.de);
+    const german = try failure.message(allocator);
+    defer allocator.free(german);
+    try std.testing.expectEqualStrings(
+        "Include-Zyklus: 'b.auf' wird bereits eingebunden",
+        german,
+    );
 }
 
 test "import specs resolve lexically against the importing file" {

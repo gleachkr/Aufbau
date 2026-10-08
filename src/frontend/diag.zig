@@ -52,6 +52,23 @@ fn printT(writer: anytype, comptime name: []const u8, args: anytype) !void {
     }
 }
 
+/// A catalogue message the hosts write outside compiler diagnostics
+/// (`diag_strings.zig`, "Messages the hosts write …") with `args`, in the
+/// active locale.
+pub fn allocMessage(
+    allocator: std.mem.Allocator,
+    comptime name: []const u8,
+    args: anytype,
+) std.mem.Allocator.Error![]u8 {
+    return switch (active_lang) {
+        inline else => |lang| std.fmt.allocPrint(
+            allocator,
+            comptime @field(locale_strings.table(lang), name),
+            args,
+        ),
+    };
+}
+
 pub const DiagnosticKind = enum {
     generic,
     omitted_diagnostics,

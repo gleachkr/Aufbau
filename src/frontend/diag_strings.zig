@@ -417,6 +417,32 @@ pub const Strings = struct {
     phase_freshen: []const u8,
     phase_normalization: []const u8,
     phase_final_reconciliation: []const u8,
+
+    // Messages the hosts write outside compiler diagnostics: loading a
+    // unit, search placeholders and their parameters, document URIs.
+    join_import_cycle: []const u8,
+    join_include_cycle: []const u8,
+    join_duplicate_import: []const u8,
+    join_duplicate_include: []const u8,
+    join_unresolved_import: []const u8,
+    join_unresolved_include: []const u8,
+    join_malformed_import: []const u8,
+    join_malformed_include: []const u8,
+    load_unreadable: []const u8,
+    search_placeholder: []const u8,
+    search_succeeded: []const u8,
+    search_failed: []const u8,
+    search_no_proof: []const u8,
+    search_budget_exhausted: []const u8,
+    search_params_not_tunable: []const u8,
+    search_param_unknown: []const u8,
+    search_param_out_of_range: []const u8,
+    document_uri_invalid: []const u8,
+    document_uri_scheme: []const u8,
+    document_uri_host: []const u8,
+    proof_document_extension: []const u8,
+    proof_document_no_theory: []const u8,
+    proof_document_theory_unreadable: []const u8,
 };
 
 pub const en: Strings = .{
@@ -822,6 +848,31 @@ pub const en: Strings = .{
     .phase_freshen = "freshen",
     .phase_normalization = "normalization",
     .phase_final_reconciliation = "final reconciliation",
+
+    // Messages the hosts write outside compiler diagnostics.
+    .join_import_cycle = "import cycle: '{s}' is already being imported",
+    .join_include_cycle = "include cycle: '{s}' is already being included",
+    .join_duplicate_import = "duplicate import: '{s}' is already imported",
+    .join_duplicate_include = "duplicate include: '{s}' is already included",
+    .join_unresolved_import = "unable to import '{s}': {s}",
+    .join_unresolved_include = "unable to include '{s}': {s}",
+    .join_malformed_import = "malformed import statement",
+    .join_malformed_include = "malformed include statement",
+    .load_unreadable = "unable to read '{s}': {s}",
+    .search_placeholder = "{s} placeholder: search not yet run (request code actions here to search)",
+    .search_succeeded = "{s} search succeeded: {s}",
+    .search_failed = "{s} search failed: {s}",
+    .search_no_proof = "no proof found",
+    .search_budget_exhausted = "budget exhausted before the search completed (a proof may still exist)",
+    .search_params_not_tunable = "search parameters only apply to auto? and conversion? (exact? and apply? are single-shot searches with nothing to tune)",
+    .search_param_unknown = "unknown {s} parameter '{s}' (expected one of: {s})",
+    .search_param_out_of_range = "'{s}' must be between {d} and {d}",
+    .document_uri_invalid = "document URI is not a valid URI",
+    .document_uri_scheme = "document URI must use the file scheme",
+    .document_uri_host = "file URI host must be empty or localhost",
+    .proof_document_extension = "proof files must end in .auf",
+    .proof_document_no_theory = "could not find sibling .mm0 file for this proof",
+    .proof_document_theory_unreadable = "could not read sibling .mm0 file: {s}",
 };
 
 pub const de: Strings = .{
@@ -1227,6 +1278,31 @@ pub const de: Strings = .{
     .phase_freshen = "Freshening",
     .phase_normalization = "Normalisierung",
     .phase_final_reconciliation = "Abschlussabgleich",
+
+    // Messages the hosts write outside compiler diagnostics.
+    .join_import_cycle = "Importzyklus: '{s}' wird bereits importiert",
+    .join_include_cycle = "Include-Zyklus: '{s}' wird bereits eingebunden",
+    .join_duplicate_import = "doppelter Import: '{s}' ist bereits importiert",
+    .join_duplicate_include = "doppeltes Include: '{s}' ist bereits eingebunden",
+    .join_unresolved_import = "'{s}' kann nicht importiert werden: {s}",
+    .join_unresolved_include = "'{s}' kann nicht eingebunden werden: {s}",
+    .join_malformed_import = "fehlerhafte import-Anweisung",
+    .join_malformed_include = "fehlerhafte include-Anweisung",
+    .load_unreadable = "'{s}' kann nicht gelesen werden: {s}",
+    .search_placeholder = "{s}-Platzhalter: Suche noch nicht ausgeführt (hier Code-Aktionen anfordern, um zu suchen)",
+    .search_succeeded = "{s}-Suche erfolgreich: {s}",
+    .search_failed = "{s}-Suche fehlgeschlagen: {s}",
+    .search_no_proof = "kein Beweis gefunden",
+    .search_budget_exhausted = "Budget erschöpft, bevor die Suche abgeschlossen war (ein Beweis kann dennoch existieren)",
+    .search_params_not_tunable = "Suchparameter gelten nur für auto? und conversion? (exact? und apply? sind einmalige Suchen ohne Stellschrauben)",
+    .search_param_unknown = "unbekannter {s}-Parameter '{s}' (erwartet wird einer von: {s})",
+    .search_param_out_of_range = "'{s}' muss zwischen {d} und {d} liegen",
+    .document_uri_invalid = "die Dokument-URI ist keine gültige URI",
+    .document_uri_scheme = "die Dokument-URI muss das file-Schema verwenden",
+    .document_uri_host = "der Host einer file-URI muss leer oder localhost sein",
+    .proof_document_extension = "Beweisdateien müssen auf .auf enden",
+    .proof_document_no_theory = "keine .mm0-Datei neben diesem Beweis gefunden",
+    .proof_document_theory_unreadable = "die .mm0-Datei neben diesem Beweis kann nicht gelesen werden: {s}",
 };
 
 pub inline fn table(comptime lang: Lang) Strings {

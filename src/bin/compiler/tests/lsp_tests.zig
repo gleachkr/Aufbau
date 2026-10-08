@@ -3325,6 +3325,37 @@ test "LSP reports an unresolved import on its statement and keeps going" {
     try expectRangeText(mm0_text, location.range, "top");
 }
 
+test "LSP keys a root URI with dot segments like its imports" {
+    // `x/../main.mm0` is `main.mm0`: importing it from itself is a cycle,
+    // not a second, missing file.
+    const mm0_uri = "file:///tmp/lsp-import-dots/x/../main.mm0";
+    const mm0_text =
+        \\provable sort wff;
+        \\import "main.mm0";
+        \\term top: wff;
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = mm0_uri,
+        .languageId = "metamath-zero",
+        .version = 1,
+        .text = mm0_text,
+    } });
+    try std.testing.expect(transport_state.containsMessage(
+        "import cycle: 'main.mm0' is already being imported",
+    ));
+}
+
 test "LSP resolves imports from disk and reports on the imported file" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

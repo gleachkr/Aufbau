@@ -1110,6 +1110,56 @@ pub fn searchPlaceholders(
     return try out.toOwnedSlice(allocator);
 }
 
+/// What every host reports for a search placeholder before a search has
+/// run at it: a warning on the placeholder, then an error on each of its
+/// parameters `tunables.validateSearchParams` rejects (an invalid entry is
+/// skipped, never fatal, so the valid ones still apply).
+pub const PlaceholderNotice = struct {
+    kind: enum { placeholder, parameter },
+    /// The placeholder the notice is about.
+    placeholder: SearchPlaceholder,
+    /// The placeholder's span, or the rejected parameter's.
+    span: Span,
+    /// In the active diagnostic locale.
+    message: []const u8,
+};
+
+/// The notices for every placeholder in `proof_src`, in source order (see
+/// `searchPlaceholders`). Everything is allocated on `allocator`; use an
+/// arena.
+pub fn placeholderNotices(
+    allocator: std.mem.Allocator,
+    proof_src: []const u8,
+) ![]PlaceholderNotice {
+    var out = std.ArrayListUnmanaged(PlaceholderNotice){};
+    for (try searchPlaceholders(allocator, proof_src)) |placeholder| {
+        try out.append(allocator, .{
+            .kind = .placeholder,
+            .placeholder = placeholder,
+            .span = placeholder.span,
+            .message = try CompilerDiag.allocMessage(
+                allocator,
+                "search_placeholder",
+                .{placeholder.kind.keyword()},
+            ),
+        });
+        const issues = try tunables.validateSearchParams(
+            allocator,
+            placeholder.kind.paramContext(),
+            placeholder.params,
+        );
+        for (issues) |issue| {
+            try out.append(allocator, .{
+                .kind = .parameter,
+                .placeholder = placeholder,
+                .span = issue.span,
+                .message = issue.message,
+            });
+        }
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
 fn collectSearchPlaceholders(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged(SearchPlaceholder),

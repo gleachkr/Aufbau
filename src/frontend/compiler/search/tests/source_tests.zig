@@ -332,6 +332,37 @@ test "searchPlaceholders survives a broken sibling line" {
     );
 }
 
+test "placeholderNotices warns per placeholder and rejects bad parameters" {
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ P $ by exact?
+        \\l2: $ Q $ by auto? (depht: 8, depth: 2)
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const notices = try source.placeholderNotices(arena.allocator(), proof_src);
+
+    try std.testing.expectEqual(@as(usize, 3), notices.len);
+    try std.testing.expectEqual(.placeholder, notices[0].kind);
+    try std.testing.expectEqualStrings(
+        "exact? placeholder: search not yet run " ++
+            "(request code actions here to search)",
+        notices[0].message,
+    );
+    try std.testing.expectEqual(.placeholder, notices[1].kind);
+    try std.testing.expectEqual(
+        source.SearchPlaceholder.Kind.auto,
+        notices[1].placeholder.kind,
+    );
+    // Only the misspelt name is rejected, on its own span.
+    try std.testing.expectEqual(.parameter, notices[2].kind);
+    try std.testing.expectEqualStrings(
+        "depht",
+        proof_src[notices[2].span.start..notices[2].span.end],
+    );
+}
+
 // Local def and notation items are not blocks. The editor-facing walkers must
 // step over them rather than stop (enumeration) or fail (targeting) there.
 test "searchPlaceholders enumerates past local def and notation items" {

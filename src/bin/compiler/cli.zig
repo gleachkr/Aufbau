@@ -274,24 +274,21 @@ fn reportLoadFailure(
         std.debug.print("abc: {s}\n", .{@errorName(err)});
         return;
     };
-    switch (info) {
-        .read => |read| reportFileError("read", read.path, read.err),
-        .join => |join_info| {
-            var join = join_info;
-            if (join.err == null) join.err = err;
-            const message = join.message(allocator) catch return;
-            defer allocator.free(message);
-            std.debug.print("abc: {s}\n", .{message});
-            const cwd = std.process.getCwdAlloc(allocator) catch "";
-            defer if (cwd.len != 0) allocator.free(cwd);
-            const pos = lineCol(join.file_text, join.span.start);
-            std.debug.print("  --> {s}:{d}:{d}\n", .{
-                mm0.Imports.displayPath(cwd, join.file_key),
-                pos.line,
-                pos.column,
-            });
-        },
-    }
+    const message = info.message(allocator) catch return;
+    defer allocator.free(message);
+    std.debug.print("abc: {s}\n", .{message});
+    const join = switch (info) {
+        .join => |join| join,
+        .read => return,
+    };
+    const cwd = std.process.getCwdAlloc(allocator) catch "";
+    defer if (cwd.len != 0) allocator.free(cwd);
+    const pos = lineCol(join.file_text, join.span.start);
+    std.debug.print("  --> {s}:{d}:{d}\n", .{
+        mm0.Imports.displayPath(cwd, join.file_key),
+        pos.line,
+        pos.column,
+    });
 }
 
 const LineCol = struct { line: usize, column: usize };

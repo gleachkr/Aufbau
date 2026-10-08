@@ -285,21 +285,16 @@ fn writeLoadFailure(
     err: anyerror,
 ) !void {
     var synthetic: ?SyntheticDiagnostic = null;
-    if (failure) |info| switch (info) {
-        .read => |read| synthetic = .{
-            .message = try std.fmt.allocPrint(
-                arena,
-                "unable to read '{s}': {s}",
-                .{ read.path, @errorName(read.err) },
-            ),
-            .source = if (std.mem.endsWith(u8, read.path, ".auf")) .proof else .mm0,
-            .err = read.err,
-        },
-        .join => |join_info| {
-            var join = join_info;
-            if (join.err == null) join.err = err;
-            synthetic = .{
-                .message = try join.message(arena),
+    if (failure) |info| {
+        const message = try info.message(arena);
+        synthetic = switch (info) {
+            .read => |read| .{
+                .message = message,
+                .source = if (std.mem.endsWith(u8, read.path, ".auf")) .proof else .mm0,
+                .err = read.err,
+            },
+            .join => |join| .{
+                .message = message,
                 .source = switch (join.syntax) {
                     .mm0 => .mm0,
                     .auf => .proof,
@@ -307,9 +302,9 @@ fn writeLoadFailure(
                 .err = err,
                 .file = join.file_key,
                 .span = .{ .start = join.span.start, .end = join.span.end },
-            };
-        },
-    };
+            },
+        };
+    }
     const diagnostics: []const SyntheticDiagnostic = if (synthetic) |*diag|
         diag[0..1]
     else
@@ -351,61 +346,37 @@ fn writeDiagnosticsField(
     try jw.endArray();
 }
 
-// One warning per search placeholder, mirroring the LSP's "search not yet
-// run". The analysis pass tolerates placeholders (`allow_search_placeholders`)
-// so they produce no compiler diagnostic of their own; this is the signal
-// that marks them as unfilled holes rather than errors. Rejected search
-// parameters (unknown name, out-of-range value) additionally get one error
-// each, mirroring the LSP's `validateSearchParams` diagnostics — without
-// them a typo'd parameter is silently ignored in the browser editor.
+// One warning per search placeholder and one error per parameter it
+// rejects (`Search.placeholderNotices`, the same notices the LSP publishes).
+// The analysis pass tolerates placeholders (`allow_search_placeholders`), so
+// they produce no compiler diagnostic of their own; without these a
+// placeholder would look finished and a typo'd parameter would be silently
+// ignored in the browser editor.
 fn writePlaceholderDiagnostics(
     jw: *std.json.Stringify,
     compiler: ?*const mm0.Compiler,
     proof_src: []const u8,
 ) !void {
-    const placeholders = mm0.CompilerSupport.Search.searchPlaceholders(
-        allocator,
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const notices = mm0.CompilerSupport.Search.placeholderNotices(
+        arena_state.allocator(),
         proof_src,
     ) catch return;
-    defer allocator.free(placeholders);
-
-    var message: std.Io.Writer.Allocating = .init(allocator);
-    defer message.deinit();
-    for (placeholders) |placeholder| {
-        message.clearRetainingCapacity();
-        try message.writer.print(
-            "{s} placeholder: proof search has not filled this hole",
-            .{placeholder.kind.keyword()},
-        );
+    for (notices) |notice| {
         try jw.write(placed(compiler, .{
-            .message = message.written(),
-            .severity = .warning,
-            .source = .proof,
-            .err = error.SearchPlaceholder,
-            .span = .{
-                .start = placeholder.span.start,
-                .end = placeholder.span.end,
+            .message = notice.message,
+            .severity = switch (notice.kind) {
+                .placeholder => .warning,
+                .parameter => .@"error",
             },
+            .source = .proof,
+            .err = switch (notice.kind) {
+                .placeholder => error.SearchPlaceholder,
+                .parameter => error.InvalidSearchParameter,
+            },
+            .span = .{ .start = notice.span.start, .end = notice.span.end },
         }));
-
-        const issues = mm0.CompilerSupport.Search.tunables.validateSearchParams(
-            allocator,
-            placeholder.kind.paramContext(),
-            placeholder.params,
-        ) catch continue;
-        defer {
-            for (issues) |issue| allocator.free(issue.message);
-            allocator.free(issues);
-        }
-        for (issues) |issue| {
-            try jw.write(placed(compiler, .{
-                .message = issue.message,
-                .severity = .@"error",
-                .source = .proof,
-                .err = error.InvalidSearchParameter,
-                .span = .{ .start = issue.span.start, .end = issue.span.end },
-            }));
-        }
     }
 }
 

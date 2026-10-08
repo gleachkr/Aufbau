@@ -16,6 +16,7 @@
 const std = @import("std");
 const types = @import("./types.zig");
 const ProofScript = @import("../../proof_script.zig");
+const Diag = @import("../../diag.zig");
 const ConversionOptions = @import("./conversion.zig").Options;
 
 pub const SearchParam = ProofScript.SearchParam;
@@ -146,7 +147,8 @@ pub fn applyConversionParams(
 
 /// Check a placeholder's parameter list and return an issue per rejected
 /// entry (unknown name, out-of-range value, or any parameter on a
-/// placeholder that accepts none). Messages are allocated on `allocator`;
+/// placeholder that accepts none). Messages come from the diagnostic
+/// catalogue in the active locale and are allocated on `allocator`;
 /// the returned slice is owned by the caller.
 pub fn validateSearchParams(
     allocator: std.mem.Allocator,
@@ -165,33 +167,24 @@ pub fn validateSearchParams(
                 allocator,
                 &issues,
                 param.span,
-                "search parameters only apply to auto? and conversion? " ++
-                    "(exact? and apply? are single-shot searches with " ++
-                    "nothing to tune)",
+                "search_params_not_tunable",
                 .{},
             );
             continue;
         }
         const spec = specForNameIn(table, param.name) orelse {
-            switch (context) {
-                .auto => try appendIssue(
-                    allocator,
-                    &issues,
-                    param.name_span,
-                    "unknown auto? parameter '{s}' (expected one of: " ++
-                        known_param_names ++ ")",
-                    .{param.name},
-                ),
-                .conversion => try appendIssue(
-                    allocator,
-                    &issues,
-                    param.name_span,
-                    "unknown conversion? parameter '{s}' (expected one " ++
-                        "of: " ++ known_conversion_param_names ++ ")",
-                    .{param.name},
-                ),
+            const tactic: []const u8, const known: []const u8 = switch (context) {
+                .auto => .{ "auto?", known_param_names },
+                .conversion => .{ "conversion?", known_conversion_param_names },
                 .exact, .apply => unreachable,
-            }
+            };
+            try appendIssue(
+                allocator,
+                &issues,
+                param.name_span,
+                "search_param_unknown",
+                .{ tactic, param.name, known },
+            );
             continue;
         };
         if (param.value < spec.min or param.value > spec.max) {
@@ -199,7 +192,7 @@ pub fn validateSearchParams(
                 allocator,
                 &issues,
                 param.value_span,
-                "'{s}' must be between {d} and {d}",
+                "search_param_out_of_range",
                 .{ spec.name, spec.min, spec.max },
             );
         }
@@ -211,10 +204,10 @@ fn appendIssue(
     allocator: std.mem.Allocator,
     issues: *std.ArrayListUnmanaged(ParamIssue),
     span: Span,
-    comptime fmt: []const u8,
+    comptime message_name: []const u8,
     args: anytype,
 ) !void {
-    const message = try std.fmt.allocPrint(allocator, fmt, args);
+    const message = try Diag.allocMessage(allocator, message_name, args);
     errdefer allocator.free(message);
     try issues.append(allocator, .{ .span = span, .message = message });
 }
