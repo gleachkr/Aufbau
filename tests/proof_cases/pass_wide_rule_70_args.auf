@@ -1,0 +1,18 @@
+wide_inferred
+-------------
+l1: $ H c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c d $ by h_fact
+l2: $ P d $ by wide [l1]
+
+wide_explicit
+-------------
+l1: $ H c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c d $ by h_fact
+l2: $ P d $ by wide (a0 := $ c $, a1 := $ c $, a2 := $ c $, a3 := $ c $, a4 := $ c $, a5 := $ c $, a6 := $ c $, a7 := $ c $, a8 := $ c $, a9 := $ c $, a10 := $ c $, a11 := $ c $, a12 := $ c $, a13 := $ c $, a14 := $ c $, a15 := $ c $, a16 := $ c $, a17 := $ c $, a18 := $ c $, a19 := $ c $, a20 := $ c $, a21 := $ c $, a22 := $ c $, a23 := $ c $, a24 := $ c $, a25 := $ c $, a26 := $ c $, a27 := $ c $, a28 := $ c $, a29 := $ c $, a30 := $ c $, a31 := $ c $, a32 := $ c $, a33 := $ c $, a34 := $ c $, a35 := $ c $, a36 := $ c $, a37 := $ c $, a38 := $ c $, a39 := $ c $, a40 := $ c $, a41 := $ c $, a42 := $ c $, a43 := $ c $, a44 := $ c $, a45 := $ c $, a46 := $ c $, a47 := $ c $, a48 := $ c $, a49 := $ c $, a50 := $ c $, a51 := $ c $, a52 := $ c $, a53 := $ c $, a54 := $ c $, a55 := $ c $, a56 := $ c $, a57 := $ c $, a58 := $ c $, a59 := $ c $, a60 := $ c $, a61 := $ c $, a62 := $ c $, a63 := $ c $, a64 := $ c $, a65 := $ c $, a66 := $ c $, a67 := $ c $, a68 := $ c $, a69 := $ d $) [l1]
+
+wide_rewrite
+------------
+l1: $ P (g c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c d) $ by wide_inferred
+
+wide_bound_ok
+-------------
+l1: $ K c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c (f c) $ by k_fact
+l2: $ P (f c) $ by wide_bound [l1, #h]

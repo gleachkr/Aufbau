@@ -154,6 +154,8 @@ pub fn firstDepViolation(
     theorem: *TheoremContext,
     lines: []const CheckedLine,
 ) !?DepViolation {
+    var scratch = BindingValidation.infoScratch(theorem.allocator);
+    const allocator = scratch.get();
     for (lines, 0..) |line, line_idx| {
         const rule = switch (line.data) {
             .rule => |rule| rule,
@@ -162,10 +164,13 @@ pub fn firstDepViolation(
         if (rule.rule_id >= env.rules.items.len) return error.UnknownRule;
 
         const rule_decl = &env.rules.items[rule.rule_id];
-        var infos: [56]BindingValidation.ExprInfo = undefined;
-        std.debug.assert(rule.bindings.len <= infos.len);
-        for (rule.bindings, 0..) |binding, idx| {
-            infos[idx] = try BindingValidation.currentExprInfoCached(
+        const infos = try allocator.alloc(
+            BindingValidation.ExprInfo,
+            rule.bindings.len,
+        );
+        defer allocator.free(infos);
+        for (rule.bindings, infos) |binding, *info| {
+            info.* = try BindingValidation.currentExprInfoCached(
                 env,
                 theorem,
                 binding,
@@ -173,7 +178,7 @@ pub fn firstDepViolation(
         }
         const violation = BindingValidation.firstDepViolation(
             rule_decl.args,
-            infos[0..rule.bindings.len],
+            infos,
         ) orelse continue;
         return .{
             .line_idx = line_idx,

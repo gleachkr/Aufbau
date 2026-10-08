@@ -1,0 +1,5 @@
+wide_bound_clash
+----------------
+l1: $ K c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c c y $ by k_fact
+l2: $ all y (P y) $ by all_fact
+l3: $ P y $ by wide_bound [l1, l2]

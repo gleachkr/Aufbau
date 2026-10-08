@@ -693,7 +693,8 @@ pub const Verifier = struct {
                 for (popped) |expr| deps |= expr.deps();
             },
             .defn => {
-                var bound_deps: [56]u55 = undefined;
+                // Indexed by bound arg; checkBinder caps those per term.
+                var bound_deps: [MAX_BOUND_VARS]u55 = undefined;
                 var bound_len: usize = 0;
                 for (args, popped) |arg, expr| {
                     var arg_deps = expr.deps();
@@ -766,7 +767,8 @@ pub const Verifier = struct {
         }
 
         // Dep checks in forward order
-        var deps_buf: [56]u55 = undefined;
+        // Indexed by bound arg; checkBinder caps those per theorem.
+        var deps_buf: [MAX_BOUND_VARS]u55 = undefined;
         var deps_len: usize = 0;
         for (0..n) |j| {
             const expr = uheap_entries[j].expr;

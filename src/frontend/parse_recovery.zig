@@ -3,6 +3,7 @@ const core = @import("../trusted/parse.zig");
 const Expr = @import("../trusted/expressions.zig").Expr;
 
 pub const ArgInfo = core.ArgInfo;
+pub const max_bound_vars = core.max_bound_vars;
 pub const binderDepsToBoundArgDeps = core.binderDepsToBoundArgDeps;
 pub const boundArgDepsToBinderDeps = core.boundArgDepsToBinderDeps;
 pub const AssertionKind = core.AssertionKind;

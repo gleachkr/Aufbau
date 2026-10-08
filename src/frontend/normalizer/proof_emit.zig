@@ -709,18 +709,11 @@ pub fn validateRewriteBindings(
     expected_args: []const ArgInfo,
     bindings: []const ExprId,
 ) !void {
-    var infos: [56]BindingValidation.ExprInfo = undefined;
-    std.debug.assert(bindings.len <= infos.len);
-    for (bindings, 0..) |expr_id, idx| {
-        infos[idx] = try BindingValidation.currentExprInfo(
-            env,
-            theorem,
-            expr_id,
-        );
-    }
-    switch (BindingValidation.firstViolation(
+    switch (try BindingValidation.firstCurrentViolation(
+        env,
+        theorem,
         expected_args,
-        infos[0..bindings.len],
+        bindings,
     ) orelse return) {
         .len_mismatch, .sort_mismatch => return error.SortMismatch,
         .boundness_mismatch => return error.BoundnessMismatch,

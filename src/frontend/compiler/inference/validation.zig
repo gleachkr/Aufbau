@@ -167,15 +167,47 @@ pub fn firstDepViolation(
     rule_arg_names: []const ?[]const u8,
     bindings: []const ExprId,
 ) !?DepViolationDetail {
-    var infos: [56]ExprInfo = undefined;
-    std.debug.assert(bindings.len <= infos.len);
-    for (bindings, 0..) |binding, idx| {
-        infos[idx] = try exprInfo(env, theorem, theorem_args, binding);
+    var scratch = BindingValidation.infoScratch(theorem.allocator);
+    const allocator = scratch.get();
+    const infos = try allocator.alloc(ExprInfo, bindings.len);
+    defer allocator.free(infos);
+    for (bindings, infos) |binding, *info| {
+        info.* = try exprInfo(env, theorem, theorem_args, binding);
     }
+    return depViolationDetailOf(rule_args, rule_arg_names, infos);
+}
 
+/// `firstDepViolation` for a partial binding: an unbound binder holds no
+/// variables yet, so it can neither clash nor be clashed with.
+pub fn firstPartialDepViolation(
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    theorem_args: []const ArgInfo,
+    rule_args: []const ArgInfo,
+    rule_arg_names: []const ?[]const u8,
+    bindings: []const ?ExprId,
+) !?DepViolationDetail {
+    var scratch = BindingValidation.infoScratch(theorem.allocator);
+    const allocator = scratch.get();
+    const infos = try allocator.alloc(ExprInfo, bindings.len);
+    defer allocator.free(infos);
+    for (bindings, infos) |binding, *info| {
+        info.* = if (binding) |expr_id|
+            try exprInfo(env, theorem, theorem_args, expr_id)
+        else
+            .{ .sort_name = "", .bound = false, .deps = 0 };
+    }
+    return depViolationDetailOf(rule_args, rule_arg_names, infos);
+}
+
+fn depViolationDetailOf(
+    rule_args: []const ArgInfo,
+    rule_arg_names: []const ?[]const u8,
+    infos: []const ExprInfo,
+) ?DepViolationDetail {
     const violation = BindingValidation.firstDepViolation(
         rule_args,
-        infos[0..bindings.len],
+        infos,
     ) orelse return null;
     return depViolationDetail(
         rule_args,
@@ -185,91 +217,6 @@ pub fn firstDepViolation(
         violation.second_idx,
         infos[violation.second_idx],
     );
-}
-
-pub fn firstPartialDepViolation(
-    env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
-    rule_args: []const ArgInfo,
-    rule_arg_names: []const ?[]const u8,
-    bindings: []const ?ExprId,
-) !?DepViolationDetail {
-    var bound_deps: [56]u55 = undefined;
-    var bound_arg_indices: [56]usize = undefined;
-    var bound_len: usize = 0;
-    var prev_deps: [56]u55 = undefined;
-    var prev_arg_indices: [56]usize = undefined;
-    var prev_len: usize = 0;
-
-    for (rule_args, bindings, 0..) |expected, binding, idx| {
-        const info = if (binding) |expr_id|
-            try exprInfo(env, theorem, theorem_args, expr_id)
-        else
-            null;
-
-        if (expected.bound) {
-            if (info) |actual| {
-                for (prev_deps[0..prev_len], prev_arg_indices[0..prev_len]) |
-                    prev_dep,
-                    prev_idx,
-                | {
-                    if (prev_dep & actual.deps != 0) {
-                        return depViolationDetail(
-                            rule_args,
-                            rule_arg_names,
-                            prev_idx,
-                            try exprInfo(
-                                env,
-                                theorem,
-                                theorem_args,
-                                bindings[prev_idx].?,
-                            ),
-                            idx,
-                            actual,
-                        );
-                    }
-                }
-                bound_deps[bound_len] = actual.deps;
-            } else {
-                bound_deps[bound_len] = 0;
-            }
-            bound_arg_indices[bound_len] = idx;
-            bound_len += 1;
-        } else if (info) |actual| {
-            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len], 0..) |
-                bound_dep,
-                bound_idx,
-                k,
-            | {
-                if ((@as(u64, expected.deps) >> @intCast(k)) & 1 != 0) {
-                    continue;
-                }
-                if (bound_dep & actual.deps != 0) {
-                    return depViolationDetail(
-                        rule_args,
-                        rule_arg_names,
-                        bound_idx,
-                        try exprInfo(
-                            env,
-                            theorem,
-                            theorem_args,
-                            bindings[bound_idx].?,
-                        ),
-                        idx,
-                        actual,
-                    );
-                }
-            }
-        }
-
-        if (info) |actual| {
-            prev_deps[prev_len] = actual.deps;
-            prev_arg_indices[prev_len] = idx;
-            prev_len += 1;
-        }
-    }
-    return null;
 }
 
 fn depViolationDetail(

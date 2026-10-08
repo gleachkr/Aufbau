@@ -153,19 +153,12 @@ pub const Canonicalizer = struct {
         if (rule.rule_id >= self.env.rules.items.len) return false;
         const rule_decl = &self.env.rules.items[rule.rule_id];
 
-        var infos: [56]BindingValidation.ExprInfo = undefined;
-        std.debug.assert(bindings.len <= infos.len);
-        for (bindings, 0..) |binding, idx| {
-            infos[idx] = try BindingValidation.currentExprInfo(
-                self.env,
-                self.theorem,
-                binding,
-            );
-        }
-        return BindingValidation.firstViolation(
+        return (try BindingValidation.firstCurrentViolation(
+            self.env,
+            self.theorem,
             rule_decl.args,
-            infos[0..bindings.len],
-        ) == null;
+            bindings,
+        )) == null;
     }
 
     fn canonicalizeAcui(

@@ -361,11 +361,16 @@ fn validateRewriteRuleBindings(
     if (rule.rule_id >= self.shared.env.rules.items.len) return false;
     const rule_decl = &self.shared.env.rules.items[rule.rule_id];
 
-    var infos: [56]BindingValidation.ExprInfo = undefined;
-    std.debug.assert(rewrite_bindings.len <= infos.len);
-    for (rewrite_bindings, 0..) |binding_opt, idx| {
+    var scratch = BindingValidation.infoScratch(self.shared.allocator);
+    const allocator = scratch.get();
+    const infos = try allocator.alloc(
+        BindingValidation.ExprInfo,
+        rewrite_bindings.len,
+    );
+    defer allocator.free(infos);
+    for (rewrite_bindings, infos) |binding_opt, *info| {
         const binding = binding_opt orelse return false;
-        infos[idx] = .{
+        info.* = .{
             .sort_name = try rewriteBoundValueSortName(
                 self,
                 binding,
@@ -383,10 +388,7 @@ fn validateRewriteRuleBindings(
             ),
         };
     }
-    if (BindingValidation.firstViolation(
-        rule_decl.args,
-        infos[0..rewrite_bindings.len],
-    ) != null) {
+    if (BindingValidation.firstViolation(rule_decl.args, infos) != null) {
         return false;
     }
 
@@ -396,16 +398,17 @@ fn validateRewriteRuleBindings(
     // `firstViolation` on dummy-root occurrence masks when they are all
     // computable; when any mask is not, keep the concrete-only verdict.
     dummy_check: {
-        var masks: [56]u64 = undefined;
+        const masks = try allocator.alloc(u64, rewrite_bindings.len);
+        defer allocator.free(masks);
         var seen_binders: std.AutoHashMapUnmanaged(usize, void) = .empty;
         defer seen_binders.deinit(self.shared.allocator);
-        for (rewrite_bindings, 0..) |binding_opt, idx| {
+        for (rewrite_bindings, masks) |binding_opt, *mask| {
             seen_binders.clearRetainingCapacity();
             const repr = try WitnessState.boundValueRepresentative(
                 self,
                 binding_opt.?,
             );
-            masks[idx] = (try dummyRootMaskInSymbolic(
+            mask.* = (try dummyRootMaskInSymbolic(
                 self,
                 repr,
                 state,
@@ -415,7 +418,7 @@ fn validateRewriteRuleBindings(
         if (BindingValidation.firstDepViolationOverMasks(
             u64,
             rule_decl.args,
-            masks[0..rewrite_bindings.len],
+            masks,
         ) != null) {
             return false;
         }

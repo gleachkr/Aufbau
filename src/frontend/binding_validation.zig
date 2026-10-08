@@ -3,6 +3,7 @@ const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const ArgInfo = @import("parse_recovery.zig").ArgInfo;
+const max_bound_vars = @import("parse_recovery.zig").max_bound_vars;
 
 pub const ExprInfo = struct {
     sort_name: []const u8,
@@ -59,6 +60,32 @@ pub fn currentExprInfo(
     expr_id: ExprId,
 ) !ExprInfo {
     return try exprInfo(env, theorem, theorem.arg_infos, expr_id);
+}
+
+/// Scratch for one `ExprInfo` per rule arg: on the stack for ordinary
+/// arities, on the heap past that (a rule may have any number of args).
+pub fn infoScratch(
+    fallback: std.mem.Allocator,
+) std.heap.StackFallbackAllocator(16 * @sizeOf(ExprInfo)) {
+    return std.heap.stackFallback(16 * @sizeOf(ExprInfo), fallback);
+}
+
+/// First violation of `bindings` against `expected_args`, each binding read
+/// in the theorem's own context.
+pub fn firstCurrentViolation(
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    expected_args: []const ArgInfo,
+    bindings: []const ExprId,
+) !?Violation {
+    var scratch = infoScratch(theorem.allocator);
+    const allocator = scratch.get();
+    const infos = try allocator.alloc(ExprInfo, bindings.len);
+    defer allocator.free(infos);
+    for (bindings, infos) |binding, *info| {
+        info.* = try currentExprInfo(env, theorem, binding);
+    }
+    return firstViolation(expected_args, infos);
 }
 
 /// Memoized twin of `currentExprInfo` for the hot per-candidate validation
@@ -143,11 +170,12 @@ pub fn defExprInfo(
 
     const term = env.terms.items[app.term_id];
     var deps: u55 = 0;
-    var bound_deps: [56]u55 = undefined;
+    // Indexed by bound arg; the parser caps those per declaration.
+    var bound_deps: [max_bound_vars]u55 = undefined;
     // The j-th bound arg's own binder-space dep bit, for matching against
     // `arg.deps` masks (which are binder-indexed and shift past any dummy
     // the term declares ahead of a bound arg — bit j would be wrong).
-    var bound_bits: [56]u55 = undefined;
+    var bound_bits: [max_bound_vars]u55 = undefined;
     var bound_len: usize = 0;
 
     for (term.args, app.args) |arg, arg_id| {
@@ -195,61 +223,72 @@ pub fn currentDefExprInfo(
 /// dependency-mask type. `firstDepViolation` runs it over concrete u55 dep
 /// masks; the def-ops rewrite validation runs it over dummy-root occurrence
 /// masks (u64), where an unmaterialized hidden-def dummy has no concrete dep
-/// bit. `firstViolation` inlines the same algorithm interleaved with sort and
-/// boundness checks so the first violation is reported in argument order —
-/// keep its dependency half in sync with this one.
+/// bit.
 pub fn firstDepViolationOverMasks(
     comptime Mask: type,
     expected_args: []const ArgInfo,
     deps: []const Mask,
 ) ?DepViolation {
-    std.debug.assert(expected_args.len == deps.len);
-    std.debug.assert(expected_args.len <= 56);
+    const identity = struct {
+        fn get(mask: Mask) Mask {
+            return mask;
+        }
+    }.get;
+    return firstDepViolationBy(Mask, Mask, identity, expected_args, deps);
+}
 
-    var bound_deps: [56]Mask = undefined;
-    var bound_arg_indices: [56]usize = undefined;
-    var bound_len: usize = 0;
-    var prev_deps: [56]Mask = undefined;
-    var prev_arg_indices: [56]usize = undefined;
-    var prev_len: usize = 0;
+/// MMB's dependency rule over one value per expected arg: a bound arg's value
+/// shares no variable with any earlier arg's value, and a regular arg's value
+/// shares none with an earlier bound arg's value unless the regular arg
+/// declares a dependency on that bound arg. Reports the first violation in
+/// argument order, paired with the earliest arg it clashes with.
+///
+/// Two running unions settle the clean case in one pass; only a possible
+/// clash rescans the earlier args. Nothing is stored per arg, so any arity
+/// works (only bound args are capped, at 55; a rule may have more args).
+fn firstDepViolationBy(
+    comptime Mask: type,
+    comptime T: type,
+    comptime maskOf: fn (T) Mask,
+    expected_args: []const ArgInfo,
+    items: []const T,
+) ?DepViolation {
+    std.debug.assert(expected_args.len == items.len);
 
-    for (expected_args, deps, 0..) |expected, mask, idx| {
+    var prev_union: Mask = 0;
+    var bound_union: Mask = 0;
+    for (expected_args, items, 0..) |expected, item, idx| {
+        const mask = maskOf(item);
         if (expected.bound) {
-            for (prev_deps[0..prev_len], prev_arg_indices[0..prev_len]) |
-                prev_dep,
+            if (prev_union & mask != 0) {
+                for (items[0..idx], 0..) |prev, prev_idx| {
+                    if (maskOf(prev) & mask != 0) {
+                        return .{ .first_idx = prev_idx, .second_idx = idx };
+                    }
+                }
+                unreachable;
+            }
+            bound_union |= mask;
+        } else if (bound_union & mask != 0) {
+            for (expected_args[0..idx], items[0..idx], 0..) |
+                prev_expected,
+                prev,
                 prev_idx,
             | {
-                if (prev_dep & mask != 0) {
-                    return .{
-                        .first_idx = prev_idx,
-                        .second_idx = idx,
-                    };
-                }
-            }
-            bound_deps[bound_len] = mask;
-            bound_arg_indices[bound_len] = idx;
-            bound_len += 1;
-        } else {
-            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len]) |
-                bound_dep,
-                bound_idx,
-            | {
-                if (expected.deps & expected_args[bound_idx].deps != 0) {
-                    continue;
-                }
-                if (bound_dep & mask != 0) {
-                    return .{
-                        .first_idx = bound_idx,
-                        .second_idx = idx,
-                    };
+                if (!prev_expected.bound) continue;
+                if (expected.deps & prev_expected.deps != 0) continue;
+                if (maskOf(prev) & mask != 0) {
+                    return .{ .first_idx = prev_idx, .second_idx = idx };
                 }
             }
         }
-        prev_deps[prev_len] = mask;
-        prev_arg_indices[prev_len] = idx;
-        prev_len += 1;
+        prev_union |= mask;
     }
     return null;
+}
+
+fn infoDeps(info: ExprInfo) u55 {
+    return info.deps;
 }
 
 pub fn firstViolation(
@@ -257,58 +296,27 @@ pub fn firstViolation(
     infos: []const ExprInfo,
 ) ?Violation {
     if (expected_args.len != infos.len) return .len_mismatch;
-    std.debug.assert(expected_args.len <= 56);
 
-    var bound_deps: [56]u55 = undefined;
-    var bound_arg_indices: [56]usize = undefined;
-    var bound_len: usize = 0;
-    var prev_deps: [56]u55 = undefined;
-    var prev_arg_indices: [56]usize = undefined;
-    var prev_len: usize = 0;
-
+    // The first sort or boundness mismatch, if any. A dependency violation
+    // wins only when it comes earlier in argument order.
+    var shape_violation: ?Violation = null;
+    var shape_ok_len = infos.len;
     for (expected_args, infos, 0..) |expected, info, idx| {
         if (!std.mem.eql(u8, info.sort_name, expected.sort_name)) {
-            return .{ .sort_mismatch = idx };
-        }
-        if (expected.bound and !info.bound) {
-            return .{ .boundness_mismatch = idx };
-        }
-        if (expected.bound) {
-            for (prev_deps[0..prev_len], prev_arg_indices[0..prev_len]) |
-                prev_dep,
-                prev_idx,
-            | {
-                if (prev_dep & info.deps != 0) {
-                    return .{ .dep_violation = .{
-                        .first_idx = prev_idx,
-                        .second_idx = idx,
-                    } };
-                }
-            }
-            bound_deps[bound_len] = info.deps;
-            bound_arg_indices[bound_len] = idx;
-            bound_len += 1;
-        } else {
-            for (bound_deps[0..bound_len], bound_arg_indices[0..bound_len]) |
-                bound_dep,
-                bound_idx,
-            | {
-                if (expected.deps & expected_args[bound_idx].deps != 0) {
-                    continue;
-                }
-                if (bound_dep & info.deps != 0) {
-                    return .{ .dep_violation = .{
-                        .first_idx = bound_idx,
-                        .second_idx = idx,
-                    } };
-                }
-            }
-        }
-        prev_deps[prev_len] = info.deps;
-        prev_arg_indices[prev_len] = idx;
-        prev_len += 1;
+            shape_violation = .{ .sort_mismatch = idx };
+        } else if (expected.bound and !info.bound) {
+            shape_violation = .{ .boundness_mismatch = idx };
+        } else continue;
+        shape_ok_len = idx;
+        break;
     }
-    return null;
+    if (firstDepViolation(
+        expected_args[0..shape_ok_len],
+        infos[0..shape_ok_len],
+    )) |violation| {
+        return .{ .dep_violation = violation };
+    }
+    return shape_violation;
 }
 
 pub fn firstDepViolation(
@@ -316,11 +324,42 @@ pub fn firstDepViolation(
     infos: []const ExprInfo,
 ) ?DepViolation {
     if (expected_args.len != infos.len) return null;
-    std.debug.assert(expected_args.len <= 56);
+    return firstDepViolationBy(u55, ExprInfo, infoDeps, expected_args, infos);
+}
 
-    var deps: [56]u55 = undefined;
-    for (infos, 0..) |info, idx| {
-        deps[idx] = info.deps;
-    }
-    return firstDepViolationOverMasks(u55, expected_args, deps[0..infos.len]);
+test "firstViolation keeps argument order past 56 args" {
+    // 60 regular args, a bound arg, then a regular arg declared to depend on
+    // it. Only bound args are capped, so the scans reach past index 56.
+    const obj: ArgInfo = .{ .sort_name = "obj", .bound = false, .deps = 0 };
+    var expected = [_]ArgInfo{obj} ** 62;
+    expected[60] = .{ .sort_name = "obj", .bound = true, .deps = 1 };
+    expected[61] = .{ .sort_name = "obj", .bound = false, .deps = 1 };
+    const x: ExprInfo = .{ .sort_name = "obj", .bound = true, .deps = 1 << 3 };
+    var infos = [_]ExprInfo{.{ .sort_name = "obj", .bound = false, .deps = 0 }} ** 62;
+    infos[60] = x;
+    infos[61] = .{ .sort_name = "obj", .bound = false, .deps = x.deps };
+    try std.testing.expectEqual(@as(?Violation, null), firstViolation(&expected, &infos));
+
+    // The bound arg's variable also occurs in an earlier arg.
+    infos[57].deps = x.deps;
+    const clash: Violation = .{ .dep_violation = .{ .first_idx = 57, .second_idx = 60 } };
+    try std.testing.expectEqual(clash, firstViolation(&expected, &infos).?);
+    // A later sort mismatch does not hide it; an earlier one comes first.
+    infos[61].sort_name = "wff";
+    try std.testing.expectEqual(clash, firstViolation(&expected, &infos).?);
+    infos[10].sort_name = "wff";
+    try std.testing.expectEqual(
+        Violation{ .sort_mismatch = 10 },
+        firstViolation(&expected, &infos).?,
+    );
+
+    // A regular arg that does not declare the dependency.
+    infos[10].sort_name = "obj";
+    infos[57].deps = 0;
+    infos[61].sort_name = "obj";
+    expected[61].deps = 0;
+    try std.testing.expectEqual(
+        Violation{ .dep_violation = .{ .first_idx = 60, .second_idx = 61 } },
+        firstViolation(&expected, &infos).?,
+    );
 }

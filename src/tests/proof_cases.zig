@@ -54,6 +54,10 @@ const proof_cases = [_]ProofCase{
     // The kernel once sized the MMB name table in u8 arithmetic, so any
     // file with 16 or more sorts failed to load.
     .{ .stem = "pass_seventeen_sorts", .outcome = .pass },
+    // Only bound binders are capped (55); a rule may have more args. The
+    // binding checks once kept per-arg state in fixed [56] buffers.
+    .{ .stem = "pass_wide_rule_70_args", .outcome = .pass },
+    .{ .stem = "fail_wide_rule_dep_violation", .outcome = .{ .fail = error.DepViolation } },
     // Multi-file: `.mm0` imports joined in post-order, paired `.auf` files
     // concatenated in the same order (lib/prop_right.mm0 has none).
     .{ .stem = "pass_import_diamond", .outcome = .pass },
