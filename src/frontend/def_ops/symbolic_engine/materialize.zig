@@ -43,19 +43,7 @@ pub fn representResolvedBindings(
 }
 
 pub fn exprDeps(self: anytype, expr_id: ExprId) anyerror!u55 {
-    if (try self.shared.theorem.currentLeafInfo(expr_id)) |leaf| {
-        return leaf.deps;
-    }
-
-    const app = switch (self.shared.theorem.interner.node(expr_id).*) {
-        .app => |value| value,
-        .variable, .placeholder => unreachable,
-    };
-    var deps: u55 = 0;
-    for (app.args) |arg| {
-        deps |= try exprDeps(self, arg);
-    }
-    return deps;
+    return self.shared.theorem.exprDeps(expr_id, .{});
 }
 
 fn collectUnresolvedRootsInSymbolic(

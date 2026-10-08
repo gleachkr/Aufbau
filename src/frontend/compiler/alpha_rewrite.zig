@@ -161,13 +161,11 @@ pub fn tryFreshenBindings(
     const new_info = try Inference.exprInfo(
         env,
         theorem,
-        theorem.arg_infos,
         freshened.result_expr,
     );
     const blocker_info = try Inference.exprInfo(
         env,
         theorem,
-        theorem.arg_infos,
         blocker_expr,
     );
     report.blocker_dependency_remaining =
@@ -334,13 +332,11 @@ fn freshenExpr(
     const blocker_deps = (try Inference.exprInfo(
         normalizer.env,
         normalizer.theorem,
-        normalizer.theorem.arg_infos,
         blocker_expr,
     )).deps;
     const current_deps = (try Inference.exprInfo(
         normalizer.env,
         normalizer.theorem,
-        normalizer.theorem.arg_infos,
         expr_id,
     )).deps;
     if (current_deps & blocker_deps == 0) {
@@ -374,7 +370,6 @@ fn freshenExpr(
         const root_info = try Inference.exprInfo(
             normalizer.env,
             normalizer.theorem,
-            normalizer.theorem.arg_infos,
             normalized.result_expr,
         );
         if (root_info.deps & blocker_deps == 0) {

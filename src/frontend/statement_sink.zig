@@ -83,7 +83,7 @@ pub const StatementSink = struct {
                 .is_local = rule.is_local,
             };
             const view = TemplateView{ .env = env, .names = rule.arg_names };
-            if (try pretty_print.render(allocator, parser, view, rule.concl)) |concl| {
+            if (try pretty_print.render(allocator, parser, view, rule.concl, .{ .overflow = .truncate })) |concl| {
                 const hyps = try allocator.alloc([]const u8, rule.hyps.len);
                 const all_rendered = for (rule.hyps, 0..) |hyp, idx| {
                     hyps[idx] = try pretty_print.render(
@@ -91,6 +91,7 @@ pub const StatementSink = struct {
                         parser,
                         view,
                         hyp,
+                        .{ .overflow = .truncate },
                     ) orelse break false;
                 } else true;
                 if (all_rendered) {
@@ -116,7 +117,7 @@ pub const StatementSink = struct {
                     .names = term.arg_names,
                     .extra_names = term.dummy_names,
                 };
-                stmt.body = try pretty_print.render(allocator, parser, view, body);
+                stmt.body = try pretty_print.render(allocator, parser, view, body, .{ .overflow = .truncate });
             }
             try self.statements.append(allocator, stmt);
         }

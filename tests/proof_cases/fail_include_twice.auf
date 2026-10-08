@@ -1,0 +1,4 @@
+-- lib/k_lemma.auf already includes lib/k_def.auf; a unit includes a file
+-- at most once.
+include "lib/k_lemma.auf";
+include "lib/k_def.auf";

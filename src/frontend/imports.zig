@@ -364,6 +364,8 @@ pub const SourceMap = struct {
 
 pub const JoinErrorKind = enum {
     cycle,
+    /// A second `include` of a file the unit already includes.
+    duplicate,
     unresolved,
     malformed,
 };
@@ -377,7 +379,7 @@ pub const JoinFailure = struct {
     file_key: []const u8,
     file_text: []const u8,
     span: Span,
-    /// The spec of the failing import (for `cycle`/`unresolved`).
+    /// The spec of the failing import (for `cycle`/`duplicate`/`unresolved`).
     spec: []const u8,
     /// The resolver's error, for `unresolved`.
     err: ?anyerror = null,
@@ -392,6 +394,11 @@ pub const JoinFailure = struct {
             .cycle => std.fmt.allocPrint(
                 allocator,
                 "{s} cycle: '{s}' is already being {s}d",
+                .{ keyword, self.spec, keyword },
+            ),
+            .duplicate => std.fmt.allocPrint(
+                allocator,
+                "duplicate {s}: '{s}' is already {s}d",
                 .{ keyword, self.spec, keyword },
             ),
             .unresolved => std.fmt.allocPrint(
@@ -414,6 +421,7 @@ pub const JoinFailure = struct {
 
 pub const JoinError = error{
     ImportCycle,
+    DuplicateInclude,
     ImportUnresolved,
     MalformedImport,
 } || std.mem.Allocator.Error;
@@ -494,10 +502,11 @@ pub fn join(
 }
 
 /// Join several roots in order, each with everything it pulls in, a
-/// newline between roots. `.mm0` roots follow `import` with
-/// deduplication; `.auf` roots follow `include` without it (the paired
-/// proof files of a join are the roots on that side). A single root
-/// without statements is passed through untouched.
+/// newline between roots. `.mm0` roots follow `import`, skipping a file
+/// already joined; `.auf` roots follow `include`, where a second include
+/// of a file is an error (the paired proof files of a join are the roots
+/// on that side). A single root without statements is passed through
+/// untouched.
 pub fn joinAll(
     allocator: std.mem.Allocator,
     resolver: Resolver,
@@ -565,9 +574,7 @@ const Joiner = struct {
     ) JoinError!void {
         try self.stack.append(self.allocator, key);
         defer _ = self.stack.pop();
-        if (is_root and self.syntax == .mm0) {
-            try self.working.put(self.allocator, key, {});
-        }
+        if (is_root) try self.working.put(self.allocator, key, {});
 
         // Files are numbered in post-order, so this file's index is only
         // known once its imports are done; segments record it via a
@@ -624,10 +631,23 @@ const Joiner = struct {
                     return error.ImportCycle;
                 }
             }
-            if (self.syntax == .mm0) {
-                const gop = try self.working.getOrPut(self.allocator, resolved.key);
-                if (gop.found_existing) continue;
-            }
+            // A second import of a file is skipped (mm0-rs does the same). A
+            // second include would declare the file's items again, and a
+            // chain of double includes would double the text per level.
+            const gop = try self.working.getOrPut(self.allocator, resolved.key);
+            if (gop.found_existing) switch (self.syntax) {
+                .mm0 => continue,
+                .auf => {
+                    self.fail(.{
+                        .kind = .duplicate,
+                        .file_key = key,
+                        .file_text = text,
+                        .span = stmt.spec_span,
+                        .spec = stmt.spec,
+                    });
+                    return error.DuplicateInclude;
+                },
+            };
             try self.write(resolved.key, resolved.text, false);
             // Keep the importer's text out of a trailing comment in the
             // imported file (mm0-rs does the same in comments mode).
@@ -1442,7 +1462,7 @@ test "join reports cycles and unresolved imports" {
     try std.testing.expectEqual(@as(usize, 8), failure.?.span.start);
 }
 
-test "include join splices in place without dedup and joins roots" {
+test "include join splices in place and joins roots" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
@@ -1451,33 +1471,74 @@ test "include join splices in place without dedup and joins roots" {
     };
     const roots = [_]File{
         .{ .key = "p", .text = "lemma p\n---" },
-        .{ .key = "r", .text = "include \"b\";\nt\n---\ninclude \"d\";\n" },
+        .{ .key = "r", .text = "include \"b\";\nt\n---\n" },
     };
     var failure: ?JoinFailure = null;
     const joined = try includeMem(arena.allocator(), &files, &roots, &failure);
     try std.testing.expectEqualStrings(
-        "lemma p\n---\nlemma d\n---\n\nlemma b\n---\n\nt\n---\nlemma d\n---\n\n",
+        "lemma p\n---\nlemma d\n---\n\nlemma b\n---\n\nt\n---\n",
         joined.text,
     );
-    // Post-order per root, d twice: p, d, b, d, r.
-    try std.testing.expectEqual(@as(usize, 5), joined.files.len);
+    // Post-order per root: p, d, b, r.
+    try std.testing.expectEqual(@as(usize, 4), joined.files.len);
     try std.testing.expectEqualStrings("p", joined.files[0].key);
     try std.testing.expectEqualStrings("d", joined.files[1].key);
     try std.testing.expectEqualStrings("b", joined.files[2].key);
-    try std.testing.expectEqualStrings("d", joined.files[3].key);
-    try std.testing.expectEqualStrings("r", joined.files[4].key);
+    try std.testing.expectEqualStrings("r", joined.files[3].key);
     try std.testing.expect(!joined.isPassthrough());
     const t_start = std.mem.indexOf(u8, joined.text, "t\n---").?;
     const loc = joined.map.locate(t_start).?;
     try std.testing.expectEqualStrings("r", joined.files[loc.file_index].key);
     try std.testing.expectEqual(@as(usize, "include \"b\";\n".len), loc.offset);
-    const second_d = std.mem.lastIndexOf(u8, joined.text, "lemma d").?;
-    try std.testing.expectEqual(@as(usize, 3), joined.map.locate(second_d).?.file_index);
+    const d_start = std.mem.indexOf(u8, joined.text, "lemma d").?;
+    try std.testing.expectEqual(@as(usize, 1), joined.map.locate(d_start).?.file_index);
 
     // A single root without includes is passed through.
     const one = try includeMem(arena.allocator(), &files, roots[0..1], &failure);
     try std.testing.expect(one.isPassthrough());
     try std.testing.expect(one.text.ptr == roots[0].text.ptr);
+}
+
+test "include join rejects a second include of the same file" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Each file includes the next twice; joining this without the check
+    // doubles the text per level.
+    const files = [_]File{
+        .{ .key = "f1", .text = "include \"f2\";\ninclude \"f2\";\n" },
+        .{ .key = "f2", .text = "lemma l\n---\n" },
+        .{ .key = "s", .text = "include \"f2\";\n" },
+    };
+    const roots = [_]File{.{ .key = "r", .text = "include \"f1\";\n" }};
+    var failure: ?JoinFailure = null;
+    try std.testing.expectError(
+        error.DuplicateInclude,
+        includeMem(arena.allocator(), &files, &roots, &failure),
+    );
+    try std.testing.expectEqual(JoinErrorKind.duplicate, failure.?.kind);
+    try std.testing.expectEqualStrings("f1", failure.?.file_key);
+    try std.testing.expectEqualStrings("f2", failure.?.spec);
+    try std.testing.expectEqual(@as(usize, "include \"f2\";\ninclude ".len), failure.?.span.start);
+    const message = try failure.?.message(arena.allocator());
+    try std.testing.expectEqualStrings("duplicate include: 'f2' is already included", message);
+
+    // Reached by two routes, and a root included again, count too.
+    failure = null;
+    const two_routes = [_]File{.{ .key = "r", .text = "include \"s\";\ninclude \"f2\";\n" }};
+    try std.testing.expectError(
+        error.DuplicateInclude,
+        includeMem(arena.allocator(), &files, &two_routes, &failure),
+    );
+    try std.testing.expectEqualStrings("r", failure.?.file_key);
+    failure = null;
+    const root_again = [_]File{
+        .{ .key = "f2", .text = "lemma l\n---\n" },
+        .{ .key = "r", .text = "include \"f2\";\n" },
+    };
+    try std.testing.expectError(
+        error.DuplicateInclude,
+        includeMem(arena.allocator(), &files, &root_again, &failure),
+    );
 }
 
 test "include join reports cycles, misses, and malformed includes" {

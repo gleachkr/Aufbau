@@ -12,6 +12,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   keeps its `∃` does. Under an idempotent context the copy was a repeat of
   the same subgoal. A miss on `∀x∃y H(x,y) → ∃y∀x H(x,y)` in a one-sided
   first-order calculus now takes about 20% less work.
+- A unit includes each `.auf` file at most once: a second `include` of a
+  file, directly or through another include, is an error. A second include
+  declared the file's items again, and a chain of files each including the
+  next twice doubled the joined text at every level.
 
 ### Fixed
 
@@ -37,6 +41,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   deeper than the checker's stack allows, some 500 levels in release
   builds, is reported at the application where checking stopped. A few
   hundred levels used to overflow the stack.
+- Proofs whose lines build on each other (`l2: $ _w $ by dup [l1]`, each
+  line doubling the last) no longer take time exponential in the number of
+  lines in `abc`, `abc search` or the language server. An expression shared
+  between lines is now walked once. A value whose text would pass 64 KiB is
+  cut with `…` in hovers and messages, and no fill or `unpack` action is
+  offered for it.
+- The language server no longer crashes on an edit whose range ends before
+  it starts.
 - The language server no longer crashes when a diagnostic covers part of a
   non-ASCII character, as one on a stray `⊢` outside `$ … $` does, or
   when a closed file it reads is not valid UTF-8. With VS Code's default

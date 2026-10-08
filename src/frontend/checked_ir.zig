@@ -64,14 +64,23 @@ pub fn validateNoPlaceholderExpr(
     theorem: *const TheoremContext,
     expr: ExprId,
 ) LeakageError!void {
+    var first: ?PlaceholderId = null;
+    if (theorem.exprAny(expr, &first, firstPlaceholderPred)) {
+        return leakageError(theorem, first.?);
+    }
+}
+
+fn firstPlaceholderPred(
+    first: *?PlaceholderId,
+    theorem: *const TheoremContext,
+    expr: ExprId,
+) bool {
     switch (theorem.interner.node(expr).*) {
-        .variable => {},
-        .placeholder => |id| return leakageError(theorem, id),
-        .app => |app| {
-            for (app.args) |arg| {
-                try validateNoPlaceholderExpr(theorem, arg);
-            }
+        .placeholder => |id| {
+            first.* = id;
+            return true;
         },
+        .variable, .app => return false,
     }
 }
 
@@ -170,7 +179,7 @@ pub fn firstDepViolation(
         );
         defer allocator.free(infos);
         for (rule.bindings, infos) |binding, *info| {
-            info.* = try BindingValidation.currentExprInfoCached(
+            info.* = try BindingValidation.exprInfo(
                 env,
                 theorem,
                 binding,

@@ -40,7 +40,7 @@ const RuleInferenceContext = InferenceContextModule.RuleInferenceContext;
 const HiddenWitnessFreshContext =
     InferenceContextModule.HiddenWitnessFreshContext;
 const ReplayMismatch = InferenceContextModule.ReplayMismatch;
-const exprInfo = InferenceValidation.exprInfo;
+const exprInfo = @import("../../binding_validation.zig").exprInfo;
 const buildMissingBinderDiagnostic =
     InferenceDiagnostics.buildMissingBinderDiagnostic;
 const buildInferenceFailureDiagnostic =
@@ -681,7 +681,6 @@ fn finishRuleMatchSession(
     const line_deps = (try exprInfo(
         env,
         session.shared.theorem,
-        session.shared.theorem.arg_infos,
         line_expr,
     )).deps;
     return try tryFinalizeRuleMatchSession(

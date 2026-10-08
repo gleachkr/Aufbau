@@ -23,45 +23,6 @@ pub const Violation = union(enum) {
     dep_violation: DepViolation,
 };
 
-pub fn exprInfo(
-    env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
-    expr_id: ExprId,
-) !ExprInfo {
-    if (try theorem.leafInfoWithArgs(theorem_args, expr_id)) |leaf| {
-        return .{
-            .sort_name = leaf.sort_name,
-            .bound = leaf.bound,
-            .deps = leaf.deps,
-        };
-    }
-
-    const app = switch (theorem.interner.node(expr_id).*) {
-        .app => |value| value,
-        .variable, .placeholder => unreachable,
-    };
-    if (app.term_id >= env.terms.items.len) return error.UnknownTerm;
-
-    var deps: u55 = 0;
-    for (app.args) |arg_id| {
-        deps |= (try exprInfo(env, theorem, theorem_args, arg_id)).deps;
-    }
-    return .{
-        .sort_name = env.terms.items[app.term_id].ret_sort_name,
-        .bound = false,
-        .deps = deps,
-    };
-}
-
-pub fn currentExprInfo(
-    env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) !ExprInfo {
-    return try exprInfo(env, theorem, theorem.arg_infos, expr_id);
-}
-
 /// Scratch for one `ExprInfo` per rule arg: on the stack for ordinary
 /// arities, on the heap past that (a rule may have any number of args).
 pub fn infoScratch(
@@ -74,7 +35,7 @@ pub fn infoScratch(
 /// in the theorem's own context.
 pub fn firstCurrentViolation(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     expected_args: []const ArgInfo,
     bindings: []const ExprId,
 ) !?Violation {
@@ -83,20 +44,18 @@ pub fn firstCurrentViolation(
     const infos = try allocator.alloc(ExprInfo, bindings.len);
     defer allocator.free(infos);
     for (bindings, infos) |binding, *info| {
-        info.* = try currentExprInfo(env, theorem, binding);
+        info.* = try exprInfo(env, theorem, binding);
     }
     return firstViolation(expected_args, infos);
 }
 
-/// Memoized twin of `currentExprInfo` for the hot per-candidate validation
-/// path. `exprInfo` re-walks hash-consed shared subtrees once per occurrence
-/// (ACUI rule bindings share whole contexts). Only the deps mask needs the
-/// recursion; it is memoized per app node in
-/// `TheoremContext.expr_deps_cache`, which is only valid for the CURRENT
-/// `arg_infos` — hence no caller-supplied-args variant. Leaf info is
-/// mint-immutable, so entries never go stale. Errors (unknown term/leaf) are
-/// raised before any caching, identically to the plain walk.
-pub fn currentExprInfoCached(
+/// Sort, boundness and dependency mask of `expr_id` in the theorem's own
+/// context. The mask is the OR of the leaves' masks; it is memoized per app
+/// node in `TheoremContext.expr_deps_cache`, so a hash-consed DAG is walked
+/// once, not once per path (a chain of lines that each double the previous
+/// expression has linear DAG size and exponential tree size). Errors
+/// (unknown term/leaf) are raised before any caching.
+pub fn exprInfo(
     env: *const GlobalEnv,
     theorem: *TheoremContext,
     expr_id: ExprId,
@@ -118,11 +77,11 @@ pub fn currentExprInfoCached(
     return .{
         .sort_name = env.terms.items[app.term_id].ret_sort_name,
         .bound = false,
-        .deps = try currentExprDepsCached(env, theorem, expr_id),
+        .deps = try exprDeps(env, theorem, expr_id),
     };
 }
 
-fn currentExprDepsCached(
+fn exprDeps(
     env: *const GlobalEnv,
     theorem: *TheoremContext,
     expr_id: ExprId,
@@ -141,7 +100,7 @@ fn currentExprDepsCached(
 
     var deps: u55 = 0;
     for (app.args) |arg_id| {
-        deps |= try currentExprDepsCached(env, theorem, arg_id);
+        deps |= try exprDeps(env, theorem, arg_id);
     }
     // Memo-or-forget on OOM.
     theorem.expr_deps_cache.put(theorem.allocator, expr_id, deps) catch {};

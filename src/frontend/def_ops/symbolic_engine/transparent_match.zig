@@ -1355,10 +1355,12 @@ pub fn expandConcreteDef(
         *const SymbolicExpr,
         def.term.args.len + def.term.dummy_args.len,
     );
+    // Only the dummy slots read the argument deps.
+    const has_dummies = def.term.dummy_args.len != 0;
     var forbidden_deps: u55 = 0;
     for (def.app.args, 0..) |arg, idx| {
         subst[idx] = try self.allocSymbolic(.{ .fixed = arg });
-        forbidden_deps |= try WitnessState.exprDeps(self, arg);
+        if (has_dummies) forbidden_deps |= try WitnessState.exprDeps(self, arg);
     }
     const distinct_group = state.symbolic_dummy_infos.items.len;
     for (def.term.dummy_args, 0..) |dummy_arg, idx| {

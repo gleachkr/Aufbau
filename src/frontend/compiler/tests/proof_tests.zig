@@ -468,6 +468,33 @@ test "compiler accepts deeply nested rule applications as refs" {
     try mm0.verifyPair(std.testing.allocator, nested_keep_mm0, mmb);
 }
 
+test "compiler checks lines whose values double per line" {
+    // Line k is `l(k-1) /\ l(k-1)`: 61 shared nodes, 2^60 leaves as a tree.
+    // Every per-line walk must see the DAG, not the tree.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\--| @hole _w
+        \\provable sort wff;
+        \\term an (a b: wff): wff;
+        \\infixl an: $/\$ prec 20;
+        \\axiom dup (a: wff): $ a $ > $ a /\ a $;
+        \\axiom idr (a: wff): $ a $ > $ a $;
+        \\theorem th (p: wff): $ p $ > $ p $;
+    ;
+    var proof: std.ArrayListUnmanaged(u8) = .{};
+    defer proof.deinit(std.testing.allocator);
+    try proof.appendSlice(std.testing.allocator, "th\n---\nl1: $ _w $ by dup [#1]\n");
+    for (2..61) |k| {
+        try proof.writer(std.testing.allocator).print("l{d}: $ _w $ by dup [l{d}]\n", .{ k, k - 1 });
+    }
+    try proof.appendSlice(std.testing.allocator, "l0: $ p $ by idr [#1]\n");
+
+    var compiler = Compiler.initWithProof(std.testing.allocator, mm0_src, proof.items);
+    const mmb = try compiler.compileMmb(std.testing.allocator);
+    defer std.testing.allocator.free(mmb);
+    try mm0.verifyPair(std.testing.allocator, mm0_src, mmb);
+}
+
 test "compiler stops inline proofs nested past its stack guard" {
     // The deepest nesting the parser accepts is deeper than the checker's
     // stack allows in any build mode.

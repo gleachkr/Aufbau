@@ -289,7 +289,6 @@ fn inferBindingsNoView(
                     validateBindingExpr(
                         env,
                         theorem,
-                        assertion.args,
                         rule.args[idx],
                         binding.?,
                     ) catch {
@@ -770,7 +769,7 @@ fn strictInferBindingsDetailed(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     assertion: AssertionStmt,
     rule: *const RuleDecl,
     line: anytype,
@@ -857,7 +856,6 @@ fn strictInferBindingsDetailed(
         validateBindingExpr(
             env,
             theorem,
-            assertion.args,
             rule.args[idx],
             binding,
         ) catch |err| {
@@ -989,7 +987,7 @@ pub fn strictInferBindings(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     assertion: AssertionStmt,
     rule: *const RuleDecl,
     line: anytype,

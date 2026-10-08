@@ -311,7 +311,7 @@ fn applyRecoverBinding(
 }
 
 fn recoverBindingCandidateFromSeed(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     dummy_witnesses: ?[]const ?ExprId,
     source_expr: ExprId,
@@ -374,7 +374,7 @@ fn recoverBindingCandidateFromSeed(
 }
 
 fn recoverBindingCandidateFromBoundValue(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     dummy_witnesses: ?[]const ?ExprId,
     source_expr: ExprId,
@@ -423,7 +423,7 @@ fn recoverBindingCandidateFromBoundValue(
 }
 
 fn recoverBindingCandidateSymbolic(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     dummy_witnesses: ?[]const ?ExprId,
     source_expr: ExprId,
@@ -736,7 +736,7 @@ pub fn concreteRecoverCandidate(
 }
 
 fn recoverBindingCandidate(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     source_expr: ExprId,
     pattern_expr: ExprId,
@@ -872,14 +872,14 @@ fn concreteCoercionChainHole(
 /// argument (recursively) otherwise. Null when no prefix strip lands at the
 /// target sort — the subtree genuinely has a different sort.
 fn resortExprToSort(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     expr_id: ExprId,
     target_sort: []const u8,
 ) ?ExprId {
     var current = expr_id;
     while (true) {
-        const info = BindingValidation.currentExprInfo(
+        const info = BindingValidation.exprInfo(
             env,
             theorem,
             current,
@@ -897,7 +897,7 @@ fn resortExprToSort(
 }
 
 fn recoverBindingFromSourceWrapper(
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     env: *const GlobalEnv,
     source_app: ExprNode.App,
     pattern_expr: ExprId,
@@ -914,7 +914,7 @@ fn recoverBindingFromSourceWrapper(
     var wrapper_candidate: ?ExprId = null;
     for (source_app.args) |source_arg| {
         if (source_arg == hole_expr or source_arg == pattern_expr) continue;
-        const arg_info = try BindingValidation.currentExprInfo(
+        const arg_info = try BindingValidation.exprInfo(
             env,
             theorem,
             source_arg,
@@ -1029,7 +1029,7 @@ fn applyAbstractBinding(
     // the hole wrapped in the coercion route up to that sort, keeping the
     // constructed context well-sorted.
     const plug_sort_name = if (abstract.left_plug.bareBinder()) |idx| blk: {
-        const info = try BindingValidation.currentExprInfo(
+        const info = try BindingValidation.exprInfo(
             env,
             theorem,
             view_bindings[idx].?,
@@ -1266,7 +1266,7 @@ fn abstractWrapHoleToPlugSort(
     hole_expr: ExprId,
     plug_sort_name: []const u8,
 ) !?ExprId {
-    const hole_info = try BindingValidation.currentExprInfo(
+    const hole_info = try BindingValidation.exprInfo(
         env,
         theorem,
         hole_expr,

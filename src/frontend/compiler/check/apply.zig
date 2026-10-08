@@ -876,7 +876,6 @@ noinline fn finishCandidate(
         var dep_detail = (try Inference.firstDepViolation(
             env,
             theorem,
-            assertion.args,
             rule.args,
             rule.arg_names,
             resolved_bindings,
@@ -967,7 +966,6 @@ noinline fn finishCandidate(
             dep_detail = (try Inference.firstDepViolation(
                 env,
                 theorem,
-                assertion.args,
                 rule.args,
                 rule.arg_names,
                 resolved_bindings,
@@ -1962,13 +1960,14 @@ noinline fn recordInlineConclusion(
         theorem_vars,
     );
     defer names.deinit(context.allocator);
-    const rendered = try ViewTrace.formatExprNamed(
+    // `unpack` splices the text into the source, so it must be whole.
+    const rendered = try ViewTrace.formatExprNamedWhole(
         sink.allocator,
         theorem,
         context.env,
         &names,
         conclusion,
-    );
+    ) orelse return;
     try sink.addOwned(span, rendered);
 }
 

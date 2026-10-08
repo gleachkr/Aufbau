@@ -1634,7 +1634,7 @@ const UnfoldWalk = struct {
     /// an expression the checker rejects.
     fn argDeps(self: *UnfoldWalk, arg: ExprId) !u55 {
         const resolved = try self.store.deref(self.theorem, arg);
-        const info = BindingValidation.currentExprInfo(self.context.env, self.theorem, resolved) catch return 0;
+        const info = BindingValidation.exprInfo(self.context.env, self.theorem, resolved) catch return 0;
         return info.deps;
     }
 
@@ -2107,6 +2107,6 @@ pub const Namer = struct {
             .theorem = theorem,
             .env = context.env,
         };
-        return pretty_print.render(arena, context.parser, view, expr_id);
+        return pretty_print.render(arena, context.parser, view, expr_id, .{ .overflow = .fail });
     }
 };

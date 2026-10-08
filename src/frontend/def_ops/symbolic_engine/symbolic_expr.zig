@@ -124,11 +124,29 @@ pub fn exprSortName(
         null;
 }
 
+/// `expr_id` with each subterm that is a concrete binding of `state` read
+/// back as that binder and each placeholder as a witness slot, or null when
+/// no subterm is either.
 pub fn resymbolizeBinding(
     self: anytype,
     expr_id: ExprId,
     state: *MatchSession,
     witness_slots: *std.AutoHashMapUnmanaged(ExprId, usize),
+) anyerror!?*const SymbolicExpr {
+    // Subterms already found to read back as null. A null answer depends on
+    // `state.bindings` and the subterm alone, so a shared subterm is walked
+    // once, not once per path.
+    var plain: std.AutoHashMapUnmanaged(ExprId, void) = .empty;
+    defer plain.deinit(self.shared.allocator);
+    return resymbolizeBindingIn(self, expr_id, state, witness_slots, &plain);
+}
+
+fn resymbolizeBindingIn(
+    self: anytype,
+    expr_id: ExprId,
+    state: *MatchSession,
+    witness_slots: *std.AutoHashMapUnmanaged(ExprId, usize),
+    plain: *std.AutoHashMapUnmanaged(ExprId, void),
 ) anyerror!?*const SymbolicExpr {
     if (try symbolicForExistingConcreteBinding(self, expr_id, state)) |binding| {
         return binding;
@@ -145,6 +163,7 @@ pub fn resymbolizeBinding(
             witness_slots,
         ),
         .app => |app| blk: {
+            if (plain.contains(expr_id)) break :blk null;
             var has_symbolic = false;
             const args = try self.shared.allocator.alloc(
                 *const SymbolicExpr,
@@ -152,11 +171,12 @@ pub fn resymbolizeBinding(
             );
             errdefer self.shared.allocator.free(args);
             for (app.args, 0..) |arg_expr, idx| {
-                if (try resymbolizeBinding(
+                if (try resymbolizeBindingIn(
                     self,
                     arg_expr,
                     state,
                     witness_slots,
+                    plain,
                 )) |symbolic_arg| {
                     args[idx] = symbolic_arg;
                     has_symbolic = true;
@@ -166,6 +186,7 @@ pub fn resymbolizeBinding(
             }
             if (!has_symbolic) {
                 self.shared.allocator.free(args);
+                try plain.put(self.shared.allocator, expr_id, {});
                 break :blk null;
             }
             break :blk try self.allocSymbolic(.{ .app = .{

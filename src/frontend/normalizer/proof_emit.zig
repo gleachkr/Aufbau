@@ -705,7 +705,7 @@ fn traceExprPair(
 
 pub fn validateRewriteBindings(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     expected_args: []const ArgInfo,
     bindings: []const ExprId,
 ) !void {

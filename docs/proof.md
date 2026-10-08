@@ -92,8 +92,9 @@ the including file), so the items it holds are anchored where the
 `include` sits: lemmas, local definitions, and notation it declares are
 visible from that point on, exactly as if written there. This is the
 place for shared proof-local material and for generated lemma files.
-Includes nest and are not deduplicated (including a file twice declares
-its items twice); an include cycle is an error.
+Includes nest. A unit includes each file at most once: a second
+`include` of the same file, by any route, is an error, as is an include
+cycle.
 
 ## Comments and whitespace
 

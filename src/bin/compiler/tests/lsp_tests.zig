@@ -556,6 +556,48 @@ test "LSP survives proofs nested to the parser's limit and past it" {
     try std.testing.expect(transport_state.containsMessage("more than 1024 levels"));
 }
 
+test "LSP applies ranged edits, including reversed and past-the-end ranges" {
+    const uri = "file:///tmp/lsp-ranged-edit.mm0";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = uri,
+        .languageId = "mm0",
+        .version = 1,
+        .text = "sort s;\nsort t;\n",
+    } });
+
+    const Edit = struct { start: types.Position, end: types.Position, text: []const u8, expected: []const u8 };
+    const edits = [_]Edit{
+        // Ordered: replace `s` with `a`.
+        .{ .start = .{ .line = 0, .character = 5 }, .end = .{ .line = 0, .character = 6 }, .text = "a", .expected = "sort a;\nsort t;\n" },
+        // Reversed: the same span as its reverse, the whole first line.
+        .{ .start = .{ .line = 1, .character = 0 }, .end = .{ .line = 0, .character = 0 }, .text = "", .expected = "sort t;\n" },
+        // Past the end: both endpoints clamp to the end of the text.
+        .{ .start = .{ .line = 7, .character = 3 }, .end = .{ .line = 9, .character = 0 }, .text = "sort u;\n", .expected = "sort t;\nsort u;\n" },
+    };
+    for (edits, 2..) |edit, version| {
+        try handler.@"textDocument/didChange"(arena, .{
+            .textDocument = .{ .uri = uri, .version = @intCast(version) },
+            .contentChanges = &.{.{ .literal_0 = .{
+                .range = .{ .start = edit.start, .end = edit.end },
+                .text = edit.text,
+            } }},
+        });
+        try std.testing.expectEqualStrings(edit.expected, handler.docs.get(uri).?.text);
+    }
+}
+
 test "LSP code action caches search results across identical requests" {
     const mm0_uri = "file:///tmp/lsp-code-action-cache.mm0";
     const proof_uri = "file:///tmp/lsp-code-action-cache.auf";
@@ -1534,6 +1576,79 @@ fn fillHolesAction(
         .Command => {},
     };
     return null;
+}
+
+/// A proof whose line k doubles line k - 1 (`$ _w $ by dup [lk-1]`): the
+/// values are linear as DAGs and exponential as text.
+fn dupChainProof(allocator: std.mem.Allocator, lines: usize) ![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    try out.appendSlice(allocator, "main\n----\nl1: $ _w $ by dup [#1]\n");
+    for (2..lines + 1) |k| {
+        try out.writer(allocator).print("l{d}: $ _w $ by dup [l{d}]\n", .{ k, k - 1 });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+test "LSP hover and fill stay bounded on values that double per line" {
+    const mm0_uri = "file:///tmp/lsp-dup-chain.mm0";
+    const proof_uri = "file:///tmp/lsp-dup-chain.auf";
+    const mm0_text =
+        \\delimiter $ ( ) $;
+        \\--| @hole _w
+        \\provable sort wff;
+        \\term an (a b: wff): wff;
+        \\infixl an: $/\$ prec 20;
+        \\axiom dup (a: wff): $ a $ > $ a /\ a $;
+        \\theorem main (p: wff): $ p $ > $ p $;
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The last value prints as 2^60 copies of `p`.
+    const proof_text = try dupChainProof(arena, 60);
+    try handler.putDocument(mm0_uri, mm0_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = "aufbau",
+        .version = 1,
+        .text = proof_text,
+    } });
+
+    const hoverText = struct {
+        fn at(h: *Handler, a: std.mem.Allocator, uri: []const u8, text: []const u8, needle: []const u8) ![]const u8 {
+            const offset = std.mem.indexOf(u8, text, needle).? + needle.len - "_w $".len;
+            const result = try h.@"textDocument/hover"(a, .{
+                .textDocument = .{ .uri = uri },
+                .position = lsp.offsets.indexToPosition(text, offset, .@"utf-16"),
+            });
+            const hover = result orelse return error.ExpectedHover;
+            return switch (hover.contents) {
+                .MarkupContent => |content| content.value,
+                else => error.ExpectedMarkdownHover,
+            };
+        }
+    }.at;
+
+    // A short value prints whole; a long one is cut.
+    const short = try hoverText(&handler, arena, proof_uri, proof_text, "l2: $ _w $");
+    try std.testing.expect(std.mem.indexOf(u8, short, "p /\\ p /\\ (p /\\ p)") != null);
+    const long = try hoverText(&handler, arena, proof_uri, proof_text, "l60: $ _w $");
+    try std.testing.expect(std.mem.indexOf(u8, long, "…") != null);
+    try std.testing.expect(long.len < 2 * mm0.PrettyPrint.Limit.default_max_len);
+
+    // A fill must be whole, so only the short one is offered.
+    const l2 = std.mem.indexOf(u8, proof_text, "l2:").?;
+    try std.testing.expect((try fillHolesAction(&handler, arena, proof_uri, proof_text, l2)) != null);
+    const l60 = std.mem.indexOf(u8, proof_text, "l60:").?;
+    try std.testing.expect((try fillHolesAction(&handler, arena, proof_uri, proof_text, l60)) == null);
 }
 
 const FillSetup = enum {

@@ -24,7 +24,7 @@ pub const bindingsRespectRuleDeps = Validation.bindingsRespectRuleDeps;
 pub const firstDepViolation = Validation.firstDepViolation;
 pub const firstPartialDepViolation = Validation.firstPartialDepViolation;
 pub const validateBindingExpr = Validation.validateBindingExpr;
-pub const exprInfo = Validation.exprInfo;
+pub const exprInfo = @import("../binding_validation.zig").exprInfo;
 pub const buildMissingBinderDiagnostic =
     Diagnostics.buildMissingBinderDiagnostic;
 

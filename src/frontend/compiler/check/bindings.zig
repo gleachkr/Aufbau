@@ -292,7 +292,7 @@ fn matchRawTemplateToHoleyConclusion(
 pub fn validateOptionalBindingsForProbe(
     self: *CompilerContext,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     parser: ?*const MM0Parser,
     theorem_vars: ?*const NameExprMap,
     assertion: AssertionStmt,
@@ -309,7 +309,6 @@ pub fn validateOptionalBindingsForProbe(
         Inference.validateBindingExpr(
             env,
             theorem,
-            assertion.args,
             rule.args[idx],
             expr,
         ) catch |err| {
@@ -333,7 +332,6 @@ pub fn validateOptionalBindingsForProbe(
                 theorem,
                 parser,
                 theorem_vars,
-                assertion.args,
                 rule.args[idx],
                 expr,
                 err,
@@ -346,7 +344,6 @@ pub fn validateOptionalBindingsForProbe(
         if (try Inference.firstPartialDepViolation(
             env,
             theorem,
-            assertion.args,
             rule.args,
             rule.arg_names,
             bindings,
@@ -1094,7 +1091,7 @@ pub fn parseBindings(
 
 pub fn lineAssertionKnownDeps(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     rule: *const RuleDecl,
     line_assertion: LineAssertion,
     partial_bindings: []const ?ExprId,
@@ -1103,7 +1100,6 @@ pub fn lineAssertionKnownDeps(
         .concrete => |expr_id| (try Inference.exprInfo(
             env,
             theorem,
-            theorem.arg_infos,
             expr_id,
         )).deps,
         .holey => |holey| holey.surface.deps(),
@@ -1118,7 +1114,7 @@ pub fn lineAssertionKnownDeps(
 
 fn templateKnownDeps(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     template: TemplateExpr,
     partial_bindings: []const ?ExprId,
 ) !u55 {
@@ -1128,7 +1124,6 @@ fn templateKnownDeps(
             break :blk (try Inference.exprInfo(
                 env,
                 theorem,
-                theorem.arg_infos,
                 expr_id,
             )).deps;
         },
@@ -1180,7 +1175,6 @@ pub fn validateFreshBindingsAgainstLine(
         const selected_deps = (try Inference.exprInfo(
             env,
             theorem,
-            theorem.arg_infos,
             selected,
         )).deps;
         if ((used_deps & selected_deps) == 0) continue;

@@ -143,8 +143,8 @@ l1: $ b -> a $ by weaken [#1]
 ```
 
 The path is relative to the including file. The included items are visible from 
-the `include` on, as if written there. Includes are not deduplicated, so 
-include a file once per proof development.
+the `include` on, as if written there. A file may be included only once in a 
+proof development; a second `include` of it is an error.
 
 `import` is a convention shared with mm0-rs, not part of MM0 itself, so a
 verifier requires that imports be flattened into a single file. `abc join` 

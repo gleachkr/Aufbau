@@ -418,7 +418,7 @@ pub const MetaStore = struct {
         if (self.occursIn(theorem, meta_id, resolved)) {
             return error.OccursCheckFailed;
         }
-        if (BindingValidation.currentExprInfo(
+        if (BindingValidation.exprInfo(
             self.env,
             theorem,
             resolved,

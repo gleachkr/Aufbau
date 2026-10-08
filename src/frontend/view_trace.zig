@@ -11,6 +11,7 @@ const BoundValue = @import("./def_ops/types.zig").BoundValue;
 const SymbolicExpr = @import("./def_ops/types.zig").SymbolicExpr;
 const pretty_print = @import("./pretty_print.zig");
 const interner_view = @import("./interner_view.zig");
+const text_util = @import("./text_util.zig");
 
 pub fn printViewBindings(
     allocator: std.mem.Allocator,
@@ -128,15 +129,23 @@ pub fn printMessage(comptime fmt: []const u8, args: anytype) void {
     debugPrint("[debug:views] " ++ fmt ++ "\n", args);
 }
 
+/// `expr_id` in internal coordinates (`v0`, `.d1`, `.p2`), for debug output
+/// and as the fallback of `formatExprNamed`. Cut with `…` past the
+/// default `pretty_print.Limit`, like any display render.
 pub fn formatExpr(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
     env: *const GlobalEnv,
     expr_id: ExprId,
 ) ![]u8 {
+    const max_len = pretty_print.Limit.default_max_len;
     var out = std.ArrayListUnmanaged(u8){};
     errdefer out.deinit(allocator);
-    try appendExpr(&out, allocator, theorem, env, expr_id);
+    try appendExpr(&out, allocator, theorem, env, expr_id, max_len);
+    if (out.items.len > max_len) {
+        out.shrinkRetainingCapacity(text_util.truncateUtf8(out.items, max_len).len);
+        try out.appendSlice(allocator, "…");
+    }
     return try out.toOwnedSlice(allocator);
 }
 
@@ -222,16 +231,39 @@ pub fn formatExprNamed(
     names: *const DiagNames,
     expr_id: ExprId,
 ) ![]const u8 {
+    if (try renderNamed(allocator, theorem, env, names, expr_id, .truncate)) |text| {
+        return text;
+    }
+    return try formatExpr(allocator, theorem, env, expr_id);
+}
+
+/// `formatExprNamed` for text that must be whole (it is spliced into the
+/// source): null when the render passes the default `pretty_print.Limit`.
+pub fn formatExprNamedWhole(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names: *const DiagNames,
+    expr_id: ExprId,
+) !?[]const u8 {
+    return try renderNamed(allocator, theorem, env, names, expr_id, .fail);
+}
+
+fn renderNamed(
+    allocator: std.mem.Allocator,
+    theorem: *const TheoremContext,
+    env: *const GlobalEnv,
+    names: *const DiagNames,
+    expr_id: ExprId,
+    overflow: @FieldType(pretty_print.Limit, "overflow"),
+) !?[]const u8 {
     var coord_buf: [24]u8 = undefined;
     const view: interner_view.View = .{
         .names = .{ .vars = &names.map, .coord_buf = &coord_buf },
         .theorem = theorem,
         .env = env,
     };
-    if (try pretty_print.render(allocator, names.parser, view, expr_id)) |text| {
-        return text;
-    }
-    return try formatExpr(allocator, theorem, env, expr_id);
+    return try pretty_print.render(allocator, names.parser, view, expr_id, .{ .overflow = overflow });
 }
 
 /// Render `expr_id` as math text a proof can contain: notation-aware, with
@@ -250,7 +282,7 @@ pub fn formatExprSource(
         .theorem = theorem,
         .env = env,
     };
-    return try pretty_print.render(allocator, names.parser, view, expr_id);
+    return try pretty_print.render(allocator, names.parser, view, expr_id, .{ .overflow = .fail });
 }
 
 pub fn formatBindingSeed(
@@ -339,7 +371,10 @@ fn appendExpr(
     theorem: *const TheoremContext,
     env: *const GlobalEnv,
     expr_id: ExprId,
+    max_len: usize,
 ) anyerror!void {
+    // Past `max_len` the caller cuts the text, so stop adding to it.
+    if (out.items.len > max_len) return;
     switch (theorem.interner.node(expr_id).*) {
         .variable => |var_id| switch (var_id) {
             .theorem_var => |idx| {
@@ -362,7 +397,7 @@ fn appendExpr(
             try out.append(allocator, '(');
             for (app.args, 0..) |arg, idx| {
                 if (idx != 0) try out.appendSlice(allocator, ", ");
-                try appendExpr(out, allocator, theorem, env, arg);
+                try appendExpr(out, allocator, theorem, env, arg, max_len);
             }
             try out.append(allocator, ')');
         },
@@ -383,7 +418,7 @@ fn appendSeed(
         .none => try out.appendSlice(allocator, "none"),
         .exact => |expr_id| {
             try out.appendSlice(allocator, "exact(");
-            try appendExpr(out, allocator, theorem, env, expr_id);
+            try appendExpr(out, allocator, theorem, env, expr_id, pretty_print.Limit.default_max_len);
             try out.append(allocator, ')');
         },
         .semantic => |semantic| {
@@ -391,7 +426,7 @@ fn appendSeed(
                 "semantic({s}, ",
                 .{bindingModeName(semantic.mode)},
             );
-            try appendExpr(out, allocator, theorem, env, semantic.expr_id);
+            try appendExpr(out, allocator, theorem, env, semantic.expr_id, pretty_print.Limit.default_max_len);
             try out.append(allocator, ')');
         },
         .bound => |bound| try appendBoundValue(
@@ -429,6 +464,7 @@ fn appendBoundValue(
                 theorem,
                 env,
                 concrete.raw,
+                pretty_print.Limit.default_max_len,
             );
             try out.append(allocator, ')');
         },
@@ -488,7 +524,7 @@ fn appendSymbolic(
         },
         .fixed => |expr_id| {
             try out.appendSlice(allocator, "fixed(");
-            try appendExpr(out, allocator, theorem, env, expr_id);
+            try appendExpr(out, allocator, theorem, env, expr_id, pretty_print.Limit.default_max_len);
             try out.append(allocator, ')');
         },
         .dummy => |slot| {

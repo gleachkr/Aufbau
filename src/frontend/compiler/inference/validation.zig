@@ -21,7 +21,7 @@ pub fn validateResolvedBindingsWithDebug(
     self: *CompilerContext,
     debug: DebugConfig,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     parser: ?*const ParseRecovery.MM0Parser,
     theorem_vars: ?*const NameExprMap,
     assertion: AssertionStmt,
@@ -33,7 +33,6 @@ pub fn validateResolvedBindingsWithDebug(
         validateBindingExpr(
             env,
             theorem,
-            assertion.args,
             rule.args[idx],
             binding,
         ) catch |err| {
@@ -54,7 +53,6 @@ pub fn validateResolvedBindingsWithDebug(
                 theorem,
                 parser,
                 theorem_vars,
-                assertion.args,
                 rule.args[idx],
                 binding,
                 err,
@@ -66,7 +64,6 @@ pub fn validateResolvedBindingsWithDebug(
     if (try firstDepViolation(
         env,
         theorem,
-        assertion.args,
         rule.args,
         rule.arg_names,
         bindings,
@@ -119,7 +116,7 @@ pub fn validateResolvedBindingsWithDebug(
 pub fn validateResolvedBindings(
     self: *CompilerContext,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     parser: ?*const ParseRecovery.MM0Parser,
     theorem_vars: ?*const NameExprMap,
     assertion: AssertionStmt,
@@ -143,8 +140,7 @@ pub fn validateResolvedBindings(
 
 pub fn bindingsRespectRuleDeps(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
+    theorem: *TheoremContext,
     rule_args: []const ArgInfo,
     rule_arg_names: []const ?[]const u8,
     bindings: []const ExprId,
@@ -152,7 +148,6 @@ pub fn bindingsRespectRuleDeps(
     return (try firstDepViolation(
         env,
         theorem,
-        theorem_args,
         rule_args,
         rule_arg_names,
         bindings,
@@ -161,8 +156,7 @@ pub fn bindingsRespectRuleDeps(
 
 pub fn firstDepViolation(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
+    theorem: *TheoremContext,
     rule_args: []const ArgInfo,
     rule_arg_names: []const ?[]const u8,
     bindings: []const ExprId,
@@ -172,7 +166,7 @@ pub fn firstDepViolation(
     const infos = try allocator.alloc(ExprInfo, bindings.len);
     defer allocator.free(infos);
     for (bindings, infos) |binding, *info| {
-        info.* = try exprInfo(env, theorem, theorem_args, binding);
+        info.* = try BindingValidation.exprInfo(env, theorem, binding);
     }
     return depViolationDetailOf(rule_args, rule_arg_names, infos);
 }
@@ -181,8 +175,7 @@ pub fn firstDepViolation(
 /// variables yet, so it can neither clash nor be clashed with.
 pub fn firstPartialDepViolation(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
+    theorem: *TheoremContext,
     rule_args: []const ArgInfo,
     rule_arg_names: []const ?[]const u8,
     bindings: []const ?ExprId,
@@ -193,7 +186,7 @@ pub fn firstPartialDepViolation(
     defer allocator.free(infos);
     for (bindings, infos) |binding, *info| {
         info.* = if (binding) |expr_id|
-            try exprInfo(env, theorem, theorem_args, expr_id)
+            try BindingValidation.exprInfo(env, theorem, expr_id)
         else
             .{ .sort_name = "", .bound = false, .deps = 0 };
     }
@@ -343,10 +336,9 @@ pub fn attachBindingValidationNotes(
     diag: *CompilerDiag.Diagnostic,
     bufs: *BindingValidationNoteBufs,
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
+    theorem: *TheoremContext,
     parser: ?*const ParseRecovery.MM0Parser,
     theorem_vars: ?*const NameExprMap,
-    theorem_args: []const ArgInfo,
     expected: ArgInfo,
     expr_id: ExprId,
     err: anyerror,
@@ -372,7 +364,7 @@ pub fn attachBindingValidationNotes(
         } }, .proof, null);
     }
 
-    const info = exprInfo(env, theorem, theorem_args, expr_id) catch return;
+    const info = BindingValidation.exprInfo(env, theorem, expr_id) catch return;
     const message: CompilerDiag.NoteMessage = switch (err) {
         error.SortMismatch => .{ .binding_sort_mismatch = .{
             .actual_sort = info.sort_name,
@@ -388,12 +380,11 @@ pub fn attachBindingValidationNotes(
 // and dependency checks that explicit parser-side argument parsing performs.
 pub fn validateBindingExpr(
     env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
+    theorem: *TheoremContext,
     expected: ArgInfo,
     expr_id: ExprId,
 ) !void {
-    const info = try exprInfo(env, theorem, theorem_args, expr_id);
+    const info = try BindingValidation.exprInfo(env, theorem, expr_id);
     if (!std.mem.eql(u8, info.sort_name, expected.sort_name)) {
         return error.SortMismatch;
     }
@@ -402,18 +393,4 @@ pub fn validateBindingExpr(
     if (expected.bound and !info.bound) return error.BoundnessMismatch;
     // Note: dep checking is deferred to the verifier which checks deps
     // relative to the theorem's own bound variables.
-}
-
-pub fn exprInfo(
-    env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    theorem_args: []const ArgInfo,
-    expr_id: ExprId,
-) !ExprInfo {
-    return try BindingValidation.exprInfo(
-        env,
-        theorem,
-        theorem_args,
-        expr_id,
-    );
 }

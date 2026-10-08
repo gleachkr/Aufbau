@@ -1014,29 +1014,68 @@ pub const TheoremContext = struct {
         };
     }
 
-    /// Pre-order OR-walk over the expression tree: true when
+    /// Pre-order OR-walk over the expression DAG: true when
     /// `pred(ctx, self, id)` holds for any node reachable from `root` (the
     /// root included). An app node is offered to the predicate before its
     /// arguments are visited, so both head predicates and leaf predicates
-    /// fit. Hash-consed sharing is NOT deduplicated — a shared subtree is
-    /// visited once per occurrence — so predicates must be cheap and pure.
+    /// fit. A shared app node is entered once (`DagWalk`): an expression a
+    /// chain of lines builds by doubling has linear DAG size and exponential
+    /// tree size. Predicates must be pure, or at least idempotent, since a
+    /// node reached by two paths may still be offered twice.
     pub fn exprAny(
         self: *const TheoremContext,
         root: ExprId,
         ctx: anytype,
         comptime pred: fn (@TypeOf(ctx), *const TheoremContext, ExprId) bool,
     ) bool {
-        if (pred(ctx, self, root)) return true;
-        switch (self.interner.node(root).*) {
-            .variable, .placeholder => return false,
+        var walk: DagWalk = .{};
+        defer walk.deinit(self.allocator);
+        return self.exprAnyIn(&walk, root, ctx, pred);
+    }
+
+    fn exprAnyIn(
+        self: *const TheoremContext,
+        walk: *DagWalk,
+        id: ExprId,
+        ctx: anytype,
+        comptime pred: fn (@TypeOf(ctx), *const TheoremContext, ExprId) bool,
+    ) bool {
+        switch (self.interner.node(id).*) {
+            .variable, .placeholder => return pred(ctx, self, id),
             .app => |app| {
+                // A node entered before held no match, nor did anything under it.
+                if (!walk.enter(self.allocator, id)) return false;
+                if (pred(ctx, self, id)) return true;
                 for (app.args) |arg| {
-                    if (self.exprAny(arg, ctx, pred)) return true;
+                    if (self.exprAnyIn(walk, arg, ctx, pred)) return true;
                 }
                 return false;
             },
         }
     }
+
+    /// Which app nodes a DAG walk has entered. The first `plain_steps` app
+    /// nodes go unrecorded, so a small expression costs no allocation; past
+    /// that each app node is entered once. Memo-or-forget on OOM (the walk
+    /// then degrades to a tree walk).
+    const DagWalk = struct {
+        const plain_steps = 64;
+
+        steps: usize = 0,
+        seen: std.AutoHashMapUnmanaged(ExprId, void) = .empty,
+
+        fn deinit(self: *DagWalk, allocator: std.mem.Allocator) void {
+            self.seen.deinit(allocator);
+        }
+
+        /// False when `id` was entered before.
+        fn enter(self: *DagWalk, allocator: std.mem.Allocator, id: ExprId) bool {
+            self.steps += 1;
+            if (self.steps <= plain_steps) return true;
+            const gop = self.seen.getOrPut(allocator, id) catch return true;
+            return !gop.found_existing;
+        }
+    };
 
     /// True when `expr` is itself a placeholder leaf.
     pub fn isPlaceholder(self: *const TheoremContext, expr: ExprId) bool {
@@ -1060,15 +1099,23 @@ pub const TheoremContext = struct {
         root: ExprId,
         opts: struct { placeholders: bool = true },
     ) !u55 {
-        return switch (self.interner.node(root).*) {
-            .placeholder => if (opts.placeholders) self.leafDeps(root) else 0,
-            .variable => self.leafDeps(root),
-            .app => |app| blk: {
-                var deps: u55 = 0;
-                for (app.args) |arg| deps |= try self.exprDeps(arg, .{ .placeholders = opts.placeholders });
-                break :blk deps;
-            },
+        const Union = struct {
+            deps: u55 = 0,
+            placeholders: bool,
+
+            fn visit(acc: *@This(), theorem: *const TheoremContext, expr: ExprId) anyerror!void {
+                switch (theorem.interner.node(expr).*) {
+                    .placeholder => if (acc.placeholders) {
+                        acc.deps |= try theorem.leafDeps(expr);
+                    },
+                    .variable => acc.deps |= try theorem.leafDeps(expr),
+                    .app => {},
+                }
+            }
         };
+        var acc: Union = .{ .placeholders = opts.placeholders };
+        try self.exprForEach(root, &acc, Union.visit);
+        return acc.deps;
     }
 
     fn leafDeps(self: *const TheoremContext, leaf: ExprId) !u55 {
@@ -1136,19 +1183,33 @@ pub const TheoremContext = struct {
     }
 
     /// Side-effecting companion to `exprAny`: apply `visit` to every node
-    /// reachable from `root` in pre-order (the root included). Errors from
-    /// `visit` abort the walk and propagate.
+    /// reachable from `root` in pre-order (the root included), entering a
+    /// shared app node once. `visit` must be idempotent. Errors from `visit`
+    /// abort the walk and propagate.
     pub fn exprForEach(
         self: *const TheoremContext,
         root: ExprId,
         ctx: anytype,
         comptime visit: fn (@TypeOf(ctx), *const TheoremContext, ExprId) anyerror!void,
     ) anyerror!void {
-        try visit(ctx, self, root);
-        switch (self.interner.node(root).*) {
-            .variable, .placeholder => {},
-            .app => |app| for (app.args) |arg| {
-                try self.exprForEach(arg, ctx, visit);
+        var walk: DagWalk = .{};
+        defer walk.deinit(self.allocator);
+        try self.exprForEachIn(&walk, root, ctx, visit);
+    }
+
+    fn exprForEachIn(
+        self: *const TheoremContext,
+        walk: *DagWalk,
+        id: ExprId,
+        ctx: anytype,
+        comptime visit: fn (@TypeOf(ctx), *const TheoremContext, ExprId) anyerror!void,
+    ) anyerror!void {
+        switch (self.interner.node(id).*) {
+            .variable, .placeholder => try visit(ctx, self, id),
+            .app => |app| {
+                if (!walk.enter(self.allocator, id)) return;
+                try visit(ctx, self, id);
+                for (app.args) |arg| try self.exprForEachIn(walk, arg, ctx, visit);
             },
         }
     }

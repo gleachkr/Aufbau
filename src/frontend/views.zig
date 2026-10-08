@@ -1515,7 +1515,7 @@ fn holeyMatchesConcrete(
     expr_id: ExprId,
 ) !bool {
     if (lineHoleSort(theorem, holey)) |hole_sort| {
-        const info = try BindingValidation.currentExprInfo(
+        const info = try BindingValidation.exprInfo(
             env,
             theorem,
             expr_id,

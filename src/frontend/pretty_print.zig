@@ -1,14 +1,48 @@
 const std = @import("std");
 const parse = @import("../trusted/parse.zig");
 const ExprMod = @import("./expr.zig");
+const text_util = @import("./text_util.zig");
 
 const Notation = parse.Notation;
 const MAX_PRECEDENCE = parse.MAX_PRECEDENCE;
 const APP_PRECEDENCE = parse.APP_PRECEDENCE;
 
 /// The render functions are mutually recursive, so their error set is stated
-/// explicitly (only allocation can fail) rather than inferred.
+/// explicitly rather than inferred: allocation can fail, and the internal
+/// `TooLong` stops a render that has passed its `Limit`.
 const Error = std.mem.Allocator.Error;
+const RenderError = Error || error{TooLong};
+
+/// Text produced within a theorem is not bounded by the source: an expression
+/// a chain of lines builds by doubling has linear DAG size and exponential
+/// printed size. A render stops once its output passes `max_len` bytes, so it
+/// costs O(`max_len` + depth) whatever the expression.
+pub const Limit = struct {
+    max_len: usize = default_max_len,
+    /// What a render past `max_len` returns: null (text that must be whole,
+    /// e.g. to be spliced into the source) or its first `max_len` bytes
+    /// followed by `…` (text that is only read).
+    overflow: enum { fail, truncate },
+
+    pub const default_max_len = 64 * 1024;
+};
+
+/// Output of a render: fails with `TooLong` once past `max_len`.
+const Out = struct {
+    list: std.ArrayListUnmanaged(u8) = .{},
+    arena: std.mem.Allocator,
+    max_len: usize,
+
+    fn append(self: *Out, byte: u8) RenderError!void {
+        try self.list.append(self.arena, byte);
+        if (self.list.items.len > self.max_len) return error.TooLong;
+    }
+
+    fn appendSlice(self: *Out, bytes: []const u8) RenderError!void {
+        try self.list.appendSlice(self.arena, bytes);
+        if (self.list.items.len > self.max_len) return error.TooLong;
+    }
+};
 
 /// Classification of one expression node, returned by a view adapter's
 /// `nodeInfo`. Generic over the adapter's node-handle type so the printer can
@@ -50,14 +84,30 @@ pub fn render(
     notation: anytype,
     view: anytype,
     root: @TypeOf(view).Node,
+    limit: Limit,
 ) Error!?[]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
-    errdefer out.deinit(arena);
-    if (!try renderNode(&out, arena, notation, view, root, 0)) {
-        out.deinit(arena);
+    var out: Out = .{ .arena = arena, .max_len = limit.max_len };
+    errdefer out.list.deinit(arena);
+    const rendered = renderNode(&out, notation, view, root, 0) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.TooLong => switch (limit.overflow) {
+            .fail => {
+                out.list.deinit(arena);
+                return null;
+            },
+            .truncate => {
+                const keep = text_util.truncateUtf8(out.list.items, limit.max_len);
+                out.list.shrinkRetainingCapacity(keep.len);
+                try out.list.appendSlice(arena, "…");
+                return try out.list.toOwnedSlice(arena);
+            },
+        },
+    };
+    if (!rendered) {
+        out.list.deinit(arena);
         return null;
     }
-    return try out.toOwnedSlice(arena);
+    return try out.list.toOwnedSlice(arena);
 }
 
 /// Render `node` in a context that accepts subexpressions of precedence
@@ -65,87 +115,83 @@ pub fn render(
 /// parentheses. This mirrors the parser's precedence climbing exactly, so the
 /// output re-parses to the same expression with the fewest parentheses.
 fn renderNode(
-    out: *std.ArrayListUnmanaged(u8),
-    arena: std.mem.Allocator,
+    out: *Out,
     notation: anytype,
     view: anytype,
     node: @TypeOf(view).Node,
     min_prec: u16,
-) Error!bool {
+) RenderError!bool {
     ExprMod.work_ticks_walk +%= 1;
     switch (view.nodeInfo(node)) {
         .missing => return false,
         .atom => |name| {
-            try out.appendSlice(arena, name);
+            try out.appendSlice(name);
             return true;
         },
         .app => |app| {
             // Coercions are inserted implicitly and never written in source, so
             // print the argument transparently at the same precedence.
             if (app.args.len == 1 and notation.isCoercionTerm(app.term_id)) {
-                return renderNode(out, arena, notation, view, app.args[0], min_prec);
+                return renderNode(out, notation, view, app.args[0], min_prec);
             }
             if (notation.notationForTerm(app.term_id)) |notn| switch (notn) {
                 .infix => |ix| {
                     if (app.args.len == 2) {
-                        return renderInfix(out, arena, notation, view, ix, app.args, min_prec);
+                        return renderInfix(out, notation, view, ix, app.args, min_prec);
                     }
                 },
                 .prefix => |px| {
-                    return renderPrefix(out, arena, notation, view, px, app.args, min_prec);
+                    return renderPrefix(out, notation, view, px, app.args, min_prec);
                 },
             };
-            return renderFallback(out, arena, notation, view, app.term_id, app.args, min_prec);
+            return renderFallback(out, notation, view, app.term_id, app.args, min_prec);
         },
     }
 }
 
 fn renderInfix(
-    out: *std.ArrayListUnmanaged(u8),
-    arena: std.mem.Allocator,
+    out: *Out,
     notation: anytype,
     view: anytype,
     ix: anytype,
     args: []const @TypeOf(view).Node,
     min_prec: u16,
-) Error!bool {
+) RenderError!bool {
     // Left-associative: the right operand must bind tighter (prec + 1); the left
     // operand may share the operator's precedence. Right-associative is the
     // mirror. (parse.zig parses the rhs at `prec` / `prec + 1` accordingly.)
     const left_prec = if (ix.right_assoc) ix.prec + 1 else ix.prec;
     const right_prec = if (ix.right_assoc) ix.prec else ix.prec + 1;
     const wrap = ix.prec < min_prec;
-    if (wrap) try out.append(arena, '(');
-    if (!try renderNode(out, arena, notation, view, args[0], left_prec)) return false;
-    try out.append(arena, ' ');
-    try out.appendSlice(arena, ix.token);
-    try out.append(arena, ' ');
-    if (!try renderNode(out, arena, notation, view, args[1], right_prec)) return false;
-    if (wrap) try out.append(arena, ')');
+    if (wrap) try out.append('(');
+    if (!try renderNode(out, notation, view, args[0], left_prec)) return false;
+    try out.append(' ');
+    try out.appendSlice(ix.token);
+    try out.append(' ');
+    if (!try renderNode(out, notation, view, args[1], right_prec)) return false;
+    if (wrap) try out.append(')');
     return true;
 }
 
 fn renderPrefix(
-    out: *std.ArrayListUnmanaged(u8),
-    arena: std.mem.Allocator,
+    out: *Out,
     notation: anytype,
     view: anytype,
     px: anytype,
     args: []const @TypeOf(view).Node,
     min_prec: u16,
-) Error!bool {
+) RenderError!bool {
     const wrap = px.prec < min_prec;
-    if (wrap) try out.append(arena, '(');
-    try out.appendSlice(arena, px.token);
+    if (wrap) try out.append('(');
+    try out.appendSlice(px.token);
     for (px.lits) |lit| {
-        try out.append(arena, ' ');
+        try out.append(' ');
         switch (lit) {
-            .constant => |tok| try out.appendSlice(arena, tok),
+            .constant => |tok| try out.appendSlice(tok),
             .variable => |v| {
                 if (v.arg_index >= args.len) return false;
                 if (!try renderNode(
                     out,
-                    arena,
                     notation,
                     view,
                     args[v.arg_index],
@@ -154,35 +200,34 @@ fn renderPrefix(
             },
         }
     }
-    if (wrap) try out.append(arena, ')');
+    if (wrap) try out.append(')');
     return true;
 }
 
 fn renderFallback(
-    out: *std.ArrayListUnmanaged(u8),
-    arena: std.mem.Allocator,
+    out: *Out,
     notation: anytype,
     view: anytype,
     term_id: u32,
     args: []const @TypeOf(view).Node,
     min_prec: u16,
-) Error!bool {
+) RenderError!bool {
     const name = view.termName(term_id) orelse return false;
     if (args.len == 0) {
         // Nullary atom: bound at MAX_PRECEDENCE, never parenthesized.
-        try out.appendSlice(arena, name);
+        try out.appendSlice(name);
         return true;
     }
     const wrap = APP_PRECEDENCE < min_prec;
-    if (wrap) try out.append(arena, '(');
-    try out.appendSlice(arena, name);
+    if (wrap) try out.append('(');
+    try out.appendSlice(name);
     for (args) |arg| {
-        try out.append(arena, ' ');
+        try out.append(' ');
         // Application arguments are parsed at MAX_PRECEDENCE, so any compound
         // argument is parenthesized while atoms are left bare.
-        if (!try renderNode(out, arena, notation, view, arg, MAX_PRECEDENCE)) return false;
+        if (!try renderNode(out, notation, view, arg, MAX_PRECEDENCE)) return false;
     }
-    if (wrap) try out.append(arena, ')');
+    if (wrap) try out.append(')');
     return true;
 }
 
@@ -241,7 +286,7 @@ fn expectRender(
     view: MockView,
     root: u32,
 ) !void {
-    const out = try render(testing.allocator, notation, view, root);
+    const out = try render(testing.allocator, notation, view, root, .{ .overflow = .fail });
     defer if (out) |o| testing.allocator.free(o);
     try testing.expect(out != null);
     try testing.expectEqualStrings(expected, out.?);
@@ -440,9 +485,34 @@ test "missing subnode makes the whole render fail" {
     const notation = MockNotation{ .entries = &.{
         .{ .infix = .{ .token = "+", .prec = 64, .right_assoc = false } },
     } };
-    const out = try render(testing.allocator, notation, view, 2);
+    const out = try render(testing.allocator, notation, view, 2, .{ .overflow = .fail });
     defer if (out) |o| testing.allocator.free(o);
     try testing.expect(out == null);
+}
+
+test "a render stops at its limit on a doubling DAG" {
+    // Node k + 1 is `k ∧ k`: 41 nodes, 2^40 leaves when printed.
+    var nodes: [41]MockNode = undefined;
+    var args: [40][2]u32 = undefined;
+    nodes[0] = .{ .atom = "p" };
+    for (0..40) |k| {
+        args[k] = .{ @intCast(k), @intCast(k) };
+        nodes[k + 1] = .{ .app = .{ .term_id = 0, .args = &args[k] } };
+    }
+    const view = MockView{ .nodes = &nodes, .term_names = &.{"an"} };
+    const notation = MockNotation{ .entries = &.{
+        .{ .infix = .{ .token = "∧", .prec = 20, .right_assoc = false } },
+    } };
+
+    const failed = try render(testing.allocator, notation, view, 40, .{ .max_len = 100, .overflow = .fail });
+    try testing.expect(failed == null);
+
+    const cut = (try render(testing.allocator, notation, view, 40, .{ .max_len = 100, .overflow = .truncate })).?;
+    defer testing.allocator.free(cut);
+    try testing.expect(std.mem.endsWith(u8, cut, "…"));
+    try testing.expect(std.unicode.utf8ValidateSlice(cut));
+    try testing.expect(cut.len <= 100 + "…".len);
+    try testing.expect(std.mem.startsWith(u8, cut, "p ∧ p ∧ (p ∧ p)"));
 }
 
 test "atom renders without parens at top level" {

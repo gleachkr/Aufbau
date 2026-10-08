@@ -87,9 +87,10 @@ pub fn locToRange(text: []const u8, loc: Loc, encoding: Encoding) types.Range {
     };
 }
 
+/// The span `range` covers. A malformed range whose end precedes its start
+/// covers the same span as its reverse, so `start <= end` always holds.
 pub fn rangeToLoc(text: []const u8, range: types.Range, encoding: Encoding) Loc {
-    return .{
-        .start = positionToIndex(text, range.start, encoding),
-        .end = positionToIndex(text, range.end, encoding),
-    };
+    const a = positionToIndex(text, range.start, encoding);
+    const b = positionToIndex(text, range.end, encoding);
+    return .{ .start = @min(a, b), .end = @max(a, b) };
 }
