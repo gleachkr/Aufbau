@@ -1,7 +1,11 @@
 name: Deploy web demo to GitHub Pages
 
 on:
-  push:
+  # Deploy main only after the Test workflow passes on that commit, and
+  # build the commit it tested rather than the branch tip.
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -16,10 +20,19 @@ concurrency:
 
 jobs:
   build:
+    # A workflow_run event fires for any completed Test run whose head
+    # branch is main, so also require a passing run of a push (a pull
+    # request from a fork's main would otherwise qualify).
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2

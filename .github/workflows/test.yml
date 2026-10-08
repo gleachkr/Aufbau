@@ -127,3 +127,51 @@ jobs:
               > "$RUNNER_TEMP/cells.actual"
             diff -u manual/cells.expected "$RUNNER_TEMP/cells.actual"
           '
+
+  # npm and Pages ship ReleaseFast wasm, where safety checks are compiled out
+  # and undefined behaviour the ReleaseSafe job would trap on can go silent.
+  # Run the package tests once against the build that actually ships.
+  wasm-release-fast:
+    name: Test shipped ReleaseFast wasm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Zig build data
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/zig-global
+            .cache/zig-local
+          key: zig-fast-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            zig-fast-${{ runner.os }}-
+
+      - name: Test the packages under Node
+        run: |
+          nix develop .#ci --command zig build test-node-wasm test-wasm-host \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global
+
+      - name: Smoke-test the packed editor in Chromium
+        run: |
+          nix develop .#ci --command zig build test-editor-browser \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global
+
+      - name: Test the cross-origin LSP worker in Chromium
+        run: |
+          nix develop .#ci --command zig build test-lsp-cross-origin \
+            -Doptimize=ReleaseFast \
+            --cache-dir .cache/zig-local \
+            --global-cache-dir .cache/zig-global

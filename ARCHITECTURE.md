@@ -98,6 +98,7 @@ The user-facing manual is an mdbook under `manual/`:
   ```
 - CI wiring: `.github/workflows/test.yml` runs the cell check;
   `.github/workflows/web-demo-pages.yml` builds and deploys the book
+  once the Test workflow passes on `main`
 
 Subsystem-level architecture notes live next to their code:
 
@@ -1254,7 +1255,10 @@ across the chain. The manual and demo consume these same packages.
   CI runs them explicitly, but they are not dependencies of `test`.
 
 CI additionally checks versions, architecture paths, test-import wiring,
-Zig formatting, native builds, and manual cells. The scripts are
+Zig formatting, native builds, and manual cells. Everything above runs at
+ReleaseSafe; a second job reruns the four package tests at ReleaseFast,
+the mode npm and Pages ship. The npm canary and the Pages deploy wait for
+the Test workflow to pass on the commit they build. The scripts are
 `scripts/check-version.mjs`, `scripts/check-doc-paths.mjs`, and
 `scripts/check-test-wiring.mjs`. Path/import checks are structural aids, not
 proof that architectural claims or every colocated test are covered.

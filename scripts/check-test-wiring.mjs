@@ -12,28 +12,40 @@
 // Mechanics: build.zig and every file it imports by relative path (build
 // manifests such as tests/frontier_guards.zig) are scanned; test roots are
 // the `root_source_file` entries whose path mentions "test". The manifests
-// themselves count as wired. From each root we walk relative
-// `@import("….zig")` edges (named module imports like "mm0" cross a module
-// boundary, where Zig does not collect tests, so they are not followed).
-// Every file under src/ or tests/ that looks like a test file — basename
-// `tests.zig`, `*_tests.zig`, or living in a `tests/` directory — must be
-// reachable.
+// themselves count as wired. From each root we walk aggregator edges —
+// `_ = @import("….zig")` — with comments stripped first, so a
+// commented-out import does not count. A plain `const x = @import(…)`
+// is not an edge: Zig only collects a file's tests when it analyzes the
+// file, and an unreferenced const never is. Named module imports like "mm0"
+// cross a module boundary, where Zig does not collect tests, so they are
+// not edges either. Every file under src/ or tests/ that declares a
+// top-level test must be reachable.
 import fs from "node:fs";
 import path from "node:path";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
+const source = (rel) => fs.readFileSync(path.join(repoRoot, rel), "utf8");
 
-const zigImports = (file) =>
-  [...read(file).matchAll(/@import\("([^"]+\.zig)"\)/g)].map((m) =>
+// Zig source with `//` comments and `\\` multiline-string lines removed.
+// Ordinary `"…"` literals are matched first and kept, so a `//` inside one
+// (a URL, say) does not start a comment.
+const code = (rel) =>
+  source(rel)
+    .replace(/\\\\[^\n]*/g, "")
+    .replace(/"(?:[^"\\\n]|\\.)*"|\/\/[^\n]*/g, (m) => (m.startsWith("//") ? "" : m));
+
+const importsIn = (file, pattern) =>
+  [...code(file).matchAll(pattern)].map((m) =>
     path.normalize(path.join(path.dirname(file), m[1])),
   );
+const anyImport = /@import\("([^"]+\.zig)"\)/g;
+const aggregatorImport = /_\s*=\s*@import\("([^"]+\.zig)"\)/g;
 
 // 1. Test roots from build.zig and the manifests it imports.
-const buildFiles = ["build.zig", ...zigImports("build.zig")];
+const buildFiles = ["build.zig", ...importsIn("build.zig", anyImport)];
 const roots = [];
 for (const file of buildFiles) {
-  for (const m of read(file).matchAll(/root_source_file\s*=\s*b\.path\("([^"]+)"\)/g)) {
+  for (const m of code(file).matchAll(/root_source_file\s*=\s*b\.path\("([^"]+)"\)/g)) {
     if (/test/.test(m[1])) roots.push(m[1]);
   }
 }
@@ -42,7 +54,7 @@ if (roots.length === 0) {
   process.exit(1);
 }
 
-// 2. Reachability via relative imports.
+// 2. Reachability via aggregator imports.
 const reachable = new Set();
 const queue = [...roots];
 while (queue.length > 0) {
@@ -50,22 +62,18 @@ while (queue.length > 0) {
   if (reachable.has(file)) continue;
   if (!fs.existsSync(path.join(repoRoot, file))) continue;
   reachable.add(file);
-  queue.push(...zigImports(file));
+  queue.push(...importsIn(file, aggregatorImport));
 }
 
-// 3. Candidate test files.
+// 3. Candidate test files: any file with a top-level test declaration.
 const candidates = [];
 const walk = (dir) => {
   for (const entry of fs.readdirSync(path.join(repoRoot, dir), { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
     const rel = path.join(dir, entry.name);
     if (entry.isDirectory()) walk(rel);
-    else if (entry.name.endsWith(".zig")) {
-      const isTestFile =
-        entry.name === "tests.zig" ||
-        entry.name.endsWith("_tests.zig") ||
-        rel.split(path.sep).includes("tests");
-      if (isTestFile) candidates.push(rel);
+    else if (entry.name.endsWith(".zig") && /^test\b/m.test(code(rel))) {
+      candidates.push(rel);
     }
   }
 };
@@ -77,7 +85,7 @@ if (dark.length > 0) {
   for (const c of dark) {
     console.error(`${c}: not reachable from any test root (${roots.join(", ")})`);
   }
-  console.error(`\n${dark.length} dark test file(s): wire them into a test root's import graph or delete them.`);
+  console.error(`\n${dark.length} dark test file(s): add a \`_ = @import\` edge from a test root's aggregator, or delete them.`);
   process.exit(1);
 }
 console.log(`check-test-wiring: ${candidates.length} test files reachable from ${roots.length} roots`);
