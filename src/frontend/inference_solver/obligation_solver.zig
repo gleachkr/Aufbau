@@ -178,11 +178,18 @@ fn solveAcuStructuralObligation(
         target_items.items,
         binder_item_lists,
         0,
+        0,
         &out,
     );
     return try out.toOwnedSlice(self.allocator);
 }
 
+/// `min_binder` is the first binder the member at `item_pos` may go to.
+/// Copies of one member are interchangeable and sit next to each other in
+/// the sorted items, so each copy goes to the same binder as the copy
+/// before it or a later one: every split of the copies is visited once, in
+/// the order trying each binder for each copy first reaches it, instead of
+/// once per permutation (k^n assignments for C(n+k-1, k-1) splits).
 fn searchAcuStructuralObligationAssignments(
     self: anytype,
     state: BranchState,
@@ -192,6 +199,7 @@ fn searchAcuStructuralObligationAssignments(
     binder_target_items: []const ExprId,
     binder_item_lists: []std.ArrayListUnmanaged(ExprId),
     item_pos: usize,
+    min_binder: usize,
     out: *std.ArrayListUnmanaged(BranchState),
 ) anyerror!void {
     if (item_pos >= binder_target_items.len) {
@@ -213,8 +221,12 @@ fn searchAcuStructuralObligationAssignments(
         return;
     }
 
-    for (binder_item_lists) |*items| {
-        try items.append(self.allocator, binder_target_items[item_pos]);
+    const item = binder_target_items[item_pos];
+    const next_pos = item_pos + 1;
+    const next_is_copy = next_pos < binder_target_items.len and
+        binder_target_items[next_pos] == item;
+    for (binder_item_lists[min_binder..], min_binder..) |*items, binder| {
+        try items.append(self.allocator, item);
         try searchAcuStructuralObligationAssignments(
             self,
             state,
@@ -223,7 +235,8 @@ fn searchAcuStructuralObligationAssignments(
             profile,
             binder_target_items,
             binder_item_lists,
-            item_pos + 1,
+            next_pos,
+            if (next_is_copy) binder else 0,
             out,
         );
         _ = items.pop();

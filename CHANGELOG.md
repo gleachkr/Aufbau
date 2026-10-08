@@ -63,6 +63,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `auto?` no longer takes time exponential in the number of such doubling
   lines either. Its forward pass, and two other walks it makes, went over
   an expression shared between lines once for every path to it.
+- Inferring how to split a bag under an `@acui` combiner without
+  idempotence no longer takes time exponential in the number of identical
+  members. Every copy of a member was tried in every binder, 2^16 splits
+  for 16 copies over two binders where 17 are distinct. Each distinct
+  split is now tried once.
 - After an `@auto eager` rule applies, `auto?` still tries an eager rule
   that splits the context. Such a rule sorts after every rule that does
   not split it, and the search used to stop at the first rule that was not

@@ -604,6 +604,52 @@ test "uncoupled ACUI cover product is resolved without enumeration" {
     );
 }
 
+test "identical ACU members are split once per count" {
+    // `weaken` splits a context of 24 copies of `x` between two binders.
+    // Trying every binder for every copy made 2^24 covers to compare; the
+    // copies are interchangeable, so only the 25 splits are enumerated. The
+    // chosen and alternative covers are the ones per-copy enumeration
+    // reached first.
+    const allocator = std.testing.allocator;
+    const mm0_src = try readProofCaseFile(
+        allocator,
+        "pass_acu_identical_members_ambiguous",
+        "mm0",
+    );
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCaseFile(
+        allocator,
+        "pass_acu_identical_members_ambiguous",
+        "auf",
+    );
+    defer allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    const diag = warnings[0];
+    try std.testing.expectEqual(error.AmbiguousAcuiMatch, diag.err);
+    try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
+    try expectNoteText(
+        "chosen bindings: g = join(hyp(v0), join(hyp(v0), join(hyp(v0), " ++
+            "join(...; h = emp; d = hyp(v1)",
+        diag.noteSlice()[1],
+    );
+    try expectNoteText(
+        "alternative bindings: g = join(hyp(v0), join(hyp(v0), " ++
+            "join(hyp(v0), join(...; h = hyp(v0); d = hyp(v1)",
+        diag.noteSlice()[2],
+    );
+    try expectNoteText(
+        "distinct solutions considered: 25",
+        diag.noteSlice()[3],
+    );
+}
+
 test "-Werror upgrades ambiguity warnings into errors" {
     const allocator = std.testing.allocator;
     const mm0_src = try readProofCaseFile(
