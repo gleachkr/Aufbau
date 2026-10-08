@@ -106,7 +106,7 @@ pub const Marker = struct {
     edit: ?Edit = null,
     /// When found: the line's assertion with its holes filled, as an edit.
     /// Null when the line has no holes, or the filled assertion does not
-    /// print with source names.
+    /// print with source names, or an earlier marker on the line has it.
     filled_assertion: ?Edit = null,
     /// After a miss: why, and which limits cut it short.
     detail: ?[]const u8 = null,
@@ -383,6 +383,29 @@ fn searchMarker(
     return spans;
 }
 
+/// Write `text` with `edits` made, sorting them in place. Edits of one
+/// run never overlap: each marker's proof replaces its own span, and a
+/// line's filled assertion goes with only one of its markers.
+pub fn writeEdits(
+    writer: *std.Io.Writer,
+    text: []const u8,
+    edits: []Edit,
+) (std.Io.Writer.Error || error{OverlappingEdits})!void {
+    std.mem.sort(Edit, edits, {}, struct {
+        fn before(_: void, a: Edit, b: Edit) bool {
+            return a.span.start < b.span.start;
+        }
+    }.before);
+    var at: usize = 0;
+    for (edits) |edit| {
+        if (edit.span.start < at) return error.OverlappingEdits;
+        try writer.writeAll(text[at..edit.span.start]);
+        try writer.writeAll(edit.text);
+        at = edit.span.end;
+    }
+    try writer.writeAll(text[at..]);
+}
+
 /// `text` with `span` replaced by `replacement`.
 fn splice(
     allocator: std.mem.Allocator,
@@ -489,6 +512,10 @@ fn fillHoleValues(
         }
     }
 
+    // The line the last entry was on: entries come in text order, so the
+    // first on each line attaches its filled assertion, mapped back by the
+    // growth before it, which all lies before the line.
+    var filled_line: ?usize = null;
     for (found_at) |entry| {
         const line = for (lines.items) |span| {
             if (entry.at >= span.start and entry.at < span.end) break span;
@@ -510,6 +537,8 @@ fn fillHoleValues(
         }
         const marker = &markers[entry.marker];
         marker.holes = try holes.toOwnedSlice(out);
+        if (filled_line == line.start) continue;
+        filled_line = line.start;
         for (sink.assertions.items) |filled| {
             if (filled.line.start != line.start) continue;
             marker.filled_assertion = .{

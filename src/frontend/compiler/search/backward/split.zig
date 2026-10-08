@@ -182,16 +182,20 @@ fn collectSpine(context: *const Context, site: *SplitSite) bool {
 }
 
 /// True when `hyp` restates every fixed principal summand of `site` as a
-/// summand of its own `site.head_id` combiner, as `rex`'s premise
-/// `[x/t] p , (∃ x p) , d` restates `∃ x p`. Retaining a claimed member in the
-/// open rest then only duplicates it, and a set combiner identifies that
-/// premise with the non-retaining split's. (An ordered idempotent combiner
-/// does not: `a , b , a` need not equal `a , b`.)
-pub fn hypRestatesPrincipals(context: *const Context, site: SplitSite, hyp: TemplateExpr) bool {
+/// summand of its own `site.head_id` combiner holding the split binder `b`,
+/// as `rex`'s premise `[x/t] p , (∃ x p) , d` restates `∃ x p`. Retaining a
+/// claimed member in the open rest then only duplicates it, and a set
+/// combiner identifies that premise with the non-retaining split's. (An
+/// ordered idempotent combiner does not: `a , b , a` need not equal `a , b`.)
+pub fn hypRestatesPrincipals(
+    context: *const Context,
+    site: SplitSite,
+    hyp: TemplateExpr,
+    b: usize,
+) bool {
     if (site.fixed_len == 0) return false;
     if (bag.lawOf(context, site.head_id) != .set) return false;
-    const combiner = findCombiner(hyp, site.head_id) orelse return false;
-    const summands = bag.flattenTemplate(context, site.head_id, combiner) orelse return false;
+    const summands = summandsHolding(context, hyp, site.head_id, b) orelse return false;
     for (site.fixed[0..site.fixed_len]) |principal| {
         for (summands.slice()) |summand| {
             if (summand.eql(principal)) break;
@@ -200,17 +204,31 @@ pub fn hypRestatesPrincipals(context: *const Context, site: SplitSite, hyp: Temp
     return true;
 }
 
-fn findCombiner(template: TemplateExpr, head_id: u32) ?TemplateExpr {
-    switch (template) {
+/// The summands of the outermost `head_id` combiner in `template` that has
+/// binder `b` as a summand: the context `b` stands for, not another one
+/// (a two-sided sequent has two).
+fn summandsHolding(
+    context: *const Context,
+    template: TemplateExpr,
+    head_id: u32,
+    b: usize,
+) ?bag.TemplateBag {
+    const app = switch (template) {
         .binder => return null,
-        .app => |app| {
-            if (app.term_id == head_id) return template;
-            for (app.args) |arg| {
-                if (findCombiner(arg, head_id)) |found| return found;
-            }
-            return null;
-        },
+        .app => |app| app,
+    };
+    if (app.term_id == head_id) {
+        if (bag.flattenTemplate(context, head_id, template)) |summands| {
+            for (summands.slice()) |summand| switch (summand) {
+                .binder => |idx| if (idx == b) return summands,
+                .app => {},
+            };
+        }
     }
+    for (app.args) |arg| {
+        if (summandsHolding(context, arg, head_id, b)) |found| return found;
+    }
+    return null;
 }
 
 /// Enumerates candidate concrete contexts for one open spine binder, smallest

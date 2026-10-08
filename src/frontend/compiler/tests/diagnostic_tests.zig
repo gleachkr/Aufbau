@@ -539,6 +539,50 @@ test "compiler distinguishes rules declared later in mm0 order" {
     );
 }
 
+test "a rule declared later stays later after local lemmas" {
+    // Two `.auf` lemmas grow the rule table past the `.mm0` assertions
+    // checked so far; `later` is still ahead of `t`.
+    const mm0_src =
+        \\provable sort wff;
+        \\term tt: wff;
+        \\axiom a0: $ tt $;
+        \\theorem t: $ tt $;
+        \\axiom later: $ tt $;
+    ;
+    const proof_src =
+        \\lemma lem1: $ tt $
+        \\----
+        \\l1: $ tt $ by a0 []
+        \\
+        \\lemma lem2: $ tt $
+        \\----
+        \\l1: $ tt $ by a0 []
+        \\
+        \\t
+        \\---
+        \\l1: $ tt $ by later []
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, mm0_src, proof_src);
+    try std.testing.expectError(error.RuleNotYetAvailable, compiler.check());
+}
+
+test "a rule declared later is found ahead of a malformed statement" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term tt: wff;
+        \\axiom a0: $ tt $;
+        \\theorem t: $ tt $;
+        \\axiom later: $ tt $;
+        \\axiom broken $ tt
+    ;
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ tt $ by later []
+    ;
+    var compiler = Compiler.initWithProof(std.testing.allocator, mm0_src, proof_src);
+    try std.testing.expectError(error.RuleNotYetAvailable, compiler.check());
+}
 test "compiler retries theorem lines through fallback chains" {
     const mm0_src =
         \\provable sort wff;

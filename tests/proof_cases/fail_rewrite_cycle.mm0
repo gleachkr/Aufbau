@@ -1,0 +1,26 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort obj;
+term iff (a b: wff): wff;
+term eq (a b: obj): wff;
+term P (x: obj): wff;
+term c: obj;
+term d: obj;
+term add (a b: obj): obj;
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ iff a a $;
+axiom iff_trans (a b c: wff): $ iff a b $ > $ iff b c $ > $ iff a c $;
+axiom iff_sym (a b: wff): $ iff a b $ > $ iff b a $;
+axiom iff_mp (a b: wff): $ iff a b $ > $ a $ > $ b $;
+--| @relation obj eq eq_refl eq_trans eq_sym _
+axiom eq_refl (a: obj): $ eq a a $;
+axiom eq_trans (a b c: obj): $ eq a b $ > $ eq b c $ > $ eq a c $;
+axiom eq_sym (a b: obj): $ eq a b $ > $ eq b a $;
+--| @congr
+axiom P_congr (a b: obj): $ eq a b $ > $ iff (P a) (P b) $;
+--| @congr
+axiom add_congr (a b c e: obj): $ eq a b $ > $ eq c e $ > $ eq (add a c) (add b e) $;
+--| @rewrite
+axiom add_comm (a b: obj): $ eq (add a b) (add b a) $;
+axiom ax1: $ P (add c d) $;
+theorem thm: $ P (add d c) $;

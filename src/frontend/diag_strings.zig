@@ -204,6 +204,7 @@ pub const Strings = struct {
     err_DependencySlotExhausted: []const u8,
     err_UnresolvedDummyWitness: []const u8,
     err_MissingCongruenceRule: []const u8,
+    err_RewriteCycle: []const u8,
     err_ExpectedIdentifier: []const u8,
     err_ExpectedNumber: []const u8,
     err_UnknownMathToken: []const u8,
@@ -400,6 +401,7 @@ pub const Strings = struct {
     detail_hypothesis_ref_index: []const u8,
     detail_parameter: []const u8,
     detail_local_term: []const u8,
+    detail_rewrite_cycle: []const u8,
 
     // Inference-path names.
     path_strict_replay: []const u8,
@@ -607,6 +609,7 @@ pub const en: Strings = .{
     .err_DependencySlotExhausted = "theorem exceeded the 55 tracked bound-variable dependency slots",
     .err_UnresolvedDummyWitness = "matched rule through hidden def structure, but omitted binders contain unresolved hidden-dummy witnesses",
     .err_MissingCongruenceRule = "missing congruence rule needed for normalization",
+    .err_RewriteCycle = "the @rewrite rules rewrite an expression back to itself",
     .err_ExpectedIdentifier = "expected identifier",
     .err_ExpectedNumber = "expected number",
     .err_UnknownMathToken = "unknown token in math string",
@@ -803,6 +806,7 @@ pub const en: Strings = .{
     .detail_hypothesis_ref_index = "hypothesis ref: #{d}",
     .detail_parameter = "parameter: {s}",
     .detail_local_term = "local definition: {s}",
+    .detail_rewrite_cycle = "cycle closed by: {s}",
 
     // Inference-path names.
     .path_strict_replay = "exact match",
@@ -1010,6 +1014,7 @@ pub const de: Strings = .{
     .err_DependencySlotExhausted = "das Theorem überschreitet die 55 verfolgten Abhängigkeitsplätze für gebundene Variablen",
     .err_UnresolvedDummyWitness = "die Regel passte durch verborgene Definitionsstruktur, aber ausgelassene Binder enthalten unaufgelöste Zeugen für verborgene Dummys",
     .err_MissingCongruenceRule = "für die Normalisierung fehlt eine benötigte Kongruenzregel",
+    .err_RewriteCycle = "die @rewrite-Regeln schreiben einen Ausdruck in sich selbst zurück",
     .err_ExpectedIdentifier = "Bezeichner erwartet",
     .err_ExpectedNumber = "Zahl erwartet",
     .err_UnknownMathToken = "unbekanntes Token im Mathe-String",
@@ -1206,6 +1211,7 @@ pub const de: Strings = .{
     .detail_hypothesis_ref_index = "Hypothesenreferenz: #{d}",
     .detail_parameter = "Parameter: {s}",
     .detail_local_term = "lokale Definition: {s}",
+    .detail_rewrite_cycle = "Zyklus geschlossen durch: {s}",
 
     // Inference-path names.
     .path_strict_replay = "exakte Übereinstimmung",

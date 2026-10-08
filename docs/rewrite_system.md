@@ -1102,16 +1102,17 @@ The normalizer does **not** guarantee termination. A set of rules that cycle
 (`a ~ b` and `b ~ a`) or that expand indefinitely will not terminate on their
 own.
 
-To prevent infinite loops, the normalizer enforces a **step limit** of 1000
-rewrite steps per normalization invocation. Each successful rule application
-counts as one step. When the limit is reached, normalization halts and returns
-whatever expression has been reached so far.
+A cycle is an error. When a rewrite step leads back to an expression that is
+still being normalized, the compiler stops with `RewriteCycle` and names the
+rule whose step closed the cycle. A commutativity law such as `add a b ~ add b
+a` is the usual cause; register it with `@acui` instead.
 
-If the partially-normalized expression does not match your assertion, the
-compiler reports a `ConclusionMismatch` (or `HypothesisMismatch`) error as
-usual. The error message does not currently distinguish "step limit reached"
-from "normalization completed but result doesn't match". If you suspect a step
-limit issue, check for cycles or unbounded expansion in your rule set.
+Rules that expand without repeating an expression are cut off by a **step
+limit** of 1000 rewrite steps per normalization invocation. Each successful
+rule application counts as one step. When the limit is reached, normalization
+halts and returns whatever expression has been reached so far. If that
+expression does not match your assertion, the compiler reports a
+`ConclusionMismatch` (or `HypothesisMismatch`) error as usual.
 
 The step limit is shared across all recursive normalization within a single
 validation attempt: descending into children and assembling

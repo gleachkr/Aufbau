@@ -1410,7 +1410,7 @@ fn trySplitGenerate(
             // the principal (`rex`): keeping it would only repeat it.
             hook.allow_retain_principal and
                 context.registry.eagerPriority(candidate.rule_id) == null and
-                !split.hypRestatesPrincipals(context, site, hyp_template),
+                !split.hypRestatesPrincipals(context, site, hyp_template, b),
         ) orelse {
             step = .abstained;
             continue;

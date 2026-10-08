@@ -5,13 +5,19 @@ const CompilerDiag = @import("../diag.zig");
 const Span = @import("../proof_script.zig").Span;
 
 pub const Entry = struct {
-    ordinal: u32,
+    /// The parser position just past the assertion's statement. A check
+    /// whose parser has not passed it cites a rule declared later.
+    end: usize,
     name_span: Span,
+
+    pub fn declaredBefore(self: Entry, parser_pos: usize) bool {
+        return self.end < parser_pos;
+    }
 };
 
 const EntryMap = std.StringHashMap(Entry);
 
-/// Every assertion of the `.mm0`, by name, with its declaration ordinal.
+/// Every assertion of the `.mm0`, by name, with where its statement ends.
 /// Only a rule name the env does not know yet reads it, to tell a rule
 /// declared later from an unknown one, so the whole-file parse it takes
 /// runs on the first lookup rather than up front.
@@ -26,49 +32,42 @@ pub const Catalog = struct {
 
     pub fn get(self: *Catalog, name: []const u8) ?Entry {
         if (self.entries == null) {
-            // A convenience index: a malformed statement ends the walk
-            // rather than failing the lookup.
-            self.entries = build(self.allocator, self.src) catch
-                EntryMap.init(self.allocator);
+            self.entries = EntryMap.init(self.allocator);
+            build(self.allocator, self.src, &self.entries.?) catch {};
         }
         return self.entries.?.get(name);
     }
 };
 
+/// A convenience index: a malformed statement (or running out of memory)
+/// ends the walk, keeping the assertions before it.
 fn build(
     allocator: std.mem.Allocator,
     src: []const u8,
-) !EntryMap {
+    catalog: *EntryMap,
+) !void {
     var parser = MM0Parser.init(src, allocator);
-    var catalog = EntryMap.init(allocator);
-    var ordinal: u32 = 0;
-
     while (try parser.next()) |stmt| {
         switch (stmt) {
-            .assertion => |assertion| {
-                try recordAssertion(
-                    &catalog,
-                    assertion,
-                    ordinal,
-                );
-                ordinal += 1;
-            },
+            .assertion => |assertion| try recordAssertion(
+                catalog,
+                assertion,
+                parser.core.pos,
+            ),
             else => {},
         }
     }
-
-    return catalog;
 }
 
 fn recordAssertion(
     catalog: *EntryMap,
     assertion: AssertionStmt,
-    ordinal: u32,
+    end: usize,
 ) !void {
     const gop = try catalog.getOrPut(assertion.name);
     if (gop.found_existing) return;
     gop.value_ptr.* = .{
-        .ordinal = ordinal,
+        .end = end,
         .name_span = CompilerDiag.mathSpanToSpan(assertion.name_span),
     };
 }

@@ -451,7 +451,7 @@ pub const CheckMemo = struct {
 
 fn catalogEntryEql(a: ?RuleCatalog.Entry, b: ?RuleCatalog.Entry) bool {
     if (a == null or b == null) return a == null and b == null;
-    return a.?.ordinal == b.?.ordinal and
+    return a.?.end == b.?.end and
         a.?.name_span.start == b.?.name_span.start and
         a.?.name_span.end == b.?.name_span.end;
 }

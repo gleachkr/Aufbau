@@ -154,6 +154,9 @@ pub fn lookupRuleApplicationId(
     self: *CompilerContext,
     env: *const GlobalEnv,
     rule_catalog: *RuleCatalog.Catalog,
+    /// How far the `.mm0` has been parsed: a catalog entry past it is a
+    /// rule declared later, one before it an unknown (failed) rule.
+    mm0_pos: usize,
     labels: *const LabelIndexMap,
     diag_context: ApplicationDiagnosticContext,
     application: RuleApplication,
@@ -167,7 +170,7 @@ pub fn lookupRuleApplicationId(
         memo.noteCatalogLookup(application.rule_name, catalog_entry);
     }
     if (catalog_entry) |entry| {
-        if (entry.ordinal >= env.rules.items.len) {
+        if (!entry.declaredBefore(mm0_pos)) {
             var diag: Diagnostic = .{
                 .kind = .rule_not_yet_available,
                 .err = error.RuleNotYetAvailable,

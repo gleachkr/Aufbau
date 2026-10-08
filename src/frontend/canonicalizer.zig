@@ -20,7 +20,9 @@ pub const Canonicalizer = struct {
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
-    cache: std.AutoHashMap(ExprId, ExprId),
+    /// Each expression's canonical form; null while it is being
+    /// canonicalized.
+    cache: std.AutoHashMap(ExprId, ?ExprId),
     step_count: usize = 0,
     step_limit: usize = 1000,
 
@@ -35,7 +37,7 @@ pub const Canonicalizer = struct {
             .theorem = theorem,
             .env = env,
             .registry = registry,
-            .cache = std.AutoHashMap(ExprId, ExprId).init(allocator),
+            .cache = std.AutoHashMap(ExprId, ?ExprId).init(allocator),
         };
     }
 
@@ -43,9 +45,14 @@ pub const Canonicalizer = struct {
         self: *Canonicalizer,
         expr_id: ExprId,
     ) Error!ExprId {
-        if (self.cache.get(expr_id)) |cached| {
-            return cached;
+        const entry = try self.cache.getOrPut(expr_id);
+        if (entry.found_existing) {
+            // Met again before it has a canonical form: the rewrite rules
+            // lead back to it.
+            return entry.value_ptr.* orelse error.RewriteCycle;
         }
+        entry.value_ptr.* = null;
+        errdefer _ = self.cache.remove(expr_id);
         const result = try self.canonicalizeUncached(expr_id);
         try self.cache.put(expr_id, result);
         return result;

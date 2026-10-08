@@ -287,7 +287,7 @@ fn handleOne(
             };
             try handleRequest(arena, transport, handler, id, method, params);
         } else {
-            try handleNotification(arena, handler, method, params);
+            handleNotification(arena, handler, method, params);
         }
         return;
     }
@@ -299,6 +299,10 @@ fn handleOne(
     try writeInvalidRequest(arena, transport, null, "missing method");
 }
 
+/// Calls the handler method named `method`, as lsp_kit's server does: the
+/// methods are the handler's own declarations, and a request that fails
+/// is answered with an error under its id, so the client's promise
+/// settles and the messages written before it are kept.
 fn handleRequest(
     arena: std.mem.Allocator,
     transport: *Transport,
@@ -307,118 +311,74 @@ fn handleRequest(
     method: []const u8,
     params: ?std.json.Value,
 ) !void {
-    if (std.mem.eql(u8, method, "initialize")) {
-        const parsed = try parseParams(types.InitializeParams, arena, params);
-        const result = handler.initialize(arena, parsed);
-        try transport.writeResponse(
-            arena,
-            id,
-            types.InitializeResult,
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else if (std.mem.eql(u8, method, "shutdown")) {
-        const result = handler.shutdown(arena, {});
-        try transport.writeResponse(
-            arena,
-            id,
-            ?void,
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else if (std.mem.eql(u8, method, "textDocument/hover")) {
-        const parsed = try parseParams(types.HoverParams, arena, params);
-        const result = try handler.@"textDocument/hover"(arena, parsed);
-        try transport.writeResponse(
-            arena,
-            id,
-            ResultType("textDocument/hover"),
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else if (std.mem.eql(u8, method, "textDocument/completion")) {
-        const parsed = try parseParams(types.CompletionParams, arena, params);
-        const result = try handler.@"textDocument/completion"(arena, parsed);
-        try transport.writeResponse(
-            arena,
-            id,
-            ResultType("textDocument/completion"),
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
-        const parsed = try parseParams(types.DocumentSymbolParams, arena, params);
-        const result = try handler.@"textDocument/documentSymbol"(arena, parsed);
-        try transport.writeResponse(
-            arena,
-            id,
-            ResultType("textDocument/documentSymbol"),
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else if (std.mem.eql(u8, method, "textDocument/codeAction")) {
-        const parsed = try parseParams(types.CodeActionParams, arena, params);
-        const result = try handler.@"textDocument/codeAction"(arena, parsed);
-        try transport.writeResponse(
-            arena,
-            id,
-            ResultType("textDocument/codeAction"),
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else if (std.mem.eql(u8, method, "textDocument/definition")) {
-        const parsed = try parseParams(types.DefinitionParams, arena, params);
-        const result = try handler.@"textDocument/definition"(arena, parsed);
-        try transport.writeResponse(
-            arena,
-            id,
-            ResultType("textDocument/definition"),
-            result,
-            .{ .emit_null_optional_fields = false },
-        );
-    } else {
-        try transport.writeErrorResponse(
-            arena,
-            id,
-            .{ .code = .method_not_found, .message = method },
-            .{ .emit_null_optional_fields = false },
-        );
+    const Handler = @TypeOf(handler.*);
+    inline for (types.request_metadata) |meta| {
+        if (comptime @hasDecl(Handler, meta.method)) {
+            if (std.mem.eql(u8, method, meta.method)) {
+                const parsed = parseParams(meta.Params orelse void, arena, params) catch |err| {
+                    return writeError(arena, transport, id, .invalid_params, err);
+                };
+                const returned = @field(Handler, meta.method)(handler, arena, parsed);
+                const result = if (@typeInfo(@TypeOf(returned)) == .error_union)
+                    returned catch |err| {
+                        return writeError(arena, transport, id, .internal_error, err);
+                    }
+                else
+                    returned;
+                return transport.writeResponse(
+                    arena,
+                    id,
+                    meta.Result,
+                    result,
+                    .{ .emit_null_optional_fields = false },
+                );
+            }
+        }
     }
+    try transport.writeErrorResponse(
+        arena,
+        id,
+        .{ .code = .method_not_found, .message = method },
+        .{ .emit_null_optional_fields = false },
+    );
 }
 
+/// A notification has no reply: one that fails is dropped, as lsp_kit's
+/// server drops it.
 fn handleNotification(
     arena: std.mem.Allocator,
     handler: anytype,
     method: []const u8,
     params: ?std.json.Value,
-) !void {
-    if (std.mem.eql(u8, method, "initialized")) {
-        const parsed = try parseParams(types.InitializedParams, arena, params);
-        handler.initialized(arena, parsed);
-    } else if (std.mem.eql(u8, method, "exit")) {
-        handler.exit(arena, {});
-    } else if (std.mem.eql(u8, method, "textDocument/didOpen")) {
-        const parsed = try parseParams(
-            types.DidOpenTextDocumentParams,
-            arena,
-            params,
-        );
-        try handler.@"textDocument/didOpen"(arena, parsed);
-    } else if (std.mem.eql(u8, method, "textDocument/didChange")) {
-        const parsed = try parseParams(
-            types.DidChangeTextDocumentParams,
-            arena,
-            params,
-        );
-        try handler.@"textDocument/didChange"(arena, parsed);
-    } else if (std.mem.eql(u8, method, "textDocument/didClose")) {
-        const parsed = try parseParams(
-            types.DidCloseTextDocumentParams,
-            arena,
-            params,
-        );
-        try handler.@"textDocument/didClose"(arena, parsed);
+) void {
+    const Handler = @TypeOf(handler.*);
+    inline for (types.notification_metadata) |meta| {
+        if (comptime @hasDecl(Handler, meta.method)) {
+            if (std.mem.eql(u8, method, meta.method)) {
+                const parsed = parseParams(meta.Params orelse void, arena, params) catch return;
+                const returned = @field(Handler, meta.method)(handler, arena, parsed);
+                if (@typeInfo(@TypeOf(returned)) == .error_union) {
+                    returned catch {};
+                }
+                return;
+            }
+        }
     }
+}
+
+fn writeError(
+    arena: std.mem.Allocator,
+    transport: *Transport,
+    id: JsonRPCMessage.ID,
+    code: JsonRPCMessage.Response.Error.Code,
+    err: anyerror,
+) !void {
+    try transport.writeErrorResponse(
+        arena,
+        id,
+        .{ .code = code, .message = @errorName(err) },
+        .{ .emit_null_optional_fields = false },
+    );
 }
 
 fn parseParams(

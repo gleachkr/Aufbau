@@ -85,6 +85,7 @@ pub fn writeDetail(
         }),
         .unused_parameter => |info| try writeFields(jw, .{ .parameter = info.parameter_name }),
         .local_term_reference => |info| try writeFields(jw, .{ .term = info.term_name }),
+        .rewrite_cycle => |info| try writeFields(jw, .{ .rule = info.rule_name }),
     }
     try jw.endObject();
 }

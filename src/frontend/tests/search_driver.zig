@@ -43,17 +43,23 @@ fn applyEdits(
         }
         if (marker.edit) |edit| try edits.append(std.testing.allocator, edit);
     }
-    var text = std.ArrayListUnmanaged(u8){};
-    errdefer text.deinit(std.testing.allocator);
-    var at: usize = 0;
-    for (edits.items) |edit| {
-        try std.testing.expect(edit.span.start >= at);
-        try text.appendSlice(std.testing.allocator, proof_src[at..edit.span.start]);
-        try text.appendSlice(std.testing.allocator, edit.text);
-        at = edit.span.end;
-    }
-    try text.appendSlice(std.testing.allocator, proof_src[at..]);
-    return text.toOwnedSlice(std.testing.allocator);
+    var text = std.Io.Writer.Allocating.init(std.testing.allocator);
+    errdefer text.deinit();
+    try SearchDriver.writeEdits(&text.writer, proof_src, edits.items);
+    return text.toOwnedSlice();
+}
+
+test "search driver edits are refused when they overlap" {
+    var edits = [_]SearchDriver.Edit{
+        .{ .span = .{ .start = 4, .end = 8 }, .text = "y" },
+        .{ .span = .{ .start = 0, .end = 5 }, .text = "x" },
+    };
+    var text = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer text.deinit();
+    try std.testing.expectError(
+        error.OverlappingEdits,
+        SearchDriver.writeEdits(&text.writer, "abcdefgh", &edits),
+    );
 }
 
 test "search driver puts each find in place for the markers after it" {

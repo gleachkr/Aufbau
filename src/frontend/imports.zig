@@ -706,9 +706,10 @@ const Joiner = struct {
     }
 };
 
-/// Filesystem resolver for native hosts: specs resolve relative to the
-/// importing file's directory; keys are canonical paths so the same file
-/// reached by two routes is joined once (`.mm0`) or recognised on a cycle.
+/// Filesystem resolver for native hosts: a spec names the path
+/// `resolveSpecPath` gives (the lexical rule every host shares); keys are
+/// canonical paths so the same file reached by two routes is joined once
+/// (`.mm0`) or recognised on a cycle.
 pub const FsResolver = struct {
     pub fn resolver(self: *FsResolver) Resolver {
         return .{ .ctx = @ptrCast(self), .resolveFn = resolveFn };
@@ -728,10 +729,8 @@ pub const FsResolver = struct {
     ) anyerror!Resolved {
         _ = ctx;
         if (builtin.os.tag == .freestanding) return error.FileNotFound;
-        const dir = std.fs.path.dirname(from_key) orelse ".";
-        const relative = try std.fs.path.join(allocator, &.{ dir, spec });
-        const key = std.fs.cwd().realpathAlloc(allocator, relative) catch |err|
-            return err;
+        const path = try resolveSpecPath(allocator, from_key, spec);
+        const key = try std.fs.cwd().realpathAlloc(allocator, path);
         const text = try std.fs.cwd().readFileAlloc(
             allocator,
             key,
@@ -1266,6 +1265,32 @@ test "import specs resolve lexically against the importing file" {
         defer allocator.free(got);
         try std.testing.expectEqualStrings(case.want, got);
     }
+}
+
+test "filesystem imports take absolute specs as they are" {
+    if (builtin.os.tag == .freestanding) return error.SkipZigTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.makeDir("sub");
+    try tmp.dir.writeFile(.{ .sub_path = "lib.mm0", .data = "sort s;\n" });
+    const lib = try tmp.dir.realpathAlloc(allocator, "lib.mm0");
+    try tmp.dir.writeFile(.{
+        .sub_path = "sub/main.mm0",
+        .data = try std.fmt.allocPrint(
+            allocator,
+            "import \"{s}\";\nterm c: s;\n",
+            .{lib},
+        ),
+    });
+    const main = try tmp.dir.realpathAlloc(allocator, "sub/main.mm0");
+
+    var failure: ?LoadFailure = null;
+    const pair = try loadPair(allocator, main, null, &failure);
+    try std.testing.expectEqual(@as(usize, 2), pair.mm0.files.len);
+    try std.testing.expectEqualStrings(lib, pair.mm0.files[0].key);
 }
 
 test "scanner finds imports and skips other statements" {

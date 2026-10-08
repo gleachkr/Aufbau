@@ -292,6 +292,21 @@ assert.ok(
   hoverText.includes("(#1) of") && hoverText.includes("hp"),
   "named hypothesis hover did not resolve: " + hoverText,
 );
+// A request that fails is answered under its id, so the client's
+// promise settles.
+const badOutput = lsp.process({
+  jsonrpc: "2.0",
+  id: 7,
+  method: "textDocument/hover",
+  params: {},
+});
+const badMessage = badOutput.map(JSON.parse).find((m) => m.id === 7);
+assert.equal(
+  badMessage?.error?.code,
+  -32602,
+  "a request with bad params was not answered under its id: " +
+    JSON.stringify(badOutput),
+);
 
 console.log("Packed npm WASM packages load and run under Node.");
 `;

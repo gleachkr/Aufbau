@@ -28,9 +28,13 @@ pub const Normalizer = struct {
     diag_scratch: ?*DiagScratch.Scratch,
     debug: DebugConfig = .none,
     hidden_witness_provider: ?DefOps.HiddenWitnessProvider = null,
-    cache: std.AutoHashMap(ExprId, NormalizeResult),
+    /// Each expression's normal form; null while it is being normalized.
+    cache: std.AutoHashMap(ExprId, ?NormalizeResult),
     step_count: usize = 0,
     step_limit: usize = 1000,
+    /// The `@rewrite` rule of the innermost step whose result is being
+    /// normalized, which names a rewrite cycle.
+    last_rule_id: ?u32 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -86,7 +90,7 @@ pub const Normalizer = struct {
             .lines = lines,
             .diag_scratch = diag_scratch,
             .debug = debug,
-            .cache = std.AutoHashMap(ExprId, NormalizeResult).init(
+            .cache = std.AutoHashMap(ExprId, ?NormalizeResult).init(
                 allocator,
             ),
         };

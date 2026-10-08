@@ -62,6 +62,24 @@ This file records notable user-facing changes to Aufbau. The project follows
   that splits the context. Such a rule sorts after every rule that does
   not split it, and the search used to stop at the first rule that was not
   eager.
+- A set of `@rewrite` rules that rewrites an expression back to itself,
+  such as a commutativity law, is an error naming the rule that closed the
+  cycle. Rewriting used to stop silently after 1000 steps, leaving a chain
+  of 1000 proof lines whose result depended on the parity of the step
+  count.
+- `abc` resolves an absolute `import` path as written. It used to join the
+  path onto the importing file's directory, so a file the language server
+  found was missing for `abc`.
+- A proof citing a rule declared later in the `.mm0` is reported as citing
+  a rule declared later, even after `.auf` lemmas or ahead of a malformed
+  statement. Both used to report an unknown rule.
+- In a sequent with two contexts, `auto?` checks the context it splits when
+  deciding whether a premise restates the principal formula. It used to
+  check the first context.
+- The browser language server answers a request that fails with an error
+  under the request's id, and keeps the diagnostics it sent before it. The
+  editor's request used to wait forever. It now also answers
+  go-to-implementation and find-references, as the native server does.
 - The language server no longer crashes on an edit whose range ends before
   it starts.
 - The language server no longer crashes when a diagnostic covers part of a

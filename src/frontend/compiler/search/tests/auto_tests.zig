@@ -2142,10 +2142,14 @@ test "split of an idempotent sequence context retains principals as any run" {
 /// Whether `rule_name`'s premise restates the principal its conclusion's
 /// context binder `g` is split around, against the goal of theorem `u`.
 fn restatesPrincipals(mm0_src: []const u8, rule_name: []const u8) !bool {
+    return restatesPrincipalsAt(mm0_src, "u", rule_name);
+}
+
+fn restatesPrincipalsAt(mm0_src: []const u8, theorem_name: []const u8, rule_name: []const u8) !bool {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, "u");
+    var fixture = try fixtureFor(allocator, mm0_src, theorem_name);
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
     try theorem.seedAssertion(fixture.assertion);
@@ -2158,7 +2162,7 @@ fn restatesPrincipals(mm0_src: []const u8, rule_name: []const u8) !bool {
     const g_idx = try ruleArgIndex(rule, "g");
     const site = split.findSplitSite(&context, &theorem, rule.concl, goal_expr, g_idx) orelse
         return error.MissingSplitSite;
-    return split.hypRestatesPrincipals(&context, site, rule.hyps[0]);
+    return split.hypRestatesPrincipals(&context, site, rule.hyps[0], g_idx);
 }
 
 test "a premise that restates its principal does not retain it in a set context" {
@@ -2168,6 +2172,22 @@ test "a premise that restates its principal does not retain it in a set context"
     try std.testing.expect(!try restatesPrincipals(splitLawMm0("ctx_comm", "ctx_idem"), "ext"));
     // In an ordered context the repeat may sit elsewhere in the sequence.
     try std.testing.expect(!try restatesPrincipals(splitLawMm0("_", "ctx_idem"), "keep"));
+}
+
+test "a two-sided premise restates its principal in the context that is split" {
+    const mm0_src = comptime splitLawMm0("ctx_comm", "ctx_idem") ++
+        \\term seq2 (l g: ctx): wff;
+        \\axiom right_keep (l g: ctx) (a: wff):
+        \\  $ seq2 (join l (hyp B)) (join (hyp a) g) $ > $ seq2 l (join g (hyp a)) $;
+        \\axiom left_only (l g: ctx) (a: wff):
+        \\  $ seq2 (join l (hyp a)) g $ > $ seq2 l (join g (hyp a)) $;
+        \\theorem v: $ seq2 (hyp B) (join (join (hyp A) (hyp B)) (hyp A)) $;
+        \\
+    ;
+    // `g` is split on the right; the left context's summands say nothing
+    // about it, whichever comes first.
+    try std.testing.expect(try restatesPrincipalsAt(mm0_src, "v", "right_keep"));
+    try std.testing.expect(!try restatesPrincipalsAt(mm0_src, "v", "left_only"));
 }
 
 /// `premiseOpenAcuiOwned` for premise `hyp_index` of `rule_name` against the

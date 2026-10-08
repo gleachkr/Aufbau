@@ -177,6 +177,11 @@ pub const DiagnosticDetail = union(enum) {
     local_term_reference: struct {
         term_name: []const u8,
     },
+    /// Rewriting by this `@rewrite` rule led back to an expression still
+    /// being rewritten.
+    rewrite_cycle: struct {
+        rule_name: []const u8,
+    },
     /// A close-by known name for an unknown rule or line-label reference.
     /// The slice must outlive the diagnostic (rule/label names stored in
     /// the environment or proof script satisfy this).
@@ -572,6 +577,7 @@ pub const DiagnosticError = error{
     RewriteBareLhs,
     RewriteConclusionNotRelation,
     RewriteRuleHasHypotheses,
+    RewriteCycle,
     RuleNotYetAvailable,
     SorryLine,
     SorryLineArguments,
@@ -1505,6 +1511,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.DependencySlotExhausted => t("err_DependencySlotExhausted"),
         error.UnresolvedDummyWitness => t("err_UnresolvedDummyWitness"),
         error.MissingCongruenceRule => t("err_MissingCongruenceRule"),
+        error.RewriteCycle => t("err_RewriteCycle"),
         error.ExpectedIdentifier,
         error.ExpectedIdent,
         => t("err_ExpectedIdentifier"),
@@ -2094,6 +2101,14 @@ fn writeDetailContextLines(
                 .{info.term_name},
             );
         },
+        .rewrite_cycle => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "detail_rewrite_cycle",
+                .{info.rule_name},
+            );
+        },
     }
 }
 
@@ -2137,6 +2152,12 @@ pub fn buildCapturedDiagnosticDetail(
                 .arg_index = info.arg_index,
             },
         },
+        .rewrite_cycle => |info| .{ .rewrite_cycle = .{
+            .rule_name = if (info.rule_id < env.rules.items.len)
+                env.rules.items[info.rule_id].name
+            else
+                "?",
+        } },
     };
 }
 

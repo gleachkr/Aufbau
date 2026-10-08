@@ -17,6 +17,11 @@ pub const CapturedDetail = union(enum) {
         sort_name: ?[]const u8 = null,
         arg_index: ?usize = null,
     },
+    /// The `@rewrite` rule whose step led back to an expression still
+    /// being rewritten.
+    rewrite_cycle: struct {
+        rule_id: u32,
+    },
 };
 
 pub const CapturedEntry = struct {

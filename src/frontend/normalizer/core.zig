@@ -9,7 +9,9 @@ const Types = @import("./types.zig");
 const NormalizeResult = Types.NormalizeResult;
 
 pub fn normalize(self: anytype, expr_id: ExprId) anyerror!NormalizeResult {
-    if (self.cache.get(expr_id)) |cached| {
+    const entry = try self.cache.getOrPut(expr_id);
+    if (entry.found_existing) {
+        const cached = entry.value_ptr.* orelse return rewriteCycle(self);
         DebugTrace.traceNormalization(
             self.debug,
             "normalization cache hit for expr #{d}",
@@ -17,10 +19,25 @@ pub fn normalize(self: anytype, expr_id: ExprId) anyerror!NormalizeResult {
         );
         return cached;
     }
+    // Null while in progress: meeting the expression again before it has
+    // a result means the rewrite rules lead back to it, and would forever.
+    entry.value_ptr.* = null;
+    errdefer _ = self.cache.remove(expr_id);
 
     const result = try normalizeUncached(self, expr_id);
     try self.cache.put(expr_id, result);
     return result;
+}
+
+fn rewriteCycle(self: anytype) error{RewriteCycle} {
+    if (self.diag_scratch) |scratch| {
+        if (self.last_rule_id) |rule_id| {
+            scratch.record(error.RewriteCycle, .{
+                .rewrite_cycle = .{ .rule_id = rule_id },
+            });
+        }
+    }
+    return error.RewriteCycle;
 }
 
 pub fn normalizeUncached(
@@ -110,7 +127,12 @@ pub fn normalizeUncached(
             );
             if (match_result) |step_result| {
                 self.step_count += 1;
+                // The rule of the innermost step still being normalized,
+                // which closes any cycle met below it.
+                const outer_rule_id = self.last_rule_id;
+                self.last_rule_id = rule.rule_id;
                 const rhs_norm = try normalize(self, step_result.result_expr);
+                self.last_rule_id = outer_rule_id;
                 const rhs_proof = try ProofEmit.composeTransitivity(
                     self,
                     relation,

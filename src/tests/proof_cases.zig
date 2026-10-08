@@ -67,6 +67,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "fail_include_cycle", .outcome = .{ .fail = error.ImportCycle } },
     .{ .stem = "fail_include_missing", .outcome = .{ .fail = error.ImportUnresolved } },
     .{ .stem = "fail_include_twice", .outcome = .{ .fail = error.DuplicateInclude } },
+    // `@rewrite add_comm` rewrites `c + d` back to itself.
+    .{ .stem = "fail_rewrite_cycle", .outcome = .{ .fail = error.RewriteCycle } },
     .{ .stem = "pass_rule_symbolic_witness", .outcome = .pass },
     .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },

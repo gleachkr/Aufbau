@@ -568,23 +568,10 @@ fn writeFilled(
             });
         }
     }
-    std.mem.sort(Edit, edits.items, {}, struct {
-        fn before(_: void, a: Edit, b: Edit) bool {
-            return a.span.start < b.span.start;
-        }
-    }.before);
-
     var buf: [4096]u8 = undefined;
     var stdout = std.fs.File.stdout().writer(&buf);
-    const w = &stdout.interface;
-    var at: usize = 0;
-    for (edits.items) |edit| {
-        try w.writeAll(root_text[at..edit.span.start]);
-        try w.writeAll(edit.text);
-        at = edit.span.end;
-    }
-    try w.writeAll(root_text[at..]);
-    try w.flush();
+    try SearchDriver.writeEdits(&stdout.interface, root_text, edits.items);
+    try stdout.interface.flush();
 }
 
 /// Where a marker sits, for the report: its file's label and line.

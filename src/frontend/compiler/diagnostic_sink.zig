@@ -501,6 +501,9 @@ pub const DiagnosticSink = struct {
                     info.parameter_name,
                 ),
             } },
+            .rewrite_cycle => |info| .{ .rewrite_cycle = .{
+                .rule_name = self.stableRequiredString(info.rule_name),
+            } },
             .local_term_reference => |info| .{ .local_term_reference = .{
                 .term_name = self.stableRequiredString(info.term_name),
             } },
