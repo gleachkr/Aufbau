@@ -467,6 +467,14 @@ pub const MM0Parser = struct {
                     dummy.name_span,
                 );
             }
+            const sort = self.core.sort_infos.items[sort_id];
+            if (sort.strict or sort.free) {
+                return self.fillerError(
+                    if (sort.strict) error.BoundVarInStrictSort else error.DummyInFreeSort,
+                    tail_start,
+                    dummy.name_span,
+                );
+            }
             const expr = try allocator.create(Expr);
             expr.* = .{ .variable = .{
                 .sort = @intCast(sort_id),

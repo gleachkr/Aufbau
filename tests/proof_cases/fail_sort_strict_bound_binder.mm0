@@ -1,0 +1,3 @@
+provable sort wff;
+strict sort s;
+term f {x: s}: wff;

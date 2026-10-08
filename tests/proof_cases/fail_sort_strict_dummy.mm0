@@ -1,0 +1,4 @@
+provable sort wff;
+strict sort s;
+term top: wff;
+def f (.x: s): wff = $ top $;

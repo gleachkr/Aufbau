@@ -2353,7 +2353,7 @@ test "context pruner counts absent members against the discharge budget" {
 test "raw context pruner matches discharged member shape" {
     const mm0_src =
         \\delimiter $ ( ) , $;
-        \\strict provable sort wff;
+        \\provable sort wff;
         \\sort ctx;
         \\term ctx_eq (G H: ctx): wff;
         \\term emp: ctx;

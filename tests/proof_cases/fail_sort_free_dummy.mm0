@@ -1,0 +1,4 @@
+provable sort wff;
+free sort s;
+term g {a: s}: wff;
+def f (.x: s): wff = $ g x $;

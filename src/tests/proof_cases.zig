@@ -567,6 +567,11 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_au_ambiguous_right_unit",
         .outcome = .{ .fail = error.AmbiguousStructuralUnitRule },
     },
+    .{
+        .stem = "fail_au_conditional_right_unit",
+        .outcome = .{ .fail = error.UnifyMismatch },
+    },
+    .{ .stem = "pass_au_right_unit_declared_late", .outcome = .pass },
     .{ .stem = "pass_au_order_sensitive", .outcome = .pass },
     .{ .stem = "fail_au_order_sensitive", .outcome = .{ .fail = error.UnifyMismatch } },
     .{ .stem = "pass_acu_multiplicity_sensitive", .outcome = .pass },
@@ -843,6 +848,22 @@ const proof_cases = [_]ProofCase{
     .{
         .stem = "fail_vars_free_sort",
         .outcome = .{ .fail = error.VarsFreeSort },
+    },
+    .{
+        .stem = "fail_sort_strict_bound_binder",
+        .outcome = .{ .fail = error.BoundVarInStrictSort },
+    },
+    .{
+        .stem = "fail_sort_strict_dummy",
+        .outcome = .{ .fail = error.BoundVarInStrictSort },
+    },
+    .{
+        .stem = "fail_sort_free_dummy",
+        .outcome = .{ .fail = error.DummyInFreeSort },
+    },
+    .{
+        .stem = "fail_sort_pure_term",
+        .outcome = .{ .fail = error.TermInPureSort },
     },
     .{ .stem = "pass_sorry_line", .outcome = .sorry },
     .{

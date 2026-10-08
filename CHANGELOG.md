@@ -46,6 +46,27 @@ This file records notable user-facing changes to Aufbau. The project follows
   constant of its sort. Such theories used to compile to proofs the
   verifier rejects, and `@acui` on a one-argument term crashed `abc` and
   the language server.
+- Sort modifiers are enforced where a declaration is parsed: a `strict`
+  sort cannot have a bound or dummy variable, a `free` sort cannot have a
+  dummy, and no `term` or `def` can have a `pure` result sort. `abc` used
+  to compile such theories to binaries both verifiers reject.
+- Dummy variables follow `mm0-c`'s rules: only a `def` can declare one, a
+  dummy cannot list dependencies, and an argument type cannot depend on one
+  (`def f (.y: set) (a: wff y)`). The last was caught only when `abc
+  compile` wrote the binary, so the language server and `abc search`
+  accepted it. **Compatibility:** a spec that breaks one of these rules, or
+  declares an unused dummy in a `strict` or `free` sort, used to pass
+  `mm0-zig` although `mm0-c` rejected it. Both now reject it.
+- An `@alpha` rule must conclude with its operand sort's `@relation`, as a
+  `@rewrite` rule must, and a sort can have only one `@relation`. A
+  `@rewrite` rule whose left side is a bare variable is an error instead of
+  being ignored. The first two used to compile to proofs the verifier
+  rejects.
+- `@acui` unit laws are found where they are declared, so a unit law
+  declared after the first proof that normalizes is still used, and a
+  lemma with hypotheses or bound variables is no longer taken for one. Such
+  a lemma used to compile to proofs the verifier rejects. A second unit law
+  for the same side of a combiner is reported at its declaration.
 - `exact?` and `auto?` no longer run out of memory when several hypotheses
   state the same thing and a rule has several premises they all fit. Every
   combination of the identical hypotheses was tried, 16^16 of them for 16

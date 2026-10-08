@@ -249,6 +249,12 @@ test "compiler checks @relation members against the shapes proofs cite" {
         \\--| @relation wff bi biid bitr bisym mpbi
         \\axiom biid (a: wff): $ bi a a $;
     , error.RelationSymmShape, "biid", "biid");
+    // Rules checked against the first relation would be cited under a
+    // second one.
+    try expectShapeError(relation_prelude ++ relation_members ++
+        \\--| @relation wff imp impid imptr impsym mpimp
+        \\axiom impid (a: wff): $ imp a a $;
+    , error.DuplicateRelationForSort, "impid", "@relation wff imp impid imptr impsym mpimp");
 
     var compiler = Compiler.init(
         std.testing.allocator,
@@ -266,6 +272,20 @@ test "compiler rejects @rewrite rules that are not bare relation steps" {
         \\--| @rewrite
         \\axiom neg_bi (a b: wff): $ a $ > $ bi (neg a) b $;
     , error.RewriteRuleHasHypotheses, "neg_bi", "@rewrite");
+    try expectShapeError(relation_prelude ++ relation_members ++
+        \\--| @rewrite
+        \\axiom bi_neg_neg (a: wff): $ bi a (neg (neg a)) $;
+    , error.RewriteBareLhs, "bi_neg_neg", "@rewrite");
+}
+
+test "compiler rejects @alpha rules that are not relation steps" {
+    // Freshening cites the rule as a step of the operand sort's relation.
+    try expectShapeError(relation_prelude ++ relation_members ++
+        \\sort obj;
+        \\term al {x: obj} (p: wff x): wff;
+        \\--| @alpha x y
+        \\axiom al_alpha {x y: obj} (p: wff x): $ imp (al x p) (al y p) $;
+    , error.AlphaConclusionMustBeBinaryRelation, "al_alpha", "@alpha x y");
 }
 
 const acui_prelude =
@@ -322,6 +342,15 @@ test "compiler checks @acui combiners, units, and laws" {
     ++ acui_assoc ++ acui_comm ++
         \\axiom cidem (g: ctx): $ ceq (join g g) emp $;
     , error.AcuiIdemShape, "cidem", "cidem");
+    // A second unit law for one side is reported where it is declared,
+    // whichever orientation either one has.
+    try expectShapeError(acui_prelude ++
+        \\--| @acui cassoc _ emp
+        \\term join (g h: ctx): ctx;
+    ++ acui_assoc ++
+        \\axiom cunit (g: ctx): $ ceq (join emp g) g $;
+        \\axiom cunit2 (g: ctx): $ ceq g (join emp g) $;
+    , error.AmbiguousStructuralUnitRule, "cunit2", "cunit2");
     // Without a relation the laws wait for one: emission cannot use the
     // combiner before then.
     try expectShapeError(

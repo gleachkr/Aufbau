@@ -169,10 +169,11 @@ pub const StructuralCombiner = struct {
     assoc_id: ?u32 = null,
     comm_id: ?u32 = null,
     idem_id: ?u32 = null,
+    /// The unit laws, found as rules are declared (`noteUnitLaw`): a rule
+    /// declared after a use is still found, and one the checker could not
+    /// cite (a hypothesis, a bound binder) never is.
     left_unit_rule: ?UnitRule = null,
     right_unit_rule: ?UnitRule = null,
-    left_unit_rule_searched: bool = false,
-    right_unit_rule_searched: bool = false,
 };
 
 pub const ResolvedStructuralCombiner = struct {
@@ -388,6 +389,12 @@ pub const RewriteRegistry = struct {
         const trans = iter.next() orelse return;
         const symm = iter.next() orelse return;
         const transport = iter.next() orelse return;
+        // Every rule already checked against the sort's relation was
+        // checked against that one; a second bundle would be cited for
+        // them unchecked.
+        if (self.relations.contains(sort_name)) {
+            return error.DuplicateRelationForSort;
+        }
 
         const bundle: RelationBundle = .{
             .sort_name = sort_name,
@@ -410,8 +417,9 @@ pub const RewriteRegistry = struct {
                 const head = entry.key_ptr.*;
                 const head_sort = env.terms.items[head].ret_sort_name;
                 if (!std.mem.eql(u8, head_sort, sort_name)) continue;
-                for (env.rules.items) |*rule| {
+                for (env.rules.items, 0..) |*rule, rule_id| {
                     try checkAcuiLaw(env, head, entry.value_ptr, rel, rule);
+                    try noteUnitLaw(env, head, entry.value_ptr, rel, @intCast(rule_id));
                 }
             }
         }
@@ -425,8 +433,9 @@ pub const RewriteRegistry = struct {
     /// annotated with its own bundle is checked by `processRelation`. An
     /// `@acui` law is checked once its sort has a `@relation` (emission
     /// cannot use the combiner before then; search reads only law names).
+    /// A rule of unit-law shape is recorded as its combiner's unit law.
     pub fn checkDeclaredMember(
-        self: *const RewriteRegistry,
+        self: *RewriteRegistry,
         env: *const GlobalEnv,
         rule_id: u32,
     ) !void {
@@ -441,6 +450,7 @@ pub const RewriteRegistry = struct {
             const sort_name = env.terms.items[head].ret_sort_name;
             const rel = self.relationTermIdForSort(env, sort_name) orelse continue;
             try checkAcuiLaw(env, head, entry.value_ptr, rel, rule);
+            try noteUnitLaw(env, head, entry.value_ptr, rel, rule_id);
         }
     }
 
@@ -490,7 +500,9 @@ pub const RewriteRegistry = struct {
         }
         const lhs = app.args[0];
         const rhs = app.args[1];
-        const head_id = getHeadTermId(lhs) orelse return;
+        // Rewrites are indexed by their left side's head; a bare variable
+        // would match everything and is never tried.
+        const head_id = getHeadTermId(lhs) orelse return error.RewriteBareLhs;
 
         const gop = try self.rewrites_by_head.getOrPut(head_id);
         if (!gop.found_existing) {
@@ -828,7 +840,9 @@ pub const RewriteRegistry = struct {
 
         switch (rule.concl) {
             .app => |app| {
-                if (app.args.len != 2) {
+                // Freshening cites the rule as a `rel(lhs, rhs)` step of
+                // the operand sort's registered relation, as `@rewrite`.
+                if (app.args.len != 2 or !self.isRelationTerm(env, app.term_id)) {
                     return error.AlphaConclusionMustBeBinaryRelation;
                 }
                 const lhs = app.args[0];
@@ -1253,15 +1267,16 @@ pub const RewriteRegistry = struct {
             return error.AcuiUnitShape;
         }
 
-        const combiner: StructuralCombiner = .{
+        var combiner: StructuralCombiner = .{
             .unit_term_name = unit_term_name,
             .assoc_name = assoc_name,
             .comm_name = comm_name,
             .idem_name = idem_name,
         };
         if (self.relationTermIdForSort(env, head.ret_sort_name)) |rel| {
-            for (env.rules.items) |*rule| {
+            for (env.rules.items, 0..) |*rule, rule_id| {
                 try checkAcuiLaw(env, head_term_id, &combiner, rel, rule);
+                try noteUnitLaw(env, head_term_id, &combiner, rel, @intCast(rule_id));
             }
         }
         try self.acui_by_head.put(head_term_id, combiner);
@@ -1521,9 +1536,9 @@ pub const RewriteRegistry = struct {
             &env.terms.items[head_term_id]
         else
             return null;
-        const relation = self.resolveRelation(env, term_decl.ret_sort_name) orelse {
+        if (self.resolveRelation(env, term_decl.ret_sort_name) == null) {
             return null;
-        };
+        }
 
         if (combiner.unit_term_id == null) {
             combiner.unit_term_id = env.term_names.get(combiner.unit_term_name);
@@ -1536,24 +1551,6 @@ pub const RewriteRegistry = struct {
         }
         if (combiner.idem_id == null and combiner.idem_name != null) {
             combiner.idem_id = env.getRuleId(combiner.idem_name.?);
-        }
-        if (!combiner.left_unit_rule_searched) {
-            combiner.left_unit_rule = try findLeftUnitRule(
-                env,
-                relation.rel_term_id,
-                head_term_id,
-                combiner.unit_term_id orelse return null,
-            );
-            combiner.left_unit_rule_searched = true;
-        }
-        if (!combiner.right_unit_rule_searched) {
-            combiner.right_unit_rule = try findRightUnitRule(
-                env,
-                relation.rel_term_id,
-                head_term_id,
-                combiner.unit_term_id orelse return null,
-            );
-            combiner.right_unit_rule_searched = true;
         }
 
         return .{
@@ -1582,135 +1579,44 @@ pub const RewriteRegistry = struct {
     }
 };
 
-fn findLeftUnitRule(
+/// Record `rule_id` as a unit law of combiner `f` (unit `e`, relation
+/// `rel`) when it has the shape normalization cites one at: one regular
+/// binder, no hypotheses, and `rel (f e a) a` (left) or `rel (f a e) a`
+/// (right), either side first. A second law for the same side is
+/// `AmbiguousStructuralUnitRule`, reported at its declaration.
+fn noteUnitLaw(
     env: *const GlobalEnv,
-    rel_term_id: u32,
-    head_term_id: u32,
-    unit_term_id: u32,
-) !?UnitRule {
-    return try findUnitRule(
-        env,
-        rel_term_id,
-        head_term_id,
-        unit_term_id,
-        isLeftUnitPattern,
-    );
-}
-
-fn findRightUnitRule(
-    env: *const GlobalEnv,
-    rel_term_id: u32,
-    head_term_id: u32,
-    unit_term_id: u32,
-) !?UnitRule {
-    return try findUnitRule(
-        env,
-        rel_term_id,
-        head_term_id,
-        unit_term_id,
-        isRightUnitPattern,
-    );
-}
-
-fn findUnitRule(
-    env: *const GlobalEnv,
-    rel_term_id: u32,
-    head_term_id: u32,
-    unit_term_id: u32,
-    comptime matches: fn (TemplateExpr, TemplateExpr, u32, u32) bool,
-) !?UnitRule {
-    var found: ?UnitRule = null;
-    for (env.rules.items, 0..) |rule, rule_idx| {
-        if (rule.args.len != 1) continue;
-        const app = switch (rule.concl) {
-            .app => |value| value,
-            else => continue,
-        };
-        if (app.term_id != rel_term_id or app.args.len != 2) continue;
-
-        const direct = matches(
-            app.args[0],
-            app.args[1],
-            head_term_id,
-            unit_term_id,
-        );
-        const reversed = matches(
-            app.args[1],
-            app.args[0],
-            head_term_id,
-            unit_term_id,
-        );
-        if (!direct and !reversed) continue;
-        if (direct and reversed) return error.AmbiguousStructuralUnitRule;
-
-        const candidate: UnitRule = .{
-            .rule_id = @intCast(rule_idx),
-            .reversed = reversed,
-        };
-        if (found != null) return error.AmbiguousStructuralUnitRule;
-        found = candidate;
+    f: u32,
+    combiner: *StructuralCombiner,
+    rel: u32,
+    rule_id: u32,
+) !void {
+    const unit = env.term_names.get(combiner.unit_term_name) orelse return;
+    const rule = &env.rules.items[rule_id];
+    const sort_name = env.terms.items[f].ret_sort_name;
+    const a: TemplateExpr = .{ .binder = 0 };
+    const e: TemplateExpr = .{ .app = .{ .term_id = unit, .args = &.{} } };
+    const ea = [_]TemplateExpr{ e, a };
+    const ae = [_]TemplateExpr{ a, e };
+    const sides = [_]struct { combined: TemplateExpr, slot: *?UnitRule }{
+        .{ .combined = binaryApp(f, &ea), .slot = &combiner.left_unit_rule },
+        .{ .combined = binaryApp(f, &ae), .slot = &combiner.right_unit_rule },
+    };
+    for (sides) |side| {
+        const direct = [_]TemplateExpr{ side.combined, a };
+        const reversed = [_]TemplateExpr{ a, side.combined };
+        const is_reversed = if (lawShapeOk(rule, sort_name, 1, &.{}, binaryApp(rel, &direct)))
+            false
+        else if (lawShapeOk(rule, sort_name, 1, &.{}, binaryApp(rel, &reversed)))
+            true
+        else
+            continue;
+        if (side.slot.*) |existing| {
+            if (existing.rule_id == rule_id) continue;
+            return error.AmbiguousStructuralUnitRule;
+        }
+        side.slot.* = .{ .rule_id = rule_id, .reversed = is_reversed };
     }
-    return found;
-}
-
-fn isLeftUnitPattern(
-    lhs: TemplateExpr,
-    rhs: TemplateExpr,
-    head_term_id: u32,
-    unit_term_id: u32,
-) bool {
-    const lhs_app = switch (lhs) {
-        .app => |value| value,
-        else => return false,
-    };
-    if (lhs_app.term_id != head_term_id or lhs_app.args.len != 2) {
-        return false;
-    }
-    const unit_app = switch (lhs_app.args[0]) {
-        .app => |value| value,
-        else => return false,
-    };
-    const rhs_binder = switch (rhs) {
-        .binder => |value| value,
-        else => return false,
-    };
-    const lhs_rhs_binder = switch (lhs_app.args[1]) {
-        .binder => |value| value,
-        else => return false,
-    };
-    return unit_app.term_id == unit_term_id and
-        unit_app.args.len == 0 and
-        lhs_rhs_binder == rhs_binder;
-}
-
-fn isRightUnitPattern(
-    lhs: TemplateExpr,
-    rhs: TemplateExpr,
-    head_term_id: u32,
-    unit_term_id: u32,
-) bool {
-    const lhs_app = switch (lhs) {
-        .app => |value| value,
-        else => return false,
-    };
-    if (lhs_app.term_id != head_term_id or lhs_app.args.len != 2) {
-        return false;
-    }
-    const lhs_rhs_binder = switch (lhs_app.args[0]) {
-        .binder => |value| value,
-        else => return false,
-    };
-    const unit_app = switch (lhs_app.args[1]) {
-        .app => |value| value,
-        else => return false,
-    };
-    const rhs_binder = switch (rhs) {
-        .binder => |value| value,
-        else => return false,
-    };
-    return unit_app.term_id == unit_term_id and
-        unit_app.args.len == 0 and
-        lhs_rhs_binder == rhs_binder;
 }
 
 /// Whitespace/paren tokenizer for `@auto trigger` pattern text: `(` and `)`

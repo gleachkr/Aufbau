@@ -1693,6 +1693,20 @@ test "parser rejects result-type deps naming a hidden binder" {
     );
 }
 
+test "check rejects argument types depending on a hidden binder" {
+    // Was raised only while emitting MMB, so `check` (the LSP and
+    // `abc search`) accepted what `compile` rejected.
+    const mm0_src =
+        \\provable sort wff;
+        \\sort set;
+        \\term al {x: set} (a: wff x): wff;
+        \\def foo (.y: set) (a: wff y): wff = $ al y a $;
+    ;
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try std.testing.expectError(error.ArgDependencyOnDummy, compiler.check());
+}
+
 test "exhausted @vars pool is reported, not a later tier's mismatch" {
     // Matching `l @ a` against `t_tapp` unfolds `Nat` and must name its
     // hidden `∀` dummy from the `ty` pool, but the theorem already binds

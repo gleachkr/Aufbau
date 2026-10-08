@@ -1,0 +1,9 @@
+assoc_first
+-----------
+
+l1: $ g , (h , i) ⇒ atom $ by base3 []
+
+right_unit_declared_late
+------------------------
+
+l1: $ g ⇒ atom $ by base []

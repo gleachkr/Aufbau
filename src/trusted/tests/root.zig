@@ -534,7 +534,7 @@ test "MM0 parser bounds math nesting instead of overflowing the stack" {
 test "MM0 parser handles binders and dependencies" {
     const src =
         \\sort wff;
-        \\term app {x: wff} (h: wff x) (.d: wff x) : wff;
+        \\term app {x: wff} (h: wff x) : wff;
     ;
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -570,7 +570,7 @@ test "MM0 parser treats parenthesized dot binders as bound dummies" {
         \\provable sort wff;
         \\term all {x: nat} (p: wff x): wff;
         \\prefix all: $A.$ prec 41;
-        \\def subset (.x: nat) (p: wff x): wff = $ A. x p $;
+        \\def subset (p: wff) (.x: nat): wff = $ A. x p $;
     ;
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -597,7 +597,7 @@ test "MM0 parser treats parenthesized dot binders as bound dummies" {
                 @as(u55, 1),
                 term_stmt.dummy_exprs[0].deps(),
             );
-            try std.testing.expectEqual(@as(u55, 1), term_stmt.args[0].deps);
+            try std.testing.expectEqual(@as(u55, 0), term_stmt.args[0].deps);
 
             const body = term_stmt.body orelse return error.ExpectedDefinitionBody;
             switch (body.*) {
@@ -1392,6 +1392,78 @@ test "MM0 parser counts hidden dummies against the 55-binder limit" {
     var parser = MM0Parser.init(src, arena.allocator());
     _ = (try parser.next()).?;
     try std.testing.expectError(error.TooManyBoundVars, parser.next());
+}
+
+/// Parse `src`, expecting a statement to fail with `err`.
+fn expectLastStatementError(src: []const u8, err: anyerror) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var parser = MM0Parser.init(src, arena.allocator());
+    while (true) {
+        _ = (parser.next() catch |actual| {
+            return std.testing.expectEqual(err, actual);
+        }) orelse return error.TestExpectedError;
+    }
+}
+
+test "MM0 parser enforces the strict, free and pure sort modifiers" {
+    // mm0.md: a strict sort has no bound or dummy variables, a free sort no
+    // dummies, and a pure sort is the result of no term or def.
+    try expectLastStatementError(
+        "strict sort s; sort w;\nterm f {x: s}: w;\n",
+        error.BoundVarInStrictSort,
+    );
+    try expectLastStatementError(
+        "strict sort s; provable sort w; term t (a: s): w;\naxiom a {x: s}: $ t x $;\n",
+        error.BoundVarInStrictSort,
+    );
+    try expectLastStatementError(
+        "strict sort s; sort w; term t: w;\ndef f (.x: s): w = $ t $;\n",
+        error.BoundVarInStrictSort,
+    );
+    try expectLastStatementError(
+        "free sort s; sort w; term t: w;\ndef f (.x: s): w = $ t $;\n",
+        error.DummyInFreeSort,
+    );
+    try expectLastStatementError("pure sort p;\nterm k: p;\n", error.TermInPureSort);
+    try expectLastStatementError(
+        "pure sort p; sort w;\ndef d (a: w): p;\n",
+        error.TermInPureSort,
+    );
+
+    // What each modifier still allows: regular strict variables, bound free
+    // variables, and pure variables.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var parser = MM0Parser.init(
+        \\strict sort s; free sort f; pure sort p; sort w;
+        \\term g (a: s) {x: f} (b: p): w;
+        \\def h (a: s) {x: f} (b: p): w = $ g a x b $;
+        \\
+    , arena.allocator());
+    while (try parser.next()) |_| {}
+}
+
+test "MM0 parser rejects argument types depending on a def's dummy" {
+    // MMB argument deps index bound arguments only; a dummy's bit has no
+    // place there.
+    try expectLastStatementError(
+        "sort s; sort w; term al {x: s} (a: w x): w;\n" ++
+            "def foo (.y: s) (a: w y): w = $ al y a $;\n",
+        error.ArgDependencyOnDummy,
+    );
+    // Nor may a dummy itself list dependencies, or appear outside a def
+    // (mm0-c rejects all three).
+    try expectLastStatementError(
+        "sort s; sort w; term t: w;\n" ++
+            "def foo {x: s} (.y: w x): w = $ t $;\n",
+        error.DependentDummyBinder,
+    );
+    try expectLastStatementError("sort w;\nterm t (.d: w): w;\n", error.DummyOutsideDef);
+    try expectLastStatementError(
+        "provable sort w; term t: w;\ntheorem th (.d: w): $ t $;\n",
+        error.DummyOutsideDef,
+    );
 }
 
 test "MM0 parser accepts declarations binding exactly 55 variables" {

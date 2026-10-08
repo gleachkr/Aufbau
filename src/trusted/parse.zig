@@ -24,12 +24,16 @@ const PROV_COERCION_IDX: usize = MAX_SORTS;
 pub const ParseError = error{
     AnonymousNotationBinder,
     ArgCountMismatch,
+    ArgDependencyOnDummy,
     BinderTokenCollision,
+    BoundVarInStrictSort,
     BoundnessMismatch,
     CoercionCycle,
     CoercionDiamond,
     CoercionDiamondToProvable,
-    DummyHypothesisBinder,
+    DependentDummyBinder,
+    DummyInFreeSort,
+    DummyOutsideDef,
     DummyNotationBinder,
     DuplicateHoleAnnotation,
     DuplicateHoleToken,
@@ -63,6 +67,7 @@ pub const ParseError = error{
     PrecedenceMismatch,
     ResultDependencyOnDummy,
     SortMismatch,
+    TermInPureSort,
     TooManyBoundVars,
     TooManySorts,
     TooManyTerms,
@@ -255,7 +260,7 @@ pub const Notation = union(enum) {
     },
 };
 
-const BinderKind = enum { term, assertion };
+const BinderKind = enum { term, def, assertion };
 
 pub const MathSpan = struct {
     start: usize,
@@ -815,12 +820,17 @@ pub const MM0Parser = struct {
 
         var ctx = BinderContext.init(self.allocator);
         self.skipWhitespaceAndComments();
-        try self.parseBinders(&ctx, .term);
+        try self.parseBinders(&ctx, if (is_def) .def else .term);
 
         try self.expect(':');
         const ret_info = try self.parseTermType(&ctx);
         const ret_sort_name = ret_info.sort_name;
         const ret_sort = try self.lookupSortId(ret_sort_name);
+        // mm0.md: no `term` (or `def`) may target a `pure` sort.
+        if (self.sort_infos.items[ret_sort].pure) {
+            self.last_error_span = name_info.span;
+            return error.TermInPureSort;
+        }
 
         var body: ?*const Expr = null;
         self.skipWhitespaceAndComments();
@@ -844,6 +854,13 @@ pub const MM0Parser = struct {
         // those, so remap and reject anything left over (a dummy).
         const remapped = binderDepsToBoundArgDeps(arg_slice, ret_info.deps);
         if (remapped.dummy_deps != 0) return error.ResultDependencyOnDummy;
+        // The same holds for each argument type, e.g. `(.y: s) (a: wff y)`.
+        for (arg_slice) |arg| {
+            if (binderDepsToBoundArgDeps(arg_slice, arg.deps).dummy_deps != 0) {
+                self.last_error_span = name_info.span;
+                return error.ArgDependencyOnDummy;
+            }
+        }
         const ret_deps = remapped.deps;
         const term_id = try self.nextTermId();
         const term_args = try self.buildTermArgs(arg_slice);
@@ -972,6 +989,7 @@ pub const MM0Parser = struct {
             self.skipWhitespaceAndComments();
 
             var names: std.ArrayListUnmanaged([]const u8) = .{};
+            var name_spans: std.ArrayListUnmanaged(MathSpan) = .{};
             var is_dummy_buf: std.ArrayListUnmanaged(bool) = .{};
             var first_name_span: ?MathSpan = null;
             while (true) {
@@ -981,6 +999,11 @@ pub const MM0Parser = struct {
                 if (is_dummy) self.pos += 1;
                 const ident_info = try self.consumeRequiredIdentInfo();
                 if (first_name_span == null) first_name_span = ident_info.span;
+                // mm0-c: "dummies are only allowed in defs".
+                if (is_dummy and kind != .def) {
+                    self.last_error_span = ident_info.span;
+                    return error.DummyOutsideDef;
+                }
                 if (self.isRegisteredHoleToken(ident_info.text)) {
                     self.last_error_span = ident_info.span;
                     return error.HoleTokenNameCollision;
@@ -995,6 +1018,7 @@ pub const MM0Parser = struct {
                     return error.BinderTokenCollision;
                 }
                 try names.append(self.allocator, ident_info.text);
+                try name_spans.append(self.allocator, ident_info.span);
                 try is_dummy_buf.append(self.allocator, is_dummy);
             }
             self.pos += 1;
@@ -1004,8 +1028,7 @@ pub const MM0Parser = struct {
                 const hyp = try self.parseFormulaMathString(&ctx.vars);
                 self.skipWhitespaceAndComments();
                 try self.expect(close);
-                for (names.items, is_dummy_buf.items) |name, is_dummy| {
-                    if (is_dummy) return error.DummyHypothesisBinder;
+                for (names.items) |name| {
                     try hyps_rev.append(self.allocator, hyp);
                     try hyp_names_rev.append(self.allocator, name);
                 }
@@ -1026,12 +1049,30 @@ pub const MM0Parser = struct {
             self.skipWhitespaceAndComments();
             try self.expect(close);
 
-            for (names.items, is_dummy_buf.items) |name, is_dummy| {
+            const sort = self.sort_infos.items[try self.lookupSortId(arg.sort_name)];
+            for (names.items, name_spans.items, is_dummy_buf.items) |name, name_span, is_dummy| {
+                // mm0-c: "dummies should not have dependencies". A dummy
+                // gets its own bit; listed deps would be silently dropped.
+                // (A curly group's `arg.deps` is its own bit, not a list.)
+                if (is_dummy and !is_bound and arg.deps != 0) {
+                    self.last_error_span = name_span;
+                    return error.DependentDummyBinder;
+                }
                 const treat_as_bound = is_bound or is_dummy;
                 if (treat_as_bound and
                     ctx.bound_names.items.len >= max_bound_vars)
                 {
                     return error.TooManyBoundVars;
+                }
+                // mm0.md sort modifiers: a `strict` sort has no bound or
+                // dummy variables, and a `free` sort has no dummies.
+                if (treat_as_bound and sort.strict) {
+                    self.last_error_span = name_span;
+                    return error.BoundVarInStrictSort;
+                }
+                if (is_dummy and sort.free) {
+                    self.last_error_span = name_span;
+                    return error.DummyInFreeSort;
                 }
                 const actual_arg = if (treat_as_bound)
                     ArgInfo{

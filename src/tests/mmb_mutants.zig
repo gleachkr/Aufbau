@@ -213,11 +213,12 @@ const mutants = [_]Mutant{
             .{ .at = 40, .bytes = &.{0x06} },
             .{ .at = 0x50, .bytes = &arg(0, true, 1) },
         },
-        .spec_edits = &.{ strict_wff, .{
-            .find = "term imp: wff > wff > wff;",
-            .replace = "term imp {a: wff} (b: wff): wff;",
-        } },
-        .expected = error.StrictSort,
+        // The spec keeps `imp` regular: a strict bound binder there is
+        // already a parse error, so only the stream's binder is bad. mm0-c
+        // checks binders before the spec; this verifier compares the spec
+        // first.
+        .spec_edits = &.{strict_wff},
+        .expected = error.ArgBoundMismatch,
         .mm0c = "bound variable in strict sort",
     },
 

@@ -162,8 +162,8 @@ The annotated rule must satisfy these frontend checks:
 - both are bound binders
 - both have the same sort
 - the rule has no hypotheses
-- the conclusion is a binary relation already understood by the rewrite
-  / transport machinery
+- the conclusion is `rel(lhs, rhs)` with `rel` the registered `@relation`
+  term of the operand sort, as for `@rewrite`
 - the left-hand side has a visible head term, so the compiler can index
   the rule as a rewrite candidate for that constructor
 
@@ -844,8 +844,10 @@ performs the following steps:
 2. **Flatten nested uses.** `(a ∘ b) ∘ c` and `a ∘ (b ∘ c)` are treated as
    the flat list `[a, b, c]`.
 3. **Remove supported unit elements.** The normalizer drops a left unit
-   only when it has discovered a proof of `unit ∘ a ~ a`, and drops a right
-   unit only when it has discovered a proof of `a ∘ unit ~ a`. If the
+   only when a declared rule proves `unit ∘ a ~ a`, and drops a right unit
+   only when one proves `a ∘ unit ~ a` (either side of `~` first). A unit
+   law has exactly one regular argument and no hypotheses; it is found when
+   it is declared, and a second one for the same side is an error. If the
    combiner is commutative, either side can be derived from the other by
    first commuting.
 4. **Sort deterministically** (if commutativity is declared). Elements are

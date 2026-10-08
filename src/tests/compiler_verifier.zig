@@ -527,7 +527,7 @@ test "compiler rejects invalid filler binder tails" {
     }
 }
 
-test "filler dummies in a free sort are rejected by the kernel" {
+test "filler dummies in a free sort are rejected" {
     const allocator = std.testing.allocator;
     const mm0_src =
         \\delimiter $ ( ) $;
@@ -541,15 +541,12 @@ test "filler dummies in a free sort are rejected by the kernel" {
         \\def alias (.d: obj) = $ all d (eq d d) $
     ;
 
+    // Checked where the dummy is declared, as for a `.mm0` def, instead of
+    // compiling to a stream the kernel rejects with `FreeSort`.
     var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
-    const mmb = try compiler.compileMmb(allocator);
-    defer allocator.free(mmb);
-
-    // The compiler mirrors local-def behavior and leaves the free-sort dummy
-    // restriction to the verifier.
     try std.testing.expectError(
-        error.FreeSort,
-        mm0.verifyPair(allocator, mm0_src, mmb),
+        error.DummyInFreeSort,
+        compiler.compileMmb(allocator),
     );
 }
 
