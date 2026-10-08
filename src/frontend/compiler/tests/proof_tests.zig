@@ -435,28 +435,81 @@ test "compiler accepts nested rule applications as refs" {
     try mm0.verifyPair(std.testing.allocator, mm0_src, mmb);
 }
 
+const nested_keep_mm0 =
+    \\provable sort wff;
+    \\term top: wff;
+    \\axiom top_i: $ top $;
+    \\axiom keep: $ top $ > $ top $;
+    \\theorem target: $ top $;
+;
+
+/// `keep [keep [... top_i [] ...]]` nested `depth` reference lists deep.
+fn nestedKeepProof(allocator: std.mem.Allocator, depth: usize) ![]u8 {
+    var text: std.ArrayListUnmanaged(u8) = .{};
+    errdefer text.deinit(allocator);
+    try text.appendSlice(allocator, "target\n------\nl1: $ top $ by ");
+    for (1..depth) |_| try text.appendSlice(allocator, "keep [");
+    try text.appendSlice(allocator, "top_i []");
+    try text.appendNTimes(allocator, ']', depth - 1);
+    return text.toOwnedSlice(allocator);
+}
+
 test "compiler accepts deeply nested rule applications as refs" {
-    const mm0_src =
-        \\provable sort wff;
-        \\term top: wff;
-        \\axiom top_i: $ top $;
-        \\axiom keep: $ top $ > $ top $;
-        \\theorem target: $ top $;
-    ;
-    const proof_src =
-        \\target
-        \\------
-        \\l1: $ top $ by keep [keep [keep [keep [top_i []]]]]
-    ;
+    const proof_src = try nestedKeepProof(std.testing.allocator, 32);
+    defer std.testing.allocator.free(proof_src);
 
     var compiler = Compiler.initWithProof(
         std.testing.allocator,
-        mm0_src,
+        nested_keep_mm0,
         proof_src,
     );
     const mmb = try compiler.compileMmb(std.testing.allocator);
     defer std.testing.allocator.free(mmb);
-    try mm0.verifyPair(std.testing.allocator, mm0_src, mmb);
+    try mm0.verifyPair(std.testing.allocator, nested_keep_mm0, mmb);
+}
+
+test "compiler stops inline proofs nested past its stack guard" {
+    // The deepest nesting the parser accepts is deeper than the checker's
+    // stack allows in any build mode.
+    const proof_src = try nestedKeepProof(
+        std.testing.allocator,
+        mm0.ProofScript.max_inline_depth,
+    );
+    defer std.testing.allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        nested_keep_mm0,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.CheckStackExhausted,
+        compiler.compileMmb(std.testing.allocator),
+    );
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.CheckStackExhausted, diag.err);
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expect(std.mem.startsWith(u8, proof_src[span.start..], "keep ["));
+}
+
+test "compiler rejects inline proofs nested past the parser's limit" {
+    const proof_src = try nestedKeepProof(
+        std.testing.allocator,
+        mm0.ProofScript.max_inline_depth + 1,
+    );
+    defer std.testing.allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        nested_keep_mm0,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.InlineProofTooDeep,
+        compiler.compileMmb(std.testing.allocator),
+    );
 }
 
 test "compiler accepts inline applications using refs and bindings" {

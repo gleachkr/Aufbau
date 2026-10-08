@@ -487,6 +487,75 @@ test "LSP code action offers unpack for inline applications" {
     );
 }
 
+/// `keep [keep [... top_i [] ...]]` nested `depth` reference lists deep.
+fn nestedKeepProof(allocator: std.mem.Allocator, depth: usize) ![]u8 {
+    var text: std.ArrayListUnmanaged(u8) = .{};
+    try text.appendSlice(allocator, "main\n----\nl1: $ top $ by ");
+    for (1..depth) |_| try text.appendSlice(allocator, "keep [");
+    try text.appendSlice(allocator, "top_i []");
+    try text.appendNTimes(allocator, ']', depth - 1);
+    try text.append(allocator, '\n');
+    return text.toOwnedSlice(allocator);
+}
+
+test "LSP survives proofs nested to the parser's limit and past it" {
+    const mm0_uri = "file:///tmp/lsp-deep-nesting.mm0";
+    const proof_uri = "file:///tmp/lsp-deep-nesting.auf";
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = mm0_uri,
+            .languageId = "mm0",
+            .version = 1,
+            .text = lsp_search_mm0_text,
+        },
+    });
+
+    // The deepest nesting the parser accepts: the checker's stack guard
+    // stops it, and every editor feature still walks the parsed tree.
+    const deepest = try nestedKeepProof(arena, mm0.ProofScript.max_inline_depth);
+    transport_state.clearMessages();
+    try handler.@"textDocument/didOpen"(arena, .{
+        .textDocument = .{
+            .uri = proof_uri,
+            .languageId = "auf",
+            .version = 1,
+            .text = deepest,
+        },
+    });
+    try std.testing.expect(transport_state.containsMessage("too deeply to check"));
+    const position = try testPosition(deepest, "top_i");
+    _ = try handler.@"textDocument/hover"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = position,
+    });
+    _ = try handler.@"textDocument/codeAction"(
+        arena,
+        try codeActionParamsAt(proof_uri, deepest, "top_i"),
+    );
+    _ = try handler.@"textDocument/documentSymbol"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+    });
+
+    // One level more is a parse error.
+    const too_deep = try nestedKeepProof(arena, mm0.ProofScript.max_inline_depth + 1);
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = proof_uri, .version = 2 },
+        .contentChanges = &.{.{ .literal_1 = .{ .text = too_deep } }},
+    });
+    try std.testing.expect(transport_state.containsMessage("more than 1024 levels"));
+}
+
 test "LSP code action caches search results across identical requests" {
     const mm0_uri = "file:///tmp/lsp-code-action-cache.mm0";
     const proof_uri = "file:///tmp/lsp-code-action-cache.auf";

@@ -118,6 +118,12 @@ pub fn applyRuleApplication(
     theorem: *TheoremContext,
     theorem_vars: *NameExprMap,
 ) anyerror!usize {
+    const outermost = self.stack_base == null;
+    if (outermost) self.stack_base = @frameAddress();
+    defer if (outermost) {
+        self.stack_base = null;
+    };
+    try checkStackGuard(self, application, diag_context);
     const allocator = context.allocator;
     const sink_mark = if (self.inline_conclusion_sink) |sink| sink.mark() else 0;
     errdefer if (self.inline_conclusion_sink) |sink| sink.rollback(sink_mark);
@@ -191,7 +197,7 @@ pub fn applyRuleApplication(
                 theorem_vars,
                 &.{},
             ) catch |err| retry: {
-                if (err == error.OutOfMemory) return err;
+                if (unrecoverable(err)) return err;
                 const err_diag = getDiagnostic(self);
                 for (pins) |pin| {
                     restoreDiagnostic(self, null);
@@ -209,7 +215,7 @@ pub fn applyRuleApplication(
                     )) |pinned| {
                         break :retry pinned;
                     } else |pin_err| {
-                        if (pin_err == error.OutOfMemory) return pin_err;
+                        if (unrecoverable(pin_err)) return pin_err;
                     }
                 }
                 restoreDiagnostic(self, err_diag);
@@ -287,6 +293,42 @@ pub fn applyRuleApplication(
         restoreDiagnostic(self, saved_diag);
         return line_idx;
     }
+}
+
+/// Call-stack guard for inline elaboration, which recurses through
+/// `applyRuleApplication` once per nested inline application. A level costs
+/// tens of KiB of native stack (several times that in Debug), so nesting the
+/// parser accepts (`ProofScript.max_inline_depth`) can still overflow the
+/// runtime stack; on wasm that silently corrupts linear memory. Sized like
+/// the search's guard: below the 8 MiB stack the wasm executables link with,
+/// leaving room for one level and the non-recursive work under it.
+const check_stack_guard_bytes = 6 * 1024 * 1024;
+
+/// Fail the application once the stack below `CompilerContext.stack_base`
+/// passes `check_stack_guard_bytes`. Kept out of line so its diagnostic does
+/// not enlarge the recursive frame.
+noinline fn checkStackGuard(
+    self: *CompilerContext,
+    application: RuleApplication,
+    diag_context: ApplicationDiagnosticContext,
+) error{CheckStackExhausted}!void {
+    if (self.stack_base.? -| @frameAddress() <= check_stack_guard_bytes) return;
+    self.setProof(CompilerDiag.withPhase(.{
+        .kind = .generic,
+        .err = error.CheckStackExhausted,
+        .theorem_name = diag_context.theorem_name,
+        .line_label = diag_context.line_label,
+        .rule_name = application.rule_name,
+        .span = application.span,
+    }, .theorem_application));
+    return error.CheckStackExhausted;
+}
+
+/// Errors no retry with other pins, fallback rules or bindings can recover
+/// from. They propagate at once: retrying would repeat the failed descent at
+/// every enclosing inline level.
+fn unrecoverable(err: anyerror) bool {
+    return err == error.OutOfMemory or err == error.CheckStackExhausted;
 }
 
 pub fn probeRuleConclusion(
@@ -414,17 +456,9 @@ fn applyRuleCandidateCore(
     const allocator = context.allocator;
     const parser = context.parser;
     const env = context.env;
-    const registry = context.registry;
     const assertion = context.assertion;
     const checked = context.checked;
-    const diag_scratch = context.diag_scratch;
     const rule = &env.rules.items[rule_id];
-    var conclusion_rule = rule.*;
-    if (kind == .conclusion_probe) conclusion_rule.hyps = &.{};
-    const inference_rule = if (kind == .conclusion_probe)
-        &conclusion_rule
-    else
-        rule;
     const expected_ref_count = switch (kind) {
         .full_application => rule.hyps.len,
         .conclusion_probe => 0,
@@ -537,7 +571,7 @@ fn applyRuleCandidateCore(
             ref_exprs,
             &failed_ref,
         ) catch |err| {
-            if (err == error.OutOfMemory) return err;
+            if (unrecoverable(err)) return err;
             const w = withheld orelse return err;
             const idx = failed_ref orelse return err;
             if (application.refs[idx] != .application) return err;
@@ -578,6 +612,61 @@ fn applyRuleCandidateCore(
         break;
     };
 
+    return finishCandidate(
+        self,
+        context,
+        application,
+        line_assertion,
+        expected_conclusion_hint,
+        line,
+        rule_id,
+        theorem,
+        theorem_vars,
+        kind,
+        partial_bindings,
+        withheld,
+        refs,
+        &refs_owned,
+        ref_exprs,
+    );
+}
+
+/// The rest of `applyRuleCandidateCore` once the refs are elaborated:
+/// binding inference, @freshen repair, hypothesis matching and the
+/// conclusion line. Kept out of line so its many locals and diagnostics are
+/// not part of the frame that stays live while nested inline applications
+/// recurse. Clears `refs_owned` when `refs` passes to a checked line.
+noinline fn finishCandidate(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    application: RuleApplication,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    line: ApplicationLine,
+    rule_id: u32,
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    kind: CandidateApplyKind,
+    partial_bindings: []?ExprId,
+    withheld: ?BindingOracle.Withheld,
+    refs: []CheckedRef,
+    refs_owned: *bool,
+    ref_exprs: []ExprId,
+) anyerror!CandidateApplyResult {
+    const allocator = context.allocator;
+    const parser = context.parser;
+    const env = context.env;
+    const registry = context.registry;
+    const assertion = context.assertion;
+    const checked = context.checked;
+    const diag_scratch = context.diag_scratch;
+    const rule = &env.rules.items[rule_id];
+    var conclusion_rule = rule.*;
+    if (kind == .conclusion_probe) conclusion_rule.hyps = &.{};
+    const inference_rule = if (kind == .conclusion_probe)
+        &conclusion_rule
+    else
+        rule;
     const explicit_bindings = try allocator.dupe(?ExprId, partial_bindings);
     defer allocator.free(explicit_bindings);
 
@@ -709,7 +798,7 @@ fn applyRuleCandidateCore(
             refs,
         ) catch |err| {
             if (checkedRangeOwnsRefs(checked.items[conclusion_mark..], refs)) {
-                refs_owned = false;
+                refs_owned.* = false;
             }
             if (checkedRangeOwnsBindings(
                 checked.items[conclusion_mark..],
@@ -724,7 +813,7 @@ fn applyRuleCandidateCore(
             return error.ConclusionMismatch;
         };
         _ = line_idx;
-        refs_owned = false;
+        refs_owned.* = false;
         filled_bindings_owned = false;
 
         const owned_bindings = try allocator.dupe(?ExprId, optional_bindings);
@@ -994,7 +1083,7 @@ fn applyRuleCandidateCore(
             return err;
         };
         allocator.free(refs);
-        refs_owned = false;
+        refs_owned.* = false;
         return .{ .full_application = line_idx };
     }
 
@@ -1150,7 +1239,7 @@ fn applyRuleCandidateCore(
         refs,
     ) catch |err| {
         if (checkedRangeOwnsRefs(checked.items[concl_checked_mark..], refs)) {
-            refs_owned = false;
+            refs_owned.* = false;
         }
         if (self.setProofScratchDiagnosticIfPresent(
             diag_scratch,
@@ -1205,7 +1294,7 @@ fn applyRuleCandidateCore(
         self.setProof(diag);
         return error.ConclusionMismatch;
     };
-    refs_owned = false;
+    refs_owned.* = false;
     diag_scratch.discard(concl_mark);
 
     return .{ .full_application = line_idx };
@@ -1222,7 +1311,9 @@ fn applyRuleCandidateCore(
 /// catch that. Fills `take`; null when the oracle has no value to add, else
 /// whether the tier taken is the last, which over-approximates (its
 /// bindings are forced).
-fn hintRetryBinders(
+/// Out of line, like the other helpers on the inline recursion path (see
+/// `checkStackGuard`), so its frame is not part of every level's.
+noinline fn hintRetryBinders(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
     rule: *const RuleDecl,
@@ -1658,7 +1749,9 @@ fn hasInlineRef(application: RuleApplication) bool {
     return false;
 }
 
-fn principalPinsFor(
+/// Out of line, like the other helpers on the inline recursion path (see
+/// `checkStackGuard`), so its frame is not part of every level's.
+noinline fn principalPinsFor(
     allocator: std.mem.Allocator,
     context: *const RuleApplyContext,
     theorem: *const TheoremContext,
@@ -1714,66 +1807,20 @@ fn elaborateRefs(
                 );
                 const hyp_idx = switch (resolved) {
                     .index => |value| value,
-                    .unknown, .ambiguous => {
-                        self.setProof(CompilerDiag.withPhase(.{
-                            .kind = if (resolved == .ambiguous)
-                                .ambiguous_hypothesis_ref
-                            else
-                                .unknown_hypothesis_ref,
-                            .err = if (resolved == .ambiguous)
-                                error.AmbiguousHypothesisRef
-                            else
-                                error.UnknownHypothesisRef,
-                            .theorem_name = assertion.name,
-                            .line_label = line.label,
-                            .span = hyp.span,
-                            .detail = .{
-                                .hypothesis_ref = .{
-                                    .index = hyp.index,
-                                    .name = hyp.name,
-                                },
-                            },
-                        }, .theorem_application));
-                        return if (resolved == .ambiguous)
-                            error.AmbiguousHypothesisRef
-                        else
-                            error.UnknownHypothesisRef;
-                    },
+                    .unknown, .ambiguous => return reportHypRef(
+                        self,
+                        assertion.name,
+                        line.label,
+                        hyp,
+                        resolved == .ambiguous,
+                    ),
                 };
                 refs[idx] = .{ .hyp = hyp_idx };
                 break :blk theorem.theorem_hyps.items[hyp_idx];
             },
             .line => |label| blk: {
-                const line_idx = context.labels.get(label.label) orelse {
-                    var label_diag = CompilerDiag.withPhase(.{
-                        .kind = .unknown_label,
-                        .err = error.UnknownLabel,
-                        .theorem_name = assertion.name,
-                        .line_label = line.label,
-                        .name = label.label,
-                        .span = label.span,
-                    }, .theorem_application);
-                    if (labelAppearsInBlock(
-                        context.block_lines,
-                        label.label,
-                    )) {
-                        CompilerDiag.addNote(
-                            &label_diag,
-                            .label_belongs_to_later_line,
-                            .proof,
-                            null,
-                        );
-                    } else if (closestKeyName(
-                        context.labels,
-                        label.label,
-                    )) |suggestion| {
-                        label_diag.detail = .{ .name_suggestion = .{
-                            .suggestion = suggestion,
-                        } };
-                    }
-                    self.setProof(label_diag);
-                    return error.UnknownLabel;
-                };
+                const line_idx = context.labels.get(label.label) orelse
+                    return reportUnknownLabel(self, context, line.label, label);
                 refs[idx] = .{ .line = line_idx };
                 break :blk context.checked.items[line_idx].expr;
             },
@@ -1821,13 +1868,85 @@ fn elaborateRefs(
     }
 }
 
+/// Report a hypothesis ref that names no hypothesis, or several. This and
+/// `reportUnknownLabel` are out of line so their diagnostics are not part of
+/// the `elaborateRefs` frame that stays live while inline applications
+/// recurse.
+noinline fn reportHypRef(
+    self: *CompilerContext,
+    theorem_name: []const u8,
+    line_label: []const u8,
+    hyp: ProofScript.HypRef,
+    ambiguous: bool,
+) anyerror {
+    const err: CompilerDiag.DiagnosticError = if (ambiguous)
+        error.AmbiguousHypothesisRef
+    else
+        error.UnknownHypothesisRef;
+    self.setProof(CompilerDiag.withPhase(.{
+        .kind = if (ambiguous)
+            .ambiguous_hypothesis_ref
+        else
+            .unknown_hypothesis_ref,
+        .err = err,
+        .theorem_name = theorem_name,
+        .line_label = line_label,
+        .span = hyp.span,
+        .detail = .{
+            .hypothesis_ref = .{
+                .index = hyp.index,
+                .name = hyp.name,
+            },
+        },
+    }, .theorem_application));
+    return err;
+}
+
+noinline fn reportUnknownLabel(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    line_label: []const u8,
+    label: ProofScript.LineRef,
+) anyerror {
+    var label_diag = CompilerDiag.withPhase(.{
+        .kind = .unknown_label,
+        .err = error.UnknownLabel,
+        .theorem_name = context.assertion.name,
+        .line_label = line_label,
+        .name = label.label,
+        .span = label.span,
+    }, .theorem_application);
+    if (labelAppearsInBlock(
+        context.block_lines,
+        label.label,
+    )) {
+        CompilerDiag.addNote(
+            &label_diag,
+            .label_belongs_to_later_line,
+            .proof,
+            null,
+        );
+    } else if (closestKeyName(
+        context.labels,
+        label.label,
+    )) |suggestion| {
+        label_diag.detail = .{ .name_suggestion = .{
+            .suggestion = suggestion,
+        } };
+    }
+    self.setProof(label_diag);
+    return error.UnknownLabel;
+}
+
 /// Record the conclusion an inline application elaborated to, rendered with
 /// declared notation and source binder names, for presentation features (the
 /// `unpack` code action). Fallback retries re-record the same span; the last
 /// entry wins, and entries from candidates that were rolled back are
 /// harmless because consumers only read the sink out of documents that
 /// analyzed cleanly. No-op (and free) when no sink is configured.
-fn recordInlineConclusion(
+/// Out of line, like the other helpers on the inline recursion path (see
+/// `checkStackGuard`), so its frame is not part of every level's.
+noinline fn recordInlineConclusion(
     self: *CompilerContext,
     context: *const RuleApplyContext,
     theorem: *const TheoremContext,
@@ -1884,7 +2003,9 @@ fn recordInlineConclusion(
 ///     refine rather than emit a wrong-but-concrete hint;
 ///   - instantiation is strict (`instantiateTemplatePartial`): a still-open binder
 ///     yields null and the original hint is kept.
-fn refinedInlineHint(
+/// Out of line, like the other helpers on the inline recursion path (see
+/// `checkStackGuard`), so its frame is not part of every level's.
+noinline fn refinedInlineHint(
     context: *const RuleApplyContext,
     theorem: *TheoremContext,
     rule: *const RuleDecl,

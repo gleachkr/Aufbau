@@ -157,8 +157,10 @@ pub fn ensureConcreteCheckedIrRange(
 
 // Preserve any new checked-IR validation diagnostic on failure, but restore
 // the caller's saved diagnostic on success so speculative attempts remain
-// diagnostically transparent.
-pub fn validateAttemptCheckedIrRange(
+// diagnostically transparent. Out of line: `applyRuleApplication` calls it
+// and recurses for nested inline applications, so its locals would
+// otherwise sit in every level's frame.
+pub noinline fn validateAttemptCheckedIrRange(
     self: *CompilerContext,
     env: *const GlobalEnv,
     theorem: *TheoremContext,

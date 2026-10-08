@@ -32,6 +32,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 - A math string nested more than 1024 levels deep, by parentheses, prefix
   operators or a right-associative chain, is a parse error. Some 20,000
   levels used to overflow the stack of `mm0-zig` and `abc`.
+- Deeply nested inline proofs (`r [r [… r [] …]]`) no longer crash `abc`
+  or the language server. More than 1024 levels is a parse error. Nesting
+  deeper than the checker's stack allows, some 500 levels in release
+  builds, is reported at the application where checking stopped. A few
+  hundred levels used to overflow the stack.
 - The language server no longer crashes when a diagnostic covers part of a
   non-ASCII character, as one on a stray `⊢` outside `$ … $` does, or
   when a closed file it reads is not valid UTF-8. With VS Code's default

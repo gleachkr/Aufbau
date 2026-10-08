@@ -63,6 +63,46 @@ test "proof script parser reads theorem blocks and proof lines" {
     try std.testing.expect((try parser.nextBlock()) == null);
 }
 
+/// A proof block whose first line nests `depth` reference lists
+/// (`r [r [... r [] ...]]`), followed by a plain second line.
+fn nestedRefsBlock(allocator: std.mem.Allocator, depth: usize) ![]u8 {
+    var text: std.ArrayListUnmanaged(u8) = .{};
+    try text.appendSlice(allocator, "demo\n----\nl1: $ c $ by ");
+    for (0..depth) |_| try text.appendSlice(allocator, "r [");
+    try text.appendNTimes(allocator, ']', depth);
+    try text.appendSlice(allocator, "\nl2: $ c $ by r []\n");
+    return text.toOwnedSlice(allocator);
+}
+
+test "proof script parser bounds reference nesting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const max = ProofScript.max_inline_depth;
+
+    var deepest = ProofScript.Parser.init(
+        arena.allocator(),
+        try nestedRefsBlock(arena.allocator(), max),
+    );
+    const block = (try deepest.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), block.lines.len);
+
+    var strict = ProofScript.Parser.init(
+        arena.allocator(),
+        try nestedRefsBlock(arena.allocator(), max + 1),
+    );
+    try std.testing.expectError(error.InlineProofTooDeep, strict.nextBlock());
+
+    // A lenient parse drops only the offending line and resets its depth.
+    var lenient = ProofScript.Parser.initLenient(
+        arena.allocator(),
+        try nestedRefsBlock(arena.allocator(), max + 1),
+    );
+    const recovered = (try lenient.nextBlock()).?;
+    try std.testing.expectEqual(@as(usize, 2), recovered.lines.len);
+    try std.testing.expectEqual(@as(usize, 0), lenient.inline_depth);
+    try std.testing.expectEqualStrings("r", recovered.lines[1].application.rule_name);
+}
+
 test "proof script parser reads nested rule applications" {
     const src =
         \\demo

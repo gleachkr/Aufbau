@@ -158,7 +158,16 @@ pub const ParseError = error{
     NumberOutOfRange,
     UnexpectedCharacter,
     UnterminatedMathString,
+    InlineProofTooDeep,
 };
+
+/// Deepest nesting of reference lists (`r [s [t []]]`) the proof parser
+/// accepts. The parser and every walker of the parsed reference tree recurse
+/// once per level, so this bounds their stack use and turns a pathological
+/// line into a parse error instead of a stack overflow. Checking an inline
+/// proof costs far more stack per level than parsing it; the checker guards
+/// that separately (`check/apply.zig`). Proofs found by search nest below 20.
+pub const max_inline_depth = 1024;
 
 pub const BlockKind = enum {
     theorem,
@@ -243,6 +252,8 @@ pub const Parser = struct {
     current_block_name_span: ?Span = null,
     last_error_span: ?Span = null,
     last_header_tail_span: ?Span = null,
+    /// Reference lists open around the current position.
+    inline_depth: usize = 0,
     /// Keep going after a proof line fails to parse, retaining whatever prefix
     /// of it did parse. See `initLenient`.
     lenient: bool = false,
@@ -795,6 +806,14 @@ pub const Parser = struct {
         var refs: []const Ref = &.{};
         var refs_span: ?Span = null;
         if (self.consumeOptionalProofDelimiter('[')) |refs_start| {
+            if (self.inline_depth >= max_inline_depth) {
+                return self.recordErrorAtSpan(error.InlineProofTooDeep, .{
+                    .start = refs_start,
+                    .end = refs_start + 1,
+                });
+            }
+            self.inline_depth += 1;
+            defer self.inline_depth -= 1;
             refs = try self.parseRefs();
             try self.expectProof(']');
             refs_span = .{

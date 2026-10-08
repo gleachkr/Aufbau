@@ -1143,7 +1143,13 @@ test "compiler proof cases from files" {
         };
         if (case.outcome != .known_fail and case.outcome != .unsupported) {
             const actual = try analyzeError(allocator, pair);
-            if (actual != expected_analyze) {
+            // Unwrapped by hand: `!=` on two `?anyerror` reports equal
+            // payloads as different in Debug builds (Zig 0.15.2).
+            const agrees = if (actual) |a|
+                expected_analyze != null and a == expected_analyze.?
+            else
+                expected_analyze == null;
+            if (!agrees) {
                 std.debug.print(
                     "FAIL (analyze drift) case={s}: analyze reports {?}, compile expects {?}\n",
                     .{ case.stem, actual, expected_analyze },

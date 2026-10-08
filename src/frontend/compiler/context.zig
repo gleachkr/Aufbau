@@ -298,6 +298,12 @@ pub const CompilerContext = struct {
     /// Memo of block check outcomes for editor re-analysis; null on the
     /// compile path. See `check_memo.zig`.
     check_memo: ?*CheckMemo = null,
+    /// `@frameAddress` of the outermost frame that elaborates rule
+    /// applications: the first `applyRuleApplication` on the stack, or a
+    /// search's entry frame, since its candidate checks run deep in its
+    /// descent. The checker's call-stack guard measures from here
+    /// (`check/apply.zig`).
+    stack_base: ?usize = null,
 
     /// Tell the check memo how a theorem or lemma block came out: the one
     /// thing later checks can observe of its proof.

@@ -290,6 +290,11 @@ pub fn generateTopLevel(
     const saved_work_budget = compiler.work_budget;
     if (budget_ptr) |budget| compiler.work_budget = budget.workBudget();
     defer compiler.work_budget = saved_work_budget;
+    // Candidate checks run deep in the descent; the checker's stack guard
+    // measures from here so it counts the descent's frames too.
+    const saved_stack_base = compiler.stack_base;
+    if (saved_stack_base == null) compiler.stack_base = @frameAddress();
+    defer compiler.stack_base = saved_stack_base;
 
     switch (goal) {
         .concrete, .holey => {},
