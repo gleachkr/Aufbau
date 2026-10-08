@@ -746,6 +746,50 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_view_boundness",
         .outcome = .{ .fail = error.BoundnessMismatch },
     },
+    // One case per @view/@recover rejection a user can reach. The view
+    // match failures (conclusion, hypothesis, binding conflict) are not
+    // here: a view that does not match falls back to plain inference, so
+    // the line reports the rule's own mismatch instead.
+    .{
+        .stem = "fail_view_duplicate",
+        .outcome = .{ .fail = error.DuplicateViewAnnotation },
+    },
+    .{
+        .stem = "fail_view_hyp_count",
+        .outcome = .{ .fail = error.ViewHypCountMismatch },
+    },
+    .{
+        .stem = "fail_view_invalid",
+        .outcome = .{ .fail = error.InvalidViewAnnotation },
+    },
+    .{
+        .stem = "fail_recover_without_view",
+        .outcome = .{ .fail = error.RecoverWithoutView },
+    },
+    .{
+        .stem = "fail_recover_invalid",
+        .outcome = .{ .fail = error.InvalidRecoverAnnotation },
+    },
+    .{
+        .stem = "fail_recover_unknown_binder",
+        .outcome = .{ .fail = error.UnknownRecoverBinder },
+    },
+    .{
+        .stem = "fail_recover_target_not_rule_binder",
+        .outcome = .{ .fail = error.RecoverTargetNotRuleBinder },
+    },
+    .{
+        .stem = "fail_recover_sort_mismatch",
+        .outcome = .{ .fail = error.RecoverSortMismatch },
+    },
+    .{
+        .stem = "fail_recover_conflict",
+        .outcome = .{ .fail = error.RecoverConflict },
+    },
+    .{
+        .stem = "fail_recover_hole_not_found",
+        .outcome = .{ .fail = error.RecoverHoleNotFound },
+    },
     .{
         .stem = "fail_unknown_label",
         .outcome = .{ .fail = error.UnknownLabel },
@@ -985,6 +1029,30 @@ fn verifyWithMm0c(
     }
 }
 
+/// The LSP path's verdict on a case: the error `analyze` returns, else
+/// its first primary diagnostic, else null. It must agree with compile:
+/// a case the editor shows clean must compile, and a case compile rejects
+/// must show the same error.
+fn analyzeError(
+    allocator: std.mem.Allocator,
+    pair: mm0.Imports.LoadedPair,
+) !?anyerror {
+    var compiler = Compiler.initWithProof(
+        allocator,
+        pair.mm0.text,
+        pair.proof.?.text,
+    );
+    compiler.diagnostics.setMapping(.mm0, pair.mm0_mapping);
+    compiler.diagnostics.setMapping(.proof, pair.proof_mapping);
+    compiler.analyze() catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return @as(?anyerror, err);
+    };
+    const diags = compiler.primaryDiagnostics();
+    if (diags.len == 0) return null;
+    return @as(?anyerror, diags[0].err);
+}
+
 test "non-pass proof case metadata stays in sync" {
     var known_fail_count: usize = 0;
     var unsupported_count: usize = 0;
@@ -1064,6 +1132,23 @@ test "compiler proof cases from files" {
         };
         const mm0_src = pair.mm0.text;
         const proof_src = pair.proof.?.text;
+
+        const expected_analyze: ?anyerror = switch (case.outcome) {
+            .fail => |expected_err| expected_err,
+            else => null,
+        };
+        if (case.outcome != .known_fail and case.outcome != .unsupported) {
+            const actual = try analyzeError(allocator, pair);
+            if (actual != expected_analyze) {
+                std.debug.print(
+                    "FAIL (analyze drift) case={s}: analyze reports {?}, compile expects {?}\n",
+                    .{ case.stem, actual, expected_analyze },
+                );
+                failed_cases[failure_count] = case.stem;
+                failure_count += 1;
+                continue;
+            }
+        }
 
         var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
         compiler.diagnostics.setMapping(.mm0, pair.mm0_mapping);

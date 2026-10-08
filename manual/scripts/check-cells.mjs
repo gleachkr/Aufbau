@@ -8,7 +8,9 @@
 // cell's, behind a `prelude.mm0`), and runs `abc compile` on the last cell's
 // file of each. A document left holding search placeholders goes through
 // `abc search --fill` first and the filled proof is compiled instead, so the
-// report says whether each search demo still finds its proof. The report
+// report says whether each search demo still finds its proof. Every MMB that
+// compiles is then checked by the verifier against the joined `.mm0`, so a
+// compile the kernel rejects shows up as an error, not an ok. The report
 // lists one line per document so runs can be diffed: a page edit or prelude
 // change that flips a cell from ok to error shows up as a one-line diff.
 //
@@ -21,9 +23,10 @@
 //
 //   node manual/scripts/check-cells.mjs --abc zig-out/bin/abc > manual/cells.expected
 //
-// Usage: node scripts/check-cells.mjs [--abc PATH] [--keep DIR]
-//   --abc PATH   compiler binary (default ../zig-out/bin/abc)
-//   --keep DIR   write the assembled documents (one directory each) to DIR
+// Usage: node scripts/check-cells.mjs [--abc PATH] [--verifier PATH] [--keep DIR]
+//   --abc PATH        compiler binary (default ../zig-out/bin/abc)
+//   --verifier PATH   verifier binary (default mm0-zig next to the compiler)
+//   --keep DIR        write the assembled documents (one directory each) to DIR
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, mkdtempSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
@@ -38,6 +41,7 @@ function argValue(flag) {
   return at === -1 ? null : args[at + 1];
 }
 const abc = argValue("--abc") ?? join(manualDir, "..", "zig-out", "bin", "abc");
+const verifier = argValue("--verifier") ?? join(dirname(abc), "mm0-zig");
 const keepDir = argValue("--keep");
 const workDir = keepDir ?? mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "manual-cells-"));
 if (keepDir) mkdirSync(keepDir, { recursive: true });
@@ -142,19 +146,26 @@ for (const file of readdirSync(srcDir).sort()) {
 console.error(`\n${failures} document(s) with errors (see report above)`);
 
 // Compile one document (proof from `input` when given, as `abc compile` reads
-// `-` from stdin) and return its report status.
+// `-` from stdin), verify the MMB, and return its report status.
 function compile(mm0Path, aufPath, dir, input) {
+  const mmbPath = join(dir, "out.mmb");
   try {
-    execFileSync(abc, ["compile", mm0Path, input == null ? aufPath : "-", join(dir, "out.mmb")], {
+    execFileSync(abc, ["compile", mm0Path, input == null ? aufPath : "-", mmbPath], {
       input,
       stdio: [input == null ? "ignore" : "pipe", "pipe", "pipe"],
     });
-    return "ok";
   } catch (err) {
     // Compiled, but a line is admitted with `sorry!` (abc's exit 3).
     if (err.status === 3) return "sorry";
     return `error: ${firstError(err.stderr)}`;
   }
+  try {
+    const joined = execFileSync(abc, ["join", mm0Path], { stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync(verifier, [mmbPath], { input: joined, stdio: ["pipe", "pipe", "pipe"] });
+  } catch (err) {
+    return `error: verify: ${firstLine(err.stderr)}`;
+  }
+  return "ok";
 }
 
 // A document left holding search placeholders: run the search, then compile
@@ -177,6 +188,10 @@ function searchThenCompile(mm0Path, aufPath, dir) {
 
 function firstError(stderr) {
   return ((stderr?.toString() ?? "").split("\n").find((l) => l.includes("error")) ?? "compile failed").trim();
+}
+
+function firstLine(stderr) {
+  return (stderr?.toString() ?? "").trim().split("\n")[0] || "verification failed";
 }
 
 function lastLine(stderr) {

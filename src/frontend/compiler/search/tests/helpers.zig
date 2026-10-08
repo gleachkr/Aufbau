@@ -809,8 +809,9 @@ pub fn expectEnrollmentError(mm0_src: []const u8, expected: anyerror) !void {
     try std.testing.expectError(expected, compiler.check());
 }
 
-/// Splice the suggestion into the proof source and run the full compile
-/// path over the pair: the emitted chain must actually check.
+/// Splice the suggestion into the proof source, compile the pair, and
+/// verify the MMB: the emitted chain must pass the kernel, not only the
+/// checker.
 pub fn expectConversionCompiles(
     arena: *std.heap.ArenaAllocator,
     mm0_src: []const u8,
@@ -828,7 +829,14 @@ pub fn expectConversionCompiles(
         mm0_src,
         spliced,
     );
-    try compiler.check();
+    // Not the arena: the kernel needs the MMB tables 8-byte aligned.
+    const mmb = try compiler.compileMmb(std.testing.allocator);
+    defer std.testing.allocator.free(mmb);
+    try @import("../../../../lib.zig").verifyPair(
+        std.testing.allocator,
+        mm0_src,
+        mmb,
+    );
 }
 
 // The same connectives with comm/assoc as role certificates: the AC laws

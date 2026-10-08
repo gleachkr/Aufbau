@@ -1,0 +1,12 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort set;
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+term all {x: set} (p: wff x): wff; prefix all: $A.$ prec 41;
+term pred (t: set): wff; prefix pred: $P$ prec 50;
+term rel (s t: set): wff; infixl rel: $R$ prec 45;
+term sb (t: set) {x: set} (p: wff x): wff;
+--| @view {x: set} (t: set) (p: wff x) (q: wff): $ A. x p -> q $
+--| @recover t q p x
+axiom ax_inst {x: set} (t: set) (p: wff x): $ A. x p -> sb t x p $;
+theorem goal (u w: set) {x: set}: $ A. x (x R x) -> (P u) $;
