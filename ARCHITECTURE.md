@@ -145,6 +145,9 @@ Current trusted files are:
 - `ustack.zig`
 - `verifier.zig`
 
+`tests.zig` and `tests/` hold the kernel's unit tests; nothing else
+imports them.
+
 This is the auditable core. Changes here need a high bar.
 
 In particular, shared code is still trusted if the verifier imports it.
@@ -164,8 +167,23 @@ Compiler API and orchestration:
 
 - `compiler.zig`
 - `compiler/pipeline.zig`
+- `compiler/context.zig`
+- `compiler/diagnostic_sink.zig`
+- `compiler/rule_catalog.zig`
+- `compiler/lints.zig`
 - `diag.zig` and `diag_strings.zig`
+- `diag_scratch.zig`
 - `debug.zig`
+
+`compiler/context.zig` holds `CompilerContext`, the per-run state the
+pipeline, checker and search share. `compiler/diagnostic_sink.zig`
+collects a run's primary diagnostics and warnings and reports them.
+`compiler/rule_catalog.zig` indexes the `.mm0`'s assertions on first
+lookup, so a proof citing a name the environment lacks is told whether
+the rule is declared later or not at all. `compiler/lints.zig` warns on
+unused theorem and definition parameters. `diag_scratch.zig` records
+diagnostic details that code deep in normalization or matching captures,
+for the checker to attach to the diagnostic it reports.
 
 Compiler data models and theorem-local state:
 
@@ -192,12 +210,26 @@ Theorem checking and emission:
 - `compiler/check.zig` (facade; submodules under `compiler/check/`)
 - `compiler/check/matching.zig`
 - `compiler/theorem_boundary.zig`
-- `compiler/inference.zig`
+- `compiler/inference.zig` (facade; submodules under `compiler/inference/`)
 - `compiler/normalize.zig`
 - `compiler/emit.zig`
 - `compiler/metadata.zig`
 - `compiler/fresh_select.zig`
+- `compiler/alpha_rewrite.zig`
 - `compiler/holes.zig`
+
+`compiler/inference/` holds omitted-binder inference: `context.zig` is
+the exact unify-replay context, `dispatch.zig` runs the inference ladder,
+`strategies.zig` holds its def-aware and view-seeded tiers,
+`validation.zig` checks resolved bindings against the rule's dependency
+conditions, and `diagnostics.zig` builds inference-failure diagnostics
+and notes. `meta_store.zig` (search metavariables) and `open_terms.zig`
+(placeholder factories and partial template instantiation) serve search
+and the checker's probes.
+
+`compiler/alpha_rewrite.zig` repairs `@freshen` alpha capture: it
+renames bound variables through `@alpha` rules and transports a ref
+along the resulting relation proof.
 
 `compiler/holes.zig` owns proof-side hole elaboration: parsing a
 holey assertion via the trusted hole-aware parser entry point,
@@ -244,6 +276,10 @@ Parsing, output, and debug helpers:
 - `proof_script.zig`
 - `compiler/mmb_writer.zig`
 - `view_trace.zig`
+- `containers.zig` and `text_util.zig`
+
+`containers.zig` clones hash maps; `text_util.zig` truncates text without
+splitting a UTF-8 character.
 
 `parse_recovery.zig` is the frontend's facade over the trusted MM0
 parser: it re-exports the core statement types, collects annotations,
@@ -1250,7 +1286,8 @@ across the chain. The manual and demo consume these same packages.
   floor measurements live in `docs/frontier_guard_history.md`).
 - `test-search-scenarios`: benchmark suggestion/count expectations.
 - `test-node-wasm`: packed-package compiler/verifier/LSP smoke tests in Node.
-- `test`: all five steps above.
+- `test-wasm-host`: the packages' wasm hosting against mock instances.
+- `test`: all six steps above.
 - `test-editor-browser` and `test-lsp-cross-origin`: separate Chromium gates;
   CI runs them explicitly, but they are not dependencies of `test`.
 

@@ -280,7 +280,9 @@ axiom rand (d: ctx) (a b: wff):
 
 An eager rule also has the effect of `@auto backward`. It is tried before
 other registered rules, in priority order. Priority 1 is the default and
-runs first.
+runs first. One ordering comes before priority: a rule that splits the
+context between its premises, eager or not, is tried after every rule
+that does not.
 
 Once an eager rule applies, search commits to it: if its premises cannot be
 proved, search does not try non-eager alternatives at that node. Eager

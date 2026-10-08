@@ -140,7 +140,8 @@ def uniq {x .y: tm} (p: wff x): wff = $ ex y (all x (iff p (eq x y))) $;
 `uniq` takes `x` and `p`. Its `y` is internal to the body. A proof that
 unfolds `uniq` may instantiate it with any variable that does not clash. The
 `free` sort modifier described in [Sorts and terms](sorts-and-terms.md)
-forbids hidden dummies of a sort.
+forbids hidden dummies of a sort. Only a `def` may declare a dummy, a dummy
+lists no dependencies, and no argument's type may depend on one.
 
 ## Definition checking
 

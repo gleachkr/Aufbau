@@ -54,7 +54,7 @@ sits on the reflexivity axiom. Each member must have exactly the shape the
 compiler cites it at, binders in this order: `(a): rel a a`,
 `(a b c): rel a b > rel b c > rel a c`, `(a b): rel a b > rel b a`, and
 `(a b): rel a b > a > b`. Hypotheses are rule-form (`>`, not object-level
-implications) and no binder is bound.
+implications) and no binder is bound. A sort has at most one `@relation`.
 
 ```text
 --| @relation wff bi biid bitr bisym mpbi
@@ -68,9 +68,11 @@ implications) and no binder is bound.
 ```
 
 No arguments. The associated assertion's conclusion must be `rel lhs rhs`
-for a registered relation, with no hypotheses; it is indexed by the head term of `lhs` and
-applied left to right during normalization. Rules with the same head are
-tried in declaration order; the first matching rule applies.
+with `rel` the `@relation` of its sort, declared earlier, and the assertion
+has no hypotheses. `lhs` is not a bare variable. The rule is indexed by the
+head term of `lhs` and applied left to right during normalization. Rules
+with the same head are tried in declaration order; the first matching rule
+applies.
 
 ### `@congr`
 
@@ -179,9 +181,11 @@ search chooses one from the `@vars` pool.
 `eager` marks a rule as invertible. Search tries it first, commits to it
 once applied, and does not count its applications toward the depth limit.
 The optional priority `N` is at least 1, defaults to 1, and runs earlier
-when smaller. It implies `backward`. The compiler checks that premises use
-only binders present in the conclusion, but cannot verify invertibility;
-a rule marked eager that is not invertible can make search miss proofs.
+when smaller. An eager rule that splits the context between its premises
+is still tried after every rule that does not. It implies `backward`. The
+compiler checks that premises use only binders present in the conclusion,
+but cannot verify invertibility; a rule marked eager that is not invertible
+can make search miss proofs.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
 binders, and `_`. As a last resort, search matches it against subterms of

@@ -675,14 +675,17 @@ An eager rule (which is implicitly `@auto backward` too) gets three things:
    non-branching rules, then branching ones, then witness rules — is
    spelled: closing rules unannotated (they already go first), the
    non-branching ladder `@auto eager`, the branching rules
-   `@auto eager 2`, the witness rules plain `@auto backward`.
+   `@auto eager 2`, the witness rules plain `@auto backward`. Splitting
+   ranks above all of this: a rule whose conclusion splits the context
+   between its premises (`g , h ⊢ …` with `g` and `h` bare) is tried after
+   every rule that does not split it, eager or not.
 2. **Commitment (the cut).** Once an eager candidate has actually applied
-   — matched the goal and reached its subgoals — the search does not fall
-   back to non-eager rules at that node: invertibility means that if the
+   — matched the goal and reached its subgoals — the search tries no
+   further non-eager rules at that node: invertibility means that if the
    decomposition fails, the goal fails. All *eager* alternatives (other
-   matching formulas, other eager rules) are still tried. For the same
-   reason an eager rule's premises never keep the decomposed formula
-   alongside its parts.
+   matching formulas, other eager rules, including ones that split the
+   context) are still tried. For the same reason an eager rule's premises
+   never keep the decomposed formula alongside its parts.
 3. **Depth exemption.** Eager applications don't consume the `max_depth`
    budget. A proof that is a tall deterministic decomposition ladder plus
    one real choice point costs one depth level, not fifteen — which is

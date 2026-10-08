@@ -489,13 +489,17 @@ application, with each new line's assertion filled in from the checked
 conclusion. The action is offered only when the document checks cleanly
 and the rewritten document does too.
 
-Inline applications may be nested arbitrarily and may use explicit
-bindings, omitted-binder inference, theorem-hypothesis refs, prior line
-refs, and other inline applications:
+Inline applications may be nested and may use explicit bindings,
+omitted-binder inference, theorem-hypothesis refs, prior line refs, and
+other inline applications:
 
 ```text
 l2: $ c $ by outer [middle (a := $ t $) [inner [l1]], #1]
 ```
+
+Nesting deeper than 1024 reference lists is a parse error. An application
+nested deeper than the checker's stack allows, some 500 levels in release
+builds, is reported where checking stopped.
 
 The checker may give the child a contextual hint from the parent rule's
 expected hypothesis, built from the parent conclusion, explicit bindings,

@@ -7,6 +7,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- `abc compile` is faster. Over the 264 test theories that 0.0.14 also
+  compiles, it runs about 30% fewer instructions and takes 17% less time,
+  and a third fewer instructions on the zermelo set theory. Every binary it
+  writes is unchanged.
 - `auto?` no longer copies a rule's principal formula into the rest of the
   context when the rule's premise already restates it, as an `∃` rule that
   keeps its `∃` does. Under an idempotent context the copy was a repeat of
@@ -54,6 +58,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   deeper than the checker's stack allows, some 500 levels in release
   builds, is reported at the application where checking stopped. A few
   hundred levels used to overflow the stack.
+- A proof can cite a rule with more than 56 arguments. `abc` and the
+  language server kept each argument's dependencies in a 56-entry buffer,
+  so such a proof crashed them or, in release builds, wrote past the
+  buffer. `mm0-c` and `mm0-rs` accept such rules; only bound variables are
+  limited, to 55.
 - Proofs whose lines build on each other (`l2: $ _w $ by dup [l1]`, each
   line doubling the last) no longer take time exponential in the number of
   lines in `abc`, `abc search` or the language server. An expression shared
@@ -102,6 +111,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   go-to-implementation and find-references, as the native server does.
 - The language server no longer crashes on an edit whose range ends before
   it starts.
+- The language server and the browser editor no longer keep memory from
+  every edit and every search, which added up over a long session.
 - The language server no longer crashes when a diagnostic covers part of a
   non-ASCII character, as one on a stray `⊢` outside `$ … $` does, or
   when a closed file it reads is not valid UTF-8. With VS Code's default
@@ -115,7 +126,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   is an `@acui` combiner that is not binary or a unit that is not a
   constant of its sort. Such theories used to compile to proofs the
   verifier rejects, and `@acui` on a one-argument term crashed `abc` and
-  the language server.
+  the language server. **Compatibility:** a theory is now rejected if it
+  declares a `@rewrite` rule before its sort's `@relation`, or a relation
+  member with its binders in another order (`iff_trans (b a c: wff)`),
+  even when no proof cites the rule.
 - Sort modifiers are enforced where a declaration is parsed: a `strict`
   sort cannot have a bound or dummy variable, a `free` sort cannot have a
   dummy, and no `term` or `def` can have a `pure` result sort. `abc` used
