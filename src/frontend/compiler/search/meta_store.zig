@@ -23,22 +23,9 @@ const TheoremContext = ExprModule.TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const BindingValidation = @import("../../binding_validation.zig");
 
-/// The four placeholder-like search leaves (META.md terminology). Only the
-/// store may interpret them; everything else sees an opaque placeholder leaf.
-pub const MetaKind = enum {
-    /// Matches anything and binds nothing. Hints and shape filtering only.
-    wildcard,
-    /// Backward-search unknown; must be solved before a proof is emitted.
-    existential,
-    /// Schematic variable in a derived forward ref; solved transiently when
-    /// the derived ref is used (Stage 7 use-time discipline).
-    universal,
-    /// A bound variable not yet named: it reads as bound with its own dep
-    /// bit, takes only a bound variable as its value (a ref's, or a
-    /// theorem-local dummy from an @vars pool), and keeps its kind across
-    /// interner boundaries (`PlaceholderInfo.bound_var`).
-    bound_choice,
-};
+/// The search leaf kinds; defined with the placeholder factory that mints
+/// them.
+pub const MetaKind = @import("../inference/open_terms.zig").MetaKind;
 
 pub const MetaInfo = struct {
     sort_name: []const u8,
@@ -586,22 +573,6 @@ pub const MetaStore = struct {
                 }
                 try visited.put(self.allocator, expr_id, {});
             },
-        }
-    }
-
-    /// Debug chokepoint guard: panics in safe builds when a live meta is
-    /// reachable from `expr_id`. Wired at the solved-only chokepoints
-    /// (`tryCandidate` entry, generation-hook boundary, render entry) in
-    /// Stage 4; the kind-aware leakage guard remains the hard backstop.
-    pub fn assertNoLiveMeta(
-        self: *const MetaStore,
-        theorem: *const TheoremContext,
-        expr_id: ExprId,
-    ) void {
-        if (std.debug.runtime_safety) {
-            if (self.hasUnsolvedMeta(theorem, expr_id)) {
-                @panic("live search meta reached a solved-only chokepoint");
-            }
         }
     }
 };

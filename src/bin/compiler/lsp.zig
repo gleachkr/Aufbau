@@ -1911,8 +1911,7 @@ pub const Handler = struct {
     fn pathExists(self: *Handler, arena: std.mem.Allocator, path: []const u8) bool {
         const uri = pathToUri(arena, path) catch return false;
         if (self.docs.contains(uri)) return true;
-        _ = statMtimeAlloc(self.io, path) catch return false;
-        return true;
+        return fileOpens(self.io, path);
     }
 
     /// Does the open document at `uri` report its own diagnostics (a `.mm0`
@@ -2625,14 +2624,11 @@ fn readFileWithMtimeAlloc(
     };
 }
 
-/// The mtime of `path` without reading its contents — used to build a search
-/// cache key cheaply on a hit. Reports the same mtime as `readFileWithMtimeAlloc`
-/// for an unchanged file (both stat the same opened handle).
-fn statMtimeAlloc(io: std.Io, path: []const u8) !i128 {
-    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    const stat = try file.stat(io);
-    return stat.mtime.nanoseconds;
+/// Can `path` be opened for reading? Checked without reading the contents.
+fn fileOpens(io: std.Io, path: []const u8) bool {
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    file.close(io);
+    return true;
 }
 
 fn clientSupportsSnippets(capabilities: types.ClientCapabilities) bool {

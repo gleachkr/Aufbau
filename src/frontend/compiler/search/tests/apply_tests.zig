@@ -1015,7 +1015,7 @@ test "apply candidate can compile after user supplies refs" {
     );
     defer result.deinit();
     try std.testing.expect(result.checked_lines.len > 0);
-    try CheckedIr.validateLines(&result.theorem, result.checked_lines);
+    try CheckedIr.validateLinesCached(&result.theorem, result.checked_lines);
 }
 
 test "search candidate failure leaves no checked lines" {

@@ -236,10 +236,10 @@ pub const Scanner = struct {
     }
 };
 
-/// Does `src` contain any `import` statement? Cheap pre-check so a
-/// single-file source is passed through untouched.
-pub fn hasImports(src: []const u8) bool {
-    var scanner = Scanner.init(src, .mm0);
+/// Does `src` contain any `import` (`.mm0`) or `include` (`.auf`)
+/// statement?
+pub fn hasImports(src: []const u8, syntax: Syntax) bool {
+    var scanner = Scanner.init(src, syntax);
     const first = scanner.next() catch return true;
     return first != null;
 }
@@ -1546,8 +1546,8 @@ test "scanner finds imports and skips other statements" {
     try std.testing.expectEqualStrings("b.mm0", b.spec);
     try std.testing.expectEqualStrings("import  \"b.mm0\" ;", src[b.span.start..b.span.end]);
     try std.testing.expect((try scanner.next()) == null);
-    try std.testing.expect(hasImports(src));
-    try std.testing.expect(!hasImports("sort wff; axiom a: $ x ; $;"));
+    try std.testing.expect(hasImports(src, .mm0));
+    try std.testing.expect(!hasImports("sort wff; axiom a: $ x ; $;", .mm0));
 }
 
 test "scanner reports malformed imports" {
@@ -1589,6 +1589,8 @@ test "auf scanner finds includes at line starts only" {
 
     scanner = Scanner.init("include \"a.auf\"\nfoo\n---\n", .auf);
     try std.testing.expectError(error.MalformedImport, scanner.next());
+    try std.testing.expect(hasImports(src, .auf));
+    try std.testing.expect(!hasImports("thm\n---\nl1: $ p $ by include []\n", .auf));
 }
 
 test "join without imports passes the root through" {

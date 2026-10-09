@@ -12,8 +12,8 @@ const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 pub const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
-const MetaStore = @import("../inference/meta_store.zig").MetaStore;
-const MetaDepBans = @import("../inference/meta_store.zig").MetaDepBans;
+const MetaStore = @import("./meta_store.zig").MetaStore;
+const MetaDepBans = @import("./meta_store.zig").MetaDepBans;
 const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerViews = @import("../../views.zig");
 const FreshSelect = @import("../fresh_select.zig");
@@ -534,10 +534,10 @@ pub const SearchCounters = struct {
     cold_setup_ns: u64 = 0,
     warm_search_ns: u64 = 0,
     /// The part of `warm_search_ns` spent trimming a suggestion's bindings
-    /// (`source.zig:trimBindings`): checker runs, never ticks.
+    /// (`source/trim.zig:trimBindings`): checker runs, never ticks.
     trim_ns: u64 = 0,
     /// Suggestions that came back with every binding the search chose,
-    /// because the `BindingOracle` check failed (`source.zig:trimBindings`).
+    /// because the `BindingOracle` check failed (`source/trim.zig:trimBindings`).
     /// The bench, and search tests that go through `tests/helpers.zig`,
     /// fail on any.
     untrimmed: u32 = 0,
@@ -673,8 +673,9 @@ pub const SearchCounters = struct {
     meta_assignments: usize = 0,
     meta_rollbacks: usize = 0,
     derived_ref_count: usize = 0,
-    /// `@auto trigger` seeds minted for the phase-6 seeding retry (zero when
-    /// phase 6 never ran or the harvest matched nothing).
+    /// `@auto trigger` seeds the phase-6 seeding retry ran with: those
+    /// harvested, less any restating a pool fact or another seed (zero when
+    /// phase 6 never ran or no seed was new).
     trigger_seed_count: usize = 0,
     /// Sub-solves skipped by the cross-cell persisted failure memos
     /// (`GenerateOptions.persist_negative`): re-solves whose target was
@@ -872,7 +873,7 @@ pub const GenerationHook = struct {
 
     /// When true, an open witness slot whose existential meta has no concrete
     /// member or coupled-member anchor may *invent* a witness by grounding the
-    /// meta to a reused `@vars`-pool dummy (`backward/backtrack.zig`
+    /// meta to a reused `@vars`-pool dummy (`backward/open_slot.zig`
     /// `tryPoolWitnesses`, pick `.shared`).
     /// This is the only place search picks an underdetermined witness rather
     /// than forcing one, but it needs no phase gate: it is the last rung of

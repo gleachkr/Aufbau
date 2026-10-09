@@ -49,7 +49,7 @@ const RuleApplication = ProofScript.RuleApplication;
 const Ref = ProofScript.Ref;
 const Span = ProofScript.Span;
 const OpenTerms = @import("../inference/open_terms.zig");
-const MetaStore = @import("../inference/meta_store.zig").MetaStore;
+const MetaStore = @import("./meta_store.zig").MetaStore;
 const pretty_print = @import("../../pretty_print.zig");
 const interner_view = @import("../../interner_view.zig");
 
@@ -80,11 +80,11 @@ const zero_span = Span{ .start = 0, .end = 0 };
 /// `seeds` are `@auto trigger` ground facts (sourceless `DerivedRef`s minted
 /// by `trigger.zig` for the seeding retry phase; empty on every other call).
 /// They enter as depth-0 derived sources so layer-1 joins fire over them,
-/// and stay in the derived pool for backward use. A seed whose canonical
-/// shape merely restates a pool fact (or an earlier seed) is dropped —
-/// backward search already has the ref. Seeds occupy the lowest derived
-/// indices, as recipe acyclicity requires (a join product referencing a seed
-/// must sit at a strictly higher index).
+/// and stay in the derived pool for backward use. The caller has already
+/// dropped seeds that restate a pool fact or each other
+/// (`trigger.dropRestatedSeeds`). Seeds occupy the lowest derived indices,
+/// as recipe acyclicity requires (a join product referencing a seed must sit
+/// at a strictly higher index).
 pub fn saturate(
     context: *const Context,
     theorem: *TheoremContext,
@@ -136,11 +136,13 @@ pub fn saturate(
 
     result.has_seeds = seeds.len > 0;
     for (seeds) |seed| {
+        // Registered so a join restating a seed is dropped like one
+        // restating a pool fact.
         const shape_gop = try sat.seen.getOrPut(
             sat.scratch,
             try sat.shapeKey(seed.shape),
         );
-        if (shape_gop.found_existing) continue;
+        std.debug.assert(!shape_gop.found_existing);
         const idx = sat.derived.items.len;
         try sat.derived.append(sat.arena, seed);
         try sat.sources.append(sat.scratch, .{
@@ -1946,7 +1948,7 @@ fn renderRecipe(
 /// Variable naming for recipe rendering: reverse name lookup for real
 /// variables, plus deterministic fresh-variable choice (sorted theorem vars
 /// first, then the sort's `@vars` pool) for unfold-dummy placeholders.
-/// Shared with the explicit-binding renderer in `backward/backtrack.zig`.
+/// Shared with the explicit-binding renderer in `backward/validate.zig`.
 pub const Namer = struct {
     allocator: std.mem.Allocator,
     /// Encoded VarId -> source name.

@@ -372,7 +372,7 @@ pub const Index = struct {
     // A `@recover` coupling constraint expressed as an ACUI-member containment
     // query: the context (arg `ctx_arg_index` of the `turnstile_term_id`
     // sequent) of the matched hypothesis must hold a member `wrapper(pattern)`
-    // with the recover `hole` widened. See `lookupTemplateInjected`.
+    // with the recover `hole` widened. See `lookupTemplateInjectedDual`.
     pub const RecoverMemberInjection = struct {
         turnstile_term_id: u32,
         ctx_arg_index: usize,
@@ -381,37 +381,15 @@ pub const Index = struct {
         hole: ExprId,
     };
 
-    // Like `lookupTemplate`, but before querying, splice extra ACUI members into
-    // the context region of the built sequent shape. This pushes a cross-hyp
-    // `@recover` coupling constraint into the index: instead of the permissive
-    // view (whose free context binder `q` shapes to a covering wildcard), the
-    // query demands a context member matching the recover pattern, so refs that
-    // could never satisfy the recover law are filtered cheaply at lookup rather
-    // than after full validation. Sound: injecting a member only narrows the
-    // accept set, and the pattern's hole is widened so any valid witness still
-    // matches.
-    pub fn lookupTemplateInjected(
-        self: *const Index,
-        theorem: *const TheoremContext,
-        template: @import("../../rules.zig").TemplateExpr,
-        args: []const @import("../../parse_recovery.zig").ArgInfo,
-        bindings: []const ?ExprId,
-        injections: []const RecoverMemberInjection,
-        counters: ?*SearchCounters,
-    ) !LookupResult {
-        const dual = try self.lookupTemplateInjectedDual(
-            null,
-            theorem,
-            template,
-            args,
-            bindings,
-            injections,
-            counters,
-        );
-        std.debug.assert(dual.secondary == null);
-        return dual.primary;
-    }
-
+    // Like `lookupTemplateDual`, but before querying, splice extra ACUI
+    // members into the context region of the built sequent shape. This pushes
+    // a cross-hyp `@recover` coupling constraint into the index: instead of
+    // the permissive view (whose free context binder `q` shapes to a covering
+    // wildcard), the query demands a context member matching the recover
+    // pattern, so refs that could never satisfy the recover law are filtered
+    // cheaply at lookup rather than after full validation. Sound: injecting a
+    // member only narrows the accept set, and the pattern's hole is widened so
+    // any valid witness still matches.
     pub fn lookupTemplateInjectedDual(
         self: *const Index,
         secondary: ?*const Index,

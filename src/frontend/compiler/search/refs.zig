@@ -101,30 +101,6 @@ fn refNameLessThan(lhs: ProofScript.Ref, rhs: ProofScript.Ref) bool {
     };
 }
 
-pub fn refsFromIndices(
-    allocator: std.mem.Allocator,
-    pool: []const RefPoolEntry,
-    indices: []const usize,
-) ![]const ProofScript.Ref {
-    const refs = try allocator.alloc(ProofScript.Ref, indices.len);
-    for (indices, 0..) |pool_idx, idx| {
-        refs[idx] = pool[pool_idx].ref;
-    }
-    return refs;
-}
-
-pub fn advanceReferenceIndices(indices: []usize, base: usize) bool {
-    if (indices.len == 0) return false;
-    var idx = indices.len;
-    while (idx > 0) {
-        idx -= 1;
-        indices[idx] += 1;
-        if (indices[idx] < base) return true;
-        indices[idx] = 0;
-    }
-    return false;
-}
-
 pub fn rankReferenceIndices(base: usize, indices: []const usize) usize {
     if (base == 0) return 0;
     var rank: usize = 0;

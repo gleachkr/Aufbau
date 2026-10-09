@@ -46,7 +46,7 @@ Inside the search, validation renders every binder the search chose
 (existential metas, bound witnesses, ACUI split and principal choices) as an
 explicit binding, so the checker never has to re-derive a choice
 (`backward/validate.zig`). The suggestion text is a separate matter:
-`source.zig:trimBindings` keeps only the bindings the checker cannot infer.
+`source/trim.zig:trimBindings` keeps only the bindings the checker cannot infer.
 It tries the suggestion with no bindings first. Failing that, it checks the
 line with every binding withheld behind a `BindingOracle`
 (`compiler/context.zig`), and the checker (`check/apply.zig`) takes from it
@@ -184,7 +184,7 @@ Three phases matter for the discussion below:
   the *concrete goal* at candidate-construction time. Cheap, deterministic.
 - **validation** (`candidate.zig:tryCandidate` + `finalConclusionPlausible`):
   re-derive the line through the real checker on a cloned theorem.
-- **generation** (`auto?` only, in `backward/backtrack.zig` + `generate.zig`): synthesize
+- **generation** (`auto?` only, in `backward/backtrack.zig`, `backward/open_slot.zig` + `generate.zig`): synthesize
   sub-proofs for hypotheses the pool can't fill.
 
 ## ACUI conclusion matching — the three principal mechanisms
@@ -407,7 +407,7 @@ which the persisted-memo covering rule requires:
   `miss`. A retired core phase skips the remaining tail cells; phase 6 still
   runs after any retirement. The global budget or the stack guard
   (`stopped`) blocks it.
-- **The failure report** (`miss.MissReport`, read by `source.zig`'s status and
+- **The failure report** (`miss.MissReport`, read by `source/report.zig`'s status and
   detail, the retry code action, and the bench's miss causes) calls a miss
   *truncated* when any limit cut it short: the global budget, the stack guard,
   a phase's fuel, forward saturation, or a node-capped pass
@@ -487,7 +487,7 @@ over, `∅` when there are none.
 binders the goal does not determine. A meta may not appear in the goal at seed
 time — it is introduced *downstream* by the `@view`/`@recover` open-target solve
 (`tryOpenGenerateSlot`, `emitOpenTarget`, `tryAcuiMemberWitnesses` in
-`backward/backtrack.zig`; `backward/witness.zig`). Therefore:
+`backward/open_slot.zig`; `backward/witness.zig`). Therefore:
 
 > **Do not add a prune or forced binding that could clobber a slot a meta lives
 > in (or could come to live in).** A "no meta in the goal container" check is
@@ -1401,13 +1401,15 @@ width is real.
 | `root.zig` | public surface / re-exports |
 | `session.zig` | `SearchSession`: lazy index + pool caching |
 | `types.zig` | `Goal`, `Context`, `ApplyCandidate`, `ExactCandidate`, options, counters |
-| `backward/backtrack.zig` | `exact?` driver + the `backtrackRefs` ⇄ generation/open/witness engine (one mutually-recursive component) |
+| `backward/backtrack.zig` | `exact?` driver + `backtrackRefs` and the concrete generation paths (split, principal enumeration); mutually recursive with `open_slot.zig` |
+| `backward/open_slot.zig` | open-slot generation (`tryOpenGenerateSlot`): open targets with existential metas, child-search read-back, the slot-local witness ladder, ref naming and pool fills |
 | `backward/match.zig` | per-ref hypothesis matching + `@view`/`@recover` seeding + eliminator meta-aware match (`tryMetaAwareHypMatch`) |
 | `backward/lookup.zig` | reference-index lookup for a hypothesis slot |
 | `backward/plan.zig` | per-slot fill ordering (cost/strength) + template-binder masks |
 | `backward/plausible.zig` | conclusion-contradiction prune + ACUI split-member reasoning |
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
+| `meta_store.zig` | `MetaStore`: the branch-local store of search metavariables (assignment, allowed deps, rollback marks); the leaf kinds live in `../inference/open_terms.zig` |
 | `trigger.zig` | `@auto trigger` seed harvest (phase 6): goal-subterm e-match → sourceless ground `DerivedRef`s |
 | `tunables.zig` | `auto?` per-call parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
@@ -1426,7 +1428,11 @@ width is real.
 | `shape.zig` / `clipper.zig` | shape extraction + discrimination index |
 | `ref_index.zig` / `refs.zig` / `rule_index.zig` | candidate/ref indexing |
 | `fixture.zig` | theorem-prefix preparation and test setup (walks the `.mm0` through `pipeline/common.zig`'s shared statement helpers, recovering from broken earlier declarations like the analysis) |
-| `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome) + `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics) |
+| `source.zig` | `suggestionsAtSourceOffset` (LSP entry; reports a `SearchStatus` outcome): runs the search for one placeholder and renders its suggestions |
+| `source/placeholders.zig` | `searchPlaceholders` (placeholder enumeration for the LSP status diagnostics and the search CLI) + the placeholder at a source offset |
+| `source/inline_target.zig` | the expected goal of a placeholder nested inside an application |
+| `source/trim.zig` | `trimBindings`: keep only the bindings the checker cannot infer |
+| `source/report.zig` | status, `conversion?` and retry-advice detail text |
 | `miss.zig` | `MissReport` (which limits cut a failed search short, read once from its counters) + `retryFor` (the `auto?` parameters the failure report and its **Retry with …** code action suggest) |
 | `rank.zig` | candidate ranking |
 | `egraph.zig` | `conversion?` e-graph core: hashcons + congruence closure, AC bag nodes, dep-safety gate, saturation |

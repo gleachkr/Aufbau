@@ -36,7 +36,7 @@ pub const Witness = @import("../backward/witness.zig");
 
 pub const forward = @import("../forward.zig");
 
-pub const MetaStore = @import("../../inference/meta_store.zig").MetaStore;
+pub const MetaStore = @import("../meta_store.zig").MetaStore;
 
 pub const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
 
@@ -216,7 +216,7 @@ pub fn expectCaseLineSearch(
     );
     defer result.deinit();
     try std.testing.expect(result.checked_lines.len > 0);
-    try CheckedIr.validateLines(&result.theorem, result.checked_lines);
+    try CheckedIr.validateLinesCached(&result.theorem, result.checked_lines);
     try std.testing.expectEqual(line_index, harness.checked.items.len);
 }
 
@@ -482,7 +482,7 @@ pub fn expectExactRuleOrderWithPrefix(
             .{},
         );
         defer attempt.deinit();
-        try CheckedIr.validateLines(
+        try CheckedIr.validateLinesCached(
             &attempt.theorem,
             attempt.checked_lines,
         );

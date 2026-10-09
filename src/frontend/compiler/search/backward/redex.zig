@@ -1,8 +1,8 @@
 //! Substitution/rewrite redex reduction for generated emit targets. Split out
 //! of `backtrack.zig`: both the concrete (`emitGeneratedSlot`) and open
-//! (`emitOpenTarget`) emit paths reduce a rule-instantiated target's rewrite
-//! redexes to their computed form while leaving the surrounding ACUI context
-//! structure byte-identical to the pool refs. These are pure functions over
+//! (`open_slot.zig`'s `emitOpenTarget`) emit paths reduce a rule-instantiated
+//! target's rewrite redexes to their computed form while leaving the
+//! surrounding ACUI context structure byte-identical to the pool refs. These are pure functions over
 //! `context`/`theorem`/`Canonicalizer` — they hold no search state.
 
 const types = @import("../types.zig");

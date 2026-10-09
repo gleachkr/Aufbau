@@ -1,5 +1,6 @@
 const std = @import("std");
 const mm0 = @import("../lib.zig");
+const web_demo_fixtures = @import("web_demo_fixtures");
 
 const Compiler = mm0.Compiler;
 const Mmb = mm0.Mmb;
@@ -1098,6 +1099,24 @@ test "non-pass proof case metadata stays in sync" {
     }
     for (unsupported_proof_cases) |entry| {
         try std.testing.expect(knownFailReason(entry.stem) == null);
+    }
+}
+
+test "web demo fixtures are single files" {
+    // The demo page reads each fixture's text as is; it does not join
+    // `import`s or `include`s.
+    const allocator = std.testing.allocator;
+    for (web_demo_fixtures.fixtures) |fixture| {
+        const mm0_src = try mm0.readProofCase(allocator, fixture.name, "mm0");
+        defer allocator.free(mm0_src);
+        const proof_src = try mm0.readProofCase(allocator, fixture.name, "auf");
+        defer allocator.free(proof_src);
+        if (mm0.Imports.hasImports(mm0_src, .mm0) or
+            mm0.Imports.hasImports(proof_src, .auf))
+        {
+            std.debug.print("web demo fixture {s} imports another file\n", .{fixture.name});
+            return error.WebDemoFixtureNotSingleFile;
+        }
     }
 }
 

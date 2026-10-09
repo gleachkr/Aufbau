@@ -5,10 +5,12 @@ Latency + capability harness for the proof-search engine that backs the
 [`src/search_bench.zig`](../../src/search_bench.zig); the fixtures it runs live
 in this directory.
 
-It is **not** a unit test — it is run on demand to (a) catch latency
-regressions in search and (b) keep the current capability frontier visible: a
-fixed list of goals we can solve, plus a fixed list of goals we cannot solve
-*yet* (the work tracked in [`META.md`](../../META.md)).
+It is run on demand to (a) catch latency regressions in search and (b) keep
+the current capability frontier visible: a fixed list of goals we can solve,
+plus a fixed list of goals we cannot solve *yet* (the work tracked in
+[`META.md`](../../META.md)). The scenario table lives in
+[`tests/search_scenarios.zig`](../search_scenarios.zig); `zig build test-unit`
+checks every scenario's expectations as a unit test, and the bench times them.
 
 ## Running
 
@@ -159,7 +161,7 @@ core matcher from the generation path). Points default to `8..512` if omitted.
 
 ## How a scenario works
 
-Each `Scenario` (see the struct in `search_bench.zig`) pairs an `.mm0` theory
+Each `Scenario` (see the struct in `tests/search_scenarios.zig`) pairs an `.mm0` theory
 with an `.auf` proof that contains a search marker:
 
 ```
@@ -186,15 +188,15 @@ LSP uses. Key fields:
 `expect_result = false` records a probe: the benchmark still runs it for
 latency and stability, but does not require a particular replacement string.
 For deliberately unsupported goals, also set `expected_suggestion_count = 0`;
-that makes an unexpected new suggestion fail the bench until the scenario is
+that makes an unexpected new suggestion fail the unit test until the scenario is
 intentionally reclassified. When a later stage teaches the engine to solve the
 goal, flip `expect_result` to `true`, remove the zero-count assertion, and pin
 the proof in `expected_replacement`.
 
 ### Diagnosing what a goal actually returns
 
-The harness prints every suggestion when an `expect_result = true` scenario
-*fails*. To see what `auto?` produces for a new goal, temporarily set
+The unit test and the bench print every suggestion when an
+`expect_result = true` scenario *fails*. To see what `auto?` produces for a new goal, temporarily set
 `expected_replacement` to a sentinel that cannot match (e.g.
 `"__PRINT__"`), run with `--filter=`, and read the printed `suggestion:` lines.
 Then set the real expectation (or `expect_result = false`).

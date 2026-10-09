@@ -13,9 +13,7 @@ const Handler = lsp_server.Handler;
 const DocumentKind = lsp_server.DocumentKind;
 const DiagnosticContext = lsp_diagnostics.DiagnosticContext;
 
-const compilerDiagnosticsToLsp = lsp_diagnostics.compilerDiagnosticsToLsp;
-const compilerSourceDiagnosticsToLsp =
-    lsp_diagnostics.compilerSourceDiagnosticsToLsp;
+const locateCompilerDiagnostics = lsp_diagnostics.locateCompilerDiagnostics;
 const compilerDiagnosticToLsp = lsp_diagnostics.compilerDiagnosticToLsp;
 const diagnosticSeverityToLsp = lsp_diagnostics.diagnosticSeverityToLsp;
 const pathToUri = lsp_server.pathToUri;
@@ -2591,31 +2589,25 @@ test "compiler diagnostics filter by source for LSP publishing" {
             .version = 1,
         },
     };
-    const proof = try compilerDiagnosticsToLsp(
+    const located = try locateCompilerDiagnostics(
         allocator,
         diag_context,
+        &.{},
         &diags,
-        .proof,
+        null,
+        null,
+        null,
         .@"utf-16",
     );
-    try std.testing.expectEqual(@as(usize, 1), proof.len);
-    try std.testing.expectEqual(
-        types.DiagnosticSeverity.Warning,
-        proof[0].severity.?,
-    );
-
-    const mm0_diags = try compilerDiagnosticsToLsp(
-        allocator,
-        diag_context,
-        &diags,
-        .mm0,
-        .@"utf-16",
-    );
-    try std.testing.expectEqual(@as(usize, 1), mm0_diags.len);
-    try std.testing.expectEqual(
-        types.DiagnosticSeverity.Warning,
-        mm0_diags[0].severity.?,
-    );
+    try std.testing.expectEqual(@as(usize, 2), located.len);
+    try std.testing.expectEqualStrings("file:///tmp/test.auf", located[0].uri);
+    try std.testing.expectEqualStrings("file:///tmp/test.mm0", located[1].uri);
+    for (located) |item| {
+        try std.testing.expectEqual(
+            types.DiagnosticSeverity.Warning,
+            item.diagnostic.severity.?,
+        );
+    }
 }
 
 test "compiler source diagnostics merge primaries and warnings" {
@@ -2662,29 +2654,25 @@ test "compiler source diagnostics merge primaries and warnings" {
         },
     };
 
-    const diags = try compilerSourceDiagnosticsToLsp(
+    const located = try locateCompilerDiagnostics(
         allocator,
         diag_context,
         &primary,
         &warnings,
         extra,
         null,
-        .mm0,
+        null,
         .@"utf-16",
     );
-    try std.testing.expectEqual(@as(usize, 3), diags.len);
-    try std.testing.expectEqual(
-        types.DiagnosticSeverity.Error,
-        diags[0].severity.?,
-    );
-    try std.testing.expectEqual(
-        types.DiagnosticSeverity.Error,
-        diags[1].severity.?,
-    );
-    try std.testing.expectEqual(
-        types.DiagnosticSeverity.Warning,
-        diags[2].severity.?,
-    );
+    // Proof-side first, then `.mm0`-side: the extra diagnostic, primaries,
+    // then warnings.
+    try std.testing.expectEqual(@as(usize, 4), located.len);
+    try std.testing.expectEqualStrings("file:///tmp/test.auf", located[0].uri);
+    const expected = [_]types.DiagnosticSeverity{ .Error, .Error, .Warning };
+    for (located[1..], expected) |item, severity| {
+        try std.testing.expectEqualStrings("file:///tmp/test.mm0", item.uri);
+        try std.testing.expectEqual(severity, item.diagnostic.severity.?);
+    }
 }
 
 test "compiler source diagnostics append omitted summary" {
@@ -2713,20 +2701,20 @@ test "compiler source diagnostics append omitted summary" {
         },
     };
 
-    const diags = try compilerSourceDiagnosticsToLsp(
+    const located = try locateCompilerDiagnostics(
         allocator,
         diag_context,
         &primary,
         &.{},
         null,
+        null,
         omitted,
-        .mm0,
         .@"utf-16",
     );
-    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(@as(usize, 2), located.len);
     try std.testing.expectEqualStrings(
         "17 more diagnostics omitted",
-        diags[1].message.string,
+        located[1].diagnostic.message.string,
     );
 }
 

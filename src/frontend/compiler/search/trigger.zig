@@ -21,10 +21,11 @@
 
 const std = @import("std");
 const types = @import("./types.zig");
+const refs_mod = @import("./refs.zig");
 const acui = @import("./backward/acui.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
-const MetaStore = @import("../inference/meta_store.zig").MetaStore;
+const MetaStore = @import("./meta_store.zig").MetaStore;
 const OpenTerms = @import("../inference/open_terms.zig");
 const TriggerPattern = @import("../../rewrite_registry.zig").TriggerPattern;
 
@@ -139,6 +140,35 @@ pub fn harvestSeeds(
         }
     }
     return try seeds.toOwnedSlice(allocator);
+}
+
+/// The seeds whose shape neither a reference-pool fact nor an earlier seed
+/// states: backward search already has the pool ref, and two seeds of one
+/// shape are one fact. Both pools built from seeds (`forward.saturate` and
+/// `seedOnlyPool`) take only these. Seeds are ground and interned with the
+/// pool's expressions, so equal shapes are equal ids. Compacts `seeds` in
+/// place and returns the kept prefix.
+pub fn dropRestatedSeeds(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    pool: []const refs_mod.RefPoolEntry,
+    seeds: []DerivedRef,
+    allocator: std.mem.Allocator,
+) ![]DerivedRef {
+    var known = std.AutoHashMapUnmanaged(ExprId, void){};
+    defer known.deinit(allocator);
+    for (pool) |entry| {
+        const expr = refs_mod.sourceRefExpr(context, theorem, entry.ref) catch continue;
+        try known.put(allocator, expr, {});
+    }
+    var kept: usize = 0;
+    for (seeds) |seed| {
+        const gop = try known.getOrPut(allocator, seed.shape);
+        if (gop.found_existing) continue;
+        seeds[kept] = seed;
+        kept += 1;
+    }
+    return seeds[0..kept];
 }
 
 /// A derived pool holding only seeds, for theories with `@auto trigger`

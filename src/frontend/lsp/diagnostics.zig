@@ -85,8 +85,9 @@ pub const LocatedDiagnostic = struct {
 };
 
 /// Every diagnostic of a compile, located: proof-side first, then
-/// `.mm0`-side, each in the order `compilerSourceDiagnosticsToLsp` uses.
-/// A diagnostic whose document the context cannot name is dropped.
+/// `.mm0`-side. Within a side the order is the extra diagnostic, the
+/// primaries, the omitted-count summary, then the warnings. A diagnostic
+/// whose document the context cannot name is dropped.
 pub fn locateCompilerDiagnostics(
     arena: std.mem.Allocator,
     diag_context: DiagnosticContext,
@@ -149,103 +150,6 @@ fn appendLocated(
 fn spanOf(span: anytype) ?Span {
     const s = span orelse return null;
     return .{ .start = s.start, .end = s.end };
-}
-
-pub fn compilerDiagnosticsToLsp(
-    arena: std.mem.Allocator,
-    diag_context: DiagnosticContext,
-    diags: []const mm0.CompilerDiagnostic,
-    source: mm0.CompilerDiagnosticSource,
-    encoding: lsp.offsets.Encoding,
-) ![]types.Diagnostic {
-    var count: usize = 0;
-    for (diags) |diag| {
-        if (diag.source == source) count += 1;
-    }
-    const result = try arena.alloc(types.Diagnostic, count);
-    var out_idx: usize = 0;
-    for (diags) |diag| {
-        if (diag.source != source) continue;
-        result[out_idx] = try compilerDiagnosticToLsp(
-            arena,
-            diag_context,
-            diag,
-            encoding,
-        );
-        out_idx += 1;
-    }
-    return result;
-}
-
-pub fn compilerSourceDiagnosticsToLsp(
-    arena: std.mem.Allocator,
-    diag_context: DiagnosticContext,
-    primary: []const mm0.CompilerDiagnostic,
-    warnings: []const mm0.CompilerDiagnostic,
-    extra: ?mm0.CompilerDiagnostic,
-    omitted: ?mm0.CompilerDiagnostic,
-    source: mm0.CompilerDiagnosticSource,
-    encoding: lsp.offsets.Encoding,
-) ![]types.Diagnostic {
-    var count: usize = 0;
-    if (extra) |diag| {
-        if (diag.source == source) count += 1;
-    }
-    for (primary) |diag| {
-        if (diag.source == source) count += 1;
-    }
-    for (warnings) |diag| {
-        if (diag.source == source) count += 1;
-    }
-    if (omitted) |diag| {
-        if (diag.source == source) count += 1;
-    }
-
-    const result = try arena.alloc(types.Diagnostic, count);
-    var out_idx: usize = 0;
-    if (extra) |diag| {
-        if (diag.source == source) {
-            result[out_idx] = try compilerDiagnosticToLsp(
-                arena,
-                diag_context,
-                diag,
-                encoding,
-            );
-            out_idx += 1;
-        }
-    }
-    for (primary) |diag| {
-        if (diag.source != source) continue;
-        result[out_idx] = try compilerDiagnosticToLsp(
-            arena,
-            diag_context,
-            diag,
-            encoding,
-        );
-        out_idx += 1;
-    }
-    if (omitted) |diag| {
-        if (diag.source == source) {
-            result[out_idx] = try compilerDiagnosticToLsp(
-                arena,
-                diag_context,
-                diag,
-                encoding,
-            );
-            out_idx += 1;
-        }
-    }
-    for (warnings) |diag| {
-        if (diag.source != source) continue;
-        result[out_idx] = try compilerDiagnosticToLsp(
-            arena,
-            diag_context,
-            diag,
-            encoding,
-        );
-        out_idx += 1;
-    }
-    return result;
 }
 
 pub fn compilerDiagnosticToLsp(
@@ -313,8 +217,7 @@ pub const LocatedRange = struct {
 };
 
 /// Maps an index range (in the text the index was built over) to a
-/// document. Hosts that index a join supply their own; `snapshotLocator`
-/// reads ranges against the snapshot's own texts.
+/// document.
 pub const RangeLocator = struct {
     ctx: *const anyopaque,
     locateFn: *const fn (
@@ -350,24 +253,6 @@ pub const RangeLocator = struct {
         };
     }
 };
-
-pub fn snapshotLocator(snapshot: *const LspIndex.Snapshot) RangeLocator {
-    return .{ .ctx = @ptrCast(snapshot), .locateFn = locateInSnapshot };
-}
-
-fn locateInSnapshot(
-    ctx: *const anyopaque,
-    range: LspIndex.SourceRange,
-) ?LocatedRange {
-    const snapshot: *const LspIndex.Snapshot = @ptrCast(@alignCast(ctx));
-    const uri = snapshot.uriForDocument(range.document) orelse return null;
-    const text = snapshot.textForDocument(range.document) orelse return null;
-    return .{
-        .uri = uri,
-        .text = text,
-        .span = .{ .start = range.start, .end = range.end },
-    };
-}
 
 pub fn sourceRangesToLocations(
     allocator: std.mem.Allocator,

@@ -67,18 +67,6 @@ pub fn exprIdSortName(
     };
 }
 
-pub fn exprIdSort(
-    parser: *MM0Parser,
-    theorem: *const TheoremContext,
-    env: *const GlobalEnv,
-    expr_id: ExprId,
-) !u7 {
-    const name = try exprIdSortName(theorem, env, expr_id);
-    return @intCast(parser.core.sort_names.get(name) orelse {
-        return error.UnknownSort;
-    });
-}
-
 pub fn containsStructuralHole(
     env: *const GlobalEnv,
     registry: *RewriteRegistry,

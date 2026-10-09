@@ -168,25 +168,6 @@ pub fn matchSymbolicToExprSemantic(
     );
 }
 
-pub fn matchExprToSymbolicSemantic(
-    self: anytype,
-    actual: ExprId,
-    symbolic: *const SymbolicExpr,
-    state: *MatchSession,
-    budget: usize,
-) anyerror!bool {
-    var visited: SemanticSearchVisited = .empty;
-    defer visited.deinit(self.shared.allocator);
-    return try matchExprToSymbolicSemanticSearch(
-        self,
-        actual,
-        symbolic,
-        state,
-        budget,
-        &visited,
-    );
-}
-
 pub fn matchSymbolicToSymbolicSemantic(
     self: anytype,
     lhs: *const SymbolicExpr,

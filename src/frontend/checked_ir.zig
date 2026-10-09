@@ -95,7 +95,7 @@ pub fn validateNoPlaceholderSlice(
 
 /// Memoized twin of `validateNoPlaceholderExpr` for the hot per-candidate
 /// validation path. The plain walker re-walks hash-consed shared subtrees
-/// once per occurrence — and `validateLine` visits every rule binding twice
+/// once per occurrence — and line validation visits every rule binding twice
 /// by construction (each binding is a subtree of the line expr). The memo
 /// (`TheoremContext.placeholder_scan_cache`) stores the first placeholder id
 /// found under a node in pre-order, so the error raised (and its
@@ -109,34 +109,9 @@ pub fn validateNoPlaceholderExprCached(
     }
 }
 
-pub fn validateLine(
-    theorem: *const TheoremContext,
-    line: CheckedLine,
-) LeakageError!void {
-    try validateNoPlaceholderExpr(theorem, line.expr);
-    switch (line.data) {
-        .rule => |rule| try validateNoPlaceholderSlice(
-            theorem,
-            rule.bindings,
-        ),
-        .transport => |transport| try validateNoPlaceholderExpr(
-            theorem,
-            transport.source_expr,
-        ),
-        .sorry => {},
-    }
-}
-
-pub fn validateLines(
-    theorem: *const TheoremContext,
-    lines: []const CheckedLine,
-) LeakageError!void {
-    for (lines) |line| {
-        try validateLine(theorem, line);
-    }
-}
-
-/// Memoized twin of `validateLines` (see `validateNoPlaceholderExprCached`).
+/// Rejects a placeholder or unsolved meta anywhere in `lines`: a line's
+/// expression, a rule line's bindings, or a transport's source. Memoized
+/// (see `validateNoPlaceholderExprCached`).
 pub fn validateLinesCached(
     theorem: *TheoremContext,
     lines: []const CheckedLine,
@@ -314,7 +289,7 @@ pub fn rollbackToMark(
     lines.shrinkRetainingCapacity(mark);
 }
 
-test "validateLines rejects placeholder bindings" {
+test "validateLinesCached rejects placeholder bindings" {
     var theorem = TheoremContext.init(std.testing.allocator);
     defer theorem.deinit();
     try theorem.seedBinderCount(1);
@@ -332,7 +307,7 @@ test "validateLines rejects placeholder bindings" {
 
     try std.testing.expectError(
         error.PlaceholderLeakage,
-        validateLines(&theorem, &lines),
+        validateLinesCached(&theorem, &lines),
     );
 }
 
@@ -353,7 +328,7 @@ test "leakage guard distinguishes unsolved metas from placeholders" {
     );
 }
 
-test "validateLines rejects unsolved meta bindings" {
+test "validateLinesCached rejects unsolved meta bindings" {
     var theorem = TheoremContext.init(std.testing.allocator);
     defer theorem.deinit();
     try theorem.seedBinderCount(1);
@@ -371,11 +346,11 @@ test "validateLines rejects unsolved meta bindings" {
 
     try std.testing.expectError(
         error.UnsolvedMetaLeakage,
-        validateLines(&theorem, &lines),
+        validateLinesCached(&theorem, &lines),
     );
 }
 
-test "validateLine rejects placeholder transports" {
+test "validateLinesCached rejects placeholder transports" {
     var theorem = TheoremContext.init(std.testing.allocator);
     defer theorem.deinit();
     try theorem.seedBinderCount(1);
@@ -391,6 +366,6 @@ test "validateLine rejects placeholder transports" {
 
     try std.testing.expectError(
         error.PlaceholderLeakage,
-        validateLine(&theorem, line),
+        validateLinesCached(&theorem, &.{line}),
     );
 }

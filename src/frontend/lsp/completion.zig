@@ -5,6 +5,7 @@ const source = @import("source.zig");
 const Types = @import("types.zig");
 const model = @import("model.zig");
 const notation_model = @import("notation.zig");
+const Metadata = @import("../compiler/metadata.zig");
 
 const DocumentId = Types.DocumentId;
 const SourceRange = Types.SourceRange;
@@ -955,23 +956,20 @@ const AnnotationDirective = struct {
     sort_text: []const u8,
 };
 
-const annotation_directives = [_]AnnotationDirective{
-    .{ .label = "@vars", .detail = "sort variable pool", .sort_text = "10 00" },
-    .{ .label = "@relation", .detail = "rewrite relation", .sort_text = "10 01" },
-    .{ .label = "@rewrite", .detail = "rewrite rule", .sort_text = "10 02" },
-    .{ .label = "@congr", .detail = "congruence rule", .sort_text = "10 03" },
-    .{ .label = "@acui", .detail = "ACUI metadata", .sort_text = "10 04" },
-    .{ .label = "@view", .detail = "view theorem", .sort_text = "10 05" },
-    .{ .label = "@recover", .detail = "recovery theorem", .sort_text = "10 06" },
-    .{ .label = "@abstract", .detail = "abstract theorem", .sort_text = "10 07" },
-    .{ .label = "@fresh", .detail = "freshness theorem", .sort_text = "10 08" },
-    .{ .label = "@hole", .detail = "proof hole", .sort_text = "10 09" },
-    .{ .label = "@auto", .detail = "search automation", .sort_text = "10 10" },
-    .{ .label = "@freshen", .detail = "fresh-binder repair", .sort_text = "10 11" },
-    .{ .label = "@alpha", .detail = "bound-variable renaming rule", .sort_text = "10 12" },
-    .{ .label = "@fallback", .detail = "search fallback rule", .sort_text = "10 13" },
-    .{ .label = "@conversion", .detail = "conversion? equation", .sort_text = "10 14" },
-    .{ .label = "@compute", .detail = "directed computation rule", .sort_text = "10 15" },
+/// The compiler's annotation table, minus those completion leaves out, in
+/// table order.
+const annotation_directives = blk: {
+    var directives: []const AnnotationDirective = &.{};
+    for (Metadata.known_annotations) |annotation| {
+        const detail = annotation.detail orelse continue;
+        directives = directives ++ &[_]AnnotationDirective{.{
+            .label = annotation.name,
+            .detail = detail,
+            .sort_text = std.fmt.comptimePrint("10 {d:0>2}", .{directives.len}),
+        }};
+    }
+    const result = directives;
+    break :blk result;
 };
 
 const CompletionItemSeed = struct {
@@ -1043,7 +1041,6 @@ pub const sort_group_notation_token = "06";
 pub const sort_group_notation_snippet = "07";
 pub const sort_group_term = "08";
 pub const sort_group_sort = "09";
-pub const sort_group_keyword = "10";
 
 pub fn completionSortText(
     allocator: std.mem.Allocator,

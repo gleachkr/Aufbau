@@ -836,6 +836,73 @@ test "auto trigger seeds close an elimination major from an empty pool" {
     try std.testing.expect(found_imp_elim);
 }
 
+test "auto trigger drops a seed that restates a hypothesis" {
+    // `@auto trigger` with no `@auto forward` rules, so the seeds take the
+    // seed-only pool. The `p ⊢ q` goal harvests the one seed `ax: p ⊢ p`; a
+    // hypothesis stating it leaves nothing new to seed.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term bi (a b: wff): wff;
+        \\infixl bi: $↔$ prec 20;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\notation emp: ctx = ($∅$:max);
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term nd (g: ctx) (a: wff): wff;
+        \\infixl nd: $⊢$ prec 1;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ a ↔ a $;
+        \\axiom bitr (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+        \\axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+        \\axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx):
+        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\--| @auto trigger (hyp a)
+        \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+        \\term r: wff;
+        \\theorem restated (p: wff): $ p ⊢ p $ > $ p ⊢ r $;
+        \\theorem seeded (p q: wff): $ p ⊢ q $;
+    ;
+    // `restated` concludes `p ⊢ r` for the constant `r`, so it is no lemma
+    // for `seeded`'s `p ⊢ q`.
+    const cases = [_]struct { proof: []const u8, seeds: usize }{
+        .{ .proof = "restated\n--------\nl1: $ p ⊢ r $ by auto?\n", .seeds = 0 },
+        .{
+            .proof = "restated\n--------\nl1: $ p ⊢ r $ by sorry!\n\n" ++
+                "seeded\n------\nl1: $ p ⊢ q $ by auto?\n",
+            .seeds = 1,
+        },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var counters = types.SearchCounters{};
+        var suggestions = try suggestionsAtNeedle(
+            &arena,
+            mm0_src,
+            case.proof,
+            "auto?",
+            .{ .counters = &counters, .generate = .{ .enabled = true } },
+        );
+        defer suggestions.deinit();
+        try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+        try std.testing.expectEqual(case.seeds, counters.trigger_seed_count);
+    }
+}
+
 test "theories without trigger annotations mint no seeds on a miss" {
     // A clean full-ladder miss in a trigger-free theory: the phase-6 gate
     // (`triggerRuleCount() > 0`) must skip the harvest entirely.

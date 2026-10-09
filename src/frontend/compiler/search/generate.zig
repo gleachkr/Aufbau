@@ -26,8 +26,8 @@ const AcuiBag = @import("../../acui_bag.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const PlaceholderId = @import("../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
-const MetaStore = @import("../inference/meta_store.zig").MetaStore;
-const MetaDepBans = @import("../inference/meta_store.zig").MetaDepBans;
+const MetaStore = @import("./meta_store.zig").MetaStore;
+const MetaDepBans = @import("./meta_store.zig").MetaDepBans;
 const OpenTerms = @import("../inference/open_terms.zig");
 const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
@@ -496,13 +496,20 @@ pub fn generateTopLevel(
         !driver.open_root and
         session.context.registry.triggerRuleCount() > 0)
     {
-        const seeds = try trigger.harvestSeeds(
+        const harvested = try trigger.harvestSeeds(
             session.context,
             &work_theorem,
             goal_expr,
             session.allocator,
         );
-        defer session.allocator.free(seeds);
+        defer session.allocator.free(harvested);
+        const seeds = try trigger.dropRestatedSeeds(
+            session.context,
+            &work_theorem,
+            try session.getReferencePool(theorem, session.effectiveCounters(null)),
+            harvested,
+            session.allocator,
+        );
         if (seeds.len > 0) {
             if (gen_counters) |c| c.trigger_seed_count += seeds.len;
             // With `@auto forward` rules, re-saturate with the seeds as

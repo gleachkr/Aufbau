@@ -11,11 +11,23 @@ const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const StructuralCombiner =
     @import("../../rewrite_registry.zig").StructuralCombiner;
 
-/// Search-side placeholder class.  Stage 1 only uses `.wildcard`, but the
-/// helper APIs carry the kind so later stages can replace the factory with
-/// the branch-local meta store without changing every call site again.  The
-/// canonical definition lives with the store (Stage 2).
-pub const MetaKind = @import("./meta_store.zig").MetaKind;
+/// The four placeholder-like search leaves (META.md terminology). Only the
+/// search meta store (`search/meta_store.zig`) may interpret them; everything
+/// else sees an opaque placeholder leaf.
+pub const MetaKind = enum {
+    /// Matches anything and binds nothing. Hints and shape filtering only.
+    wildcard,
+    /// Backward-search unknown; must be solved before a proof is emitted.
+    existential,
+    /// Schematic variable in a derived forward ref; solved transiently when
+    /// the derived ref is used (Stage 7 use-time discipline).
+    universal,
+    /// A bound variable not yet named: it reads as bound with its own dep
+    /// bit, takes only a bound variable as its value (a ref's, or a
+    /// theorem-local dummy from an @vars pool), and keeps its kind across
+    /// interner boundaries (`PlaceholderInfo.bound_var`).
+    bound_choice,
+};
 
 pub const PlaceholderFactory = struct {
     context: ?*anyopaque = null,
@@ -522,28 +534,6 @@ fn templateHasOpenableUnresolvedBinder(
             return false;
         },
     }
-}
-
-/// Conservative structured-target guard for future open-goal search.  A bare
-/// unresolved binder is not structured; an application head is.
-pub fn templateHasConcreteHead(
-    template: TemplateExpr,
-    binders: []const ?ExprId,
-) bool {
-    return switch (template) {
-        .app => true,
-        .binder => |idx| idx < binders.len and binders[idx] != null,
-    };
-}
-
-pub fn exprHasConcreteHead(
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    return switch (theorem.interner.node(expr_id).*) {
-        .app => true,
-        .variable, .placeholder => false,
-    };
 }
 
 /// Match a rule template against a target expression.  In wildcard-target mode,

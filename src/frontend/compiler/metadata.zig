@@ -22,23 +22,71 @@ pub const SortVarRegistry = CompilerVars.SortVarRegistry;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
 const Span = @import("../proof_script.zig").Span;
 
-// Everything a doc-comment annotation may legally say at each attachment
-// site. @syntax lines carry grammar metadata for external front ends
-// (aufbau-syntax); the compiler accepts them everywhere without reading
-// them. Anything else off-list is downgraded to a warning as a typo
-// safeguard — the annotation is ignored either way.
-const known_sort_directives = [_][]const u8{ "@vars", "@hole", "@syntax" };
-const known_term_directives = [_][]const u8{
-    "@acui",
-    "@conversion",
-    "@syntax",
+/// A `--|` annotation the compiler knows: the declarations it may attach to,
+/// and its LSP completion detail (null keeps it out of completion). The one
+/// list the unknown-annotation warnings and the LSP completions derive from;
+/// a comptime check below ties the rewrite registry's dispatch to it.
+pub const Annotation = struct {
+    name: []const u8,
+    sort: bool = false,
+    term: bool = false,
+    assertion: bool = false,
+    detail: ?[]const u8,
 };
-const known_assertion_directives = [_][]const u8{
-    "@relation", "@rewrite",  "@alpha", "@conversion", "@compute",
-    "@congr",    "@fallback", "@auto",  "@acui",       "@fresh",
-    "@freshen",  "@dummy",    "@view",  "@recover",    "@abstract",
-    "@syntax",
+
+/// In LSP completion order. `@syntax` lines carry grammar metadata for
+/// external front ends (aufbau-syntax); the compiler accepts them everywhere
+/// without reading them. Anything off-list for its declaration is downgraded
+/// to a warning as a typo safeguard; the annotation is ignored either way.
+pub const known_annotations = [_]Annotation{
+    .{ .name = "@vars", .sort = true, .detail = "sort variable pool" },
+    .{ .name = "@relation", .assertion = true, .detail = "rewrite relation" },
+    .{ .name = "@rewrite", .assertion = true, .detail = "rewrite rule" },
+    .{ .name = "@congr", .assertion = true, .detail = "congruence rule" },
+    .{ .name = "@acui", .term = true, .assertion = true, .detail = "ACUI metadata" },
+    .{ .name = "@view", .assertion = true, .detail = "view theorem" },
+    .{ .name = "@recover", .assertion = true, .detail = "recovery theorem" },
+    .{ .name = "@abstract", .assertion = true, .detail = "abstract theorem" },
+    .{ .name = "@fresh", .assertion = true, .detail = "freshness theorem" },
+    .{ .name = "@hole", .sort = true, .detail = "proof hole" },
+    .{ .name = "@auto", .assertion = true, .detail = "search automation" },
+    .{ .name = "@freshen", .assertion = true, .detail = "fresh-binder repair" },
+    .{ .name = "@alpha", .assertion = true, .detail = "bound-variable renaming rule" },
+    .{ .name = "@fallback", .assertion = true, .detail = "search fallback rule" },
+    .{ .name = "@conversion", .term = true, .assertion = true, .detail = "conversion? equation" },
+    .{ .name = "@compute", .assertion = true, .detail = "directed computation rule" },
+    .{ .name = "@dummy", .assertion = true, .detail = null },
+    .{ .name = "@syntax", .sort = true, .term = true, .assertion = true, .detail = null },
 };
+
+const Site = enum { sort, term, assertion };
+
+fn namesAt(comptime site: Site) []const []const u8 {
+    comptime var names: []const []const u8 = &.{};
+    inline for (known_annotations) |annotation| {
+        if (@field(annotation, @tagName(site))) names = names ++ &[_][]const u8{annotation.name};
+    }
+    const result = names;
+    return result;
+}
+
+const known_sort_directives = namesAt(.sort);
+const known_term_directives = namesAt(.term);
+const known_assertion_directives = namesAt(.assertion);
+
+comptime {
+    for (std.meta.fieldNames(RewriteRegistry.Directive)) |tag| {
+        const name = "@" ++ tag;
+        for (known_annotations) |annotation| {
+            if (std.mem.eql(u8, annotation.name, name)) {
+                if (!annotation.term and !annotation.assertion) {
+                    @compileError(name ++ " is read by the rewrite registry but may not attach to a term or assertion");
+                }
+                break;
+            }
+        } else @compileError(name ++ " is read by the rewrite registry but missing from `known_annotations`");
+    }
+}
 
 pub fn processSortMetadata(
     ctx: ?*CompilerContext,
@@ -63,7 +111,7 @@ pub fn processSortMetadata(
     );
     warnUnknownAnnotations(
         ctx,
-        &known_sort_directives,
+        known_sort_directives,
         .mm0,
         sort_stmt.name,
         annotations,
@@ -119,7 +167,7 @@ pub fn processTermMetadataAt(
     }
     warnUnknownAnnotations(
         ctx,
-        &known_term_directives,
+        known_term_directives,
         source,
         term_stmt.name,
         annotations,
@@ -166,7 +214,7 @@ pub fn processAssertionMetadata(
     );
     warnUnknownAnnotations(
         ctx,
-        &known_assertion_directives,
+        known_assertion_directives,
         source,
         assertion.name,
         annotations,

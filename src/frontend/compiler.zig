@@ -138,11 +138,6 @@ pub const Compiler = struct {
         );
     }
 
-    pub fn writeMmb(self: *Compiler) !void {
-        const bytes = try self.compileMmb(self.allocator);
-        self.allocator.free(bytes);
-    }
-
     pub fn primaryDiagnostics(self: *const Compiler) []const Diagnostic {
         return self.diagnostics.primaryDiagnostics();
     }

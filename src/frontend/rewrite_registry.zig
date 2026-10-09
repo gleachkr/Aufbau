@@ -355,28 +355,36 @@ pub const RewriteRegistry = struct {
         annotation: []const u8,
     ) !void {
         var iter = std.mem.tokenizeAny(u8, annotation, " \t");
-        const directive = iter.next() orelse return;
-
-        if (std.mem.eql(u8, directive, "@relation")) {
-            try self.processRelation(env, &iter);
-        } else if (std.mem.eql(u8, directive, "@rewrite")) {
-            try self.processRewrite(env, stmt_name, &iter);
-        } else if (std.mem.eql(u8, directive, "@alpha")) {
-            try self.processAlpha(env, stmt_name, &iter);
-        } else if (std.mem.eql(u8, directive, "@conversion")) {
-            try self.processConversion(env, stmt_name, &iter);
-        } else if (std.mem.eql(u8, directive, "@compute")) {
-            try self.processCompute(env, stmt_name, &iter);
-        } else if (std.mem.eql(u8, directive, "@congr")) {
-            try self.processCongr(env, stmt_name);
-        } else if (std.mem.eql(u8, directive, "@fallback")) {
-            try self.processFallback(env, stmt_name, &iter);
-        } else if (std.mem.eql(u8, directive, "@auto")) {
-            try self.processAuto(env, stmt_name, &iter);
-        } else if (std.mem.eql(u8, directive, "@acui")) {
-            try self.processAcui(env, stmt_name, &iter);
+        const word = iter.next() orelse return;
+        if (!std.mem.startsWith(u8, word, "@")) return;
+        const directive = std.meta.stringToEnum(Directive, word[1..]) orelse return;
+        switch (directive) {
+            .relation => try self.processRelation(env, &iter),
+            .rewrite => try self.processRewrite(env, stmt_name, &iter),
+            .alpha => try self.processAlpha(env, stmt_name, &iter),
+            .conversion => try self.processConversion(env, stmt_name, &iter),
+            .compute => try self.processCompute(env, stmt_name, &iter),
+            .congr => try self.processCongr(env, stmt_name),
+            .fallback => try self.processFallback(env, stmt_name, &iter),
+            .auto => try self.processAuto(env, stmt_name, &iter),
+            .acui => try self.processAcui(env, stmt_name, &iter),
         }
     }
+
+    /// The annotations the registry reads, each `@` plus its tag name.
+    /// `compiler/metadata.zig` checks at comptime that each is in its
+    /// annotation table.
+    pub const Directive = enum {
+        relation,
+        rewrite,
+        alpha,
+        conversion,
+        compute,
+        congr,
+        fallback,
+        auto,
+        acui,
+    };
 
     fn processRelation(
         self: *RewriteRegistry,

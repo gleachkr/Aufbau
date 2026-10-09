@@ -613,7 +613,7 @@ test "proof script parser recovers to the next block header" {
 
     var parser = ProofScript.Parser.init(arena.allocator(), src);
     try std.testing.expectError(error.ExpectedIdentifier, parser.nextBlock());
-    try std.testing.expect(parser.recoverToNextBlockBoundary());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
 
     const block = (try parser.nextBlock()).?;
     try std.testing.expect(block.kind == .theorem);
@@ -638,7 +638,7 @@ test "proof script parser recovers to lemma blocks with binders" {
 
     var parser = ProofScript.Parser.init(arena.allocator(), src);
     try std.testing.expectError(error.ExpectedIdentifier, parser.nextBlock());
-    try std.testing.expect(parser.recoverToNextBlockBoundary());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
 
     const block = (try parser.nextBlock()).?;
     try std.testing.expect(block.kind == .lemma);
@@ -668,7 +668,7 @@ test "proof script parser recovery ignores proof-line comments" {
 
     var parser = ProofScript.Parser.init(arena.allocator(), src);
     try std.testing.expectError(error.ExpectedIdentifier, parser.nextBlock());
-    try std.testing.expect(parser.recoverToNextBlockBoundary());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
 
     const block = (try parser.nextBlock()).?;
     try std.testing.expect(block.kind == .theorem);
@@ -694,7 +694,7 @@ test "proof script parser recovery ignores bare identifier fragments" {
 
     var parser = ProofScript.Parser.init(arena.allocator(), src);
     try std.testing.expectError(error.ExpectedIdentifier, parser.nextBlock());
-    try std.testing.expect(parser.recoverToNextBlockBoundary());
+    try std.testing.expect(parser.recoverToNextItemBoundary());
 
     const block = (try parser.nextBlock()).?;
     try std.testing.expect(block.kind == .theorem);
@@ -716,7 +716,7 @@ test "proof script parser recovery ignores bare identifiers at eof" {
 
     var parser = ProofScript.Parser.init(arena.allocator(), src);
     try std.testing.expectError(error.ExpectedIdentifier, parser.nextBlock());
-    try std.testing.expect(!parser.recoverToNextBlockBoundary());
+    try std.testing.expect(!parser.recoverToNextItemBoundary());
 }
 
 test "proof script parser recovery requires underlines on later blocks" {
@@ -734,7 +734,7 @@ test "proof script parser recovery requires underlines on later blocks" {
 
     var parser = ProofScript.Parser.init(arena.allocator(), src);
     try std.testing.expectError(error.ExpectedIdentifier, parser.nextBlock());
-    try std.testing.expect(!parser.recoverToNextBlockBoundary());
+    try std.testing.expect(!parser.recoverToNextItemBoundary());
 }
 
 test "lenient parser keeps a broken line's label and goal" {

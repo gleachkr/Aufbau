@@ -435,15 +435,6 @@ pub const Builder = struct {
         });
     }
 
-    pub fn addDeclarationNameUse(
-        self: *Builder,
-        text: []const u8,
-        name: []const u8,
-        decl_index: usize,
-    ) !void {
-        try self.addDeclarationNameUseIn(.mm0, text, name, decl_index);
-    }
-
     pub fn addDeclarationNameUseIn(
         self: *Builder,
         document: DocumentId,

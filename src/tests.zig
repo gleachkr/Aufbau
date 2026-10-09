@@ -1,6 +1,16 @@
+// The one test root that reaches `lib.zig` by relative path, so the inline
+// tests of library files run here and only here. Other roots consume the
+// library as the `mm0` module, whose tests Zig does not collect.
 comptime {
     _ = @import("./tests/root.zig");
     _ = @import("./tests/fresh.zig");
+    _ = @import("./frontend/compiler/search/tests/root.zig");
+    _ = @import("./frontend/compiler/search/egraph.zig");
+    _ = @import("./frontend/compiler/search/clipper.zig");
+    _ = @import("./frontend/compiler/search/shape.zig");
+    _ = @import("./frontend/compiler/search/ref_index.zig");
+    _ = @import("./frontend/lsp/index.zig");
+    _ = @import("./frontend/lsp/tests.zig");
     _ = @import("./frontend/pretty_print.zig");
     _ = @import("./frontend/text_util.zig");
     _ = @import("./frontend/view_trace.zig");
@@ -17,7 +27,7 @@ comptime {
     _ = @import("./frontend/compiler/holes.zig");
     _ = @import("./frontend/compiler/check/checked_range.zig");
     _ = @import("./frontend/compiler/check/inline_hints.zig");
-    _ = @import("./frontend/compiler/inference/meta_store.zig");
+    _ = @import("./frontend/compiler/search/meta_store.zig");
     _ = @import("./frontend/compiler/inference/open_terms.zig");
     _ = @import("./frontend/def_ops/mirror_support.zig");
     _ = @import("./frontend/normalizer/proof_emit.zig");

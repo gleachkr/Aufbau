@@ -1,4 +1,5 @@
 const std = @import("std");
+const web_demo_fixtures = @import("tests/web_demo_fixtures.zig");
 
 const WebPackageInstall = struct {
     source_dir: []const u8,
@@ -35,49 +36,6 @@ fn readProjectVersion(b: *std.Build) []const u8 {
     };
     return version;
 }
-
-/// The one roster of web-demo examples.  Each entry ships
-/// `tests/proof_cases/{name}.{mm0,auf}` and is listed in the generated
-/// `fixtures/manifest.json`, which is what the demo page builds its example
-/// picker from — so adding an example is a single edit here.
-const WebDemoFixture = struct {
-    name: []const u8,
-    /// Display name in the picker; defaults to `name`.
-    label: ?[]const u8 = null,
-};
-
-const WEB_DEMO_FIXTURES = [_]WebDemoFixture{
-    .{ .name = "hilbert" },
-    .{ .name = "russell" },
-    .{ .name = "tseitin" },
-    .{ .name = "robinson" },
-    .{ .name = "aristotle" },
-    .{ .name = "peirce" },
-    .{ .name = "gentzen" },
-    .{ .name = "prawitz" },
-    .{ .name = "barcan" },
-    .{ .name = "prior" },
-    .{ .name = "pnueli" },
-    .{ .name = "barwise" },
-    .{ .name = "loeb" },
-    .{ .name = "church" },
-    .{ .name = "leibniz" },
-    .{ .name = "mac_lane", .label = "mac lane" },
-    .{ .name = "martin_lof", .label = "martin-löf" },
-    .{ .name = "peano" },
-    .{ .name = "euclid" },
-    .{ .name = "smullyan" },
-    .{ .name = "zermelo" },
-    .{ .name = "tait" },
-    .{ .name = "pratt" },
-    .{ .name = "hoare" },
-    .{ .name = "diaconescu" },
-    .{ .name = "herbrand" },
-    .{ .name = "girard" },
-    .{ .name = "reynolds" },
-    .{ .name = "cardano" },
-    .{ .name = "knaster" },
-};
 
 fn installWebPackageSet(
     b: *std.Build,
@@ -168,7 +126,7 @@ fn installWebDemoFixtures(b: *std.Build, step: *std.Build.Step) void {
     var manifest: std.ArrayList(u8) = .empty;
     manifest.append(b.allocator, '[') catch @panic("OOM");
 
-    for (WEB_DEMO_FIXTURES, 0..) |fixture, index| {
+    for (web_demo_fixtures.fixtures, 0..) |fixture, index| {
         const install_mm0 = b.addInstallFile(
             b.path(b.fmt("tests/proof_cases/{s}.mm0", .{fixture.name})),
             b.fmt("web-demo/fixtures/{s}.mm0", .{fixture.name}),
@@ -461,11 +419,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     root_test_module.addImport("mm0", mm0_lib);
+    root_test_module.addImport("web_demo_fixtures", b.createModule(.{
+        .root_source_file = b.path("tests/web_demo_fixtures.zig"),
+    }));
+    addSearchBuildOptions(b, root_test_module, search_timers);
 
     const root_tests = b.addTest(.{
         .root_module = root_test_module,
     });
     const run_root_tests = b.addRunArtifact(root_tests);
+
+    // The proof-search scenario table: run as a unit test by the frontend
+    // root, timed by `bench-search`.
+    const search_scenarios_module = b.createModule(.{
+        .root_source_file = b.path("tests/search_scenarios.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    search_scenarios_module.addImport("mm0", mm0_lib);
 
     const frontend_test_module = b.createModule(.{
         .root_source_file = b.path("src/frontend/tests.zig"),
@@ -473,22 +444,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     frontend_test_module.addImport("mm0", mm0_lib);
+    frontend_test_module.addImport("search_scenarios", search_scenarios_module);
 
     const frontend_tests = b.addTest(.{
         .root_module = frontend_test_module,
     });
     const run_frontend_tests = b.addRunArtifact(frontend_tests);
-
-    const lsp_index_test_module = b.createModule(.{
-        .root_source_file = b.path("src/lsp_index_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const lsp_index_tests = b.addTest(.{
-        .root_module = lsp_index_test_module,
-    });
-    const run_lsp_index_tests = b.addRunArtifact(lsp_index_tests);
 
     const compiler_test_module = b.createModule(.{
         .root_source_file = b.path("src/frontend/compiler/tests.zig"),
@@ -502,26 +463,13 @@ pub fn build(b: *std.Build) void {
     });
     const run_compiler_tests = b.addRunArtifact(compiler_tests);
 
-    const compiler_search_test_module = b.createModule(.{
-        .root_source_file = b.path("src/search_tests.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    addSearchBuildOptions(b, compiler_search_test_module, search_timers);
-
-    const compiler_search_tests = b.addTest(.{
-        .root_module = compiler_search_test_module,
-    });
-    const run_compiler_search_tests = b.addRunArtifact(
-        compiler_search_tests,
-    );
-
     const search_bench_module = b.createModule(.{
         .root_source_file = b.path("src/search_bench.zig"),
         .target = target,
         .optimize = optimize,
     });
     search_bench_module.addImport("mm0", mm0_lib);
+    search_bench_module.addImport("search_scenarios", search_scenarios_module);
     const search_bench_exe = b.addExecutable(.{
         .name = "search-bench",
         .root_module = search_bench_module,
@@ -602,9 +550,7 @@ pub fn build(b: *std.Build) void {
     unit_step.dependOn(&run_trusted_tests.step);
     unit_step.dependOn(&run_root_tests.step);
     unit_step.dependOn(&run_frontend_tests.step);
-    unit_step.dependOn(&run_lsp_index_tests.step);
     unit_step.dependOn(&run_compiler_tests.step);
-    unit_step.dependOn(&run_compiler_search_tests.step);
     unit_step.dependOn(&run_compiler_bin_tests.step);
     unit_step.dependOn(&run_verifier_bin_tests.step);
 
@@ -980,27 +926,10 @@ pub fn build(b: *std.Build) void {
     );
     search_bench_step.dependOn(&run_search_bench.step);
 
-    // Scenario regression guard wired into `zig build test`. The scenario bench
-    // asserts each `expected_replacement` / `expected_suggestion_count` before
-    // printing, so a stale expectation (e.g. a notation-rendering or capability
-    // change that moves a suggestion) exits nonzero. Run in `--compact` mode so
-    // the gate stays quiet; the full per-scenario counter dump is still
-    // available via `zig build bench-search`. This guard exists because the
-    // scenario expectations silently rotted across several committed changes
-    // while only `bench-search` (a manual step) exercised them.
-    const run_search_scenarios = b.addRunArtifact(search_bench_exe);
-    run_search_scenarios.addArg("--compact");
-    const search_scenarios_step = b.step(
-        "test-search-scenarios",
-        "Regression guard: proof-search scenario suggestions must stay current",
-    );
-    search_scenarios_step.dependOn(&run_search_scenarios.step);
-
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(unit_step);
     test_step.dependOn(integration_step);
     test_step.dependOn(frontier_smoke_step);
-    test_step.dependOn(search_scenarios_step);
     test_step.dependOn(node_wasm_test_step);
     test_step.dependOn(wasm_host_test_step);
 }

@@ -315,6 +315,10 @@ pub const Parser = struct {
         ) };
     }
 
+    /// The next proof block, where a local def or notation item is an
+    /// error. Production walkers use `nextItem` or
+    /// `nextBlockSkippingLocalItems`; tests use this to read a fixture's
+    /// blocks.
     pub fn nextBlock(self: *Parser) ParseError!?ProofBlock {
         const item = (try self.nextItem()) orelse return null;
         return switch (item) {
@@ -366,10 +370,6 @@ pub const Parser = struct {
             self.pos = self.nextLineStart(line_start);
         }
         return false;
-    }
-
-    pub fn recoverToNextBlockBoundary(self: *Parser) bool {
-        return self.recoverToNextItemBoundary();
     }
 
     fn startsLemmaHeader(self: *Parser) bool {

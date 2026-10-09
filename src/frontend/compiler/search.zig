@@ -49,13 +49,3 @@ pub const shape = root.shape;
 /// The monotonic clock behind the search timers, whether or not
 /// `enable_search_timers` is set; the search bench times scenarios with it.
 pub const clock = @import("./search/timer_real.zig");
-
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("./search/tests/root.zig");
-        _ = @import("./search/egraph.zig");
-        _ = @import("./search/clipper.zig");
-        _ = @import("./search/shape.zig");
-        _ = @import("./search/ref_index.zig");
-    }
-}

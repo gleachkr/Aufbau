@@ -947,17 +947,6 @@ pub const TheoremContext = struct {
         });
     }
 
-    /// The stable `meta_id` of placeholder `idx`, or null when it is not a
-    /// shared-store meta leaf (standard placeholder, or a meta minted without
-    /// an id).
-    pub fn placeholderMetaId(
-        self: *const TheoremContext,
-        idx: PlaceholderId,
-    ) ?u64 {
-        const info = self.placeholderInfo(idx) orelse return null;
-        return info.meta_id;
-    }
-
     pub fn hasMetaPlaceholders(self: *const TheoremContext) bool {
         return self.meta_placeholder_count != 0;
     }

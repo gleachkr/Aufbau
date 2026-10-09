@@ -15,14 +15,11 @@ pub const CompilerDiagnosticSource = CompilerDiag.DiagnosticSource;
 pub const CompilerDiagnosticSpan = @import("./frontend/proof_script.zig").Span;
 pub const CompilerDiagnosticPhase = CompilerDiag.DiagnosticPhase;
 pub const CompilerDiagnosticNote = CompilerDiag.DiagnosticNote;
-pub const CompilerDiagnosticRelated = CompilerDiag.DiagnosticRelated;
 pub const CompilerNoteMessage = CompilerDiag.NoteMessage;
 pub const CompilerRelatedLabel = CompilerDiag.RelatedLabel;
 pub const CompilerLang = CompilerDiag.Lang;
 pub const setCompilerLang = CompilerDiag.setLang;
-pub const compilerLang = CompilerDiag.activeLang;
 pub const parseCompilerLang = CompilerDiag.parseLang;
-pub const compilerSeverityLabel = CompilerDiag.severityLabel;
 pub const compilerNoteHeading = CompilerDiag.noteHeading;
 pub const compilerRelatedHeading = CompilerDiag.relatedHeading;
 pub const compilerDiagnosticSummary = CompilerDiag.diagnosticSummary;
@@ -45,24 +42,18 @@ pub const Frontend = struct {
     pub const Env = @import("./frontend/env.zig");
     pub const Expr = @import("./frontend/expr.zig");
     pub const LspIndex = @import("./frontend/lsp/index.zig");
-    pub const Rules = @import("./frontend/rules.zig");
 };
 
 pub const CompilerSupport = struct {
     pub const CheckedIr = @import("./frontend/checked_ir.zig");
     pub const Context = @import("./frontend/compiler/context.zig");
-    pub const DerivedBindings =
-        @import("./frontend/derived_bindings.zig");
     pub const DiagnosticSink =
         @import("./frontend/compiler/diagnostic_sink.zig");
-    pub const Holes = @import("./frontend/compiler/holes.zig");
     pub const Inference = @import("./frontend/compiler/inference.zig");
     pub const Metadata = @import("./frontend/compiler/metadata.zig");
-    pub const Normalize = @import("./frontend/compiler/normalize.zig");
     pub const Search = @import("./frontend/compiler/search.zig");
     pub const SearchDriver = @import("./frontend/search_driver.zig");
     pub const Unpack = @import("./frontend/unpack.zig");
-    pub const Vars = @import("./frontend/compiler/vars.zig");
     pub const Views = @import("./frontend/views.zig");
 };
 pub const DefOps = @import("./frontend/def_ops.zig");
@@ -83,7 +74,6 @@ pub const boundArgDepsToBinderDeps =
 pub const MM0Parser = @import("./frontend/parse_recovery.zig").MM0Parser;
 pub const Mmb = @import("./trusted/mmb.zig").Mmb;
 pub const Index = @import("./trusted/mmb.zig").Index;
-pub const StringList = @import("./trusted/mmb.zig").StringList;
 pub const Proof = @import("./trusted/proof.zig");
 pub const ProofScript = @import("./frontend/proof_script.zig");
 pub const Imports = @import("./frontend/imports.zig");

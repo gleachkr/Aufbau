@@ -122,7 +122,7 @@ fn lookupHypReferencesViaView(
     seedViewBindingsFromRule(view, rule_bindings, view_bindings);
 
     // Push any resolvable `@recover` coupling into the index as a context-member
-    // containment query (see `lookupTemplateInjected`). Only fires when the
+    // containment query (see `lookupTemplateInjectedDual`). Only fires when the
     // recover source still sits in this hypothesis's ambiguous ACUI context but
     // its pattern and hole are already pinned by the conclusion or an
     // earlier-matched hypothesis.

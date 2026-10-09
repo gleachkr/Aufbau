@@ -223,9 +223,10 @@ the exact unify-replay context, `dispatch.zig` runs the inference ladder,
 `strategies.zig` holds its def-aware and view-seeded tiers,
 `validation.zig` checks resolved bindings against the rule's dependency
 conditions, and `diagnostics.zig` builds inference-failure diagnostics
-and notes. `meta_store.zig` (search metavariables) and `open_terms.zig`
-(placeholder factories and partial template instantiation) serve search
-and the checker's probes.
+and notes. `open_terms.zig` (placeholder factories, the search leaf
+kinds and partial template instantiation) serves search and the
+checker's probes. The search metavariable store that interprets those
+leaves is `compiler/search/meta_store.zig`.
 
 `compiler/alpha_rewrite.zig` repairs `@freshen` alpha capture: it
 renames bound variables through `@alpha` rules and transports a ref
@@ -1271,9 +1272,16 @@ across the chain. The manual and demo consume these same packages.
 
 `build.zig` is the source of truth for test-step dependencies:
 
-- `test-unit`: trusted, root, frontend, compiler, search, LSP-index, and
-  binary test roots, plus native CLI smoke tests. File-based proof cases
-  run through the root tests here, not only through integration tests.
+- `test-unit`: trusted, root, frontend, compiler, and binary test roots,
+  plus native CLI smoke tests. The root (`src/tests.zig`) is the only one
+  that reaches `src/lib.zig` by relative path, so it also owns the search
+  and LSP-index suites and every library file's inline tests; the others
+  use the library as the `mm0` module, whose tests Zig does not collect.
+  File-based proof cases run through the root tests here, not only through
+  integration tests. The proof-search scenarios of
+  `tests/search_scenarios.zig` (one marker per small fixture, with the
+  suggestion it must return) run here as one frontend test, which reports
+  every failing scenario; `bench-search` times the same table.
   The proof-case driver joins imports like the CLI: shared preludes live
   in `tests/proof_cases/lib/` (a `wff` base, `iff` and `ctx` over it,
   `nd` and `seq` importing both), and most small fixtures import one of
@@ -1284,10 +1292,9 @@ across the chain. The manual and demo consume these same packages.
 - `test-frontier-smoke`: selected search frontiers and whole-fixture guards,
   one `search-bench` run per entry in `tests/frontier_guards.zig` (dated
   floor measurements live in `docs/frontier_guard_history.md`).
-- `test-search-scenarios`: benchmark suggestion/count expectations.
 - `test-node-wasm`: packed-package compiler/verifier/LSP smoke tests in Node.
 - `test-wasm-host`: the packages' wasm hosting against mock instances.
-- `test`: all six steps above.
+- `test`: all five steps above.
 - `test-editor-browser` and `test-lsp-cross-origin`: separate Chromium gates;
   CI runs them explicitly, but they are not dependencies of `test`.
 
