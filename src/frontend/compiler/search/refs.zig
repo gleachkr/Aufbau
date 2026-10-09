@@ -45,7 +45,7 @@ pub fn buildReferencePool(
     context: *const Context,
     theorem: *const TheoremContext,
 ) ![]RefPoolEntry {
-    var pool = std.ArrayListUnmanaged(RefPoolEntry){};
+    var pool = std.ArrayListUnmanaged(RefPoolEntry).empty;
     errdefer pool.deinit(allocator);
 
     for (theorem.theorem_hyps.items, 0..) |_, idx| {
@@ -58,7 +58,7 @@ pub fn buildReferencePool(
         });
     }
 
-    var line_refs = std.ArrayListUnmanaged(RefPoolEntry){};
+    var line_refs = std.ArrayListUnmanaged(RefPoolEntry).empty;
     defer line_refs.deinit(allocator);
     var labels = context.labels.iterator();
     while (labels.next()) |entry| {

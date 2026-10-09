@@ -49,16 +49,19 @@ const CommandResult = struct {
     }
 };
 
-fn openExamplesDirOrSkip() !std.fs.Dir {
-    std.fs.cwd().access(EXAMPLES_DIR, .{}) catch return error.SkipZigTest;
-    return std.fs.cwd().openDir(EXAMPLES_DIR, .{ .iterate = true });
+const io = std.testing.io;
+
+fn openExamplesDirOrSkip() !std.Io.Dir {
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(io, EXAMPLES_DIR, .{}) catch return error.SkipZigTest;
+    return cwd.openDir(io, EXAMPLES_DIR, .{ .iterate = true });
 }
 
 fn ensureMm0RsExists(allocator: std.mem.Allocator) !void {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, io, .{
         .argv = &.{ "mm0-rs", "--version" },
-        .max_output_bytes = 8 * 1024,
+        .stdout_limit = .limited(8 * 1024),
+        .stderr_limit = .limited(8 * 1024),
     }) catch |err| switch (err) {
         error.FileNotFound => return error.SkipZigTest,
         else => return err,
@@ -67,7 +70,7 @@ fn ensureMm0RsExists(allocator: std.mem.Allocator) !void {
     defer allocator.free(result.stderr);
 
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != 0) return error.SkipZigTest;
         },
         else => return error.SkipZigTest,
@@ -76,14 +79,14 @@ fn ensureMm0RsExists(allocator: std.mem.Allocator) !void {
 
 fn runCommand(
     allocator: std.mem.Allocator,
-    cwd_dir: std.fs.Dir,
+    cwd_dir: std.Io.Dir,
     argv: []const []const u8,
 ) !CommandResult {
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
+    const result = try std.process.run(allocator, io, .{
         .argv = argv,
-        .cwd_dir = cwd_dir,
-        .max_output_bytes = 2 * 1024 * 1024,
+        .cwd = .{ .dir = cwd_dir },
+        .stdout_limit = .limited(2 * 1024 * 1024),
+        .stderr_limit = .limited(2 * 1024 * 1024),
     });
     return .{
         .term = result.term,
@@ -94,7 +97,7 @@ fn runCommand(
 
 fn expectCommandSuccess(argv: []const []const u8, result: CommandResult) !void {
     switch (result.term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) return;
             std.debug.print("command failed ({d}):\n", .{code});
         },
@@ -121,11 +124,11 @@ fn findExpected(stem: []const u8) ?struct { idx: usize, pair: ExpectedPair } {
 }
 
 fn getFilter(allocator: std.mem.Allocator) !?[]u8 {
-    return std.process.getEnvVarOwned(
+    return std.testing.environ.getAlloc(
         allocator,
         "MM0_ZIG_EXAMPLE_FILTER",
     ) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => null,
+        error.EnvironmentVariableMissing => null,
         else => return err,
     };
 }
@@ -140,7 +143,7 @@ fn matchesFilter(filter: ?[]const u8, rel_mm1_path: []const u8) bool {
 test "integration: all example mm1/mm0 pairs" {
     const allocator = std.testing.allocator;
     var examples_dir = try openExamplesDirOrSkip();
-    defer examples_dir.close();
+    defer examples_dir.close(io);
 
     try ensureMm0RsExists(allocator);
 
@@ -150,7 +153,7 @@ test "integration: all example mm1/mm0 pairs" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const tmp_abs = try tmp.parent_dir.realpathAlloc(allocator, &tmp.sub_path);
+    const tmp_abs = try tmp.parent_dir.realPathFileAlloc(io, &tmp.sub_path, allocator);
     defer allocator.free(tmp_abs);
 
     const out_mmb_path = try std.fs.path.join(allocator, &.{ tmp_abs, "example.mmb" });
@@ -165,12 +168,12 @@ test "integration: all example mm1/mm0 pairs" {
     var walker = try examples_dir.walk(allocator);
     defer walker.deinit();
 
-    var seen: [expected_pairs.len]bool = .{false} ** expected_pairs.len;
+    var seen: [expected_pairs.len]bool = @splat(false);
     var paired_count: usize = 0;
     var skipped_no_mm0: usize = 0;
     var skipped_by_filter: usize = 0;
 
-    while (try walker.next()) |entry| {
+    while (try walker.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.path, ".mm1")) continue;
         if (!matchesFilter(filter, entry.path)) {
@@ -183,7 +186,7 @@ test "integration: all example mm1/mm0 pairs" {
         const mm0_rel = try std.fmt.allocPrint(allocator, "{s}.mm0", .{stem_rel});
         defer allocator.free(mm0_rel);
 
-        examples_dir.access(mm0_rel, .{}) catch {
+        examples_dir.access(io, mm0_rel, .{}) catch {
             skipped_no_mm0 += 1;
             continue;
         };
@@ -209,7 +212,7 @@ test "integration: all example mm1/mm0 pairs" {
         switch (expected.outcome) {
             .compile_fail => {
                 switch (compile_result.term) {
-                    .Exited => |code| {
+                    .exited => |code| {
                         if (code == 0) {
                             std.debug.print(
                                 "expected compile failure but succeeded: {s}\n",
@@ -242,18 +245,19 @@ test "integration: all example mm1/mm0 pairs" {
             join_result,
         );
 
-        const mm0 = try std.fs.cwd().readFileAlloc(
-            allocator,
+        const mm0 = try std.Io.Dir.cwd().readFileAlloc(
+            io,
             joined_mm0_path,
-            std.math.maxInt(usize),
+            allocator,
+            .unlimited,
         );
         defer allocator.free(mm0);
 
-        const mmb = try std.fs.cwd().readFileAllocOptions(
-            allocator,
+        const mmb = try std.Io.Dir.cwd().readFileAllocOptions(
+            io,
             out_mmb_path,
-            std.math.maxInt(usize),
-            null,
+            allocator,
+            .unlimited,
             std.mem.Alignment.of(mm0_lib.Arg),
             null,
         );

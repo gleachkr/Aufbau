@@ -215,7 +215,7 @@ pub const ExplainCtx = struct {
     /// traversed, so a premise is never proven through the union it
     /// licensed or anything later. Null = the whole forest.
     age_bound: ?u32 = null,
-    steps: std.ArrayListUnmanaged(Step) = .{},
+    steps: std.ArrayListUnmanaged(Step) = .empty,
     depth: usize = 0,
     /// Route attempts consumed (successful and rolled-back alike); see
     /// `ExplainOptions.max_routes`.
@@ -228,7 +228,7 @@ pub const ExplainCtx = struct {
     active: std.AutoHashMapUnmanaged(AlignKey, void) = .{},
     /// Interned avoid-masks: sorted atom lists a representative's subtree
     /// must not mention. Index 0 is always the empty mask.
-    mask_atoms: std.ArrayListUnmanaged([]const LeafId) = .{},
+    mask_atoms: std.ArrayListUnmanaged([]const LeafId) = .empty,
     /// Masks whose extraction fixpoint has run.
     masks_computed: std.AutoArrayHashMapUnmanaged(u32, void) = .{},
     /// Extraction state: minimal-size representative per (class root,
@@ -439,7 +439,7 @@ pub const ExplainCtx = struct {
         const alloc = self.allocator();
         var seen: std.AutoHashMapUnmanaged(EClassId, void) = .{};
         defer seen.deinit(alloc);
-        var stack: std.ArrayListUnmanaged(EClassId) = .{};
+        var stack: std.ArrayListUnmanaged(EClassId) = .empty;
         defer stack.deinit(alloc);
         if (adj.get(root)) |children| {
             try stack.appendSlice(alloc, children.items);
@@ -474,7 +474,7 @@ pub const ExplainCtx = struct {
             for (self.eg.nodes.items) |stored| {
                 const root = self.eg.find(stored.class);
                 const gop = try adj.getOrPut(alloc, root);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
                 switch (stored.node) {
                     .leaf => {},
                     .app => |app| for (app.children) |child| switch (child) {
@@ -547,8 +547,8 @@ pub const ExplainCtx = struct {
     ) !?[]const Traversed {
         const alloc = self.allocator();
         // Ancestor chain of n1 with positions for LCA lookup.
-        var chain1_nodes: std.ArrayListUnmanaged(ENodeId) = .{};
-        var chain1_edges: std.ArrayListUnmanaged(ExplEdge) = .{};
+        var chain1_nodes: std.ArrayListUnmanaged(ENodeId) = .empty;
+        var chain1_edges: std.ArrayListUnmanaged(ExplEdge) = .empty;
         var positions: std.AutoArrayHashMapUnmanaged(ENodeId, usize) = .{};
         var current = n1;
         while (true) {
@@ -562,7 +562,7 @@ pub const ExplainCtx = struct {
             current = edge.to;
         }
         // Walk up from n2 until the chains meet.
-        var chain2_edges: std.ArrayListUnmanaged(ExplEdge) = .{};
+        var chain2_edges: std.ArrayListUnmanaged(ExplEdge) = .empty;
         var lca_pos: usize = undefined;
         current = n2;
         while (true) {
@@ -578,7 +578,7 @@ pub const ExplainCtx = struct {
             current = edge.to;
         }
 
-        var path: std.ArrayListUnmanaged(Traversed) = .{};
+        var path: std.ArrayListUnmanaged(Traversed) = .empty;
         for (chain1_edges.items[0..lca_pos]) |edge| {
             // Traversed child -> parent: as stored.
             try path.append(alloc, .{
@@ -820,7 +820,7 @@ pub const ExplainCtx = struct {
             std.ArrayListUnmanaged(RouteEdge),
             self.eg.nodes.items.len,
         );
-        @memset(adj, .{});
+        @memset(adj, .empty);
         for (self.eg.expl_parent.items) |maybe_edge| {
             const edge = maybe_edge orelse continue;
             try self.addRouteEdge(adj, edge.just, edge.age);
@@ -875,7 +875,7 @@ pub const ExplainCtx = struct {
         };
         const prev = try self.allocator().alloc(?Prev, adj.len);
         @memset(prev, null);
-        var queue: std.ArrayListUnmanaged(ENodeId) = .{};
+        var queue: std.ArrayListUnmanaged(ENodeId) = .empty;
         try queue.append(self.allocator(), n1);
         var head: usize = 0;
         search: while (head < queue.items.len) {
@@ -892,7 +892,7 @@ pub const ExplainCtx = struct {
                 try queue.append(self.allocator(), re.to);
             }
         } else return null;
-        var route: std.ArrayListUnmanaged(Traversed) = .{};
+        var route: std.ArrayListUnmanaged(Traversed) = .empty;
         var cursor = n2;
         while (cursor != n1) {
             const link = prev[cursor].?;
@@ -987,12 +987,12 @@ pub const ExplainCtx = struct {
         const prev = self.dijkstra.?.prev;
         @memset(prev, null);
         var queue = std.PriorityQueue(WeightedItem, void, WeightedItem.order)
-            .init(alloc, {});
-        defer queue.deinit();
+            .initContext({});
+        defer queue.deinit(alloc);
         dist[n1] = 0;
         var seq: usize = 0;
-        try queue.add(.{ .cost = 0, .seq = seq, .node = n1 });
-        while (queue.removeOrNull()) |item| {
+        try queue.push(alloc, .{ .cost = 0, .seq = seq, .node = n1 });
+        while (queue.pop()) |item| {
             if (item.cost > dist[item.node]) continue;
             if (item.node == n2) break;
             for (adj[item.node].items) |re| {
@@ -1005,11 +1005,11 @@ pub const ExplainCtx = struct {
                     .forward = re.forward,
                 };
                 seq += 1;
-                try queue.add(.{ .cost = cost, .seq = seq, .node = re.to });
+                try queue.push(alloc, .{ .cost = cost, .seq = seq, .node = re.to });
             }
         }
         if (n1 != n2 and prev[n2] == null) return null;
-        var route: std.ArrayListUnmanaged(Traversed) = .{};
+        var route: std.ArrayListUnmanaged(Traversed) = .empty;
         var cursor = n2;
         while (cursor != n1) {
             const link = prev[cursor].?;
@@ -1439,8 +1439,8 @@ pub const ExplainCtx = struct {
                 ?*const Term,
                 anchor_bag.members.len,
             );
-            var leaves: std.ArrayListUnmanaged(*const Term) = .{};
-            var leaf_roots: std.ArrayListUnmanaged(EClassId) = .{};
+            var leaves: std.ArrayListUnmanaged(*const Term) = .empty;
+            var leaf_roots: std.ArrayListUnmanaged(EClassId) = .empty;
             for (anchor_bag.members, 0..) |member, idx| {
                 const child = aligned.children[idx].?;
                 const exp = sp.expansion[map[idx]] orelse {
@@ -1743,7 +1743,7 @@ pub const ExplainCtx = struct {
         term: *const Term,
         matched: []const u32,
     ) ![]EClassId {
-        var out: std.ArrayListUnmanaged(EClassId) = .{};
+        var out: std.ArrayListUnmanaged(EClassId) = .empty;
         for (term.children, 0..) |maybe_child, idx| {
             const child = maybe_child orelse continue;
             if (std.mem.indexOfScalar(u32, matched, @intCast(idx)) != null) {
@@ -1954,7 +1954,7 @@ pub const ExplainCtx = struct {
         @memset(masks, 0);
         if (rule.restrictions.len == 0) return masks;
         for (0..rule.num_binders) |slot| {
-            var atoms: std.ArrayListUnmanaged(LeafId) = .{};
+            var atoms: std.ArrayListUnmanaged(LeafId) = .empty;
             for (rule.restrictions) |restriction| {
                 if (restriction.term_slot != slot) continue;
                 const binding = subst[restriction.bound_slot] orelse continue;
@@ -1995,14 +1995,14 @@ pub const ExplainCtx = struct {
         whole: bool,
     ) error{OutOfMemory}!?RenderedBag {
         const bag = self.eg.nodes.items[bag_node].node.bag;
-        var flat: std.ArrayListUnmanaged(TemplateExpr) = .{};
+        var flat: std.ArrayListUnmanaged(TemplateExpr) = .empty;
         try self.eg.flattenPattern(self.allocator(), bag.term_id, pattern, &flat);
         const children = try self.allocator().alloc(
             ?*const Term,
             bag.members.len,
         );
         @memset(children, null);
-        var matched: std.ArrayListUnmanaged(u32) = .{};
+        var matched: std.ArrayListUnmanaged(u32) = .empty;
         const bag_root = self.eg.find(self.eg.nodes.items[bag_node].class);
         for (flat.items, 0..) |pm, pm_idx| {
             if (!try self.claimBagMembers(

@@ -940,11 +940,7 @@ fn readProofCaseFile(
         .{ stem, ext },
     );
     defer allocator.free(path);
-    return try std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        std.math.maxInt(usize),
-    );
+    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
 }
 
 fn loadProofCase(
@@ -962,22 +958,22 @@ fn loadProofCase(
         "tests/proof_cases/{s}." ++ proof_case_ext,
         .{stem},
     );
-    return mm0.Imports.loadPair(arena, mm0_path, proof_path, failure);
+    return mm0.Imports.loadPair(std.testing.io, arena, mm0_path, proof_path, failure);
 }
 
 const mm0c_cache_dir = ".zig-cache-local/mm0c-test";
 
 fn mm0cExists() bool {
-    const result = std.process.Child.run(.{
-        .allocator = std.testing.allocator,
+    const result = std.process.run(std.testing.allocator, std.testing.io, .{
         .argv = &.{"mm0-c"},
-        .max_output_bytes = 8 * 1024,
+        .stdout_limit = .limited(8 * 1024),
+        .stderr_limit = .limited(8 * 1024),
     }) catch return false;
     std.testing.allocator.free(result.stdout);
     std.testing.allocator.free(result.stderr);
     // mm0-c with no args prints usage and exits 1
     return switch (result.term) {
-        .Exited => true,
+        .exited => true,
         else => false,
     };
 }
@@ -988,44 +984,49 @@ fn verifyWithMm0c(
     stem: []const u8,
     expected_code: u8,
 ) !void {
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
     var path_buf: [256]u8 = undefined;
     const mmb_path = std.fmt.bufPrint(&path_buf, mm0c_cache_dir ++ "/{s}.mmb", .{stem}) catch mm0c_cache_dir ++ "/out.mmb";
-    std.fs.cwd().makePath(mm0c_cache_dir) catch |err| {
+    cwd.createDirPath(io, mm0c_cache_dir) catch |err| {
         std.debug.print("FAIL (mm0-c) could not create cache dir: {}\n", .{err});
         return err;
     };
-    std.fs.cwd().writeFile(.{ .sub_path = mmb_path, .data = mmb }) catch |err| {
+    cwd.writeFile(io, .{ .sub_path = mmb_path, .data = mmb }) catch |err| {
         std.debug.print("FAIL (mm0-c) could not write temp mmb: {}\n", .{err});
         return err;
     };
-    defer std.fs.cwd().deleteFile(mmb_path) catch {};
+    defer cwd.deleteFile(io, mmb_path) catch {};
 
-    var child = std.process.Child.init(&.{ "mm0-c", mmb_path }, std.testing.allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    child.spawn() catch |err| {
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "mm0-c", mmb_path },
+        .stdin = .pipe,
+        .stdout = .ignore,
+        .stderr = .pipe,
+    }) catch |err| {
         std.debug.print("FAIL (mm0-c) could not spawn: {}\n", .{err});
         return err;
     };
+    defer child.kill(io);
 
-    child.stdin.?.writeAll(mm0_src) catch {};
-    child.stdin.?.close();
+    child.stdin.?.writeStreamingAll(io, mm0_src) catch {};
+    child.stdin.?.close(io);
     child.stdin = null;
 
     // Read stderr before wait to avoid pipe buffer deadlock
     var stderr_buf: [4096]u8 = undefined;
-    const stderr_len = child.stderr.?.readAll(&stderr_buf) catch 0;
+    var read_buf: [512]u8 = undefined;
+    var stderr_reader = child.stderr.?.reader(io, &read_buf);
+    const stderr_len = stderr_reader.interface.readSliceShort(&stderr_buf) catch 0;
     const stderr = stderr_buf[0..stderr_len];
 
-    const term = child.wait() catch |err| {
+    const term = child.wait(io) catch |err| {
         std.debug.print("FAIL (mm0-c) wait failed: {}\n", .{err});
         return err;
     };
 
     switch (term) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code != expected_code) {
                 std.debug.print("FAIL (mm0-c) exit code {d}, expected {d}\n{s}\n", .{ code, expected_code, stderr });
                 return error.Mm0cVerificationFailed;

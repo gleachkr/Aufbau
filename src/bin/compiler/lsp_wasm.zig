@@ -36,6 +36,7 @@ pub export fn process_lsp_message(message_ptr: u32, message_len: u32) u32 {
     if (!lsp_handler_initialized) {
         lsp_handler = compiler_lsp.Handler.init(
             allocator,
+            browser_io,
             &browser_transport.transport,
         );
         lsp_handler_initialized = true;
@@ -43,6 +44,7 @@ pub export fn process_lsp_message(message_ptr: u32, message_len: u32) u32 {
 
     browser_transport.reset(ptrToConstSlice(message_ptr, message_len));
     lsp.basic_server.run(
+        browser_io,
         allocator,
         &browser_transport.transport,
         &lsp_handler,
@@ -98,6 +100,11 @@ fn slicePtr(bytes: []const u8) u32 {
     return @intCast(@intFromPtr(bytes.ptr));
 }
 
+/// The browser host does no I/O of its own: messages arrive and leave
+/// through `BrowserTransport`, and the handler's disk reads report
+/// FileNotFound on freestanding before they reach an `Io`.
+const browser_io = std.Io.failing;
+
 const BrowserTransport = struct {
     transport: lsp.Transport = .{ .vtable = &vtable },
     input: []const u8 = &.{},
@@ -122,8 +129,10 @@ const BrowserTransport = struct {
 
     fn readJsonMessage(
         transport: *lsp.Transport,
+        io: std.Io,
         arena: std.mem.Allocator,
     ) lsp.Transport.ReadError![]u8 {
+        _ = io;
         const self: *BrowserTransport = @fieldParentPtr(
             "transport",
             transport,
@@ -135,8 +144,10 @@ const BrowserTransport = struct {
 
     fn writeJsonMessage(
         transport: *lsp.Transport,
+        io: std.Io,
         json_message: []const u8,
     ) lsp.Transport.WriteError!void {
+        _ = io;
         const self: *BrowserTransport = @fieldParentPtr(
             "transport",
             transport,

@@ -352,7 +352,7 @@ pub const Solver = struct {
         self: *Solver,
         partial_bindings: []const ?ExprId,
     ) !std.ArrayListUnmanaged(BranchState) {
-        var states = std.ArrayListUnmanaged(BranchState){};
+        var states = std.ArrayListUnmanaged(BranchState).empty;
         try states.append(
             self.allocator,
             try BranchStateOps.initState(self, partial_bindings),
@@ -382,7 +382,7 @@ pub const Solver = struct {
         ref_exprs: []const ExprId,
         space: BinderSpace,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var constraints = std.ArrayListUnmanaged(MatchConstraint){};
+        var constraints = std.ArrayListUnmanaged(MatchConstraint).empty;
         defer constraints.deinit(self.allocator);
         for (hyps, ref_exprs) |hyp, actual| {
             try constraints.append(self.allocator, .{
@@ -425,7 +425,7 @@ pub const Solver = struct {
                 space,
             ),
             .unconstrained => blk: {
-                var next = std.ArrayListUnmanaged(BranchState){};
+                var next = std.ArrayListUnmanaged(BranchState).empty;
                 try next.appendSlice(self.allocator, states);
                 break :blk next;
             },
@@ -439,11 +439,11 @@ pub const Solver = struct {
         space: BinderSpace,
         region: ConstraintRegion,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var current = std.ArrayListUnmanaged(BranchState){};
+        var current = std.ArrayListUnmanaged(BranchState).empty;
         try current.appendSlice(self.allocator, states);
 
         for (constraints, 0..) |constraint, constraint_idx| {
-            var next = std.ArrayListUnmanaged(BranchState){};
+            var next = std.ArrayListUnmanaged(BranchState).empty;
             for (current.items) |state| {
                 const matches = try StructuralMatcher.matchExpr(
                     self,
@@ -493,7 +493,7 @@ pub const Solver = struct {
         actual: ExprId,
         space: BinderSpace,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var next = std.ArrayListUnmanaged(BranchState){};
+        var next = std.ArrayListUnmanaged(BranchState).empty;
         for (states) |state| {
             const matches = try self.matchHoleyExpr(template, actual, space, state);
             try next.appendSlice(self.allocator, matches);
@@ -528,10 +528,10 @@ pub const Solver = struct {
         if (node.* != .app or node.app.term_id != app.term_id or
             node.app.args.len != app.args.len) return &.{};
 
-        var states = std.ArrayListUnmanaged(BranchState){};
+        var states = std.ArrayListUnmanaged(BranchState).empty;
         try states.append(self.allocator, try BranchStateOps.cloneState(self, state));
         for (app.args, node.app.args) |tmpl_arg, actual_arg| {
-            var next = std.ArrayListUnmanaged(BranchState){};
+            var next = std.ArrayListUnmanaged(BranchState).empty;
             for (states.items) |current| {
                 const matches = try self.matchHoleyExpr(tmpl_arg, actual_arg, space, current);
                 try next.appendSlice(self.allocator, matches);
@@ -553,7 +553,7 @@ pub const Solver = struct {
         hint: ExprId,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
         const bindings = try self.allocator.alloc(ExprId, self.rule.args.len);
-        var next = std.ArrayListUnmanaged(BranchState){};
+        var next = std.ArrayListUnmanaged(BranchState).empty;
         for (states) |state| {
             const complete = for (state.rule_bindings, bindings) |binding, *slot| {
                 slot.* = binding orelse break false;
@@ -645,7 +645,7 @@ pub const Solver = struct {
         states: []const BranchState,
         space: BinderSpace,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var next = std.ArrayListUnmanaged(BranchState){};
+        var next = std.ArrayListUnmanaged(BranchState).empty;
         for (states) |state| {
             if (BranchStateOps.matchState(&state, space) == null) {
                 try next.append(self.allocator, state);
@@ -686,7 +686,7 @@ pub const Solver = struct {
         states: []const BranchState,
         derived_bindings: []const DerivedBinding,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var next = std.ArrayListUnmanaged(BranchState){};
+        var next = std.ArrayListUnmanaged(BranchState).empty;
         var first_err: ?anyerror = null;
         for (states) |state| {
             var new_state = try BranchStateOps.cloneState(self, state);
@@ -773,7 +773,7 @@ pub const Solver = struct {
         states: []const BranchState,
         space: BinderSpace,
     ) anyerror!std.ArrayListUnmanaged(BranchState) {
-        var next = std.ArrayListUnmanaged(BranchState){};
+        var next = std.ArrayListUnmanaged(BranchState).empty;
         var first_err: ?anyerror = null;
         for (states) |state| {
             const finalized = self.finalizeStructuralBindings(
@@ -794,7 +794,7 @@ pub const Solver = struct {
         state: BranchState,
         space: BinderSpace,
     ) anyerror![]BranchState {
-        var out = std.ArrayListUnmanaged(BranchState){};
+        var out = std.ArrayListUnmanaged(BranchState).empty;
         try self.searchStructuralFinalizations(state, space, &out);
         if (out.items.len == 0) return error.UnifyMismatch;
         return try out.toOwnedSlice(self.allocator);

@@ -953,7 +953,7 @@ pub const Builder = struct {
     ) anyerror!clipper.ShapeNode {
         const head_id = node.token.term_id;
         const unit_id = self.acuiUnitId(head_id);
-        var members = std.ArrayListUnmanaged(clipper.ShapeNode){};
+        var members = std.ArrayListUnmanaged(clipper.ShapeNode).empty;
         errdefer {
             for (members.items) |m| deinitShape(self.allocator, m);
             members.deinit(self.allocator);
@@ -1161,7 +1161,7 @@ const State = struct {
 const VariantList = struct {
     allocator: std.mem.Allocator,
     max_variants: usize,
-    variants: std.ArrayListUnmanaged(clipper.ShapeNode) = .{},
+    variants: std.ArrayListUnmanaged(clipper.ShapeNode) = .empty,
 
     fn init(allocator: std.mem.Allocator, max_variants: usize) VariantList {
         return .{ .allocator = allocator, .max_variants = max_variants };

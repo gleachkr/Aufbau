@@ -8,7 +8,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 
-const types = lsp.types;
+const types = lsp.types.flat;
 pub const Encoding = lsp.offsets.Encoding;
 pub const Loc = lsp.offsets.Loc;
 

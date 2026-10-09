@@ -34,7 +34,7 @@ pub const StatementSink = struct {
     };
 
     arena: std.heap.ArenaAllocator,
-    statements: std.ArrayListUnmanaged(Statement) = .{},
+    statements: std.ArrayListUnmanaged(Statement) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) StatementSink {
         return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
@@ -46,7 +46,7 @@ pub const StatementSink = struct {
     }
 
     pub fn reset(self: *StatementSink) void {
-        self.statements = .{};
+        self.statements = .empty;
         _ = self.arena.reset(.retain_capacity);
     }
 
@@ -171,7 +171,7 @@ fn renderTermSignature(
     allocator: std.mem.Allocator,
     term: env_mod.TermDecl,
 ) ![]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
+    var out: std.ArrayListUnmanaged(u8) = .empty;
     errdefer out.deinit(allocator);
     for (term.args, 0..) |arg, idx| {
         try out.appendSlice(allocator, if (arg.bound) "{" else "(");

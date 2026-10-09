@@ -179,7 +179,7 @@ pub fn run(
     // order (deterministic). Bound-binder slots and dep restrictions are
     // shared by both orientations; the dep gate uses them to admit only
     // matches the verifier's disjointness conditions can accept.
-    var rules: std.ArrayListUnmanaged(egraph.Rule) = .{};
+    var rules: std.ArrayListUnmanaged(egraph.Rule) = .empty;
     for (context.registry.conversionRules()) |conv| {
         if (conv.role != .none and conv.role != .alpha) {
             const head = conv.head_term_id orelse continue;
@@ -196,8 +196,8 @@ pub fn run(
         for (conv.premises, 0..) |hyp, idx| {
             premises[idx] = premiseFor(context, &rel_heads, decl, hyp);
         }
-        var bound_slots: std.ArrayListUnmanaged(u32) = .{};
-        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
+        var bound_slots: std.ArrayListUnmanaged(u32) = .empty;
+        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
         var bound_ordinal: u6 = 0;
         for (decl.args, 0..) |arg, slot| {
             if (!arg.bound) continue;
@@ -264,8 +264,8 @@ pub fn run(
     for (context.registry.defConversionRules()) |def_conv| {
         if (def_conv.term_id & def_rule_tag != 0) continue;
         const decl = &context.env.terms.items[def_conv.term_id];
-        var bound_slots: std.ArrayListUnmanaged(u32) = .{};
-        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
+        var bound_slots: std.ArrayListUnmanaged(u32) = .empty;
+        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
         var bound_ordinal: u6 = 0;
         for (decl.args, 0..) |arg, slot| {
             if (!arg.bound) continue;
@@ -319,8 +319,8 @@ pub fn run(
     // dep-deferred designated redex stays unconsumed.
     for (context.registry.computeRules()) |comp| {
         const decl = &context.env.rules.items[comp.rule_id];
-        var bound_slots: std.ArrayListUnmanaged(u32) = .{};
-        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .{};
+        var bound_slots: std.ArrayListUnmanaged(u32) = .empty;
+        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
         var bound_ordinal: u6 = 0;
         for (decl.args, 0..) |arg, slot| {
             if (!arg.bound) continue;
@@ -387,7 +387,7 @@ pub fn run(
     // consult these masks. Dep bits index bound binders in declaration
     // order, same convention as the rule restrictions above.
     {
-        var bound_leaves: std.ArrayListUnmanaged(egraph.LeafId) = .{};
+        var bound_leaves: std.ArrayListUnmanaged(egraph.LeafId) = .empty;
         for (theorem.arg_infos, 0..) |arg, idx| {
             if (!arg.bound) continue;
             try bound_leaves.append(
@@ -397,7 +397,7 @@ pub fn run(
         }
         for (theorem.arg_infos, 0..) |arg, idx| {
             if (arg.bound or arg.deps == 0) continue;
-            var deps: std.ArrayListUnmanaged(egraph.LeafId) = .{};
+            var deps: std.ArrayListUnmanaged(egraph.LeafId) = .empty;
             for (bound_leaves.items, 0..) |leaf, ordinal| {
                 if ((arg.deps >> @intCast(ordinal)) & 1 != 0) {
                     try deps.append(work, leaf);
@@ -1013,7 +1013,7 @@ fn addAcExpr(
     term_id: u32,
     expr_id: ExprId,
 ) error{OutOfMemory}!?*const egraph.Term {
-    var member_exprs: std.ArrayListUnmanaged(ExprId) = .{};
+    var member_exprs: std.ArrayListUnmanaged(ExprId) = .empty;
     try flattenAcExpr(eg.allocator, theorem, term_id, expr_id, &member_exprs);
     const member_terms = try eg.allocator.alloc(
         *const egraph.Term,

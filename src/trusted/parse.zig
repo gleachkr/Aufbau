@@ -304,13 +304,13 @@ pub const MathParseError = union(enum) {
 
 const BinderContext = struct {
     vars: std.StringHashMap(*const Expr),
-    arg_infos: std.ArrayListUnmanaged(ArgInfo) = .{},
-    arg_names: std.ArrayListUnmanaged(?[]const u8) = .{},
-    arg_exprs: std.ArrayListUnmanaged(*const Expr) = .{},
-    bound_names: std.ArrayListUnmanaged([]const u8) = .{},
-    dummy_infos: std.ArrayListUnmanaged(ArgInfo) = .{},
-    dummy_names: std.ArrayListUnmanaged(?[]const u8) = .{},
-    dummy_exprs: std.ArrayListUnmanaged(*const Expr) = .{},
+    arg_infos: std.ArrayListUnmanaged(ArgInfo) = .empty,
+    arg_names: std.ArrayListUnmanaged(?[]const u8) = .empty,
+    arg_exprs: std.ArrayListUnmanaged(*const Expr) = .empty,
+    bound_names: std.ArrayListUnmanaged([]const u8) = .empty,
+    dummy_infos: std.ArrayListUnmanaged(ArgInfo) = .empty,
+    dummy_names: std.ArrayListUnmanaged(?[]const u8) = .empty,
+    dummy_exprs: std.ArrayListUnmanaged(*const Expr) = .empty,
 
     fn init(allocator: std.mem.Allocator) BinderContext {
         return .{ .vars = std.StringHashMap(*const Expr).init(allocator) };
@@ -423,8 +423,8 @@ pub const MM0Parser = struct {
             .allocator = allocator,
             .sort_names = std.StringHashMap(u8).init(allocator),
             .term_names = std.StringHashMap(u32).init(allocator),
-            .sort_infos = .{},
-            .terms = .{},
+            .sort_infos = .empty,
+            .terms = .empty,
             .prefix_notations = std.StringHashMap(PrefixEnv).init(allocator),
             .infix_notations = std.StringHashMap(InfixEnv).init(allocator),
             .term_notations = std.AutoHashMap(u32, Notation).init(allocator),
@@ -439,8 +439,8 @@ pub const MM0Parser = struct {
             .coercion_table = std.mem.zeroes(
                 [MAX_SORTS][MAX_SORTS + 1]CoercionRoute,
             ),
-            .left_delims = [_]bool{false} ** 256,
-            .right_delims = [_]bool{false} ** 256,
+            .left_delims = @splat(false),
+            .right_delims = @splat(false),
         };
     }
 
@@ -896,8 +896,8 @@ pub const MM0Parser = struct {
         self.recordNameContext(name_info);
 
         var ctx = BinderContext.init(self.allocator);
-        var hyps_rev: std.ArrayListUnmanaged(*const Expr) = .{};
-        var hyp_names_rev: std.ArrayListUnmanaged(?[]const u8) = .{};
+        var hyps_rev: std.ArrayListUnmanaged(*const Expr) = .empty;
+        var hyp_names_rev: std.ArrayListUnmanaged(?[]const u8) = .empty;
         self.skipWhitespaceAndComments();
         try self.parseBindersWithHyps(&ctx, &hyps_rev, &hyp_names_rev, .assertion);
 
@@ -969,8 +969,8 @@ pub const MM0Parser = struct {
         ctx: *BinderContext,
         kind: BinderKind,
     ) !void {
-        var ignore_hyps: std.ArrayListUnmanaged(*const Expr) = .{};
-        var ignore_hyp_names: std.ArrayListUnmanaged(?[]const u8) = .{};
+        var ignore_hyps: std.ArrayListUnmanaged(*const Expr) = .empty;
+        var ignore_hyp_names: std.ArrayListUnmanaged(?[]const u8) = .empty;
         try self.parseBindersWithHyps(ctx, &ignore_hyps, &ignore_hyp_names, kind);
         if (ignore_hyps.items.len != 0) return error.UnexpectedHypothesisBinder;
     }
@@ -988,9 +988,9 @@ pub const MM0Parser = struct {
             self.pos += 1;
             self.skipWhitespaceAndComments();
 
-            var names: std.ArrayListUnmanaged([]const u8) = .{};
-            var name_spans: std.ArrayListUnmanaged(MathSpan) = .{};
-            var is_dummy_buf: std.ArrayListUnmanaged(bool) = .{};
+            var names: std.ArrayListUnmanaged([]const u8) = .empty;
+            var name_spans: std.ArrayListUnmanaged(MathSpan) = .empty;
+            var is_dummy_buf: std.ArrayListUnmanaged(bool) = .empty;
             var first_name_span: ?MathSpan = null;
             while (true) {
                 self.skipWhitespaceAndComments();
@@ -1226,7 +1226,7 @@ pub const MM0Parser = struct {
         switch (kind) {
             .prefix => {
                 try self.registerLeadingToken(token);
-                var lits: std.ArrayListUnmanaged(PrefixLit) = .{};
+                var lits: std.ArrayListUnmanaged(PrefixLit) = .empty;
                 if (term.args.len > 0) {
                     for (term.args, 0..) |_, idx| {
                         try lits.append(self.allocator, .{ .variable = .{
@@ -1289,7 +1289,7 @@ pub const MM0Parser = struct {
             self.pos += 1;
             self.skipWhitespaceAndComments();
 
-            var names: std.ArrayListUnmanaged([]const u8) = .{};
+            var names: std.ArrayListUnmanaged([]const u8) = .empty;
             while (true) {
                 self.skipWhitespaceAndComments();
                 if (self.peek() == ':') break;
@@ -1344,7 +1344,7 @@ pub const MM0Parser = struct {
         // infixy only when they immediately follow a variable.
         try self.registerTokenPrec(first.token, first.prec);
         try self.registerLeadingToken(first.token);
-        var lits: std.ArrayListUnmanaged(PrefixLit) = .{};
+        var lits: std.ArrayListUnmanaged(PrefixLit) = .empty;
         var pending_var_index: ?usize = null;
         while (true) {
             self.skipWhitespaceAndComments();
@@ -1802,7 +1802,7 @@ pub const MM0Parser = struct {
                     };
                     return error.PrecMismatch;
                 }
-                var args: std.ArrayListUnmanaged(*const Expr) = .{};
+                var args: std.ArrayListUnmanaged(*const Expr) = .empty;
                 for (term.args) |_| {
                     const arg = try self.parseExpr(
                         cursor,

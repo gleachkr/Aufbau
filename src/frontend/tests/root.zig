@@ -62,7 +62,7 @@ test "proof script parser reads theorem blocks and proof lines" {
 /// A proof block whose first line nests `depth` reference lists
 /// (`r [r [... r [] ...]]`), followed by a plain second line.
 fn nestedRefsBlock(allocator: std.mem.Allocator, depth: usize) ![]u8 {
-    var text: std.ArrayListUnmanaged(u8) = .{};
+    var text: std.ArrayListUnmanaged(u8) = .empty;
     try text.appendSlice(allocator, "demo\n----\nl1: $ c $ by ");
     for (0..depth) |_| try text.appendSlice(allocator, "r [");
     try text.appendNTimes(allocator, ']', depth);

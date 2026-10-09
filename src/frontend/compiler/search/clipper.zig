@@ -52,7 +52,7 @@ pub const ShapeNode = union(enum) {
 };
 
 pub const BitSet = struct {
-    words: std.ArrayListUnmanaged(u64) = .{},
+    words: std.ArrayListUnmanaged(u64) = .empty,
 
     pub fn deinit(self: *BitSet, allocator: std.mem.Allocator) void {
         self.words.deinit(allocator);
@@ -163,7 +163,7 @@ pub const BitSet = struct {
         allocator: std.mem.Allocator,
         bit_count: usize,
     ) ![]ItemId {
-        var result = std.ArrayListUnmanaged(ItemId){};
+        var result = std.ArrayListUnmanaged(ItemId).empty;
         errdefer result.deinit(allocator);
         var bit: usize = 0;
         while (bit < bit_count) : (bit += 1) {
@@ -228,7 +228,7 @@ fn deinitBitSetMap(
 }
 
 const PathInterner = struct {
-    nodes: std.ArrayListUnmanaged(PathNode) = .{},
+    nodes: std.ArrayListUnmanaged(PathNode) = .empty,
     children: std.AutoHashMapUnmanaged(PathStep, PathId) = .empty,
 
     fn init(allocator: std.mem.Allocator) !PathInterner {
@@ -319,7 +319,7 @@ const ActiveWildcards = struct {
 pub const Index = struct {
     allocator: std.mem.Allocator,
     paths: PathInterner,
-    cells: std.ArrayListUnmanaged(PathCell) = .{},
+    cells: std.ArrayListUnmanaged(PathCell) = .empty,
     item_count: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Index {
@@ -393,7 +393,7 @@ pub const Index = struct {
         item: ItemId,
         shape: ShapeNode,
     ) !void {
-        var path = std.ArrayListUnmanaged(ChildIndex){};
+        var path = std.ArrayListUnmanaged(ChildIndex).empty;
         defer path.deinit(self.allocator);
         try self.insertShapeAt(item, shape, &path);
     }

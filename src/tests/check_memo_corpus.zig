@@ -33,8 +33,8 @@ fn analyzeDump(
     if (inlines_sink) compiler.inline_conclusion_sink = &inlines;
     compiler.check_memo = memo;
 
-    var out = std.ArrayListUnmanaged(u8){};
-    const writer = out.writer(arena);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const writer = &out.writer;
     if (compiler.analyze()) |_| {
         try writer.writeAll("result: ok\n");
     } else |err| {
@@ -81,7 +81,7 @@ fn analyzeDump(
             item.conclusion,
         });
     }
-    return try allocator.dupe(u8, out.items);
+    return try allocator.dupe(u8, out.written());
 }
 
 fn dumpSpan(writer: anytype, span: ?ProofScript.Span) !void {
@@ -135,7 +135,7 @@ const Edit = struct {
 };
 
 fn applyEdit(allocator: std.mem.Allocator, source: []const u8, edit: Edit) ![]u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     try out.appendSlice(allocator, source[0..edit.start]);
     try out.appendSlice(allocator, edit.text);
     try out.appendSlice(allocator, source[edit.end..]);
@@ -177,7 +177,7 @@ fn proofBlocks(
     allocator: std.mem.Allocator,
     proof_text: []const u8,
 ) ![]const ProofScript.ProofBlock {
-    var blocks = std.ArrayListUnmanaged(ProofScript.ProofBlock){};
+    var blocks = std.ArrayListUnmanaged(ProofScript.ProofBlock).empty;
     var parser = ProofScript.Parser.initLenient(allocator, proof_text);
     while (true) {
         const item = parser.nextItem() catch {
@@ -193,17 +193,18 @@ fn proofBlocks(
 }
 
 fn fixtureStems(allocator: std.mem.Allocator) ![]const []const u8 {
-    var stems = std.ArrayListUnmanaged([]const u8){};
-    var dir = try std.fs.cwd().openDir("tests/proof_cases", .{ .iterate = true });
-    defer dir.close();
+    var stems = std.ArrayListUnmanaged([]const u8).empty;
+    const io = std.testing.io;
+    var dir = try std.Io.Dir.cwd().openDir(io, "tests/proof_cases", .{ .iterate = true });
+    defer dir.close(io);
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         if (entry.kind != .file) continue;
         if (!std.mem.endsWith(u8, entry.name, ".auf")) continue;
         const stem = entry.name[0 .. entry.name.len - ".auf".len];
         const mm0_name = try std.fmt.allocPrint(allocator, "{s}.mm0", .{stem});
         defer allocator.free(mm0_name);
-        dir.access(mm0_name, .{}) catch continue;
+        dir.access(io, mm0_name, .{}) catch continue;
         try stems.append(allocator, try allocator.dupe(u8, stem));
     }
     std.sort.pdq([]const u8, stems.items, {}, struct {
@@ -227,7 +228,7 @@ fn runFixture(
     const mm0_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.mm0", .{stem});
     const proof_path = try std.fmt.allocPrint(arena, "tests/proof_cases/{s}.auf", .{stem});
     var failure: ?mm0.Imports.LoadFailure = null;
-    const pair = mm0.Imports.loadPair(arena, mm0_path, proof_path, &failure) catch return;
+    const pair = mm0.Imports.loadPair(std.testing.io, arena, mm0_path, proof_path, &failure) catch return;
     const mm0_text = pair.mm0.text;
     const proof_text = (pair.proof orelse return).text;
 

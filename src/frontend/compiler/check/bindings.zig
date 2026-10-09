@@ -837,7 +837,7 @@ fn validateHoleyAssertionAgainstCandidate(
         return expected_line;
     }
 
-    var scratch_checked = std.ArrayListUnmanaged(CheckedLine){};
+    var scratch_checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer scratch_checked.deinit(allocator);
     const normalized_line = try Normalize.normalizeExprForSnapshot(
         allocator,

@@ -316,7 +316,7 @@ pub fn generateTopLevel(
             session.allocator,
             theorem_vars,
         );
-        var tokens = std.ArrayListUnmanaged([]const u8){};
+        var tokens = std.ArrayListUnmanaged([]const u8).empty;
         defer tokens.deinit(session.allocator);
         var token_iter = session.context.sort_vars.tokens.keyIterator();
         while (token_iter.next()) |token| {
@@ -466,7 +466,7 @@ pub fn generateTopLevel(
 
     const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
     defer session.allocator.free(schedule);
-    var applications = std.ArrayListUnmanaged(RuleApplication){};
+    var applications = std.ArrayListUnmanaged(RuleApplication).empty;
     const ladder = try runPhaseLadder(
         &driver,
         goal_expr,
@@ -723,7 +723,7 @@ fn buildSchedule(
     max_depth: usize,
     gates: LadderGates,
 ) ![]const Cell {
-    var cells = std.ArrayListUnmanaged(Cell){};
+    var cells = std.ArrayListUnmanaged(Cell).empty;
     errdefer cells.deinit(allocator);
     for (1..max_depth + 1) |depth| {
         for (0..core_phase_count) |index| {
@@ -1099,7 +1099,7 @@ fn hookSolveOpen(
         driver.current_depth + 1
     else
         driver.current_depth;
-    var proofs = std.ArrayListUnmanaged(OpenProof){};
+    var proofs = std.ArrayListUnmanaged(OpenProof).empty;
     defer proofs.deinit(driver.scratch);
     try collectOpenProofs(driver, target, target_theorem, store, depth, &proofs);
     for (proofs.items) |proof| {
@@ -1575,7 +1575,7 @@ fn canonicalOpenKey(
     expr: ExprId,
     bans: *const MetaDepBans,
 ) ![]u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     errdefer out.deinit(allocator);
     var numbering = std.AutoHashMapUnmanaged(u32, u32){};
     defer numbering.deinit(allocator);

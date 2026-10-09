@@ -43,7 +43,7 @@ pub fn appendCmd(
     data: u32,
 ) !void {
     const op_int: u8 = switch (@typeInfo(@TypeOf(op))) {
-        .@"enum" => @intFromEnum(op),
+        .@"enum" => @backingInt(op),
         .comptime_int, .int => @intCast(op),
         else => @compileError("unsupported opcode type"),
     };
@@ -95,7 +95,7 @@ pub fn buildFile(
     theorems: []const TheoremRecord,
     statements: []const Statement,
 ) ![]u8 {
-    var bytes = std.ArrayListUnmanaged(u8){};
+    var bytes = std.ArrayListUnmanaged(u8).empty;
     errdefer bytes.deinit(allocator);
 
     try bytes.resize(allocator, @sizeOf(Header));

@@ -271,7 +271,7 @@ pub const Verifier = struct {
         while (true) {
             const cmd = try Cmd.read(self.file_bytes, pos, limit);
             pos += cmd.size;
-            switch (@as(ProofCmd, @enumFromInt(cmd.op))) {
+            switch (@as(ProofCmd, @fromBackingInt(@intCast(cmd.op)))) {
                 .End => {
                     if (pos != limit) return error.BadStatementLength;
                     break;
@@ -388,7 +388,7 @@ pub const Verifier = struct {
             const cmd = try Cmd.read(self.file_bytes, pos, self.file_bytes.len);
             pos += cmd.size;
 
-            switch (@as(StmtCmd, @enumFromInt(cmd.op))) {
+            switch (@as(StmtCmd, @fromBackingInt(@intCast(cmd.op)))) {
                 .End => break,
                 .Sort => {
                     const stmt_end = try self.beginStatement(

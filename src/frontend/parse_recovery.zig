@@ -31,16 +31,16 @@ pub const ParseError = core.ParseError || error{
 
 pub const MM0Parser = struct {
     core: core.MM0Parser,
-    pending_annotations: std.ArrayListUnmanaged([]const u8) = .{},
-    pending_annotation_spans: std.ArrayListUnmanaged(MathSpan) = .{},
+    pending_annotations: std.ArrayListUnmanaged([]const u8) = .empty,
+    pending_annotation_spans: std.ArrayListUnmanaged(MathSpan) = .empty,
     last_annotations: []const []const u8 = &.{},
     last_annotation_spans: []const MathSpan = &.{},
     // Annotations discarded because a statement the parser consumes silently
     // (a notation declaration, typically) intervened before the next public
     // statement. Accumulated so the compiler can warn instead of losing them
     // without a trace; consumers clear via clearDroppedAnnotations.
-    dropped_annotations: std.ArrayListUnmanaged([]const u8) = .{},
-    dropped_annotation_spans: std.ArrayListUnmanaged(MathSpan) = .{},
+    dropped_annotations: std.ArrayListUnmanaged([]const u8) = .empty,
+    dropped_annotation_spans: std.ArrayListUnmanaged(MathSpan) = .empty,
     diagnostic_name_override: ?[]const u8 = null,
     diagnostic_span_override: ?MathSpan = null,
     math_span_override: ?MathSpan = null,
@@ -403,7 +403,7 @@ pub const MM0Parser = struct {
         self.clearDiagnosticOverrides();
         self.diagnostic_name_override = stmt.name;
 
-        var scanned = std.ArrayListUnmanaged(ScannedFillerDummy){};
+        var scanned = std.ArrayListUnmanaged(ScannedFillerDummy).empty;
         defer scanned.deinit(self.core.allocator);
         try self.scanFillerDummyTail(tail, tail_start, &scanned);
 

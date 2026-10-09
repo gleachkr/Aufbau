@@ -477,7 +477,7 @@ pub const Parser = struct {
             header_tail_end -= 1;
         }
         const header_tail_raw = self.src[header_tail_start..header_tail_end];
-        const header_tail = std.mem.trimLeft(u8, header_tail_raw, " \t\r");
+        const header_tail = std.mem.trimStart(u8, header_tail_raw, " \t\r");
         const trimmed_start = header_tail_end - header_tail.len;
 
         try self.expect('=');
@@ -611,7 +611,7 @@ pub const Parser = struct {
 
     fn parseProofLines(self: *Parser) ![]const ProofLine {
         self.pos = self.skipProofLineTriviaFrom(self.pos);
-        var lines = std.ArrayListUnmanaged(ProofLine){};
+        var lines = std.ArrayListUnmanaged(ProofLine).empty;
         while (true) {
             const line_start = self.skipProofLineTriviaFrom(self.pos);
             self.pos = line_start;
@@ -842,7 +842,7 @@ pub const Parser = struct {
     }
 
     fn parseArgBindings(self: *Parser) ![]const ArgBinding {
-        var bindings = std.ArrayListUnmanaged(ArgBinding){};
+        var bindings = std.ArrayListUnmanaged(ArgBinding).empty;
         self.skipProofWhitespace();
         if (self.peek() == ')') {
             return try bindings.toOwnedSlice(self.allocator);
@@ -885,8 +885,8 @@ pub const Parser = struct {
     /// search parameter. Real rule applications never come through here, so
     /// their strict `:=` grammar (and its error spans) is untouched.
     fn parsePlaceholderBindings(self: *Parser) !PlaceholderBindings {
-        var bindings = std.ArrayListUnmanaged(ArgBinding){};
-        var params = std.ArrayListUnmanaged(SearchParam){};
+        var bindings = std.ArrayListUnmanaged(ArgBinding).empty;
+        var params = std.ArrayListUnmanaged(SearchParam).empty;
         self.skipProofWhitespace();
         if (self.peek() == ')') {
             return .{
@@ -945,7 +945,7 @@ pub const Parser = struct {
     }
 
     fn parseRefs(self: *Parser) ![]const Ref {
-        var refs = std.ArrayListUnmanaged(Ref){};
+        var refs = std.ArrayListUnmanaged(Ref).empty;
         self.skipProofWhitespace();
         if (self.peek() == ']') {
             return try refs.toOwnedSlice(self.allocator);
@@ -1288,7 +1288,7 @@ pub const Parser = struct {
     fn skipBlockTriviaAndCaptureAnnotations(
         self: *Parser,
     ) ![]const []const u8 {
-        var annotations = std.ArrayListUnmanaged([]const u8){};
+        var annotations = std.ArrayListUnmanaged([]const u8).empty;
         while (true) {
             const line_start = self.pos;
             self.skipHorizontalSpace();
@@ -1502,7 +1502,7 @@ pub const Parser = struct {
         var i = line_start;
         while (i < self.src.len and isHorizontalSpace(self.src[i])) : (i += 1) {}
         const line_end = self.lineEnd(i);
-        const trimmed = std.mem.trimRight(
+        const trimmed = std.mem.trimEnd(
             u8,
             self.src[i..line_end],
             " \t\r",

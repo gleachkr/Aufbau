@@ -43,17 +43,17 @@ const FreshenDecl = Metadata.FreshenDecl;
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 
 pub const Output = struct {
-    sort_names: std.ArrayListUnmanaged([]const u8) = .{},
-    sorts: std.ArrayListUnmanaged(Sort) = .{},
-    terms: std.ArrayListUnmanaged(TermRecord) = .{},
-    theorems: std.ArrayListUnmanaged(TheoremRecord) = .{},
-    statements: std.ArrayListUnmanaged(Statement) = .{},
+    sort_names: std.ArrayListUnmanaged([]const u8) = .empty,
+    sorts: std.ArrayListUnmanaged(Sort) = .empty,
+    terms: std.ArrayListUnmanaged(TermRecord) = .empty,
+    theorems: std.ArrayListUnmanaged(TheoremRecord) = .empty,
+    statements: std.ArrayListUnmanaged(Statement) = .empty,
 };
 
 pub const ProofItemStream = struct {
     allocator: std.mem.Allocator,
     parser: ProofScriptParser,
-    pending: std.ArrayListUnmanaged(TopLevelItem) = .{},
+    pending: std.ArrayListUnmanaged(TopLevelItem) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, source: []const u8) ProofItemStream {
         return .{
@@ -636,7 +636,7 @@ pub fn collectAnchoredLocalProofItems(
     const proofs = if (proof_stream.*) |*actual| actual else return &.{};
     const header = parser.peekNextPublicStmtHeader() orelse return &.{};
 
-    var locals = std.ArrayListUnmanaged(TopLevelItem){};
+    var locals = std.ArrayListUnmanaged(TopLevelItem).empty;
     defer locals.deinit(allocator);
 
     while (true) {

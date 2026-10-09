@@ -4,7 +4,7 @@ const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
 
-const types = lsp.types;
+const types = lsp.types.flat;
 const LspIndex = mm0.Frontend.LspIndex;
 const Search = mm0.CompilerSupport.Search;
 const Unpack = mm0.CompilerSupport.Unpack;
@@ -592,7 +592,7 @@ fn applicableRuleCompletions(
     defer suggestions.deinit();
     if (suggestions.target_span == null) return completions;
 
-    var filtered = std.ArrayListUnmanaged(LspIndex.CompletionItem){};
+    var filtered = std.ArrayListUnmanaged(LspIndex.CompletionItem).empty;
     for (completions) |item| {
         // The tactics are what you write *instead of* naming a rule, so the
         // search has no opinion on them and the filter must not eat them.
@@ -636,6 +636,7 @@ fn searchOffersRule(
 
 pub const Handler = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     transport: *lsp.Transport,
     docs: std.StringHashMapUnmanaged(OpenDocument),
     nav_cache: std.StringHashMapUnmanaged(NavigationCacheEntry),
@@ -652,10 +653,12 @@ pub const Handler = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         transport: *lsp.Transport,
     ) Handler {
         return .{
             .allocator = allocator,
+            .io = io,
             .transport = transport,
             .docs = .empty,
             .nav_cache = .empty,
@@ -733,7 +736,7 @@ pub const Handler = struct {
                 .@"utf-32" => .@"utf-32",
             },
             .textDocumentSync = .{
-                .TextDocumentSyncOptions = .{
+                .text_document_sync_options = .{
                     .openClose = true,
                     .change = .Full,
                 },
@@ -760,7 +763,7 @@ pub const Handler = struct {
                 null,
         };
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             // The validator only understands static capabilities. Validate
             // against the superset of implemented handlers while returning
             // the client-specific capabilities above.
@@ -824,12 +827,12 @@ pub const Handler = struct {
     ) !void {
         const doc = self.docs.getPtr(params.textDocument.uri) orelse return;
 
-        var buffer = std.ArrayListUnmanaged(u8){};
+        var buffer = std.ArrayListUnmanaged(u8).empty;
         try buffer.appendSlice(arena, doc.text);
 
         for (params.contentChanges) |change| {
             switch (change) {
-                .literal_0 => |partial| {
+                .text_document_content_change_partial => |partial| {
                     const loc = lsp_diagnostics.offsets.rangeToLoc(
                         buffer.items,
                         partial.range,
@@ -842,7 +845,7 @@ pub const Handler = struct {
                         partial.text,
                     );
                 },
-                .literal_1 => |whole| {
+                .text_document_content_change_whole_document => |whole| {
                     buffer.clearRetainingCapacity();
                     try buffer.appendSlice(arena, whole.text);
                 },
@@ -911,7 +914,7 @@ pub const Handler = struct {
         const hover = nav.snapshot.hoverAt(nav.document, offset) orelse return null;
         return .{
             .contents = .{
-                .MarkupContent = .{
+                .markup_content = .{
                     .kind = .markdown,
                     .value = hover.markdown,
                 },
@@ -966,7 +969,7 @@ pub const Handler = struct {
         // for reasons no client-side filter could reconstruct; a token holding
         // a `?` drops the rules entirely. Saying `isIncomplete` asks the
         // client to re-query per keystroke instead of reusing a stale list.
-        return .{ .CompletionList = .{
+        return .{ .completion_list = .{
             .isIncomplete = true,
             .items = items,
         } };
@@ -987,7 +990,7 @@ pub const Handler = struct {
             self.offset_encoding,
         ) orelse return null;
 
-        var actions = std.ArrayListUnmanaged(CodeActionItem){};
+        var actions = std.ArrayListUnmanaged(CodeActionItem).empty;
         if (try self.suggestionsForUnit(arena, nav, offset)) |suggestions| {
             for (suggestions) |suggestion| {
                 const action = try self.searchCodeAction(
@@ -995,14 +998,14 @@ pub const Handler = struct {
                     nav,
                     suggestion,
                 ) orelse continue;
-                try actions.append(arena, .{ .CodeAction = action });
+                try actions.append(arena, .{ .code_action = action });
             }
         }
         if (try self.unpackCodeAction(arena, nav, offset)) |action| {
-            try actions.append(arena, .{ .CodeAction = action });
+            try actions.append(arena, .{ .code_action = action });
         }
         if (try self.fillHolesCodeAction(arena, nav, offset)) |action| {
-            try actions.append(arena, .{ .CodeAction = action });
+            try actions.append(arena, .{ .code_action = action });
         }
         if (actions.items.len == 0) return null;
         return try actions.toOwnedSlice(arena);
@@ -1226,7 +1229,7 @@ pub const Handler = struct {
         errdefer owned_key.deinit(self.allocator);
         const owned_uri = try self.allocator.dupe(u8, proof_uri);
         errdefer self.allocator.free(owned_uri);
-        var statuses = std.ArrayListUnmanaged(PlaceholderOutcome){};
+        var statuses = std.ArrayListUnmanaged(PlaceholderOutcome).empty;
         errdefer statuses.deinit(self.allocator);
         try statuses.append(self.allocator, outcome);
         try self.search_status.put(self.allocator, owned_uri, .{
@@ -1342,7 +1345,7 @@ pub const Handler = struct {
             nav.snapshot.outline(nav.document),
             self.offset_encoding,
         );
-        return .{ .array_of_DocumentSymbol = symbols };
+        return .{ .document_symbols = symbols };
     }
 
     pub fn @"textDocument/definition"(
@@ -1366,7 +1369,7 @@ pub const Handler = struct {
             definition.selection_range,
             self.offset_encoding,
         ) orelse return null;
-        return .{ .Definition = .{ .Location = location } };
+        return .{ .definition = .{ .location = location } };
     }
 
     pub fn @"textDocument/implementation"(
@@ -1390,7 +1393,7 @@ pub const Handler = struct {
             implementation.selection_range,
             self.offset_encoding,
         ) orelse return null;
-        return .{ .Definition = .{ .Location = location } };
+        return .{ .definition = .{ .location = location } };
     }
 
     pub fn @"textDocument/references"(
@@ -1743,7 +1746,7 @@ pub const Handler = struct {
             if (entry.key.eql(states)) outcomes = entry.statuses.items;
         }
 
-        var diagnostics = std.ArrayListUnmanaged(LocatedDiagnostic){};
+        var diagnostics = std.ArrayListUnmanaged(LocatedDiagnostic).empty;
         for (notices) |notice| {
             // A rejected parameter is an error; it never blocks the search,
             // which simply does not apply it.
@@ -1831,7 +1834,7 @@ pub const Handler = struct {
                 .severity = severity,
                 .source = LSP_SERVER_NAME,
                 .code = .{ .string = SEARCH_STATUS_CODE },
-                .message = message,
+                .message = .{ .string = message },
             },
         });
     }
@@ -1860,7 +1863,7 @@ pub const Handler = struct {
             };
         }
 
-        const disk = try readFileWithMtimeAlloc(arena, path);
+        const disk = try readFileWithMtimeAlloc(self.io, arena, path);
         return .{
             .uri = uri,
             .text = disk.text,
@@ -1890,7 +1893,7 @@ pub const Handler = struct {
             };
         }
         if (open_only) return null;
-        const disk = readFileWithMtimeAlloc(arena, path) catch |err| {
+        const disk = readFileWithMtimeAlloc(self.io, arena, path) catch |err| {
             // On wasm there is no disk; the read reports FileNotFound.
             if (err == error.OutOfMemory) return error.OutOfMemory;
             return null;
@@ -1908,7 +1911,7 @@ pub const Handler = struct {
     fn pathExists(self: *Handler, arena: std.mem.Allocator, path: []const u8) bool {
         const uri = pathToUri(arena, path) catch return false;
         if (self.docs.contains(uri)) return true;
-        _ = statMtimeAlloc(path) catch return false;
+        _ = statMtimeAlloc(self.io, path) catch return false;
         return true;
     }
 
@@ -1972,7 +1975,7 @@ pub const Handler = struct {
             &failure,
         );
 
-        var failures = std.ArrayListUnmanaged(UnitFailure){};
+        var failures = std.ArrayListUnmanaged(UnitFailure).empty;
         for (unit.failures) |info| {
             try recordJoinFailure(arena, &loader, &failures, info);
         }
@@ -2047,7 +2050,7 @@ pub const Handler = struct {
         mm0_omitted: ?mm0.CompilerDiagnostic,
         extra_located: []const LocatedDiagnostic,
     ) !void {
-        var all = std.ArrayListUnmanaged(LocatedDiagnostic){};
+        var all = std.ArrayListUnmanaged(LocatedDiagnostic).empty;
         try all.appendSlice(arena, try lsp_diagnostics.locateCompilerDiagnostics(
             arena,
             unit.diagnosticContext(),
@@ -2070,14 +2073,14 @@ pub const Handler = struct {
                     ),
                     .severity = .Error,
                     .source = LSP_SERVER_NAME,
-                    .message = failure.message,
+                    .message = .{ .string = failure.message },
                 },
             });
         }
         try all.appendSlice(arena, extra_located);
 
         // Proof root first, then the theory root, then everything else.
-        var targets = std.ArrayListUnmanaged(UnitFile){};
+        var targets = std.ArrayListUnmanaged(UnitFile).empty;
         if (unit.proof) |proof| try targets.append(arena, proof.rootFile());
         try targets.append(arena, unit.mm0.rootFile());
         for (unit.mm0.files, 0..) |file, index| {
@@ -2089,8 +2092,8 @@ pub const Handler = struct {
             }
         }
 
-        var deps = std.ArrayListUnmanaged([]const u8){};
-        var published = std.ArrayListUnmanaged([]const u8){};
+        var deps = std.ArrayListUnmanaged([]const u8).empty;
+        var published = std.ArrayListUnmanaged([]const u8).empty;
         for (targets.items, 0..) |target, position| {
             // A file reached twice (a proof file both paired and included)
             // publishes once.
@@ -2102,7 +2105,7 @@ pub const Handler = struct {
 
             const is_root = unit.isRootUri(target.uri);
             if (!is_root) try deps.append(arena, target.uri);
-            var diagnostics = std.ArrayListUnmanaged(types.Diagnostic){};
+            var diagnostics = std.ArrayListUnmanaged(types.Diagnostic).empty;
             for (all.items) |located| {
                 if (!std.mem.eql(u8, located.uri, target.uri)) continue;
                 try diagnostics.append(arena, located.diagnostic);
@@ -2196,7 +2199,7 @@ pub const Handler = struct {
         arena: std.mem.Allocator,
         uri: []const u8,
     ) ![]const []const u8 {
-        var roots = std.ArrayListUnmanaged([]const u8){};
+        var roots = std.ArrayListUnmanaged([]const u8).empty;
         var it = self.units.iterator();
         while (it.next()) |entry| {
             if (!uriListContains(entry.value_ptr.deps, uri)) continue;
@@ -2407,7 +2410,7 @@ pub const Handler = struct {
             .range = zeroRange(text, self.offset_encoding),
             .severity = .Error,
             .source = LSP_SERVER_NAME,
-            .message = message,
+            .message = .{ .string = message },
         };
         try self.publishDiagnostics(arena, uri, version, diagnostics);
     }
@@ -2429,6 +2432,7 @@ pub const Handler = struct {
         diagnostics: []const types.Diagnostic,
     ) !void {
         try self.transport.writeNotification(
+            self.io,
             arena,
             "textDocument/publishDiagnostics",
             types.PublishDiagnosticsParams,
@@ -2507,7 +2511,7 @@ pub const DocumentKind = enum {
     other,
 };
 
-pub fn run(allocator: std.mem.Allocator) !void {
+pub fn run(io: std.Io, allocator: std.mem.Allocator) !void {
     var read_buffer: [4096]u8 = undefined;
     var stdio_transport = lsp.Transport.Stdio.init(
         &read_buffer,
@@ -2516,10 +2520,11 @@ pub fn run(allocator: std.mem.Allocator) !void {
     );
     const transport: *lsp.Transport = &stdio_transport.transport;
 
-    var handler = Handler.init(allocator, transport);
+    var handler = Handler.init(allocator, io, transport);
     defer handler.deinit();
 
     try lsp.basic_server.run(
+        io,
         allocator,
         transport,
         &handler,
@@ -2599,51 +2604,45 @@ const ReadFileWithMtime = struct {
     mtime: i128,
 };
 
+fn openPath(io: std.Io, path: []const u8) !std.Io.File {
+    return if (std.fs.path.isAbsolute(path))
+        std.Io.Dir.openFileAbsolute(io, path, .{})
+    else
+        std.Io.Dir.cwd().openFile(io, path, .{});
+}
+
 fn readFileWithMtimeAlloc(
+    io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
 ) !ReadFileWithMtime {
     if (builtin.os.tag == .freestanding) {
         return error.FileNotFound;
     } else {
-        const file = if (std.fs.path.isAbsolute(path))
-            try std.fs.openFileAbsolute(path, .{})
-        else
-            try std.fs.cwd().openFile(path, .{});
-        defer file.close();
+        const file = try openPath(io, path);
+        defer file.close(io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io);
+        var buffer: [4096]u8 = undefined;
+        var reader = file.reader(io, &buffer);
         return .{
-            .text = try file.readToEndAlloc(
-                allocator,
-                std.math.maxInt(usize),
-            ),
-            .mtime = stat.mtime,
+            .text = try reader.interface.allocRemaining(allocator, .unlimited),
+            .mtime = stat.mtime.nanoseconds,
         };
     }
-}
-
-fn readFileAlloc(
-    allocator: std.mem.Allocator,
-    path: []const u8,
-) ![]u8 {
-    return (try readFileWithMtimeAlloc(allocator, path)).text;
 }
 
 /// The mtime of `path` without reading its contents — used to build a search
 /// cache key cheaply on a hit. Reports the same mtime as `readFileWithMtimeAlloc`
 /// for an unchanged file (both stat the same opened handle).
-fn statMtimeAlloc(path: []const u8) !i128 {
+fn statMtimeAlloc(io: std.Io, path: []const u8) !i128 {
     if (builtin.os.tag == .freestanding) {
         return error.FileNotFound;
     } else {
-        const file = if (std.fs.path.isAbsolute(path))
-            try std.fs.openFileAbsolute(path, .{})
-        else
-            try std.fs.cwd().openFile(path, .{});
-        defer file.close();
-        const stat = try file.stat();
-        return stat.mtime;
+        const file = try openPath(io, path);
+        defer file.close(io);
+        const stat = try file.stat(io);
+        return stat.mtime.nanoseconds;
     }
 }
 

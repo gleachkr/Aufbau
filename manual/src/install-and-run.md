@@ -31,7 +31,7 @@ build from source, as described below.
 Building Aufbau requires:
 
 - Git
-- Zig 0.15.2
+- Zig 0.17.0
 
 Clone the repository, including its submodules, and make a release build:
 

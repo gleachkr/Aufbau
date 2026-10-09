@@ -8,7 +8,7 @@ Try the [web demo](https://gleachkr.github.io/Aufbau/).
 
 ## Build
 
-Aufbau requires Zig 0.15.2.
+Aufbau requires Zig 0.17.0.
 
 ```sh
 git clone --recurse-submodules https://github.com/gleachkr/Aufbau.git

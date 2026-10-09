@@ -69,9 +69,9 @@ pub const Retry = struct {
 
     /// True when the retry sets the parameter called `name`.
     pub fn sets(self: Retry, name: []const u8) bool {
-        inline for (@typeInfo(Retry).@"struct".fields) |field| {
-            if (@field(self, field.name) != null and
-                std.mem.eql(u8, field.name, name)) return true;
+        inline for (comptime std.meta.fieldNames(Retry)) |field_name| {
+            if (@field(self, field_name) != null and
+                std.mem.eql(u8, field_name, name)) return true;
         }
         return false;
     }
@@ -79,11 +79,11 @@ pub const Retry = struct {
     /// Write the retry as `name: value` pairs joined by ", ".
     pub fn writeParams(self: Retry, w: anytype) !void {
         var first = true;
-        inline for (@typeInfo(Retry).@"struct".fields) |field| {
-            if (@field(self, field.name)) |value| {
+        inline for (comptime std.meta.fieldNames(Retry)) |field_name| {
+            if (@field(self, field_name)) |value| {
                 if (!first) try w.writeAll(", ");
                 first = false;
-                try w.print(field.name ++ ": {d}", .{value});
+                try w.print(field_name ++ ": {d}", .{value});
             }
         }
     }

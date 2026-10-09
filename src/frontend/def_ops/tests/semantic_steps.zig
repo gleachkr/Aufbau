@@ -33,7 +33,7 @@ test "semantic step enumeration finds root def rewrite and acui moves" {
     );
     defer ctx.deinit();
 
-    var mono_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var mono_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer mono_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -59,7 +59,7 @@ test "semantic step enumeration finds root def rewrite and acui moves" {
     // Non-rewriting heads can contain rewritable subtrees too.
     try std.testing.expect(hasNormalizeBigStep(mono_steps.items));
 
-    var comp_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var comp_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer comp_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -87,7 +87,7 @@ test "semantic step enumeration finds root def rewrite and acui moves" {
         comp_steps.items[comp_steps.items.len - 1] == .normalize_rewrites,
     );
 
-    var ctx_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var ctx_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer ctx_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -116,7 +116,7 @@ test "semantic step enumeration is registry-gated" {
     );
     defer ctx.deinit();
 
-    var mono_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var mono_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer mono_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -131,7 +131,7 @@ test "semantic step enumeration is registry-gated" {
         ),
     );
 
-    var comp_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var comp_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer comp_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -140,7 +140,7 @@ test "semantic step enumeration is registry-gated" {
     );
     try std.testing.expectEqual(@as(usize, 0), comp_steps.items.len);
 
-    var ctx_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var ctx_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer ctx_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -172,7 +172,7 @@ test "semantic step enumeration handles symbolic roots" {
         .args = mono_args,
     } });
 
-    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer symbolic_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesSymbolic(
         &ctx,
@@ -187,7 +187,7 @@ test "semantic step enumeration handles symbolic roots" {
         &ctx,
         .{ .fixed = fixture.comp_expr },
     );
-    var fixed_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var fixed_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer fixed_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesSymbolic(
         &ctx,
@@ -217,7 +217,7 @@ test "semantic step enumeration ignores placeholder roots" {
         "mor",
     );
 
-    var expr_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var expr_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer expr_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesExpr(
         &ctx,
@@ -230,7 +230,7 @@ test "semantic step enumeration ignores placeholder roots" {
         &ctx,
         .{ .fixed = placeholder },
     );
-    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer symbolic_steps.deinit(fixture.arena.allocator());
     try Testing.collectSemanticStepCandidatesSymbolic(
         &ctx,

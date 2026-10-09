@@ -112,13 +112,13 @@ pub fn matchExpr(
                     state,
                 );
             }
-            var states = std.ArrayListUnmanaged(BranchState){};
+            var states = std.ArrayListUnmanaged(BranchState).empty;
             try states.append(
                 self.allocator,
                 try BranchStateOps.cloneState(self, state),
             );
             for (app.args, actual_app.args) |tmpl_arg, actual_arg| {
-                var next = std.ArrayListUnmanaged(BranchState){};
+                var next = std.ArrayListUnmanaged(BranchState).empty;
                 for (states.items) |current| {
                     const matches = try matchExpr(
                         self,

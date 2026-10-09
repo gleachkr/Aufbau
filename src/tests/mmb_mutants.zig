@@ -335,22 +335,18 @@ fn readMutantFile(
         .{name},
     );
     defer allocator.free(path);
-    return try std.fs.cwd().readFileAllocOptions(
-        allocator,
+    return try std.Io.Dir.cwd().readFileAllocOptions(
+        std.testing.io,
         path,
-        std.math.maxInt(usize),
-        null,
+        allocator,
+        .unlimited,
         std.mem.Alignment.of(mm0.Arg),
         null,
     );
 }
 
 fn buildSpec(allocator: std.mem.Allocator, mutant: Mutant) ![]u8 {
-    var spec = try std.fs.cwd().readFileAlloc(
-        allocator,
-        "tests/mmb_mutants/tutorial.mm0",
-        std.math.maxInt(usize),
-    );
+    var spec = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/mmb_mutants/tutorial.mm0", allocator, .unlimited);
     for (mutant.spec_edits) |edit| {
         const next = try std.mem.replaceOwned(u8, allocator, spec, edit.find, edit.replace);
         if (std.mem.eql(u8, next, spec)) return error.SpecEditMissed;
@@ -384,35 +380,42 @@ fn runMm0c(
     mmb: []const u8,
     spec: []const u8,
 ) !?struct { term: std.process.Child.Term, stderr: []u8 } {
-    try dir.dir.writeFile(.{ .sub_path = "mutant.mmb", .data = mmb });
-    const mmb_path = try dir.dir.realpathAlloc(allocator, "mutant.mmb");
+    const io = std.testing.io;
+    try dir.dir.writeFile(io, .{ .sub_path = "mutant.mmb", .data = mmb });
+    const mmb_path = try dir.dir.realPathFileAlloc(io, "mutant.mmb", allocator);
     defer allocator.free(mmb_path);
 
-    var child = std.process.Child.init(&.{ "mm0-c", mmb_path }, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch |err| switch (err) {
+    var child = std.process.spawn(io, .{
+        .argv = &.{ "mm0-c", mmb_path },
+        .stdin = .pipe,
+        .stdout = .pipe,
+        .stderr = .pipe,
+    }) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
+    defer child.kill(io);
     // The spec fits in the pipe buffer, so writing it before reading
     // mm0-c's output cannot deadlock. mm0-c rejects a bad header without
-    // reading the spec at all, and may exit before the write.
-    child.stdin.?.writeAll(spec) catch |err| switch (err) {
-        error.BrokenPipe => {},
-        else => return err,
-    };
-    child.stdin.?.close();
+    // reading the spec at all, and may exit before the write (a broken
+    // pipe), so a failed write is not an error here.
+    child.stdin.?.writeStreamingAll(io, spec) catch {};
+    child.stdin.?.close(io);
     child.stdin = null;
 
-    var stdout: std.ArrayListUnmanaged(u8) = .{};
-    defer stdout.deinit(allocator);
-    var stderr: std.ArrayListUnmanaged(u8) = .{};
-    errdefer stderr.deinit(allocator);
-    try child.collectOutput(allocator, &stdout, &stderr, 1 << 20);
-    const term = try child.wait();
-    return .{ .term = term, .stderr = try stderr.toOwnedSlice(allocator) };
+    var buffers: std.Io.File.MultiReader.Buffer(2) = undefined;
+    var output: std.Io.File.MultiReader = undefined;
+    output.init(allocator, io, buffers.toStreams(), &.{ child.stdout.?, child.stderr.? });
+    defer output.deinit();
+    while (output.fill(64, .none)) |_| {
+        if (output.reader(1).buffered().len > 1 << 20) return error.StreamTooLong;
+    } else |err| switch (err) {
+        error.EndOfStream => {},
+        else => |e| return e,
+    }
+    try output.checkAnyError();
+    const term = try child.wait(io);
+    return .{ .term = term, .stderr = try output.toOwnedSlice(1) };
 }
 
 test "mmb mutants: unmodified tutorial verifies" {
@@ -454,7 +457,7 @@ test "mmb mutants: each mutant is rejected as mm0-c rejects it" {
         const oracle = try runMm0c(allocator, dir, mmb, spec) orelse continue;
         defer allocator.free(oracle.stderr);
         const rejected = switch (oracle.term) {
-            .Exited => |code| code != 0,
+            .exited => |code| code != 0,
             else => true,
         };
         if (!rejected or std.mem.indexOf(u8, oracle.stderr, mutant.mm0c) == null) {

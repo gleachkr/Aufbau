@@ -179,10 +179,10 @@ pub fn run(
     var marker_options = search_options;
     Search.tunables.applySearchParams(&marker_options.generate, options.params);
 
-    var markers = std.ArrayListUnmanaged(Marker){};
+    var markers = std.ArrayListUnmanaged(Marker).empty;
     // The found markers whose lines may have holes: where each proof went
     // in the working text, and the growth before it.
-    var found_at = std.ArrayListUnmanaged(FoundAt){};
+    var found_at = std.ArrayListUnmanaged(FoundAt).empty;
     defer found_at.deinit(allocator);
 
     var working = try allocator.dupe(u8, proof_src);
@@ -223,7 +223,7 @@ pub fn run(
         var retried: ?[]u8 = null;
         defer if (retried) |text| allocator.free(text);
         var retry_growth: isize = 0;
-        var rounds = std.ArrayListUnmanaged(Round){};
+        var rounds = std.ArrayListUnmanaged(Round).empty;
         var offset = next.span.start;
         var marker = unsearched;
         const proof_span = while (true) {
@@ -504,7 +504,7 @@ fn fillHoleValues(
 
     var parse_arena = std.heap.ArenaAllocator.init(allocator);
     defer parse_arena.deinit();
-    var lines = std.ArrayListUnmanaged(Span){};
+    var lines = std.ArrayListUnmanaged(Span).empty;
     var parser = ProofScript.Parser.initLenient(parse_arena.allocator(), text);
     while (parser.nextBlockSkippingLocalItems() catch null) |block| {
         for (block.lines) |line| {
@@ -520,7 +520,7 @@ fn fillHoleValues(
         const line = for (lines.items) |span| {
             if (entry.at >= span.start and entry.at < span.end) break span;
         } else continue;
-        var holes = std.ArrayListUnmanaged(HoleValue){};
+        var holes = std.ArrayListUnmanaged(HoleValue).empty;
         for (sink.items.items) |hole| {
             if (hole.span.start < line.start or hole.span.end > line.end) {
                 continue;

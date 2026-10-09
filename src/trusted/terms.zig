@@ -73,7 +73,7 @@ pub const Term = extern struct {
     }
 };
 
-pub const RetSort = packed struct {
+pub const RetSort = packed struct(u8) {
     /// index into the sort table
     sort: u7,
     /// is this a definition

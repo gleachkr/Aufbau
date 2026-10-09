@@ -89,7 +89,7 @@ pub fn normalizeStructural(
         return .{ .result_expr = expr_id, .conv_line_idx = null };
     }
 
-    var leaves = std.ArrayListUnmanaged(AcuiLeaf){};
+    var leaves = std.ArrayListUnmanaged(AcuiLeaf).empty;
     defer leaves.deinit(self.allocator);
     try collectAcuiLeaves(self, expr_id, acui.head_term_id, &leaves);
 
@@ -158,7 +158,7 @@ pub fn collectAcuiLeaves(
 ) anyerror!void {
     var support = Support.acuiSupport(self);
     defer support.deinit();
-    var infos = std.ArrayListUnmanaged(AcuiSupport.LeafInfo){};
+    var infos = std.ArrayListUnmanaged(AcuiSupport.LeafInfo).empty;
     defer infos.deinit(self.allocator);
     try support.collectLeafInfos(expr_id, head_term_id, &infos);
     try out.ensureUnusedCapacity(self.allocator, infos.items.len);

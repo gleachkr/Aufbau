@@ -1,4 +1,4 @@
-pub const Arg = packed struct {
+pub const Arg = packed struct(u64) {
     /// bit i set means depends on ith bound variable
     deps: u55,
     /// must be 0

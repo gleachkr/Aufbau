@@ -62,7 +62,7 @@ pub fn processViewAnnotations(
 
     var maybe_view: ?ViewDecl = null;
     var view_sig: ?ViewSignature = null;
-    var derived_bindings = std.ArrayListUnmanaged(DerivedBinding){};
+    var derived_bindings = std.ArrayListUnmanaged(DerivedBinding).empty;
     defer derived_bindings.deinit(allocator);
 
     for (annotations) |ann| {
@@ -2025,7 +2025,7 @@ fn parseViewSignature(
     parser: *const MM0Parser,
     text: []const u8,
 ) !ViewSignature {
-    const trimmed = std.mem.trimRight(u8, text, " \t\r\n;");
+    const trimmed = std.mem.trimEnd(u8, text, " \t\r\n;");
     const wrapped = try std.fmt.allocPrint(
         allocator,
         "axiom __view {s};",
@@ -2076,7 +2076,7 @@ fn parseRecoverAnnotation(
 ) !RecoverDecl {
     var it = std.mem.tokenizeAny(
         u8,
-        std.mem.trimRight(u8, text, " \t\r\n;"),
+        std.mem.trimEnd(u8, text, " \t\r\n;"),
         " \t\r\n",
     );
     const target_name = it.next() orelse return error.InvalidRecoverAnnotation;
@@ -2129,7 +2129,7 @@ fn parseAbstractAnnotation(
     env: *const GlobalEnv,
 ) !AbstractDecl {
     var it = AbstractTokenizer{
-        .text = std.mem.trimRight(u8, text, " \t\r\n;"),
+        .text = std.mem.trimEnd(u8, text, " \t\r\n;"),
     };
     const target_name = it.next() orelse return error.InvalidAbstractAnnotation;
     const left_name = it.next() orelse return error.InvalidAbstractAnnotation;

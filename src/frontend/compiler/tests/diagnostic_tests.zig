@@ -1908,7 +1908,7 @@ fn expectAcuiHoleNote(
 
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
     for (diag.noteSlice()) |found| {
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(std.testing.allocator);
         const text = try helpers.renderedNoteText(&buf, found);
         if (!std.mem.eql(u8, text, note)) continue;

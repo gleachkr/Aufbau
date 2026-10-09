@@ -368,7 +368,7 @@ fn drainLocalItemsBeforeSearchTarget(
     const proofs = if (proof_stream.*) |*value| value else {
         return error.MissingProofBlock;
     };
-    var locals = std.ArrayListUnmanaged(ProofScript.TopLevelItem){};
+    var locals = std.ArrayListUnmanaged(ProofScript.TopLevelItem).empty;
     defer locals.deinit(allocator);
 
     while (true) {
@@ -645,11 +645,7 @@ pub fn readProofCase(
         .{ stem, ext },
     );
     defer allocator.free(path);
-    return try std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        std.math.maxInt(usize),
-    );
+    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
 }
 
 pub fn parseGoal(

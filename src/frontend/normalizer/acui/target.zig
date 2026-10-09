@@ -26,9 +26,9 @@ pub fn buildAcuiCommonTarget(
         return null;
     };
 
-    var lhs_leaves = std.ArrayListUnmanaged(AcuiLeaf){};
+    var lhs_leaves = std.ArrayListUnmanaged(AcuiLeaf).empty;
     defer lhs_leaves.deinit(self.allocator);
-    var rhs_leaves = std.ArrayListUnmanaged(AcuiLeaf){};
+    var rhs_leaves = std.ArrayListUnmanaged(AcuiLeaf).empty;
     defer rhs_leaves.deinit(self.allocator);
     try Normalize.collectAcuiLeaves(self, lhs, acui.head_term_id, &lhs_leaves);
     try Normalize.collectAcuiLeaves(self, rhs, acui.head_term_id, &rhs_leaves);
@@ -48,7 +48,7 @@ pub fn buildAcuiCommonTarget(
     @memset(lhs_claimed, false);
     @memset(rhs_claimed, false);
 
-    var common_items = std.ArrayListUnmanaged(ExprId){};
+    var common_items = std.ArrayListUnmanaged(ExprId).empty;
     defer common_items.deinit(self.allocator);
     try cancelExactAcuiItems(
         self,
@@ -109,7 +109,7 @@ pub fn buildAcuiCommonTarget(
         );
     }
 
-    var target_items = std.ArrayListUnmanaged(ExprId){};
+    var target_items = std.ArrayListUnmanaged(ExprId).empty;
     defer target_items.deinit(self.allocator);
     try target_items.appendSlice(self.allocator, common_items.items);
 

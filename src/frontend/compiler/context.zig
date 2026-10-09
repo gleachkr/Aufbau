@@ -36,9 +36,9 @@ pub const FilledAssertion = struct {
 
 pub const HoleInferenceSink = struct {
     allocator: std.mem.Allocator,
-    items: std.ArrayListUnmanaged(HoleInference) = .{},
+    items: std.ArrayListUnmanaged(HoleInference) = .empty,
     /// Only for lines whose conclusion prints with source names.
-    assertions: std.ArrayListUnmanaged(FilledAssertion) = .{},
+    assertions: std.ArrayListUnmanaged(FilledAssertion) = .empty,
 
     pub fn deinit(self: *HoleInferenceSink) void {
         for (self.items.items) |item| {
@@ -92,7 +92,7 @@ pub const InlineConclusion = struct {
 /// probe, rolls the sink back to its entry mark (see `mark`/`rollback`).
 pub const InlineConclusionSink = struct {
     allocator: std.mem.Allocator,
-    items: std.ArrayListUnmanaged(InlineConclusion) = .{},
+    items: std.ArrayListUnmanaged(InlineConclusion) = .empty,
 
     pub fn deinit(self: *InlineConclusionSink) void {
         for (self.items.items) |item| {
@@ -177,9 +177,9 @@ pub const BindingOracle = struct {
     /// a level at a time: the nearest level that has one not forced before.
     /// For a sub-proof that strayed below the level its parent can see.
     pub fn forceNearestSubProofs(self: *BindingOracle, refs: []const ProofScript.Ref) !void {
-        var level = std.ArrayListUnmanaged(RuleApplication){};
+        var level = std.ArrayListUnmanaged(RuleApplication).empty;
         defer level.deinit(self.allocator);
-        var next = std.ArrayListUnmanaged(RuleApplication){};
+        var next = std.ArrayListUnmanaged(RuleApplication).empty;
         defer next.deinit(self.allocator);
         try appendSubProofs(self.allocator, &level, refs);
         while (level.items.len != 0) {

@@ -78,7 +78,7 @@ fn emitProofExpr(
 pub const ExprProofEmitter = struct {
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
-    bytes: std.ArrayListUnmanaged(u8) = .{},
+    bytes: std.ArrayListUnmanaged(u8) = .empty,
     expr_slots: ExprSlotMap = .empty,
     heap_len: u32,
 
@@ -117,7 +117,7 @@ pub const ExprProofEmitter = struct {
 pub const UnifyEmitter = struct {
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
-    bytes: std.ArrayListUnmanaged(u8) = .{},
+    bytes: std.ArrayListUnmanaged(u8) = .empty,
     slots: ExprSlotMap = .empty,
     remaining_uses: std.AutoHashMapUnmanaged(ExprId, u32) = .empty,
     heap_len: u32,
@@ -232,7 +232,7 @@ pub const TheoremProofEmitter = struct {
     theorem: *const TheoremContext,
     env: *const GlobalEnv,
     lines: []const CheckedLine,
-    bytes: std.ArrayListUnmanaged(u8) = .{},
+    bytes: std.ArrayListUnmanaged(u8) = .empty,
     expr_slots: ExprSlotMap = .empty,
     heap_len: u32,
     hyp_slots: []u32,

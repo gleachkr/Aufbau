@@ -609,7 +609,7 @@ fn relationForExpr(
     theorem: *TheoremContext,
     expr_id: ExprId,
 ) ?ResolvedRelation {
-    var dummy_lines = std.ArrayListUnmanaged(CheckedLine){};
+    var dummy_lines = std.ArrayListUnmanaged(CheckedLine).empty;
     defer dummy_lines.deinit(theorem.allocator);
     var normalizer = Normalizer.init(
         theorem.allocator,

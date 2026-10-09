@@ -21,7 +21,7 @@ pub fn finish(
     scratch: *CompilerDiag.Scratch,
     comparison: *DefOps.NormalizedComparison,
 ) !bool {
-    var checked = std.ArrayListUnmanaged(CheckedLine){};
+    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer checked.deinit(allocator);
 
     var normalizer = Normalizer.initWithScratch(

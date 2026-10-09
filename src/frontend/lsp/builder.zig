@@ -51,21 +51,21 @@ const bindersFromArgs = support.bindersFromArgs;
 const completionArgsFromArgs = support.completionArgsFromArgs;
 pub const Builder = struct {
     allocator: std.mem.Allocator,
-    declarations: std.ArrayListUnmanaged(Declaration) = .{},
+    declarations: std.ArrayListUnmanaged(Declaration) = .empty,
     decl_by_name: std.StringHashMapUnmanaged(usize) = .empty,
-    symbols: std.ArrayListUnmanaged(NavigationSymbol) = .{},
-    mm0_outline: std.ArrayListUnmanaged(OutlineSymbol) = .{},
-    proof_outline: std.ArrayListUnmanaged(OutlineSymbol) = .{},
-    proof_blocks: std.ArrayListUnmanaged(ProofBlockInfo) = .{},
-    proof_rules: std.ArrayListUnmanaged(ProofRuleDecl) = .{},
-    proof_lines: std.ArrayListUnmanaged(ProofLineDecl) = .{},
-    proof_applications: std.ArrayListUnmanaged(ProofApplicationInfo) = .{},
-    notations: std.ArrayListUnmanaged(NotationCompletionDecl) = .{},
+    symbols: std.ArrayListUnmanaged(NavigationSymbol) = .empty,
+    mm0_outline: std.ArrayListUnmanaged(OutlineSymbol) = .empty,
+    proof_outline: std.ArrayListUnmanaged(OutlineSymbol) = .empty,
+    proof_blocks: std.ArrayListUnmanaged(ProofBlockInfo) = .empty,
+    proof_rules: std.ArrayListUnmanaged(ProofRuleDecl) = .empty,
+    proof_lines: std.ArrayListUnmanaged(ProofLineDecl) = .empty,
+    proof_applications: std.ArrayListUnmanaged(ProofApplicationInfo) = .empty,
+    notations: std.ArrayListUnmanaged(NotationCompletionDecl) = .empty,
     notation_by_token: std.StringHashMapUnmanaged(usize) = .empty,
     sort_var_by_token: std.StringHashMapUnmanaged(usize) = .empty,
-    sort_names: std.ArrayListUnmanaged([]const u8) = .{},
-    left_delims: [256]bool = [_]bool{false} ** 256,
-    right_delims: [256]bool = [_]bool{false} ** 256,
+    sort_names: std.ArrayListUnmanaged([]const u8) = .empty,
+    left_delims: [256]bool = @splat(false),
+    right_delims: [256]bool = @splat(false),
     mm0_parser: ?parse.MM0Parser = null,
 
     const proof = @import("builder_proof.zig");
@@ -137,7 +137,7 @@ pub const Builder = struct {
         // normal state of a file being edited, and the strict parser drops the
         // whole block over it.
         var parser = proof_script.Parser.initLenient(self.allocator, text);
-        var items = std.ArrayListUnmanaged(proof_script.TopLevelItem){};
+        var items = std.ArrayListUnmanaged(proof_script.TopLevelItem).empty;
         while (true) {
             const next = parser.nextItem() catch |err| {
                 if (isFatalIndexError(err)) return err;

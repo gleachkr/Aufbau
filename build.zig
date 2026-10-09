@@ -19,10 +19,13 @@ const WebWasmInstall = struct {
 };
 
 fn readProjectVersion(b: *std.Build) []const u8 {
-    const contents = b.build_root.handle.readFileAlloc(
+    b.dependOnFileContents(b.path("VERSION"));
+    const version_path = b.root.join(b.allocator, "VERSION") catch @panic("OOM");
+    const contents = version_path.root_dir.handle.readFileAlloc(
+        b.graph.io,
+        version_path.sub_path,
         b.allocator,
-        "VERSION",
-        64,
+        .limited(64),
     ) catch |err| {
         std.debug.panic("unable to read VERSION: {s}", .{@errorName(err)});
     };
@@ -386,8 +389,8 @@ pub fn build(b: *std.Build) void {
 
     const node_wasm_test_cmd = b.addSystemCommand(&.{"node"});
     node_wasm_test_cmd.addFileArg(b.path("tests/node_wasm_loading.mjs"));
-    node_wasm_test_cmd.addArg(
-        b.getInstallPath(.prefix, "npm/@aufbau"),
+    node_wasm_test_cmd.addDirectoryArg(
+        b.graph.path(.install_prefix, "npm/@aufbau"),
     );
     node_wasm_test_cmd.step.dependOn(web_packages_step);
     const node_wasm_test_step = b.step(
@@ -398,7 +401,7 @@ pub fn build(b: *std.Build) void {
 
     const wasm_host_test_cmd = b.addSystemCommand(&.{"node"});
     wasm_host_test_cmd.addFileArg(b.path("tests/wasm_host_mock.mjs"));
-    wasm_host_test_cmd.addArg(b.getInstallPath(.prefix, "npm/@aufbau"));
+    wasm_host_test_cmd.addDirectoryArg(b.graph.path(.install_prefix, "npm/@aufbau"));
     wasm_host_test_cmd.step.dependOn(web_packages_step);
     const wasm_host_test_step = b.step(
         "test-wasm-host",
@@ -410,8 +413,8 @@ pub fn build(b: *std.Build) void {
     editor_browser_test_cmd.addFileArg(
         b.path("tests/editor_browser_smoke.mjs"),
     );
-    editor_browser_test_cmd.addArg(
-        b.getInstallPath(.prefix, "npm/@aufbau"),
+    editor_browser_test_cmd.addDirectoryArg(
+        b.graph.path(.install_prefix, "npm/@aufbau"),
     );
     editor_browser_test_cmd.step.dependOn(web_packages_step);
     const editor_browser_test_step = b.step(
@@ -424,8 +427,8 @@ pub fn build(b: *std.Build) void {
     lsp_cross_origin_test_cmd.addFileArg(
         b.path("tests/lsp_cross_origin_worker.mjs"),
     );
-    lsp_cross_origin_test_cmd.addArg(
-        b.getInstallPath(.prefix, "npm/@aufbau"),
+    lsp_cross_origin_test_cmd.addDirectoryArg(
+        b.graph.path(.install_prefix, "npm/@aufbau"),
     );
     lsp_cross_origin_test_cmd.step.dependOn(web_packages_step);
     const lsp_cross_origin_test_step = b.step(
@@ -447,10 +450,8 @@ pub fn build(b: *std.Build) void {
     run_compiler_step.dependOn(&run_compiler_cmd.step);
     run_compiler_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-        run_compiler_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
+    run_compiler_cmd.addPassthruArgs();
 
     const trusted_test_module = b.createModule(.{
         .root_source_file = b.path("src/trusted/tests.zig"),
@@ -536,9 +537,7 @@ pub fn build(b: *std.Build) void {
         .root_module = search_bench_module,
     });
     const run_search_bench = b.addRunArtifact(search_bench_exe);
-    if (b.args) |args| {
-        run_search_bench.addArgs(args);
-    }
+    run_search_bench.addPassthruArgs();
 
     // Frontier regression guards (test-frontier-smoke); the table and its
     // rationale live in tests/frontier_guards.zig.

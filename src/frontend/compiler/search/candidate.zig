@@ -198,7 +198,7 @@ fn tryCandidate(
     );
     errdefer attempt_theorem_vars.deinit();
 
-    var scratch_checked = std.ArrayListUnmanaged(CheckedLine){};
+    var scratch_checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer scratch_checked.deinit(allocator);
     try scratch_checked.appendSlice(allocator, context.checked.items);
     const checked_mark = scratch_checked.items.len;

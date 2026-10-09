@@ -114,7 +114,7 @@ pub fn expectTimingCounter(value: u64) !void {
 pub const ContextHarness = struct {
     allocator: std.mem.Allocator,
     labels: LabelIndexMap,
-    checked: std.ArrayListUnmanaged(CheckedLine) = .{},
+    checked: std.ArrayListUnmanaged(CheckedLine) = .empty,
     diag_scratch: CompilerDiag.Scratch,
     cache: Inference.RuleUnifyCache,
 

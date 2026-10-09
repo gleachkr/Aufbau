@@ -42,12 +42,12 @@ pub fn harvestSeeds(
     goal_expr: ExprId,
     allocator: std.mem.Allocator,
 ) ![]DerivedRef {
-    var seeds = std.ArrayListUnmanaged(DerivedRef){};
+    var seeds = std.ArrayListUnmanaged(DerivedRef).empty;
     errdefer seeds.deinit(allocator);
 
     // Deterministic rule order (hash-map iteration order is not part of the
     // byte-identical contract).
-    var rule_ids = std.ArrayListUnmanaged(u32){};
+    var rule_ids = std.ArrayListUnmanaged(u32).empty;
     defer rule_ids.deinit(allocator);
     var key_it = context.registry.trigger_by_rule.keyIterator();
     while (key_it.next()) |rule_id| {
@@ -59,7 +59,7 @@ pub fn harvestSeeds(
     // Goal subterms in DFS order, deduped (hash-consing makes ExprId
     // identity expression identity). Only apps are collected: a trigger
     // pattern's root always names a term head.
-    var subterms = std.ArrayListUnmanaged(ExprId){};
+    var subterms = std.ArrayListUnmanaged(ExprId).empty;
     defer subterms.deinit(allocator);
     var visited = std.AutoHashMapUnmanaged(ExprId, void){};
     defer visited.deinit(allocator);

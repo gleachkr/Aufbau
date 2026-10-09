@@ -1,3 +1,5 @@
-pub fn main() !void {
-    return @import("./cli.zig").main();
+const std = @import("std");
+
+pub fn main(init: std.process.Init) !void {
+    return @import("./cli.zig").main(init);
 }

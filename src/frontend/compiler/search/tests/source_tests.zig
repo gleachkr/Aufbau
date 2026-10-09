@@ -1236,11 +1236,7 @@ test "source search declines a target that depends on a dropped declaration" {
 fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    const mm0_src = try std.fs.cwd().readFileAlloc(
-        arena.allocator(),
-        "tests/search_bench_cases/nd_fol.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", arena.allocator(), .unlimited);
     var suggestions = try suggestionsAtNeedle(&arena, mm0_src, proof_src, "auto?", .{
         .max_results = 3,
         .exact_result_limit = 1,

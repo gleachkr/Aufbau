@@ -52,7 +52,7 @@ pub const JsonRPCMessage = union(enum) {
                 _,
 
                 pub fn jsonStringify(code: Code, stream: anytype) !void {
-                    try stream.write(@intFromEnum(code));
+                    try stream.write(@backingInt(code));
                 }
             };
         };
@@ -65,10 +65,12 @@ pub const Transport = struct {
     pub const VTable = struct {
         readJsonMessage: *const fn (
             transport: *Transport,
+            io: std.Io,
             allocator: std.mem.Allocator,
         ) ReadError![]u8,
         writeJsonMessage: *const fn (
             transport: *Transport,
+            io: std.Io,
             json_message: []const u8,
         ) WriteError!void,
     };
@@ -78,20 +80,23 @@ pub const Transport = struct {
 
     pub fn readJsonMessage(
         transport: *Transport,
+        io: std.Io,
         allocator: std.mem.Allocator,
     ) ReadError![]u8 {
-        return try transport.vtable.readJsonMessage(transport, allocator);
+        return try transport.vtable.readJsonMessage(transport, io, allocator);
     }
 
     pub fn writeJsonMessage(
         transport: *Transport,
+        io: std.Io,
         json_message: []const u8,
     ) WriteError!void {
-        return try transport.vtable.writeJsonMessage(transport, json_message);
+        return try transport.vtable.writeJsonMessage(transport, io, json_message);
     }
 
     pub fn writeNotification(
         transport: *Transport,
+        io: std.Io,
         allocator: std.mem.Allocator,
         method: []const u8,
         comptime Params: type,
@@ -108,11 +113,12 @@ pub const Transport = struct {
             options,
         );
         defer allocator.free(json_message);
-        try transport.writeJsonMessage(json_message);
+        try transport.writeJsonMessage(io, json_message);
     }
 
     pub fn writeResponse(
         transport: *Transport,
+        io: std.Io,
         allocator: std.mem.Allocator,
         id: ?JsonRPCMessage.ID,
         comptime Result: type,
@@ -129,11 +135,12 @@ pub const Transport = struct {
             options,
         );
         defer allocator.free(json_message);
-        try transport.writeJsonMessage(json_message);
+        try transport.writeJsonMessage(io, json_message);
     }
 
     pub fn writeErrorResponse(
         transport: *Transport,
+        io: std.Io,
         allocator: std.mem.Allocator,
         id: ?JsonRPCMessage.ID,
         err: JsonRPCMessage.Response.Error,
@@ -149,7 +156,7 @@ pub const Transport = struct {
             options,
         );
         defer allocator.free(json_message);
-        try transport.writeJsonMessage(json_message);
+        try transport.writeJsonMessage(io, json_message);
     }
 };
 
@@ -212,7 +219,7 @@ pub fn TypedJsonRPCResponse(comptime Result: type) type {
 }
 
 pub fn ResultType(comptime method: []const u8) type {
-    if (types.getRequestMetadata(method)) |meta| return meta.Result;
+    if (types.requests.get(method)) |meta| return meta.Result;
     @compileError("unsupported LSP result type: " ++ method);
 }
 
@@ -226,6 +233,7 @@ pub const basic_server = struct {
     }
 
     pub fn run(
+        io: std.Io,
         allocator: std.mem.Allocator,
         transport: *Transport,
         handler: anytype,
@@ -237,15 +245,16 @@ pub const basic_server = struct {
             defer arena_state.deinit();
             const arena = arena_state.allocator();
 
-            const json_message = transport.readJsonMessage(arena) catch |err| {
+            const json_message = transport.readJsonMessage(io, arena) catch |err| {
                 return err;
             };
-            try handleOne(arena, transport, handler, json_message);
+            try handleOne(io, arena, transport, handler, json_message);
         }
     }
 };
 
 fn handleOne(
+    io: std.Io,
     arena: std.mem.Allocator,
     transport: *Transport,
     handler: anytype,
@@ -258,6 +267,7 @@ fn handleOne(
         .{},
     ) catch |err| {
         try transport.writeErrorResponse(
+            io,
             arena,
             null,
             .{ .code = .parse_error, .message = @errorName(err) },
@@ -267,7 +277,7 @@ fn handleOne(
     };
     const root = parsed.value;
     if (root != .object) {
-        try writeInvalidRequest(arena, transport, null, "expected object");
+        try writeInvalidRequest(io, arena, transport, null, "expected object");
         return;
     }
 
@@ -275,17 +285,17 @@ fn handleOne(
     const maybe_method = object.get("method");
     if (maybe_method) |method_value| {
         if (method_value != .string) {
-            try writeInvalidRequest(arena, transport, null, "invalid method");
+            try writeInvalidRequest(io, arena, transport, null, "invalid method");
             return;
         }
         const method = method_value.string;
         const params = object.get("params");
         if (object.get("id")) |id_value| {
             const id = parseId(id_value) orelse {
-                try writeInvalidRequest(arena, transport, null, "invalid id");
+                try writeInvalidRequest(io, arena, transport, null, "invalid id");
                 return;
             };
-            try handleRequest(arena, transport, handler, id, method, params);
+            try handleRequest(io, arena, transport, handler, id, method, params);
         } else {
             handleNotification(arena, handler, method, params);
         }
@@ -296,7 +306,7 @@ fn handleOne(
         _ = parseId(id_value);
         return;
     }
-    try writeInvalidRequest(arena, transport, null, "missing method");
+    try writeInvalidRequest(io, arena, transport, null, "missing method");
 }
 
 /// Calls the handler method named `method`, as lsp_kit's server does: the
@@ -304,6 +314,7 @@ fn handleOne(
 /// is answered with an error under its id, so the client's promise
 /// settles and the messages written before it are kept.
 fn handleRequest(
+    io: std.Io,
     arena: std.mem.Allocator,
     transport: *Transport,
     handler: anytype,
@@ -312,20 +323,21 @@ fn handleRequest(
     params: ?std.json.Value,
 ) !void {
     const Handler = @TypeOf(handler.*);
-    inline for (types.request_metadata) |meta| {
+    inline for (comptime types.requests.values()) |meta| {
         if (comptime @hasDecl(Handler, meta.method)) {
             if (std.mem.eql(u8, method, meta.method)) {
                 const parsed = parseParams(meta.Params orelse void, arena, params) catch |err| {
-                    return writeError(arena, transport, id, .invalid_params, err);
+                    return writeError(io, arena, transport, id, .invalid_params, err);
                 };
                 const returned = @field(Handler, meta.method)(handler, arena, parsed);
                 const result = if (@typeInfo(@TypeOf(returned)) == .error_union)
                     returned catch |err| {
-                        return writeError(arena, transport, id, .internal_error, err);
+                        return writeError(io, arena, transport, id, .internal_error, err);
                     }
                 else
                     returned;
                 return transport.writeResponse(
+                    io,
                     arena,
                     id,
                     meta.Result,
@@ -336,6 +348,7 @@ fn handleRequest(
         }
     }
     try transport.writeErrorResponse(
+        io,
         arena,
         id,
         .{ .code = .method_not_found, .message = method },
@@ -352,7 +365,7 @@ fn handleNotification(
     params: ?std.json.Value,
 ) void {
     const Handler = @TypeOf(handler.*);
-    inline for (types.notification_metadata) |meta| {
+    inline for (comptime types.notifications.values()) |meta| {
         if (comptime @hasDecl(Handler, meta.method)) {
             if (std.mem.eql(u8, method, meta.method)) {
                 const parsed = parseParams(meta.Params orelse void, arena, params) catch return;
@@ -367,6 +380,7 @@ fn handleNotification(
 }
 
 fn writeError(
+    io: std.Io,
     arena: std.mem.Allocator,
     transport: *Transport,
     id: JsonRPCMessage.ID,
@@ -374,6 +388,7 @@ fn writeError(
     err: anyerror,
 ) !void {
     try transport.writeErrorResponse(
+        io,
         arena,
         id,
         .{ .code = code, .message = @errorName(err) },
@@ -405,12 +420,14 @@ fn parseId(value: std.json.Value) ?JsonRPCMessage.ID {
 }
 
 fn writeInvalidRequest(
+    io: std.Io,
     arena: std.mem.Allocator,
     transport: *Transport,
     id: ?JsonRPCMessage.ID,
     message: []const u8,
 ) !void {
     try transport.writeErrorResponse(
+        io,
         arena,
         id,
         .{ .code = .invalid_request, .message = message },

@@ -310,7 +310,7 @@ pub fn hashCanonicalContent(
             h.update("m");
             h.update(std.mem.asBytes(&pid));
             if (theorem.placeholderInfo(pid)) |info| {
-                const class_byte: u8 = @intFromEnum(info.class);
+                const class_byte: u8 = @backingInt(info.class);
                 h.update(std.mem.asBytes(&class_byte));
                 h.update(info.sort_name);
                 h.update(std.mem.asBytes(&info.deps));
@@ -691,10 +691,10 @@ pub const SearchCounters = struct {
     forward_saturation_exhausted: bool = false,
     hyp_lookup_diagnostics_len: usize = 0,
     hyp_lookup_diagnostics: [max_search_diagnostics]HypLookupDiagnostic =
-        [_]HypLookupDiagnostic{.{}} ** max_search_diagnostics,
+        @splat(.{}),
     rule_attempt_diagnostics_len: usize = 0,
     rule_attempt_diagnostics: [max_search_diagnostics]RuleAttemptDiagnostic =
-        [_]RuleAttemptDiagnostic{.{}} ** max_search_diagnostics,
+        @splat(.{}),
     pub fn recordHypLookup(
         self: *SearchCounters,
         rule_name: []const u8,

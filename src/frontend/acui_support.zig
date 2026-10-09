@@ -281,7 +281,7 @@ pub const Context = struct {
             sorted[pos] = item;
         }
 
-        var unique = std.ArrayListUnmanaged(ExprId){};
+        var unique = std.ArrayListUnmanaged(ExprId).empty;
         defer unique.deinit(self.allocator);
         for (sorted) |item| {
             if (unique.items.len != 0 and
@@ -328,7 +328,7 @@ pub const Context = struct {
         expr_id: ExprId,
         acui: ResolvedStructuralCombiner,
     ) anyerror!ExprId {
-        var leaves = std.ArrayListUnmanaged(LeafInfo){};
+        var leaves = std.ArrayListUnmanaged(LeafInfo).empty;
         defer leaves.deinit(self.allocator);
         try self.collectLeafInfos(expr_id, acui.head_term_id, &leaves);
 
@@ -517,9 +517,9 @@ pub const Context = struct {
     ) anyerror!?ExprId {
         const acui = try self.sharedStructuralCombiner(lhs, rhs) orelse return null;
 
-        var lhs_leaves = std.ArrayListUnmanaged(LeafInfo){};
+        var lhs_leaves = std.ArrayListUnmanaged(LeafInfo).empty;
         defer lhs_leaves.deinit(self.allocator);
-        var rhs_leaves = std.ArrayListUnmanaged(LeafInfo){};
+        var rhs_leaves = std.ArrayListUnmanaged(LeafInfo).empty;
         defer rhs_leaves.deinit(self.allocator);
         try self.collectLeafInfos(lhs, acui.head_term_id, &lhs_leaves);
         try self.collectLeafInfos(rhs, acui.head_term_id, &rhs_leaves);
@@ -542,7 +542,7 @@ pub const Context = struct {
         @memset(lhs_claimed, false);
         @memset(rhs_claimed, false);
 
-        var common_items = std.ArrayListUnmanaged(ExprId){};
+        var common_items = std.ArrayListUnmanaged(ExprId).empty;
         defer common_items.deinit(self.allocator);
         try self.cancelExactItems(
             lhs_state,
@@ -575,7 +575,7 @@ pub const Context = struct {
             acui,
         );
 
-        var target_items = std.ArrayListUnmanaged(ExprId){};
+        var target_items = std.ArrayListUnmanaged(ExprId).empty;
         defer target_items.deinit(self.allocator);
         try target_items.appendSlice(self.allocator, common_items.items);
 

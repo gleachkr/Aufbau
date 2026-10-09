@@ -56,7 +56,7 @@ fn solveOrderedStructuralObligation(
     obligation: StructuralJointObligation,
     profile: StructuralProfile,
 ) anyerror![]BranchState {
-    var target_items = std.ArrayListUnmanaged(ExprId){};
+    var target_items = std.ArrayListUnmanaged(ExprId).empty;
     defer target_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
@@ -71,7 +71,7 @@ fn solveOrderedStructuralObligation(
     );
     defer self.allocator.free(binder_exprs);
 
-    var out = std.ArrayListUnmanaged(BranchState){};
+    var out = std.ArrayListUnmanaged(BranchState).empty;
     try searchOrderedStructuralObligationAssignments(
         self,
         state,
@@ -153,7 +153,7 @@ fn solveAcuStructuralObligation(
     obligation: StructuralJointObligation,
     profile: StructuralProfile,
 ) anyerror![]BranchState {
-    var target_items = std.ArrayListUnmanaged(ExprId){};
+    var target_items = std.ArrayListUnmanaged(ExprId).empty;
     defer target_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
@@ -168,7 +168,7 @@ fn solveAcuStructuralObligation(
     );
     defer deinitExprItemLists(self, binder_item_lists);
 
-    var out = std.ArrayListUnmanaged(BranchState){};
+    var out = std.ArrayListUnmanaged(BranchState).empty;
     try searchAcuStructuralObligationAssignments(
         self,
         state,
@@ -267,9 +267,9 @@ fn solveAcuiStructuralObligation(
     obligation: StructuralJointObligation,
     profile: StructuralProfile,
 ) anyerror![]BranchState {
-    var lower_items = std.ArrayListUnmanaged(ExprId){};
+    var lower_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lower_items.deinit(self.allocator);
-    var upper_items = std.ArrayListUnmanaged(ExprId){};
+    var upper_items = std.ArrayListUnmanaged(ExprId).empty;
     defer upper_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
@@ -321,7 +321,7 @@ fn solveAcuiStructuralObligation(
         for (choices) |member| self.allocator.free(member.subsets);
         self.allocator.free(choices);
     }
-    var out = std.ArrayListUnmanaged(BranchState){};
+    var out = std.ArrayListUnmanaged(BranchState).empty;
     for (upper_items.items, 0..) |item, idx| {
         choices[idx] = try admissibleSubsets(
             self,
@@ -401,7 +401,7 @@ fn admissibleSubsets(
         }
     }
 
-    var subsets = std.ArrayListUnmanaged(usize){};
+    var subsets = std.ArrayListUnmanaged(usize).empty;
     errdefer subsets.deinit(self.allocator);
     if ((required_mask & ~allowed_mask) == 0) {
         const optional_mask = allowed_mask & ~required_mask;
@@ -682,7 +682,7 @@ fn initExprItemLists(
     len: usize,
 ) ![]std.ArrayListUnmanaged(ExprId) {
     const lists = try self.allocator.alloc(std.ArrayListUnmanaged(ExprId), len);
-    for (lists) |*items| items.* = .{};
+    for (lists) |*items| items.* = .empty;
     return lists;
 }
 

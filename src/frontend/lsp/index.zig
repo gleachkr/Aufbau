@@ -208,7 +208,7 @@ pub const Snapshot = struct {
             return try allocator.alloc(SourceRange, 0);
         };
 
-        var list = std.ArrayListUnmanaged(SourceRange){};
+        var list = std.ArrayListUnmanaged(SourceRange).empty;
         for (self.symbols) |symbol| {
             const symbol_target = symbol.target_range orelse continue;
             if (!sourceRangeEql(symbol_target, target_range)) continue;
@@ -353,7 +353,7 @@ fn buildHoleInfo(
         if (err == error.OutOfMemory) return err;
     };
 
-    var hovers = std.ArrayListUnmanaged(InferredHoleHover){};
+    var hovers = std.ArrayListUnmanaged(InferredHoleHover).empty;
     for (sink.items.items) |inference| {
         try hovers.append(allocator, .{
             .range = .{

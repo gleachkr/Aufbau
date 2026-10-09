@@ -38,7 +38,7 @@ pub fn collectStatementCmds(
     allocator: std.mem.Allocator,
     mmb: Mmb,
 ) ![]Proof.StmtCmd {
-    var cmds = std.ArrayListUnmanaged(Proof.StmtCmd){};
+    var cmds = std.ArrayListUnmanaged(Proof.StmtCmd).empty;
     var pos: usize = @intCast(mmb.header.p_proof);
 
     while (true) {
@@ -48,7 +48,7 @@ pub fn collectStatementCmds(
             pos,
             mmb.file_bytes.len,
         );
-        const stmt_cmd: Proof.StmtCmd = @enumFromInt(cmd.op);
+        const stmt_cmd: Proof.StmtCmd = @fromBackingInt(@intCast(cmd.op));
         try cmds.append(allocator, stmt_cmd);
         if (stmt_cmd == .End) break;
         if (cmd.data == 0) return error.BadStatementLength;
@@ -69,11 +69,7 @@ pub fn readProofCaseFile(
         .{ stem, ext },
     );
     defer allocator.free(path);
-    return try std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        std.math.maxInt(usize),
-    );
+    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
 }
 
 pub fn replaceOnceOwned(
@@ -213,14 +209,15 @@ pub fn renderedNoteText(
     buf: *std.ArrayListUnmanaged(u8),
     note: mm0.CompilerDiagnosticNote,
 ) ![]const u8 {
-    var writer = buf.writer(std.testing.allocator);
-    try mm0.renderCompilerNoteMessage(&writer, note.message);
-    return buf.items;
+    var out: std.Io.Writer.Allocating = .fromArrayList(std.testing.allocator, buf);
+    defer buf.* = out.toArrayList();
+    try mm0.renderCompilerNoteMessage(&out.writer, note.message);
+    return out.written();
 }
 
 pub fn expectHasNote(diag: anytype, expected: []const u8) !void {
     for (diag.notes[0..diag.note_count]) |note| {
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         defer buf.deinit(std.testing.allocator);
         if (std.mem.eql(u8, try renderedNoteText(&buf, note), expected)) {
             return;
@@ -233,7 +230,7 @@ pub fn expectNoteText(
     expected: []const u8,
     note: mm0.CompilerDiagnosticNote,
 ) !void {
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings(
         expected,
@@ -245,7 +242,7 @@ pub fn expectNoteStartsWith(
     prefix: []const u8,
     note: mm0.CompilerDiagnosticNote,
 ) !void {
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     defer buf.deinit(std.testing.allocator);
     try std.testing.expect(std.mem.startsWith(
         u8,

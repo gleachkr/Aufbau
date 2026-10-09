@@ -107,7 +107,7 @@ pub fn analyzeTemplates(
         .ctx_arg_index = @intCast(k),
         .acui_head_id = acui_head,
         .num_hyps = hyps.len,
-        .hyp_budgets = [_]?u8{null} ** max_hyps,
+        .hyp_budgets = @splat(null),
         .discharged = undefined,
         .discharged_has_bound = undefined,
     };
@@ -341,7 +341,7 @@ fn absentMembersFitPatterns(
     patterns: []const TemplateExpr,
     bindings: []const ?ExprId,
 ) bool {
-    var used: [max_discharged_members]bool = [_]bool{false} ** max_discharged_members;
+    var used: [max_discharged_members]bool = @splat(false);
     return matchAbsentPattern(context, theorem, absent, patterns, bindings, &used, 0);
 }
 

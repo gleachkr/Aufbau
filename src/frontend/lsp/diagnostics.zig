@@ -6,7 +6,7 @@ pub const offsets = @import("offsets.zig");
 pub const SERVER_NAME = "Aufbau";
 
 const LspIndex = mm0.Frontend.LspIndex;
-const types = lsp.types;
+const types = lsp.types.flat;
 
 pub const DiagnosticDocument = struct {
     uri: []const u8,
@@ -97,7 +97,7 @@ pub fn locateCompilerDiagnostics(
     mm0_omitted: ?mm0.CompilerDiagnostic,
     encoding: lsp.offsets.Encoding,
 ) ![]LocatedDiagnostic {
-    var out = std.ArrayListUnmanaged(LocatedDiagnostic){};
+    var out = std.ArrayListUnmanaged(LocatedDiagnostic).empty;
     const sources = [_]mm0.CompilerDiagnosticSource{ .proof, .mm0 };
     for (sources) |source| {
         const omitted = switch (source) {
@@ -261,7 +261,7 @@ pub fn compilerDiagnosticToLsp(
         .range = clampedRange(hit.text, hit.span, encoding),
         .severity = diagnosticSeverityToLsp(diag.severity),
         .source = SERVER_NAME,
-        .message = try compilerDiagnosticMessage(arena, diag),
+        .message = .{ .string = try compilerDiagnosticMessage(arena, diag) },
         .relatedInformation = try compilerDiagnosticRelatedInformation(
             arena,
             diag_context,
@@ -375,7 +375,7 @@ pub fn sourceRangesToLocations(
     ranges: []const LspIndex.SourceRange,
     encoding: lsp.offsets.Encoding,
 ) ![]const types.Location {
-    var locations = std.ArrayListUnmanaged(types.Location){};
+    var locations = std.ArrayListUnmanaged(types.Location).empty;
     for (ranges) |range| {
         const location = locator.toLocation(range, encoding) orelse continue;
         try locations.append(allocator, location);
@@ -402,7 +402,7 @@ pub fn completionsToLsp(
             .kind = completionKindToLsp(item.kind),
             .detail = item.detail,
             .documentation = if (item.documentation_markdown) |doc|
-                .{ .MarkupContent = .{ .kind = .markdown, .value = doc } }
+                .{ .markup_content = .{ .kind = .markdown, .value = doc } }
             else
                 null,
             .sortText = item.sort_text,
@@ -411,7 +411,7 @@ pub fn completionsToLsp(
                 .Snippet
             else
                 .PlainText,
-            .textEdit = .{ .TextEdit = .{
+            .textEdit = .{ .text_edit = .{
                 .range = range,
                 .newText = item.snippet_replacement_text orelse
                     item.replacement_text,
@@ -491,7 +491,7 @@ pub fn compilerDiagnosticRelatedInformation(
     diag: mm0.CompilerDiagnostic,
     encoding: lsp.offsets.Encoding,
 ) !?[]const types.DiagnosticRelatedInformation {
-    var result = std.ArrayListUnmanaged(types.DiagnosticRelatedInformation){};
+    var result = std.ArrayListUnmanaged(types.DiagnosticRelatedInformation).empty;
     for (diag.noteSlice()) |note| {
         const span = spanOf(note.span) orelse continue;
         const hit = diag_context.locate(note.source, span) orelse continue;
@@ -532,38 +532,38 @@ fn noteMessageText(
     arena: std.mem.Allocator,
     message: mm0.CompilerNoteMessage,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(arena);
-    try mm0.renderCompilerNoteMessage(&writer, message);
-    return buf.items;
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    const writer = &buf.writer;
+    try mm0.renderCompilerNoteMessage(writer, message);
+    return buf.written();
 }
 
 fn relatedLabelText(
     arena: std.mem.Allocator,
     label: mm0.CompilerRelatedLabel,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(arena);
-    try mm0.renderCompilerRelatedLabel(&writer, label);
-    return buf.items;
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    const writer = &buf.writer;
+    try mm0.renderCompilerRelatedLabel(writer, label);
+    return buf.written();
 }
 
 pub fn compilerDiagnosticMessage(
     arena: std.mem.Allocator,
     diag: mm0.CompilerDiagnostic,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(arena);
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    const writer = &buf.writer;
 
-    try mm0.renderCompilerDiagnostic(&writer, diag, "\n");
+    try mm0.renderCompilerDiagnostic(writer, diag, "\n");
     for (diag.noteSlice()) |note| {
         try writer.print("\n{s}: ", .{mm0.compilerNoteHeading()});
-        try mm0.renderCompilerNoteMessage(&writer, note.message);
+        try mm0.renderCompilerNoteMessage(writer, note.message);
     }
     for (diag.relatedSlice()) |related| {
         try writer.print("\n{s}: ", .{mm0.compilerRelatedHeading()});
-        try mm0.renderCompilerRelatedLabel(&writer, related.label);
+        try mm0.renderCompilerRelatedLabel(writer, related.label);
     }
 
-    return buf.items;
+    return buf.written();
 }

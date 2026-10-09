@@ -57,9 +57,9 @@ pub fn structuralExprSubset(
         unit_term_id,
     );
 
-    var lhs_items = std.ArrayListUnmanaged(ExprId){};
+    var lhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lhs_items.deinit(self.allocator);
-    var rhs_items = std.ArrayListUnmanaged(ExprId){};
+    var rhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer rhs_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
@@ -140,9 +140,9 @@ fn mergeStructuralExprs(
     );
     if (profile.fragment != .acui) return error.UnifyMismatch;
 
-    var lhs_items = std.ArrayListUnmanaged(ExprId){};
+    var lhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lhs_items.deinit(self.allocator);
-    var rhs_items = std.ArrayListUnmanaged(ExprId){};
+    var rhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer rhs_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
@@ -157,7 +157,7 @@ fn mergeStructuralExprs(
         &rhs_items,
     );
 
-    var merged = std.ArrayListUnmanaged(ExprId){};
+    var merged = std.ArrayListUnmanaged(ExprId).empty;
     defer merged.deinit(self.allocator);
     try mergeFn(self, &merged, lhs_items.items, rhs_items.items);
     return try StructuralItems.rebuildStructuralExpr(
@@ -329,9 +329,9 @@ pub fn obligationCompatibleWithState(
 
     const bindings = BranchStateOps.getBindings(state, space);
     const intervals = BranchStateOps.getStructuralIntervals(state, space);
-    var lower_parts = std.ArrayListUnmanaged(ExprId){};
+    var lower_parts = std.ArrayListUnmanaged(ExprId).empty;
     defer lower_parts.deinit(self.allocator);
-    var upper_parts = std.ArrayListUnmanaged(ExprId){};
+    var upper_parts = std.ArrayListUnmanaged(ExprId).empty;
     defer upper_parts.deinit(self.allocator);
     var have_full_upper = true;
 
@@ -432,7 +432,7 @@ pub fn combineStructuralBindingExprs(
         unit_term_id,
     );
 
-    var exprs = std.ArrayListUnmanaged(ExprId){};
+    var exprs = std.ArrayListUnmanaged(ExprId).empty;
     defer exprs.deinit(self.allocator);
     for (binder_idxs) |binder_idx| {
         const expr_id = bindings[binder_idx] orelse {
@@ -448,10 +448,10 @@ pub fn combineStructuralExprs(
     profile: StructuralProfile,
     exprs: []const ExprId,
 ) anyerror!ExprId {
-    var items = std.ArrayListUnmanaged(ExprId){};
+    var items = std.ArrayListUnmanaged(ExprId).empty;
     defer items.deinit(self.allocator);
     for (exprs) |expr_id| {
-        var binding_items = std.ArrayListUnmanaged(ExprId){};
+        var binding_items = std.ArrayListUnmanaged(ExprId).empty;
         defer binding_items.deinit(self.allocator);
         try StructuralItems.collectCanonicalStructuralItems(
             self,

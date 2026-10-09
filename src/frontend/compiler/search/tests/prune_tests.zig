@@ -350,7 +350,7 @@ test "principal fan-out: ambiguous two-premise principal yields one candidate pe
     defer arena.deinit();
     const allocator = arena.allocator();
     var holder: FanoutHolder = .{};
-    var list = std.ArrayListUnmanaged(types.ApplyCandidate){};
+    var list = std.ArrayListUnmanaged(types.ApplyCandidate).empty;
     // Antecedent holds two implication members, so `lim`'s principal `(im a b)`
     // is shape-compatible with both — the case the plain seed abstains on.
     try collectFanoutCandidates(
@@ -384,7 +384,7 @@ test "principal fan-out: single matching member keeps one candidate" {
     defer arena.deinit();
     const allocator = arena.allocator();
     var holder: FanoutHolder = .{};
-    var list = std.ArrayListUnmanaged(types.ApplyCandidate){};
+    var list = std.ArrayListUnmanaged(types.ApplyCandidate).empty;
     // Only one implication member ⇒ the seed pins it uniquely; no fan-out.
     try collectFanoutCandidates(
         allocator,
@@ -402,7 +402,7 @@ test "principal fan-out: one-premise rule is not fanned out" {
     defer arena.deinit();
     const allocator = arena.allocator();
     var holder: FanoutHolder = .{};
-    var list = std.ArrayListUnmanaged(types.ApplyCandidate){};
+    var list = std.ArrayListUnmanaged(types.ApplyCandidate).empty;
     // Two conjunction members would make `lan`'s principal ambiguous, but `lan`
     // has a single premise: its loose backtrack is linear, so the premises≥2
     // gate keeps it a single candidate (the spurious-overhead guard the
@@ -2412,7 +2412,7 @@ test "raw context pruner matches discharged member shape" {
     );
     const t_jdg = try parseConcreteGoal(&fixture, &theorem, &theorem_vars, "G ⊢ T");
     const t_expr = theorem.interner.node(t_jdg).app.args[1];
-    var bindings = [_]?ExprId{null} ** 4;
+    var bindings: [4]?ExprId = @splat(null);
     bindings[2] = t_expr;
 
     try std.testing.expect(!context_prune.contextInfeasible(

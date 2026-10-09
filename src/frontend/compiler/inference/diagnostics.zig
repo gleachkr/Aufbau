@@ -473,7 +473,7 @@ fn buildBindingSummary(
     mode: BindingSummaryMode,
     names: ?*const ViewTrace.DiagNames,
 ) ![]const u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     errdefer out.deinit(allocator);
 
     var emitted: usize = 0;
@@ -510,7 +510,8 @@ fn buildBindingSummary(
     if (emitted == 0) {
         try out.appendSlice(allocator, "none");
     } else if (remaining != 0) {
-        try out.writer(allocator).print(
+        try out.print(
+            allocator,
             "; +{d} more",
             .{remaining},
         );

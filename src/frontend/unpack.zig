@@ -210,7 +210,7 @@ const Emitter = struct {
     base: []const u8,
     used_labels: std.StringHashMapUnmanaged(void),
     label_counter: usize = 0,
-    out: std.ArrayListUnmanaged(u8) = .{},
+    out: std.ArrayListUnmanaged(u8) = .empty,
     count: usize = 0,
 
     /// Render `app` as source text: rule name, explicit bindings verbatim,
@@ -222,7 +222,7 @@ const Emitter = struct {
         app: RuleApplication,
     ) std.mem.Allocator.Error!?[]const u8 {
         const allocator = self.allocator;
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf = std.ArrayListUnmanaged(u8).empty;
         try buf.appendSlice(allocator, app.rule_name);
         if (app.arg_bindings.len != 0) {
             try buf.appendSlice(allocator, " (");
@@ -241,9 +241,9 @@ const Emitter = struct {
                 if (idx != 0) try buf.appendSlice(allocator, ", ");
                 switch (ref) {
                     .hyp => |hyp| if (hyp.name) |name|
-                        try buf.writer(allocator).print("#{s}", .{name})
+                        try buf.print(allocator, "#{s}", .{name})
                     else
-                        try buf.writer(allocator).print("#{d}", .{hyp.index}),
+                        try buf.print(allocator, "#{d}", .{hyp.index}),
                     .line => |line| try buf.appendSlice(
                         allocator,
                         line.label,
@@ -269,7 +269,8 @@ const Emitter = struct {
         const conclusion = self.conclusions.get(spanKey(app.span)) orelse
             return null;
         const label = try self.freshLabel();
-        try self.out.writer(self.allocator).print(
+        try self.out.print(
+            self.allocator,
             "{s}{s}: $ {s} $ by {s}\n",
             .{ self.indent, label, conclusion, app_text },
         );
@@ -321,14 +322,14 @@ fn buildReplacement(
     // Rebuild the original line: label and assertion verbatim, the
     // application re-rendered with its inline children replaced by labels,
     // and the original tail (trailing comment and newline) preserved.
-    const writer = emitter.out.writer(allocator);
-    try writer.print("{s}{s}: {s} by {s}", .{
+    try emitter.out.print(allocator, "{s}{s}: {s} by {s}", .{
         emitter.indent,
         line.label,
         proof_src[line.assertion.span.start..line.assertion.span.end],
         top_text,
     });
-    try writer.writeAll(
+    try emitter.out.appendSlice(
+        allocator,
         proof_src[line.application.span.end..line.span.end],
     );
 

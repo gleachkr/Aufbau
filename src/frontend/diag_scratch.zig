@@ -31,7 +31,7 @@ pub const CapturedEntry = struct {
 
 pub const Scratch = struct {
     allocator: std.mem.Allocator,
-    entries: std.ArrayListUnmanaged(CapturedEntry) = .{},
+    entries: std.ArrayListUnmanaged(CapturedEntry) = .empty,
 
     pub const Mark = struct {
         start: usize,

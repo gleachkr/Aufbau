@@ -551,13 +551,13 @@ const Joiner = struct {
     resolver: Resolver,
     syntax: Syntax,
     failure: ?*?JoinFailure,
-    out: std.ArrayListUnmanaged(u8) = .{},
-    files: std.ArrayListUnmanaged(File) = .{},
-    segments: std.ArrayListUnmanaged(Segment) = .{},
+    out: std.ArrayListUnmanaged(u8) = .empty,
+    files: std.ArrayListUnmanaged(File) = .empty,
+    segments: std.ArrayListUnmanaged(Segment) = .empty,
     /// Keys of files being joined or already joined (mm0-rs `working`).
     working: std.StringHashMapUnmanaged(void) = .{},
     /// Keys on the current import path (mm0-rs `stack`), for cycles.
-    stack: std.ArrayListUnmanaged([]const u8) = .{},
+    stack: std.ArrayListUnmanaged([]const u8) = .empty,
     /// True while a single root has shown no statement: its text can be
     /// reused.
     passthrough: bool,
@@ -583,7 +583,7 @@ const Joiner = struct {
         // Files are numbered in post-order, so this file's index is only
         // known once its imports are done; segments record it via a
         // placeholder patched below.
-        var pending: std.ArrayListUnmanaged(usize) = .{};
+        var pending: std.ArrayListUnmanaged(usize) = .empty;
         defer pending.deinit(self.allocator);
 
         var scanner = Scanner.init(text, self.syntax);
@@ -715,14 +715,20 @@ const Joiner = struct {
 /// canonical paths so the same file reached by two routes is joined once
 /// (`.mm0`) or recognised on a cycle.
 pub const FsResolver = struct {
+    io: std.Io,
+
     pub fn resolver(self: *FsResolver) Resolver {
         return .{ .ctx = @ptrCast(self), .resolveFn = resolveFn };
     }
 
     /// Canonical key for a root path (what `join` should be given as
     /// `root_key` so imports of the root itself are detected as cycles).
-    pub fn rootKey(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-        return std.fs.cwd().realpathAlloc(allocator, path);
+    pub fn rootKey(
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        path: []const u8,
+    ) ![]const u8 {
+        return std.Io.Dir.cwd().realPathFileAlloc(io, path, allocator);
     }
 
     fn resolveFn(
@@ -731,14 +737,15 @@ pub const FsResolver = struct {
         from_key: []const u8,
         spec: []const u8,
     ) anyerror!Resolved {
-        _ = ctx;
+        const self: *FsResolver = @ptrCast(@alignCast(ctx));
         if (builtin.os.tag == .freestanding) return error.FileNotFound;
         const path = try resolveSpecPath(allocator, from_key, spec);
-        const key = try std.fs.cwd().realpathAlloc(allocator, path);
-        const text = try std.fs.cwd().readFileAlloc(
-            allocator,
+        const key = try rootKey(self.io, allocator, path);
+        const text = try std.Io.Dir.cwd().readFileAlloc(
+            self.io,
             key,
-            std.math.maxInt(usize),
+            allocator,
+            .unlimited,
         );
         return .{ .key = key, .text = text };
     }
@@ -760,7 +767,7 @@ pub fn resolveSpecPath(
     const absolute = std.fs.path.isAbsolutePosix(spec) or
         std.fs.path.isAbsolutePosix(base);
 
-    var parts = std.ArrayListUnmanaged([]const u8){};
+    var parts = std.ArrayListUnmanaged([]const u8).empty;
     defer parts.deinit(allocator);
     const sources = [_][]const u8{ base, spec };
     for (sources) |source| {
@@ -780,7 +787,7 @@ pub fn resolveSpecPath(
         }
     }
 
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     if (absolute) try out.append(allocator, '/');
     for (parts.items, 0..) |part, index| {
         if (index != 0) try out.append(allocator, '/');
@@ -962,26 +969,28 @@ pub const stdin_label = "<stdin>";
 /// and paths relative to the current directory for imports. Allocations
 /// come from `allocator` (use an arena).
 pub fn loadPair(
+    io: std.Io,
     allocator: std.mem.Allocator,
     mm0_path: []const u8,
     proof_path: ?[]const u8,
     failure: *?LoadFailure,
 ) LoadPairError!LoadedPair {
     if (builtin.os.tag == .freestanding) return error.ReadFailed;
-    const root_text = std.fs.cwd().readFileAlloc(
-        allocator,
+    const root_text = std.Io.Dir.cwd().readFileAlloc(
+        io,
         mm0_path,
-        std.math.maxInt(usize),
+        allocator,
+        .unlimited,
     ) catch |err| {
         failure.* = .{ .read = .{ .path = mm0_path, .err = err } };
         return error.ReadFailed;
     };
-    const root_key = FsResolver.rootKey(allocator, mm0_path) catch |err| {
+    const root_key = FsResolver.rootKey(io, allocator, mm0_path) catch |err| {
         failure.* = .{ .read = .{ .path = mm0_path, .err = err } };
         return error.ReadFailed;
     };
 
-    const cwd = std.process.getCwdAlloc(allocator) catch "";
+    const cwd = std.process.currentPathAlloc(io, allocator) catch "";
     var labeller = Labeller{
         .cwd = cwd,
         .root_key = root_key,
@@ -996,22 +1005,20 @@ pub fn loadPair(
                 std.fs.path.dirname(root_key) orelse ".",
                 stdin_label,
             }),
-            .text = std.fs.File.stdin().readToEndAlloc(
-                allocator,
-                std.math.maxInt(usize),
-            ) catch |err| {
+            .text = readStdin(io, allocator) catch |err| {
                 failure.* = .{ .read = .{ .path = stdin_label, .err = err } };
                 return error.ReadFailed;
             },
         } else blk: {
-            const key = FsResolver.rootKey(allocator, path) catch |err| {
+            const key = FsResolver.rootKey(io, allocator, path) catch |err| {
                 failure.* = .{ .read = .{ .path = path, .err = err } };
                 return error.ReadFailed;
             };
-            const text = std.fs.cwd().readFileAlloc(
-                allocator,
+            const text = std.Io.Dir.cwd().readFileAlloc(
+                io,
                 key,
-                std.math.maxInt(usize),
+                allocator,
+                .unlimited,
             ) catch |err| {
                 failure.* = .{ .read = .{ .path = path, .err = err } };
                 return error.ReadFailed;
@@ -1026,7 +1033,7 @@ pub fn loadPair(
             path;
     }
 
-    var fs = FsResolver{};
+    var fs = FsResolver{ .io = io };
     const unit = try loadUnit(
         allocator,
         fs.resolver(),
@@ -1042,6 +1049,12 @@ pub fn loadPair(
         @ptrCast(&labeller),
         @ptrCast(&proof_labeller),
     );
+}
+
+fn readStdin(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
+    var buffer: [4096]u8 = undefined;
+    var reader = std.Io.File.stdin().reader(io, &buffer);
+    return reader.interface.allocRemaining(allocator, .unlimited);
 }
 
 /// Where the root's proof file comes from in `loadUnit`.
@@ -1088,7 +1101,7 @@ pub fn loadUnit(
     on_failure: OnJoinFailure,
     failure: *?LoadFailure,
 ) LoadPairError!Unit {
-    var failures = std.ArrayListUnmanaged(JoinFailure){};
+    var failures = std.ArrayListUnmanaged(JoinFailure).empty;
     const mm0 = try joinSide(
         allocator,
         resolver,
@@ -1107,7 +1120,7 @@ pub fn loadUnit(
     }
 
     // The root comes last in the post-order file list.
-    var roots = std.ArrayListUnmanaged(File){};
+    var roots = std.ArrayListUnmanaged(File).empty;
     for (mm0.files, 0..) |file, index| {
         if (index + 1 == mm0.files.len and proof == .file) {
             try roots.append(allocator, proof.file);
@@ -1492,12 +1505,13 @@ test "filesystem imports take absolute specs as they are" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+    const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.makeDir("sub");
-    try tmp.dir.writeFile(.{ .sub_path = "lib.mm0", .data = "sort s;\n" });
-    const lib = try tmp.dir.realpathAlloc(allocator, "lib.mm0");
-    try tmp.dir.writeFile(.{
+    try tmp.dir.createDir(io, "sub", .default_dir);
+    try tmp.dir.writeFile(io, .{ .sub_path = "lib.mm0", .data = "sort s;\n" });
+    const lib = try tmp.dir.realPathFileAlloc(io, "lib.mm0", allocator);
+    try tmp.dir.writeFile(io, .{
         .sub_path = "sub/main.mm0",
         .data = try std.fmt.allocPrint(
             allocator,
@@ -1505,10 +1519,10 @@ test "filesystem imports take absolute specs as they are" {
             .{lib},
         ),
     });
-    const main = try tmp.dir.realpathAlloc(allocator, "sub/main.mm0");
+    const main = try tmp.dir.realPathFileAlloc(io, "sub/main.mm0", allocator);
 
     var failure: ?LoadFailure = null;
-    const pair = try loadPair(allocator, main, null, &failure);
+    const pair = try loadPair(io, allocator, main, null, &failure);
     try std.testing.expectEqual(@as(usize, 2), pair.mm0.files.len);
     try std.testing.expectEqualStrings(lib, pair.mm0.files[0].key);
 }

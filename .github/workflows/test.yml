@@ -15,6 +15,10 @@ concurrency:
   group: test-${{ github.ref }}
   cancel-in-progress: true
 
+# Zig 0.17 takes the global cache from the environment, not a flag.
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.cache/zig-global
+
 jobs:
   test:
     name: Build and test
@@ -78,36 +82,31 @@ jobs:
         run: |
           nix develop .#ci --command zig build \
             -Doptimize=ReleaseSafe \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Run complete test suite
         run: |
           nix develop .#ci --command zig build test \
             -Doptimize=ReleaseSafe \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Build web packages
         run: |
           nix develop .#ci --command zig build web-packages \
             -Doptimize=ReleaseSafe \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Smoke-test the packed editor in Chromium
         run: |
           nix develop .#ci --command zig build test-editor-browser \
             -Doptimize=ReleaseSafe \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Test the cross-origin LSP worker in Chromium
         run: |
           nix develop .#ci --command zig build test-lsp-cross-origin \
             -Doptimize=ReleaseSafe \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       # The pages workflow builds the manual too, but only on push to main.
       # Building it here catches a broken chapter or preprocessor on the PR.
@@ -159,19 +158,16 @@ jobs:
         run: |
           nix develop .#ci --command zig build test-node-wasm test-wasm-host \
             -Doptimize=ReleaseFast \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Smoke-test the packed editor in Chromium
         run: |
           nix develop .#ci --command zig build test-editor-browser \
             -Doptimize=ReleaseFast \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Test the cross-origin LSP worker in Chromium
         run: |
           nix develop .#ci --command zig build test-lsp-cross-origin \
             -Doptimize=ReleaseFast \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local

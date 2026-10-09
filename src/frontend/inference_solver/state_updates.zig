@@ -266,7 +266,7 @@ pub fn buildStructuralInterval(
     used: []const bool,
     profile: StructuralProfile,
 ) anyerror!StructuralInterval {
-    var lower_items = std.ArrayListUnmanaged(ExprId){};
+    var lower_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lower_items.deinit(self.allocator);
     for (actual_items, used) |actual_item, is_used| {
         if (!is_used) try lower_items.append(self.allocator, actual_item);

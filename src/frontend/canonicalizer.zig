@@ -260,7 +260,7 @@ test "canonicalizer rejects rewrite bindings with forbidden deps" {
         .is_local = false,
     });
 
-    var rules = std.ArrayListUnmanaged(RewriteRule){};
+    var rules = std.ArrayListUnmanaged(RewriteRule).empty;
     try rules.append(allocator, .{
         .rule_id = 0,
         .lhs = lhs,

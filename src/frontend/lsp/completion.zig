@@ -37,7 +37,7 @@ pub fn completionsAt(
 ) ![]const CompletionItem {
     const text = self.textForDocument(document) orelse return &.{};
     const safe_offset = @min(offset, text.len);
-    var list = std.ArrayListUnmanaged(CompletionItem){};
+    var list = std.ArrayListUnmanaged(CompletionItem).empty;
     switch (document) {
         .mm0 => {
             const math = mathStringAt(text, safe_offset);

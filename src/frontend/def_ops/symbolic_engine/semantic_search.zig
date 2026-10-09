@@ -244,7 +244,7 @@ fn matchSymbolicToExprSemanticSearch(
         return true;
     }
 
-    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer symbolic_steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesSymbolic(self, symbolic, &symbolic_steps);
     for (symbolic_steps.items) |step| {
@@ -273,7 +273,7 @@ fn matchSymbolicToExprSemanticSearch(
         try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
     }
 
-    var expr_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var expr_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer expr_steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesExpr(self, actual, &expr_steps);
     for (expr_steps.items) |step| {
@@ -337,7 +337,7 @@ fn matchExprToSymbolicSemanticSearch(
         return true;
     }
 
-    var expr_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var expr_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer expr_steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesExpr(self, actual, &expr_steps);
     for (expr_steps.items) |step| {
@@ -366,7 +366,7 @@ fn matchExprToSymbolicSemanticSearch(
         try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
     }
 
-    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var symbolic_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer symbolic_steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesSymbolic(self, symbolic, &symbolic_steps);
     for (symbolic_steps.items) |step| {
@@ -430,7 +430,7 @@ fn matchSymbolicToSymbolicSemanticSearch(
         return true;
     }
 
-    var lhs_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var lhs_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer lhs_steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesSymbolic(self, lhs, &lhs_steps);
     for (lhs_steps.items) |step| {
@@ -459,7 +459,7 @@ fn matchSymbolicToSymbolicSemanticSearch(
         try WitnessState.restoreMatchSnapshot(self, &snapshot, state);
     }
 
-    var rhs_steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var rhs_steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer rhs_steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesSymbolic(self, rhs, &rhs_steps);
     for (rhs_steps.items) |step| {
@@ -977,13 +977,13 @@ fn hashBoundValueForSearch(bound: BoundValue) u64 {
         .concrete => |concrete| blk: {
             var h = Types.mixHash(0x6a09e667f3bcc908, 6);
             h = Types.mixHash(h, concrete.raw);
-            h = Types.mixHash(h, @intFromEnum(concrete.mode));
+            h = Types.mixHash(h, @backingInt(concrete.mode));
             h = Types.mixHash(h, Types.symbolicHash(concrete.repr));
             break :blk h;
         },
         .symbolic => |symbolic| blk: {
             var h = Types.mixHash(0x6a09e667f3bcc908, 7);
-            h = Types.mixHash(h, @intFromEnum(symbolic.mode));
+            h = Types.mixHash(h, @backingInt(symbolic.mode));
             h = Types.mixHash(h, Types.symbolicHash(symbolic.expr));
             break :blk h;
         },
@@ -1147,7 +1147,7 @@ fn matchSymbolicAcuiLeafToExprSemanticSearch(
         else => {},
     }
 
-    var steps = std.ArrayListUnmanaged(SemanticStepCandidate){};
+    var steps = std.ArrayListUnmanaged(SemanticStepCandidate).empty;
     defer steps.deinit(self.shared.allocator);
     try collectSemanticStepCandidatesSymbolic(self, symbolic, &steps);
     for (steps.items) |step| {

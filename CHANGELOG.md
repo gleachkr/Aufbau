@@ -13,6 +13,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   the prefixed points, `⋀ x (f · x ≤ x)`, with no set theory underneath.
   The theory ships in the web demo.
 
+### Changed
+
+- Building Aufbau now requires Zig 0.17.0 (previously 0.15.2).
+
 ## [0.0.15] - 2026-10-08
 
 ### Changed

@@ -103,7 +103,7 @@ pub fn exactWithSession(
     const runtime = options.runtime;
     const pool = try session.getReferencePool(theorem, counters);
 
-    var candidates = std.ArrayListUnmanaged(ExactCandidate){};
+    var candidates = std.ArrayListUnmanaged(ExactCandidate).empty;
     errdefer {
         for (candidates.items) |*candidate| {
             candidate.deinit();
@@ -655,7 +655,7 @@ fn exactRuleCandidates(
     const rule_ids = try session.candidateRuleIds(goal, theorem, true, counters);
     defer allocator.free(rule_ids);
 
-    var list = std.ArrayListUnmanaged(ApplyCandidate){};
+    var list = std.ArrayListUnmanaged(ApplyCandidate).empty;
     errdefer {
         deinitApplyCandidateItems(list.items);
         list.deinit(allocator);
@@ -1868,7 +1868,7 @@ fn bindingsDepHit(
         const banned = bannedDeps(theorem, rule, bindings, idx);
         if (banned == 0) continue;
         const hit = exprDepHit(context, theorem, value, banned);
-        if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
+        if (@backingInt(hit) > @backingInt(result)) result = hit;
         if (result == .rigid) break;
     }
     return result;
@@ -1892,7 +1892,7 @@ fn exprDepHit(
             for (app.args, 0..) |arg, i| {
                 var hit = exprDepHit(context, theorem, arg, banned);
                 if (hit == .rigid and !argSurvivesConversion(context, app.term_id, i)) hit = .soft;
-                if (@intFromEnum(hit) > @intFromEnum(result)) result = hit;
+                if (@backingInt(hit) > @backingInt(result)) result = hit;
                 if (result == .rigid) break;
             }
             break :blk result;
@@ -2297,7 +2297,7 @@ fn continueOpenTargetSolved(
     // binders this fill set (and their prior value) so they roll back with the
     // branch and render as explicit bindings on the final application.
     const Flag = struct { idx: usize, orig: ?ExprId };
-    var flagged = std.ArrayListUnmanaged(Flag){};
+    var flagged = std.ArrayListUnmanaged(Flag).empty;
     defer flagged.deinit(slot.ctx.context.allocator);
     var solve_failed = false;
     if (view) |v| {
@@ -2756,7 +2756,7 @@ fn tryPoolWitnesses(
     pick: PoolPick,
 ) anyerror!bool {
     const theorem = &slot.ctx.candidate.theorem;
-    var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+    var unsolved = std.ArrayListUnmanaged(PlaceholderId).empty;
     defer unsolved.deinit(slot.ctx.context.allocator);
     try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
     switch (pick) {
@@ -2817,7 +2817,7 @@ fn collectSlotUnsolved(
     out: *std.ArrayListUnmanaged(PlaceholderId),
 ) !void {
     const theorem = &slot.ctx.candidate.theorem;
-    var found = std.ArrayListUnmanaged(PlaceholderId){};
+    var found = std.ArrayListUnmanaged(PlaceholderId).empty;
     defer found.deinit(slot.store.allocator);
     for (slot.ctx.bindings) |maybe| if (maybe) |value| try slot.store.collectUnsolved(theorem, value, &found);
     for (unknowns) |maybe| if (maybe) |value| try slot.store.collectUnsolved(theorem, value, &found);
@@ -2914,7 +2914,7 @@ const RefNameTally = struct {
     unsolved: []const PlaceholderId,
     /// App subterms of the target and bindings that mention an unsolved
     /// variable.
-    parts: std.ArrayListUnmanaged(ExprId) = .{},
+    parts: std.ArrayListUnmanaged(ExprId) = .empty,
     /// Ref subterms already matched (refs share subterms).
     seen: std.AutoHashMapUnmanaged(ExprId, void) = .{},
     votes: std.AutoArrayHashMapUnmanaged(Vote, u32) = .{},

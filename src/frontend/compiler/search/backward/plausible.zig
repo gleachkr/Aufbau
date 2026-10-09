@@ -750,10 +750,10 @@ pub fn hypRefMembersPlausible(
         .rule = rule,
         .regions = regions[0..region_len],
         .goal_members = undefined,
-        .rest_region = [_]?usize{null} ** max_repeated_binder_binders,
-        .rest_count = [_]usize{0} ** max_hypref_regions,
+        .rest_region = @splat(null),
+        .rest_count = @splat(0),
         .consumed = undefined,
-        .consumed_len = [_]usize{0} ** max_hypref_regions,
+        .consumed_len = @splat(0),
         .ref_concls = ref_concls,
         .leaves = max_hypref_leaves,
     };
@@ -929,8 +929,8 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
             const mts = bag.flattenTemplate(context, hr.app.term_id, .{ .app = hr.app }) orelse
                 return .abstain;
             var inst = bag.ExprBag{};
-            var rest_mask = [_]bool{false} ** max_hypref_regions;
-            var hyp_rest_count = [_]usize{0} ** max_hypref_regions;
+            var rest_mask: [max_hypref_regions]bool = @splat(false);
+            var hyp_rest_count: [max_hypref_regions]usize = @splat(0);
             var has_rest = false;
             for (mts.slice()) |m| {
                 switch (m) {

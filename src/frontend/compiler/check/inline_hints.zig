@@ -810,9 +810,9 @@ fn semanticBindingsForChildExpectation(
     const allocator = context.allocator;
     if (application.refs.len != rule.hyps.len) return null;
 
-    var sibling_hyps = std.ArrayListUnmanaged(TemplateExpr){};
+    var sibling_hyps = std.ArrayListUnmanaged(TemplateExpr).empty;
     defer sibling_hyps.deinit(allocator);
-    var sibling_exprs = std.ArrayListUnmanaged(ExprId){};
+    var sibling_exprs = std.ArrayListUnmanaged(ExprId).empty;
     defer sibling_exprs.deinit(allocator);
 
     for (application.refs, 0..) |ref, idx| {
@@ -1191,7 +1191,7 @@ pub fn ambiguousPrincipalPins(
     expected: ExprId,
     explicit: []const ?ExprId,
 ) ![][]?ExprId {
-    var pins = std.ArrayListUnmanaged([]?ExprId){};
+    var pins = std.ArrayListUnmanaged([]?ExprId).empty;
     errdefer {
         for (pins.items) |pin| allocator.free(pin);
         pins.deinit(allocator);

@@ -27,15 +27,15 @@ pub fn sortMarkdown(
     sort: parse.SortStmt,
     annotations: []const []const u8,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    const writer = &buf.writer;
     try writer.print("Sort `{s}`.\n\n", .{sort.name});
     try writer.writeAll("```mm0\n");
-    try writeAnnotationLines(&writer, annotations);
-    try writeSortModifiers(&writer, sort.modifiers);
+    try writeAnnotationLines(writer, annotations);
+    try writeSortModifiers(writer, sort.modifiers);
     try writer.print("sort {s};\n```", .{sort.name});
-    try writeDocComment(&writer, annotations);
-    return try buf.toOwnedSlice(allocator);
+    try writeDocComment(writer, annotations);
+    return try buf.toOwnedSlice();
 }
 
 pub fn termMarkdown(
@@ -44,33 +44,33 @@ pub fn termMarkdown(
     term: parse.TermStmt,
     annotations: []const []const u8,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    const writer = &buf.writer;
     try writer.print("{s} `{s}`, returns `{s}`.\n\n", .{
         if (term.is_def) "Definition" else "Term",
         term.name,
         term.ret_sort_name,
     });
     try writer.writeAll("```mm0\n");
-    try writeAnnotationLines(&writer, annotations);
+    try writeAnnotationLines(writer, annotations);
     try writer.print("{s} {s}", .{
         if (term.is_def) "def" else "term",
         term.name,
     });
-    try writeCompactArgList(&writer, term.arg_names, term.args);
+    try writeCompactArgList(writer, term.arg_names, term.args);
     try writer.print(": {s}", .{term.ret_sort_name});
-    try writeDeps(&writer, term.ret_deps, term.arg_names, term.args, term.args.len);
+    try writeDeps(writer, term.ret_deps, term.arg_names, term.args, term.args.len);
     if (term.is_def) {
         if (definitionBodySource(text, term.name_span)) |body| {
             try writer.writeAll(" =\n");
-            try writeMathLine(&writer, "  ", body);
+            try writeMathLine(writer, "  ", body);
         } else {
             try writer.writeAll(" = …");
         }
     }
     try writer.writeAll(";\n```");
-    try writeDocComment(&writer, annotations);
-    return try buf.toOwnedSlice(allocator);
+    try writeDocComment(writer, annotations);
+    return try buf.toOwnedSlice();
 }
 
 pub fn assertionMarkdown(
@@ -80,8 +80,8 @@ pub fn assertionMarkdown(
     concl_sort_name: ?[]const u8,
     annotations: []const []const u8,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    const writer = &buf.writer;
     const kind: DeclarationKind = switch (assertion.kind) {
         .axiom => .axiom,
         .theorem => .theorem,
@@ -98,9 +98,9 @@ pub fn assertionMarkdown(
     try writer.writeAll(".");
     if (assertion.is_local) try writer.writeAll(" Local assertion.");
     try writer.writeAll("\n\n```mm0\n");
-    try writeAnnotationLines(&writer, annotations);
+    try writeAnnotationLines(writer, annotations);
     try writer.print("{s} {s}", .{ kind.label(), assertion.name });
-    try writeCompactArgList(&writer, assertion.arg_names, assertion.args);
+    try writeCompactArgList(writer, assertion.arg_names, assertion.args);
     try writer.writeAll(":\n");
 
     const math_strings = try source.mathStringsBeforeByteInContainingStatement(
@@ -114,11 +114,11 @@ pub fn assertionMarkdown(
     const expected = assertion.hyps.len + 1;
     if (math_strings.len >= expected) {
         for (math_strings[0..assertion.hyps.len]) |hyp| {
-            try writeMathLine(&writer, "  ", hyp.text);
+            try writeMathLine(writer, "  ", hyp.text);
             try writer.writeAll(" >\n");
         }
         try writeMathLine(
-            &writer,
+            writer,
             "  ",
             math_strings[assertion.hyps.len].text,
         );
@@ -126,8 +126,8 @@ pub fn assertionMarkdown(
     } else {
         try writer.writeAll("  …;\n```");
     }
-    try writeDocComment(&writer, annotations);
-    return try buf.toOwnedSlice(allocator);
+    try writeDocComment(writer, annotations);
+    return try buf.toOwnedSlice();
 }
 
 pub fn lemmaMarkdown(
@@ -136,8 +136,8 @@ pub fn lemmaMarkdown(
     hyp_count: usize,
     hyp_count_known: bool,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    const writer = &buf.writer;
     try writer.print("Local lemma `{s}`.", .{block.name});
     if (hyp_count_known) {
         try writer.print(" {d} {s}.", .{
@@ -146,29 +146,29 @@ pub fn lemmaMarkdown(
         });
     }
     try writer.writeAll("\n\n```auf\n");
-    try writeAnnotationLines(&writer, block.annotations);
+    try writeAnnotationLines(writer, block.annotations);
     try writer.print("lemma {s}", .{block.name});
     if (block.header_tail.len != 0) {
         try writer.print(" {s}", .{block.header_tail});
     }
     try writer.writeAll("\n```");
-    try writeDocComment(&writer, block.annotations);
-    return try buf.toOwnedSlice(allocator);
+    try writeDocComment(writer, block.annotations);
+    return try buf.toOwnedSlice();
 }
 
 pub fn proofLineMarkdown(
     allocator: std.mem.Allocator,
     line: proof_script.ProofLine,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    const writer = &buf.writer;
     try writer.writeAll("```auf\n");
     try writer.print("{s}: ${s}$\n```", .{
         line.label,
         line.assertion.text,
     });
     try writer.print("\n\nProof line `{s}`.", .{line.label});
-    return try buf.toOwnedSlice(allocator);
+    return try buf.toOwnedSlice();
 }
 
 pub fn hypRefMarkdown(
@@ -180,8 +180,8 @@ pub fn hypRefMarkdown(
     hyp_count_known: bool,
     hyp_text: ?[]const u8,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    var writer = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    const writer = &buf.writer;
     if (hyp_text) |text| {
         try writer.writeAll("```mm0\n$");
         try writer.writeAll(text);
@@ -205,7 +205,7 @@ pub fn hypRefMarkdown(
             hyp_count,
         });
     }
-    return try buf.toOwnedSlice(allocator);
+    return try buf.toOwnedSlice();
 }
 
 pub fn sortVarMarkdown(

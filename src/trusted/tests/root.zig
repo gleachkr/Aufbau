@@ -268,7 +268,7 @@ fn collectStatementCmds(
     allocator: std.mem.Allocator,
     mmb: Mmb,
 ) ![]Proof.StmtCmd {
-    var cmds = std.ArrayListUnmanaged(Proof.StmtCmd){};
+    var cmds = std.ArrayListUnmanaged(Proof.StmtCmd).empty;
     var pos: usize = @intCast(mmb.header.p_proof);
 
     while (true) {
@@ -278,7 +278,7 @@ fn collectStatementCmds(
             pos,
             mmb.file_bytes.len,
         );
-        const stmt_cmd: Proof.StmtCmd = @enumFromInt(cmd.op);
+        const stmt_cmd: Proof.StmtCmd = @fromBackingInt(@intCast(cmd.op));
         try cmds.append(allocator, stmt_cmd);
         if (stmt_cmd == .End) break;
         if (cmd.data == 0) return error.BadStatementLength;
@@ -493,7 +493,7 @@ fn parseNestedAxiom(
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var src: std.ArrayListUnmanaged(u8) = .{};
+    var src: std.ArrayListUnmanaged(u8) = .empty;
     try src.appendSlice(allocator,
         \\delimiter $ ( ) ~ $;
         \\provable sort wff;

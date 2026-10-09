@@ -127,8 +127,8 @@ pub const InferenceContext = struct {
     // These slots start as either an explicit binding or `null` if omitted.
     // Any entries appended later by `UTermSave` are concrete by construction
     // (or meta wildcards when the expected line is a Stage 4 open hint).
-    uheap: std.ArrayListUnmanaged(?ExprId) = .{},
-    ustack: std.ArrayListUnmanaged(ExprId) = .{},
+    uheap: std.ArrayListUnmanaged(?ExprId) = .empty,
+    ustack: std.ArrayListUnmanaged(ExprId) = .empty,
     hyps: []const ExprId,
     next_hyp: usize,
     region: ReplayMismatch.Region = .conclusion,

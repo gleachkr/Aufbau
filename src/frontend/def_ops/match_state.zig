@@ -41,7 +41,7 @@ pub const MatchSession = struct {
     materialized_witness_infos: Types.MaterializedWitnessInfoMap = .empty,
     transparent_representatives: Types.RepresentativeCache = .empty,
     normalized_representatives: Types.RepresentativeCache = .empty,
-    symbolic_dummy_infos: std.ArrayListUnmanaged(Types.SymbolicDummyInfo) = .{},
+    symbolic_dummy_infos: std.ArrayListUnmanaged(Types.SymbolicDummyInfo) = .empty,
     /// Negative memo for `matchSymbolicToSymbolicState`: combined hash of
     /// (lhs, rhs, session state) for pairs already proven NOT to match under
     /// the current state. Mirrors the semantic-search `visited` dedup but for
@@ -55,7 +55,7 @@ pub const MatchSession = struct {
     /// below; only the initial seeding of a fresh session (before any
     /// snapshot exists) may bypass the trail, and only via `seedBinding`,
     /// which asserts that.
-    trail: std.ArrayListUnmanaged(TrailEntry) = .{},
+    trail: std.ArrayListUnmanaged(TrailEntry) = .empty,
     /// Set by `saveMatchSnapshot` on the first snapshot and never cleared.
     /// Once true, untrailed mutation (`seedBinding`) is illegal: a rollback
     /// could not undo it.

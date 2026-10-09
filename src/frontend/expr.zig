@@ -213,9 +213,9 @@ pub const ExprInterner = struct {
     /// snapshot.
     base: ?*const ExprInterner = null,
     base_count: ExprId = 0,
-    nodes: std.ArrayListUnmanaged(ExprNode) = .{},
+    nodes: std.ArrayListUnmanaged(ExprNode) = .empty,
     /// `hashExprNode` of each overlay node, aligned with `nodes`.
-    hashes: std.ArrayListUnmanaged(u64) = .{},
+    hashes: std.ArrayListUnmanaged(u64) = .empty,
     index: ExprIdIndex = .empty,
 
     pub fn init(allocator: std.mem.Allocator) ExprInterner {
@@ -421,14 +421,14 @@ pub const TheoremContext = struct {
     interner: ExprInterner,
     parser_vars: std.AutoHashMapUnmanaged(*const Expr, VarId) = .empty,
     arg_infos: []const ArgInfo = &.{},
-    theorem_vars: std.ArrayListUnmanaged(ExprId) = .{},
-    theorem_hyps: std.ArrayListUnmanaged(ExprId) = .{},
+    theorem_vars: std.ArrayListUnmanaged(ExprId) = .empty,
+    theorem_hyps: std.ArrayListUnmanaged(ExprId) = .empty,
     /// Borrowed from the parsed assertion (parser-arena-owned), aligned with
     /// `theorem_hyps`: binder names for binder-form hypotheses, null for
     /// arrow-form ones.
     theorem_hyp_names: []const ?[]const u8 = &.{},
-    theorem_dummies: std.ArrayListUnmanaged(DummyInfo) = .{},
-    theorem_placeholders: std.ArrayListUnmanaged(PlaceholderInfo) = .{},
+    theorem_dummies: std.ArrayListUnmanaged(DummyInfo) = .empty,
+    theorem_placeholders: std.ArrayListUnmanaged(PlaceholderInfo) = .empty,
     next_dummy_id: DummyVarId = 0,
     next_placeholder_id: PlaceholderId = 0,
     // Placeholder deps are frontend-only synthetic masks. They must stay

@@ -39,7 +39,7 @@ pub fn collectTemplateStructuralItems(
             if (isStructuralRemainderBinder(self, space, idx, profile)) {
                 if (idx < bindings.len) {
                     if (bindings[idx]) |bound_value| {
-                        var items = std.ArrayListUnmanaged(ExprId){};
+                        var items = std.ArrayListUnmanaged(ExprId).empty;
                         defer items.deinit(self.allocator);
                         try collectCanonicalStructuralItems(
                             self,
@@ -138,7 +138,7 @@ pub fn collectConcreteStructuralItems(
     profile: StructuralProfile,
     out: *std.ArrayListUnmanaged(ExprId),
 ) anyerror!void {
-    var raw = std.ArrayListUnmanaged(ExprId){};
+    var raw = std.ArrayListUnmanaged(ExprId).empty;
     defer raw.deinit(self.allocator);
 
     try StructuralCongruence.collectItems(self, expr_id, profile, &raw);

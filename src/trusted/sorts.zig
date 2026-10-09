@@ -1,4 +1,4 @@
-pub const Sort = packed struct {
+pub const Sort = packed struct(u8) {
     pure: bool = false,
     strict: bool = false,
     provable: bool = false,

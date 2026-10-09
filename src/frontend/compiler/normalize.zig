@@ -46,7 +46,7 @@ pub fn maybeBuildComparisonSnapshotWithDebug(
     actual: ExprId,
     debug: DebugConfig,
 ) ComparisonSnapshot {
-    var checked = std.ArrayListUnmanaged(CheckedLine){};
+    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer checked.deinit(allocator);
 
     const normalized_expected = normalizeExprForSnapshot(
@@ -287,7 +287,7 @@ pub fn wouldAcceptStatedConclusion(
     derived: ExprId,
     stated: ExprId,
 ) error{OutOfMemory}!bool {
-    var checked = std.ArrayListUnmanaged(CheckedLine){};
+    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer checked.deinit(allocator);
     var scratch = CompilerDiag.Scratch.init(allocator);
     defer scratch.deinit();

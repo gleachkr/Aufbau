@@ -703,7 +703,7 @@ fn fillAcuiFrame(
     candidate: ExprId,
 ) !?ExprId {
     const allocator = theorem.allocator;
-    var members = std.ArrayListUnmanaged(*const Expr){};
+    var members = std.ArrayListUnmanaged(*const Expr).empty;
     defer members.deinit(allocator);
     try collectSurfaceMembers(allocator, holey, acui.head_term_id, &members);
     const frame_hole = switch (frameOf(env, acui, members.items)) {
@@ -790,7 +790,7 @@ pub fn acuiFrameObstacle(
     };
     if (term.args.len == 2) {
         if (try registry.resolveStructuralCombiner(env, term.id)) |acui| {
-            var members = std.ArrayListUnmanaged(*const Expr){};
+            var members = std.ArrayListUnmanaged(*const Expr).empty;
             defer members.deinit(allocator);
             try collectSurfaceMembers(
                 allocator,

@@ -12,3 +12,4 @@ CLAUDE.md
 .claude
 docs/design_notes
 specs/
+zig-pkg

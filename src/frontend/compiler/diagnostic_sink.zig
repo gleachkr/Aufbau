@@ -125,11 +125,13 @@ pub const DiagnosticSink = struct {
     }
 
     pub fn reportWarnings(self: *const DiagnosticSink) void {
+        var buffer: [256]u8 = undefined;
+        const stderr = &std.debug.lockStderr(&buffer).file_writer.interface;
+        defer std.debug.unlockStderr();
         for (self.warningDiagnostics()) |diag| {
-            self.reportDiagnostic(diag);
+            self.writeDiagnostic(stderr, diag) catch return;
         }
         if (self.dropped_warning_count != 0) {
-            const stderr = std.fs.File.stderr().deprecatedWriter();
             stderr.print(
                 "{s}: ",
                 .{CompilerDiag.severityLabel(.warning)},
@@ -170,16 +172,26 @@ pub const DiagnosticSink = struct {
         self: *const DiagnosticSink,
         diag: Diagnostic,
     ) void {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
-        stderr.print(
+        var buffer: [256]u8 = undefined;
+        const stderr = &std.debug.lockStderr(&buffer).file_writer.interface;
+        defer std.debug.unlockStderr();
+        self.writeDiagnostic(stderr, diag) catch return;
+    }
+
+    fn writeDiagnostic(
+        self: *const DiagnosticSink,
+        stderr: *std.Io.Writer,
+        diag: Diagnostic,
+    ) std.Io.Writer.Error!void {
+        try stderr.print(
             "{s}: ",
             .{CompilerDiag.severityLabel(diag.severity)},
-        ) catch return;
-        CompilerDiag.renderDiagnostic(stderr, diag, "\n  ") catch return;
-        stderr.writeByte('\n') catch return;
-        self.reportDiagnosticNotes(diag);
-        self.reportDiagnosticRelated(diag);
-        self.reportDiagnosticLocation(diag);
+        );
+        try CompilerDiag.renderDiagnostic(stderr, diag, "\n  ");
+        try stderr.writeByte('\n');
+        try self.writeDiagnosticNotes(stderr, diag);
+        try self.writeDiagnosticRelated(stderr, diag);
+        try self.writeDiagnosticLocation(stderr, diag);
     }
 
     pub fn setMapping(
@@ -228,27 +240,29 @@ pub const DiagnosticSink = struct {
         };
     }
 
-    fn reportDiagnosticLocation(
+    fn writeDiagnosticLocation(
         self: *const DiagnosticSink,
+        stderr: *std.Io.Writer,
         diag: Diagnostic,
-    ) void {
+    ) std.Io.Writer.Error!void {
         const span = diag.span orelse return;
         const located = self.locateSpan(diag.source, span) orelse return;
-        reportSpanLocation("", located.info, located.span);
+        try writeSpanLocation(stderr, "", located.info, located.span);
     }
 
-    fn reportDiagnosticNotes(
+    fn writeDiagnosticNotes(
         self: *const DiagnosticSink,
+        stderr: *std.Io.Writer,
         diag: Diagnostic,
-    ) void {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+    ) std.Io.Writer.Error!void {
         for (diag.noteSlice()) |note| {
-            stderr.print("  {s}: ", .{CompilerDiag.noteHeading()}) catch return;
-            CompilerDiag.renderNoteMessage(stderr, note.message) catch return;
-            stderr.writeByte('\n') catch return;
+            try stderr.print("  {s}: ", .{CompilerDiag.noteHeading()});
+            try CompilerDiag.renderNoteMessage(stderr, note.message);
+            try stderr.writeByte('\n');
             const span = note.span orelse continue;
             const located = self.locateSpan(note.source, span) orelse continue;
-            reportSpanLocation(
+            try writeSpanLocation(
+                stderr,
                 CompilerDiag.noteHeading(),
                 located.info,
                 located.span,
@@ -256,22 +270,22 @@ pub const DiagnosticSink = struct {
         }
     }
 
-    fn reportDiagnosticRelated(
+    fn writeDiagnosticRelated(
         self: *const DiagnosticSink,
+        stderr: *std.Io.Writer,
         diag: Diagnostic,
-    ) void {
-        const stderr = std.fs.File.stderr().deprecatedWriter();
+    ) std.Io.Writer.Error!void {
         for (diag.relatedSlice()) |related| {
-            stderr.print(
+            try stderr.print(
                 "  {s}: ",
                 .{CompilerDiag.relatedHeading()},
-            ) catch return;
-            CompilerDiag.renderRelatedLabel(stderr, related.label) catch
-                return;
-            stderr.writeByte('\n') catch return;
+            );
+            try CompilerDiag.renderRelatedLabel(stderr, related.label);
+            try stderr.writeByte('\n');
             const located = self.locateSpan(related.source, related.span) orelse
                 continue;
-            reportSpanLocation(
+            try writeSpanLocation(
+                stderr,
                 CompilerDiag.relatedHeading(),
                 located.info,
                 located.span,
@@ -419,11 +433,12 @@ pub const DiagnosticSink = struct {
                 const Payload = @TypeOf(payload);
                 if (Payload == void) return message;
                 var stable_payload = payload;
-                inline for (@typeInfo(Payload).@"struct".fields) |field| {
-                    if (field.type == []const u8) {
-                        @field(stable_payload, field.name) =
+                const info = @typeInfo(Payload).@"struct";
+                inline for (info.field_names, info.field_types) |name, field_type| {
+                    if (field_type == []const u8) {
+                        @field(stable_payload, name) =
                             self.stableRequiredString(
-                                @field(payload, field.name),
+                                @field(payload, name),
                             );
                     }
                 }
@@ -556,27 +571,28 @@ pub const DiagnosticSink = struct {
     }
 };
 
-fn reportSpanLocation(
+fn writeSpanLocation(
+    stderr: *std.Io.Writer,
     prefix: []const u8,
     source_info: SourceInfo,
     span: Span,
-) void {
+) std.Io.Writer.Error!void {
     const info = lineCol(source_info.text, span.start);
     const line = source_info.text[info.line_start..info.line_end];
 
     if (prefix.len == 0) {
-        std.debug.print(
+        try stderr.print(
             "  --> {s}:{d}:{d}\n",
             .{ source_info.label, info.line, info.column },
         );
     } else {
-        std.debug.print(
+        try stderr.print(
             "  {s} --> {s}:{d}:{d}\n",
             .{ prefix, source_info.label, info.line, info.column },
         );
     }
-    std.debug.print("  | {s}\n", .{line});
-    std.debug.print("  | ", .{});
+    try stderr.print("  | {s}\n", .{line});
+    try stderr.writeAll("  | ");
 
     const caret_start = span.start - info.line_start;
     const caret_end = if (span.end > span.start)
@@ -585,13 +601,9 @@ fn reportSpanLocation(
         @min(span.start + 1, info.line_end);
     const caret_len = @max(caret_end - span.start, 1);
 
-    for (0..caret_start) |_| {
-        std.debug.print(" ", .{});
-    }
-    for (0..caret_len) |_| {
-        std.debug.print("^", .{});
-    }
-    std.debug.print("\n", .{});
+    try stderr.splatByteAll(' ', caret_start);
+    try stderr.splatByteAll('^', caret_len);
+    try stderr.writeByte('\n');
 }
 
 const SourceInfo = struct {

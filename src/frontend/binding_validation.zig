@@ -25,11 +25,21 @@ pub const Violation = union(enum) {
 
 /// Scratch for one `ExprInfo` per rule arg: on the stack for ordinary
 /// arities, on the heap past that (a rule may have any number of args).
-pub fn infoScratch(
-    fallback: std.mem.Allocator,
-) std.heap.StackFallbackAllocator(16 * @sizeOf(ExprInfo)) {
-    return std.heap.stackFallback(16 * @sizeOf(ExprInfo), fallback);
+pub fn infoScratch(fallback: std.mem.Allocator) InfoScratch {
+    return .{ .fallback = fallback };
 }
+
+pub const InfoScratch = struct {
+    buffer: [16 * @sizeOf(ExprInfo)]u8 align(@alignOf(ExprInfo)) = undefined,
+    fallback: std.mem.Allocator,
+    first: std.heap.BufferFirstAllocator = undefined,
+
+    /// Call once, after the scratch has reached its final address.
+    pub fn get(self: *InfoScratch) std.mem.Allocator {
+        self.first = .init(&self.buffer, self.fallback);
+        return self.first.allocator();
+    }
+};
 
 /// First violation of `bindings` against `expected_args`, each binding read
 /// in the theorem's own context.
@@ -290,11 +300,11 @@ test "firstViolation keeps argument order past 56 args" {
     // 60 regular args, a bound arg, then a regular arg declared to depend on
     // it. Only bound args are capped, so the scans reach past index 56.
     const obj: ArgInfo = .{ .sort_name = "obj", .bound = false, .deps = 0 };
-    var expected = [_]ArgInfo{obj} ** 62;
+    var expected: [62]ArgInfo = @splat(obj);
     expected[60] = .{ .sort_name = "obj", .bound = true, .deps = 1 };
     expected[61] = .{ .sort_name = "obj", .bound = false, .deps = 1 };
     const x: ExprInfo = .{ .sort_name = "obj", .bound = true, .deps = 1 << 3 };
-    var infos = [_]ExprInfo{.{ .sort_name = "obj", .bound = false, .deps = 0 }} ** 62;
+    var infos: [62]ExprInfo = @splat(.{ .sort_name = "obj", .bound = false, .deps = 0 });
     infos[60] = x;
     infos[61] = .{ .sort_name = "obj", .bound = false, .deps = x.deps };
     try std.testing.expectEqual(@as(?Violation, null), firstViolation(&expected, &infos));

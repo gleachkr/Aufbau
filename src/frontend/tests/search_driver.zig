@@ -35,7 +35,7 @@ fn applyEdits(
     proof_src: []const u8,
     markers: []const SearchDriver.Marker,
 ) ![]u8 {
-    var edits = std.ArrayListUnmanaged(SearchDriver.Edit){};
+    var edits = std.ArrayListUnmanaged(SearchDriver.Edit).empty;
     defer edits.deinit(std.testing.allocator);
     for (markers) |marker| {
         if (marker.filled_assertion) |edit| {

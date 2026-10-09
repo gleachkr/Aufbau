@@ -25,6 +25,10 @@ concurrency:
   group: npm-publish
   cancel-in-progress: false
 
+# Zig 0.17 takes the global cache from the environment, not a flag.
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.cache/zig-global
+
 jobs:
   release_test:
     if: github.ref_type == 'tag'
@@ -54,7 +58,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.17.0
 
       - name: Cache Zig build data
         uses: actions/cache@v4
@@ -105,8 +109,7 @@ jobs:
         run: |
           zig build web-packages \
             -Doptimize=ReleaseFast \
-            --cache-dir .cache/zig-local \
-            --global-cache-dir .cache/zig-global
+            --cache-dir .cache/zig-local
 
       - name: Set package versions
         run: |

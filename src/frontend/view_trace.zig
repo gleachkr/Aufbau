@@ -139,7 +139,7 @@ pub fn formatExpr(
     expr_id: ExprId,
 ) ![]u8 {
     const max_len = pretty_print.Limit.default_max_len;
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     errdefer out.deinit(allocator);
     try appendExpr(&out, allocator, theorem, env, expr_id, max_len);
     if (out.items.len > max_len) {
@@ -293,9 +293,9 @@ pub fn formatBindingSeed(
     all_seeds: []const BindingSeed,
     seed: BindingSeed,
 ) ![]u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     errdefer out.deinit(allocator);
-    var seen = std.ArrayListUnmanaged(usize){};
+    var seen = std.ArrayListUnmanaged(usize).empty;
     defer seen.deinit(allocator);
     try appendSeed(
         &out,
@@ -378,21 +378,21 @@ fn appendExpr(
     switch (theorem.interner.node(expr_id).*) {
         .variable => |var_id| switch (var_id) {
             .theorem_var => |idx| {
-                try out.writer(allocator).print("v{d}", .{idx});
+                try out.print(allocator, "v{d}", .{idx});
             },
             .dummy_var => |idx| {
-                try out.writer(allocator).print(".d{d}", .{idx});
+                try out.print(allocator, ".d{d}", .{idx});
             },
         },
         .placeholder => |idx| {
-            try out.writer(allocator).print(".p{d}", .{idx});
+            try out.print(allocator, ".p{d}", .{idx});
         },
         .app => |app| {
             const term_name = if (app.term_id < env.terms.items.len)
                 env.terms.items[app.term_id].name
             else
                 "<term>";
-            try out.writer(allocator).print("{s}", .{term_name});
+            try out.print(allocator, "{s}", .{term_name});
             if (app.args.len == 0) return;
             try out.append(allocator, '(');
             for (app.args, 0..) |arg, idx| {
@@ -422,7 +422,8 @@ fn appendSeed(
             try out.append(allocator, ')');
         },
         .semantic => |semantic| {
-            try out.writer(allocator).print(
+            try out.print(
+                allocator,
                 "semantic({s}, ",
                 .{bindingModeName(semantic.mode)},
             );
@@ -454,7 +455,8 @@ fn appendBoundValue(
 ) anyerror!void {
     switch (bound) {
         .concrete => |concrete| {
-            try out.writer(allocator).print(
+            try out.print(
+                allocator,
                 "bound.concrete({s}, raw=",
                 .{bindingModeName(concrete.mode)},
             );
@@ -469,7 +471,8 @@ fn appendBoundValue(
             try out.append(allocator, ')');
         },
         .symbolic => |symbolic| {
-            try out.writer(allocator).print(
+            try out.print(
+                allocator,
                 "bound.symbolic({s}, ",
                 .{bindingModeName(symbolic.mode)},
             );
@@ -501,7 +504,8 @@ fn appendSymbolic(
     switch (symbolic.*) {
         .binder => |idx| {
             const name = binderLabel(view_arg_names, idx);
-            try out.writer(allocator).print(
+            try out.print(
+                allocator,
                 "binder({s}#{d}",
                 .{ name, idx },
             );
@@ -528,14 +532,14 @@ fn appendSymbolic(
             try out.append(allocator, ')');
         },
         .dummy => |slot| {
-            try out.writer(allocator).print("dummy({d})", .{slot});
+            try out.print(allocator, "dummy({d})", .{slot});
         },
         .app => |app| {
             const term_name = if (app.term_id < env.terms.items.len)
                 env.terms.items[app.term_id].name
             else
                 "<term>";
-            try out.writer(allocator).print("{s}(", .{term_name});
+            try out.print(allocator, "{s}(", .{term_name});
             for (app.args, 0..) |arg, idx| {
                 if (idx != 0) try out.appendSlice(allocator, ", ");
                 try appendSymbolic(

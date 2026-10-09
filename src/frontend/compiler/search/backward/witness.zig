@@ -568,8 +568,8 @@ fn matchAcuiRegion(
     if (!try flattenRegion(store, theorem, head, unit_id, source, &sbuf, &scount)) return false;
     if (!try flattenRegion(store, theorem, head, unit_id, pattern, &pbuf, &pcount)) return false;
 
-    var sused = [_]bool{false} ** max_region_members;
-    var pdone = [_]bool{false} ** max_region_members;
+    var sused: [max_region_members]bool = @splat(false);
+    var pdone: [max_region_members]bool = @splat(false);
 
     // Pass 1: cancel identical members (multiset, multiplicity-aware —
     // hash-consing makes ExprId equality member equality).

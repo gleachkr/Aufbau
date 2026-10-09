@@ -151,7 +151,7 @@ pub fn collectAlphaMatches(
         rule_slot: u32,
         entries: []const Entry,
     };
-    var pending: std.ArrayListUnmanaged(Pending) = .{};
+    var pending: std.ArrayListUnmanaged(Pending) = .empty;
     var complete = true;
 
     collect: for (rules, 0..) |rule, rule_slot| {
@@ -161,7 +161,7 @@ pub fn collectAlphaMatches(
 
         // Settled instances on clean classes keep their verdicts;
         // ones on dirty classes are superseded by the re-solve below.
-        var clean: std.ArrayListUnmanaged(AlphaInstance) = .{};
+        var clean: std.ArrayListUnmanaged(AlphaInstance) = .empty;
         if (self.alpha_settled.get(@intCast(rule_slot))) |cached| {
             for (cached.items) |inst| {
                 if (dirty.contains(self.find(inst.root))) continue;
@@ -169,7 +169,7 @@ pub fn collectAlphaMatches(
             }
         }
 
-        var fresh: std.ArrayListUnmanaged(AlphaInstance) = .{};
+        var fresh: std.ArrayListUnmanaged(AlphaInstance) = .empty;
         for (self.nodes.items, 0..) |stored, node_id| {
             const app = switch (stored.node) {
                 .app => |a| a,
@@ -196,7 +196,7 @@ pub fn collectAlphaMatches(
             const allotted = @min(opts.ac_match_budget, iter_steps.*);
             self.ac_budget_remaining = allotted;
             self.ac_budget_hit = false;
-            var solutions: std.ArrayListUnmanaged([]const ?Child) = .{};
+            var solutions: std.ArrayListUnmanaged([]const ?Child) = .empty;
             try self.solvePairs(
                 pairs,
                 0,
@@ -316,7 +316,7 @@ pub fn collectAlphaMatches(
             self.allocator,
             p.rule_slot,
         );
-        if (!gop.found_existing) gop.value_ptr.* = .{};
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
         const list = gop.value_ptr;
         list.clearRetainingCapacity();
         for (p.entries) |entry| {

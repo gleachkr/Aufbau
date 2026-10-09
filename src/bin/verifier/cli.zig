@@ -23,23 +23,23 @@ const Command = union(enum) {
     version,
 };
 
-fn writeToFile(file: std.fs.File, text: []const u8) !void {
+fn writeToFile(io: std.Io, file: std.Io.File, text: []const u8) !void {
     var buf: [512]u8 = undefined;
-    var w = file.writer(&buf);
+    var w = file.writer(io, &buf);
     try w.interface.writeAll(text);
     try w.interface.flush();
 }
 
-pub fn usage() !void {
-    try writeToFile(std.fs.File.stdout(), usage_text);
+pub fn usage(io: std.Io) !void {
+    try writeToFile(io, .stdout(), usage_text);
 }
 
-fn usageError() !void {
-    try writeToFile(std.fs.File.stderr(), usage_text);
+fn usageError(io: std.Io) !void {
+    try writeToFile(io, .stderr(), usage_text);
 }
 
-fn version() !void {
-    try writeToFile(std.fs.File.stdout(), version_text);
+fn version(io: std.Io) !void {
+    try writeToFile(io, .stdout(), version_text);
 }
 
 fn parseArgs(argv: []const []const u8) !Command {
@@ -70,14 +70,16 @@ fn reportFileError(action: []const u8, path: []const u8, err: anyerror) void {
     });
 }
 
-fn runVerify(allocator: std.mem.Allocator, mmb_path: []const u8) !void {
-    const cwd = std.fs.cwd();
-
-    const mmb_bytes = cwd.readFileAllocOptions(
-        allocator,
+fn runVerify(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    mmb_path: []const u8,
+) !void {
+    const mmb_bytes = std.Io.Dir.cwd().readFileAllocOptions(
+        io,
         mmb_path,
-        std.math.maxInt(usize),
-        null,
+        allocator,
+        .unlimited,
         std.mem.Alignment.of(mm0.Arg),
         null,
     ) catch |err| {
@@ -86,10 +88,11 @@ fn runVerify(allocator: std.mem.Allocator, mmb_path: []const u8) !void {
     };
     defer allocator.free(mmb_bytes);
 
-    const mm0_src = std.fs.File.readToEndAlloc(
-        std.fs.File.stdin(),
+    var stdin_buf: [4096]u8 = undefined;
+    var stdin = std.Io.File.stdin().reader(io, &stdin_buf);
+    const mm0_src = stdin.interface.allocRemaining(
         allocator,
-        std.math.maxInt(usize),
+        .unlimited,
     ) catch |err| {
         std.debug.print("mm0-zig: unable to read standard input: {s}\n", .{
             @errorName(err),
@@ -130,33 +133,31 @@ fn runVerify(allocator: std.mem.Allocator, mmb_path: []const u8) !void {
     };
 
     try writeToFile(
-        std.fs.File.stdout(),
+        io,
+        .stdout(),
         "Verification successful!\n",
     );
 }
 
 pub fn run(
+    io: std.Io,
     allocator: std.mem.Allocator,
     argv: []const []const u8,
 ) !void {
     switch (try parseArgs(argv)) {
-        .verify => |mmb_path| try runVerify(allocator, mmb_path),
-        .help => try usage(),
-        .version => try version(),
+        .verify => |mmb_path| try runVerify(io, allocator, mmb_path),
+        .help => try usage(io),
+        .version => try version(io),
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    run(allocator, args[1..]) catch |err| switch (err) {
+    run(io, init.gpa, args[1..]) catch |err| switch (err) {
         CliError.InvalidUsage => {
-            usageError() catch {};
+            usageError(io) catch {};
             std.process.exit(1);
         },
         CliError.Reported => std.process.exit(1),

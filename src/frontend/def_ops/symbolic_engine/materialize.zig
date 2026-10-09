@@ -140,7 +140,7 @@ pub fn collectUnresolvedRootsInSymbolicOwned(
     symbolic: *const SymbolicExpr,
     state: *MatchSession,
 ) anyerror![]UnresolvedDummyRoot {
-    var roots = std.ArrayListUnmanaged(UnresolvedDummyRoot){};
+    var roots = std.ArrayListUnmanaged(UnresolvedDummyRoot).empty;
     errdefer roots.deinit(self.shared.allocator);
     var seen_roots: std.AutoHashMapUnmanaged(usize, void) = .empty;
     defer seen_roots.deinit(self.shared.allocator);

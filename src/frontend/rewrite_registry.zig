@@ -237,14 +237,14 @@ pub const RewriteRegistry = struct {
     /// `@conversion` rules in declaration order. The egraph builds its own
     /// match-side head indexes per search call; the registry keeps a flat
     /// list.
-    conversions: std.ArrayListUnmanaged(ConversionRule) = .{},
+    conversions: std.ArrayListUnmanaged(ConversionRule) = .empty,
     /// `@conversion`-enrolled defs in declaration order.
-    def_conversions: std.ArrayListUnmanaged(DefConversionRule) = .{},
+    def_conversions: std.ArrayListUnmanaged(DefConversionRule) = .empty,
     /// `@compute` rules in declaration order: single-direction conversion
     /// rules (exactly one of ltr/rtl, role always .none) the egraph
     /// applies through its directed fold scheduler instead of general
     /// saturation.
-    computes: std.ArrayListUnmanaged(ConversionRule) = .{},
+    computes: std.ArrayListUnmanaged(ConversionRule) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) RewriteRegistry {
         return .{
@@ -319,12 +319,12 @@ pub const RewriteRegistry = struct {
         allocator: std.mem.Allocator,
     ) !RewriteRegistry {
         var out: RewriteRegistry = undefined;
-        inline for (std.meta.fields(RewriteRegistry)) |field| {
-            const kind = comptime clone_kinds.get(field.name) orelse
+        inline for (comptime std.meta.fieldNames(RewriteRegistry)) |field_name| {
+            const kind = comptime clone_kinds.get(field_name) orelse
                 @compileError("RewriteRegistry.clone: classify field '" ++
-                    field.name ++ "' in clone_kinds");
-            const src = &@field(self, field.name);
-            @field(out, field.name) = switch (kind) {
+                    field_name ++ "' in clone_kinds");
+            const src = &@field(self, field_name);
+            @field(out, field_name) = switch (kind) {
                 .owner => allocator,
                 .map => try Containers.cloneManagedMap(allocator, src),
                 .list_map => try Containers.cloneManagedListMap(
@@ -506,7 +506,7 @@ pub const RewriteRegistry = struct {
 
         const gop = try self.rewrites_by_head.getOrPut(head_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(self.allocator, .{
             .rule_id = rule_id,
@@ -853,7 +853,7 @@ pub const RewriteRegistry = struct {
 
                 const gop = try self.alpha_by_head.getOrPut(head_id);
                 if (!gop.found_existing) {
-                    gop.value_ptr.* = .{};
+                    gop.value_ptr.* = .empty;
                 }
                 try gop.value_ptr.append(self.allocator, .{
                     .rule_id = rule_id,
@@ -1163,7 +1163,7 @@ pub const RewriteRegistry = struct {
 
         const gop = try self.trigger_by_rule.getOrPut(rule_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(self.allocator, pattern);
     }

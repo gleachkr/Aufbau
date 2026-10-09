@@ -53,7 +53,7 @@ const ProofAnalysisState = struct {
     invalid_rules: InvalidRuleSet,
     invalid_terms: InvalidRuleSet,
     parser: ProofScriptParser,
-    pending: std.ArrayListUnmanaged(TopLevelItem) = .{},
+    pending: std.ArrayListUnmanaged(TopLevelItem) = .empty,
     exhausted: bool = false,
     stream_aborted: bool = false,
 
@@ -273,7 +273,7 @@ fn analyzeDrainAnchoredLocalProofItems(
     const header = state.parser.peekNextPublicStmtHeader() orelse return;
     if (!analysisProofStreamLooksLocal(proof)) return;
 
-    var locals = std.ArrayListUnmanaged(TopLevelItem){};
+    var locals = std.ArrayListUnmanaged(TopLevelItem).empty;
     defer locals.deinit(allocator);
 
     while (true) {

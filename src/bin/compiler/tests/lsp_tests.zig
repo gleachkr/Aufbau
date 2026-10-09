@@ -5,7 +5,7 @@ const mm0 = @import("mm0");
 const lsp_server = @import("../lsp.zig");
 const lsp_diagnostics = @import("lsp_diagnostics");
 
-const types = lsp.types;
+const types = lsp.types.flat;
 const CodeActionResult = lsp.ResultType("textDocument/codeAction");
 const CodeActionItems = @typeInfo(CodeActionResult).optional.child;
 const CodeActionItem = @typeInfo(CodeActionItems).pointer.child;
@@ -55,6 +55,7 @@ const TestTransport = struct {
 
     fn readJsonMessage(
         _: *lsp.Transport,
+        _: std.Io,
         _: std.mem.Allocator,
     ) lsp.Transport.ReadError![]u8 {
         return error.EndOfStream;
@@ -62,6 +63,7 @@ const TestTransport = struct {
 
     fn writeJsonMessage(
         transport: *lsp.Transport,
+        _: std.Io,
         message: []const u8,
     ) lsp.Transport.WriteError!void {
         const self: *TestTransport = @fieldParentPtr(
@@ -104,8 +106,8 @@ fn expectDefinitionLocation(
 ) !types.Location {
     const value = result orelse return error.ExpectedDefinition;
     return switch (value) {
-        .Definition => |definition| switch (definition) {
-            .Location => |location| location,
+        .definition => |definition| switch (definition) {
+            .location => |location| location,
             else => error.ExpectedDefinitionLocation,
         },
         else => error.ExpectedDefinitionLocation,
@@ -117,8 +119,8 @@ fn expectImplementationLocation(
 ) !types.Location {
     const value = result orelse return error.ExpectedImplementation;
     return switch (value) {
-        .Definition => |definition| switch (definition) {
-            .Location => |location| location,
+        .definition => |definition| switch (definition) {
+            .location => |location| location,
             else => error.ExpectedImplementationLocation,
         },
         else => error.ExpectedImplementationLocation,
@@ -130,7 +132,7 @@ fn expectDocumentSymbols(
 ) ![]const types.DocumentSymbol {
     const value = result orelse return error.ExpectedDocumentSymbols;
     return switch (value) {
-        .array_of_DocumentSymbol => |symbols| symbols,
+        .document_symbols => |symbols| symbols,
         else => error.ExpectedDocumentSymbols,
     };
 }
@@ -143,7 +145,7 @@ fn expectCompletionItems(
         // Always a list, and always incomplete: the items depend on the token
         // under the cursor, so a client must re-query rather than filter the
         // previous answer.
-        .CompletionList => |list| blk: {
+        .completion_list => |list| blk: {
             if (!list.isIncomplete) return error.ExpectedIncompleteCompletions;
             break :blk list.items;
         },
@@ -169,7 +171,7 @@ fn expectCompletionEditText(
 ) !void {
     const edit = item.textEdit orelse return error.ExpectedTextEdit;
     const text_edit = switch (edit) {
-        .TextEdit => |value| value,
+        .text_edit => |value| value,
         else => return error.ExpectedTextEdit,
     };
     try expectRangeText(text, text_edit.range, expected_old);
@@ -195,8 +197,8 @@ fn codeActionSingleEdit(
 
 fn firstCodeAction(items: []const CodeActionItem) ?types.CodeAction {
     for (items) |item| switch (item) {
-        .CodeAction => |action| return action,
-        .Command => {},
+        .code_action => |action| return action,
+        .command => {},
     };
     return null;
 }
@@ -207,13 +209,13 @@ fn codeActionWithReplacement(
     expected_new: []const u8,
 ) ?types.CodeAction {
     for (items) |item| switch (item) {
-        .CodeAction => |action| {
+        .code_action => |action| {
             const edit = codeActionSingleEdit(action, uri) orelse continue;
             if (std.mem.eql(u8, edit.newText, expected_new)) {
                 return action;
             }
         },
-        .Command => {},
+        .command => {},
     };
     return null;
 }
@@ -306,6 +308,7 @@ test "LSP initialize advertises navigation capabilities" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -386,6 +389,7 @@ test "LSP initialize omits document symbols for non-hierarchical clients" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -404,6 +408,7 @@ test "LSP code action replaces exact placeholder" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -445,6 +450,7 @@ test "LSP code action offers unpack for inline applications" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -489,7 +495,7 @@ test "LSP code action offers unpack for inline applications" {
 
 /// `keep [keep [... top_i [] ...]]` nested `depth` reference lists deep.
 fn nestedKeepProof(allocator: std.mem.Allocator, depth: usize) ![]u8 {
-    var text: std.ArrayListUnmanaged(u8) = .{};
+    var text: std.ArrayListUnmanaged(u8) = .empty;
     try text.appendSlice(allocator, "main\n----\nl1: $ top $ by ");
     for (1..depth) |_| try text.appendSlice(allocator, "keep [");
     try text.appendSlice(allocator, "top_i []");
@@ -508,13 +514,14 @@ test "LSP survives proofs nested to the parser's limit and past it" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = mm0_uri,
-            .languageId = "mm0",
+            .languageId = .{ .custom_value = "mm0" },
             .version = 1,
             .text = lsp_search_mm0_text,
         },
@@ -527,7 +534,7 @@ test "LSP survives proofs nested to the parser's limit and past it" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = proof_uri,
-            .languageId = "auf",
+            .languageId = .{ .custom_value = "auf" },
             .version = 1,
             .text = deepest,
         },
@@ -551,7 +558,7 @@ test "LSP survives proofs nested to the parser's limit and past it" {
     transport_state.clearMessages();
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = proof_uri, .version = 2 },
-        .contentChanges = &.{.{ .literal_1 = .{ .text = too_deep } }},
+        .contentChanges = &.{.{ .text_document_content_change_whole_document = .{ .text = too_deep } }},
     });
     try std.testing.expect(transport_state.containsMessage("more than 1024 levels"));
 }
@@ -562,6 +569,7 @@ test "LSP applies ranged edits, including reversed and past-the-end ranges" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -572,7 +580,7 @@ test "LSP applies ranged edits, including reversed and past-the-end ranges" {
 
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = uri,
-        .languageId = "mm0",
+        .languageId = .{ .custom_value = "mm0" },
         .version = 1,
         .text = "sort s;\nsort t;\n",
     } });
@@ -589,7 +597,7 @@ test "LSP applies ranged edits, including reversed and past-the-end ranges" {
     for (edits, 2..) |edit, version| {
         try handler.@"textDocument/didChange"(arena, .{
             .textDocument = .{ .uri = uri, .version = @intCast(version) },
-            .contentChanges = &.{.{ .literal_0 = .{
+            .contentChanges = &.{.{ .text_document_content_change_partial = .{
                 .range = .{ .start = edit.start, .end = edit.end },
                 .text = edit.text,
             } }},
@@ -605,6 +613,7 @@ test "LSP code action caches search results across identical requests" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -668,6 +677,7 @@ test "LSP code action cache hits across different offsets on the same step" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -713,6 +723,7 @@ test "LSP code action search cache is freed when the document closes" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -753,6 +764,7 @@ test "LSP code action replaces entire placeholder application" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -788,6 +800,7 @@ test "LSP code action completes inline exact placeholder" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -823,6 +836,7 @@ test "LSP diagnostics ignore inline search placeholders" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -834,7 +848,7 @@ test "LSP diagnostics ignore inline search placeholders" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = mm0_uri,
-            .languageId = "mm0",
+            .languageId = .{ .custom_value = "mm0" },
             .version = 1,
             .text = lsp_search_mm0_text,
         },
@@ -843,7 +857,7 @@ test "LSP diagnostics ignore inline search placeholders" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = proof_uri,
-            .languageId = "auf",
+            .languageId = .{ .custom_value = "auf" },
             .version = 1,
             .text = proof_text,
         },
@@ -860,6 +874,7 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -871,7 +886,7 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = mm0_uri,
-            .languageId = "mm0",
+            .languageId = .{ .custom_value = "mm0" },
             .version = 1,
             .text = lsp_search_mm0_text,
         },
@@ -880,7 +895,7 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = proof_uri,
-            .languageId = "auf",
+            .languageId = .{ .custom_value = "auf" },
             .version = 1,
             .text = lsp_search_exact_proof_text,
         },
@@ -935,7 +950,7 @@ test "LSP placeholder status diagnostics upgrade after code action search" {
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = proof_uri, .version = 2 },
         .contentChanges = &.{
-            .{ .literal_1 = .{ .text = lsp_search_exact_proof_text } },
+            .{ .text_document_content_change_whole_document = .{ .text = lsp_search_exact_proof_text } },
         },
     });
     try std.testing.expectEqual(@as(usize, 0), handler.search_status.count());
@@ -968,6 +983,7 @@ test "LSP placeholder status diagnostics report a search miss as error" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -979,7 +995,7 @@ test "LSP placeholder status diagnostics report a search miss as error" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = mm0_uri,
-            .languageId = "mm0",
+            .languageId = .{ .custom_value = "mm0" },
             .version = 1,
             .text = miss_mm0_text,
         },
@@ -987,7 +1003,7 @@ test "LSP placeholder status diagnostics report a search miss as error" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = proof_uri,
-            .languageId = "auf",
+            .languageId = .{ .custom_value = "auf" },
             .version = 1,
             .text = miss_proof_text,
         },
@@ -1025,6 +1041,7 @@ test "LSP code action offers a retry with raised limits after an auto? miss" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1082,6 +1099,7 @@ test "LSP placeholder diagnostics report invalid search parameters" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1093,7 +1111,7 @@ test "LSP placeholder diagnostics report invalid search parameters" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = mm0_uri,
-            .languageId = "mm0",
+            .languageId = .{ .custom_value = "mm0" },
             .version = 1,
             .text = mm0_text,
         },
@@ -1101,7 +1119,7 @@ test "LSP placeholder diagnostics report invalid search parameters" {
     try handler.@"textDocument/didOpen"(arena, .{
         .textDocument = .{
             .uri = proof_uri,
-            .languageId = "auf",
+            .languageId = .{ .custom_value = "auf" },
             .version = 1,
             .text = proof_text,
         },
@@ -1122,6 +1140,7 @@ test "LSP code action replaces apply placeholder with plain refs" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1164,6 +1183,7 @@ test "LSP code action uses UTF-16 ranges after non-ASCII text" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1194,6 +1214,7 @@ test "LSP code action is absent outside search placeholders" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1220,6 +1241,7 @@ test "LSP code action is absent for invalid search contexts" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1241,6 +1263,7 @@ test "LSP code action is absent without sibling mm0" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1275,6 +1298,7 @@ test "LSP code action uses prior local lemma in theorem search" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1321,6 +1345,7 @@ test "LSP code action works inside local lemma blocks" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1365,6 +1390,7 @@ test "LSP code action excludes future local lemmas" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1402,6 +1428,7 @@ test "LSP code action uses open unsaved mm0 and proof documents" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1440,6 +1467,7 @@ test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1460,7 +1488,7 @@ test "LSP proof hover accepts UTF-16 positions after non-ASCII text" {
     try expectRangeText(proof_text, range, "top_i");
 
     const markdown = switch (hover.contents) {
-        .MarkupContent => |content| content.value,
+        .markup_content => |content| content.value,
         else => return error.ExpectedMarkdownHover,
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1498,6 +1526,7 @@ fn expectProofHoleHover(open: bool) !void {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1507,7 +1536,7 @@ fn expectProofHoleHover(open: bool) !void {
     if (open) {
         try handler.@"textDocument/didOpen"(arena_state.allocator(), .{ .textDocument = .{
             .uri = proof_uri,
-            .languageId = "aufbau",
+            .languageId = .{ .custom_value = "aufbau" },
             .version = 1,
             .text = proof_text,
         } });
@@ -1530,7 +1559,7 @@ fn expectProofHoleHover(open: bool) !void {
     try expectRangeText(proof_text, range, "_wff");
 
     const rendered = switch (hover.contents) {
-        .MarkupContent => |content| content.value,
+        .markup_content => |content| content.value,
         else => return error.ExpectedMarkdownHover,
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1570,10 +1599,10 @@ fn fillHolesAction(
     });
     const items = result orelse return null;
     for (items) |item| switch (item) {
-        .CodeAction => |action| {
+        .code_action => |action| {
             if (std.mem.eql(u8, action.title, "Fill in the holes")) return action;
         },
-        .Command => {},
+        .command => {},
     };
     return null;
 }
@@ -1581,10 +1610,10 @@ fn fillHolesAction(
 /// A proof whose line k doubles line k - 1 (`$ _w $ by dup [lk-1]`): the
 /// values are linear as DAGs and exponential as text.
 fn dupChainProof(allocator: std.mem.Allocator, lines: usize) ![]const u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
+    var out: std.ArrayListUnmanaged(u8) = .empty;
     try out.appendSlice(allocator, "main\n----\nl1: $ _w $ by dup [#1]\n");
     for (2..lines + 1) |k| {
-        try out.writer(allocator).print("l{d}: $ _w $ by dup [l{d}]\n", .{ k, k - 1 });
+        try out.print(allocator, "l{d}: $ _w $ by dup [l{d}]\n", .{ k, k - 1 });
     }
     return out.toOwnedSlice(allocator);
 }
@@ -1605,6 +1634,7 @@ test "LSP hover and fill stay bounded on values that double per line" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1617,7 +1647,7 @@ test "LSP hover and fill stay bounded on values that double per line" {
     try handler.putDocument(mm0_uri, mm0_text, 1);
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = proof_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = proof_text,
     } });
@@ -1631,7 +1661,7 @@ test "LSP hover and fill stay bounded on values that double per line" {
             });
             const hover = result orelse return error.ExpectedHover;
             return switch (hover.contents) {
-                .MarkupContent => |content| content.value,
+                .markup_content => |content| content.value,
                 else => error.ExpectedMarkdownHover,
             };
         }
@@ -1693,6 +1723,7 @@ fn expectFillHolesAction(setup: FillSetup) !void {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1705,7 +1736,7 @@ fn expectFillHolesAction(setup: FillSetup) !void {
         .open, .edited => {
             try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
                 .uri = proof_uri,
-                .languageId = "aufbau",
+                .languageId = .{ .custom_value = "aufbau" },
                 .version = 1,
                 .text = if (setup == .open)
                     proof_text
@@ -1715,7 +1746,7 @@ fn expectFillHolesAction(setup: FillSetup) !void {
             if (setup == .edited) {
                 try handler.@"textDocument/didChange"(arena, .{
                     .textDocument = .{ .uri = proof_uri, .version = 2 },
-                    .contentChanges = &.{.{ .literal_1 = .{ .text = proof_text } }},
+                    .contentChanges = &.{.{ .text_document_content_change_whole_document = .{ .text = proof_text } }},
                 });
             }
             try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
@@ -1790,16 +1821,8 @@ test "LSP fill-holes code action replays the checks of an edit" {
 fn prawitzCitingLineFill(arena: std.mem.Allocator, congr: bool) !?types.CodeAction {
     const mm0_uri = "file:///tmp/lsp-fill-holes-sb.mm0";
     const proof_uri = "file:///tmp/lsp-fill-holes-sb.auf";
-    const fixture_mm0 = try std.fs.cwd().readFileAlloc(
-        arena,
-        "tests/proof_cases/pass_prawitz_holes.mm0",
-        std.math.maxInt(usize),
-    );
-    const proof_text = try std.fs.cwd().readFileAlloc(
-        arena,
-        "tests/proof_cases/pass_prawitz_holes.auf",
-        std.math.maxInt(usize),
-    );
+    const fixture_mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/pass_prawitz_holes.mm0", arena, .unlimited);
+    const proof_text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/pass_prawitz_holes.auf", arena, .unlimited);
     const annotated = "--| @congr\naxiom sb_f_congr";
     if (std.mem.indexOf(u8, fixture_mm0, annotated) == null) return error.FixtureChanged;
     const mm0_text = if (congr)
@@ -1808,7 +1831,7 @@ fn prawitzCitingLineFill(arena: std.mem.Allocator, congr: bool) !?types.CodeActi
         try std.mem.replaceOwned(u8, arena, fixture_mm0, annotated, "axiom sb_f_congr");
 
     var transport_state: TestTransport = .{};
-    var handler = Handler.init(std.testing.allocator, &transport_state.transport);
+    var handler = Handler.init(std.testing.allocator, std.testing.io, &transport_state.transport);
     defer handler.deinit();
     try handler.putDocument(mm0_uri, mm0_text, 1);
     try handler.putDocument(proof_uri, proof_text, 1);
@@ -1857,6 +1880,7 @@ test "LSP fill-holes code action keeps a definition the rule unfolds" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1891,6 +1915,7 @@ test "LSP proof hover resolves rule applications" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1910,7 +1935,7 @@ test "LSP proof hover resolves rule applications" {
     try expectRangeText(lsp_navigation_proof_text, range, "keep");
 
     const markdown = switch (hover.contents) {
-        .MarkupContent => |content| content.value,
+        .markup_content => |content| content.value,
         else => return error.ExpectedMarkdownHover,
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -1942,6 +1967,7 @@ test "LSP completion returns only rules applicable to the line goal" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -1996,6 +2022,7 @@ test "LSP completion filters rules inside nested applications" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2033,6 +2060,7 @@ test "LSP completion returns explicit edits" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2076,6 +2104,7 @@ test "LSP completion uses UTF-16 ranges after non-ASCII text" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2117,6 +2146,7 @@ test "LSP completion returns notation snippets for snippet clients" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2177,6 +2207,7 @@ test "LSP completion avoids snippets for plain completion clients" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2214,6 +2245,7 @@ test "LSP proof definition resolves rules and line references" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2249,6 +2281,7 @@ test "LSP implementation resolves theorem declarations to proofs" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2281,6 +2314,7 @@ test "LSP references returns matching indexed symbol uses" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2327,6 +2361,7 @@ test "LSP document symbols returns quiet proof outline" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2361,6 +2396,7 @@ test "LSP navigation cache invalidates changed mm0 sibling" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2380,7 +2416,7 @@ test "LSP navigation cache invalidates changed mm0 sibling" {
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = mm0_uri, .version = 2 },
         .contentChanges = &.{
-            .{ .literal_1 = .{ .text = changed_mm0_text } },
+            .{ .text_document_content_change_whole_document = .{ .text = changed_mm0_text } },
         },
     });
     try std.testing.expectEqual(@as(usize, 0), handler.nav_cache.count());
@@ -2391,7 +2427,7 @@ test "LSP navigation cache invalidates changed mm0 sibling" {
     });
     const hover = hover_result orelse return error.ExpectedHover;
     const markdown = switch (hover.contents) {
-        .MarkupContent => |content| content.value,
+        .markup_content => |content| content.value,
         else => return error.ExpectedMarkdownHover,
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2409,6 +2445,7 @@ test "LSP navigation cache invalidates closed proof sibling" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2448,6 +2485,7 @@ test "LSP proof unknown rule has hover but no definition" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -2464,7 +2502,7 @@ test "LSP proof unknown rule has hover but no definition" {
     });
     const hover = hover_result orelse return error.ExpectedHover;
     const markdown = switch (hover.contents) {
-        .MarkupContent => |content| content.value,
+        .markup_content => |content| content.value,
         else => return error.ExpectedMarkdownHover,
     };
     try std.testing.expect(std.mem.containsAtLeast(
@@ -2688,7 +2726,7 @@ test "compiler source diagnostics append omitted summary" {
     try std.testing.expectEqual(@as(usize, 2), diags.len);
     try std.testing.expectEqualStrings(
         "17 more diagnostics omitted",
-        diags[1].message,
+        diags[1].message.string,
     );
 }
 
@@ -2777,7 +2815,7 @@ test "compiler diagnostics publish related information" {
     );
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "phase: theorem application",
     ));
@@ -2833,20 +2871,20 @@ test "compiler dependency diagnostics render detail in LSP messages" {
 
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "dependency violation: bound variables x and y " ++
             "must be assigned distinct variables",
     ));
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "x was assigned: z",
     ));
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "y was assigned: z",
     ));
@@ -2902,20 +2940,20 @@ test "compiler dependency diagnostics explain one-sided violations" {
 
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "dependency violation: the rule does not allow p " ++
             "to mention the variable assigned to x",
     ));
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "x was assigned: z",
     ));
     try std.testing.expect(std.mem.containsAtLeast(
         u8,
-        lsp_diag.message,
+        lsp_diag.message.string,
         1,
         "p was assigned: rel z z",
     ));
@@ -2995,6 +3033,7 @@ test "LSP diagnostic on a stray non-ASCII character covers the whole character" 
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3005,13 +3044,13 @@ test "LSP diagnostic on a stray non-ASCII character covers the whole character" 
 
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = mm0_uri,
-        .languageId = "mm0",
+        .languageId = .{ .custom_value = "mm0" },
         .version = 1,
         .text = lsp_search_mm0_text,
     } });
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = proof_uri,
-        .languageId = "auf",
+        .languageId = .{ .custom_value = "auf" },
         .version = 1,
         .text = proof_text,
     } });
@@ -3037,8 +3076,8 @@ test "LSP reports on a closed sibling mm0 that is not valid UTF-8" {
 
     // A Latin-1 `é` on the line of the error: read from disk, never
     // decoded by a client.
-    const dir = try tmp.dir.realpathAlloc(arena, ".");
-    try tmp.dir.writeFile(.{
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", arena);
+    try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "main.mm0",
         .data = "provable sort wff;\nterm caf\xe9 (a b: wff): wff; zzz\n",
     });
@@ -3048,12 +3087,13 @@ test "LSP reports on a closed sibling mm0 that is not valid UTF-8" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = proof_uri,
-        .languageId = "auf",
+        .languageId = .{ .custom_value = "auf" },
         .version = 1,
         .text = "",
     } });
@@ -3066,7 +3106,7 @@ test "LSP reports on a closed sibling mm0 that is not valid UTF-8" {
 fn hoverMarkdown(result: lsp.ResultType("textDocument/hover")) ![]const u8 {
     const hover = result orelse return error.ExpectedHover;
     return switch (hover.contents) {
-        .MarkupContent => |content| content.value,
+        .markup_content => |content| content.value,
         else => error.ExpectedMarkdownHover,
     };
 }
@@ -3079,6 +3119,7 @@ test "LSP resolves imports against open documents" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3090,7 +3131,7 @@ test "LSP resolves imports against open documents" {
     try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = proof_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = lsp_import_proof_text,
     } });
@@ -3152,6 +3193,7 @@ test "LSP re-analyses importers when an imported document changes" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3163,7 +3205,7 @@ test "LSP re-analyses importers when an imported document changes" {
     try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = proof_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = lsp_import_proof_text,
     } });
@@ -3178,7 +3220,7 @@ test "LSP re-analyses importers when an imported document changes" {
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = lib_uri, .version = 2 },
         .contentChanges = &.{
-            .{ .literal_1 = .{ .text = "provable sort wff;\nterm top: wff;\n" } },
+            .{ .text_document_content_change_whole_document = .{ .text = "provable sort wff;\nterm top: wff;\n" } },
         },
     });
     // The library's own set, then the proof re-checked against it.
@@ -3222,6 +3264,7 @@ test "LSP check memo replays library blocks across roots" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3234,7 +3277,7 @@ test "LSP check memo replays library blocks across roots" {
     // The library root checks its own theorem: one miss, recorded.
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = lib_auf_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = lib_auf_text,
     } });
@@ -3247,7 +3290,7 @@ test "LSP check memo replays library blocks across roots" {
     transport_state.clearMessages();
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = main_auf_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = main_auf_text,
     } });
@@ -3260,7 +3303,7 @@ test "LSP check memo replays library blocks across roots" {
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = main_auf_uri, .version = 2 },
         .contentChanges = &.{
-            .{ .literal_1 = .{ .text = "main_thm\n---\np: $ top $ by lib_thm [] \n" } },
+            .{ .text_document_content_change_whole_document = .{ .text = "main_thm\n---\np: $ top $ by lib_thm [] \n" } },
         },
     });
     try std.testing.expect(publishedEmpty(&transport_state, main_auf_uri));
@@ -3273,7 +3316,7 @@ test "LSP check memo replays library blocks across roots" {
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = lib_auf_uri, .version = 2 },
         .contentChanges = &.{
-            .{ .literal_1 = .{ .text = "lib_thm\n---\np: $ top $ by ax_top [] \n" } },
+            .{ .text_document_content_change_whole_document = .{ .text = "lib_thm\n---\np: $ top $ by ax_top [] \n" } },
         },
     });
     try std.testing.expect(publishedEmpty(&transport_state, lib_auf_uri));
@@ -3296,6 +3339,7 @@ test "LSP reports an unresolved import on its statement and keeps going" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3305,7 +3349,7 @@ test "LSP reports an unresolved import on its statement and keeps going" {
 
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = mm0_uri,
-        .languageId = "metamath-zero",
+        .languageId = .{ .custom_value = "metamath-zero" },
         .version = 1,
         .text = mm0_text,
     } });
@@ -3338,6 +3382,7 @@ test "LSP keys a root URI with dot segments like its imports" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3347,7 +3392,7 @@ test "LSP keys a root URI with dot segments like its imports" {
 
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = mm0_uri,
-        .languageId = "metamath-zero",
+        .languageId = .{ .custom_value = "metamath-zero" },
         .version = 1,
         .text = mm0_text,
     } });
@@ -3363,8 +3408,8 @@ test "LSP resolves imports from disk and reports on the imported file" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const dir = try tmp.dir.realpathAlloc(arena, ".");
-    try tmp.dir.writeFile(.{
+    const dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", arena);
+    try tmp.dir.writeFile(std.testing.io, .{
         .sub_path = "lib.mm0",
         .data = "provable sort wff;\nterm top: wff;\naxiom bad: $ nope $;\n",
     });
@@ -3376,12 +3421,13 @@ test "LSP resolves imports from disk and reports on the imported file" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = mm0_uri,
-        .languageId = "metamath-zero",
+        .languageId = .{ .custom_value = "metamath-zero" },
         .version = 1,
         .text = lsp_import_main_text,
     } });
@@ -3421,6 +3467,7 @@ test "LSP resolves proof includes against open library files" {
     var transport_state: TestTransport = .{};
     var handler = Handler.init(
         std.testing.allocator,
+        std.testing.io,
         &transport_state.transport,
     );
     defer handler.deinit();
@@ -3432,7 +3479,7 @@ test "LSP resolves proof includes against open library files" {
     // A library proof file has no theory of its own.
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = lib_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = lib_text,
     } });
@@ -3443,7 +3490,7 @@ test "LSP resolves proof includes against open library files" {
     transport_state.clearMessages();
     try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
         .uri = proof_uri,
-        .languageId = "aufbau",
+        .languageId = .{ .custom_value = "aufbau" },
         .version = 1,
         .text = proof_text,
     } });
@@ -3475,7 +3522,7 @@ test "LSP resolves proof includes against open library files" {
     try handler.@"textDocument/didChange"(arena, .{
         .textDocument = .{ .uri = lib_uri, .version = 2 },
         .contentChanges = &.{
-            .{ .literal_1 = .{ .text = "lemma lib_top: $ top $\n-------\nl1: $ top $ by nope []\n" } },
+            .{ .text_document_content_change_whole_document = .{ .text = "lemma lib_top: $ top $\n-------\nl1: $ top $ by nope []\n" } },
         },
     });
     try std.testing.expect(transport_state.containsMessage(lib_uri));

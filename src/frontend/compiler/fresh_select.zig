@@ -57,9 +57,9 @@ pub fn processFreshAnnotations(
     const rule_id = env.getRuleId(assertion.name) orelse return;
     const rule = &env.rules.items[rule_id];
 
-    var decls = std.ArrayListUnmanaged(FreshDecl){};
+    var decls = std.ArrayListUnmanaged(FreshDecl).empty;
     defer decls.deinit(allocator);
-    var freshen_decls = std.ArrayListUnmanaged(FreshenDecl){};
+    var freshen_decls = std.ArrayListUnmanaged(FreshenDecl).empty;
     defer freshen_decls.deinit(allocator);
 
     for (annotations) |ann| {
@@ -436,7 +436,7 @@ fn parseFreshenAnnotation(
 ) !FreshenDecl {
     var it = std.mem.tokenizeAny(
         u8,
-        std.mem.trimRight(u8, text, " \t\r\n;"),
+        std.mem.trimEnd(u8, text, " \t\r\n;"),
         " \t\r\n",
     );
     const target_name = it.next() orelse return error.InvalidFreshenAnnotation;

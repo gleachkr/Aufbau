@@ -145,8 +145,8 @@ pub fn collectGeneralNotation(
         decl.completion_args,
     );
 
-    var pieces = std.ArrayListUnmanaged(NotationPiece){};
-    var constants = std.ArrayListUnmanaged([]const u8){};
+    var pieces = std.ArrayListUnmanaged(NotationPiece).empty;
+    var constants = std.ArrayListUnmanaged([]const u8).empty;
     try collectNotationPieces(
         self.allocator,
         &pieces,

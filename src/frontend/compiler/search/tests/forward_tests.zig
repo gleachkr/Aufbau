@@ -405,11 +405,7 @@ test "auto solves the nested forward-instantiation flagship (Stage 7)" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        "tests/search_bench_cases/all_elim_forward.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/all_elim_forward.mm0", allocator, .unlimited);
     const proof_src =
         \\all_elim_forward_inst
         \\---------------------
@@ -811,11 +807,7 @@ fn readBenchCase(
         .{ stem, ext },
     );
     defer allocator.free(path);
-    return try std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        std.math.maxInt(usize),
-    );
+    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
 }
 
 test "auto trigger seeds close an elimination major from an empty pool" {
@@ -975,11 +967,7 @@ test "complement shapes derive from ax's repeated-binder template pair" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0 = try std.fs.cwd().readFileAlloc(
-        allocator,
-        "tests/search_bench_cases/tait.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/tait.mm0", allocator, .unlimited);
     var fixture = try fixtureFor(allocator, mm0, "ex_all_to_all_ex");
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
@@ -1009,11 +997,7 @@ test "auto co-solves a complementary two-meta ax leaf through the rule template"
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0 = try std.fs.cwd().readFileAlloc(
-        allocator,
-        "tests/search_bench_cases/tait.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/tait.mm0", allocator, .unlimited);
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0,
@@ -1045,11 +1029,7 @@ test "anchor shapes derive from ax's member-to-succedent binder repeat" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0 = try std.fs.cwd().readFileAlloc(
-        allocator,
-        "tests/search_bench_cases/nd_fol.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
     var fixture = try fixtureFor(allocator, mm0, "ex_all_to_all_ex");
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
@@ -1079,11 +1059,7 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0 = try std.fs.cwd().readFileAlloc(
-        allocator,
-        "tests/search_bench_cases/nd_fol.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0,

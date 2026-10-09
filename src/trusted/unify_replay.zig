@@ -21,7 +21,7 @@ pub fn run(
     while (true) {
         const cmd = try Proof.Cmd.read(file_bytes, pos, file_bytes.len);
         pos += cmd.size;
-        switch (@as(Proof.UnifyCmd, @enumFromInt(cmd.op))) {
+        switch (@as(Proof.UnifyCmd, @fromBackingInt(@intCast(cmd.op)))) {
             .End => break,
             .UTerm => try context.uopTerm(cmd.data, false),
             .UTermSave => try context.uopTerm(cmd.data, true),

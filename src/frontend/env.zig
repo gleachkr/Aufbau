@@ -66,14 +66,14 @@ pub const GlobalEnv = struct {
     sort_names: std.StringHashMap(u8),
     term_names: std.StringHashMap(u32),
     rule_names: std.StringHashMap(u32),
-    terms: std.ArrayListUnmanaged(TermDecl) = .{},
-    rules: std.ArrayListUnmanaged(RuleDecl) = .{},
-    coercions: std.ArrayListUnmanaged(CoercionDecl) = .{},
+    terms: std.ArrayListUnmanaged(TermDecl) = .empty,
+    rules: std.ArrayListUnmanaged(RuleDecl) = .empty,
+    coercions: std.ArrayListUnmanaged(CoercionDecl) = .empty,
     coercion_term_ids: std.AutoHashMapUnmanaged(u32, void) = .{},
     /// Term ids flagged `is_local`, in declaration order, so the per-statement
     /// notation check does not rescan the whole term table.
-    local_term_ids: std.ArrayListUnmanaged(u32) = .{},
-    local_notations: std.ArrayListUnmanaged(LocalNotation) = .{},
+    local_term_ids: std.ArrayListUnmanaged(u32) = .empty,
+    local_notations: std.ArrayListUnmanaged(LocalNotation) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) GlobalEnv {
         return .{

@@ -27,7 +27,7 @@ pub fn pickUniqueSolution(
 ) anyerror![]const ExprId {
     if (states.len == 0) return error.UnifyMismatch;
 
-    var distinct_idxs = std.ArrayListUnmanaged(usize){};
+    var distinct_idxs = std.ArrayListUnmanaged(usize).empty;
     defer distinct_idxs.deinit(self.allocator);
     // Every solution the structural enumeration would have produced: a
     // distinct state stands for `multiplicity` covers (see
@@ -148,7 +148,7 @@ fn structuralBindingRank(
             sort_name,
         ) orelse continue;
         const profile = types.StructuralProfile.init(combiner);
-        var items = std.ArrayListUnmanaged(ExprId){};
+        var items = std.ArrayListUnmanaged(ExprId).empty;
         defer items.deinit(self.allocator);
         try StructuralItems.collectCanonicalStructuralItems(
             self,
@@ -199,7 +199,7 @@ fn formatBindingSummary(
     self: anytype,
     bindings: []const ?ExprId,
 ) ![]const u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     errdefer out.deinit(self.allocator);
 
     var emitted: usize = 0;
@@ -210,7 +210,7 @@ fn formatBindingSummary(
         }
 
         const name = self.rule.arg_names[idx] orelse "_";
-        try out.writer(self.allocator).print("{s} = ", .{name});
+        try out.print(self.allocator, "{s} = ", .{name});
         if (binding) |expr_id| {
             const text = try ViewTrace.formatExpr(
                 self.allocator,
@@ -227,7 +227,8 @@ fn formatBindingSummary(
     }
 
     if (bindings.len > emitted) {
-        try out.writer(self.allocator).print(
+        try out.print(
+            self.allocator,
             "; +{d} more",
             .{bindings.len - emitted},
         );

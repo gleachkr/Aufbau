@@ -858,7 +858,7 @@ noinline fn finishCandidate(
     } else try node.infer(partial_bindings);
 
     var resolved_bindings = bindings;
-    var freshen_steps: std.ArrayListUnmanaged(AlphaRewrite.FreshenResult) = .{};
+    var freshen_steps: std.ArrayListUnmanaged(AlphaRewrite.FreshenResult) = .empty;
     defer freshen_steps.deinit(allocator);
     Inference.validateResolvedBindingsWithDebug(
         self,

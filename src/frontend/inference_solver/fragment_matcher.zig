@@ -31,11 +31,11 @@ pub fn matchStructural(
 
     const bindings = BranchStateOps.getBindings(@constCast(&state), space);
 
-    var template_items = std.ArrayListUnmanaged(StructuralTemplateItem){};
+    var template_items = std.ArrayListUnmanaged(StructuralTemplateItem).empty;
     defer template_items.deinit(self.allocator);
-    var pre_required = std.ArrayListUnmanaged(ExprId){};
+    var pre_required = std.ArrayListUnmanaged(ExprId).empty;
     defer pre_required.deinit(self.allocator);
-    var remainders = std.ArrayListUnmanaged(StructuralRemainder){};
+    var remainders = std.ArrayListUnmanaged(StructuralRemainder).empty;
     defer remainders.deinit(self.allocator);
     try StructuralItems.collectTemplateStructuralItems(
         self,
@@ -48,7 +48,7 @@ pub fn matchStructural(
         &pre_required,
     );
 
-    var actual_items = std.ArrayListUnmanaged(ExprId){};
+    var actual_items = std.ArrayListUnmanaged(ExprId).empty;
     defer actual_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
@@ -91,7 +91,7 @@ pub fn matchStructural(
         if (!found) return &.{};
     }
 
-    var matches = std.ArrayListUnmanaged(BranchState){};
+    var matches = std.ArrayListUnmanaged(BranchState).empty;
     try matchCommutativeStructuralObligations(
         Matcher,
         self,
@@ -125,7 +125,7 @@ fn matchOrderedStructural(
         try self.allocator.alloc(usize, template_items.len);
     defer self.allocator.free(matched_positions);
 
-    var out = std.ArrayListUnmanaged(BranchState){};
+    var out = std.ArrayListUnmanaged(BranchState).empty;
     try matchOrderedStructuralAnchors(
         Matcher,
         self,
@@ -212,7 +212,7 @@ fn appendOrderedStructuralMatchState(
     out: *std.ArrayListUnmanaged(BranchState),
     profile: StructuralProfile,
 ) anyerror!void {
-    var states = std.ArrayListUnmanaged(BranchState){};
+    var states = std.ArrayListUnmanaged(BranchState).empty;
     try states.append(
         self.allocator,
         try BranchStateOps.cloneState(self, state),
@@ -234,7 +234,7 @@ fn appendOrderedStructuralMatchState(
         {}
         const group = remainders[group_start..remainder_start];
 
-        var next = std.ArrayListUnmanaged(BranchState){};
+        var next = std.ArrayListUnmanaged(BranchState).empty;
         if (group.len == 0) {
             if (segment_items.len != 0) return;
             try next.appendSlice(self.allocator, states.items);

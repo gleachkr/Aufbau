@@ -54,7 +54,7 @@ pub const LookupResult = struct {
 const ShapeCache = struct {
     map: std.StringHashMapUnmanaged(shape_mod.ShapeSet) = .empty,
     // Reused per-call key build buffer; `map` keys are owned dupes of it.
-    scratch: std.ArrayListUnmanaged(u8) = .{},
+    scratch: std.ArrayListUnmanaged(u8) = .empty,
     // Per-call DAG backref table (ExprId → first-visit ordinal), so shared
     // subterms serialize as O(1) backrefs instead of exponential tree copies.
     // Within one call all ids come from one theorem clone, so id-equal means

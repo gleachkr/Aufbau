@@ -173,7 +173,7 @@ fn collectHypotheses(
     hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
     var pos = start;
-    var math_strings = std.ArrayListUnmanaged(source.MathStringSpan){};
+    var math_strings = std.ArrayListUnmanaged(source.MathStringSpan).empty;
     defer math_strings.deinit(allocator);
     while (math_strings.items.len < hyp_count) {
         const math = source.nextMathStringIn(text, end, &pos) orelse break;
@@ -199,7 +199,7 @@ fn hypothesesFromMathStrings(
     hyp_count: usize,
     hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
-    var result = std.ArrayListUnmanaged(HypothesisDecl){};
+    var result = std.ArrayListUnmanaged(HypothesisDecl).empty;
     var hyp_index: usize = 0;
     for (math_strings) |math| {
         if (hyp_index >= hyp_count) break;
@@ -280,7 +280,7 @@ fn binderGroupNamesBeforeMath(
     if (pos == 0 or text[pos - 1] != ':') return &.{};
     pos -= 1;
 
-    var names = std.ArrayListUnmanaged(BinderNameToken){};
+    var names = std.ArrayListUnmanaged(BinderNameToken).empty;
     errdefer names.deinit(allocator);
     while (true) {
         while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
@@ -316,7 +316,7 @@ pub fn bindersFromTerm(
     text: []const u8,
     term: parse.TermStmt,
 ) ![]const BinderDecl {
-    var binders = std.ArrayListUnmanaged(BinderDecl){};
+    var binders = std.ArrayListUnmanaged(BinderDecl).empty;
     try appendBindersFromArgs(
         allocator,
         &binders,
@@ -384,7 +384,7 @@ pub fn bindersFromProofDef(
         header_span.start,
     );
 
-    var binders = std.ArrayListUnmanaged(BinderDecl){};
+    var binders = std.ArrayListUnmanaged(BinderDecl).empty;
     var arg_index: usize = 0;
     var dummy_index: usize = 0;
     var ordinal: usize = 0;
@@ -427,7 +427,7 @@ fn scanProofDefBinders(
     header_tail: []const u8,
     base: usize,
 ) ![]const ScannedProofBinder {
-    var result = std.ArrayListUnmanaged(ScannedProofBinder){};
+    var result = std.ArrayListUnmanaged(ScannedProofBinder).empty;
     var pos: usize = 0;
     while (pos < header_tail.len) : (pos += 1) {
         const open = header_tail[pos];
@@ -484,7 +484,7 @@ pub fn bindersFromArgs(
     names: []const ?[]const u8,
     args: []const parse.ArgInfo,
 ) ![]const BinderDecl {
-    var binders = std.ArrayListUnmanaged(BinderDecl){};
+    var binders = std.ArrayListUnmanaged(BinderDecl).empty;
     for (args, 0..) |arg, i| {
         if (i >= names.len) continue;
         const name = names[i] orelse continue;
@@ -511,7 +511,7 @@ pub fn completionArgsFromArgs(
     names: []const ?[]const u8,
     args: []const parse.ArgInfo,
 ) ![]const BinderDecl {
-    var binders = std.ArrayListUnmanaged(BinderDecl){};
+    var binders = std.ArrayListUnmanaged(BinderDecl).empty;
     for (args, 0..) |arg, i| {
         const name = if (i < names.len) names[i] else null;
         const label = if (name) |actual|
@@ -543,7 +543,7 @@ pub fn bindersFromLemma(
     names: []const ?[]const u8,
     args: []const parse.ArgInfo,
 ) ![]const BinderDecl {
-    var binders = std.ArrayListUnmanaged(BinderDecl){};
+    var binders = std.ArrayListUnmanaged(BinderDecl).empty;
     var search_start: usize = 0;
     for (args, 0..) |arg, i| {
         if (i >= names.len) continue;

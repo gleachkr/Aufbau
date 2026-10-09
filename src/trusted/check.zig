@@ -30,7 +30,7 @@ pub const CrossChecker = struct {
     // Working storage for unify-stream replay: the saved-expression heap, the
     // expression traversal stack, and the non-recursive equality stack.
     uheap: [UHEAP_SIZE]*const Expr = undefined,
-    uheap_saved: [UHEAP_SIZE]bool = [_]bool{false} ** UHEAP_SIZE,
+    uheap_saved: [UHEAP_SIZE]bool = @splat(false),
     uheap_len: usize = 0,
     ustack: [USTACK_SIZE]*const Expr = undefined,
     ustack_top: usize = 0,

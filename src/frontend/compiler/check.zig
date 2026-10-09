@@ -186,7 +186,7 @@ pub fn checkTheoremBlock(
     var labels = LabelIndexMap.init(allocator);
     defer labels.deinit();
 
-    var checked = std.ArrayListUnmanaged(CheckedLine){};
+    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
     var rule_unify_cache = Inference.RuleUnifyCache.init(allocator);
     defer rule_unify_cache.deinit();
     var diag_scratch = CompilerDiag.Scratch.init(allocator);
@@ -198,7 +198,7 @@ pub fn checkTheoremBlock(
     // Analysis only: lines with no statement to admit. A placeholder line
     // whose assertion has holes is unfinished, and so is a holey line that
     // cites one.
-    var unfinished = std.ArrayListUnmanaged([]const u8){};
+    var unfinished = std.ArrayListUnmanaged([]const u8).empty;
     defer unfinished.deinit(allocator);
     var ends_unfinished = false;
 
@@ -609,7 +609,7 @@ fn filledLineChecks(
     };
     if (parsed == .holey) return false;
 
-    var scratch: std.ArrayListUnmanaged(CheckedLine) = .{};
+    var scratch: std.ArrayListUnmanaged(CheckedLine) = .empty;
     defer {
         CheckedIr.rollbackToMark(allocator, &scratch, checked_mark);
         scratch.deinit(allocator);

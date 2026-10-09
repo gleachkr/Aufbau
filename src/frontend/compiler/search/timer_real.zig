@@ -11,6 +11,8 @@ pub fn elapsedSince(start: i128) u64 {
     return @intCast(elapsed);
 }
 
+/// Profiling counters only, so this reads the clock through the debug `Io`
+/// rather than threading the host's through every search entry point.
 pub fn nanoTimestamp() i128 {
-    return std.time.nanoTimestamp();
+    return std.Io.Clock.awake.now(std.Options.debug_io).nanoseconds;
 }

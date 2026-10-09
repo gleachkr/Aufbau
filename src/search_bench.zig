@@ -4,6 +4,13 @@ const mm0 = @import("mm0");
 const Search = mm0.CompilerSupport.Search;
 const ProofScript = mm0.ProofScript;
 
+/// The process's `Io`, set first thing in `main`.
+var io: std.Io = undefined;
+
+fn nanoTimestamp() i128 {
+    return std.Io.Clock.awake.now(io).nanoseconds;
+}
+
 const Scenario = struct {
     name: []const u8,
     mm0_path: []const u8,
@@ -1333,14 +1340,18 @@ fn failOnUntrimmed() void {
     std.process.exit(1);
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    io = init.io;
     const allocator = counting_allocator.allocator();
-    const options = try parseOptions(allocator);
+    const options = try parseOptions(
+        allocator,
+        try init.minimal.args.toSlice(init.arena.allocator()),
+    );
     counting_allocator.track_sites = options.track_sites;
     counting_allocator.trap_bytes = options.alloc_trap_mib << 20;
 
     var stdout_buf: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buf);
     const stdout = &stdout_writer.interface;
 
     if (options.sweep != null) {
@@ -1377,12 +1388,12 @@ pub fn main() !void {
     failOnUntrimmed();
 }
 
-fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
+fn parseOptions(
+    allocator: std.mem.Allocator,
+    args: []const [:0]const u8,
+) !BenchOptions {
     var options = BenchOptions{};
-    var files = std.ArrayListUnmanaged(FixturePair){};
+    var files = std.ArrayListUnmanaged(FixturePair).empty;
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--compact") or
             std.mem.eql(u8, arg, "-c"))
@@ -1543,7 +1554,7 @@ fn parseOptions(allocator: std.mem.Allocator) !BenchOptions {
 
 fn printUsage() !void {
     var stderr_buf: [1024]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+    var stderr_writer = std.Io.File.stderr().writer(io, &stderr_buf);
     const stderr = &stderr_writer.interface;
     try stderr.writeAll(
         "usage: zig build bench-search -- [--compact|-c] [--filter=TEXT]\n" ++
@@ -1583,18 +1594,10 @@ fn runScenario(
     scenario: Scenario,
     options: BenchOptions,
 ) !void {
-    const scenario_start = std.time.nanoTimestamp();
-    const mm0_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        scenario.mm0_path,
-        std.math.maxInt(usize),
-    );
+    const scenario_start = nanoTimestamp();
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(io, scenario.mm0_path, allocator, .unlimited);
     defer allocator.free(mm0_src);
-    const proof_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        scenario.proof_path,
-        std.math.maxInt(usize),
-    );
+    const proof_src = try std.Io.Dir.cwd().readFileAlloc(io, scenario.proof_path, allocator, .unlimited);
     defer allocator.free(proof_src);
     const offset = std.mem.indexOf(u8, proof_src, scenario.marker) orelse {
         return error.MissingBenchmarkMarker;
@@ -1813,7 +1816,7 @@ fn runScenario(
 }
 
 fn elapsedSince(start: i128) u64 {
-    const elapsed = std.time.nanoTimestamp() - start;
+    const elapsed = nanoTimestamp() - start;
     if (elapsed <= 0) return 0;
     return @intCast(elapsed);
 }
@@ -1970,7 +1973,7 @@ fn spliceSource(
     app_span: ProofScript.Span,
     marker: []const u8,
 ) !Spliced {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     var pos: usize = 0;
     for (removed_lines) |line| {
         try out.appendSlice(arena, src[pos..line.span.start]);
@@ -1989,7 +1992,7 @@ fn normalizeWhitespace(
     arena: std.mem.Allocator,
     text: []const u8,
 ) ![]const u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     var in_ws = true;
     for (text) |c| {
         if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
@@ -2064,7 +2067,7 @@ const CountingAllocator = struct {
     /// Per-site live-byte attribution (keyed by the allocation `ret_addr`,
     /// symbolized offline with addr2line). Maps allocate straight from the
     /// child allocator so tracking never recurses into itself.
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = .init,
     sites: std.AutoHashMapUnmanaged(usize, Site) = .{},
     ptr_site: std.AutoHashMapUnmanaged(usize, usize) = .{},
     /// Snapshot of `sites` taken the last time `live` crossed a new 256 MiB
@@ -2121,8 +2124,8 @@ const CountingAllocator = struct {
         ret_addr: usize,
     ) void {
         if (!self.track_sites) return;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         self.ptr_site.put(self.child, ptr, ret_addr) catch return;
         const entry = self.sites.getOrPutValue(
             self.child,
@@ -2153,8 +2156,8 @@ const CountingAllocator = struct {
 
     fn trackFree(self: *CountingAllocator, ptr: usize, len: usize) void {
         if (!self.track_sites) return;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         const kv = self.ptr_site.fetchRemove(ptr) orelse return;
         if (self.sites.getPtr(kv.value)) |site| {
             site.live -|= len;
@@ -2169,8 +2172,8 @@ const CountingAllocator = struct {
         new_len: usize,
     ) void {
         if (!self.track_sites) return;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         const kv = self.ptr_site.fetchRemove(old_ptr) orelse return;
         self.ptr_site.put(self.child, new_ptr, kv.value) catch return;
         if (self.sites.getPtr(kv.value)) |site| {
@@ -2182,15 +2185,15 @@ const CountingAllocator = struct {
     /// Print the top sites by live bytes (call-site return addresses;
     /// symbolize with `addr2line -f -e search-bench ADDR...`).
     fn reportTopSites(self: *CountingAllocator, writer: anytype, n: usize) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         try reportSitesLocked(&self.sites, writer, n);
     }
 
     /// Print the top sites of the last peak snapshot (see `peak_sites`).
     fn reportPeakSites(self: *CountingAllocator, writer: anytype, n: usize) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         if (self.peak_sites_live == 0) return;
         try writer.print(
             "      -- sites at live snapshot {d} MiB --\n",
@@ -2321,7 +2324,7 @@ const RssSample = struct {
 fn sampleRss() RssSample {
     var sample = RssSample{};
     var buf: [4096]u8 = undefined;
-    const data = std.fs.cwd().readFile("/proc/self/status", &buf) catch
+    const data = std.Io.Dir.cwd().readFile(io, "/proc/self/status", &buf) catch
         return sample;
     var lines = std.mem.splitScalar(u8, data, '\n');
     while (lines.next()) |line| {
@@ -2359,7 +2362,7 @@ fn runFrontierSearch(
     // production, where the counters block exists only as the memo carrier).
     var counters = Search.SearchCounters{ .collect = true };
     defer untrimmed_total += counters.untrimmed;
-    const run_start = std.time.nanoTimestamp();
+    const run_start = nanoTimestamp();
     var suggestions = Search.suggestionsAtSourceOffset(
         allocator,
         mm0_src,
@@ -2608,7 +2611,7 @@ const DepthStats = struct {
     found_ticks_label: []const u8 = "",
     fail_ticks_max: u64 = 0,
     /// Terminating MISS runs by the bound that ended them (see `MissCause`).
-    miss_causes: [@typeInfo(MissCause).@"enum".fields.len]usize =
+    miss_causes: [std.meta.fieldNames(MissCause).len]usize =
         @splat(0),
 
     /// Fold one search outcome into the per-fixture stats. `label` may point
@@ -2700,7 +2703,7 @@ fn parseSweepSpec(allocator: std.mem.Allocator, spec: []const u8) !SweepSpec {
         try printUsage();
         return error.InvalidArgument;
     };
-    var points = std.ArrayListUnmanaged(usize){};
+    var points = std.ArrayListUnmanaged(usize).empty;
     if (colon) |c| {
         var it = std.mem.splitScalar(u8, spec[c + 1 ..], ',');
         while (it.next()) |tok| {
@@ -2730,8 +2733,8 @@ fn generateSweep(
     n: usize,
     marker: []const u8,
 ) !GeneratedSweep {
-    var mm0_buf = std.ArrayListUnmanaged(u8){};
-    const w = mm0_buf.writer(arena);
+    var mm0_buf: std.Io.Writer.Allocating = .init(arena);
+    const w = &mm0_buf.writer;
     try w.writeAll(
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -2791,16 +2794,16 @@ fn generateSweep(
         try w.writeAll("theorem probe: $ Goal K $;\n");
     }
 
-    var auf = std.ArrayListUnmanaged(u8){};
-    const aw = auf.writer(arena);
+    var auf: std.Io.Writer.Allocating = .init(arena);
+    const aw = &auf.writer;
     try aw.writeAll("probe\n-----\nl1: $ Goal K $ by ");
-    const offset = auf.items.len;
+    const offset = auf.written().len;
     try aw.writeAll(marker);
     try aw.writeAll("\n");
 
     return .{
-        .mm0 = mm0_buf.items,
-        .spliced = .{ .text = auf.items, .offset = offset },
+        .mm0 = mm0_buf.written(),
+        .spliced = .{ .text = auf.written(), .offset = offset },
     };
 }
 
@@ -3006,17 +3009,9 @@ fn runBreadthFixture(
     fixture: FixturePair,
     options: BenchOptions,
 ) !BreadthStats {
-    const mm0_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        fixture.mm0_path,
-        std.math.maxInt(usize),
-    );
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(io, fixture.mm0_path, allocator, .unlimited);
     defer allocator.free(mm0_src);
-    const proof_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        fixture.proof_path,
-        std.math.maxInt(usize),
-    );
+    const proof_src = try std.Io.Dir.cwd().readFileAlloc(io, fixture.proof_path, allocator, .unlimited);
     defer allocator.free(proof_src);
 
     var stats = BreadthStats{};
@@ -3148,17 +3143,9 @@ fn runDepthFixture(
     fixture: FixturePair,
     options: BenchOptions,
 ) !DepthStats {
-    const mm0_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        fixture.mm0_path,
-        std.math.maxInt(usize),
-    );
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(io, fixture.mm0_path, allocator, .unlimited);
     defer allocator.free(mm0_src);
-    const proof_src = try std.fs.cwd().readFileAlloc(
-        allocator,
-        fixture.proof_path,
-        std.math.maxInt(usize),
-    );
+    const proof_src = try std.Io.Dir.cwd().readFileAlloc(io, fixture.proof_path, allocator, .unlimited);
     defer allocator.free(proof_src);
 
     var stats = DepthStats{};
@@ -3292,7 +3279,7 @@ fn runDepthFixture(
                 fail_cause = MissCause.of(&run.counters, options.max_depth);
                 fail_last_phase = run.counters.gen_last_phase;
                 fail_last_depth = run.counters.gen_last_depth;
-                stats.miss_causes[@intFromEnum(fail_cause)] += 1;
+                stats.miss_causes[@backingInt(fail_cause)] += 1;
                 if (options.retry_misses) {
                     retry_note = try retryMissNote(
                         allocator,
@@ -3419,8 +3406,8 @@ fn retryMissNote(
     const gen = frontierGenerateOptions(options);
     const retry = Search.miss.retryFor(Search.miss.MissReport.of(counters), gen) orelse
         return " [retry none]";
-    var out = std.ArrayListUnmanaged(u8){};
-    const w = out.writer(arena);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    const w = &out.writer;
     try w.writeAll(" [retry ");
     try retry.writeParams(w);
     var retried = options;
@@ -3433,7 +3420,7 @@ fn retryMissNote(
         if (run.err != null) "err" else if (run.found) "FOUND" else "miss",
         @as(f64, @floatFromInt(RunTicks.of(&run.counters).weighted())) / 1e6,
     });
-    return out.items;
+    return out.written();
 }
 
 /// ` <cause> d<last>/<max>`: the bound that ended a miss and the ladder depth
@@ -3484,11 +3471,10 @@ fn printDepthSummary(
     // more depth" bucket: the budget died only after every shallower depth
     // was searched clean, so the depth limit may be what hides the proof.
     try writer.print("{s:<16} miss causes:", .{label});
-    inline for (@typeInfo(MissCause).@"enum".fields) |field| {
-        const cause: MissCause = @enumFromInt(field.value);
+    for (std.meta.tags(MissCause)) |cause| {
         try writer.print(" {s} {d}", .{
             cause.label(),
-            stats.miss_causes[field.value],
+            stats.miss_causes[@backingInt(cause)],
         });
     }
     try writer.writeAll("\n");

@@ -70,14 +70,14 @@ fn holdsNoPointers(comptime T: type) bool {
         .array => |a| holdsNoPointers(a.child),
         .vector => |v| holdsNoPointers(v.child),
         .@"struct" => |s| blk: {
-            inline for (s.fields) |f| {
-                if (!holdsNoPointers(f.type)) break :blk false;
+            inline for (s.field_types) |field_type| {
+                if (!holdsNoPointers(field_type)) break :blk false;
             }
             break :blk true;
         },
         .@"union" => |u| blk: {
-            inline for (u.fields) |f| {
-                if (!holdsNoPointers(f.type)) break :blk false;
+            inline for (u.field_types) |field_type| {
+                if (!holdsNoPointers(field_type)) break :blk false;
             }
             break :blk true;
         },
@@ -94,9 +94,9 @@ test "search counters are value-only statistics" {
         if (!holdsNoPointers(types.SearchCounters)) {
             @compileError("SearchCounters must hold no pointers");
         }
-        for (std.meta.fields(types.SearchCounters)) |field| {
-            if (std.mem.endsWith(u8, field.name, "_enabled")) {
-                @compileError("SearchCounters." ++ field.name ++
+        for (std.meta.fieldNames(types.SearchCounters)) |field_name| {
+            if (std.mem.endsWith(u8, field_name, "_enabled")) {
+                @compileError("SearchCounters." ++ field_name ++
                     " is a policy switch; policy belongs on SearchRuntime");
             }
         }
@@ -462,11 +462,7 @@ fn andCommSlotSuggestions(
     arena: *std.heap.ArenaAllocator,
     proof_src: []const u8,
 ) !types.SourceSuggestions {
-    const mm0 = try std.fs.cwd().readFileAlloc(
-        arena.allocator(),
-        "tests/proof_cases/zermelo.mm0",
-        std.math.maxInt(usize),
-    );
+    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/zermelo.mm0", arena.allocator(), .unlimited);
     return suggestionsAtNeedle(arena, mm0, proof_src, "exact?", .{});
 }
 
@@ -1987,31 +1983,31 @@ test "recover member injection skips pinned-target laws" {
 /// with a two-context rule, a context-extension rule, a context `nil` that
 /// unfolds to the unit, and the goal context `A , B , A`.
 fn splitLawMm0(comptime comm: []const u8, comptime idem: []const u8) []const u8 {
-    return 
+    return
     \\delimiter $ ( ) $;
     \\provable sort wff;
     \\sort ctx;
     \\term ctx_eq (g h: ctx): wff;
     \\term emp: ctx;
     \\--| @acui ctx_assoc 
-++ comm ++ " emp " ++ idem ++ "\n" ++
-    \\term join (g h: ctx): ctx;
-    \\term hyp (a: wff): ctx;
-    \\term seq (g: ctx) (a: wff): wff;
-    \\term A: wff;
-    \\term B: wff;
-    \\term P: wff;
-    \\def nil: ctx = $ emp $;
-    \\axiom ctx_assoc (g h i: ctx):
-    \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
-    \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
-    \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
-    \\axiom two (g h: ctx): $ seq g P $ > $ seq h P $ > $ seq (join g h) P $;
-    \\axiom ext (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) a $;
-    \\axiom keep (g: ctx) (a: wff): $ seq (join (hyp B) (join (hyp a) g)) a $ >
-    \\  $ seq (join g (hyp a)) a $;
-    \\theorem t: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
-    \\theorem u: $ seq (join (join (hyp A) (hyp B)) (hyp A)) A $;
+    ++ comm ++ " emp " ++ idem ++ "\n" ++
+        \\term join (g h: ctx): ctx;
+        \\term hyp (a: wff): ctx;
+        \\term seq (g: ctx) (a: wff): wff;
+        \\term A: wff;
+        \\term B: wff;
+        \\term P: wff;
+        \\def nil: ctx = $ emp $;
+        \\axiom ctx_assoc (g h i: ctx):
+        \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+        \\axiom two (g h: ctx): $ seq g P $ > $ seq h P $ > $ seq (join g h) P $;
+        \\axiom ext (g: ctx) (a: wff): $ seq g a $ > $ seq (join g (hyp a)) a $;
+        \\axiom keep (g: ctx) (a: wff): $ seq (join (hyp B) (join (hyp a) g)) a $ >
+        \\  $ seq (join g (hyp a)) a $;
+        \\theorem t: $ seq (join (join (hyp A) (hyp B)) (hyp A)) P $;
+        \\theorem u: $ seq (join (join (hyp A) (hyp B)) (hyp A)) A $;
     ;
 }
 

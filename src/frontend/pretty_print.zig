@@ -29,7 +29,7 @@ pub const Limit = struct {
 
 /// Output of a render: fails with `TooLong` once past `max_len`.
 const Out = struct {
-    list: std.ArrayListUnmanaged(u8) = .{},
+    list: std.ArrayListUnmanaged(u8) = .empty,
     arena: std.mem.Allocator,
     max_len: usize,
 

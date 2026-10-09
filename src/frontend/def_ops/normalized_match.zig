@@ -685,7 +685,7 @@ pub const RuleMatchSession = struct {
         self: *RuleMatchSession,
     ) ![]UnresolvedDummyRoot {
         var symbolic_engine = self.engine();
-        var roots = std.ArrayListUnmanaged(UnresolvedDummyRoot){};
+        var roots = std.ArrayListUnmanaged(UnresolvedDummyRoot).empty;
         errdefer roots.deinit(self.shared.allocator);
         var seen_roots: std.AutoHashMapUnmanaged(usize, void) = .empty;
         defer seen_roots.deinit(self.shared.allocator);

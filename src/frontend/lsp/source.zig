@@ -288,7 +288,7 @@ pub fn mathStringsBeforeByte(
 ) ![]const MathStringSpan {
     const end = findStatementByte(text, stmt, stop_byte) orelse stmt.end;
     var pos = stmt.start;
-    var result = std.ArrayListUnmanaged(MathStringSpan){};
+    var result = std.ArrayListUnmanaged(MathStringSpan).empty;
     while (nextMathStringIn(text, end, &pos)) |math| {
         try result.append(allocator, math);
     }

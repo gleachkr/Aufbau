@@ -856,10 +856,10 @@ test "runtime locale switch renders the German catalogue" {
         mm0.compilerErrorSummary(error.OutOfMemory),
     );
 
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(std.testing.allocator);
-    var writer = buf.writer(std.testing.allocator);
-    try mm0.renderCompilerNoteMessage(&writer, .{
+    var buf: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer buf.deinit();
+    const writer = &buf.writer;
+    try mm0.renderCompilerNoteMessage(writer, .{
         .assignment_parses_as_sort = .{
             .actual_sort = "wff",
             .expected_sort = "nat",
@@ -868,7 +868,7 @@ test "runtime locale switch renders the German catalogue" {
     try std.testing.expectEqualStrings(
         "die Zuweisung parst, aber mit Sorte 'wff'; " ++
             "dieser Binder erwartet Sorte 'nat'",
-        buf.items,
+        buf.written(),
     );
 }
 

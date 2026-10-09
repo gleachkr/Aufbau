@@ -330,12 +330,12 @@ fn buildAcuiLeafFold(
         return null;
     };
 
-    var user_items = std.ArrayListUnmanaged(ExprId){};
+    var user_items = std.ArrayListUnmanaged(ExprId).empty;
     defer user_items.deinit(allocator);
     try support.collectConcreteSetItems(user, acui, &user_items);
     if (user_items.items.len > max_acui_fold_items) return null;
 
-    var raw_items = std.ArrayListUnmanaged(AcuiSupport.LeafInfo){};
+    var raw_items = std.ArrayListUnmanaged(AcuiSupport.LeafInfo).empty;
     defer raw_items.deinit(allocator);
     try support.collectLeafInfos(raw, acui.head_term_id, &raw_items);
     if (raw_items.items.len > max_acui_fold_items) return null;

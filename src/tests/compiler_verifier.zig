@@ -51,7 +51,7 @@ fn collectStatementCmds(
     allocator: std.mem.Allocator,
     mmb: Mmb,
 ) ![]Proof.StmtCmd {
-    var cmds = std.ArrayListUnmanaged(Proof.StmtCmd){};
+    var cmds = std.ArrayListUnmanaged(Proof.StmtCmd).empty;
     var pos: usize = @intCast(mmb.header.p_proof);
 
     while (true) {
@@ -61,7 +61,7 @@ fn collectStatementCmds(
             pos,
             mmb.file_bytes.len,
         );
-        const stmt_cmd: Proof.StmtCmd = @enumFromInt(cmd.op);
+        const stmt_cmd: Proof.StmtCmd = @fromBackingInt(@intCast(cmd.op));
         try cmds.append(allocator, stmt_cmd);
         if (stmt_cmd == .End) break;
         if (cmd.data == 0) return error.BadStatementLength;
@@ -82,11 +82,7 @@ fn readProofCaseFile(
         .{ stem, ext },
     );
     defer allocator.free(path);
-    return try std.fs.cwd().readFileAlloc(
-        allocator,
-        path,
-        std.math.maxInt(usize),
-    );
+    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
 }
 
 const proof_case_ext = "auf";

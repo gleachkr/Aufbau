@@ -121,7 +121,7 @@ pub fn suggestionsAtSourceOffset(
 
     var labels = LabelIndexMap.init(work);
     defer labels.deinit();
-    var checked = std.ArrayListUnmanaged(CheckedLine){};
+    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer {
         CheckedIr.deinitLines(work, checked.items);
         checked.deinit(work);
@@ -133,7 +133,7 @@ pub fn suggestionsAtSourceOffset(
 
     // Labels of earlier lines with no statement to admit, as in the
     // checker's analysis: a holey placeholder line, or a holey line citing one.
-    var unfinished = std.ArrayListUnmanaged([]const u8){};
+    var unfinished = std.ArrayListUnmanaged([]const u8).empty;
     defer unfinished.deinit(work);
     for (target.block.lines[0..target.line_index]) |line| {
         // An incomplete line has no rule to run: stop accumulating context,
@@ -549,9 +549,9 @@ fn buildConversionDetail(
     conv_options: ConversionSearch.Options,
     goal_concrete: bool,
 ) !?[]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+    const w = &buf.writer;
     if (!goal_concrete) {
         try w.writeAll(
             "conversion? needs a concrete goal formula (no holes).",
@@ -713,7 +713,7 @@ fn buildConversionDetail(
             .{result.partial_ac_heads},
         );
     }
-    return try buf.toOwnedSlice(allocator);
+    return try buf.toOwnedSlice();
 }
 
 /// Derive the user-facing outcome of a completed search: found beats
@@ -743,9 +743,9 @@ pub fn buildStatusDetail(
     counters: *const types.SearchCounters,
     gen: types.GenerateOptions,
 ) !?[]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
-    errdefer buf.deinit(allocator);
-    const w = buf.writer(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    errdefer buf.deinit();
+    const w = &buf.writer;
 
     const validated = counters.full_try_candidate_calls;
     const accepted = counters.accepted_candidates;
@@ -891,7 +891,7 @@ pub fn buildStatusDetail(
     // reject-flood, the usual budget sink). Only recorded under `collect`.
     try appendTopRuleAttempts(w, counters);
 
-    return try buf.toOwnedSlice(allocator);
+    return try buf.toOwnedSlice();
 }
 
 /// " Try 'auto? (nodes: 512, budget: 14)'." — on a cut-short miss, with
@@ -929,13 +929,13 @@ fn retrySuggestion(
     application: RuleApplication,
     retry: miss.Retry,
 ) !SourceSuggestion {
-    var params = std.ArrayListUnmanaged(u8){};
-    defer params.deinit(allocator);
-    try retry.writeParams(params.writer(allocator));
+    var params: std.Io.Writer.Allocating = .init(allocator);
+    defer params.deinit();
+    try retry.writeParams(&params.writer);
 
-    var text = std.ArrayListUnmanaged(u8){};
-    errdefer text.deinit(allocator);
-    const w = text.writer(allocator);
+    var text: std.Io.Writer.Allocating = .init(allocator);
+    errdefer text.deinit();
+    const w = &text.writer;
     try w.print("{s} (", .{application.rule_name});
     for (application.arg_bindings) |binding| {
         try w.print("{s}, ", .{proof_src[binding.span.start..binding.span.end]});
@@ -944,15 +944,15 @@ fn retrySuggestion(
         if (retry.sets(param.name)) continue;
         try w.print("{s}, ", .{proof_src[param.span.start..param.span.end]});
     }
-    try w.print("{s})", .{params.items});
+    try w.print("{s})", .{params.written()});
 
     return .{
         .title = try std.fmt.allocPrint(
             allocator,
             "Retry with {s}",
-            .{params.items},
+            .{params.written()},
         ),
-        .replacement = try text.toOwnedSlice(allocator),
+        .replacement = try text.toOwnedSlice(),
         .replace_span = .{
             .start = application.rule_span.start,
             .end = (application.binding_list_span orelse
@@ -1093,7 +1093,7 @@ pub fn searchPlaceholders(
 ) ![]SearchPlaceholder {
     var parse_arena = std.heap.ArenaAllocator.init(allocator);
     defer parse_arena.deinit();
-    var out = std.ArrayListUnmanaged(SearchPlaceholder){};
+    var out = std.ArrayListUnmanaged(SearchPlaceholder).empty;
     errdefer out.deinit(allocator);
     var parser = ProofParser.initLenient(parse_arena.allocator(), proof_src);
     while (parser.nextBlockSkippingLocalItems() catch null) |block| {
@@ -1131,7 +1131,7 @@ pub fn placeholderNotices(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
 ) ![]PlaceholderNotice {
-    var out = std.ArrayListUnmanaged(PlaceholderNotice){};
+    var out = std.ArrayListUnmanaged(PlaceholderNotice).empty;
     for (try searchPlaceholders(allocator, proof_src)) |placeholder| {
         try out.append(allocator, .{
             .kind = .placeholder,
@@ -1366,7 +1366,7 @@ fn appendGeneratedSuggestions(
     options: SourceSuggestionOptions,
     existing: SourceSuggestions,
 ) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion){};
+    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
     errdefer deinitSourceSuggestionItems(allocator, items.items);
     // Seed with the already-rendered direct suggestions. `existing` and its
     // strings live on the per-call work arena (as does everything appended
@@ -1448,7 +1448,7 @@ fn inlineExactSuggestions(
     budgets: *CallBudgets,
     options: SourceSuggestionOptions,
 ) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion){};
+    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
     errdefer deinitSourceSuggestionItems(allocator, items.items);
 
     const max_results = options.max_results;
@@ -1531,7 +1531,7 @@ fn renderExactSourceSuggestions(
     replace_span: Span,
     keyword: []const u8,
 ) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion){};
+    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
     errdefer deinitSourceSuggestionItems(allocator, items.items);
     for (candidates) |candidate| {
         const app = try withNeededBindings(allocator, site, candidate.application);
@@ -1563,7 +1563,7 @@ fn renderApplySourceSuggestions(
     replace_span: Span,
     replaced_rule_name: []const u8,
 ) !SourceSuggestions {
-    var items = std.ArrayListUnmanaged(SourceSuggestion){};
+    var items = std.ArrayListUnmanaged(SourceSuggestion).empty;
     errdefer deinitSourceSuggestionItems(allocator, items.items);
     for (candidates) |candidate| {
         const replacement = try renderApplyApplication(allocator, candidate);
@@ -1742,7 +1742,7 @@ fn renderRefString(
     allocator: std.mem.Allocator,
     ref: Ref,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
     try renderRef(allocator, &buf, ref);
     return try buf.toOwnedSlice(allocator);
@@ -1972,7 +1972,7 @@ fn trimBindings(
     defer if (site.counters) |counters| {
         counters.trim_ns += timer.elapsedSince(start);
     };
-    var list = std.ArrayListUnmanaged(*const ProofScript.ArgBinding){};
+    var list = std.ArrayListUnmanaged(*const ProofScript.ArgBinding).empty;
     try appendPreorderBindings(allocator, &list, app);
     const bindings = list.items;
     if (bindings.len == 0) return null;
@@ -2033,7 +2033,7 @@ fn withBindingsDroppedFrom(
     oracle: ?*BindingOracle,
 ) !RuleApplication {
     var copy = app;
-    var kept = std.ArrayListUnmanaged(ProofScript.ArgBinding){};
+    var kept = std.ArrayListUnmanaged(ProofScript.ArgBinding).empty;
     for (app.arg_bindings) |binding| {
         if (!drop[next.*]) try kept.append(allocator, binding);
         next.* += 1;
@@ -2389,12 +2389,12 @@ fn renderApplyApplication(
     if (candidate.unresolved_hyps.len == 0) {
         return try allocator.dupe(u8, candidate.rule_name);
     }
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
-    try buf.writer(allocator).print("{s} [", .{candidate.rule_name});
+    try buf.print(allocator, "{s} [", .{candidate.rule_name});
     for (candidate.unresolved_hyps, 0..) |_, idx| {
         if (idx != 0) try buf.appendSlice(allocator, ", ");
-        try buf.writer(allocator).print("ref{}", .{idx + 1});
+        try buf.print(allocator, "ref{}", .{idx + 1});
     }
     try buf.append(allocator, ']');
     return try buf.toOwnedSlice(allocator);
@@ -2406,14 +2406,15 @@ fn renderApplication(
     arg_bindings: []const ProofScript.ArgBinding,
     refs: []const ProofScript.Ref,
 ) anyerror![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
     try buf.appendSlice(allocator, rule_name);
     if (arg_bindings.len != 0) {
         try buf.appendSlice(allocator, " (");
         for (arg_bindings, 0..) |binding, idx| {
             if (idx != 0) try buf.appendSlice(allocator, ", ");
-            try buf.writer(allocator).print(
+            try buf.print(
+                allocator,
                 "{s} := $ {s} $",
                 .{ binding.name, binding.formula.text },
             );
@@ -2436,7 +2437,7 @@ fn renderInlineApplication(
     allocator: std.mem.Allocator,
     app: RuleApplication,
 ) ![]const u8 {
-    var buf = std.ArrayListUnmanaged(u8){};
+    var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
     try renderRef(allocator, &buf, .{ .application = app });
     return try buf.toOwnedSlice(allocator);
@@ -2449,9 +2450,9 @@ fn renderRef(
 ) anyerror!void {
     switch (ref) {
         .hyp => |hyp| if (hyp.name) |name|
-            try buf.writer(allocator).print("#{s}", .{name})
+            try buf.print(allocator, "#{s}", .{name})
         else
-            try buf.writer(allocator).print("#{}", .{hyp.index}),
+            try buf.print(allocator, "#{}", .{hyp.index}),
         .line => |line| try buf.appendSlice(allocator, line.label),
         .application => |app| {
             const rendered = try renderApplication(

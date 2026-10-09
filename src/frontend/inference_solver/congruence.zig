@@ -11,9 +11,9 @@ pub fn expressionsEqual(
     rhs: ExprId,
     profile: StructuralProfile,
 ) anyerror!bool {
-    var lhs_items = std.ArrayListUnmanaged(ExprId){};
+    var lhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lhs_items.deinit(self.allocator);
-    var rhs_items = std.ArrayListUnmanaged(ExprId){};
+    var rhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer rhs_items.deinit(self.allocator);
 
     try collectItems(self, lhs, profile, &lhs_items);

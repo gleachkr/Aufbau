@@ -223,14 +223,14 @@ const Saturator = struct {
     /// Premise sources: pool refs first, then derived refs in derivation
     /// order. Layer N restricts matching to the prefix that existed when the
     /// layer started.
-    sources: std.ArrayListUnmanaged(SourceEntry) = .{},
-    derived: std.ArrayListUnmanaged(DerivedRef) = .{},
+    sources: std.ArrayListUnmanaged(SourceEntry) = .empty,
+    derived: std.ArrayListUnmanaged(DerivedRef) = .empty,
     /// Forward-join overlay: nested-source universal metas grounded to concrete
     /// witnesses during the current premise match (`P ?t` meets `P c` ⇒ `?t :=
     /// c`). Kept here instead of the shared pool store so the family fact stays
     /// general; baked into the produced fact's `pinned_metas`. Snapshotted by
     /// length and restored on backtrack, like the binding array.
-    groundings: std.ArrayListUnmanaged(types.MetaAssignment) = .{},
+    groundings: std.ArrayListUnmanaged(types.MetaAssignment) = .empty,
     /// Dedupe set over recipe keys (rule + source tuple) and canonical shape
     /// keys.
     seen: std.StringHashMapUnmanaged(void) = .empty,
@@ -321,7 +321,7 @@ const Saturator = struct {
         template: TemplateExpr,
         source_limit: usize,
     ) FireError![]usize {
-        var list = std.ArrayListUnmanaged(usize){};
+        var list = std.ArrayListUnmanaged(usize).empty;
         errdefer list.deinit(self.scratch);
 
         var filtered = false;
@@ -627,7 +627,7 @@ const Saturator = struct {
         // Project the solved/deferred values into rule-binder space for the
         // recipe's explicit bindings (ascending arg order for stable
         // rendering).
-        var binding_list = std.ArrayListUnmanaged(DerivedRefBinding){};
+        var binding_list = std.ArrayListUnmanaged(DerivedRefBinding).empty;
         if (view) |v| {
             for (0..rule.args.len) |arg_idx| {
                 for (v.binder_map, 0..) |maybe_rule_idx, vi| {
@@ -664,10 +664,10 @@ const Saturator = struct {
         // binding values plus every derived source's, recursively — must
         // occur in the shape: the use-time solve assigns exactly the metas
         // the goal match sees, so anything else could never materialize.
-        var shape_metas = std.ArrayListUnmanaged(PlaceholderId){};
+        var shape_metas = std.ArrayListUnmanaged(PlaceholderId).empty;
         defer shape_metas.deinit(self.scratch);
         try store.collectUnsolved(theorem, shape, &shape_metas);
-        var required = std.ArrayListUnmanaged(PlaceholderId){};
+        var required = std.ArrayListUnmanaged(PlaceholderId).empty;
         defer required.deinit(self.scratch);
         for (binding_list.items) |binding| {
             try store.collectUnsolved(theorem, binding.value, &required);
@@ -676,7 +676,7 @@ const Saturator = struct {
         // witness is *pinned* in this recipe (re-applied transiently at
         // materialize), not deferred to a use-time goal solve. Only genuinely
         // unsolved source metas stay in `required` and must occur in `shape`.
-        var pinned = std.ArrayListUnmanaged(types.MetaAssignment){};
+        var pinned = std.ArrayListUnmanaged(types.MetaAssignment).empty;
         defer pinned.deinit(self.scratch);
         for (chosen) |src_idx| {
             switch (self.sources.items[src_idx].source) {
@@ -791,7 +791,7 @@ const Saturator = struct {
         rule_id: u32,
         chosen: []const usize,
     ) ![]u8 {
-        var out = std.ArrayListUnmanaged(u8){};
+        var out = std.ArrayListUnmanaged(u8).empty;
         errdefer out.deinit(self.arena);
         try out.append(self.arena, 'r');
         try appendKeyInt(&out, self.arena, rule_id);
@@ -817,7 +817,7 @@ const Saturator = struct {
     /// back-reference to it, so the key is the size of the DAG, not the
     /// tree. Concrete pool expressions serialize through the same walk.
     fn shapeKey(self: *Saturator, shape: ExprId) ![]u8 {
-        var out = std.ArrayListUnmanaged(u8){};
+        var out = std.ArrayListUnmanaged(u8).empty;
         errdefer out.deinit(self.arena);
         try out.append(self.arena, 's');
         var meta_numbers = std.AutoHashMapUnmanaged(PlaceholderId, u32).empty;
@@ -1363,10 +1363,10 @@ const UnfoldWalk = struct {
     theorem: *TheoremContext,
     arena: std.mem.Allocator,
     /// Every unfolded def application, on either side.
-    frames: std.ArrayListUnmanaged(*Frame) = .{},
+    frames: std.ArrayListUnmanaged(*Frame) = .empty,
     /// Metas paired with a body subtree that mentions a hidden variable;
     /// solved in `finish`, once the hidden variables exist.
-    deferred: std.ArrayListUnmanaged(Deferred) = .{},
+    deferred: std.ArrayListUnmanaged(Deferred) = .empty,
 
     /// One unfolded def application.
     const Frame = struct {
@@ -1591,7 +1591,7 @@ const UnfoldWalk = struct {
             if (!try self.assign(pid, try self.theorem.instantiateTemplate(d.template, binders))) return false;
         }
         // Every check that can fail runs before the first mint.
-        var fresh = std.ArrayListUnmanaged(PlaceholderId){};
+        var fresh = std.ArrayListUnmanaged(PlaceholderId).empty;
         for (self.frames.items) |frame| {
             for (frame.hidden, 0..) |maybe, k| {
                 const value = try self.store.deref(self.theorem, maybe orelse continue);
@@ -1600,7 +1600,7 @@ const UnfoldWalk = struct {
                 if (std.mem.indexOfScalar(PlaceholderId, fresh.items, pid) == null) try fresh.append(self.arena, pid);
             }
         }
-        var unsolved = std.ArrayListUnmanaged(PlaceholderId){};
+        var unsolved = std.ArrayListUnmanaged(PlaceholderId).empty;
         defer unsolved.deinit(self.store.allocator);
         try self.store.collectUnsolved(self.theorem, pattern, &unsolved);
         for (unsolved.items) |pid| {
@@ -1703,7 +1703,7 @@ pub fn materializeApplication(
     // overlay for the duration of the resolve, so the family facts stay
     // general for other uses without any rollback discipline here.
     var resolved = ResolvedRecipe{};
-    var pins = std.ArrayListUnmanaged(types.MetaAssignment){};
+    var pins = std.ArrayListUnmanaged(types.MetaAssignment).empty;
     if (!try resolveRecipeValues(
         dpool,
         theorem,
@@ -1742,7 +1742,7 @@ const ResolvedRecipe = struct {
     // different per-use pins resolves to different witnesses each time, so each
     // occurrence keeps its own values. `renderRecipe` walks the identical DFS and
     // consumes entries through a cursor.
-    order: std.ArrayListUnmanaged(Entry) = .{},
+    order: std.ArrayListUnmanaged(Entry) = .empty,
 };
 
 /// Dereference every binding value across the recipe tree through the store's
@@ -1952,7 +1952,7 @@ pub const Namer = struct {
     /// Encoded VarId -> source name.
     names: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
     /// Bound theorem vars eligible as dummy stand-ins, sorted by name.
-    candidates: std.ArrayListUnmanaged(Candidate) = .{},
+    candidates: std.ArrayListUnmanaged(Candidate) = .empty,
     /// Encoded VarIds that occur in the goal or in any rendered value (a
     /// chosen stand-in must not collide with these).
     used: std.AutoHashMapUnmanaged(u64, void) = .empty,

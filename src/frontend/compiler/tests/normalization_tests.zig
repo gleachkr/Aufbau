@@ -844,7 +844,7 @@ test "transparent betacv matching handles quantified bic operands" {
 test "compiler reports dependency slot exhaustion clearly" {
     const allocator = std.testing.allocator;
 
-    var mm0_buf = std.ArrayListUnmanaged(u8){};
+    var mm0_buf = std.ArrayListUnmanaged(u8).empty;
     defer mm0_buf.deinit(allocator);
     try mm0_buf.appendSlice(allocator,
         \\--| @vars y
@@ -855,7 +855,7 @@ test "compiler reports dependency slot exhaustion clearly" {
         \\theorem overflow
     );
     for (0..FrontendExpr.tracked_bound_dep_limit) |idx| {
-        try mm0_buf.writer(allocator).print(" {{x{d}: wff}}", .{idx});
+        try mm0_buf.print(allocator, " {{x{d}: wff}}", .{idx});
     }
     try mm0_buf.appendSlice(allocator, ": $ top $;\n");
 

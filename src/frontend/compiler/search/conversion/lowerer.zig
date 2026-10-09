@@ -88,12 +88,12 @@ pub const Lowerer = struct {
     /// Labels of already-emitted lines keyed by content (formula, rule,
     /// references); see `emitLine`.
     line_memo: std.StringHashMapUnmanaged([]const u8) = .{},
-    out: std.ArrayListUnmanaged(u8) = .{},
+    out: std.ArrayListUnmanaged(u8) = .empty,
 
     const NormState = struct {
         /// Proof lines the normalizer emits as it reduces; discarded —
         /// only the resulting expressions gate the grouping.
-        lines: std.ArrayListUnmanaged(CheckedLine) = .{},
+        lines: std.ArrayListUnmanaged(CheckedLine) = .empty,
         normalizer: Normalizer,
     };
 
@@ -273,10 +273,10 @@ pub const Lowerer = struct {
         rule_id: u32,
         ref_labels: []const []const u8,
     ) !?[]const u8 {
-        var key = std.ArrayListUnmanaged(u8){};
-        try key.writer(self.work).print("{d}:{d}", .{ formula, rule_id });
+        var key = std.ArrayListUnmanaged(u8).empty;
+        try key.print(self.work, "{d}:{d}", .{ formula, rule_id });
         for (ref_labels) |ref_label| {
-            try key.writer(self.work).print(":{s}", .{ref_label});
+            try key.print(self.work, ":{s}", .{ref_label});
         }
         if (self.line_memo.get(key.items)) |label| return label;
         self.lines_emitted += 1;
@@ -286,22 +286,21 @@ pub const Lowerer = struct {
         }
         const text = (try self.ppExpr(formula));
         const label = try self.freshLabel();
-        const writer = self.out.writer(self.work);
-        try writer.print("{s}{s}: $ {s} $ by {s}", .{
+        try self.out.print(self.work, "{s}{s}: $ {s} $ by {s}", .{
             self.indent,
             label,
             text,
             self.ruleName(rule_id),
         });
         if (ref_labels.len != 0) {
-            try writer.writeAll(" [");
+            try self.out.appendSlice(self.work, " [");
             for (ref_labels, 0..) |ref_label, idx| {
-                if (idx != 0) try writer.writeAll(", ");
-                try writer.writeAll(ref_label);
+                if (idx != 0) try self.out.appendSlice(self.work, ", ");
+                try self.out.appendSlice(self.work, ref_label);
             }
-            try writer.writeAll("]");
+            try self.out.appendSlice(self.work, "]");
         }
-        try writer.writeAll("\n");
+        try self.out.appendSlice(self.work, "\n");
         try self.line_memo.put(self.work, key.items, label);
         return label;
     }
@@ -614,7 +613,7 @@ pub const Lowerer = struct {
         };
         const decl = &self.context.env.terms.items[app.term_id];
 
-        var ref_labels: std.ArrayListUnmanaged([]const u8) = .{};
+        var ref_labels: std.ArrayListUnmanaged([]const u8) = .empty;
         for (decl.args, 0..) |arg_info, idx| {
             if (arg_info.bound) continue;
             if (idx == changed_idx) {
@@ -722,7 +721,7 @@ pub const Lowerer = struct {
                 if (app.args.len == 2 and
                     self.ac_certs.contains(app.term_id))
                 {
-                    var members: std.ArrayListUnmanaged(ExprId) = .{};
+                    var members: std.ArrayListUnmanaged(ExprId) = .empty;
                     try flattenAcExpr(
                         self.work,
                         self.theorem,
@@ -795,7 +794,7 @@ pub const Lowerer = struct {
             return null;
         };
         const decl = &self.context.env.terms.items[app.term_id];
-        var ref_labels: std.ArrayListUnmanaged([]const u8) = .{};
+        var ref_labels: std.ArrayListUnmanaged([]const u8) = .empty;
         for (decl.args, app.args, 0..) |arg_info, old_arg, i| {
             if (arg_info.bound) continue;
             if (i == idx) {
@@ -950,7 +949,7 @@ pub const Lowerer = struct {
         head: u32,
         expr: ExprId,
     ) !?[]const u32 {
-        var path: std.ArrayListUnmanaged(u32) = .{};
+        var path: std.ArrayListUnmanaged(u32) = .empty;
         var current = expr;
         while (true) {
             const app = self.exprApp(current) orelse return null;
@@ -1001,7 +1000,7 @@ pub const Lowerer = struct {
         count: usize,
     ) !?ExprId {
         var current = current_in;
-        var path: std.ArrayListUnmanaged(u32) = .{};
+        var path: std.ArrayListUnmanaged(u32) = .empty;
         for (0..s) |_| try path.append(self.work, 1);
         if (s + 2 == count) {
             const stepped = (try self.emitPrimAt(
@@ -1117,7 +1116,7 @@ pub const Lowerer = struct {
         if (decl.args.len != fa.args.len or fa.args.len != ta.args.len) {
             return null;
         }
-        var ref_labels: std.ArrayListUnmanaged([]const u8) = .{};
+        var ref_labels: std.ArrayListUnmanaged([]const u8) = .empty;
         for (decl.args, fa.args, ta.args) |arg_info, fc, tc| {
             if (arg_info.bound) {
                 if (fc != tc) return null;
@@ -1149,11 +1148,11 @@ pub const Lowerer = struct {
         from: ExprId,
         to: ExprId,
     ) AlignErr!?[]const u8 {
-        var from_members: std.ArrayListUnmanaged(ExprId) = .{};
-        var from_paths: std.ArrayListUnmanaged([]const u32) = .{};
+        var from_members: std.ArrayListUnmanaged(ExprId) = .empty;
+        var from_paths: std.ArrayListUnmanaged([]const u32) = .empty;
         try self.collectAcLeaves(head, from, &.{}, &from_members, &from_paths);
-        var to_members: std.ArrayListUnmanaged(ExprId) = .{};
-        var to_paths: std.ArrayListUnmanaged([]const u32) = .{};
+        var to_members: std.ArrayListUnmanaged(ExprId) = .empty;
+        var to_paths: std.ArrayListUnmanaged([]const u32) = .empty;
         try self.collectAcLeaves(head, to, &.{}, &to_members, &to_paths);
         const count = from_members.items.len;
         if (to_members.items.len != count) return null;
@@ -1261,7 +1260,7 @@ pub const Lowerer = struct {
         }
         // Phase 4: un-nest into `to`'s exact shape by reversing the plan
         // that right-nests `to`.
-        var to_plan: std.ArrayListUnmanaged([]const u32) = .{};
+        var to_plan: std.ArrayListUnmanaged([]const u32) = .empty;
         var sim = to;
         while (try self.findLtrRedex(head, sim)) |path| {
             try to_plan.append(self.work, path);
@@ -1414,7 +1413,7 @@ pub const Lowerer = struct {
         // Extension: complement of the matched member indices on a bag
         // endpoint (both endpoints carry the same representatives).
         var head: u32 = 0;
-        var ext_exprs: std.ArrayListUnmanaged(ExprId) = .{};
+        var ext_exprs: std.ArrayListUnmanaged(ExprId) = .empty;
         const before_node = self.eg.nodes.items[step.before.node].node;
         const after_node = self.eg.nodes.items[step.after.node].node;
         if (before_node == .bag) {
@@ -2261,7 +2260,7 @@ pub const Lowerer = struct {
             if (!(try self.canDriveBigStep(driver))) continue;
             // Positions of scanned steps left in place; a later debris
             // step may only cross steps it is disjoint with.
-            var blockers: std.ArrayListUnmanaged([]const u32) = .{};
+            var blockers: std.ArrayListUnmanaged([]const u32) = .empty;
             scan: for (steps[i + 1 ..], i + 1..) |cand, j| {
                 if (taken[j]) continue;
                 if (self.isAbsorbableDebris(cand, driver.position)) {
@@ -2340,7 +2339,7 @@ pub const Lowerer = struct {
         // sub-relation's `trans` at their deepest shared position, and
         // each composed run is lifted through the enclosing congruences
         // once — when the chain leaves its subtree.
-        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
         try frames.append(self.work, .{
             .prefix = &.{},
             .start_root = start_term,
@@ -2524,22 +2523,22 @@ pub const Lowerer = struct {
         ref_labels: []const []const u8,
     ) !void {
         const line = self.target_line;
-        const writer = self.out.writer(self.work);
-        try writer.print("{s}{s}: {s} by {s}", .{
+        try self.out.print(self.work, "{s}{s}: {s} by {s}", .{
             self.indent,
             line.label,
             self.proof_src[line.assertion.span.start..line.assertion.span.end],
             self.ruleName(rule_id),
         });
         if (ref_labels.len != 0) {
-            try writer.writeAll(" [");
+            try self.out.appendSlice(self.work, " [");
             for (ref_labels, 0..) |ref_label, idx| {
-                if (idx != 0) try writer.writeAll(", ");
-                try writer.writeAll(ref_label);
+                if (idx != 0) try self.out.appendSlice(self.work, ", ");
+                try self.out.appendSlice(self.work, ref_label);
             }
-            try writer.writeAll("]");
+            try self.out.appendSlice(self.work, "]");
         }
-        try writer.writeAll(
+        try self.out.appendSlice(
+            self.work,
             self.proof_src[line.application.span.end..line.span.end],
         );
     }

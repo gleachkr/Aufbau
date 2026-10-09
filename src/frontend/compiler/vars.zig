@@ -19,7 +19,7 @@ pub const SortVarDecl = struct {
 pub const SortVarPool = struct {
     sort_name: []const u8,
     sort_id: u8,
-    tokens: std.ArrayListUnmanaged([]const u8) = .{},
+    tokens: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn deinit(
         self: *SortVarPool,

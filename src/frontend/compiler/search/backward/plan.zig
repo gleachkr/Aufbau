@@ -449,7 +449,7 @@ fn orderRecoverDeps(
     if (view.derived_bindings.len == 0) return;
 
     // predecessors[i]: bitmask of plan slots that must precede slot i.
-    var preds = [_]u64{0} ** max_plans;
+    var preds: [max_plans]u64 = @splat(0);
     var any = false;
     for (view.derived_bindings) |derived| {
         const rec = switch (derived) {

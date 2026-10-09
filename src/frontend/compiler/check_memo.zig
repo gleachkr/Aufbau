@@ -188,7 +188,7 @@ pub const CheckMemo = struct {
     /// an equal fingerprint means equal theory text up to the cursor.
     fn feed(self: *CheckMemo, domain: Domain, bytes: []const u8) void {
         var hasher = std.hash.Wyhash.init(self.fingerprint);
-        hasher.update(&[_]u8{@intFromEnum(domain)});
+        hasher.update(&[_]u8{@backingInt(domain)});
         const len: u64 = bytes.len;
         hasher.update(std.mem.asBytes(&len));
         hasher.update(bytes);
@@ -429,7 +429,7 @@ pub const CheckMemo = struct {
                 return a.last_used < b.last_used;
             }
         };
-        var aged = std.ArrayListUnmanaged(Aged){};
+        var aged = std.ArrayListUnmanaged(Aged).empty;
         defer aged.deinit(self.allocator);
         var it = self.entries.iterator();
         while (it.next()) |kv| {
@@ -561,13 +561,14 @@ fn dupeUnionStrings(comptime U: type, arena: std.mem.Allocator, value: U) !U {
             const Payload = @TypeOf(payload);
             if (Payload == void) return value;
             var copy = payload;
-            inline for (@typeInfo(Payload).@"struct".fields) |field| {
-                if (field.type == []const u8) {
-                    @field(copy, field.name) =
-                        try arena.dupe(u8, @field(payload, field.name));
-                } else if (field.type == ?[]const u8) {
-                    @field(copy, field.name) =
-                        try dupeOptional(arena, @field(payload, field.name));
+            const info = @typeInfo(Payload).@"struct";
+            inline for (info.field_names, info.field_types) |name, field_type| {
+                if (field_type == []const u8) {
+                    @field(copy, name) =
+                        try arena.dupe(u8, @field(payload, name));
+                } else if (field_type == ?[]const u8) {
+                    @field(copy, name) =
+                        try dupeOptional(arena, @field(payload, name));
                 }
             }
             return @unionInit(U, @tagName(tag), copy);

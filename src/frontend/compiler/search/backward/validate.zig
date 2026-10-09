@@ -570,7 +570,7 @@ fn renderBindings(
     defer namer.deinit();
     try namer.collectTheoremVars(&candidate.theorem, theorem_vars);
 
-    var out = std.ArrayListUnmanaged(ProofScript.ArgBinding){};
+    var out = std.ArrayListUnmanaged(ProofScript.ArgBinding).empty;
     errdefer {
         for (out.items) |binding| allocator.free(binding.formula.text);
         out.deinit(allocator);

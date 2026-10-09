@@ -672,9 +672,9 @@ pub const DiagnosticError = error{
 /// Catalogued names pass through unchanged; anything else degrades to
 /// `UnexpectedInternalError` instead of leaking a raw Zig identifier.
 pub fn narrowDiagnosticError(err: anyerror) DiagnosticError {
-    const info = @typeInfo(DiagnosticError).error_set.?;
-    inline for (info) |e| {
-        if (std.mem.eql(u8, e.name, @errorName(err))) {
+    const names = @typeInfo(DiagnosticError).error_set.error_names.?;
+    inline for (names) |name| {
+        if (std.mem.eql(u8, name, @errorName(err))) {
             return @errorCast(err);
         }
     }

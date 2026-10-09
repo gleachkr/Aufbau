@@ -189,16 +189,8 @@ test "unpack round-trips on a real fixture with rich notation" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const mm0_src = try std.fs.cwd().readFileAlloc(
-        arena,
-        "tests/proof_cases/hoare.mm0",
-        16 * 1024 * 1024,
-    );
-    const auf_src = try std.fs.cwd().readFileAlloc(
-        arena,
-        "tests/proof_cases/hoare.auf",
-        16 * 1024 * 1024,
-    );
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/hoare.mm0", arena, .limited(16 * 1024 * 1024));
+    const auf_src = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/proof_cases/hoare.auf", arena, .limited(16 * 1024 * 1024));
 
     // `valid_mp [box_k [], l1]` — an inline application whose conclusion
     // renders through hoare's unicode notation (modal boxes, `→`, `⊨`).

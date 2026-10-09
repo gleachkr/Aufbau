@@ -68,7 +68,7 @@ pub fn aliasFirstFilterText(
 ) ![]const u8 {
     if (std.mem.endsWith(u8, text, alias)) {
         const prefix_end = text.len - alias.len;
-        const prefix = std.mem.trimRight(u8, text[0..prefix_end], " ");
+        const prefix = std.mem.trimEnd(u8, text[0..prefix_end], " ");
         if (prefix.len == 0) return alias;
         return try std.fmt.allocPrint(
             allocator,
@@ -87,7 +87,7 @@ pub fn escapeSnippetText(
     allocator: std.mem.Allocator,
     text: []const u8,
 ) ![]const u8 {
-    var out = std.ArrayListUnmanaged(u8){};
+    var out = std.ArrayListUnmanaged(u8).empty;
     try appendEscapedSnippetText(allocator, &out, text);
     return try out.toOwnedSlice(allocator);
 }
@@ -111,7 +111,7 @@ fn appendSnippetPlaceholder(
     index: usize,
     label: []const u8,
 ) !void {
-    try out.writer(allocator).print("${{{d}:", .{index});
+    try out.print(allocator, "${{{d}:", .{index});
     try appendEscapedSnippetText(allocator, out, label);
     try out.append(allocator, '}');
 }
@@ -124,11 +124,11 @@ pub fn buildPrefixSnippet(
 ) !?NotationSnippet {
     if (args.len == 0) return null;
 
-    var label = std.ArrayListUnmanaged(u8){};
+    var label = std.ArrayListUnmanaged(u8).empty;
     try label.appendSlice(allocator, token);
     try label.appendSlice(allocator, " …");
 
-    var text = std.ArrayListUnmanaged(u8){};
+    var text = std.ArrayListUnmanaged(u8).empty;
     try appendEscapedSnippetText(allocator, &text, token);
     for (args, 0..) |arg, i| {
         try text.append(allocator, ' ');
@@ -154,9 +154,9 @@ pub fn buildGeneralNotationSnippet(
 ) !?NotationSnippet {
     if (pieces.len == 0) return null;
 
-    var label = std.ArrayListUnmanaged(u8){};
-    var text = std.ArrayListUnmanaged(u8){};
-    var filter = std.ArrayListUnmanaged(u8){};
+    var label = std.ArrayListUnmanaged(u8).empty;
+    var text = std.ArrayListUnmanaged(u8).empty;
+    var filter = std.ArrayListUnmanaged(u8).empty;
     var has_variable = false;
 
     for (pieces, 0..) |piece, i| {

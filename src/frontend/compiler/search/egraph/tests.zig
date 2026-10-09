@@ -717,17 +717,17 @@ test "bag interning makes the AC closure definitional" {
     try eg.ac_heads.put(eg.allocator, ADD, {});
 
     const n: u5 = 5;
-    var subset_classes: std.ArrayListUnmanaged(EClassId) = .{};
+    var subset_classes: std.ArrayListUnmanaged(EClassId) = .empty;
     var mask: u32 = 1;
     while (mask < (@as(u32, 1) << n)) : (mask += 1) {
-        var ids: std.ArrayListUnmanaged(u32) = .{};
+        var ids: std.ArrayListUnmanaged(u32) = .empty;
         for (1..n + 1) |id| {
             if ((mask >> @intCast(id - 1)) & 1 == 1) {
                 try ids.append(eg.allocator, @intCast(id));
             }
         }
         var reversed_buf: [8]u32 = undefined;
-        var variants: std.ArrayListUnmanaged(EClassId) = .{};
+        var variants: std.ArrayListUnmanaged(EClassId) = .empty;
         if (ids.items.len == 1) {
             try variants.append(
                 eg.allocator,
@@ -767,11 +767,11 @@ test "bag egraph agrees with saturated tree egraph (differential oracle)" {
     try bagged.congr_heads.put(bagged.allocator, ADD, {});
     try bagged.ac_heads.put(bagged.allocator, ADD, {});
 
-    var tree_classes: std.ArrayListUnmanaged(EClassId) = .{};
-    var bag_classes: std.ArrayListUnmanaged(EClassId) = .{};
+    var tree_classes: std.ArrayListUnmanaged(EClassId) = .empty;
+    var bag_classes: std.ArrayListUnmanaged(EClassId) = .empty;
     var mask: u32 = 1;
     while (mask < (@as(u32, 1) << n)) : (mask += 1) {
-        var ids: std.ArrayListUnmanaged(u32) = .{};
+        var ids: std.ArrayListUnmanaged(u32) = .empty;
         for (1..n + 1) |id| {
             if ((mask >> @intCast(id - 1)) & 1 == 1) {
                 try ids.append(arena_state.allocator(), @intCast(id));
@@ -789,10 +789,10 @@ test "bag egraph agrees with saturated tree egraph (differential oracle)" {
             );
             continue;
         }
-        var tree_variants: std.ArrayListUnmanaged(EClassId) = .{};
+        var tree_variants: std.ArrayListUnmanaged(EClassId) = .empty;
         try shapeVariants(&tree, ids.items, &reversed_buf, &tree_variants);
         try tree_classes.appendSlice(tree.allocator, tree_variants.items);
-        var bag_variants: std.ArrayListUnmanaged(EClassId) = .{};
+        var bag_variants: std.ArrayListUnmanaged(EClassId) = .empty;
         try shapeVariants(&bagged, ids.items, &reversed_buf, &bag_variants);
         try bag_classes.appendSlice(bagged.allocator, bag_variants.items);
     }
@@ -934,7 +934,7 @@ fn tAc2(
     } } };
     _ = try eg.add(shape);
     const node = (try eg.lookupNode(shape)).?;
-    var members: std.ArrayListUnmanaged(*const Term) = .{};
+    var members: std.ArrayListUnmanaged(*const Term) = .empty;
     try collectAcMembers(eg, term_id, a, &members);
     try collectAcMembers(eg, term_id, b, &members);
     std.mem.sort(*const Term, members.items, eg, termClassLess);

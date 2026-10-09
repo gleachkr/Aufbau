@@ -8,9 +8,9 @@ const mm0 = @import("mm0");
 
 /// Write each field of `fields` into the object `jw` has open.
 pub fn writeFields(jw: *std.json.Stringify, fields: anytype) !void {
-    inline for (@typeInfo(@TypeOf(fields)).@"struct".fields) |field| {
-        try jw.objectField(field.name);
-        try jw.write(@field(fields, field.name));
+    inline for (comptime std.meta.fieldNames(@TypeOf(fields))) |name| {
+        try jw.objectField(name);
+        try jw.write(@field(fields, name));
     }
 }
 

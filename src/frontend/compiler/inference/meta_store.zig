@@ -84,7 +84,7 @@ const TrailEntry = union(enum) {
 pub const MetaDepBans = struct {
     allocator: std.mem.Allocator,
     banned: std.AutoHashMapUnmanaged(u64, u55) = .empty,
-    undo: std.ArrayListUnmanaged(Undo) = .{},
+    undo: std.ArrayListUnmanaged(Undo) = .empty,
 
     const Undo = struct { meta_id: u64, prev: ?u55 };
 
@@ -132,7 +132,7 @@ pub const MetaStore = struct {
     env: *const GlobalEnv,
     metas: std.AutoHashMapUnmanaged(PlaceholderId, MetaInfo) = .empty,
     assignments: std.AutoHashMapUnmanaged(PlaceholderId, ExprId) = .empty,
-    trail: std.ArrayListUnmanaged(TrailEntry) = .{},
+    trail: std.ArrayListUnmanaged(TrailEntry) = .empty,
     /// Universal metas are deferred choices: they may only be assigned during
     /// a derived-ref use-time match (Stage 7), opened explicitly by the
     /// driver. Everywhere else an attempted assignment is a phase error.
@@ -966,7 +966,7 @@ test "unsolved existential leakage is rejected" {
         setup.store.materialize(theorem, wrapped),
     );
 
-    var unsolved: std.ArrayListUnmanaged(PlaceholderId) = .{};
+    var unsolved: std.ArrayListUnmanaged(PlaceholderId) = .empty;
     defer unsolved.deinit(std.testing.allocator);
     try setup.store.collectUnsolved(theorem, wrapped, &unsolved);
     try std.testing.expectEqual(@as(usize, 1), unsolved.items.len);

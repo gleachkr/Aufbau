@@ -445,7 +445,7 @@ const nested_keep_mm0 =
 
 /// `keep [keep [... top_i [] ...]]` nested `depth` reference lists deep.
 fn nestedKeepProof(allocator: std.mem.Allocator, depth: usize) ![]u8 {
-    var text: std.ArrayListUnmanaged(u8) = .{};
+    var text: std.ArrayListUnmanaged(u8) = .empty;
     errdefer text.deinit(allocator);
     try text.appendSlice(allocator, "target\n------\nl1: $ top $ by ");
     for (1..depth) |_| try text.appendSlice(allocator, "keep [");
@@ -481,11 +481,11 @@ test "compiler checks lines whose values double per line" {
         \\axiom idr (a: wff): $ a $ > $ a $;
         \\theorem th (p: wff): $ p $ > $ p $;
     ;
-    var proof: std.ArrayListUnmanaged(u8) = .{};
+    var proof: std.ArrayListUnmanaged(u8) = .empty;
     defer proof.deinit(std.testing.allocator);
     try proof.appendSlice(std.testing.allocator, "th\n---\nl1: $ _w $ by dup [#1]\n");
     for (2..61) |k| {
-        try proof.writer(std.testing.allocator).print("l{d}: $ _w $ by dup [l{d}]\n", .{ k, k - 1 });
+        try proof.print(std.testing.allocator, "l{d}: $ _w $ by dup [l{d}]\n", .{ k, k - 1 });
     }
     try proof.appendSlice(std.testing.allocator, "l0: $ p $ by idr [#1]\n");
 

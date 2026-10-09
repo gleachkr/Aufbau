@@ -321,7 +321,7 @@ fn enumerateSet(
 ) bool {
     var distinct = bag.ExprBag{};
     for (goal.slice()) |member| _ = distinct.appendDistinct(member);
-    var free = [_]bool{true} ** bag.capacity;
+    var free: [bag.capacity]bool = @splat(true);
     claimPrincipals(theorem, site, bindings, distinct.slice(), free[0..distinct.len]);
 
     // A goal member may sit in BOTH a fixed principal summand AND the open rest
@@ -421,7 +421,7 @@ fn enumerateMultiset(
 ) bool {
     en.members = goal;
     const members = en.members.slice();
-    var free = [_]bool{true} ** bag.capacity;
+    var free: [bag.capacity]bool = @splat(true);
     claimPrincipals(theorem, site, bindings, members, free[0..members.len]);
 
     var open_sibling = false;
@@ -467,7 +467,7 @@ fn enumerateMultiset(
         if (total > max_candidates) return false;
     }
 
-    var counts = [_]usize{0} ** bag.capacity;
+    var counts: [bag.capacity]usize = @splat(0);
     while (true) {
         var mask: u64 = 0;
         for (0..groups) |g| {

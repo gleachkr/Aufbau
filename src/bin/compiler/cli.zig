@@ -100,23 +100,23 @@ const Command = union(enum) {
     version,
 };
 
-fn writeToFile(file: std.fs.File, text: []const u8) !void {
+fn writeToFile(io: std.Io, file: std.Io.File, text: []const u8) !void {
     var buf: [1024]u8 = undefined;
-    var w = file.writer(&buf);
+    var w = file.writer(io, &buf);
     try w.interface.writeAll(text);
     try w.interface.flush();
 }
 
-pub fn usage() !void {
-    try writeToFile(std.fs.File.stdout(), usage_text);
+pub fn usage(io: std.Io) !void {
+    try writeToFile(io, .stdout(), usage_text);
 }
 
-fn usageError() !void {
-    try writeToFile(std.fs.File.stderr(), usage_text);
+fn usageError(io: std.Io) !void {
+    try writeToFile(io, .stderr(), usage_text);
 }
 
-fn version() !void {
-    try writeToFile(std.fs.File.stdout(), version_text);
+fn version(io: std.Io) !void {
+    try writeToFile(io, .stdout(), version_text);
 }
 
 fn appendPositionalArg(
@@ -184,7 +184,7 @@ fn parseCompileArgs(argv: []const []const u8) !Command {
     var warnings_as_errors = false;
     var search_flags = false;
     var search: SearchCommand = .{ .input = "", .proof = "" };
-    var positional = std.ArrayListUnmanaged([]const u8){};
+    var positional = std.ArrayListUnmanaged([]const u8).empty;
     var buf: [64][]const u8 = undefined;
     positional.items = buf[0..0];
     positional.capacity = buf.len;
@@ -266,6 +266,7 @@ fn reportFileError(action: []const u8, path: []const u8, err: anyerror) void {
 }
 
 fn reportLoadFailure(
+    io: std.Io,
     allocator: std.mem.Allocator,
     failure: ?mm0.Imports.LoadFailure,
     err: anyerror,
@@ -281,7 +282,7 @@ fn reportLoadFailure(
         .join => |join| join,
         .read => return,
     };
-    const cwd = std.process.getCwdAlloc(allocator) catch "";
+    const cwd = std.process.currentPathAlloc(io, allocator) catch "";
     defer if (cwd.len != 0) allocator.free(cwd);
     const pos = lineCol(join.file_text, join.span.start);
     std.debug.print("  --> {s}:{d}:{d}\n", .{
@@ -305,23 +306,24 @@ fn lineCol(text: []const u8, offset: usize) LineCol {
     return .{ .line = line, .column = column };
 }
 
-fn runJoin(allocator: std.mem.Allocator, cmd: JoinCommand) !void {
+fn runJoin(io: std.Io, allocator: std.mem.Allocator, cmd: JoinCommand) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     var failure: ?mm0.Imports.LoadFailure = null;
     const pair = mm0.Imports.loadPair(
+        io,
         arena.allocator(),
         cmd.input,
         null,
         &failure,
     ) catch |err| {
-        reportLoadFailure(allocator, failure, err);
+        reportLoadFailure(io, allocator, failure, err);
         return CliError.Reported;
     };
 
     if (cmd.output) |output| {
-        std.fs.cwd().writeFile(.{
+        std.Io.Dir.cwd().writeFile(io, .{
             .sub_path = output,
             .data = pair.mm0.text,
         }) catch |err| {
@@ -329,7 +331,7 @@ fn runJoin(allocator: std.mem.Allocator, cmd: JoinCommand) !void {
             return CliError.Reported;
         };
     } else {
-        writeToFile(std.fs.File.stdout(), pair.mm0.text) catch |err| {
+        writeToFile(io, .stdout(), pair.mm0.text) catch |err| {
             reportFileError("write", "standard output", err);
             return CliError.Reported;
         };
@@ -337,6 +339,7 @@ fn runJoin(allocator: std.mem.Allocator, cmd: JoinCommand) !void {
 }
 
 fn runCompile(
+    io: std.Io,
     allocator: std.mem.Allocator,
     cmd: CompileCommand,
 ) !void {
@@ -345,12 +348,13 @@ fn runCompile(
 
     var failure: ?mm0.Imports.LoadFailure = null;
     const pair = mm0.Imports.loadPair(
+        io,
         arena.allocator(),
         cmd.paths.input,
         cmd.paths.proof,
         &failure,
     ) catch |err| {
-        reportLoadFailure(allocator, failure, err);
+        reportLoadFailure(io, allocator, failure, err);
         return CliError.Reported;
     };
 
@@ -386,11 +390,11 @@ fn runCompile(
     compiler.reportWarnings();
 
     if (std.mem.eql(u8, cmd.paths.output, "-")) {
-        writeToFile(std.fs.File.stdout(), mmb) catch |err| {
+        writeToFile(io, .stdout(), mmb) catch |err| {
             reportFileError("write", "standard output", err);
             return CliError.Reported;
         };
-    } else std.fs.cwd().writeFile(.{
+    } else std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = cmd.paths.output,
         .data = mmb,
     }) catch |err| {
@@ -404,6 +408,7 @@ fn runCompile(
 }
 
 fn runSearch(
+    io: std.Io,
     allocator: std.mem.Allocator,
     cmd: SearchCommand,
 ) !void {
@@ -414,12 +419,13 @@ fn runSearch(
 
     var failure: ?mm0.Imports.LoadFailure = null;
     const pair = mm0.Imports.loadPair(
+        io,
         arena.allocator(),
         cmd.input,
         cmd.proof,
         &failure,
     ) catch |err| {
-        reportLoadFailure(allocator, failure, err);
+        reportLoadFailure(io, allocator, failure, err);
         return CliError.Reported;
     };
     const proof = pair.proof.?;
@@ -467,9 +473,9 @@ fn runSearch(
     var buf: [4096]u8 = undefined;
     // With `--fill` the filled file takes standard output.
     var report = if (cmd.fill)
-        std.fs.File.stderr().writer(&buf)
+        std.Io.File.stderr().writer(io, &buf)
     else
-        std.fs.File.stdout().writer(&buf);
+        std.Io.File.stdout().writer(io, &buf);
     const failed = if (cmd.json)
         try writeSearchJson(&report.interface, proof_mapping, result.markers)
     else
@@ -480,7 +486,7 @@ fn runSearch(
             cmd.verbosity,
         );
     try report.interface.flush();
-    if (cmd.fill) try writeFilled(allocator, proof_mapping, result.markers);
+    if (cmd.fill) try writeFilled(io, allocator, proof_mapping, result.markers);
     if (failed or errors.len != 0) return CliError.Reported;
     for (result.markers) |marker| {
         if (marker.outcome != .found) return CliError.Missed;
@@ -493,7 +499,7 @@ const SearchMarker = SearchDriver.Marker;
 /// gets the message it would get in a proof file.
 fn searchParams(arena: std.mem.Allocator, cmd: SearchCommand) ![]const SearchParam {
     const Search = mm0.CompilerSupport.Search;
-    var params = std.ArrayListUnmanaged(SearchParam){};
+    var params = std.ArrayListUnmanaged(SearchParam).empty;
     const flags = [_]struct { name: []const u8, value: ?u64 }{
         .{ .name = "depth", .value = cmd.depth },
         .{ .name = "budget", .value = cmd.budget },
@@ -519,6 +525,7 @@ fn searchParams(arena: std.mem.Allocator, cmd: SearchCommand) ![]const SearchPar
 /// it put in place. A proof found in another file is not written; a
 /// warning names it.
 fn writeFilled(
+    io: std.Io,
     allocator: std.mem.Allocator,
     mapping: mm0.Imports.Mapping,
     markers: []const SearchMarker,
@@ -527,7 +534,7 @@ fn writeFilled(
     const root = mapping.files.len - 1;
     const root_text = mapping.files[root].text;
     const Edit = SearchDriver.Edit;
-    var edits = std.ArrayListUnmanaged(Edit){};
+    var edits = std.ArrayListUnmanaged(Edit).empty;
     defer edits.deinit(allocator);
     for (markers) |marker| {
         const edit = marker.edit orelse continue;
@@ -566,7 +573,7 @@ fn writeFilled(
         }
     }
     var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
+    var stdout = std.Io.File.stdout().writer(io, &buf);
     try SearchDriver.writeEdits(&stdout.interface, root_text, edits.items);
     try stdout.interface.flush();
 }
@@ -776,7 +783,7 @@ fn writeCostFields(jw: *std.json.Stringify, cost: SearchDriver.Cost) !void {
 }
 
 fn writeIndented(w: *std.Io.Writer, text: []const u8) !void {
-    var lines = std.mem.splitScalar(u8, std.mem.trimRight(u8, text, "\n"), '\n');
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, text, "\n"), '\n');
     while (lines.next()) |line| try w.print("  {s}\n", .{line});
 }
 
@@ -809,15 +816,15 @@ fn splitLangArgs(
     return .{ .rest = buf[0..len], .lang = lang };
 }
 
-fn applyEnvLang(allocator: std.mem.Allocator) void {
-    const value = std.process.getEnvVarOwned(allocator, "ABC_LANG") catch
-        return;
-    defer allocator.free(value);
+fn applyEnvLang(environ: *const std.process.Environ.Map) void {
+    const value = environ.get("ABC_LANG") orelse return;
     if (mm0.parseCompilerLang(value)) |lang| mm0.setCompilerLang(lang);
 }
 
 pub fn run(
+    io: std.Io,
     allocator: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
     argv: []const []const u8,
 ) !void {
     var lang_buf: [64][]const u8 = undefined;
@@ -825,30 +832,26 @@ pub fn run(
     if (split.lang) |lang| {
         mm0.setCompilerLang(lang);
     } else {
-        applyEnvLang(allocator);
+        applyEnvLang(environ);
     }
     const cmd = try parseArgs(split.rest);
     switch (cmd) {
-        .compile => |compile| try runCompile(allocator, compile),
-        .search => |search| try runSearch(allocator, search),
-        .join => |join| try runJoin(allocator, join),
-        .lsp => try compiler_lsp.run(allocator),
-        .help => try usage(),
-        .version => try version(),
+        .compile => |compile| try runCompile(io, allocator, compile),
+        .search => |search| try runSearch(io, allocator, search),
+        .join => |join| try runJoin(io, allocator, join),
+        .lsp => try compiler_lsp.run(io, allocator),
+        .help => try usage(io),
+        .version => try version(io),
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    run(allocator, args[1..]) catch |err| switch (err) {
+    run(io, init.gpa, init.environ_map, args[1..]) catch |err| switch (err) {
         CliError.InvalidUsage => {
-            usageError() catch {};
+            usageError(io) catch {};
             std.process.exit(1);
         },
         CliError.Reported => std.process.exit(1),

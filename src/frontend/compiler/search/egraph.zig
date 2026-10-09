@@ -531,7 +531,7 @@ pub const EGraph = struct {
     allocator: std.mem.Allocator,
     /// Union-find over class ids; `parents[i] == i` marks a root. Classes
     /// are created only in `add` — rebuild reuses ids, never makesets.
-    parents: std.ArrayListUnmanaged(EClassId) = .{},
+    parents: std.ArrayListUnmanaged(EClassId) = .empty,
     /// Append-only node store; `ENodeId` indexes stay stable across
     /// rebuilds (justifications reference them). Node contents are
     /// find-updated in place — safe because bound children are rigid and
@@ -539,7 +539,7 @@ pub const EGraph = struct {
     /// MULTISET never changes after insert: explanation edges render
     /// against the shapes recorded at union time, so a pending splice
     /// mints a twin node (`.splice` edge) instead of rewriting history.
-    nodes: std.ArrayListUnmanaged(StoredNode) = .{},
+    nodes: std.ArrayListUnmanaged(StoredNode) = .empty,
     /// Canonical node -> first node id with that shape. Maintained
     /// incrementally by `add`, reconstructed wholesale by `rebuild`.
     memo: NodeMap = .{},
@@ -596,10 +596,10 @@ pub const EGraph = struct {
     /// Rebuilt with `bag_node_index` each rebuild pass; staleness only
     /// defers a claim.
     subbag_index: std.AutoArrayHashMapUnmanaged(u64, SubBagSpan) = .{},
-    subbag_nodes: std.ArrayListUnmanaged(ENodeId) = .{},
+    subbag_nodes: std.ArrayListUnmanaged(ENodeId) = .empty,
     /// Sub-bag claims of the bag assignment in progress (pushed and
     /// popped by `assignSubBagMember`); reset per `matchRuleBag` call.
-    subbag_stack: std.ArrayListUnmanaged(SubBagClaim) = .{},
+    subbag_stack: std.ArrayListUnmanaged(SubBagClaim) = .empty,
     /// The bag node a `matchRuleBag` call is matching, for the duration
     /// of the call.
     match_bag: ?ENodeId = null,
@@ -674,16 +674,16 @@ pub const EGraph = struct {
     /// pass: zero means the filter was exact at fixpoint.
     alpha_filter_skips: usize = 0,
     /// Proof-forest edges, one per effective union, in union order.
-    unions: std.ArrayListUnmanaged(UnionEdge) = .{},
+    unions: std.ArrayListUnmanaged(UnionEdge) = .empty,
     /// Creating node of each class (parallel to `parents`). Every class is
     /// born in `add` with this node (its flat twin may join it in the same
     /// call, see `nestedView`), so this always names a member.
-    class_node: std.ArrayListUnmanaged(ENodeId) = .{},
+    class_node: std.ArrayListUnmanaged(ENodeId) = .empty,
     /// Explanation forest (Nieuwenhuis–Oliveras): per-node parent link
     /// carrying the union justification. Distinct from the fast union-find:
     /// edges connect the *semantic endpoint nodes* of each union and are
     /// never path-compressed, only re-rooted.
-    expl_parent: std.ArrayListUnmanaged(?ExplEdge) = .{},
+    expl_parent: std.ArrayListUnmanaged(?ExplEdge) = .empty,
     /// Justifications whose union was a no-op (classes already merged),
     /// plus same-class congruent duplicates found during rebuild. The
     /// forest keeps only class-merging edges, so its unique tree path
@@ -691,7 +691,7 @@ pub const EGraph = struct {
     /// class (an edge on the path re-poses the path's own endpoints as a
     /// child obligation). These edges give extraction acyclic detours;
     /// they are never primary. Deduplicated per endpoint node-pair.
-    alt_edges: std.ArrayListUnmanaged(AltEdge) = .{},
+    alt_edges: std.ArrayListUnmanaged(AltEdge) = .empty,
     alt_seen: std.AutoHashMapUnmanaged(u64, void) = .{},
     /// Seeded pool facts by node (see `addFact`): the reference-pool
     /// formula each proven class ultimately cites, with its seed-time
@@ -1136,7 +1136,7 @@ pub const EGraph = struct {
             self.memo.clearRetainingCapacity();
             _ = scratch_state.reset(.retain_capacity);
             try self.refreshBagIndex(scratch);
-            var mints: std.ArrayListUnmanaged(PendingTwin) = .{};
+            var mints: std.ArrayListUnmanaged(PendingTwin) = .empty;
             for (self.nodes.items, 0..) |*stored, idx| {
                 stored.class = self.find(stored.class);
                 switch (stored.node) {
@@ -1255,7 +1255,7 @@ pub const EGraph = struct {
     /// bag head is structure that bag's flat form would dissolve).
     pub const ClassKinds = struct {
         atomic: bool = false,
-        heads: std.ArrayListUnmanaged(u32) = .{},
+        heads: std.ArrayListUnmanaged(u32) = .empty,
     };
 
     fn noteNodeKind(
@@ -1321,7 +1321,7 @@ pub const EGraph = struct {
         scratch: std.mem.Allocator,
     ) !Justification {
         const bag = self.nodes.items[from].node.bag;
-        var visited: std.ArrayListUnmanaged(EClassId) = .{};
+        var visited: std.ArrayListUnmanaged(EClassId) = .empty;
         if (self_class) |class| {
             try visited.append(scratch, self.find(class));
         }
@@ -1484,7 +1484,7 @@ pub const EGraph = struct {
                 gop.value_ptr.* = @intCast(idx);
             }
         }
-        var cyclic: std.ArrayListUnmanaged(u64) = .{};
+        var cyclic: std.ArrayListUnmanaged(u64) = .empty;
         for (self.bag_node_index.keys()) |key| {
             const term_id: u32 = @intCast(key >> 32);
             const root: EClassId = @truncate(key);
@@ -1523,7 +1523,7 @@ pub const EGraph = struct {
                 return a.node < b.node;
             }
         };
-        var entries: std.ArrayListUnmanaged(Entry) = .{};
+        var entries: std.ArrayListUnmanaged(Entry) = .empty;
         for (self.nodes.items, 0..) |stored, idx| {
             const bag = switch (stored.node) {
                 .bag => |bag| bag,
@@ -1582,8 +1582,8 @@ pub const EGraph = struct {
         root: EClassId,
         scratch: std.mem.Allocator,
     ) !bool {
-        var stack: std.ArrayListUnmanaged(EClassId) = .{};
-        var seen: std.ArrayListUnmanaged(EClassId) = .{};
+        var stack: std.ArrayListUnmanaged(EClassId) = .empty;
+        var seen: std.ArrayListUnmanaged(EClassId) = .empty;
         const bag_node = self.bag_node_index.get(bagKey(term_id, root)).?;
         for (self.nodes.items[bag_node].node.bag.members) |member| {
             try stack.append(scratch, self.find(member));
@@ -1672,7 +1672,7 @@ pub const EGraph = struct {
             }
             try self.buildClassIndex();
 
-            var matches: std.ArrayListUnmanaged(Match) = .{};
+            var matches: std.ArrayListUnmanaged(Match) = .empty;
             var iter_steps: usize = opts.ac_iter_step_budget;
             const matched_nodes = self.nodes.items.len;
             // Alpha scheduler first: it creates no nodes, only retained
@@ -1986,7 +1986,7 @@ pub const EGraph = struct {
     ) !?ENodeId {
         const flat = self.nodes.items[flat_id].node.bag;
         const flat_root = self.find(self.nodes.items[flat_id].class);
-        var members: std.ArrayListUnmanaged(EClassId) = .{};
+        var members: std.ArrayListUnmanaged(EClassId) = .empty;
         try members.ensureTotalCapacity(self.allocator, flat.members.len);
         for (flat.members) |member| {
             members.appendAssumeCapacity(self.find(member));
@@ -2380,7 +2380,7 @@ pub const EGraph = struct {
                 }
                 const root = self.find(stored.class);
                 if (fired_classes.contains(root)) continue;
-                var matches: std.ArrayListUnmanaged(Match) = .{};
+                var matches: std.ArrayListUnmanaged(Match) = .empty;
                 for (rules, 0..) |rule, rule_slot| {
                     if (!rule.compute) continue;
                     const pattern = rule.match_side.app;
@@ -2805,8 +2805,8 @@ pub const EGraph = struct {
         self_class: ?EClassId,
         alloc: std.mem.Allocator,
     ) SpliceError!ENode {
-        var out: std.ArrayListUnmanaged(EClassId) = .{};
-        var visited: std.ArrayListUnmanaged(EClassId) = .{};
+        var out: std.ArrayListUnmanaged(EClassId) = .empty;
+        var visited: std.ArrayListUnmanaged(EClassId) = .empty;
         if (self_class) |class| {
             try visited.append(alloc, self.find(class));
         }
@@ -2883,7 +2883,7 @@ pub const EGraph = struct {
         for (self.nodes.items, 0..) |stored, node_id| {
             const root = self.find(stored.class);
             const gop = try self.class_index.getOrPut(self.allocator, root);
-            if (!gop.found_existing) gop.value_ptr.* = .{};
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
             try gop.value_ptr.append(self.allocator, @intCast(node_id));
         }
     }
@@ -2986,7 +2986,7 @@ pub const EGraph = struct {
 
         // Solutions stage in scratch; only new-effect ones are copied into
         // the run allocator and retained.
-        var solutions: std.ArrayListUnmanaged([]const ?Child) = .{};
+        var solutions: std.ArrayListUnmanaged([]const ?Child) = .empty;
         try self.solvePairs(pairs, 0, subst, &solutions, scratch, scratch);
         for (solutions.items) |solution| {
             const key = self.matchEffectKey(rule_slot, root_node, solution, &.{});
@@ -3078,7 +3078,7 @@ pub const EGraph = struct {
         self.subbag_stack.clearRetainingCapacity();
         self.match_bag = root_node;
         defer self.match_bag = null;
-        var pattern_members: std.ArrayListUnmanaged(TemplateExpr) = .{};
+        var pattern_members: std.ArrayListUnmanaged(TemplateExpr) = .empty;
         try self.flattenPattern(
             scratch,
             bag.term_id,
@@ -3097,7 +3097,7 @@ pub const EGraph = struct {
         @memset(subst, null);
         const used = try scratch.alloc(bool, bag.members.len);
         @memset(used, false);
-        var solutions: std.ArrayListUnmanaged(BagSolution) = .{};
+        var solutions: std.ArrayListUnmanaged(BagSolution) = .empty;
         try self.assignBagMembers(
             bag,
             pattern_members.items,
@@ -3162,7 +3162,7 @@ pub const EGraph = struct {
         }
         self.ac_budget_remaining -= 1;
         if (p_idx == pattern_members.len) {
-            var extension: std.ArrayListUnmanaged(EClassId) = .{};
+            var extension: std.ArrayListUnmanaged(EClassId) = .empty;
             for (bag.members, used) |member, is_used| {
                 if (!is_used) {
                     try extension.append(scratch, self.find(member));
@@ -3205,7 +3205,7 @@ pub const EGraph = struct {
                     const probe = try scratch.dupe(?Child, subst);
                     var partial: std.ArrayListUnmanaged(
                         []const ?Child,
-                    ) = .{};
+                    ) = .empty;
                     try self.solvePairs(
                         pairs,
                         0,
@@ -3287,7 +3287,7 @@ pub const EGraph = struct {
                             @intCast(binder_idx),
                         )))
                 {
-                    var residual: std.ArrayListUnmanaged(usize) = .{};
+                    var residual: std.ArrayListUnmanaged(usize) = .empty;
                     for (used, 0..) |is_used, i| {
                         if (!is_used) try residual.append(scratch, i);
                     }
@@ -3311,7 +3311,7 @@ pub const EGraph = struct {
                     );
                     return;
                 }
-                var chosen: std.ArrayListUnmanaged(usize) = .{};
+                var chosen: std.ArrayListUnmanaged(usize) = .empty;
                 try self.enumerateBinderSubsets(
                     bag,
                     pattern_members,
@@ -3399,7 +3399,7 @@ pub const EGraph = struct {
             if (sub.term_id != bag.term_id) continue;
             if (sub.members.len < 2 or sub.members.len > bag.members.len)
                 continue;
-            var chosen: std.ArrayListUnmanaged(usize) = .{};
+            var chosen: std.ArrayListUnmanaged(usize) = .empty;
             defer for (chosen.items) |idx| {
                 used[idx] = false;
             };
@@ -3501,7 +3501,7 @@ pub const EGraph = struct {
         // instead of a member scan, and the leftmost unused occurrence
         // of each root — the one the direct arm's dedup claims — is the
         // first entry of its run.
-        var slots: std.ArrayListUnmanaged(Slot) = .{};
+        var slots: std.ArrayListUnmanaged(Slot) = .empty;
         for (bag.members, 0..) |member, idx| {
             if (used[idx]) continue;
             try slots.append(scratch, .{
@@ -3550,7 +3550,7 @@ pub const EGraph = struct {
                 }
                 self.ac_budget_remaining -= 1;
                 // Cover the candidate's members from the unused positions.
-                var chosen: std.ArrayListUnmanaged(usize) = .{};
+                var chosen: std.ArrayListUnmanaged(usize) = .empty;
                 defer for (chosen.items) |i| {
                     used[i] = false;
                 };
@@ -3571,7 +3571,7 @@ pub const EGraph = struct {
                     .child = .{ .class = cand_root },
                 };
                 const probe = try scratch.dupe(?Child, subst);
-                var partial: std.ArrayListUnmanaged([]const ?Child) = .{};
+                var partial: std.ArrayListUnmanaged([]const ?Child) = .empty;
                 try self.solvePairs(
                     pairs,
                     0,
@@ -3897,7 +3897,7 @@ pub const EGraph = struct {
                                 self.ac_budget_remaining -= 1;
                                 var flat: std.ArrayListUnmanaged(
                                     TemplateExpr,
-                                ) = .{};
+                                ) = .empty;
                                 try self.flattenPattern(
                                     scratch,
                                     member_bag.term_id,
@@ -3926,7 +3926,7 @@ pub const EGraph = struct {
                                 @memset(used, false);
                                 var bag_solutions: std.ArrayListUnmanaged(
                                     BagSolution,
-                                ) = .{};
+                                ) = .empty;
                                 try self.assignBagMembers(
                                     member_bag,
                                     flat.items,
@@ -4024,7 +4024,7 @@ pub const EGraph = struct {
                     // node explain lays the pattern back over. Spine-
                     // internal applications are not subterms in the bag
                     // view and get no node of their own.
-                    var flat: std.ArrayListUnmanaged(TemplateExpr) = .{};
+                    var flat: std.ArrayListUnmanaged(TemplateExpr) = .empty;
                     try self.flattenPattern(
                         self.allocator,
                         app.term_id,

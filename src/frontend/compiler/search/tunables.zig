@@ -155,7 +155,7 @@ pub fn validateSearchParams(
     context: ParamContext,
     params: []const SearchParam,
 ) ![]ParamIssue {
-    var issues = std.ArrayListUnmanaged(ParamIssue){};
+    var issues = std.ArrayListUnmanaged(ParamIssue).empty;
     errdefer {
         for (issues.items) |issue| allocator.free(issue.message);
         issues.deinit(allocator);

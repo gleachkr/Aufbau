@@ -16,7 +16,7 @@ const statement_walks = [_][]const u8{
 const common_path = "src/frontend/compiler/pipeline/common.zig";
 
 fn readSource(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return std.fs.cwd().readFileAlloc(allocator, path, 1 << 22);
+    return std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(1 << 22));
 }
 
 fn contains(haystack: []const u8, needle: []const u8) bool {

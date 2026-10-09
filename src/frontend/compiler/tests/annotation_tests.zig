@@ -1324,7 +1324,7 @@ fn registerEveryFamily(
         .transport_name = "mpbi",
     });
     const rewrites = try registry.rewrites_by_head.getOrPut(7);
-    if (!rewrites.found_existing) rewrites.value_ptr.* = .{};
+    if (!rewrites.found_existing) rewrites.value_ptr.* = .empty;
     try rewrites.value_ptr.append(registry.allocator, .{
         .rule_id = key,
         .lhs = .{ .binder = 0 },
@@ -1333,7 +1333,7 @@ fn registerEveryFamily(
         .head_term_id = 7,
     });
     const alphas = try registry.alpha_by_head.getOrPut(7);
-    if (!alphas.found_existing) alphas.value_ptr.* = .{};
+    if (!alphas.found_existing) alphas.value_ptr.* = .empty;
     try alphas.value_ptr.append(registry.allocator, .{
         .rule_id = key,
         .lhs = .{ .binder = 0 },
@@ -1359,7 +1359,7 @@ fn registerEveryFamily(
         .idem_name = null,
     });
     const triggers = try registry.trigger_by_rule.getOrPut(7);
-    if (!triggers.found_existing) triggers.value_ptr.* = .{};
+    if (!triggers.found_existing) triggers.value_ptr.* = .empty;
     try triggers.value_ptr.append(registry.allocator, .wildcard);
     try registry.conversions.append(registry.allocator, rule);
     try registry.def_conversions.append(registry.allocator, .{

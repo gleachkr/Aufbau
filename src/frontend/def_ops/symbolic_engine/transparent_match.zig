@@ -618,7 +618,7 @@ pub fn guideSymbolicWitnessesFromAcuiTarget(
     defer support.deinit();
     if (!support.exprMatchesCombinerSort(target_expr, acui)) return false;
 
-    var items = std.ArrayListUnmanaged(ExprId){};
+    var items = std.ArrayListUnmanaged(ExprId).empty;
     defer items.deinit(self.shared.allocator);
     try support.collectConcreteSetItems(
         target_expr,

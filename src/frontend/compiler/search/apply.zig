@@ -48,7 +48,7 @@ pub fn applyWithSession(
     const context = session.context;
     const allocator = context.allocator;
     const counters = session.effectiveCounters(options.counters);
-    var candidates = std.ArrayListUnmanaged(ApplyCandidate){};
+    var candidates = std.ArrayListUnmanaged(ApplyCandidate).empty;
     errdefer {
         for (candidates.items) |*candidate| {
             candidate.deinit();
