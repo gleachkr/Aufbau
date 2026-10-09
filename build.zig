@@ -227,7 +227,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const lsp_module = lsp_dep.module("lsp");
-    const lsp_types_module = lsp_dep.module("lsp-types");
 
     const mm0_lib = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),
@@ -248,19 +247,10 @@ pub fn build(b: *std.Build) void {
         .cpu_arch = .wasm32,
         .os_tag = .freestanding,
     });
-    const lsp_offsets_wasm_module = b.createModule(.{
-        .root_source_file = lsp_dep.path("src/offsets.zig"),
+    const lsp_wasm_module = b.dependency("lsp_kit", .{
         .target = wasm_target,
         .optimize = optimize,
-    });
-    lsp_offsets_wasm_module.addImport("types", lsp_types_module);
-    const lsp_wasm_module = b.createModule(.{
-        .root_source_file = b.path("src/bin/compiler/lsp_wasm_compat.zig"),
-        .target = wasm_target,
-        .optimize = optimize,
-    });
-    lsp_wasm_module.addImport("types", lsp_types_module);
-    lsp_wasm_module.addImport("offsets", lsp_offsets_wasm_module);
+    }).module("lsp");
     const mm0_wasm_lib = b.createModule(.{
         .root_source_file = b.path("src/lib.zig"),
         .target = wasm_target,

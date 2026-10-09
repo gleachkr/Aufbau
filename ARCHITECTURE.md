@@ -65,7 +65,7 @@ The native CLIs are thin wrappers:
 The WASM entrypoints export C-style functions for allocation and result
 retrieval. Compiler/verifier calls return JSON metadata through result
 buffers; the LSP entry accepts JSON-RPC messages and returns newline-separated
-JSON messages. `lsp_wasm_compat.zig` supplies the freestanding transport API.
+JSON messages through lsp-kit's own server loop, built for wasm.
 
 ## Documentation map
 

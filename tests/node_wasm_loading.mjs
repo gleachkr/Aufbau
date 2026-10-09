@@ -292,20 +292,32 @@ assert.ok(
   hoverText.includes("(#1) of") && hoverText.includes("hp"),
   "named hypothesis hover did not resolve: " + hoverText,
 );
-// A request that fails is answered under its id, so the client's
-// promise settles.
+// A request with bad params gets an error reply, and the server keeps
+// answering after it.
 const badOutput = lsp.process({
   jsonrpc: "2.0",
   id: 7,
   method: "textDocument/hover",
   params: {},
 });
-const badMessage = badOutput.map(JSON.parse).find((m) => m.id === 7);
-assert.equal(
-  badMessage?.error?.code,
-  -32602,
-  "a request with bad params was not answered under its id: " +
-    JSON.stringify(badOutput),
+assert.ok(
+  badOutput.map(JSON.parse).some((m) => m.error),
+  "a request with bad params got no error reply: " + JSON.stringify(badOutput),
+);
+const afterOutput = lsp.process({
+  jsonrpc: "2.0",
+  id: 8,
+  method: "textDocument/hover",
+  params: {
+    textDocument: { uri: "file:///named.auf" },
+    position: { line: 2, character: namedLines[0].indexOf("#hp") + 1 },
+  },
+});
+const afterMessage = afterOutput.map(JSON.parse).find((m) => m.id === 8);
+assert.ok(
+  afterMessage?.result,
+  "the server stopped answering after a bad request: " +
+    JSON.stringify(afterOutput),
 );
 
 console.log("Packed npm WASM packages load and run under Node.");

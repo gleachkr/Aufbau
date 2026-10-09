@@ -16,6 +16,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 ### Changed
 
 - Building Aufbau now requires Zig 0.17.0 (previously 0.15.2).
+- The browser language server runs the same message loop as `abc lsp`, so
+  the two answer malformed messages alike. A request for a method the
+  server doesn't implement gets a `null` result instead of an error, and a
+  request whose parameters don't parse gets a parse error without its id.
 
 ## [0.0.15] - 2026-10-08
 
