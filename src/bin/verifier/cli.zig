@@ -89,13 +89,14 @@ fn runVerify(
     defer allocator.free(mmb_bytes);
 
     var stdin_buf: [4096]u8 = undefined;
-    var stdin = std.Io.File.stdin().reader(io, &stdin_buf);
+    var stdin = std.Io.File.stdin().readerStreaming(io, &stdin_buf);
     const mm0_src = stdin.interface.allocRemaining(
         allocator,
         .unlimited,
     ) catch |err| {
+        const cause = if (err == error.ReadFailed) stdin.err.? else err;
         std.debug.print("mm0-zig: unable to read standard input: {s}\n", .{
-            @errorName(err),
+            @errorName(cause),
         });
         return CliError.Reported;
     };

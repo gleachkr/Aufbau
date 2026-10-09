@@ -1241,8 +1241,8 @@ zig build bench-search -Doptimize=ReleaseFast -- --frontier=depth \
 
 Notes:
 
-- In the sandbox, add the following flags before `--` in each build command:
-  `--cache-dir .cache/zig-local --global-cache-dir .cache/zig-global`.
+- In the sandbox, add `--cache-dir .cache/zig-local` before `--` in each
+  build command and set `ZIG_GLOBAL_CACHE_DIR=.cache/zig-global`.
 - For ownership/COW changes, also run safety-enabled tests (Debug or
   ReleaseSafe). The ReleaseFast corpus gate does not replace lifetime checks.
 - **Always run ReleaseFast and use a freshly built binary.** Debug is slow;

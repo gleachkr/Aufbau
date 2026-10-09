@@ -388,7 +388,7 @@ fn runMm0c(
     var child = std.process.spawn(io, .{
         .argv = &.{ "mm0-c", mmb_path },
         .stdin = .pipe,
-        .stdout = .pipe,
+        .stdout = .ignore,
         .stderr = .pipe,
     }) catch |err| switch (err) {
         error.FileNotFound => return null,
@@ -403,19 +403,16 @@ fn runMm0c(
     child.stdin.?.close(io);
     child.stdin = null;
 
-    var buffers: std.Io.File.MultiReader.Buffer(2) = undefined;
-    var output: std.Io.File.MultiReader = undefined;
-    output.init(allocator, io, buffers.toStreams(), &.{ child.stdout.?, child.stderr.? });
-    defer output.deinit();
-    while (output.fill(64, .none)) |_| {
-        if (output.reader(1).buffered().len > 1 << 20) return error.StreamTooLong;
-    } else |err| switch (err) {
-        error.EndOfStream => {},
-        else => |e| return e,
-    }
-    try output.checkAnyError();
+    var buffer: [4096]u8 = undefined;
+    var reader = child.stderr.?.readerStreaming(io, &buffer);
+    const stderr = reader.interface.allocRemaining(allocator, .limited(1 << 20)) catch |err|
+        switch (err) {
+            error.ReadFailed => return reader.err.?,
+            else => |e| return e,
+        };
+    errdefer allocator.free(stderr);
     const term = try child.wait(io);
-    return .{ .term = term, .stderr = try output.toOwnedSlice(1) };
+    return .{ .term = term, .stderr = stderr };
 }
 
 test "mmb mutants: unmodified tutorial verifies" {

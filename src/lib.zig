@@ -37,6 +37,7 @@ pub const writeCompilerDepViolationSummary =
     CompilerDiag.writeDepViolationSummary;
 pub const writeCompilerOmittedDiagnosticsSummary =
     CompilerDiag.writeOmittedDiagnosticsSummary;
+pub const allocRender = @import("./frontend/text_util.zig").allocRender;
 pub const Frontend = struct {
     pub const Env = @import("./frontend/env.zig");
     pub const Expr = @import("./frontend/expr.zig");

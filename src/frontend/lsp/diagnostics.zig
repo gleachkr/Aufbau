@@ -532,29 +532,27 @@ fn noteMessageText(
     arena: std.mem.Allocator,
     message: mm0.CompilerNoteMessage,
 ) ![]const u8 {
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    const writer = &buf.writer;
-    try mm0.renderCompilerNoteMessage(writer, message);
-    return buf.written();
+    return mm0.allocRender(arena, mm0.renderCompilerNoteMessage, .{message});
 }
 
 fn relatedLabelText(
     arena: std.mem.Allocator,
     label: mm0.CompilerRelatedLabel,
 ) ![]const u8 {
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    const writer = &buf.writer;
-    try mm0.renderCompilerRelatedLabel(writer, label);
-    return buf.written();
+    return mm0.allocRender(arena, mm0.renderCompilerRelatedLabel, .{label});
 }
 
 pub fn compilerDiagnosticMessage(
     arena: std.mem.Allocator,
     diag: mm0.CompilerDiagnostic,
 ) ![]const u8 {
-    var buf: std.Io.Writer.Allocating = .init(arena);
-    const writer = &buf.writer;
+    return mm0.allocRender(arena, writeCompilerDiagnosticMessage, .{diag});
+}
 
+fn writeCompilerDiagnosticMessage(
+    writer: *std.Io.Writer,
+    diag: mm0.CompilerDiagnostic,
+) std.Io.Writer.Error!void {
     try mm0.renderCompilerDiagnostic(writer, diag, "\n");
     for (diag.noteSlice()) |note| {
         try writer.print("\n{s}: ", .{mm0.compilerNoteHeading()});
@@ -564,6 +562,4 @@ pub fn compilerDiagnosticMessage(
         try writer.print("\n{s}: ", .{mm0.compilerRelatedHeading()});
         try mm0.renderCompilerRelatedLabel(writer, related.label);
     }
-
-    return buf.written();
 }

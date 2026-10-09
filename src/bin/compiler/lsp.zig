@@ -2625,8 +2625,12 @@ fn readFileWithMtimeAlloc(
         const stat = try file.stat(io);
         var buffer: [4096]u8 = undefined;
         var reader = file.reader(io, &buffer);
+        const text = reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+            error.ReadFailed => return reader.err.?,
+            else => |e| return e,
+        };
         return .{
-            .text = try reader.interface.allocRemaining(allocator, .unlimited),
+            .text = text,
             .mtime = stat.mtime.nanoseconds,
         };
     }

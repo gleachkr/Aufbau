@@ -1300,10 +1300,11 @@ the Test workflow to pass on the commit they build. The scripts are
 `scripts/check-test-wiring.mjs`. Path/import checks are structural aids, not
 proof that architectural claims or every colocated test are covered.
 
-In the sandbox, append these flags to every Zig build command:
+In the sandbox, give every Zig build command a local cache and point the
+global cache into the tree (`zig build` has no `--global-cache-dir` flag):
 
 ```text
---cache-dir .cache/zig-local --global-cache-dir .cache/zig-global
+ZIG_GLOBAL_CACHE_DIR=.cache/zig-global zig build ... --cache-dir .cache/zig-local
 ```
 
 Use ReleaseFast for expensive corpus runs. For COW/ownership changes, also

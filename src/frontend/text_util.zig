@@ -13,6 +13,41 @@ pub fn truncateUtf8(text: []const u8, limit: usize) []const u8 {
     return text[0..end];
 }
 
+/// The text `render(writer, args...)` writes, as a slice owned by
+/// `allocator`. An allocating writer fails only when its allocator does, so a
+/// write failure comes back as `error.OutOfMemory`; callers that tell OOM
+/// apart from other errors keep working.
+pub fn allocRender(
+    allocator: std.mem.Allocator,
+    comptime render: anytype,
+    args: anytype,
+) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    @call(.auto, render, .{&out.writer} ++ args) catch |err| switch (err) {
+        error.WriteFailed => return error.OutOfMemory,
+        else => |e| return e,
+    };
+    return out.toOwnedSlice();
+}
+
+test "allocRender reports a failed write as OutOfMemory" {
+    const render = struct {
+        fn render(writer: *std.Io.Writer, n: usize) std.Io.Writer.Error!void {
+            try writer.splatByteAll('x', n);
+        }
+    }.render;
+    const text = try allocRender(std.testing.allocator, render, .{3});
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings("xxx", text);
+    var buffer: [8]u8 = undefined;
+    var fixed: std.heap.FixedBufferAllocator = .init(&buffer);
+    try std.testing.expectError(
+        error.OutOfMemory,
+        allocRender(fixed.allocator(), render, .{4096}),
+    );
+}
+
 test "truncateUtf8 leaves short text untouched" {
     try std.testing.expectEqualStrings("abc", truncateUtf8("abc", 8));
     try std.testing.expectEqualStrings("abc", truncateUtf8("abc", 3));

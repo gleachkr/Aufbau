@@ -124,14 +124,14 @@ pub const DiagnosticSink = struct {
         self.warning_count += 1;
     }
 
+    /// Each warning takes the stderr lock on its own, so one failed write
+    /// (which stays sticky until unlock) does not drop the ones after it.
     pub fn reportWarnings(self: *const DiagnosticSink) void {
-        var buffer: [256]u8 = undefined;
-        const stderr = &std.debug.lockStderr(&buffer).file_writer.interface;
-        defer std.debug.unlockStderr();
-        for (self.warningDiagnostics()) |diag| {
-            self.writeDiagnostic(stderr, diag) catch return;
-        }
+        for (self.warningDiagnostics()) |diag| self.reportDiagnostic(diag);
         if (self.dropped_warning_count != 0) {
+            var buffer: [256]u8 = undefined;
+            const stderr = &std.debug.lockStderr(&buffer).file_writer.interface;
+            defer std.debug.unlockStderr();
             stderr.print(
                 "{s}: ",
                 .{CompilerDiag.severityLabel(.warning)},

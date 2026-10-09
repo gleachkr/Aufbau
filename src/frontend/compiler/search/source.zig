@@ -21,6 +21,7 @@ const Span = ProofScript.Span;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const CompilerDiag = @import("../../diag.zig");
+const text_util = @import("../../text_util.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const BindingOracle = @import("../context.zig").BindingOracle;
 const CheckedIr = @import("../../checked_ir.zig");
@@ -549,9 +550,19 @@ fn buildConversionDetail(
     conv_options: ConversionSearch.Options,
     goal_concrete: bool,
 ) !?[]const u8 {
-    var buf: std.Io.Writer.Allocating = .init(allocator);
-    errdefer buf.deinit();
-    const w = &buf.writer;
+    return try text_util.allocRender(
+        allocator,
+        writeConversionDetail,
+        .{ result, conv_options, goal_concrete },
+    );
+}
+
+fn writeConversionDetail(
+    w: *std.Io.Writer,
+    result: ConversionSearch.Result,
+    conv_options: ConversionSearch.Options,
+    goal_concrete: bool,
+) !void {
     if (!goal_concrete) {
         try w.writeAll(
             "conversion? needs a concrete goal formula (no holes).",
@@ -713,7 +724,6 @@ fn buildConversionDetail(
             .{result.partial_ac_heads},
         );
     }
-    return try buf.toOwnedSlice();
 }
 
 /// Derive the user-facing outcome of a completed search: found beats
@@ -743,10 +753,22 @@ pub fn buildStatusDetail(
     counters: *const types.SearchCounters,
     gen: types.GenerateOptions,
 ) !?[]const u8 {
-    var buf: std.Io.Writer.Allocating = .init(allocator);
-    errdefer buf.deinit();
-    const w = &buf.writer;
+    if (status == .found) return null;
+    return try text_util.allocRender(
+        allocator,
+        writeStatusDetail,
+        .{ keyword, is_auto, status, counters, gen },
+    );
+}
 
+fn writeStatusDetail(
+    w: *std.Io.Writer,
+    keyword: []const u8,
+    is_auto: bool,
+    status: types.SearchStatus,
+    counters: *const types.SearchCounters,
+    gen: types.GenerateOptions,
+) !void {
     const validated = counters.full_try_candidate_calls;
     const accepted = counters.accepted_candidates;
     const rejected = counters.rejected_candidates_after_validation;
@@ -757,7 +779,7 @@ pub fn buildStatusDetail(
     const retry: ?miss.Retry = if (is_auto) miss.retryFor(report, gen) else null;
 
     switch (status) {
-        .found => return null,
+        .found => unreachable,
         .miss => {
             if (generation_ran) {
                 try w.print(
@@ -890,8 +912,6 @@ pub fn buildStatusDetail(
     // (attempts ≠ accepts — a rule tried 500 times with 0 accepted is a
     // reject-flood, the usual budget sink). Only recorded under `collect`.
     try appendTopRuleAttempts(w, counters);
-
-    return try buf.toOwnedSlice();
 }
 
 /// " Try 'auto? (nodes: 512, budget: 14)'." — on a cut-short miss, with
@@ -908,8 +928,7 @@ fn writeRetryAdvice(
         );
     }
     try w.print(" {s} '{s} (", .{ if (cut_short) "try" else "Try", keyword });
-    try retry.writeParams(w);
-    try w.writeAll(")'.");
+    try w.print("{f})'.", .{retry});
     if (cut_short) {
         try w.writeAll(
             " A larger search finds only some of the proofs a smaller " ++
@@ -929,13 +948,29 @@ fn retrySuggestion(
     application: RuleApplication,
     retry: miss.Retry,
 ) !SourceSuggestion {
-    var params: std.Io.Writer.Allocating = .init(allocator);
-    defer params.deinit();
-    try retry.writeParams(&params.writer);
+    return .{
+        .title = try std.fmt.allocPrint(allocator, "Retry with {f}", .{retry}),
+        .replacement = try text_util.allocRender(
+            allocator,
+            writeRetryReplacement,
+            .{ proof_src, application, retry },
+        ),
+        .replace_span = .{
+            .start = application.rule_span.start,
+            .end = (application.binding_list_span orelse
+                application.rule_span).end,
+        },
+    };
+}
 
-    var text: std.Io.Writer.Allocating = .init(allocator);
-    errdefer text.deinit();
-    const w = &text.writer;
+/// The placeholder with its parameter list rewritten: bindings, then the
+/// parameters `retry` leaves alone, then the ones it raises.
+fn writeRetryReplacement(
+    w: *std.Io.Writer,
+    proof_src: []const u8,
+    application: RuleApplication,
+    retry: miss.Retry,
+) std.Io.Writer.Error!void {
     try w.print("{s} (", .{application.rule_name});
     for (application.arg_bindings) |binding| {
         try w.print("{s}, ", .{proof_src[binding.span.start..binding.span.end]});
@@ -944,21 +979,7 @@ fn retrySuggestion(
         if (retry.sets(param.name)) continue;
         try w.print("{s}, ", .{proof_src[param.span.start..param.span.end]});
     }
-    try w.print("{s})", .{params.written()});
-
-    return .{
-        .title = try std.fmt.allocPrint(
-            allocator,
-            "Retry with {s}",
-            .{params.written()},
-        ),
-        .replacement = try text.toOwnedSlice(),
-        .replace_span = .{
-            .start = application.rule_span.start,
-            .end = (application.binding_list_span orelse
-                application.rule_span).end,
-        },
-    };
+    try w.print("{f})", .{retry});
 }
 
 const top_rules_lead = " Most-tried rules: ";

@@ -76,8 +76,8 @@ pub const Retry = struct {
         return false;
     }
 
-    /// Write the retry as `name: value` pairs joined by ", ".
-    pub fn writeParams(self: Retry, w: anytype) !void {
+    /// Format (`{f}`) the retry as `name: value` pairs joined by ", ".
+    pub fn format(self: Retry, w: *std.Io.Writer) std.Io.Writer.Error!void {
         var first = true;
         inline for (comptime std.meta.fieldNames(Retry)) |field_name| {
             if (@field(self, field_name)) |value| {

@@ -13,8 +13,8 @@ fixed list of goals we can solve, plus a fixed list of goals we cannot solve
 ## Running
 
 ```bash
-zig build bench-search -Doptimize=ReleaseFast \
-  --cache-dir .zig-cache-local/ --global-cache-dir .zig-cache-global/ -- --compact
+ZIG_GLOBAL_CACHE_DIR=.zig-cache-global zig build bench-search \
+  -Doptimize=ReleaseFast --cache-dir .zig-cache-local/ -- --compact
 ```
 
 Flags (after `--`):

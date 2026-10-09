@@ -1053,8 +1053,11 @@ pub fn loadPair(
 
 fn readStdin(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
     var buffer: [4096]u8 = undefined;
-    var reader = std.Io.File.stdin().reader(io, &buffer);
-    return reader.interface.allocRemaining(allocator, .unlimited);
+    var reader = std.Io.File.stdin().readerStreaming(io, &buffer);
+    return reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |e| return e,
+    };
 }
 
 /// Where the root's proof file comes from in `loadUnit`.

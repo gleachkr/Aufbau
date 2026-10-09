@@ -3408,8 +3408,7 @@ fn retryMissNote(
         return " [retry none]";
     var out: std.Io.Writer.Allocating = .init(arena);
     const w = &out.writer;
-    try w.writeAll(" [retry ");
-    try retry.writeParams(w);
+    try w.print(" [retry {f}", .{retry});
     var retried = options;
     if (retry.depth) |v| retried.max_depth = @intCast(v);
     if (retry.nodes) |v| retried.gen_nodes = @intCast(v);
