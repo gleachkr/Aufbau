@@ -71,31 +71,19 @@ fn collectStatementCmds(
     return try cmds.toOwnedSlice(allocator);
 }
 
-fn readProofCaseFile(
-    allocator: std.mem.Allocator,
-    stem: []const u8,
-    ext: []const u8,
-) ![]u8 {
-    const path = try std.fmt.allocPrint(
-        allocator,
-        "tests/proof_cases/{s}.{s}",
-        .{ stem, ext },
-    );
-    defer allocator.free(path);
-    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
-}
+const readProofCase = mm0.readProofCase;
 
 const proof_case_ext = "auf";
 
 test "compiler emits a valid hidden-dummy targeted unfold proof" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_def_unfold_dummy",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_def_unfold_dummy",
         proof_case_ext,
@@ -111,13 +99,13 @@ test "compiler emits a valid hidden-dummy targeted unfold proof" {
 
 test "compiler handles normalize-plus-unfold hidden-dummy proof" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_def_hidden_dummy_all_elim_ctx_unfold",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_def_hidden_dummy_all_elim_ctx_unfold",
         proof_case_ext,
@@ -133,13 +121,13 @@ test "compiler handles normalize-plus-unfold hidden-dummy proof" {
 
 test "compiler rejects hidden-dummy dep violations before emission" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "fail_hidden_dummy_dep",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "fail_hidden_dummy_dep",
         proof_case_ext,
@@ -415,13 +403,13 @@ test "strict replay still infers exact omitted binders" {
 
 test "compiler normalizes conclusions then transports through defs" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_normalize_def_transport_concl",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_normalize_def_transport_concl",
         proof_case_ext,

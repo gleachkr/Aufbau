@@ -8,7 +8,7 @@ const Expr = helpers.Expr;
 const MM0Parser = helpers.MM0Parser;
 const CompilerViews = helpers.CompilerViews;
 const DefOps = helpers.DefOps;
-const readProofCaseFile = helpers.readProofCaseFile;
+const readProofCase = helpers.readProofCase;
 const processAnnotatedMetadata = helpers.processAnnotatedMetadata;
 
 test "compiler env converts rules into binder-indexed templates" {
@@ -614,13 +614,13 @@ test "compiler infers inline child binders through views" {
 
 test "compiler infers nested transparent view binders" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_nested_transparent_view_infer",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_nested_transparent_view_infer",
         "auf",
@@ -641,7 +641,7 @@ fn expectNestedView(
     allocator: std.mem.Allocator,
     with_semantic: bool,
 ) !void {
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_nested_transparent_view_infer",
         "mm0",
@@ -764,7 +764,7 @@ test "nested view matching preserves hidden dummy witnesses" {
 
 test "nested transparent view proof case keeps binders omitted" {
     const allocator = std.testing.allocator;
-    const proof = try readProofCaseFile(
+    const proof = try readProofCase(
         allocator,
         "pass_nested_transparent_view_infer",
         "auf",
@@ -790,9 +790,9 @@ test "nested transparent view proof case keeps binders omitted" {
 
 test "euclid ex_elim infers symbolic view witness" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(allocator, "euclid", "mm0");
+    const mm0_src = try readProofCase(allocator, "euclid", "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(allocator, "euclid", "auf");
+    const proof_src = try readProofCase(allocator, "euclid", "auf");
     defer allocator.free(proof_src);
 
     const witness_free_application = "by ex_elim [#1, l2]";
@@ -825,9 +825,9 @@ test "euclid ex_elim infers symbolic view witness" {
 test "structural view recover uses symbolic snapshot" {
     const allocator = std.testing.allocator;
     const stem = "pass_view_acui_joint_cover";
-    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    const proof_src = try readProofCase(allocator, stem, "auf");
     defer allocator.free(proof_src);
 
     var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);

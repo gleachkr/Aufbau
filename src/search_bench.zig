@@ -7,9 +7,8 @@ const ProofScript = mm0.ProofScript;
 /// The process's `Io`, set first thing in `main`.
 var io: std.Io = undefined;
 
-fn nanoTimestamp() i128 {
-    return std.Io.Clock.awake.now(io).nanoseconds;
-}
+const nanoTimestamp = Search.clock.nanoTimestamp;
+const elapsedSince = Search.clock.elapsedSince;
 
 const Scenario = struct {
     name: []const u8,
@@ -1813,12 +1812,6 @@ fn runScenario(
     );
     try printHypLookupDiagnostics(writer, &counters);
     try printRuleAttemptDiagnostics(writer, &counters);
-}
-
-fn elapsedSince(start: i128) u64 {
-    const elapsed = nanoTimestamp() - start;
-    if (elapsed <= 0) return 0;
-    return @intCast(elapsed);
 }
 
 fn containsReplacement(

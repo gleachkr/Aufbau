@@ -11,19 +11,7 @@ const allocNoneSeeds = Fixtures.allocNoneSeeds;
 const Testing = DefOps.Testing;
 const MatchSession = Testing.MatchSession;
 
-fn readProofCaseFile(
-    allocator: std.mem.Allocator,
-    stem: []const u8,
-    ext: []const u8,
-) ![]u8 {
-    const path = try std.fmt.allocPrint(
-        allocator,
-        "tests/proof_cases/{s}.{s}",
-        .{ stem, ext },
-    );
-    defer allocator.free(path);
-    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
-}
+const readProofCase = @import("../../compiler/search/fixture.zig").readProofCase;
 
 fn expectCompareTransparent(
     src: []const u8,
@@ -292,7 +280,7 @@ fn exprContainsExprId(
 
 test "def matcher binds quantified templates through hidden dummies" {
     const allocator = std.testing.allocator;
-    const src = try readProofCaseFile(
+    const src = try readProofCase(
         allocator,
         "pass_def_all_elim_free_param",
         "mm0",
@@ -942,7 +930,7 @@ test "collectConcreteDepsForPendingFinalization sees exact dummy seeds" {
 
 test "symbolic transparent bindings fall back to representatives" {
     const allocator = std.testing.allocator;
-    const src = try readProofCaseFile(
+    const src = try readProofCase(
         allocator,
         "pass_alleq_transparent_inference",
         "mm0",

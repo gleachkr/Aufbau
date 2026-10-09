@@ -7,11 +7,11 @@ const MM0Parser = helpers.MM0Parser;
 const RewriteRegistry = helpers.RewriteRegistry;
 const ConversionRole = helpers.ConversionRole;
 const CompilerMetadata = helpers.CompilerMetadata;
-const readProofCaseFile = helpers.readProofCaseFile;
+const readProofCase = helpers.readProofCase;
 const processAnnotatedMetadata = helpers.processAnnotatedMetadata;
 
 test "compiler env retains def dummy metadata" {
-    const src = try readProofCaseFile(
+    const src = try readProofCase(
         std.testing.allocator,
         "pass_def_dummy",
         "mm0",

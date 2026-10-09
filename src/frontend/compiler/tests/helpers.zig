@@ -58,19 +58,7 @@ pub fn collectStatementCmds(
     return try cmds.toOwnedSlice(allocator);
 }
 
-pub fn readProofCaseFile(
-    allocator: std.mem.Allocator,
-    stem: []const u8,
-    ext: []const u8,
-) ![]u8 {
-    const path = try std.fmt.allocPrint(
-        allocator,
-        "tests/proof_cases/{s}.{s}",
-        .{ stem, ext },
-    );
-    defer allocator.free(path);
-    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
-}
+pub const readProofCase = mm0.readProofCase;
 
 pub fn replaceOnceOwned(
     allocator: std.mem.Allocator,
@@ -205,23 +193,20 @@ pub fn hasFreshenDecl(
     return false;
 }
 
-pub fn renderedNoteText(
-    buf: *std.ArrayListUnmanaged(u8),
-    note: mm0.CompilerDiagnosticNote,
-) ![]const u8 {
-    var out: std.Io.Writer.Allocating = .fromArrayList(std.testing.allocator, buf);
-    defer buf.* = out.toArrayList();
-    try mm0.renderCompilerNoteMessage(&out.writer, note.message);
-    return out.written();
+/// The note's rendered message, owned by `std.testing.allocator`.
+pub fn renderedNoteText(note: mm0.CompilerDiagnosticNote) ![]u8 {
+    return mm0.allocRender(
+        std.testing.allocator,
+        mm0.renderCompilerNoteMessage,
+        .{note.message},
+    );
 }
 
 pub fn expectHasNote(diag: anytype, expected: []const u8) !void {
     for (diag.notes[0..diag.note_count]) |note| {
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(std.testing.allocator);
-        if (std.mem.eql(u8, try renderedNoteText(&buf, note), expected)) {
-            return;
-        }
+        const text = try renderedNoteText(note);
+        defer std.testing.allocator.free(text);
+        if (std.mem.eql(u8, text, expected)) return;
     }
     return error.MissingExpectedNote;
 }
@@ -230,23 +215,16 @@ pub fn expectNoteText(
     expected: []const u8,
     note: mm0.CompilerDiagnosticNote,
 ) !void {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    try std.testing.expectEqualStrings(
-        expected,
-        try renderedNoteText(&buf, note),
-    );
+    const text = try renderedNoteText(note);
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings(expected, text);
 }
 
 pub fn expectNoteStartsWith(
     prefix: []const u8,
     note: mm0.CompilerDiagnosticNote,
 ) !void {
-    var buf = std.ArrayListUnmanaged(u8).empty;
-    defer buf.deinit(std.testing.allocator);
-    try std.testing.expect(std.mem.startsWith(
-        u8,
-        try renderedNoteText(&buf, note),
-        prefix,
-    ));
+    const text = try renderedNoteText(note);
+    defer std.testing.allocator.free(text);
+    try std.testing.expect(std.mem.startsWith(u8, text, prefix));
 }

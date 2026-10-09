@@ -46,6 +46,9 @@ pub const exactWithSession = root.exactWithSession;
 pub const suggestionsAtSourceOffset = root.suggestionsAtSourceOffset;
 pub const clipper = root.clipper;
 pub const shape = root.shape;
+/// The monotonic clock behind the search timers, whether or not
+/// `enable_search_timers` is set; the search bench times scenarios with it.
+pub const clock = @import("./search/timer_real.zig");
 
 comptime {
     if (@import("builtin").is_test) {

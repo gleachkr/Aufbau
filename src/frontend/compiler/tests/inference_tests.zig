@@ -8,7 +8,7 @@ const Expr = helpers.Expr;
 const CompilerInference = helpers.CompilerInference;
 const MM0Parser = helpers.MM0Parser;
 const ProofScript = helpers.ProofScript;
-const readProofCaseFile = helpers.readProofCaseFile;
+const readProofCase = helpers.readProofCase;
 const replaceOnceOwned = helpers.replaceOnceOwned;
 const processAnnotatedMetadata = helpers.processAnnotatedMetadata;
 const ruleArgIndex = helpers.ruleArgIndex;
@@ -19,13 +19,13 @@ const expectNoteStartsWith = helpers.expectNoteStartsWith;
 
 test "multi-remainder inference handles a simple ACUI cover" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_infer",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_infer",
         "auf",
@@ -40,13 +40,13 @@ test "multi-remainder inference handles a simple ACUI cover" {
 
 test "repeated ACUI remainder binder infers a principal witness" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_repeated_joint_binder",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_repeated_joint_binder",
         "auf",
@@ -65,13 +65,13 @@ test "repeated ACUI remainder binder infers a principal witness" {
 
 test "transparent ctx defs satisfy structural intervals" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_transparent_ctx_reuse",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_transparent_ctx_reuse",
         "auf",
@@ -90,13 +90,13 @@ test "transparent ctx defs satisfy structural intervals" {
 
 test "structural solver matches branch items by normalization" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_structural_normalized_item",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_structural_normalized_item",
         "auf",
@@ -160,13 +160,13 @@ test "freshen repairs strict replay dep violation without normalize" {
 
 test "prawitz alpha freshen proof compiles and verifies" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "prawitz",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "prawitz",
         "auf",
@@ -181,13 +181,13 @@ test "prawitz alpha freshen proof compiles and verifies" {
 
 test "compiler reports freshen attempt notes on failure" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "fail_alpha_freshen_opaque_theorem_arg",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "fail_alpha_freshen_opaque_theorem_arg",
         "auf",
@@ -227,7 +227,7 @@ test "compiler reports freshen attempt notes on failure" {
 
 test "compiler pinpoints invalid @freshen binder kinds" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "prawitz",
         "mm0",
@@ -262,7 +262,7 @@ test "compiler pinpoints invalid @freshen binder kinds" {
 
 test "compiler pinpoints invalid @alpha binder kinds" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "prawitz",
         "mm0",
@@ -294,7 +294,7 @@ test "compiler pinpoints invalid @alpha binder kinds" {
 
 test "prawitz metadata registers alpha and freshen annotations" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "prawitz",
         "mm0",
@@ -397,7 +397,7 @@ test "prawitz metadata registers alpha and freshen annotations" {
 
 test "pass_alpha_freshen metadata registers alpha and freshen annotations" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_alpha_freshen",
         "mm0",
@@ -453,13 +453,13 @@ test "pass_alpha_freshen metadata registers alpha and freshen annotations" {
 
 test "joint structural cover conflicts fail before missing binders" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "fail_acui_joint_cover_conflict",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "fail_acui_joint_cover_conflict",
         "auf",
@@ -475,13 +475,13 @@ test "joint structural cover conflicts fail before missing binders" {
 
 test "multi-remainder ambiguity survives to final bindings" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_ambiguous",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_ambiguous",
         "auf",
@@ -502,13 +502,13 @@ test "multi-remainder ambiguity survives to final bindings" {
 
 test "compiler reports structural ambiguity without ACUI-only wording" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_ambiguous",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_ambiguous",
         "auf",
@@ -567,13 +567,13 @@ test "uncoupled ACUI cover product is resolved without enumeration" {
     // (each member in the last binder alone), and alternative from the
     // per-member choice lists.
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_cover_product_ambiguous",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_cover_product_ambiguous",
         "auf",
@@ -611,13 +611,13 @@ test "identical ACU members are split once per count" {
     // chosen and alternative covers are the ones per-copy enumeration
     // reached first.
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acu_identical_members_ambiguous",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acu_identical_members_ambiguous",
         "auf",
@@ -652,13 +652,13 @@ test "identical ACU members are split once per count" {
 
 test "-Werror upgrades ambiguity warnings into errors" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_ambiguous",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_acui_multi_remainder_ambiguous",
         "auf",
@@ -689,13 +689,13 @@ test "-Werror upgrades ambiguity warnings into errors" {
 
 test "holey ACUI conclusion can still report ambiguity" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_hole_acui_ambiguous",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_hole_acui_ambiguous",
         "auf",
@@ -725,13 +725,13 @@ test "holey ACUI conclusion can still report ambiguity" {
 
 test "holey ACUI minimal residuals are warning-free" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_hole_acui_min_ctx",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_hole_acui_min_ctx",
         "auf",
@@ -750,13 +750,13 @@ test "holey ACUI minimal residuals are warning-free" {
 
 test "holey ACUI refs and visible structure disambiguate" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_hole_acui_disambiguate",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_hole_acui_disambiguate",
         "auf",
@@ -933,13 +933,13 @@ test "-Werror upgrades unused theorem parameter warnings into errors" {
 
 test "robinson demo uses omitted binders across two ACUI sorts" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "robinson",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "robinson",
         "auf",
@@ -954,7 +954,7 @@ test "robinson demo uses omitted binders across two ACUI sorts" {
 
 test "fully omitted robinson step emits ambiguity warning" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "robinson",
         "mm0",
@@ -984,13 +984,13 @@ test "fully omitted robinson step emits ambiguity warning" {
 
 test "or_left demo works with both contexts omitted" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "gentzen",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "gentzen",
         "auf",
@@ -1142,9 +1142,9 @@ test "compiler points binding validation errors at explicit assignments" {
 test "ordinary structural inference retains witnesses without views" {
     const allocator = std.testing.allocator;
     const stem = "pass_rule_symbolic_witness";
-    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    const proof_src = try readProofCase(allocator, stem, "auf");
     defer allocator.free(proof_src);
     try std.testing.expect(std.mem.indexOf(u8, mm0_src, "@view") == null);
     try std.testing.expect(std.mem.indexOf(u8, mm0_src, "@vars") == null);
@@ -1159,9 +1159,9 @@ test "ordinary structural inference retains witnesses without views" {
 test "symbolic rule inference respects an explicit witness constraint" {
     const allocator = std.testing.allocator;
     const stem = "pass_rule_symbolic_witness";
-    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    const proof_src = try readProofCase(allocator, stem, "auf");
     defer allocator.free(proof_src);
     const wrong_witness = try replaceOnceOwned(
         allocator,
@@ -1184,9 +1184,9 @@ test "structural solve aborts at an exhausted search work budget" {
     // instead of running its fan-out to completion.
     const allocator = std.testing.allocator;
     const stem = "pass_acui_cover_product_ambiguous";
-    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    const proof_src = try readProofCase(allocator, stem, "auf");
     defer allocator.free(proof_src);
 
     const Spent = struct {
@@ -1214,9 +1214,9 @@ test "kept symbolic match state extends a branch rather than duplicating it" {
     // whole-constraint match per premise would double it every time.
     const allocator = std.testing.allocator;
     const stem = "pass_symbolic_witness_repeated_premises";
-    const mm0_src = try readProofCaseFile(allocator, stem, "mm0");
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(allocator, stem, "auf");
+    const proof_src = try readProofCase(allocator, stem, "auf");
     defer allocator.free(proof_src);
 
     var stats = Compiler.InferenceStatsSink{};

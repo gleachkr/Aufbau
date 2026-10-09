@@ -101,9 +101,15 @@ fn slicePtr(bytes: []const u8) u32 {
 }
 
 /// The browser host does no I/O of its own: messages arrive and leave
-/// through `BrowserTransport`, and the handler's disk reads report
-/// FileNotFound on freestanding before they reach an `Io`.
+/// through `BrowserTransport`, and the handler's disk reads get
+/// FileNotFound from `std.Io.failing`.
 const browser_io = std.Io.failing;
+
+/// Freestanding has no working directory for `std.Io.Dir.cwd()` to name; the
+/// handler's reads go through `browser_io`, which never looks at the handle.
+pub fn std_options_cwd() std.Io.Dir {
+    return .{ .handle = {} };
+}
 
 const BrowserTransport = struct {
     transport: lsp.Transport = .{ .vtable = &vtable },

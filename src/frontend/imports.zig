@@ -738,7 +738,6 @@ pub const FsResolver = struct {
         spec: []const u8,
     ) anyerror!Resolved {
         const self: *FsResolver = @ptrCast(@alignCast(ctx));
-        if (builtin.os.tag == .freestanding) return error.FileNotFound;
         const path = try resolveSpecPath(allocator, from_key, spec);
         const key = try rootKey(self.io, allocator, path);
         const text = try std.Io.Dir.cwd().readFileAlloc(
@@ -975,7 +974,6 @@ pub fn loadPair(
     proof_path: ?[]const u8,
     failure: *?LoadFailure,
 ) LoadPairError!LoadedPair {
-    if (builtin.os.tag == .freestanding) return error.ReadFailed;
     const root_text = std.Io.Dir.cwd().readFileAlloc(
         io,
         mm0_path,

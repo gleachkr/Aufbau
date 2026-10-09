@@ -38,6 +38,9 @@ pub const writeCompilerDepViolationSummary =
 pub const writeCompilerOmittedDiagnosticsSummary =
     CompilerDiag.writeOmittedDiagnosticsSummary;
 pub const allocRender = @import("./frontend/text_util.zig").allocRender;
+/// Test support: reads `tests/proof_cases/<stem>.<ext>`.
+pub const readProofCase =
+    @import("./frontend/compiler/search/fixture.zig").readProofCase;
 pub const Frontend = struct {
     pub const Env = @import("./frontend/env.zig");
     pub const Expr = @import("./frontend/expr.zig");

@@ -929,19 +929,7 @@ const proof_cases = [_]ProofCase{
     },
 };
 
-fn readProofCaseFile(
-    allocator: std.mem.Allocator,
-    stem: []const u8,
-    ext: []const u8,
-) ![]u8 {
-    const path = try std.fmt.allocPrint(
-        allocator,
-        "tests/proof_cases/{s}.{s}",
-        .{ stem, ext },
-    );
-    defer allocator.free(path);
-    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
-}
+const readProofCase = mm0.readProofCase;
 
 fn loadProofCase(
     arena: std.mem.Allocator,
@@ -1325,9 +1313,9 @@ test "compiler proof cases from files" {
 
 test "compiler emits name, var, and hyp index tables" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(allocator, "hilbert", "mm0");
+    const mm0_src = try readProofCase(allocator, "hilbert", "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "hilbert",
         proof_case_ext,
@@ -1378,9 +1366,9 @@ test "compiler emits name, var, and hyp index tables" {
 
 test "compiler records theorem-local fresh vars in theorem var table" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(allocator, "pass_fresh_hole", "mm0");
+    const mm0_src = try readProofCase(allocator, "pass_fresh_hole", "mm0");
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_fresh_hole",
         proof_case_ext,
@@ -1414,13 +1402,13 @@ test "compiler records theorem-local fresh vars in theorem var table" {
 
 test "compiler reuses @fresh pool vars across proof lines" {
     const allocator = std.testing.allocator;
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         allocator,
         "pass_fresh_reuse",
         "mm0",
     );
     defer allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         allocator,
         "pass_fresh_reuse",
         proof_case_ext,

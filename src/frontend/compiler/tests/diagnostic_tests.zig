@@ -2,7 +2,7 @@ const helpers = @import("./helpers.zig");
 const std = helpers.std;
 const mm0 = helpers.mm0;
 const Compiler = helpers.Compiler;
-const readProofCaseFile = helpers.readProofCaseFile;
+const readProofCase = helpers.readProofCase;
 const expectHasNote = helpers.expectHasNote;
 const expectNoteText = helpers.expectNoteText;
 const expectNoteStartsWith = helpers.expectNoteStartsWith;
@@ -1580,13 +1580,13 @@ test "compiler explains one-sided dependency violations logically" {
 }
 
 test "compiler reports checked-ir dep violations before emission" {
-    const mm0_src = try readProofCaseFile(
+    const mm0_src = try readProofCase(
         std.testing.allocator,
         "fail_hidden_dummy_dep",
         "mm0",
     );
     defer std.testing.allocator.free(mm0_src);
-    const proof_src = try readProofCaseFile(
+    const proof_src = try readProofCase(
         std.testing.allocator,
         "fail_hidden_dummy_dep",
         "auf",
@@ -1908,9 +1908,8 @@ fn expectAcuiHoleNote(
 
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
     for (diag.noteSlice()) |found| {
-        var buf = std.ArrayListUnmanaged(u8).empty;
-        defer buf.deinit(std.testing.allocator);
-        const text = try helpers.renderedNoteText(&buf, found);
+        const text = try helpers.renderedNoteText(found);
+        defer std.testing.allocator.free(text);
         if (!std.mem.eql(u8, text, note)) continue;
         const span = found.span orelse return error.ExpectedDiagnosticSpan;
         try std.testing.expectEqual(header.len + token_offset, span.start);

@@ -796,25 +796,16 @@ test "two-layer derived ref solves a shared hole in both recipe layers" {
 // from the goal's subterms.
 // ---------------------------------------------------------------------------
 
-fn readBenchCase(
-    allocator: std.mem.Allocator,
-    stem: []const u8,
-    ext: []const u8,
-) ![]u8 {
-    const path = try std.fmt.allocPrint(
-        allocator,
-        "tests/search_bench_cases/{s}.{s}",
-        .{ stem, ext },
-    );
-    defer allocator.free(path);
-    return try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
-}
-
 test "auto trigger seeds close an elimination major from an empty pool" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0_src = try readBenchCase(allocator, "nd_minimal", "mm0");
+    const mm0_src = try std.Io.Dir.cwd().readFileAlloc(
+        std.testing.io,
+        "tests/search_bench_cases/nd_minimal.mm0",
+        allocator,
+        .unlimited,
+    );
 
     // The pure left-rule repro: `p → q , p ⊢ q` from an EMPTY ref pool.
     // Without seeding this is a clean miss at any budget (imp_elim's `p` is

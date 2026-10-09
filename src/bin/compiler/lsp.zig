@@ -2604,50 +2604,35 @@ const ReadFileWithMtime = struct {
     mtime: i128,
 };
 
-fn openPath(io: std.Io, path: []const u8) !std.Io.File {
-    return if (std.fs.path.isAbsolute(path))
-        std.Io.Dir.openFileAbsolute(io, path, .{})
-    else
-        std.Io.Dir.cwd().openFile(io, path, .{});
-}
-
 fn readFileWithMtimeAlloc(
     io: std.Io,
     allocator: std.mem.Allocator,
     path: []const u8,
 ) !ReadFileWithMtime {
-    if (builtin.os.tag == .freestanding) {
-        return error.FileNotFound;
-    } else {
-        const file = try openPath(io, path);
-        defer file.close(io);
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-        const stat = try file.stat(io);
-        var buffer: [4096]u8 = undefined;
-        var reader = file.reader(io, &buffer);
-        const text = reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
-            error.ReadFailed => return reader.err.?,
-            else => |e| return e,
-        };
-        return .{
-            .text = text,
-            .mtime = stat.mtime.nanoseconds,
-        };
-    }
+    const stat = try file.stat(io);
+    var buffer: [4096]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    const text = reader.interface.allocRemaining(allocator, .unlimited) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |e| return e,
+    };
+    return .{
+        .text = text,
+        .mtime = stat.mtime.nanoseconds,
+    };
 }
 
 /// The mtime of `path` without reading its contents — used to build a search
 /// cache key cheaply on a hit. Reports the same mtime as `readFileWithMtimeAlloc`
 /// for an unchanged file (both stat the same opened handle).
 fn statMtimeAlloc(io: std.Io, path: []const u8) !i128 {
-    if (builtin.os.tag == .freestanding) {
-        return error.FileNotFound;
-    } else {
-        const file = try openPath(io, path);
-        defer file.close(io);
-        const stat = try file.stat(io);
-        return stat.mtime.nanoseconds;
-    }
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const stat = try file.stat(io);
+    return stat.mtime.nanoseconds;
 }
 
 fn clientSupportsSnippets(capabilities: types.ClientCapabilities) bool {
