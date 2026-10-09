@@ -3,6 +3,16 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `knaster`, a demo theory that proves the Knaster–Tarski theorem: a
+  monotone map on a complete lattice has a least fixed point. Arbitrary
+  meets are a binder, `⋀ x p`, so the least fixed point is the meet of
+  the prefixed points, `⋀ x (f · x ≤ x)`, with no set theory underneath.
+  The theory ships in the web demo.
+
 ## [0.0.15] - 2026-10-08
 
 ### Changed
