@@ -1,3 +1,107 @@
+# Aufbau 0.0.15
+
+Aufbau 0.0.15 is a robustness release. We fixed a hole in the verifier, fixed 
+theories that `abc` compiled to unverifiable binaries, and fixed some inputs 
+that crashed or hung `abc` and the language server, discovered via fuzzing. 
+This release also compiles `.auf` files about 30% faster.
+
+## Highlights
+
+### Improved fidelity to mm0-c
+
+- `mm0-zig` accepted a `.mm0` spec that declares more than the `.mmb`
+  proves: an axiom or theorem after the binary's last statement was
+  accepted with no proof. It is now rejected, as `mm0-c` rejects it.
+- `mm0-zig` loads binaries with 16 or more sorts. Such files, including
+  `abc`'s own output for theories with that many sorts, crashed it or
+  were rejected.
+- Every statement's binders are checked as `mm0-c` checks them. A plain
+  `term` was not checked at all.
+
+A table of 38 malformed binaries pins the verifier's error for each, and
+CI runs every one through `mm0-c` too.
+
+### Fixed some malformed outputs
+
+The compiler now checks conditions that previously could lead to malformed 
+output
+
+- `@relation` members, `@rewrite` rules and `@acui` laws must have the right 
+  shape.
+- Sort modifiers (`strict`, `free`, `pure`) and `mm0-c`'s rules for dummy
+  variables are enforced at declaration parse.
+- An `@alpha` rule must conclude with its sort's `@relation`, and a sort
+  must have only one `@relation`.
+- When `@rewrite` rules rewrite an expression back to itself, the proof
+  line gets a clear error naming the rule that closed the cycle, rather than 
+  the rewrite silently running out of gas.
+
+The test suite now verifies every fixture it compiles, and checks that
+the language server reports the same first error as `abc compile`.
+
+### Inputs that crashed or hung
+
+- A formula or an inline proof nested more than 1024 levels deep is now a
+  parse error. Extremely deep nesting used to overflow the stack.
+- A proof can cite a rule with more than 56 arguments.
+- Certain pathological proof lines no longer take time exponential in the 
+  number of lines to compile, search or show in the editor.
+- `exact?` and `apply?` run under the same work budget as `auto?` and
+  offer what they found when it runs out. Ten references for each of six
+  premises used to take a million checks.
+- Inferring how to split a bag under an `@acui` combiner without
+  idempotence is now much more efficient: previously inferring splits for 24 
+  copies of a single bag element took over a minute; it now takes about 12 ms.
+- The language server no longer crashes on an edit range that ends
+  before it starts, a diagnostic covering part of a non-ASCII character,
+  or a NUL byte in a path. It and the browser editor no longer keep
+  memory from every edit and search.
+
+### Faster compiling
+
+Over the 264 test theories that 0.0.14 also compiles, `abc compile` runs
+about 30% fewer instructions and takes 17% less time. The binaries it
+writes are unchanged.
+
+### Smaller changes
+
+- `abc`, the language server and the browser load a unit through one
+  loader, so they check the same properties during load. Repeated includes are 
+  now forbidden, and `abc` now resolves absolute `import` paths correctly for 
+  display.
+- Import and include failures, the search placeholder warning and the
+  language server's document messages are properly internationalized.
+- The browser language server answers a failed request with an error
+  instead of leaving the editor waiting, and now answers
+  go-to-implementation and find-references.
+- After an `@auto eager` rule applies, `auto?` still tries eager rules
+  that split the context.
+
+## Compatibility
+
+A theory that 0.0.14 compiled is now rejected if it:
+
+- declares a `@rewrite` rule before its sort's `@relation`;
+- declares a `@relation` member or `@acui` law with its binders in
+  the wrong order;
+- gives a sort a second `@relation`, or a `@rewrite` rule whose left side
+  is a variable;
+- breaks a sort modifier or a dummy-variable rule. `mm0-zig` now rejects
+  such a spec too, as `mm0-c` did;
+- includes the same `.auf` file twice.
+
+A proof line whose normalization reaches a `@rewrite` cycle is an error.
+Only a `.mm0` file pairs with a proof file: `abc` no longer pairs
+`lib.mm1` with `lib.auf`. Every test theory from 0.0.14 gives the same
+result as before.
+
+The MMB format, the proof syntax and the package APIs are unchanged.
+Source builds still require Zig 0.15.2.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.14
 
 Aufbau 0.0.14 adds `abc search`, which runs search placeholders from the 
