@@ -1,0 +1,45 @@
+-- The Knaster–Tarski fixed-point theorem.
+
+eq_le
+-----
+l1: $ G ⊢ a ≤ a $ by le_refl
+l2: $ G ⊢ a ≤ b $ by eq_replace [#1, l1]
+
+mono_elim
+---------
+l1: $ G ⊢ ∀ y (a ≤ y → f · a ≤ f · y) $ by all_elim [#1]
+l2: $ G ⊢ a ≤ b → f · a ≤ f · b $ by all_elim [l1]
+l3: $ G , H ⊢ f · a ≤ f · b $ by imp_elim [l2, #2]
+
+lfp_lb
+------
+l1: $ G ⊢ lfp f ≤ a $ by inf_lb [#1]
+
+lfp_glb
+-------
+l1: $ G ⊢ z ≤ lfp f $ by inf_glb [#1]
+
+lfp_prefixed
+------------
+l1: $ f · x ≤ x ⊢ f · x ≤ x $ by ax
+l2: $ f · x ≤ x ⊢ lfp f ≤ x $ by lfp_lb [l1]
+l3: $ G , f · x ≤ x ⊢ f · lfp f ≤ f · x $ by mono_elim [#1, l2]
+l4: $ G , f · x ≤ x ⊢ f · lfp f ≤ x $ by le_trans [l3, l1]
+l5: $ G ⊢ f · lfp f ≤ lfp f $ by lfp_glb [l4]
+
+lfp_postfixed
+-------------
+l1: $ G ⊢ f · lfp f ≤ lfp f $ by lfp_prefixed [#1]
+l2: $ G ⊢ f · (f · lfp f) ≤ f · lfp f $ by mono_elim [#1, l1]
+l3: $ G ⊢ lfp f ≤ f · lfp f $ by lfp_lb [l2]
+
+knaster_tarski
+--------------
+l1: $ G ⊢ f · lfp f ≤ lfp f $ by lfp_prefixed [#1]
+l2: $ G ⊢ lfp f ≤ f · lfp f $ by lfp_postfixed [#1]
+l3: $ G ⊢ f · lfp f = lfp f $ by le_antisym [l1, l2]
+
+lfp_least
+---------
+l1: $ G ⊢ f · a ≤ a $ by eq_le [#1]
+l2: $ G ⊢ lfp f ≤ a $ by lfp_lb [l1]

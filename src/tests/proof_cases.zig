@@ -647,6 +647,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "reynolds", .outcome = .pass },
     .{ .stem = "cardano", .outcome = .pass },
     .{ .stem = "zach", .outcome = .pass },
+    .{ .stem = "knaster", .outcome = .pass },
     .{
         .stem = "fail_two_sort_eigen_smuggle",
         .outcome = .{ .fail = error.DepViolation },

@@ -1,0 +1,272 @@
+-- The Knaster–Tarski fixed-point theorem for complete lattices.
+-- Arbitrary meets are a binder: `⋀ x p` is the greatest lower bound of
+-- every x satisfying p. The least fixed point of a monotone f is the meet
+-- of its prefixed points, `⋀ x (f · x ≤ x)`.
+
+delimiter $ ( ) [ / ] , $;
+
+strict provable sort wff;
+--| @vars x y z a b c
+sort obj;
+--| @vars f g
+sort fn;
+sort ctx;
+
+-- --------------------------------------------------------------------------
+-- Object-language syntax
+-- --------------------------------------------------------------------------
+
+term im (p q: wff): wff;
+infixr im: $->$ prec 25;
+infixr im: $→$ prec 25;
+
+term bi (p q: wff): wff;
+infixr bi: $<->$ prec 20;
+infixr bi: $↔$ prec 20;
+
+term all {x: obj} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+prefix all: $∀$ prec 41;
+
+term sb_f {x: obj} (t: obj x) (p: wff x): wff;
+notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
+  ($[$:41) x ($/$:0) t ($]$:0) p;
+term sb_s {x: obj} (t: obj x) (s: obj x): obj;
+notation sb_s {x: obj} (t: obj x) (s: obj x): obj =
+  ($⟦$:41) x ($/$:0) t ($⟧$:0) s;
+
+term eq (a b: obj): wff;
+infixl eq: $=$ prec 50;
+
+term fn_eq (f g: fn): wff;
+
+term le (a b: obj): wff;
+infixl le: $<=$ prec 50;
+infixl le: $≤$ prec 50;
+
+term ap (f: fn) (a: obj): obj;
+infixl ap: $@$ prec 70;
+infixl ap: $·$ prec 70;
+
+term inf {x: obj} (p: wff x): obj;
+prefix inf: $/\\$ prec 80;
+prefix inf: $⋀$ prec 80;
+
+-- --------------------------------------------------------------------------
+-- Context syntax for natural deduction
+-- --------------------------------------------------------------------------
+
+term ctx_eq (G H: ctx): wff;
+term emp: ctx;
+notation emp: ctx = ($_$:max);
+
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (G H: ctx): ctx;
+infixl join: $,$ prec 5;
+
+term hyp (p: wff): ctx;
+coercion hyp: wff > ctx;
+
+term nd (G: ctx) (p: wff): wff;
+infixl nd: $⊢$ prec 0;
+
+-- --------------------------------------------------------------------------
+-- Relations and congruence
+-- --------------------------------------------------------------------------
+
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (p: wff): $ p ↔ p $;
+axiom bitr (p q r: wff): $ p ↔ q $ > $ q ↔ r $ > $ p ↔ r $;
+axiom bisym (p q: wff): $ p ↔ q $ > $ q ↔ p $;
+axiom mpbi (p q: wff): $ p ↔ q $ > $ p $ > $ q $;
+
+--| @relation obj eq eqid eqtr eqsym _
+axiom eqid (a: obj): $ a = a $;
+axiom eqtr (a b c: obj): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eqsym (a b: obj): $ a = b $ > $ b = a $;
+
+--| @relation fn fn_eq fn_refl fn_trans fn_sym _
+axiom fn_refl (f: fn): $ fn_eq f f $;
+axiom fn_trans (f g h: fn): $ fn_eq f g $ > $ fn_eq g h $ > $ fn_eq f h $;
+axiom fn_sym (f g: fn): $ fn_eq f g $ > $ fn_eq g f $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (G: ctx): $ ctx_eq G G $;
+axiom ctx_trans (G H K: ctx):
+  $ ctx_eq G H $ > $ ctx_eq H K $ > $ ctx_eq G K $;
+axiom ctx_sym (G H: ctx): $ ctx_eq G H $ > $ ctx_eq H G $;
+axiom ctx_assoc (G H K: ctx):
+  $ ctx_eq ((G , H) , K) (G , (H , K)) $;
+axiom ctx_comm (G H: ctx): $ ctx_eq (G , H) (H , G) $;
+axiom ctx_idem (G: ctx): $ ctx_eq (G , G) G $;
+axiom ctx_unit (G: ctx): $ ctx_eq (emp , G) G $;
+
+--| @congr
+axiom join_congr (G1 G2 H1 H2: ctx):
+  $ ctx_eq G1 G2 $ > $ ctx_eq H1 H2 $ >
+  $ ctx_eq (G1 , H1) (G2 , H2) $;
+
+--| @congr
+axiom hyp_congr (p q: wff): $ p ↔ q $ > $ ctx_eq (hyp p) (hyp q) $;
+
+--| @congr
+axiom nd_congr (G H: ctx) (p q: wff):
+  $ ctx_eq G H $ > $ p ↔ q $ > $ (G ⊢ p) ↔ (H ⊢ q) $;
+
+--| @congr
+axiom im_congr (p q r s: wff):
+  $ p ↔ q $ > $ r ↔ s $ > $ (p → r) ↔ (q → s) $;
+
+--| @congr
+axiom all_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+
+--| @congr
+axiom eq_congr (a b c d: obj):
+  $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+
+--| @congr
+axiom le_congr (a b c d: obj):
+  $ a = b $ > $ c = d $ > $ (a ≤ c) ↔ (b ≤ d) $;
+
+--| @congr
+axiom ap_congr (f g: fn) (a b: obj):
+  $ fn_eq f g $ > $ a = b $ > $ f · a = g · b $;
+
+--| @congr
+axiom inf_congr {x: obj} (p q: wff x):
+  $ p ↔ q $ > $ ⋀ x p = ⋀ x q $;
+
+-- --------------------------------------------------------------------------
+-- Substitution rewrites
+-- --------------------------------------------------------------------------
+
+--| @rewrite
+axiom sb_s_var {x: obj} (t: obj x): $ (⟦ x / t ⟧ x) = t $;
+
+--| @rewrite
+axiom sb_s_other {x y: obj} (t: obj x): $ (⟦ x / t ⟧ y) = y $;
+
+--| @rewrite
+axiom sb_s_irrel {x: obj} (t: obj x) (s: obj): $ (⟦ x / t ⟧ s) = s $;
+
+--| @rewrite
+axiom sb_s_ap {x: obj} (t: obj x) (f: fn) (a: obj x):
+  $ (⟦ x / t ⟧ (f · a)) = f · (⟦ x / t ⟧ a) $;
+
+--| @rewrite
+axiom sb_f_eq {x: obj} (t a b: obj x):
+  $ [x/t] (a = b) ↔ (⟦ x / t ⟧ a) = (⟦ x / t ⟧ b) $;
+
+--| @rewrite
+axiom sb_f_le {x: obj} (t a b: obj x):
+  $ [x/t] (a ≤ b) ↔ (⟦ x / t ⟧ a) ≤ (⟦ x / t ⟧ b) $;
+
+--| @rewrite
+axiom sb_f_im {x: obj} (t: obj x) (p q: wff x):
+  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+
+--| @rewrite
+axiom sb_f_all {x y: obj} (t: obj x) (p: wff x y):
+  $ [x/t] (∀ y p) ↔ ∀ y [x/t] p $;
+
+--| @rewrite
+axiom sb_f_id {x: obj} (p: wff x): $ [x/x] p ↔ p $;
+
+--| @congr
+axiom sb_f_congr {x: obj} (t u: obj x) (p q: wff x):
+  $ t = u $ > $ p ↔ q $ > $ [x/t] p ↔ [x/u] q $;
+
+--| @alpha x y
+axiom all_alpha {x y: obj} (p: wff x):
+  $ ∀ x p ↔ ∀ y ([x/y] p) $;
+
+-- --------------------------------------------------------------------------
+-- Natural deduction
+-- --------------------------------------------------------------------------
+
+axiom ax (G: ctx) (p: wff): $ G , p ⊢ p $;
+
+axiom imp_intro (G: ctx) (p q: wff):
+  $ G , p ⊢ q $ > $ G ⊢ p → q $;
+
+axiom imp_elim (G H: ctx) (p q: wff):
+  $ G ⊢ p → q $ > $ H ⊢ p $ > $ G , H ⊢ q $;
+
+--| @freshen G x
+axiom all_intro (G: ctx) {x: obj} (p: wff x):
+  $ G ⊢ p $ > $ G ⊢ ∀ x p $;
+
+--| @view {x:obj}(G:ctx x)(t:obj x)(p:wff x)(q:wff): $ G ⊢ ∀ x p $ > $ G ⊢ q $
+--| @recover t q p x
+--| @auto forward
+axiom all_elim {x: obj} (G: ctx x) (t: obj x) (p: wff x):
+  $ G ⊢ ∀ x p $ > $ G ⊢ [x/t] p $;
+
+axiom eq_intro (G: ctx) (a: obj): $ G ⊢ a = a $;
+
+--| @view (G H:ctx){z:obj}(a b:obj)(p:wff z)(q r:wff): $ G ⊢ a = b $ > $ H ⊢ q $ > $ G,H ⊢ r $
+--| @abstract p q r z a b
+--| @fresh z
+axiom eq_replace (G H: ctx) {z: obj} (a b: obj) (p: wff z):
+  $ G ⊢ a = b $ > $ H ⊢ [z/a] p $ > $ G , H ⊢ [z/b] p $;
+
+-- --------------------------------------------------------------------------
+-- Complete lattices
+-- --------------------------------------------------------------------------
+
+axiom le_refl (G: ctx) (a: obj): $ G ⊢ a ≤ a $;
+
+axiom le_trans (G H: ctx) (a b c: obj):
+  $ G ⊢ a ≤ b $ > $ H ⊢ b ≤ c $ > $ G , H ⊢ a ≤ c $;
+
+axiom le_antisym (G H: ctx) (a b: obj):
+  $ G ⊢ a ≤ b $ > $ H ⊢ b ≤ a $ > $ G , H ⊢ a = b $;
+
+-- The meet is below everything satisfying p ...
+--| @view {x:obj}(G:ctx x)(t:obj x)(p:wff x)(q:wff): $ G ⊢ q $ > $ G ⊢ ⋀ x p ≤ t $
+--| @recover t q p x
+axiom inf_lb {x: obj} (G: ctx x) (t: obj x) (p: wff x):
+  $ G ⊢ [x/t] p $ > $ G ⊢ ⋀ x p ≤ t $;
+
+-- ... and above every such lower bound z (x is fresh for G and z).
+--| @freshen G x
+axiom inf_glb (G: ctx) (z: obj) {x: obj} (p: wff x):
+  $ G , p ⊢ z ≤ x $ > $ G ⊢ z ≤ ⋀ x p $;
+
+-- --------------------------------------------------------------------------
+-- Monotone maps and the least fixed point
+-- --------------------------------------------------------------------------
+
+def mono (f: fn) (.x .y: obj): wff = $ ∀ x ∀ y (x ≤ y → f · x ≤ f · y) $;
+
+def lfp (f: fn) (.x: obj): obj = $ ⋀ x (f · x ≤ x) $;
+
+theorem eq_le (G: ctx) (a b: obj): $ G ⊢ a = b $ > $ G ⊢ a ≤ b $;
+
+theorem mono_elim (G H: ctx) (f: fn) (a b: obj):
+  $ G ⊢ mono f $ > $ H ⊢ a ≤ b $ > $ G , H ⊢ f · a ≤ f · b $;
+
+-- lfp f is below every prefixed point ...
+theorem lfp_lb (G: ctx) (f: fn) (a: obj):
+  $ G ⊢ f · a ≤ a $ > $ G ⊢ lfp f ≤ a $;
+
+-- ... and above every lower bound of them.
+theorem lfp_glb (G: ctx) (f: fn) (z: obj) {x: obj}:
+  $ G , f · x ≤ x ⊢ z ≤ x $ > $ G ⊢ z ≤ lfp f $;
+
+-- lfp f is itself prefixed ...
+theorem lfp_prefixed (G: ctx) (f: fn):
+  $ G ⊢ mono f $ > $ G ⊢ f · lfp f ≤ lfp f $;
+
+-- ... and postfixed,
+theorem lfp_postfixed (G: ctx) (f: fn):
+  $ G ⊢ mono f $ > $ G ⊢ lfp f ≤ f · lfp f $;
+
+-- so it is a fixed point,
+theorem knaster_tarski (G: ctx) (f: fn):
+  $ G ⊢ mono f $ > $ G ⊢ f · lfp f = lfp f $;
+
+-- and the least one. (Leastness needs no monotonicity.)
+theorem lfp_least (G: ctx) (f: fn) (a: obj):
+  $ G ⊢ f · a = a $ > $ G ⊢ lfp f ≤ a $;
