@@ -284,6 +284,12 @@ pub const CompilerContext = struct {
     proof_source: ?[]const u8,
     debug: DebugConfig,
     diagnostics: *DiagnosticSink,
+    /// Analysis, not compilation: a proof line holding a search placeholder
+    /// is admitted like `sorry!` when its statement is concrete, and a
+    /// placeholder nested in an application is admitted as the goal its
+    /// position expects when that goal is concrete (a search checking its
+    /// result in a line that holds another). False on the compile path,
+    /// which rejects every placeholder.
     allow_search_placeholders: bool = false,
     hole_inference_sink: ?*HoleInferenceSink = null,
     inline_conclusion_sink: ?*InlineConclusionSink = null,

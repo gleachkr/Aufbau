@@ -229,6 +229,69 @@ test "search driver reports the hole values a find gives its line" {
     ));
 }
 
+test "search driver finds two markers on one line and fills its assertion once" {
+    // Each marker's find is checked in the whole line, while the other
+    // marker still stands there (#409).
+    const proof_src =
+        \\t3
+        \\---
+        \\l1: $ isty _A $ by pair [exact?, auto?]
+    ;
+    var result = try SearchDriver.run(std.testing.allocator,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\--| @hole _A
+        \\sort ty;
+        \\term o: ty;
+        \\term isty (A: ty): wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom use: $ P $ > $ Q $;
+        \\axiom pair: $ P $ > $ Q $ > $ isty o $;
+        \\theorem t3: $ isty o $;
+    , proof_src, .{});
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.markers.len);
+    for (result.markers) |marker| {
+        try std.testing.expectEqual(.found, marker.outcome);
+    }
+    try std.testing.expect(result.markers[0].filled_assertion != null);
+    try std.testing.expect(result.markers[1].filled_assertion == null);
+    const filled = try applyEdits(proof_src, result.markers);
+    defer std.testing.allocator.free(filled);
+    try std.testing.expectEqualStrings(
+        \\t3
+        \\---
+        \\l1: $ isty o $ by pair [p [], use [p []]]
+    , filled);
+}
+
+test "search driver misses a marker whose sibling marker's goal is a hole" {
+    // The sibling's goal is `_w`, which no proof has fixed yet, so a find
+    // for the first marker cannot be checked in the line and it misses.
+    // The second marker's find checks against the first one's goal, `p`.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ p /\ _w $ by both [auto?, auto?]
+    ;
+    var result = try SearchDriver.run(std.testing.allocator,
+        \\--| @hole _w
+        \\provable sort wff;
+        \\term an: wff > wff > wff;
+        \\infixl an: $/\$ prec 20;
+        \\axiom both (a b: wff): $ a $ > $ b $ > $ a /\ b $;
+        \\theorem t (p q: wff): $ p $ > $ q $ > $ p /\ q $;
+    , proof_src, .{});
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.markers.len);
+    try std.testing.expectEqual(.missed, result.markers[0].outcome);
+    try std.testing.expectEqual(.found, result.markers[1].outcome);
+}
+
 test "search driver retries a miss with the larger limits its report advises" {
     const proof_src =
         \\t1

@@ -1835,6 +1835,10 @@ fn elaborateRefs(
                     ref_exprs,
                     idx,
                 );
+                if (try admitNestedPlaceholder(self, context, theorem, inline_app, hint)) |line_idx| {
+                    refs[idx] = .{ .line = line_idx };
+                    break :blk context.checked.items[line_idx].expr;
+                }
                 const line_idx = try applyRuleApplication(
                     self,
                     context,
@@ -1865,6 +1869,25 @@ fn elaborateRefs(
             },
         };
     }
+}
+
+/// Analysis only: a search placeholder nested in an application, admitted
+/// like `sorry!` as the goal `hint` its position expects, so a line holding
+/// a second placeholder still checks with a search result in the first's
+/// place (#409). Null, leaving the placeholder to fail as an unknown rule,
+/// when it is not one or that goal is not determined.
+noinline fn admitNestedPlaceholder(
+    self: *CompilerContext,
+    context: *const RuleApplyContext,
+    theorem: *const TheoremContext,
+    inline_app: RuleApplication,
+    hint: ?ExprId,
+) !?usize {
+    if (!self.allow_search_placeholders) return null;
+    if (!ProofScript.isSearchPlaceholderRuleName(inline_app.rule_name)) return null;
+    const goal = hint orelse return null;
+    if (theorem.containsPlaceholder(goal)) return null;
+    return try CheckedIr.appendSorryLine(context.checked, context.allocator, goal);
 }
 
 /// Report a hypothesis ref that names no hypothesis, or several. This and

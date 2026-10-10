@@ -61,6 +61,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   every such fact was silently dropped. The search sees more facts as a
   result, and a few searches near their limit now need the larger limits
   their miss report suggests.
+- Two search markers on one line, as in `both [auto?, auto?]`, are now
+  each found, in the editor and by `abc search`. Before, every proof found
+  for one failed the check of its line, because the other marker was still
+  there, and both were reported missed. A marker is still missed when the
+  other one's goal is not yet known, such as a hole in the line's
+  statement that only the other marker's proof would fill.
 
 ## [0.0.15] - 2026-10-08
 

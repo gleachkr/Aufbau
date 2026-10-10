@@ -121,6 +121,9 @@ pub fn suggestionsAtSourceOffset(
     );
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
+    // A result is checked in the whole line, where another placeholder may
+    // still stand: the checker admits it as the goal it fills.
+    compiler.allow_search_placeholders = true;
 
     var theorem = TheoremContext.init(work);
     defer theorem.deinit();
