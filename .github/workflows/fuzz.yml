@@ -1,0 +1,104 @@
+name: Fuzz
+
+# Nightly fuzzing of every target in tests/fuzz/ (docs/fuzzing.md). Each
+# target keeps its corpus across runs in the Actions cache, so coverage
+# accumulates. The fuzzer exits 0 after a crash, so the job looks for the
+# saved input itself, replays it into source files, uploads both, and fails.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      per_target:
+        description: Inputs to try per target (e.g. 30K, 1M)
+        required: true
+        default: 30K
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
+env:
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.cache/zig-global
+  INPUTS: ${{ inputs.per_target || '30K' }}
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [compile, kernel, lsp, search, shapes, theory]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache Zig build data
+        uses: actions/cache@v4
+        with:
+          path: .cache/zig-global
+          key: zig-fuzz-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            zig-fuzz-${{ runner.os }}-
+
+      - name: Restore the corpus
+        uses: actions/cache@v4
+        with:
+          path: .cache/zig-local/f
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        run: |
+          set -o pipefail
+          rm -rf .cache/zig-local/f/crash .cache/zig-local/f/crash.*
+          nix develop .#ci --command zig build fuzz \
+            -Dfuzz-target=${{ matrix.target }} --fuzz=$INPUTS \
+            --cache-dir .cache/zig-local 2>&1 | tee fuzz.log
+          {
+            echo "### ${{ matrix.target }}"
+            echo '```'
+            grep -E '^(Runs|Unique runs|Coverage):' fuzz.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Replay a crash
+        id: crash
+        run: |
+          if [ -e .cache/zig-local/f/crash ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            nix develop .#ci --command zig build fuzz \
+              -Dfuzz-target=${{ matrix.target }} \
+              -Dfuzz-replay=.cache/zig-local/f/crash \
+              --cache-dir .cache/zig-local 2>&1 | tee replay.log || true
+          fi
+
+      - name: Upload the crash
+        if: steps.crash.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            .cache/zig-local/f/crash
+            .cache/zig-local/f/crash.${{ matrix.target }}/
+            fuzz.log
+            replay.log
+
+      - name: Fail on a crash
+        if: steps.crash.outputs.found == 'true'
+        run: |
+          echo "The ${{ matrix.target }} target crashed; see the fuzz-crash-${{ matrix.target }} artifact and docs/fuzzing.md."
+          exit 1

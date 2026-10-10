@@ -34,7 +34,12 @@ fn compileThenVerify(seeds: []const harness.Seed, input: harness.Input) !void {
     defer gpa.free(auf_src);
     input.dump("case.mm0", mm0_src);
     input.dump("case.auf", auf_src);
+    _ = try checkPair(gpa, seed.stem, mm0_src, auf_src);
+}
 
+/// Whether the pair compiled, after checking it against the oracles above.
+/// `name` labels a failure.
+pub fn checkPair(gpa: std.mem.Allocator, name: []const u8, mm0_src: []const u8, auf_src: []const u8) !bool {
     const analysis_error = try analyzeError(gpa, mm0_src, auf_src);
 
     var compiler = mm0.Compiler.initWithProof(gpa, mm0_src, auf_src);
@@ -44,14 +49,14 @@ fn compileThenVerify(seeds: []const harness.Seed, input: harness.Input) !void {
         // name the error, with no location.
         const reported = if (compiler.getDiagnostic()) |diag| diag.err == err else false;
         if (!reported)
-            fail(seed, "compile fails with {t} but has no diagnostic for it", .{err});
+            fail(name, "compile fails with {t} but has no diagnostic for it", .{err});
         if (analysis_error == null)
-            fail(seed, "compile fails with {t} but analysis reports nothing", .{err});
-        return;
+            fail(name, "compile fails with {t} but analysis reports nothing", .{err});
+        return false;
     };
     defer gpa.free(mmb);
     if (analysis_error) |err|
-        fail(seed, "compile succeeds but analysis reports {t}", .{err});
+        fail(name, "compile succeeds but analysis reports {t}", .{err});
 
     var sorry_lines: usize = 0;
     for (compiler.warningDiagnostics()) |diag| {
@@ -59,21 +64,22 @@ fn compileThenVerify(seeds: []const harness.Seed, input: harness.Input) !void {
     }
     var session = mm0.VerificationSession.init(gpa, mm0_src, mmb) catch |err| {
         if (err == error.OutOfMemory) return err;
-        fail(seed, "the compiled proof fails to load: {t}", .{err});
+        fail(name, "the compiled proof fails to load: {t}", .{err});
     };
     defer session.deinit();
     if (session.verify()) |_| {
         if (sorry_lines != 0)
-            fail(seed, "{d} sorry lines, but the proof verifies", .{sorry_lines});
+            fail(name, "{d} sorry lines, but the proof verifies", .{sorry_lines});
     } else |err| switch (err) {
         error.OutOfMemory => return err,
         error.SorryUsed => if (session.verifier.sorry_count != sorry_lines)
-            fail(seed, "{d} sorry lines, but the verifier admits {d} statements", .{
+            fail(name, "{d} sorry lines, but the verifier admits {d} statements", .{
                 sorry_lines,
                 session.verifier.sorry_count,
             }),
-        else => fail(seed, "the compiled proof fails to verify: {t}", .{err}),
+        else => fail(name, "the compiled proof fails to verify: {t}", .{err}),
     }
+    return true;
 }
 
 /// The first error the editor's analysis reports, if any.
@@ -88,8 +94,8 @@ fn analyzeError(gpa: std.mem.Allocator, mm0_src: []const u8, auf_src: []const u8
     return @as(?anyerror, diags[0].err);
 }
 
-fn fail(seed: harness.Seed, comptime format: []const u8, args: anytype) noreturn {
-    std.debug.print("seed {s}: " ++ format ++ "\n", .{seed.stem} ++ args);
+fn fail(name: []const u8, comptime format: []const u8, args: anytype) noreturn {
+    std.debug.print("{s}: " ++ format ++ "\n", .{name} ++ args);
     @panic("compile oracle failed");
 }
 
