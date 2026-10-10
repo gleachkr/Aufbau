@@ -79,6 +79,7 @@ A manual with some interactive examples is available at
 - [`docs/view_recover.md`](docs/view_recover.md) — view and recovery metadata
 - [`docs/fresh_binders.md`](docs/fresh_binders.md) — fresh binders
 - [`docs/holes.md`](docs/holes.md) — proof-side holes
+- [`docs/fuzzing.md`](docs/fuzzing.md) — fuzz targets, crashes, replay
 
 The canonical MM0 and MMB specifications are maintained by the
 [Metamath Zero project](https://github.com/digama0/mm0).

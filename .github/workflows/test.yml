@@ -76,7 +76,7 @@ jobs:
         run: nix develop .#ci --command node scripts/check-test-wiring.mjs
 
       - name: Check formatting
-        run: nix develop .#ci --command zig fmt --check build.zig src
+        run: nix develop .#ci --command zig fmt --check build.zig src tests
 
       - name: Build native binaries
         run: |

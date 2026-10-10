@@ -546,6 +546,44 @@ pub fn build(b: *std.Build) void {
     });
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
+    // Fuzz targets (docs/fuzzing.md). A plain run tries each target once
+    // as a smoke check; `zig build fuzz --fuzz[=N]` fuzzes them. Fuzzing
+    // needs LLVM's instrumentation, which the self-hosted Debug backend
+    // lacks. A ReleaseSafe fuzz build never finishes compiling on Zig 0.17
+    // (#430), so fuzz at Debug or ReleaseFast.
+    const fuzz_target = b.option(
+        []const u8,
+        "fuzz-target",
+        "Run only this fuzz target (e.g. compile)",
+    );
+    const fuzz_replay = b.option(
+        []const u8,
+        "fuzz-replay",
+        "Replay a saved fuzz input instead of fuzzing",
+    );
+    const fuzz_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fuzz_test_module.addImport("mm0", mm0_lib);
+
+    const fuzz_tests = b.addTest(.{
+        .root_module = fuzz_test_module,
+        .use_llvm = true,
+        .filters = if (fuzz_target) |name| &.{name} else &.{},
+    });
+    const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
+    if (fuzz_replay) |path| {
+        run_fuzz_tests.setEnvironmentVariable("FUZZ_REPLAY", path);
+        run_fuzz_tests.has_side_effects = true;
+    }
+    const fuzz_step = b.step(
+        "fuzz",
+        "Run the fuzz targets once (--fuzz to fuzz them)",
+    );
+    fuzz_step.dependOn(&run_fuzz_tests.step);
+
     const unit_step = b.step("test-unit", "Run unit tests");
     unit_step.dependOn(&run_trusted_tests.step);
     unit_step.dependOn(&run_root_tests.step);
@@ -553,6 +591,7 @@ pub fn build(b: *std.Build) void {
     unit_step.dependOn(&run_compiler_tests.step);
     unit_step.dependOn(&run_compiler_bin_tests.step);
     unit_step.dependOn(&run_verifier_bin_tests.step);
+    unit_step.dependOn(&run_fuzz_tests.step);
 
     const cli_smoke_step = b.step(
         "test-cli",

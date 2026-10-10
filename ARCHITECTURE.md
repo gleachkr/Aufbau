@@ -1272,11 +1272,12 @@ across the chain. The manual and demo consume these same packages.
 
 `build.zig` is the source of truth for test-step dependencies:
 
-- `test-unit`: trusted, root, frontend, compiler, and binary test roots,
-  plus native CLI smoke tests. The root (`src/tests.zig`) is the only one
-  that reaches `src/lib.zig` by relative path, so it also owns the search
-  and LSP-index suites and every library file's inline tests; the others
-  use the library as the `mm0` module, whose tests Zig does not collect.
+- `test-unit`: trusted, root, frontend, compiler, binary, and fuzz test
+  roots, plus native CLI smoke tests. The root (`src/tests.zig`) is the
+  only one that reaches `src/lib.zig` by relative path, so it also owns
+  the search and LSP-index suites and every library file's inline tests;
+  the others use the library as the `mm0` module, whose tests Zig does not
+  collect.
   File-based proof cases run through the root tests here, not only through
   integration tests. The proof-search scenarios of
   `tests/search_scenarios.zig` (one marker per small fixture, with the
@@ -1295,6 +1296,11 @@ across the chain. The manual and demo consume these same packages.
 - `test-node-wasm`: packed-package compiler/verifier/LSP smoke tests in Node.
 - `test-wasm-host`: the packages' wasm hosting against mock instances.
 - `test`: all five steps above.
+- `fuzz`: the fuzz targets of `tests/fuzz/` (`docs/fuzzing.md`). Alone it
+  runs each target once, as `test-unit` does; with `--fuzz` it fuzzes
+  them. A shared harness adds a per-input time limit and memory cap to
+  the fuzzer's own panic, leak, and use-after-free checks, seeds from the
+  joined proof cases, and replays a saved crash into source files.
 - `test-editor-browser` and `test-lsp-cross-origin`: separate Chromium gates;
   CI runs them explicitly, but they are not dependencies of `test`.
 
