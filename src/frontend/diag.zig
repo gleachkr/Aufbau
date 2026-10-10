@@ -673,12 +673,21 @@ pub const DiagnosticError = error{
 /// `UnexpectedInternalError` instead of leaking a raw Zig identifier.
 pub fn narrowDiagnosticError(err: anyerror) DiagnosticError {
     const names = @typeInfo(DiagnosticError).error_set.error_names.?;
+    // Compare error values, not names: an error's value is global by name,
+    // and an unrolled chain of name compares costs LLVM's CodeGenPrepare
+    // half of a ReleaseSafe build, and hangs it under `-ffuzz`
+    // (docs/fuzzing.md).
     inline for (names) |name| {
-        if (std.mem.eql(u8, name, @errorName(err))) {
-            return @errorCast(err);
-        }
+        if (err == @field(anyerror, name)) return @field(DiagnosticError, name);
     }
     return error.UnexpectedInternalError;
+}
+
+test "narrowDiagnosticError keeps catalogued errors and hides the rest" {
+    const narrowed: DiagnosticError = error.OutOfMemory;
+    try std.testing.expectEqual(narrowed, narrowDiagnosticError(error.OutOfMemory));
+    const hidden: DiagnosticError = error.UnexpectedInternalError;
+    try std.testing.expectEqual(hidden, narrowDiagnosticError(error.FileNotFound));
 }
 
 pub const Diagnostic = struct {

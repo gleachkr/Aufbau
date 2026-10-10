@@ -22,6 +22,7 @@ comptime {
     _ = @import("./frontend/canonicalizer.zig");
     _ = @import("./frontend/checked_ir.zig");
     _ = @import("./frontend/debug.zig");
+    _ = @import("./frontend/diag.zig");
     _ = @import("./frontend/imports.zig");
     _ = @import("./frontend/compiler/emit.zig");
     _ = @import("./frontend/compiler/holes.zig");

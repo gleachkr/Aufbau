@@ -36,11 +36,16 @@ zig build fuzz --fuzz -Dfuzz-target=compile
 
 `zig build test-unit` runs the same smoke check.
 
-Fuzz at Debug (the default) or ReleaseFast. Debug keeps the safety checks
-and runs at roughly 35 inputs a second. ReleaseFast is about twice as fast
-but cannot catch out-of-bounds or overflow. A ReleaseSafe fuzz build never
-finishes compiling on Zig 0.17. The fuzz build uses LLVM even at Debug,
-because the self-hosted backend has no fuzzing instrumentation.
+Fuzz at Debug (the default), ReleaseSafe or ReleaseFast. Debug and
+ReleaseSafe keep the safety checks and run at about the same speed, roughly
+30–35 inputs a second on `compile`. ReleaseFast is about twice as fast but
+cannot catch out-of-bounds or overflow. The fuzz build uses LLVM even at
+Debug, because the self-hosted backend has no fuzzing instrumentation.
+
+A ReleaseSafe fuzz build on Zig 0.17 can hang in LLVM's CodeGen Prepare
+pass on a long unrolled chain of string compares, such as an `inline for`
+over a large error set that compares `@errorName`s. Compare the error
+values instead, as `narrowDiagnosticError` in `src/frontend/diag.zig` does.
 
 ## Crashes
 
