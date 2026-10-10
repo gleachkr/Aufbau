@@ -567,6 +567,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     fuzz_test_module.addImport("mm0", mm0_lib);
+    fuzz_test_module.addImport("lsp", lsp_module);
+    const fuzz_lsp_server_module = b.createModule(.{
+        .root_source_file = b.path("src/bin/compiler/lsp.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fuzz_lsp_server_module.addImport("mm0", mm0_lib);
+    fuzz_lsp_server_module.addImport("lsp", lsp_module);
+    fuzz_lsp_server_module.addImport("lsp_diagnostics", lsp_diagnostics_module);
+    fuzz_lsp_server_module.addOptions("build_options", version_options);
+    fuzz_test_module.addImport("lsp_server", fuzz_lsp_server_module);
 
     const fuzz_tests = b.addTest(.{
         .root_module = fuzz_test_module,

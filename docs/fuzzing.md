@@ -8,6 +8,7 @@ toolchain and checks what comes back:
 |---|---|---|
 | `compile` | a proof case with edits to its `.mm0`, its `.auf`, or both: tokens, lines, statements and blocks, brackets wrapped around runs | whatever compiles passes the trusted verifier, which admits exactly the statements `by sorry!` warned about; a failed compile has a diagnostic for its error; the editor's analysis reports an error exactly when the compile fails |
 | `kernel` | a proof case's `.mm0` with the binary this compiler makes for it, or the upstream tutorial pair (built by mm0-rs); the binary gets raw edits (bytes, words, cuts, copies) or structured ones (a header or table field, or one proof or unify command: its opcode, its operand, dropped or repeated), and the spec may get token edits | the verifier rejects bad input with an error; a changed pair it accepts must pass mm0-c too, when `mm0-c` is on PATH |
+| `lsp` | a language-server session over lsp-kit's own message loop: initialize with a random position encoding, open a proof case (maybe edited), then up to 32 events (insertions, deletions, whole-document replacements, typing a token a character at a time, hover, completion, definition, implementation, references, symbols, code actions, applying a returned code action's edit, closing, reopening, malformed messages) | every server message is JSON; a well-formed request never fails; every returned range lies inside its document, on a code-point boundary of the negotiated encoding |
 
 Every target must also not panic, leak, write after free, run longer than
 10 seconds on one input, or hold more than 1 GiB at once. The fuzzer checks
@@ -54,7 +55,8 @@ zig build fuzz -Dfuzz-target=compile -Dfuzz-replay=.zig-cache/f/crash
 ```
 
 This runs the input once, reproduces the crash, and writes the generated
-files (for `compile`, a `.mm0` and an `.auf` named `case`) to
+files (for `compile`, a `.mm0` and an `.auf` named `case`; for `lsp`, the
+client's messages as `session.jsonl`) to
 `.zig-cache/f/crash.compile/`. Without `-Dfuzz-target`, every target reads
 the same file and writes its own directory.
 
