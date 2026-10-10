@@ -1,7 +1,5 @@
 const std = @import("std");
-const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
-const Metadata = @import("../metadata.zig");
 const AssertionStmt = @import("../../parse_recovery.zig").AssertionStmt;
 const SortStmt = @import("../../parse_recovery.zig").SortStmt;
 const TermStmt = @import("../../parse_recovery.zig").TermStmt;
@@ -14,7 +12,6 @@ const DefItem = ProofScript.DefItem;
 const NotationItem = ProofScript.NotationItem;
 const TopLevelItem = ProofScript.TopLevelItem;
 const Span = ProofScript.Span;
-const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const Check = @import("../check.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
@@ -24,10 +21,6 @@ const Common = @import("common.zig");
 const TheoryState = @import("../theory_state.zig").TheoryState;
 
 const Diagnostic = CompilerDiag.Diagnostic;
-const FreshDecl = Metadata.FreshDecl;
-const FreshenDecl = Metadata.FreshenDecl;
-const ViewDecl = Metadata.ViewDecl;
-const SortVarRegistry = CompilerVars.SortVarRegistry;
 const WarningSnapshot = Recovery.WarningSnapshot;
 const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
 const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
@@ -88,6 +81,10 @@ const AnalysisState = struct {
     invalid_terms: InvalidRuleSet,
     proof: ?ProofAnalysisState = null,
     last_stmt: ?MM0Stmt = null,
+    /// Set by `analyzeToSearchPoint`: the walk ends there, and leaves the
+    /// public theorem proofs before it unchecked.
+    stop: ?SearchStop = null,
+    reached: ?AssertionStmt = null,
 
     fn init(
         allocator: std.mem.Allocator,
@@ -124,6 +121,47 @@ pub fn analyzeMm0(
     try analyzeInternal(self, allocator, false);
 }
 
+/// Where a search's walk stops.
+pub const SearchStop = union(enum) {
+    /// Before the statement of the theorem with this name.
+    theorem: []const u8,
+    /// At the lemma block with this span, after the items before it.
+    lemma: Span,
+};
+
+pub const SearchPoint = struct {
+    theory: TheoryState,
+    assertion: AssertionStmt,
+};
+
+/// The analysis walk up to `stop`, recovering from broken statements and
+/// local items the same way, but leaving the theorem proofs before `stop`
+/// unchecked: the theory a search at `stop` runs in, and the target's
+/// assertion. Fails with `MissingTheorem` or `MissingProofBlock` when the
+/// walk never reaches `stop`, and with `UnavailableDependency` when the
+/// target theorem names a declaration the walk dropped.
+pub fn analyzeToSearchPoint(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    stop: SearchStop,
+) !SearchPoint {
+    var state = AnalysisState.init(
+        allocator,
+        self.source,
+        self.proof_source,
+        true,
+    );
+    state.stop = stop;
+    walk(self, allocator, &state, true) catch |err| {
+        if (err != error.SearchPointReached) return err;
+        return .{ .theory = state.theory, .assertion = state.reached.? };
+    };
+    return switch (stop) {
+        .theorem => error.MissingTheorem,
+        .lemma => error.MissingProofBlock,
+    };
+}
+
 fn analyzeInternal(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -141,21 +179,29 @@ fn analyzeInternal(
     // early in several places), while the parser and env are still alive.
     defer if (self.statement_sink) |sink|
         sink.capture(&state.theory.parser, &state.theory.env);
+    try walk(self, allocator, &state, with_proof);
+}
 
+fn walk(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    state: *AnalysisState,
+    comptime with_proof: bool,
+) !void {
     parse_loop: while (true) {
         Common.prepareNextPublicStatement(
             self,
             &state.theory.parser,
             &state.theory.env,
         ) catch |err| {
-            if (!recoverFromMm0ParseFailure(self, &state, err)) return;
+            if (!recoverFromMm0ParseFailure(self, state, err)) return;
             continue :parse_loop;
         };
         if (with_proof) {
             try analyzeDrainAnchoredLocalProofItems(
                 self,
                 allocator,
-                &state,
+                state,
             );
         }
         const next_stmt = Common.nextPublicStatement(
@@ -171,12 +217,13 @@ fn analyzeInternal(
                 continue :parse_loop;
             },
             else => {
-                if (!recoverFromMm0ParseFailure(self, &state, err)) return;
+                if (!recoverFromMm0ParseFailure(self, state, err)) return;
                 continue :parse_loop;
             },
         };
         const stmt = next_stmt orelse break;
         state.last_stmt = stmt;
+        try stopAtTheorem(state, stmt);
 
         // Taken after the gap's obligations: dropped-annotation warnings
         // belong to the gap, not to the statement that follows, so a failing
@@ -201,7 +248,7 @@ fn analyzeInternal(
             .sort => |sort_stmt| try analyzeSortStatement(
                 self,
                 allocator,
-                &state,
+                state,
                 stmt,
                 sort_stmt,
                 warnings,
@@ -209,7 +256,7 @@ fn analyzeInternal(
             .term => |term_stmt| try analyzeTermStatement(
                 self,
                 allocator,
-                &state,
+                state,
                 stmt,
                 term_stmt,
                 warnings,
@@ -217,7 +264,7 @@ fn analyzeInternal(
             .assertion => |assertion| try analyzeAssertionStatement(
                 self,
                 allocator,
-                &state,
+                state,
                 stmt,
                 assertion,
                 warnings,
@@ -242,8 +289,40 @@ fn analyzeInternal(
     };
 
     if (state.proof) |*proof| {
-        try analyzeExtraProofBlocks(self, allocator, &state, proof);
+        try analyzeExtraProofBlocks(self, allocator, state, proof);
     }
+}
+
+fn stopAtTheorem(state: *AnalysisState, stmt: MM0Stmt) !void {
+    const stop = state.stop orelse return;
+    if (stop != .theorem or stmt != .assertion) return;
+    const assertion = stmt.assertion;
+    if (!std.mem.eql(u8, assertion.name, stop.theorem)) return;
+    if (!Common.assertionDependenciesAvailable(&state.theory.env, assertion)) {
+        return error.UnavailableDependency;
+    }
+    state.reached = assertion;
+    return error.SearchPointReached;
+}
+
+fn stopAtLemma(
+    self: *CompilerContext,
+    allocator: std.mem.Allocator,
+    state: *AnalysisState,
+    block: TheoremBlock,
+) !void {
+    const stop = state.stop orelse return;
+    if (stop != .lemma) return;
+    if (stop.lemma.start != block.span.start or stop.lemma.end != block.span.end) {
+        return;
+    }
+    state.reached = try Common.parseLemmaAssertion(
+        self,
+        allocator,
+        &state.theory.parser,
+        block,
+    );
+    return error.SearchPointReached;
 }
 
 fn analyzeDrainAnchoredLocalProofItems(
@@ -363,13 +442,10 @@ fn analyzeLocalProofItem(
     item: TopLevelItem,
 ) !void {
     switch (item) {
-        .block => |block| try analyzeLocalProofBlock(
-            self,
-            allocator,
-            state,
-            proof,
-            block,
-        ),
+        .block => |block| {
+            try stopAtLemma(self, allocator, state, block);
+            try analyzeLocalProofBlock(self, allocator, state, proof, block);
+        },
         .def => |def| try analyzeLocalDefItem(
             self,
             allocator,
@@ -661,7 +737,9 @@ fn analyzeAssertionStatement(
     }
 
     if (state.proof) |*proof| {
-        if (assertion.kind == .theorem) {
+        if (assertion.kind == .theorem and state.stop != null) {
+            skipTheoremProof(proof, assertion);
+        } else if (assertion.kind == .theorem) {
             const theorem_result = try analyzeTheoremProof(
                 self,
                 allocator,
@@ -733,6 +811,15 @@ fn analyzeAssertionStatement(
         }
         return;
     };
+}
+
+/// A search keeps every theorem before its target in scope, proved or not:
+/// the theorem's proof block is skipped unchecked when it comes next.
+fn skipTheoremProof(proof: *ProofAnalysisState, assertion: AssertionStmt) void {
+    const item = (proof.nextItem() catch return) orelse return;
+    if (item == .block and item.block.kind == .theorem and
+        std.mem.eql(u8, item.block.name, assertion.name)) return;
+    proof.putBack(item);
 }
 
 fn markAssertionInvalid(

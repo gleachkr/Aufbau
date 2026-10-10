@@ -1,25 +1,17 @@
-//! Search fixture builder: constructs a `Fixture` (parser + env + registries +
-//! metadata) positioned at a search target, driving the same pipeline passes the
-//! compiler uses. Split out of `source.zig`: this machinery is shared by the
-//! production LSP entry (`suggestionsAtSourceOffset` builds a fixture via
-//! `fixtureForSourceTarget`) and the search unit tests (`fixtureFor*`,
-//! `parseGoal`, `commitSearchLine`/`probeSearchLine`, `readProofCase`). It
-//! holds no search logic — only the setup that positions parsing/elaboration
-//! state at a proof point.
+//! Search fixture: the theory and target assertion a search runs against.
+//! The editor's search builds one with `fixtureForSourceTarget`, which runs
+//! the analysis walk up to the target (`Analyze.analyzeToSearchPoint`); the
+//! unit tests build theirs with the `.mm0`-only walks in `tests/helpers.zig`.
+//! Also the per-line helpers both share (`parseGoal`, `commitSearchLine`,
+//! `searchContext`) and `readProofCase`.
 
 const std = @import("std");
 const types = @import("./types.zig");
 const candidate_mod = @import("./candidate.zig");
 const TheoremContext = @import("../../expr.zig").TheoremContext;
-const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const ParseRecovery = @import("../../parse_recovery.zig");
 const AssertionStmt = ParseRecovery.AssertionStmt;
-const SortStmt = ParseRecovery.SortStmt;
-const TermStmt = ParseRecovery.TermStmt;
-const MM0Parser = ParseRecovery.MM0Parser;
 const ProofScript = @import("../../proof_script.zig");
-const Span = ProofScript.Span;
-const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CheckedIr = @import("../../checked_ir.zig");
@@ -28,22 +20,13 @@ const Inference = @import("../inference.zig");
 const Check = @import("../check.zig");
 const Holes = @import("../holes.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
-const PipelineCommon = @import("../pipeline/common.zig");
+const Analyze = @import("../pipeline/analyze.zig");
 const TheoryState = @import("../theory_state.zig").TheoryState;
-const Recovery = @import("../pipeline/recovery.zig");
-const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
-const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
-const ProofParser = ProofScript.Parser;
 const Goal = types.Goal;
 const Context = types.Context;
-const Probe = candidate_mod.Probe;
 const AttemptOptions = types.AttemptOptions;
 const NameExprMap = types.NameExprMap;
 const LabelIndexMap = types.LabelIndexMap;
-const FreshDecl = types.FreshDecl;
-const FreshenDecl = types.FreshenDecl;
-const ViewDecl = types.ViewDecl;
-const SortVarRegistry = types.SortVarRegistry;
 
 /// A search target resolved from a proof source: the enclosing block plus the
 /// path to the specific line/inline application to search at. Consumed by
@@ -60,541 +43,36 @@ pub const Fixture = struct {
     available_rule_count: usize,
 };
 
-pub fn fixtureFor(
-    allocator: std.mem.Allocator,
-    mm0_src: []const u8,
-    theorem_name: []const u8,
-) !Fixture {
-    return fixtureForSearchPoint(
-        allocator,
-        mm0_src,
-        theorem_name,
-        false,
-    );
-}
-
-pub fn fixtureForFullEnv(
-    allocator: std.mem.Allocator,
-    mm0_src: []const u8,
-    theorem_name: []const u8,
-) !Fixture {
-    return fixtureForSearchPoint(
-        allocator,
-        mm0_src,
-        theorem_name,
-        true,
-    );
-}
-
 pub fn fixtureForSourceTarget(
     allocator: std.mem.Allocator,
     mm0_src: []const u8,
     proof_src: []const u8,
     target: SourceTarget,
 ) !Fixture {
-    // A lemma target normally anchors to the next public block; a TRAILING
-    // lemma (no following public block) anchors to mm0 EOF instead — every
-    // declared rule is in scope, mirroring `drainTrailingLocalProofItems` on
-    // the compile path.
-    const anchor_name = try sourceTargetAnchorName(
-        allocator,
-        proof_src,
-        target.block,
-    );
-    if (target.block.kind == .theorem and anchor_name == null) {
-        return error.MissingTheorem;
-    }
-    var fixture = try initSearchFixture(allocator, mm0_src);
     var sink = DiagnosticSink.init(mm0_src, proof_src);
     var compiler = CompilerContext.init(mm0_src, proof_src, .none, &sink);
     // A local lemma before the target may itself hold a placeholder or a
     // half-typed line; tolerate both the way the LSP analysis does, so the
-    // target's search survives an unfinished sibling. The stream is lenient
-    // to match `findSearchLine`'s parse — the spans compared by
-    // `drainLocalItemsBeforeSearchTarget` must come from the same grammar.
+    // target's search survives an unfinished sibling.
     compiler.allow_search_placeholders = true;
-    var proof_stream: ?PipelineCommon.ProofItemStream =
-        PipelineCommon.ProofItemStream.initLenient(allocator, proof_src);
-
-    // The walk recovers the way the editor analysis does: a declaration or
-    // local item that fails is dropped (its term invalidated, its rule rolled
-    // back) and the walk goes on, so a broken statement earlier in the file
-    // silences neither the analysis nor the search of a later theorem. Only
-    // the target itself must be intact.
-    while (true) {
-        PipelineCommon.prepareNextPublicStatement(
-            &compiler,
-            &fixture.theory.parser,
-            &fixture.theory.env,
-        ) catch |err| {
-            try recoverSearchMm0Parse(&fixture, err);
-            continue;
-        };
-        const maybe_header = fixture.theory.parser.peekNextPublicStmtHeader();
-        const lemma_scope_complete = target.block.kind == .lemma and
-            if (anchor_name) |name|
-                maybe_header != null and publicHeaderNameEql(maybe_header.?, name)
-            else
-                maybe_header == null;
-        if (lemma_scope_complete) {
-            const block = try drainLocalItemsBeforeSearchTarget(
-                &compiler,
-                allocator,
-                &fixture,
-                &proof_stream,
-                target.block.span,
-            );
-            fixture.assertion = try PipelineCommon.parseLemmaAssertion(
-                &compiler,
-                allocator,
-                &fixture.theory.parser,
-                block,
-            );
-            fixture.available_rule_count = fixture.theory.env.rules.items.len;
-            return fixture;
-        }
-        if (maybe_header == null) return error.MissingTheorem;
-
-        const locals = try PipelineCommon.collectAnchoredLocalProofItems(
-            &compiler,
-            allocator,
-            &fixture.theory.parser,
-            &proof_stream,
-        );
-        try processSearchLocalItems(&compiler, allocator, &fixture, locals);
-
-        const maybe_stmt = PipelineCommon.nextPublicStatement(
-            &compiler,
-            &fixture.theory.parser,
-            &fixture.theory.env,
-        ) catch |err| switch (err) {
-            // The analysis reports the gap and skips the statement it
-            // anchors on; the search skips it too.
-            error.LocalTermInMm0 => continue,
-            else => {
-                try recoverSearchMm0Parse(&fixture, err);
-                continue;
-            },
-        };
-        const stmt = maybe_stmt orelse return error.MissingTheorem;
-        switch (stmt) {
-            .sort => |sort_stmt| try processSearchSortStmt(
-                &compiler,
-                allocator,
-                &fixture,
-                sort_stmt,
-            ),
-            .term => |term_stmt| try processSearchTermStmt(
-                &compiler,
-                allocator,
-                &fixture,
-                &proof_stream,
-                term_stmt,
-            ),
-            .assertion => |assertion| {
-                // For a theorem target the anchor is its own (non-null) name.
-                if (target.block.kind == .theorem and
-                    std.mem.eql(u8, assertion.name, anchor_name.?))
-                {
-                    // A target that names a rejected declaration is what the
-                    // analysis marks invalid without checking; there is
-                    // nothing meaningful to search either.
-                    if (!PipelineCommon.assertionDependenciesAvailable(
-                        &fixture.theory.env,
-                        assertion,
-                    )) return error.UnavailableDependency;
-                    fixture.assertion = assertion;
-                    fixture.available_rule_count = fixture.theory.env.rules.items.len;
-                    return fixture;
-                }
-                try processSearchAssertionStmt(
-                    &compiler,
-                    allocator,
-                    &fixture,
-                    &proof_stream,
-                    assertion,
-                );
-            },
-        }
-    }
-}
-
-/// A malformed `.mm0` statement: skip to the next one, as the analysis
-/// does after reporting it. Out of memory is not a parse failure.
-fn recoverSearchMm0Parse(fixture: *Fixture, err: anyerror) !void {
-    if (err == error.OutOfMemory) return error.OutOfMemory;
-    fixture.theory.parser.discardPendingAnnotations();
-    fixture.theory.parser.recoverToStatementBoundary() catch {
-        return error.MissingTheorem;
-    };
-}
-
-fn initSearchFixture(
-    allocator: std.mem.Allocator,
-    mm0_src: []const u8,
-) !Fixture {
+    // The analysis walk, which recovers from a broken statement or local
+    // item by dropping it, so a broken statement earlier in the file
+    // silences neither the analysis nor the search of a later theorem. Its
+    // proof stream is lenient like `findSearchLine`'s parse, so the target
+    // lemma's span matches.
+    const point = try Analyze.analyzeToSearchPoint(
+        &compiler,
+        allocator,
+        switch (target.block.kind) {
+            .theorem => .{ .theorem = target.block.name },
+            .lemma => .{ .lemma = target.block.span },
+        },
+    );
     return .{
-        .theory = TheoryState.init(allocator, mm0_src),
-        .assertion = undefined,
-        .available_rule_count = 0,
+        .theory = point.theory,
+        .assertion = point.assertion,
+        .available_rule_count = point.theory.env.rules.items.len,
     };
-}
-
-fn fixtureForSearchPoint(
-    allocator: std.mem.Allocator,
-    mm0_src: []const u8,
-    theorem_name: []const u8,
-    include_trailing_rules: bool,
-) !Fixture {
-    var fixture = try initSearchFixture(allocator, mm0_src);
-    var found_theorem = false;
-
-    // Test-only, `.mm0`-only walk: strict, so a broken fixture fails loudly.
-    while (try PipelineCommon.nextPublicStatement(
-        null,
-        &fixture.theory.parser,
-        &fixture.theory.env,
-    )) |stmt| {
-        switch (stmt) {
-            .sort => |sort_stmt| try PipelineCommon.registerSort(
-                null,
-                &fixture.theory.parser,
-                &fixture.theory.env,
-                sort_stmt,
-                &fixture.theory.sort_vars,
-            ),
-            .term => |term_stmt| try PipelineCommon.registerTerm(
-                null,
-                allocator,
-                &fixture.theory.parser,
-                &fixture.theory.env,
-                &fixture.theory.registry,
-                term_stmt,
-                .mm0,
-            ),
-            .assertion => |assertion| {
-                if (!found_theorem and
-                    std.mem.eql(u8, assertion.name, theorem_name))
-                {
-                    fixture.assertion = assertion;
-                    fixture.available_rule_count =
-                        fixture.theory.env.rules.items.len;
-                    found_theorem = true;
-                    if (!include_trailing_rules) return fixture;
-                    continue;
-                }
-                try PipelineCommon.registerAssertion(
-                    null,
-                    allocator,
-                    &fixture.theory,
-                    assertion,
-                    .mm0,
-                );
-            },
-        }
-    }
-    if (found_theorem) return fixture;
-    return error.MissingTheorem;
-}
-
-fn sourceTargetAnchorName(
-    allocator: std.mem.Allocator,
-    proof_src: []const u8,
-    target_block: ProofScript.ProofBlock,
-) !?[]const u8 {
-    if (target_block.kind == .theorem) return target_block.name;
-
-    // Lenient to match `findSearchLine`'s parse: `spanEql` below compares
-    // this walk's block spans against the target block it produced.
-    var parser = ProofParser.initLenient(allocator, proof_src);
-    var found_target = false;
-    while (try parser.nextItem()) |item| {
-        switch (item) {
-            .block => |block| {
-                if (spanEql(block.span, target_block.span)) {
-                    found_target = true;
-                    continue;
-                }
-                if (!found_target) continue;
-                if (block.kind == .theorem) return block.name;
-            },
-            .def => |def| {
-                if (!found_target) continue;
-                if (def.header_tail == null) return def.name;
-            },
-            .notation => {},
-        }
-    }
-    return null;
-}
-
-fn publicHeaderNameEql(header: anytype, name: []const u8) bool {
-    const header_name = header.name orelse return false;
-    return std.mem.eql(u8, header_name, name);
-}
-
-fn drainLocalItemsBeforeSearchTarget(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    proof_stream: *?PipelineCommon.ProofItemStream,
-    target_span: Span,
-) !ProofScript.ProofBlock {
-    const proofs = if (proof_stream.*) |*value| value else {
-        return error.MissingProofBlock;
-    };
-    var locals = std.ArrayListUnmanaged(ProofScript.TopLevelItem).empty;
-    defer locals.deinit(allocator);
-
-    while (true) {
-        const item = (try proofs.next()) orelse return error.MissingProofBlock;
-        switch (item) {
-            .block => |block| {
-                if (spanEql(block.span, target_span)) {
-                    try processSearchLocalItems(
-                        compiler,
-                        allocator,
-                        fixture,
-                        locals.items,
-                    );
-                    return block;
-                }
-                if (PipelineCommon.isLocalProofItem(item)) {
-                    try locals.append(allocator, item);
-                    continue;
-                }
-                proofs.putBack(item);
-                putBackProofItems(proofs, locals.items);
-                return error.MissingProofBlock;
-            },
-            .def, .notation => {
-                if (PipelineCommon.isLocalProofItem(item)) {
-                    try locals.append(allocator, item);
-                    continue;
-                }
-                proofs.putBack(item);
-                putBackProofItems(proofs, locals.items);
-                return error.MissingProofBlock;
-            },
-        }
-    }
-}
-
-fn processSearchLocalItems(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    items: []const ProofScript.TopLevelItem,
-) !void {
-    for (items) |item| {
-        try processSearchLocalItem(compiler, allocator, fixture, item);
-    }
-}
-
-/// As the analysis does with a broken local item: a lemma that fails to
-/// check leaves no rule (registration is atomic), a local def that fails is
-/// invalidated in place, and the walk continues.
-fn processSearchLocalItem(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    item: ProofScript.TopLevelItem,
-) !void {
-    switch (item) {
-        .block => |block| PipelineCommon.processLocalProofBlock(
-            compiler,
-            allocator,
-            &fixture.theory,
-            block,
-            null,
-        ) catch |err| {
-            if (err == error.OutOfMemory) return err;
-        },
-        .def => |def| {
-            const snapshot = try TermRecoverySnapshot.capture(allocator, &fixture.theory);
-            const parser_term_count = fixture.theory.parser.core.terms.items.len;
-            PipelineCommon.processLocalDefItem(
-                compiler,
-                allocator,
-                &fixture.theory.parser,
-                &fixture.theory.env,
-                &fixture.theory.registry,
-                def,
-                null,
-            ) catch |err| {
-                if (err == error.OutOfMemory) return err;
-                snapshot.restore(&fixture.theory);
-                try Recovery.discardFailedLocalTerm(
-                    &fixture.theory.env,
-                    &fixture.theory.parser,
-                    parser_term_count,
-                    def.name,
-                );
-            };
-        },
-        .notation => |notation| PipelineCommon.processLocalNotationItem(
-            compiler,
-            &fixture.theory.parser,
-            &fixture.theory.env,
-            notation,
-        ) catch |err| {
-            if (err == error.OutOfMemory) return err;
-        },
-    }
-}
-
-fn putBackProofItems(
-    proofs: *PipelineCommon.ProofItemStream,
-    items: []const ProofScript.TopLevelItem,
-) void {
-    var idx = items.len;
-    while (idx > 0) {
-        idx -= 1;
-        proofs.putBack(items[idx]);
-    }
-}
-
-fn processSearchSortStmt(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    sort_stmt: SortStmt,
-) !void {
-    const sort_vars_snapshot = try Recovery.cloneSortVarRegistry(
-        allocator,
-        &fixture.theory.sort_vars,
-    );
-    PipelineCommon.registerSort(
-        compiler,
-        &fixture.theory.parser,
-        &fixture.theory.env,
-        sort_stmt,
-        &fixture.theory.sort_vars,
-    ) catch |err| {
-        if (err == error.OutOfMemory) return err;
-        fixture.theory.sort_vars = sort_vars_snapshot;
-    };
-}
-
-fn processSearchTermStmt(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    proof_stream: *?PipelineCommon.ProofItemStream,
-    term_stmt: TermStmt,
-) !void {
-    const snapshot = try TermRecoverySnapshot.capture(allocator, &fixture.theory);
-    registerSearchTerm(
-        compiler,
-        allocator,
-        fixture,
-        proof_stream,
-        term_stmt,
-    ) catch |err| {
-        if (err == error.OutOfMemory) return err;
-        snapshot.restore(&fixture.theory);
-        // The parser already holds the term's id: keep the slot, drop the
-        // declaration.
-        try snapshot.discardTerm(&fixture.theory.env, term_stmt.name);
-    };
-}
-
-fn registerSearchTerm(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    proof_stream: *?PipelineCommon.ProofItemStream,
-    term_stmt: TermStmt,
-) !void {
-    var filled_term_stmt = term_stmt;
-    var filled_body_span: ?Span = null;
-    if (term_stmt.is_def and term_stmt.body == null) {
-        const filled = try PipelineCommon.fillPublicDefBody(
-            compiler,
-            allocator,
-            &fixture.theory.parser,
-            proof_stream,
-            term_stmt,
-        );
-        filled_term_stmt = filled.stmt;
-        filled_body_span = filled.body_span;
-    }
-    if (!PipelineCommon.termDependenciesAvailable(
-        &fixture.theory.env,
-        filled_term_stmt,
-    )) return error.UnavailableDependency;
-
-    try PipelineCommon.validateDefinitionBody(
-        compiler,
-        allocator,
-        &fixture.theory.parser,
-        &fixture.theory.env,
-        filled_term_stmt,
-        if (filled_body_span != null) .proof else .mm0,
-        filled_body_span,
-    );
-    try PipelineCommon.registerTerm(
-        compiler,
-        allocator,
-        &fixture.theory.parser,
-        &fixture.theory.env,
-        &fixture.theory.registry,
-        filled_term_stmt,
-        .mm0,
-    );
-}
-
-fn processSearchAssertionStmt(
-    compiler: *CompilerContext,
-    allocator: std.mem.Allocator,
-    fixture: *Fixture,
-    proof_stream: *?PipelineCommon.ProofItemStream,
-    assertion: AssertionStmt,
-) !void {
-    if (PipelineCommon.assertionDependenciesAvailable(&fixture.theory.env, assertion)) {
-        const snapshot = try AssertionRecoverySnapshot.capture(
-            allocator,
-            &fixture.theory,
-        );
-        PipelineCommon.registerAssertion(
-            compiler,
-            allocator,
-            &fixture.theory,
-            assertion,
-            .mm0,
-        ) catch |err| {
-            if (err == error.OutOfMemory) return err;
-            snapshot.restore(&fixture.theory);
-            snapshot.rollbackRule(&fixture.theory.env, assertion.name);
-        };
-    }
-    // Its proof block, if any, is skipped either way: the proofs before
-    // the target are not checked, only kept in lockstep.
-    consumeMatchingPublicProofBlock(proof_stream, assertion) catch {};
-}
-
-fn consumeMatchingPublicProofBlock(
-    proof_stream: *?PipelineCommon.ProofItemStream,
-    assertion: AssertionStmt,
-) !void {
-    if (assertion.kind != .theorem) return;
-    const proofs = if (proof_stream.*) |*value| value else return;
-    const item = (try proofs.next()) orelse return;
-    switch (item) {
-        .block => |block| {
-            if (block.kind == .theorem and
-                std.mem.eql(u8, block.name, assertion.name))
-            {
-                return;
-            }
-            proofs.putBack(item);
-        },
-        .def, .notation => proofs.putBack(item),
-    }
-}
-
-fn spanEql(lhs: Span, rhs: Span) bool {
-    return lhs.start == rhs.start and lhs.end == rhs.end;
 }
 
 pub fn readProofCase(
@@ -663,38 +141,6 @@ pub fn commitSearchLine(
     );
 }
 
-/// Check `line` against the fixture without changing any caller state.
-pub fn probeSearchLine(
-    allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
-    fixture: *Fixture,
-    labels: *LabelIndexMap,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    theorem: *TheoremContext,
-    theorem_vars: *NameExprMap,
-    diag_scratch: *CompilerDiag.Scratch,
-    rule_unify_cache: *Inference.RuleUnifyCache,
-    line: ProofScript.ProofLine,
-) !Probe {
-    const context = searchContext(
-        allocator,
-        fixture,
-        labels,
-        checked,
-        diag_scratch,
-        rule_unify_cache,
-    );
-    return candidate_mod.probe(
-        compiler,
-        &context,
-        line.application,
-        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
-        theorem,
-        theorem_vars,
-        searchLineOptions(line),
-    );
-}
-
 /// The search context over the fixture's theory and target, with the
 /// caller's per-search state.
 pub fn searchContext(
@@ -724,7 +170,7 @@ pub fn searchContext(
     };
 }
 
-fn searchLineOptions(line: ProofScript.ProofLine) AttemptOptions {
+pub fn searchLineOptions(line: ProofScript.ProofLine) AttemptOptions {
     return .{
         .line_label = line.label,
         .assertion_span = line.assertion.span,

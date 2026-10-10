@@ -571,13 +571,12 @@ between trusted parser trees and frontend proof elaboration.
   everything.
 
 The drivers maintain the parser, frontend environment, and metadata
-registries. Search source preparation has a third statement-order consumer
-in `compiler/search/fixture.zig`; it walks the `.mm0` through the same
-`common.zig` helpers (recovering from a broken earlier declaration the way
-the analysis does) but checks no proofs before its target and is not an
-invocation of the complete batch pipeline. A loop chooses only its error
-policy and whether to check proofs; what a statement step *is* lives in
-`common.zig` once.
+registries. A search prepares its theory with the analysis walk itself:
+`analyzeToSearchPoint` runs it up to the target theorem's statement or the
+target lemma's block, skipping the theorem proofs before it unchecked and
+keeping every declared theorem in scope (`compiler/search/fixture.zig`
+calls it). A loop chooses only its error policy and whether to check
+proofs; what a statement step *is* lives in `common.zig` once.
 
 At a high level it does this:
 
@@ -1186,8 +1185,8 @@ Because the verifier depends on it, it remains part of the trusted set.
 
 `src/frontend/compiler/search.zig` exposes the search facade. Within the
 search directory, `root.zig` assembles the public API and `source.zig` is the
-source-offset adapter used by editor requests. `fixture.zig` constructs the
-parser/environment at a proof point. Source queries use a per-call work arena
+source-offset adapter used by editor requests. `fixture.zig` builds the
+theory at a proof point through the analysis walk. Source queries use a per-call work arena
 and copy returned suggestions into the caller's allocator.
 
 There are distinct engines with different contracts:

@@ -37,9 +37,6 @@ const TheoryState = @import("../theory_state.zig").TheoryState;
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
 
-const ViewDecl = Metadata.ViewDecl;
-const FreshDecl = Metadata.FreshDecl;
-const FreshenDecl = Metadata.FreshenDecl;
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 
 pub const Output = struct {

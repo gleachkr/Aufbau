@@ -86,15 +86,124 @@ pub const exact = backtrack.exact;
 
 pub const probe = candidate_mod.probe;
 
-pub const fixtureFor = fixture_mod.fixtureFor;
-
-pub const fixtureForFullEnv = fixture_mod.fixtureForFullEnv;
-
 pub const parseGoal = fixture_mod.parseGoal;
 
 pub const Fixture = fixture_mod.Fixture;
 pub const commitSearchLine = fixture_mod.commitSearchLine;
-pub const probeSearchLine = fixture_mod.probeSearchLine;
+
+const PipelineCommon = @import("../../pipeline/common.zig");
+const TheoryState = @import("../../theory_state.zig").TheoryState;
+
+/// The fixture at `theorem_name`, with the rules declared before it.
+pub fn fixtureFor(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    theorem_name: []const u8,
+) !Fixture {
+    return fixtureForMm0(allocator, mm0_src, theorem_name, false);
+}
+
+/// The fixture at `theorem_name`, with every rule the `.mm0` declares.
+pub fn fixtureForFullEnv(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    theorem_name: []const u8,
+) !Fixture {
+    return fixtureForMm0(allocator, mm0_src, theorem_name, true);
+}
+
+/// A `.mm0`-only walk to a theorem. Strict, so a broken fixture fails
+/// loudly; the editor's search goes through `fixtureForSourceTarget`.
+fn fixtureForMm0(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    theorem_name: []const u8,
+    include_trailing_rules: bool,
+) !Fixture {
+    var fixture: Fixture = .{
+        .theory = TheoryState.init(allocator, mm0_src),
+        .assertion = undefined,
+        .available_rule_count = 0,
+    };
+    var found_theorem = false;
+    const theory = &fixture.theory;
+    while (try PipelineCommon.nextPublicStatement(
+        null,
+        &theory.parser,
+        &theory.env,
+    )) |stmt| {
+        switch (stmt) {
+            .sort => |sort_stmt| try PipelineCommon.registerSort(
+                null,
+                &theory.parser,
+                &theory.env,
+                sort_stmt,
+                &theory.sort_vars,
+            ),
+            .term => |term_stmt| try PipelineCommon.registerTerm(
+                null,
+                allocator,
+                &theory.parser,
+                &theory.env,
+                &theory.registry,
+                term_stmt,
+                .mm0,
+            ),
+            .assertion => |assertion| {
+                if (!found_theorem and
+                    std.mem.eql(u8, assertion.name, theorem_name))
+                {
+                    fixture.assertion = assertion;
+                    fixture.available_rule_count = theory.env.rules.items.len;
+                    found_theorem = true;
+                    if (!include_trailing_rules) return fixture;
+                    continue;
+                }
+                try PipelineCommon.registerAssertion(
+                    null,
+                    allocator,
+                    theory,
+                    assertion,
+                    .mm0,
+                );
+            },
+        }
+    }
+    if (found_theorem) return fixture;
+    return error.MissingTheorem;
+}
+
+/// Check `line` against the fixture without changing any caller state.
+pub fn probeSearchLine(
+    allocator: std.mem.Allocator,
+    compiler: *CompilerContext,
+    fixture: *Fixture,
+    labels: *LabelIndexMap,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    diag_scratch: *CompilerDiag.Scratch,
+    rule_unify_cache: *Inference.RuleUnifyCache,
+    line: ProofScript.ProofLine,
+) !Probe {
+    const context = fixture_mod.searchContext(
+        allocator,
+        fixture,
+        labels,
+        checked,
+        diag_scratch,
+        rule_unify_cache,
+    );
+    return candidate_mod.probe(
+        compiler,
+        &context,
+        line.application,
+        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
+        theorem,
+        theorem_vars,
+        fixture_mod.searchLineOptions(line),
+    );
+}
 
 pub const readProofCase = fixture_mod.readProofCase;
 

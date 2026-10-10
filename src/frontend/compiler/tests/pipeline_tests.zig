@@ -1,16 +1,16 @@
-//! Guards for the shared `.mm0` statement walk (task #262). Three loops
-//! stream the `.mm0` file — the compile path, the editor analysis, and the
-//! search fixture — and each once carried its own copy of the per-gap
-//! obligations, which drifted (the fixture never mirrored coercions). They
-//! now advance through `pipeline/common.zig`; this pins that the copies do
-//! not come back.
+//! Guards for the shared `.mm0` statement walk (task #262). The loops that
+//! stream the `.mm0` file — the compile path, the editor analysis (which the
+//! search fixture also runs), and the search tests' `.mm0`-only walk — each
+//! once carried its own copy of the per-gap obligations, which drifted (the
+//! search fixture never mirrored coercions). They now advance through
+//! `pipeline/common.zig`; this pins that the copies do not come back.
 
 const std = @import("std");
 
 const statement_walks = [_][]const u8{
     "src/frontend/compiler/pipeline/run.zig",
     "src/frontend/compiler/pipeline/analyze.zig",
-    "src/frontend/compiler/search/fixture.zig",
+    "src/frontend/compiler/search/tests/helpers.zig",
 };
 
 const common_path = "src/frontend/compiler/pipeline/common.zig";
