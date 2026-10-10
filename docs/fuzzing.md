@@ -6,7 +6,7 @@ toolchain and checks what comes back:
 
 | Target | Input | Must hold |
 |---|---|---|
-| `compile` | a proof case with token edits on its `.mm0` or its `.auf` | the compiler returns (diagnostics are fine), and whatever compiles passes the trusted verifier |
+| `compile` | a proof case with edits to its `.mm0`, its `.auf`, or both: tokens, lines, statements and blocks, brackets wrapped around runs | whatever compiles passes the trusted verifier, which admits exactly the statements `by sorry!` warned about; a failed compile has a diagnostic for its error; the editor's analysis reports an error exactly when the compile fails |
 
 Every target must also not panic, leak, write after free, run longer than
 10 seconds on one input, or hold more than 1 GiB at once. The fuzzer checks
