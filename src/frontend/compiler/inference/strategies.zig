@@ -84,13 +84,6 @@ pub const ViewSeedSetupResult = union(enum) {
     concrete: []const ExprId,
 };
 
-fn clonePartialBindings(
-    allocator: std.mem.Allocator,
-    bindings: []const ?ExprId,
-) ![]const ?ExprId {
-    return try allocator.dupe(?ExprId, bindings);
-}
-
 pub fn canConvertTransparent(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
