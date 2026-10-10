@@ -12,6 +12,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   meets are a binder, `⋀ x p`, so the least fixed point is the meet of
   the prefixed points, `⋀ x (f · x ≤ x)`, with no set theory underneath.
   The theory ships in the web demo.
+- Coverage-guided fuzzing with Zig's built-in fuzzer (`zig build fuzz`,
+  see `docs/fuzzing.md`). Six targets cover compiling, the trusted kernel
+  (with mm0-c as a second opinion on every binary it accepts), language
+  server sessions, proof search, generated deep and shared shapes, and
+  generated theories. CI fuzzes every target nightly and keeps each corpus
+  between runs.
 
 ### Changed
 
