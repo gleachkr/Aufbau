@@ -1293,20 +1293,31 @@ pub fn matchSymbolicAcuiLeafToExprState(
 /// time (`.fixed` leaves, recursively through apps). Unresolved binders and
 /// dummies contribute nothing: this is a stable under-approximation used for
 /// capture masks — it must only contain bits that are certainly part of the
-/// argument instantiation, whatever the rest resolves to later.
+/// argument instantiation, whatever the rest resolves to later. Memoized per
+/// interned node, so an unfolding chain that keeps wrapping the previous
+/// argument walks each node once (#431).
 pub fn fixedSymbolicDeps(
     self: anytype,
     symbolic: *const SymbolicExpr,
 ) anyerror!u55 {
-    return switch (symbolic.*) {
+    switch (symbolic.*) {
+        .binder, .dummy => return 0,
+        .fixed, .app => {},
+    }
+    if (self.shared.fixedDepsSlot(symbolic)) |slot| {
+        if (slot.*) |deps| return deps;
+    }
+    const deps = switch (symbolic.*) {
         .fixed => |expr_id| try WitnessState.exprDeps(self, expr_id),
         .app => |app| blk: {
-            var deps: u55 = 0;
-            for (app.args) |arg| deps |= try fixedSymbolicDeps(self, arg);
-            break :blk deps;
+            var acc: u55 = 0;
+            for (app.args) |arg| acc |= try fixedSymbolicDeps(self, arg);
+            break :blk acc;
         },
-        .binder, .dummy => 0,
+        .binder, .dummy => unreachable,
     };
+    if (self.shared.fixedDepsSlot(symbolic)) |slot| slot.* = deps;
+    return deps;
 }
 
 pub fn expandTemplateApp(

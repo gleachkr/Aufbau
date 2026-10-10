@@ -62,9 +62,11 @@ const SymbolicInternAdapter = struct {
     }
 };
 
+/// The value is the node's memoized `transparent_match.fixedSymbolicDeps`,
+/// null until first asked.
 const SymbolicInternMap = std.HashMapUnmanaged(
     *const SymbolicExpr,
-    void,
+    ?u55,
     SymbolicInternContext,
     std.hash_map.default_max_load_percentage,
 );
@@ -235,6 +237,7 @@ pub const SharedContext = struct {
         const node = try self.scratch().create(SymbolicExpr);
         node.* = value;
         gop.key_ptr.* = node;
+        gop.value_ptr.* = null;
         return node;
     }
 
@@ -265,7 +268,16 @@ pub const SharedContext = struct {
         const node = try self.scratch().create(SymbolicExpr);
         node.* = .{ .app = .{ .term_id = term_id, .args = owned, .hash = hash } };
         gop.key_ptr.* = node;
+        gop.value_ptr.* = null;
         return node;
+    }
+
+    /// The `fixedSymbolicDeps` memo slot of the interned node structurally
+    /// equal to `node`, or null when there is none (a node cloned in from a
+    /// seed). Looked up by content, not by pointer, so the key is always an
+    /// arena node that lives as long as this context.
+    pub fn fixedDepsSlot(self: *SharedContext, node: *const SymbolicExpr) ?*?u55 {
+        return self.symbolic_intern.getPtrAdapted(node.*, SymbolicInternAdapter{});
     }
 
     /// Expansion-memo probe. Returns the memoized canonical node for this

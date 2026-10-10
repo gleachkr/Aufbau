@@ -28,16 +28,14 @@ const must_compile_below = 48;
 /// even in Debug.
 const max_size = 2048;
 
-/// Known costs that would otherwise trip the time limit, until they are
-/// fixed. ACU matching of n identical members is still about n^4 in time
-/// and memory (the solution dedup left over from #408, tracked in #406):
-/// 256 copies take a minute. Rejecting a wrong proof of a chain of k
-/// nested definitions is about k^3 (#431): 436 take 5 s. A doubling chain
-/// through a definition is about n^2 (#432): 2048 doublings take 0.3 s in
-/// ReleaseSafe and over 10 s in Debug.
+/// Known costs that would otherwise trip the time limit. ACU matching of n
+/// identical members is still about n^4 in time and memory (the solution
+/// dedup left over from #408, tracked in #406): 256 copies take a minute.
+/// Rejecting a wrong proof of a chain of k nested definitions is about k^2,
+/// one transparent search per unfolding step (#431): 512 take 1.2 s in
+/// Debug.
 const max_acu_copies = 48;
-const max_nested_defs = 128;
-const max_def_doublings = 512;
+const max_nested_defs = 512;
 
 const Shape = enum(u8) {
     inline_depth,
@@ -161,17 +159,16 @@ fn generate(shape: Shape, size: usize, mm0: *std.Io.Writer, auf: *std.Io.Writer)
         .doubling, .holey_doubling, .def_doubling => {
             // Line k holds a value of DAG size k and tree size 2^k; the
             // second half takes it apart again.
-            const n = if (shape == .def_doubling) @min(size, max_def_doublings) else size;
             try mm0.writeAll("theorem thm: $ top $;\n");
             try header(auf);
             try auf.writeAll("l0: $ top $ by top_i []\n");
-            for (1..n + 1) |k| {
+            for (1..size + 1) |k| {
                 const pattern = if (shape == .holey_doubling) "_w /\\ _w" else "_w";
                 const rule = if (shape == .def_doubling) "dupd" else "dup";
                 try auf.print("l{d}: $ {s} $ by {s} [l{d}]\n", .{ k, pattern, rule, k - 1 });
             }
-            for (n + 1..2 * n) |k| try auf.print("l{d}: $ _w $ by fst [l{d}]\n", .{ k, k - 1 });
-            try auf.print("l{d}: $ top $ by fst [l{d}]\n", .{ 2 * n, 2 * n - 1 });
+            for (size + 1..2 * size) |k| try auf.print("l{d}: $ _w $ by fst [l{d}]\n", .{ k, k - 1 });
+            try auf.print("l{d}: $ top $ by fst [l{d}]\n", .{ 2 * size, 2 * size - 1 });
         },
         .inline_doubling => {
             try mm0.writeAll("theorem thm: $ top $;\n");

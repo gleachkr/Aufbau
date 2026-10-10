@@ -47,6 +47,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   identical members no longer runs out of memory. Splitting 128 copies of
   one member took 15 seconds and 256 copies ran out of memory; they now
   take under a second and about 8 seconds.
+- Two kinds of long proof through definitions check much faster. Rejecting
+  a line against a chain of k definitions, each unfolding to two copies of
+  the one before, took time cubic in k and now takes about quadratic: 256
+  definitions took 0.7 seconds and now take 0.04. Lines that each double
+  the last through a definition and are then taken apart took time
+  quadratic in the number of lines and now take linear: 4096 such lines
+  took a second and now take 0.05.
 - `auto?` can now use a fact read off a hypothesis through a definition
   whose body binds hidden variables when the theorem has no spare bound
   variables to name them, as in eliminating both quantifiers of `mono f`

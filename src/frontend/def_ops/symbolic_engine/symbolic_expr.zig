@@ -133,6 +133,12 @@ pub fn resymbolizeBinding(
     state: *MatchSession,
     witness_slots: *std.AutoHashMapUnmanaged(ExprId, usize),
 ) anyerror!?*const SymbolicExpr {
+    // Only a concrete binding or a placeholder reads back, and placeholder
+    // presence is memoized per node: without either, skip the walk, which
+    // costs the size of the DAG on every binding (#432).
+    if (!hasConcreteBinding(state) and self.shared.exprIsPlaceholderFree(expr_id)) {
+        return null;
+    }
     // Subterms already found to read back as null. A null answer depends on
     // `state.bindings` and the subterm alone, so a shared subterm is walked
     // once, not once per path.
@@ -195,6 +201,13 @@ fn resymbolizeBindingIn(
             } });
         },
     };
+}
+
+fn hasConcreteBinding(state: *const MatchSession) bool {
+    for (state.bindings) |binding| {
+        if (binding != null and binding.? == .concrete) return true;
+    }
+    return false;
 }
 
 pub fn symbolicForExistingConcreteBinding(
