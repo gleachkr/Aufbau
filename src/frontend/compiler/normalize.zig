@@ -8,10 +8,6 @@ const Normalizer = @import("../normalizer.zig").Normalizer;
 const CommonTargetResult = @import("../normalizer.zig").CommonTargetResult;
 const CheckedIr = @import("../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
-const CheckedRef = CheckedIr.CheckedRef;
-const appendTransportLine = CheckedIr.appendTransportLine;
-const appendRuleLine = CheckedIr.appendRuleLine;
-const Inference = @import("./inference.zig");
 const CompilerDiag = @import("../diag.zig");
 const DebugConfig = @import("../debug.zig").DebugConfig;
 const DebugTrace = @import("../debug.zig");
@@ -115,31 +111,6 @@ pub fn normalizeExprForSnapshot(
     };
     scratch.discard(mark);
     return normalized.result_expr;
-}
-
-pub fn buildNormalizedConversionWithDebug(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    scratch: *CompilerDiag.Scratch,
-    actual: ExprId,
-    expected: ExprId,
-    debug: DebugConfig,
-) !?NormalizedConversion {
-    return try buildNormalizedConversionWithProviderAndDebug(
-        allocator,
-        theorem,
-        registry,
-        env,
-        checked,
-        scratch,
-        actual,
-        expected,
-        null,
-        debug,
-    );
 }
 
 pub fn buildNormalizedConversionWithProviderAndDebug(
@@ -348,159 +319,6 @@ pub fn buildExpectedNormalizationWithDebug(
         .conv_line_idx = normalized.conv_line_idx,
         .normalizer = normalizer,
     };
-}
-
-pub fn buildTransparentNormalizedHypRefWithDebug(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    scratch: *CompilerDiag.Scratch,
-    actual_ref: CheckedRef,
-    actual: ExprId,
-    expected: ExprId,
-    debug: DebugConfig,
-) !?CheckedRef {
-    var normalization = try buildExpectedNormalizationWithDebug(
-        allocator,
-        theorem,
-        registry,
-        env,
-        checked,
-        scratch,
-        expected,
-        debug,
-    ) orelse return null;
-    if (!try Inference.canConvertTransparent(
-        allocator,
-        theorem,
-        env,
-        normalization.normalized_expr,
-        actual,
-    )) {
-        DebugTrace.traceNormalization(
-            debug,
-            "transparent-normalized hypothesis comparison did not match",
-            .{},
-        );
-        return null;
-    }
-
-    const normalized_ref = if (actual == normalization.normalized_expr)
-        actual_ref
-    else
-        CheckedRef{ .line = try appendTransportLine(
-            checked,
-            allocator,
-            normalization.normalized_expr,
-            actual,
-            actual_ref,
-        ) };
-
-    if (normalization.conv_line_idx) |conv_line_idx| {
-        const symm_idx = try normalization.normalizer.emitSymm(
-            normalization.relation,
-            expected,
-            normalization.normalized_expr,
-            conv_line_idx,
-        );
-        return .{ .line = try normalization.normalizer.emitTransport(
-            normalization.relation,
-            expected,
-            normalization.normalized_expr,
-            symm_idx,
-            normalized_ref,
-        ) };
-    }
-    return normalized_ref;
-}
-
-pub fn buildTransparentNormalizedConclusionLineWithDebug(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    scratch: *CompilerDiag.Scratch,
-    line_expr: ExprId,
-    expected_line: ExprId,
-    rule_id: u32,
-    bindings: []const ExprId,
-    refs: []const CheckedRef,
-    debug: DebugConfig,
-) !?usize {
-    var normalization = try buildExpectedNormalizationWithDebug(
-        allocator,
-        theorem,
-        registry,
-        env,
-        checked,
-        scratch,
-        expected_line,
-        debug,
-    ) orelse return null;
-
-    var line_normalizer = Normalizer.initWithDebugAndScratch(
-        allocator,
-        theorem,
-        registry,
-        env,
-        checked,
-        scratch,
-        debug,
-    );
-    const mark = scratch.mark();
-    const normalized_line = line_normalizer.normalize(line_expr) catch |err| {
-        return err;
-    };
-    scratch.discard(mark);
-    if (normalized_line.result_expr != normalization.normalized_expr and
-        !try Inference.canConvertTransparent(
-            allocator,
-            theorem,
-            env,
-            line_expr,
-            normalization.normalized_expr,
-        ))
-    {
-        DebugTrace.traceNormalization(
-            debug,
-            "transparent-normalized conclusion comparison did not match",
-            .{},
-        );
-        return null;
-    }
-
-    const raw_idx = try appendRuleLine(
-        checked,
-        allocator,
-        expected_line,
-        rule_id,
-        bindings,
-        refs,
-    );
-    const normalized_idx = if (normalization.conv_line_idx) |conv_line_idx|
-        try normalization.normalizer.emitTransport(
-            normalization.relation,
-            normalization.normalized_expr,
-            expected_line,
-            conv_line_idx,
-            .{ .line = raw_idx },
-        )
-    else
-        raw_idx;
-
-    if (line_expr == normalization.normalized_expr) {
-        return normalized_idx;
-    }
-    return try appendTransportLine(
-        checked,
-        allocator,
-        line_expr,
-        normalization.normalized_expr,
-        .{ .line = normalized_idx },
-    );
 }
 
 fn tryTraceComparison(

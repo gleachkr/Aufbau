@@ -14,7 +14,6 @@ const CompilerContext = @import("../context.zig").CompilerContext;
 const AlphaRewrite = @import("../alpha_rewrite.zig");
 const Normalize = @import("../normalize.zig");
 const Holes = @import("../holes.zig");
-const TheoremBoundary = @import("../theorem_boundary.zig");
 const ViewTrace = @import("../../view_trace.zig");
 const text_util = @import("../../text_util.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
@@ -540,7 +539,6 @@ pub fn addBoundaryAttemptNotes(
     theorem_vars: *const std.StringHashMap(*const Expr),
     theorem_concl: ExprId,
     final_line: ExprId,
-    report: TheoremBoundary.ReconciliationReport,
 ) void {
     var names = ViewTrace.OptionalDiagNames.build(
         allocator,
@@ -568,12 +566,8 @@ pub fn addBoundaryAttemptNotes(
         names_ptr,
         final_line,
     );
-    if (report.attempted_transparent) {
-        addProofNote(diag, .boundary_mismatch_despite_unfolding);
-    }
-    if (report.attempted_normalized) {
-        addProofNote(diag, .boundary_mismatch_despite_normalization);
-    }
+    addProofNote(diag, .boundary_mismatch_despite_unfolding);
+    addProofNote(diag, .boundary_mismatch_despite_normalization);
 }
 
 fn addRenderedExprNote(

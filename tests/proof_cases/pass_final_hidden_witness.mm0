@@ -1,0 +1,27 @@
+import "lib/iff.mm0";
+
+--| @vars x
+sort obj;
+
+term imp (a b: wff): wff;
+infixr imp: $->$ prec 25;
+term top: wff;
+term mark (a: wff): wff;
+term eq (a b: obj): wff;
+infixl eq: $=$ prec 35;
+term all {x: obj} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term g (a b: obj): obj;
+
+--| @rewrite
+axiom mark_any (a: wff): $ mark a <-> top $;
+
+def pre_wrap (f y: obj) {.x: obj}: wff
+  = $ mark (A. x (((g f x) = y) -> (x = x))) $;
+
+axiom pre_ax (f y: obj): $ pre_wrap f y $;
+
+-- The final line restates what the axiom proves; reaching the conclusion
+-- unfolds pre_wrap, which needs a theorem variable for its hidden dummy.
+theorem pass_final_hidden_witness (f y: obj):
+  $ top $;

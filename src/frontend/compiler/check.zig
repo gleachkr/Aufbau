@@ -35,6 +35,7 @@ const InlineConclusionSink = @import("./context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("./diagnostic_sink.zig").DiagnosticSink;
 const Normalize = @import("./normalize.zig");
 const ViewTrace = @import("../view_trace.zig");
+const DebugTrace = @import("../debug.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const CheckedIr = @import("../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
@@ -43,7 +44,6 @@ const Inference = @import("./inference.zig");
 const Matching = @import("./check/matching.zig");
 const DiagNotes = @import("./check/diag_notes.zig");
 const FreshenRetry = @import("./check/freshen_retry.zig");
-const TheoremBoundary = @import("./theorem_boundary.zig");
 const CompilerVars = @import("./vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("./holes.zig");
@@ -403,20 +403,25 @@ pub fn checkTheoremBlock(
         if (last_line_idx) |line_idx| {
             const final_mark = diag_scratch.mark();
             const checked_mark = checked.items.len;
-            var final_report: TheoremBoundary.ReconciliationReport = .{};
-            if ((TheoremBoundary.tryReconcileFinalConclusion(
-                allocator,
-                theorem,
-                registry,
-                env,
-                &checked,
-                &diag_scratch,
-                theorem_concl,
-                final_line,
-                line_idx,
+            DebugTrace.traceBoundary(
                 self.debug,
-                &final_report,
-            ) catch |err| {
+                "reconciling the final line with the theorem conclusion",
+                .{},
+            );
+            if ((Matching.convertTo(.{
+                .allocator = allocator,
+                .theorem = theorem,
+                .registry = registry,
+                .env = env,
+                .checked = &checked,
+                .scratch = &diag_scratch,
+                .debug = self.debug,
+                .fresh = .{
+                    .parser = parser,
+                    .theorem_vars = &theorem_vars,
+                    .sort_vars = sort_vars,
+                },
+            }, .{ .ref = .{ .line = line_idx } }, final_line, theorem_concl) catch |err| {
                 if (CompilerDiag.takeScratchDetail(
                     &diag_scratch,
                     final_mark,
@@ -440,14 +445,13 @@ pub fn checkTheoremBlock(
                         &theorem_vars,
                         theorem_concl,
                         final_line,
-                        final_report,
                     );
                     self.setProof(diag);
                     return err;
                 }
                 diag_scratch.discard(final_mark);
                 return err;
-            })) {
+            }) != null) {
                 diag_scratch.discard(final_mark);
                 try ensureConcreteCheckedIrRange(
                     self,
@@ -464,6 +468,11 @@ pub fn checkTheoremBlock(
                 return try checked.toOwnedSlice(allocator);
             }
             diag_scratch.discard(final_mark);
+            DebugTrace.traceBoundary(
+                self.debug,
+                "no conversion relates the final line to the conclusion",
+                .{},
+            );
             var diag = CompilerDiag.withPhase(.{
                 .kind = .final_line_mismatch,
                 .err = error.FinalLineMismatch,
@@ -480,7 +489,6 @@ pub fn checkTheoremBlock(
                 &theorem_vars,
                 theorem_concl,
                 final_line,
-                final_report,
             );
             self.setProof(diag);
             return error.FinalLineMismatch;

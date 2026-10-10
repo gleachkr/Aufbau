@@ -390,7 +390,7 @@ Transparent def unfolding and automatic normalization solve different problems.
 
 They compose in a limited way. The checker can compare normalized expressions
 and can still bridge a def gap afterwards when ordinary transparent conversion
-is enough. For conclusions, it can also build a folded intermediate first:
+is enough. It can also build a folded intermediate first:
 selected raw subterms are folded toward the user assertion, then ordinary
 normalization / ACUI cleanup proves the remaining difference.
 
@@ -411,7 +411,7 @@ selected theorem-local witness is never cached.
 The normalizer itself still does **not** generally unfold defs first in order
 to discover more rewrites. Rewriting works on the visible instantiated
 expression, on the narrow semantic def-exposure path above, or on an explicitly
-folded intermediate chosen by theorem-line matching.
+folded intermediate chosen by the checker's comparison.
 
 Broader witness recovery after unfold / rewrite alignment is still usually a
 job for `@view` plus `@recover` or `@abstract`.
@@ -438,7 +438,7 @@ its normalized expected form, and finally uses transparent def conversion if
 needed to bridge between that normalized form and what the user wrote.
 
 What it does **not** do is generally unfold a def first just to expose a new
-rewrite redex. The fold-before-normalize conclusion fallback goes the other
+rewrite redex. The fold-before-normalize fallback goes the other
 way: it hides a raw def body behind the user's def-headed expression before
 normalization runs outside that folded subtree.
 

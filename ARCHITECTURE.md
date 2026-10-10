@@ -209,7 +209,6 @@ Theorem checking and emission:
 
 - `compiler/check.zig` (facade; submodules under `compiler/check/`)
 - `compiler/check/matching.zig`
-- `compiler/theorem_boundary.zig`
 - `compiler/inference.zig` (facade; submodules under `compiler/inference/`)
 - `compiler/normalize.zig`
 - `compiler/emit.zig`
@@ -686,21 +685,24 @@ For each proof line it does roughly this:
 8. infer omitted binders if needed
 9. instantiate the rule's expected hypotheses and conclusion
 10. insert transport or normalization lines when metadata permits a
-    non-exact comparison; conclusion matching may first build a folded
+    non-exact comparison; the comparison may first build a folded
     intermediate so normalization runs outside selected transparent defs
 11. store a `CheckedLine` representation that later emission can lower to
     MMB
 
-`compiler/check/matching.zig` holds the comparison helpers used once a
-candidate binding list exists. It also owns the narrow fold-before-normalize
-fallback for conclusions, using existing def conversion, ACUI support, and
-normalizer transport rather than a separate equality subsystem.
+`compiler/check/matching.zig` holds `convertTo`, the one conversion ladder
+used once a candidate binding list exists. It turns a proof of one statement
+into a proof of another, trying in order: identity, transparent def
+conversion, a fold-before-normalize intermediate, normalization to a common
+target, normalization followed by unfolding, and unfolding to the other
+side's normal form. It serves a cited hypothesis, a line's stated
+conclusion, and the theorem's final line alike, so a comparison accepted in
+one place is accepted in the others. It uses existing def conversion, ACUI
+support, and normalizer transport rather than a separate equality subsystem.
 
-After the last line of a public theorem block has been checked,
-`compiler/theorem_boundary.zig` compares it with the theorem declaration.
-That boundary reconciliation is deliberately limited to transparent def
-conversion and registered normalization. It is proof-producing, just like
-ordinary line reconciliation.
+After the last line of a public theorem block has been checked, the checker
+runs the same ladder from that line to the theorem declaration. The result
+is proof-producing, just like ordinary line reconciliation.
 
 The checker does not adopt a general alpha-equivalence policy. Any extra
 flexibility is consumed earlier by symbolic matching, by targeted
@@ -1089,8 +1091,8 @@ It packages the common checker operations:
 - normalize a rule conclusion and then transport the emitted theorem line
   back to the user-written line
 
-`compiler/check/matching.zig` can compose these helpers with transparent
-conversion by constructing a folded intermediate first. That intermediate is
+`compiler/check/matching.zig` composes these helpers with transparent
+conversion, and can construct a folded intermediate first. That intermediate is
 then handed back to the normalizer, so proof construction still uses the
 existing conversion and normalization emitters.
 

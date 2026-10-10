@@ -608,13 +608,13 @@ details.
 
 A public theorem block is accepted if and only if its final proof line
 proves the theorem conclusion from the corresponding `.mm0` declaration,
-directly or through the limited final-boundary reconciliation
-implemented by the frontend.
+directly or through the same conversions the frontend allows between a
+proof line and the rule it cites.
 
 That reconciliation is proof-producing. If the final proof line differs
-from the declared theorem conclusion only by transparent def conversion or
-by registered normalization, the compiler may emit ordinary transport and
-conversion proof lines that bridge the gap.
+from the declared theorem conclusion only by transparent def conversion,
+by registered normalization, or by a combination of the two, the compiler
+may emit ordinary transport and conversion proof lines that bridge the gap.
 
 This flexibility applies only at the outer public theorem boundary.
 Interior proof lines are still checked in the ordinary way against the

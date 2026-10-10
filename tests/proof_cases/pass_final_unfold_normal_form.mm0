@@ -1,0 +1,47 @@
+import "lib/iff.mm0";
+
+sort ctx;
+
+term top: wff;
+
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+infixl join: $,$ prec 5;
+term k: ctx;
+term nd (g: ctx) (a: wff): wff;
+infixl nd: $|-$ prec 0;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (g1 , h1) (g2 , h2) $;
+
+--| @congr
+axiom nd_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ (g |- a) <-> (h |- b) $;
+
+term box (a: wff): wff;
+
+--| @rewrite
+axiom box_top: $ box top <-> top $;
+
+def dtop: wff = $ top $;
+axiom raw_k: $ k |- box top $;
+
+-- The rewrite fires on the final line's box top but not on the folded
+-- box dtop, so the two normal forms differ; the conclusion's normal form
+-- unfolds to the final line.
+theorem pass_final_unfold_normal_form: $ emp , k |- box dtop $;

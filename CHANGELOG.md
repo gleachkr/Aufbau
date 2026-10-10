@@ -27,6 +27,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   server doesn't implement gets a `null` result instead of an error, and a
   request whose parameters don't parse gets a parse error without its id.
 
+### Fixed
+
+- A theorem's final line is now compared with the declared conclusion by
+  the same conversions as any line against the rule it cites. Before, a
+  final line could fail with "last proof line does not prove the theorem
+  conclusion" where the same statement would pass on an ordinary line:
+  when unfolding a definition needed a `@vars` variable for a hidden
+  dummy, or when the conclusion only met the line after normalizing one
+  side and unfolding a definition.
+
 ## [0.0.15] - 2026-10-08
 
 ### Changed

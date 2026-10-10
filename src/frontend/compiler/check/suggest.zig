@@ -41,7 +41,6 @@ const Inference = @import("../inference.zig");
 const Matching = @import("./matching.zig");
 const DiagNotes = @import("./diag_notes.zig");
 const FreshenRetry = @import("./freshen_retry.zig");
-const TheoremBoundary = @import("../theorem_boundary.zig");
 const CompilerVars = @import("../vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("../holes.zig");
