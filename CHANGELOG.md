@@ -43,6 +43,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   line checked with the variable written out: inference had its own copy
   of the comparison, which never opened a definition into the surrounding
   product. Inference and the checker now share one.
+- Inferring how a rule's variables split a commutative bag of many
+  identical members no longer runs out of memory. Splitting 128 copies of
+  one member took 15 seconds and 256 copies ran out of memory; they now
+  take under a second and about 8 seconds.
 
 ## [0.0.15] - 2026-10-08
 

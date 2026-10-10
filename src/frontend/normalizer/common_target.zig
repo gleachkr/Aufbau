@@ -3,6 +3,7 @@ const ResolvedRelation = @import("../rewrite_registry.zig").ResolvedRelation;
 const Support = @import("./support.zig");
 const Core = @import("./core.zig");
 const Acui = @import("./acui.zig");
+const Cover = @import("./acui/cover.zig");
 const NonAcuiTarget = @import("./non_acui_target.zig");
 const ProofEmit = @import("./proof_emit.zig");
 const Types = @import("./types.zig");
@@ -14,14 +15,51 @@ pub fn buildCommonTarget(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
-    if (lhs == rhs) {
-        return .{
-            .target_expr = lhs,
-            .lhs_conv_line_idx = null,
-            .rhs_conv_line_idx = null,
-        };
+    if (lhs == rhs) return sameTarget(lhs);
+    if (try buildDefCommonTarget(self, lhs, rhs)) |result| return result;
+    if (try Cover.sharedStructuralCombiner(self, lhs, rhs)) |acui| {
+        if (try Acui.buildAcuiCommonTarget(self, lhs, rhs)) |result| {
+            return result;
+        }
+        // Two bags of a commutative combiner have just been compared member
+        // by member, every member against every other. Descending through
+        // the spine pairs the same members in one fixed order, and repeats
+        // the bag comparison on every suffix on the way down.
+        if (acui.comm_id != null and
+            Cover.isAcuiExpr(self, lhs, acui.head_term_id) and
+            Cover.isAcuiExpr(self, rhs, acui.head_term_id))
+        {
+            return null;
+        }
     }
+    return try NonAcuiTarget.buildNonAcuiCommonTarget(self, lhs, rhs);
+}
 
+/// A common target of two members of one bag: `buildCommonTarget` short of
+/// the bag comparison the members are already inside.
+pub fn buildMemberCommonTarget(
+    self: anytype,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?CommonTargetResult {
+    if (lhs == rhs) return sameTarget(lhs);
+    if (try buildDefCommonTarget(self, lhs, rhs)) |result| return result;
+    return try NonAcuiTarget.buildNonAcuiCommonTarget(self, lhs, rhs);
+}
+
+fn sameTarget(expr_id: ExprId) CommonTargetResult {
+    return .{
+        .target_expr = expr_id,
+        .lhs_conv_line_idx = null,
+        .rhs_conv_line_idx = null,
+    };
+}
+
+fn buildDefCommonTarget(
+    self: anytype,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?CommonTargetResult {
     // The two def-unfolding steps can only make progress through a
     // concrete def: `compareTransparent` on distinct interned exprs needs
     // a def-headed subterm to get past a structural mismatch, and
@@ -29,18 +67,11 @@ pub fn buildCommonTarget(
     // Hash-consing makes "distinct ids, no def anywhere" a proof that both
     // return null, so skip their per-pair cache probes entirely.
     const support = try self.support();
-    if (support.isDefBearing(lhs) or support.isDefBearing(rhs)) {
-        if (try buildDirectTransparentCommonTarget(self, lhs, rhs)) |direct| {
-            return direct;
-        }
-        if (try buildSemanticDefCommonTarget(self, lhs, rhs)) |semantic| {
-            return semantic;
-        }
+    if (!support.isDefBearing(lhs) and !support.isDefBearing(rhs)) return null;
+    if (try buildDirectTransparentCommonTarget(self, lhs, rhs)) |direct| {
+        return direct;
     }
-    if (try Acui.buildAcuiCommonTarget(self, lhs, rhs)) |acui| {
-        return acui;
-    }
-    return try NonAcuiTarget.buildNonAcuiCommonTarget(self, lhs, rhs);
+    return try buildSemanticDefCommonTarget(self, lhs, rhs);
 }
 
 pub fn buildDirectTransparentCommonTarget(

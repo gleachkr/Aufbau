@@ -4,7 +4,7 @@ const AcuiSupport = @import("../../acui_support.zig");
 const compareExprIds = AcuiSupport.compareExprIds;
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const Support = @import("../support.zig");
-const NonAcuiTarget = @import("../non_acui_target.zig");
+const CommonTarget = @import("../common_target.zig");
 const ProofEmit = @import("../proof_emit.zig");
 const Cover = @import("./cover.zig");
 const Normalize = @import("./normalize.zig");
@@ -288,7 +288,7 @@ pub fn pairCommonAcuiLeaves(
         if (lhs_exact[lhs_idx]) continue;
         for (rhs, 0..) |*rhs_leaf, rhs_idx| {
             if (rhs_exact[rhs_idx]) continue;
-            const common = try NonAcuiTarget.buildNonAcuiCommonTarget(
+            const common = try CommonTarget.buildMemberCommonTarget(
                 self,
                 lhs_leaf.old_expr,
                 rhs_leaf.old_expr,

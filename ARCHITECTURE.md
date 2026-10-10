@@ -1052,8 +1052,10 @@ engine runs in two modes:
 Besides normal forms, the engine finds common targets of two expressions:
 transparent def comparison, witness-directed def instantiation, and for two
 bags of one ACUI combiner exact cancellation of members, members that meet
-by congruence, concrete members folded into equal def members, and def
-members opened into the surrounding bag. Each bag is also canonicalized
+through defs or by congruence, concrete members folded into equal def
+members, and def members opened into the surrounding bag. Two bags of a
+commutative combiner are compared as bags only, not again position by
+position down their spines. Each bag is also canonicalized
 with same-side absorption, where a concrete member folds into an equal def
 member of its own bag. The engine may instantiate a def toward a witness for
 member coverage, but it does not open every def.

@@ -197,63 +197,75 @@ pub fn exprBagIsSubset(
 
     // Compatibility is semantic rather than exact identity, so ACU/ACUI
     // subset checks need a real bipartite matching pass.
+    const compatible = try self.allocator.alloc(?bool, lhs.len * rhs.len);
+    defer self.allocator.free(compatible);
+    @memset(compatible, null);
     const rhs_matches = try self.allocator.alloc(?usize, rhs.len);
     defer self.allocator.free(rhs_matches);
     @memset(rhs_matches, null);
-
     const seen_rhs = try self.allocator.alloc(bool, rhs.len);
     defer self.allocator.free(seen_rhs);
 
-    for (lhs, 0..) |_, lhs_idx| {
+    var matching: BagMatching(@TypeOf(self)) = .{
+        .solver = self,
+        .lhs = lhs,
+        .rhs = rhs,
+        .compatible = compatible,
+        .seen_rhs = seen_rhs,
+        .rhs_matches = rhs_matches,
+    };
+    for (0..lhs.len) |lhs_idx| {
         @memset(seen_rhs, false);
-        if (!try tryAugmentBagMatching(
-            self,
-            lhs,
-            rhs,
-            lhs_idx,
-            seen_rhs,
-            rhs_matches,
-        )) {
-            return false;
-        }
+        if (!try matching.augment(lhs_idx)) return false;
     }
     return true;
 }
 
-pub fn tryAugmentBagMatching(
-    self: anytype,
-    lhs: []const ExprId,
-    rhs: []const ExprId,
-    lhs_idx: usize,
-    seen_rhs: []bool,
-    rhs_matches: []?usize,
-) anyerror!bool {
-    for (rhs, 0..) |rhs_item, rhs_idx| {
-        if (seen_rhs[rhs_idx]) continue;
-        if (!try SemanticCompare.bindingCompatible(
-            self,
-            lhs[lhs_idx],
-            rhs_item,
-        )) {
-            continue;
+/// Kuhn's augmenting-path matching of `lhs` into `rhs`. Each pair is
+/// compared once, and an item takes a free compatible partner before it
+/// displaces a matched one: among interchangeable members every partner is
+/// compatible, and a path that always displaced would walk the whole chain
+/// of earlier matches.
+fn BagMatching(comptime Solver: type) type {
+    return struct {
+        solver: Solver,
+        lhs: []const ExprId,
+        rhs: []const ExprId,
+        compatible: []?bool,
+        seen_rhs: []bool,
+        rhs_matches: []?usize,
+
+        fn isCompatible(self: *@This(), lhs_idx: usize, rhs_idx: usize) anyerror!bool {
+            const slot = &self.compatible[lhs_idx * self.rhs.len + rhs_idx];
+            if (slot.*) |known| return known;
+            const result = try SemanticCompare.bindingCompatible(
+                self.solver,
+                self.lhs[lhs_idx],
+                self.rhs[rhs_idx],
+            );
+            slot.* = result;
+            return result;
         }
-        seen_rhs[rhs_idx] = true;
-        if (rhs_matches[rhs_idx]) |prev_lhs_idx| {
-            if (!try tryAugmentBagMatching(
-                self,
-                lhs,
-                rhs,
-                prev_lhs_idx,
-                seen_rhs,
-                rhs_matches,
-            )) {
-                continue;
+
+        fn augment(self: *@This(), lhs_idx: usize) anyerror!bool {
+            for (self.rhs_matches, 0..) |match, rhs_idx| {
+                if (match != null or self.seen_rhs[rhs_idx]) continue;
+                if (!try self.isCompatible(lhs_idx, rhs_idx)) continue;
+                self.rhs_matches[rhs_idx] = lhs_idx;
+                return true;
             }
+            for (self.rhs_matches, 0..) |match, rhs_idx| {
+                const prev_lhs_idx = match orelse continue;
+                if (self.seen_rhs[rhs_idx]) continue;
+                if (!try self.isCompatible(lhs_idx, rhs_idx)) continue;
+                self.seen_rhs[rhs_idx] = true;
+                if (!try self.augment(prev_lhs_idx)) continue;
+                self.rhs_matches[rhs_idx] = lhs_idx;
+                return true;
+            }
+            return false;
         }
-        rhs_matches[rhs_idx] = lhs_idx;
-        return true;
-    }
-    return false;
+    };
 }
 
 pub fn appendExprSetUnion(
