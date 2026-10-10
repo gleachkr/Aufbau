@@ -20,6 +20,7 @@ const TheoremContext = expr_mod.TheoremContext;
 const ViewTrace = @import("../../view_trace.zig");
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
+const ArgInfo = @import("../../parse_recovery.zig").ArgInfo;
 const Context = types.Context;
 const NameExprMap = types.NameExprMap;
 const lowering = @import("./conversion/lowerer.zig");
@@ -196,23 +197,7 @@ pub fn run(
         for (conv.premises, 0..) |hyp, idx| {
             premises[idx] = premiseFor(context, &rel_heads, decl, hyp);
         }
-        var bound_slots: std.ArrayListUnmanaged(u32) = .empty;
-        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
-        var bound_ordinal: u6 = 0;
-        for (decl.args, 0..) |arg, slot| {
-            if (!arg.bound) continue;
-            try bound_slots.append(work, @intCast(slot));
-            for (decl.args, 0..) |term_arg, term_slot| {
-                if (term_arg.bound) continue;
-                if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
-                    try restrictions.append(work, .{
-                        .bound_slot = @intCast(slot),
-                        .term_slot = @intCast(term_slot),
-                    });
-                }
-            }
-            bound_ordinal += 1;
-        }
+        const restricted = try ruleRestrictions(work, decl.args);
         // Alpha rules enroll their match orientation only, flagged for
         // the pairing scheduler (the general loop skips them: their
         // target uses the fresh binder the match side never binds). The
@@ -225,8 +210,8 @@ pub fn run(
                 .match_side = conv.lhs,
                 .target_side = conv.rhs,
                 .num_binders = conv.num_binders,
-                .bound_slots = bound_slots.items,
-                .restrictions = restrictions.items,
+                .bound_slots = restricted.bound_slots.items,
+                .restrictions = restricted.restrictions.items,
                 .alpha = true,
                 .alpha_old_slot = conv.alpha_old_slot,
                 .alpha_new_slot = conv.alpha_new_slot,
@@ -239,8 +224,8 @@ pub fn run(
             .match_side = conv.lhs,
             .target_side = conv.rhs,
             .num_binders = conv.num_binders,
-            .bound_slots = bound_slots.items,
-            .restrictions = restrictions.items,
+            .bound_slots = restricted.bound_slots.items,
+            .restrictions = restricted.restrictions.items,
             .premises = premises,
         });
         if (conv.rtl) try rules.append(work, .{
@@ -249,8 +234,8 @@ pub fn run(
             .match_side = conv.rhs,
             .target_side = conv.lhs,
             .num_binders = conv.num_binders,
-            .bound_slots = bound_slots.items,
-            .restrictions = restrictions.items,
+            .bound_slots = restricted.bound_slots.items,
+            .restrictions = restricted.restrictions.items,
             .premises = premises,
         });
     }
@@ -264,29 +249,13 @@ pub fn run(
     for (context.registry.defConversionRules()) |def_conv| {
         if (def_conv.term_id & def_rule_tag != 0) continue;
         const decl = &context.env.terms.items[def_conv.term_id];
-        var bound_slots: std.ArrayListUnmanaged(u32) = .empty;
-        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
-        var bound_ordinal: u6 = 0;
-        for (decl.args, 0..) |arg, slot| {
-            if (!arg.bound) continue;
-            try bound_slots.append(work, @intCast(slot));
-            for (decl.args, 0..) |term_arg, term_slot| {
-                if (term_arg.bound) continue;
-                if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
-                    try restrictions.append(work, .{
-                        .bound_slot = @intCast(slot),
-                        .term_slot = @intCast(term_slot),
-                    });
-                }
-            }
-            bound_ordinal += 1;
-        }
+        var restricted = try ruleRestrictions(work, decl.args);
         for (0..decl.dummy_args.len) |dummy_idx| {
             const slot: u32 = @intCast(decl.args.len + dummy_idx);
-            try bound_slots.append(work, slot);
+            try restricted.bound_slots.append(work, slot);
             for (decl.args, 0..) |term_arg, term_slot| {
                 if (term_arg.bound) continue;
-                try restrictions.append(work, .{
+                try restricted.restrictions.append(work, .{
                     .bound_slot = slot,
                     .term_slot = @intCast(term_slot),
                 });
@@ -299,8 +268,8 @@ pub fn run(
             .match_side = def_conv.lhs,
             .target_side = def_conv.rhs,
             .num_binders = def_conv.num_binders,
-            .bound_slots = bound_slots.items,
-            .restrictions = restrictions.items,
+            .bound_slots = restricted.bound_slots.items,
+            .restrictions = restricted.restrictions.items,
         });
         if (def_conv.unfold) try rules.append(work, .{
             .rule_id = tag,
@@ -308,8 +277,8 @@ pub fn run(
             .match_side = def_conv.rhs,
             .target_side = def_conv.lhs,
             .num_binders = def_conv.num_binders,
-            .bound_slots = bound_slots.items,
-            .restrictions = restrictions.items,
+            .bound_slots = restricted.bound_slots.items,
+            .restrictions = restricted.restrictions.items,
         });
     }
     // `@compute` rules: one orientation each, flagged for the egraph's
@@ -319,31 +288,15 @@ pub fn run(
     // dep-deferred designated redex stays unconsumed.
     for (context.registry.computeRules()) |comp| {
         const decl = &context.env.rules.items[comp.rule_id];
-        var bound_slots: std.ArrayListUnmanaged(u32) = .empty;
-        var restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
-        var bound_ordinal: u6 = 0;
-        for (decl.args, 0..) |arg, slot| {
-            if (!arg.bound) continue;
-            try bound_slots.append(work, @intCast(slot));
-            for (decl.args, 0..) |term_arg, term_slot| {
-                if (term_arg.bound) continue;
-                if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
-                    try restrictions.append(work, .{
-                        .bound_slot = @intCast(slot),
-                        .term_slot = @intCast(term_slot),
-                    });
-                }
-            }
-            bound_ordinal += 1;
-        }
+        const restricted = try ruleRestrictions(work, decl.args);
         try rules.append(work, .{
             .rule_id = comp.rule_id,
             .reversed = comp.rtl,
             .match_side = if (comp.ltr) comp.lhs else comp.rhs,
             .target_side = if (comp.ltr) comp.rhs else comp.lhs,
             .num_binders = comp.num_binders,
-            .bound_slots = bound_slots.items,
-            .restrictions = restrictions.items,
+            .bound_slots = restricted.bound_slots.items,
+            .restrictions = restricted.restrictions.items,
             .compute = true,
         });
     }
@@ -732,6 +685,37 @@ const DualLowering = struct {
 ///
 /// Each orientation gets its own `Lowerer` copied from `proto`, whose every
 /// mutable field is still at its empty default.
+/// The bound-binder slots of a declaration's `args`, and for each the term
+/// slots whose dependencies omit it: a match may not put that bound
+/// variable free there.
+const RuleRestrictions = struct {
+    bound_slots: std.ArrayListUnmanaged(u32) = .empty,
+    restrictions: std.ArrayListUnmanaged(egraph.Restriction) = .empty,
+};
+
+fn ruleRestrictions(
+    work: std.mem.Allocator,
+    args: []const ArgInfo,
+) !RuleRestrictions {
+    var out: RuleRestrictions = .{};
+    var bound_ordinal: u6 = 0;
+    for (args, 0..) |arg, slot| {
+        if (!arg.bound) continue;
+        try out.bound_slots.append(work, @intCast(slot));
+        for (args, 0..) |term_arg, term_slot| {
+            if (term_arg.bound) continue;
+            if ((term_arg.deps >> bound_ordinal) & 1 == 0) {
+                try out.restrictions.append(work, .{
+                    .bound_slot = @intCast(slot),
+                    .term_slot = @intCast(term_slot),
+                });
+            }
+        }
+        bound_ordinal += 1;
+    }
+    return out;
+}
+
 fn lowerBothOrientations(
     proto: Lowerer,
     block_lines: []const ProofScript.ProofLine,
