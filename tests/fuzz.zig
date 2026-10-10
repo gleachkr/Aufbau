@@ -5,4 +5,6 @@ test {
     _ = @import("fuzz/harness.zig");
     _ = @import("fuzz/mutate.zig");
     _ = @import("fuzz/compile.zig");
+    _ = @import("fuzz/kernel.zig");
+    _ = @import("fuzz/mmb_mutate.zig");
 }

@@ -7,6 +7,7 @@ toolchain and checks what comes back:
 | Target | Input | Must hold |
 |---|---|---|
 | `compile` | a proof case with edits to its `.mm0`, its `.auf`, or both: tokens, lines, statements and blocks, brackets wrapped around runs | whatever compiles passes the trusted verifier, which admits exactly the statements `by sorry!` warned about; a failed compile has a diagnostic for its error; the editor's analysis reports an error exactly when the compile fails |
+| `kernel` | a proof case's `.mm0` with the binary this compiler makes for it, or the upstream tutorial pair (built by mm0-rs); the binary gets raw edits (bytes, words, cuts, copies) or structured ones (a header or table field, or one proof or unify command: its opcode, its operand, dropped or repeated), and the spec may get token edits | the verifier rejects bad input with an error; a changed pair it accepts must pass mm0-c too, when `mm0-c` is on PATH |
 
 Every target must also not panic, leak, write after free, run longer than
 10 seconds on one input, or hold more than 1 GiB at once. The fuzzer checks
