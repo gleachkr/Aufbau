@@ -47,6 +47,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   identical members no longer runs out of memory. Splitting 128 copies of
   one member took 15 seconds and 256 copies ran out of memory; they now
   take under a second and about 8 seconds.
+- `auto?` can now use a fact read off a hypothesis through a definition
+  whose body binds hidden variables when the theorem has no spare bound
+  variables to name them, as in eliminating both quantifiers of `mono f`
+  in `knaster`. The hidden variables now take unused `@vars` names; before,
+  every such fact was silently dropped. The search sees more facts as a
+  result, and a few searches near their limit now need the larger limits
+  their miss report suggests.
 
 ## [0.0.15] - 2026-10-08
 

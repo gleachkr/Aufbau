@@ -551,6 +551,43 @@ test "same derived ref is selected twice at two different witnesses" {
     try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
 }
 
+// The flagship theory with an `@vars` pool for `obj`, and a theorem whose
+// `obj` variables are all regular: no bound theorem variable can stand in
+// for `mono`'s hidden `.a .b`, so only the pool can name them.
+const fwd_pool_mm0 = blk: {
+    @setEvalBranchQuota(100_000);
+    const sort_decl = "sort obj;\n";
+    const at = std.mem.indexOf(u8, fwd_twice_mm0, sort_decl).?;
+    break :blk fwd_twice_mm0[0..at] ++ "--| @vars a b c\n" ++ fwd_twice_mm0[at..] ++
+        "theorem fwd_pool (f u v: obj):\n" ++
+        "  $ mono f $ > $ (pair f u = pair f v) → (u = v) $;\n";
+};
+
+test "derived recipe through a binder def names its hidden variables from the @vars pool" {
+    const proof_src =
+        \\fwd_pool
+        \\--------
+        \\l1: $ (pair f u = pair f v) → (u = v) $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        fwd_pool_mm0,
+        proof_src,
+        "auto?",
+        .{ .generate = .{ .enabled = true } },
+    );
+    defer suggestions.deinit();
+
+    // The search pre-materializes the pool tokens as proof dummies. Unused
+    // ones name the unfolded dummies, in both recipe layers.
+    try expectOffered(suggestions.items, &.{
+        "all_elim (p := $ pair f u = pair f a → u = a $) " ++
+            "[all_elim (t := $ u $, p := $ ∀ a (pair f b = pair f a → b = a) $) [#1]]",
+    });
+}
+
 // ============================================================
 // Multi-premise and multi-layer forward saturation
 // (META.md). Layered semi-naive firing over pool + derived

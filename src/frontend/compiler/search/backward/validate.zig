@@ -120,6 +120,7 @@ pub fn appendDerivedDirectCandidates(
                 theorem_vars,
                 goal_expr,
                 dref,
+                null,
             );
         }
         dpool.store.rollbackTo(mark);

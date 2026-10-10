@@ -1176,6 +1176,7 @@ fn tryDerivedSlots(
                     ctx.theorem_vars,
                     goal_expr,
                     dref,
+                    bindings,
                 );
             }
         }

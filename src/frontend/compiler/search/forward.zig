@@ -1694,6 +1694,7 @@ pub fn materializeApplication(
     theorem_vars: *const NameExprMap,
     avoid_expr: ?ExprId,
     dref: *const DerivedRef,
+    rename: ?[]?ExprId,
 ) !?RuleApplication {
     var scratch_arena = std.heap.ArenaAllocator.init(context.allocator);
     defer scratch_arena.deinit();
@@ -1729,6 +1730,11 @@ pub fn materializeApplication(
             }
         }
     }
+
+    if (rename) |values| for (values) |*value| {
+        const old = value.* orelse continue;
+        value.* = try namer.nameChosen(theorem, theorem_vars, old) orelse old;
+    };
 
     var cursor: usize = 0;
     return try renderRecipe(dpool, context, theorem, &namer, dref, &resolved, &cursor);
@@ -1959,6 +1965,11 @@ pub const Namer = struct {
     /// chosen stand-in must not collide with these).
     used: std.AutoHashMapUnmanaged(u64, void) = .empty,
     chosen: std.AutoHashMapUnmanaged(PlaceholderId, []const u8) = .empty,
+    /// Named proof dummies (source name -> encoded VarId): `@vars` pool
+    /// tokens the search or an earlier line already materialized. Each is a
+    /// bound variable of the proof, so its name may stand in for a hidden
+    /// dummy unless the variable itself is used.
+    dummy_names: std.StringHashMapUnmanaged(u64) = .empty,
 
     const Candidate = struct {
         name: []const u8,
@@ -1975,6 +1986,7 @@ pub const Namer = struct {
         self.candidates.deinit(self.allocator);
         self.used.deinit(self.allocator);
         self.chosen.deinit(self.allocator);
+        self.dummy_names.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -2006,7 +2018,11 @@ pub const Namer = struct {
                         .sort_name = info.sort_name,
                     });
                 },
-                .dummy_var => {},
+                .dummy_var => try self.dummy_names.put(
+                    self.allocator,
+                    entry.key_ptr.*,
+                    var_id.hashKey(),
+                ),
             }
         }
         std.mem.sort(Candidate, self.candidates.items, {}, candidateLessThan);
@@ -2065,7 +2081,9 @@ pub const Namer = struct {
                 if (context.sort_vars.getPool(sort_name)) |pool| {
                     for (pool.tokens.items) |token| {
                         if (self.tokenAlreadyChosen(token)) continue;
-                        if (self.nameIsTheoremVar(token)) continue;
+                        if (self.dummy_names.get(token)) |key| {
+                            if (self.used.contains(key)) continue;
+                        } else if (self.nameIsTheoremVar(token)) continue;
                         try self.chosen.put(self.allocator, pid, token);
                         return true;
                     }
@@ -2081,6 +2099,38 @@ pub const Namer = struct {
                     )) return false;
                 }
                 return true;
+            },
+        }
+    }
+
+    /// `expr_id` with each chosen placeholder replaced by the variable of
+    /// its chosen name: the value a search binding takes once the recipe
+    /// names the def's hidden variables. Null when a chosen name has no
+    /// variable in `theorem_vars`.
+    pub fn nameChosen(
+        self: *const Namer,
+        theorem: *TheoremContext,
+        theorem_vars: *const NameExprMap,
+        expr_id: ExprId,
+    ) !?ExprId {
+        switch (theorem.interner.node(expr_id).*) {
+            .variable => return expr_id,
+            .placeholder => |pid| {
+                const name = self.chosen.get(pid) orelse return expr_id;
+                const surface = theorem_vars.get(name) orelse return null;
+                const var_id = theorem.parser_vars.get(surface) orelse return null;
+                return try theorem.interner.internVar(var_id);
+            },
+            .app => |app| {
+                var changed = false;
+                const args = try theorem.allocator.alloc(ExprId, app.args.len);
+                defer theorem.allocator.free(args);
+                for (app.args, 0..) |arg, idx| {
+                    args[idx] = try self.nameChosen(theorem, theorem_vars, arg) orelse return null;
+                    if (args[idx] != arg) changed = true;
+                }
+                if (!changed) return expr_id;
+                return try theorem.interner.internApp(app.term_id, args);
             },
         }
     }
