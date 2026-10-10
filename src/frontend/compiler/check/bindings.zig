@@ -32,7 +32,7 @@ const HoleInferenceSink = @import("../context.zig").HoleInferenceSink;
 const InlineConclusionSink = @import("../context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Normalize = @import("../normalize.zig");
-const Canonicalizer = @import("../../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const ViewTrace = @import("../../view_trace.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const CheckedIr = @import("../../checked_ir.zig");
@@ -863,8 +863,8 @@ fn validateHoleyAssertionAgainstCandidate(
         hole_report = normalized_report;
     }
 
-    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env);
-    defer canonicalizer.cache.deinit();
+    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
+    defer canonicalizer.deinit();
 
     // Each fill below is computed once. When the normalized line differs,
     // `can_materialize` holds, and a positional fill of `expected_line` that

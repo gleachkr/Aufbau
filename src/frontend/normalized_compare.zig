@@ -6,7 +6,7 @@ const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const Normalizer = @import("./normalizer.zig").Normalizer;
-const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("./normalizer.zig").Canonicalizer;
 const CheckedLine = @import("./checked_ir.zig").CheckedLine;
 const CompilerDiag = @import("./diag.zig");
 
@@ -35,7 +35,7 @@ pub fn finish(
     // The normalization memo is per-call scratch (NormalizeResult is a flat
     // value; the interned results live in the mirror theorem). It was leaked on
     // every match — free it here.
-    defer normalizer.cache.deinit();
+    defer normalizer.deinit();
     const expected_mark = scratch.mark();
     const normalized_expected =
         normalizer.normalize(comparison.expected_expr) catch |err| {
@@ -54,11 +54,12 @@ pub fn finish(
         comparison.mirrorTheorem(),
         registry,
         env,
+        {},
     );
     // The canonicalization memo is per-call scratch; the results interned into
     // the mirror theorem outlive it, but the cache map itself was previously
     // leaked on every match. Free it here.
-    defer canonicalizer.cache.deinit();
+    defer canonicalizer.deinit();
     const canonical_expected = try canonicalizer.canonicalize(
         normalized_expected.result_expr,
     );

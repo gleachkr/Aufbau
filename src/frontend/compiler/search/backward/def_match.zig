@@ -10,7 +10,7 @@ const acui = @import("./acui.zig");
 const semantic = @import("./semantic.zig");
 const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
-const Canonicalizer = @import("../../../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 
 const isRigidHead = semantic.isRigidHead;
 
@@ -71,8 +71,8 @@ pub fn stuckRedex(
     if (theorem.exprAny(expr, context, notStableNode)) return false;
     var scratch = theorem.clone() catch return false;
     defer scratch.deinit();
-    var canon = Canonicalizer.init(scratch.allocator, &scratch, context.registry, context.env);
-    defer canon.cache.deinit();
+    var canon = Canonicalizer.init(scratch.allocator, &scratch, context.registry, context.env, {});
+    defer canon.deinit();
     const normal = canon.canonicalize(expr) catch return false;
     return normal == expr and canon.step_count == 0;
 }
@@ -90,9 +90,8 @@ fn notStableNode(context: *const Context, theorem: *const TheoremContext, expr: 
 }
 
 // A `@rewrite` head that is also an ACUI combiner or a transparent def classes
-// as `.rewrite`, yet it can change with no rewrite firing: the canonicalizer
-// rearranges an ACUI head without trying its rewrites, and the checker unfolds
-// the def.
+// as `.rewrite`, yet it can change with no rewrite firing: an ACUI head
+// rearranges its members, and the checker unfolds the def.
 fn plainRewriteHead(context: *const Context, term_id: u32) bool {
     if (context.registry.acui_by_head.contains(term_id)) return false;
     const term = &context.env.terms.items[term_id];

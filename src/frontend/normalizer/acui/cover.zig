@@ -1,11 +1,9 @@
 const ExprId = @import("../../expr.zig").ExprId;
-const DefOps = @import("../../def_ops.zig");
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const ResolvedStructuralCombiner =
     @import("../../rewrite_registry.zig").ResolvedStructuralCombiner;
 const NonAcuiTarget = @import("../non_acui_target.zig");
 const ProofEmit = @import("../proof_emit.zig");
-const Support = @import("../support.zig");
 const Canonical = @import("./canonical.zig");
 const Types = @import("../types.zig");
 
@@ -60,14 +58,7 @@ pub fn buildConcreteToDefCoverProof(
         );
     }
 
-    var def_ops = DefOps.Context.initWithRegistry(
-        self.allocator,
-        self.theorem,
-        self.env,
-        self.registry,
-    );
-    defer def_ops.deinit();
-
+    const def_ops = try self.defOps();
     const witness = try def_ops.instantiateDefTowardAcuiItem(
         def_expr,
         concrete_expr,
@@ -140,9 +131,7 @@ pub fn sharedStructuralCombiner(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?ResolvedStructuralCombiner {
-    var support = Support.acuiSupport(self);
-    defer support.deinit();
-    return try support.sharedStructuralCombiner(lhs, rhs);
+    return try (try self.support()).sharedStructuralCombiner(lhs, rhs);
 }
 
 pub fn buildCanonicalAcuiFromItems(
@@ -150,9 +139,7 @@ pub fn buildCanonicalAcuiFromItems(
     items: []const ExprId,
     acui: ResolvedStructuralCombiner,
 ) anyerror!ExprId {
-    var support = Support.acuiSupport(self);
-    defer support.deinit();
-    return try support.buildCanonicalAcuiFromItems(items, acui);
+    return try (try self.support()).buildCanonicalAcuiFromItems(items, acui);
 }
 
 pub fn normalizeStructuralExact(

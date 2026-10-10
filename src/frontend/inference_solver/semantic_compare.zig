@@ -8,8 +8,10 @@ pub fn commonStructuralTarget(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?ExprId {
-    const support = self.structuralSupportShared();
-    return try support.buildCommonTarget(lhs, rhs);
+    const common = try self.canonicalizer.buildCommonTarget(lhs, rhs) orelse {
+        return null;
+    };
+    return common.target_expr;
 }
 
 pub fn bindingCompatible(
@@ -33,7 +35,7 @@ fn structuralCongruenceCompatible(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!bool {
-    const support = self.structuralSupportShared();
+    const support = try self.canonicalizer.support();
     const combiner = try support.sharedStructuralCombiner(lhs, rhs) orelse {
         return false;
     };

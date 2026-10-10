@@ -8,7 +8,7 @@ const plausible = helpers.plausible;
 const seed = helpers.seed;
 const acui = helpers.acui;
 const ExprId = helpers.ExprId;
-const Canonicalizer = @import("../../../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 const TheoremContext = helpers.TheoremContext;
 const Check = helpers.Check;
 const apply = helpers.apply;
@@ -927,10 +927,9 @@ test "a stuck @rewrite redex clashes with a rigid conclusion head" {
 }
 
 test "a @rewrite head that is also a def or an ACUI combiner is never stuck" {
-    // The canonicalizer fires no rewrite on either term, yet the checker
-    // changes both: it unfolds `sbd x t p` to `an p p`, an instance of
-    // `an a b`, and its normalizer rewrites `join (hyp q) (hyp r)` by
-    // `join_hyp`, which the canonicalizer never tries on an ACUI head.
+    // No rewrite at the root of either term is what keeps it unchanged: the
+    // checker unfolds `sbd x t p` to `an p p`, an instance of `an a b`, and
+    // its normalizer rewrites `join (hyp q) (hyp r)` by `join_hyp`.
     const mm0_src =
         \\delimiter $ ( ) $;
         \\provable sort wff;
@@ -980,12 +979,16 @@ test "a @rewrite head that is also a def or an ACUI combiner is never stuck" {
 
     const def_redex = (try parseGoal(&fixture, &theorem, &theorem_vars, "sbd x t p")).concrete;
     const bag_eq = (try parseGoal(&fixture, &theorem, &theorem_vars, "ctx_eq (join (hyp q) (hyp r)) g")).concrete;
-    // Put the bag in canonical order first, so only the head's class can make
-    // it not stuck.
-    var canon = Canonicalizer.init(allocator, &theorem, context.registry, context.env);
-    defer canon.cache.deinit();
+    // Put the bag in canonical order first (its members only, not its
+    // rewrite), so only the head's class can make it not stuck.
+    var canon = Canonicalizer.init(allocator, &theorem, context.registry, context.env, {});
+    defer canon.deinit();
     const raw_bag = theorem.interner.node(bag_eq).app.args[0];
-    const bag = try canon.canonicalize(raw_bag);
+    const join_acui = (try context.registry.resolveStructuralCombiner(
+        context.env,
+        theorem.interner.node(raw_bag).app.term_id,
+    )).?;
+    const bag = try canon.canonicalizeAcui(raw_bag, join_acui);
     try std.testing.expectEqual(
         theorem.interner.node(raw_bag).app.term_id,
         theorem.interner.node(bag).app.term_id,

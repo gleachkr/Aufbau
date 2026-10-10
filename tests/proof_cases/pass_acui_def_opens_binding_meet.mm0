@@ -1,0 +1,61 @@
+delimiter $ ( ) / $;
+
+provable sort wff;
+sort R;
+
+term bi (a b: wff): wff;
+infixl bi: $↔$ prec 20;
+term eq (a b: R): wff;
+infixl eq: $=$ prec 50;
+
+term one: R;
+notation one: R = ($1$:max);
+term two: R;
+notation two: R = ($2$:max);
+--| @acui mul_assoc mul_comm one _
+term mul (a b: R): R;
+infixl mul: $*$ prec 70;
+term inv (a: R): R;
+
+--| @relation wff bi bi_refl bi_trans bi_symm mpbi
+axiom bi_refl (a: wff): $ a ↔ a $;
+axiom bi_trans (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+axiom bi_symm (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+
+--| @relation R eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: R): $ a = a $;
+axiom eq_trans (a b c: R): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_symm (a b: R): $ a = b $ > $ b = a $;
+
+--| @congr
+axiom eq_congr (a b c d: R): $ a = b $ > $ c = d $ > $ (a = c) ↔ (b = d) $;
+--| @congr
+axiom mul_congr (a b c d: R): $ a = b $ > $ c = d $ > $ a * c = b * d $;
+--| @congr
+axiom inv_congr (a b: R): $ a = b $ > $ inv a = inv b $;
+
+--| @conversion assoc
+axiom mul_assoc (a b c: R): $ (a * b) * c = a * (b * c) $;
+--| @conversion comm
+axiom mul_comm (a b: R): $ a * b = b * a $;
+axiom mul_one (a: R): $ a * 1 = a $;
+
+def div (a b: R): R = $ a * inv b $;
+infixl div: $/$ prec 70;
+
+term P (a: R): wff;
+--| @congr
+axiom P_congr (a b: R): $ a = b $ > $ P a ↔ P b $;
+axiom both (a: R): $ a = 1 $ > $ a = 1 $ > $ P a $;
+
+-- Inference meets two bindings of `a` the way the checker converts them:
+-- `2 * (q / 2)` from the first premise and `2 * inv 2 * q` from the second
+-- (or the conclusion) agree only once the def opens into the product.
+theorem acui_def_opens_binding_meet_concl (q: R)
+  (h1: $ 2 * (q / 2) = 1 $) (h2: $ 2 * inv 2 * q = 1 $):
+  $ P (2 * inv 2 * q) $;
+
+theorem acui_def_opens_binding_meet_def (q: R)
+  (h1: $ 2 * (q / 2) = 1 $) (h2: $ 2 * inv 2 * q = 1 $):
+  $ P (2 * (q / 2)) $;

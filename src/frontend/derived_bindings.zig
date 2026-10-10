@@ -4,7 +4,7 @@ const ExprId = @import("./expr.zig").ExprId;
 const ExprNode = @import("./expr.zig").ExprNode;
 const TheoremContext = @import("./expr.zig").TheoremContext;
 const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
-const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("./normalizer.zig").Canonicalizer;
 const BindingValidation = @import("./binding_validation.zig");
 const DefOps = @import("./def_ops.zig");
 const BindingSeed = DefOps.BindingSeed;
@@ -1347,7 +1347,9 @@ fn preprocessDerivedExpr(
         theorem,
         registry,
         env,
+        {},
     );
+    defer canonicalizer.deinit();
     return try preprocessDerivedExprInner(
         &canonicalizer,
         theorem,

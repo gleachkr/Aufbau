@@ -1,5 +1,4 @@
 const ExprId = @import("../expr.zig").ExprId;
-const DefOps = @import("../def_ops.zig");
 const ResolvedRelation = @import("../rewrite_registry.zig").ResolvedRelation;
 const Support = @import("./support.zig");
 const Core = @import("./core.zig");
@@ -23,11 +22,20 @@ pub fn buildCommonTarget(
         };
     }
 
-    if (try buildDirectTransparentCommonTarget(self, lhs, rhs)) |direct| {
-        return direct;
-    }
-    if (try buildSemanticDefCommonTarget(self, lhs, rhs)) |semantic| {
-        return semantic;
+    // The two def-unfolding steps can only make progress through a
+    // concrete def: `compareTransparent` on distinct interned exprs needs
+    // a def-headed subterm to get past a structural mismatch, and
+    // `instantiateDefTowardExpr` bails unless its expr is def-headed.
+    // Hash-consing makes "distinct ids, no def anywhere" a proof that both
+    // return null, so skip their per-pair cache probes entirely.
+    const support = try self.support();
+    if (support.isDefBearing(lhs) or support.isDefBearing(rhs)) {
+        if (try buildDirectTransparentCommonTarget(self, lhs, rhs)) |direct| {
+            return direct;
+        }
+        if (try buildSemanticDefCommonTarget(self, lhs, rhs)) |semantic| {
+            return semantic;
+        }
     }
     if (try Acui.buildAcuiCommonTarget(self, lhs, rhs)) |acui| {
         return acui;
@@ -40,15 +48,8 @@ pub fn buildDirectTransparentCommonTarget(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
-    const relation = Support.resolveRelationForExpr(self, lhs) orelse return null;
-
-    var def_ops = DefOps.Context.initWithRegistry(
-        self.allocator,
-        self.theorem,
-        self.env,
-        self.registry,
-    );
-    defer def_ops.deinit();
+    const relation = Support.relationFor(self, lhs) orelse return null;
+    const def_ops = try self.defOps();
 
     if ((try def_ops.compareTransparent(lhs, rhs)) != null) {
         return .{
@@ -82,7 +83,7 @@ pub fn buildSemanticDefCommonTarget(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
-    const relation = Support.resolveRelationForExpr(self, lhs) orelse return null;
+    const relation = Support.relationFor(self, lhs) orelse return null;
     if (try buildSemanticCommonTargetFromDef(self, lhs, rhs, relation)) |result| {
         return result;
     }
@@ -102,14 +103,7 @@ pub fn buildSemanticCommonTargetFromDef(
     other_expr: ExprId,
     relation: ResolvedRelation,
 ) anyerror!?CommonTargetResult {
-    var def_ops = DefOps.Context.initWithRegistry(
-        self.allocator,
-        self.theorem,
-        self.env,
-        self.registry,
-    );
-    defer def_ops.deinit();
-
+    const def_ops = try self.defOps();
     const witness = if (self.hidden_witness_provider) |provider|
         try def_ops.instantiateDefTowardExprWithProvider(
             def_expr,

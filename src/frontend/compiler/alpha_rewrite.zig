@@ -9,7 +9,6 @@ const ResolvedRelation =
     @import("../rewrite_registry.zig").ResolvedRelation;
 const Normalizer = @import("../normalizer.zig").Normalizer;
 const ProofEmit = @import("../normalizer/proof_emit.zig");
-const RewriteProof = @import("../normalizer/proof_emit.zig");
 const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
 const Expr = @import("../../trusted/expressions.zig").Expr;
 const FreshSelect = @import("./fresh_select.zig");
@@ -24,7 +23,6 @@ const ViewTrace = @import("../view_trace.zig");
 const CheckedIr = @import("../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
 const CheckedRef = CheckedIr.CheckedRef;
-const appendRuleLine = CheckedIr.appendRuleLine;
 
 const NameExprMap = std.StringHashMap(*const Expr);
 
@@ -118,6 +116,7 @@ pub fn tryFreshenBindings(
         scratch,
         debug,
     );
+    defer normalizer.deinit();
     report.replacement_name = selection.token;
     DebugTrace.traceFreshen(
         debug,
@@ -237,6 +236,7 @@ pub fn buildRelationProofFromTargetChange(
         checked,
         scratch,
     );
+    defer normalizer.deinit();
     return try buildRelationProofRec(
         &normalizer,
         old_expr,
@@ -273,6 +273,7 @@ pub fn transportRefAlongProof(
         checked,
         scratch,
     );
+    defer normalizer.deinit();
     return .{ .line = try normalizer.emitTransport(
         relation,
         target_expr,
@@ -308,6 +309,7 @@ pub fn transportRefBackwardAlongProof(
         checked,
         scratch,
     );
+    defer normalizer.deinit();
     const symm_idx = try normalizer.emitSymm(
         relation,
         target_expr,
@@ -496,56 +498,25 @@ fn tryApplyAlphaRule(
     bindings[rule.old_idx] = blocker_expr;
     bindings[rule.new_idx] = fresh_expr;
 
-    if (!normalizer.theorem.matchTemplate(rule.lhs, expr_id, bindings)) {
-        return null;
-    }
-
-    const concrete = try normalizer.allocator.alloc(ExprId, rule.num_binders);
-    errdefer normalizer.allocator.free(concrete);
-    for (bindings, 0..) |binding, idx| {
-        concrete[idx] = binding orelse {
-            normalizer.allocator.free(concrete);
-            return null;
-        };
-    }
-
-    const rule_decl = &normalizer.env.rules.items[rule.rule_id];
-    RewriteProof.validateRewriteBindings(
-        normalizer.env,
-        normalizer.theorem,
-        rule_decl.args,
-        concrete,
-    ) catch {
-        normalizer.allocator.free(concrete);
-        return null;
-    };
-
-    const rhs_expr = try normalizer.theorem.instantiateTemplate(
+    const instance = try ProofEmit.matchRewrite(
+        normalizer,
+        rule.rule_id,
+        rule.lhs,
         rule.rhs,
-        concrete,
-    );
-    if (rhs_expr == expr_id) {
-        normalizer.allocator.free(concrete);
+        expr_id,
+        bindings,
+    ) orelse return null;
+    if (instance.result_expr == expr_id) {
+        normalizer.allocator.free(instance.args);
         return null;
     }
-    const step_expr = try ProofEmit.buildRelExpr(
+    return try ProofEmit.emitRewriteStep(
         normalizer,
         relation,
         expr_id,
-        rhs_expr,
-    );
-    const line_idx = try appendRuleLine(
-        normalizer.lines,
-        normalizer.allocator,
-        step_expr,
         rule.rule_id,
-        concrete,
-        &.{},
+        instance,
     );
-    return .{
-        .result_expr = rhs_expr,
-        .conv_line_idx = line_idx,
-    };
 }
 
 fn buildRelationProofRec(
@@ -618,6 +589,7 @@ fn relationForExpr(
         env,
         &dummy_lines,
     );
+    defer normalizer.deinit();
     return normalizer.resolveRelationForExpr(expr_id);
 }
 

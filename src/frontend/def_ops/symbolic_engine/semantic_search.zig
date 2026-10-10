@@ -1,7 +1,7 @@
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
-const AcuiSupport = @import("../../acui_support.zig");
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const RewriteRule = @import("../../rewrite_registry.zig").RewriteRule;
 const ResolvedStructuralCombiner =
     @import("../../rewrite_registry.zig").ResolvedStructuralCombiner;
@@ -791,14 +791,15 @@ fn applyAcuiToExpr(
     expr_id: ExprId,
 ) anyerror!?*const SymbolicExpr {
     const registry = self.shared.registry orelse return null;
-    var support = AcuiSupport.Context.init(
+    var canonicalizer = Canonicalizer.init(
         self.shared.allocator,
         self.shared.theorem,
-        self.shared.env,
         registry,
+        self.shared.env,
+        {},
     );
-    defer support.deinit();
-    const canonical = try support.canonicalizeAcui(expr_id, acui);
+    defer canonicalizer.deinit();
+    const canonical = try canonicalizer.canonicalizeAcui(expr_id, acui);
     if (canonical == expr_id) return null;
     return try self.allocSymbolic(.{ .fixed = canonical });
 }

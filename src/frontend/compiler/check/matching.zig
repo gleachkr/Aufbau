@@ -304,6 +304,7 @@ fn convertFolded(
             provider,
             ctx.debug,
         ) orelse return null;
+    defer if (conversion) |*conversion_mut| conversion_mut.normalizer.deinit();
 
     const folded = try transport(
         ctx,
@@ -344,6 +345,7 @@ fn convertNormalized(
         provider,
         ctx.debug,
     ) orelse return null;
+    defer conversion.normalizer.deinit();
     const source_ref = try materialize(ctx, source, have);
     const conv_idx = conversion.conv_line_idx orelse return source_ref;
     return .{ .line = try conversion.normalizer.emitTransport(
@@ -374,6 +376,7 @@ fn convertNormalizedThenUnfolded(
         have,
         ctx.debug,
     ) orelse return null;
+    defer normalization.normalizer.deinit();
     const normalized = normalization.normalized_expr;
     if (!try Inference.canConvertTransparent(
         ctx.allocator,
@@ -417,6 +420,7 @@ fn convertUnfoldedToNormalForm(
         want,
         ctx.debug,
     ) orelse return null;
+    defer normalization.normalizer.deinit();
     const normalized = normalization.normalized_expr;
     if (!try Inference.canConvertTransparent(
         ctx.allocator,

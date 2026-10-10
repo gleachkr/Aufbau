@@ -564,6 +564,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_acui_cross_side_cancel_then_absorb", .outcome = .pass },
     .{ .stem = "pass_acui_cross_side_structural_def_leftover", .outcome = .pass },
     .{ .stem = "pass_acui_def_opens_into_bag", .outcome = .pass },
+    .{ .stem = "pass_acui_def_opens_binding_meet", .outcome = .pass },
     .{ .stem = "pass_acui_fragment_baseline", .outcome = .pass },
     .{ .stem = "pass_au_category", .outcome = .pass },
     .{

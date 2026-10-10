@@ -4,6 +4,7 @@ const AcuiSupport = @import("../../acui_support.zig");
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const ResolvedStructuralCombiner =
     @import("../../rewrite_registry.zig").ResolvedStructuralCombiner;
+const AcuiBag = @import("../../acui_bag.zig");
 const ChildNorm = @import("../child_norm.zig");
 const ProofEmit = @import("../proof_emit.zig");
 const Support = @import("../support.zig");
@@ -156,8 +157,7 @@ pub fn collectAcuiLeaves(
     head_term_id: u32,
     out: *std.ArrayListUnmanaged(AcuiLeaf),
 ) anyerror!void {
-    var support = Support.acuiSupport(self);
-    defer support.deinit();
+    const support = try self.support();
     var infos = std.ArrayListUnmanaged(AcuiSupport.LeafInfo).empty;
     defer infos.deinit(self.allocator);
     try support.collectLeafInfos(expr_id, head_term_id, &infos);
@@ -172,6 +172,33 @@ pub fn collectAcuiLeaves(
     }
 }
 
+/// The canonical bag of `acui` at `expr_id` with its members left as they
+/// are: concrete members fold into equal def members, then the bag is
+/// flattened, sorted and deduplicated by the combiner's laws.
+pub fn canonicalizeBag(
+    self: anytype,
+    expr_id: ExprId,
+    acui: ResolvedStructuralCombiner,
+) anyerror!ExprId {
+    const relation = Support.relationFor(self, expr_id) orelse return expr_id;
+    var leaves = std.ArrayListUnmanaged(AcuiLeaf).empty;
+    defer leaves.deinit(self.allocator);
+    try collectAcuiLeaves(self, expr_id, acui.head_term_id, &leaves);
+    const unit_expr = try ProofEmit.unitExpr(self, acui);
+    try applySameSideAbsorption(self, leaves.items, unit_expr, relation, acui);
+
+    const items = try self.allocator.alloc(ExprId, leaves.items.len);
+    defer self.allocator.free(items);
+    for (leaves.items, items) |leaf, *item| item.* = leaf.new_expr;
+    const rebuilt = (try AcuiBag.Combiner.fromResolved(acui).build(
+        self.theorem,
+        items,
+    )).?;
+    return try (try self.support()).canonicalizeAcuiExact(rebuilt, acui);
+}
+
+/// Fold each concrete leaf into a def leaf of the same bag that equals it,
+/// the first such def in leaf order, so equal members meet as one item.
 pub fn applySameSideAbsorption(
     self: anytype,
     leaves: []AcuiLeaf,
@@ -179,31 +206,21 @@ pub fn applySameSideAbsorption(
     relation: ResolvedRelation,
     acui: ResolvedStructuralCombiner,
 ) anyerror!void {
-    const infos = try self.allocator.alloc(AcuiSupport.LeafInfo, leaves.len);
-    defer self.allocator.free(infos);
-    for (leaves, 0..) |leaf, idx| {
-        infos[idx] = .{
-            .expr_id = leaf.old_expr,
-            .is_def = leaf.is_def,
-        };
-    }
-
-    var support = Support.acuiSupport(self);
-    defer support.deinit();
-    const targets = try support.computeSameSideTargets(infos, unit_expr, acui);
-    defer self.allocator.free(targets);
-
-    for (leaves, targets) |*leaf, target| {
-        if (target == leaf.old_expr) continue;
-        const proof = try Cover.buildConcreteToDefCoverProof(
-            self,
-            leaf.old_expr,
-            target,
-            relation,
-            acui,
-        ) orelse return error.MissingStructuralMetadata;
-        leaf.new_expr = target;
-        leaf.conv_line_idx = proof;
+    for (leaves) |*leaf| {
+        if (leaf.old_expr == unit_expr or leaf.is_def) continue;
+        for (leaves) |owner| {
+            if (!owner.is_def) continue;
+            const proof = try Cover.buildConcreteToDefCoverProof(
+                self,
+                leaf.old_expr,
+                owner.old_expr,
+                relation,
+                acui,
+            ) orelse continue;
+            leaf.new_expr = owner.old_expr;
+            leaf.conv_line_idx = proof;
+            break;
+        }
     }
 }
 

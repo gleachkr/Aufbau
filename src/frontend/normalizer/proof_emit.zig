@@ -5,6 +5,7 @@ const TheoremContext = @import("../expr.zig").TheoremContext;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const DiagScratch = @import("../diag_scratch.zig");
 const RewriteRule = @import("../rewrite_registry.zig").RewriteRule;
+const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const BindingValidation = @import("../binding_validation.zig");
 const MissingCongruenceReason = DiagScratch.MissingCongruenceReason;
 const ResolvedRelation = @import("../rewrite_registry.zig").ResolvedRelation;
@@ -29,6 +30,7 @@ pub fn emitTransparentRelationProof(
     target_expr: ExprId,
 ) anyerror!?usize {
     if (source_expr == target_expr) return null;
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const source_rel = try buildRelExpr(self, relation, source_expr, source_expr);
     const target_rel = try buildRelExpr(self, relation, source_expr, target_expr);
     const refl_idx = try emitRefl(self, relation, source_expr);
@@ -50,59 +52,94 @@ pub fn tryApplyRule(
     const bindings = try self.allocator.alloc(?ExprId, rule.num_binders);
     defer self.allocator.free(bindings);
     @memset(bindings, null);
+    const instance = try matchRewrite(
+        self,
+        rule.rule_id,
+        rule.lhs,
+        rule.rhs,
+        expr_id,
+        bindings,
+    ) orelse return null;
+    return try emitRewriteStep(self, relation, expr_id, rule.rule_id, instance);
+}
 
-    if (!self.theorem.matchTemplate(rule.lhs, expr_id, bindings)) {
-        return null;
-    }
+/// A rewrite rule instantiated at an expression: the rule's arguments and
+/// the instance of its right-hand side.
+pub const RewriteInstance = struct {
+    args: []ExprId,
+    result_expr: ExprId,
+};
 
-    const concrete = try self.allocator.alloc(ExprId, rule.num_binders);
-    for (bindings, 0..) |binding, idx| {
-        concrete[idx] = binding orelse {
-            self.allocator.free(concrete);
+/// The instance of rule `rule_id`, read as `lhs` to `rhs`, at `expr_id`, or
+/// null when `lhs` does not match or the matched arguments break the rule's
+/// sorts or dependencies. `bindings` holds the arguments the caller fixes
+/// and receives the rest. The caller owns the instance's `args` until
+/// `emitRewriteStep` takes them.
+pub fn matchRewrite(
+    self: anytype,
+    rule_id: u32,
+    lhs: TemplateExpr,
+    rhs: TemplateExpr,
+    expr_id: ExprId,
+    bindings: []?ExprId,
+) anyerror!?RewriteInstance {
+    if (!self.theorem.matchTemplate(lhs, expr_id, bindings)) return null;
+    if (rule_id >= self.env.rules.items.len) return null;
+    const rule_decl = &self.env.rules.items[rule_id];
+    if (rule_decl.args.len != bindings.len) return null;
+
+    const args = try self.allocator.alloc(ExprId, bindings.len);
+    errdefer self.allocator.free(args);
+    for (bindings, args) |binding, *arg| {
+        arg.* = binding orelse {
+            self.allocator.free(args);
             return null;
         };
     }
-
-    if (rule.rule_id >= self.env.rules.items.len) {
-        self.allocator.free(concrete);
-        return null;
-    }
-    const rule_decl = &self.env.rules.items[rule.rule_id];
-    if (rule_decl.args.len != concrete.len) {
-        self.allocator.free(concrete);
-        return null;
-    }
-    validateRewriteBindings(
-        self.env,
-        self.theorem,
-        rule_decl.args,
-        concrete,
-    ) catch {
-        self.allocator.free(concrete);
+    validateRewriteBindings(self.env, self.theorem, rule_decl.args, args) catch {
+        self.allocator.free(args);
         return null;
     };
-
-    const rhs_expr = try self.theorem.instantiateTemplate(rule.rhs, concrete);
-    const step_expr = try buildRelExpr(self, relation, expr_id, rhs_expr);
-
-    const line_idx = try appendRuleLine(
-        self.lines,
-        self.allocator,
-        step_expr,
-        rule.rule_id,
-        concrete,
-        &.{},
-    );
-    traceExprPair(
-        self,
-        "applied rewrite",
-        expr_id,
-        rhs_expr,
-    );
-
     return .{
-        .result_expr = rhs_expr,
-        .conv_line_idx = line_idx,
+        .args = args,
+        .result_expr = try self.theorem.instantiateTemplate(rhs, args),
+    };
+}
+
+/// The step `rel(expr_id, instance.result_expr)` by rule `rule_id`. Takes
+/// ownership of the instance's arguments.
+pub fn emitRewriteStep(
+    self: anytype,
+    relation: ResolvedRelation,
+    expr_id: ExprId,
+    rule_id: u32,
+    instance: RewriteInstance,
+) anyerror!NormalizeResult {
+    traceExprPair(self, "applied rewrite", expr_id, instance.result_expr);
+    if (!Support.emitsProofs(self)) {
+        self.allocator.free(instance.args);
+        return .{
+            .result_expr = instance.result_expr,
+            .conv_line_idx = Support.proof_free_line,
+        };
+    }
+    errdefer self.allocator.free(instance.args);
+    const step_expr = try buildRelExpr(
+        self,
+        relation,
+        expr_id,
+        instance.result_expr,
+    );
+    return .{
+        .result_expr = instance.result_expr,
+        .conv_line_idx = try appendRuleLine(
+            self.lines,
+            self.allocator,
+            step_expr,
+            rule_id,
+            instance.args,
+            &.{},
+        ),
     };
 }
 
@@ -152,6 +189,7 @@ pub fn emitCongruenceLine(
         any_changed = any_changed or old_arg != new_arg;
     }
     if (!any_changed) return null;
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
 
     const term_decl = if (term_id < self.env.terms.items.len)
         &self.env.terms.items[term_id]
@@ -276,6 +314,7 @@ pub fn emitRefl(
     relation: ResolvedRelation,
     expr_id: ExprId,
 ) anyerror!usize {
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const refl_expr = try buildRelExpr(self, relation, expr_id, expr_id);
     const bindings = try self.allocator.alloc(ExprId, 1);
     bindings[0] = expr_id;
@@ -298,6 +337,7 @@ pub fn emitAssoc(
     relation: ResolvedRelation,
     acui: ResolvedStructuralCombiner,
 ) anyerror!usize {
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const lhs = try self.theorem.interner.internApp(
         acui.head_term_id,
         &[_]ExprId{
@@ -342,6 +382,7 @@ pub fn emitAssocSymm(
     relation: ResolvedRelation,
     acui: ResolvedStructuralCombiner,
 ) anyerror!usize {
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const assoc_idx = try emitAssoc(self, a, b, c, relation, acui);
     const lhs = try self.theorem.interner.internApp(
         acui.head_term_id,
@@ -373,6 +414,8 @@ pub fn emitComm(
     relation: ResolvedRelation,
     acui: ResolvedStructuralCombiner,
 ) anyerror!usize {
+    const comm_id = acui.comm_id orelse return error.MissingStructuralMetadata;
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const lhs = try self.theorem.interner.internApp(
         acui.head_term_id,
         &[_]ExprId{ a, b },
@@ -390,7 +433,7 @@ pub fn emitComm(
         self.lines,
         self.allocator,
         expr,
-        acui.comm_id orelse return error.MissingStructuralMetadata,
+        comm_id,
         bindings,
         &.{},
     );
@@ -402,6 +445,8 @@ pub fn emitIdem(
     relation: ResolvedRelation,
     acui: ResolvedStructuralCombiner,
 ) anyerror!usize {
+    const idem_id = acui.idem_id orelse return error.MissingStructuralMetadata;
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const lhs = try self.theorem.interner.internApp(
         acui.head_term_id,
         &[_]ExprId{ a, a },
@@ -414,7 +459,7 @@ pub fn emitIdem(
         self.lines,
         self.allocator,
         expr,
-        acui.idem_id orelse return error.MissingStructuralMetadata,
+        idem_id,
         bindings,
         &.{},
     );
@@ -523,6 +568,8 @@ fn emitDirectUnit(
     rule_id: ?u32,
     reversed: bool,
 ) anyerror!usize {
+    const unit_rule_id = rule_id orelse return error.MissingStructuralMetadata;
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const bindings = try self.allocator.alloc(ExprId, 1);
     bindings[0] = result_expr;
 
@@ -535,7 +582,7 @@ fn emitDirectUnit(
         self.lines,
         self.allocator,
         theorem_expr,
-        rule_id orelse return error.MissingStructuralMetadata,
+        unit_rule_id,
         bindings,
         &.{},
     );
@@ -574,6 +621,7 @@ pub fn composeTransitivityLine(
     first_proof: usize,
     second_proof: usize,
 ) anyerror!usize {
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const trans_expr = try buildRelExpr(self, relation, original, final);
     const bindings = try self.allocator.alloc(ExprId, 3);
     bindings[0] = original;
@@ -623,6 +671,7 @@ pub fn emitTransport(
     conv_line_idx: usize,
     source_line: CheckedRef,
 ) anyerror!usize {
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const transport_id = relation.transport_id orelse {
         return error.MissingTransport;
     };
@@ -653,6 +702,7 @@ pub fn emitSymm(
     b: ExprId,
     proof_line_idx: usize,
 ) anyerror!usize {
+    if (!Support.emitsProofs(self)) return Support.proof_free_line;
     const symm_expr = try buildRelExpr(self, relation, b, a);
     const bindings = try self.allocator.alloc(ExprId, 2);
     bindings[0] = a;

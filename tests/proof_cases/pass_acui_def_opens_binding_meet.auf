@@ -1,0 +1,9 @@
+acui_def_opens_binding_meet_concl
+---------------------------------
+
+l1: $ P (2 * inv 2 * q) $ by both [#1, #2]
+
+acui_def_opens_binding_meet_def
+-------------------------------
+
+l1: $ P (2 * (q / 2)) $ by both [#1, #2]

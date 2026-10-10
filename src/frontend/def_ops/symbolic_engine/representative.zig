@@ -1,6 +1,6 @@
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
-const Canonicalizer = @import("../../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const Types = @import("../types.zig");
 const MatchState = @import("../match_state.zig");
 const TransparentMatch = @import("./transparent_match.zig");
@@ -129,7 +129,9 @@ fn rebuildCanonicalRepresentative(
                 self.shared.theorem,
                 registry,
                 self.shared.env,
+                {},
             );
+            defer canonicalizer.deinit();
             const canonical = try canonicalizer.canonicalize(plain);
             current = try self.allocSymbolic(.{ .fixed = canonical });
         }

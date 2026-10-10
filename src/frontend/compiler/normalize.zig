@@ -104,6 +104,7 @@ pub fn normalizeExprForSnapshot(
         checked,
         scratch,
     );
+    defer normalizer.deinit();
     const mark = scratch.mark();
     const normalized = normalizer.normalize(expr) catch |err| {
         scratch.discard(mark);
@@ -144,6 +145,9 @@ pub fn buildNormalizedConversionWithProviderAndDebug(
         debug,
     );
     normalizer.hidden_witness_provider = hidden_witness_provider;
+    // Handed to the caller with the result; freed here otherwise.
+    var returned = false;
+    defer if (!returned) normalizer.deinit();
     const relation = normalizer.resolveRelationForExpr(actual) orelse {
         DebugTrace.traceNormalization(
             debug,
@@ -232,6 +236,7 @@ pub fn buildNormalizedConversionWithProviderAndDebug(
         "normalized comparison succeeded",
         .{},
     );
+    returned = true;
     return .{
         .relation = relation,
         .conv_line_idx = conv_line_idx,
@@ -278,9 +283,9 @@ pub fn wouldAcceptStatedConclusion(
         else => return false,
     }) orelse return false;
     var conversion_mut = conversion;
-    conversion_mut.normalizer.cache.deinit();
-    return conversion_mut.conv_line_idx == null or
-        conversion_mut.relation.transport_id != null;
+    conversion_mut.normalizer.deinit();
+    return conversion.conv_line_idx == null or
+        conversion.relation.transport_id != null;
 }
 
 pub fn buildExpectedNormalizationWithDebug(
@@ -302,6 +307,9 @@ pub fn buildExpectedNormalizationWithDebug(
         scratch,
         debug,
     );
+    // Handed to the caller with the result; freed here otherwise.
+    var returned = false;
+    defer if (!returned) normalizer.deinit();
     const relation = normalizer.resolveRelationForExpr(expected) orelse {
         return null;
     };
@@ -313,6 +321,7 @@ pub fn buildExpectedNormalizationWithDebug(
     if (normalized.result_expr == expected and normalized.conv_line_idx == null) {
         return null;
     }
+    returned = true;
     return .{
         .relation = relation,
         .normalized_expr = normalized.result_expr,

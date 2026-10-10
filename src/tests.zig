@@ -19,7 +19,6 @@ comptime {
     // here happens to reference them (scripts/check-test-wiring.mjs).
     _ = @import("./frontend/acui_support.zig");
     _ = @import("./frontend/binding_validation.zig");
-    _ = @import("./frontend/canonicalizer.zig");
     _ = @import("./frontend/checked_ir.zig");
     _ = @import("./frontend/debug.zig");
     _ = @import("./frontend/diag.zig");
@@ -31,6 +30,7 @@ comptime {
     _ = @import("./frontend/compiler/search/meta_store.zig");
     _ = @import("./frontend/compiler/inference/open_terms.zig");
     _ = @import("./frontend/def_ops/mirror_support.zig");
+    _ = @import("./frontend/normalizer.zig");
     _ = @import("./frontend/normalizer/proof_emit.zig");
     // Must be a same-module comptime import: the test runner only collects
     // test decls reachable from the root module, so the previous routing

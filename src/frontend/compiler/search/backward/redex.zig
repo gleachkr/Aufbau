@@ -8,7 +8,7 @@
 const types = @import("../types.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
-const Canonicalizer = @import("../../../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
 const Context = types.Context;
 
 /// Reduce only the substitution/rewrite redexes in `expr_id`, leaving the ACUI
@@ -45,8 +45,9 @@ pub fn reduceRedexOnly(
         theorem,
         context.registry,
         context.env,
+        {},
     );
-    defer canon.cache.deinit();
+    defer canon.deinit();
     return reduceRedexOnlyInner(context, theorem, &canon, expr_id);
 }
 

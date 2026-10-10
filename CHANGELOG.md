@@ -36,6 +36,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   when unfolding a definition needed a `@vars` variable for a hidden
   dummy, or when the conclusion only met the line after normalizing one
   side and unfolding a definition.
+- Inference now decides whether two values of a rule variable agree the
+  way the checker converts them. A variable read as `2 * (q / 2)` from one
+  premise and `2 * inv 2 * q` from another failed with "the statement and
+  cited premises could not be matched against this rule", although the
+  line checked with the variable written out: inference had its own copy
+  of the comparison, which never opened a definition into the surrounding
+  product. Inference and the checker now share one.
 
 ## [0.0.15] - 2026-10-08
 

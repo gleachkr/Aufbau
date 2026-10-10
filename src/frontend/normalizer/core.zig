@@ -63,7 +63,7 @@ pub fn normalizeUncached(
         },
     };
 
-    const relation = Support.resolveRelationForExpr(self, expr_id) orelse {
+    const relation = Support.relationFor(self, expr_id) orelse {
         DebugTrace.traceNormalization(
             self.debug,
             "expr #{d} has no registered normalization relation",

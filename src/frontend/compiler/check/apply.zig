@@ -57,7 +57,7 @@ const addBoundaryAttemptNotes = DiagNotes.addBoundaryAttemptNotes;
 const applyFreshenedRuleLine = FreshenRetry.applyFreshenedRuleLine;
 const findRuleArgIndex = Idents.findRuleArgIndex;
 const templateMentionsBinder = @import("../../rules.zig").templateMentionsBinder;
-const Canonicalizer = @import("../../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 
 const NameExprMap = @import("./types.zig").NameExprMap;
 const UnresolvedHypothesis = @import("./types.zig").UnresolvedHypothesis;
@@ -1590,8 +1590,9 @@ const NodeInference = struct {
             n.theorem,
             n.context.registry,
             n.context.env,
+            {},
         );
-        defer canonicalizer.cache.deinit();
+        defer canonicalizer.deinit();
         for (values, 0..) |value, idx| {
             const expected = value orelse continue;
             if (idx < bindings.len) {

@@ -6,7 +6,6 @@ const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const Support = @import("../support.zig");
 const NonAcuiTarget = @import("../non_acui_target.zig");
 const ProofEmit = @import("../proof_emit.zig");
-const DefOps = @import("../../def_ops.zig");
 const Cover = @import("./cover.zig");
 const Normalize = @import("./normalize.zig");
 const Types = @import("../types.zig");
@@ -21,7 +20,7 @@ pub fn buildAcuiCommonTarget(
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
     const relation =
-        Support.resolveRelationForExpr(self, lhs) orelse return null;
+        Support.relationFor(self, lhs) orelse return null;
     const acui = try Cover.sharedStructuralCombiner(self, lhs, rhs) orelse {
         return null;
     };
@@ -250,14 +249,7 @@ fn openUncoveredDefs(
     exact: []const bool,
     claimed: []const bool,
 ) anyerror!?NormalizeResult {
-    var def_ops = DefOps.Context.initWithRegistry(
-        self.allocator,
-        self.theorem,
-        self.env,
-        self.registry,
-    );
-    defer def_ops.deinit();
-
+    const def_ops = try self.defOps();
     const opened = try self.allocator.alloc(AcuiLeaf, leaves.len);
     defer self.allocator.free(opened);
     var any_opened = false;

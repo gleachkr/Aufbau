@@ -268,7 +268,6 @@ Definition-aware matching and normalization support:
 - `def_ops/tests/`
 - `head_class.zig`
 - `inference_solver.zig`
-- `canonicalizer.zig`
 - `acui_bag.zig`
 - `acui_support.zig`
 - `rewrite_registry.zig`
@@ -900,7 +899,7 @@ matched expression and a chosen representative. Representative choice is
 deterministic and may use:
 
 - recursive representative rebuilding
-- canonicalization via `canonicalizer.zig`
+- canonicalization by the `Canonicalizer` (`normalizer.zig`)
 - compression back to a def-headed form when possible
 
 That split matters because derived-binding logic such as `@recover` and
@@ -960,8 +959,10 @@ It is mainly responsible for cases where omitted-binder inference needs:
   session
 
 The solver keeps branch-local binding arrays plus ACUI interval
-constraints, and uses `canonicalizer.zig` and `def_ops.zig` as helper
-predicates. When several ACUI-compatible concrete solutions remain, it
+constraints, and uses the `Canonicalizer` and `def_ops.zig` as helper
+predicates: two bindings are compatible when they canonicalize alike or the
+`Canonicalizer` finds them a common target, the same search the checker
+runs with proofs. When several ACUI-compatible concrete solutions remain, it
 ranks them by minimal structural residual and emits an ambiguity warning
 if more than one distinct solution survived.
 
@@ -1007,33 +1008,18 @@ reusing the verifier's native conversion machinery.
 
 ## Shared ACUI semantics
 
-`src/frontend/acui_support.zig` owns the non-proof-producing ACUI item
-semantics shared by:
-
-- `canonicalizer.zig`
-- `normalizer.zig`
-- parts of omitted-binder inference that need canonical ACUI reasoning
-
-This shared module matters because the project previously had a real risk
-of drift between the canonicalizer and the proof-producing normalizer.
+`src/frontend/acui_support.zig` holds the ACUI vocabulary: combiner
+resolution (memoized per statement), leaf collection, the def-bearing test,
+canonical set items, and canonical bag building and merging by
+`compareExprIds`. It decides nothing about equality through defs; that is
+the normalizer's (below), in one implementation for the checker and for
+inference.
 
 Below it, `src/frontend/acui_bag.zig` is the one reading of a combiner
 application as a bag of members, shared by the checker and the search. It
 flattens (dropping the combiner's *own* unit only: ring `+` and `*` on one sort
 do not share units), rebuilds, and reports the declared laws as one `Law`
 (set, multiset, sequence, or idempotent sequence).
-
-The current shared ACUI model includes:
-
-- exact cancellation of matching items
-- deterministic same-side absorption by def-bearing leaves
-- support for wrapped leaves by building non-ACUI common targets inside
-  those leaves when needed
-- ordinary ACUI rebuilding and canonical sorting by `compareExprIds`
-
-The key policy point is that ACUI support may use witness-directed def
-instantiation for leaf coverage, but it still does not introduce a global
-"open every def" semantics.
 
 ## Rewrite metadata, normalization, and transport
 
@@ -1049,19 +1035,28 @@ metadata for:
 - `@auto` forward, backward, eager, and trigger enrollment
 - `@conversion` theorem/definition enrollment and directed `@compute` rules
 
-### Canonicalizer
-
-`src/frontend/canonicalizer.zig` computes symbolic canonical forms used
-by inference and representative selection. It is non-proof-producing.
-
-Its job is to answer questions like "which concrete representative should
-this semantically solved binder keep?", not to emit proof lines.
-
 ### Normalizer
 
-`src/frontend/normalizer.zig` is the façade for the proof-producing
-normalizer, with most implementation split across the
-`src/frontend/normalizer/` directory.
+`src/frontend/normalizer.zig` is the façade for the normalizer, with most
+implementation split across the `src/frontend/normalizer/` directory. One
+engine runs in two modes:
+
+- `Normalizer` appends a checked line for every step it takes
+- `Canonicalizer` takes the same steps with no proof sink: each step
+  reports a placeholder line, so it reaches the same normal forms and
+  common targets. It decides the laws rather than whether their proof can
+  be stated, so it also runs where the proof-producing mode needs a
+  registered relation or `@congr` rule and has none. Inference, search and
+  representative selection use it
+
+Besides normal forms, the engine finds common targets of two expressions:
+transparent def comparison, witness-directed def instantiation, and for two
+bags of one ACUI combiner exact cancellation of members, members that meet
+by congruence, concrete members folded into equal def members, and def
+members opened into the surrounding bag. Each bag is also canonicalized
+with same-side absorption, where a concrete member folds into an equal def
+member of its own bag. The engine may instantiate a def toward a witness for
+member coverage, but it does not open every def.
 
 It emits ordinary proof lines that justify normalization using:
 

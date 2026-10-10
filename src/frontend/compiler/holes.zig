@@ -15,7 +15,7 @@ const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
 const AcuiBag = @import("../acui_bag.zig");
 const Views = @import("../views.zig");
-const Canonicalizer = @import("../canonicalizer.zig").Canonicalizer;
+const Canonicalizer = @import("../normalizer.zig").Canonicalizer;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const ResolvedStructuralCombiner =
     @import("../rewrite_registry.zig").ResolvedStructuralCombiner;

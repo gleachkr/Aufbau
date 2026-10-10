@@ -11,8 +11,7 @@ const CompilerDiag = @import("./diag.zig");
 const ArgInfo = @import("./parse_recovery.zig").ArgInfo;
 const ViewDecl = @import("./views.zig").ViewDecl;
 const DerivedBinding = @import("./views.zig").DerivedBinding;
-const Canonicalizer = @import("./canonicalizer.zig").Canonicalizer;
-const AcuiSupport = @import("./acui_support.zig");
+const Canonicalizer = @import("./normalizer.zig").Canonicalizer;
 const DerivedBindings = @import("./derived_bindings.zig");
 const DefOps = @import("./def_ops.zig");
 const DebugTrace = @import("./debug.zig");
@@ -110,11 +109,6 @@ pub const Solver = struct {
     // `real_allocator` (the interner allocator) like the per-call contexts did.
     def_ops_ctx: ?DefOps.Context = null,
     def_ops_ctx_plain: ?DefOps.Context = null,
-    /// Solve-lifetime ACUI structural-support context for the semantic-compare
-    /// paths (`bindingCompatible` / `commonStructuralTarget`), which used to
-    /// build a fresh context — and therefore a cold def_ops context — per
-    /// comparison. Same soundness argument as the def_ops contexts above.
-    acui_support_ctx: ?AcuiSupport.Context = null,
     /// Search work ceiling, set by the caller when the solve runs under a
     /// budgeted search (`CompilerContext.work_budget`). Polled by every
     /// branch clone and semantic compare (`checkBudget`), the two operations
@@ -149,6 +143,7 @@ pub const Solver = struct {
                 @constCast(theorem),
                 registry,
                 env,
+                {},
             ),
             .scratch = scratch,
             .debug = debug,
@@ -174,10 +169,9 @@ pub const Solver = struct {
         if (self.ambiguity_report.alternative_bindings) |summary| {
             self.real_allocator.free(summary);
         }
-        self.canonicalizer.cache.deinit();
+        self.canonicalizer.deinit();
         if (self.def_ops_ctx) |*ctx| ctx.deinit();
         if (self.def_ops_ctx_plain) |*ctx| ctx.deinit();
-        if (self.acui_support_ctx) |*ctx| ctx.deinit();
         self.state_arena.deinit();
     }
 
@@ -222,32 +216,9 @@ pub const Solver = struct {
         return self.failure;
     }
 
-    pub fn structuralSupport(self: *Solver) AcuiSupport.Context {
-        // AcuiSupport builds def_ops contexts internally, whose `internAppOwned`
-        // frees interned args with the theorem interner allocator, so it must run
-        // on the real allocator, not the per-solve arena.
-        return AcuiSupport.Context.init(
-            self.real_allocator,
-            self.theorem,
-            self.env,
-            self.registry,
-        );
-    }
-
-    /// Solve-lifetime shared variant of `structuralSupport`. Callers must not
-    /// deinit (or copy) the result; the Solver owns it. Lazily created via a
-    /// stable `*Solver`, so the by-value construction copy settles while the
-    /// context's lazy def_ops field is still null (the documented-safe window).
     /// Abort the solve if the installed search budget is spent.
     pub fn checkBudget(self: *const Solver) error{SearchBudgetExhausted}!void {
         if (self.budget) |budget| try budget.check();
-    }
-
-    pub fn structuralSupportShared(self: *Solver) *AcuiSupport.Context {
-        if (self.acui_support_ctx == null) {
-            self.acui_support_ctx = self.structuralSupport();
-        }
-        return &self.acui_support_ctx.?;
     }
 
     // This entry point is supposed to infer omitted structural binders for
