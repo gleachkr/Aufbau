@@ -54,6 +54,9 @@ pub const Cost = struct {
     phase: usize = 0,
     /// The rules with the most validation attempts, most first.
     rules: []const RuleTally = &.{},
+    /// Suggestions the binding oracle failed to trim
+    /// (`SearchCounters.untrimmed`); any is an oracle gap.
+    untrimmed: u32 = 0,
 };
 
 pub const Outcome = enum {
@@ -475,6 +478,7 @@ fn costOf(out: std.mem.Allocator, counters: *const Search.SearchCounters) !Cost 
         .depth = counters.gen_last_depth,
         .phase = counters.gen_last_phase,
         .rules = rules,
+        .untrimmed = counters.untrimmed,
     };
 }
 

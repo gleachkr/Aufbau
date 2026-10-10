@@ -17,10 +17,6 @@ const mmb_mutate = @import("mmb_mutate.zig");
 
 const Base = struct { mm0: []const u8, mmb: []const u8 };
 
-/// Each seed's compiled binary, made the first time an input picks it.
-/// Kept for the process, like the seeds.
-const Compiled = union(enum) { untried, failed, mmb: []const u8 };
-var compiled: []Compiled = &.{};
 var tutorial: ?Base = null;
 
 const Edit = enum { raw, structure, spec, structure_and_spec };
@@ -58,28 +54,11 @@ fn kernel(seeds: []const harness.Seed, input: harness.Input) !void {
 }
 
 /// Base `index` (the last index is the tutorial), or null when that seed
-/// does not compile.
+/// does not compile cleanly.
 fn pickBase(seeds: []const harness.Seed, index: usize) !?Base {
     if (index == seeds.len) return try loadTutorial();
-    if (compiled.len == 0) {
-        compiled = try std.heap.page_allocator.alloc(Compiled, seeds.len);
-        @memset(compiled, .untried);
-    }
-    const seed = seeds[index];
-    if (compiled[index] == .untried) {
-        // Outside the per-input allocator: the binary outlives the input.
-        const gpa = std.heap.smp_allocator;
-        var compiler = mm0.Compiler.initWithProof(gpa, seed.mm0, seed.auf);
-        compiled[index] = if (compiler.compileMmb(gpa)) |mmb| .{ .mmb = mmb } else |err| switch (err) {
-            error.OutOfMemory => return err,
-            else => .failed,
-        };
-    }
-    return switch (compiled[index]) {
-        .untried => unreachable,
-        .failed => null,
-        .mmb => |mmb| .{ .mm0 = seed.mm0, .mmb = mmb },
-    };
+    const mmb = (try harness.compiledSeed(seeds, index)) orelse return null;
+    return .{ .mm0 = seeds[index].mm0, .mmb = mmb };
 }
 
 fn loadTutorial() !Base {

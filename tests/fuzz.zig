@@ -7,5 +7,6 @@ test {
     _ = @import("fuzz/compile.zig");
     _ = @import("fuzz/kernel.zig");
     _ = @import("fuzz/lsp.zig");
+    _ = @import("fuzz/search.zig");
     _ = @import("fuzz/mmb_mutate.zig");
 }

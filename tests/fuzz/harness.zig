@@ -188,6 +188,42 @@ pub fn seeds() ![]const Seed {
     return loaded_seeds.?;
 }
 
+/// Each seed's compiled binary, made the first time an input asks for it
+/// and kept for the process, like the seeds.
+const Compiled = union(enum) { untried, failed, mmb: []const u8 };
+var compiled: []Compiled = &.{};
+
+/// The binary this compiler makes for `seeds[index]`, or null when the
+/// seed does not compile or verify cleanly (`by sorry!` included).
+pub fn compiledSeed(all: []const Seed, index: usize) !?[]const u8 {
+    if (compiled.len == 0) {
+        compiled = try std.heap.page_allocator.alloc(Compiled, all.len);
+        @memset(compiled, .untried);
+    }
+    if (compiled[index] == .untried) {
+        // Outside the per-input allocator: the binary outlives the input.
+        const gpa = std.heap.smp_allocator;
+        const seed = all[index];
+        var compiler = mm0.Compiler.initWithProof(gpa, seed.mm0, seed.auf);
+        compiled[index] = if (compiler.compileMmb(gpa)) |mmb| verified: {
+            mm0.verifyPair(gpa, seed.mm0, mmb) catch |err| {
+                gpa.free(mmb);
+                if (err == error.OutOfMemory) return err;
+                break :verified .failed;
+            };
+            break :verified .{ .mmb = mmb };
+        } else |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => .failed,
+        };
+    }
+    return switch (compiled[index]) {
+        .untried => unreachable,
+        .failed => null,
+        .mmb => |mmb| mmb,
+    };
+}
+
 /// Every case under tests/proof_cases that joins, sorted by stem so a
 /// saved input picks the same seed on every machine. Lives in `arena`.
 fn loadSeeds(arena: std.mem.Allocator) ![]const Seed {
