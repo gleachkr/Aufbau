@@ -62,7 +62,7 @@ test "conclusion seed unfolds transparent template head" {
     const context = harness.context(&fixture);
     const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
     const goal: Goal = .{ .concrete = goal_expr };
-    const rule_id = fixture.env.getRuleId("ded") orelse return error.MissingRule;
+    const rule_id = fixture.theory.env.getRuleId("ded") orelse return error.MissingRule;
     var candidate = try seed.makeExactRuleCandidate(
         allocator,
         &context,
@@ -72,7 +72,7 @@ test "conclusion seed unfolds transparent template head" {
     );
     defer candidate.deinit();
 
-    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
     const p_idx = blk: {
         for (rule.arg_names, 0..) |maybe_name, idx| {
             const name = maybe_name orelse continue;
@@ -125,7 +125,7 @@ fn seedSlotSpend(comptime name: []const u8) !u32 {
     defer harness.deinit();
     const context = harness.context(&fixture);
     const goal: Goal = .{ .concrete = try theorem.internParsedExpr(fixture.assertion.concl) };
-    const rule_id = fixture.env.getRuleId("ex_i") orelse return error.MissingRule;
+    const rule_id = fixture.theory.env.getRuleId("ex_i") orelse return error.MissingRule;
     var candidate = try seed.makeExactRuleCandidate(allocator, &context, goal, &theorem, rule_id);
     defer candidate.deinit();
     return theorem.depSlotsLeft() - candidate.theorem.depSlotsLeft();
@@ -333,7 +333,7 @@ fn collectFanoutCandidates(
     const context = holder.harness.context(&holder.fixture);
     const goal_expr = try holder.theorem.internParsedExpr(holder.fixture.assertion.concl);
     const goal: Goal = .{ .concrete = goal_expr };
-    const rule_id = holder.fixture.env.getRuleId(rule_name) orelse
+    const rule_id = holder.fixture.theory.env.getRuleId(rule_name) orelse
         return error.MissingRule;
     try seed.appendRuleCandidates(
         list,
@@ -363,8 +363,8 @@ test "principal fan-out: ambiguous two-premise principal yields one candidate pe
     );
 
     try std.testing.expectEqual(@as(usize, 2), list.items.len);
-    const rule = &holder.fixture.env.rules.items[
-        @intCast(holder.fixture.env.getRuleId("lim").?)
+    const rule = &holder.fixture.theory.env.rules.items[
+        @intCast(holder.fixture.theory.env.getRuleId("lim").?)
     ];
     const a_idx = try ruleArgIndex(rule, "a");
     const b_idx = try ruleArgIndex(rule, "b");
@@ -699,8 +699,8 @@ test "redex conclusion prune holds when the theorem has no dependency slots left
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("sub") orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("sub") orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
     const ref = (try parseGoal(&fixture, &theorem, &theorem_vars, "pr (lam y z)")).concrete;
     const goal = (try parseGoal(&fixture, &theorem, &theorem_vars, "pr o")).concrete;
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
@@ -896,8 +896,8 @@ test "ACUI member prune does not count a placeholder member" {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("weaken2") orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("weaken2") orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
 
     const one_entry = (try parseGoal(
         &fixture,
@@ -919,10 +919,10 @@ test "ACUI member prune does not count a placeholder member" {
         bindings,
     ));
 
-    var store = MetaStore.init(allocator, &fixture.env);
+    var store = MetaStore.init(allocator, &fixture.theory.env);
     defer store.deinit();
     const meta = try store.mint(&theorem, "ctx", std.math.maxInt(u55), .existential);
-    const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const join_id = fixture.theory.env.term_names.get("join") orelse return error.MissingTerm;
     const open_ctx = try theorem.interner.internApp(join_id, &.{ nd.args[0], meta });
     const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
     try std.testing.expect(acui.acuiBoundMembersPlausible(
@@ -955,8 +955,8 @@ test "ACUI member prune keeps a required member an open meta may supply" {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("weaken") orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("weaken") orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
 
     const bare = (try parseGoal(&fixture, &theorem, &theorem_vars, "nd g (has z Nat)")).concrete;
     const nd = theorem.interner.node(bare).app;
@@ -966,10 +966,10 @@ test "ACUI member prune keeps a required member an open meta may supply" {
     bindings[0] = g;
     try std.testing.expect(!acui.acuiBoundMembersPlausible(&context, &theorem, rule.concl, bare, bindings));
 
-    var store = MetaStore.init(allocator, &fixture.env);
+    var store = MetaStore.init(allocator, &fixture.theory.env);
     defer store.deinit();
     const meta = try store.mint(&theorem, "ctx", std.math.maxInt(u55), .existential);
-    const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const join_id = fixture.theory.env.term_names.get("join") orelse return error.MissingTerm;
     const open_ctx = try theorem.interner.internApp(join_id, &.{ g, meta });
     const open_goal = try theorem.interner.internApp(nd.term_id, &.{ open_ctx, nd.args[1] });
     try std.testing.expect(acui.acuiBoundMembersPlausible(&context, &theorem, rule.concl, open_goal, bindings));
@@ -993,8 +993,8 @@ test "ACUI member prunes keep a def leaf that unfolds to the unit" {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("wk_nil") orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("wk_nil") orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
     const goal = try theorem.internParsedExpr(fixture.assertion.concl);
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
@@ -1049,10 +1049,10 @@ fn repeatedBinderPlausible(rule_name: []const u8, goal_src: []const u8, meta_for
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
     var goal = (try parseGoal(&fixture, &theorem, &theorem_vars, goal_src)).concrete;
-    var store = MetaStore.init(allocator, &fixture.env);
+    var store = MetaStore.init(allocator, &fixture.theory.env);
     defer store.deinit();
     if (meta_for) |name| {
         const meta = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);
@@ -1205,7 +1205,7 @@ test "conclusion plausibility gives back the dependency slots its def unfolds sp
     defer harness.deinit();
     const context = harness.context(&fixture);
     const goal: Goal = .{ .concrete = try theorem.internParsedExpr(fixture.assertion.concl) };
-    const rule_id = fixture.env.getRuleId("lam_o") orelse return error.MissingRule;
+    const rule_id = fixture.theory.env.getRuleId("lam_o") orelse return error.MissingRule;
     const bindings = try allocator.alloc(?ExprId, context.env.rules.items[rule_id].args.len);
     @memset(bindings, null);
     var candidate = types.ApplyCandidate{
@@ -1340,7 +1340,7 @@ test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
         .{ .head = "opaque", .determined = &.{true} },
     };
     for (rows) |row| {
-        const head = fixture.env.term_names.get(row.head) orelse return error.MissingTerm;
+        const head = fixture.theory.env.term_names.get(row.head) orelse return error.MissingTerm;
         for (row.determined, 0..) |expected, i| {
             std.testing.expectEqual(expected, semantic.argDetermined(&context, head, i)) catch |err| {
                 std.debug.print("argDetermined({s}, {d})\n", .{ row.head, i });
@@ -1350,13 +1350,13 @@ test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
     }
 
     // An argument index past a def's parameters.
-    const cst = fixture.env.term_names.get("cst") orelse return error.MissingTerm;
+    const cst = fixture.theory.env.term_names.get("cst") orelse return error.MissingTerm;
     try std.testing.expect(!semantic.argDetermined(&context, cst, 2));
     // A term id past the table, and a term recovery has discarded.
-    const len: u32 = @intCast(fixture.env.terms.items.len);
+    const len: u32 = @intCast(fixture.theory.env.terms.items.len);
     try std.testing.expect(!semantic.argDetermined(&context, len, 0));
-    const f = fixture.env.term_names.get("f") orelse return error.MissingTerm;
-    fixture.env.terms.items[f].available = false;
+    const f = fixture.theory.env.term_names.get("f") orelse return error.MissingTerm;
+    fixture.theory.env.terms.items[f].available = false;
     try std.testing.expect(!semantic.argDetermined(&context, f, 0));
 }
 
@@ -1389,8 +1389,8 @@ fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("lw") orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("lw") orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
     const ref = try theorem.internParsedExpr(fixture.assertion.concl);
     const ctx = theorem.interner.node(ref).app.args[0];
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
@@ -1399,7 +1399,7 @@ fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
     def_match.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
     const a = bindings[try ruleArgIndex(rule, "a")] orelse return null;
     const a_id = theorem.interner.node(a).app.term_id;
-    return fixture.env.terms.items[a_id].name;
+    return fixture.theory.env.terms.items[a_id].name;
 }
 
 test "extractHypPartialBindings pins a leaf by elimination only without idempotence" {
@@ -1434,8 +1434,8 @@ test "extractHypPartialBindings aligns an ordered context entry by entry" {
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("lam_i") orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("lam_i") orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[rule_id];
 
     const spelled = (try parseGoal(
         &fixture,
@@ -1449,7 +1449,7 @@ test "extractHypPartialBindings aligns an ordered context entry by entry" {
     const k_entry = tail.args[0];
     const m_typing = theorem.interner.node(tail.args[1]).app.args[0];
     const m_has = theorem.interner.node(m_typing).app;
-    const join_id = fixture.env.term_names.get("join") orelse return error.MissingTerm;
+    const join_id = fixture.theory.env.term_names.get("join") orelse return error.MissingTerm;
     const expected_g = try theorem.interner.internApp(join_id, &.{ spine.args[0], k_entry });
 
     const folded = (try parseGoal(
@@ -1521,7 +1521,7 @@ test "ACUI member prune allows transparent def matching variable member" {
     const context = harness.context(&fixture);
     const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
     const goal: Goal = .{ .concrete = goal_expr };
-    const rule_id = fixture.env.getRuleId("use_idctx") orelse
+    const rule_id = fixture.theory.env.getRuleId("use_idctx") orelse
         return error.MissingRule;
     var candidate = try seed.makeExactRuleCandidate(
         allocator,
@@ -1531,7 +1531,7 @@ test "ACUI member prune allows transparent def matching variable member" {
         rule_id,
     );
     defer candidate.deinit();
-    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
 
     try std.testing.expect(acui.acuiBoundMembersPlausible(
         &context,
@@ -1582,9 +1582,9 @@ test "closed-region prune refutes a ref context unequal to a bound context binde
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const join = fixture.env.term_names.get("join") orelse return error.MissingTerm;
-    const hyp = fixture.env.term_names.get("hyp") orelse return error.MissingTerm;
-    const idw = fixture.env.term_names.get("idw") orelse return error.MissingTerm;
+    const join = fixture.theory.env.term_names.get("join") orelse return error.MissingTerm;
+    const hyp = fixture.theory.env.term_names.get("hyp") orelse return error.MissingTerm;
+    const idw = fixture.theory.env.term_names.get("idw") orelse return error.MissingTerm;
     const g_var = try theorem.interner.internVar(.{ .theorem_var = 0 });
     const a = try theorem.interner.internVar(.{ .theorem_var = 1 });
     const b = try theorem.interner.internVar(.{ .theorem_var = 2 });
@@ -1622,7 +1622,7 @@ test "closed-region prune refutes a ref context unequal to a bound context binde
     // A bound value of open metas may be empty, so it meets the empty context;
     // a rigid member beside them may not.
     const emp = try theorem.interner.internApp(
-        fixture.env.term_names.get("emp") orelse return error.MissingTerm,
+        fixture.theory.env.term_names.get("emp") orelse return error.MissingTerm,
         &.{},
     );
     const m1 = try theorem.addMetaPlaceholderResolved("ctx");
@@ -1708,13 +1708,13 @@ test "solveCorrespondenceAcui matches commutative regions member-wise" {
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const join_id = fixture.env.term_names.get("join").?;
-    const join2_id = fixture.env.term_names.get("join2").?;
-    const emp_id = fixture.env.term_names.get("emp").?;
-    const hyp_id = fixture.env.term_names.get("hyp").?;
-    const p_id = fixture.env.term_names.get("P").?;
-    const q_id = fixture.env.term_names.get("Q").?;
-    const r_id = fixture.env.term_names.get("R").?;
+    const join_id = fixture.theory.env.term_names.get("join").?;
+    const join2_id = fixture.theory.env.term_names.get("join2").?;
+    const emp_id = fixture.theory.env.term_names.get("emp").?;
+    const hyp_id = fixture.theory.env.term_names.get("hyp").?;
+    const p_id = fixture.theory.env.term_names.get("P").?;
+    const q_id = fixture.theory.env.term_names.get("Q").?;
+    const r_id = fixture.theory.env.term_names.get("R").?;
     const hp = try theorem.interner.internApp(
         hyp_id,
         &.{try theorem.interner.internApp(p_id, &.{})},
@@ -1728,7 +1728,7 @@ test "solveCorrespondenceAcui matches commutative regions member-wise" {
         &.{try theorem.interner.internApp(r_id, &.{})},
     );
 
-    var store = MetaStore.init(allocator, &fixture.env);
+    var store = MetaStore.init(allocator, &fixture.theory.env);
     defer store.deinit();
     const solve = Witness.solveCorrespondenceAcui;
 
@@ -1777,7 +1777,7 @@ test "solveCorrespondenceAcui matches commutative regions member-wise" {
     // Foreign unit: `join2`'s unit `emp2` inside a `join` region is a REAL
     // member (join(emp2, X) is not ACUI-equal to X under join's laws), so a
     // source carrying it cannot cancel against a pattern without it.
-    const emp2_id = fixture.env.term_names.get("emp2").?;
+    const emp2_id = fixture.theory.env.term_names.get("emp2").?;
     const emp2 = try theorem.interner.internApp(emp2_id, &.{});
     const p_with_foreign_unit = try theorem.interner.internApp(join_id, &.{ hp, emp2 });
     try std.testing.expect(!(try solve(&context, &store, &theorem, p_with_foreign_unit, hp)));
@@ -1792,7 +1792,7 @@ test "solveCorrespondenceAcui matches commutative regions member-wise" {
     // region: pass 2 solves `?m := hp` through `boxed ?m`, and the
     // whole-member complement branch must CONSISTENCY-CHECK the already-solved
     // meta against the leftover (`hp`) instead of failing the blind re-assign.
-    const boxed_id = fixture.env.term_names.get("boxed").?;
+    const boxed_id = fixture.theory.env.term_names.get("boxed").?;
     const boxed_meta = try theorem.interner.internApp(boxed_id, &.{meta});
     const boxed_hp = try theorem.interner.internApp(boxed_id, &.{hp});
     const pat_nested = try theorem.interner.internApp(join_id, &.{ meta, boxed_meta });
@@ -1986,9 +1986,9 @@ test "abstract pruner resolves def heads to rigid roots, abstains on reducible h
     var harness = ContextHarness.init(allocator);
     defer harness.deinit();
     const context = harness.context(&fixture);
-    const rule_id = fixture.env.getRuleId("ax_ctx") orelse
+    const rule_id = fixture.theory.env.getRuleId("ax_ctx") orelse
         return error.MissingRule;
-    const view = fixture.views.get(rule_id) orelse return error.MissingView;
+    const view = fixture.theory.views.get(rule_id) orelse return error.MissingView;
     const goal_expr = try parseConcreteGoal(
         &fixture,
         &theorem,
@@ -2253,15 +2253,15 @@ test "context pruner counts absent members against the discharge budget" {
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const carry_view = fixture.views.get(
-        fixture.env.getRuleId("carry") orelse return error.MissingRule,
+    const carry_view = fixture.theory.views.get(
+        fixture.theory.env.getRuleId("carry") orelse return error.MissingRule,
     ) orelse return error.MissingView;
-    const discharge_view = fixture.views.get(
-        fixture.env.getRuleId("discharge") orelse return error.MissingRule,
+    const discharge_view = fixture.theory.views.get(
+        fixture.theory.env.getRuleId("discharge") orelse return error.MissingRule,
     ) orelse return error.MissingView;
 
-    const drop_view = fixture.views.get(
-        fixture.env.getRuleId("drop") orelse return error.MissingRule,
+    const drop_view = fixture.theory.views.get(
+        fixture.theory.env.getRuleId("drop") orelse return error.MissingRule,
     ) orelse return error.MissingView;
 
     const carry_info = context_prune.analyzeView(&context, carry_view) orelse
@@ -2391,8 +2391,8 @@ test "raw context pruner matches discharged member shape" {
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const rule_id = fixture.env.getRuleId("inst") orelse return error.MissingRule;
-    const rule = fixture.env.rules.items[rule_id];
+    const rule_id = fixture.theory.env.getRuleId("inst") orelse return error.MissingRule;
+    const rule = fixture.theory.env.rules.items[rule_id];
     const info = context_prune.analyzeRule(&context, rule) orelse
         return error.AnalyzeFailed;
     try std.testing.expectEqual(@as(?u8, 1), info.hyp_budgets[1]);

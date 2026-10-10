@@ -16,12 +16,12 @@ const TopLevelItem = ProofScript.TopLevelItem;
 const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const Check = @import("../check.zig");
-const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const Recovery = @import("recovery.zig");
 const Common = @import("common.zig");
+const TheoryState = @import("../theory_state.zig").TheoryState;
 
 const Diagnostic = CompilerDiag.Diagnostic;
 const FreshDecl = Metadata.FreshDecl;
@@ -43,10 +43,6 @@ const validateDefinitionBody = Common.validateDefinitionBody;
 
 const FilledPublicDef = Common.FilledPublicDef;
 const InvalidRuleSet = std.StringHashMap(void);
-
-const FreshBindingMap = std.AutoHashMap(u32, []const FreshDecl);
-const FreshenBindingMap = std.AutoHashMap(u32, []const FreshenDecl);
-const ViewMap = std.AutoHashMap(u32, ViewDecl);
 
 const ProofAnalysisState = struct {
     allocator: std.mem.Allocator,
@@ -87,14 +83,7 @@ const ProofAnalysisState = struct {
 };
 
 const AnalysisState = struct {
-    parser: MM0Parser,
-    rule_catalog: RuleCatalog.Catalog,
-    env: GlobalEnv,
-    registry: RewriteRegistry,
-    fresh_bindings: FreshBindingMap,
-    freshen_bindings: FreshenBindingMap,
-    views: ViewMap,
-    sort_vars: SortVarRegistry,
+    theory: TheoryState,
     invalid_assertions: InvalidRuleSet,
     invalid_terms: InvalidRuleSet,
     proof: ?ProofAnalysisState = null,
@@ -107,14 +96,7 @@ const AnalysisState = struct {
         comptime with_proof: bool,
     ) AnalysisState {
         return .{
-            .parser = MM0Parser.init(source, allocator),
-            .rule_catalog = RuleCatalog.Catalog.init(allocator, source),
-            .env = GlobalEnv.init(allocator),
-            .registry = RewriteRegistry.init(allocator),
-            .fresh_bindings = FreshBindingMap.init(allocator),
-            .freshen_bindings = FreshenBindingMap.init(allocator),
-            .views = ViewMap.init(allocator),
-            .sort_vars = SortVarRegistry.init(allocator),
+            .theory = TheoryState.init(allocator, source),
             .invalid_assertions = InvalidRuleSet.init(allocator),
             .invalid_terms = InvalidRuleSet.init(allocator),
             .proof = if (with_proof)
@@ -158,13 +140,13 @@ fn analyzeInternal(
     // Snapshot pretty-printed statements on every exit path (recovery bails
     // early in several places), while the parser and env are still alive.
     defer if (self.statement_sink) |sink|
-        sink.capture(&state.parser, &state.env);
+        sink.capture(&state.theory.parser, &state.theory.env);
 
     parse_loop: while (true) {
         Common.prepareNextPublicStatement(
             self,
-            &state.parser,
-            &state.env,
+            &state.theory.parser,
+            &state.theory.env,
         ) catch |err| {
             if (!recoverFromMm0ParseFailure(self, &state, err)) return;
             continue :parse_loop;
@@ -178,8 +160,8 @@ fn analyzeInternal(
         }
         const next_stmt = Common.nextPublicStatement(
             self,
-            &state.parser,
-            &state.env,
+            &state.theory.parser,
+            &state.theory.env,
         ) catch |err| switch (err) {
             // The gap named a proof-local term: report it and skip the
             // statement it anchors on. At end of stream the next round has
@@ -202,16 +184,16 @@ fn analyzeInternal(
         const warnings = WarningSnapshot.capture(self);
 
         CompilerVars.validateSortVarCollisions(
-            &state.parser,
-            &state.sort_vars,
+            &state.theory.parser,
+            &state.theory.sort_vars,
         ) catch |err| {
             warnings.restore(self);
-            recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+            recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
             continue;
         };
-        rejectLocalTermReferences(self, &state.env, stmt) catch |err| {
+        rejectLocalTermReferences(self, &state.theory.env, stmt) catch |err| {
             warnings.restore(self);
-            recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+            recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
             continue;
         };
 
@@ -244,16 +226,16 @@ fn analyzeInternal(
     }
 
     CompilerVars.validateSortVarCollisions(
-        &state.parser,
-        &state.sort_vars,
+        &state.theory.parser,
+        &state.theory.sort_vars,
     ) catch |err| {
         if (state.last_stmt) |stmt| {
-            recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+            recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
             return;
         }
         self.setDiagnostic(Common.mm0ParserDiagnosticWithLocalNotes(
-            &state.parser,
-            &state.env,
+            &state.theory.parser,
+            &state.theory.env,
             err,
         ));
         return err;
@@ -270,7 +252,7 @@ fn analyzeDrainAnchoredLocalProofItems(
     state: *AnalysisState,
 ) !void {
     const proof = if (state.proof) |*actual| actual else return;
-    const header = state.parser.peekNextPublicStmtHeader() orelse return;
+    const header = state.theory.parser.peekNextPublicStmtHeader() orelse return;
     if (!analysisProofStreamLooksLocal(proof)) return;
 
     var locals = std.ArrayListUnmanaged(TopLevelItem).empty;
@@ -413,8 +395,8 @@ fn analyzeLocalNotationItem(
     const warnings = WarningSnapshot.capture(self);
     processLocalNotationItem(
         self,
-        &state.parser,
-        &state.env,
+        &state.theory.parser,
+        &state.theory.env,
         item,
     ) catch |err| {
         warnings.restore(self);
@@ -447,14 +429,7 @@ fn analyzeLocalProofBlock(
     processLocalProofBlock(
         self,
         allocator,
-        &state.parser,
-        &state.env,
-        &state.registry,
-        &state.rule_catalog,
-        &state.fresh_bindings,
-        &state.freshen_bindings,
-        &state.views,
-        &state.sort_vars,
+        &state.theory,
         block,
         null,
     ) catch |err| {
@@ -481,23 +456,23 @@ fn analyzeLocalDefItem(
     def: DefItem,
 ) !void {
     const warnings = WarningSnapshot.capture(self);
-    const snapshot = try TermRecoverySnapshot.capture(allocator, state);
-    const parser_term_count = state.parser.core.terms.items.len;
+    const snapshot = try TermRecoverySnapshot.capture(allocator, &state.theory);
+    const parser_term_count = state.theory.parser.core.terms.items.len;
 
     processLocalDefItem(
         self,
         allocator,
-        &state.parser,
-        &state.env,
-        &state.registry,
+        &state.theory.parser,
+        &state.theory.env,
+        &state.theory.registry,
         def,
         null,
     ) catch |err| {
         warnings.restore(self);
-        snapshot.restore(state);
+        snapshot.restore(&state.theory);
         try Recovery.discardFailedLocalTerm(
-            &state.env,
-            &state.parser,
+            &state.theory.env,
+            &state.theory.parser,
             parser_term_count,
             def.name,
         );
@@ -533,18 +508,18 @@ fn analyzeSortStatement(
 ) !void {
     const sort_vars_snapshot = try Recovery.cloneSortVarRegistry(
         allocator,
-        &state.sort_vars,
+        &state.theory.sort_vars,
     );
     Common.registerSort(
         self,
-        &state.parser,
-        &state.env,
+        &state.theory.parser,
+        &state.theory.env,
         sort_stmt,
-        &state.sort_vars,
+        &state.theory.sort_vars,
     ) catch |err| {
         warnings.restore(self);
-        state.sort_vars = sort_vars_snapshot;
-        recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+        state.theory.sort_vars = sort_vars_snapshot;
+        recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
     };
 }
 
@@ -556,7 +531,7 @@ fn analyzeTermStatement(
     term_stmt: TermStmt,
     warnings: WarningSnapshot,
 ) !void {
-    const snapshot = try TermRecoverySnapshot.capture(allocator, state);
+    const snapshot = try TermRecoverySnapshot.capture(allocator, &state.theory);
     var actual_stmt = term_stmt;
     var proof_body_span: ?Span = null;
 
@@ -564,20 +539,20 @@ fn analyzeTermStatement(
         const filled = try analyzeFillPublicDefBody(self, state, term_stmt);
         if (filled == null) {
             warnings.restore(self);
-            snapshot.restore(state);
-            try snapshot.discardTerm(&state.env, term_stmt.name);
+            snapshot.restore(&state.theory);
+            try snapshot.discardTerm(&state.theory.env, term_stmt.name);
             try state.invalid_terms.put(term_stmt.name, {});
-            recordPrimaryStatementFailure(self, &state.parser, stmt, error.InvalidTerm);
+            recordPrimaryStatementFailure(self, &state.theory.parser, stmt, error.InvalidTerm);
             return;
         }
         actual_stmt = filled.?.stmt;
         proof_body_span = filled.?.body_span;
     }
 
-    if (!Common.termDependenciesAvailable(&state.env, actual_stmt)) {
+    if (!Common.termDependenciesAvailable(&state.theory.env, actual_stmt)) {
         warnings.restore(self);
-        snapshot.restore(state);
-        try snapshot.discardTerm(&state.env, actual_stmt.name);
+        snapshot.restore(&state.theory);
+        try snapshot.discardTerm(&state.theory.env, actual_stmt.name);
         try state.invalid_terms.put(actual_stmt.name, {});
         return;
     }
@@ -585,34 +560,34 @@ fn analyzeTermStatement(
     validateDefinitionBody(
         self,
         allocator,
-        &state.parser,
-        &state.env,
+        &state.theory.parser,
+        &state.theory.env,
         actual_stmt,
         if (proof_body_span != null) .proof else .mm0,
         proof_body_span,
     ) catch |err| {
         warnings.restore(self);
-        snapshot.restore(state);
-        try snapshot.discardTerm(&state.env, actual_stmt.name);
+        snapshot.restore(&state.theory);
+        try snapshot.discardTerm(&state.theory.env, actual_stmt.name);
         try state.invalid_terms.put(actual_stmt.name, {});
-        recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+        recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
         return;
     };
 
     Common.registerTerm(
         self,
         allocator,
-        &state.parser,
-        &state.env,
-        &state.registry,
+        &state.theory.parser,
+        &state.theory.env,
+        &state.theory.registry,
         actual_stmt,
         .mm0,
     ) catch |err| {
         warnings.restore(self);
-        snapshot.restore(state);
-        try snapshot.discardTerm(&state.env, actual_stmt.name);
+        snapshot.restore(&state.theory);
+        try snapshot.discardTerm(&state.theory.env, actual_stmt.name);
         try state.invalid_terms.put(actual_stmt.name, {});
-        recordPrimaryStatementFailure(self, &state.parser, stmt, err);
+        recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
     };
 }
 
@@ -652,7 +627,7 @@ fn analyzeFillPublicDefBody(
         .def => |def| {
             return Common.fillFromFillerDefItem(
                 self,
-                &state.parser,
+                &state.theory.parser,
                 term_stmt,
                 def,
             ) catch null;
@@ -676,11 +651,11 @@ fn analyzeAssertionStatement(
     assertion: AssertionStmt,
     warnings: WarningSnapshot,
 ) !void {
-    const snapshot = try AssertionRecoverySnapshot.capture(allocator, state);
+    const snapshot = try AssertionRecoverySnapshot.capture(allocator, &state.theory);
 
-    if (!Common.assertionDependenciesAvailable(&state.env, assertion)) {
+    if (!Common.assertionDependenciesAvailable(&state.theory.env, assertion)) {
         warnings.restore(self);
-        snapshot.restore(state);
+        snapshot.restore(&state.theory);
         try markAssertionInvalid(state, assertion.name);
         return;
     }
@@ -690,14 +665,7 @@ fn analyzeAssertionStatement(
             const theorem_result = try analyzeTheoremProof(
                 self,
                 allocator,
-                &state.parser,
-                &state.env,
-                &state.registry,
-                &state.rule_catalog,
-                &state.fresh_bindings,
-                &state.freshen_bindings,
-                &state.views,
-                &state.sort_vars,
+                &state.theory,
                 proof,
                 assertion,
             );
@@ -711,27 +679,22 @@ fn analyzeAssertionStatement(
             Common.registerAssertion(
                 self,
                 allocator,
-                &state.parser,
-                &state.env,
-                &state.registry,
-                &state.fresh_bindings,
-                &state.freshen_bindings,
-                &state.views,
+                &state.theory,
                 assertion,
                 .mm0,
             ) catch |err| {
                 theorem_warnings.restore(self);
-                snapshot.restore(state);
+                snapshot.restore(&state.theory);
                 try markAssertionInvalid(state, assertion.name);
                 self.noteBlockOutcome(assertion.name, false);
                 if (!shouldSuppressAssertionMetadataFailure(
                     err,
-                    state.parser.last_annotations,
+                    state.theory.parser.last_annotations,
                     &state.invalid_assertions,
                 )) {
                     recordPrimaryStatementFailure(
                         self,
-                        &state.parser,
+                        &state.theory.parser,
                         stmt,
                         err,
                     );
@@ -747,30 +710,23 @@ fn analyzeAssertionStatement(
     processAssertion(
         self,
         allocator,
-        &state.parser,
-        &state.env,
-        &state.registry,
-        &state.rule_catalog,
-        &state.fresh_bindings,
-        &state.freshen_bindings,
-        &state.views,
-        &state.sort_vars,
+        &state.theory,
         &no_proof_parser,
         assertion,
         null,
     ) catch |err| {
         warnings.restore(self);
-        snapshot.restore(state);
-        snapshot.rollbackRule(&state.env, assertion.name);
+        snapshot.restore(&state.theory);
+        snapshot.rollbackRule(&state.theory.env, assertion.name);
         try markAssertionInvalid(state, assertion.name);
         if (!shouldSuppressAssertionMetadataFailure(
             err,
-            state.parser.last_annotations,
+            state.theory.parser.last_annotations,
             &state.invalid_assertions,
         )) {
             recordPrimaryStatementFailure(
                 self,
-                &state.parser,
+                &state.theory.parser,
                 stmt,
                 err,
             );
@@ -796,14 +752,7 @@ const TheoremProofResult = struct {
 fn analyzeTheoremProof(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     proof: *ProofAnalysisState,
     assertion: AssertionStmt,
 ) !?TheoremProofResult {
@@ -891,14 +840,7 @@ fn analyzeTheoremProof(
                     processLocalProofBlock(
                         self,
                         allocator,
-                        parser,
-                        env,
-                        registry,
-                        rule_catalog,
-                        fresh_bindings,
-                        freshen_bindings,
-                        views,
-                        sort_vars,
+                        theory,
                         block,
                         null,
                     ) catch |err| {
@@ -946,14 +888,7 @@ fn analyzeTheoremProof(
                 _ = Check.checkTheoremBlockMemoized(
                     self,
                     allocator,
-                    parser,
-                    env,
-                    registry,
-                    rule_catalog,
-                    fresh_bindings,
-                    freshen_bindings,
-                    views,
-                    sort_vars,
+                    theory,
                     assertion,
                     block,
                     &theorem,
@@ -1057,11 +992,11 @@ fn recoverFromMm0ParseFailure(
     state: *AnalysisState,
     err: anyerror,
 ) bool {
-    const parser = &state.parser;
+    const parser = &state.theory.parser;
     const diag = self.getDiagnostic() orelse
         Common.mm0ParserDiagnosticWithLocalNotes(
             parser,
-            &state.env,
+            &state.theory.env,
             CompilerDiag.narrowDiagnosticError(err),
         );
     self.restoreDiagnostic(null);

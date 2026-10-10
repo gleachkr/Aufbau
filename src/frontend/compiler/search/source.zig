@@ -200,23 +200,14 @@ pub fn suggestionsAtSourceOffset(
         labels.put(line.label, line_idx) catch return error.OutOfMemory;
     }
 
-    const context = Context{
-        .allocator = work,
-        .parser = &fixture.parser,
-        .env = &fixture.env,
-        .registry = &fixture.registry,
-        .rule_catalog = &fixture.rule_catalog,
-        .fresh_bindings = &fixture.fresh_bindings,
-        .freshen_bindings = &fixture.freshen_bindings,
-        .views = &fixture.views,
-        .sort_vars = &fixture.sort_vars,
-        .assertion = fixture.assertion,
-        .labels = &labels,
-        .checked = &checked,
-        .diag_scratch = &diag_scratch,
-        .rule_unify_cache = &cache,
-        .available_rule_count = fixture.available_rule_count,
-    };
+    const context = fixture_mod.searchContext(
+        work,
+        &fixture,
+        &labels,
+        &checked,
+        &diag_scratch,
+        &cache,
+    );
     var session = session_mod.SearchSession.init(&context, .{
         .counters = options.counters,
         .query_shape_cache = options.generate.shape_cache,

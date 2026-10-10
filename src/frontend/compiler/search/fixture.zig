@@ -20,7 +20,6 @@ const MM0Parser = ParseRecovery.MM0Parser;
 const ProofScript = @import("../../proof_script.zig");
 const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
-const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CheckedIr = @import("../../checked_ir.zig");
@@ -30,6 +29,7 @@ const Check = @import("../check.zig");
 const Holes = @import("../holes.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const PipelineCommon = @import("../pipeline/common.zig");
+const TheoryState = @import("../theory_state.zig").TheoryState;
 const Recovery = @import("../pipeline/recovery.zig");
 const TermRecoverySnapshot = Recovery.TermRecoverySnapshot;
 const AssertionRecoverySnapshot = Recovery.AssertionRecoverySnapshot;
@@ -55,14 +55,7 @@ pub const SourceTarget = struct {
 };
 
 pub const Fixture = struct {
-    parser: MM0Parser,
-    env: GlobalEnv,
-    registry: RewriteRegistry,
-    rule_catalog: RuleCatalog.Catalog,
-    fresh_bindings: std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: std.AutoHashMap(u32, []const FreshenDecl),
-    views: std.AutoHashMap(u32, ViewDecl),
-    sort_vars: SortVarRegistry,
+    theory: TheoryState,
     assertion: AssertionStmt,
     available_rule_count: usize,
 };
@@ -131,13 +124,13 @@ pub fn fixtureForSourceTarget(
     while (true) {
         PipelineCommon.prepareNextPublicStatement(
             &compiler,
-            &fixture.parser,
-            &fixture.env,
+            &fixture.theory.parser,
+            &fixture.theory.env,
         ) catch |err| {
             try recoverSearchMm0Parse(&fixture, err);
             continue;
         };
-        const maybe_header = fixture.parser.peekNextPublicStmtHeader();
+        const maybe_header = fixture.theory.parser.peekNextPublicStmtHeader();
         const lemma_scope_complete = target.block.kind == .lemma and
             if (anchor_name) |name|
                 maybe_header != null and publicHeaderNameEql(maybe_header.?, name)
@@ -154,10 +147,10 @@ pub fn fixtureForSourceTarget(
             fixture.assertion = try PipelineCommon.parseLemmaAssertion(
                 &compiler,
                 allocator,
-                &fixture.parser,
+                &fixture.theory.parser,
                 block,
             );
-            fixture.available_rule_count = fixture.env.rules.items.len;
+            fixture.available_rule_count = fixture.theory.env.rules.items.len;
             return fixture;
         }
         if (maybe_header == null) return error.MissingTheorem;
@@ -165,15 +158,15 @@ pub fn fixtureForSourceTarget(
         const locals = try PipelineCommon.collectAnchoredLocalProofItems(
             &compiler,
             allocator,
-            &fixture.parser,
+            &fixture.theory.parser,
             &proof_stream,
         );
         try processSearchLocalItems(&compiler, allocator, &fixture, locals);
 
         const maybe_stmt = PipelineCommon.nextPublicStatement(
             &compiler,
-            &fixture.parser,
-            &fixture.env,
+            &fixture.theory.parser,
+            &fixture.theory.env,
         ) catch |err| switch (err) {
             // The analysis reports the gap and skips the statement it
             // anchors on; the search skips it too.
@@ -207,11 +200,11 @@ pub fn fixtureForSourceTarget(
                     // analysis marks invalid without checking; there is
                     // nothing meaningful to search either.
                     if (!PipelineCommon.assertionDependenciesAvailable(
-                        &fixture.env,
+                        &fixture.theory.env,
                         assertion,
                     )) return error.UnavailableDependency;
                     fixture.assertion = assertion;
-                    fixture.available_rule_count = fixture.env.rules.items.len;
+                    fixture.available_rule_count = fixture.theory.env.rules.items.len;
                     return fixture;
                 }
                 try processSearchAssertionStmt(
@@ -230,8 +223,8 @@ pub fn fixtureForSourceTarget(
 /// does after reporting it. Out of memory is not a parse failure.
 fn recoverSearchMm0Parse(fixture: *Fixture, err: anyerror) !void {
     if (err == error.OutOfMemory) return error.OutOfMemory;
-    fixture.parser.discardPendingAnnotations();
-    fixture.parser.recoverToStatementBoundary() catch {
+    fixture.theory.parser.discardPendingAnnotations();
+    fixture.theory.parser.recoverToStatementBoundary() catch {
         return error.MissingTheorem;
     };
 }
@@ -241,20 +234,7 @@ fn initSearchFixture(
     mm0_src: []const u8,
 ) !Fixture {
     return .{
-        .parser = MM0Parser.init(mm0_src, allocator),
-        .env = GlobalEnv.init(allocator),
-        .registry = RewriteRegistry.init(allocator),
-        .rule_catalog = RuleCatalog.Catalog.init(allocator, mm0_src),
-        .fresh_bindings = std.AutoHashMap(
-            u32,
-            []const FreshDecl,
-        ).init(allocator),
-        .freshen_bindings = std.AutoHashMap(
-            u32,
-            []const FreshenDecl,
-        ).init(allocator),
-        .views = std.AutoHashMap(u32, ViewDecl).init(allocator),
-        .sort_vars = SortVarRegistry.init(allocator),
+        .theory = TheoryState.init(allocator, mm0_src),
         .assertion = undefined,
         .available_rule_count = 0,
     };
@@ -272,23 +252,23 @@ fn fixtureForSearchPoint(
     // Test-only, `.mm0`-only walk: strict, so a broken fixture fails loudly.
     while (try PipelineCommon.nextPublicStatement(
         null,
-        &fixture.parser,
-        &fixture.env,
+        &fixture.theory.parser,
+        &fixture.theory.env,
     )) |stmt| {
         switch (stmt) {
             .sort => |sort_stmt| try PipelineCommon.registerSort(
                 null,
-                &fixture.parser,
-                &fixture.env,
+                &fixture.theory.parser,
+                &fixture.theory.env,
                 sort_stmt,
-                &fixture.sort_vars,
+                &fixture.theory.sort_vars,
             ),
             .term => |term_stmt| try PipelineCommon.registerTerm(
                 null,
                 allocator,
-                &fixture.parser,
-                &fixture.env,
-                &fixture.registry,
+                &fixture.theory.parser,
+                &fixture.theory.env,
+                &fixture.theory.registry,
                 term_stmt,
                 .mm0,
             ),
@@ -298,7 +278,7 @@ fn fixtureForSearchPoint(
                 {
                     fixture.assertion = assertion;
                     fixture.available_rule_count =
-                        fixture.env.rules.items.len;
+                        fixture.theory.env.rules.items.len;
                     found_theorem = true;
                     if (!include_trailing_rules) return fixture;
                     continue;
@@ -306,12 +286,7 @@ fn fixtureForSearchPoint(
                 try PipelineCommon.registerAssertion(
                     null,
                     allocator,
-                    &fixture.parser,
-                    &fixture.env,
-                    &fixture.registry,
-                    &fixture.fresh_bindings,
-                    &fixture.freshen_bindings,
-                    &fixture.views,
+                    &fixture.theory,
                     assertion,
                     .mm0,
                 );
@@ -429,36 +404,29 @@ fn processSearchLocalItem(
         .block => |block| PipelineCommon.processLocalProofBlock(
             compiler,
             allocator,
-            &fixture.parser,
-            &fixture.env,
-            &fixture.registry,
-            &fixture.rule_catalog,
-            &fixture.fresh_bindings,
-            &fixture.freshen_bindings,
-            &fixture.views,
-            &fixture.sort_vars,
+            &fixture.theory,
             block,
             null,
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
         },
         .def => |def| {
-            const snapshot = try TermRecoverySnapshot.capture(allocator, fixture);
-            const parser_term_count = fixture.parser.core.terms.items.len;
+            const snapshot = try TermRecoverySnapshot.capture(allocator, &fixture.theory);
+            const parser_term_count = fixture.theory.parser.core.terms.items.len;
             PipelineCommon.processLocalDefItem(
                 compiler,
                 allocator,
-                &fixture.parser,
-                &fixture.env,
-                &fixture.registry,
+                &fixture.theory.parser,
+                &fixture.theory.env,
+                &fixture.theory.registry,
                 def,
                 null,
             ) catch |err| {
                 if (err == error.OutOfMemory) return err;
-                snapshot.restore(fixture);
+                snapshot.restore(&fixture.theory);
                 try Recovery.discardFailedLocalTerm(
-                    &fixture.env,
-                    &fixture.parser,
+                    &fixture.theory.env,
+                    &fixture.theory.parser,
                     parser_term_count,
                     def.name,
                 );
@@ -466,8 +434,8 @@ fn processSearchLocalItem(
         },
         .notation => |notation| PipelineCommon.processLocalNotationItem(
             compiler,
-            &fixture.parser,
-            &fixture.env,
+            &fixture.theory.parser,
+            &fixture.theory.env,
             notation,
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
@@ -494,17 +462,17 @@ fn processSearchSortStmt(
 ) !void {
     const sort_vars_snapshot = try Recovery.cloneSortVarRegistry(
         allocator,
-        &fixture.sort_vars,
+        &fixture.theory.sort_vars,
     );
     PipelineCommon.registerSort(
         compiler,
-        &fixture.parser,
-        &fixture.env,
+        &fixture.theory.parser,
+        &fixture.theory.env,
         sort_stmt,
-        &fixture.sort_vars,
+        &fixture.theory.sort_vars,
     ) catch |err| {
         if (err == error.OutOfMemory) return err;
-        fixture.sort_vars = sort_vars_snapshot;
+        fixture.theory.sort_vars = sort_vars_snapshot;
     };
 }
 
@@ -515,7 +483,7 @@ fn processSearchTermStmt(
     proof_stream: *?PipelineCommon.ProofItemStream,
     term_stmt: TermStmt,
 ) !void {
-    const snapshot = try TermRecoverySnapshot.capture(allocator, fixture);
+    const snapshot = try TermRecoverySnapshot.capture(allocator, &fixture.theory);
     registerSearchTerm(
         compiler,
         allocator,
@@ -524,10 +492,10 @@ fn processSearchTermStmt(
         term_stmt,
     ) catch |err| {
         if (err == error.OutOfMemory) return err;
-        snapshot.restore(fixture);
+        snapshot.restore(&fixture.theory);
         // The parser already holds the term's id: keep the slot, drop the
         // declaration.
-        try snapshot.discardTerm(&fixture.env, term_stmt.name);
+        try snapshot.discardTerm(&fixture.theory.env, term_stmt.name);
     };
 }
 
@@ -544,7 +512,7 @@ fn registerSearchTerm(
         const filled = try PipelineCommon.fillPublicDefBody(
             compiler,
             allocator,
-            &fixture.parser,
+            &fixture.theory.parser,
             proof_stream,
             term_stmt,
         );
@@ -552,15 +520,15 @@ fn registerSearchTerm(
         filled_body_span = filled.body_span;
     }
     if (!PipelineCommon.termDependenciesAvailable(
-        &fixture.env,
+        &fixture.theory.env,
         filled_term_stmt,
     )) return error.UnavailableDependency;
 
     try PipelineCommon.validateDefinitionBody(
         compiler,
         allocator,
-        &fixture.parser,
-        &fixture.env,
+        &fixture.theory.parser,
+        &fixture.theory.env,
         filled_term_stmt,
         if (filled_body_span != null) .proof else .mm0,
         filled_body_span,
@@ -568,9 +536,9 @@ fn registerSearchTerm(
     try PipelineCommon.registerTerm(
         compiler,
         allocator,
-        &fixture.parser,
-        &fixture.env,
-        &fixture.registry,
+        &fixture.theory.parser,
+        &fixture.theory.env,
+        &fixture.theory.registry,
         filled_term_stmt,
         .mm0,
     );
@@ -583,26 +551,21 @@ fn processSearchAssertionStmt(
     proof_stream: *?PipelineCommon.ProofItemStream,
     assertion: AssertionStmt,
 ) !void {
-    if (PipelineCommon.assertionDependenciesAvailable(&fixture.env, assertion)) {
+    if (PipelineCommon.assertionDependenciesAvailable(&fixture.theory.env, assertion)) {
         const snapshot = try AssertionRecoverySnapshot.capture(
             allocator,
-            fixture,
+            &fixture.theory,
         );
         PipelineCommon.registerAssertion(
             compiler,
             allocator,
-            &fixture.parser,
-            &fixture.env,
-            &fixture.registry,
-            &fixture.fresh_bindings,
-            &fixture.freshen_bindings,
-            &fixture.views,
+            &fixture.theory,
             assertion,
             .mm0,
         ) catch |err| {
             if (err == error.OutOfMemory) return err;
-            snapshot.restore(fixture);
-            snapshot.rollbackRule(&fixture.env, assertion.name);
+            snapshot.restore(&fixture.theory);
+            snapshot.rollbackRule(&fixture.theory.env, assertion.name);
         };
     }
     // Its proof block, if any, is skipped either way: the proofs before
@@ -655,10 +618,10 @@ pub fn parseGoal(
     text: []const u8,
 ) !Goal {
     const parsed = try Holes.parseAssertion(
-        &fixture.parser,
+        &fixture.theory.parser,
         theorem,
         theorem_vars,
-        &fixture.sort_vars,
+        &fixture.theory.sort_vars,
         text,
     );
     return switch (parsed) {
@@ -681,7 +644,7 @@ pub fn commitSearchLine(
     rule_unify_cache: *Inference.RuleUnifyCache,
     line: ProofScript.ProofLine,
 ) !usize {
-    const context = searchLineContext(
+    const context = searchContext(
         allocator,
         fixture,
         labels,
@@ -713,7 +676,7 @@ pub fn probeSearchLine(
     rule_unify_cache: *Inference.RuleUnifyCache,
     line: ProofScript.ProofLine,
 ) !Probe {
-    const context = searchLineContext(
+    const context = searchContext(
         allocator,
         fixture,
         labels,
@@ -732,7 +695,9 @@ pub fn probeSearchLine(
     );
 }
 
-fn searchLineContext(
+/// The search context over the fixture's theory and target, with the
+/// caller's per-search state.
+pub fn searchContext(
     allocator: std.mem.Allocator,
     fixture: *Fixture,
     labels: *LabelIndexMap,
@@ -742,14 +707,14 @@ fn searchLineContext(
 ) Context {
     return .{
         .allocator = allocator,
-        .parser = &fixture.parser,
-        .env = &fixture.env,
-        .registry = &fixture.registry,
-        .rule_catalog = &fixture.rule_catalog,
-        .fresh_bindings = &fixture.fresh_bindings,
-        .freshen_bindings = &fixture.freshen_bindings,
-        .views = &fixture.views,
-        .sort_vars = &fixture.sort_vars,
+        .parser = &fixture.theory.parser,
+        .env = &fixture.theory.env,
+        .registry = &fixture.theory.registry,
+        .rule_catalog = &fixture.theory.rule_catalog,
+        .fresh_bindings = &fixture.theory.fresh_bindings,
+        .freshen_bindings = &fixture.theory.freshen_bindings,
+        .views = &fixture.theory.views,
+        .sort_vars = &fixture.theory.sort_vars,
         .assertion = fixture.assertion,
         .labels = labels,
         .checked = checked,

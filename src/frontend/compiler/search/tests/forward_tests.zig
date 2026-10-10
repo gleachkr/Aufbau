@@ -1169,12 +1169,12 @@ test "member witness match rejects values captured under a member binder" {
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const not_id = fixture.env.term_names.get("not").?;
-    const ex_id = fixture.env.term_names.get("ex").?;
-    const q_id = fixture.env.term_names.get("Q").?;
-    const hyp_id = fixture.env.term_names.get("hyp").?;
+    const not_id = fixture.theory.env.term_names.get("not").?;
+    const ex_id = fixture.theory.env.term_names.get("ex").?;
+    const q_id = fixture.theory.env.term_names.get("Q").?;
+    const hyp_id = fixture.theory.env.term_names.get("hyp").?;
 
-    var store = MetaStore.init(allocator, &fixture.env);
+    var store = MetaStore.init(allocator, &fixture.theory.env);
     defer store.deinit();
     const meta = try store.mint(&theorem, "obj", std.math.maxInt(u55), .existential);
     const fragment = try theorem.interner.internApp(q_id, &.{meta});
@@ -1255,7 +1255,7 @@ test "solveCorrespondenceUnfolding reads back through a def and mints only on su
 
     const term = struct {
         fn id(f: anytype, name: []const u8) u32 {
-            return f.env.term_names.get(name).?;
+            return f.theory.env.term_names.get(name).?;
         }
     };
     const s = theorem.theorem_vars.items[0];
@@ -1277,7 +1277,7 @@ test "solveCorrespondenceUnfolding reads back through a def and mints only on su
     }.over;
     const ids = [3]u32{ all_id, im_id, mem_id };
 
-    var store = MetaStore.init(allocator, &fixture.env);
+    var store = MetaStore.init(allocator, &fixture.theory.env);
     defer store.deinit();
     const x = try store.mint(&theorem, "set", std.math.maxInt(u55), .existential);
     const p = try store.mint(&theorem, "wff", std.math.maxInt(u55), .existential);

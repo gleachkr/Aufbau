@@ -843,7 +843,7 @@ test "folded-body check compares only determined args of a same-head @rewrite" {
     const goal = try parseGoal(&fixture, &theorem, &theorem_vars, "P (k2 a c) c");
     const other = try parseGoal(&fixture, &theorem, &theorem_vars, "P (k2 a b) c");
     const y_value = theorem.interner.node(other.concrete).app.args[0];
-    const rule_id = fixture.env.getRuleId("r_y") orelse return error.MissingRule;
+    const rule_id = fixture.theory.env.getRuleId("r_y") orelse return error.MissingRule;
     const bindings = try allocator.dupe(?ExprId, &.{ y_value, null });
     var candidate = types.ApplyCandidate{
         .allocator = allocator,
@@ -907,8 +907,8 @@ test "a stuck @rewrite redex clashes with a rigid conclusion head" {
     try std.testing.expect(helpers.def_match.stuckRedex(&context, &theorem, stuck));
     try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, reducible));
 
-    const rule_id = fixture.env.getRuleId("r_an") orelse return error.MissingRule;
-    const concl = fixture.env.rules.items[rule_id].concl;
+    const rule_id = fixture.theory.env.getRuleId("r_an") orelse return error.MissingRule;
+    const concl = fixture.theory.env.rules.items[rule_id].concl;
     const unbound = [_]?ExprId{ null, null };
     try std.testing.expect(helpers.def_match.templateDefiniteMismatch(
         &context,
@@ -993,12 +993,12 @@ test "a @rewrite head that is also a def or an ACUI combiner is never stuck" {
     try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, def_redex));
     try std.testing.expect(!helpers.def_match.stuckRedex(&context, &theorem, bag));
 
-    const rule_id = fixture.env.getRuleId("r_an") orelse return error.MissingRule;
+    const rule_id = fixture.theory.env.getRuleId("r_an") orelse return error.MissingRule;
     const unbound = [_]?ExprId{ null, null };
     try std.testing.expect(!helpers.def_match.templateDefiniteMismatch(
         &context,
         &theorem,
-        fixture.env.rules.items[rule_id].concl,
+        fixture.theory.env.rules.items[rule_id].concl,
         def_redex,
         &unbound,
     ));
@@ -1112,8 +1112,8 @@ test "source search sees coercions: a cross-sort @recover rule is searchable" {
 
     // The fixture's env carries the theory's three coercions.
     var fixture = try fixtureFor(allocator, mm0_src, "ex_open");
-    try std.testing.expectEqual(@as(usize, 3), fixture.env.coercions.items.len);
-    try std.testing.expect(fixture.env.getRuleId("ex_intro") != null);
+    try std.testing.expectEqual(@as(usize, 3), fixture.theory.env.coercions.items.len);
+    try std.testing.expect(fixture.theory.env.getRuleId("ex_intro") != null);
 
     const proof_src =
         \\ex_open

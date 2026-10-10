@@ -168,6 +168,7 @@ Compiler API and orchestration:
 - `compiler.zig`
 - `compiler/pipeline.zig`
 - `compiler/context.zig`
+- `compiler/theory_state.zig`
 - `compiler/diagnostic_sink.zig`
 - `compiler/rule_catalog.zig`
 - `compiler/lints.zig`
@@ -176,7 +177,12 @@ Compiler API and orchestration:
 - `debug.zig`
 
 `compiler/context.zig` holds `CompilerContext`, the per-run state the
-pipeline, checker and search share. `compiler/diagnostic_sink.zig`
+pipeline, checker and search share. `compiler/theory_state.zig` holds
+`TheoryState`, the theory a statement walk has built (parser, environment,
+rewrite registry, rule catalog, `@fresh`/`@freshen`/`@view` declarations
+and `@vars` pools); the compile walk, the analysis and the search fixture
+each own one and pass it to the shared steps and the checker.
+`compiler/diagnostic_sink.zig`
 collects a run's primary diagnostics and warnings and reports them.
 `compiler/rule_catalog.zig` indexes the `.mm0`'s assertions on first
 lookup, so a proof citing a name the environment lacks is told whether

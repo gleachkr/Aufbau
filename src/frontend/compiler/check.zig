@@ -23,8 +23,6 @@ const TheoremBlock = @import("../proof_script.zig").TheoremBlock;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const CompilerViews = @import("../views.zig");
 const FreshSelect = @import("./fresh_select.zig");
-const AlphaRewrite = @import("./alpha_rewrite.zig");
-const RuleCatalog = @import("./rule_catalog.zig");
 const ViewDecl = CompilerViews.ViewDecl;
 const FreshDecl = FreshSelect.FreshDecl;
 const FreshenDecl = FreshSelect.FreshenDecl;
@@ -33,7 +31,6 @@ const CompilerContext = @import("./context.zig").CompilerContext;
 const HoleInferenceSink = @import("./context.zig").HoleInferenceSink;
 const InlineConclusionSink = @import("./context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("./diagnostic_sink.zig").DiagnosticSink;
-const Normalize = @import("./normalize.zig");
 const ViewTrace = @import("../view_trace.zig");
 const DebugTrace = @import("../debug.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
@@ -44,11 +41,11 @@ const Inference = @import("./inference.zig");
 const Matching = @import("./check/matching.zig");
 const DiagNotes = @import("./check/diag_notes.zig");
 const FreshenRetry = @import("./check/freshen_retry.zig");
+const TheoryState = @import("./theory_state.zig").TheoryState;
 const CompilerVars = @import("./vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Holes = @import("./holes.zig");
 const Idents = @import("../idents.zig");
-const OpenTerms = @import("./inference/open_terms.zig");
 const addFallbackFailureNote = DiagNotes.addFallbackFailureNote;
 const concreteMatchFailureSpan = DiagNotes.concreteMatchFailureSpan;
 const setHoleyInferenceDiagnostic = DiagNotes.setHoleyInferenceDiagnostic;
@@ -86,14 +83,7 @@ const findSearchPlaceholder = @import("./check/suggest.zig").findSearchPlacehold
 pub fn checkTheoremBlockMemoized(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *const GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *const std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *const std.AutoHashMap(u32, []const FreshenDecl),
-    views: *const std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     assertion: AssertionStmt,
     block: TheoremBlock,
     theorem: *TheoremContext,
@@ -102,14 +92,7 @@ pub fn checkTheoremBlockMemoized(
     const memo = self.check_memo orelse return checkTheoremBlock(
         self,
         allocator,
-        parser,
-        env,
-        registry,
-        rule_catalog,
-        fresh_bindings,
-        freshen_bindings,
-        views,
-        sort_vars,
+        theory,
         assertion,
         block,
         theorem,
@@ -119,23 +102,16 @@ pub fn checkTheoremBlockMemoized(
         return checkTheoremBlock(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             assertion,
             block,
             theorem,
             theorem_concl,
         );
     }
-    const mm0_pos = parser.core.pos;
+    const mm0_pos = theory.parser.core.pos;
     const key = memo.keyForBlock(self.source, mm0_pos, self.proof_source.?, block);
-    if (memo.find(key, rule_catalog)) |entry| {
+    if (memo.find(key, &theory.rule_catalog)) |entry| {
         try entry.replay(self, block.span.start);
         if (entry.outcome) |err| return err;
         return &.{};
@@ -144,14 +120,7 @@ pub fn checkTheoremBlockMemoized(
     const checked = checkTheoremBlock(
         self,
         allocator,
-        parser,
-        env,
-        registry,
-        rule_catalog,
-        fresh_bindings,
-        freshen_bindings,
-        views,
-        sort_vars,
+        theory,
         assertion,
         block,
         theorem,
@@ -167,19 +136,16 @@ pub fn checkTheoremBlockMemoized(
 pub fn checkTheoremBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *const GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *const std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *const std.AutoHashMap(u32, []const FreshenDecl),
-    views: *const std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     assertion: AssertionStmt,
     block: TheoremBlock,
     theorem: *TheoremContext,
     theorem_concl: ExprId,
 ) ![]const CheckedLine {
+    const parser = &theory.parser;
+    const env: *const GlobalEnv = &theory.env;
+    const registry = &theory.registry;
+    const sort_vars: *const SortVarRegistry = &theory.sort_vars;
     var theorem_vars = try buildTheoremVarMap(allocator, assertion);
     defer theorem_vars.deinit();
 
@@ -341,10 +307,10 @@ pub fn checkTheoremBlock(
             .parser = parser,
             .env = env,
             .registry = registry,
-            .rule_catalog = rule_catalog,
-            .fresh_bindings = fresh_bindings,
-            .freshen_bindings = freshen_bindings,
-            .views = views,
+            .rule_catalog = &theory.rule_catalog,
+            .fresh_bindings = &theory.fresh_bindings,
+            .freshen_bindings = &theory.freshen_bindings,
+            .views = &theory.views,
             .sort_vars = sort_vars,
             .assertion = assertion,
             .labels = &labels,

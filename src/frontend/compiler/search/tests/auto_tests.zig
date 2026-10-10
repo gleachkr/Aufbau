@@ -1438,12 +1438,12 @@ test "extractHypPartialBindings keeps an ACUI binder open for an eigenvariable s
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const ti_join = fixture.env.term_names.get("join").?;
-    const ti_hyp = fixture.env.term_names.get("hyp").?;
-    const ti_ca = fixture.env.term_names.get("ca").?;
-    const ti_cb = fixture.env.term_names.get("cb").?;
-    const ti_s0 = fixture.env.term_names.get("s0").?;
-    const ti_P = fixture.env.term_names.get("P").?;
+    const ti_join = fixture.theory.env.term_names.get("join").?;
+    const ti_hyp = fixture.theory.env.term_names.get("hyp").?;
+    const ti_ca = fixture.theory.env.term_names.get("ca").?;
+    const ti_cb = fixture.theory.env.term_names.get("cb").?;
+    const ti_s0 = fixture.theory.env.term_names.get("s0").?;
+    const ti_P = fixture.theory.env.term_names.get("P").?;
 
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
@@ -1503,12 +1503,12 @@ test "extractHypPartialBindings reads only arguments the head determines" {
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const ti_pr = fixture.env.term_names.get("pr").?;
-    const ti_kst = fixture.env.term_names.get("kst").?;
+    const ti_pr = fixture.theory.env.term_names.get("pr").?;
+    const ti_kst = fixture.theory.env.term_names.get("kst").?;
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
-    const a0 = try theorem.interner.internApp(fixture.env.term_names.get("a0").?, &.{});
-    const c0 = try theorem.interner.internApp(fixture.env.term_names.get("c0").?, &.{});
+    const a0 = try theorem.interner.internApp(fixture.theory.env.term_names.get("a0").?, &.{});
+    const c0 = try theorem.interner.internApp(fixture.theory.env.term_names.get("c0").?, &.{});
     const kst_ref = try theorem.interner.internApp(ti_kst, &.{ a0, c0 });
     const ref = try theorem.interner.internApp(ti_pr, &.{kst_ref});
 
@@ -1552,7 +1552,7 @@ test "recoverDefiniteMismatch compares only arguments the head determines" {
 
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
-    const names = &fixture.env.term_names;
+    const names = &fixture.theory.env.term_names;
     const a0 = try theorem.interner.internApp(names.get("a0").?, &.{});
     const c0 = try theorem.interner.internApp(names.get("c0").?, &.{});
     const d0 = try theorem.interner.internApp(names.get("d0").?, &.{});
@@ -1613,7 +1613,7 @@ test "templateDefiniteMismatch compares a binder-introducing def by its argument
 
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
-    const names = &fixture.env.term_names;
+    const names = &fixture.theory.env.term_names;
     const a0 = try theorem.interner.internApp(names.get("a0").?, &.{});
     const c0 = try theorem.interner.internApp(names.get("c0").?, &.{});
     const some = names.get("some").?;
@@ -1684,15 +1684,15 @@ test "canonicalizeAcui respects the registered combiner subset" {
     defer harness.deinit();
     const context = harness.context(&fixture);
 
-    const ti_join = fixture.env.term_names.get("join").?;
-    const ti_bag = fixture.env.term_names.get("bag").?;
-    const ti_seq = fixture.env.term_names.get("seq").?;
-    const ti_emp = fixture.env.term_names.get("emp").?;
-    const ti_bemp = fixture.env.term_names.get("bemp").?;
-    const ti_semp = fixture.env.term_names.get("semp").?;
-    const ti_ca = fixture.env.term_names.get("ca").?;
-    const ti_cb = fixture.env.term_names.get("cb").?;
-    const ti_cc = fixture.env.term_names.get("cc").?;
+    const ti_join = fixture.theory.env.term_names.get("join").?;
+    const ti_bag = fixture.theory.env.term_names.get("bag").?;
+    const ti_seq = fixture.theory.env.term_names.get("seq").?;
+    const ti_emp = fixture.theory.env.term_names.get("emp").?;
+    const ti_bemp = fixture.theory.env.term_names.get("bemp").?;
+    const ti_semp = fixture.theory.env.term_names.get("semp").?;
+    const ti_ca = fixture.theory.env.term_names.get("ca").?;
+    const ti_cb = fixture.theory.env.term_names.get("cb").?;
+    const ti_cc = fixture.theory.env.term_names.get("cc").?;
 
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
@@ -2049,8 +2049,8 @@ fn expectSplitCandidates(
     const context = harness.context(&fixture);
     const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
 
-    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
     const g_idx = try ruleArgIndex(rule, "g");
@@ -2153,8 +2153,8 @@ fn restatesPrincipalsAt(mm0_src: []const u8, theorem_name: []const u8, rule_name
     defer harness.deinit();
     const context = harness.context(&fixture);
     const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
-    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
     const g_idx = try ruleArgIndex(rule, "g");
     const site = split.findSplitSite(&context, &theorem, rule.concl, goal_expr, g_idx) orelse
         return error.MissingSplitSite;
@@ -2201,8 +2201,8 @@ fn premiseOwned(mm0_src: []const u8, rule_name: []const u8, hyp_index: usize, pi
     defer harness.deinit();
     const context = harness.context(&fixture);
     const goal_expr = try theorem.internParsedExpr(fixture.assertion.concl);
-    const rule_id = fixture.env.getRuleId(rule_name) orelse return error.MissingRule;
-    const rule = &fixture.env.rules.items[@intCast(rule_id)];
+    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse return error.MissingRule;
+    const rule = &fixture.theory.env.rules.items[@intCast(rule_id)];
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
     const goal_ctx = theorem.interner.node(goal_expr).app.args[0];

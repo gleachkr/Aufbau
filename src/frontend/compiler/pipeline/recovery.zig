@@ -2,19 +2,17 @@ const std = @import("std");
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
-const Metadata = @import("../metadata.zig");
+const TheoryStateModule = @import("../theory_state.zig");
+const TheoryState = TheoryStateModule.TheoryState;
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CompilerVars = @import("../vars.zig");
 const Containers = @import("../../containers.zig");
 
 const cloneManagedMap = Containers.cloneManagedMap;
 
-const FreshDecl = Metadata.FreshDecl;
-const FreshenDecl = Metadata.FreshenDecl;
-const ViewDecl = Metadata.ViewDecl;
-const FreshBindingMap = std.AutoHashMap(u32, []const FreshDecl);
-const FreshenBindingMap = std.AutoHashMap(u32, []const FreshenDecl);
-const ViewMap = std.AutoHashMap(u32, ViewDecl);
+const FreshBindingMap = TheoryStateModule.FreshBindingMap;
+const FreshenBindingMap = TheoryStateModule.FreshenBindingMap;
+const ViewMap = TheoryStateModule.ViewMap;
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 
 pub const WarningSnapshot = struct {
@@ -44,7 +42,7 @@ pub const TermRecoverySnapshot = struct {
 
     pub fn capture(
         allocator: std.mem.Allocator,
-        state: anytype,
+        state: *const TheoryState,
     ) !TermRecoverySnapshot {
         return .{
             .registry = try state.registry.clone(allocator),
@@ -54,7 +52,7 @@ pub const TermRecoverySnapshot = struct {
 
     pub fn restore(
         self: TermRecoverySnapshot,
-        state: anytype,
+        state: *TheoryState,
     ) void {
         state.registry = self.registry;
     }
@@ -81,7 +79,7 @@ pub const AssertionRecoverySnapshot = struct {
 
     pub fn capture(
         allocator: std.mem.Allocator,
-        state: anytype,
+        state: *const TheoryState,
     ) !AssertionRecoverySnapshot {
         return .{
             .registry = try state.registry.clone(allocator),
@@ -103,7 +101,7 @@ pub const AssertionRecoverySnapshot = struct {
 
     pub fn restore(
         self: AssertionRecoverySnapshot,
-        state: anytype,
+        state: *TheoryState,
     ) void {
         state.registry = self.registry;
         state.fresh_bindings = self.fresh_bindings;

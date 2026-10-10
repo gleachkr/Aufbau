@@ -1,22 +1,14 @@
 const std = @import("std");
-const GlobalEnv = @import("../../env.zig").GlobalEnv;
-const Metadata = @import("../metadata.zig");
-const MM0Parser = @import("../../parse_recovery.zig").MM0Parser;
 const MM0Stmt = @import("../../parse_recovery.zig").MM0Stmt;
 const ProofScript = @import("../../proof_script.zig");
 const Span = ProofScript.Span;
-const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const CompilerEmit = @import("../emit.zig");
-const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const Common = @import("common.zig");
+const TheoryState = @import("../theory_state.zig").TheoryState;
 
-const FreshDecl = Metadata.FreshDecl;
-const FreshenDecl = Metadata.FreshenDecl;
-const ViewDecl = Metadata.ViewDecl;
-const SortVarRegistry = CompilerVars.SortVarRegistry;
 const Output = Common.Output;
 const ProofItemStream = Common.ProofItemStream;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
@@ -32,21 +24,12 @@ pub fn run(
     allocator: std.mem.Allocator,
     emit: ?*Output,
 ) !void {
-    var parser = MM0Parser.init(self.source, allocator);
-    var rule_catalog = RuleCatalog.Catalog.init(allocator, self.source);
-    var env = GlobalEnv.init(allocator);
+    var theory = TheoryState.init(allocator, self.source);
+    const parser = &theory.parser;
+    const env = &theory.env;
     // Snapshot pretty-printed statements on every exit path, while the parser
     // (the notation provider) and env still live in this call's arena.
-    defer if (self.statement_sink) |sink| sink.capture(&parser, &env);
-    var registry = RewriteRegistry.init(allocator);
-    var fresh_bindings = std.AutoHashMap(u32, []const FreshDecl).init(
-        allocator,
-    );
-    var freshen_bindings = std.AutoHashMap(u32, []const FreshenDecl).init(
-        allocator,
-    );
-    var views = std.AutoHashMap(u32, ViewDecl).init(allocator);
-    var sort_vars = SortVarRegistry.init(allocator);
+    defer if (self.statement_sink) |sink| sink.capture(parser, env);
     var proof_stream = if (self.proof_source) |proof|
         ProofItemStream.init(allocator, proof)
     else
@@ -54,32 +37,25 @@ pub fn run(
     var last_stmt: ?MM0Stmt = null;
 
     while (true) {
-        try Common.prepareNextPublicStatement(self, &parser, &env);
+        try Common.prepareNextPublicStatement(self, parser, env);
         try drainAnchoredLocalProofItems(
             self,
             allocator,
-            &parser,
-            &env,
-            &registry,
-            &rule_catalog,
-            &fresh_bindings,
-            &freshen_bindings,
-            &views,
-            &sort_vars,
+            &theory,
             &proof_stream,
             emit,
         );
 
-        const stmt = try Common.nextPublicStatement(self, &parser, &env) orelse
+        const stmt = try Common.nextPublicStatement(self, parser, env) orelse
             break;
         last_stmt = stmt;
-        CompilerVars.validateSortVarCollisions(&parser, &sort_vars) catch |err| {
+        CompilerVars.validateSortVarCollisions(parser, &theory.sort_vars) catch |err| {
             self.setIfMissing(
-                CompilerDiag.mm0StatementDiagnostic(&parser, stmt, err),
+                CompilerDiag.mm0StatementDiagnostic(parser, stmt, err),
             );
             return err;
         };
-        try rejectLocalTermReferences(self, &env, stmt);
+        try rejectLocalTermReferences(self, env, stmt);
         switch (stmt) {
             .sort => |sort_stmt| {
                 if (emit) |out| {
@@ -92,14 +68,14 @@ pub fn run(
                 }
                 Common.registerSort(
                     self,
-                    &parser,
-                    &env,
+                    parser,
+                    env,
                     sort_stmt,
-                    &sort_vars,
+                    &theory.sort_vars,
                 ) catch |err| {
                     self.setIfMissing(
                         CompilerDiag.mm0StatementDiagnostic(
-                            &parser,
+                            parser,
                             stmt,
                             CompilerDiag.narrowDiagnosticError(err),
                         ),
@@ -114,7 +90,7 @@ pub fn run(
                     const filled = try fillPublicDefBody(
                         self,
                         allocator,
-                        &parser,
+                        parser,
                         &proof_stream,
                         term_stmt,
                     );
@@ -131,8 +107,8 @@ pub fn run(
                 validateDefinitionBody(
                     self,
                     allocator,
-                    &parser,
-                    &env,
+                    parser,
+                    env,
                     filled_term_stmt,
                     term_diag_source,
                     term_diag_span,
@@ -142,12 +118,12 @@ pub fn run(
                 if (emit) |out| {
                     const term_record = CompilerEmit.compileTermRecord(
                         allocator,
-                        &parser,
+                        parser,
                         filled_term_stmt,
                     ) catch |err| {
                         self.setIfMissing(
                             CompilerDiag.mm0StatementDiagnostic(
-                                &parser,
+                                parser,
                                 MM0Stmt{ .term = term_stmt_copy },
                                 err,
                             ),
@@ -158,12 +134,12 @@ pub fn run(
                     const body = if (filled_term_stmt.is_def)
                         CompilerEmit.buildDefProofBody(
                             allocator,
-                            &parser,
+                            parser,
                             filled_term_stmt,
                         ) catch |err| {
                             self.setIfMissing(
                                 CompilerDiag.mm0StatementDiagnostic(
-                                    &parser,
+                                    parser,
                                     MM0Stmt{ .term = term_stmt_copy },
                                     err,
                                 ),
@@ -180,15 +156,15 @@ pub fn run(
                 Common.registerTerm(
                     self,
                     allocator,
-                    &parser,
-                    &env,
-                    &registry,
+                    parser,
+                    env,
+                    &theory.registry,
                     filled_term_stmt,
                     .mm0,
                 ) catch |err| {
                     self.setIfMissing(
                         CompilerDiag.mm0StatementDiagnostic(
-                            &parser,
+                            parser,
                             MM0Stmt{ .term = term_stmt_copy },
                             CompilerDiag.narrowDiagnosticError(err),
                         ),
@@ -200,21 +176,14 @@ pub fn run(
                 processAssertion(
                     self,
                     allocator,
-                    &parser,
-                    &env,
-                    &registry,
-                    &rule_catalog,
-                    &fresh_bindings,
-                    &freshen_bindings,
-                    &views,
-                    &sort_vars,
+                    &theory,
                     &proof_stream,
                     assertion,
                     emit,
                 ) catch |err| {
                     self.setIfMissing(
                         CompilerDiag.mm0StatementDiagnostic(
-                            &parser,
+                            parser,
                             MM0Stmt{ .assertion = assertion },
                             CompilerDiag.narrowDiagnosticError(err),
                         ),
@@ -225,10 +194,10 @@ pub fn run(
         }
     }
 
-    CompilerVars.validateSortVarCollisions(&parser, &sort_vars) catch |err| {
+    CompilerVars.validateSortVarCollisions(parser, &theory.sort_vars) catch |err| {
         if (last_stmt) |stmt| {
             self.setIfMissing(
-                CompilerDiag.mm0StatementDiagnostic(&parser, stmt, err),
+                CompilerDiag.mm0StatementDiagnostic(parser, stmt, err),
             );
         }
         return err;
@@ -238,14 +207,7 @@ pub fn run(
         try drainTrailingLocalProofItems(
             self,
             allocator,
-            &parser,
-            &env,
-            &registry,
-            &rule_catalog,
-            &fresh_bindings,
-            &freshen_bindings,
-            &views,
-            &sort_vars,
+            &theory,
             proofs,
             emit,
         );

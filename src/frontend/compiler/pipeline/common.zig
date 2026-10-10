@@ -29,11 +29,11 @@ const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const BindingValidation = @import("../../binding_validation.zig");
 const CompilerEmit = @import("../emit.zig");
 const Check = @import("../check.zig");
-const RuleCatalog = @import("../rule_catalog.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const CompilerLints = @import("../lints.zig");
+const TheoryState = @import("../theory_state.zig").TheoryState;
 const Diagnostic = CompilerDiag.Diagnostic;
 const DiagnosticSource = CompilerDiag.DiagnosticSource;
 
@@ -252,15 +252,11 @@ pub fn registerTerm(
 pub fn registerAssertion(
     ctx: ?*CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
+    theory: *TheoryState,
     assertion: AssertionStmt,
     site: DeclarationSite,
 ) !void {
+    const env = &theory.env;
     const source: DiagnosticSource = switch (site) {
         .mm0 => .mm0,
         .proof => .proof,
@@ -283,22 +279,22 @@ pub fn registerAssertion(
         );
     }
     const annotations: []const []const u8 = switch (site) {
-        .mm0 => parser.last_annotations,
+        .mm0 => theory.parser.last_annotations,
         .proof => |item| item.annotations,
     };
     const annotation_spans: []const MathSpan = switch (site) {
-        .mm0 => parser.last_annotation_spans,
+        .mm0 => theory.parser.last_annotation_spans,
         .proof => &.{},
     };
     Metadata.processAssertionMetadata(
         allocator,
         ctx,
-        parser,
+        &theory.parser,
         env,
-        registry,
-        fresh_bindings,
-        freshen_bindings,
-        views,
+        &theory.registry,
+        &theory.fresh_bindings,
+        &theory.freshen_bindings,
+        &theory.views,
         assertion,
         annotations,
         annotation_spans,
@@ -673,21 +669,14 @@ pub fn collectAnchoredLocalProofItems(
 pub fn drainAnchoredLocalProofItems(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     proof_stream: *?ProofItemStream,
     emit: ?*Output,
 ) !void {
     const locals = try collectAnchoredLocalProofItems(
         self,
         allocator,
-        parser,
+        &theory.parser,
         proof_stream,
     );
     defer allocator.free(locals);
@@ -695,14 +684,7 @@ pub fn drainAnchoredLocalProofItems(
         try processLocalProofItem(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             local,
             emit,
         );
@@ -726,14 +708,7 @@ fn putBackItems(proofs: *ProofItemStream, items: []const TopLevelItem) void {
 pub fn drainTrailingLocalProofItems(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     proofs: *ProofItemStream,
     emit: ?*Output,
 ) !void {
@@ -754,14 +729,7 @@ pub fn drainTrailingLocalProofItems(
         try processLocalProofItem(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             item,
             emit,
         );
@@ -797,14 +765,7 @@ pub fn anchorMatches(header: PublicStmtHeader, item: TopLevelItem) bool {
 pub fn processLocalProofItem(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     item: TopLevelItem,
     emit: ?*Output,
 ) !void {
@@ -812,30 +773,23 @@ pub fn processLocalProofItem(
         .block => |block| try processLocalProofBlock(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             block,
             emit,
         ),
         .def => |def| try processLocalDefItem(
             self,
             allocator,
-            parser,
-            env,
-            registry,
+            &theory.parser,
+            &theory.env,
+            &theory.registry,
             def,
             emit,
         ),
         .notation => |notation| try processLocalNotationItem(
             self,
-            parser,
-            env,
+            &theory.parser,
+            &theory.env,
             notation,
         ),
     }
@@ -1158,29 +1112,18 @@ pub fn localDefParseDiagnostic(
 pub fn processAssertion(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *SortVarRegistry,
+    theory: *TheoryState,
     proof_parser: *?ProofItemStream,
     assertion: AssertionStmt,
     emit: ?*Output,
 ) !void {
+    const parser = &theory.parser;
+    const env = &theory.env;
     if (assertion.kind != .theorem) {
         return try processNonTheoremAssertion(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
+            theory,
             assertion,
             emit,
         );
@@ -1195,14 +1138,7 @@ pub fn processAssertion(
         const block = try nextTheoremBlock(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             proofs,
             assertion.name,
             CompilerDiag.mathSpanToSpan(assertion.name_span),
@@ -1211,14 +1147,7 @@ pub fn processAssertion(
         const checked = Check.checkTheoremBlock(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             assertion,
             block,
             &theorem,
@@ -1282,12 +1211,7 @@ pub fn processAssertion(
     try registerAssertion(
         self,
         allocator,
-        parser,
-        env,
-        registry,
-        fresh_bindings,
-        freshen_bindings,
-        views,
+        theory,
         assertion,
         .mm0,
     );
@@ -1296,16 +1220,11 @@ pub fn processAssertion(
 pub fn processNonTheoremAssertion(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    _: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
+    theory: *TheoryState,
     assertion: AssertionStmt,
     emit: ?*Output,
 ) !void {
+    const parser = &theory.parser;
     if (emit) |out| {
         var theorem = TheoremContext.init(allocator);
         defer theorem.deinit();
@@ -1346,12 +1265,7 @@ pub fn processNonTheoremAssertion(
     try registerAssertion(
         self,
         allocator,
-        parser,
-        env,
-        registry,
-        fresh_bindings,
-        freshen_bindings,
-        views,
+        theory,
         assertion,
         .mm0,
     );
@@ -1360,14 +1274,7 @@ pub fn processNonTheoremAssertion(
 pub fn nextTheoremBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     proofs: *ProofItemStream,
     theorem_name: []const u8,
     theorem_name_span: Span,
@@ -1394,14 +1301,7 @@ pub fn nextTheoremBlock(
                     try processLocalProofBlock(
                         self,
                         allocator,
-                        parser,
-                        env,
-                        registry,
-                        rule_catalog,
-                        fresh_bindings,
-                        freshen_bindings,
-                        views,
-                        sort_vars,
+                        theory,
                         block,
                         emit,
                     );
@@ -1468,28 +1368,14 @@ pub fn parseLemmaAssertion(
 pub fn processLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     block: TheoremBlock,
     emit: ?*Output,
 ) !void {
     checkAndRegisterLocalProofBlock(
         self,
         allocator,
-        parser,
-        env,
-        registry,
-        rule_catalog,
-        fresh_bindings,
-        freshen_bindings,
-        views,
-        sort_vars,
+        theory,
         block,
         emit,
     ) catch |err| {
@@ -1502,17 +1388,12 @@ pub fn processLocalProofBlock(
 fn checkAndRegisterLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    parser: *MM0Parser,
-    env: *GlobalEnv,
-    registry: *RewriteRegistry,
-    rule_catalog: *RuleCatalog.Catalog,
-    fresh_bindings: *std.AutoHashMap(u32, []const FreshDecl),
-    freshen_bindings: *std.AutoHashMap(u32, []const FreshenDecl),
-    views: *std.AutoHashMap(u32, ViewDecl),
-    sort_vars: *const SortVarRegistry,
+    theory: *TheoryState,
     block: TheoremBlock,
     emit: ?*Output,
 ) !void {
+    const parser = &theory.parser;
+    const env = &theory.env;
     const assertion = try parseLemmaAssertion(self, allocator, parser, block);
 
     var theorem = TheoremContext.init(allocator);
@@ -1526,14 +1407,7 @@ fn checkAndRegisterLocalProofBlock(
         Check.checkTheoremBlockMemoized(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             assertion,
             block,
             &theorem,
@@ -1543,14 +1417,7 @@ fn checkAndRegisterLocalProofBlock(
         Check.checkTheoremBlock(
             self,
             allocator,
-            parser,
-            env,
-            registry,
-            rule_catalog,
-            fresh_bindings,
-            freshen_bindings,
-            views,
-            sort_vars,
+            theory,
             assertion,
             block,
             &theorem,
@@ -1615,12 +1482,7 @@ fn checkAndRegisterLocalProofBlock(
     registerAssertion(
         self,
         allocator,
-        parser,
-        env,
-        registry,
-        fresh_bindings,
-        freshen_bindings,
-        views,
+        theory,
         assertion,
         .{ .proof = .{
             .annotations = block.annotations,

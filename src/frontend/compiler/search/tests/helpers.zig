@@ -136,23 +136,14 @@ pub const ContextHarness = struct {
     }
 
     pub fn context(self: *ContextHarness, fixture: *fixture_mod.Fixture) Context {
-        return .{
-            .allocator = self.allocator,
-            .parser = &fixture.parser,
-            .env = &fixture.env,
-            .registry = &fixture.registry,
-            .rule_catalog = &fixture.rule_catalog,
-            .fresh_bindings = &fixture.fresh_bindings,
-            .freshen_bindings = &fixture.freshen_bindings,
-            .views = &fixture.views,
-            .sort_vars = &fixture.sort_vars,
-            .assertion = fixture.assertion,
-            .labels = &self.labels,
-            .checked = &self.checked,
-            .diag_scratch = &self.diag_scratch,
-            .rule_unify_cache = &self.cache,
-            .available_rule_count = fixture.available_rule_count,
-        };
+        return fixture_mod.searchContext(
+            self.allocator,
+            fixture,
+            &self.labels,
+            &self.checked,
+            &self.diag_scratch,
+            &self.cache,
+        );
     }
 };
 
@@ -292,7 +283,7 @@ pub fn expectApplyNotContains(
     defer arena.deinit();
     const allocator = arena.allocator();
     var fixture = try fixtureForFullEnv(allocator, mm0_src, theorem_name);
-    const excluded_rule_id = fixture.env.getRuleId(rule_name) orelse {
+    const excluded_rule_id = fixture.theory.env.getRuleId(rule_name) orelse {
         return error.ExpectedExcludedRuleInEnv;
     };
     _ = excluded_rule_id;
@@ -342,7 +333,7 @@ pub fn expectRuleIsUnavailableAtSearchPoint(
     defer arena.deinit();
     const allocator = arena.allocator();
     var fixture = try fixtureForFullEnv(allocator, mm0_src, theorem_name);
-    const rule_id = fixture.env.getRuleId(rule_name) orelse {
+    const rule_id = fixture.theory.env.getRuleId(rule_name) orelse {
         return error.ExpectedExcludedRuleInEnv;
     };
     try std.testing.expect(
