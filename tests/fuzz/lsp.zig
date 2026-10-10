@@ -3,7 +3,8 @@
 //! The session runs lsp-kit's own server loop (as `abc lsp` and the browser
 //! do) over a transport that writes the client's half on demand: initialize
 //! with a random position encoding, open a proof case's `.mm0` and `.auf`
-//! (maybe edited), then edits (insertions, deletions, whole-document
+//! (maybe edited, maybe split at a statement into a `lib` pair that the
+//! `case` pair imports, so analysis crosses an import), then edits (insertions, deletions, whole-document
 //! replacements, typing a token one character at a time), requests at
 //! random or real positions, closing and reopening, applying an edit a code
 //! action returned, and malformed messages. The server must not panic,
@@ -13,6 +14,7 @@
 const std = @import("std");
 const lsp = @import("lsp");
 const server = @import("lsp_server");
+const mm0 = @import("mm0");
 const harness = @import("harness.zig");
 const mutate = @import("mutate.zig");
 
@@ -25,7 +27,13 @@ const Empty = struct {};
 /// At most this many client events after the documents open.
 const max_events = 32;
 
-const uris = [_][]const u8{ "file:///fuzz/case.mm0", "file:///fuzz/case.auf" };
+const case_mm0 = "file:///fuzz/case.mm0";
+const case_auf = "file:///fuzz/case.auf";
+const lib_mm0 = "file:///fuzz/lib.mm0";
+const lib_auf = "file:///fuzz/lib.auf";
+
+/// A document of the session and the text it was first opened with.
+const Document = struct { uri: []const u8, source: []const u8 };
 
 const Event = enum(u8) {
     insert,
@@ -64,10 +72,14 @@ const Session = struct {
     typing: ?struct { uri: []const u8, index: usize, rest: []const u8 } = null,
     /// The document text the last code action's edit would produce.
     action_result: ?struct { uri: []const u8, text: []u8 } = null,
-    /// The second document to open, sent right after the first.
-    queued: ?[]u8 = null,
+    /// The session's documents; set when they first open.
+    docs: []const Document = &.{},
+    /// Messages to send before the next event: the documents still to open.
+    queued: std.ArrayList([]u8) = .empty,
     /// Every client message, written out when replaying.
     log: std.ArrayList(u8) = .empty,
+    /// The documents' texts.
+    text_arena: std.heap.ArenaAllocator,
 
     const vtable: lsp.Transport.VTable = .{
         .readJsonMessage = readJsonMessage,
@@ -75,7 +87,10 @@ const Session = struct {
     };
 
     fn deinit(self: *Session) void {
+        self.text_arena.deinit();
         if (self.action_result) |result| self.gpa.free(result.text);
+        for (self.queued.items) |message| self.gpa.free(message);
+        self.queued.deinit(self.gpa);
         self.log.deinit(self.gpa);
     }
 
@@ -110,22 +125,18 @@ const Session = struct {
             },
             .open => {
                 self.stage = .events;
-                // Open the proof file first or second, or not at all.
-                const auf = try self.editedSeed(self.seed.auf, self.seed.mm0);
-                defer self.gpa.free(auf);
-                const mm0 = try self.editedSeed(self.seed.mm0, self.seed.auf);
-                defer self.gpa.free(mm0);
-                return switch (self.smith.valueRangeAtMost(u8, 0, 2)) {
-                    0 => self.openThenQueue(allocator, uris[0], mm0, uris[1], auf),
-                    1 => self.openThenQueue(allocator, uris[1], auf, uris[0], mm0),
-                    else => open(allocator, uris[0], mm0),
-                };
+                self.docs = try self.documents();
+                // Open them in a random order, maybe leaving one out.
+                var order: [4]usize = .{ 0, 1, 2, 3 };
+                const count = self.docs.len;
+                var k = count;
+                while (k > 1) : (k -= 1) std.mem.swap(usize, &order[k - 1], &order[self.smith.index(k)]);
+                const opened = if (self.smith.value(bool)) count else count - 1;
+                for (order[1..opened]) |i| try self.queued.append(self.gpa, try open(allocator, self.docs[i].uri, self.docs[i].source));
+                return open(allocator, self.docs[order[0]].uri, self.docs[order[0]].source);
             },
             .events => {
-                if (self.queued) |queued| {
-                    self.queued = null;
-                    return queued;
-                }
+                if (self.queued.items.len != 0) return self.queued.orderedRemove(0);
                 if (self.typing != null) return self.typeNext(allocator);
                 if (self.events == max_events or self.smith.eos()) {
                     self.stage = .shutdown;
@@ -146,18 +157,34 @@ const Session = struct {
         }
     }
 
-    fn openThenQueue(self: *Session, allocator: std.mem.Allocator, first_uri: []const u8, first: []const u8, second_uri: []const u8, second: []const u8) ![]u8 {
-        self.queued = try open(allocator, second_uri, second);
-        return open(allocator, first_uri, first);
+    /// The seed's documents, maybe edited: its own pair, or that pair
+    /// split at a statement into a `lib` pair the `case` pair imports.
+    fn documents(self: *Session) ![]const Document {
+        const split = if (self.smith.value(bool)) try splitSeed(self.arena(), self.smith, self.seed) else null;
+        const parts: []const Document = if (split) |pair| &pair else &.{
+            .{ .uri = case_mm0, .source = self.seed.mm0 },
+            .{ .uri = case_auf, .source = self.seed.auf },
+        };
+        const out = try self.arena().alloc(Document, parts.len);
+        for (out, parts) |*doc, part| {
+            const other = if (std.mem.endsWith(u8, part.uri, ".mm0")) self.seed.auf else self.seed.mm0;
+            doc.* = .{ .uri = part.uri, .source = try self.editedSeed(part.source, other) };
+        }
+        return out;
     }
 
-    fn editedSeed(self: *Session, text: []const u8, other: []const u8) ![]u8 {
-        if (self.smith.value(bool)) return mutate.mutate(self.gpa, self.smith, text, other);
-        return self.gpa.dupe(u8, text);
+    fn arena(self: *Session) std.mem.Allocator {
+        return self.text_arena.allocator();
+    }
+
+    fn editedSeed(self: *Session, text: []const u8, other: []const u8) ![]const u8 {
+        if (self.smith.value(bool)) return mutate.mutate(self.arena(), self.smith, text, other);
+        return text;
     }
 
     fn event(self: *Session, allocator: std.mem.Allocator) ![]u8 {
-        const uri = uris[self.smith.index(uris.len)];
+        const doc = self.docs[self.smith.index(self.docs.len)];
+        const uri = doc.uri;
         const text = self.documentText(uri) orelse "";
         switch (self.smith.value(Event)) {
             .insert => {
@@ -229,10 +256,7 @@ const Session = struct {
             .close => return notification(allocator, "textDocument/didClose", .{
                 .textDocument = .{ .uri = uri },
             }),
-            .reopen => {
-                const source = if (uri.ptr == uris[0].ptr) self.seed.mm0 else self.seed.auf;
-                return open(allocator, uri, source);
-            },
+            .reopen => return open(allocator, uri, doc.source),
             .malformed => return self.malformed(allocator, uri),
         }
     }
@@ -277,7 +301,10 @@ const Session = struct {
         const typing = &self.typing.?;
         const text = self.documentText(typing.uri) orelse "";
         const index = @min(typing.index, text.len);
-        const at = lsp.offsets.indexToPosition(text, index, self.encoding);
+        const at: Position = if (std.unicode.utf8ValidateSlice(text))
+            lsp.offsets.indexToPosition(text, index, self.encoding)
+        else
+            .{ .line = 0, .character = @intCast(@min(index, std.math.maxInt(u32))) };
         const char = typing.rest[0..1];
         typing.index = index + 1;
         typing.rest = typing.rest[1..];
@@ -313,7 +340,9 @@ const Session = struct {
     /// A position on a code-point boundary of `text`, or an arbitrary one
     /// up to a line past its end (the server must clamp it).
     fn pickPosition(self: *Session, text: []const u8) Position {
-        if (self.smith.value(bool)) return lsp.offsets.indexToPosition(text, self.pickIndex(text), self.encoding);
+        // lsp-kit's conversions assume valid UTF-8; byte edits can break it.
+        if (self.smith.value(bool) and std.unicode.utf8ValidateSlice(text))
+            return lsp.offsets.indexToPosition(text, self.pickIndex(text), self.encoding);
         const lines: u32 = @intCast(std.mem.count(u8, text, "\n") + 1);
         return .{
             .line = self.smith.valueRangeAtMost(u32, 0, lines + 1),
@@ -414,10 +443,11 @@ const Session = struct {
         const changes = (edit.object.get("changes") orelse return).object;
         var it = changes.iterator();
         const entry = it.next() orelse return;
-        const uri = for (uris) |known| {
-            if (std.mem.eql(u8, known, entry.key_ptr.*)) break known;
+        const uri = for (self.docs) |doc| {
+            if (std.mem.eql(u8, doc.uri, entry.key_ptr.*)) break doc.uri;
         } else return;
         const text = self.documentText(uri) orelse return;
+        if (!std.unicode.utf8ValidateSlice(text)) return;
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.gpa);
         // Apply from the last edit back so earlier offsets stay put.
@@ -442,6 +472,65 @@ fn jsonPosition(value: std.json.Value) Position {
         .line = @intCast(value.object.get("line").?.integer),
         .character = @intCast(value.object.get("character").?.integer),
     };
+}
+
+/// `seed` split after a statement chosen by `smith`: the statements up to
+/// it become `lib.mm0` with the proofs of its theorems in `lib.auf`, and
+/// the rest `case.mm0`, importing `lib.mm0`, with the other proofs. Null
+/// when the seed has no statement to split after or its proofs do not
+/// parse.
+fn splitSeed(arena: std.mem.Allocator, smith: *Smith, seed: harness.Seed) !?[4]Document {
+    // Statement ends: `;` outside math strings and comments.
+    var ends: std.ArrayList(usize) = .empty;
+    var in_math = false;
+    var i: usize = 0;
+    while (i < seed.mm0.len) : (i += 1) {
+        const c = seed.mm0[i];
+        if (!in_math and c == '-' and i + 1 < seed.mm0.len and seed.mm0[i + 1] == '-') {
+            i = std.mem.indexOfScalarPos(u8, seed.mm0, i, '\n') orelse seed.mm0.len;
+        } else if (c == '$') {
+            in_math = !in_math;
+        } else if (c == ';' and !in_math) {
+            try ends.append(arena, i + 1);
+        }
+    }
+    if (ends.items.len < 2) return null;
+    const cut = ends.items[smith.index(ends.items.len - 1)];
+    const lib_text = seed.mm0[0..cut];
+
+    var lib_proofs: std.ArrayList(u8) = .empty;
+    var case_proofs: std.ArrayList(u8) = .empty;
+    var copied: usize = 0;
+    var parser = mm0.ProofScript.Parser.init(arena, seed.auf);
+    while (parser.nextItem() catch return null) |item| switch (item) {
+        .block => |block| if (declares(lib_text, block.name)) {
+            try case_proofs.appendSlice(arena, seed.auf[copied..block.span.start]);
+            try lib_proofs.appendSlice(arena, seed.auf[block.span.start..block.span.end]);
+            try lib_proofs.appendSlice(arena, "\n\n");
+            copied = block.span.end;
+        },
+        .def, .notation => {},
+    };
+    try case_proofs.appendSlice(arena, seed.auf[copied..]);
+    return .{
+        .{ .uri = lib_mm0, .source = lib_text },
+        .{ .uri = lib_auf, .source = lib_proofs.items },
+        .{ .uri = case_mm0, .source = try std.mem.concat(arena, u8, &.{ "import \"lib.mm0\";\n", seed.mm0[cut..] }) },
+        .{ .uri = case_auf, .source = case_proofs.items },
+    };
+}
+
+/// Whether `mm0_text` declares a theorem named `name`.
+fn declares(mm0_text: []const u8, name: []const u8) bool {
+    var rest = mm0_text;
+    while (std.mem.indexOf(u8, rest, "theorem ")) |at| {
+        rest = std.mem.trimStart(u8, rest[at + "theorem ".len ..], " \t\n");
+        if (std.mem.startsWith(u8, rest, name) and rest.len > name.len) {
+            const next = rest[name.len];
+            if (std.ascii.isWhitespace(next) or next == '(' or next == ':') return true;
+        }
+    }
+    return false;
 }
 
 fn change(allocator: std.mem.Allocator, uri: []const u8, range: lsp.offsets.Range, new_text: []const u8) ![]u8 {
@@ -485,6 +574,7 @@ fn fail(comptime format: []const u8, args: anytype) noreturn {
 fn session(seeds: []const harness.Seed, input: harness.Input) !void {
     var handler: server.Handler = undefined;
     var state: Session = .{
+        .text_arena = .init(input.gpa),
         .gpa = input.gpa,
         .smith = input.smith,
         .input = input,
