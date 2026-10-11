@@ -1,5 +1,5 @@
--- Horn-clause / transitive-closure forward-saturation stress (META_STRESS.md
--- workstream 3). The headline *positive* forward theory (contrast
+-- Horn-clause / transitive-closure forward-saturation stress.
+-- The headline *positive* forward theory (contrast
 -- `forward_stress`, a bounded *no-result* probe): `auto?` must FORWARD-SATURATE
 -- the transitive closure of an `edge` relation, layer by layer, to close a real
 -- goal. `trans` combines path×path, so a chain's full closure is the O(n^2) set
@@ -14,7 +14,7 @@
 -- alone; longer chains hit a *budget* floor (NOT incompleteness — every chain
 -- reaches FULL given enough budget). The bounds bind in order
 -- attempts -> facts -> tuples -> layers; use the bench's --fwd-* overrides to
--- separate the two. See META_STRESS.md.
+-- separate the two.
 delimiter $ ( ) $;
 provable sort wff;
 sort obj;

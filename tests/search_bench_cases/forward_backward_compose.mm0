@@ -1,5 +1,5 @@
 -- Bench-only Hilbert-style theory for the forward/backward composition probe
--- (META.md Stages 4+7/8): a universal fact is instantiated *forward* into the
+-- (open backward × forward saturation): a universal fact is instantiated *forward* into the
 -- family fact `P ?t → Q ?t` (universal meta), and a plain modus ponens opens
 -- its major premise *backward* as `?a → Q K` (existential meta). The derived
 -- family fact discharges the open subgoal: the goal-vs-shape walk solves

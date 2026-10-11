@@ -44,8 +44,8 @@ pub const DummyInfo = struct {
     deps: u55,
 };
 
-/// Discriminates the two users of the shared `PlaceholderId` space (META.md
-/// Stage 2 id-space decision: one counter, a class field, no reserved ranges).
+/// Discriminates the two users of the shared `PlaceholderId` space (one
+/// counter, a class field, no reserved ranges).
 ///
 /// - `standard`: the historical frontend placeholder — a bound-variable
 ///   stand-in or witness that consumes a synthetic dep bit from the shared
@@ -469,8 +469,8 @@ pub const TheoremContext = struct {
     next_dummy_dep: u32 = 0,
     /// Count of `.meta`-class placeholders ever minted in this context, line
     /// holes aside. Lets meta-aware matching short-circuit to "no metas
-    /// anywhere" in O(1) for ordinary theorems (everything outside Stage 4
-    /// open search).
+    /// anywhere" in O(1) for ordinary theorems (everything outside open
+    /// backward search).
     meta_placeholder_count: u32 = 0,
     /// True once a line hole is minted (`PlaceholderInfo.line_hole`). Kept
     /// apart from `meta_placeholder_count`, which the search gates read on

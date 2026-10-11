@@ -2613,7 +2613,7 @@ test "exact uses view hyp shape to discover ex_intro past substitution head" {
 }
 
 // ============================================================
-// Single-layer forward saturation with universal metas
-// (META.md). Forward firing is gated on `@auto forward` metadata
+// Single-layer forward saturation with universal metas.
+// Forward firing is gated on `@auto forward` metadata
 // and runs only inside the `auto?` generation driver.
 // ============================================================

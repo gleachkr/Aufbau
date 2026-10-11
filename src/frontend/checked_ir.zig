@@ -43,7 +43,7 @@ pub const DepViolation = struct {
 
 /// Kind-aware leakage error set. Both variants fire at the same chokepoints
 /// and both mean "an unresolved frontend leaf reached checked IR / emission";
-/// the split is purely for debuggability (META.md Stage 2): a genuine
+/// the split is purely for debuggability: a genuine
 /// placeholder leak and an unsolved search metavariable have different causes
 /// and different fixes.
 pub const LeakageError = error{ PlaceholderLeakage, UnsolvedMetaLeakage };

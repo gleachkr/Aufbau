@@ -126,7 +126,7 @@ pub const InferenceContext = struct {
     // Heap prefix `0..rule.args.len` stores inferred theorem arguments.
     // These slots start as either an explicit binding or `null` if omitted.
     // Any entries appended later by `UTermSave` are concrete by construction
-    // (or meta wildcards when the expected line is a Stage 4 open hint).
+    // (or meta wildcards when the expected line is an open-search hint).
     uheap: std.ArrayListUnmanaged(?ExprId) = .empty,
     ustack: std.ArrayListUnmanaged(ExprId) = .empty,
     hyps: []const ExprId,

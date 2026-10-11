@@ -7,8 +7,7 @@ in this directory.
 
 It is run on demand to (a) catch latency regressions in search and (b) keep
 the current capability frontier visible: a fixed list of goals we can solve,
-plus a fixed list of goals we cannot solve *yet* (the work tracked in
-[`META.md`](../../META.md)). The scenario table lives in
+plus a fixed list of goals we cannot solve *yet*. The scenario table lives in
 [`tests/search_scenarios.zig`](../search_scenarios.zig); `zig build test-unit`
 checks every scenario's expectations as a unit test, and the bench times them.
 
@@ -53,7 +52,7 @@ Always build `-Doptimize=ReleaseFast`; debug timings are meaningless and slow.
 
 ## Frontier analysis (`--frontier=`)
 
-On-demand corpus analysis over the real developments (see `META_STRESS.md`),
+On-demand corpus analysis over the real developments,
 not part of the bench gate — a full run is thousands of search invocations
 and takes minutes.
 
@@ -115,9 +114,9 @@ Two flavors:
 - **Per-line guards** (`filter` set) pin one hand-picked theorem just above its
   measured budget floor — they catch a *budget* regression on that line.
 - **Fixture-total guards** (`filter` omitted → whole fixture) pin the FULL
-  *total* of an entire bespoke-stress fixture (META_STRESS.md §3): depth +
+  *total* of an entire bespoke-stress fixture: depth +
   `--require-no-miss` over every block fails unless `full == theorems`. These are
-  the completeness backstop for theories #1–#3 — they catch a regression on any
+  the completeness backstop for those fixtures — they catch a regression on any
   *unguarded* line and force any newly-added theorem to reach FULL (or be given
   coverage). Current totals (2026-06-25): `additive_fol` 84/84,
   `transitive_closure` 7/7, `quantifier_alternation` 18/18. Each total uses the
@@ -126,7 +125,7 @@ Two flavors:
 
 ## Discrimination/scaling sweep (`--sweep=`)
 
-META_STRESS.md bespoke theory #4. Where the frontier modes measure *capability*
+Where the frontier modes measure *capability*
 over a fixed corpus, the sweep measures *how search cost scales* as the
 candidate pool grows. It synthesizes a distractor theory in memory at each N
 (no fixture files) with a deliberately **unprovable** goal — so the full
@@ -232,9 +231,12 @@ The `expect_result = false` probes below are currently-unsolved goals or
 negative controls. They are deliberately failing-to-find, not bugs. Stage 4
 open backward generation, Stage 5 ACUI member-witness enumeration, and
 Stage 7/8 forward saturation are now supported for the positive cases listed
-after this table.
+after this table. Stage numbers, here and in scenario names, name the search
+capability a case was added for: 4 is open backward generation, 5 ACUI
+member-witness enumeration, 7 single-layer forward instantiation, and 8
+multi-layer forward saturation.
 
-| Scenario | Purpose | META.md stage |
+| Scenario | Purpose | Stage |
 |----------|---------|---------------|
 | `stage5 no valid member auto? (no result)` | Confirms enumeration proposes nothing when no ACUI member matches the meta fragment. | 5 guard |
 | `stage5 unit context auto? (no result)` | Confirms the ACUI unit element is never a witness domain member. | 5 guard |
@@ -266,7 +268,7 @@ Supported open-backward cases:
 | `bound @vars choice auto? (Stage 4 open backward)` | A hidden bound witness is drawn from the explicit `@vars` pool. |
 | `euclid ex_intro open witness auto? (Stage 4 open backward)` | `@recover` builds the reduced hypothesis surface and recovers the witness. |
 
-Supported ACUI member-witness cases (META.md Stage 5):
+Supported ACUI member-witness cases (Stage 5):
 
 | Scenario | What it pins |
 |----------|--------------|
@@ -284,7 +286,7 @@ Supported forward-instantiation cases:
 | `all_elim two-layer derived direct auto? (Stage 8 forward)` | A two-layer derived ref solves shared universal holes in one goal match. |
 | `all_elim three-layer chain auto? (Stage 8 forward)` | A three-layer forward chain materializes a nested recipe. |
 
-Adversarial-saturation cases (META_STRESS theory #5, `adversarial_saturation.mm0`).
+Adversarial-saturation cases (`adversarial_saturation.mm0`).
 These are no-result probes (goal `R` unprovable) that pressure the two saturation
 guards — the *recipe* key (rule + source tuple) and the canonical *surface shape*
 key — and assert the exhaustion flag plus derived-ref count, so a dedupe-key

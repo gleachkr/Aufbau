@@ -1,7 +1,7 @@
 -- Additive two-sided classical sequent calculus for first-order logic (G3c).
 --
--- This is the "backward search really works" stress theory of META_STRESS.md
--- workstream 3.  The design goal is to give `auto?` a theory in which a pure
+-- This is the "backward search really works" stress theory of the search
+-- bench.  The design goal is to give `auto?` a theory in which a pure
 -- backward (root-first) proof search is a *complete* procedure for classical
 -- first-order logic, up to the search depth limit.
 --
@@ -384,7 +384,7 @@ theorem drinker {x y: obj}:
 -- further R atoms when more are needed).  Biconditionals are stated as a
 -- conjunction of the two implications (the calculus has no primitive ↔ rule).
 --
--- Frontier status (see META_STRESS.md): the *breadth* frontier is 100% (every
+-- Frontier status (see README.md): the *breadth* frontier is 100% (every
 -- proof line is recovered by `auto?` from its pool — per-step completeness).
 -- The *depth* frontier (whole-proof regeneration from the bare goal) is now
 -- 100% FULL for the whole fixture at `--max-depth=10` (every theorem here,

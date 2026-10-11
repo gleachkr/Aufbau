@@ -237,7 +237,7 @@ pub const guards = [_]FrontierGuard{
     // frontier 4 without the cost. The additive total guard above is the dual
     // check (it traps the transport screen: without it, the same cost reorders
     // `mpbi`'s premises and additive collapses). Default budget: the gain is
-    // not budget-bound. See `project_premise_ordering_shared_pin`.
+    // not budget-bound.
     .{
         .filter = "eq_euclid",
         .files = "tests/search_bench_cases/peano_frontier.mm0:" ++
@@ -245,7 +245,7 @@ pub const guards = [_]FrontierGuard{
         .mode = "depth",
     },
     // Forward-saturation depth guards (Horn-clause / transitive closure,
-    // META_STRESS.md "Bespoke theory #2"). These are the only end-to-end
+    // `transitive_closure.mm0`). These are the only end-to-end
     // checks that `auto?` FORWARD-SATURATES a real multi-layer Horn
     // derivation: each goal `path v0 vN` must regenerate its WHOLE proof
     // from the edge hypotheses alone (frontier FULL), which exercises the
@@ -404,8 +404,8 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/church_frontier.auf",
         .mode = "depth",
     },
-    // Forward-JOIN depth guards (∀∃ quantifier alternation, META_STRESS.md
-    // "Bespoke theory #3"). These pin the forward-join meta grounding: a
+    // Forward-JOIN depth guards (∀∃ quantifier alternation,
+    // `quantifier_alternation.mm0`). These pin the forward-join meta grounding: a
     // universal family fact (`P ?t → Q ?t`, from `all_elim`) joined with a
     // concrete fact (`P c`) by `mp @auto forward` must derive the concrete
     // fact (`Q c`), grounding `?t := c` at the join and baking it as a recipe
@@ -530,7 +530,7 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/quantifier_alternation.auf",
         .mode = "depth",
     },
-    // ── Fixture-TOTAL FULL guards (META_STRESS.md §3 bespoke theories #1–#3).
+    // ── Fixture-TOTAL FULL guards (the bespoke stress fixtures).
     // The per-line guards above pin specific theorems just above their budget
     // floor (catching *budget* regressions on those lines). These three pin
     // the FULL *total* of an ENTIRE fixture: with `--filter` omitted every

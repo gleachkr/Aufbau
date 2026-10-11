@@ -1,4 +1,4 @@
-//! Branch-local search metavariable store (META.md Stage 2).
+//! Branch-local search metavariable store.
 //!
 //! A search meta is represented in the interner as an ordinary placeholder
 //! leaf whose `PlaceholderId` keys this store; the assignment state lives
@@ -7,7 +7,7 @@
 //! leakage guard cover unsolved metas (kind-aware via
 //! `PlaceholderClass.meta`).
 //!
-//! Lifetime/rollback discipline (enforced under real search from Stage 4):
+//! Lifetime/rollback discipline:
 //! - the store is branch-local: one store per search branch, marked before a
 //!   hypothesis match and rolled back beside `rollbackOneHypMatch`;
 //! - metas are fully solved before every `tryCandidate` call, so validation
@@ -122,7 +122,7 @@ pub const MetaStore = struct {
     assignments: std.AutoHashMapUnmanaged(PlaceholderId, ExprId) = .empty,
     trail: std.ArrayListUnmanaged(TrailEntry) = .empty,
     /// Universal metas are deferred choices: they may only be assigned during
-    /// a derived-ref use-time match (Stage 7), opened explicitly by the
+    /// a derived-ref use-time match, opened explicitly by the
     /// driver. Everywhere else an attempted assignment is a phase error.
     universal_use_open: bool = false,
     stats: MetaStats = .{},
@@ -475,7 +475,7 @@ pub const MetaStore = struct {
     }
 
     /// Open/close the derived-ref use-time window in which universal metas
-    /// may be assigned (Stage 7's transient-assignment discipline).
+    /// may be assigned (forward instantiation's transient assignments).
     pub fn openUniversalUse(self: *MetaStore) void {
         self.universal_use_open = true;
     }

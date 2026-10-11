@@ -1,6 +1,6 @@
 -- Bench-only copy of a first-order ∀/=/→ theory with a substitution operator
 -- and a universal-elimination rule (`all_elim`) carrying @view/@recover. This
--- is the worked example for forward universal instantiation (META.md Stage 7).
+-- is the worked example for forward universal instantiation.
 --
 -- IMPORTANT: this is a *bench-only* copy. The structurally-similar
 -- tests/proof_cases/pass_def_all_elim_free_param.mm0 is shared with the

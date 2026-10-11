@@ -27,7 +27,7 @@ pub const Scenario = struct {
     /// bench until the scenario is intentionally reclassified.
     expected_suggestion_count: ?usize = null,
     /// When set, assert the forward-saturation exhaustion flag. Guards the
-    /// adversarial-saturation probes (META_STRESS theory #5): a commutativity /
+    /// adversarial-saturation probes (`adversarial_saturation.mm0`): a commutativity /
     /// confluence loop must reach a fixpoint (`false`); a genuinely unbounded
     /// mutual-regeneration loop must stop on the budget (`true`). A dedupe-key
     /// regression flips this flag, so it is a tighter guard than the no-result
@@ -679,8 +679,8 @@ pub const scenarios = [_]Scenario{
         .generate = .{ .enabled = true, .max_depth = 6 },
     },
     // ============================================================
-    // META.md capability fixtures. Stage 4 open backward generation and
-    // Stages 7–8 forward saturation are now supported for the cases below;
+    // Capability fixtures. Open backward generation (Stage 4) and
+    // forward saturation (Stages 7–8) are supported for the cases below;
     // the remaining `expect_result = false` entries are negative controls
     // and still-unsolved gaps. Existing probes elsewhere in this file cover
     // other gap categories and are cross-referenced below.
@@ -1075,7 +1075,7 @@ pub const scenarios = [_]Scenario{
         },
     },
     .{
-        // META_STRESS theory #5 (adversarial saturation). A commutativity loop:
+        // Adversarial saturation. A commutativity loop:
         // `comm` swaps `g`'s args, regenerating from its own output. The shape
         // key drops the swapped-back fact and the recipe key blocks re-firing,
         // so saturation reaches a FIXPOINT (exhausted = false) at one derived
@@ -1092,7 +1092,7 @@ pub const scenarios = [_]Scenario{
         .expect_derived_refs = 1,
     },
     .{
-        // META_STRESS theory #5. Mutual regeneration: `ping`/`pong` build an
+        // Adversarial saturation. Mutual regeneration: `ping`/`pong` build an
         // unbounded `h`-tower, so the frontier stays productive at every layer
         // and saturation must stop on the budget with exhaustion REPORTED
         // (exhausted = true) rather than looping forever. Goal unprovable.
@@ -1107,7 +1107,7 @@ pub const scenarios = [_]Scenario{
         .expect_saturation_exhausted = true,
     },
     .{
-        // META_STRESS theory #5. Confluence: `viaA`/`viaB` derive the identical
+        // Adversarial saturation. Confluence: `viaA`/`viaB` derive the identical
         // fact `C K1` by distinct recipes. The recipe keys differ, so the
         // canonical SURFACE shape key is what must collapse them to a single
         // derived ref (exhausted = false, one derived fact). Goal unprovable.

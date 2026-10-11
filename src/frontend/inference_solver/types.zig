@@ -80,7 +80,7 @@ pub const StructuralJointObligation = struct {
 
 pub const StructuralInterval = struct {
     // Per-binder structural bounds. For ACUI these are real lower / upper
-    // set bounds; for the other fragments Stage 3 still uses exact
+    // set bounds; for the other fragments the solver still uses exact
     // lower == upper intervals and carries multi-binder obligations
     // separately.
     head_term_id: u32,

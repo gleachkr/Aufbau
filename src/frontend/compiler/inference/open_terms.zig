@@ -12,7 +12,7 @@ const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
 const StructuralCombiner =
     @import("../../rewrite_registry.zig").StructuralCombiner;
 
-/// The four placeholder-like search leaves (META.md terminology). Only the
+/// The four placeholder-like search leaves. Only the
 /// search meta store (`search/meta_store.zig`) may interpret them; everything
 /// else sees an opaque placeholder leaf.
 pub const MetaKind = enum {
@@ -21,7 +21,7 @@ pub const MetaKind = enum {
     /// Backward-search unknown; must be solved before a proof is emitted.
     existential,
     /// Schematic variable in a derived forward ref; solved transiently when
-    /// the derived ref is used (Stage 7 use-time discipline).
+    /// the derived ref is used.
     universal,
     /// A bound variable not yet named: it reads as bound with its own dep
     /// bit, takes only a bound variable as its value (a ref's, or a
@@ -269,8 +269,8 @@ fn unresolvedBinderExpr(
     return try missing.placeholder_factory.make(theorem, rule.args[idx].sort_name);
 }
 
-/// Stage 4 open-target instantiation (META.md "structured open backward
-/// generation").  Like the holey instantiation, but kind/policy-aware:
+/// Open-target instantiation for structured open backward generation.
+/// Like the holey instantiation, but kind/policy-aware:
 ///
 /// - an unresolved binder becomes one shared existential meta per binder
 ///   (the `logical_unknowns` cache), minted through `factory`;

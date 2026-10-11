@@ -1,5 +1,5 @@
--- Quantifier-alternation forward-saturation stress (META_STRESS.md workstream
--- 3, the ∀∃ theory). Exercises the Stage 7 × Stage 4/5 *product*: a universal
+-- Quantifier-alternation forward-saturation stress (the ∀∃ theory).
+-- Exercises forward instantiation × open backward search: a universal
 -- fact is instantiated *forward* into a family fact carrying a universal meta
 -- (`P ?t → Q (f ?t)`), and an existential goal opens a *backward* witness hole
 -- (`Q ?s`); the forward-derived fact discharges the open hole and the witness

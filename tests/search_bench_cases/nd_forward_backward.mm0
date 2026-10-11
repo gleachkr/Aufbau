@@ -1,5 +1,5 @@
--- Bench-only natural-deduction twin of forward_backward_compose.mm0 (META.md
--- Stages 4+7/8 composition probe): sequents with ACUI hypothesis contexts,
+-- Bench-only natural-deduction twin of forward_backward_compose.mm0 (the
+-- open backward × forward saturation probe): sequents with ACUI hypothesis contexts,
 -- forward universal instantiation deriving the family fact
 -- `emp ⊢ P ?t → Q ?t`, and an `@auto backward` imp_elim whose major premise
 -- opens as `emp ⊢ ?a → Q K`. The ND core (contexts, congruences, substitution

@@ -1,4 +1,4 @@
--- Adversarial saturation stress (META_STRESS theory #5). Forward `@auto`
+-- Adversarial saturation stress. Forward `@auto`
 -- rules that regenerate each other's output under genuine pressure, written to
 -- exercise the two saturation guards independently: the *recipe* dedupe key
 -- (rule + source tuple) and the *canonical surface shape* key (metas numbered

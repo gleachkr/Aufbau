@@ -584,7 +584,7 @@ pub const SearchCounters = struct {
     shape_emission_ns: u64 = 0,
     /// Number of query-side `ShapeSet` builds (one per `lookupTemplate*`/goal
     /// lookup). Paired with `shape_emission_ns` to gauge per-lookup shape cost
-    /// and redundancy across a search (see `project_found_outlier_shape_cost`).
+    /// and redundancy across a search.
     shape_emissions: usize = 0,
     /// Subset of `shape_emissions` from the rule-index (goal-shape) path; the
     /// remainder are ref-index (template-shape) lookups.

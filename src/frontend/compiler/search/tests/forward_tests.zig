@@ -589,8 +589,8 @@ test "derived recipe through a binder def names its hidden variables from the @v
 }
 
 // ============================================================
-// Multi-premise and multi-layer forward saturation
-// (META.md). Layered semi-naive firing over pool + derived
+// Multi-premise and multi-layer forward saturation.
+// Layered semi-naive firing over pool + derived
 // sources, configurable bounds, recipe/shape dedupe, nested
 // recipe materialization.
 // ============================================================

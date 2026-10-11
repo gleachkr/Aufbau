@@ -471,7 +471,7 @@ Calibrate with
 `t=…M (i=… s=… sh=… tc=…)` columns) and refit the weights if the engine's
 cost profile shifts.
 
-Forward saturation (`forward.zig`, Stages 7–8) runs *before* backward search
+Forward saturation (`forward.zig`) runs *before* backward search
 when the theory declares `@auto forward` rules: bounded multi-layer forward
 chaining over the ref pool produces a `DerivedPool` of derived facts, indexed
 so backward search pre-filters them per slot. A derived fact that matches the
@@ -548,10 +548,9 @@ When `not_left` counted as multiplicative it sorted behind `raa`, so its cut
 came too late. `raa`'s `Γ , ¬ ⊥ ⊢ ⊥` detours then spent the per-cell node
 budget, and the empty-pool drinker missed. Guard: `empty_pool_witness_probe`.
 
-This is a hard-won constraint (Stage 1 `forceAcuiRestBinder` regressed `drinker`
-5/5→1/5 by over-constraining a witness slot). See `feedback_let_metas_propagate`
-and `feedback_forced_not_heuristic` — the project preference is solid, forced,
-explainable deductions over completeness-trading guesses.
+This is a hard-won constraint (an earlier `forceAcuiRestBinder` regressed
+`drinker` 5/5→1/5 by over-constraining a witness slot). The project preference
+is solid, forced, explainable deductions over completeness-trading guesses.
 
 ### Eliminator seed metas (the one controlled seed-time exception)
 
@@ -915,7 +914,7 @@ from sub-goals:
 > formula spawns an intro fan-out that exhausts the node budget, and the ordinary
 > ref-discharge path already handles those rules. (`bot_elim` is the
 > backward-safe exception.) Mirror-image: forward on an intro rule produces
-> family facts nothing will consume. See `project_auto_annotation_discipline`.
+> family facts nothing will consume.
 
 ## Backward hypothesis ordering and candidate screening
 
@@ -951,8 +950,7 @@ bare-conclusion shape alone — so a plain modus-ponens axiom (`ax_mp`/`mp`), wh
 shares the shape but is *not* a relation member, stays a backward candidate (it is
 load-bearing in Hilbert-style proofs). This is what lets the gen-only cost help
 `mp`-chains (peano, zermelo_hilbert) without breaking the additive ACUI proofs,
-where the same cost would otherwise reorder `mpbi`'s premises destructively. See
-`project_premise_ordering_shared_pin`.
+where the same cost would otherwise reorder `mpbi`'s premises destructively.
 
 ## The COW interner invariant
 
@@ -971,8 +969,7 @@ base nodes, preserving every `ExprId`). **Any "clone a candidate theorem, then
 free/replace the source" pattern must `flatten()` the clone first.** Current
 flatten sites: `candidate.zig:commit`, `check/apply.zig:SpeculativeAttempt.promote`
 and `backward/seed.zig:cloneCandidateWithPrincipalPin` (the fan-out
-variant outlives the `base` candidate that `appendRuleCandidates` frees). See
-`project_cow_interner` and `project_cow_fanout_dangling_base`.
+variant outlives the `base` candidate that `appendRuleCandidates` frees).
 
 Two cost corollaries (2026-07-05, the tait `resolution` budget fix):
 

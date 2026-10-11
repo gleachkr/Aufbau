@@ -752,7 +752,7 @@ theorem euclid {n q: nat}:
 -- p ≤ n branch via dvd_fact, dvd_add_cancel, and
 -- prime_not_dvd_one.
 
--- META.md Stage 4 flagship probe: the existential witness appears only in
+-- Open backward generation flagship probe: the existential witness appears only in
 -- the (generated) hypothesis. The open backward path builds the
 -- @recover-shaped target `emp |- ?t = 0` (one leaf swap, not the raw
 -- sb-headed template), the generated child `eq_intro_nd` closes it at 0,

@@ -21,7 +21,7 @@ const BenchOptions = struct {
     /// comma-separated substrings (e.g. a fixture's supporting lemmas,
     /// proved with rules search never sees).
     exclude: ?[]const u8 = null,
-    /// Frontier analysis mode (META_STRESS.md workstream 1). When set, the
+    /// Frontier analysis mode. When set, the
     /// scenario bench is skipped and the frontier runs over the corpus.
     frontier: ?FrontierMode = null,
     /// Extra/override frontier fixture pairs from `--files=MM0:AUF`.
@@ -86,12 +86,12 @@ const BenchOptions = struct {
     /// Content-keyed query-shape cache (Lever M-content); `--no-shape-cache`
     /// turns it off to measure its effect.
     shape_cache: bool = true,
-    /// Discrimination/scaling sweep (META_STRESS.md theory #4). When set, the
+    /// Discrimination/scaling sweep. When set, the
     /// scenario/frontier benches are skipped and the sweep runs instead.
     sweep: ?SweepSpec = null,
 };
 
-/// Frontier analysis (see META_STRESS.md):
+/// Frontier analysis (see `tests/search_bench_cases/README.md`):
 /// - `breadth`: per-line ablation — replace each proof line's application
 ///   with the search marker and ask whether search recovers it from the
 ///   preceding pool. Misses are matcher/witness gaps with a known-good
@@ -108,7 +108,7 @@ const FixturePair = struct {
     proof_path: []const u8,
 };
 
-/// Discrimination/scaling sweep (META_STRESS.md bespoke theory #4). Each family
+/// Discrimination/scaling sweep. Each family
 /// synthesizes a distractor theory parametrized by N and isolates one
 /// candidate-discrimination path; the goal is deliberately unprovable so the
 /// full candidate set is always exhausted (a clean no-result scaling probe, like
@@ -456,7 +456,7 @@ fn printUsage() !void {
             "       [--fwd-tuples=N]\n" ++
             "       [--sweep=FAMILY[:N1,N2,...]]\n" ++
             "\n" ++
-            "frontier modes (META_STRESS.md): per-line ablation (breadth)\n" ++
+            "frontier modes: per-line ablation (breadth)\n" ++
             "or proof-tail truncation (depth) over the real developments;\n" ++
             "default corpus is the *_frontier copies of the major\n" ++
             "developments in tests/search_bench_cases/, and\n" ++
@@ -464,7 +464,7 @@ fn printUsage() !void {
             "--retry-misses re-runs each depth miss with the retry its\n" ++
             "failure report suggests and prints whether that finds it.\n" ++
             "\n" ++
-            "sweep mode (META_STRESS.md theory #4): synthesize a distractor\n" ++
+            "sweep mode: synthesize a distractor\n" ++
             "theory parametrized by N and plot search time vs N to catch\n" ++
             "superlinear blowups. FAMILY is head_distinct|head_shared|\n" ++
             "ref_fanout; points default to 8..512. Honors --marker.\n",
@@ -743,7 +743,7 @@ fn printTicksCompact(writer: anytype, ticks: RunTicks) !void {
 }
 
 // ===========================================================================
-// Frontier analysis (META_STRESS.md workstream 1)
+// Frontier analysis
 // ===========================================================================
 
 const Spliced = struct {
@@ -842,7 +842,7 @@ const FrontierRun = struct {
 
 /// Byte-exact live/peak tracking around the backing allocator, to split
 /// "still live" (true retention) from "freed but cached by the allocator"
-/// when RSS stays high (META_STRESS.md open thread 1).
+/// when RSS stays high.
 const CountingAllocator = struct {
     child: std.mem.Allocator,
     live: std.atomic.Value(u64) = .init(0),
@@ -1105,7 +1105,7 @@ var counting_allocator = CountingAllocator{
 
 /// Current and peak resident set size from /proc/self/status (Linux only;
 /// zeros elsewhere). Used to attribute depth-mode memory growth to per-call
-/// peaks vs. cross-call accumulation (META_STRESS.md open thread 1).
+/// peaks vs. cross-call accumulation.
 const RssSample = struct {
     rss_kib: u64 = 0,
     hwm_kib: u64 = 0,
@@ -1198,7 +1198,7 @@ fn runFrontierSearch(
 
 /// One-line key-counter summary for a MISS/SLOW breadth row, plus the top
 /// rules by full-validation attempts — the data the major/minor premise
-/// policy question needs (META_STRESS.md workstream 2).
+/// policy question needs.
 fn printRunCounters(writer: anytype, counters: *const Search.SearchCounters) !void {
     try writer.print(
         "       tc={} acc={} rej={} chain={} pool={} derived={} " ++
@@ -1480,7 +1480,7 @@ const DepthStats = struct {
 /// guard can't pass vacuously). Depth mode has no pass/fail notion and always
 /// returns `false`.
 // ===========================================================================
-// Discrimination / scaling sweep (META_STRESS.md bespoke theory #4)
+// Discrimination / scaling sweep
 // ===========================================================================
 
 /// Parse `--sweep=FAMILY[:N1,N2,...]`. Omitting the point list uses a default
@@ -1600,7 +1600,7 @@ fn generateSweep(
 /// Run the sweep: for each N, time the probe search (min of a few repeats to
 /// damp noise) and print the time-vs-N curve alongside the discrimination
 /// counters that explain its shape. Catches superlinear blowups a fixed corpus
-/// hides (META_STRESS.md theory #4).
+/// hides.
 fn runSweep(
     allocator: std.mem.Allocator,
     writer: anytype,
