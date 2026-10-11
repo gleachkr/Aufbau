@@ -577,7 +577,7 @@ pub const Builder = struct {
                         state.enterUnfold();
                         defer state.leaveUnfold();
                         const def_scope = TemplateSurfaceScope{
-                            .outer = scope,
+                            .outer = .{ .surface = scope },
                             .args = app.args,
                             .dummies = decl.dummy_args,
                         };
@@ -622,12 +622,20 @@ pub const Builder = struct {
         return switch (template) {
             .binder => |idx| blk: {
                 if (idx < scope.args.len) {
-                    break :blk try self.templateSurfaceShape(
-                        scope.args[idx],
-                        scope.outer,
-                        state,
-                        unfold_defs,
-                    );
+                    break :blk switch (scope.outer) {
+                        .surface => |outer| try self.templateSurfaceShape(
+                            scope.args[idx],
+                            outer,
+                            state,
+                            unfold_defs,
+                        ),
+                        .via => |outer| try self.templateSurfaceShapeVia(
+                            scope.args[idx],
+                            outer,
+                            state,
+                            unfold_defs,
+                        ),
+                    };
                 }
                 break :blk .{ .hole = sort_id };
             },
@@ -641,7 +649,9 @@ pub const Builder = struct {
                         state.enterUnfold();
                         defer state.leaveUnfold();
                         const nested = TemplateSurfaceScope{
-                            .outer = scope.outer,
+                            // The inner def's args live in the *current* via
+                            // scope, so chain to it (not to scope.outer).
+                            .outer = .{ .via = scope },
                             .args = app.args,
                             .dummies = decl.dummy_args,
                         };
@@ -785,6 +795,9 @@ pub const Builder = struct {
                         break :blk def_scope.args[idx].sort();
                     }
                     const dummy_idx = idx - def_scope.args.len;
+                    if (dummy_idx >= def_scope.dummies.len) {
+                        return error.UnknownTemplateBinder;
+                    }
                     break :blk try sortFromArg(
                         self.env,
                         def_scope.dummies[dummy_idx],
@@ -803,12 +816,21 @@ pub const Builder = struct {
         return switch (template) {
             .binder => |idx| blk: {
                 if (idx < scope.args.len) {
-                    break :blk try self.templateSurfaceSort(
-                        scope.args[idx],
-                        scope.outer,
-                    );
+                    break :blk switch (scope.outer) {
+                        .surface => |outer| try self.templateSurfaceSort(
+                            scope.args[idx],
+                            outer,
+                        ),
+                        .via => |outer| try self.templateSurfaceSortVia(
+                            scope.args[idx],
+                            outer,
+                        ),
+                    };
                 }
                 const dummy_idx = idx - scope.args.len;
+                if (dummy_idx >= scope.dummies.len) {
+                    return error.UnknownTemplateBinder;
+                }
                 break :blk try sortFromArg(self.env, scope.dummies[dummy_idx]);
             },
             .app => |app| try self.termSort(app.term_id),
@@ -1118,9 +1140,14 @@ const SurfaceDefScope = struct {
 };
 
 const TemplateSurfaceScope = struct {
-    outer: *const SurfaceScope,
+    outer: TemplateSurfaceOuter,
     args: []const TemplateExpr,
     dummies: []const ArgInfo,
+};
+
+const TemplateSurfaceOuter = union(enum) {
+    surface: *const SurfaceScope,
+    via: *const TemplateSurfaceScope,
 };
 
 const State = struct {
@@ -1594,6 +1621,59 @@ test "shape emits holey surface expressions" {
     const a_children = [_]clipper.ShapeNode{appShape(t_a, s_obj, &.{})};
     try index.insertShape(item, appShape(t_p, s_wff, &a_children));
     try expectItems(&index, shapes.variants[0], &.{item});
+}
+
+test "shape resolves a holey goal's nested definitions in their own scope" {
+    // `outer(x) := inner(b, x)` and `inner(v, w) := Q(v)`, where `Q(u) :=
+    // P(u)`. Shaping the surface goal `outer(a)` unfolds three definitions;
+    // `Q`'s argument is `inner`'s first binder, which is `b` here, not
+    // `outer`'s first binder `a`.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var env = GlobalEnv.init(allocator);
+    try populateEnv(&env, allocator);
+
+    const inner_args = try allocator.alloc(ArgInfo, 2);
+    inner_args[0] = makeArg("obj");
+    inner_args[1] = makeArg("obj");
+    const inner_body_args = try allocator.alloc(TemplateExpr, 1);
+    inner_body_args[0] = .{ .binder = 0 };
+    try env.terms.append(allocator, testTerm("inner", inner_args, "wff", .{ .app = .{
+        .term_id = t_q,
+        .args = inner_body_args,
+    } }));
+    const t_inner: u32 = @intCast(env.terms.items.len - 1);
+
+    const outer_args = try allocator.alloc(ArgInfo, 1);
+    outer_args[0] = makeArg("obj");
+    const outer_body_args = try allocator.alloc(TemplateExpr, 2);
+    outer_body_args[0] = .{ .app = .{ .term_id = t_b, .args = &.{} } };
+    outer_body_args[1] = .{ .binder = 0 };
+    try env.terms.append(allocator, testTerm("outer", outer_args, "wff", .{ .app = .{
+        .term_id = t_inner,
+        .args = outer_body_args,
+    } }));
+    const t_outer: u32 = @intCast(env.terms.items.len - 1);
+
+    const a_expr = try allocator.create(TrustedExpr);
+    a_expr.* = .{ .term = .{ .sort = @intCast(s_obj), .deps = 0, .id = t_a, .args = &.{} } };
+    const goal_args = try allocator.alloc(*const TrustedExpr, 1);
+    goal_args[0] = a_expr;
+    const goal = try allocator.create(TrustedExpr);
+    goal.* = .{ .term = .{
+        .sort = @intCast(s_wff),
+        .deps = 0,
+        .id = t_outer,
+        .args = goal_args,
+    } };
+
+    const builder = Builder.init(allocator, &env, .{});
+    var shapes = try builder.fromSurfaceExpr(goal);
+    defer shapes.deinit();
+
+    const b_children = [_]clipper.ShapeNode{appShape(t_b, s_obj, &.{})};
+    try std.testing.expect(shapeEql(appShape(t_p, s_wff, &b_children), shapes.variants[0]));
 }
 
 test "shape unfolds transparent definitions instead of all-sort fallback" {

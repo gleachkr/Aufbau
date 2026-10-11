@@ -67,6 +67,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   there, and both were reported missed. A marker is still missed when the
   other one's goal is not yet known, such as a hole in the line's
   statement that only the other marker's proof would fill.
+- `exact?` and `apply?` on a line with a hole no longer read a definition's
+  arguments from the wrong definition when the goal unfolds three
+  definitions deep. Before, the search could pass over a rule that fits,
+  or crash reading past a definition's variables.
 
 ## [0.0.15] - 2026-10-08
 
