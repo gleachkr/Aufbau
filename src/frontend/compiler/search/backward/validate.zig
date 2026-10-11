@@ -152,7 +152,11 @@ pub fn appendDerivedDirectCandidates(
             }
             continue;
         };
-        attempt.deinit();
+        const read_back = blk: {
+            defer attempt.deinit();
+            const keep = runtime.keep orelse break :blk null;
+            break :blk try keep.readBackFn(keep.ctx, &attempt);
+        };
         if (counters) |actual| {
             actual.accepted_candidates += 1;
             actual.recordRuleAttempt(dref.rule_name, true);
@@ -170,6 +174,7 @@ pub fn appendDerivedDirectCandidates(
             .application = owned_application,
             // Derived recipes rank after any assembly over real pool refs.
             .reference_rank = std.math.maxInt(usize),
+            .read_back = read_back,
         });
     }
 }
@@ -439,6 +444,7 @@ pub fn validateSelectedRefs(
         actual.accepted_candidates += 1;
         actual.recordRuleAttempt(candidate.rule_name, true);
     }
+    const read_back = if (runtime.keep) |keep| try keep.readBackFn(keep.ctx, &attempt) else null;
     // Nested-inline binder handoff: an accepted `@auto eager` candidate inside
     // an internal generation child becomes a NESTED node of a parent assembly,
     // where the checker's bottom-up re-inference would have to re-derive its
@@ -481,6 +487,7 @@ pub fn validateSelectedRefs(
         .application = owned_application,
         .reference_rank = reference_rank,
         .owns_arg_bindings = arg_bindings.len != 0,
+        .read_back = read_back,
     });
     bindings_transferred = true;
 }

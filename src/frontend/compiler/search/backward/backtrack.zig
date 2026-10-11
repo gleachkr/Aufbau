@@ -248,6 +248,10 @@ pub fn exactWithSession(
             error.SearchBudgetExhausted => if (options.fuel == null) break else return err,
             else => return err,
         };
+        // Counted before `dropRejected`: a candidate that applied arms the
+        // eager cut even when its conclusion does not read back.
+        const produced = candidates.items.len > results_before;
+        if (runtime.keep != null) dropRejected(&candidates, results_before);
         // An eager candidate whose conclusion bindings may break the rule's
         // eigenvariable condition does not arm the cut: the step may not be
         // applicable as matched (e.g. `all_intro` over a context that
@@ -255,8 +259,7 @@ pub fn exactWithSession(
         // rules. The rigid, view-less case was pruned above; the rest is
         // tried, since a conversion, view or `@freshen` may still repair it.
         if (is_eager and
-            (apply_candidate.reached_child_solve or
-                candidates.items.len > results_before) and
+            (apply_candidate.reached_child_solve or produced) and
             dep_hit == .none)
         {
             eager_armed = true;
@@ -273,6 +276,7 @@ pub fn exactWithSession(
     // A derived forward ref whose shape directly matches the goal is
     // itself a complete proof — materialize the recipe and validate it.
     if (options.derived) |dpool| {
+        const derived_before = candidates.items.len;
         try appendDerivedDirectCandidates(
             compiler,
             allocator,
@@ -286,6 +290,7 @@ pub fn exactWithSession(
             options.fuel,
             &candidates,
         );
+        if (runtime.keep != null) dropRejected(&candidates, derived_before);
     }
 
     std.mem.sort(
@@ -306,6 +311,24 @@ pub fn exactWithSession(
         .allocator = allocator,
         .candidates = try candidates.toOwnedSlice(allocator),
     };
+}
+
+/// Drop the candidates from `from` on that `SearchRuntime.keep` rejected
+/// (no `read_back`).
+fn dropRejected(
+    candidates: *std.ArrayListUnmanaged(ExactCandidate),
+    from: usize,
+) void {
+    var write = from;
+    for (candidates.items[from..]) |*candidate| {
+        if (candidate.read_back != null) {
+            candidates.items[write] = candidate.*;
+            write += 1;
+        } else {
+            candidate.deinit();
+        }
+    }
+    candidates.shrinkRetainingCapacity(write);
 }
 
 /// True when the rule's view declares any `@abstract` derived binding (a

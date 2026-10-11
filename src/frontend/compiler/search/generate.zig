@@ -57,24 +57,6 @@ pub const GeneratedResults = struct {
     }
 };
 
-/// Key for `Driver.open_fail_truncated`: a canonical open key at one depth.
-/// Hashed in place, so a lookup with a borrowed key allocates nothing.
-const OpenDepthKey = struct {
-    key: []const u8,
-    depth: usize,
-
-    const HashContext = struct {
-        pub fn hash(_: HashContext, k: OpenDepthKey) u64 {
-            var hasher = std.hash.Wyhash.init(k.depth);
-            hasher.update(k.key);
-            return hasher.final();
-        }
-        pub fn eql(_: HashContext, a: OpenDepthKey, b: OpenDepthKey) bool {
-            return a.depth == b.depth and std.mem.eql(u8, a.key, b.key);
-        }
-    };
-};
-
 /// Value for the concrete-success memo (`concrete_ok`): the cached sub-proof's
 /// application tree plus the actual generation depth it occupies, so it is
 /// replayed only when the current remaining budget admits it. Only the
@@ -128,19 +110,6 @@ const Driver = struct {
     /// keyed canonically instead (metas numbered by first occurrence). Keys
     /// are owned by `scratch` and freed on removal.
     visited_open: std.StringHashMapUnmanaged(void) = .{},
-    /// Open fails whose child enumeration was truncated by
-    /// `open_child_max_results`. "The first N candidates didn't match back"
-    /// is not a pure semantic fact (`concrete_ok` growth between cells can
-    /// change which candidates surface; observed flipping on euclid
-    /// dvd_add), so unlike `open_fail` below these replay only at the depth
-    /// that recorded them and only within that (depth, phase) cell. Keys own
-    /// their bytes.
-    open_fail_truncated: std.HashMapUnmanaged(
-        OpenDepthKey,
-        void,
-        OpenDepthKey.HashContext,
-        std.hash_map.default_max_load_percentage,
-    ) = .{},
     /// Success ("transposition table") dual of `concrete_fail`. A concrete
     /// subgoal proved once is reusable wherever it recurs (the pool and
     /// `work_theorem` are constant across the search), so this collapses the
@@ -443,10 +412,6 @@ pub fn generateTopLevel(
         var key_iter = driver.visited_open.keyIterator();
         while (key_iter.next()) |key| driver.scratch.free(key.*);
         driver.visited_open.deinit(driver.scratch);
-    }
-    defer {
-        clearTruncatedFails(&driver);
-        driver.open_fail_truncated.deinit(driver.scratch);
     }
     defer driver.concrete_ok.deinit(driver.scratch);
     defer driver.concrete_fail.deinit(driver.scratch);
@@ -940,7 +905,6 @@ fn runDepthPass(
     var open_keys = driver.visited_open.keyIterator();
     while (open_keys.next()) |key| driver.scratch.free(key.*);
     driver.visited_open.clearRetainingCapacity();
-    clearTruncatedFails(driver);
     if (!driver.options.persist_negative) clearFails(driver);
     // NB: `concrete_ok` is deliberately NOT cleared between cells. A found
     // proof is valid in every later pass, so persisting it lets later cells
@@ -1057,10 +1021,12 @@ fn hookSolve(
     return proof;
 }
 
-/// Number of child candidates the open-target solver inspects before giving
-/// up on a slot: the implicit-conclusion child search is hint-guided but not
-/// hint-enforcing, so the first accepted proof may conclude something the
-/// match-back rejects.
+/// Number of child proofs that read back onto an open target the solver
+/// collects for a slot. The implicit-conclusion child search is hint-guided
+/// but not hint-enforcing, so an accepted proof may conclude something the
+/// match-back rejects; `OpenReadBack` drops those as they are found, so they
+/// never take a place (an early-declared rule whose every result fails the
+/// match-back cannot crowd out the proof the parent needs).
 const open_child_max_results: usize = 4;
 
 /// `GenerationHook.solveOpenFn`: solve a *structured open*
@@ -1108,6 +1074,49 @@ fn hookSolveOpen(
     }
 }
 
+/// `SearchRuntime.keep` for an open target's child search: a child proof's
+/// checker-accepted conclusion, read back into `target_theorem`, when it
+/// matches the open target.
+const OpenReadBack = struct {
+    driver: *Driver,
+    target: ExprId,
+    target_theorem: *TheoremContext,
+    store: *MetaStore,
+    hint: ExprId,
+    scope_dummy_base: usize,
+
+    fn readBack(ctx: *anyopaque, attempt: *candidate_mod.Probe) anyerror!?ExprId {
+        const self: *OpenReadBack = @ptrCast(@alignCast(ctx));
+        const driver = self.driver;
+        const accepted = acceptedConclusionOf(
+            driver,
+            attempt,
+            Goal{ .implicit_whole_conclusion = self.hint },
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        // A conclusion referencing a scope-minted dummy cannot escape (see
+        // `scope_dummy_base`); `reinternConcrete`'s per-index check alone
+        // cannot catch the case where `target_theorem` owns an unrelated
+        // same-sort dummy at the same index.
+        if (driver.work_theorem.exprAny(
+            accepted,
+            self.scope_dummy_base,
+            scopeDummyEscapes,
+        )) return null;
+        const back = (try reinternConcrete(
+            self.target_theorem,
+            driver.work_theorem,
+            accepted,
+        )) orelse return null;
+        const mark = self.store.mark();
+        defer self.store.rollbackTo(mark);
+        if (try readBackOpen(driver, self.store, self.target_theorem, back, self.target, .probe) == null) return null;
+        return back;
+    }
+};
+
 /// A child proof of an open target that reads back onto it (`back` is its
 /// conclusion in the target's theorem).
 const OpenProof = struct {
@@ -1137,10 +1146,6 @@ fn collectOpenProofs(
     // open targets, so charging skips burns the whole budget on dedup hits).
     if (driver.open_fail.covered(key, driver.phase_index, depth)) {
         if (driver.counters) |c| c.persist_open_skips += 1;
-        driver.scratch.free(key);
-        return;
-    }
-    if (driver.open_fail_truncated.contains(.{ .key = key, .depth = depth })) {
         driver.scratch.free(key);
         return;
     }
@@ -1228,6 +1233,16 @@ fn collectOpenProofs(
     driver.current_depth = if (depth > 0) depth - 1 else 0;
     defer driver.current_depth = saved_depth;
 
+    var filter = OpenReadBack{
+        .driver = driver,
+        .target = target,
+        .target_theorem = target_theorem,
+        .store = store,
+        .hint = hint,
+        .scope_dummy_base = scope_dummy_base,
+    };
+    var runtime = driver.runtime;
+    runtime.keep = .{ .ctx = &filter, .readBackFn = OpenReadBack.readBack };
     var results = try backtrack.exactWithSession(
         driver.compiler,
         driver.session,
@@ -1238,7 +1253,7 @@ fn collectOpenProofs(
             .max_results = open_child_max_results,
             .generator = generator,
             .counters = driver.counters,
-            .runtime = driver.runtime,
+            .runtime = runtime,
             .fuel = &driver.fuel,
             .derived = driver.derived,
             .internal_open_child = true,
@@ -1248,34 +1263,9 @@ fn collectOpenProofs(
     if (driver.counters) |c| c.generated_chain_attempts += 1;
 
     for (results.candidates) |candidate| {
-        const accepted = acceptedConclusion(
-            driver,
-            candidate.application,
-            Goal{ .implicit_whole_conclusion = hint },
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => continue,
-        };
-        // A conclusion referencing a scope-minted dummy cannot escape (see
-        // `scope_dummy_base`); `reinternConcrete`'s per-index check alone
-        // cannot catch the case where `target_theorem` owns an unrelated
-        // same-sort dummy at the same index.
-        if (driver.work_theorem.exprAny(
-            accepted,
-            scope_dummy_base,
-            scopeDummyEscapes,
-        )) continue;
-        const back = (try reinternConcrete(
-            target_theorem,
-            driver.work_theorem,
-            accepted,
-        )) orelse continue;
-        const mark = store.mark();
-        if (try readBackOpen(driver, store, target_theorem, back, target, .probe) == null) continue;
-        store.rollbackTo(mark);
         try out.append(driver.scratch, .{
             .application = try cloneApplication(driver.arena, candidate.application),
-            .back = back,
+            .back = candidate.read_back.?,
         });
     }
     // A target some child proof matched back is solvable at this depth: a
@@ -1292,14 +1282,7 @@ fn collectOpenProofs(
     if (driver.node_cap_trips == trips_at_entry and
         driver.path_prunes == path_prunes_at_entry)
     {
-        // A full candidate list means "the first `open_child_max_results`
-        // child candidates didn't match back", not "no candidate matches
-        // back"; see `open_fail_truncated`.
-        if (results.candidates.len < open_child_max_results) {
-            driver.open_fail.record(driver.scratch, key, driver.phase_index, depth);
-        } else {
-            recordTruncatedFail(driver, key, depth);
-        }
+        driver.open_fail.record(driver.scratch, key, driver.phase_index, depth);
     }
     return;
 }
@@ -1674,26 +1657,6 @@ fn clearFails(driver: *Driver) void {
     driver.open_fail.clear(driver.scratch);
 }
 
-fn clearTruncatedFails(driver: *Driver) void {
-    var keys = driver.open_fail_truncated.keyIterator();
-    while (keys.next()) |entry| driver.scratch.free(entry.key);
-    driver.open_fail_truncated.clearRetainingCapacity();
-}
-
-/// Best-effort, like `PhaseDepthMemo.record`. The caller's `key` is freed on
-/// solve exit, so the memo owns a copy.
-fn recordTruncatedFail(driver: *Driver, key: []const u8, depth: usize) void {
-    const gop = driver.open_fail_truncated.getOrPut(
-        driver.scratch,
-        .{ .key = key, .depth = depth },
-    ) catch return;
-    if (gop.found_existing) return;
-    gop.key_ptr.key = driver.scratch.dupe(u8, key) catch {
-        _ = driver.open_fail_truncated.remove(.{ .key = key, .depth = depth });
-        return;
-    };
-}
-
 /// Produce one proof of `target` (already in `work_theorem`) at the given depth,
 /// as an arena-owned `GeneratedProof`, or null. At depth 0 the sub-search is
 /// pool-refs-only (a leaf); deeper, it carries the hook so its own open hyps can
@@ -1966,7 +1929,15 @@ fn acceptedConclusion(
         .{},
     );
     defer attempt.deinit();
+    return acceptedConclusionOf(driver, &attempt, goal);
+}
 
+/// `acceptedConclusion` of an application already probed as `attempt`.
+fn acceptedConclusionOf(
+    driver: *Driver,
+    attempt: *candidate_mod.Probe,
+    goal: Goal,
+) anyerror!ExprId {
     const line = attempt.line() orelse return error.InvalidLineIndex;
     const accepted_theorem = &attempt.theorem;
     var accepted = line.expr;

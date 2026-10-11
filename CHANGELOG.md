@@ -92,6 +92,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   mentions it (`[z/b] p`), and failed with "@fresh could not find an
   available @vars token". The same failure dropped every proof `auto?` or
   `exact?` found that used such a rule under another rule.
+- `auto?` keeps up to four proofs of each subgoal whose statement is only
+  partly known, such as a transitivity rule's `a ≤ ?y` with the middle
+  term open, and now counts only the proofs that fit it. Proofs the subgoal then rejects, such as
+  an `eq_replace` step whose conclusion is still a substitution, used to
+  take those places and crowd out the one the search needed.
 
 ## [0.0.15] - 2026-10-08
 
