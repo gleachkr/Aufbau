@@ -1088,11 +1088,15 @@ pub fn parseBindings(
     return bindings;
 }
 
+/// The deps of what a line asserts before its `@fresh` binders are chosen.
+/// An inline sub-proof writes no assertion: it asserts the goal its parent
+/// expects (`expected_conclusion_hint`) and its known conclusion parts.
 pub fn lineAssertionKnownDeps(
     env: *const GlobalEnv,
     theorem: *TheoremContext,
     rule: *const RuleDecl,
     line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
     partial_bindings: []const ?ExprId,
 ) !u55 {
     return switch (line_assertion) {
@@ -1102,12 +1106,18 @@ pub fn lineAssertionKnownDeps(
             expr_id,
         )).deps,
         .holey => |holey| holey.surface.deps(),
-        .implicit_whole_conclusion => try templateKnownDeps(
-            env,
-            theorem,
-            rule.concl,
-            partial_bindings,
-        ),
+        .implicit_whole_conclusion => blk: {
+            var deps = try templateKnownDeps(
+                env,
+                theorem,
+                rule.concl,
+                partial_bindings,
+            );
+            if (expected_conclusion_hint) |hint| {
+                deps |= (try Inference.exprInfo(env, theorem, hint)).deps;
+            }
+            break :blk deps;
+        },
     };
 }
 
@@ -1141,6 +1151,38 @@ fn templateKnownDeps(
     };
 }
 
+/// The deps of what a line asserts, for checking its `@fresh` choices. A
+/// written line counts what it elaborated to, holes filled: a hole the fresh
+/// variable fills is an error (`fail_hole_fresh_postfill`). An inline
+/// application writes no line, and what it elaborated to is built from the
+/// choice (`[z/b] p`, with `p` abstracted over `z`), so it always mentions
+/// the fresh variable; it counts what `applyFreshBindings` saw instead.
+fn freshCheckLineDeps(
+    env: *const GlobalEnv,
+    theorem: *TheoremContext,
+    rule: *const RuleDecl,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    elaborated_line: ExprId,
+    partial_bindings: []const ?ExprId,
+) !u55 {
+    return switch (line_assertion) {
+        .concrete, .holey => try theorem.exprDeps(elaborated_line, .{}),
+        .implicit_whole_conclusion => try lineAssertionKnownDeps(
+            env,
+            theorem,
+            rule,
+            line_assertion,
+            expected_conclusion_hint,
+            partial_bindings,
+        ),
+    };
+}
+
+/// Reject a `@fresh` choice that occurs in the line's inputs: what the line
+/// asserts (`freshCheckLineDeps`, from `line_assertion`, the goal the parent
+/// expects and the conclusion the line elaborated to), its refs, and its
+/// explicit bindings.
 pub fn validateFreshBindingsAgainstLine(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
@@ -1149,7 +1191,9 @@ pub fn validateFreshBindingsAgainstLine(
     theorem_name: []const u8,
     rule: *const RuleDecl,
     line: ApplicationLine,
-    line_expr: ExprId,
+    line_assertion: LineAssertion,
+    expected_conclusion_hint: ?ExprId,
+    elaborated_line: ExprId,
     ref_exprs: []const ExprId,
     partial_bindings: []const ?ExprId,
     resolved_bindings: []const ExprId,
@@ -1161,9 +1205,17 @@ pub fn validateFreshBindingsAgainstLine(
         optional_bindings[fresh.target_arg_idx] = null;
     }
 
-    const used_deps = try FreshSelect.collectUsedDeps(
+    const used_deps = try FreshSelect.collectUsedDepsFromLineDeps(
         theorem,
-        line_expr,
+        try freshCheckLineDeps(
+            env,
+            theorem,
+            rule,
+            line_assertion,
+            expected_conclusion_hint,
+            elaborated_line,
+            optional_bindings,
+        ),
         ref_exprs,
         optional_bindings,
         0,

@@ -320,6 +320,7 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_fresh_hole", .outcome = .pass },
     .{ .stem = "pass_fresh_explicit_override", .outcome = .pass },
     .{ .stem = "pass_fresh_reuse", .outcome = .pass },
+    .{ .stem = "pass_fresh_inline", .outcome = .pass },
     .{ .stem = "pass_holes", .outcome = .pass },
     .{ .stem = "pass_hole_fallback", .outcome = .pass },
     .{ .stem = "pass_hole_normalize", .outcome = .pass },
@@ -870,6 +871,10 @@ const proof_cases = [_]ProofCase{
     .{
         .stem = "fail_fresh_exhausted",
         .outcome = .{ .fail = error.FreshNoAvailableVar },
+    },
+    .{
+        .stem = "fail_fresh_inline_goal_var",
+        .outcome = .{ .fail = error.HypothesisMismatch },
     },
     .{
         .stem = "fail_var_conclusion_mismatch",

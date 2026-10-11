@@ -1,0 +1,3 @@
+fresh_inline_goal_var
+---------------------
+l1: $ top $ by drop (p := $ x $) [use_fresh []]

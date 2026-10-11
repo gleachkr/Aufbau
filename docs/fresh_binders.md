@@ -200,7 +200,9 @@ local `.auf` lemma.
 For one rule application, the compiler looks at the current concrete
 inputs:
 
-- the proof line assertion
+- the proof line assertion; an application written inline, as in
+  `outer [rule [...]]`, has none of its own and uses the goal the outer
+  rule expects of it
 - the cited references
 - the explicit binder assignments on the line
 

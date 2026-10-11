@@ -1,0 +1,3 @@
+fresh_inline
+------------
+l1: $ top -> (b -> top) $ by wrap [ax_ctx [#1, #2]]

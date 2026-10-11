@@ -1,0 +1,11 @@
+delimiter $ ( ) $;
+--| @vars x y
+provable sort wff;
+term top: wff;
+--| @fresh x
+axiom use_fresh {x: wff}: $ x $;
+axiom drop (p: wff): $ p $ > $ top $;
+-- The goal `drop` expects of the inline `use_fresh` is `x`, so `@fresh`
+-- passes over `x` and picks `y`, as it would for the line `$ x $ by
+-- use_fresh []`: the premise then does not match.
+theorem fresh_inline_goal_var: $ top $;

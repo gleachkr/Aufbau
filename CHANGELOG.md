@@ -86,6 +86,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   unreported. It now shows on the failing statement and on the open file's
   statement that leads there, as in `unable to include 'lemmas.auf':
   unable to include 'gone.auf': FileNotFound`.
+- A `@fresh` rule now checks when written inline, as the `eq_replace` in
+  `imp_intro [eq_replace [l1, l2]]`. Before, the check counted the fresh
+  variable against itself, because the conclusion it built from the choice
+  mentions it (`[z/b] p`), and failed with "@fresh could not find an
+  available @vars token". The same failure dropped every proof `auto?` or
+  `exact?` found that used such a rule under another rule.
 
 ## [0.0.15] - 2026-10-08
 
