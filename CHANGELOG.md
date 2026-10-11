@@ -22,9 +22,14 @@ This file records notable user-facing changes to Aufbau. The project follows
 ### Changed
 
 - Building Aufbau now requires Zig 0.17.0 (previously 0.15.2).
-- Compiling and proof search are about 7% faster. Zig 0.17's arena
-  allocator synchronizes every allocation for use across threads; the
-  compiler runs on one thread and now uses an arena that doesn't.
+- Proof search (`auto?`, `exact?`, `apply?`) takes about a quarter less
+  time for the same results, and compiling is about 7% faster. Zig 0.17's
+  arena allocator synchronizes every allocation for use across threads;
+  the compiler runs on one thread and now uses an arena that doesn't. The
+  search also stops redoing work: representatives are shared between the
+  checker's trial copies of a theorem, definitions that cannot fold an
+  expression are skipped before matching, and repeated lookups and checks
+  reuse their first result.
 - The browser language server runs the same message loop as `abc lsp`, so
   the two answer malformed messages alike. A request for a method the
   server doesn't implement gets a `null` result instead of an error, and a
