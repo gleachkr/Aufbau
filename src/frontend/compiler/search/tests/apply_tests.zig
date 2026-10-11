@@ -52,7 +52,7 @@ test "apply rule index filters nonmatching rules before validation" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var counters = types.SearchCounters{};
+    var counters = types.SearchCounters{ .timing = true };
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0_src,
@@ -102,7 +102,7 @@ test "search session reuses rule index across apply calls" {
     var session = session_mod.SearchSession.init(&context, .{});
     defer session.deinit();
 
-    var first_counters = types.SearchCounters{};
+    var first_counters = types.SearchCounters{ .timing = true };
     var first_results = try applyWithSession(
         &compiler,
         &session,
@@ -113,7 +113,7 @@ test "search session reuses rule index across apply calls" {
     );
     defer first_results.deinit();
 
-    var second_counters = types.SearchCounters{};
+    var second_counters = types.SearchCounters{ .timing = true };
     var second_results = try applyWithSession(
         &compiler,
         &session,
@@ -426,7 +426,7 @@ test "exact ref index filters multi-hyp reference tuples" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var counters = types.SearchCounters{};
+    var counters = types.SearchCounters{ .timing = true };
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0_src,

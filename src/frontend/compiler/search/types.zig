@@ -499,11 +499,17 @@ pub const SearchRuntime = struct {
 /// a caller may keep one block across calls or pass none at all. A test pins
 /// the no-pointer property.
 pub const SearchCounters = struct {
-    /// When false (the production default), the expensive per-candidate
-    /// diagnostics — `tryCandidate` timers and the per-rule/per-hyp attempt
-    /// tallies (`recordRuleAttempt`/`recordHypLookup`, an O(n) name lookup each)
-    /// — are skipped. It only gates observability; the bench sets it true.
+    /// When false, the expensive per-candidate diagnostics — `tryCandidate`
+    /// timers and the per-rule/per-hyp attempt tallies
+    /// (`recordRuleAttempt`/`recordHypLookup`, an O(n) name lookup each) — are
+    /// skipped. It only gates observability. The bench sets it, and so do the
+    /// editor and `abc search`, whose miss reports name the most-tried rules.
     collect: bool = false,
+    /// Times index builds, shape emission and reference/rule lookups into
+    /// the `*_build_ns`, `shape_emission_ns` and `*_lookup_ns` fields. Those
+    /// clocks run on every lookup, so they stay off outside the bench's
+    /// `--counters` and scenario reports (#446).
+    timing: bool = false,
     /// Scalar mirrors of the Lever A verdict-memo stats, snapshotted by the
     /// generation call before its memo dies. `total - distinct` is the
     /// skippable repeat work; `skips` is what the enabled memo actually avoided.
@@ -697,6 +703,12 @@ pub const SearchCounters = struct {
     rule_attempt_diagnostics_len: usize = 0,
     rule_attempt_diagnostics: [max_search_diagnostics]RuleAttemptDiagnostic =
         @splat(.{}),
+
+    pub fn timingOn(counters: ?*const SearchCounters) bool {
+        const actual = counters orelse return false;
+        return actual.timing;
+    }
+
     pub fn recordHypLookup(
         self: *SearchCounters,
         rule_name: []const u8,

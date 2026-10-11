@@ -789,9 +789,9 @@ fn partialMatchTemplate(
             // `(λ x : A. t) : (A → B)` meets `x` twice, once from the λ and
             // once as the arrow's hidden binder; the λ's `x` must win, not
             // null the pin as a conflict between two concretes.
-            const incoming_loose = seedValueIsLoose(theorem, expr_id);
             if (bindings[idx]) |existing| {
                 if (existing == expr_id) return;
+                const incoming_loose = seedValueIsLoose(theorem, expr_id);
                 const existing_loose = seedValueIsLoose(theorem, existing);
                 if (existing_loose and !incoming_loose) {
                     bindings[idx] = expr_id; // concrete refines a loose bind

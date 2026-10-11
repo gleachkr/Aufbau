@@ -479,7 +479,7 @@ fn runScenario(
     options: BenchOptions,
 ) !void {
     const scenario_start = nanoTimestamp();
-    var counters = Search.SearchCounters{};
+    var counters = Search.SearchCounters{ .timing = true };
     var suggestions = try scenario_manifest.run(allocator, io, scenario, &counters);
     defer suggestions.deinit();
     untrimmed_total += counters.untrimmed;
@@ -1153,9 +1153,9 @@ fn runFrontierSearch(
     // The search-reuse memos are Driver-owned now (see `generateTopLevel`); the
     // Driver attaches its memo to this counters block and snapshots its stats
     // back into the scalar fields before returning, so we just read them after.
-    // `collect` turns on the per-candidate diagnostics the bench reports (off in
-    // production, where the counters block exists only as the memo carrier).
-    var counters = Search.SearchCounters{ .collect = true };
+    // `collect` turns on the per-candidate diagnostics the bench reports;
+    // `timing` adds the lookup clocks, which only `--counters` prints.
+    var counters = Search.SearchCounters{ .collect = true, .timing = options.counters };
     defer untrimmed_total += counters.untrimmed;
     const run_start = nanoTimestamp();
     var suggestions = Search.suggestionsAtSourceOffset(

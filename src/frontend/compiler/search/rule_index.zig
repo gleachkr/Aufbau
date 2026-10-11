@@ -45,7 +45,7 @@ pub const Index = struct {
         options: shape_mod.Options,
         counters: ?*SearchCounters,
     ) !Index {
-        const build_start = timer.timestampIf(counters != null);
+        const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
         const entries = try allocator.alloc(Entry, env.rules.items.len);
         errdefer allocator.free(entries);
         var result = Index{
@@ -80,7 +80,7 @@ pub const Index = struct {
             }
         }
         if (counters) |actual| {
-            actual.rule_index_build_ns += timer.elapsedSince(build_start);
+            if (actual.timing) actual.rule_index_build_ns += timer.elapsedSince(build_start);
         }
         return result;
     }
@@ -98,10 +98,10 @@ pub const Index = struct {
         available_rule_count: usize,
         counters: ?*SearchCounters,
     ) ![]u32 {
-        const shape_start = timer.timestampIf(counters != null);
+        const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var shape_set = try self.shapeGoal(goal, theorem) orelse {
             if (counters) |actual| {
-                actual.shape_emission_ns += timer.elapsedSince(shape_start);
+                if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
                 actual.shape_emissions += 1;
                 actual.rule_shape_emissions += 1;
             }
@@ -109,12 +109,12 @@ pub const Index = struct {
         };
         defer shape_set.deinit();
         if (counters) |actual| {
-            actual.shape_emission_ns += timer.elapsedSince(shape_start);
+            if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
             actual.rule_shape_emissions += 1;
         }
 
-        const lookup_start = timer.timestampIf(counters != null);
+        const lookup_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var live = clipper.BitSet{};
         defer live.deinit(self.allocator);
         for (shape_set.variants) |variant| {
@@ -139,7 +139,7 @@ pub const Index = struct {
             rules[idx] = self.entries[item].rule_id;
         }
         if (counters) |actual| {
-            actual.rule_lookup_ns += timer.elapsedSince(lookup_start);
+            if (actual.timing) actual.rule_lookup_ns += timer.elapsedSince(lookup_start);
         }
         return rules;
     }

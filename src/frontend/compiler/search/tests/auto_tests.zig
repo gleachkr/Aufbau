@@ -1175,7 +1175,7 @@ test "source exact inside inline application can resolve to direct ref" {
     ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var counters = types.SearchCounters{};
+    var counters = types.SearchCounters{ .timing = true };
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0_src,
@@ -1378,7 +1378,7 @@ test "source exact inside inline ex elim uses later sibling" {
         \\l6: $ ∃ x p ⊢ (p → q) → q $ by imp_intro [l5]
         \\l7: $ _ ⊢ (∃ x p) → ((p → q) → q) $ by imp_intro [l6]
     ;
-    var counters = types.SearchCounters{};
+    var counters = types.SearchCounters{ .timing = true };
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0_src,

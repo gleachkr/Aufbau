@@ -103,7 +103,7 @@ pub const Index = struct {
         options: shape_mod.Options,
         counters: ?*SearchCounters,
     ) !Index {
-        const build_start = timer.timestampIf(counters != null);
+        const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
         const entries = try allocator.alloc(Entry, pool.len);
         errdefer allocator.free(entries);
         var result = Index{
@@ -151,7 +151,7 @@ pub const Index = struct {
             }
         }
         if (counters) |actual| {
-            actual.ref_index_build_ns += timer.elapsedSince(build_start);
+            if (actual.timing) actual.ref_index_build_ns += timer.elapsedSince(build_start);
         }
         return result;
     }
@@ -170,7 +170,7 @@ pub const Index = struct {
         options: shape_mod.Options,
         counters: ?*SearchCounters,
     ) !Index {
-        const build_start = timer.timestampIf(counters != null);
+        const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
         const entries = try allocator.alloc(Entry, exprs.len);
         errdefer allocator.free(entries);
         var result = Index{
@@ -205,7 +205,7 @@ pub const Index = struct {
             }
         }
         if (counters) |actual| {
-            actual.ref_index_build_ns += timer.elapsedSince(build_start);
+            if (actual.timing) actual.ref_index_build_ns += timer.elapsedSince(build_start);
         }
         return result;
     }
@@ -239,11 +239,11 @@ pub const Index = struct {
             self.context.registry,
             self.options,
         );
-        const shape_start = timer.timestampIf(counters != null);
+        const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var shape_set = try builder.fromExprId(theorem, expected);
         defer shape_set.deinit();
         if (counters) |actual| {
-            actual.shape_emission_ns += timer.elapsedSince(shape_start);
+            if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
         }
         return try self.lookupShapeSet(&shape_set, counters);
@@ -293,7 +293,7 @@ pub const Index = struct {
         bindings: []const ?ExprId,
         counters: ?*SearchCounters,
     ) !DualLookup {
-        const shape_start = timer.timestampIf(counters != null);
+        const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var local_set: ?shape_mod.ShapeSet = null;
         defer if (local_set) |*set| set.deinit();
         const shape_set: *const shape_mod.ShapeSet = blk: {
@@ -336,7 +336,7 @@ pub const Index = struct {
             break :blk &local_set.?;
         };
         if (counters) |actual| {
-            actual.shape_emission_ns += timer.elapsedSince(shape_start);
+            if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
         }
         var primary = try self.lookupShapeSet(shape_set, counters);
@@ -406,7 +406,7 @@ pub const Index = struct {
             self.context.registry,
             self.options,
         );
-        const shape_start = timer.timestampIf(counters != null);
+        const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var shape_set = try builder.fromTemplateWithBindings(
             theorem,
             template,
@@ -420,7 +420,7 @@ pub const Index = struct {
             }
         }
         if (counters) |actual| {
-            actual.shape_emission_ns += timer.elapsedSince(shape_start);
+            if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
         }
         var primary = try self.lookupShapeSet(&shape_set, counters);
@@ -445,7 +445,7 @@ pub const Index = struct {
             );
         }
 
-        const lookup_start = timer.timestampIf(counters != null);
+        const lookup_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var live = clipper.BitSet{};
         defer live.deinit(self.allocator);
         for (shape_set.variants) |variant| {
@@ -457,7 +457,7 @@ pub const Index = struct {
         defer self.allocator.free(items);
         const indices = try self.indicesFromItems(items);
         if (counters) |actual| {
-            actual.ref_lookup_ns += timer.elapsedSince(lookup_start);
+            if (actual.timing) actual.ref_lookup_ns += timer.elapsedSince(lookup_start);
         }
         return .{
             .allocator = self.allocator,
@@ -472,14 +472,14 @@ pub const Index = struct {
         broad: bool,
         counters: ?*SearchCounters,
     ) !LookupResult {
-        const lookup_start = timer.timestampIf(counters != null);
+        const lookup_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var bits = try self.clipper_index.query(.{ .hole = sort_id });
         defer bits.deinit(self.allocator);
         const items = try self.clipper_index.collect(&bits);
         defer self.allocator.free(items);
         const indices = try self.indicesFromItems(items);
         if (counters) |actual| {
-            actual.ref_lookup_ns += timer.elapsedSince(lookup_start);
+            if (actual.timing) actual.ref_lookup_ns += timer.elapsedSince(lookup_start);
         }
         return .{
             .allocator = self.allocator,

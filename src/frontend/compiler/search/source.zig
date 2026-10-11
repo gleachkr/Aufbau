@@ -69,9 +69,8 @@ pub fn suggestionsAtSourceOffset(
     caller_options: SourceSuggestionOptions,
 ) !SourceSuggestions {
     // The result's `status` is derived from the counters' exhaustion flags, so
-    // thread a local block when the caller didn't pass one. `collect` stays
-    // false, which skips every per-candidate diagnostic; search behavior never
-    // depends on the counters (they are observe-only), so this is free.
+    // thread a local block when the caller didn't pass one. Search behavior
+    // never depends on the counters (they are observe-only).
     var local_counters = types.SearchCounters{};
     var options = caller_options;
     if (options.counters == null) {
@@ -216,7 +215,10 @@ pub fn suggestionsAtSourceOffset(
         .counters = options.counters,
         .query_shape_cache = options.generate.shape_cache,
     });
-    defer session.deinit();
+    // No `session.deinit()`: the session, its rule and reference indexes and
+    // the query-shape cache all live in `work`, which is freed whole on
+    // return. Walking the cached shape trees to free them node by node first
+    // cost about 1.5% of a search (#446).
 
     const target_line = target.block.lines[target.line_index];
     const line_goal = try parseGoal(
