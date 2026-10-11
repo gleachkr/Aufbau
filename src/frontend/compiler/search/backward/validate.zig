@@ -385,11 +385,7 @@ pub fn validateSelectedRefs(
         // (+27% ticks on `add_suc_right`, erasing the global-budget margin)
         // without ever succeeding. Gated to holey goals so the concrete-goal
         // corpus pays no second `tryCandidate` on its ordinary mismatches.
-        const unify_retry = err == error.UnifyMismatch and unify_retry_scope;
-        if (err == error.MissingBinderAssignment or
-            (err == error.HypothesisMismatch and goal == .implicit_whole_conclusion) or
-            unify_retry)
-        blk_retry: {
+        if (candidate_mod.retryEligibleReject(err, goal, unify_retry_scope)) blk_retry: {
             const hint = if (err == error.MissingBinderAssignment) goal.expectedHint() else null;
             // A view rule's unbound binder is a recover target; any other
             // rule's is a bound variable the goal hides inside a meta.

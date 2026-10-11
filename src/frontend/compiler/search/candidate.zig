@@ -13,16 +13,16 @@ const Context = types.Context;
 const AttemptOptions = types.AttemptOptions;
 const NameExprMap = types.NameExprMap;
 
-/// Mirror of `validateSelectedRefs`' explicit-binding retry guard: an
-/// assembly that fails with one of these errors is NOT a terminal reject — the
-/// caller retries it with every resolved binding rendered and may succeed.
-/// Whether that retry adds a binding depends on the candidate, not on the
+/// `validateSelectedRefs`' explicit-binding retry guard: an assembly that
+/// fails with one of these errors is NOT a terminal reject — the caller
+/// retries it with every resolved binding rendered and may succeed. Whether
+/// that retry adds a binding depends on the candidate, not on the
 /// application, so the rendered bindings do not decide it here. Such rejects
 /// must not be memoized (see `tryCandidate`), unless the attempt is the retry
 /// itself (`AttemptOptions.final_attempt`). The UnifyMismatch arm's view/meta
 /// scoping lives with the caller and arrives via
-/// `AttemptOptions.unify_retry_eligible`, so the two gates cannot drift.
-fn retryEligibleReject(
+/// `AttemptOptions.unify_retry_eligible`.
+pub fn retryEligibleReject(
     err: anyerror,
     goal: Goal,
     unify_retry_eligible: bool,
@@ -245,8 +245,8 @@ fn tryCandidate(
         // rendered bindings and can SUCCEED, so memoizing the reject would make
         // a later re-encounter short-circuit to `error.MemoizedReject` and skip
         // that retry, losing a winnable proof.
-        // Mirror the caller's retry guard exactly, and never memoize OOM (a
-        // transient resource error, not a verdict). The retry itself is
+        // Skip what the caller's retry guard retries, and never memoize OOM
+        // (a transient resource error, not a verdict). The retry itself is
         // terminal.
         if (verdict_memo) |m| {
             if (err != error.OutOfMemory and
