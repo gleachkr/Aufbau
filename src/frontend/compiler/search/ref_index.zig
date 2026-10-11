@@ -52,7 +52,7 @@ pub const LookupResult = struct {
 // aliasing that made a raw-ExprId key unsound). Everything else the builder
 // consults (env decls, rewrite registry, `Options`) is fixed per `Index`.
 const ShapeCache = struct {
-    map: std.StringHashMapUnmanaged(shape_mod.ShapeSet) = .empty,
+    map: std.StringHashMapUnmanaged(CachedShapes) = .empty,
     // Reused per-call key build buffer; `map` keys are owned dupes of it.
     scratch: std.ArrayListUnmanaged(u8) = .empty,
     // Per-call DAG backref table (ExprId → first-visit ordinal), so shared
@@ -71,6 +71,18 @@ const ShapeCache = struct {
         self.scratch.deinit(allocator);
         self.backrefs.deinit(allocator);
         self.* = undefined;
+    }
+};
+
+/// A cached query shape set, with what it found in this index once looked
+/// up: the index never changes while the cache lives, so neither does that.
+const CachedShapes = struct {
+    shapes: shape_mod.ShapeSet,
+    primary: ?LookupResult = null,
+
+    fn deinit(self: *CachedShapes) void {
+        self.shapes.deinit();
+        if (self.primary) |*lookup| lookup.deinit();
     }
 };
 
@@ -296,6 +308,7 @@ pub const Index = struct {
         const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
         var local_set: ?shape_mod.ShapeSet = null;
         defer if (local_set) |*set| set.deinit();
+        var cached: ?*CachedShapes = null;
         const shape_set: *const shape_mod.ShapeSet = blk: {
             if (self.shape_cache) |cache| {
                 if (try buildCallKey(
@@ -308,7 +321,8 @@ pub const Index = struct {
                 )) {
                     if (cache.map.getPtr(cache.scratch.items)) |hit| {
                         if (counters) |actual| actual.shape_cache_hits += 1;
-                        break :blk hit;
+                        cached = hit;
+                        break :blk &hit.shapes;
                     }
                     var built = try self.buildTemplateShapes(
                         theorem,
@@ -322,9 +336,10 @@ pub const Index = struct {
                         cache.scratch.items,
                     );
                     errdefer self.allocator.free(owned_key);
-                    try cache.map.putNoClobber(self.allocator, owned_key, built);
+                    try cache.map.putNoClobber(self.allocator, owned_key, .{ .shapes = built });
                     if (counters) |actual| actual.shape_cache_misses += 1;
-                    break :blk cache.map.getPtr(owned_key).?;
+                    cached = cache.map.getPtr(owned_key).?;
+                    break :blk &cached.?.shapes;
                 }
             }
             local_set = try self.buildTemplateShapes(
@@ -339,7 +354,17 @@ pub const Index = struct {
             if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
         }
-        var primary = try self.lookupShapeSet(shape_set, counters);
+        var primary = if (cached) |entry| blk: {
+            if (entry.primary == null) {
+                entry.primary = try self.lookupShapeSet(shape_set, counters);
+            }
+            const found = entry.primary.?;
+            break :blk LookupResult{
+                .allocator = self.allocator,
+                .indices = try self.allocator.dupe(usize, found.indices),
+                .broad = found.broad,
+            };
+        } else try self.lookupShapeSet(shape_set, counters);
         errdefer primary.deinit();
         const second: ?LookupResult = if (secondary) |index|
             try index.lookupShapeSet(shape_set, counters)
