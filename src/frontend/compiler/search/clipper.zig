@@ -33,6 +33,11 @@ pub const ConcreteNode = struct {
 pub const AcuiNode = struct {
     sort: SortId,
     members: []const ShapeNode = &.{},
+    /// Where the shape builder got the region, for its own use while
+    /// building; the index ignores it. The combiner head whose applications
+    /// were flattened, or null for a single term of an ACUI sort wrapped as a
+    /// one-member region.
+    head: ?u32 = null,
 };
 
 pub const ShapeNode = union(enum) {

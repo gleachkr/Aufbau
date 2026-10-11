@@ -108,13 +108,17 @@ pub const Builder = struct {
             isTransparentDefTemplateRoot(self.env, template))
         {
             var state = State.init(self.options);
+            state.acui_sorts = &acui_sorts;
             const shape = try self.templateShape(template, scope, &state, false);
-            try self.appendNormalized(&result, &acui_sorts, shape);
+            errdefer deinitShape(self.allocator, shape);
+            try result.appendOwned(shape);
         }
 
         var state = State.init(self.options);
+        state.acui_sorts = &acui_sorts;
         const shape = try self.templateShape(template, scope, &state, true);
-        try self.appendNormalized(&result, &acui_sorts, shape);
+        errdefer deinitShape(self.allocator, shape);
+        try result.appendOwned(shape);
         return try result.finish();
     }
 
@@ -133,13 +137,17 @@ pub const Builder = struct {
             isTransparentDefExprRoot(self.env, theorem, expr_id))
         {
             var state = State.init(self.options);
+            state.acui_sorts = &acui_sorts;
             const shape = try self.exprShape(expr_id, &scope, &state, false);
-            try self.appendNormalized(&result, &acui_sorts, shape);
+            errdefer deinitShape(self.allocator, shape);
+            try result.appendOwned(shape);
         }
 
         var state = State.init(self.options);
+        state.acui_sorts = &acui_sorts;
         const shape = try self.exprShape(expr_id, &scope, &state, true);
-        try self.appendNormalized(&result, &acui_sorts, shape);
+        errdefer deinitShape(self.allocator, shape);
+        try result.appendOwned(shape);
         return try result.finish();
     }
 
@@ -157,13 +165,17 @@ pub const Builder = struct {
             isTransparentDefSurfaceRoot(self.env, expr))
         {
             var state = State.init(self.options);
+            state.acui_sorts = &acui_sorts;
             const shape = try self.surfaceShape(expr, &scope, &state, false);
-            try self.appendNormalized(&result, &acui_sorts, shape);
+            errdefer deinitShape(self.allocator, shape);
+            try result.appendOwned(shape);
         }
 
         var state = State.init(self.options);
+        state.acui_sorts = &acui_sorts;
         const shape = try self.surfaceShape(expr, &scope, &state, true);
-        try self.appendNormalized(&result, &acui_sorts, shape);
+        errdefer deinitShape(self.allocator, shape);
+        try result.appendOwned(shape);
         return try result.finish();
     }
 
@@ -171,9 +183,9 @@ pub const Builder = struct {
     // `hyp([x/u]p)`) for injection into a recover-source context query. The
     // pattern is shaped concretely except at the recover hole, which is widened
     // to a covering wildcard so it matches whatever witness the real context
-    // member carries. Rendered through `memberBody` (same path as stored
-    // members) and with `unfold_defs` so transparent defs in the pattern line
-    // up with the index's unfolded ref members. Caller owns the result.
+    // member carries. Rendered as stored members are, with the wrapper head
+    // kept concrete, and with `unfold_defs` so transparent defs in the pattern
+    // line up with the index's unfolded ref members. Caller owns the result.
     pub fn recoverMemberShape(
         self: *const Builder,
         theorem: *const TheoremContext,
@@ -190,6 +202,7 @@ pub const Builder = struct {
 
         var state = State.init(self.options);
         state.hole = hole;
+        state.acui_sorts = &acui_sorts;
         const scope = ExprScope{ .theorem = theorem };
         const inner = try self.exprShape(pattern, &scope, &state, true);
 
@@ -198,10 +211,9 @@ pub const Builder = struct {
             return err;
         };
         children[0] = inner;
-        const wrapped = concrete(wrapper_term_id, wrapper_sort, children);
-        defer deinitShape(self.allocator, wrapped);
-
-        return try self.memberBody(wrapped.concrete, &acui_sorts);
+        // A member keeps its own head: no region wrap around the wrapper.
+        const member = concrete(wrapper_term_id, wrapper_sort, children);
+        return member;
     }
 
     fn templateShape(
@@ -282,7 +294,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(app.term_id, sort_id, children);
+                break :blk try self.finish(state, app.term_id, sort_id, children);
             },
         };
     }
@@ -303,7 +315,7 @@ pub const Builder = struct {
 
         const node = try scope.node(expr_id);
         return switch (node.*) {
-            .variable => |var_id| varLeaf(var_id, sort_id),
+            .variable => |var_id| try self.finishLeaf(state, varLeaf(var_id, sort_id)),
             .placeholder => .{ .wildcard = sort_id },
             .app => |app| blk: {
                 const decl = self.lookupTerm(app.term_id) orelse {
@@ -342,7 +354,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(app.term_id, sort_id, children);
+                break :blk try self.finish(state, app.term_id, sort_id, children);
             },
         };
     }
@@ -410,7 +422,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(app.term_id, sort_id, children);
+                break :blk try self.finish(state, app.term_id, sort_id, children);
             },
         };
     }
@@ -484,7 +496,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(app.term_id, sort_id, children);
+                break :blk try self.finish(state, app.term_id, sort_id, children);
             },
         };
     }
@@ -538,7 +550,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(term_app.id, sort_id, children);
+                break :blk try self.finish(state, term_app.id, sort_id, children);
             },
         };
     }
@@ -605,7 +617,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(app.term_id, sort_id, children);
+                break :blk try self.finish(state, app.term_id, sort_id, children);
             },
         };
     }
@@ -678,7 +690,7 @@ pub const Builder = struct {
                         unfold_defs,
                     );
                 }
-                break :blk concrete(app.term_id, sort_id, children);
+                break :blk try self.finish(state, app.term_id, sort_id, children);
             },
         };
     }
@@ -896,174 +908,98 @@ pub const Builder = struct {
         return set;
     }
 
-    // Rewrite a freshly built shape tree so ACUI regions route their members
-    // through the clipper member slot (see clipper.AcuiNode). Builds a fresh
-    // tree; the caller frees the input. `acui_sorts` is empty when there is no
-    // registry, so this is a deep copy in that case.
-    fn acuiNormalize(
+    // Puts a freshly built application into the index's normal form: an
+    // ACUI combiner's application becomes the region of its flattened
+    // members, and any other term of an ACUI sort a one-member region.
+    // `children` are already in normal form; the result owns them.
+    fn finish(
         self: *const Builder,
-        shape: clipper.ShapeNode,
-        acui_sorts: *const SortSet,
-    ) anyerror!clipper.ShapeNode {
-        ExprMod.work_ticks_walk +%= 1;
-        switch (shape) {
-            .wildcard, .hole => return shape, // unknown whole region -> covering
-            .acui => |node| {
-                const members = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    node.members.len,
-                );
-                var built: usize = 0;
-                errdefer {
-                    for (members[0..built]) |m| deinitShape(self.allocator, m);
-                    self.allocator.free(members);
-                }
-                for (node.members, 0..) |member, idx| {
-                    members[idx] = try self.regionMember(member, acui_sorts);
-                    built = idx + 1;
-                }
-                return .{ .acui = .{ .sort = node.sort, .members = members } };
-            },
-            .concrete => |node| {
-                if (self.isAcuiRoot(node.token.term_id)) {
-                    return try self.acuiRegionShape(node, acui_sorts);
-                }
-                const body = try self.memberBody(node, acui_sorts);
-                if (acui_sorts.contains(node.sort)) {
-                    // Non-combiner term of an ACUI sort: a one-member region, so
-                    // unit absorption against a multi-member region matches.
-                    errdefer deinitShape(self.allocator, body);
-                    const members = try self.allocator.alloc(clipper.ShapeNode, 1);
-                    members[0] = body;
-                    return .{ .acui = .{ .sort = node.sort, .members = members } };
-                }
-                return body;
-            },
-        }
+        state: *const State,
+        term_id: u32,
+        sort_id: clipper.SortId,
+        children: []clipper.ShapeNode,
+    ) !clipper.ShapeNode {
+        const acui_sorts = state.acui_sorts orelse return concrete(term_id, sort_id, children);
+        if (self.isAcuiRoot(term_id)) return try self.region(term_id, sort_id, children);
+        const body = concrete(term_id, sort_id, children);
+        if (!acui_sorts.contains(sort_id)) return body;
+        const members = self.allocator.alloc(clipper.ShapeNode, 1) catch |err| {
+            deinitShape(self.allocator, body);
+            return err;
+        };
+        members[0] = body;
+        return .{ .acui = .{ .sort = sort_id, .members = members } };
     }
 
-    // A concrete node rendered with its head kept concrete (no region wrap) and
-    // its children normalized. Used for ACUI members and ordinary terms.
-    fn memberBody(
+    // A variable leaf of an ACUI sort is a one-member region, like any other
+    // term of that sort.
+    fn finishLeaf(
         self: *const Builder,
-        node: clipper.ConcreteNode,
-        acui_sorts: *const SortSet,
-    ) anyerror!clipper.ShapeNode {
-        const children = try self.allocator.alloc(
-            clipper.ShapeNode,
-            node.children.len,
-        );
-        var built: usize = 0;
-        errdefer {
-            for (children[0..built]) |c| deinitShape(self.allocator, c);
+        state: *const State,
+        leaf: clipper.ShapeNode,
+    ) !clipper.ShapeNode {
+        const acui_sorts = state.acui_sorts orelse return leaf;
+        const node = switch (leaf) {
+            .concrete => |node| node,
+            else => return leaf,
+        };
+        if (!acui_sorts.contains(node.sort)) return leaf;
+        const members = try self.allocator.alloc(clipper.ShapeNode, 1);
+        members[0] = leaf;
+        return .{ .acui = .{ .sort = node.sort, .members = members } };
+    }
+
+    // The region of combiner `head` applied to `children`. A child region
+    // of the same combiner is spliced in, the unit is absorbed, and a
+    // one-member wrap is unwrapped, since a member keeps its own head.
+    fn region(
+        self: *const Builder,
+        head: u32,
+        sort_id: clipper.SortId,
+        children: []clipper.ShapeNode,
+    ) !clipper.ShapeNode {
+        const unit_id = self.acuiUnitId(head);
+        var count: usize = 0;
+        for (children) |child| count += regionShare(child, head, unit_id);
+        const members = self.allocator.alloc(clipper.ShapeNode, count) catch |err| {
+            for (children) |child| deinitShape(self.allocator, child);
             self.allocator.free(children);
-        }
-        for (node.children, 0..) |child, idx| {
-            children[idx] = try self.acuiNormalize(child, acui_sorts);
-            built = idx + 1;
-        }
-        return .{ .concrete = .{
-            .token = node.token,
-            .sort = node.sort,
-            .children = children,
-        } };
-    }
-
-    fn acuiRegionShape(
-        self: *const Builder,
-        node: clipper.ConcreteNode,
-        acui_sorts: *const SortSet,
-    ) anyerror!clipper.ShapeNode {
-        const head_id = node.token.term_id;
-        const unit_id = self.acuiUnitId(head_id);
-        var members = std.ArrayListUnmanaged(clipper.ShapeNode).empty;
-        errdefer {
-            for (members.items) |m| deinitShape(self.allocator, m);
-            members.deinit(self.allocator);
-        }
-        try self.collectRegionMembers(head_id, node, unit_id, &members, acui_sorts);
-        const owned = try members.toOwnedSlice(self.allocator);
-        return .{ .acui = .{ .sort = node.sort, .members = owned } };
-    }
-
-    // Flatten nested applications of `head_id` into member shapes, dropping the
-    // (absorbed) unit element. Member position is erased by the slot.
-    fn collectRegionMembers(
-        self: *const Builder,
-        head_id: u32,
-        node: clipper.ConcreteNode,
-        unit_id: ?u32,
-        out: *std.ArrayListUnmanaged(clipper.ShapeNode),
-        acui_sorts: *const SortSet,
-    ) anyerror!void {
-        for (node.children) |child| {
+            return err;
+        };
+        var at: usize = 0;
+        for (children) |child| {
             switch (child) {
-                .concrete => |cn| {
-                    if (cn.token.term_id == head_id) {
-                        try self.collectRegionMembers(
-                            head_id,
-                            cn,
-                            unit_id,
-                            out,
-                            acui_sorts,
-                        );
+                .acui => |node| {
+                    if (node.head == head) {
+                        @memcpy(members[at..][0..node.members.len], node.members);
+                        at += node.members.len;
+                        self.allocator.free(node.members);
                         continue;
                     }
-                    if (unit_id != null and cn.token.term_id == unit_id.? and
-                        cn.children.len == 0)
-                    {
-                        continue; // unit is absorbed, not a member
+                    if (node.head == null) {
+                        const inner = node.members[0];
+                        self.allocator.free(node.members);
+                        if (isUnitLeaf(inner, unit_id)) {
+                            deinitShape(self.allocator, inner);
+                            continue;
+                        }
+                        members[at] = inner;
+                        at += 1;
+                        continue;
                     }
-                    const member = try self.regionMember(child, acui_sorts);
-                    errdefer deinitShape(self.allocator, member);
-                    try out.append(self.allocator, member);
                 },
-                .wildcard, .hole => try out.append(self.allocator, child),
-                .acui => {
-                    const member = try self.regionMember(child, acui_sorts);
-                    errdefer deinitShape(self.allocator, member);
-                    try out.append(self.allocator, member);
+                .concrete => if (isUnitLeaf(child, unit_id)) {
+                    deinitShape(self.allocator, child);
+                    continue;
                 },
+                .wildcard, .hole => {},
             }
+            members[at] = child;
+            at += 1;
         }
-    }
-
-    // Render an ACUI member: a nested region for a different ACUI combiner,
-    // otherwise the term with its head kept concrete (members are not wrapped).
-    fn regionMember(
-        self: *const Builder,
-        child: clipper.ShapeNode,
-        acui_sorts: *const SortSet,
-    ) anyerror!clipper.ShapeNode {
-        return switch (child) {
-            .wildcard, .hole => child,
-            .acui => try self.acuiNormalize(child, acui_sorts),
-            .concrete => |cn| if (self.isAcuiRoot(cn.token.term_id))
-                try self.acuiNormalize(child, acui_sorts)
-            else
-                try self.memberBody(cn, acui_sorts),
-        };
-    }
-
-    fn appendNormalized(
-        self: *const Builder,
-        result: *VariantList,
-        acui_sorts: *const SortSet,
-        shape: clipper.ShapeNode,
-    ) !void {
-        // With no ACUI combiner there is no region to route, and
-        // `acuiNormalize` would return an exact copy of `shape`.
-        if (acui_sorts.count() == 0) {
-            errdefer deinitShape(self.allocator, shape);
-            return try result.appendOwned(shape);
-        }
-        const norm = blk: {
-            errdefer deinitShape(self.allocator, shape);
-            break :blk try self.acuiNormalize(shape, acui_sorts);
-        };
-        deinitShape(self.allocator, shape);
-        errdefer deinitShape(self.allocator, norm);
-        try result.appendOwned(norm);
+        std.debug.assert(at == count);
+        self.allocator.free(children);
+        return .{ .acui = .{ .sort = sort_id, .members = members, .head = head } };
     }
 };
 
@@ -1165,6 +1101,9 @@ const State = struct {
     // query: the pattern `p` is shaped concretely except at the hole `x`, whose
     // occurrences must match the witness the recovered context member carries.
     hole: ?ExprId = null,
+    /// The ACUI sorts to normalize regions for while building (see
+    /// `Builder.finish`); null builds the plain tree.
+    acui_sorts: ?*const SortSet = null,
 
     fn init(options: Options) State {
         return .{
@@ -1230,6 +1169,28 @@ const VariantList = struct {
         return .{ .allocator = self.allocator, .variants = owned };
     }
 };
+
+/// How many members `child` gives a region of combiner `head`.
+fn regionShare(child: clipper.ShapeNode, head: u32, unit_id: ?u32) usize {
+    return switch (child) {
+        .acui => |node| if (node.head == head)
+            node.members.len
+        else if (node.head == null and isUnitLeaf(node.members[0], unit_id))
+            0
+        else
+            1,
+        .concrete => if (isUnitLeaf(child, unit_id)) 0 else 1,
+        .wildcard, .hole => 1,
+    };
+}
+
+fn isUnitLeaf(shape: clipper.ShapeNode, unit_id: ?u32) bool {
+    const unit = unit_id orelse return false;
+    return switch (shape) {
+        .concrete => |node| node.token.term_id == unit and node.children.len == 0,
+        else => false,
+    };
+}
 
 fn concrete(
     term_id: u32,
