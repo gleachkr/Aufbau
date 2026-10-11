@@ -679,10 +679,9 @@ pub const SearchCounters = struct {
     /// harvested, less any restating a pool fact or another seed (zero when
     /// phase 6 never ran or no seed was new).
     trigger_seed_count: usize = 0,
-    /// Sub-solves skipped by the cross-cell persisted failure memos
-    /// (`GenerateOptions.persist_negative`): re-solves whose target was
-    /// already exhaustively failed at a covering (depth, phase) in an
-    /// earlier ladder cell.
+    /// Sub-solves skipped by the failure memos (persisted across ladder
+    /// cells under `GenerateOptions.persist_negative`): re-solves whose
+    /// target already failed exhaustively at a covering (depth, phase).
     persist_concrete_skips: usize = 0,
     persist_open_skips: usize = 0,
     forward_rule_attempts: usize = 0,

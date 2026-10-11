@@ -57,12 +57,23 @@ pub const GeneratedResults = struct {
     }
 };
 
-/// Key for the within-pass concrete-failure memo: a `solveProof` result
-/// depends on both the target and the remaining recursion depth. `target` is
-/// the canonical content hash of the ACUI-*canonical* form (`contentKey`),
-/// shared with `concrete_ok`, so an exhausted failure skips every ACUI
-/// variant of the goal, not just the literal one searched.
-const ConcreteFailKey = struct { target: u64, depth: usize };
+/// Key for `Driver.open_fail_truncated`: a canonical open key at one depth.
+/// Hashed in place, so a lookup with a borrowed key allocates nothing.
+const OpenDepthKey = struct {
+    key: []const u8,
+    depth: usize,
+
+    const HashContext = struct {
+        pub fn hash(_: HashContext, k: OpenDepthKey) u64 {
+            var hasher = std.hash.Wyhash.init(k.depth);
+            hasher.update(k.key);
+            return hasher.final();
+        }
+        pub fn eql(_: HashContext, a: OpenDepthKey, b: OpenDepthKey) bool {
+            return a.depth == b.depth and std.mem.eql(u8, a.key, b.key);
+        }
+    };
+};
 
 /// Value for the concrete-success memo (`concrete_ok`): the cached sub-proof's
 /// application tree plus the actual generation depth it occupies, so it is
@@ -117,31 +128,19 @@ const Driver = struct {
     /// keyed canonically instead (metas numbered by first occurrence). Keys
     /// are owned by `scratch` and freed on removal.
     visited_open: std.StringHashMapUnmanaged(void) = .{},
-    /// Within-pass negative memo for structured open targets (carry-to-leaf
-    /// witness solves). `visited_open` is only a DFS *path* guard — it is
-    /// removed when a solve returns, so sibling subtrees re-solve an identical
-    /// canonical open target from scratch. The large two-branch additive
-    /// proofs (`*_dist_*`) re-derive the same ~100 doomed leaf witness targets
-    /// per depth pass that way. This cache remembers canonical keys whose
-    /// solve was fully explored and genuinely failed (all candidates tried, no
-    /// match-back) so siblings skip them. Sound within a pass because failures
-    /// are memoized only when neither the node budget nor the DFS path guard
-    /// pruned the subtree, and fuel exhaustion propagates as an error, not a
-    /// null.
-    /// Cleared at each (depth, phase) ladder cell, like `visited_open`. Keyed by
-    /// the (depth-independent) canonical open key; the value is a bitset of the
-    /// `current_depth`s at which that target genuinely failed. Depth matters —
-    /// a target unprovable shallow may be provable deeper — so a failure only
-    /// replays at the same depth. A bitset value (not a depth-augmented key)
-    /// keeps the per-call check allocation-free (`current_depth < 16`).
-    open_fail: std.StringHashMapUnmanaged(u16) = .{},
-    /// Concrete (`solveProof`) analogue of `open_fail`, keyed by `(canonical
-    /// target content hash, depth)` (the same key as `concrete_ok`, so an
-    /// exhausted failure covers every ACUI variant). `visited` is only a path
-    /// guard (removed on exit), so sibling subtrees re-solve identical concrete
-    /// leaf targets; this remembers the genuinely-exhausted failures within a
-    /// pass.
-    concrete_fail: std.AutoHashMapUnmanaged(ConcreteFailKey, void) = .{},
+    /// Open fails whose child enumeration was truncated by
+    /// `open_child_max_results`. "The first N candidates didn't match back"
+    /// is not a pure semantic fact (`concrete_ok` growth between cells can
+    /// change which candidates surface; observed flipping on euclid
+    /// dvd_add), so unlike `open_fail` below these replay only at the depth
+    /// that recorded them and only within that (depth, phase) cell. Keys own
+    /// their bytes.
+    open_fail_truncated: std.HashMapUnmanaged(
+        OpenDepthKey,
+        void,
+        OpenDepthKey.HashContext,
+        std.hash_map.default_max_load_percentage,
+    ) = .{},
     /// Success ("transposition table") dual of `concrete_fail`. A concrete
     /// subgoal proved once is reusable wherever it recurs (the pool and
     /// `work_theorem` are constant across the search), so this collapses the
@@ -153,7 +152,7 @@ const Driver = struct {
     /// *canonical* form of the target, NOT by `(target, depth)`. A found proof
     /// is a complete, valid tree; its validity does not depend on the budget it
     /// was found under (unlike a *failure*, which is depth-relative — hence
-    /// `concrete_fail` keeps its depth). We instead store the proof's actual
+    /// `concrete_fail` keeps depths). We instead store the proof's actual
     /// generation depth (`gen_depth`) and replay it only when the current
     /// remaining budget is at least that deep, so a shallow subproof found
     /// anywhere is reused everywhere it fits, never returning a proof too deep
@@ -177,48 +176,42 @@ const Driver = struct {
     /// NOT cleared per depth: a success is valid in every later pass.
     concrete_ok: std.AutoHashMapUnmanaged(u64, OkMemo) = .{},
     /// Ladder phase index (0-based) of the currently running cell. Set by
-    /// `runPhaseLadder` next to the capability flags; keys the persisted
-    /// failure memos below by the capability set they were recorded under.
+    /// `runPhaseLadder` next to the capability flags; keys the failure
+    /// memos below by the capability set they were recorded under.
     phase_index: usize = 0,
     /// What the theory offers the ladder; fixed for the whole call.
     gates: LadderGates,
-    /// Cross-cell persisted failure memos (`GenerateOptions.
-    /// persist_negative`, default on). Unlike the per-cell memos above,
-    /// these survive the whole retry ladder: a genuinely-exhaustive
-    /// failure at (target, depth d, phase p) is a pure semantic fact —
-    /// "no proof of gen-depth ≤ d under phase-p capabilities and this
-    /// pool" — because the phase capability flags are cumulative, linearly
-    /// ordered, and purely additive (each only ADDS candidate branches),
-    /// and the exhaustiveness guards (`node_cap_trips`/`path_prunes`)
-    /// already exclude truncated verdicts. So a recorded failure soundly
-    /// covers any later re-solve at depth ≤ d under phase ≤ p — which the
-    /// depth-major core re-encounters constantly (phases 1–2 re-run at
-    /// every depth after phase 3 already failed the same targets) — and,
-    /// because depth-0 solves carry no hook at all, ANY recorded failure
-    /// covers depth-0 re-solves at every phase. `concrete_ok` growth
-    /// cannot contradict a covered verdict (a replayed proof of gen-depth
-    /// g ≤ d under covered flags would contradict the recorded
-    /// exhaustiveness), but the ok-replay is still checked FIRST in
-    /// `solveProof`: an ok entry found under STRONGER flags than a
+    /// Genuinely-exhaustive failure memos: concrete (`solveProof`, keyed by
+    /// `contentKey`, the same key as `concrete_ok`, so a failure covers
+    /// every ACUI variant) and open (`collectOpenProofs`, keyed by the
+    /// canonical open key bytes). `visited` and `visited_open` are only DFS
+    /// path guards, removed when a solve returns, so sibling subtrees would
+    /// re-solve identical targets from scratch (the two-branch additive
+    /// `*_dist_*` proofs re-derive ~100 doomed leaf witness targets per
+    /// pass). A failure is recorded only when neither the node budget nor
+    /// the path guard pruned its subtree (`node_cap_trips`/`path_prunes`),
+    /// and fuel exhaustion propagates as an error, never a null, so a
+    /// recorded failure at (target, depth d, phase p) is a pure semantic
+    /// fact: "no proof of gen-depth ≤ d under phase-p capabilities and this
+    /// pool". The phase capability flags are cumulative, linearly ordered
+    /// and purely additive (each only ADDS candidate branches), so the
+    /// verdict survives the whole retry ladder (`GenerateOptions.
+    /// persist_negative`, default on; off clears these at every cell). The
+    /// depth-major core re-encounters such targets constantly: phases 1–2
+    /// re-run at every depth after phase 3 already failed them.
+    /// `concrete_ok` growth cannot contradict a covered verdict (a replayed
+    /// proof of gen-depth g ≤ d under covered flags would contradict the
+    /// recorded exhaustiveness), but the ok-replay is still checked FIRST
+    /// in `solveProof`: an ok entry found under STRONGER flags than a
     /// recorded fail is consistent with it and must win on re-encounter.
-    /// Keys are scope-stable canonical content (the `contentKey` hash /
-    /// the canonical open key bytes), values per-phase failure depths
-    /// (max depth for concrete, depth bitset for open). Cleared at the
-    /// ladder-rerun boundary where the verdict inputs genuinely change
-    /// (the phase-6 seeded pool). Open verdicts are
-    /// recorded only when the child enumeration was NOT truncated by
-    /// `open_child_max_results` — a truncated fail ("the first N
-    /// candidates didn't match back") is not a pure semantic fact and was
-    /// observed to flip on re-solve; truncated open fails keep their
-    /// per-cell lifetime in `open_fail` above. When `persist_negative` is
-    /// off nothing is recorded here, so lookups degrade to the per-cell
-    /// maps and behavior is bit-identical to the per-cell-only scheme.
-    /// Corpus-validated by shadow instrumentation before the real
-    /// implementation: zero contradicted verdicts across ~550k would-skip
-    /// re-solves; ~17-21% of generation ticks had been re-deriving
-    /// already-known failures.
-    persist_concrete_fail: std.AutoHashMapUnmanaged(u64, [5]u8) = .{},
-    persist_open_fail: std.StringHashMapUnmanaged([5]u16) = .{},
+    /// Keys are scope-stable canonical content. Cleared at the ladder-rerun
+    /// boundary where the verdict inputs genuinely change (the phase-6
+    /// seeded pool). Corpus-validated by shadow instrumentation before the
+    /// real implementation: zero contradicted verdicts across ~550k
+    /// would-skip re-solves; ~17-21% of generation ticks had been
+    /// re-deriving already-known failures.
+    concrete_fail: PhaseDepthMemo(u64) = .{},
+    open_fail: PhaseDepthMemo([]const u8) = .{},
     /// True when the theory registers at least one ACUI combiner. Gates the
     /// canonicalization walk in `canonicalKey` so non-ACUI theories pay nothing.
     has_acui: bool = false,
@@ -452,18 +445,12 @@ pub fn generateTopLevel(
         driver.visited_open.deinit(driver.scratch);
     }
     defer {
-        var key_iter = driver.open_fail.keyIterator();
-        while (key_iter.next()) |key| driver.scratch.free(key.*);
-        driver.open_fail.deinit(driver.scratch);
+        clearTruncatedFails(&driver);
+        driver.open_fail_truncated.deinit(driver.scratch);
     }
-    defer driver.concrete_fail.deinit(driver.scratch);
     defer driver.concrete_ok.deinit(driver.scratch);
-    defer driver.persist_concrete_fail.deinit(driver.scratch);
-    defer {
-        var key_iter = driver.persist_open_fail.keyIterator();
-        while (key_iter.next()) |key| driver.scratch.free(key.*);
-        driver.persist_open_fail.deinit(driver.scratch);
-    }
+    defer driver.concrete_fail.deinit(driver.scratch);
+    defer driver.open_fail.deinit(driver.scratch);
 
     const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
     defer session.allocator.free(schedule);
@@ -522,8 +509,8 @@ pub fn generateTopLevel(
             try buildDerivedIndex(session, &work_theorem, &seeded_pool.?);
             driver.derived = &seeded_pool.?;
             // The seeded pool changes every failure verdict's inputs; the
-            // persisted memos must not carry across.
-            clearPersistedFails(&driver);
+            // failure memos must not carry across.
+            clearFails(&driver);
             _ = try runPhaseLadder(
                 &driver,
                 goal_expr,
@@ -654,7 +641,7 @@ const Phase = struct {
 /// - Phase 1: ordinary, non-splitting generation.
 /// - Phase 2: adds ACUI context splitting.
 /// - Phase 3: a capability-identical retry of phase 2, with its own fuel pool
-///   and its own persisted-memo lineage (`persist*Covered` is
+///   and its own failure-memo lineage (`PhaseDepthMemo` is
 ///   phase-indexed). It runs only for theories with a `@vars` witness pool,
 ///   where deep open-witness churn makes the retry pay: peano's
 ///   mul_eq_*_all at depth 6 are found by this cell and by nothing else
@@ -678,8 +665,8 @@ pub fn phaseName(phase_1based: usize) []const u8 {
     return ladder_phases[phase_1based - 1].name;
 }
 
-// A persisted failure recorded under phase p covers re-solves under any
-// phase ≤ p (`persist*Covered`), which is sound only while each phase's
+// A failure recorded under phase p covers re-solves under any
+// phase ≤ p (`PhaseDepthMemo.covered`), which is sound only while each phase's
 // capabilities include every earlier phase's.
 comptime {
     for (ladder_phases[1..], ladder_phases[0 .. ladder_phases.len - 1]) |phase, prev| {
@@ -931,14 +918,11 @@ fn runCell(
 /// One single-depth generation pass over `goal_expr` under the driver's
 /// currently configured phase flags and fuel — one (depth, phase) ladder
 /// cell — appending generation-using assemblies to `applications`. Returns
-/// how the cell ended. The per-cell `nodes` counter and the
-/// per-cell failure memos reset here (a deeper pass can succeed where a
-/// shallow one failed, and a later phase can succeed where an earlier one
-/// failed at the same depth — the raw (target, depth) verdicts don't carry).
-/// The `persist_*_fail` maps do NOT reset: they tag each verdict with the
-/// phase it was recorded under and replay it only at covering
-/// (depth ≤, phase ≤) re-encounters, which stays sound across cells (see
-/// the field doc).
+/// how the cell ended. The per-cell `nodes` counter and the truncated open
+/// failures reset here. The other failure memos do NOT reset (unless
+/// `persist_negative` is off): they tag each verdict with the phase it was
+/// recorded under and replay it only at covering (depth ≤, phase ≤)
+/// re-encounters, which stays sound across cells (see the field doc).
 fn runDepthPass(
     driver: *Driver,
     goal_expr: ExprId,
@@ -956,10 +940,8 @@ fn runDepthPass(
     var open_keys = driver.visited_open.keyIterator();
     while (open_keys.next()) |key| driver.scratch.free(key.*);
     driver.visited_open.clearRetainingCapacity();
-    var fail_keys = driver.open_fail.keyIterator();
-    while (fail_keys.next()) |key| driver.scratch.free(key.*);
-    driver.open_fail.clearRetainingCapacity();
-    driver.concrete_fail.clearRetainingCapacity();
+    clearTruncatedFails(driver);
+    if (!driver.options.persist_negative) clearFails(driver);
     // NB: `concrete_ok` is deliberately NOT cleared between cells. A found
     // proof is valid in every later pass, so persisting it lets later cells
     // replay sub-solves already proved instead of re-deriving them — the
@@ -1149,29 +1131,16 @@ fn collectOpenProofs(
     // Canonical visited key: metas numbered by first occurrence, so two
     // alpha-variant open targets (fresh meta ids each attempt) collide.
     const key = try canonicalOpenKey(driver.scratch, target_theorem, target, &driver.meta_dep_bans);
-    // Depth bit for the failure memo: the solve depends on remaining recursion
-    // depth, so a failure is only replayable at the same depth.
-    const depth_bit: u16 = if (depth < 16)
-        @as(u16, 1) << @intCast(depth)
-    else
-        0;
     // Cheap O(1) skips (DFS path guard + failure memos) are charged no node
     // budget: the budget bounds real exploration work, and counting a
     // memoized skip would defeat the memo (the dist proofs have ~70% repeat
     // open targets, so charging skips burns the whole budget on dedup hits).
-    // The persisted map holds only untruncated cross-cell verdicts (empty
-    // when `persist_negative` is off); the per-cell map keeps the truncated
-    // ones.
-    if (persistOpenCovered(driver, key, depth)) {
+    if (driver.open_fail.covered(key, driver.phase_index, depth)) {
         if (driver.counters) |c| c.persist_open_skips += 1;
         driver.scratch.free(key);
         return;
     }
-    const memo_hit = if (driver.open_fail.get(key)) |bits|
-        (depth_bit != 0 and (bits & depth_bit) != 0)
-    else
-        false;
-    if (memo_hit) {
+    if (driver.open_fail_truncated.contains(.{ .key = key, .depth = depth })) {
         driver.scratch.free(key);
         return;
     }
@@ -1321,35 +1290,15 @@ fn collectOpenProofs(
     // a null, so it cannot reach here. The key is owned by the `defer` above,
     // so the memo takes its own copy.
     if (driver.node_cap_trips == trips_at_entry and
-        driver.path_prunes == path_prunes_at_entry and
-        depth_bit != 0)
+        driver.path_prunes == path_prunes_at_entry)
     {
-        // Persist only untruncated verdicts: a fail with a full candidate
-        // list means "the first `open_child_max_results` child candidates
-        // didn't match back", not "no candidate matches back" —
-        // `concrete_ok` growth between cells can change which candidates
-        // surface, so a truncated verdict is not a pure semantic fact
-        // (observed flipping on euclid dvd_add). Truncated fails keep
-        // their per-cell lifetime in `open_fail` below.
-        if (driver.options.persist_negative and
-            results.candidates.len < open_child_max_results)
-        {
-            persistOpenRecord(driver, key, depth_bit);
-            return;
-        }
-        const gop = driver.open_fail.getOrPut(driver.scratch, key) catch
-            return;
-        if (gop.found_existing) {
-            gop.value_ptr.* |= depth_bit;
+        // A full candidate list means "the first `open_child_max_results`
+        // child candidates didn't match back", not "no candidate matches
+        // back"; see `open_fail_truncated`.
+        if (results.candidates.len < open_child_max_results) {
+            driver.open_fail.record(driver.scratch, key, driver.phase_index, depth);
         } else {
-            // New entry: own a copy of the key (the live `key` is freed by the
-            // `defer` above). On dup failure, drop the entry rather than alias.
-            const owned = driver.scratch.dupe(u8, key) catch {
-                _ = driver.open_fail.remove(key);
-                return;
-            };
-            gop.key_ptr.* = owned;
-            gop.value_ptr.* = depth_bit;
+            recordTruncatedFail(driver, key, depth);
         }
     }
     return;
@@ -1652,98 +1601,97 @@ fn stringLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Cross-cell persisted failure memos (see the `persist_concrete_fail` /
-// `persist_open_fail` field doc). Two covering rules:
-//   - phase closure: a genuinely-exhaustive fail at (target, depth d,
-//     phase p) covers re-solves at depth ≤ d under phase ≤ p (capability
-//     flags are cumulative and purely additive along the phase order);
-//   - depth-0 universality: depth-0 solves run generator=null (no hook),
-//     so ANY recorded fail covers a depth-0 re-solve at every phase.
+// Failure memos (see the `concrete_fail` / `open_fail` field doc).
 
-const persist_no_depth: u8 = 0xff;
+/// Genuinely-exhaustive failure verdicts: for each target and ladder phase,
+/// the deepest generation depth at which the target failed under that
+/// phase's capabilities. Two covering rules:
+///   - phase closure: a fail at (depth d, phase p) covers re-solves at depth
+///     ≤ d under phase ≤ p (capability flags are cumulative and purely
+///     additive along the phase order);
+///   - depth-0 universality: depth-0 solves run generator=null (no hook),
+///     so ANY recorded fail covers a depth-0 re-solve at every phase.
+/// String keys are owned copies.
+fn PhaseDepthMemo(comptime Key: type) type {
+    const owns_keys = Key == []const u8;
+    const Depths = [ladder_phases.len]u8;
+    return struct {
+        map: if (owns_keys)
+            std.StringHashMapUnmanaged(Depths)
+        else
+            std.AutoHashMapUnmanaged(Key, Depths) = .{},
 
-fn clearPersistedFails(driver: *Driver) void {
-    driver.persist_concrete_fail.clearRetainingCapacity();
-    var key_iter = driver.persist_open_fail.keyIterator();
-    while (key_iter.next()) |key| driver.scratch.free(key.*);
-    driver.persist_open_fail.clearRetainingCapacity();
-}
+        const Self = @This();
+        const none: u8 = 0xff;
 
-fn persistConcreteCovered(
-    driver: *const Driver,
-    target: u64,
-    depth: usize,
-) bool {
-    const entry = driver.persist_concrete_fail.get(target) orelse return false;
-    var p: usize = driver.phase_index;
-    while (p < entry.len) : (p += 1) {
-        if (entry[p] != persist_no_depth and @as(usize, entry[p]) >= depth)
-            return true;
-    }
-    if (depth == 0) {
-        p = 0;
-        while (p < driver.phase_index) : (p += 1) {
-            if (entry[p] != persist_no_depth) return true;
+        fn covered(self: *const Self, key: Key, phase: usize, depth: usize) bool {
+            const depths = self.map.get(key) orelse return false;
+            const from = if (depth == 0) 0 else phase;
+            for (depths[from..]) |d| {
+                if (d != none and d >= depth) return true;
+            }
+            return false;
         }
-    }
-    return false;
-}
 
-fn persistConcreteRecord(driver: *Driver, target: u64, depth: usize) void {
-    // Clamping only loses coverage (a fail at a deeper budget covers the
-    // clamped depth's ≤-cone too), never overstates it. Best-effort: an
-    // OOM just forgoes the memo, like the per-cell maps.
-    const d: u8 = @intCast(@min(depth, persist_no_depth - 1));
-    const gop = driver.persist_concrete_fail.getOrPut(
-        driver.scratch,
-        target,
-    ) catch return;
-    if (!gop.found_existing) gop.value_ptr.* = @splat(persist_no_depth);
-    const cur = &gop.value_ptr.*[driver.phase_index];
-    if (cur.* == persist_no_depth or d > cur.*) cur.* = d;
-}
-
-fn persistOpenCovered(
-    driver: *const Driver,
-    key: []const u8,
-    depth: usize,
-) bool {
-    if (depth >= 16) return false;
-    const entry = driver.persist_open_fail.get(key) orelse return false;
-    // A fail recorded at depth d covers re-solves at depth ≤ d: any set
-    // bit at position ≥ depth is a covering verdict.
-    const mask_ge: u16 = @as(u16, 0xffff) << @intCast(depth);
-    var p: usize = driver.phase_index;
-    while (p < entry.len) : (p += 1) {
-        if (entry[p] & mask_ge != 0) return true;
-    }
-    if (depth == 0) {
-        p = 0;
-        while (p < driver.phase_index) : (p += 1) {
-            if (entry[p] != 0) return true;
+        /// Best-effort: an OOM just forgoes the memo.
+        fn record(self: *Self, gpa: std.mem.Allocator, key: Key, phase: usize, depth: usize) void {
+            // Clamping only loses coverage (a fail at a deeper budget covers
+            // the clamped depth's ≤-cone too), never overstates it.
+            const d: u8 = @intCast(@min(depth, none - 1));
+            const gop = self.map.getOrPut(gpa, key) catch return;
+            if (!gop.found_existing) {
+                if (owns_keys) {
+                    // On dup failure, drop the entry rather than alias the
+                    // caller's key.
+                    gop.key_ptr.* = gpa.dupe(u8, key) catch {
+                        _ = self.map.remove(key);
+                        return;
+                    };
+                }
+                gop.value_ptr.* = @splat(none);
+            }
+            const cur = &gop.value_ptr[phase];
+            if (cur.* == none or d > cur.*) cur.* = d;
         }
-    }
-    return false;
+
+        fn clear(self: *Self, gpa: std.mem.Allocator) void {
+            if (owns_keys) {
+                var keys = self.map.keyIterator();
+                while (keys.next()) |key| gpa.free(key.*);
+            }
+            self.map.clearRetainingCapacity();
+        }
+
+        fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+            self.clear(gpa);
+            self.map.deinit(gpa);
+        }
+    };
 }
 
-fn persistOpenRecord(driver: *Driver, key: []const u8, depth_bit: u16) void {
-    const gop = driver.persist_open_fail.getOrPut(
+fn clearFails(driver: *Driver) void {
+    driver.concrete_fail.clear(driver.scratch);
+    driver.open_fail.clear(driver.scratch);
+}
+
+fn clearTruncatedFails(driver: *Driver) void {
+    var keys = driver.open_fail_truncated.keyIterator();
+    while (keys.next()) |entry| driver.scratch.free(entry.key);
+    driver.open_fail_truncated.clearRetainingCapacity();
+}
+
+/// Best-effort, like `PhaseDepthMemo.record`. The caller's `key` is freed on
+/// solve exit, so the memo owns a copy.
+fn recordTruncatedFail(driver: *Driver, key: []const u8, depth: usize) void {
+    const gop = driver.open_fail_truncated.getOrPut(
         driver.scratch,
-        key,
+        .{ .key = key, .depth = depth },
     ) catch return;
-    if (gop.found_existing) {
-        gop.value_ptr.*[driver.phase_index] |= depth_bit;
-        return;
-    }
-    // Own a copy of the key (the caller's is freed on solve exit). On dup
-    // failure, drop the entry rather than alias.
-    const owned = driver.scratch.dupe(u8, key) catch {
-        _ = driver.persist_open_fail.remove(key);
+    if (gop.found_existing) return;
+    gop.key_ptr.key = driver.scratch.dupe(u8, key) catch {
+        _ = driver.open_fail_truncated.remove(.{ .key = key, .depth = depth });
         return;
     };
-    gop.key_ptr.* = owned;
-    gop.value_ptr.* = @splat(0);
-    gop.value_ptr.*[driver.phase_index] = depth_bit;
 }
 
 /// Produce one proof of `target` (already in `work_theorem`) at the given depth,
@@ -1764,7 +1712,6 @@ fn solveProof(
     // success memo's only cost (one canonicalization walk — a no-op on a
     // non-ACUI theory via the `has_acui` gate — plus one content-hash walk).
     const ok_key = contentKey(driver, target);
-    const fail_key = ConcreteFailKey{ .target = ok_key, .depth = depth };
     // Transposition hit: this `target` was already proved in a sibling subtree
     // (or an earlier pass) at a generation depth the current budget admits.
     // Replay the cached proof (a fresh arena clone so the spliced copy never
@@ -1772,12 +1719,12 @@ fn solveProof(
     // path-guard skips. Safe even when `target` is on the DFS path: the cached
     // proof is a complete acyclic tree.
     //
-    // Checked BEFORE the failure memos: a persisted failure recorded under
+    // Checked BEFORE the failure memo: a failure recorded under
     // weaker phase flags is consistent with a proof found later under
     // stronger ones (the ok entry), and the proof must win on re-encounter.
     // (Within one cell the two cannot conflict — an exhaustive fail at
     // (target, d) rules out any same-flags proof of gen-depth ≤ d — so this
-    // ordering is only load-bearing for the persisted memo.)
+    // ordering is only load-bearing across cells.)
     if (driver.concrete_ok.get(ok_key)) |memo| {
         if (depth >= memo.gen_depth) {
             // Relabel the cached proof to the caller's *exact* target. When the
@@ -1795,15 +1742,12 @@ fn solveProof(
             };
         }
     }
-    // Cheap O(1) skips (failure memos + DFS path guard) are charged no node
-    // budget, mirroring `hookSolveOpen`. The persisted map is empty when
-    // `persist_negative` is off (nothing records into it), so the check
-    // degrades to the per-cell memo alone.
-    if (persistConcreteCovered(driver, ok_key, depth)) {
+    // Cheap O(1) skips (failure memo + DFS path guard) are charged no node
+    // budget, mirroring `hookSolveOpen`.
+    if (driver.concrete_fail.covered(ok_key, driver.phase_index, depth)) {
         if (driver.counters) |c| c.persist_concrete_skips += 1;
         return null;
     }
-    if (driver.concrete_fail.contains(fail_key)) return null;
     if (driver.visited.contains(target)) {
         driver.path_prunes += 1;
         return null;
@@ -1872,12 +1816,7 @@ fn solveProof(
         if (driver.node_cap_trips == trips_at_entry and
             driver.path_prunes == path_prunes_at_entry)
         {
-            if (driver.options.persist_negative) {
-                persistConcreteRecord(driver, ok_key, depth);
-            } else {
-                // Best-effort: an OOM just forgoes the memo.
-                driver.concrete_fail.put(driver.scratch, fail_key, {}) catch {};
-            }
+            driver.concrete_fail.record(driver.scratch, ok_key, driver.phase_index, depth);
         }
         return null;
     }

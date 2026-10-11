@@ -1203,7 +1203,7 @@ outlives a scope therefore keys
 expressions by scope-stable canonical CONTENT, never a raw id:
 `concrete_ok`/`concrete_fail` (`contentKey`), the reject-verdict memo
 (`applicationSignature` → `hashCanonicalContent`), the deep-verdict cache,
-and `open_fail`/`visited_open` (canonical byte strings). Content keys make
+and `open_fail`/`open_fail_truncated`/`visited_open` (canonical byte strings). Content keys make
 scope exits free — nothing to evict, and successes first proved inside an
 open scope stay reusable afterward (the transposition memo works across
 open-chain boundaries with no re-keying). Leaf identities are chosen so
@@ -1325,36 +1325,34 @@ commutative/idempotent (`comm_name`/`idem_name`) — so it never collides two
 genuinely-unequal expressions (worst case: a missed reuse). On a non-ACUI theory
 it is the identity, gated by `has_acui` so those theories pay nothing.
 
-- `concrete_fail` — per-pass **failure** memo keyed `(canonical target, depth)`.
-  A failure is depth-relative (unprovable in d levels may be provable in d+1), so
-  depth is part of the key. Only written for *exhaustive* failures (gated on
-  `node_cap_trips`/`path_prunes` unchanged across the subtree), and cleared each
-  iterative-deepening pass. An exhausted failure for one ACUI variant skips them
-  all. It reuses `concrete_ok`'s already-computed canonical key, so it costs
-  nothing beyond the success memo. Legacy path: only written when
-  `persist_negative` is off.
-- `persist_concrete_fail` / `persist_open_fail` — **cross-cell persisted**
-  failure memos (`GenerateOptions.persist_negative`, default on). Same
-  exhaustiveness guards, but each verdict is tagged with the phase it was
-  recorded under (values: per-phase max failed depth / per-phase depth
-  bitset) and survives the whole retry ladder. Sound because a
-  genuinely-exhaustive fail at (target, depth d, phase p) is a pure semantic
-  fact — no proof of gen-depth ≤ d exists under phase-p capabilities and
-  this pool — and the phase flag sets are monotone and linearly ordered
-  (phase 3 equals phase 2; the rest strictly grow): the verdict covers any
-  re-encounter at (depth ≤ d, phase ≤ p), which the depth-major core hits
-  constantly (phases 1–2 re-run at every new depth after phase 3 already
-  failed the same targets at the previous one). Depth-0 solves carry no hook, so ANY recorded fail covers
-  depth-0 re-encounters at every phase. Open verdicts persist only when the
-  child enumeration was NOT truncated by `open_child_max_results` (a
-  truncated fail can flip when `concrete_ok` growth changes which child
-  candidates surface — observed on euclid `dvd_add`); truncated open fails
-  keep their per-cell lifetime in `open_fail`. Both maps clear at the
-  ladder rerun whose inputs genuinely change (the phase-6 seeded pool). `concrete_ok` replay is checked BEFORE the
-  persisted fail (an ok entry found under stronger flags is consistent with
-  a persisted weaker-phase fail and must win). Shadow-validated before
-  landing: zero contradicted verdicts across ~550k would-skip re-solves;
-  ~17-21% of generation ticks had been re-deriving already-known failures.
+- `concrete_fail` / `open_fail` — **failure** memos (`PhaseDepthMemo`),
+  keyed by `concrete_ok`'s canonical content key (so an exhausted failure
+  for one ACUI variant skips them all, at no cost beyond the success memo)
+  and by the canonical open key bytes. Only written for *exhaustive*
+  failures (gated on `node_cap_trips`/`path_prunes` unchanged across the
+  subtree). Each verdict records, per phase, the deepest generation depth
+  it failed at, and survives the whole retry ladder
+  (`GenerateOptions.persist_negative`, default on; off clears them every
+  cell). Sound because a genuinely-exhaustive fail at (target, depth d,
+  phase p) is a pure semantic fact — no proof of gen-depth ≤ d exists under
+  phase-p capabilities and this pool — and the phase flag sets are monotone
+  and linearly ordered (phase 3 equals phase 2; the rest strictly grow): the
+  verdict covers any re-encounter at (depth ≤ d, phase ≤ p), which the
+  depth-major core hits constantly (phases 1–2 re-run at every new depth
+  after phase 3 already failed the same targets at the previous one).
+  Depth-0 solves carry no hook, so ANY recorded fail covers depth-0
+  re-encounters at every phase. Both memos clear at the ladder rerun whose
+  inputs genuinely change (the phase-6 seeded pool). `concrete_ok` replay is
+  checked BEFORE the fail (an ok entry found under stronger flags is
+  consistent with a weaker-phase fail and must win). Shadow-validated
+  before landing: zero contradicted verdicts across ~550k would-skip
+  re-solves; ~17-21% of generation ticks had been re-deriving
+  already-known failures.
+- `open_fail_truncated` — open fails whose child enumeration WAS truncated
+  by `open_child_max_results`. Such a fail can flip when `concrete_ok`
+  growth changes which child candidates surface (observed on euclid
+  `dvd_add`), so it replays only at its own depth and only within the cell
+  that recorded it.
   Skips spend no per-phase fuel, so cells explore more distinct candidates —
   this raised the found-ticks ceiling and re-anchored `global_budget` (see
   the budget section).
