@@ -5,6 +5,7 @@ const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const PureReprKey = @import("../expr.zig").PureReprKey;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
+const Canonicalizer = @import("../normalizer.zig").Canonicalizer;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const Types = @import("./types.zig");
 const SymbolicExpr = Types.SymbolicExpr;
@@ -173,6 +174,10 @@ pub const SharedContext = struct {
     /// template part and fixes nothing (`transparent_match.holeyActual`).
     /// Off everywhere else, so search's metas keep their meaning.
     line_holes_match_anything: bool = false,
+    /// One canonicalizer for every representative this context rebuilds,
+    /// so the normal form of a subterm found under one ancestor serves the
+    /// next. Created on first use; see `canonicalize`.
+    canonicalizer: ?*Canonicalizer = null,
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: ?*RewriteRegistry,
@@ -204,6 +209,27 @@ pub const SharedContext = struct {
             .env = env,
             .registry = registry,
         };
+    }
+
+    /// The registry's normal form of `expr_id`, as a fresh `Canonicalizer`
+    /// computes it. Each call gets the step budget a fresh one would have,
+    /// and a call that spends it all forgets what it found: forms cut short
+    /// by the budget are not normal, and must not serve a later call. Only
+    /// for a context with a registry.
+    pub fn canonicalize(self: *SharedContext, expr_id: ExprId) !ExprId {
+        const canonicalizer = self.canonicalizer orelse blk: {
+            const created = try self.allocator.create(Canonicalizer);
+            created.* = Canonicalizer.init(self.allocator, self.theorem, self.registry.?, self.env, {});
+            self.canonicalizer = created;
+            break :blk created;
+        };
+        canonicalizer.step_count = 0;
+        canonicalizer.last_rule_id = null;
+        const canonical = try canonicalizer.canonicalize(expr_id);
+        if (canonicalizer.step_count >= canonicalizer.step_limit) {
+            canonicalizer.cache.clearRetainingCapacity();
+        }
+        return canonical;
     }
 
     /// Allocator for throwaway intermediate `SymbolicExpr` trees. Reclaimed at
@@ -432,6 +458,10 @@ pub const SharedContext = struct {
         var index_it = self.def_compression_index.valueIterator();
         while (index_it.next()) |bucket| bucket.deinit(self.allocator);
         self.def_compression_index.deinit(self.allocator);
+        if (self.canonicalizer) |canonicalizer| {
+            canonicalizer.deinit();
+            self.allocator.destroy(canonicalizer);
+        }
         self.scratch_arena.deinit();
         self.* = undefined;
     }

@@ -2,7 +2,6 @@ const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
 const head_class = @import("../../head_class.zig");
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
-const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const Types = @import("../types.zig");
 const MatchState = @import("../match_state.zig");
 const TransparentMatch = @import("./transparent_match.zig");
@@ -124,17 +123,9 @@ fn rebuildCanonicalRepresentative(
     mode: BindingMode,
 ) anyerror!*const SymbolicExpr {
     var current = try rebuildExprRepresentativeSymbolic(self, expr_id, state, mode);
-    if (self.shared.registry) |registry| {
+    if (self.shared.registry != null) {
         if (try symbolicToConcreteIfPlain(self, current, state)) |plain| {
-            var canonicalizer = Canonicalizer.init(
-                self.shared.allocator,
-                self.shared.theorem,
-                registry,
-                self.shared.env,
-                {},
-            );
-            defer canonicalizer.deinit();
-            const canonical = try canonicalizer.canonicalize(plain);
+            const canonical = try self.shared.canonicalize(plain);
             current = try self.allocSymbolic(.{ .fixed = canonical });
         }
     }
@@ -147,36 +138,36 @@ pub fn rebuildExprRepresentativeSymbolic(
     state: *MatchSession,
     mode: BindingMode,
 ) anyerror!*const SymbolicExpr {
-    var witness_slots: std.AutoHashMapUnmanaged(ExprId, usize) = .empty;
-    defer witness_slots.deinit(self.shared.allocator);
-
-    var witness_it = state.witnesses.iterator();
-    while (witness_it.next()) |entry| {
-        try witness_slots.put(
-            self.shared.allocator,
-            entry.value_ptr.*,
-            entry.key_ptr.*,
-        );
-    }
-    var materialized_it = state.materialized_witnesses.iterator();
-    while (materialized_it.next()) |entry| {
-        try witness_slots.put(
-            self.shared.allocator,
-            entry.value_ptr.*,
-            entry.key_ptr.*,
-        );
-    }
-
     const node = self.shared.theorem.interner.node(expr_id);
     return switch (node.*) {
         .variable => try self.allocSymbolic(.{ .fixed = expr_id }),
-        .placeholder => |idx| try resymbolizePlaceholderExpr(
-            self,
-            expr_id,
-            idx,
-            state,
-            &witness_slots,
-        ),
+        .placeholder => |idx| blk: {
+            var witness_slots: std.AutoHashMapUnmanaged(ExprId, usize) = .empty;
+            defer witness_slots.deinit(self.shared.allocator);
+            var witness_it = state.witnesses.iterator();
+            while (witness_it.next()) |entry| {
+                try witness_slots.put(
+                    self.shared.allocator,
+                    entry.value_ptr.*,
+                    entry.key_ptr.*,
+                );
+            }
+            var materialized_it = state.materialized_witnesses.iterator();
+            while (materialized_it.next()) |entry| {
+                try witness_slots.put(
+                    self.shared.allocator,
+                    entry.value_ptr.*,
+                    entry.key_ptr.*,
+                );
+            }
+            break :blk try resymbolizePlaceholderExpr(
+                self,
+                expr_id,
+                idx,
+                state,
+                &witness_slots,
+            );
+        },
         .app => |app| blk: {
             const args = try self.shared.allocator.alloc(
                 *const SymbolicExpr,
