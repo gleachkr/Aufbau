@@ -524,8 +524,13 @@ The preprocess retry described below matches the patterns against the
 preprocessed sides; the patterns themselves are not preprocessed, only the
 solved binders they mention.
 
-Search does not use `@abstract`: `auto?` and `apply?` skip rules carrying
-it, so a DeM-style rule has to be cited explicitly.
+Search uses an `@abstract` rule only when its premises are already
+available: `exact?` tries it with premises taken from earlier lines, and
+`auto?` does the same when it closes a goal directly. `apply?` does not
+offer it. `auto?` never builds subgoals for its premises: the context can
+only be worked out once both sides are known, so the premise to prove
+would be unknown. A DeM-style step whose premise must itself be proved has
+to be cited.
 
 ### What `@abstract` can and cannot do
 

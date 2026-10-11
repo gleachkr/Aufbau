@@ -264,8 +264,9 @@ sides are never sites, the outermost matching position wins, and one
 assignment of `A` and `B` serves every site. `A` and `B` are declared in the
 `@view` line so that the walk's solution reaches the rule binders of the
 same name. `DeM_rev` is the other direction, reached through `@fallback`.
-Search does not use `@abstract`, so a rule like `DeM` is only applied when
-a line cites it.
+Search applies an `@abstract` rule only to premises that are already
+proved: `exact?` finds `DeM [#1]` for `dem_demo`, but no search proves a
+premise for `DeM` first.
 
 ## `@fresh`, completing the picture
 
