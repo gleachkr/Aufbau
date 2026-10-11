@@ -59,7 +59,6 @@ pub fn applyWithSession(
     const candidate_rule_ids = try session.candidateRuleIds(
         goal,
         theorem,
-        options.use_rule_index,
         counters,
     );
     defer allocator.free(candidate_rule_ids);

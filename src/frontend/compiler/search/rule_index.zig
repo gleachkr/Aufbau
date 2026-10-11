@@ -35,14 +35,12 @@ pub const Index = struct {
     registry: *const RewriteRegistry,
     clipper_index: clipper.Index,
     entries: []Entry,
-    options: shape_mod.Options,
 
     pub fn build(
         allocator: std.mem.Allocator,
         env: *const GlobalEnv,
         registry: *const RewriteRegistry,
         views: *const std.AutoHashMap(u32, types.ViewDecl),
-        options: shape_mod.Options,
         counters: ?*SearchCounters,
     ) !Index {
         const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
@@ -54,7 +52,6 @@ pub const Index = struct {
             .registry = registry,
             .clipper_index = try clipper.Index.init(allocator),
             .entries = entries,
-            .options = options,
         };
         errdefer result.clipper_index.deinit();
 
@@ -62,7 +59,7 @@ pub const Index = struct {
             allocator,
             env,
             registry,
-            options,
+            .{},
         );
         for (env.rules.items, 0..) |rule, rule_idx| {
             const item = result.clipper_index.addItem();
@@ -99,7 +96,7 @@ pub const Index = struct {
         counters: ?*SearchCounters,
     ) ![]u32 {
         const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var shape_set = try self.shapeGoal(goal, theorem) orelse {
+        const shape = try self.shapeGoal(goal, theorem) orelse {
             if (counters) |actual| {
                 if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
                 actual.shape_emissions += 1;
@@ -107,7 +104,7 @@ pub const Index = struct {
             }
             return try self.allAvailableRules(available_rule_count);
         };
-        defer shape_set.deinit();
+        defer shape_mod.deinitShape(self.allocator, shape);
         if (counters) |actual| {
             if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
@@ -115,13 +112,8 @@ pub const Index = struct {
         }
 
         const lookup_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var live = clipper.BitSet{};
+        var live = try self.clipper_index.query(shape);
         defer live.deinit(self.allocator);
-        for (shape_set.variants) |variant| {
-            var bits = try self.clipper_index.query(variant);
-            defer bits.deinit(self.allocator);
-            try live.unionWith(self.allocator, &bits);
-        }
         var availability = clipper.BitSet{};
         defer availability.deinit(self.allocator);
         const rule_limit = @min(available_rule_count, self.entries.len);
@@ -151,11 +143,9 @@ pub const Index = struct {
         rule: RuleDecl,
         source: Source,
     ) !void {
-        var shapes = try builder.fromTemplate(rule.concl, rule.args);
-        defer shapes.deinit();
-        for (shapes.variants) |variant| {
-            try self.clipper_index.insertShape(rule_idx, variant);
-        }
+        const shape = try builder.fromTemplate(rule.concl, rule.args);
+        defer shape_mod.deinitShape(self.allocator, shape);
+        try self.clipper_index.insertShape(rule_idx, shape);
         self.entries[rule_idx].source_mask |= switch (source) {
             .raw => source_raw_bit,
             .view => source_view_bit,
@@ -168,11 +158,9 @@ pub const Index = struct {
         rule_idx: usize,
         view: *const types.ViewDecl,
     ) !void {
-        var shapes = try builder.fromTemplate(view.concl, view.arg_infos);
-        defer shapes.deinit();
-        for (shapes.variants) |variant| {
-            try self.clipper_index.insertShape(rule_idx, variant);
-        }
+        const shape = try builder.fromTemplate(view.concl, view.arg_infos);
+        defer shape_mod.deinitShape(self.allocator, shape);
+        try self.clipper_index.insertShape(rule_idx, shape);
         self.entries[rule_idx].source_mask |= source_view_bit;
     }
 
@@ -180,12 +168,12 @@ pub const Index = struct {
         self: *const Index,
         goal: Goal,
         theorem: *const TheoremContext,
-    ) !?shape_mod.ShapeSet {
+    ) !?clipper.ShapeNode {
         const builder = shape_mod.Builder.initWithRegistry(
             self.allocator,
             self.env,
             self.registry,
-            self.options,
+            .{},
         );
         return switch (goal) {
             .concrete => |expr_id| try builder.fromExprId(theorem, expr_id),

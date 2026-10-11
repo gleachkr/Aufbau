@@ -623,7 +623,6 @@ fn buildDerivedIndex(
             session.context,
             work_theorem,
             shapes,
-            session.shape_options,
             session.effectiveCounters(null),
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,

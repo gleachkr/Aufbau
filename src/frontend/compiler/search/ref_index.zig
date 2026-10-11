@@ -39,11 +39,11 @@ pub const LookupResult = struct {
     }
 };
 
-// Session-scoped memo of query-side template `ShapeSet`s. The backtracker asks
+// Session-scoped memo of query-side template shapes. The backtracker asks
 // the same rule-hyp slot question at every node (~260k shape builds against a
 // ~16-ref index on the zermelo found-outliers), so `lookupTemplateDual`
-// memoizes the built set. Soundness is by construction, not by corpus: the key
-// is a full structural serialization of every theorem-dependent input the
+// memoizes the built shape. Soundness is by construction, not by corpus: the
+// key is a full structural serialization of every theorem-dependent input the
 // shape `Builder` reads — resolved node structure, variable leaf kind + index
 // + sort, placeholder leaf sort ONLY (identity is never read: `shape.zig`
 // `varLeaf` keys variables by numeric index, `.placeholder` renders a pure
@@ -65,7 +65,7 @@ const ShapeCache = struct {
         var it = self.map.iterator();
         while (it.next()) |entry| {
             allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(allocator);
         }
         self.map.deinit(allocator);
         self.scratch.deinit(allocator);
@@ -74,14 +74,14 @@ const ShapeCache = struct {
     }
 };
 
-/// A cached query shape set, with what it found in this index once looked
-/// up: the index never changes while the cache lives, so neither does that.
+/// A cached query shape, with what it found in this index once looked up:
+/// the index never changes while the cache lives, so neither does that.
 const CachedShapes = struct {
-    shapes: shape_mod.ShapeSet,
+    shape: clipper.ShapeNode,
     primary: ?LookupResult = null,
 
-    fn deinit(self: *CachedShapes) void {
-        self.shapes.deinit();
+    fn deinit(self: *CachedShapes, allocator: std.mem.Allocator) void {
+        shape_mod.deinitShape(allocator, self.shape);
         if (self.primary) |*lookup| lookup.deinit();
     }
 };
@@ -103,7 +103,6 @@ pub const Index = struct {
     context: *const Context,
     clipper_index: clipper.Index,
     entries: []Entry,
-    options: shape_mod.Options,
     // Behind a pointer so `*const Index` lookups can populate it.
     shape_cache: ?*ShapeCache = null,
 
@@ -112,7 +111,6 @@ pub const Index = struct {
         context: *const Context,
         theorem: *const TheoremContext,
         pool: []const refs_mod.RefPoolEntry,
-        options: shape_mod.Options,
         counters: ?*SearchCounters,
     ) !Index {
         const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
@@ -123,7 +121,6 @@ pub const Index = struct {
             .context = context,
             .clipper_index = try clipper.Index.init(allocator),
             .entries = entries,
-            .options = options,
         };
         errdefer result.clipper_index.deinit();
 
@@ -131,7 +128,7 @@ pub const Index = struct {
             allocator,
             context.env,
             context.registry,
-            options,
+            .{},
         );
         var seen = std.AutoHashMapUnmanaged(ExprId, void){};
         defer seen.deinit(allocator);
@@ -156,11 +153,9 @@ pub const Index = struct {
             // Indexed, n identical hyps against n bare premises enumerate
             // n^n tuples.
             if ((try seen.getOrPut(allocator, expr)).found_existing) continue;
-            var shapes = try builder.fromExprId(theorem, expr);
-            defer shapes.deinit();
-            for (shapes.variants) |variant| {
-                try result.clipper_index.insertShape(pool_index, variant);
-            }
+            const shape = try builder.fromExprId(theorem, expr);
+            defer shape_mod.deinitShape(allocator, shape);
+            try result.clipper_index.insertShape(pool_index, shape);
         }
         if (counters) |actual| {
             if (actual.timing) actual.ref_index_build_ns += timer.elapsedSince(build_start);
@@ -179,7 +174,6 @@ pub const Index = struct {
         context: *const Context,
         theorem: *const TheoremContext,
         exprs: []const ExprId,
-        options: shape_mod.Options,
         counters: ?*SearchCounters,
     ) !Index {
         const build_start = timer.timestampIf(SearchCounters.timingOn(counters));
@@ -190,7 +184,6 @@ pub const Index = struct {
             .context = context,
             .clipper_index = try clipper.Index.init(allocator),
             .entries = entries,
-            .options = options,
         };
         errdefer result.clipper_index.deinit();
 
@@ -198,7 +191,7 @@ pub const Index = struct {
             allocator,
             context.env,
             context.registry,
-            options,
+            .{},
         );
         for (exprs, 0..) |expr, idx| {
             const item = result.clipper_index.addItem();
@@ -210,11 +203,9 @@ pub const Index = struct {
                 .expr = expr,
                 .order = idx,
             };
-            var shapes = try builder.fromExprId(theorem, expr);
-            defer shapes.deinit();
-            for (shapes.variants) |variant| {
-                try result.clipper_index.insertShape(idx, variant);
-            }
+            const shape = try builder.fromExprId(theorem, expr);
+            defer shape_mod.deinitShape(allocator, shape);
+            try result.clipper_index.insertShape(idx, shape);
         }
         if (counters) |actual| {
             if (actual.timing) actual.ref_index_build_ns += timer.elapsedSince(build_start);
@@ -249,16 +240,16 @@ pub const Index = struct {
             self.allocator,
             self.context.env,
             self.context.registry,
-            self.options,
+            .{},
         );
         const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var shape_set = try builder.fromExprId(theorem, expected);
-        defer shape_set.deinit();
+        const shape = try builder.fromExprId(theorem, expected);
+        defer shape_mod.deinitShape(self.allocator, shape);
         if (counters) |actual| {
             if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
         }
-        return try self.lookupShapeSet(&shape_set, counters);
+        return try self.lookupShape(shape, counters);
     }
 
     pub fn lookupTemplate(
@@ -281,7 +272,7 @@ pub const Index = struct {
         return dual.primary;
     }
 
-    /// One template lookup against two indexes: the shape set is built once
+    /// One template lookup against two indexes: the shape is built once
     /// and queried against `self` and (when present) `secondary`. Used to ask
     /// the pool index and the derived-ref index the same slot question for
     /// the price of one shape emission.
@@ -306,10 +297,10 @@ pub const Index = struct {
         counters: ?*SearchCounters,
     ) !DualLookup {
         const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var local_set: ?shape_mod.ShapeSet = null;
-        defer if (local_set) |*set| set.deinit();
+        var local_shape: ?clipper.ShapeNode = null;
+        defer if (local_shape) |shape| shape_mod.deinitShape(self.allocator, shape);
         var cached: ?*CachedShapes = null;
-        const shape_set: *const shape_mod.ShapeSet = blk: {
+        const shape: clipper.ShapeNode = blk: {
             if (self.shape_cache) |cache| {
                 if (try buildCallKey(
                     self.allocator,
@@ -322,33 +313,33 @@ pub const Index = struct {
                     if (cache.map.getPtr(cache.scratch.items)) |hit| {
                         if (counters) |actual| actual.shape_cache_hits += 1;
                         cached = hit;
-                        break :blk &hit.shapes;
+                        break :blk hit.shape;
                     }
-                    var built = try self.buildTemplateShapes(
+                    const built = try self.buildTemplateShape(
                         theorem,
                         template,
                         args,
                         bindings,
                     );
-                    errdefer built.deinit();
+                    errdefer shape_mod.deinitShape(self.allocator, built);
                     const owned_key = try self.allocator.dupe(
                         u8,
                         cache.scratch.items,
                     );
                     errdefer self.allocator.free(owned_key);
-                    try cache.map.putNoClobber(self.allocator, owned_key, .{ .shapes = built });
+                    try cache.map.putNoClobber(self.allocator, owned_key, .{ .shape = built });
                     if (counters) |actual| actual.shape_cache_misses += 1;
                     cached = cache.map.getPtr(owned_key).?;
-                    break :blk &cached.?.shapes;
+                    break :blk built;
                 }
             }
-            local_set = try self.buildTemplateShapes(
+            local_shape = try self.buildTemplateShape(
                 theorem,
                 template,
                 args,
                 bindings,
             );
-            break :blk &local_set.?;
+            break :blk local_shape.?;
         };
         if (counters) |actual| {
             if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
@@ -356,7 +347,7 @@ pub const Index = struct {
         }
         var primary = if (cached) |entry| blk: {
             if (entry.primary == null) {
-                entry.primary = try self.lookupShapeSet(shape_set, counters);
+                entry.primary = try self.lookupShape(shape, counters);
             }
             const found = entry.primary.?;
             break :blk LookupResult{
@@ -364,27 +355,27 @@ pub const Index = struct {
                 .indices = try self.allocator.dupe(usize, found.indices),
                 .broad = found.broad,
             };
-        } else try self.lookupShapeSet(shape_set, counters);
+        } else try self.lookupShape(shape, counters);
         errdefer primary.deinit();
         const second: ?LookupResult = if (secondary) |index|
-            try index.lookupShapeSet(shape_set, counters)
+            try index.lookupShape(shape, counters)
         else
             null;
         return .{ .primary = primary, .secondary = second };
     }
 
-    fn buildTemplateShapes(
+    fn buildTemplateShape(
         self: *const Index,
         theorem: *const TheoremContext,
         template: TemplateExpr,
         args: []const ArgInfo,
         bindings: []const ?ExprId,
-    ) !shape_mod.ShapeSet {
+    ) !clipper.ShapeNode {
         const builder = shape_mod.Builder.initWithRegistry(
             self.allocator,
             self.context.env,
             self.context.registry,
-            self.options,
+            .{},
         );
         return try builder.fromTemplateWithBindings(
             theorem,
@@ -429,55 +420,44 @@ pub const Index = struct {
             self.allocator,
             self.context.env,
             self.context.registry,
-            self.options,
+            .{},
         );
         const shape_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var shape_set = try builder.fromTemplateWithBindings(
+        var shape = try builder.fromTemplateWithBindings(
             theorem,
             template,
             args,
             bindings,
         );
-        defer shape_set.deinit();
-        for (shape_set.variants) |*variant| {
-            for (injections) |inj| {
-                try injectMember(self.allocator, &builder, theorem, variant, inj);
-            }
+        defer shape_mod.deinitShape(self.allocator, shape);
+        for (injections) |inj| {
+            try injectMember(self.allocator, &builder, theorem, &shape, inj);
         }
         if (counters) |actual| {
             if (actual.timing) actual.shape_emission_ns += timer.elapsedSince(shape_start);
             actual.shape_emissions += 1;
         }
-        var primary = try self.lookupShapeSet(&shape_set, counters);
+        var primary = try self.lookupShape(shape, counters);
         errdefer primary.deinit();
         const second: ?LookupResult = if (secondary) |index|
-            try index.lookupShapeSet(&shape_set, counters)
+            try index.lookupShape(shape, counters)
         else
             null;
         return .{ .primary = primary, .secondary = second };
     }
 
-    fn lookupShapeSet(
+    fn lookupShape(
         self: *const Index,
-        shape_set: *const shape_mod.ShapeSet,
+        shape: clipper.ShapeNode,
         counters: ?*SearchCounters,
     ) !LookupResult {
-        if (allVariantsBroad(shape_set.variants)) {
-            return try self.lookupSort(
-                rootSort(shape_set.variants[0]),
-                true,
-                counters,
-            );
+        if (!isConcreteRoot(shape)) {
+            return try self.lookupSort(rootSort(shape), counters);
         }
 
         const lookup_start = timer.timestampIf(SearchCounters.timingOn(counters));
-        var live = clipper.BitSet{};
+        var live = try self.clipper_index.query(shape);
         defer live.deinit(self.allocator);
-        for (shape_set.variants) |variant| {
-            var bits = try self.clipper_index.query(variant);
-            defer bits.deinit(self.allocator);
-            try live.unionWith(self.allocator, &bits);
-        }
         const items = try self.clipper_index.collect(&live);
         defer self.allocator.free(items);
         const indices = try self.indicesFromItems(items);
@@ -491,10 +471,11 @@ pub const Index = struct {
         };
     }
 
+    /// Every entry of sort `sort_id`: the broad answer when a query shape
+    /// has no concrete root to discriminate on.
     pub fn lookupSort(
         self: *const Index,
         sort_id: clipper.SortId,
-        broad: bool,
         counters: ?*SearchCounters,
     ) !LookupResult {
         const lookup_start = timer.timestampIf(SearchCounters.timingOn(counters));
@@ -509,7 +490,7 @@ pub const Index = struct {
         return .{
             .allocator = self.allocator,
             .indices = indices,
-            .broad = broad,
+            .broad = true,
         };
     }
 
@@ -526,19 +507,19 @@ pub const Index = struct {
     }
 };
 
-// Splice one recover-coupling member into a sequent variant's context region.
-// No-ops (sound) unless the variant is the expected turnstile with an ACUI
-// region at `ctx_arg_index` — a wildcard/broad variant or an unexpected shape
-// simply keeps its permissive form. The built member is owned by the variant
-// tree afterwards (freed by `ShapeSet.deinit`).
+// Splice one recover-coupling member into a sequent shape's context region.
+// No-ops (sound) unless the shape is the expected turnstile with an ACUI
+// region at `ctx_arg_index` — a wildcard/broad shape or an unexpected shape
+// simply keeps its permissive form. The built member is owned by the shape
+// tree afterwards (freed by `deinitShape`).
 fn injectMember(
     allocator: std.mem.Allocator,
     builder: *const shape_mod.Builder,
     theorem: *const TheoremContext,
-    variant: *clipper.ShapeNode,
+    shape: *clipper.ShapeNode,
     inj: Index.RecoverMemberInjection,
 ) !void {
-    const cnode = switch (variant.*) {
+    const cnode = switch (shape.*) {
         .concrete => |*c| c,
         else => return,
     };
@@ -573,13 +554,6 @@ fn sourceKind(ref: @import("../../proof_script.zig").Ref) SourceKind {
         .line => .checked_line,
         .application => .checked_line,
     };
-}
-
-fn allVariantsBroad(variants: []const clipper.ShapeNode) bool {
-    for (variants) |variant| {
-        if (isConcreteRoot(variant)) return false;
-    }
-    return true;
 }
 
 fn isConcreteRoot(shape: clipper.ShapeNode) bool {

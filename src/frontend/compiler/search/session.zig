@@ -3,7 +3,6 @@ const std = @import("std");
 const refs_mod = @import("./refs.zig");
 const ref_index_mod = @import("./ref_index.zig");
 const rule_index_mod = @import("./rule_index.zig");
-const shape_mod = @import("./shape.zig");
 const types = @import("./types.zig");
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 
@@ -13,7 +12,6 @@ const SearchCounters = types.SearchCounters;
 
 pub const Options = struct {
     counters: ?*SearchCounters = null,
-    shape_options: shape_mod.Options = .{},
     /// Content-keyed query-shape cache on the ref index (see
     /// `ref_index.ShapeCache`). Off only for bench A/B.
     query_shape_cache: bool = true,
@@ -23,7 +21,6 @@ pub const SearchSession = struct {
     allocator: std.mem.Allocator,
     context: *const Context,
     counters: ?*SearchCounters = null,
-    shape_options: shape_mod.Options = .{},
     query_shape_cache: bool = true,
     rule_index: ?rule_index_mod.Index = null,
     reference_pool: ?[]refs_mod.RefPoolEntry = null,
@@ -34,7 +31,6 @@ pub const SearchSession = struct {
             .allocator = context.allocator,
             .context = context,
             .counters = options.counters,
-            .shape_options = options.shape_options,
             .query_shape_cache = options.query_shape_cache,
         };
     }
@@ -63,12 +59,8 @@ pub const SearchSession = struct {
         self: *SearchSession,
         goal: Goal,
         theorem: *const TheoremContext,
-        use_rule_index: bool,
         counters: ?*SearchCounters,
     ) ![]u32 {
-        if (!use_rule_index) {
-            return try self.allAvailableRuleIds();
-        }
         const index = try self.ensureRuleIndex(counters);
         return try index.lookupGoal(
             goal,
@@ -114,7 +106,6 @@ pub const SearchSession = struct {
                 self.context,
                 theorem,
                 pool,
-                self.shape_options,
                 counters,
             );
         }
@@ -134,22 +125,9 @@ pub const SearchSession = struct {
                 self.context.env,
                 self.context.registry,
                 self.context.views,
-                self.shape_options,
                 counters,
             );
         }
         return &self.rule_index.?;
-    }
-
-    fn allAvailableRuleIds(self: *SearchSession) ![]u32 {
-        const rule_limit = @min(
-            self.context.available_rule_count,
-            self.context.env.rules.items.len,
-        );
-        const ids = try self.allocator.alloc(u32, rule_limit);
-        for (ids, 0..) |*id, idx| {
-            id.* = @intCast(idx);
-        }
-        return ids;
     }
 };

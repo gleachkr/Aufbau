@@ -83,7 +83,7 @@ pub fn lookupHypReferences(
             else => {
                 fallback = .template_error;
                 break :blk .{
-                    .pool = try ref_index.lookupSort(sort_id, true, counters),
+                    .pool = try ref_index.lookupSort(sort_id, counters),
                     .derived = null,
                 };
             },

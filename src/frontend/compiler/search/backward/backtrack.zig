@@ -657,7 +657,7 @@ fn exactRuleCandidates(
 ) ![]ApplyCandidate {
     const context = session.context;
     const allocator = context.allocator;
-    const rule_ids = try session.candidateRuleIds(goal, theorem, true, counters);
+    const rule_ids = try session.candidateRuleIds(goal, theorem, counters);
     defer allocator.free(rule_ids);
 
     var list = std.ArrayListUnmanaged(ApplyCandidate).empty;

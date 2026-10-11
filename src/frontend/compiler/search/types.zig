@@ -756,7 +756,6 @@ pub const SearchCounters = struct {
 pub const ApplyOptions = struct {
     max_results: ?usize = null,
     counters: ?*SearchCounters = null,
-    use_rule_index: bool = true,
     /// Per-call work budget: each rule probe spends a candidate from it,
     /// and when it runs out the remaining rules are not probed.
     budget: ?*GlobalBudget = null,

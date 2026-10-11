@@ -19,21 +19,6 @@ const TheoremContext = ExprMod.TheoremContext;
 pub const Options = struct {
     max_unfold_depth: usize = 4,
     max_nodes: usize = 256,
-    max_variants: usize = 4,
-    include_opaque_def_variant: bool = false,
-    acui_normalize: bool = true,
-};
-
-pub const ShapeSet = struct {
-    allocator: std.mem.Allocator,
-    variants: []clipper.ShapeNode,
-
-    pub fn deinit(self: *ShapeSet) void {
-        const allocator = self.allocator;
-        for (self.variants) |shape| deinitShape(allocator, shape);
-        allocator.free(self.variants);
-        self.* = .{ .allocator = allocator, .variants = &.{} };
-    }
 };
 
 // NOTE: `ref_index.ShapeCache` memoizes `fromTemplateWithBindings` results
@@ -42,6 +27,9 @@ pub const ShapeSet = struct {
 // binder-arg sorts). If a change makes the builder read anything new from the
 // theorem, mirror it into `ref_index.zig`'s key serializers or the cache
 // silently returns stale shapes.
+//
+// Every `from*` entry point returns a shape the caller owns and frees with
+// `deinitShape`.
 pub const Builder = struct {
     allocator: std.mem.Allocator,
     env: *const GlobalEnv,
@@ -74,7 +62,7 @@ pub const Builder = struct {
         self: *const Builder,
         template: TemplateExpr,
         args: []const ArgInfo,
-    ) !ShapeSet {
+    ) !clipper.ShapeNode {
         const scope = TemplateScope{ .rule = args };
         return try self.fromTemplateScope(template, &scope);
     }
@@ -85,7 +73,7 @@ pub const Builder = struct {
         template: TemplateExpr,
         args: []const ArgInfo,
         bindings: []const ?ExprId,
-    ) !ShapeSet {
+    ) !clipper.ShapeNode {
         const scope = TemplateScope{ .bound_rule = .{
             .args = args,
             .theorem = theorem,
@@ -98,85 +86,37 @@ pub const Builder = struct {
         self: *const Builder,
         template: TemplateExpr,
         scope: *const TemplateScope,
-    ) !ShapeSet {
-        var result = VariantList.init(self.allocator, self.options.max_variants);
-        errdefer result.deinit();
+    ) !clipper.ShapeNode {
         var acui_sorts = try self.acuiSorts();
         defer acui_sorts.deinit(self.allocator);
-
-        if (self.options.include_opaque_def_variant and
-            isTransparentDefTemplateRoot(self.env, template))
-        {
-            var state = State.init(self.options);
-            state.acui_sorts = &acui_sorts;
-            const shape = try self.templateShape(template, scope, &state, false);
-            errdefer deinitShape(self.allocator, shape);
-            try result.appendOwned(shape);
-        }
-
         var state = State.init(self.options);
         state.acui_sorts = &acui_sorts;
-        const shape = try self.templateShape(template, scope, &state, true);
-        errdefer deinitShape(self.allocator, shape);
-        try result.appendOwned(shape);
-        return try result.finish();
+        return try self.templateShape(template, scope, &state);
     }
 
     pub fn fromExprId(
         self: *const Builder,
         theorem: *const TheoremContext,
         expr_id: ExprId,
-    ) !ShapeSet {
+    ) !clipper.ShapeNode {
         const scope = ExprScope{ .theorem = theorem };
-        var result = VariantList.init(self.allocator, self.options.max_variants);
-        errdefer result.deinit();
         var acui_sorts = try self.acuiSorts();
         defer acui_sorts.deinit(self.allocator);
-
-        if (self.options.include_opaque_def_variant and
-            isTransparentDefExprRoot(self.env, theorem, expr_id))
-        {
-            var state = State.init(self.options);
-            state.acui_sorts = &acui_sorts;
-            const shape = try self.exprShape(expr_id, &scope, &state, false);
-            errdefer deinitShape(self.allocator, shape);
-            try result.appendOwned(shape);
-        }
-
         var state = State.init(self.options);
         state.acui_sorts = &acui_sorts;
-        const shape = try self.exprShape(expr_id, &scope, &state, true);
-        errdefer deinitShape(self.allocator, shape);
-        try result.appendOwned(shape);
-        return try result.finish();
+        return try self.exprShape(expr_id, &scope, &state);
     }
 
     pub fn fromSurfaceExpr(
         self: *const Builder,
         expr: *const TrustedExpr,
-    ) !ShapeSet {
+    ) !clipper.ShapeNode {
         const scope = SurfaceScope{ .root = {} };
-        var result = VariantList.init(self.allocator, self.options.max_variants);
-        errdefer result.deinit();
         var acui_sorts = try self.acuiSorts();
         defer acui_sorts.deinit(self.allocator);
-
-        if (self.options.include_opaque_def_variant and
-            isTransparentDefSurfaceRoot(self.env, expr))
-        {
-            var state = State.init(self.options);
-            state.acui_sorts = &acui_sorts;
-            const shape = try self.surfaceShape(expr, &scope, &state, false);
-            errdefer deinitShape(self.allocator, shape);
-            try result.appendOwned(shape);
-        }
-
         var state = State.init(self.options);
         state.acui_sorts = &acui_sorts;
-        const shape = try self.surfaceShape(expr, &scope, &state, true);
-        errdefer deinitShape(self.allocator, shape);
-        try result.appendOwned(shape);
-        return try result.finish();
+        return try self.surfaceShape(expr, &scope, &state);
     }
 
     // Build the shape of a single ACUI-region member `wrapper(pattern)` (e.g.
@@ -184,7 +124,7 @@ pub const Builder = struct {
     // pattern is shaped concretely except at the recover hole, which is widened
     // to a covering wildcard so it matches whatever witness the real context
     // member carries. Rendered as stored members are, with the wrapper head
-    // kept concrete, and with `unfold_defs` so transparent defs in the pattern
+    // kept concrete, and with transparent defs in the pattern unfolded so they
     // line up with the index's unfolded ref members. Caller owns the result.
     pub fn recoverMemberShape(
         self: *const Builder,
@@ -204,7 +144,7 @@ pub const Builder = struct {
         state.hole = hole;
         state.acui_sorts = &acui_sorts;
         const scope = ExprScope{ .theorem = theorem };
-        const inner = try self.exprShape(pattern, &scope, &state, true);
+        const inner = try self.exprShape(pattern, &scope, &state);
 
         const children = self.allocator.alloc(clipper.ShapeNode, 1) catch |err| {
             deinitShape(self.allocator, inner);
@@ -221,7 +161,6 @@ pub const Builder = struct {
         template: TemplateExpr,
         scope: *const TemplateScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         const sort_id = try self.templateSort(template, scope);
         if (state.consumeNode(sort_id)) |fallback| return fallback;
@@ -239,7 +178,6 @@ pub const Builder = struct {
                                 expr_id,
                                 &expr_scope,
                                 state,
-                                unfold_defs,
                             );
                         }
                     }
@@ -251,7 +189,6 @@ pub const Builder = struct {
                             def_scope.args[idx],
                             def_scope.parent,
                             state,
-                            unfold_defs,
                         );
                     }
                     break :blk .{ .wildcard = sort_id };
@@ -261,7 +198,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(app.term_id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .wildcard = sort_id };
                     if (app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -275,7 +212,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &def_scope,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -291,7 +227,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, app.term_id, sort_id, children);
@@ -304,12 +239,11 @@ pub const Builder = struct {
         expr_id: ExprId,
         scope: *const ExprScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         ExprMod.work_ticks_walk +%= 1;
         const node = try scope.node(expr_id);
         const sort_id = try self.nodeSort(expr_id, node, scope);
-        return self.exprShapeOf(expr_id, node, sort_id, scope, state, unfold_defs);
+        return self.exprShapeOf(expr_id, node, sort_id, scope, state);
     }
 
     /// `exprShape` for a def binder, whose caller already read the sort of
@@ -320,11 +254,10 @@ pub const Builder = struct {
         sort_id: clipper.SortId,
         scope: *const ExprScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         ExprMod.work_ticks_walk +%= 1;
         const node = try scope.node(expr_id);
-        return self.exprShapeOf(expr_id, node, sort_id, scope, state, unfold_defs);
+        return self.exprShapeOf(expr_id, node, sort_id, scope, state);
     }
 
     fn exprShapeOf(
@@ -334,7 +267,6 @@ pub const Builder = struct {
         sort_id: clipper.SortId,
         scope: *const ExprScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         if (state.hole) |h| {
             if (expr_id == h) return .{ .wildcard = sort_id };
@@ -348,7 +280,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(app.term_id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .wildcard = sort_id };
                     if (app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -362,7 +294,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &def_scope,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -378,7 +309,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, app.term_id, sort_id, children);
@@ -391,10 +321,9 @@ pub const Builder = struct {
         template: TemplateExpr,
         scope: *const ExprScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         const sort_id = try self.templateExprSort(template, scope);
-        return self.templateExprShapeSorted(template, sort_id, scope, state, unfold_defs);
+        return self.templateExprShapeSorted(template, sort_id, scope, state);
     }
 
     fn templateExprShapeSorted(
@@ -403,7 +332,6 @@ pub const Builder = struct {
         sort_id: clipper.SortId,
         scope: *const ExprScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         ExprMod.work_ticks_walk +%= 1;
         if (state.consumeNode(sort_id)) |fallback| return fallback;
@@ -418,7 +346,6 @@ pub const Builder = struct {
                             sort_id,
                             def_scope.parent,
                             state,
-                            unfold_defs,
                         );
                     }
                     break :blk .{ .wildcard = sort_id };
@@ -428,7 +355,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(app.term_id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .wildcard = sort_id };
                     if (app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -442,7 +369,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &def_scope,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -458,7 +384,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, app.term_id, sort_id, children);
@@ -471,10 +396,9 @@ pub const Builder = struct {
         template: TemplateExpr,
         scope: *const TemplateExprViaScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         const sort_id = try self.templateExprSortVia(template, scope);
-        return self.templateExprShapeViaSorted(template, sort_id, scope, state, unfold_defs);
+        return self.templateExprShapeViaSorted(template, sort_id, scope, state);
     }
 
     fn templateExprShapeViaSorted(
@@ -483,7 +407,6 @@ pub const Builder = struct {
         sort_id: clipper.SortId,
         scope: *const TemplateExprViaScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         ExprMod.work_ticks_walk +%= 1;
         if (state.consumeNode(sort_id)) |fallback| return fallback;
@@ -497,14 +420,12 @@ pub const Builder = struct {
                             sort_id,
                             e,
                             state,
-                            unfold_defs,
                         ),
                         .via => |v| try self.templateExprShapeViaSorted(
                             scope.args[idx],
                             sort_id,
                             v,
                             state,
-                            unfold_defs,
                         ),
                     };
                 }
@@ -514,7 +435,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(app.term_id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .wildcard = sort_id };
                     if (app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -530,7 +451,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &nested,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -545,7 +465,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, app.term_id, sort_id, children);
@@ -558,7 +477,6 @@ pub const Builder = struct {
         expr: *const TrustedExpr,
         scope: *const SurfaceScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         const sort_id: clipper.SortId = expr.sort();
         if (state.consumeNode(sort_id)) |fallback| return fallback;
@@ -570,7 +488,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(term_app.id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(term_app.id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(term_app.id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .hole = sort_id };
                     if (term_app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -583,7 +501,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &def_scope,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -599,7 +516,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, term_app.id, sort_id, children);
@@ -612,7 +528,6 @@ pub const Builder = struct {
         template: TemplateExpr,
         scope: *const SurfaceScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         const sort_id = try self.templateSurfaceSort(template, scope);
         if (state.consumeNode(sort_id)) |fallback| return fallback;
@@ -626,7 +541,6 @@ pub const Builder = struct {
                             def_scope.args[idx],
                             &SurfaceScope{ .root = {} },
                             state,
-                            unfold_defs,
                         );
                     }
                     break :blk .{ .hole = sort_id };
@@ -636,7 +550,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(app.term_id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .hole = sort_id };
                     if (app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -650,7 +564,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &def_scope,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -666,7 +579,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, app.term_id, sort_id, children);
@@ -679,7 +591,6 @@ pub const Builder = struct {
         template: TemplateExpr,
         scope: *const TemplateSurfaceScope,
         state: *State,
-        unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         const sort_id = try self.templateSurfaceSortVia(template, scope);
         if (state.consumeNode(sort_id)) |fallback| return fallback;
@@ -692,13 +603,11 @@ pub const Builder = struct {
                             scope.args[idx],
                             outer,
                             state,
-                            unfold_defs,
                         ),
                         .via => |outer| try self.templateSurfaceShapeVia(
                             scope.args[idx],
                             outer,
                             state,
-                            unfold_defs,
                         ),
                     };
                 }
@@ -708,7 +617,7 @@ pub const Builder = struct {
                 const decl = self.lookupTerm(app.term_id) orelse {
                     return error.UnknownTerm;
                 };
-                if (unfold_defs and !self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
+                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
                     if (!state.canUnfold()) return .{ .hole = sort_id };
                     if (app.args.len == decl.args.len) {
                         state.enterUnfold();
@@ -724,7 +633,6 @@ pub const Builder = struct {
                             decl.body.?,
                             &nested,
                             state,
-                            unfold_defs,
                         );
                     }
                 }
@@ -739,7 +647,6 @@ pub const Builder = struct {
                         arg,
                         scope,
                         state,
-                        unfold_defs,
                     );
                 }
                 break :blk try self.finish(state, app.term_id, sort_id, children);
@@ -922,7 +829,6 @@ pub const Builder = struct {
     }
 
     fn isAcuiRoot(self: *const Builder, term_id: u32) bool {
-        if (!self.options.acui_normalize) return false;
         const registry = self.registry orelse return false;
         return registry.acui_by_head.contains(term_id);
     }
@@ -958,7 +864,6 @@ pub const Builder = struct {
     fn acuiSorts(self: *const Builder) !SortSet {
         var set = SortSet{};
         errdefer set.deinit(self.allocator);
-        if (!self.options.acui_normalize) return set;
         const registry = self.registry orelse return set;
         var it = registry.acui_by_head.keyIterator();
         while (it.next()) |head_ptr| {
@@ -1192,45 +1097,6 @@ const State = struct {
     }
 };
 
-const VariantList = struct {
-    allocator: std.mem.Allocator,
-    max_variants: usize,
-    variants: std.ArrayListUnmanaged(clipper.ShapeNode) = .empty,
-
-    fn init(allocator: std.mem.Allocator, max_variants: usize) VariantList {
-        return .{ .allocator = allocator, .max_variants = max_variants };
-    }
-
-    fn deinit(self: *VariantList) void {
-        for (self.variants.items) |shape| deinitShape(self.allocator, shape);
-        self.variants.deinit(self.allocator);
-    }
-
-    fn appendOwned(self: *VariantList, shape: clipper.ShapeNode) !void {
-        if (self.max_variants == 0) {
-            deinitShape(self.allocator, shape);
-            return;
-        }
-        for (self.variants.items) |existing| {
-            if (shapeEql(existing, shape)) {
-                deinitShape(self.allocator, shape);
-                return;
-            }
-        }
-        if (self.variants.items.len >= self.max_variants) {
-            deinitShape(self.allocator, shape);
-            return;
-        }
-        try self.variants.append(self.allocator, shape);
-    }
-
-    fn finish(self: *VariantList) !ShapeSet {
-        if (self.variants.items.len == 0) return error.NoShapeVariants;
-        const owned = try self.variants.toOwnedSlice(self.allocator);
-        return .{ .allocator = self.allocator, .variants = owned };
-    }
-};
-
 /// How many members `child` gives a region of combiner `head`.
 fn regionShare(child: clipper.ShapeNode, head: u32, unit_id: ?u32) usize {
     return switch (child) {
@@ -1307,46 +1173,6 @@ fn sortFromName(env: *const GlobalEnv, sort_name: []const u8) anyerror!clipper.S
 
 fn isTransparentDef(term: *const TermDecl) bool {
     return term.available and term.is_def and term.body != null;
-}
-
-fn isTransparentDefTemplateRoot(
-    env: *const GlobalEnv,
-    template: TemplateExpr,
-) bool {
-    return switch (template) {
-        .app => |app| if (env.hasAvailableTerm(app.term_id))
-            isTransparentDef(&env.terms.items[app.term_id])
-        else
-            false,
-        .binder => false,
-    };
-}
-
-fn isTransparentDefExprRoot(
-    env: *const GlobalEnv,
-    theorem: *const TheoremContext,
-    expr_id: ExprId,
-) bool {
-    return switch (theorem.interner.node(expr_id).*) {
-        .app => |app| if (env.hasAvailableTerm(app.term_id))
-            isTransparentDef(&env.terms.items[app.term_id])
-        else
-            false,
-        else => false,
-    };
-}
-
-fn isTransparentDefSurfaceRoot(
-    env: *const GlobalEnv,
-    expr: *const TrustedExpr,
-) bool {
-    return switch (expr.*) {
-        .term => |app| if (env.hasAvailableTerm(app.id))
-            isTransparentDef(&env.terms.items[app.id])
-        else
-            false,
-        else => false,
-    };
 }
 
 pub fn deinitShape(allocator: std.mem.Allocator, shape: clipper.ShapeNode) void {
@@ -1496,29 +1322,28 @@ test "shape keeps a pinned binder concrete even when it depends on an unbound bo
     // `x` unbound: concrete shape kept (no widening).
     {
         const bindings = [_]?ExprId{ null, body };
-        var shapes = try builder.fromTemplateWithBindings(
+        const shape = try builder.fromTemplateWithBindings(
             &theorem,
             template,
             &args,
             &bindings,
         );
-        defer shapes.deinit();
-        try std.testing.expectEqual(@as(usize, 1), shapes.variants.len);
-        try std.testing.expect(shapeEql(expected, shapes.variants[0]));
+        defer deinitShape(allocator, shape);
+        try std.testing.expect(shapeEql(expected, shape));
     }
 
     // `x` bound: same concrete shape.
     {
         const x_val = try theorem.interner.internApp(t_b, &.{});
         const bindings = [_]?ExprId{ x_val, body };
-        var shapes = try builder.fromTemplateWithBindings(
+        const shape = try builder.fromTemplateWithBindings(
             &theorem,
             template,
             &args,
             &bindings,
         );
-        defer shapes.deinit();
-        try std.testing.expect(shapeEql(expected, shapes.variants[0]));
+        defer deinitShape(allocator, shape);
+        try std.testing.expect(shapeEql(expected, shape));
     }
 }
 
@@ -1544,16 +1369,16 @@ test "shape emits theorem templates with binders as wildcards" {
     const builder = Builder.init(allocator, &env, .{});
     const children = try allocator.alloc(TemplateExpr, 1);
     children[0] = .{ .binder = 0 };
-    var shapes = try builder.fromTemplate(
+    const shape = try builder.fromTemplate(
         .{ .app = .{ .term_id = t_p, .args = children } },
         &[_]ArgInfo{makeArg("obj")},
     );
-    defer shapes.deinit();
+    defer deinitShape(allocator, shape);
 
     var index = try clipper.Index.init(allocator);
     defer index.deinit();
     const item = index.addItem();
-    try index.insertShape(item, shapes.variants[0]);
+    try index.insertShape(item, shape);
 
     const a_children = [_]clipper.ShapeNode{appShape(t_a, s_obj, &.{})};
     try expectItems(&index, appShape(t_p, s_wff, &a_children), &.{item});
@@ -1572,12 +1397,12 @@ test "shape emits concrete ExprId trees" {
     const p_expr = try theorem.interner.internApp(t_p, &.{a_expr});
 
     const builder = Builder.init(allocator, &env, .{});
-    var shapes = try builder.fromExprId(&theorem, p_expr);
-    defer shapes.deinit();
+    const shape = try builder.fromExprId(&theorem, p_expr);
+    defer deinitShape(allocator, shape);
 
     const a_children = [_]clipper.ShapeNode{appShape(t_a, s_obj, &.{})};
     const expected = appShape(t_p, s_wff, &a_children);
-    try std.testing.expect(shapeEql(expected, shapes.variants[0]));
+    try std.testing.expect(shapeEql(expected, shape));
 }
 
 test "shape routes ACUI-rooted regions through the member slot" {
@@ -1601,11 +1426,10 @@ test "shape routes ACUI-rooted regions through the member slot" {
     const wrapped_expr = try theorem.interner.internApp(t_wrap, &.{p_expr});
 
     const builder = Builder.initWithRegistry(allocator, &env, &registry, .{});
-    var shapes = try builder.fromExprId(&theorem, wrapped_expr);
-    defer shapes.deinit();
+    const shape = try builder.fromExprId(&theorem, wrapped_expr);
+    defer deinitShape(allocator, shape);
 
-    try std.testing.expectEqual(@as(usize, 1), shapes.variants.len);
-    switch (shapes.variants[0]) {
+    switch (shape) {
         .acui => |node| {
             try std.testing.expectEqual(s_wff, node.sort);
             try std.testing.expectEqual(@as(usize, 1), node.members.len);
@@ -1641,15 +1465,15 @@ test "shape emits holey surface expressions" {
     } };
 
     const builder = Builder.init(allocator, &env, .{});
-    var shapes = try builder.fromSurfaceExpr(p_expr);
-    defer shapes.deinit();
+    const shape = try builder.fromSurfaceExpr(p_expr);
+    defer deinitShape(allocator, shape);
 
     var index = try clipper.Index.init(allocator);
     defer index.deinit();
     const item = index.addItem();
     const a_children = [_]clipper.ShapeNode{appShape(t_a, s_obj, &.{})};
     try index.insertShape(item, appShape(t_p, s_wff, &a_children));
-    try expectItems(&index, shapes.variants[0], &.{item});
+    try expectItems(&index, shape, &.{item});
 }
 
 test "shape resolves a holey goal's nested definitions in their own scope" {
@@ -1698,11 +1522,11 @@ test "shape resolves a holey goal's nested definitions in their own scope" {
     } };
 
     const builder = Builder.init(allocator, &env, .{});
-    var shapes = try builder.fromSurfaceExpr(goal);
-    defer shapes.deinit();
+    const shape = try builder.fromSurfaceExpr(goal);
+    defer deinitShape(allocator, shape);
 
     const b_children = [_]clipper.ShapeNode{appShape(t_b, s_obj, &.{})};
-    try std.testing.expect(shapeEql(appShape(t_p, s_wff, &b_children), shapes.variants[0]));
+    try std.testing.expect(shapeEql(appShape(t_p, s_wff, &b_children), shape));
 }
 
 test "shape unfolds transparent definitions instead of all-sort fallback" {
@@ -1715,16 +1539,16 @@ test "shape unfolds transparent definitions instead of all-sort fallback" {
     const q_args = try allocator.alloc(TemplateExpr, 1);
     q_args[0] = .{ .binder = 0 };
     const builder = Builder.init(allocator, &env, .{});
-    var shapes = try builder.fromTemplate(
+    const shape = try builder.fromTemplate(
         .{ .app = .{ .term_id = t_q, .args = q_args } },
         &[_]ArgInfo{makeArg("obj")},
     );
-    defer shapes.deinit();
+    defer deinitShape(allocator, shape);
 
     var index = try clipper.Index.init(allocator);
     defer index.deinit();
     const item = index.addItem();
-    try index.insertShape(item, shapes.variants[0]);
+    try index.insertShape(item, shape);
 
     const a_children = [_]clipper.ShapeNode{appShape(t_a, s_obj, &.{})};
     try expectItems(&index, appShape(t_p, s_wff, &a_children), &.{item});
@@ -1745,16 +1569,16 @@ test "shape budget exhaustion falls back to local wildcards" {
     const builder = Builder.init(allocator, &env, .{
         .max_unfold_depth = 0,
     });
-    var shapes = try builder.fromTemplate(
+    const shape = try builder.fromTemplate(
         .{ .app = .{ .term_id = t_wrap, .args = wrap_args } },
         &[_]ArgInfo{makeArg("obj")},
     );
-    defer shapes.deinit();
+    defer deinitShape(allocator, shape);
 
     var index = try clipper.Index.init(allocator);
     defer index.deinit();
     const item = index.addItem();
-    try index.insertShape(item, shapes.variants[0]);
+    try index.insertShape(item, shape);
 
     const a_children = [_]clipper.ShapeNode{appShape(t_a, s_obj, &.{})};
     const r_children = [_]clipper.ShapeNode{
@@ -1762,33 +1586,4 @@ test "shape budget exhaustion falls back to local wildcards" {
     };
     try expectItems(&index, appShape(t_wrap, s_wff, &r_children), &.{item});
     try expectItems(&index, appShape(t_r, s_wff, &a_children), &.{});
-}
-
-test "shape variant cap prevents transparent def index blowup" {
-    var arena = ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-    var env = GlobalEnv.init(allocator);
-    try populateEnv(&env, allocator);
-
-    const q_args = try allocator.alloc(TemplateExpr, 1);
-    q_args[0] = .{ .binder = 0 };
-    const template = TemplateExpr{ .app = .{ .term_id = t_q, .args = q_args } };
-    const args = &[_]ArgInfo{makeArg("obj")};
-
-    const capped_builder = Builder.init(allocator, &env, .{
-        .include_opaque_def_variant = true,
-        .max_variants = 1,
-    });
-    var capped = try capped_builder.fromTemplate(template, args);
-    defer capped.deinit();
-    try std.testing.expectEqual(@as(usize, 1), capped.variants.len);
-
-    const uncapped_builder = Builder.init(allocator, &env, .{
-        .include_opaque_def_variant = true,
-        .max_variants = 2,
-    });
-    var uncapped = try uncapped_builder.fromTemplate(template, args);
-    defer uncapped.deinit();
-    try std.testing.expectEqual(@as(usize, 2), uncapped.variants.len);
 }
