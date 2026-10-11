@@ -34,7 +34,6 @@ const normalizeAcuiUnits = acui.normalizeAcuiUnits;
 
 const seedViewBindingsForMatch = match.seedViewBindingsForMatch;
 const rollbackOneHypMatch = match.rollbackOneHypMatch;
-const finalConclusionPlausible = plausible.finalConclusionPlausible;
 const conclusionBinderMaskOrNone = plan.conclusionBinderMaskOrNone;
 
 const backtrack = @import("./backtrack.zig");
@@ -824,7 +823,7 @@ fn continueOpenTargetSolved(
     // Same incremental prune as the pool-ref loop: a fill whose pinned
     // binders contradict the conclusion-vs-goal correspondence dooms every
     // tuple under it.
-    if (!finalConclusionPlausible(slot.ctx.context, slot.ctx.candidate, slot.ctx.goal, slot.ctx.bindings, slot.ctx.runtime, slot.ctx.counters)) {
+    if (!slot.ctx.conclusionPlausible()) {
         if (slot.ctx.counters) |c| c.final_conclusion_prunes += 1;
         return;
     }

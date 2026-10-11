@@ -704,6 +704,11 @@ fn deinitApplyCandidateItems(candidates: []ApplyCandidate) void {
 /// The slices are the search's mutable state (the rule bindings, a bindings
 /// snapshot per depth, and the pool ref or generated sub-application chosen
 /// for each slot); everything else is fixed for the candidate.
+const AcceptedConclusion = struct {
+    bindings: []?ExprId,
+    valid: bool = false,
+};
+
 pub const SlotCtx = struct {
     compiler: *CompilerContext,
     context: *const Context,
@@ -729,14 +734,39 @@ pub const SlotCtx = struct {
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
     prune_setup: PruneSetup,
+    /// The bindings `finalConclusionPlausible` last accepted. It reads
+    /// nothing else that changes during this search, so the same bindings
+    /// pass again without rerunning it.
+    accepted_conclusion: *AcceptedConclusion,
 
     /// The bindings snapshot of search depth `depth`.
     pub fn snapshotAt(self: *const SlotCtx, depth: usize) []?ExprId {
         return self.snapshots[depth * self.bindings.len ..][0..self.bindings.len];
     }
 
+    /// `finalConclusionPlausible` for the current bindings.
+    pub fn conclusionPlausible(self: *const SlotCtx) bool {
+        const accepted = self.accepted_conclusion;
+        if (accepted.valid and std.mem.eql(?ExprId, accepted.bindings, self.bindings)) return true;
+        if (!finalConclusionPlausible(
+            self.context,
+            self.candidate,
+            self.goal,
+            self.bindings,
+            self.runtime,
+            self.counters,
+        )) return false;
+        @memcpy(accepted.bindings, self.bindings);
+        accepted.valid = true;
+        return true;
+    }
+
     /// Validate the fills chosen for every slot as one complete application.
     fn validate(self: *const SlotCtx) !void {
+        if (!self.conclusionPlausible()) {
+            if (self.counters) |actual| actual.final_conclusion_prunes += 1;
+            return;
+        }
         try validateSelectedRefs(
             self.compiler,
             self.context.allocator,
@@ -797,21 +827,36 @@ fn enumerateCandidateRefs(
     const allocator = context.allocator;
     const rule = &context.env.rules.items[candidate.rule_id];
     const hyp_count = candidate.unresolved_hyps.len;
-    const plans: []const HypPlan = if (hyp_count == 0) &.{} else try buildHypPlans(
-        allocator,
-        context,
-        ref_index,
-        candidate,
-        generator != null,
-        generator != null and generator.?.allow_constrained_mp,
-        derived,
-        counters,
-    );
-    defer if (hyp_count != 0) allocator.free(plans);
+    // A single slot needs no order, and the search's own lookup for it would
+    // repeat the one planning does, so it is not planned.
+    const single_plan = [1]HypPlan{.{
+        .position = 0,
+        .initial_len = 0,
+        .seeded_len = 0,
+        .strength = 0,
+        .defer_generate = false,
+        .defer_wildcard = false,
+    }};
+    const plans: []const HypPlan = switch (hyp_count) {
+        0 => &.{},
+        1 => &single_plan,
+        else => try buildHypPlans(
+            allocator,
+            context,
+            ref_index,
+            candidate,
+            generator != null,
+            generator != null and generator.?.allow_constrained_mp,
+            derived,
+            counters,
+        ),
+    };
+    defer if (hyp_count > 1) allocator.free(plans);
     // A hyp with no pool refs makes the candidate impossible for pool-only
     // search. With a generator (or a derived-ref pool) the slot may
-    // instead be filled by a synthesized sub-proof, so don't prune then.
-    if (generator == null and derived == null) {
+    // instead be filled by a synthesized sub-proof, so don't prune then. A
+    // single slot's own lookup makes the same check.
+    if (hyp_count > 1 and generator == null and derived == null) {
         for (plans) |hyp_plan| {
             if (hyp_plan.initial_len == 0) return;
         }
@@ -827,6 +872,10 @@ fn enumerateCandidateRefs(
     const generated = try allocator.alloc(?RuleApplication, hyp_count);
     defer allocator.free(generated);
     @memset(generated, null);
+    var accepted_conclusion = AcceptedConclusion{
+        .bindings = try allocator.alloc(?ExprId, bindings.len),
+    };
+    defer allocator.free(accepted_conclusion.bindings);
 
     const ctx = SlotCtx{
         .compiler = compiler,
@@ -850,6 +899,7 @@ fn enumerateCandidateRefs(
         .fuel = fuel,
         .candidates = candidates,
         .prune_setup = computePruneSetup(context, candidate.rule_id),
+        .accepted_conclusion = &accepted_conclusion,
     };
     try backtrackRefs(&ctx, 0);
 }
@@ -958,9 +1008,7 @@ fn backtrackRefs(ctx: *const SlotCtx, depth: usize) anyerror!void {
         // fills, generation). The check is the same one
         // `validateSelectedRefs` applies at the end, so results are
         // unchanged; plain `exact?` keeps its existing flow untouched.
-        if ((ctx.generator != null or ctx.derived != null) and
-            !finalConclusionPlausible(context, candidate, ctx.goal, bindings, ctx.runtime, counters))
-        {
+        if ((ctx.generator != null or ctx.derived != null) and !ctx.conclusionPlausible()) {
             if (counters) |actual| actual.final_conclusion_prunes += 1;
             rollbackOneHypMatch(bindings, snapshot);
             continue;
@@ -1188,7 +1236,7 @@ fn tryDerivedSlots(
             // Same incremental prune as the pool-ref loop: a fill whose
             // pinned binders already contradict the conclusion-vs-goal
             // correspondence dooms every tuple under it.
-            if (finalConclusionPlausible(context, candidate, ctx.goal, bindings, ctx.runtime, ctx.counters)) {
+            if (ctx.conclusionPlausible()) {
                 try ctx.descendGenerated(slot.depth, slot.position, app);
             } else if (ctx.counters) |actual| {
                 actual.final_conclusion_prunes += 1;

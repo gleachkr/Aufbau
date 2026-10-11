@@ -36,7 +36,6 @@ const SearchRuntime = types.SearchRuntime;
 const Fuel = types.Fuel;
 const rankReferenceIndices = refs_mod.rankReferenceIndices;
 const probe = candidate_mod.probe;
-const finalConclusionPlausible = plausible.finalConclusionPlausible;
 
 /// Goal-direct use of derived refs: when a derived shape structurally
 /// matches the concrete goal (the holes solved positionally by the match),
@@ -222,11 +221,6 @@ pub fn validateSelectedRefs(
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
 ) !void {
-    if (!finalConclusionPlausible(context, candidate, goal, bindings, runtime, counters)) {
-        if (counters) |actual| actual.final_conclusion_prunes += 1;
-        return;
-    }
-
     // The selected pool refs' conclusions, read once for the checks below. A
     // generated slot has no ref yet.
     var ref_buf: [16]?ExprId = undefined;
