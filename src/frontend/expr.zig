@@ -336,9 +336,16 @@ pub const ExprInterner = struct {
         term_id: u32,
         args: []const ExprId,
     ) !ExprId {
+        // Probe with the borrowed args; copy them only for a new node.
+        const probe = ExprNode{ .app = .{ .term_id = term_id, .args = args } };
+        const hash = hashExprNode(probe);
+        if (self.findHashed(probe, hash)) |id| return id;
         const owned = try self.allocator.dupe(ExprId, args);
         errdefer self.allocator.free(owned);
-        return try self.internAppOwned(term_id, owned);
+        return try self.insertNew(
+            .{ .app = .{ .term_id = term_id, .args = owned } },
+            hash,
+        );
     }
 
     /// Intern an application whose `args` slice the caller allocated with

@@ -139,13 +139,7 @@ pub fn buildHypPlans(
             .position = position,
             .initial_len = lookup.pool.indices.len,
             .seeded_len = seeded_len,
-            .strength = templateConstraintStrength(
-                context.env,
-                &candidate.theorem,
-                template,
-                rule.args,
-                candidate.bindings,
-            ),
+            .strength = 0, // computed below, only where it breaks a tie
             .defer_generate = false, // resolved in the second pass
             .defer_wildcard = false, // resolved in the second pass
         };
@@ -159,6 +153,23 @@ pub fn buildHypPlans(
     if (constrained_mp) {
         for (0..n) |i| {
             plans[i].defer_wildcard = shouldDeferWildcard(slots, i);
+        }
+    }
+
+    // `strength` is the comparator's last tiebreak, read only between plans
+    // equal on every earlier key, and it walks the slot's bound values; so
+    // it is computed only for plans that have such a tie.
+    for (0..n) |i| {
+        for (0..n) |j| {
+            if (i == j or !sameOrderClass(plans[i], plans[j])) continue;
+            plans[i].strength = templateConstraintStrength(
+                context.env,
+                &candidate.theorem,
+                rule.hyps[candidate.unresolved_hyps[i].index],
+                rule.args,
+                candidate.bindings,
+            );
+            break;
         }
     }
 
@@ -405,6 +416,13 @@ fn hypSlotCost(plan: HypPlan) usize {
     // like a ref slot of the same width.
     if (plan.seeded_len != 0) return plan.seeded_len;
     return generate_only_cost;
+}
+
+/// Whether `hypPlanLessThan` would reach the `strength` key for `a` and `b`.
+fn sameOrderClass(a: HypPlan, b: HypPlan) bool {
+    return a.defer_wildcard == b.defer_wildcard and
+        a.defer_generate == b.defer_generate and
+        hypSlotCost(a) == hypSlotCost(b);
 }
 
 fn hypPlanLessThan(_: void, lhs: HypPlan, rhs: HypPlan) bool {
