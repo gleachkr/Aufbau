@@ -1424,16 +1424,15 @@ pub fn symbolicFromTemplate(
     self: anytype,
     template: TemplateExpr,
 ) anyerror!*const SymbolicExpr {
-    return try symbolicFromStableTemplateSubst(self, template, null);
+    return try symbolicFromTemplateSubst(self, template, null);
 }
 
 /// Memoized `symbolicFromTemplateSubst` for STABLE templates — templates
-/// living in env/registry/view storage for the whole def_ops context (term
-/// and def bodies, rewrite-rule sides, view templates). Every `TemplateExpr`
-/// in the program today qualifies (`TemplateExpr.fromExpr` is only called
-/// while building env rules and view decls); a future TRANSIENT template must
-/// use the plain `symbolicFromTemplateSubst`, or its recycled args-pointer
-/// could alias a stale memo key. The memo is exact, not heuristic: the callee
+/// living in env/registry storage for the whole def_ops context: term and
+/// def bodies and rewrite-rule sides, which are its only callers. A template
+/// that came from a caller (`symbolicFromTemplate`) may be built per call,
+/// and a recycled args pointer would alias a stale memo key, so those take
+/// the plain `symbolicFromTemplateSubst`. The memo is exact, not heuristic: the callee
 /// is a pure function of (template structure, subst pointers) and returns the
 /// canonical interned node, so a hit is pointer-identical to a rebuild. This
 /// skips the whole rebuild-and-reprobe walk that dominates def-unfold-heavy
