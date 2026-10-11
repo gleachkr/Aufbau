@@ -1407,7 +1407,7 @@ fn expectRepresentative(
             const repr = try def_ops.chooseRepresentative(actual, mode);
             try std.testing.expectEqual(expected, repr);
         }
-        if (pass == 0) try std.testing.expect(theorem.pure_reprs.count() > 0);
+        if (pass == 0) try std.testing.expect(theorem.shared_memo.?.pure_reprs.count() > 0);
     }
     try std.testing.expectEqual(start_dummy_id, theorem.next_dummy_id);
     try std.testing.expectEqual(start_dummy_dep, theorem.next_dummy_dep);

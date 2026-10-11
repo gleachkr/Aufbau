@@ -423,6 +423,30 @@ pub const PureReprKey = struct {
     line_holes_match_anything: bool,
 };
 
+/// Pure memos a theorem shares with its copy-on-write clones. The checker
+/// tries each search candidate in a fresh clone, so a memo the clone kept to
+/// itself would start empty every time. An entry whose ids are all below a
+/// theorem's `stable_limit` names nodes of the root of its clone chain,
+/// which mean the same thing in every theorem of the chain that can see
+/// them; such entries live here, where siblings and later clones find them.
+/// Reference-counted: the root and each clone hold one reference.
+pub const SharedMemo = struct {
+    refs: u32 = 1,
+    pure_reprs: std.AutoHashMapUnmanaged(PureReprKey, ExprId) = .empty,
+    /// The env and registry the entries were computed under, set by the
+    /// first entry; a theorem used with others neither reads nor writes.
+    env_addr: usize = 0,
+    registry_addr: usize = 0,
+
+    fn serves(self: *SharedMemo, env_addr: usize, registry_addr: usize) bool {
+        if (self.env_addr == 0) {
+            self.env_addr = env_addr;
+            self.registry_addr = registry_addr;
+        }
+        return self.env_addr == env_addr and self.registry_addr == registry_addr;
+    }
+};
+
 pub const TheoremContext = struct {
     allocator: std.mem.Allocator,
     interner: ExprInterner,
@@ -516,15 +540,66 @@ pub const TheoremContext = struct {
     /// representative, under the fixed env/registry invariant above. Such a
     /// representative reads no match-session state, so every def_ops context
     /// on this theorem computes the same one; keeping it here shares it
-    /// across proof lines (`SharedContext.pureRepresentativeGet`). Cleared on
-    /// `clone`.
+    /// across proof lines (`SharedContext.pureRepresentativeGet`). Holds only
+    /// entries naming this clone's own nodes; the rest go to `shared_memo`.
+    /// Cleared on `clone`.
     pure_reprs: std.AutoHashMapUnmanaged(PureReprKey, ExprId) = .empty,
 
+    /// Shared with every clone of this theorem (see `SharedMemo`). Null only
+    /// when allocating it failed; the theorem then keeps its memos to itself.
+    shared_memo: ?*SharedMemo = null,
+    /// Ids below this resolve in the root of this theorem's clone chain;
+    /// only entries within it go to `shared_memo`. No limit for a root.
+    stable_limit: ExprId = std.math.maxInt(ExprId),
+
     pub fn init(allocator: std.mem.Allocator) TheoremContext {
-        return .{
+        var self = TheoremContext{
             .allocator = allocator,
             .interner = ExprInterner.init(allocator),
         };
+        self.shared_memo = allocator.create(SharedMemo) catch null;
+        if (self.shared_memo) |memo| memo.* = .{};
+        return self;
+    }
+
+    fn releaseSharedMemo(self: *TheoremContext) void {
+        const memo = self.shared_memo orelse return;
+        self.shared_memo = null;
+        memo.refs -= 1;
+        if (memo.refs != 0) return;
+        memo.pure_reprs.deinit(self.allocator);
+        self.allocator.destroy(memo);
+    }
+
+    /// The shared representative for `key`, when this theorem can see both
+    /// ids (see `SharedMemo`).
+    pub fn sharedPureReprGet(
+        self: *const TheoremContext,
+        key: PureReprKey,
+        env_addr: usize,
+        registry_addr: usize,
+    ) ?ExprId {
+        const memo = self.shared_memo orelse return null;
+        if (key.expr >= self.stable_limit) return null;
+        if (!memo.serves(env_addr, registry_addr)) return null;
+        const repr = memo.pure_reprs.get(key) orelse return null;
+        return if (repr < self.stable_limit) repr else null;
+    }
+
+    /// Records `key -> repr` in the shared memo when both ids resolve in the
+    /// chain's root; false leaves the entry to this theorem's own memo.
+    pub fn sharedPureReprPut(
+        self: *TheoremContext,
+        key: PureReprKey,
+        repr: ExprId,
+        env_addr: usize,
+        registry_addr: usize,
+    ) !bool {
+        const memo = self.shared_memo orelse return false;
+        if (key.expr >= self.stable_limit or repr >= self.stable_limit) return false;
+        if (!memo.serves(env_addr, registry_addr)) return false;
+        try memo.pure_reprs.put(self.allocator, key, repr);
+        return true;
     }
 
     pub fn deinit(self: *TheoremContext) void {
@@ -541,6 +616,7 @@ pub const TheoremContext = struct {
         self.placeholder_scan_cache.deinit(self.allocator);
         self.expr_deps_cache.deinit(self.allocator);
         self.pure_reprs.deinit(self.allocator);
+        self.releaseSharedMemo();
     }
 
     pub fn assertDefOpsCacheIdentity(
@@ -570,6 +646,15 @@ pub const TheoremContext = struct {
         var copy = TheoremContext.init(self.allocator);
         errdefer copy.deinit();
 
+        copy.releaseSharedMemo();
+        if (self.shared_memo) |memo| {
+            memo.refs += 1;
+            copy.shared_memo = memo;
+        }
+        copy.stable_limit = @min(
+            self.stable_limit,
+            std.math.cast(ExprId, self.interner.count()) orelse std.math.maxInt(ExprId),
+        );
         copy.interner = try self.interner.clone();
         copy.arg_infos = self.arg_infos;
         copy.theorem_hyp_names = self.theorem_hyp_names;
@@ -616,6 +701,8 @@ pub const TheoremContext = struct {
     /// promoting a clone to replace its own base (see `ExprInterner.flatten`).
     pub fn flatten(self: *TheoremContext) !void {
         try self.interner.flatten();
+        // `stable_limit` stays: the base this clone was cut from may live on
+        // and grow its own nodes past it, so ids beyond it are not shared.
     }
 
     // Seed a context with `count` theorem binders but without any parser-side
@@ -646,6 +733,10 @@ pub const TheoremContext = struct {
         // and so are representatives, whose def compression reads deps.
         self.expr_deps_cache.clearRetainingCapacity();
         self.pure_reprs.clearRetainingCapacity();
+        // Clones made under the old args keep the old shared memo.
+        self.releaseSharedMemo();
+        self.shared_memo = self.allocator.create(SharedMemo) catch null;
+        if (self.shared_memo) |memo| memo.* = .{};
         try self.seedBinderCount(arg_exprs.len);
         var next_bound_dep: u32 = 0;
         for (arg_infos) |arg| {

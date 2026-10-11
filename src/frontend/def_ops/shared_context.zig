@@ -351,8 +351,10 @@ pub const SharedContext = struct {
         };
     }
 
-    /// Session-independent representative memo, kept on the theorem
-    /// (`TheoremContext.pure_reprs`) so it outlives this context. Populated
+    /// Session-independent representative memo, kept on the theorem so it
+    /// outlives this context: in the memo the theorem shares with its clones
+    /// (`TheoremContext.SharedMemo`) when both ids resolve in the root of the
+    /// clone chain, else in `TheoremContext.pure_reprs`. Populated
     /// only when the input is placeholder-free and the computed
     /// representative came out plain (`.fixed`): then the whole rebuild →
     /// canonicalize → def-compress computation never reads match-session
@@ -388,13 +390,19 @@ pub const SharedContext = struct {
         );
     }
 
+    fn registryAddr(self: *const SharedContext) usize {
+        return if (self.registry) |registry| @intFromPtr(registry) else 0;
+    }
+
     pub fn pureRepresentativeGet(
         self: *SharedContext,
         mode: Types.BindingMode,
         expr_id: ExprId,
     ) ?ExprId {
         self.assertCacheIdentity();
-        return self.theorem.pure_reprs.get(self.pureReprKey(mode, expr_id));
+        const key = self.pureReprKey(mode, expr_id);
+        if (self.theorem.pure_reprs.get(key)) |repr| return repr;
+        return self.theorem.sharedPureReprGet(key, @intFromPtr(self.env), self.registryAddr());
     }
 
     pub fn pureRepresentativePut(
@@ -404,11 +412,14 @@ pub const SharedContext = struct {
         repr: ExprId,
     ) !void {
         self.assertCacheIdentity();
-        try self.theorem.pure_reprs.put(
-            self.theorem.allocator,
-            self.pureReprKey(mode, expr_id),
+        const key = self.pureReprKey(mode, expr_id);
+        if (try self.theorem.sharedPureReprPut(
+            key,
             repr,
-        );
+            @intFromPtr(self.env),
+            self.registryAddr(),
+        )) return;
+        try self.theorem.pure_reprs.put(self.theorem.allocator, key, repr);
     }
 
     pub fn exprIsPlaceholderFree(self: *SharedContext, expr_id: ExprId) bool {

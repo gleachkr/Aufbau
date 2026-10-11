@@ -1759,6 +1759,73 @@ test "expr interner supports clone chains" {
     }
 }
 
+test "theorem clones share representatives that name their root's nodes" {
+    var root = FrontendExpr.TheoremContext.init(std.testing.allocator);
+    defer root.deinit();
+    const v0 = try root.interner.internVar(.{ .theorem_var = 0 });
+    const v1 = try root.interner.internVar(.{ .theorem_var = 1 });
+    const key = FrontendExpr.PureReprKey{
+        .expr = v0,
+        .normalized = false,
+        .has_registry = false,
+        .line_holes_match_anything = false,
+    };
+    const env: usize = 0x1000;
+
+    var first = try root.clone();
+    defer first.deinit();
+    var second = try root.clone();
+    defer second.deinit();
+
+    // A sibling finds what another clone recorded about root nodes.
+    try std.testing.expect(try first.sharedPureReprPut(key, v1, env, 0));
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, v1), second.sharedPureReprGet(key, env, 0));
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, v1), root.sharedPureReprGet(key, env, 0));
+
+    // A clone's own node is not shared, nor read back by another clone.
+    const own = try first.interner.internVar(.{ .theorem_var = 2 });
+    const own_key = FrontendExpr.PureReprKey{
+        .expr = own,
+        .normalized = false,
+        .has_registry = false,
+        .line_holes_match_anything = false,
+    };
+    try std.testing.expect(!try first.sharedPureReprPut(own_key, own, env, 0));
+    try std.testing.expect(!try first.sharedPureReprPut(key, own, env, 0));
+
+    // Another env neither reads nor writes the shared entries.
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, null), second.sharedPureReprGet(key, env + 1, 0));
+    try std.testing.expect(!try second.sharedPureReprPut(key, v1, env, 1));
+}
+
+test "a flattened clone does not share ids its base went on to mint" {
+    var root = FrontendExpr.TheoremContext.init(std.testing.allocator);
+    defer root.deinit();
+    const v0 = try root.interner.internVar(.{ .theorem_var = 0 });
+    const v1 = try root.interner.internVar(.{ .theorem_var = 1 });
+    const key = FrontendExpr.PureReprKey{
+        .expr = v0,
+        .normalized = false,
+        .has_registry = false,
+        .line_holes_match_anything = false,
+    };
+    const env: usize = 0x1000;
+
+    var detached = try root.clone();
+    defer detached.deinit();
+    try detached.flatten();
+
+    // Both now mint id 2, as different nodes.
+    const root_node = try root.interner.internVar(.{ .theorem_var = 2 });
+    const detached_node = try detached.interner.internVar(.{ .theorem_var = 3 });
+    try std.testing.expectEqual(root_node, detached_node);
+
+    try std.testing.expect(try root.sharedPureReprPut(key, root_node, env, 0));
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, null), detached.sharedPureReprGet(key, env, 0));
+    try std.testing.expect(!try detached.sharedPureReprPut(key, detached_node, env, 0));
+    _ = v1;
+}
+
 test "explicit source dummy allocation is allowed and tracks dependency slots" {
     // Explicit user/source dummies (seedTerm, applyDummyBindings) are
     // legitimate and must keep working. This test verifies the low-level
