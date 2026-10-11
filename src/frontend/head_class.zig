@@ -44,6 +44,29 @@ pub fn classify(
 /// this is a defensive cap, not a semantic limit.
 const max_depth = 64;
 
+/// The head an application of `head` shows once def heads are unfolded, when
+/// that head is rigid. No conversion changes a rigid head, so two terms whose
+/// rigid heads differ are never equal. Null when unfolding reaches a binder,
+/// or a head that conversion can change.
+pub fn rigidHead(
+    env: *const GlobalEnv,
+    registry: ?*const RewriteRegistry,
+    head: u32,
+) ?u32 {
+    var current = head;
+    for (0..max_depth) |_| {
+        switch (classify(env, registry, current)) {
+            .rigid => return current,
+            .def => switch (env.terms.items[current].body.?) {
+                .binder => return null,
+                .app => |app| current = app.term_id,
+            },
+            .acui, .rewrite, .unavailable => return null,
+        }
+    }
+    return null;
+}
+
 /// Does `h(a) ≡ h(b)` force `a[arg_idx] ≡ b[arg_idx]`? True for a rigid head,
 /// and for a transparent def whose body places that parameter at a path of
 /// such heads (possibly through nested defs, each checked the same way).

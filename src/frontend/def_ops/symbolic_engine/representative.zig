@@ -1,5 +1,7 @@
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
+const head_class = @import("../../head_class.zig");
+const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const Types = @import("../types.zig");
 const MatchState = @import("../match_state.zig");
@@ -262,6 +264,8 @@ pub fn compressRepresentativeToDef(
     const candidates = try self.shared.defCompressionCandidates(sort_name);
     term_loop: for (candidates) |term_id| {
         const term = self.shared.env.terms.items[term_id];
+        // Skip a def whose body cannot match before cloning the state for it.
+        if (!bodyMayMatch(self, term.body.?, .{ .symbolic = symbolic })) continue;
 
         var temp = try cloneRepresentativeState(
             self,
@@ -368,6 +372,71 @@ pub fn compressRepresentativeToDef(
         } });
     }
     return null;
+}
+
+const MatchTarget = union(enum) {
+    symbolic: *const SymbolicExpr,
+    expr: ExprId,
+};
+
+/// Whether a def body can match `target`. False only when the two meet
+/// rigid heads that differ, reached from the root through equal rigid heads.
+/// A rigid head is never unfolded, rewritten or rearranged, so equal rigid
+/// heads match their arguments in place, and different ones never match.
+fn bodyMayMatch(self: anytype, template: TemplateExpr, target: MatchTarget) bool {
+    const app = switch (template) {
+        .binder => return true,
+        .app => |app| app,
+    };
+    const target_app = matchTargetApp(self, target) orelse return true;
+    const env = self.shared.env;
+    const registry = self.shared.registry;
+    if (head_class.classify(env, registry, app.term_id) == .rigid and
+        head_class.classify(env, registry, target_app.term_id) == .rigid)
+    {
+        if (app.term_id != target_app.term_id) return false;
+        for (app.args, 0..) |arg, idx| {
+            if (!bodyMayMatch(self, arg, target_app.arg(idx))) return false;
+        }
+        return true;
+    }
+    const head = head_class.rigidHead(env, registry, app.term_id) orelse return true;
+    const target_head = head_class.rigidHead(env, registry, target_app.term_id) orelse return true;
+    return head == target_head;
+}
+
+const MatchTargetApp = struct {
+    term_id: u32,
+    symbolic_args: ?[]const *const SymbolicExpr,
+    expr_args: []const ExprId,
+
+    fn arg(self: MatchTargetApp, idx: usize) MatchTarget {
+        if (self.symbolic_args) |args| return .{ .symbolic = args[idx] };
+        return .{ .expr = self.expr_args[idx] };
+    }
+};
+
+fn matchTargetApp(self: anytype, target: MatchTarget) ?MatchTargetApp {
+    const expr_id = switch (target) {
+        .symbolic => |symbolic| switch (symbolic.*) {
+            .app => |app| return .{
+                .term_id = app.term_id,
+                .symbolic_args = app.args,
+                .expr_args = &.{},
+            },
+            .fixed => |expr_id| expr_id,
+            .binder, .dummy => return null,
+        },
+        .expr => |expr_id| expr_id,
+    };
+    return switch (self.shared.theorem.interner.node(expr_id).*) {
+        .app => |app| .{
+            .term_id = app.term_id,
+            .symbolic_args = null,
+            .expr_args = app.args,
+        },
+        .variable, .placeholder => null,
+    };
 }
 
 /// A def's hidden binders must be fresh with respect to the arguments the
