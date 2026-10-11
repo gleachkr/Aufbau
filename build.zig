@@ -549,8 +549,8 @@ pub fn build(b: *std.Build) void {
     // Fuzz targets (docs/fuzzing.md). A plain run tries each target once
     // as a smoke check; `zig build fuzz --fuzz[=N]` fuzzes them. Fuzzing
     // needs LLVM's instrumentation, which the self-hosted Debug backend
-    // lacks. A ReleaseSafe fuzz build never finishes compiling on Zig 0.17
-    // (#430), so fuzz at Debug or ReleaseFast.
+    // lacks. Any optimize mode fuzzes; see docs/fuzzing.md for keeping
+    // ReleaseSafe fuzz builds clear of an LLVM hang (#430).
     const fuzz_target = b.option(
         []const u8,
         "fuzz-target",
