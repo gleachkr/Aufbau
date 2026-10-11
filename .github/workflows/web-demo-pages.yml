@@ -18,10 +18,6 @@ concurrency:
   group: github-pages
   cancel-in-progress: false
 
-# Zig 0.17 takes the global cache from the environment, not a flag.
-env:
-  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.cache/zig-global
-
 jobs:
   build:
     # A workflow_run event fires for any completed Test run whose head
@@ -43,15 +39,15 @@ jobs:
         with:
           version: 0.17.0
 
+      # setup-zig sets and caches Zig's global cache itself, so only the
+      # local cache is ours to keep.
       - name: Cache Zig build data
         uses: actions/cache@v4
         with:
-          path: |
-            .cache/zig-global
-            .cache/zig-local
-          key: zig-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          path: .cache/zig-local
+          key: zig-local-pages-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            zig-${{ runner.os }}-
+            zig-local-pages-${{ runner.os }}-
 
       - name: Build web demo
         run: |

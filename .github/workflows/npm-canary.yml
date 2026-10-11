@@ -25,10 +25,6 @@ concurrency:
   group: npm-publish
   cancel-in-progress: false
 
-# Zig 0.17 takes the global cache from the environment, not a flag.
-env:
-  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.cache/zig-global
-
 jobs:
   release_test:
     if: github.ref_type == 'tag'
@@ -60,15 +56,15 @@ jobs:
         with:
           version: 0.17.0
 
+      # setup-zig sets and caches Zig's global cache itself, so only the
+      # local cache is ours to keep.
       - name: Cache Zig build data
         uses: actions/cache@v4
         with:
-          path: |
-            .cache/zig-global
-            .cache/zig-local
-          key: zig-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          path: .cache/zig-local
+          key: zig-local-npm-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            zig-${{ runner.os }}-
+            zig-local-npm-${{ runner.os }}-
 
       - name: Setup Node
         uses: actions/setup-node@v4
