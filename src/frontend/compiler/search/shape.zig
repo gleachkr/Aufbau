@@ -307,13 +307,40 @@ pub const Builder = struct {
         unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
         ExprMod.work_ticks_walk +%= 1;
-        const sort_id = try self.exprSort(expr_id, scope);
+        const node = try scope.node(expr_id);
+        const sort_id = try self.nodeSort(expr_id, node, scope);
+        return self.exprShapeOf(expr_id, node, sort_id, scope, state, unfold_defs);
+    }
+
+    /// `exprShape` for a def binder, whose caller already read the sort of
+    /// the argument it resolves to.
+    fn exprShapeSorted(
+        self: *const Builder,
+        expr_id: ExprId,
+        sort_id: clipper.SortId,
+        scope: *const ExprScope,
+        state: *State,
+        unfold_defs: bool,
+    ) anyerror!clipper.ShapeNode {
+        ExprMod.work_ticks_walk +%= 1;
+        const node = try scope.node(expr_id);
+        return self.exprShapeOf(expr_id, node, sort_id, scope, state, unfold_defs);
+    }
+
+    fn exprShapeOf(
+        self: *const Builder,
+        expr_id: ExprId,
+        node: *const ExprNode,
+        sort_id: clipper.SortId,
+        scope: *const ExprScope,
+        state: *State,
+        unfold_defs: bool,
+    ) anyerror!clipper.ShapeNode {
         if (state.hole) |h| {
             if (expr_id == h) return .{ .wildcard = sort_id };
         }
         if (state.consumeNode(sort_id)) |fallback| return fallback;
 
-        const node = try scope.node(expr_id);
         return switch (node.*) {
             .variable => |var_id| try self.finishLeaf(state, varLeaf(var_id, sort_id)),
             .placeholder => .{ .wildcard = sort_id },
@@ -366,8 +393,19 @@ pub const Builder = struct {
         state: *State,
         unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
-        ExprMod.work_ticks_walk +%= 1;
         const sort_id = try self.templateExprSort(template, scope);
+        return self.templateExprShapeSorted(template, sort_id, scope, state, unfold_defs);
+    }
+
+    fn templateExprShapeSorted(
+        self: *const Builder,
+        template: TemplateExpr,
+        sort_id: clipper.SortId,
+        scope: *const ExprScope,
+        state: *State,
+        unfold_defs: bool,
+    ) anyerror!clipper.ShapeNode {
+        ExprMod.work_ticks_walk +%= 1;
         if (state.consumeNode(sort_id)) |fallback| return fallback;
 
         return switch (template) {
@@ -375,8 +413,9 @@ pub const Builder = struct {
                 .theorem => .{ .wildcard = sort_id },
                 .def_body => |def_scope| blk: {
                     if (idx < def_scope.args.len) {
-                        break :blk try self.exprShape(
+                        break :blk try self.exprShapeSorted(
                             def_scope.args[idx],
+                            sort_id,
                             def_scope.parent,
                             state,
                             unfold_defs,
@@ -434,22 +473,35 @@ pub const Builder = struct {
         state: *State,
         unfold_defs: bool,
     ) anyerror!clipper.ShapeNode {
-        ExprMod.work_ticks_walk +%= 1;
         const sort_id = try self.templateExprSortVia(template, scope);
+        return self.templateExprShapeViaSorted(template, sort_id, scope, state, unfold_defs);
+    }
+
+    fn templateExprShapeViaSorted(
+        self: *const Builder,
+        template: TemplateExpr,
+        sort_id: clipper.SortId,
+        scope: *const TemplateExprViaScope,
+        state: *State,
+        unfold_defs: bool,
+    ) anyerror!clipper.ShapeNode {
+        ExprMod.work_ticks_walk +%= 1;
         if (state.consumeNode(sort_id)) |fallback| return fallback;
 
         return switch (template) {
             .binder => |idx| blk: {
                 if (idx < scope.args.len) {
                     break :blk switch (scope.outer) {
-                        .expr => |e| try self.templateExprShape(
+                        .expr => |e| try self.templateExprShapeSorted(
                             scope.args[idx],
+                            sort_id,
                             e,
                             state,
                             unfold_defs,
                         ),
-                        .via => |v| try self.templateExprShapeVia(
+                        .via => |v| try self.templateExprShapeViaSorted(
                             scope.args[idx],
+                            sort_id,
                             v,
                             state,
                             unfold_defs,
@@ -727,7 +779,15 @@ pub const Builder = struct {
         expr_id: ExprId,
         scope: *const ExprScope,
     ) anyerror!clipper.SortId {
-        const node = try scope.node(expr_id);
+        return self.nodeSort(expr_id, try scope.node(expr_id), scope);
+    }
+
+    fn nodeSort(
+        self: *const Builder,
+        expr_id: ExprId,
+        node: *const ExprNode,
+        scope: *const ExprScope,
+    ) anyerror!clipper.SortId {
         return switch (node.*) {
             .app => |app| try self.termSort(app.term_id),
             .variable, .placeholder => blk: {
@@ -852,6 +912,7 @@ pub const Builder = struct {
 
     fn termSort(self: *const Builder, term_id: u32) anyerror!clipper.SortId {
         const decl = self.lookupTerm(term_id) orelse return error.UnknownTerm;
+        if (decl.ret_sort_id) |sort_id| return sort_id;
         return try sortFromName(self.env, decl.ret_sort_name);
     }
 

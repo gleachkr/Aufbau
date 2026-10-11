@@ -15,6 +15,10 @@ pub const TermDecl = struct {
     dummy_args: []const ArgInfo,
     dummy_names: []const ?[]const u8,
     ret_sort_name: []const u8,
+    /// The id of `ret_sort_name` in `GlobalEnv.sort_names`, recorded when the
+    /// term is registered; null on a term built by hand, which callers look
+    /// up by name.
+    ret_sort_id: ?u8 = null,
     /// Result-type dependencies, indexed over the bound args in declaration
     /// order (same convention as the MMB return Arg).
     ret_deps: u55 = 0,
@@ -397,6 +401,7 @@ pub const GlobalEnv = struct {
             .dummy_args = stmt.dummy_args,
             .dummy_names = stmt.dummy_names,
             .ret_sort_name = stmt.ret_sort_name,
+            .ret_sort_id = self.sort_names.get(stmt.ret_sort_name),
             .ret_deps = stmt.ret_deps,
             .is_def = stmt.is_def,
             .body = body,
