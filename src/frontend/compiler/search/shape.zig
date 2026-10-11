@@ -63,8 +63,8 @@ pub const Builder = struct {
         template: TemplateExpr,
         args: []const ArgInfo,
     ) !clipper.ShapeNode {
-        const scope = TemplateScope{ .rule = args };
-        return try self.fromTemplateScope(template, &scope);
+        const frame = Frame{ .args = .{ .rule = .{ .args = args } } };
+        return try self.fromTemplateFrame(template, &frame);
     }
 
     pub fn fromTemplateWithBindings(
@@ -74,24 +74,23 @@ pub const Builder = struct {
         args: []const ArgInfo,
         bindings: []const ?ExprId,
     ) !clipper.ShapeNode {
-        const scope = TemplateScope{ .bound_rule = .{
+        const frame = Frame{ .args = .{ .rule = .{
             .args = args,
             .theorem = theorem,
             .bindings = bindings,
-        } };
-        return try self.fromTemplateScope(template, &scope);
+        } } };
+        return try self.fromTemplateFrame(template, &frame);
     }
 
-    fn fromTemplateScope(
+    fn fromTemplateFrame(
         self: *const Builder,
         template: TemplateExpr,
-        scope: *const TemplateScope,
+        frame: *const Frame,
     ) !clipper.ShapeNode {
         var acui_sorts = try self.acuiSorts();
         defer acui_sorts.deinit(self.allocator);
-        var state = State.init(self.options);
-        state.acui_sorts = &acui_sorts;
-        return try self.templateShape(template, scope, &state);
+        var state = State.init(self.options, &acui_sorts);
+        return try self.templateShape(template, null, frame, &state);
     }
 
     pub fn fromExprId(
@@ -99,24 +98,21 @@ pub const Builder = struct {
         theorem: *const TheoremContext,
         expr_id: ExprId,
     ) !clipper.ShapeNode {
-        const scope = ExprScope{ .theorem = theorem };
         var acui_sorts = try self.acuiSorts();
         defer acui_sorts.deinit(self.allocator);
-        var state = State.init(self.options);
-        state.acui_sorts = &acui_sorts;
-        return try self.exprShape(expr_id, &scope, &state);
+        var state = State.init(self.options, &acui_sorts);
+        return try self.exprShape(expr_id, null, theorem, &state);
     }
 
     pub fn fromSurfaceExpr(
         self: *const Builder,
         expr: *const TrustedExpr,
     ) !clipper.ShapeNode {
-        const scope = SurfaceScope{ .root = {} };
         var acui_sorts = try self.acuiSorts();
         defer acui_sorts.deinit(self.allocator);
-        var state = State.init(self.options);
-        state.acui_sorts = &acui_sorts;
-        return try self.surfaceShape(expr, &scope, &state);
+        var state = State.init(self.options, &acui_sorts);
+        state.holes = true;
+        return try self.surfaceShape(expr, &state);
     }
 
     // Build the shape of a single ACUI-region member `wrapper(pattern)` (e.g.
@@ -140,11 +136,9 @@ pub const Builder = struct {
             return error.UnknownTerm;
         const wrapper_sort = try sortFromName(self.env, wrapper_decl.ret_sort_name);
 
-        var state = State.init(self.options);
+        var state = State.init(self.options, &acui_sorts);
         state.hole = hole;
-        state.acui_sorts = &acui_sorts;
-        const scope = ExprScope{ .theorem = theorem };
-        const inner = try self.exprShape(pattern, &scope, &state);
+        const inner = try self.exprShape(pattern, null, theorem, &state);
 
         const children = self.allocator.alloc(clipper.ShapeNode, 1) catch |err| {
             deinitShape(self.allocator, inner);
@@ -156,118 +150,49 @@ pub const Builder = struct {
         return member;
     }
 
+    // One visitor per kind of source: templates (a rule's, or an unfolded
+    // def's body), theorem expressions, and parsed surface expressions. Each
+    // hands an application to `applicationShape`, which unfolds a transparent
+    // def into a `Frame` over the application's arguments, so the def body's
+    // binders resolve back into whichever kind wrote them. `known_sort` is
+    // the sort a binder already read for the argument it resolves to. The
+    // shared helpers are inline so each visitor's `FrameArgs` switch folds.
+
     fn templateShape(
         self: *const Builder,
         template: TemplateExpr,
-        scope: *const TemplateScope,
+        known_sort: ?clipper.SortId,
+        frame: *const Frame,
         state: *State,
     ) anyerror!clipper.ShapeNode {
-        const sort_id = try self.templateSort(template, scope);
+        const sort_id = known_sort orelse try self.templateSort(template, frame);
+        if (frame.ticks) ExprMod.work_ticks_walk +%= 1;
         if (state.consumeNode(sort_id)) |fallback| return fallback;
 
         return switch (template) {
-            .binder => |idx| switch (scope.*) {
-                .rule => .{ .wildcard = sort_id },
-                .bound_rule => |bound| blk: {
-                    if (idx < bound.bindings.len) {
-                        if (bound.bindings[idx]) |expr_id| {
-                            const expr_scope = ExprScope{
-                                .theorem = bound.theorem,
-                            };
-                            break :blk try self.exprShape(
-                                expr_id,
-                                &expr_scope,
-                                state,
-                            );
-                        }
-                    }
-                    break :blk .{ .wildcard = sort_id };
-                },
-                .def_body => |def_scope| blk: {
-                    if (idx < def_scope.args.len) {
-                        break :blk try self.templateShape(
-                            def_scope.args[idx],
-                            def_scope.parent,
-                            state,
-                        );
-                    }
-                    break :blk .{ .wildcard = sort_id };
-                },
-            },
-            .app => |app| blk: {
-                const decl = self.lookupTerm(app.term_id) orelse {
-                    return error.UnknownTerm;
-                };
-                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .wildcard = sort_id };
-                    if (app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const def_scope = TemplateScope{ .def_body = .{
-                            .parent = scope,
-                            .args = app.args,
-                            .dummies = decl.dummy_args,
-                        } };
-                        break :blk try self.templateShape(
-                            decl.body.?,
-                            &def_scope,
-                            state,
-                        );
-                    }
-                }
-                if (self.headIsReducible(app.term_id)) break :blk .{ .wildcard = sort_id };
-
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (app.args, 0..) |arg, idx| {
-                    children[idx] = try self.templateShape(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, app.term_id, sort_id, children);
-            },
+            .binder => |idx| if (idx < frame.args.len())
+                try self.argShape(frame.args, idx, sort_id, state)
+            else
+                state.open(sort_id),
+            .app => |app| try self.applicationShape(
+                app.term_id,
+                sort_id,
+                .{ .template = .{ .args = app.args, .frame = frame } },
+                state,
+            ),
         };
     }
 
     fn exprShape(
         self: *const Builder,
         expr_id: ExprId,
-        scope: *const ExprScope,
+        known_sort: ?clipper.SortId,
+        theorem: *const TheoremContext,
         state: *State,
     ) anyerror!clipper.ShapeNode {
         ExprMod.work_ticks_walk +%= 1;
-        const node = try scope.node(expr_id);
-        const sort_id = try self.nodeSort(expr_id, node, scope);
-        return self.exprShapeOf(expr_id, node, sort_id, scope, state);
-    }
-
-    /// `exprShape` for a def binder, whose caller already read the sort of
-    /// the argument it resolves to.
-    fn exprShapeSorted(
-        self: *const Builder,
-        expr_id: ExprId,
-        sort_id: clipper.SortId,
-        scope: *const ExprScope,
-        state: *State,
-    ) anyerror!clipper.ShapeNode {
-        ExprMod.work_ticks_walk +%= 1;
-        const node = try scope.node(expr_id);
-        return self.exprShapeOf(expr_id, node, sort_id, scope, state);
-    }
-
-    fn exprShapeOf(
-        self: *const Builder,
-        expr_id: ExprId,
-        node: *const ExprNode,
-        sort_id: clipper.SortId,
-        scope: *const ExprScope,
-        state: *State,
-    ) anyerror!clipper.ShapeNode {
+        const node = theorem.interner.node(expr_id);
+        const sort_id = known_sort orelse try self.nodeSort(theorem, expr_id, node);
         if (state.hole) |h| {
             if (expr_id == h) return .{ .wildcard = sort_id };
         }
@@ -276,544 +201,127 @@ pub const Builder = struct {
         return switch (node.*) {
             .variable => |var_id| try self.finishLeaf(state, varLeaf(var_id, sort_id)),
             .placeholder => .{ .wildcard = sort_id },
-            .app => |app| blk: {
-                const decl = self.lookupTerm(app.term_id) orelse {
-                    return error.UnknownTerm;
-                };
-                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .wildcard = sort_id };
-                    if (app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const def_scope = ExprScope{ .def_body = .{
-                            .parent = scope,
-                            .args = app.args,
-                            .dummies = decl.dummy_args,
-                        } };
-                        break :blk try self.templateExprShape(
-                            decl.body.?,
-                            &def_scope,
-                            state,
-                        );
-                    }
-                }
-                if (self.headIsReducible(app.term_id)) break :blk .{ .wildcard = sort_id };
-
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (app.args, 0..) |arg, idx| {
-                    children[idx] = try self.exprShape(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, app.term_id, sort_id, children);
-            },
-        };
-    }
-
-    fn templateExprShape(
-        self: *const Builder,
-        template: TemplateExpr,
-        scope: *const ExprScope,
-        state: *State,
-    ) anyerror!clipper.ShapeNode {
-        const sort_id = try self.templateExprSort(template, scope);
-        return self.templateExprShapeSorted(template, sort_id, scope, state);
-    }
-
-    fn templateExprShapeSorted(
-        self: *const Builder,
-        template: TemplateExpr,
-        sort_id: clipper.SortId,
-        scope: *const ExprScope,
-        state: *State,
-    ) anyerror!clipper.ShapeNode {
-        ExprMod.work_ticks_walk +%= 1;
-        if (state.consumeNode(sort_id)) |fallback| return fallback;
-
-        return switch (template) {
-            .binder => |idx| switch (scope.*) {
-                .theorem => .{ .wildcard = sort_id },
-                .def_body => |def_scope| blk: {
-                    if (idx < def_scope.args.len) {
-                        break :blk try self.exprShapeSorted(
-                            def_scope.args[idx],
-                            sort_id,
-                            def_scope.parent,
-                            state,
-                        );
-                    }
-                    break :blk .{ .wildcard = sort_id };
-                },
-            },
-            .app => |app| blk: {
-                const decl = self.lookupTerm(app.term_id) orelse {
-                    return error.UnknownTerm;
-                };
-                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .wildcard = sort_id };
-                    if (app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const def_scope = TemplateExprViaScope{
-                            .outer = .{ .expr = scope },
-                            .args = app.args,
-                            .dummies = decl.dummy_args,
-                        };
-                        break :blk try self.templateExprShapeVia(
-                            decl.body.?,
-                            &def_scope,
-                            state,
-                        );
-                    }
-                }
-                if (self.headIsReducible(app.term_id)) break :blk .{ .wildcard = sort_id };
-
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (app.args, 0..) |arg, idx| {
-                    children[idx] = try self.templateExprShape(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, app.term_id, sort_id, children);
-            },
-        };
-    }
-
-    fn templateExprShapeVia(
-        self: *const Builder,
-        template: TemplateExpr,
-        scope: *const TemplateExprViaScope,
-        state: *State,
-    ) anyerror!clipper.ShapeNode {
-        const sort_id = try self.templateExprSortVia(template, scope);
-        return self.templateExprShapeViaSorted(template, sort_id, scope, state);
-    }
-
-    fn templateExprShapeViaSorted(
-        self: *const Builder,
-        template: TemplateExpr,
-        sort_id: clipper.SortId,
-        scope: *const TemplateExprViaScope,
-        state: *State,
-    ) anyerror!clipper.ShapeNode {
-        ExprMod.work_ticks_walk +%= 1;
-        if (state.consumeNode(sort_id)) |fallback| return fallback;
-
-        return switch (template) {
-            .binder => |idx| blk: {
-                if (idx < scope.args.len) {
-                    break :blk switch (scope.outer) {
-                        .expr => |e| try self.templateExprShapeSorted(
-                            scope.args[idx],
-                            sort_id,
-                            e,
-                            state,
-                        ),
-                        .via => |v| try self.templateExprShapeViaSorted(
-                            scope.args[idx],
-                            sort_id,
-                            v,
-                            state,
-                        ),
-                    };
-                }
-                break :blk .{ .wildcard = sort_id };
-            },
-            .app => |app| blk: {
-                const decl = self.lookupTerm(app.term_id) orelse {
-                    return error.UnknownTerm;
-                };
-                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .wildcard = sort_id };
-                    if (app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const nested = TemplateExprViaScope{
-                            // The inner def's args live in the *current* via
-                            // scope, so chain to it (not to scope.outer).
-                            .outer = .{ .via = scope },
-                            .args = app.args,
-                            .dummies = decl.dummy_args,
-                        };
-                        break :blk try self.templateExprShapeVia(
-                            decl.body.?,
-                            &nested,
-                            state,
-                        );
-                    }
-                }
-                if (self.headIsReducible(app.term_id)) break :blk .{ .wildcard = sort_id };
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (app.args, 0..) |arg, idx| {
-                    children[idx] = try self.templateExprShapeVia(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, app.term_id, sort_id, children);
-            },
+            .app => |app| try self.applicationShape(
+                app.term_id,
+                sort_id,
+                .{ .expr = .{ .args = app.args, .theorem = theorem } },
+                state,
+            ),
         };
     }
 
     fn surfaceShape(
         self: *const Builder,
         expr: *const TrustedExpr,
-        scope: *const SurfaceScope,
         state: *State,
     ) anyerror!clipper.ShapeNode {
         const sort_id: clipper.SortId = expr.sort();
         if (state.consumeNode(sort_id)) |fallback| return fallback;
 
         return switch (expr.*) {
-            .variable => .{ .hole = sort_id },
-            .hole => .{ .hole = sort_id },
-            .term => |term_app| blk: {
-                const decl = self.lookupTerm(term_app.id) orelse {
-                    return error.UnknownTerm;
-                };
-                if (!self.isAcuiRoot(term_app.id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .hole = sort_id };
-                    if (term_app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const def_scope = SurfaceScope{ .def_body = .{
-                            .args = term_app.args,
-                            .dummies = decl.dummy_args,
-                        } };
-                        break :blk try self.templateSurfaceShape(
-                            decl.body.?,
-                            &def_scope,
-                            state,
-                        );
-                    }
-                }
-                if (self.headIsReducible(term_app.id)) break :blk .{ .hole = sort_id };
-
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    term_app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (term_app.args, 0..) |arg, idx| {
-                    children[idx] = try self.surfaceShape(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, term_app.id, sort_id, children);
-            },
+            .variable, .hole => .{ .hole = sort_id },
+            .term => |term_app| try self.applicationShape(
+                term_app.id,
+                sort_id,
+                .{ .surface = term_app.args },
+                state,
+            ),
         };
     }
 
-    fn templateSurfaceShape(
+    inline fn applicationShape(
         self: *const Builder,
-        template: TemplateExpr,
-        scope: *const SurfaceScope,
+        term_id: u32,
+        sort_id: clipper.SortId,
+        args: FrameArgs,
         state: *State,
     ) anyerror!clipper.ShapeNode {
-        const sort_id = try self.templateSurfaceSort(template, scope);
-        if (state.consumeNode(sort_id)) |fallback| return fallback;
-
-        return switch (template) {
-            .binder => |idx| switch (scope.*) {
-                .root => .{ .hole = sort_id },
-                .def_body => |def_scope| blk: {
-                    if (idx < def_scope.args.len) {
-                        break :blk try self.surfaceShape(
-                            def_scope.args[idx],
-                            &SurfaceScope{ .root = {} },
-                            state,
-                        );
-                    }
-                    break :blk .{ .hole = sort_id };
-                },
-            },
-            .app => |app| blk: {
-                const decl = self.lookupTerm(app.term_id) orelse {
-                    return error.UnknownTerm;
+        const decl = self.lookupTerm(term_id) orelse return error.UnknownTerm;
+        if (!self.isAcuiRoot(term_id) and isTransparentDef(decl)) {
+            if (!state.canUnfold()) return state.open(sort_id);
+            if (args.len() == decl.args.len) {
+                state.enterUnfold();
+                defer state.leaveUnfold();
+                const frame = Frame{
+                    .args = args,
+                    .dummies = decl.dummy_args,
+                    .ticks = args.ticks(),
                 };
-                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .hole = sort_id };
-                    if (app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const def_scope = TemplateSurfaceScope{
-                            .outer = .{ .surface = scope },
-                            .args = app.args,
-                            .dummies = decl.dummy_args,
-                        };
-                        break :blk try self.templateSurfaceShapeVia(
-                            decl.body.?,
-                            &def_scope,
-                            state,
-                        );
-                    }
-                }
-                if (self.headIsReducible(app.term_id)) break :blk .{ .hole = sort_id };
+                return try self.templateShape(decl.body.?, null, &frame, state);
+            }
+        }
+        if (self.headIsReducible(term_id)) return state.open(sort_id);
 
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (app.args, 0..) |arg, idx| {
-                    children[idx] = try self.templateSurfaceShape(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, app.term_id, sort_id, children);
-            },
-        };
+        const children = try self.allocator.alloc(clipper.ShapeNode, args.len());
+        errdefer self.allocator.free(children);
+        for (children, 0..) |*child, idx| {
+            child.* = try self.argShape(args, idx, null, state);
+        }
+        return try self.finish(state, term_id, sort_id, children);
     }
 
-    fn templateSurfaceShapeVia(
+    inline fn argShape(
         self: *const Builder,
-        template: TemplateExpr,
-        scope: *const TemplateSurfaceScope,
+        args: FrameArgs,
+        idx: usize,
+        known_sort: ?clipper.SortId,
         state: *State,
     ) anyerror!clipper.ShapeNode {
-        const sort_id = try self.templateSurfaceSortVia(template, scope);
-        if (state.consumeNode(sort_id)) |fallback| return fallback;
-
-        return switch (template) {
-            .binder => |idx| blk: {
-                if (idx < scope.args.len) {
-                    break :blk switch (scope.outer) {
-                        .surface => |outer| try self.templateSurfaceShape(
-                            scope.args[idx],
-                            outer,
-                            state,
-                        ),
-                        .via => |outer| try self.templateSurfaceShapeVia(
-                            scope.args[idx],
-                            outer,
-                            state,
-                        ),
-                    };
-                }
-                break :blk .{ .hole = sort_id };
-            },
-            .app => |app| blk: {
-                const decl = self.lookupTerm(app.term_id) orelse {
-                    return error.UnknownTerm;
-                };
-                if (!self.isAcuiRoot(app.term_id) and isTransparentDef(decl)) {
-                    if (!state.canUnfold()) return .{ .hole = sort_id };
-                    if (app.args.len == decl.args.len) {
-                        state.enterUnfold();
-                        defer state.leaveUnfold();
-                        const nested = TemplateSurfaceScope{
-                            // The inner def's args live in the *current* via
-                            // scope, so chain to it (not to scope.outer).
-                            .outer = .{ .via = scope },
-                            .args = app.args,
-                            .dummies = decl.dummy_args,
-                        };
-                        break :blk try self.templateSurfaceShapeVia(
-                            decl.body.?,
-                            &nested,
-                            state,
-                        );
+        return switch (args) {
+            .rule => |rule| blk: {
+                if (idx < rule.bindings.len) {
+                    if (rule.bindings[idx]) |expr_id| {
+                        // A binding is shaped under its own sort.
+                        break :blk try self.exprShape(expr_id, null, rule.theorem.?, state);
                     }
                 }
-                if (self.headIsReducible(app.term_id)) break :blk .{ .hole = sort_id };
-                const children = try self.allocator.alloc(
-                    clipper.ShapeNode,
-                    app.args.len,
-                );
-                errdefer self.allocator.free(children);
-                for (app.args, 0..) |arg, idx| {
-                    children[idx] = try self.templateSurfaceShapeVia(
-                        arg,
-                        scope,
-                        state,
-                    );
-                }
-                break :blk try self.finish(state, app.term_id, sort_id, children);
+                break :blk .{ .wildcard = known_sort.? };
             },
+            .template => |t| try self.templateShape(t.args[idx], known_sort, t.frame, state),
+            .expr => |e| try self.exprShape(e.args[idx], known_sort, e.theorem, state),
+            .surface => |exprs| try self.surfaceShape(exprs[idx], state),
         };
     }
 
     fn templateSort(
         self: *const Builder,
         template: TemplateExpr,
-        scope: *const TemplateScope,
+        frame: *const Frame,
     ) anyerror!clipper.SortId {
         return switch (template) {
-            .binder => |idx| switch (scope.*) {
-                .rule => |args| try sortFromArg(self.env, args[idx]),
-                .bound_rule => |bound| try sortFromArg(self.env, bound.args[idx]),
-                .def_body => |def_scope| blk: {
-                    if (idx < def_scope.args.len) {
-                        break :blk try self.templateSort(
-                            def_scope.args[idx],
-                            def_scope.parent,
-                        );
-                    }
-                    const dummy_idx = idx - def_scope.args.len;
-                    break :blk try sortFromArg(
-                        self.env,
-                        def_scope.dummies[dummy_idx],
-                    );
-                },
-            },
             .app => |app| try self.termSort(app.term_id),
+            .binder => |idx| blk: {
+                const args = frame.args;
+                if (idx < args.len()) break :blk switch (args) {
+                    .rule => |rule| try sortFromArg(self.env, rule.args[idx]),
+                    .template => |t| try self.templateSort(t.args[idx], t.frame),
+                    .expr => |e| try self.nodeSort(
+                        e.theorem,
+                        e.args[idx],
+                        e.theorem.interner.node(e.args[idx]),
+                    ),
+                    .surface => |exprs| exprs[idx].sort(),
+                };
+                const dummy_idx = idx - args.len();
+                if (dummy_idx >= frame.dummies.len) return error.UnknownTemplateBinder;
+                break :blk try sortFromArg(self.env, frame.dummies[dummy_idx]);
+            },
         };
-    }
-
-    fn exprSort(
-        self: *const Builder,
-        expr_id: ExprId,
-        scope: *const ExprScope,
-    ) anyerror!clipper.SortId {
-        return self.nodeSort(expr_id, try scope.node(expr_id), scope);
     }
 
     fn nodeSort(
         self: *const Builder,
+        theorem: *const TheoremContext,
         expr_id: ExprId,
         node: *const ExprNode,
-        scope: *const ExprScope,
     ) anyerror!clipper.SortId {
         return switch (node.*) {
             .app => |app| try self.termSort(app.term_id),
             .variable, .placeholder => blk: {
-                const sort_name = try scope.leafSortName(expr_id);
-                break :blk try sortFromName(self.env, sort_name);
+                const leaf = (try theorem.currentLeafInfo(expr_id)) orelse
+                    return error.ExpectedExprLeaf;
+                break :blk try sortFromName(self.env, leaf.sort_name);
             },
-        };
-    }
-
-    fn templateExprSort(
-        self: *const Builder,
-        template: TemplateExpr,
-        scope: *const ExprScope,
-    ) anyerror!clipper.SortId {
-        return switch (template) {
-            .binder => |idx| switch (scope.*) {
-                .theorem => error.UnknownTemplateBinder,
-                .def_body => |def_scope| blk: {
-                    if (idx < def_scope.args.len) {
-                        break :blk try self.exprSort(
-                            def_scope.args[idx],
-                            def_scope.parent,
-                        );
-                    }
-                    const dummy_idx = idx - def_scope.args.len;
-                    if (dummy_idx >= def_scope.dummies.len) {
-                        return error.UnknownTemplateBinder;
-                    }
-                    break :blk try sortFromArg(
-                        self.env,
-                        def_scope.dummies[dummy_idx],
-                    );
-                },
-            },
-            .app => |app| try self.termSort(app.term_id),
-        };
-    }
-
-    fn templateExprSortVia(
-        self: *const Builder,
-        template: TemplateExpr,
-        scope: *const TemplateExprViaScope,
-    ) anyerror!clipper.SortId {
-        return switch (template) {
-            .binder => |idx| blk: {
-                if (idx < scope.args.len) {
-                    break :blk switch (scope.outer) {
-                        .expr => |e| try self.templateExprSort(
-                            scope.args[idx],
-                            e,
-                        ),
-                        .via => |v| try self.templateExprSortVia(
-                            scope.args[idx],
-                            v,
-                        ),
-                    };
-                }
-                const dummy_idx = idx - scope.args.len;
-                if (dummy_idx >= scope.dummies.len) {
-                    return error.UnknownTemplateBinder;
-                }
-                break :blk try sortFromArg(self.env, scope.dummies[dummy_idx]);
-            },
-            .app => |app| try self.termSort(app.term_id),
-        };
-    }
-
-    fn templateSurfaceSort(
-        self: *const Builder,
-        template: TemplateExpr,
-        scope: *const SurfaceScope,
-    ) anyerror!clipper.SortId {
-        return switch (template) {
-            .binder => |idx| switch (scope.*) {
-                .root => error.UnknownTemplateBinder,
-                .def_body => |def_scope| blk: {
-                    if (idx < def_scope.args.len) {
-                        break :blk def_scope.args[idx].sort();
-                    }
-                    const dummy_idx = idx - def_scope.args.len;
-                    if (dummy_idx >= def_scope.dummies.len) {
-                        return error.UnknownTemplateBinder;
-                    }
-                    break :blk try sortFromArg(
-                        self.env,
-                        def_scope.dummies[dummy_idx],
-                    );
-                },
-            },
-            .app => |app| try self.termSort(app.term_id),
-        };
-    }
-
-    fn templateSurfaceSortVia(
-        self: *const Builder,
-        template: TemplateExpr,
-        scope: *const TemplateSurfaceScope,
-    ) anyerror!clipper.SortId {
-        return switch (template) {
-            .binder => |idx| blk: {
-                if (idx < scope.args.len) {
-                    break :blk switch (scope.outer) {
-                        .surface => |outer| try self.templateSurfaceSort(
-                            scope.args[idx],
-                            outer,
-                        ),
-                        .via => |outer| try self.templateSurfaceSortVia(
-                            scope.args[idx],
-                            outer,
-                        ),
-                    };
-                }
-                const dummy_idx = idx - scope.args.len;
-                if (dummy_idx >= scope.dummies.len) {
-                    return error.UnknownTemplateBinder;
-                }
-                break :blk try sortFromArg(self.env, scope.dummies[dummy_idx]);
-            },
-            .app => |app| try self.termSort(app.term_id),
         };
     }
 
@@ -885,10 +393,9 @@ pub const Builder = struct {
         sort_id: clipper.SortId,
         children: []clipper.ShapeNode,
     ) !clipper.ShapeNode {
-        const acui_sorts = state.acui_sorts orelse return concrete(term_id, sort_id, children);
         if (self.isAcuiRoot(term_id)) return try self.region(term_id, sort_id, children);
         const body = concrete(term_id, sort_id, children);
-        if (!acui_sorts.contains(sort_id)) return body;
+        if (!state.acui_sorts.contains(sort_id)) return body;
         const members = self.allocator.alloc(clipper.ShapeNode, 1) catch |err| {
             deinitShape(self.allocator, body);
             return err;
@@ -904,12 +411,11 @@ pub const Builder = struct {
         state: *const State,
         leaf: clipper.ShapeNode,
     ) !clipper.ShapeNode {
-        const acui_sorts = state.acui_sorts orelse return leaf;
         const node = switch (leaf) {
             .concrete => |node| node,
             else => return leaf,
         };
-        if (!acui_sorts.contains(node.sort)) return leaf;
+        if (!state.acui_sorts.contains(node.sort)) return leaf;
         const members = try self.allocator.alloc(clipper.ShapeNode, 1);
         members[0] = leaf;
         return .{ .acui = .{ .sort = node.sort, .members = members } };
@@ -971,92 +477,46 @@ pub const Builder = struct {
 
 const SortSet = std.AutoHashMapUnmanaged(clipper.SortId, void);
 
-const TemplateScope = union(enum) {
-    rule: []const ArgInfo,
-    bound_rule: BoundTemplateScope,
-    def_body: TemplateDefScope,
+// Where a template's binders resolve. A rule template's binders are the
+// rule's arguments. In an unfolded def body, binder `i` below the def's arity
+// is argument `i` of the application being unfolded, shaped where it was
+// written, and the rest are the def's dummies.
+const Frame = struct {
+    args: FrameArgs,
+    dummies: []const ArgInfo = &.{},
+    // Whether template visits count as walk work, as expression visits do:
+    // true in the body of a def unfolded from a theorem expression.
+    ticks: bool = false,
 };
 
-const BoundTemplateScope = struct {
-    args: []const ArgInfo,
-    theorem: *const TheoremContext,
-    bindings: []const ?ExprId,
-};
+const FrameArgs = union(enum) {
+    // A rule's arguments, open unless `bindings` binds them.
+    rule: struct {
+        args: []const ArgInfo,
+        theorem: ?*const TheoremContext = null,
+        bindings: []const ?ExprId = &.{},
+    },
+    // Templates written in `frame`, e.g. a def application in a def body.
+    template: struct { args: []const TemplateExpr, frame: *const Frame },
+    expr: struct { args: []const ExprId, theorem: *const TheoremContext },
+    surface: []const *const TrustedExpr,
 
-const TemplateDefScope = struct {
-    parent: *const TemplateScope,
-    args: []const TemplateExpr,
-    dummies: []const ArgInfo,
-};
-
-const ExprScope = union(enum) {
-    theorem: *const TheoremContext,
-    def_body: ExprDefScope,
-
-    fn node(self: *const ExprScope, expr_id: ExprId) !*const ExprNode {
-        return switch (self.*) {
-            .theorem => |theorem| theorem.interner.node(expr_id),
-            .def_body => |def_scope| def_scope.parent.node(expr_id),
+    fn len(self: FrameArgs) usize {
+        return switch (self) {
+            .rule => |rule| rule.args.len,
+            .template => |t| t.args.len,
+            .expr => |e| e.args.len,
+            .surface => |exprs| exprs.len,
         };
     }
 
-    fn leafSortName(
-        self: *const ExprScope,
-        expr_id: ExprId,
-    ) ![]const u8 {
-        return switch (self.*) {
-            .theorem => |theorem| blk: {
-                const info = try theorem.currentLeafInfo(expr_id);
-                break :blk if (info) |leaf| leaf.sort_name else {
-                    return error.ExpectedExprLeaf;
-                };
-            },
-            .def_body => |def_scope| def_scope.parent.leafSortName(expr_id),
+    fn ticks(self: FrameArgs) bool {
+        return switch (self) {
+            .expr => true,
+            .template => |t| t.frame.ticks,
+            .rule, .surface => false,
         };
     }
-};
-
-const ExprDefScope = struct {
-    parent: *const ExprScope,
-    args: []const ExprId,
-    dummies: []const ArgInfo,
-};
-
-const TemplateExprViaScope = struct {
-    // A via scope's args are templates that live in `outer`. When defs nest, the
-    // inner def's args live in the enclosing *via* scope, not its ExprScope base
-    // — so `outer` must be able to chain to another via scope, otherwise an
-    // inner arg referencing an outer def's dummy is resolved one scope level too
-    // far out and mis-indexes the dummies.
-    outer: TemplateExprViaOuter,
-    args: []const TemplateExpr,
-    dummies: []const ArgInfo,
-};
-
-const TemplateExprViaOuter = union(enum) {
-    expr: *const ExprScope,
-    via: *const TemplateExprViaScope,
-};
-
-const SurfaceScope = union(enum) {
-    root,
-    def_body: SurfaceDefScope,
-};
-
-const SurfaceDefScope = struct {
-    args: []const *const TrustedExpr,
-    dummies: []const ArgInfo,
-};
-
-const TemplateSurfaceScope = struct {
-    outer: TemplateSurfaceOuter,
-    args: []const TemplateExpr,
-    dummies: []const ArgInfo,
-};
-
-const TemplateSurfaceOuter = union(enum) {
-    surface: *const SurfaceScope,
-    via: *const TemplateSurfaceScope,
 };
 
 const State = struct {
@@ -1067,15 +527,24 @@ const State = struct {
     // query: the pattern `p` is shaped concretely except at the hole `x`, whose
     // occurrences must match the witness the recovered context member carries.
     hole: ?ExprId = null,
+    // Set for a surface query, whose open positions are holes, not wildcards.
+    holes: bool = false,
     /// The ACUI sorts to normalize regions for while building (see
-    /// `Builder.finish`); null builds the plain tree.
-    acui_sorts: ?*const SortSet = null,
+    /// `Builder.finish`).
+    acui_sorts: *const SortSet,
 
-    fn init(options: Options) State {
+    fn init(options: Options, acui_sorts: *const SortSet) State {
         return .{
             .nodes_left = options.max_nodes,
             .unfold_left = options.max_unfold_depth,
+            .acui_sorts = acui_sorts,
         };
+    }
+
+    // An open position: a def's dummy, a def too deep to unfold, or a head
+    // `@rewrite` can reduce.
+    fn open(self: *const State, sort_id: clipper.SortId) clipper.ShapeNode {
+        return if (self.holes) .{ .hole = sort_id } else .{ .wildcard = sort_id };
     }
 
     fn consumeNode(self: *State, sort_id: clipper.SortId) ?clipper.ShapeNode {
@@ -1160,6 +629,24 @@ fn varLeaf(var_id: ExprMod.VarId, sort_id: clipper.SortId) clipper.ShapeNode {
         .sort = sort_id,
         .children = &.{},
     } };
+}
+
+/// The sort of a rule's `template`, whose binders are the rule's `args`.
+pub fn ruleTemplateSort(
+    env: *const GlobalEnv,
+    template: TemplateExpr,
+    args: []const ArgInfo,
+) anyerror!clipper.SortId {
+    return switch (template) {
+        .app => |app| blk: {
+            if (!env.hasAvailableTerm(app.term_id)) return error.UnknownTerm;
+            break :blk try sortFromName(env, env.terms.items[app.term_id].ret_sort_name);
+        },
+        .binder => |idx| blk: {
+            if (idx >= args.len) return error.UnknownTemplateBinder;
+            break :blk try sortFromArg(env, args[idx]);
+        },
+    };
 }
 
 fn sortFromArg(env: *const GlobalEnv, info: ArgInfo) anyerror!clipper.SortId {

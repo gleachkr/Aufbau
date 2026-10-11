@@ -64,7 +64,7 @@ pub const Index = struct {
         for (env.rules.items, 0..) |rule, rule_idx| {
             const item = result.clipper_index.addItem();
             std.debug.assert(item == rule_idx);
-            const conclusion_sort = try templateSort(env, rule.concl, rule.args);
+            const conclusion_sort = try shape_mod.ruleTemplateSort(env, rule.concl, rule.args);
             result.entries[rule_idx] = .{
                 .rule_id = @intCast(rule_idx),
                 .declaration_order = rule_idx,
@@ -197,22 +197,3 @@ pub const Index = struct {
         return rules;
     }
 };
-
-fn templateSort(
-    env: *const GlobalEnv,
-    template: @import("../../rules.zig").TemplateExpr,
-    args: []const @import("../../parse_recovery.zig").ArgInfo,
-) !clipper.SortId {
-    const sort_name = switch (template) {
-        .app => |app| blk: {
-            if (!env.hasAvailableTerm(app.term_id)) return error.UnknownTerm;
-            break :blk env.terms.items[app.term_id].ret_sort_name;
-        },
-        .binder => |idx| blk: {
-            if (idx >= args.len) return error.UnknownTemplateBinder;
-            break :blk args[idx].sort_name;
-        },
-    };
-    const sort_id = env.sort_names.get(sort_name) orelse return error.UnknownSort;
-    return @intCast(sort_id);
-}

@@ -8,11 +8,10 @@ const std = @import("std");
 const types = @import("../types.zig");
 const clipper = @import("../clipper.zig");
 const ref_index_mod = @import("../ref_index.zig");
+const shape = @import("../shape.zig");
 const match = @import("./match.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
-const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
-const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
 const GlobalEnv = @import("../../../env.zig").GlobalEnv;
 const Context = types.Context;
 const SearchCounters = types.SearchCounters;
@@ -202,24 +201,5 @@ fn hypothesisSort(
     hyp_index: usize,
 ) !clipper.SortId {
     if (hyp_index >= rule.hyps.len) return error.UnknownHypothesis;
-    return templateSort(env, rule.hyps[hyp_index], rule.args);
-}
-
-fn templateSort(
-    env: *const GlobalEnv,
-    template: TemplateExpr,
-    args: []const ArgInfo,
-) !clipper.SortId {
-    const sort_name = switch (template) {
-        .app => |app| blk: {
-            if (!env.hasAvailableTerm(app.term_id)) return error.UnknownTerm;
-            break :blk env.terms.items[app.term_id].ret_sort_name;
-        },
-        .binder => |idx| blk: {
-            if (idx >= args.len) return error.UnknownTemplateBinder;
-            break :blk args[idx].sort_name;
-        },
-    };
-    const sort_id = env.sort_names.get(sort_name) orelse return error.UnknownSort;
-    return @intCast(sort_id);
+    return shape.ruleTemplateSort(env, rule.hyps[hyp_index], rule.args);
 }
