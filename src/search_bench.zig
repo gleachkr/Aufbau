@@ -559,10 +559,6 @@ fn runScenario(
         .{counters.generated_chain_attempts},
     );
     try writer.print(
-        "  recursive apply calls: {}\n",
-        .{counters.recursive_apply_calls},
-    );
-    try writer.print(
         "  rejected candidates after validation: {}\n",
         .{counters.rejected_candidates_after_validation},
     );
@@ -595,9 +591,8 @@ fn runScenario(
         .{ counters.recover_guard_match_rejects, counters.recover_guard_extract_rejects },
     );
     try writer.print(
-        "  metas created (wild/exist/univ/bound): {}/{}/{}/{}\n",
+        "  metas created (exist/univ/bound): {}/{}/{}\n",
         .{
-            counters.wildcard_metas_created,
             counters.existential_metas_created,
             counters.universal_metas_created,
             counters.bound_choice_metas_created,

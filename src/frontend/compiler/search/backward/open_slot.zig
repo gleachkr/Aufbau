@@ -120,8 +120,7 @@ pub fn tryOpenGenerateSlot(
     } else 0;
     defer if (hook.meta_dep_bans) |bans| bans.rollback(ban_mark);
     defer {
-        // Mirror this branch's meta activity into the bench counters
-        // (META.md performance gates).
+        // Mirror this branch's meta activity into the bench counters.
         if (ctx.counters) |c| {
             c.existential_metas_created += store.stats.existential_created;
             c.bound_choice_metas_created += store.stats.bound_choice_created;

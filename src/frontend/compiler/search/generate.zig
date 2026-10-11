@@ -533,8 +533,7 @@ pub fn generateTopLevel(
         }
     }
 
-    // Mirror the forward layer's meta-store activity into the bench counters
-    // (META.md performance gates).
+    // Mirror the forward layer's meta-store activity into the bench counters.
     if (derived_pool) |*dpool| {
         if (driver.counters) |c| {
             c.universal_metas_created += dpool.store.stats.universal_created;

@@ -629,7 +629,6 @@ pub const SearchCounters = struct {
     per_hyp_filtered_ref_list_total: usize = 0,
     ref_tuple_count_after_filtering: usize = 0,
     full_try_candidate_calls: usize = 0,
-    recursive_apply_calls: usize = 0,
     generated_chain_attempts: usize = 0,
     /// Set when a ladder phase ran out of its own fuel and was retired. A
     /// stop on the shared global budget sets `work_budget_exhausted` instead.
@@ -668,12 +667,8 @@ pub const SearchCounters = struct {
     // extraction after a structural match failure).
     recover_guard_match_rejects: usize = 0,
     recover_guard_extract_rejects: usize = 0,
-    // Metavariable / forward-saturation counters (META.md
-    // "Performance gates"). Landed — and baselined at zero — before any
-    // behavior change, so later stages' bench claims diff against recorded
-    // numbers. The search driver mirrors `MetaStore.stats` into these once
-    // stages 4/7 wire the store in; the forward counters move in stages 7/8.
-    wildcard_metas_created: usize = 0,
+    // Metavariable and forward-saturation counters, mirrored from each
+    // `MetaStore.stats` when its branch or pool is done.
     existential_metas_created: usize = 0,
     universal_metas_created: usize = 0,
     bound_choice_metas_created: usize = 0,
