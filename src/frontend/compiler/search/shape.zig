@@ -1051,6 +1051,12 @@ pub const Builder = struct {
         acui_sorts: *const SortSet,
         shape: clipper.ShapeNode,
     ) !void {
+        // With no ACUI combiner there is no region to route, and
+        // `acuiNormalize` would return an exact copy of `shape`.
+        if (acui_sorts.count() == 0) {
+            errdefer deinitShape(self.allocator, shape);
+            return try result.appendOwned(shape);
+        }
         const norm = blk: {
             errdefer deinitShape(self.allocator, shape);
             break :blk try self.acuiNormalize(shape, acui_sorts);
