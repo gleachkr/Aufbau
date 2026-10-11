@@ -1940,7 +1940,8 @@ pub const Handler = struct {
     /// paired `.auf` files with their includes (`Imports.loadUnit`). A join
     /// that fails (a missing file, a cycle, a malformed statement) degrades
     /// that side to its root alone with its statements blanked, and records
-    /// the failure as a diagnostic on the file holding the statement.
+    /// the failure as a diagnostic on the file holding the statement (and,
+    /// when that file is not the root, on the root statement leading there).
     /// Everything the unit references is allocated from `arena`.
     fn buildUnit(
         self: *Handler,
@@ -2021,14 +2022,23 @@ pub const Handler = struct {
         failures: *std.ArrayListUnmanaged(UnitFailure),
         info: Imports.JoinFailure,
     ) !void {
-        const message = try info.message(arena);
         // The statement's file was loaded before its statements were
         // followed, so it is always on record.
         const file = loader.files.get(info.file_key) orelse return;
         try failures.append(arena, .{
             .file = file,
             .span = .{ .start = info.span.start, .end = info.span.end },
-            .message = message,
+            .message = try info.message(arena),
+        });
+        // A failure deeper down also shows on the root statement that led
+        // there: the degraded unit has only the root left, whose errors
+        // would otherwise just be knock-on ones.
+        const via = info.via orelse return;
+        const via_file = loader.files.get(via.file_key) orelse return;
+        try failures.append(arena, .{
+            .file = via_file,
+            .span = .{ .start = via.span.start, .end = via.span.end },
+            .message = try info.viaMessage(arena, via),
         });
     }
 
@@ -2091,6 +2101,8 @@ pub const Handler = struct {
                 if (index != proof.root) try targets.append(arena, file);
             }
         }
+        // A failed join leaves the failing file out of the degraded unit.
+        for (unit.failures) |failure| try targets.append(arena, failure.file);
 
         var deps = std.ArrayListUnmanaged([]const u8).empty;
         var published = std.ArrayListUnmanaged([]const u8).empty;

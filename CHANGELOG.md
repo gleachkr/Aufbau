@@ -79,6 +79,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   arguments from the wrong definition when the goal unfolds three
   definitions deep. Before, the search could pass over a rule that fits,
   or crash reading past a definition's variables.
+- The language server now reports an `include` or `import` that fails in a
+  file the open one pulls in, such as an included proof file that includes
+  a file that does not exist. Before, the open file showed only the errors
+  that followed from the missing items, and the failure itself went
+  unreported. It now shows on the failing statement and on the open file's
+  statement that leads there, as in `unable to include 'lemmas.auf':
+  unable to include 'gone.auf': FileNotFound`.
 
 ## [0.0.15] - 2026-10-08
 

@@ -2978,6 +2978,18 @@ fn publishedEmpty(transport: *const TestTransport, uri: []const u8) bool {
     return false;
 }
 
+fn publishedContains(
+    transport: *const TestTransport,
+    uri: []const u8,
+    needle: []const u8,
+) bool {
+    for (transport.messages[0..transport.message_count]) |message| {
+        if (!std.mem.containsAtLeast(u8, message, 1, uri)) continue;
+        if (std.mem.containsAtLeast(u8, message, 1, needle)) return true;
+    }
+    return false;
+}
+
 /// The ranges of the last diagnostics set the transport saw for `uri`.
 fn publishedRanges(
     arena: std.mem.Allocator,
@@ -3515,4 +3527,65 @@ test "LSP resolves proof includes against open library files" {
     });
     try std.testing.expect(transport_state.containsMessage(lib_uri));
     try std.testing.expect(transport_state.containsMessage("nope"));
+}
+
+test "LSP reports a missing nested include" {
+    const mm0_uri = "file:///tmp/lsp-include-nested/main.mm0";
+    const lib_uri = "file:///tmp/lsp-include-nested/lemmas.auf";
+    const proof_uri = "file:///tmp/lsp-include-nested/main.auf";
+    const lib_text =
+        \\include "gone.auf";
+        \\lemma lib_top: $ top $
+        \\-------
+        \\l1: $ top $ by top_i []
+    ;
+    const proof_text =
+        \\include "lemmas.auf";
+        \\main
+        \\----
+        \\l1: $ top $ by lib_top []
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.putDocument(mm0_uri, lsp_import_lib_text ++ "\ntheorem main: $ top $;\n", 1);
+    try handler.putDocument(lib_uri, lib_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = .{ .custom_value = "aufbau" },
+        .version = 1,
+        .text = proof_text,
+    } });
+    // The failing statement's file, though the degraded unit no longer
+    // includes it, and the root's statement leading there both report it.
+    try std.testing.expect(publishedContains(
+        &transport_state,
+        lib_uri,
+        "unable to include 'gone.auf': FileNotFound",
+    ));
+    try std.testing.expect(publishedContains(
+        &transport_state,
+        proof_uri,
+        "unable to include 'lemmas.auf': unable to include 'gone.auf': FileNotFound",
+    ));
+
+    // Fixing the library re-checks the root and clears both.
+    transport_state.clearMessages();
+    try handler.@"textDocument/didChange"(arena, .{
+        .textDocument = .{ .uri = lib_uri, .version = 2 },
+        .contentChanges = &.{
+            .{ .text_document_content_change_whole_document = .{ .text = lib_text["include \"gone.auf\";\n".len..] } },
+        },
+    });
+    try std.testing.expect(publishedEmpty(&transport_state, lib_uri));
+    try std.testing.expect(publishedEmpty(&transport_state, proof_uri));
 }

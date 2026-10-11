@@ -385,6 +385,15 @@ pub const JoinFailure = struct {
     spec: []const u8,
     /// The resolver's error, for `unresolved`.
     err: ?anyerror = null,
+    /// When the failing statement lies in a file a root pulls in, the
+    /// root's statement that file was reached through.
+    via: ?Via = null,
+
+    pub const Via = struct {
+        file_key: []const u8,
+        span: Span,
+        spec: []const u8,
+    };
 
     /// The failure as one line of prose, without a location, in the
     /// active diagnostic locale.
@@ -420,6 +429,24 @@ pub const JoinFailure = struct {
                     ),
                 };
             },
+        };
+    }
+
+    /// The failure as seen from `via`'s statement: that file could not be
+    /// joined, for the reason `message` gives.
+    pub fn viaMessage(
+        self: JoinFailure,
+        allocator: std.mem.Allocator,
+        via: Via,
+    ) std.mem.Allocator.Error![]u8 {
+        const reason = try self.message(allocator);
+        defer allocator.free(reason);
+        return switch (self.syntax) {
+            inline else => |syntax| Diag.allocMessage(
+                allocator,
+                "join_unresolved_" ++ comptime syntax.keyword(),
+                .{ via.spec, reason },
+            ),
         };
     }
 };
@@ -559,6 +586,8 @@ const Joiner = struct {
     working: std.StringHashMapUnmanaged(void) = .{},
     /// Keys on the current import path (mm0-rs `stack`), for cycles.
     stack: std.ArrayListUnmanaged([]const u8) = .empty,
+    /// The root statement the current import path starts with.
+    entry: ?JoinFailure.Via = null,
     /// True while a single root has shown no statement: its text can be
     /// reused.
     passthrough: bool,
@@ -653,6 +682,11 @@ const Joiner = struct {
                     return error.DuplicateInclude;
                 },
             };
+            if (self.stack.items.len == 1) self.entry = .{
+                .file_key = key,
+                .span = stmt.spec_span,
+                .spec = stmt.spec,
+            };
             try self.write(resolved.key, resolved.text, false);
             // Keep the importer's text out of a trailing comment in the
             // imported file (mm0-rs does the same in comments mode).
@@ -706,6 +740,7 @@ const Joiner = struct {
             if (slot.* == null) {
                 slot.* = info;
                 slot.*.?.syntax = self.syntax;
+                if (self.stack.items.len > 1) slot.*.?.via = self.entry;
             }
         }
     }
@@ -1700,6 +1735,14 @@ test "join reports cycles and unresolved imports" {
     try std.testing.expectEqual(JoinErrorKind.cycle, failure.?.kind);
     try std.testing.expectEqualStrings("b", failure.?.file_key);
     try std.testing.expectEqualStrings("a", failure.?.spec);
+    // The cycle lies in `b`, reached through the root's `import "b";`.
+    const via = failure.?.via.?;
+    try std.testing.expectEqualStrings("a", via.file_key);
+    try std.testing.expectEqualStrings("b", via.spec);
+    try std.testing.expectEqualStrings(
+        "unable to import 'b': import cycle: 'a' is already being imported",
+        try failure.?.viaMessage(arena.allocator(), via),
+    );
 
     failure = null;
     try std.testing.expectError(
@@ -1709,6 +1752,7 @@ test "join reports cycles and unresolved imports" {
     try std.testing.expectEqual(JoinErrorKind.unresolved, failure.?.kind);
     try std.testing.expectEqualStrings("zz", failure.?.spec);
     try std.testing.expectEqual(@as(anyerror, error.FileNotFound), failure.?.err.?);
+    try std.testing.expect(failure.?.via == null);
 
     failure = null;
     try std.testing.expectError(
