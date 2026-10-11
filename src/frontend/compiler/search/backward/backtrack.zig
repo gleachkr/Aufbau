@@ -143,7 +143,11 @@ pub fn exactWithSession(
     // split claims the bounded generation budget first. Within a band, the rule
     // whose conclusion matches more of the goal goes first (`matchSpecificity`).
     // Stable, and only on the generation path — plain `exact?` ordering is
-    // untouched.
+    // untouched. The order is a permutation of indices: a candidate carries
+    // its theorem by value, too large to move.
+    const order = try allocator.alloc(u32, apply_candidates.len);
+    defer allocator.free(order);
+    for (order, 0..) |*slot, idx| slot.* = @intCast(idx);
     if (options.generator != null) {
         for (apply_candidates) |*apply_candidate| {
             apply_candidate.concl_is_split = split.conclusionIsSplit(
@@ -162,12 +166,7 @@ pub fn exactWithSession(
                 );
             }
         }
-        std.sort.insertion(
-            ApplyCandidate,
-            apply_candidates,
-            {},
-            nonSplitCandidateFirst,
-        );
+        std.sort.insertion(u32, order, apply_candidates, nonSplitCandidateFirst);
     }
 
     const ref_index = try session.getRefIndex(theorem, counters);
@@ -192,7 +191,8 @@ pub fn exactWithSession(
     const eager_cut = options.generator != null and
         context.registry.autoEagerRuleCount() > 0;
     var eager_armed = false;
-    for (apply_candidates) |*apply_candidate| {
+    for (order) |candidate_idx| {
+        const apply_candidate = &apply_candidates[candidate_idx];
         apply_candidate.internal_child = options.internal_open_child;
         const is_eager = eager_cut and
             context.registry.eagerPriority(apply_candidate.rule_id) != null;
@@ -364,10 +364,12 @@ fn computePruneSetup(context: *const Context, rule_id: u32) PruneSetup {
 }
 
 fn nonSplitCandidateFirst(
-    _: void,
-    a: ApplyCandidate,
-    b: ApplyCandidate,
+    candidates: []const ApplyCandidate,
+    a_idx: u32,
+    b_idx: u32,
 ) bool {
+    const a = &candidates[a_idx];
+    const b = &candidates[b_idx];
     if (a.concl_is_split != b.concl_is_split) {
         return @intFromBool(a.concl_is_split) < @intFromBool(b.concl_is_split);
     }
