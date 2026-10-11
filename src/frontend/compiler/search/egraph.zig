@@ -27,6 +27,7 @@
 //! arena teardown.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const TemplateExpr = @import("../../rules.zig").TemplateExpr;
 
 const alpha_mod = @import("egraph/alpha.zig");
@@ -1126,7 +1127,7 @@ pub const EGraph = struct {
         // nodes are already canonical. Canonicalize into a reusable
         // scratch arena and copy into the egraph arena only when the
         // canonical form actually changed.
-        var scratch_state = std.heap.ArenaAllocator.init(
+        var scratch_state = ArenaAllocator.init(
             std.heap.page_allocator,
         );
         defer scratch_state.deinit();
@@ -1632,7 +1633,7 @@ pub const EGraph = struct {
         // on dense workloads — so they live in a reusable arena instead.
         // Escaping values (solution substs, extensions, sub-bag member
         // arrays) stay on `self.allocator`.
-        var scratch_state = std.heap.ArenaAllocator.init(
+        var scratch_state = ArenaAllocator.init(
             std.heap.page_allocator,
         );
         defer scratch_state.deinit();
@@ -2315,7 +2316,7 @@ pub const EGraph = struct {
         rules: []const Rule,
         opts: SaturateOptions,
         dedup: *MatchDedup,
-        scratch_state: *std.heap.ArenaAllocator,
+        scratch_state: *ArenaAllocator,
         stats: *SaturateStats,
     ) !FoldOutcome {
         var out = FoldOutcome{};

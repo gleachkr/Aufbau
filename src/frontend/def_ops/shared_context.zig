@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
 const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
@@ -143,7 +144,7 @@ pub const SharedContext = struct {
     /// called, and that is only ever called fresh via a stable `*SharedContext`
     /// (never captured before the construction-time copies settle), so copying
     /// the empty arena during `Context.init` is safe.
-    scratch_arena: std.heap.ArenaAllocator,
+    scratch_arena: ArenaAllocator,
     /// Hash-cons table for scratch-arena `SymbolicExpr` nodes (see
     /// `internSymbolic`). Backing store lives on `allocator`; the interned
     /// nodes themselves live in `scratch_arena`. Empty at construction, so the
@@ -183,7 +184,7 @@ pub const SharedContext = struct {
     ) SharedContext {
         return .{
             .allocator = allocator,
-            .scratch_arena = std.heap.ArenaAllocator.init(allocator),
+            .scratch_arena = ArenaAllocator.init(allocator),
             .theorem = theorem,
             .env = env,
             .registry = null,
@@ -198,7 +199,7 @@ pub const SharedContext = struct {
     ) SharedContext {
         return .{
             .allocator = allocator,
-            .scratch_arena = std.heap.ArenaAllocator.init(allocator),
+            .scratch_arena = ArenaAllocator.init(allocator),
             .theorem = theorem,
             .env = env,
             .registry = registry,

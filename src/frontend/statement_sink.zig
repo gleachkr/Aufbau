@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const env_mod = @import("./env.zig");
 const rules = @import("./rules.zig");
 const pretty_print = @import("./pretty_print.zig");
@@ -33,11 +34,11 @@ pub const StatementSink = struct {
         body: ?[]const u8 = null,
     };
 
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     statements: std.ArrayListUnmanaged(Statement) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) StatementSink {
-        return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+        return .{ .arena = ArenaAllocator.init(allocator) };
     }
 
     pub fn deinit(self: *StatementSink) void {

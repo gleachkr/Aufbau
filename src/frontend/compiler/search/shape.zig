@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 
 const clipper = @import("./clipper.zig");
 const Env = @import("../../env.zig");
@@ -1443,7 +1444,7 @@ test "shape keeps a pinned binder concrete even when it depends on an unbound bo
     // a sibling hypothesis pins `p` is resolved upstream in the matcher
     // (`matchOneHypViaView` defers ACUI-split member assignments), not by
     // widening the index pre-filter.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1506,7 +1507,7 @@ fn expectItems(
 }
 
 test "shape emits theorem templates with binders as wildcards" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1531,7 +1532,7 @@ test "shape emits theorem templates with binders as wildcards" {
 }
 
 test "shape emits concrete ExprId trees" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1552,7 +1553,7 @@ test "shape emits concrete ExprId trees" {
 }
 
 test "shape routes ACUI-rooted regions through the member slot" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1593,7 +1594,7 @@ test "shape routes ACUI-rooted regions through the member slot" {
 }
 
 test "shape emits holey surface expressions" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1628,7 +1629,7 @@ test "shape resolves a holey goal's nested definitions in their own scope" {
     // P(u)`. Shaping the surface goal `outer(a)` unfolds three definitions;
     // `Q`'s argument is `inner`'s first binder, which is `b` here, not
     // `outer`'s first binder `a`.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1677,7 +1678,7 @@ test "shape resolves a holey goal's nested definitions in their own scope" {
 }
 
 test "shape unfolds transparent definitions instead of all-sort fallback" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1703,7 +1704,7 @@ test "shape unfolds transparent definitions instead of all-sort fallback" {
 }
 
 test "shape budget exhaustion falls back to local wildcards" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);
@@ -1736,7 +1737,7 @@ test "shape budget exhaustion falls back to local wildcards" {
 }
 
 test "shape variant cap prevents transparent def index blowup" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var env = GlobalEnv.init(allocator);

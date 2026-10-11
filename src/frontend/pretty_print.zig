@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const parse = @import("../trusted/parse.zig");
 const ExprMod = @import("./expr.zig");
 const text_util = @import("./text_util.zig");
@@ -525,7 +526,7 @@ test "atom renders without parens at top level" {
 }
 
 test "parser reverse index keeps last-declared notation and records coercions" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const src =
         \\sort wff;
@@ -563,7 +564,7 @@ test "parser reverse index keeps last-declared notation and records coercions" {
 test "non-lexable notation token is skipped in favor of an earlier lexable one" {
     // `/` is a delimiter, so the ASCII alt token `\/` cannot lex back as a
     // single token; the printer must keep the lexable unicode `∨`.
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const src =
         \\delimiter $ ( ) { } [ / ] , | $;

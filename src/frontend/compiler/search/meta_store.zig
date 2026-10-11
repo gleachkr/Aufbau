@@ -16,6 +16,7 @@
 //!   structural match (the matching-site invariant).
 
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const ExprModule = @import("../../expr.zig");
 const ExprId = ExprModule.ExprId;
 const PlaceholderId = ExprModule.PlaceholderId;
@@ -620,14 +621,14 @@ fn appendTerm(env: *GlobalEnv, name: []const u8, ret_sort: []const u8) !u32 {
 }
 
 const TestSetup = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     env: GlobalEnv,
     theorem: TheoremContext,
     store: MetaStore,
 
     fn init() !*TestSetup {
         const self = try std.testing.allocator.create(TestSetup);
-        self.arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        self.arena = ArenaAllocator.init(std.testing.allocator);
         self.env = GlobalEnv.init(self.arena.allocator());
         self.theorem = TheoremContext.init(std.testing.allocator);
         self.store = MetaStore.init(std.testing.allocator, &self.env);

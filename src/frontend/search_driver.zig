@@ -14,6 +14,7 @@
 //! the working text only when that finds a proof, which then replaces it.
 
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const Search = @import("./compiler/search.zig");
 const ProofScript = @import("./proof_script.zig");
 const CompilerModule = @import("./compiler.zig");
@@ -145,7 +146,7 @@ pub const Options = struct {
 };
 
 pub const Result = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     markers: []const Marker,
     /// The proof text with every found proof in place.
     text: []const u8,
@@ -174,7 +175,7 @@ pub fn run(
     proof_src: []const u8,
     options: Options,
 ) !Result {
-    var result_arena = std.heap.ArenaAllocator.init(allocator);
+    var result_arena = ArenaAllocator.init(allocator);
     errdefer result_arena.deinit();
     const out = result_arena.allocator();
 
@@ -196,7 +197,7 @@ pub fn run(
     var cursor: usize = 0;
     var growth: isize = 0;
     while (true) {
-        var scan_arena = std.heap.ArenaAllocator.init(allocator);
+        var scan_arena = ArenaAllocator.init(allocator);
         defer scan_arena.deinit();
         const placeholders = try Search.searchPlaceholders(
             scan_arena.allocator(),
@@ -506,7 +507,7 @@ fn fillHoleValues(
     };
     if (sink.items.items.len == 0) return;
 
-    var parse_arena = std.heap.ArenaAllocator.init(allocator);
+    var parse_arena = ArenaAllocator.init(allocator);
     defer parse_arena.deinit();
     var lines = std.ArrayListUnmanaged(Span).empty;
     var parser = ProofScript.Parser.initLenient(parse_arena.allocator(), text);

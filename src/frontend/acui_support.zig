@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const ExprId = @import("./expr.zig").ExprId;
 const ExprNode = @import("./expr.zig").ExprNode;
 const TheoremContext = @import("./expr.zig").TheoremContext;
@@ -571,7 +572,7 @@ fn compareVarIds(lhs: anytype, rhs: @TypeOf(lhs)) std.math.Order {
 }
 
 test "ACUI canonicalization normalizes arbitrary trees and law subsets" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     var theorem = TheoremContext.init(allocator);

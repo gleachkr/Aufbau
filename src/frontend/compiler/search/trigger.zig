@@ -20,6 +20,7 @@
 //! is just a pool entry nobody selects.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const types = @import("./types.zig");
 const refs_mod = @import("./refs.zig");
 const acui = @import("./backward/acui.zig");
@@ -178,7 +179,7 @@ pub fn seedOnlyPool(
     seeds: []const DerivedRef,
 ) !types.DerivedPool {
     var pool = types.DerivedPool{
-        .arena = std.heap.ArenaAllocator.init(context.allocator),
+        .arena = ArenaAllocator.init(context.allocator),
         .store = MetaStore.init(context.allocator, context.env),
     };
     errdefer pool.deinit();

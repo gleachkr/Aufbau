@@ -42,6 +42,7 @@
 //! path never sets it, so MMB output is untouched.
 
 const std = @import("std");
+const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 const CompilerDiag = @import("../diag.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const Span = @import("../proof_script.zig").Span;
@@ -67,7 +68,7 @@ pub const CheckMemo = struct {
     };
 
     pub const Entry = struct {
-        arena: std.heap.ArenaAllocator,
+        arena: ArenaAllocator,
         last_used: u32,
         /// Null when the check succeeded, else the error it returned.
         outcome: ?anyerror,
@@ -342,7 +343,7 @@ pub const CheckMemo = struct {
         const mm0_limit = recording.mm0_limit;
         const entry = try self.allocator.create(Entry);
         entry.* = .{
-            .arena = std.heap.ArenaAllocator.init(self.allocator),
+            .arena = ArenaAllocator.init(self.allocator),
             .last_used = self.run,
             .outcome = outcome,
             .block = block,
@@ -622,7 +623,7 @@ test "dupeDiagnostic copies every string payload" {
         .detail = .{ .name_suggestion = .{ .suggestion = &text } },
     };
     CompilerDiag.addNote(&diag, .{ .already_matched = .{ .text = &text } }, .proof, null);
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const copy = try dupeDiagnostic(arena.allocator(), diag);
     text[0] = 'z';

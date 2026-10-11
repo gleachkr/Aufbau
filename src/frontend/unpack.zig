@@ -18,6 +18,7 @@
 //! that an observed fact rather than an argument.
 
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const ProofScript = @import("./proof_script.zig");
 const CompilerModule = @import("./compiler.zig");
 
@@ -51,7 +52,7 @@ pub fn hasTargetAt(
     proof_src: []const u8,
     offset: usize,
 ) bool {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = ArenaAllocator.init(allocator);
     defer arena.deinit();
     const target = findTarget(arena.allocator(), proof_src, offset) catch
         return false;
@@ -67,7 +68,7 @@ pub fn unpackAtSourceOffset(
     proof_src: []const u8,
     offset: usize,
 ) std.mem.Allocator.Error!?UnpackSuggestion {
-    var work_arena = std.heap.ArenaAllocator.init(allocator);
+    var work_arena = ArenaAllocator.init(allocator);
     defer work_arena.deinit();
     const work = work_arena.allocator();
 

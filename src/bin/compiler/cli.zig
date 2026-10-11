@@ -1,6 +1,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const mm0 = @import("mm0");
+const ArenaAllocator = mm0.ArenaAllocator;
 const compiler_lsp = @import("./lsp.zig");
 const writeFields = @import("./diag_json.zig").writeFields;
 const DebugConfig = mm0.DebugConfig;
@@ -307,7 +308,7 @@ fn lineCol(text: []const u8, offset: usize) LineCol {
 }
 
 fn runJoin(io: std.Io, allocator: std.mem.Allocator, cmd: JoinCommand) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     var failure: ?mm0.Imports.LoadFailure = null;
@@ -343,7 +344,7 @@ fn runCompile(
     allocator: std.mem.Allocator,
     cmd: CompileCommand,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     var failure: ?mm0.Imports.LoadFailure = null;
@@ -412,7 +413,7 @@ fn runSearch(
     allocator: std.mem.Allocator,
     cmd: SearchCommand,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     const params = try searchParams(arena.allocator(), cmd);

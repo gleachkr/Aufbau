@@ -1,5 +1,6 @@
 const std = @import("std");
 const mm0 = @import("mm0");
+const ArenaAllocator = mm0.ArenaAllocator;
 const scenario_manifest = @import("search_scenarios");
 
 const Search = mm0.CompilerSupport.Search;
@@ -1625,7 +1626,7 @@ fn runSweep(
     var prev_n: usize = 0;
     var prev_ns: u64 = 0;
     for (spec.points) |n| {
-        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        var arena_state = ArenaAllocator.init(allocator);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
@@ -1809,7 +1810,7 @@ fn runBreadthFixture(
     defer allocator.free(proof_src);
 
     var stats = BreadthStats{};
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    var arena_state = ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1943,7 +1944,7 @@ fn runDepthFixture(
     defer allocator.free(proof_src);
 
     var stats = DepthStats{};
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    var arena_state = ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

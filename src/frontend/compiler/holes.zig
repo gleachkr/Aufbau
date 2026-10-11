@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 
 const ExprModule = @import("../../trusted/expressions.zig");
 const Expr = ExprModule.Expr;
@@ -1126,7 +1127,7 @@ test "hole detection walks nested surface expressions" {
 }
 
 test "holey assertion parse interns nothing" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var fixture = try TestFixture.init(arena.allocator());
     defer fixture.deinit();
@@ -1154,7 +1155,7 @@ test "holey assertion parse interns nothing" {
 }
 
 test "holey matching checks concrete hole sorts" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var fixture = try TestFixture.init(arena.allocator());
     defer fixture.deinit();
@@ -1197,7 +1198,7 @@ test "holey matching checks concrete hole sorts" {
 }
 
 test "holey template matching binds visible conclusion structure" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var fixture = try TestFixture.init(arena.allocator());
     defer fixture.deinit();
@@ -1222,7 +1223,7 @@ test "holey template matching binds visible conclusion structure" {
 }
 
 test "holey template matching leaves a binder facing a holey subterm unbound" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var fixture = try TestFixture.init(arena.allocator());
     defer fixture.deinit();

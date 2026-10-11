@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
@@ -590,7 +591,7 @@ test "formatExprSource prints source names and refuses an unnamed variable" {
         \\infixl and: $/\$ prec 30;
         \\theorem thm (a b: wff): $ a $;
     ;
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

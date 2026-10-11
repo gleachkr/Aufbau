@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
@@ -767,7 +768,7 @@ test "buildDefProofBody rejects placeholders after term seeding" {
 }
 
 test "buildTheoremProofBody rejects placeholders in checked lines" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     var theorem = TheoremContext.init(arena.allocator());

@@ -22,6 +22,7 @@
 //! is anchored where its `include` sits, so including a file twice is
 //! including its items twice. Cycles are still an error.
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const builtin = @import("builtin");
 const Diag = @import("./diag.zig");
 
@@ -1323,7 +1324,7 @@ fn includeMem(
 }
 
 test "table loader chains cells the way the browser editor does" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
         .{ .key = "/d/prelude.mm0", .text = "sort s;\n" },
@@ -1355,7 +1356,7 @@ test "table loader chains cells the way the browser editor does" {
 }
 
 test "table loader reports missing files and unresolved imports" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
         .{ .key = "/d/a.mm0", .text = "import \"lib/x.mm0\";\n" },
@@ -1390,7 +1391,7 @@ test "table loader reports missing files and unresolved imports" {
 }
 
 test "loadUnit pairs only .mm0 files and degrades a failed join" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const files = [_]File{
@@ -1503,7 +1504,7 @@ test "import specs resolve lexically against the importing file" {
 
 test "filesystem imports take absolute specs as they are" {
     if (builtin.os.tag == .freestanding) return error.SkipZigTest;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const io = std.testing.io;
@@ -1594,7 +1595,7 @@ test "auf scanner finds includes at line starts only" {
 }
 
 test "join without imports passes the root through" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const root = "sort wff;\n";
     var failure: ?JoinFailure = null;
@@ -1609,7 +1610,7 @@ test "join without imports passes the root through" {
 }
 
 test "join splices imports in post-order and dedups a diamond" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
         .{ .key = "d", .text = "sort d;" },
@@ -1673,7 +1674,7 @@ test "blankStatements spaces out imports and includes in place" {
 }
 
 test "single join maps identically" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const text = "sort wff;\n";
     const joined = try single(arena.allocator(), "root", text);
@@ -1685,7 +1686,7 @@ test "single join maps identically" {
 }
 
 test "join reports cycles and unresolved imports" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
         .{ .key = "a", .text = "import \"b\";\n" },
@@ -1725,7 +1726,7 @@ test "join reports cycles and unresolved imports" {
 }
 
 test "include join splices in place and joins roots" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
         .{ .key = "d", .text = "lemma d\n---\n" },
@@ -1762,7 +1763,7 @@ test "include join splices in place and joins roots" {
 }
 
 test "include join rejects a second include of the same file" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     // Each file includes the next twice; joining this without the check
     // doubles the text per level.
@@ -1804,7 +1805,7 @@ test "include join rejects a second include of the same file" {
 }
 
 test "include join reports cycles, misses, and malformed includes" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const files = [_]File{
         .{ .key = "a", .text = "include \"b\";\n" },

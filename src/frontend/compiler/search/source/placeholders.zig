@@ -4,6 +4,7 @@
 //! nested application.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../../arena_allocator.zig").ArenaAllocator;
 const tunables = @import("../tunables.zig");
 const ProofScript = @import("../../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
@@ -73,7 +74,7 @@ pub fn searchPlaceholders(
     allocator: std.mem.Allocator,
     proof_src: []const u8,
 ) ![]SearchPlaceholder {
-    var parse_arena = std.heap.ArenaAllocator.init(allocator);
+    var parse_arena = ArenaAllocator.init(allocator);
     defer parse_arena.deinit();
     var out = std.ArrayListUnmanaged(SearchPlaceholder).empty;
     errdefer out.deinit(allocator);

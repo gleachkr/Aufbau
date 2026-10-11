@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const ExprId = @import("./expr.zig").ExprId;
 const ExprNode = @import("./expr.zig").ExprNode;
@@ -1339,7 +1340,7 @@ fn preprocessDerivedExpr(
     registry: *RewriteRegistry,
     expr_id: ExprId,
 ) !ExprId {
-    var arena = std.heap.ArenaAllocator.init(theorem.allocator);
+    var arena = ArenaAllocator.init(theorem.allocator);
     defer arena.deinit();
 
     var canonicalizer = Canonicalizer.init(

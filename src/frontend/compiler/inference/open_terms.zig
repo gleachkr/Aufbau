@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
@@ -635,7 +636,7 @@ test "partial instantiation returns null for missing binder" {
 }
 
 test "holey instantiation preserves concrete structure" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -672,7 +673,7 @@ test "holey instantiation preserves concrete structure" {
 }
 
 test "unresolved binder under ACUI combiner collapses to whole wildcard" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -712,7 +713,7 @@ test "unresolved binder under ACUI combiner collapses to whole wildcard" {
 }
 
 test "holey instantiation renders every unknown as a hole" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -798,7 +799,7 @@ test "probe fill spends a dependency slot only on a bound binder" {
 }
 
 test "repeated unresolved binder can share one logical unknown" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

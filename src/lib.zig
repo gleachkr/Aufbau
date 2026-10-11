@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Arg = @import("./trusted/args.zig").Arg;
 pub const Compiler = @import("./frontend/compiler.zig").Compiler;
+pub const ArenaAllocator = @import("./frontend/arena_allocator.zig").ArenaAllocator;
 pub const StatementSink =
     @import("./frontend/statement_sink.zig").StatementSink;
 pub const CheckMemo = @import("./frontend/compiler/check_memo.zig").CheckMemo;

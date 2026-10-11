@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const MmbWriter = @import("./compiler/mmb_writer.zig");
 const CompilerDiag = @import("./diag.zig");
 const Pipeline = @import("./compiler/pipeline.zig");
@@ -80,7 +81,7 @@ pub const Compiler = struct {
     pub fn check(self: *Compiler) !void {
         self.clearDiagnostics();
 
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
         var compiler_context = self.context();
@@ -91,7 +92,7 @@ pub const Compiler = struct {
     pub fn analyze(self: *Compiler) !void {
         self.clearDiagnostics();
 
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
         var compiler_context = self.context();
@@ -105,7 +106,7 @@ pub const Compiler = struct {
     pub fn analyzeMm0(self: *Compiler) !void {
         self.clearDiagnostics();
 
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
         var compiler_context = self.context();
@@ -120,7 +121,7 @@ pub const Compiler = struct {
 
         _ = self.proof_source orelse return error.MissingProofFile;
 
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
         var emit = PipelineOutput{};

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RuleDecl = @import("./env.zig").RuleDecl;
 const Expr = @import("../trusted/expressions.zig").Expr;
@@ -81,7 +82,7 @@ pub const Solver = struct {
     // allocator MUST equal the interner allocator).
     allocator: std.mem.Allocator,
     real_allocator: std.mem.Allocator,
-    state_arena: std.heap.ArenaAllocator,
+    state_arena: ArenaAllocator,
     env: *const GlobalEnv,
     theorem: *TheoremContext,
     registry: *RewriteRegistry,
@@ -131,7 +132,7 @@ pub const Solver = struct {
         return .{
             .allocator = allocator,
             .real_allocator = allocator,
-            .state_arena = std.heap.ArenaAllocator.init(allocator),
+            .state_arena = ArenaAllocator.init(allocator),
             .env = env,
             .theorem = theorem,
             .registry = registry,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const expr_mod = @import("../../expr.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const PlaceholderId = @import("../../expr.zig").PlaceholderId;
@@ -1220,7 +1221,7 @@ pub const ForwardOptions = struct {
 /// recipe, then rolls the assignments back, so the same derived ref can be
 /// selected twice in one proof at two different witnesses.
 pub const DerivedPool = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     store: MetaStore,
     refs: []const DerivedRef = &.{},
     /// Clipper-backed shape index over `refs` (universal-meta leaves shape to

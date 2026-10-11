@@ -6,6 +6,7 @@
 //! generation paths share. Split out of `backtrack.zig`.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../../arena_allocator.zig").ArenaAllocator;
 const types = @import("../types.zig");
 const ref_index_mod = @import("../ref_index.zig");
 const match = @import("./match.zig");
@@ -611,7 +612,7 @@ test "isWildcardSequent classifies bare-unpinned-arg apps only" {
 test "rigidNestedBinderMask skips the top level and ACUI combiners" {
     // The registry has no deinit (it is arena-backed in production); give it
     // a test-local arena so the map allocations are reclaimed.
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var registry = RewriteRegistry.init(arena.allocator());
     // `join` (term 12) is the ACUI context combiner.

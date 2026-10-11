@@ -30,6 +30,7 @@
 //! forward derivation can never yield an accepted proof.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const BindingValidation = @import("../../binding_validation.zig");
 const types = @import("./types.zig");
 const refs_mod = @import("./refs.zig");
@@ -95,7 +96,7 @@ pub fn saturate(
     seeds: []const DerivedRef,
 ) !DerivedPool {
     var result = DerivedPool{
-        .arena = std.heap.ArenaAllocator.init(context.allocator),
+        .arena = ArenaAllocator.init(context.allocator),
         .store = MetaStore.init(context.allocator, context.env),
     };
     errdefer result.deinit();
@@ -1344,7 +1345,7 @@ pub fn solveCorrespondenceUnfolding(
     pattern: ExprId,
     mint: bool,
 ) !bool {
-    var arena = std.heap.ArenaAllocator.init(theorem.allocator);
+    var arena = ArenaAllocator.init(theorem.allocator);
     defer arena.deinit();
     var walk = UnfoldWalk{
         .context = context,
@@ -1696,7 +1697,7 @@ pub fn materializeApplication(
     dref: *const DerivedRef,
     rename: ?[]?ExprId,
 ) !?RuleApplication {
-    var scratch_arena = std.heap.ArenaAllocator.init(context.allocator);
+    var scratch_arena = ArenaAllocator.init(context.allocator);
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
 

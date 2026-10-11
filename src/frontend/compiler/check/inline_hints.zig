@@ -3,6 +3,7 @@
 //! speculative ACUI-spine demotion.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
@@ -1274,7 +1275,7 @@ fn findPrincipalSite(
 }
 
 const HoleyFaceFixture = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     registry: RewriteRegistry,
     theorem: TheoremContext,
     a: ExprId,
@@ -1285,7 +1286,7 @@ const HoleyFaceFixture = struct {
     const comma: u32 = 1;
 
     fn init(self: *HoleyFaceFixture) !void {
-        self.arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        self.arena = ArenaAllocator.init(std.testing.allocator);
         self.registry = RewriteRegistry.init(self.arena.allocator());
         try self.registry.acui_by_head.put(comma, .{
             .unit_term_name = "emp",

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
@@ -245,7 +246,7 @@ fn Engine(comptime mode: Mode) type {
 }
 
 test "canonicalizer rejects rewrite bindings with forbidden deps" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 

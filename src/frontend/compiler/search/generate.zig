@@ -12,6 +12,7 @@
 //! validated through the ordinary `tryCandidate` pipeline inside `backward/backtrack.zig`.
 
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const types = @import("./types.zig");
 const backtrack = @import("./backward/backtrack.zig");
 const acui = @import("./backward/acui.zig");
@@ -47,7 +48,7 @@ const SurfaceExpr = @import("../../surface_expr.zig");
 /// Generated full proof trees for a goal. The trees are owned by `arena`; they
 /// stay valid until `deinit`, which the caller invokes after rendering.
 pub const GeneratedResults = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     applications: []const RuleApplication,
 
     pub fn deinit(self: *GeneratedResults) void {
@@ -268,7 +269,7 @@ pub fn generateTopLevel(
     options: GenerateOptions,
     budget_ptr: ?*types.GlobalBudget,
 ) !GeneratedResults {
-    var arena = std.heap.ArenaAllocator.init(session.allocator);
+    var arena = ArenaAllocator.init(session.allocator);
     errdefer arena.deinit();
 
     // The search call's cost budget (`budget_ptr`, from

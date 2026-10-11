@@ -1,5 +1,6 @@
 const std = @import("std");
 const mm0 = @import("mm0");
+const ArenaAllocator = mm0.ArenaAllocator;
 
 // Structured diagnostic-field renderers live in `diag_json.zig`: the
 // exhaustive `DiagnosticDetail` switch must be analyzed by the native test
@@ -71,7 +72,7 @@ const FilesRequest = struct {
 /// offsets local to that file. `compile_sources` is the one-pair form.
 pub export fn compile_files(json_ptr: u32, json_len: u32) u32 {
     clearState();
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    var arena_state = ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -357,7 +358,7 @@ fn writePlaceholderDiagnostics(
     compiler: ?*const mm0.Compiler,
     proof_src: []const u8,
 ) !void {
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    var arena_state = ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const notices = mm0.CompilerSupport.Search.placeholderNotices(
         arena_state.allocator(),

@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
 const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
@@ -782,7 +783,7 @@ test "validateRewriteBindings rejects bound alias after regular arg" {
         \\theorem host {x y: obj}: $ P y $;
     ;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = ArenaAllocator.init(allocator);
     defer arena.deinit();
 
     var parser = MM0Parser.init(mm0_src, arena.allocator());

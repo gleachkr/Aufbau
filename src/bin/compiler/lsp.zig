@@ -3,6 +3,7 @@ const build_options = @import("build_options");
 const std = @import("std");
 const lsp = @import("lsp");
 const mm0 = @import("mm0");
+const ArenaAllocator = mm0.ArenaAllocator;
 
 const types = lsp.types.flat;
 const LspIndex = mm0.Frontend.LspIndex;
@@ -359,7 +360,7 @@ const NavigationCacheEntry = struct {
     uri: []const u8,
     key: UnitKey,
     /// Backs `unit`: its joined texts and file records.
-    unit_arena: std.heap.ArenaAllocator,
+    unit_arena: ArenaAllocator,
     unit: Unit,
     snapshot: LspIndex.Snapshot,
 
@@ -2279,7 +2280,7 @@ pub const Handler = struct {
         request_uri: []const u8,
         docs: RootDocuments,
     ) !?NavigationSnapshot {
-        var unit_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var unit_arena = ArenaAllocator.init(self.allocator);
         var keep_arena = false;
         defer if (!keep_arena) unit_arena.deinit();
 

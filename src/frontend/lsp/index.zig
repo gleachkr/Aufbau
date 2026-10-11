@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../arena_allocator.zig").ArenaAllocator;
 
 const completion = @import("completion.zig");
 const CompilerModule = @import("../compiler.zig");
@@ -51,7 +52,7 @@ const HoleInfo = struct {
 };
 
 pub const Snapshot = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     mm0_uri: []const u8,
     mm0_text: []const u8,
     proof_uri: ?[]const u8,
@@ -75,7 +76,7 @@ pub const Snapshot = struct {
         allocator: std.mem.Allocator,
         input: SnapshotInput,
     ) !Snapshot {
-        var arena_state = std.heap.ArenaAllocator.init(allocator);
+        var arena_state = ArenaAllocator.init(allocator);
         errdefer arena_state.deinit();
 
         const arena = arena_state.allocator();

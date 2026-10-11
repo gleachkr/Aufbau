@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArenaAllocator = @import("../../arena_allocator.zig").ArenaAllocator;
 const types = @import("./types.zig");
 const tunables = @import("./tunables.zig");
 const miss = @import("./miss.zig");
@@ -101,7 +102,7 @@ pub fn suggestionsAtSourceOffset(
     // the depth corpus grew to ~20 GiB live across theorems — a diffuse per-call
     // leak spread across the parser, diagnostics, def_ops, and inference layers,
     // not any one site.
-    var work_arena = std.heap.ArenaAllocator.init(allocator);
+    var work_arena = ArenaAllocator.init(allocator);
     defer work_arena.deinit();
     const work = work_arena.allocator();
 
