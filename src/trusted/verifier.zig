@@ -451,7 +451,7 @@ pub const Verifier = struct {
                         thm_count,
                     );
                     const theorem = self.thm_table[thm_count];
-                    try checker.checkAssertion(theorem, self.file_bytes);
+                    try checker.checkAssertion(.axiom, theorem, self.file_bytes);
                     try self.verifyAxiom(
                         theorem,
                         @intCast(pos),
@@ -472,7 +472,7 @@ pub const Verifier = struct {
                         thm_count,
                     );
                     const theorem = self.thm_table[thm_count];
-                    try checker.checkAssertion(theorem, self.file_bytes);
+                    try checker.checkAssertion(.theorem, theorem, self.file_bytes);
                     try self.verifyThm(
                         theorem,
                         @intCast(pos),

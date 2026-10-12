@@ -149,6 +149,19 @@ const mutants = [_]Mutant{
         .mm0c = "term in pure sort",
     },
     .{
+        // The binary's axiom `ax_1` would "prove" a spec theorem unchecked.
+        .name = "binary axiom where the spec has a theorem",
+        .spec_edits = &.{.{ .find = "axiom ax_1", .replace = "theorem ax_1" }},
+        .expected = error.AssertionKindMismatch,
+        .mm0c = "expecting a theorem",
+    },
+    .{
+        .name = "binary theorem where the spec has an axiom",
+        .spec_edits = &.{.{ .find = "theorem id", .replace = "axiom id" }},
+        .expected = error.AssertionKindMismatch,
+        .mm0c = "expecting an axiom",
+    },
+    .{
         // The spec declares more than the stream proves: the extra axiom
         // would otherwise be accepted unproved.
         .name = "spec statement after the last proof",

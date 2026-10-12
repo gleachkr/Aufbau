@@ -23,6 +23,7 @@ const NoopChecker = struct {
 
     pub fn checkAssertion(
         _: @This(),
+        _: mm0.AssertionKind,
         _: mm0.Theorem,
         _: []const u8,
     ) !void {}

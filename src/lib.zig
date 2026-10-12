@@ -68,6 +68,7 @@ pub const MAGIC = @import("./trusted/headers.zig").MAGIC;
 pub const Heap = @import("./trusted/heap.zig").Heap;
 pub const MathSpan = @import("./trusted/parse.zig").MathSpan;
 pub const ArgInfo = @import("./trusted/parse.zig").ArgInfo;
+pub const AssertionKind = @import("./trusted/parse.zig").AssertionKind;
 pub const binderDepsToBoundArgDeps =
     @import("./trusted/parse.zig").binderDepsToBoundArgDeps;
 pub const boundArgDepsToBinderDeps =

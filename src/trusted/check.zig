@@ -129,6 +129,7 @@ pub const CrossChecker = struct {
 
     pub fn checkAssertion(
         self: *CrossChecker,
+        kind: parse.AssertionKind,
         mmb_thm: Theorem,
         file_bytes: []const u8,
     ) !void {
@@ -137,6 +138,9 @@ pub const CrossChecker = struct {
             .assertion => |a| a,
             else => return error.MM0Mismatch,
         };
+        // Without this an MMB axiom could stand in for a spec theorem and
+        // "prove" it unchecked.
+        if (mm0_thm.kind != kind) return error.AssertionKindMismatch;
 
         const mmb_args = try mmb_thm.getArgsChecked(file_bytes);
         try self.checkArgMetadata(mm0_thm.args, mmb_args);

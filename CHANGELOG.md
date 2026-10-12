@@ -37,6 +37,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- **Soundness:** the verifier now checks that each axiom or theorem in the
+  binary is declared as the same kind in the `.mm0` spec. Before, a binary
+  could declare a spec `theorem` as an `axiom` with the same statement, and
+  the theorem verified without a proof. Found by the kernel fuzz target.
 - A theorem's final line is now compared with the declared conclusion by
   the same conversions as any line against the rule it cites. Before, a
   final line could fail with "last proof line does not prove the theorem

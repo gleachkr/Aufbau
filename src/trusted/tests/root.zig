@@ -239,6 +239,7 @@ const NoopChecker = struct {
 
     pub fn checkAssertion(
         _: @This(),
+        _: mm0.AssertionKind,
         _: Theorem,
         _: []const u8,
     ) !void {}
@@ -1641,7 +1642,7 @@ test "CrossChecker remaps parser term ids to MMB ids" {
         .reserved = 0,
         .p_data = 48,
     };
-    try checker.checkAssertion(refl, file_bytes);
+    try checker.checkAssertion(.axiom, refl, file_bytes);
 }
 
 test "CrossChecker consumes theorem hypotheses in unify order" {
@@ -1673,7 +1674,7 @@ test "CrossChecker consumes theorem hypotheses in unify order" {
         .reserved = 0,
         .p_data = 48,
     };
-    try checker.checkAssertion(ax_mp, file_bytes);
+    try checker.checkAssertion(.axiom, ax_mp, file_bytes);
 }
 
 test "Verifier rejects dummy variables in free sorts" {
