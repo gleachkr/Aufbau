@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.16] - 2026-10-12
 
 ### Added
 
@@ -23,13 +23,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 - Building Aufbau now requires Zig 0.17.0 (previously 0.15.2).
 - Proof search (`auto?`, `exact?`, `apply?`) takes about a quarter less
-  time for the same results, and compiling is about 7% faster. Zig 0.17's
-  arena allocator synchronizes every allocation for use across threads;
-  the compiler runs on one thread and now uses an arena that doesn't. The
-  search also stops redoing work: representatives are shared between the
-  checker's trial copies of a theorem, definitions that cannot fold an
-  expression are skipped before matching, and repeated lookups and checks
-  reuse their first result.
+  time for the same results, and compiling a large theory takes about a
+  tenth less. Zig 0.17's arena allocator synchronizes every allocation for
+  use across threads; the compiler runs on one thread and now uses an
+  arena that doesn't. The search also stops redoing work: representatives
+  are shared between the checker's trial copies of a theorem, definitions
+  that cannot fold an expression are skipped before matching, and repeated
+  lookups and checks reuse their first result.
 - The browser language server runs the same message loop as `abc lsp`, so
   the two answer malformed messages alike. A request for a method the
   server doesn't implement gets a `null` result instead of an error, and a
@@ -1723,6 +1723,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.16]: https://github.com/gleachkr/Aufbau/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/gleachkr/Aufbau/compare/v0.0.14...v0.0.15
 [0.0.14]: https://github.com/gleachkr/Aufbau/compare/v0.0.13...v0.0.14
 [0.0.13]: https://github.com/gleachkr/Aufbau/compare/v0.0.12...v0.0.13

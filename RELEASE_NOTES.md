@@ -1,3 +1,119 @@
+# Aufbau 0.0.16
+
+Aufbau 0.0.16 adds coverage-guided fuzzing. Proof search takes about a quarter 
+less time for the same results, and this release adds `knaster`, a demo theory 
+that proves the Knaster–Tarski theorem.
+
+## Highlights
+
+### A soundness fix in the verifier
+
+`mm0-zig` now checks that each axiom or theorem in a binary has the same
+kind in the `.mm0` spec. Before, a malicious binary could list a spec `theorem` 
+as an `axiom` with the same statement, and the theorem verified without a
+proof.
+
+### Fuzzing
+
+`zig build fuzz` runs coverage-guided fuzzing on Zig's built-in fuzzer
+(see `docs/fuzzing.md`). Six targets cover:
+
+- compiling, with every accepted binary checked by the verifier;
+- the trusted kernel, with `mm0-c` as a second opinion on every binary it
+  accepts;
+- language server sessions;
+- proof search, whose found proofs must compile and verify;
+- generated deep and shared expressions;
+- generated theories.
+
+CI fuzzes every target nightly and keeps each corpus between runs. Besides
+the verifier hole, fuzzing found two kinds of proof that took far too
+long to check, now fixed:
+
+- Rejecting a line against a chain of k definitions, each unfolding to
+  two copies of the one before, took time cubic in k. It now takes about
+  quadratic time: 256 definitions took 0.7 seconds and now take 0.04.
+- Lines that each double the last through a definition, and are then
+  taken apart, took time quadratic in the number of lines. They now take
+  linear time: 4096 such lines took a second and now take 0.05.
+
+### Faster search and compiling
+
+On the search benchmark, re-proving 706 theorems with more and more of
+each proof removed takes 30% less time than with 0.0.15, and filling in
+single steps on 4,548 proof lines takes 20% less and finds the same
+proofs. The search also stops redoing work: the checker's trial copies of a 
+theorem share what they have computed, definitions that cannot fold an 
+expression are skipped before matching, and repeated lookups and checks reuse 
+their first result.
+
+Compiling the largest test theories takes about a tenth less time:
+`zermelo` went from 63 ms to 55 ms. Small theories compile in about the
+same time as with 0.0.15.
+
+### Knaster–Tarski
+
+`knaster` proves that a monotone map on a complete lattice has a least
+fixed point. Arbitrary meets are a binder, `⋀ x p`, so the least fixed
+point is the meet of the prefixed points, `⋀ x (f · x ≤ x)`, with no set
+theory underneath. The theory is in the web demo.
+
+### Checking and search fixes
+
+- A theorem's final line, a line's conclusion and a cited premise are
+  now compared by the same conversions. Before, a final line or a cited
+  premise could fail where the same statement passed as a line's
+  conclusion: when unfolding a definition needed a `@vars` name for a
+  hidden variable, or when the statements met only after normalizing one
+  side and unfolding a definition.
+- Inference now compares two values of a rule variable the way the
+  checker converts them, so a line that checks with the variable written
+  out also checks with it inferred.
+- Inferring how a rule's variables split a commutative bag of many
+  identical members no longer runs out of memory: 128 copies of one
+  member took 15 seconds and now take under a second.
+- A `@fresh` rule now checks when written inline, as the `eq_replace` in
+  `imp_intro [eq_replace [l1, l2]]`, and `auto?` keeps the proofs that use
+  one under another rule.
+- `auto?` can use a fact read off a hypothesis through a definition whose
+  body binds hidden variables, naming them from `@vars`. Before, every
+  such fact was dropped when the theorem had no spare bound variables.
+- Two search markers on one line, as in `both [auto?, auto?]`, are now
+  each found.
+- A search reads the lines before its marker as the checker does. A line
+  the checker rejects, such as a `by sorry!` line with references, now
+  stops the search instead of counting as proved.
+- A proof block with a malformed header no longer hides the search
+  markers and lemmas after it.
+- `auto?` no longer misses a proof because an earlier subgoal of the same
+  shape failed under a stricter condition, and no longer lets proofs a
+  partly known subgoal rejects crowd out the one it needed.
+- A lemma that fails because of one of its annotations no longer leaves
+  its earlier annotations in force in the editor and in search.
+
+### Smaller changes
+
+- The language server reports an `include` or `import` that fails in a
+  file the open one pulls in, on the failing statement and on the open
+  file's statement that leads there.
+- The browser language server runs the same message loop as `abc lsp`,
+  so the two answer malformed messages alike.
+- `abc` and `mm0-zig` report why writing their output failed, as in
+  `abc: unable to write 'standard output': BrokenPipe`.
+
+## Compatibility
+
+Building Aufbau from source now requires Zig 0.17.0 (previously 0.15.2).
+
+Every test theory from 0.0.15 gives the same result as before.
+`mm0-zig` now rejects a binary that lists a spec theorem as an axiom.
+
+The MMB format, the proof syntax and the package APIs are unchanged.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.15
 
 Aufbau 0.0.15 is a robustness release. We fixed a hole in the verifier, fixed 
