@@ -166,6 +166,12 @@ pub const DefinitionBodyDiagnosticDetail = struct {
     hidden_binder_count: usize,
 };
 
+pub const HypothesisRefDetail = struct {
+    index: usize,
+    /// Set when the reference was written by name (`#h`).
+    name: ?[]const u8 = null,
+};
+
 pub const DiagnosticDetail = union(enum) {
     none,
     omitted_diagnostics: struct {
@@ -182,10 +188,14 @@ pub const DiagnosticDetail = union(enum) {
     dep_violation: DepViolationDiagnosticDetail,
     definition_body: DefinitionBodyDiagnosticDetail,
     missing_congruence_rule: MissingCongruenceRuleDetail,
-    hypothesis_ref: struct {
-        index: usize,
-        /// Set when the reference was written by name (`#h`).
-        name: ?[]const u8 = null,
+    hypothesis_ref: HypothesisRefDetail,
+    /// A cited premise did not match the rule hypothesis at its position.
+    premise_mismatch: struct {
+        /// 1-based position of the premise among the line's refs, which is
+        /// also the rule hypothesis it was matched against.
+        premise: usize,
+        /// Set when the premise is a theorem hypothesis (`#N` or `#h`).
+        hypothesis_ref: ?HypothesisRefDetail = null,
     },
     unused_parameter: struct {
         parameter_name: []const u8,
@@ -2094,21 +2104,20 @@ fn writeDetailContextLines(
                 info.sort_name,
             );
         },
-        .hypothesis_ref => |info| {
-            if (info.name) |name| {
-                try writeContextLine(
-                    writer,
-                    line_separator,
-                    "detail_hypothesis_ref_name",
-                    .{name},
-                );
-            } else {
-                try writeContextLine(
-                    writer,
-                    line_separator,
-                    "detail_hypothesis_ref_index",
-                    .{info.index},
-                );
+        .hypothesis_ref => |info| try writeHypothesisRefLine(
+            writer,
+            line_separator,
+            info,
+        ),
+        .premise_mismatch => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "detail_premise",
+                .{info.premise},
+            );
+            if (info.hypothesis_ref) |ref| {
+                try writeHypothesisRefLine(writer, line_separator, ref);
             }
         },
         .unused_parameter => |info| {
@@ -2156,6 +2165,28 @@ fn writeNamedContextLine(
 ) !void {
     if (value) |actual| {
         try writeContextLine(writer, line_separator, template, .{actual});
+    }
+}
+
+fn writeHypothesisRefLine(
+    writer: anytype,
+    line_separator: []const u8,
+    ref: HypothesisRefDetail,
+) !void {
+    if (ref.name) |name| {
+        try writeContextLine(
+            writer,
+            line_separator,
+            "detail_hypothesis_ref_name",
+            .{name},
+        );
+    } else {
+        try writeContextLine(
+            writer,
+            line_separator,
+            "detail_hypothesis_ref_index",
+            .{ref.index},
+        );
     }
 }
 

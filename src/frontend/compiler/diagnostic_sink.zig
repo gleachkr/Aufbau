@@ -500,6 +500,7 @@ pub const DiagnosticSink = struct {
                 .arg_index = info.arg_index,
             } },
             .hypothesis_ref => |info| .{ .hypothesis_ref = info },
+            .premise_mismatch => |info| .{ .premise_mismatch = info },
             .unused_parameter => |info| .{ .unused_parameter = .{
                 .parameter_name = self.stableRequiredString(
                     info.parameter_name,

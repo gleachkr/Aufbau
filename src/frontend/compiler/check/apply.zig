@@ -1119,40 +1119,26 @@ noinline fn finishCandidate(
             .line => |label| label.span,
             .application => |inline_app| inline_app.span,
         };
-        var diag = switch (ref) {
-            .hyp => |hyp| CompilerDiag.withPhase(Diagnostic{
-                .kind = .hypothesis_mismatch,
-                .err = error.HypothesisMismatch,
-                .theorem_name = assertion.name,
-                .line_label = line.label,
-                .rule_name = line.application.rule_name,
-                .span = span,
-                .detail = .{
-                    .hypothesis_ref = .{
-                        .index = hyp.index,
-                        .name = hyp.name,
-                    },
+        var diag = CompilerDiag.withPhase(Diagnostic{
+            .kind = .hypothesis_mismatch,
+            .err = error.HypothesisMismatch,
+            .theorem_name = assertion.name,
+            .line_label = line.label,
+            .rule_name = line.application.rule_name,
+            .name = switch (ref) {
+                .hyp => null,
+                .line => |label| label.label,
+                .application => |inline_app| inline_app.rule_name,
+            },
+            .span = span,
+            .detail = .{ .premise_mismatch = .{
+                .premise = idx + 1,
+                .hypothesis_ref = switch (ref) {
+                    .hyp => |hyp| .{ .index = hyp.index, .name = hyp.name },
+                    .line, .application => null,
                 },
-            }, .theorem_application),
-            .line => |label| CompilerDiag.withPhase(Diagnostic{
-                .kind = .hypothesis_mismatch,
-                .err = error.HypothesisMismatch,
-                .theorem_name = assertion.name,
-                .line_label = line.label,
-                .rule_name = line.application.rule_name,
-                .name = label.label,
-                .span = span,
-            }, .theorem_application),
-            .application => |inline_app| CompilerDiag.withPhase(Diagnostic{
-                .kind = .hypothesis_mismatch,
-                .err = error.HypothesisMismatch,
-                .theorem_name = assertion.name,
-                .line_label = line.label,
-                .rule_name = line.application.rule_name,
-                .name = inline_app.rule_name,
-                .span = span,
-            }, .theorem_application),
-        };
+            } },
+        }, .theorem_application);
         try addComparisonSnapshotNotes(
             allocator,
             &diag,

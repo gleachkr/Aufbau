@@ -326,8 +326,47 @@ test "compiler preserves nested fallback first failure diagnostics" {
     try std.testing.expectEqualStrings("l1", diag.line_label.?);
     try std.testing.expectEqualStrings("need_mid", diag.rule_name.?);
     try std.testing.expectEqualStrings("top_i", diag.name.?);
+    const premise = diag.detail.premise_mismatch;
+    try std.testing.expectEqual(@as(usize, 1), premise.premise);
+    try std.testing.expect(premise.hypothesis_ref == null);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings("top_i []", proof_src[span.start..span.end]);
+}
+
+test "hypothesis mismatch names the premise and the cited theorem hypothesis" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term a: wff;
+        \\term b: wff;
+        \\term c: wff;
+        \\axiom both: $ a $ > $ b $ > $ c $;
+        \\theorem target: $ a $ > $ a $ > $ c $;
+    ;
+    const proof_src =
+        \\target
+        \\------
+        \\l1: $ c $ by both [#1, #2]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(
+        error.HypothesisMismatch,
+        compiler.compileMmb(std.testing.allocator),
+    );
+
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(.hypothesis_mismatch, diag.kind);
+    try std.testing.expectEqualStrings("both", diag.rule_name.?);
+    const premise = diag.detail.premise_mismatch;
+    try std.testing.expectEqual(@as(usize, 2), premise.premise);
+    const ref = premise.hypothesis_ref orelse return error.ExpectedHypothesisRef;
+    try std.testing.expectEqual(@as(usize, 2), ref.index);
+    const span = diag.span orelse return error.ExpectedDiagnosticSpan;
+    try std.testing.expectEqualStrings("#2", proof_src[span.start..span.end]);
 }
 
 test "compiler pinpoints nested fallback cycles" {

@@ -5,6 +5,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Changed
+
+- A diagnostic for a cited premise that doesn't match its rule
+  hypothesis says which premise it was (`premise: 2`), and the npm
+  packages report it as `detail.premise`, with the theorem hypothesis it
+  cited, if any, as `detail.index` or `detail.name`.
+
 ### Fixed
 
 - The npm packages could not read a result once the WebAssembly memory

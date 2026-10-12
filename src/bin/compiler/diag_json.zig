@@ -83,6 +83,11 @@ pub fn writeDetail(
             .index = info.index,
             .name = info.name,
         }),
+        .premise_mismatch => |info| try writeFields(jw, .{
+            .premise = info.premise,
+            .index = if (info.hypothesis_ref) |ref| ref.index else null,
+            .name = if (info.hypothesis_ref) |ref| ref.name else null,
+        }),
         .unused_parameter => |info| try writeFields(jw, .{ .parameter = info.parameter_name }),
         .local_term_reference => |info| try writeFields(jw, .{ .term = info.term_name }),
         .rewrite_cycle => |info| try writeFields(jw, .{ .rule = info.rule_name }),

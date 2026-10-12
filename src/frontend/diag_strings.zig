@@ -400,6 +400,7 @@ pub const Strings = struct {
     detail_hypothesis_ref_name: []const u8,
     detail_hypothesis_ref_index: []const u8,
     detail_parameter: []const u8,
+    detail_premise: []const u8,
     detail_local_term: []const u8,
     detail_rewrite_cycle: []const u8,
 
@@ -832,6 +833,7 @@ pub const en: Strings = .{
     .detail_hypothesis_ref_name = "hypothesis ref: #{s}",
     .detail_hypothesis_ref_index = "hypothesis ref: #{d}",
     .detail_parameter = "parameter: {s}",
+    .detail_premise = "premise: {d}",
     .detail_local_term = "local definition: {s}",
     .detail_rewrite_cycle = "cycle closed by: {s}",
 
@@ -1263,6 +1265,7 @@ pub const de: Strings = .{
     .detail_hypothesis_ref_name = "Hypothesenreferenz: #{s}",
     .detail_hypothesis_ref_index = "Hypothesenreferenz: #{d}",
     .detail_parameter = "Parameter: {s}",
+    .detail_premise = "Prämisse: {d}",
     .detail_local_term = "lokale Definition: {s}",
     .detail_rewrite_cycle = "Zyklus geschlossen durch: {s}",
 
