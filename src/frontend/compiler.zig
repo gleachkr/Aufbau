@@ -44,14 +44,14 @@ pub const Compiler = struct {
 
     const PipelineOutput = Pipeline.Output;
 
-    pub fn init(
+    pub inline fn init(
         allocator: std.mem.Allocator,
         source: []const u8,
     ) Compiler {
         return initInternal(allocator, source, null);
     }
 
-    pub fn initWithProof(
+    pub inline fn initWithProof(
         allocator: std.mem.Allocator,
         source: []const u8,
         proof_source: []const u8,
@@ -59,7 +59,11 @@ pub const Compiler = struct {
         return initInternal(allocator, source, proof_source);
     }
 
-    fn initInternal(
+    /// `inline`, as are `init` and `initWithProof`: a `Compiler` holds about
+    /// 300 KB of diagnostic storage, and returned through a call it is built
+    /// once and then copied, undefined storage and all, into the caller's
+    /// variable, which a short compile notices.
+    inline fn initInternal(
         allocator: std.mem.Allocator,
         source: []const u8,
         proof_source: ?[]const u8,

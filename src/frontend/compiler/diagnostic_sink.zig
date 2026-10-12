@@ -42,17 +42,6 @@ pub const DiagnosticSink = struct {
             .source = source,
             .proof_source = proof_source,
             .last_diagnostic = null,
-            .primary_diagnostic_storage = undefined,
-            .primary_diagnostic_count = 0,
-            .dropped_primary_diagnostic_count = 0,
-            .dropped_mm0_primary_diagnostic_count = 0,
-            .dropped_proof_primary_diagnostic_count = 0,
-            .warning_storage = undefined,
-            .warning_count = 0,
-            .dropped_warning_count = 0,
-            .warnings_as_errors = false,
-            .diagnostic_storage = undefined,
-            .diagnostic_storage_len = 0,
         };
     }
 

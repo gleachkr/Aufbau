@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
 const mm0 = @import("mm0");
 const ArenaAllocator = mm0.ArenaAllocator;
@@ -825,23 +826,27 @@ fn splitLangArgs(
     return .{ .rest = buf[0..len], .lang = lang };
 }
 
-fn applyEnvLang(environ: *const std.process.Environ.Map) void {
-    const value = environ.get("ABC_LANG") orelse return;
-    if (mm0.parseCompilerLang(value)) |lang| mm0.setCompilerLang(lang);
+/// `ABC_LANG`, looked up alone rather than by copying the whole environment
+/// into a map.
+fn envLang(environ: std.process.Environ, arena: std.mem.Allocator) ?[]const u8 {
+    if (builtin.os.tag == .windows) {
+        return environ.getAlloc(arena, "ABC_LANG") catch null;
+    }
+    return environ.getPosix("ABC_LANG");
 }
 
 pub fn run(
     io: std.Io,
     allocator: std.mem.Allocator,
-    environ: *const std.process.Environ.Map,
+    env_lang: ?[]const u8,
     argv: []const []const u8,
 ) !void {
     var lang_buf: [64][]const u8 = undefined;
     const split = try splitLangArgs(argv, &lang_buf);
     if (split.lang) |lang| {
         mm0.setCompilerLang(lang);
-    } else {
-        applyEnvLang(environ);
+    } else if (env_lang) |value| {
+        if (mm0.parseCompilerLang(value)) |lang| mm0.setCompilerLang(lang);
     }
     const cmd = try parseArgs(split.rest);
     switch (cmd) {
@@ -854,11 +859,32 @@ pub fn run(
     }
 }
 
-pub fn main(init: std.process.Init) !void {
-    const io = init.io;
-    const args = try init.minimal.args.toSlice(init.arena.allocator());
+/// The allocator `std.process.Init` would pick when safety is on: it checks
+/// for leaks.
+var safe_allocator: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
 
-    run(io, init.gpa, init.environ_map, args[1..]) catch |err| switch (err) {
+/// Takes `Init.Minimal` and sets up only what abc uses: the full `Init`
+/// also maps the whole environment and opens preopens on every run.
+pub fn main(init: std.process.Init.Minimal) !void {
+    defer if (std.debug.runtime_safety) {
+        _ = safe_allocator.deinit();
+    };
+    const gpa = if (std.debug.runtime_safety)
+        safe_allocator.allocator()
+    else
+        std.heap.smp_allocator;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    var threaded: std.Io.Threaded = .init(gpa, .{
+        .argv0 = .init(init.args),
+        .environ = init.environ,
+    });
+    defer threaded.deinit();
+    const io = threaded.io();
+    const args = try init.args.toSlice(arena.allocator());
+    const env_lang = envLang(init.environ, arena.allocator());
+
+    run(io, gpa, env_lang, args[1..]) catch |err| switch (err) {
         CliError.InvalidUsage => {
             usageError(io) catch {};
             std.process.exit(1);
