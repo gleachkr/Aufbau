@@ -132,6 +132,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   any marker below the broken header. A search past it also lost the
   lemmas declared after it, so a line citing one failed to check and the
   markers below that line were not searched.
+- A search now reads the lines before its marker the way the checker does,
+  so a line the checker rejects stops the search there. Before, a
+  `by sorry!` line with references or bindings, which the checker rejects,
+  still counted as proved: the editor and `abc search` could offer a proof
+  citing it. A repeated line label was also accepted, the later line
+  replacing the earlier one.
 - `abc` and `mm0-zig` now report why writing their output failed, as in
   `abc: unable to write 'standard output': BrokenPipe`. Before, every
   write failure was reported as `WriteFailed`.

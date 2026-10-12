@@ -2,12 +2,11 @@
 //! The editor's search builds one with `fixtureForSourceTarget`, which runs
 //! the analysis walk up to the target (`Analyze.analyzeToSearchPoint`); the
 //! unit tests build theirs with the `.mm0`-only walks in `tests/helpers.zig`.
-//! Also the per-line helpers both share (`parseGoal`, `commitSearchLine`,
-//! `searchContext`) and `readProofCase`.
+//! Also the helpers both share (`parseGoal`, `searchContext`) and
+//! `readProofCase`.
 
 const std = @import("std");
 const types = @import("./types.zig");
-const candidate_mod = @import("./candidate.zig");
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const ParseRecovery = @import("../../parse_recovery.zig");
 const AssertionStmt = ParseRecovery.AssertionStmt;
@@ -17,14 +16,12 @@ const CompilerContext = @import("../context.zig").CompilerContext;
 const CheckedIr = @import("../../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
 const Inference = @import("../inference.zig");
-const Check = @import("../check.zig");
 const Holes = @import("../holes.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Analyze = @import("../pipeline/analyze.zig");
 const TheoryState = @import("../theory_state.zig").TheoryState;
 const Goal = types.Goal;
 const Context = types.Context;
-const AttemptOptions = types.AttemptOptions;
 const NameExprMap = types.NameExprMap;
 const LabelIndexMap = types.LabelIndexMap;
 
@@ -108,39 +105,6 @@ pub fn parseGoal(
     };
 }
 
-/// Check `line` against the fixture and commit it: its lines join `checked`
-/// and `theorem`/`theorem_vars` advance. Returns the produced line's index.
-pub fn commitSearchLine(
-    allocator: std.mem.Allocator,
-    compiler: *CompilerContext,
-    fixture: *Fixture,
-    labels: *LabelIndexMap,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    theorem: *TheoremContext,
-    theorem_vars: *NameExprMap,
-    diag_scratch: *CompilerDiag.Scratch,
-    rule_unify_cache: *Inference.RuleUnifyCache,
-    line: ProofScript.ProofLine,
-) !usize {
-    const context = searchContext(
-        allocator,
-        fixture,
-        labels,
-        checked,
-        diag_scratch,
-        rule_unify_cache,
-    );
-    return candidate_mod.commit(
-        compiler,
-        &context,
-        line.application,
-        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
-        theorem,
-        theorem_vars,
-        searchLineOptions(line),
-    );
-}
-
 /// The search context over the fixture's theory and target, with the
 /// caller's per-search state.
 pub fn searchContext(
@@ -167,13 +131,5 @@ pub fn searchContext(
         .diag_scratch = diag_scratch,
         .rule_unify_cache = rule_unify_cache,
         .available_rule_count = fixture.available_rule_count,
-    };
-}
-
-pub fn searchLineOptions(line: ProofScript.ProofLine) AttemptOptions {
-    return .{
-        .line_label = line.label,
-        .assertion_span = line.assertion.span,
-        .diagnostic_span = line.span,
     };
 }

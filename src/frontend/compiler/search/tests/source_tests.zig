@@ -276,6 +276,77 @@ test "source suggestions cite earlier placeholder lines" {
     try expectOffered(holey.items, &.{"qr [l2]"});
 }
 
+// The search replays earlier lines through the checker's own walk, so a line
+// the checker rejects blocks the search rather than joining its context: a
+// `sorry!` with arguments, and a duplicate label.
+test "source suggestions are blocked by a line the checker rejects" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\term R: wff;
+        \\axiom qr: $ Q $ > $ R $;
+        \\theorem t: $ P $ > $ R $;
+    ;
+    const cases = [_]struct { src: []const u8, blocker: []const u8 }{
+        .{
+            .src =
+            \\t
+            \\---
+            \\l1: $ Q $ by sorry! [#1]
+            \\l2: $ R $ by exact?
+            ,
+            .blocker = "l1",
+        },
+        .{
+            .src =
+            \\t
+            \\---
+            \\l1: $ Q $ by sorry!
+            \\l1: $ Q $ by sorry!
+            \\l2: $ R $ by exact?
+            ,
+            .blocker = "l1: $ Q $ by sorry!\nl1",
+        },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var suggestions = try suggestionsAtNeedle(
+            &arena,
+            mm0_src,
+            case.src,
+            "exact?",
+            .{},
+        );
+        defer suggestions.deinit();
+        try std.testing.expectEqual(@as(usize, 0), suggestions.items.len);
+        const blocker_end = std.mem.indexOf(u8, case.src, case.blocker).? +
+            case.blocker.len;
+        try std.testing.expectEqual(blocker_end - "l1".len, suggestions.blocked_by.?.start);
+    }
+
+    // A well-formed `sorry!` stays citable: the search explores what follows
+    // from it.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var cited = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        \\t
+        \\---
+        \\l1: $ Q $ by sorry!
+        \\l2: $ R $ by exact?
+    ,
+        "exact?",
+        .{},
+    );
+    defer cited.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, cited.status);
+    try expectOffered(cited.items, &.{"qr [l1]"});
+}
+
 // Same story one block earlier: a local lemma before the target holds the
 // broken line. The lenient proof stream and the placeholder-tolerant fixture
 // compiler keep the fixture build alive.

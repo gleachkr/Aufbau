@@ -74,6 +74,8 @@ pub const Context = types.Context;
 
 pub const Probe = candidate_mod.Probe;
 
+pub const AttemptOptions = types.AttemptOptions;
+
 pub const NameExprMap = types.NameExprMap;
 
 pub const LabelIndexMap = types.LabelIndexMap;
@@ -89,7 +91,6 @@ pub const probe = candidate_mod.probe;
 pub const parseGoal = fixture_mod.parseGoal;
 
 pub const Fixture = fixture_mod.Fixture;
-pub const commitSearchLine = fixture_mod.commitSearchLine;
 
 const PipelineCommon = @import("../../pipeline/common.zig");
 const TheoryState = @import("../../theory_state.zig").TheoryState;
@@ -201,8 +202,49 @@ pub fn probeSearchLine(
         try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
         theorem,
         theorem_vars,
-        fixture_mod.searchLineOptions(line),
+        searchLineOptions(line),
     );
+}
+
+/// Check `line` against the fixture and commit it: its lines join `checked`
+/// and `theorem`/`theorem_vars` advance. Returns the produced line's index.
+pub fn commitSearchLine(
+    allocator: std.mem.Allocator,
+    compiler: *CompilerContext,
+    fixture: *Fixture,
+    labels: *LabelIndexMap,
+    checked: *std.ArrayListUnmanaged(CheckedLine),
+    theorem: *TheoremContext,
+    theorem_vars: *NameExprMap,
+    diag_scratch: *CompilerDiag.Scratch,
+    rule_unify_cache: *Inference.RuleUnifyCache,
+    line: ProofScript.ProofLine,
+) !usize {
+    const context = fixture_mod.searchContext(
+        allocator,
+        fixture,
+        labels,
+        checked,
+        diag_scratch,
+        rule_unify_cache,
+    );
+    return candidate_mod.commit(
+        compiler,
+        &context,
+        line.application,
+        try parseGoal(fixture, theorem, theorem_vars, line.assertion.text),
+        theorem,
+        theorem_vars,
+        searchLineOptions(line),
+    );
+}
+
+pub fn searchLineOptions(line: ProofScript.ProofLine) AttemptOptions {
+    return .{
+        .line_label = line.label,
+        .assertion_span = line.assertion.span,
+        .diagnostic_span = line.span,
+    };
 }
 
 pub const readProofCase = fixture_mod.readProofCase;

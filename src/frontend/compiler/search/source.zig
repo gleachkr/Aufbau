@@ -16,12 +16,9 @@ const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 const Ref = ProofScript.Ref;
 const Span = ProofScript.Span;
-const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
 const BindingOracle = @import("../context.zig").BindingOracle;
 const CheckedIr = @import("../../checked_ir.zig");
-const CheckedLine = CheckedIr.CheckedLine;
-const Inference = @import("../inference.zig");
 const Check = @import("../check.zig");
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
 const Goal = types.Goal;
@@ -32,13 +29,11 @@ const SourceSuggestion = types.SourceSuggestion;
 const SourceSuggestionOptions = types.SourceSuggestionOptions;
 const SourceSuggestions = types.SourceSuggestions;
 const NameExprMap = types.NameExprMap;
-const LabelIndexMap = types.LabelIndexMap;
 const applyWithSession = apply_mod.applyWithSession;
 const exactWithSession = backtrack.exactWithSession;
 const fixture_mod = @import("./fixture.zig");
 const fixtureForSourceTarget = fixture_mod.fixtureForSourceTarget;
 const parseGoal = fixture_mod.parseGoal;
-const commitSearchLine = fixture_mod.commitSearchLine;
 const inline_target_mod = @import("./source/inline_target.zig");
 const InlineExpectedRef = inline_target_mod.InlineExpectedRef;
 const expectedGoalForInlineTarget = inline_target_mod.expectedGoalForInlineTarget;
@@ -128,88 +123,39 @@ pub fn suggestionsAtSourceOffset(
     var theorem = TheoremContext.init(work);
     defer theorem.deinit();
     try theorem.seedAssertion(fixture.assertion);
-    var theorem_vars = try Check.buildTheoremVarMap(
+    // Replay the lines before the target through the checker's own walk, so
+    // the search plans against the context the checker builds. An
+    // incomplete line ends the context, as in the analysis; a line the
+    // checker rejects blocks the search.
+    var walk = try Check.LineWalk.init(
+        &compiler,
         work,
+        &fixture.theory,
         fixture.assertion,
+        target.block.lines,
+        &theorem,
     );
-    defer theorem_vars.deinit();
-
-    var labels = LabelIndexMap.init(work);
-    defer labels.deinit();
-    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
-    defer {
-        CheckedIr.deinitLines(work, checked.items);
-        checked.deinit(work);
-    }
-    var diag_scratch = CompilerDiag.Scratch.init(work);
-    defer diag_scratch.deinit();
-    var cache = Inference.RuleUnifyCache.init(work);
-    defer cache.deinit();
-
-    // Labels of earlier lines with no statement to admit, as in the
-    // checker's analysis: a holey placeholder line, or a holey line citing one.
-    var unfinished = std.ArrayListUnmanaged([]const u8).empty;
-    defer unfinished.deinit(work);
+    defer walk.deinit();
     for (target.block.lines[0..target.line_index]) |line| {
-        // An incomplete line has no rule to run: stop accumulating context,
-        // but keep searching at the target with the lines checked so far.
-        if (line.incomplete) break;
-        // An admitted line (`by sorry!`), an earlier placeholder, and a line
-        // citing an unfinished line have no rule to run either, but each
-        // names its goal: keep a concrete one in the context so a later
-        // search can cite it, as the checker does. A goal that does not
-        // parse ends the context like an incomplete line.
-        const is_sorry = ProofScript.isSorryRuleName(line.application.rule_name);
-        if (is_sorry or
-            ProofScript.applicationHasSearchPlaceholder(line.application) or
-            ProofScript.findLineRef(line.application, unfinished.items) != null)
-        {
-            const goal = parseGoal(
-                &fixture,
-                &theorem,
-                &theorem_vars,
-                line.assertion.text,
-            ) catch break;
-            switch (goal) {
-                .concrete => |expr| {
-                    const line_idx = CheckedIr.appendSorryLine(&checked, work, expr) catch
-                        return error.OutOfMemory;
-                    labels.put(line.label, line_idx) catch return error.OutOfMemory;
-                },
-                else => {
-                    if (is_sorry) break;
-                    unfinished.append(work, line.label) catch
-                        return error.OutOfMemory;
-                },
-            }
-            continue;
-        }
-        const line_idx = commitSearchLine(
-            work,
-            &compiler,
-            &fixture,
-            &labels,
-            &checked,
-            &theorem,
-            &theorem_vars,
-            &diag_scratch,
-            &cache,
-            line,
-        ) catch return .{
-            .allocator = allocator,
-            .items = &.{},
-            .blocked_by = line.label_span,
+        const next = walk.step(line) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => return .{
+                .allocator = allocator,
+                .items = &.{},
+                .blocked_by = line.label_span,
+            },
         };
-        labels.put(line.label, line_idx) catch return error.OutOfMemory;
+        if (next == .stop) break;
     }
+    const theorem_vars = &walk.theorem_vars;
 
     const context = fixture_mod.searchContext(
         work,
         &fixture,
-        &labels,
-        &checked,
-        &diag_scratch,
-        &cache,
+        &walk.labels,
+        &walk.checked,
+        &walk.diag_scratch,
+        &walk.rule_unify_cache,
     );
     var session = session_mod.SearchSession.init(&context, .{
         .counters = options.counters,
@@ -224,7 +170,7 @@ pub fn suggestionsAtSourceOffset(
     const line_goal = try parseGoal(
         &fixture,
         &theorem,
-        &theorem_vars,
+        theorem_vars,
         target_line.assertion.text,
     );
     const target_application = applicationAtPath(
@@ -247,6 +193,10 @@ pub fn suggestionsAtSourceOffset(
         timer.nanoTimestamp()
     else
         0;
+    // Everything from here on is the warm search, rendering included.
+    defer if (options.counters) |counters| {
+        counters.warm_search_ns += timer.elapsedSince(search_start);
+    };
 
     var inline_expectation: ?InlineExpectedRef = null;
     defer if (inline_expectation) |*expected| expected.deinit();
@@ -258,11 +208,8 @@ pub fn suggestionsAtSourceOffset(
             line_goal,
             target.path,
             &theorem,
-            &theorem_vars,
+            theorem_vars,
         ) orelse {
-            if (options.counters) |counters| {
-                counters.warm_search_ns += timer.elapsedSince(search_start);
-            }
             return .{
                 .allocator = allocator,
                 .items = &.{},
@@ -299,9 +246,6 @@ pub fn suggestionsAtSourceOffset(
 
     if (inline_expectation) |expected| {
         if (expected.has_placeholder and !is_exact_like) {
-            if (options.counters) |counters| {
-                counters.warm_search_ns += timer.elapsedSince(search_start);
-            }
             return .{
                 .allocator = allocator,
                 .items = &.{},
@@ -314,9 +258,6 @@ pub fn suggestionsAtSourceOffset(
         // Top-level lines only: an inline conversion has no line of its own
         // in front of which the chain could be spliced.
         if (target.path.len != 0) {
-            if (options.counters) |counters| {
-                counters.warm_search_ns += timer.elapsedSince(search_start);
-            }
             return .{
                 .allocator = allocator,
                 .items = &.{},
@@ -338,7 +279,7 @@ pub fn suggestionsAtSourceOffset(
                 work,
                 &context,
                 &theorem,
-                &theorem_vars,
+                theorem_vars,
                 expr,
                 proof_src,
                 target.block.lines,
@@ -398,9 +339,6 @@ pub fn suggestionsAtSourceOffset(
                 );
             }
         }
-        if (options.counters) |counters| {
-            counters.warm_search_ns += timer.elapsedSince(search_start);
-        }
         return try copyOutSuggestions(allocator, conv_suggestions);
     }
 
@@ -425,7 +363,7 @@ pub fn suggestionsAtSourceOffset(
             .line_goal = line_goal,
             .path = target.path,
             .theorem = &theorem,
-            .theorem_vars = &theorem_vars,
+            .theorem_vars = theorem_vars,
         };
         var suggestions = if (target.path.len == 0)
             try topLevelExactSuggestions(
@@ -448,7 +386,7 @@ pub fn suggestionsAtSourceOffset(
                 target.path,
                 inline_expectation,
                 &theorem,
-                &theorem_vars,
+                theorem_vars,
                 is_auto,
                 &budgets,
                 exact_options,
@@ -464,9 +402,6 @@ pub fn suggestionsAtSourceOffset(
                 exact_options,
                 suggestions,
             );
-        }
-        if (options.counters) |counters| {
-            counters.warm_search_ns += timer.elapsedSince(search_start);
         }
         suggestions.target_span = match_span;
         options.counters.?.work_budget_exhausted = budgets.searchExhausted();
@@ -506,7 +441,7 @@ pub fn suggestionsAtSourceOffset(
         &session,
         search_goal,
         &theorem,
-        &theorem_vars,
+        theorem_vars,
         .{
             .max_results = options.max_results,
             .counters = options.counters,
@@ -514,9 +449,6 @@ pub fn suggestionsAtSourceOffset(
         },
     );
     defer results.deinit();
-    if (options.counters) |counters| {
-        counters.warm_search_ns += timer.elapsedSince(search_start);
-    }
     var apply_suggestions = try renderApplySourceSuggestions(
         work,
         results.candidates,
