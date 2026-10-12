@@ -1,13 +1,8 @@
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
-const TheoremContext = @import("../../expr.zig").TheoremContext;
-const GlobalEnv = @import("../../env.zig").GlobalEnv;
 const RuleDecl = @import("../../env.zig").RuleDecl;
-const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
-const CompilerDiag = @import("../../diag.zig");
 const AlphaRewrite = @import("../alpha_rewrite.zig");
 const CheckedIr = @import("../../checked_ir.zig");
-const CheckedLine = CheckedIr.CheckedLine;
 const CheckedRef = CheckedIr.CheckedRef;
 const Matching = @import("./matching.zig");
 
@@ -19,12 +14,7 @@ const Matching = @import("./matching.zig");
 // through the steps in order; the freshened conclusion is transported
 // backward through them in reverse, landing on the form the line states.
 pub fn applyFreshenedRuleLine(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    diag_scratch: *CompilerDiag.Scratch,
+    conversion: Matching.ConversionContext,
     line_expr: ExprId,
     rule: *const RuleDecl,
     rule_id: u32,
@@ -34,6 +24,12 @@ pub fn applyFreshenedRuleLine(
     base_ref_exprs: []const ExprId,
 ) !usize {
     std.debug.assert(steps.len != 0);
+    const allocator = conversion.allocator;
+    const theorem = conversion.theorem;
+    const registry = conversion.registry;
+    const env = conversion.env;
+    const checked = conversion.checked;
+    const diag_scratch = conversion.scratch;
     const final_bindings = steps[steps.len - 1].bindings;
     const fresh_refs = try allocator.dupe(CheckedRef, refs);
     errdefer allocator.free(fresh_refs);
@@ -43,15 +39,9 @@ pub fn applyFreshenedRuleLine(
             rule.hyps[idx],
             original_bindings,
         );
-        var current_ref = (try Matching.tryMatchHypothesis(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
-            .none,
-            refs[idx],
+        var current_ref = (try Matching.convertTo(
+            conversion,
+            .{ .ref = refs[idx] },
             actual,
             expected_old,
         )) orelse return error.HypothesisMismatch;
@@ -152,15 +142,9 @@ pub fn applyFreshenedRuleLine(
     }
 
     if (result_expr != line_expr) {
-        result_ref = (try Matching.tryMatchHypothesis(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
-            .none,
-            result_ref,
+        result_ref = (try Matching.convertTo(
+            conversion,
+            .{ .ref = result_ref },
             result_expr,
             line_expr,
         )) orelse return error.ConclusionMismatch;

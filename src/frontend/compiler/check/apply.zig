@@ -676,6 +676,18 @@ noinline fn finishCandidate(
         .theorem_vars = theorem_vars,
         .sort_vars = context.sort_vars,
     };
+    // One context for every conversion of this application: premises,
+    // conclusion and @freshen transport convert alike.
+    const conversion: Matching.ConversionContext = .{
+        .allocator = allocator,
+        .theorem = theorem,
+        .registry = registry,
+        .env = env,
+        .checked = checked,
+        .scratch = diag_scratch,
+        .debug = self.debug,
+        .fresh = fresh_context,
+    };
     const inference_context: Inference.RuleInferenceContext = .{
         .allocator = allocator,
         .env = env,
@@ -785,15 +797,10 @@ noinline fn finishCandidate(
         const conclusion_mark = checked.items.len;
         // A probe may be abandoned, so it must not allocate theorem-local
         // hidden witnesses. The full application below gets the provider.
+        var probe_conversion = conversion;
+        probe_conversion.fresh = null;
         const line_idx = (Matching.tryBuildConclusionLine(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
-            self.debug,
-            null,
+            probe_conversion,
             candidate.displayed_conclusion,
             candidate.raw_conclusion,
             rule_id,
@@ -1049,12 +1056,7 @@ noinline fn finishCandidate(
             );
         }
         const line_idx = applyFreshenedRuleLine(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
+            conversion,
             freshened_line,
             rule,
             rule_id,
@@ -1084,15 +1086,9 @@ noinline fn finishCandidate(
             resolved_bindings,
         );
         const match_mark = diag_scratch.mark();
-        if (Matching.tryMatchHypothesis(
-            allocator,
-            theorem,
-            registry,
-            env,
-            checked,
-            diag_scratch,
-            self.debug,
-            refs[idx],
+        if (Matching.convertTo(
+            conversion,
+            .{ .ref = refs[idx] },
             actual,
             expected,
         ) catch |err| {
@@ -1216,14 +1212,7 @@ noinline fn finishCandidate(
     const concl_checked_mark = checked.items.len;
     const concl_mark = diag_scratch.mark();
     const line_idx = (Matching.tryBuildConclusionLine(
-        allocator,
-        theorem,
-        registry,
-        env,
-        checked,
-        diag_scratch,
-        self.debug,
-        fresh_context,
+        conversion,
         candidate.displayed_conclusion,
         candidate.raw_conclusion,
         rule_id,

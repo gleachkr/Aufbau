@@ -1724,6 +1724,12 @@ pub fn materializeApplication(
     for (resolved.order.items) |entry| {
         for (entry.values) |value| try namer.markUsed(theorem, value);
     }
+    // The parent's other bindings sit beside the recipe in one application:
+    // a variable a sibling binding already holds is not free to name a
+    // hidden variable here.
+    if (rename) |values| for (values) |value| {
+        if (value) |held| try namer.markUsed(theorem, held);
+    };
     for (resolved.order.items) |entry| {
         for (entry.values) |value| {
             if (!try namer.choosePlaceholderNames(context, theorem, value)) {

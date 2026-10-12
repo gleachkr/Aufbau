@@ -588,6 +588,58 @@ test "derived recipe through a binder def names its hidden variables from the @v
     });
 }
 
+// A derived fact fills `all_elim2`'s `∀ x p` premise beside `A`, which holds
+// the pool dummy `a` from a line the goal does not mention. Naming the
+// fact's hidden variable must skip `a`: with `x := a` beside `A := a`, `A`
+// would depend on the bound `x` and the checker would reject the candidate.
+const fwd_sibling_mm0 = blk: {
+    @setEvalBranchQuota(100_000);
+    const sort_decl = "sort obj;\n";
+    const at = std.mem.indexOf(u8, fwd_twice_mm0, sort_decl).?;
+    const theorems = std.mem.indexOf(u8, fwd_twice_mm0, "theorem fwd_twice").?;
+    break :blk fwd_twice_mm0[0..at] ++ "--| @vars a b c\n" ++
+        fwd_twice_mm0[at..theorems] ++
+        \\term Q (x: obj): wff;
+        \\axiom q_any (x: obj): $ Q x $;
+        \\--| @view {x: obj} (A: obj) (t: obj x) (p: wff x) (q: wff): $ Q A $ > $ ∀ x p $ > $ q $
+        \\--| @recover t q p x
+        \\axiom all_elim2 {x: obj} (A: obj) (t: obj x) (p: wff x):
+        \\  $ Q A $ > $ ∀ x p $ > $ [x/t] p $;
+        \\theorem fwd_sibling (f u v: obj):
+        \\  $ mono f $ > $ (pair f u = pair f v) → (u = v) $;
+        \\
+    ;
+};
+
+test "derived recipe names a hidden variable apart from a sibling binding" {
+    const proof_src =
+        \\fwd_sibling
+        \\-----------
+        \\l1: $ Q a $ by q_any (x := $ a $) []
+        \\l2: $ (pair f u = pair f v) → (u = v) $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var counters = types.SearchCounters{ .collect = true };
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        fwd_sibling_mm0,
+        proof_src,
+        "auto?",
+        .{ .counters = &counters, .generate = .{ .enabled = true } },
+    );
+    defer suggestions.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, suggestions.status);
+    const attempts = counters.rule_attempt_diagnostics[0..counters.rule_attempt_diagnostics_len];
+    for (attempts) |attempt| {
+        if (!std.mem.eql(u8, attempt.rule_name.slice(), "all_elim2")) continue;
+        try std.testing.expectEqual(@as(usize, 0), attempt.rejected);
+        try std.testing.expect(attempt.accepted != 0);
+        return;
+    }
+    return error.AllElim2NotTried;
+}
+
 // ============================================================
 // Multi-premise and multi-layer forward saturation.
 // Layered semi-naive firing over pool + derived

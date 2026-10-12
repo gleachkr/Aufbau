@@ -266,6 +266,7 @@ const proof_cases = [_]ProofCase{
     },
     .{ .stem = "pass_fold_intermediate_acui_leaf", .outcome = .pass },
     .{ .stem = "pass_final_hidden_witness", .outcome = .pass },
+    .{ .stem = "pass_hyp_hidden_witness", .outcome = .pass },
     .{ .stem = "pass_final_unfold_normal_form", .outcome = .pass },
     .{ .stem = "pass_convert_past_throwing_rung", .outcome = .pass },
     .{

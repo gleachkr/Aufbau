@@ -117,6 +117,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   stated side and unfolding a definition. Before, the first failed
   attempt ended the check with "missing congruence rule needed for
   normalization".
+- A line cited as a premise now converts like the same statement as a
+  line's conclusion or the final line. When matching the premise meant
+  unfolding a definition whose hidden variable needs an `@vars` name, the
+  citation failed with "a cited premise does not match the hypothesis",
+  though the same statement passed as the line's own conclusion.
 - A proof block with a malformed header, such as an underline of a single
   `-`, no longer hides the search markers after it. Before, `abc search`
   reported "no search markers" and the editor offered no search action for

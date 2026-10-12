@@ -1,0 +1,8 @@
+pass_hyp_hidden_witness
+-----------------------
+l1: $ pre_wrap f y $ by pre_ax (f := $ f $, y := $ y $) []
+l2: $ top -> top $ by use_top [l1]
+
+pass_hyp_hidden_witness_inline
+------------------------------
+l1: $ top -> top $ by use_top [pre_ax (f := $ f $, y := $ y $) []]

@@ -191,59 +191,18 @@ pub fn convertTo(
     return null;
 }
 
-/// Checks a referenced line against a rule hypothesis, returning the
-/// reference the application should use instead.
-pub fn tryMatchHypothesis(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    scratch: *CompilerDiag.Scratch,
-    debug: DebugConfig,
-    actual_ref: CheckedRef,
-    actual: ExprId,
-    expected: ExprId,
-) !?CheckedRef {
-    return try convertTo(.{
-        .allocator = allocator,
-        .theorem = theorem,
-        .registry = registry,
-        .env = env,
-        .checked = checked,
-        .scratch = scratch,
-        .debug = debug,
-    }, .{ .ref = actual_ref }, actual, expected);
-}
-
 /// Appends a rule application whose rule derives `derived`, converted to
 /// the conclusion the line states. Returns the index of the line proving
 /// `stated`, or null with nothing appended.
 pub fn tryBuildConclusionLine(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    scratch: *CompilerDiag.Scratch,
-    debug: DebugConfig,
-    fresh_context: ?Inference.HiddenWitnessFreshContext,
+    ctx: ConversionContext,
     stated: ExprId,
     derived: ExprId,
     rule_id: u32,
     bindings: []const ExprId,
     refs: []const CheckedRef,
 ) !?usize {
-    const ref = try convertTo(.{
-        .allocator = allocator,
-        .theorem = theorem,
-        .registry = registry,
-        .env = env,
-        .checked = checked,
-        .scratch = scratch,
-        .debug = debug,
-        .fresh = fresh_context,
-    }, .{ .rule = .{
+    const ref = try convertTo(ctx, .{ .rule = .{
         .rule_id = rule_id,
         .bindings = bindings,
         .refs = refs,
