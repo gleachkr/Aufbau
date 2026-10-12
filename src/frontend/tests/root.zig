@@ -1835,6 +1835,59 @@ test "a flattened clone does not share ids its base went on to mint" {
     _ = v1;
 }
 
+test "a promoted clone shares its own nodes once it holds the memo alone" {
+    var theorem = FrontendExpr.TheoremContext.init(std.testing.allocator);
+    defer theorem.deinit();
+    const v0 = try theorem.interner.internVar(.{ .theorem_var = 0 });
+    const env: usize = 0x1000;
+    theorem.assertDefOpsCacheIdentity(env, 0);
+    const key = FrontendExpr.PureReprKey{
+        .expr = v0,
+        .normalized = false,
+        .has_registry = false,
+        .line_holes_match_anything = false,
+    };
+
+    var successor = try theorem.clone();
+    var successor_owned = true;
+    defer if (successor_owned) successor.deinit();
+    successor.assertDefOpsCacheIdentity(env, 0);
+
+    // The base records a node of its own past the successor's limit, and
+    // the successor mints a different node with the same id.
+    const base_node = try theorem.interner.internVar(.{ .theorem_var = 1 });
+    try std.testing.expect(try theorem.sharedPureReprPut(key, base_node, env, 0));
+    try std.testing.expectEqual(base_node, try successor.interner.internVar(.{ .theorem_var = 2 }));
+
+    // A sibling still holding the memo keeps the limit in place.
+    var sibling = try theorem.clone();
+    try theorem.promote(&successor);
+    successor_owned = false;
+    try std.testing.expect(theorem.stable_limit != std.math.maxInt(FrontendExpr.ExprId));
+    sibling.deinit();
+
+    // The next line's clone keeps an entry about its own node to itself.
+    var next = try theorem.clone();
+    var next_owned = true;
+    defer if (next_owned) next.deinit();
+    next.assertDefOpsCacheIdentity(env, 0);
+    const own = try next.interner.internVar(.{ .theorem_var = 3 });
+    var own_key = key;
+    own_key.expr = own;
+    try std.testing.expect(!try next.sharedPureReprPut(own_key, own, env, 0));
+    try next.pure_reprs.put(std.testing.allocator, own_key, own);
+    try theorem.promote(&next);
+    next_owned = false;
+    try std.testing.expectEqual(std.math.maxInt(FrontendExpr.ExprId), theorem.stable_limit);
+    // The base's entry named a node this theorem never had.
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, null), theorem.sharedPureReprGet(key, env, 0));
+    // Its own entry is now shared with its clones.
+    try std.testing.expectEqual(@as(usize, 0), theorem.pure_reprs.count());
+    var clone = try theorem.clone();
+    defer clone.deinit();
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, own), clone.sharedPureReprGet(own_key, env, 0));
+}
+
 test "explicit source dummy allocation is allowed and tracks dependency slots" {
     // Explicit user/source dummies (seedTerm, applyDummyBindings) are
     // legitimate and must keep working. This test verifies the low-level

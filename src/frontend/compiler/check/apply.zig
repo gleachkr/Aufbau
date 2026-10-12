@@ -1709,15 +1709,11 @@ const SpeculativeAttempt = struct {
         theorem: *TheoremContext,
         theorem_vars: *NameExprMap,
     ) !usize {
-        // Materialize the COW clone before it replaces (and frees) its base.
-        attempt.theorem.flatten() catch |err| {
+        theorem.promote(&attempt.theorem) catch |err| {
             attempt.abort();
             return err;
         };
         const line_idx = attempt.line_idx;
-        var old_theorem = theorem.*;
-        theorem.* = attempt.theorem;
-        old_theorem.deinit();
         theorem_vars.deinit();
         theorem_vars.* = attempt.theorem_vars;
         attempt.* = undefined;

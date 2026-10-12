@@ -645,19 +645,20 @@ pub const TheoremContext = struct {
     }
 
     pub fn clone(self: *const TheoremContext) !TheoremContext {
-        var copy = TheoremContext.init(self.allocator);
+        var copy = TheoremContext{
+            .allocator = self.allocator,
+            .interner = try self.interner.clone(),
+            .stable_limit = @min(
+                self.stable_limit,
+                std.math.cast(ExprId, self.interner.count()) orelse std.math.maxInt(ExprId),
+            ),
+        };
         errdefer copy.deinit();
 
-        copy.releaseSharedMemo();
         if (self.shared_memo) |memo| {
             memo.refs += 1;
             copy.shared_memo = memo;
         }
-        copy.stable_limit = @min(
-            self.stable_limit,
-            std.math.cast(ExprId, self.interner.count()) orelse std.math.maxInt(ExprId),
-        );
-        copy.interner = try self.interner.clone();
         copy.arg_infos = self.arg_infos;
         copy.theorem_hyp_names = self.theorem_hyp_names;
         try copy.theorem_vars.appendSlice(
@@ -699,12 +700,53 @@ pub const TheoremContext = struct {
         return copy;
     }
 
-    /// Materialize a copy-on-write clone into a standalone theorem. Call before
-    /// promoting a clone to replace its own base (see `ExprInterner.flatten`).
+    /// Materialize a copy-on-write clone into a standalone theorem, for a
+    /// clone that outlives its base (see `ExprInterner.flatten`); `promote`
+    /// does this itself.
     pub fn flatten(self: *TheoremContext) !void {
         try self.interner.flatten();
         // `stable_limit` stays: the base this clone was cut from may live on
         // and grow its own nodes past it, so ids beyond it are not shared.
+    }
+
+    /// Replace this theorem with `successor`, a clone of it, and free the
+    /// old state (the line-commit pattern). On error both are left as they
+    /// were; on success `successor` is consumed.
+    pub fn promote(self: *TheoremContext, successor: *TheoremContext) !void {
+        // Materialize the COW clone before it replaces (and frees) its base.
+        try successor.flatten();
+        var old = self.*;
+        self.* = successor.*;
+        successor.* = undefined;
+        old.deinit();
+        self.becomeChainRoot();
+    }
+
+    /// Once no other theorem shares its memo, this theorem is the root of
+    /// its clone chain: shared entries naming ids at or past `stable_limit`
+    /// meant other theorems' nodes and go, its own entries move to the
+    /// shared memo, and the limit is lifted.
+    fn becomeChainRoot(self: *TheoremContext) void {
+        if (self.stable_limit == std.math.maxInt(ExprId)) return;
+        const memo = self.shared_memo orelse return;
+        if (memo.refs != 1) return;
+        var it = memo.pure_reprs.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.expr >= self.stable_limit or
+                entry.value_ptr.* >= self.stable_limit)
+            {
+                memo.pure_reprs.removeByPtr(entry.key_ptr);
+            }
+        }
+        self.stable_limit = std.math.maxInt(ExprId);
+        if (!self.def_ops_cache_env_identity_set) return;
+        if (!memo.serves(self.def_ops_cache_env_addr, self.def_ops_cache_registry_addr)) return;
+        memo.pure_reprs.ensureUnusedCapacity(self.allocator, self.pure_reprs.count()) catch return;
+        var own = self.pure_reprs.iterator();
+        while (own.next()) |entry| {
+            memo.pure_reprs.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        self.pure_reprs.clearRetainingCapacity();
     }
 
     // Seed a context with `count` theorem binders but without any parser-side

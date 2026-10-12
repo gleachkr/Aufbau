@@ -125,12 +125,9 @@ pub fn commit(
         result.theorem_vars.deinit();
         result.theorem.deinit();
     }
-    // Materialize the COW clone before it replaces (and frees) its base.
-    try result.theorem.flatten();
-    try context.checked.appendSlice(allocator, result.checked_lines);
-    var old_theorem = theorem.*;
-    theorem.* = result.theorem;
-    old_theorem.deinit();
+    try context.checked.ensureUnusedCapacity(allocator, result.checked_lines.len);
+    try theorem.promote(&result.theorem);
+    context.checked.appendSliceAssumeCapacity(result.checked_lines);
     theorem_vars.deinit();
     theorem_vars.* = result.theorem_vars;
     return result.line_idx;
