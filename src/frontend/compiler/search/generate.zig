@@ -1074,7 +1074,74 @@ fn hookSolveOpen(
     }
 }
 
-/// `SearchRuntime.keep` for an open target's child search: a child proof's
+/// A child search's interner scope (see `collectOpenProofs`):
+/// `driver.work_theorem` is a discardable COW clone of `parent` from `enter`
+/// to `exit`.
+const ChildScope = struct {
+    theorem: TheoremContext,
+    parent: *TheoremContext,
+    /// Dummy analogue of the interner scope: dummies minted inside it
+    /// (indexes at or above this) die with it, so a child conclusion
+    /// referencing one must not be read back. The parent either lacks the
+    /// index (dangling) or owns an unrelated dummy there (misbinding).
+    dummy_base: usize,
+
+    fn enter(self: *ChildScope, driver: *Driver) !void {
+        // The session's ref pool / index are built lazily from the FIRST
+        // theorem a search passes in (`exactWithSession` fetches the pool on
+        // entry). A scoped child search must never be that first build: the
+        // entries would capture scope-minted ids in session-persistent state.
+        // The enclosing `exactWithSession` already built the pool against
+        // the parent id-space; enforce that ordering rather than leave it
+        // implicit.
+        std.debug.assert(driver.session.reference_pool != null);
+        self.theorem = try driver.work_theorem.clone();
+        self.dummy_base = self.theorem.theorem_dummies.items.len;
+        self.parent = driver.work_theorem;
+        driver.work_theorem = &self.theorem;
+    }
+
+    fn exit(self: *ChildScope, driver: *Driver) void {
+        driver.work_theorem = self.parent;
+        self.theorem.deinit();
+    }
+};
+
+/// A generation child search for `goal` one level below `depth` (pool refs
+/// only at depth 0), which stops at the first `max_results` proofs `keep`
+/// keeps.
+fn childSearch(
+    driver: *Driver,
+    goal: Goal,
+    depth: usize,
+    max_results: usize,
+    keep: types.CandidateFilter,
+) anyerror!types.ExactResults {
+    const saved_depth = driver.current_depth;
+    driver.current_depth = if (depth > 0) depth - 1 else 0;
+    defer driver.current_depth = saved_depth;
+    const results = try backtrack.exactWithSession(
+        driver.compiler,
+        driver.session,
+        goal,
+        driver.work_theorem,
+        driver.theorem_vars,
+        .{
+            .max_results = max_results,
+            .generator = if (depth > 0) &driver.hook else null,
+            .counters = driver.counters,
+            .runtime = driver.runtime,
+            .fuel = &driver.fuel,
+            .derived = driver.derived,
+            .internal_open_child = true,
+            .keep = keep,
+        },
+    );
+    if (driver.counters) |c| c.generated_chain_attempts += 1;
+    return results;
+}
+
+/// `ExactOptions.keep` for an open target's child search: a child proof's
 /// checker-accepted conclusion, read back into `target_theorem`, when it
 /// matches the open target.
 const OpenReadBack = struct {
@@ -1087,35 +1154,70 @@ const OpenReadBack = struct {
 
     fn readBack(ctx: *anyopaque, attempt: *candidate_mod.Probe) anyerror!?ExprId {
         const self: *OpenReadBack = @ptrCast(@alignCast(ctx));
-        const driver = self.driver;
-        const accepted = acceptedConclusionOf(
-            driver,
+        const back = (try escapingConclusion(
+            self.driver,
             attempt,
             Goal{ .implicit_whole_conclusion = self.hint },
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return null,
-        };
-        // A conclusion referencing a scope-minted dummy cannot escape (see
-        // `scope_dummy_base`); `reinternConcrete`'s per-index check alone
-        // cannot catch the case where `target_theorem` owns an unrelated
-        // same-sort dummy at the same index.
-        if (driver.work_theorem.exprAny(
-            accepted,
             self.scope_dummy_base,
-            scopeDummyEscapes,
-        )) return null;
-        const back = (try reinternConcrete(
             self.target_theorem,
-            driver.work_theorem,
-            accepted,
         )) orelse return null;
         const mark = self.store.mark();
         defer self.store.rollbackTo(mark);
-        if (try readBackOpen(driver, self.store, self.target_theorem, back, self.target, .probe) == null) return null;
+        if (try readBackOpen(self.driver, self.store, self.target_theorem, back, self.target, .probe) == null) return null;
         return back;
     }
 };
+
+/// `ExactOptions.keep` for `solveProof`'s child search: a child proof's
+/// checker-accepted conclusion, translated into the theorem outside the
+/// child's interner scope. `rejected` records that some validated proof was
+/// dropped here, which makes the child's failure no exhaustive one.
+const ConcreteReadBack = struct {
+    driver: *Driver,
+    target: ExprId,
+    parent_theorem: *TheoremContext,
+    scope_dummy_base: usize,
+    rejected: bool = false,
+
+    fn readBack(ctx: *anyopaque, attempt: *candidate_mod.Probe) anyerror!?ExprId {
+        const self: *ConcreteReadBack = @ptrCast(@alignCast(ctx));
+        const back = try escapingConclusion(
+            self.driver,
+            attempt,
+            Goal{ .concrete = self.target },
+            self.scope_dummy_base,
+            self.parent_theorem,
+        );
+        if (back == null) self.rejected = true;
+        return back;
+    }
+};
+
+/// The conclusion `attempt` was accepted with (`acceptedConclusionOf`),
+/// translated out of a child search's interner scope into `dst`; null when
+/// the checker records none or it cannot leave the scope.
+fn escapingConclusion(
+    driver: *Driver,
+    attempt: *candidate_mod.Probe,
+    goal: Goal,
+    scope_dummy_base: usize,
+    dst: *TheoremContext,
+) anyerror!?ExprId {
+    const accepted = acceptedConclusionOf(driver, attempt, goal) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    // A conclusion referencing a scope-minted dummy cannot escape (see
+    // `ChildScope.dummy_base`); `reinternConcrete`'s per-index check alone cannot
+    // catch the case where `dst` owns an unrelated same-sort dummy at the
+    // same index.
+    if (driver.work_theorem.exprAny(
+        accepted,
+        scope_dummy_base,
+        scopeDummyEscapes,
+    )) return null;
+    return reinternConcrete(dst, driver.work_theorem, accepted);
+}
 
 /// A child proof of an open target that reads back onto it (`back` is its
 /// conclusion in the target's theorem).
@@ -1198,24 +1300,9 @@ fn collectOpenProofs(
     // `solveProof`. Any NEW persistent cache on the Driver or SearchRuntime
     // must follow the same rule: content keys, or a strictly scope-local
     // lifetime.
-    // The session's ref pool / index are built lazily from the FIRST theorem
-    // a search passes in (`exactWithSession` fetches the pool on entry). A
-    // scoped child search must never be that first build — the entries would
-    // capture scope-minted ids in session-persistent state. Our enclosing
-    // `exactWithSession` already built the pool against the parent id-space;
-    // enforce that ordering here rather than leave it implicit.
-    std.debug.assert(driver.session.reference_pool != null);
-    var scope_theorem = try driver.work_theorem.clone();
-    defer scope_theorem.deinit();
-    // Dummy analogue of the interner scope: dummies minted during the child
-    // search (indexes at or above this) die with the scope, so a child
-    // conclusion referencing one must not be read back — `target_theorem`
-    // either lacks the index (dangling) or owns an unrelated dummy there
-    // (misbinding).
-    const scope_dummy_base = scope_theorem.theorem_dummies.items.len;
-    const parent_theorem = driver.work_theorem;
-    driver.work_theorem = &scope_theorem;
-    defer driver.work_theorem = parent_theorem;
+    var scope: ChildScope = undefined;
+    try scope.enter(driver);
+    defer scope.exit(driver);
 
     var meta_map = std.AutoHashMapUnmanaged(PlaceholderId, ExprId){};
     defer meta_map.deinit(driver.scratch);
@@ -1228,39 +1315,22 @@ fn collectOpenProofs(
         target,
     )) orelse return;
 
-    const generator: ?*const GenerationHook = if (depth > 0) &driver.hook else null;
-    const saved_depth = driver.current_depth;
-    driver.current_depth = if (depth > 0) depth - 1 else 0;
-    defer driver.current_depth = saved_depth;
-
     var filter = OpenReadBack{
         .driver = driver,
         .target = target,
         .target_theorem = target_theorem,
         .store = store,
         .hint = hint,
-        .scope_dummy_base = scope_dummy_base,
+        .scope_dummy_base = scope.dummy_base,
     };
-    var runtime = driver.runtime;
-    runtime.keep = .{ .ctx = &filter, .readBackFn = OpenReadBack.readBack };
-    var results = try backtrack.exactWithSession(
-        driver.compiler,
-        driver.session,
+    var results = try childSearch(
+        driver,
         Goal{ .implicit_whole_conclusion = hint },
-        driver.work_theorem,
-        driver.theorem_vars,
-        .{
-            .max_results = open_child_max_results,
-            .generator = generator,
-            .counters = driver.counters,
-            .runtime = runtime,
-            .fuel = &driver.fuel,
-            .derived = driver.derived,
-            .internal_open_child = true,
-        },
+        depth,
+        open_child_max_results,
+        .{ .ctx = &filter, .readBackFn = OpenReadBack.readBack },
     );
     defer results.deinit();
-    if (driver.counters) |c| c.generated_chain_attempts += 1;
 
     for (results.candidates) |candidate| {
         try out.append(driver.scratch, .{
@@ -1751,47 +1821,36 @@ fn solveProof(
     // stays valid inside the scope (a clone extends its base's id-space).
     // Everything that escapes is id-free or translated back: the
     // application is arena-owned source syntax, the conclusion is
-    // re-interned into the parent below, and the memos written here
+    // translated into the parent by `ConcreteReadBack`, and the memos written here
     // (`concrete_ok`/`concrete_fail`, keys computed above pre-scope) key by
     // canonical content, never scope ids. Established only after the cheap
     // O(1) skips above, so memo hits and path prunes pay no clone.
-    std.debug.assert(driver.session.reference_pool != null);
-    var scope_theorem = try driver.work_theorem.clone();
-    defer scope_theorem.deinit();
-    const scope_dummy_base = scope_theorem.theorem_dummies.items.len;
-    const parent_theorem = driver.work_theorem;
-    driver.work_theorem = &scope_theorem;
-    defer driver.work_theorem = parent_theorem;
+    var scope: ChildScope = undefined;
+    try scope.enter(driver);
+    defer scope.exit(driver);
 
-    const generator: ?*const GenerationHook = if (depth > 0) &driver.hook else null;
-    const saved_depth = driver.current_depth;
-    driver.current_depth = if (depth > 0) depth - 1 else 0;
-    defer driver.current_depth = saved_depth;
-
-    var results = try backtrack.exactWithSession(
-        driver.compiler,
-        driver.session,
+    var filter = ConcreteReadBack{
+        .driver = driver,
+        .target = target,
+        .parent_theorem = scope.parent,
+        .scope_dummy_base = scope.dummy_base,
+    };
+    var results = try childSearch(
+        driver,
         Goal{ .concrete = target },
-        driver.work_theorem,
-        driver.theorem_vars,
-        .{
-            .max_results = 1,
-            .generator = generator,
-            .counters = driver.counters,
-            .runtime = driver.runtime,
-            .fuel = &driver.fuel,
-            .derived = driver.derived,
-            .internal_open_child = true,
-        },
+        depth,
+        1,
+        .{ .ctx = &filter, .readBackFn = ConcreteReadBack.readBack },
     );
     defer results.deinit();
-    if (driver.counters) |c| c.generated_chain_attempts += 1;
     if (results.candidates.len == 0) {
         // Genuine exhaustive failure (no candidate at this depth), with no
-        // node-budget bail and no DFS path-prune inside the subtree: memoize so
-        // siblings skip it.
+        // node-budget bail, no DFS path-prune inside the subtree, and no
+        // validated proof whose conclusion could not leave the scope:
+        // memoize so siblings skip it.
         if (driver.node_cap_trips == trips_at_entry and
-            driver.path_prunes == path_prunes_at_entry)
+            driver.path_prunes == path_prunes_at_entry and
+            !filter.rejected)
         {
             driver.concrete_fail.record(driver.scratch, ok_key, driver.phase_index, depth);
         }
@@ -1801,32 +1860,7 @@ fn solveProof(
         driver.arena,
         results.candidates[0].application,
     );
-    // A re-check rejection means the child assembly is not a proof after all
-    // (as on the open path in `hookSolveOpen`); it is not a genuine exhaustive
-    // failure either, so it is not memoized.
-    const accepted = acceptedConclusion(
-        driver,
-        application,
-        Goal{ .concrete = target },
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return null,
-    };
-    // A conclusion referencing a scope-minted dummy cannot escape (same
-    // guard as `hookSolveOpen`'s read-back; `reinternConcrete`'s per-index
-    // check alone cannot catch the parent owning an unrelated same-sort
-    // dummy at the same index). Not a genuine exhaustive failure, so it is
-    // deliberately NOT memoized into `concrete_fail`.
-    if (driver.work_theorem.exprAny(
-        accepted,
-        scope_dummy_base,
-        scopeDummyEscapes,
-    )) return null;
-    const conclusion = (try reinternConcrete(
-        parent_theorem,
-        driver.work_theorem,
-        accepted,
-    )) orelse return null;
+    const conclusion = results.candidates[0].read_back.?;
     // Record the success so a sibling subtree (or later pass) re-reaching this
     // `target` replays it instead of re-searching. Store the shallowest proof
     // seen (best reuse). Best-effort: an OOM here just forgoes the memo.
@@ -1911,11 +1945,10 @@ fn contentKey(driver: *Driver, target: ExprId) u64 {
     return h.final();
 }
 
-/// Re-check a generated child application and return the conclusion line the
-/// checker actually accepted, translated back into `work_theorem`. This is a
-/// deliberate belt-and-braces step: generation still proposes ordinary
-/// syntax, and the existing checker remains the source of truth for the child
-/// conclusion attached to that syntax.
+/// The conclusion line the checker accepted for a probed child application,
+/// translated back into `work_theorem`: generation proposes ordinary syntax,
+/// and the checker remains the source of truth for the conclusion attached
+/// to that syntax.
 ///
 /// For an implicit-conclusion goal (the open-target hint), the line's
 /// recorded expr is the rule's RAW conclusion (e.g. all_elim's `[x/K] p`),
@@ -1925,28 +1958,6 @@ fn contentKey(driver: *Driver, target: ExprId) u64 {
 /// from the checker's own resolved bindings (the same leaf-swap that built
 /// the target) and return that instead; the full assembly is still validated
 /// by `tryCandidate` afterwards, so a wrong surface can only fail, never leak.
-fn acceptedConclusion(
-    driver: *Driver,
-    application: RuleApplication,
-    goal: Goal,
-) anyerror!ExprId {
-    // The probe's theorem is a COW clone based directly on `work_theorem`
-    // (which outlives it), so no whole-interner `flatten()` per accepted
-    // candidate — the cost `flatten`'s contract reserves for committed lines.
-    var attempt = try candidate_mod.probe(
-        driver.compiler,
-        driver.context,
-        application,
-        goal,
-        driver.work_theorem,
-        driver.theorem_vars,
-        .{},
-    );
-    defer attempt.deinit();
-    return acceptedConclusionOf(driver, &attempt, goal);
-}
-
-/// `acceptedConclusion` of an application already probed as `attempt`.
 fn acceptedConclusionOf(
     driver: *Driver,
     attempt: *candidate_mod.Probe,

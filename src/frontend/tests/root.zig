@@ -1795,7 +1795,16 @@ test "theorem clones share representatives that name their root's nodes" {
 
     // Another env neither reads nor writes the shared entries.
     try std.testing.expectEqual(@as(?FrontendExpr.ExprId, null), second.sharedPureReprGet(key, env + 1, 0));
-    try std.testing.expect(!try second.sharedPureReprPut(key, v1, env, 1));
+
+    // The registry-free uses above locked no registry; the first registry
+    // does, and another is then refused.
+    var registry_key = key;
+    registry_key.has_registry = true;
+    try std.testing.expect(try second.sharedPureReprPut(registry_key, v1, env, 1));
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, v1), first.sharedPureReprGet(registry_key, env, 1));
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, null), first.sharedPureReprGet(registry_key, env, 2));
+    try std.testing.expect(!try second.sharedPureReprPut(registry_key, v1, env, 2));
+    try std.testing.expectEqual(@as(?FrontendExpr.ExprId, v1), first.sharedPureReprGet(key, env, 0));
 }
 
 test "a flattened clone does not share ids its base went on to mint" {

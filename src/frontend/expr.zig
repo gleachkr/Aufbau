@@ -433,17 +433,19 @@ pub const PureReprKey = struct {
 pub const SharedMemo = struct {
     refs: u32 = 1,
     pure_reprs: std.AutoHashMapUnmanaged(PureReprKey, ExprId) = .empty,
-    /// The env and registry the entries were computed under, set by the
-    /// first entry; a theorem used with others neither reads nor writes.
+    /// The env and registry the entries were computed under, each set by
+    /// the first use that has one; a theorem used with others neither reads
+    /// nor writes. A registry-free use locks no registry: the key's
+    /// `has_registry` already keeps its entries apart.
     env_addr: usize = 0,
     registry_addr: usize = 0,
 
     fn serves(self: *SharedMemo, env_addr: usize, registry_addr: usize) bool {
-        if (self.env_addr == 0) {
-            self.env_addr = env_addr;
-            self.registry_addr = registry_addr;
-        }
-        return self.env_addr == env_addr and self.registry_addr == registry_addr;
+        if (self.env_addr == 0) self.env_addr = env_addr;
+        if (self.env_addr != env_addr) return false;
+        if (registry_addr == 0) return true;
+        if (self.registry_addr == 0) self.registry_addr = registry_addr;
+        return self.registry_addr == registry_addr;
     }
 };
 

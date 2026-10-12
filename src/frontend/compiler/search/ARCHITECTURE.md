@@ -747,8 +747,9 @@ rationale):
   (eager edges cost 0) so `concrete_ok` replays stay consistent with the new
   depth semantics.
 - **Nested binding handoff** (`ApplyCandidate.internal_child`, set from
-  `ExactOptions.internal_open_child`; render at the accept point in
-  `backward/validate.zig`): an accepted eager candidate inside an internal
+  `ExactOptions.internal_open_child`; rendered before validation in
+  `backward/validate.zig`, so the probe checks the stored application): an
+  eager candidate inside an internal
   generation child solve becomes a NESTED inline node of a parent assembly,
   where the checker would have to re-infer its binders top-down from an
   ACUI-reassociated hint — and a bag with two same-shaped members is

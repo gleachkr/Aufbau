@@ -33,6 +33,7 @@ const DerivedPool = types.DerivedPool;
 const NameExprMap = types.NameExprMap;
 const SearchCounters = types.SearchCounters;
 const SearchRuntime = types.SearchRuntime;
+const CandidateFilter = types.CandidateFilter;
 const Fuel = types.Fuel;
 const rankReferenceIndices = refs_mod.rankReferenceIndices;
 const probe = candidate_mod.probe;
@@ -50,6 +51,7 @@ pub fn appendDerivedDirectCandidates(
     theorem: *const TheoremContext,
     theorem_vars: *const NameExprMap,
     runtime: SearchRuntime,
+    keep: ?CandidateFilter,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -154,8 +156,8 @@ pub fn appendDerivedDirectCandidates(
         };
         const read_back = blk: {
             defer attempt.deinit();
-            const keep = runtime.keep orelse break :blk null;
-            break :blk try keep.readBackFn(keep.ctx, &attempt);
+            const filter = keep orelse break :blk null;
+            break :blk try filter.readBackFn(filter.ctx, &attempt);
         };
         if (counters) |actual| {
             actual.accepted_candidates += 1;
@@ -222,6 +224,7 @@ pub fn validateSelectedRefs(
     // (`plausible.templateHasRewriteHead`), computed once per rule.
     concl_has_rewrite_head: bool,
     runtime: SearchRuntime,
+    keep: ?CandidateFilter,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -322,6 +325,38 @@ pub fn validateSelectedRefs(
         );
     }
     defer if (!bindings_transferred) freeRenderedBindings(allocator, arg_bindings);
+    // Nested-inline binder handoff: an `@auto eager` candidate inside an
+    // internal generation child becomes a NESTED node of a parent assembly,
+    // where the checker's bottom-up re-inference would have to re-derive its
+    // binders from an ACUI-reassociated hint (the nested-inline extraction
+    // gap: genuinely ambiguous bags cannot be decomposed from the hint
+    // alone). The search already resolved the binders; render them on the
+    // application so every level of the spliced tree carries its own values.
+    // Rendered before validation, so the probe below checks the application
+    // that is stored, and `keep` reads back that application's conclusion.
+    // Suggestions surfaced to the user (non-internal candidates) are
+    // untouched, as is every theory without eager annotations. Best-effort:
+    // a render failure leaves the search's own choices.
+    if (candidate.internal_child and
+        context.registry.eagerPriority(candidate.rule_id) != null)
+    {
+        const rendered: []ProofScript.ArgBinding = renderAllResolvedBindings(
+            allocator,
+            context,
+            candidate,
+            theorem_vars,
+            bindings,
+        ) catch |rerr| blk: {
+            if (rerr == error.OutOfMemory) return rerr;
+            break :blk &.{};
+        };
+        if (rendered.len > arg_bindings.len) {
+            freeRenderedBindings(allocator, arg_bindings);
+            arg_bindings = rendered;
+        } else {
+            freeRenderedBindings(allocator, rendered);
+        }
+    }
     const application = buildRuleApplication(candidate.rule_name, refs, arg_bindings);
 
     // Scope of the UnifyMismatch retry arm, computed ONCE and shared with the
@@ -444,37 +479,7 @@ pub fn validateSelectedRefs(
         actual.accepted_candidates += 1;
         actual.recordRuleAttempt(candidate.rule_name, true);
     }
-    const read_back = if (runtime.keep) |keep| try keep.readBackFn(keep.ctx, &attempt) else null;
-    // Nested-inline binder handoff: an accepted `@auto eager` candidate inside
-    // an internal generation child becomes a NESTED node of a parent assembly,
-    // where the checker's bottom-up re-inference would have to re-derive its
-    // binders from an ACUI-reassociated hint (the pre-existing nested-inline
-    // extraction gap — genuinely ambiguous bags cannot be decomposed from the
-    // hint alone). The search already resolved the binders; render them on the
-    // application so every level of the spliced tree carries its own values.
-    // Suggestions surfaced to the user (non-internal candidates) are untouched,
-    // as is every theory without eager annotations. Best-effort: a render
-    // failure just leaves the application as validated.
-    if (candidate.internal_child and
-        context.registry.eagerPriority(candidate.rule_id) != null)
-    {
-        const rendered: []ProofScript.ArgBinding = renderAllResolvedBindings(
-            allocator,
-            context,
-            candidate,
-            theorem_vars,
-            bindings,
-        ) catch |rerr| blk: {
-            if (rerr == error.OutOfMemory) return rerr;
-            break :blk &.{};
-        };
-        if (rendered.len > arg_bindings.len) {
-            freeRenderedBindings(allocator, arg_bindings);
-            arg_bindings = rendered;
-        } else {
-            freeRenderedBindings(allocator, rendered);
-        }
-    }
+    const read_back = if (keep) |filter| try filter.readBackFn(filter.ctx, &attempt) else null;
     const owned_refs = try allocator.dupe(ProofScript.Ref, refs);
     errdefer allocator.free(owned_refs);
     const owned_application = buildRuleApplication(candidate.rule_name, owned_refs, arg_bindings);

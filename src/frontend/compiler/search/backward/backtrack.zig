@@ -35,6 +35,7 @@ const ExactOptions = types.ExactOptions;
 const ExactResults = types.ExactResults;
 const SearchCounters = types.SearchCounters;
 const SearchRuntime = types.SearchRuntime;
+const CandidateFilter = types.CandidateFilter;
 const NameExprMap = types.NameExprMap;
 const GenerationHook = types.GenerationHook;
 const DerivedPool = types.DerivedPool;
@@ -229,6 +230,7 @@ pub fn exactWithSession(
         }
 
         const results_before = candidates.items.len;
+        var budget_out = false;
         enumerateCandidateRefs(
             compiler,
             context,
@@ -241,17 +243,21 @@ pub fn exactWithSession(
             options.generator,
             options.derived,
             runtime,
+            options.keep,
             counters,
             fuel,
             &candidates,
         ) catch |err| switch (err) {
-            error.SearchBudgetExhausted => if (options.fuel == null) break else return err,
+            error.SearchBudgetExhausted => if (options.fuel == null) {
+                budget_out = true;
+            } else return err,
             else => return err,
         };
         // Counted before `dropRejected`: a candidate that applied arms the
         // eager cut even when its conclusion does not read back.
         const produced = candidates.items.len > results_before;
-        if (runtime.keep != null) dropRejected(&candidates, results_before);
+        if (options.keep != null) dropRejected(&candidates, results_before);
+        if (budget_out) break;
         // An eager candidate whose conclusion bindings may break the rule's
         // eigenvariable condition does not arm the cut: the step may not be
         // applicable as matched (e.g. `all_intro` over a context that
@@ -286,11 +292,12 @@ pub fn exactWithSession(
             theorem,
             theorem_vars,
             runtime,
+            options.keep,
             counters,
             options.fuel,
             &candidates,
         );
-        if (runtime.keep != null) dropRejected(&candidates, derived_before);
+        if (options.keep != null) dropRejected(&candidates, derived_before);
     }
 
     std.mem.sort(
@@ -313,7 +320,7 @@ pub fn exactWithSession(
     };
 }
 
-/// Drop the candidates from `from` on that `SearchRuntime.keep` rejected
+/// Drop the candidates from `from` on that `ExactOptions.keep` rejected
 /// (no `read_back`).
 fn dropRejected(
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -755,6 +762,7 @@ pub const SlotCtx = struct {
     generator: ?*const GenerationHook,
     derived: ?*DerivedPool,
     runtime: SearchRuntime,
+    keep: ?CandidateFilter,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -806,6 +814,7 @@ pub const SlotCtx = struct {
             self.generated,
             self.prune_setup.concl_has_rewrite_head,
             self.runtime,
+            self.keep,
             self.counters,
             self.fuel,
             self.candidates,
@@ -845,6 +854,7 @@ fn enumerateCandidateRefs(
     generator: ?*const GenerationHook,
     derived: ?*DerivedPool,
     runtime: SearchRuntime,
+    keep: ?CandidateFilter,
     counters: ?*SearchCounters,
     fuel: ?*Fuel,
     candidates: *std.ArrayListUnmanaged(ExactCandidate),
@@ -920,6 +930,7 @@ fn enumerateCandidateRefs(
         .generator = generator,
         .derived = derived,
         .runtime = runtime,
+        .keep = keep,
         .counters = counters,
         .fuel = fuel,
         .candidates = candidates,

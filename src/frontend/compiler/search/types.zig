@@ -172,7 +172,7 @@ pub const ApplyCandidate = struct {
     /// child solve (`ExactOptions.internal_open_child`): its accepted
     /// application will be spliced as a NESTED inline node of a parent
     /// assembly, not surfaced as a suggestion. Validation then renders the
-    /// resolved bindings of an accepted `@auto eager` candidate explicitly,
+    /// resolved bindings of an `@auto eager` candidate explicitly,
     /// so the parent's re-check never has to re-infer them from an
     /// ACUI-reassociated hint (the nested-inline binder-extraction gap).
     internal_child: bool = false,
@@ -492,11 +492,6 @@ pub const SearchRuntime = struct {
     repin_prune_enabled: bool = false,
     /// Lever E: reject on a complete-unfold ACUI member divergence.
     deep_member_prune_enabled: bool = false,
-    /// Set only by the generation driver for an open target's child search
-    /// (`collectOpenProofs`): a validated candidate whose conclusion does not
-    /// read back onto the open target is dropped as soon as it is found, so
-    /// `ExactOptions.max_results` counts only proofs the caller can use.
-    keep: ?CandidateFilter = null,
 };
 
 /// Search statistics: a value-only observation sink. Every field is a plain
@@ -779,8 +774,8 @@ pub const ExactCandidate = struct {
     /// recipes' bindings live in the derived pool's arena instead and must
     /// not be freed here.
     owns_arg_bindings: bool = false,
-    /// Under `SearchRuntime.keep`: the candidate's conclusion read back into
-    /// the open target's theorem, or null when it does not read back (and
+    /// Under `ExactOptions.keep`: the candidate's conclusion read back into
+    /// the caller's theorem, or null when it does not read back (and
     /// `exactWithSession` drops the candidate).
     read_back: ?ExprId = null,
 
@@ -1139,8 +1134,7 @@ pub const ExactOptions = struct {
     derived: ?*DerivedPool = null,
     /// Set only by the generation driver (`hookSolveOpen`/`solveProof`) for
     /// its internal child searches. When set, candidate enumeration stops as
-    /// soon as `max_results` results exist (under `SearchRuntime.keep`, results
-    /// that read back onto the open target): an internal child's caller keeps
+    /// soon as `max_results` results exist (results that `keep` keeps): an internal child's caller keeps
     /// at most that many, so exhausting the remaining apply candidates only
     /// burns budget on results the sort-and-truncate would discard anyway.
     /// The child keeps the first `max_results` results in enumeration order
@@ -1151,9 +1145,15 @@ pub const ExactOptions = struct {
     /// inline slots) never set this: their ranked, user-visible result lists
     /// stay exhaustive.
     internal_open_child: bool = false,
+    /// Set only by the generation driver for its child searches
+    /// (`solveProof`, `collectOpenProofs`): a validated candidate whose
+    /// conclusion does not read back onto the child's target is dropped as
+    /// soon as it is found, so `max_results` counts only proofs the caller
+    /// can use.
+    keep: ?CandidateFilter = null,
 };
 
-/// See `SearchRuntime.keep`. `readBackFn` reads an accepted candidate's
+/// See `ExactOptions.keep`. `readBackFn` reads an accepted candidate's
 /// conclusion back onto the open target from the validation's own probe, so
 /// keeping a candidate costs no second checker run; null rejects it.
 pub const CandidateFilter = struct {

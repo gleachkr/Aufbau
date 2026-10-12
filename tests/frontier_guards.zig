@@ -387,7 +387,7 @@ pub const guards = [_]FrontierGuard{
     // guarded apart from candidate order. church `andR1` needs only the
     // read-back.
     // An open subgoal keeps only child proofs that read back onto it
-    // (`SearchRuntime.keep`). `lt_trans_ax` at k=2 needs `le_trans_ax`'s
+    // (`ExactOptions.keep`). `lt_trans_ax` at k=2 needs `le_trans_ax`'s
     // `emp ⊢ suc a ≤ ?y` to keep `le_suc_suc_ax [l5]`; `eq_replace`, declared
     // first, offers proofs whose conclusion is an unreduced `[z/suc a] …`
     // that never reads back, and counting them crowded `l5` out of the four
