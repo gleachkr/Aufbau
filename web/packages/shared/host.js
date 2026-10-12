@@ -74,9 +74,15 @@ export function withInputs(exports, inputs, fn) {
   }
 }
 
+// Wasm exports return addresses and lengths as i32, which JS reads as signed:
+// anything at or past 2 GiB comes back negative. `>>> 0` reads it unsigned.
+function u32(value) {
+  return value >>> 0;
+}
+
 function writeBytes(exports, bytes) {
   const len = bytes.length;
-  const ptr = exports.alloc(len);
+  const ptr = u32(exports.alloc(len));
   if (len !== 0 && ptr === 0) {
     throw new Error("WebAssembly allocation failed");
   }
@@ -93,12 +99,16 @@ function freeBytes(exports, { ptr, len }) {
 // Readers take `exports.memory.buffer` afresh on every call: a call into the
 // instance may grow its memory, which detaches any earlier buffer view.
 export function readBytes(exports, ptr, len) {
+  ptr = u32(ptr);
+  len = u32(len);
   if (!ptr || !len) return new Uint8Array();
   const view = new Uint8Array(exports.memory.buffer, ptr, len);
   return view.slice();
 }
 
 export function readText(exports, ptr, len) {
+  ptr = u32(ptr);
+  len = u32(len);
   if (!ptr || !len) return "";
   return decoder.decode(new Uint8Array(exports.memory.buffer, ptr, len));
 }

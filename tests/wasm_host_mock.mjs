@@ -225,6 +225,54 @@ const trap = () => {
   assert.equal(mock.liveCount(), 0, "request leaked after a trap");
 }
 
+{
+  // Past 2 GiB of memory, an i32 export reads as a negative number in JS.
+  // Inputs and results living there must still be read and written. The
+  // buffer is allocated lazily, so this costs no real memory.
+  const high = 2 ** 31;
+  const memory = { buffer: new ArrayBuffer(high + (1 << 16)) };
+  const signed = (value) => value | 0;
+  let next = high;
+  let seen = null;
+  const regions = {};
+  const store = (bytes) => {
+    new Uint8Array(memory.buffer, next, bytes.length).set(bytes);
+    const region = { ptr: next, len: bytes.length };
+    next += bytes.length;
+    return region;
+  };
+  const freed = [];
+  const exports = {
+    memory,
+    alloc(len) {
+      const ptr = next;
+      next += Math.max(len, 1);
+      return signed(ptr);
+    },
+    free(ptr, len) {
+      freed.push([ptr, len]);
+    },
+    compile_sources(mm0Ptr, mm0Len, proofPtr, proofLen) {
+      const read = (ptr, len) =>
+        new TextDecoder().decode(new Uint8Array(memory.buffer, ptr >>> 0, len));
+      seen = [read(mm0Ptr, mm0Len), read(proofPtr, proofLen)];
+      regions.json = store(encoder.encode('{"ok":true}'));
+      regions.mmb = store(new Uint8Array([4, 5, 6]));
+      return 1;
+    },
+    result_json_ptr: () => signed(regions.json.ptr),
+    result_json_len: () => regions.json.len,
+    result_mmb_ptr: () => signed(regions.mmb.ptr),
+    result_mmb_len: () => regions.mmb.len,
+  };
+  const compiler = await loadCompiler({ instance: { exports } });
+  const result = compiler.compile("theory", "proof");
+  assert.deepEqual(seen, ["theory", "proof"]);
+  assert.equal(result.ok, true);
+  assert.deepEqual([...result.mmbBytes], [4, 5, 6]);
+  assert.equal(freed.length, 2);
+}
+
 // --- verifier --------------------------------------------------------------
 
 {

@@ -3,6 +3,14 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- The npm packages could not read a result once the WebAssembly memory
+  passed 2 GiB: a compile that succeeded failed with "byteOffset cannot be
+  negative".
+
 ## [0.0.16] - 2026-10-12
 
 ### Added
