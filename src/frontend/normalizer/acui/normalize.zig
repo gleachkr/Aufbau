@@ -158,18 +158,29 @@ pub fn collectAcuiLeaves(
     out: *std.ArrayListUnmanaged(AcuiLeaf),
 ) anyerror!void {
     const support = try self.support();
-    var infos = std.ArrayListUnmanaged(AcuiSupport.LeafInfo).empty;
-    defer infos.deinit(self.allocator);
-    try support.collectLeafInfos(expr_id, head_term_id, &infos);
-    try out.ensureUnusedCapacity(self.allocator, infos.items.len);
-    for (infos.items) |info| {
-        out.appendAssumeCapacity(.{
-            .old_expr = info.expr_id,
-            .new_expr = info.expr_id,
-            .is_def = info.is_def,
-            .conv_line_idx = null,
-        });
-    }
+    // Sized once: the normalizer's allocator is the pipeline arena, which
+    // keeps every buffer a growing list leaves behind.
+    try out.ensureTotalCapacityPrecise(
+        self.allocator,
+        out.items.len + support.countLeaves(expr_id, head_term_id),
+    );
+    const Appender = struct {
+        support: *AcuiSupport.Context,
+        out: *std.ArrayListUnmanaged(AcuiLeaf),
+        pub fn leaf(a: @This(), leaf_id: ExprId) void {
+            a.out.appendAssumeCapacity(.{
+                .old_expr = leaf_id,
+                .new_expr = leaf_id,
+                .is_def = a.support.isDefBearing(leaf_id),
+                .conv_line_idx = null,
+            });
+        }
+    };
+    support.visitLeaves(
+        expr_id,
+        head_term_id,
+        Appender{ .support = support, .out = out },
+    );
 }
 
 /// The canonical bag of `acui` at `expr_id` with its members left as they

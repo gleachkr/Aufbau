@@ -17,6 +17,8 @@ This file records notable user-facing changes to Aufbau. The project follows
 - The npm packages could not read a result once the WebAssembly memory
   passed 2 GiB: a compile that succeeded failed with "byteOffset cannot be
   negative".
+- Compiling proofs over large `@acui` contexts used about half again as
+  much memory as in 0.0.15.
 
 ## [0.0.16] - 2026-10-12
 

@@ -467,19 +467,19 @@ fn foldAcuiLeaf(
     }
     if (def_items.items.len == 0) return null;
 
-    var raw_items = std.ArrayListUnmanaged(AcuiSupport.LeafInfo).empty;
+    var raw_items = std.ArrayListUnmanaged(ExprId).empty;
     defer raw_items.deinit(ctx.allocator);
-    try support.collectLeafInfos(raw, acui.head_term_id, &raw_items);
+    try support.collectLeaves(raw, acui.head_term_id, &raw_items);
 
     for (raw_items.items) |raw_leaf| {
         for (def_items.items) |def_item| {
-            if (raw_leaf.expr_id == def_item) continue;
+            if (raw_leaf == def_item) continue;
             if (!try Inference.canConvertTransparent(
                 ctx.allocator,
                 ctx.theorem,
                 ctx.env,
                 def_item,
-                raw_leaf.expr_id,
+                raw_leaf,
             )) continue;
             var replaced = false;
             return try replaceFirstAcuiLeaf(
@@ -487,7 +487,7 @@ fn foldAcuiLeaf(
                 ctx.theorem,
                 raw,
                 acui.head_term_id,
-                raw_leaf.expr_id,
+                raw_leaf,
                 def_item,
                 &replaced,
             );

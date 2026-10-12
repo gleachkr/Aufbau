@@ -10,11 +10,6 @@ const ResolvedStructuralCombiner =
 const DefOps = @import("./def_ops.zig");
 const AcuiBag = @import("./acui_bag.zig");
 
-pub const LeafInfo = struct {
-    expr_id: ExprId,
-    is_def: bool,
-};
-
 pub const Context = struct {
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,
@@ -186,28 +181,63 @@ pub const Context = struct {
         );
     }
 
-    pub fn collectLeafInfos(
-        self: *Context,
+    /// Calls `visitor.leaf(leaf)` for each leaf of the `head_term_id` spine
+    /// at `expr_id`, left to right.
+    pub fn visitLeaves(
+        self: *const Context,
         expr_id: ExprId,
         head_term_id: u32,
-        out: *std.ArrayListUnmanaged(LeafInfo),
-    ) anyerror!void {
-        const node = self.theorem.interner.node(expr_id);
-        switch (node.*) {
+        visitor: anytype,
+    ) void {
+        switch (self.theorem.interner.node(expr_id).*) {
             .app => |app| {
                 if (app.term_id == head_term_id and app.args.len == 2) {
-                    try self.collectLeafInfos(app.args[0], head_term_id, out);
-                    try self.collectLeafInfos(app.args[1], head_term_id, out);
+                    self.visitLeaves(app.args[0], head_term_id, visitor);
+                    self.visitLeaves(app.args[1], head_term_id, visitor);
                     return;
                 }
             },
             .variable => {},
             .placeholder => {},
         }
-        try out.append(self.allocator, .{
-            .expr_id = expr_id,
-            .is_def = self.isDefBearing(expr_id),
-        });
+        visitor.leaf(expr_id);
+    }
+
+    /// How many leaves the `head_term_id` spine at `expr_id` has.
+    pub fn countLeaves(
+        self: *const Context,
+        expr_id: ExprId,
+        head_term_id: u32,
+    ) usize {
+        var counter: struct {
+            count: usize = 0,
+            pub fn leaf(c: *@This(), _: ExprId) void {
+                c.count += 1;
+            }
+        } = .{};
+        self.visitLeaves(expr_id, head_term_id, &counter);
+        return counter.count;
+    }
+
+    /// Appends the leaves of the `head_term_id` spine at `expr_id`, left to
+    /// right, growing `out` once.
+    pub fn collectLeaves(
+        self: *Context,
+        expr_id: ExprId,
+        head_term_id: u32,
+        out: *std.ArrayListUnmanaged(ExprId),
+    ) anyerror!void {
+        try out.ensureTotalCapacityPrecise(
+            self.allocator,
+            out.items.len + self.countLeaves(expr_id, head_term_id),
+        );
+        const Appender = struct {
+            out: *std.ArrayListUnmanaged(ExprId),
+            pub fn leaf(a: @This(), leaf_id: ExprId) void {
+                a.out.appendAssumeCapacity(leaf_id);
+            }
+        };
+        self.visitLeaves(expr_id, head_term_id, Appender{ .out = out });
     }
 
     pub fn collectConcreteSetItems(
