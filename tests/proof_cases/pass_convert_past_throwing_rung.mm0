@@ -1,0 +1,18 @@
+import "lib/iff.mm0";
+
+-- `T` has no @congr, so normalizing `T (p /\ top)` throws. The ladder
+-- must still reach its last rung: normalize only the stated side
+-- (`T (D p) /\ top` to `T (D p)`, a rewrite at the root) and unfold `D`.
+term top: wff;
+term and (a b: wff): wff;
+infixl and: $/\$ prec 30;
+term T (a: wff): wff;
+--| @congr
+axiom and_congr (a b c d: wff):
+  $ a <-> b $ > $ c <-> d $ > $ (a /\ c) <-> (b /\ d) $;
+--| @rewrite
+axiom and_top (a: wff): $ (a /\ top) <-> a $;
+def D (a: wff): wff = $ a /\ top $;
+axiom ax (a: wff): $ T (a /\ top) $;
+theorem rung_line (p: wff): $ T (D p) /\ top $;
+theorem rung_final (p: wff): $ T (D p) /\ top $;

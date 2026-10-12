@@ -3529,6 +3529,47 @@ test "LSP resolves proof includes against open library files" {
     try std.testing.expect(transport_state.containsMessage("nope"));
 }
 
+test "LSP reports a failing include in an imported theory's proof file" {
+    const lib_uri = "file:///tmp/lsp-include-paired/lib.mm0";
+    const lib_proof_uri = "file:///tmp/lsp-include-paired/lib.auf";
+    const mm0_uri = "file:///tmp/lsp-include-paired/main.mm0";
+    const proof_uri = "file:///tmp/lsp-include-paired/main.auf";
+    const lib_proof_text =
+        \\include "gone.auf";
+        \\lib_top
+        \\-------
+        \\l1: $ top $ by top_i []
+    ;
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    try handler.putDocument(lib_uri, lsp_import_lib_text ++ "\ntheorem lib_top: $ top $;\n", 1);
+    try handler.putDocument(lib_proof_uri, lib_proof_text, 1);
+    try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = .{ .custom_value = "aufbau" },
+        .version = 1,
+        .text = lsp_import_proof_text,
+    } });
+    // No statement of the root leads to lib.auf: it is joined because
+    // main.mm0 imports lib.mm0. The root proof file names it.
+    try std.testing.expect(publishedContains(
+        &transport_state,
+        proof_uri,
+        "unable to load the proof file 'lib.auf': unable to include 'gone.auf': FileNotFound",
+    ));
+}
+
 test "LSP reports a missing nested include" {
     const mm0_uri = "file:///tmp/lsp-include-nested/main.mm0";
     const lib_uri = "file:///tmp/lsp-include-nested/lemmas.auf";

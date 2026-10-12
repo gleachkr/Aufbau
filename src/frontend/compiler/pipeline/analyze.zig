@@ -444,7 +444,7 @@ fn analyzeLocalProofItem(
     switch (item) {
         .block => |block| {
             try stopAtLemma(self, allocator, state, block);
-            try analyzeLocalProofBlock(self, allocator, state, proof, block);
+            try analyzeLocalProofBlock(self, allocator, &state.theory, proof, block);
         },
         .def => |def| try analyzeLocalDefItem(
             self,
@@ -494,22 +494,27 @@ fn analyzeLocalNotationItem(
     };
 }
 
+/// A lemma that fails after its annotations were partly processed must not
+/// leave their registry, @fresh or @view entries behind: the failed rule's
+/// id goes to the next rule, which would inherit them.
 fn analyzeLocalProofBlock(
     self: *CompilerContext,
     allocator: std.mem.Allocator,
-    state: *AnalysisState,
+    theory: *TheoryState,
     proof: *ProofAnalysisState,
     block: TheoremBlock,
 ) !void {
     const warnings = WarningSnapshot.capture(self);
+    const snapshot = try AssertionRecoverySnapshot.capture(allocator, theory);
     processLocalProofBlock(
         self,
         allocator,
-        &state.theory,
+        theory,
         block,
         null,
     ) catch |err| {
         warnings.restore(self);
+        snapshot.restore(theory);
         recordPrimaryProofFailure(
             self,
             &proof.invalid_rules,
@@ -923,27 +928,7 @@ fn analyzeTheoremProof(
             },
             .block => |block| {
                 if (block.kind == .lemma) {
-                    const warnings = WarningSnapshot.capture(self);
-                    processLocalProofBlock(
-                        self,
-                        allocator,
-                        theory,
-                        block,
-                        null,
-                    ) catch |err| {
-                        warnings.restore(self);
-                        recordPrimaryProofFailure(
-                            self,
-                            &proof.invalid_rules,
-                            CompilerDiag.proofBlockDiagnostic(
-                                block.name,
-                                block.header_span,
-                                CompilerDiag.narrowDiagnosticError(err),
-                            ),
-                        );
-                        try proof.invalid_rules.put(block.name, {});
-                        continue;
-                    };
+                    try analyzeLocalProofBlock(self, allocator, theory, proof, block);
                     continue;
                 }
 

@@ -1,0 +1,17 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort obj;
+term c: obj;
+term P: wff;
+term Q (a: obj): wff;
+term R: wff;
+term S: wff;
+term or (p q: wff): wff;
+infixl or: $\/$ prec 20;
+axiom qc: $ P $ > $ Q c $;
+axiom r {x: obj}: $ Q x $ > $ R $;
+--| @auto backward
+axiom w (t: obj): $ Q t $ > $ S $;
+axiom oil (p q: wff): $ p $ > $ p \/ q $;
+axiom oir (p q: wff): $ q $ > $ p \/ q $;
+theorem t_or: $ P $ > $ R \/ S $;

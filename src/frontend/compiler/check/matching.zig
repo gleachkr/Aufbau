@@ -125,7 +125,8 @@ pub const Source = union(enum) {
 /// in order: identity; definition unfolding; folding `want`'s definition
 /// applications into `have`; normalizing both sides to a common target;
 /// normalizing `have` and unfolding to `want`; unfolding `have` to the
-/// normal form of `want`. A failed rung's lines are rolled back.
+/// normal form of `want`. A failed rung's lines are rolled back, and a rung
+/// that throws hands over to the next.
 pub fn convertTo(
     ctx: ConversionContext,
     source: Source,
@@ -161,6 +162,11 @@ pub fn convertTo(
             break :blk provider_context.provider();
         } else null;
 
+    // A rung that throws (a rewrite under a term with no @congr, say) only
+    // rules itself out: a later rung may relate the two without that step.
+    // The first such error, with its scratch detail, is reported if no rung
+    // succeeds.
+    var first_err: ?anyerror = null;
     inline for (.{
         convertFolded,
         convertNormalized,
@@ -168,9 +174,20 @@ pub fn convertTo(
         convertUnfoldedToNormalForm,
     }) |rung| {
         const mark = ctx.checked.items.len;
-        if (try rung(ctx, provider, source, have, want)) |ref| return ref;
+        const rung_scratch = ctx.scratch.mark();
+        if (rung(ctx, provider, source, have, want)) |maybe_ref| {
+            if (maybe_ref) |ref| return ref;
+        } else |err| {
+            if (err == error.OutOfMemory) return err;
+            if (first_err == null) {
+                first_err = err;
+            } else {
+                ctx.scratch.discard(rung_scratch);
+            }
+        }
         CheckedIr.rollbackToMark(ctx.allocator, ctx.checked, mark);
     }
+    if (first_err) |err| return err;
     return null;
 }
 

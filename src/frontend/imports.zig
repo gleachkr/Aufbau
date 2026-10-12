@@ -393,6 +393,10 @@ pub const JoinFailure = struct {
         file_key: []const u8,
         span: Span,
         spec: []const u8,
+        /// The failure lies in the proof file paired with an imported
+        /// theory, named by `spec`; `span` is the root proof file's start,
+        /// since no statement of the root leads there.
+        paired: bool = false,
     };
 
     /// The failure as one line of prose, without a location, in the
@@ -441,6 +445,9 @@ pub const JoinFailure = struct {
     ) std.mem.Allocator.Error![]u8 {
         const reason = try self.message(allocator);
         defer allocator.free(reason);
+        if (via.paired) {
+            return Diag.allocMessage(allocator, "join_paired_proof", .{ via.spec, reason });
+        }
         return switch (self.syntax) {
             inline else => |syntax| Diag.allocMessage(
                 allocator,
@@ -551,6 +558,7 @@ pub fn joinAll(
         .resolver = resolver,
         .syntax = syntax,
         .failure = failure,
+        .last_root = roots[roots.len - 1].key,
         .passthrough = roots.len == 1,
     };
     defer joiner.deinit();
@@ -588,6 +596,9 @@ const Joiner = struct {
     stack: std.ArrayListUnmanaged([]const u8) = .empty,
     /// The root statement the current import path starts with.
     entry: ?JoinFailure.Via = null,
+    /// The last root's key. A unit's proof side joins the proof file paired
+    /// with each imported theory before the root's own.
+    last_root: []const u8,
     /// True while a single root has shown no statement: its text can be
     /// reused.
     passthrough: bool,
@@ -740,7 +751,19 @@ const Joiner = struct {
             if (slot.* == null) {
                 slot.* = info;
                 slot.*.?.syntax = self.syntax;
-                if (self.stack.items.len > 1) slot.*.?.via = self.entry;
+                const root = self.stack.items[0];
+                if (!std.mem.eql(u8, root, self.last_root)) {
+                    // A degraded unit keeps only the last root, so that is
+                    // where a failure in an earlier one has to show.
+                    slot.*.?.via = .{
+                        .file_key = self.last_root,
+                        .span = .{ .start = 0, .end = 0 },
+                        .spec = std.fs.path.basenamePosix(root),
+                        .paired = true,
+                    };
+                } else if (self.stack.items.len > 1) {
+                    slot.*.?.via = self.entry;
+                }
             }
         }
     }

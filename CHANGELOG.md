@@ -85,7 +85,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   that followed from the missing items, and the failure itself went
   unreported. It now shows on the failing statement and on the open file's
   statement that leads there, as in `unable to include 'lemmas.auf':
-  unable to include 'gone.auf': FileNotFound`.
+  unable to include 'gone.auf': FileNotFound`. A failure in the proof
+  file of an imported theory, which no statement of the open file leads
+  to, shows at the top of the open proof file, as in `unable to load the
+  proof file 'lib.auf': …`.
 - A `@fresh` rule now checks when written inline, as the `eq_replace` in
   `imp_intro [eq_replace [l1, l2]]`. Before, the check counted the fresh
   variable against itself, because the conclusion it built from the choice
@@ -97,6 +100,23 @@ This file records notable user-facing changes to Aufbau. The project follows
   term open, and now counts only the proofs that fit it. Proofs the subgoal then rejects, such as
   an `eq_replace` step whose conclusion is still a substitution, used to
   take those places and crowd out the one the search needed.
+- A lemma that fails because of one of its annotations no longer leaves
+  the annotations before it in force. In the editor, `abc search` and
+  `auto?`, a `@rewrite` on a lemma whose `@view` was malformed went on
+  rewriting under the next rule, so a later line could check through a
+  rewrite that does not exist. `abc compile` stopped at the lemma and was
+  not affected.
+- `auto?` no longer misses a proof because an earlier subgoal of the same
+  shape failed. A subgoal `Q ?x` whose `?x` must be a bound variable
+  cannot be closed by `Q c`, and that failure was remembered for every
+  subgoal `Q ?t`, including ones where `?t` may be any term. Whether the
+  search found the proof depended on which rule was declared first.
+- A line or final line whose conversion needs a rewrite under a term
+  with no `@congr` now checks when another way of relating the two
+  statements works without that rewrite, such as normalizing only the
+  stated side and unfolding a definition. Before, the first failed
+  attempt ended the check with "missing congruence rule needed for
+  normalization".
 
 ## [0.0.15] - 2026-10-08
 

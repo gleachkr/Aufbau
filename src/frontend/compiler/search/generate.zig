@@ -1139,7 +1139,7 @@ fn collectOpenProofs(
 ) anyerror!void {
     // Canonical visited key: metas numbered by first occurrence, so two
     // alpha-variant open targets (fresh meta ids each attempt) collide.
-    const key = try canonicalOpenKey(driver.scratch, target_theorem, target, &driver.meta_dep_bans);
+    const key = try canonicalOpenKey(driver.scratch, target_theorem, store, target, &driver.meta_dep_bans);
     // Cheap O(1) skips (DFS path guard + failure memos) are charged no node
     // budget: the budget bounds real exploration work, and counting a
     // memoized skip would defeat the memo (the dist proofs have ~70% repeat
@@ -1510,6 +1510,7 @@ fn reinternHint(
 fn canonicalOpenKey(
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
+    store: *const MetaStore,
     expr: ExprId,
     bans: *const MetaDepBans,
 ) ![]u8 {
@@ -1517,7 +1518,7 @@ fn canonicalOpenKey(
     errdefer out.deinit(allocator);
     var numbering = std.AutoHashMapUnmanaged(u32, u32){};
     defer numbering.deinit(allocator);
-    try appendCanonicalKey(&out, &numbering, allocator, theorem, expr, bans);
+    try appendCanonicalKey(&out, &numbering, allocator, theorem, store, expr, bans);
     return try out.toOwnedSlice(allocator);
 }
 
@@ -1526,6 +1527,7 @@ fn appendCanonicalKey(
     numbering: *std.AutoHashMapUnmanaged(u32, u32),
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
+    store: *const MetaStore,
     expr: ExprId,
     bans: *const MetaDepBans,
 ) anyerror!void {
@@ -1547,6 +1549,18 @@ fn appendCanonicalKey(
             }
             try out.append(allocator, 'm');
             try appendCanonicalInt(out, allocator, gop.value_ptr.*);
+            // What a meta may be assigned decides which child conclusions
+            // read back: a `.bound_choice` meta takes only a bound
+            // variable, an existential anything within its allowed deps.
+            // A placeholder the store does not own is fixed.
+            if (store.info(pid)) |meta| {
+                try out.append(allocator, @backingInt(meta.kind));
+                var deps: [8]u8 = undefined;
+                std.mem.writeInt(u64, &deps, meta.allowed_deps, .little);
+                try out.appendSlice(allocator, &deps);
+            } else {
+                try out.append(allocator, 'f');
+            }
             // A dep ban changes which fills are legal, so it is part of the
             // target's identity for the failure memos and the path guard.
             const meta_id = if (theorem.placeholderInfo(pid)) |ph| ph.meta_id else null;
@@ -1563,7 +1577,7 @@ fn appendCanonicalKey(
             try appendCanonicalInt(out, allocator, app.term_id);
             try appendCanonicalInt(out, allocator, @intCast(app.args.len));
             for (app.args) |arg| {
-                try appendCanonicalKey(out, numbering, allocator, theorem, arg, bans);
+                try appendCanonicalKey(out, numbering, allocator, theorem, store, arg, bans);
             }
         },
     }

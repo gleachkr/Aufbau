@@ -235,6 +235,58 @@ test "compiler analyze with proof recovers after failing lemma blocks" {
     try std.testing.expectEqualStrings("target", diags[1].theorem_name.?);
 }
 
+test "compiler analyze drops a failed lemma's partial annotations" {
+    // `bad` registers its @rewrite before its @view fails. The rewrite must
+    // not survive under the freed rule id, which `next` takes over, or `t`
+    // would check through it.
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+        \\term iff (a b: wff): wff; infixr iff: $<->$ prec 20;
+        \\term top: wff;
+        \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+        \\axiom iff_refl (a: wff): $ a <-> a $;
+        \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\--| @congr
+        \\axiom imp_congr (a b c d: wff):
+        \\  $ a <-> b $ > $ c <-> d $ > $ (a -> c) <-> (b -> d) $;
+        \\axiom imp_top (a: wff): $ (a -> top) <-> top $;
+        \\axiom id (a: wff): $ a -> a $;
+        \\theorem t (b: wff): $ top $ > $ b -> top $;
+    ;
+    const proof_src =
+        \\--| @rewrite
+        \\--| @view (a: wff): $ zzz $
+        \\lemma bad (a: wff): $ (a -> top) <-> top $
+        \\---
+        \\l1: $ (a -> top) <-> top $ by imp_top
+        \\
+        \\lemma next (a: wff): $ a -> a $
+        \\---
+        \\l1: $ a -> a $ by id
+        \\
+        \\t
+        \\---
+        \\l1: $ top <-> top $ by iff_refl
+        \\l2: $ b -> top $ by iff_mp [l1, #1]
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqualStrings("bad", diags[0].theorem_name.?);
+    try std.testing.expectEqualStrings("t", diags[1].theorem_name.?);
+}
+
 test "compiler analyze with proof recovers after malformed theorem blocks" {
     const mm0_src =
         \\provable sort wff;

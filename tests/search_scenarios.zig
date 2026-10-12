@@ -207,6 +207,18 @@ pub const scenarios = [_]Scenario{
         .generate = .{ .enabled = true },
     },
     .{
+        // `oil` opens `Q ?x` for `r`, whose `x` is bound: a bound-choice meta,
+        // which `qc`'s `Q c` cannot fill. `oir` later opens `Q ?t` for `w`,
+        // an existential that `Q c` does fill. The open-target failure memo
+        // must tell the two apart, or the first failure hides the second.
+        .name = "auto open target memo keeps meta kinds apart auto?",
+        .mm0_path = "tests/search_bench_cases/auto_open_meta_kind.mm0",
+        .proof_path = "tests/search_bench_cases/auto_open_meta_kind.auf",
+        .marker = "auto?",
+        .expected_replacement = "oir [w [qc [#1]]]",
+        .generate = .{ .enabled = true },
+    },
+    .{
         // Depth-3 concrete chain (toy): exercises iterative deepening to depth 3
         // and deep generated nesting. Deterministic deep-generation latency gate.
         .name = "auto depth-3 chain auto?",

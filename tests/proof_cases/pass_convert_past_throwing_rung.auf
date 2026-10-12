@@ -1,0 +1,7 @@
+rung_line
+---------
+l1: $ T (D p) /\ top $ by ax (a := $ p $) []
+
+rung_final
+----------
+l1: $ T (p /\ top) $ by ax (a := $ p $) []
