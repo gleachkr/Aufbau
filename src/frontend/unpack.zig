@@ -72,12 +72,8 @@ pub fn unpackAtSourceOffset(
     defer work_arena.deinit();
     const work = work_arena.allocator();
 
-    const target = (findTarget(work, proof_src, offset) catch |err|
-        switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            // A proof source that does not parse has no unpack targets.
-            else => return null,
-        }) orelse return null;
+    const target = (try findTarget(work, proof_src, offset)) orelse
+        return null;
 
     // Gate 1 + conclusion capture: the document as written must analyze
     // cleanly, with the sink recording every inline application's
@@ -135,7 +131,7 @@ fn findTarget(
     offset: usize,
 ) !?Target {
     var parser = ProofScript.Parser.init(allocator, proof_src);
-    while (try parser.nextBlockSkippingLocalItems()) |block| {
+    while (try parser.nextBlockRecovering()) |block| {
         for (block.lines) |line| {
             if (offset < line.span.start or offset > line.span.end) continue;
             if (countInlineApplications(line.application) == 0) return null;

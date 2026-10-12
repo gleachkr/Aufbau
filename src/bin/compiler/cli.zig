@@ -101,11 +101,18 @@ const Command = union(enum) {
     version,
 };
 
+/// The OS error behind a failed file write (a broken pipe, a full disk);
+/// the generic writer interface reports only `error.WriteFailed`.
+fn writeCause(w: *const std.Io.File.Writer, err: anyerror) anyerror {
+    if (err != error.WriteFailed) return err;
+    return w.err orelse err;
+}
+
 fn writeToFile(io: std.Io, file: std.Io.File, text: []const u8) !void {
     var buf: [1024]u8 = undefined;
     var w = file.writer(io, &buf);
-    try w.interface.writeAll(text);
-    try w.interface.flush();
+    w.interface.writeAll(text) catch |err| return writeCause(&w, err);
+    w.interface.flush() catch |err| return writeCause(&w, err);
 }
 
 pub fn usage(io: std.Io) !void {
@@ -477,16 +484,16 @@ fn runSearch(
         std.Io.File.stderr().writer(io, &buf)
     else
         std.Io.File.stdout().writer(io, &buf);
-    const failed = if (cmd.json)
-        try writeSearchJson(&report.interface, proof_mapping, result.markers)
+    const failed = (if (cmd.json)
+        writeSearchJson(&report.interface, proof_mapping, result.markers)
     else
-        try writeSearchReport(
+        writeSearchReport(
             &report.interface,
             proof_mapping,
             result.markers,
             cmd.verbosity,
-        );
-    try report.interface.flush();
+        )) catch |err| return writeCause(&report, err);
+    report.interface.flush() catch |err| return writeCause(&report, err);
     if (cmd.fill) try writeFilled(io, allocator, proof_mapping, result.markers);
     if (failed or errors.len != 0) return CliError.Reported;
     for (result.markers) |marker| {
@@ -575,8 +582,9 @@ fn writeFilled(
     }
     var buf: [4096]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &buf);
-    try SearchDriver.writeEdits(&stdout.interface, root_text, edits.items);
-    try stdout.interface.flush();
+    SearchDriver.writeEdits(&stdout.interface, root_text, edits.items) catch |err|
+        return writeCause(&stdout, err);
+    stdout.interface.flush() catch |err| return writeCause(&stdout, err);
 }
 
 /// Where a marker sits, for the report: its file's label and line.

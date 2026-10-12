@@ -23,11 +23,18 @@ const Command = union(enum) {
     version,
 };
 
+/// The OS error behind a failed file write (a broken pipe, a full disk);
+/// the generic writer interface reports only `error.WriteFailed`.
+fn writeCause(w: *const std.Io.File.Writer, err: anyerror) anyerror {
+    if (err != error.WriteFailed) return err;
+    return w.err orelse err;
+}
+
 fn writeToFile(io: std.Io, file: std.Io.File, text: []const u8) !void {
     var buf: [512]u8 = undefined;
     var w = file.writer(io, &buf);
-    try w.interface.writeAll(text);
-    try w.interface.flush();
+    w.interface.writeAll(text) catch |err| return writeCause(&w, err);
+    w.interface.flush() catch |err| return writeCause(&w, err);
 }
 
 pub fn usage(io: std.Io) !void {

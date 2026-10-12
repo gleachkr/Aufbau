@@ -167,6 +167,38 @@ test "search driver does not search after a line that does not check" {
     try std.testing.expectEqual(.found, result.markers[1].outcome);
 }
 
+// The lemma after the malformed header stays in scope for `t2`'s line.
+test "search driver searches past a malformed block header" {
+    const proof_src =
+        \\t1
+        \\-
+        \\l1: $ R $ by both [p [], use [p []]]
+        \\
+        \\lemma lq: $ Q $
+        \\---
+        \\l1: $ Q $ by use [p []]
+        \\
+        \\t2
+        \\---
+        \\l1: $ Q $ by lq
+        \\l2: $ R $ by both [exact?, l1]
+        \\
+        \\t3
+        \\---
+        \\l1: $ isty _A $ by auto?
+        \\l2: $ isty o $ by o_ty
+    ;
+    var result = try run(proof_src);
+    defer result.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), result.markers.len);
+    try std.testing.expectEqual(.found, result.markers[0].outcome);
+    try std.testing.expectEqualStrings("t2", result.markers[0].theorem);
+    try std.testing.expectEqual(.found, result.markers[1].outcome);
+    try std.testing.expectEqual(@as(usize, 1), result.markers[1].holes.len);
+    try std.testing.expectEqualStrings("o", result.markers[1].holes[0].value);
+}
+
 test "search driver lists apply? candidates without putting one in place" {
     const proof_src =
         \\t1

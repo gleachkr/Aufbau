@@ -332,6 +332,54 @@ test "searchPlaceholders survives a broken sibling line" {
     );
 }
 
+// A malformed block header costs only its own block: the scanners and the
+// search walk skip to the next item, as the analysis walk does, so the
+// lemma after it stays in scope for the marker below.
+test "source search survives a broken block header before its target" {
+    const mm0_src =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term P: wff;
+        \\term Q: wff;
+        \\axiom p: $ P $;
+        \\axiom q: $ Q $;
+        \\theorem s: $ P $;
+        \\theorem t: $ Q $;
+    ;
+    const proof_src =
+        \\s
+        \\-
+        \\l1: $ P $ by p []
+        \\
+        \\lemma h: $ Q $
+        \\----
+        \\h1: $ Q $ by q []
+        \\
+        \\t
+        \\----
+        \\l1: $ Q $ by exact?
+    ;
+    const placeholders = try source.searchPlaceholders(
+        std.testing.allocator,
+        proof_src,
+    );
+    defer std.testing.allocator.free(placeholders);
+    try std.testing.expectEqual(@as(usize, 1), placeholders.len);
+    try std.testing.expectEqualStrings("t", placeholders[0].theorem);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        proof_src,
+        "exact?",
+        .{},
+    );
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{"h"});
+}
+
 test "placeholderNotices warns per placeholder and rejects bad parameters" {
     const proof_src =
         \\t

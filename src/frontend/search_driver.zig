@@ -511,7 +511,7 @@ fn fillHoleValues(
     defer parse_arena.deinit();
     var lines = std.ArrayListUnmanaged(Span).empty;
     var parser = ProofScript.Parser.initLenient(parse_arena.allocator(), text);
-    while (parser.nextBlockSkippingLocalItems() catch null) |block| {
+    while (try parser.nextBlockRecovering()) |block| {
         for (block.lines) |line| {
             try lines.append(parse_arena.allocator(), line.span);
         }

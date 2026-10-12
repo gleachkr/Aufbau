@@ -821,7 +821,12 @@ fn analyzeAssertionStatement(
 /// A search keeps every theorem before its target in scope, proved or not:
 /// the theorem's proof block is skipped unchecked when it comes next.
 fn skipTheoremProof(proof: *ProofAnalysisState, assertion: AssertionStmt) void {
-    const item = (proof.nextItem() catch return) orelse return;
+    const item = proof.nextItem() catch {
+        // Skipped unchecked, malformed or not; recovering keeps every block
+        // after it in reach.
+        if (!proof.parser.recoverToNextItemBoundary()) proof.exhausted = true;
+        return;
+    } orelse return;
     if (item == .block and item.block.kind == .theorem and
         std.mem.eql(u8, item.block.name, assertion.name)) return;
     proof.putBack(item);

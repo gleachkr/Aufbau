@@ -317,7 +317,7 @@ pub const Parser = struct {
 
     /// The next proof block, where a local def or notation item is an
     /// error. Production walkers use `nextItem` or
-    /// `nextBlockSkippingLocalItems`; tests use this to read a fixture's
+    /// `nextBlockRecovering`; tests use this to read a fixture's
     /// blocks.
     pub fn nextBlock(self: *Parser) ParseError!?ProofBlock {
         const item = (try self.nextItem()) orelse return null;
@@ -327,20 +327,26 @@ pub const Parser = struct {
         };
     }
 
-    /// The next proof block (theorem or lemma), skipping local def and
-    /// notation items. For walkers that only care about proof lines —
-    /// editor-facing targeting and enumeration — a local item is not an
-    /// error, just something without lines.
-    pub fn nextBlockSkippingLocalItems(
-        self: *Parser,
-    ) ParseError!?ProofBlock {
-        while (try self.nextItem()) |item| {
+    /// The next proof block (theorem or lemma), for editor-facing walkers
+    /// that only care about proof lines (targeting, enumeration). A local
+    /// def or notation item is not an error, just something without lines,
+    /// and a malformed item is skipped to the next item header, as the
+    /// analysis walk does, so one broken header does not hide every block
+    /// after it.
+    pub fn nextBlockRecovering(self: *Parser) error{OutOfMemory}!?ProofBlock {
+        while (true) {
+            const item = self.nextItem() catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    if (!self.recoverToNextItemBoundary()) return null;
+                    continue;
+                },
+            } orelse return null;
             switch (item) {
                 .block => |block| return block,
                 .def, .notation => continue,
             }
         }
-        return null;
     }
 
     pub fn diagnosticSpan(self: *const Parser) ?Span {

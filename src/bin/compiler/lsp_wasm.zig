@@ -158,8 +158,12 @@ const BrowserTransport = struct {
             "transport",
             transport,
         );
-        self.output.appendSlice(allocator, json_message) catch unreachable;
-        self.output.append(allocator, '\n') catch unreachable;
+        // `WriteError` has no `OutOfMemory`; the nearest member is reported
+        // and `process_lsp_message` turns it into a JSON-RPC error.
+        self.output.appendSlice(allocator, json_message) catch
+            return error.SystemResources;
+        self.output.append(allocator, '\n') catch
+            return error.SystemResources;
     }
 };
 

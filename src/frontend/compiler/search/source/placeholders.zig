@@ -65,9 +65,8 @@ pub const SearchPlaceholder = struct {
 /// Enumerate every search placeholder (`exact?`/`apply?`/`auto?`) in
 /// `proof_src`, top-level and nested, in source order. Used by the LSP to
 /// publish a status diagnostic per placeholder. The parse is lenient, so a
-/// broken proof line costs only itself; a parse error elsewhere (a broken
-/// header) still ends the scan early (the compiler's own diagnostics cover
-/// malformed source), returning whatever was collected before it. The result
+/// broken proof line costs only itself, and a broken header only its own
+/// item (the compiler's own diagnostics cover malformed source). The result
 /// is allocated on `allocator` (including each placeholder's non-empty
 /// `params` array); parser transients are torn down before returning.
 pub fn searchPlaceholders(
@@ -79,7 +78,7 @@ pub fn searchPlaceholders(
     var out = std.ArrayListUnmanaged(SearchPlaceholder).empty;
     errdefer out.deinit(allocator);
     var parser = ProofParser.initLenient(parse_arena.allocator(), proof_src);
-    while (parser.nextBlockSkippingLocalItems() catch null) |block| {
+    while (try parser.nextBlockRecovering()) |block| {
         for (block.lines) |line| {
             try collectSearchPlaceholders(
                 allocator,
@@ -202,10 +201,11 @@ pub fn findSearchLine(
     apply_at_offset: bool,
 ) !?SourceTarget {
     // Lenient, like every editor-facing parse of the proof source: a broken
-    // sibling line must not cost the block its search targets. Incomplete
-    // lines themselves have no rule application to target.
+    // sibling line must not cost the block its search targets, nor a broken
+    // header the blocks after it. Incomplete lines themselves have no rule
+    // application to target.
     var parser = ProofParser.initLenient(allocator, proof_src);
-    while (try parser.nextBlockSkippingLocalItems()) |block| {
+    while (try parser.nextBlockRecovering()) |block| {
         for (block.lines, 0..) |line, line_index| {
             if (line.incomplete) continue;
             if (apply_at_offset and spanContains(

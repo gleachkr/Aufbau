@@ -117,6 +117,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   stated side and unfolding a definition. Before, the first failed
   attempt ended the check with "missing congruence rule needed for
   normalization".
+- A proof block with a malformed header, such as an underline of a single
+  `-`, no longer hides the search markers after it. Before, `abc search`
+  reported "no search markers" and the editor offered no search action for
+  any marker below the broken header. A search past it also lost the
+  lemmas declared after it, so a line citing one failed to check and the
+  markers below that line were not searched.
+- `abc` and `mm0-zig` now report why writing their output failed, as in
+  `abc: unable to write 'standard output': BrokenPipe`. Before, every
+  write failure was reported as `WriteFailed`.
 
 ## [0.0.15] - 2026-10-08
 
