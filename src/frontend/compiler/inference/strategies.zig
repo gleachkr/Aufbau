@@ -22,7 +22,6 @@ const Holes = @import("../holes.zig");
 const DebugTrace = @import("../../debug.zig");
 const NormalizedCompare = @import("../../normalized_compare.zig");
 const InferenceContextModule = @import("context.zig");
-const InferenceValidation = @import("validation.zig");
 const InferenceDiagnostics = @import("diagnostics.zig");
 
 /// Result of an advanced rule match attempt.
@@ -495,20 +494,6 @@ pub fn inferBindingsFromRefsOnly(
     return concrete;
 }
 
-fn sortUnresolvedFinalizationRoots(
-    roots: []DefOps.UnresolvedDummyRoot,
-) void {
-    var i: usize = 1;
-    while (i < roots.len) : (i += 1) {
-        const root = roots[i];
-        var j = i;
-        while (j > 0 and roots[j - 1].root_slot > root.root_slot) : (j -= 1) {
-            roots[j] = roots[j - 1];
-        }
-        roots[j] = root;
-    }
-}
-
 fn tryFinalizeRuleMatchSession(
     allocator: std.mem.Allocator,
     session: *DefOps.RuleMatchSession,
@@ -528,56 +513,18 @@ fn tryFinalizeRuleMatchSession(
     const roots = try session.collectUnresolvedFinalizationRoots();
     defer allocator.free(roots);
     if (roots.len == 0) return .unresolved_dummy_witness;
-    sortUnresolvedFinalizationRoots(roots);
 
-    for (roots) |root| {
-        if (!root.bound) return .unresolved_dummy_witness;
-        if (fresh.sort_vars.getPool(root.sort_name) == null) {
-            return .unresolved_dummy_witness;
-        }
-    }
-
-    const extra_used_deps =
-        try session.collectConcreteDepsForPendingFinalization();
-    const needs = try allocator.alloc(FreshSelect.HiddenRootNeed, roots.len);
-    defer allocator.free(needs);
-    for (roots, 0..) |root, idx| {
-        needs[idx] = .{
-            .root_slot = root.root_slot,
-            .sort_name = root.sort_name,
-        };
-    }
-
-    const hidden_assignments = FreshSelect.assignHiddenRootsFromVarsPoolWithLineDeps(
+    const materialized = try FreshSelect.materializeHiddenRoots(
         allocator,
-        fresh.parser,
+        fresh,
         session.shared.theorem,
-        fresh.theorem_vars,
-        fresh.sort_vars,
+        roots,
         line_deps,
         ref_exprs,
         explicit_bindings,
-        extra_used_deps,
-        needs,
-    ) catch |assign_err| {
-        if (assign_err == error.FreshNoAvailableVar) {
-            return error.HiddenWitnessNoAvailableVar;
-        }
-        return assign_err;
-    };
-    defer allocator.free(hidden_assignments);
-
-    const materialized = try allocator.alloc(
-        DefOps.MaterializedDummyAssignment,
-        hidden_assignments.len,
-    );
+        try session.collectConcreteDepsForPendingFinalization(),
+    ) orelse return .unresolved_dummy_witness;
     defer allocator.free(materialized);
-    for (hidden_assignments, 0..) |assignment, idx| {
-        materialized[idx] = .{
-            .root_slot = assignment.root_slot,
-            .expr_id = assignment.expr_id,
-        };
-    }
     try session.applyMaterializedDummyAssignments(materialized);
 
     if (session.finalizeConcreteBindings()) |bindings| {

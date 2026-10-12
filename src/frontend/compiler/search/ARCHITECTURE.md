@@ -184,7 +184,7 @@ Three phases matter for the discussion below:
   the *concrete goal* at candidate-construction time. Cheap, deterministic.
 - **validation** (`candidate.zig:tryCandidate` + `finalConclusionPlausible`):
   re-derive the line through the real checker on a cloned theorem.
-- **generation** (`auto?` only, in `backward/backtrack.zig`, `backward/open_slot.zig` + `generate.zig`): synthesize
+- **generation** (`auto?` only, in `backward/backtrack.zig`, `backward/open_slot.zig`, `backward/slot.zig` + `generate.zig`): synthesize
   sub-proofs for hypotheses the pool can't fill.
 
 ## ACUI conclusion matching — the three principal mechanisms
@@ -582,7 +582,7 @@ Instead (`backward/seed.zig:partitionSeedBindings`, keyed on `multiHypBinderMask
 A scrubbed dummy on a **bound** binder is a variable the def hid (`A → B`
 unfolds to `Π x : A. B`, so `pi_form`'s premise `g , x : A ⊢ Ty B` needs an
 `x` the goal never names). A ref can still supply it, and at k=0 one does.
-When none matches, `backtrack.tryFreshBoundGenerate` generates the premise
+When none matches, `open_slot.tryFreshBoundGenerate` generates the premise
 in every phase, not only phase 5. It also takes a bare unfold placeholder
 left on a bound binder by ref-side extraction (`app_elim`'s `f : A → B`), and
 an intro rule's eigenvariable (`subset_intro`'s `x` in `G , x ∈ A ⊢ x ∈ B`):
@@ -809,7 +809,7 @@ results.
 
 The open-generation policy is computed once per candidate slot as
 `OpenMode {none, constrained, witness}` (`openMode()` in
-`backward/backtrack.zig`): `.witness` is exactly `@auto backward` enrollment;
+`backward/slot.zig`): `.witness` is exactly `@auto backward` enrollment;
 `.constrained` is the phase-5 constrained-backward-MP concession for
 un-enrolled rules (child proof must determine every meta by read-back, no
 carrying, no invention; `@abstract` motive inference rides this branch);
@@ -1397,8 +1397,9 @@ width is real.
 | `root.zig` | public surface / re-exports |
 | `session.zig` | `SearchSession`: lazy index + pool caching |
 | `types.zig` | `Goal`, `Context`, `ApplyCandidate`, `ExactCandidate`, options, counters |
-| `backward/backtrack.zig` | `exact?` driver + `backtrackRefs` and the concrete generation paths (split, principal enumeration); mutually recursive with `open_slot.zig` |
-| `backward/open_slot.zig` | open-slot generation (`tryOpenGenerateSlot`): open targets with existential metas, child-search read-back, the slot-local witness ladder, ref naming and pool fills |
+| `backward/backtrack.zig` | `exact?` driver + `backtrackRefs` and the concrete generation paths (split, principal enumeration); calls into `open_slot.zig`, which descends back through `SlotCtx.descend` |
+| `backward/open_slot.zig` | open-slot generation (`tryOpenGenerateSlot`, `tryFreshBoundGenerate`): open targets with existential metas, child-search read-back, the slot-local witness ladder, ref naming and pool fills |
+| `backward/slot.zig` | what both share: `SlotCtx`/`Slot`, `OpenMode`, the concrete emit (`emitGeneratedSlot`), split-choice explicit flags, and the dependency condition as matched (`bindingsDepHit`) |
 | `backward/match.zig` | per-ref hypothesis matching + `@view`/`@recover` seeding + eliminator meta-aware match (`tryMetaAwareHypMatch`) |
 | `backward/lookup.zig` | reference-index lookup for a hypothesis slot |
 | `backward/plan.zig` | per-slot fill ordering (cost/strength) + template-binder masks |

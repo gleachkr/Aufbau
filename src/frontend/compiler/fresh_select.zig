@@ -276,6 +276,71 @@ pub fn assignHiddenRootsFromVarsPoolWithLineDeps(
     return assignments;
 }
 
+/// Names the hidden definition dummies `roots` with variables from their
+/// sorts' `@vars` pools, in root-slot order, none of them used by the line,
+/// its references, its explicit bindings or `extra_used_deps`. Null when a
+/// root is not bound or its sort has no pool. The checker's conversion
+/// provider and inference's rule-match finalization both name dummies here,
+/// so they pick the same variables.
+pub fn materializeHiddenRoots(
+    allocator: std.mem.Allocator,
+    fresh: Inference.HiddenWitnessFreshContext,
+    theorem: *TheoremContext,
+    roots: []const DefOps.UnresolvedDummyRoot,
+    line_deps: u55,
+    ref_exprs: []const ExprId,
+    explicit_bindings: []const ?ExprId,
+    extra_used_deps: u55,
+) !?[]DefOps.MaterializedDummyAssignment {
+    for (roots) |root| {
+        if (!root.bound) return null;
+        if (fresh.sort_vars.getPool(root.sort_name) == null) return null;
+    }
+
+    const needs = try allocator.alloc(HiddenRootNeed, roots.len);
+    defer allocator.free(needs);
+    for (roots, needs) |root, *need| {
+        need.* = .{
+            .root_slot = root.root_slot,
+            .sort_name = root.sort_name,
+        };
+    }
+    std.mem.sort(HiddenRootNeed, needs, {}, struct {
+        fn lessThan(_: void, a: HiddenRootNeed, b: HiddenRootNeed) bool {
+            return a.root_slot < b.root_slot;
+        }
+    }.lessThan);
+
+    const selected = assignHiddenRootsFromVarsPoolWithLineDeps(
+        allocator,
+        fresh.parser,
+        theorem,
+        fresh.theorem_vars,
+        fresh.sort_vars,
+        line_deps,
+        ref_exprs,
+        explicit_bindings,
+        extra_used_deps,
+        needs,
+    ) catch |err| switch (err) {
+        error.FreshNoAvailableVar => return error.HiddenWitnessNoAvailableVar,
+        else => return err,
+    };
+    defer allocator.free(selected);
+
+    const assignments = try allocator.alloc(
+        DefOps.MaterializedDummyAssignment,
+        selected.len,
+    );
+    for (selected, assignments) |selection, *assignment| {
+        assignment.* = .{
+            .root_slot = selection.root_slot,
+            .expr_id = selection.expr_id,
+        };
+    }
+    return assignments;
+}
+
 pub fn seedRecoverHolesFromVarsPool(
     allocator: std.mem.Allocator,
     parser: *MM0Parser,

@@ -29,8 +29,10 @@ const AcCertMap = conversion.AcCertMap;
 const varIdForLeaf = conversion.varIdForLeaf;
 const flattenAcExpr = conversion.flattenAcExpr;
 const Normalizer = @import("../../../normalizer.zig").Normalizer;
-const Normalize = @import("../../normalize.zig");
-const CheckedLine = @import("../../../checked_ir.zig").CheckedLine;
+const CheckedIr = @import("../../../checked_ir.zig");
+const CheckedLine = CheckedIr.CheckedLine;
+const CompilerDiag = @import("../../../diag.zig");
+const Matching = @import("../../check/matching.zig");
 
 /// A reference as it is written in a proof line: `#name`/`#index` for a
 /// hypothesis, the label for an earlier line. Depends on nothing but the
@@ -1841,8 +1843,8 @@ pub const Lowerer = struct {
     /// Try to extend the driving step at `idx` into a big-step group:
     /// absorb the following in-redex `@rewrite` steps and state one
     /// conclusion whose result side is the rewrite normal form.
-    /// Committed only when the checker's own normalized comparison
-    /// accepts the stated line (see `checkerAcceptsBigStep`), so an
+    /// Committed only when the checker's own conversion ladder accepts
+    /// the stated line (see `checkerAcceptsBigStep`), so an
     /// emitted big-step line always checks; anything short falls back to
     /// the elementary stanzas.
     fn tryBigStep(
@@ -1881,11 +1883,13 @@ pub const Lowerer = struct {
     /// The commit gate for a big-step group: replay the checker's own
     /// acceptance test on the rule line the group will emit. That line
     /// states the driving rule's conclusion with its result side replaced
-    /// by the group's final redex, so line-check falls through to
-    /// normalized comparison. `Normalize.wouldAcceptStatedConclusion`
-    /// runs the very builder the checker runs on this stated/derived
-    /// pair — fresh normalizer, one budget, transport requirement — so
-    /// groups cannot form when the theory cannot replay them.
+    /// by the group's final redex, and the checker relates the rule's
+    /// derived conclusion to it through `Matching.convertTo`. The gate
+    /// runs that ladder on the same pair, into a scratch line list, so
+    /// groups cannot form when the theory cannot replay them. It names no
+    /// hidden definition dummies (a probe must not allocate them), so it
+    /// may decline a group the checker would accept; the group's steps are
+    /// then emitted one by one.
     fn checkerAcceptsBigStep(
         self: *Lowerer,
         step: egraph.Step,
@@ -1913,14 +1917,28 @@ pub const Lowerer = struct {
             try self.relIds(relation, after_expr, before_expr)
         else
             try self.relIds(relation, before_expr, after_expr);
-        return Normalize.wouldAcceptStatedConclusion(
-            self.work,
-            self.theorem,
-            self.context.registry,
-            self.context.env,
-            derived,
-            stated,
-        );
+        var checked = std.ArrayListUnmanaged(CheckedLine).empty;
+        defer {
+            CheckedIr.deinitLines(self.work, checked.items);
+            checked.deinit(self.work);
+        }
+        var scratch = CompilerDiag.Scratch.init(self.work);
+        defer scratch.deinit();
+        // The source line is never read: nothing the scratch lines prove
+        // is kept.
+        const accepted = Matching.convertTo(.{
+            .allocator = self.work,
+            .theorem = self.theorem,
+            .registry = self.context.registry,
+            .env = self.context.env,
+            .checked = &checked,
+            .scratch = &scratch,
+            .debug = .none,
+        }, .{ .ref = .{ .line = 0 } }, derived, stated) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return false,
+        };
+        return accepted != null;
     }
 
     /// True when the checker's own normalized validation closes the gap
@@ -1931,7 +1949,7 @@ pub const Lowerer = struct {
     /// seam (a trans join, a congruence lift, the transported target)
     /// binds its rule binders from cited references, so the stated-vs-
     /// derived comparison is the only thing the checker must replay —
-    /// the same acceptance test `checkerAcceptsBigStep` mirrors.
+    /// the normalized rung of the ladder `checkerAcceptsBigStep` runs.
     fn acuiAbsorbs(
         self: *Lowerer,
         sort_hint: ?[]const u8,

@@ -36,14 +36,15 @@ const seedViewBindingsForMatch = match.seedViewBindingsForMatch;
 const rollbackOneHypMatch = match.rollbackOneHypMatch;
 const conclusionBinderMaskOrNone = plan.conclusionBinderMaskOrNone;
 
-const backtrack = @import("./backtrack.zig");
-const OpenMode = backtrack.OpenMode;
-const openMode = backtrack.openMode;
-const tryFreshBoundGenerate = backtrack.tryFreshBoundGenerate;
-const SlotCtx = backtrack.SlotCtx;
-const Slot = backtrack.Slot;
-const tryGenerateSlot = backtrack.tryGenerateSlot;
-const emitGeneratedSlot = backtrack.emitGeneratedSlot;
+const slot_mod = @import("./slot.zig");
+const OpenMode = slot_mod.OpenMode;
+const openMode = slot_mod.openMode;
+const SlotCtx = slot_mod.SlotCtx;
+const Slot = slot_mod.Slot;
+const emitGeneratedSlot = slot_mod.emitGeneratedSlot;
+const ExplicitFlag = slot_mod.ExplicitFlag;
+const setExplicitFlag = slot_mod.setExplicitFlag;
+const bannedDeps = slot_mod.bannedDeps;
 
 /// State for one open-slot attempt, on top of the candidate's `SlotCtx`. The
 /// open path recurses over bound-witness choices and recover/meta
@@ -150,6 +151,154 @@ pub fn tryOpenGenerateSlot(
     }
 }
 
+/// Generate a premise whose only open binders are bound variables nothing
+/// outside the premise sees, in every phase. Two kinds qualify:
+/// - a variable a def hid. Unfolding `A → B` to `Π x : A. B`, on the goal
+///   (`pi_form`) or on a ref (`app_elim`'s `f : A → B`), leaves `x` null (the
+///   seed scrubs it) or a bare placeholder. When the seed kept a term over
+///   the variable (`nat_ind_elim`'s step term `s` over `ih`, `reflt`'s
+///   `t := λ x. x` under `T`), the variable is a seed meta instead, and
+///   `rebindHiddenVars` opens it in place, whichever binder holds it;
+/// - an eigenvariable of an intro-shaped premise (`subset_intro`'s `x` in
+///   `G , x ∈ A ⊢ x ∈ B`): the goal fixes every other binder of the premise
+///   (`otherHypBindersInConclusion`, a cost gate), and no fixed binding may mention the
+///   variable (`noFixedBindingMayMention`; `inst`'s `a : term x` may).
+/// The binders open as metas (`fresh_bound` open slot), so a proof below can
+/// still name the variable, however deep its ref (`g , y : A ⊢ Ty B` under
+/// `list_form`). Only if none does is each given a `@vars` variable occurring
+/// in no binding (`tryPoolWitnesses`). Such a variable must avoid every
+/// variable of the instance, so any fresh one gives the same instance up to
+/// renaming. `@auto backward` rules take this route too: their witness
+/// ladder has no fresh-variable rung. A holey goal may still carry the
+/// variable as a meta. Reports whether the premise opened this way and
+/// whether that produced a candidate; either way the other fallbacks run,
+/// but an opened premise is not opened again.
+pub fn tryFreshBoundGenerate(
+    ctx: *const SlotCtx,
+    hook: *const GenerationHook,
+    at: Slot,
+) anyerror!FreshBound {
+    const context = ctx.context;
+    const candidate = ctx.candidate;
+    const rule = ctx.rule;
+    const bindings = ctx.bindings;
+    if (ctx.goal != .concrete) return .skipped;
+    const cand_theorem = &candidate.theorem;
+    const mask = plan.templateBinderMask(rule.hyps[at.hyp_index]);
+    if (mask.overflow) return .skipped;
+    // A null conclusion binder of a non-view rule met a def's dummy in the
+    // concrete goal (the seed scrubs it). A view rule's raw conclusion is not
+    // what matched the goal, so there only the placeholder case applies.
+    const concl_mask: u64 = if (context.views.contains(candidate.rule_id))
+        0
+    else
+        plan.conclusionBinderMaskOrNone(rule.concl);
+    var open: u64 = 0;
+    var hosts: u64 = 0;
+    var rest = mask.mask;
+    while (rest != 0) {
+        const idx: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        if (idx >= bindings.len) return .skipped;
+        const bit = @as(u64, 1) << idx;
+        if (bindings[idx]) |value| {
+            // Still standing in for a def's hidden variable: the unfolded
+            // dummy (`unfoldDefBody`), or a seed meta a ref match would have
+            // replaced (`seed.partitionSeedBindings`).
+            const kind = cand_theorem.leafPlaceholderKind(value) orelse {
+                // A term over a def's hidden variable (`reflt`'s
+                // `t := λ x. x` under `T`): the variable opens in place, as
+                // no ref matched this premise to name it.
+                if (cand_theorem.exprAny(value, {}, isHiddenVarLeaf)) hosts |= bit;
+                continue;
+            };
+            if (kind != .dummy and kind != .seed_meta) continue;
+        } else if (concl_mask & bit == 0 and
+            !(noFixedBindingMayMention(rule, bindings, idx) and
+                otherHypBindersInConclusion(rule, mask.mask, idx))) return .skipped;
+        if (!rule.args[idx].bound) return .skipped;
+        open |= bit;
+    }
+    if (open == 0 and hosts == 0) return .skipped;
+
+    if (hook.solveOpenFn == null) return .skipped;
+    // Open the def-unfold placeholders too, so the child search can fix them.
+    // A seed meta stays put: other kept bindings mention it (`s` under `ih`),
+    // and `tryOpenGenerateSlot` rebinds it everywhere at once. So does a
+    // dummy another binding also holds (`B` over `x` in `Π x : A. B`), or its
+    // copies would open as two variables.
+    var saved: [64]?ExprId = undefined;
+    var nulled: u64 = 0;
+    rest = open;
+    while (rest != 0) {
+        const idx: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        if (bindings[idx]) |value| {
+            if (cand_theorem.leafPlaceholderKind(value) == .seed_meta or
+                heldElsewhere(cand_theorem, bindings, idx, value)) continue;
+        }
+        saved[idx] = bindings[idx];
+        bindings[idx] = null;
+        nulled |= @as(u64, 1) << idx;
+    }
+    defer {
+        rest = nulled;
+        while (rest != 0) {
+            const idx: u6 = @intCast(@ctz(rest));
+            rest &= rest - 1;
+            bindings[idx] = saved[idx];
+        }
+    }
+
+    const before = ctx.candidates.items.len;
+    try tryOpenGenerateSlot(ctx, hook, at, .{ .binders = open, .hosts = hosts });
+    return if (ctx.candidates.items.len != before) .found else .opened;
+}
+
+/// What `tryFreshBoundGenerate` did with a premise.
+const FreshBound = enum { skipped, opened, found };
+
+/// True when every non-bound binder of the premise other than `idx` occurs in
+/// the rule's conclusion, so the goal alone fixes the premise (intro-shaped,
+/// `subset_intro`). A cost gate, not a soundness condition: an elim-shaped
+/// premise takes its other binders from a sibling ref (`dvd_elim`'s `a`, `b`),
+/// and opening its eigenvariable, though sound, was mostly a doomed search
+/// (euclid).
+fn otherHypBindersInConclusion(
+    rule: *const RuleDecl,
+    hyp_mask: u64,
+    idx: usize,
+) bool {
+    const concl = plan.conclusionBinderMaskOrNone(rule.concl);
+    var rest = hyp_mask & ~(@as(u64, 1) << @intCast(idx));
+    while (rest != 0) {
+        const other: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        if (rule.args[other].bound) continue;
+        if (concl & (@as(u64, 1) << other) == 0) return false;
+    }
+    return true;
+}
+
+/// True when no bound-to-a-value binder of `rule` is declared to depend on
+/// bound binder `idx`. Each fixed value must then avoid the variable, so every
+/// legal choice is distinct from all of them and any fresh one is equal up to
+/// renaming (`subset_intro`'s `x` in `G , x ∈ A ⊢ x ∈ B`). A fixed dependent
+/// (`inst`'s `a : term x`) may already mention the right variable.
+fn noFixedBindingMayMention(
+    rule: *const RuleDecl,
+    bindings: []const ?ExprId,
+    idx: usize,
+) bool {
+    const bit = rule.args[idx].deps;
+    for (rule.args, 0..) |arg, other| {
+        if (other == idx or arg.bound) continue;
+        if (arg.deps & bit == 0) continue;
+        if (bindings[other] != null) return false;
+    }
+    return true;
+}
+
 /// The parts of a premise `tryFreshBoundGenerate` opens as fresh bound
 /// variables.
 const FreshOpen = struct {
@@ -167,7 +316,7 @@ const FreshOpen = struct {
 /// term such as `reflt`'s `t := λ x. x` under `T`). A hidden variable only
 /// another premise's binders mention stays put: this slot's solve could not
 /// fill it. Returns the binders whose values changed.
-pub fn rebindHiddenVars(
+fn rebindHiddenVars(
     store: *MetaStore,
     theorem: *TheoremContext,
     bindings: []?ExprId,
@@ -196,7 +345,7 @@ pub fn rebindHiddenVars(
 }
 
 /// True when a binding other than `bindings[idx]` mentions `leaf`.
-pub fn heldElsewhere(theorem: *const TheoremContext, bindings: []const ?ExprId, idx: usize, leaf: ExprId) bool {
+fn heldElsewhere(theorem: *const TheoremContext, bindings: []const ?ExprId, idx: usize, leaf: ExprId) bool {
     for (bindings, 0..) |maybe, other| {
         if (other == idx) continue;
         const value = maybe orelse continue;
@@ -209,7 +358,7 @@ fn isExpr(target: ExprId, _: *const TheoremContext, expr: ExprId) bool {
     return expr == target;
 }
 
-pub fn isHiddenVarLeaf(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
+fn isHiddenVarLeaf(_: void, theorem: *const TheoremContext, expr: ExprId) bool {
     const kind = theorem.leafPlaceholderKind(expr) orelse return false;
     return kind == .dummy or kind == .seed_meta;
 }
@@ -244,108 +393,6 @@ fn banCarriedMetaDeps(
         const banned = bannedDeps(theorem, rule, bindings, idx);
         if (banned != 0) try banMetasIn(theorem, value, banned, bans);
     }
-}
-
-/// The dependency bits non-bound binder `idx` of `rule` must avoid, as the
-/// checker's dependency condition reads them: those of the values of the bound
-/// binders `idx`'s `ArgInfo.deps` omits.
-fn bannedDeps(
-    theorem: *const TheoremContext,
-    rule: *const RuleDecl,
-    bindings: []const ?ExprId,
-    idx: usize,
-) u55 {
-    const deps = rule.args[idx].deps;
-    var banned: u55 = 0;
-    for (rule.args, 0..) |bound_arg, bound_idx| {
-        if (!bound_arg.bound or deps & bound_arg.deps != 0) continue;
-        const bound_value = bindings[bound_idx] orelse continue;
-        banned |= (theorem.exprDeps(bound_value, .{}) catch 0);
-    }
-    return banned;
-}
-
-/// How a matched non-bound binder's value mentions the value of a bound arg
-/// its `ArgInfo.deps` omits. Occurrences under a term with alpha rules don't
-/// count (`@freshen` renames only through those). A meta leaf counts as no hit,
-/// even a seed meta carrying a dep bit: an open meta may still be assigned
-/// something that avoids the bound variable, so a partially open binding is
-/// judged on its concrete part.
-const DepHit = enum {
-    none,
-    /// Reached only through a head conversion can rewrite away: a def
-    /// argument its body may drop, a `@rewrite` head, or an unavailable term.
-    soft,
-    /// Reached along heads no conversion removes (`argSurvivesConversion`).
-    /// ACUI combiners count: rearrangement never drops a member (idempotence
-    /// keeps a copy, and the unit mentions nothing).
-    rigid,
-};
-
-/// The strongest `DepHit` over the rule's non-bound binders, as matched.
-pub fn bindingsDepHit(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    rule: *const RuleDecl,
-    bindings: []const ?ExprId,
-) DepHit {
-    var result: DepHit = .none;
-    for (rule.args, 0..) |arg, idx| {
-        if (arg.bound) continue;
-        const value = bindings[idx] orelse continue;
-        const banned = bannedDeps(theorem, rule, bindings, idx);
-        if (banned == 0) continue;
-        const hit = exprDepHit(context, theorem, value, banned);
-        if (@backingInt(hit) > @backingInt(result)) result = hit;
-        if (result == .rigid) break;
-    }
-    return result;
-}
-
-fn exprDepHit(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    expr: ExprId,
-    banned: u55,
-) DepHit {
-    return switch (theorem.interner.node(expr).*) {
-        .placeholder => .none,
-        .variable => blk: {
-            const info = (theorem.currentLeafInfo(expr) catch null) orelse break :blk .none;
-            break :blk if (info.deps & banned != 0) .rigid else .none;
-        },
-        .app => |app| blk: {
-            if (context.registry.getAlphaRules(app.term_id).len != 0) break :blk .none;
-            var result: DepHit = .none;
-            for (app.args, 0..) |arg, i| {
-                var hit = exprDepHit(context, theorem, arg, banned);
-                if (hit == .rigid and !argSurvivesConversion(context, app.term_id, i)) hit = .soft;
-                if (@backingInt(hit) > @backingInt(result)) result = hit;
-                if (result == .rigid) break;
-            }
-            break :blk result;
-        },
-    };
-}
-
-/// No checker conversion can remove argument `arg_idx` of a `term_id` app: the
-/// head is rigid, an ACUI combiner (rearrangement never drops a member), or a
-/// def whose body keeps the argument along determining heads
-/// (`semantic.argDetermined`). Alpha-rule heads are screened by the caller.
-fn argSurvivesConversion(context: *const Context, term_id: u32, arg_idx: usize) bool {
-    return switch (semantic.headClass(context, term_id)) {
-        .rigid, .acui => true,
-        .def => semantic.argDetermined(context, term_id, arg_idx),
-        .rewrite, .unavailable => false,
-    };
-}
-
-/// A view, `@fresh`, or `@freshen` can re-choose a bound binder after the
-/// conclusion match, so a dependency hit as matched is not decisive.
-pub fn ruleMayRechooseBound(context: *const Context, rule_id: u32) bool {
-    return context.views.contains(rule_id) or
-        context.fresh_bindings.contains(rule_id) or
-        context.freshen_bindings.contains(rule_id);
 }
 
 fn banMetasIn(
@@ -1472,45 +1519,4 @@ fn mintStoreMeta(
 ) anyerror!ExprId {
     const store: *MetaStore = @ptrCast(@alignCast(ctx.?));
     return store.mint(theorem, sort_name, std.math.maxInt(u55), kind);
-}
-
-/// A rule binder's explicit-rendering flag as `setExplicitFlag` set it, with
-/// what `restore` puts back.
-pub const ExplicitFlag = struct {
-    idx: usize,
-    /// The previous value; null when the flag array did not exist before, so
-    /// restoring just clears the bit.
-    prev: ?bool,
-
-    pub fn restore(self: ExplicitFlag, candidate: *ApplyCandidate) void {
-        const flags = candidate.explicit orelse return;
-        if (self.idx >= flags.len) return;
-        flags[self.idx] = self.prev orelse false;
-    }
-};
-
-/// Set the candidate's explicit flag for rule binder `idx`.
-fn setExplicitFlag(candidate: *ApplyCandidate, idx: usize) !ExplicitFlag {
-    const flags = blk: {
-        if (candidate.explicit) |flags| break :blk flags;
-        const flags = try candidate.allocator.alloc(bool, candidate.bindings.len);
-        @memset(flags, false);
-        candidate.explicit = flags;
-        break :blk flags;
-    };
-    if (idx >= flags.len) return .{ .idx = idx, .prev = null };
-    defer flags[idx] = true;
-    return .{ .idx = idx, .prev = flags[idx] };
-}
-
-/// Mark binder `idx`, just bound to `value` by an ACUI split or principal
-/// choice, for explicit rendering. The checker re-derives such a binder by
-/// its own positional reading of the bag, which need not agree with the
-/// search's choice, least of all inside a nested inline application.
-/// A value holding a goal meta is not a choice the checker can take, so it
-/// stays unmarked (null).
-pub fn handSplitChoice(candidate: *ApplyCandidate, idx: usize, value: ?ExprId) !?ExplicitFlag {
-    const expr = value orelse return null;
-    if (candidate.theorem.containsPlaceholder(expr)) return null;
-    return try setExplicitFlag(candidate, idx);
 }

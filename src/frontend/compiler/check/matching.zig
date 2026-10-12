@@ -17,7 +17,6 @@ const DefOps = @import("../../def_ops.zig");
 const FreshSelect = @import("../fresh_select.zig");
 
 const HiddenWitnessProviderContext = struct {
-    env: *const GlobalEnv,
     theorem: *TheoremContext,
     fresh: Inference.HiddenWitnessFreshContext,
     compared_exprs: [2]ExprId,
@@ -37,56 +36,16 @@ const HiddenWitnessProviderContext = struct {
     ) anyerror!?[]DefOps.MaterializedDummyAssignment {
         const self: *HiddenWitnessProviderContext =
             @ptrCast(@alignCast(raw_context));
-        for (roots) |root| {
-            if (!root.bound) return null;
-            if (self.fresh.sort_vars.getPool(root.sort_name) == null) {
-                return null;
-            }
-        }
-
-        const needs = try allocator.alloc(
-            FreshSelect.HiddenRootNeed,
-            roots.len,
-        );
-        defer allocator.free(needs);
-        for (roots, 0..) |root, idx| {
-            needs[idx] = .{
-                .root_slot = root.root_slot,
-                .sort_name = root.sort_name,
-            };
-        }
-
-        const selected = FreshSelect
-            .assignHiddenRootsFromVarsPoolWithLineDeps(
+        return FreshSelect.materializeHiddenRoots(
             allocator,
-            self.fresh.parser,
+            self.fresh,
             self.theorem,
-            self.fresh.theorem_vars,
-            self.fresh.sort_vars,
+            roots,
             0,
             &self.compared_exprs,
             &.{},
             extra_used_deps,
-            needs,
-        ) catch |err| {
-            if (err == error.FreshNoAvailableVar) {
-                return error.HiddenWitnessNoAvailableVar;
-            }
-            return err;
-        };
-        defer allocator.free(selected);
-
-        const assignments = try allocator.alloc(
-            DefOps.MaterializedDummyAssignment,
-            selected.len,
         );
-        for (selected, 0..) |assignment, idx| {
-            assignments[idx] = .{
-                .root_slot = assignment.root_slot,
-                .expr_id = assignment.expr_id,
-            };
-        }
-        return assignments;
     }
 };
 
@@ -154,7 +113,6 @@ pub fn convertTo(
     const provider: ?DefOps.HiddenWitnessProvider =
         if (ctx.fresh) |fresh| blk: {
             provider_context = .{
-                .env = ctx.env,
                 .theorem = ctx.theorem,
                 .fresh = fresh,
                 .compared_exprs = .{ want, have },

@@ -136,7 +136,7 @@ pub const guards = [_]FrontierGuard{
         .mode = "depth",
     },
     // Depth guards for fresh variables hidden by a def
-    // (`backtrack.tryFreshBoundGenerate`): `A → B` unfolds to `Π x : A. B`,
+    // (`open_slot.tryFreshBoundGenerate`): `A → B` unfolds to `Π x : A. B`,
     // so `pi_form` (`arr_form`) and `app_elim` (`arr_elim`) need a premise
     // `g , x : A ⊢ Ty B` for an `x` that nothing pins. Without a fresh `x`
     // both miss at k=1. The bench copy enrolls `pi_form` `@auto backward`,

@@ -417,7 +417,7 @@ fn needsSeedPartition(theorem: *const TheoremContext, expr_id: ExprId) bool {
 ///     ONE shared meta leaf, so a meta-aware ref-match on any hypothesis
 ///     (`match.tryMetaAwareHypMatch`) pins it for all the others. A dummy no
 ///     ref pins by the time its premise is generated opens there as a bound
-///     variable (`backtrack.tryFreshBoundGenerate`). One no binder holds (the
+///     variable (`open_slot.tryFreshBoundGenerate`). One no binder holds (the
 ///     `λ` variable inside `id_trans`'s unfolded `J` term) can only be pinned
 ///     by a ref; keeping such terms measured neutral against scrubbing them,
 ///     so they get no special case;
