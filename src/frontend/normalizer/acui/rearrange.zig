@@ -296,7 +296,8 @@ fn Mover(comptime Engine: type) type {
         /// member of `rhs`, is the one to move: when taking it out of both
         /// sides leaves them ending alike for longer than taking out the
         /// last member of `rhs` does. Null when `rhs`'s last member should
-        /// move, or `lhs` does not end in a single member it holds once.
+        /// move, when `lhs` does not end in a single member, or when its
+        /// front holds that member too and repeats merge.
         fn lastOutOfPlace(self: *Self, lhs: ExprId, rhs: ExprId) anyerror!?[2]ExprId {
             const lhs_parts = self.split(lhs) orelse return null;
             if (self.split(lhs_parts[1]) != null) return null;
@@ -473,8 +474,9 @@ fn Mover(comptime Engine: type) type {
             )).?;
         }
 
-        /// `bag` = `rest ; member`, taking out the occurrence of `member`
-        /// nearest the end of `bag`, which holds it and something else.
+        /// `bag` = `rest ; member`, taking out one occurrence of `member`
+        /// from `bag`, which holds it and something else: from the back
+        /// part when that holds it, else through `lead`.
         fn extractOne(self: *Self, bag: ExprId, member: ExprId) anyerror!Extracted {
             const parts = self.split(bag) orelse
                 return error.MissingStructuralMetadata;
@@ -523,10 +525,10 @@ fn Mover(comptime Engine: type) type {
             ) };
         }
 
-        /// `bag` = `member ; rest`, for a `bag` whose front part holds
-        /// `member` and whose back part does not. Carried at the front, the
-        /// member rises a level with one regrouping, where carried at the
-        /// back it needs two and a swap.
+        /// `bag` = `member ; rest`, taking out one occurrence of `member`
+        /// from `bag`, which holds it and something else. Carried at the
+        /// front, the member rises a level with one regrouping, where
+        /// carried at the back it needs two and a swap.
         fn lead(self: *Self, bag: ExprId, member: ExprId) anyerror!Extracted {
             const parts = self.split(bag) orelse
                 return error.MissingStructuralMetadata;

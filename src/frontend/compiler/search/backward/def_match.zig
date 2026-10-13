@@ -11,6 +11,7 @@ const semantic = @import("./semantic.zig");
 const lockstep = @import("./lockstep.zig");
 const bag = @import("./bag.zig");
 const Canonicalizer = @import("../../../normalizer.zig").Canonicalizer;
+const head_class = @import("../../../head_class.zig");
 
 const isRigidHead = semantic.isRigidHead;
 
@@ -105,9 +106,7 @@ pub fn rigidHeadMismatch(
     a_term_id: u32,
     b_term_id: u32,
 ) bool {
-    const a_head = rigidHeadOf(context, a_term_id) orelse return false;
-    const b_head = rigidHeadOf(context, b_term_id) orelse return false;
-    return a_head != b_head;
+    return head_class.rigidHeadsDiffer(context.env, context.registry, a_term_id, b_term_id);
 }
 
 /// The outermost RIGID head `term_id` presents after transparent-def head-chain
@@ -119,22 +118,7 @@ pub fn rigidHeadMismatch(
 /// canonicalize) preserves this head whenever it is non-null, because it is null
 /// on exactly the heads canonicalization could rewrite.
 pub fn rigidHeadOf(context: *const Context, term_id: u32) ?u32 {
-    var current = term_id;
-    var depth: usize = 0;
-    while (depth < max_def_unfold_depth) : (depth += 1) {
-        switch (semantic.headClass(context, current)) {
-            .rigid => return current,
-            // Follow a def to the head its body presents.
-            .def => switch (context.env.terms.items[current].body.?) {
-                .app => |app| current = app.term_id,
-                .binder => return null,
-            },
-            // Canonicalization can rewrite an ACUI or `@rewrite` head, even a
-            // `@rewrite` head that is an ordinary term, so it is no stable root.
-            .acui, .rewrite, .unavailable => return null,
-        }
-    }
-    return null;
+    return head_class.rigidHead(context.env, context.registry, term_id);
 }
 
 // True when `term_id` heads a structural combiner declared with neither

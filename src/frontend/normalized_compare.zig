@@ -22,31 +22,34 @@ pub fn finish(
     scratch: *CompilerDiag.Scratch,
     comparison: *DefOps.NormalizedComparison,
 ) !bool {
-    var canonicalizer = Canonicalizer.init(
+    const sides = [_]ExprId{ comparison.expected_expr, comparison.actual_expr };
+    var canonicalizer = Canonicalizer.initWithScratch(
         allocator,
         comparison.mirrorTheorem(),
         registry,
         env,
         {},
+        scratch,
     );
     // The canonicalization memo is per-call scratch; the results interned into
     // the mirror theorem outlive it.
     defer canonicalizer.deinit();
-    const canonical_expected = try canonicalizer.canonicalize(
-        comparison.expected_expr,
-    );
-    const canonical_actual = try canonicalizer.canonicalize(
-        comparison.actual_expr,
-    );
-    if (!try comparison.finish(canonical_expected, canonical_actual)) {
+    var canonical: [2]ExprId = undefined;
+    // Each side gets the step budget of an engine of its own.
+    for (sides, &canonical) |expr, *out| {
+        const mark = scratch.mark();
+        out.* = try canonicalizer.canonicalizeWithFreshBudget(expr);
+        scratch.discard(mark);
+    }
+    if (!try comparison.finish(canonical[0], canonical[1])) {
         return false;
     }
 
     // Normalizing with proofs reaches the same normal forms, so it decides
-    // nothing the comparison has not; it fails where no proof can be built
-    // (a missing `@congr`), and a match no proof can carry is no match. Its
-    // proofs cost a pass over a bag for each member, so it runs only once the
-    // comparison has succeeded.
+    // nothing the comparison has not; it fails, with the error that stops it,
+    // where no proof can be built (a missing `@congr`). Its proofs cost a pass
+    // over a bag for each member, so it runs only once the comparison has
+    // succeeded.
     var checked = std.ArrayListUnmanaged(CheckedLine).empty;
     defer checked.deinit(allocator);
     var normalizer = Normalizer.initWithScratch(
@@ -58,7 +61,7 @@ pub fn finish(
         scratch,
     );
     defer normalizer.deinit();
-    for ([_]ExprId{ comparison.expected_expr, comparison.actual_expr }) |expr| {
+    for (sides) |expr| {
         const mark = scratch.mark();
         _ = try normalizer.normalize(expr);
         scratch.discard(mark);

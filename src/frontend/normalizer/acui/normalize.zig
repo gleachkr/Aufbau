@@ -203,11 +203,6 @@ pub fn normalizeCommutativeBag(
         if (leaf.new_expr != leaf.old_expr) return null;
     }
 
-    members.clearRetainingCapacity();
-    for (leaves) |leaf| {
-        if (leaf.new_expr == unit_expr and acui.supportsLeftUnit()) continue;
-        members.appendAssumeCapacity(leaf.new_expr);
-    }
     const bag = try support.buildCanonicalAcuiFromItems(members.items, acui);
     // One member left, or none: its own normal form, not a bag's.
     if (!Cover.isAcuiExpr(self, bag, acui.head_term_id)) {

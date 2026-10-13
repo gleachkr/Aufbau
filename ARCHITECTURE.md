@@ -971,8 +971,8 @@ constraints, and uses the `Canonicalizer` and `def_ops.zig` as helper
 predicates: two bindings are compatible when they canonicalize alike or the
 `Canonicalizer` finds them a common target, the same search the checker
 runs with proofs. Two distinct normal forms with no def on either side are
-never compatible, so the search runs only when a def could open one of them. When several ACUI-compatible concrete solutions remain, it
-ranks them by minimal structural residual and emits an ambiguity warning
+never compatible, so the search runs only when a def could open one of
+them. When several ACUI-compatible concrete solutions remain, it ranks them by minimal structural residual and emits an ambiguity warning
 if more than one distinct solution survived.
 
 ## Definition-aware comparison and conversion

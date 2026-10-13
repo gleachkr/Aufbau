@@ -1384,46 +1384,49 @@ test "dependency prune abstains on a rule with @freshen" {
     );
 }
 
+/// Heads of each class: primitive, defs with bodies that keep, drop or
+/// move an argument, `@rewrite` and ACUI heads, and an opaque def.
+const head_class_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort obj;
+    \\sort ctx;
+    \\term oeq (a b: obj): wff;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term f (a b: obj): obj;
+    \\term rw (a b: obj): obj;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc _ emp _
+    \\term join (g h: ctx): ctx;
+    \\term pt (a: obj): ctx;
+    \\--| @relation obj oeq oeq_refl oeq_trans oeq_sym _
+    \\axiom oeq_refl (a: obj): $ oeq a a $;
+    \\axiom oeq_trans (a b c: obj): $ oeq a b $ > $ oeq b c $ > $ oeq a c $;
+    \\axiom oeq_sym (a b: obj): $ oeq a b $ > $ oeq b a $;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx):
+    \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+    \\--| @rewrite
+    \\axiom rw_red (a b: obj): $ oeq (rw a b) a $;
+    \\
+    \\def cst (a b: obj): obj = $ a $;
+    \\def swp (a b: obj): obj = $ cst b a $;
+    \\def wrap (a b: obj): obj = $ f (cst a b) b $;
+    \\def via_rw (a b: obj): obj = $ rw a b $;
+    \\def in_ctx (a b: obj): ctx = $ join (pt a) (pt b) $;
+    \\def opaque (a: obj): obj;
+    \\theorem t (a: obj): $ oeq a a $;
+;
+
 test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
-    const mm0_src =
-        \\delimiter $ ( ) $;
-        \\provable sort wff;
-        \\sort obj;
-        \\sort ctx;
-        \\term oeq (a b: obj): wff;
-        \\term ctx_eq (g h: ctx): wff;
-        \\term f (a b: obj): obj;
-        \\term rw (a b: obj): obj;
-        \\term emp: ctx;
-        \\--| @acui ctx_assoc _ emp _
-        \\term join (g h: ctx): ctx;
-        \\term pt (a: obj): ctx;
-        \\--| @relation obj oeq oeq_refl oeq_trans oeq_sym _
-        \\axiom oeq_refl (a: obj): $ oeq a a $;
-        \\axiom oeq_trans (a b c: obj): $ oeq a b $ > $ oeq b c $ > $ oeq a c $;
-        \\axiom oeq_sym (a b: obj): $ oeq a b $ > $ oeq b a $;
-        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
-        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
-        \\axiom ctx_trans (g h i: ctx):
-        \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
-        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
-        \\axiom ctx_assoc (g h i: ctx):
-        \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
-        \\axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
-        \\--| @rewrite
-        \\axiom rw_red (a b: obj): $ oeq (rw a b) a $;
-        \\
-        \\def cst (a b: obj): obj = $ a $;
-        \\def swp (a b: obj): obj = $ cst b a $;
-        \\def wrap (a b: obj): obj = $ f (cst a b) b $;
-        \\def via_rw (a b: obj): obj = $ rw a b $;
-        \\def in_ctx (a b: obj): ctx = $ join (pt a) (pt b) $;
-        \\def opaque (a: obj): obj;
-        \\theorem t (a: obj): $ oeq a a $;
-    ;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var fixture = try fixtureFor(arena.allocator(), mm0_src, "t");
+    var fixture = try fixtureFor(arena.allocator(), head_class_mm0, "t");
     var harness = ContextHarness.init(arena.allocator());
     defer harness.deinit();
     const context = harness.context(&fixture);
@@ -1467,6 +1470,47 @@ test "argDetermined reads def bodies, @rewrite and ACUI heads, and bad ids" {
     const f = fixture.theory.env.term_names.get("f") orelse return error.MissingTerm;
     fixture.theory.env.terms.items[f].available = false;
     try std.testing.expect(!semantic.argDetermined(&context, f, 0));
+}
+
+test "rigid heads differ only where both unfold to a rigid head" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var fixture = try fixtureFor(arena.allocator(), head_class_mm0, "t");
+    var harness = ContextHarness.init(arena.allocator());
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+
+    const Row = struct { lhs: []const u8, rhs: []const u8, differ: bool };
+    const rows = [_]Row{
+        .{ .lhs = "f", .rhs = "opaque", .differ = true },
+        .{ .lhs = "f", .rhs = "f", .differ = false },
+        // `wrap` unfolds to `f`.
+        .{ .lhs = "wrap", .rhs = "f", .differ = false },
+        .{ .lhs = "wrap", .rhs = "opaque", .differ = true },
+        // The rest abstain: `cst` and `swp` unfold to an argument, and
+        // `@rewrite` and ACUI heads, directly or under a def, can change.
+        .{ .lhs = "cst", .rhs = "f", .differ = false },
+        .{ .lhs = "swp", .rhs = "opaque", .differ = false },
+        .{ .lhs = "rw", .rhs = "f", .differ = false },
+        .{ .lhs = "f", .rhs = "via_rw", .differ = false },
+        .{ .lhs = "join", .rhs = "pt", .differ = false },
+        .{ .lhs = "pt", .rhs = "in_ctx", .differ = false },
+    };
+    const names = fixture.theory.env.term_names;
+    for (rows) |row| {
+        const lhs = names.get(row.lhs) orelse return error.MissingTerm;
+        const rhs = names.get(row.rhs) orelse return error.MissingTerm;
+        std.testing.expectEqual(row.differ, def_match.rigidHeadMismatch(&context, lhs, rhs)) catch |err| {
+            std.debug.print("rigidHeadMismatch({s}, {s})\n", .{ row.lhs, row.rhs });
+            return err;
+        };
+    }
+
+    // A term recovery has discarded shows no head.
+    const f = names.get("f") orelse return error.MissingTerm;
+    const opaque_def = names.get("opaque") orelse return error.MissingTerm;
+    fixture.theory.env.terms.items[f].available = false;
+    try std.testing.expect(!def_match.rigidHeadMismatch(&context, f, opaque_def));
 }
 
 const lw_rules =

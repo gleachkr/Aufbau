@@ -263,19 +263,15 @@ fn rigidHeadsDiffer(self: anytype, template: TemplateExpr, actual: ExprId) bool 
         .app => |app| app,
         .binder => return false,
     };
-    const template_head = HeadClass.rigidHead(
-        self.env,
-        self.registry,
-        template_app.term_id,
-    ) orelse return false;
     return switch (self.theorem.interner.node(actual).*) {
-        .variable => true,
+        .variable => HeadClass.rigidHead(self.env, self.registry, template_app.term_id) != null,
         .placeholder => false,
-        .app => |app| if (HeadClass.rigidHead(
+        .app => |app| HeadClass.rigidHeadsDiffer(
             self.env,
             self.registry,
+            template_app.term_id,
             app.term_id,
-        )) |head| head != template_head else false,
+        ),
     };
 }
 

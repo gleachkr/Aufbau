@@ -84,6 +84,43 @@ const mm0_src =
     \\axiom djoin_congr (g1 g2 h1 h2: du):
     \\  $ du_eq g1 g2 $ > $ du_eq h1 h2 $ > $ du_eq (djoin g1 h1) (djoin g2 h2) $;
     \\
+    \\sort au;
+    \\term anil: au;
+    \\--| @acui au_assoc _ anil _
+    \\term ajoin (g h: au): au;
+    \\term ahyp (a: wff): au;
+    \\term au_eq (g h: au): wff;
+    \\--| @relation au au_eq au_refl au_trans au_sym _
+    \\axiom au_refl (g: au): $ au_eq g g $;
+    \\axiom au_trans (g h i: au): $ au_eq g h $ > $ au_eq h i $ > $ au_eq g i $;
+    \\axiom au_sym (g h: au): $ au_eq g h $ > $ au_eq h g $;
+    \\axiom au_assoc (g h i: au): $ au_eq (ajoin (ajoin g h) i) (ajoin g (ajoin h i)) $;
+    \\axiom au_unit_l (g: au): $ au_eq (ajoin anil g) g $;
+    \\axiom au_unit_r (g: au): $ au_eq (ajoin g anil) g $;
+    \\--| @congr
+    \\axiom ajoin_congr (g1 g2 h1 h2: au):
+    \\  $ au_eq g1 g2 $ > $ au_eq h1 h2 $ > $ au_eq (ajoin g1 h1) (ajoin g2 h2) $;
+    \\def a1 (a: wff): au = $ ahyp a $;
+    \\
+    \\sort ai;
+    \\term inil: ai;
+    \\--| @acui ai_assoc _ inil ai_idem
+    \\term ijoin (g h: ai): ai;
+    \\term ihyp (a: wff): ai;
+    \\term ai_eq (g h: ai): wff;
+    \\--| @relation ai ai_eq ai_refl ai_trans ai_sym _
+    \\axiom ai_refl (g: ai): $ ai_eq g g $;
+    \\axiom ai_trans (g h i: ai): $ ai_eq g h $ > $ ai_eq h i $ > $ ai_eq g i $;
+    \\axiom ai_sym (g h: ai): $ ai_eq g h $ > $ ai_eq h g $;
+    \\axiom ai_assoc (g h i: ai): $ ai_eq (ijoin (ijoin g h) i) (ijoin g (ijoin h i)) $;
+    \\axiom ai_idem (g: ai): $ ai_eq (ijoin g g) g $;
+    \\axiom ai_unit_l (g: ai): $ ai_eq (ijoin inil g) g $;
+    \\axiom ai_unit_r (g: ai): $ ai_eq (ijoin g inil) g $;
+    \\--| @congr
+    \\axiom ijoin_congr (g1 g2 h1 h2: ai):
+    \\  $ ai_eq g1 g2 $ > $ ai_eq h1 h2 $ > $ ai_eq (ijoin g1 h1) (ijoin g2 h2) $;
+    \\def i1 (a: wff): ai = $ ihyp a $;
+    \\
     \\theorem t (a b: wff): $ a $;
 ;
 
@@ -164,6 +201,9 @@ test "proof-free and proof-producing normal forms agree on ACUI bags" {
         .{ .join = "sjoin", .atoms = &.{ "shyp", "s1", "s2", "snil" }, .args = "aaa_" },
         // A unit that is a definition of another member.
         .{ .join = "djoin", .atoms = &.{ "dhyp", "dnil", "demp", "dhyp" }, .args = "a__b" },
+        // Combiners that do not commute, with and without idempotence.
+        .{ .join = "ajoin", .atoms = &.{ "ahyp", "a1", "ahyp", "anil" }, .args = "aab_" },
+        .{ .join = "ijoin", .atoms = &.{ "ihyp", "i1", "ihyp", "inil" }, .args = "aab_" },
     };
     for (sorts) |sort| {
         const join_id = env.term_names.get(sort.join).?;

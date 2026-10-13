@@ -212,23 +212,14 @@ pub const SharedContext = struct {
     }
 
     /// The registry's normal form of `expr_id`, as a fresh `Canonicalizer`
-    /// computes it. Each call gets the step budget a fresh one would have,
-    /// and a call that spends it all forgets what it found: forms cut short
-    /// by the budget are not normal, and must not serve a later call. Only
-    /// for a context with a registry.
+    /// computes it. Only for a context with a registry.
     pub fn canonicalize(self: *SharedContext, expr_id: ExprId) !ExprId {
         const canonicalizer = try self.sharedCanonicalizer();
-        canonicalizer.step_count = 0;
-        canonicalizer.last_rule_id = null;
-        const canonical = try canonicalizer.canonicalize(expr_id);
-        if (canonicalizer.step_count >= canonicalizer.step_limit) {
-            canonicalizer.cache.clearRetainingCapacity();
-        }
-        return canonical;
+        return try canonicalizer.canonicalizeWithFreshBudget(expr_id);
     }
 
     /// Whether `lhs` and `rhs` differ only in the order, grouping and
-    /// repeats of ACUI members; always false without a registry.
+    /// repeats of ACUI members; without a registry, whether they are equal.
     pub fn isRearrangement(
         self: *SharedContext,
         lhs: ExprId,

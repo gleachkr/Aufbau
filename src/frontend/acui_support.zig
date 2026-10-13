@@ -225,13 +225,11 @@ pub const Context = struct {
         if (lhs_app.args.len == 2) {
             if (try self.resolveCombinerForTerm(lhs_app.term_id)) |acui| {
                 if (acui.comm_id == null) return false;
-                const unit = try self.unitExpr(acui);
-                if (self.holdsMember(lhs, unit, acui.head_term_id) or
-                    self.holdsMember(rhs, unit, acui.head_term_id))
-                {
-                    return false;
-                }
-                return try self.sameMembers(lhs, rhs, acui);
+                const lhs_members = try self.sortedMembers(lhs, acui, 0);
+                const rhs_members = try self.sortedMembers(rhs, acui, 1);
+                if (!std.mem.eql(ExprId, lhs_members, rhs_members)) return false;
+                // Alike members: the unit is among both or neither.
+                return std.mem.indexOfScalar(ExprId, lhs_members, try self.unitExpr(acui)) == null;
             }
         }
         for (lhs_app.args, rhs_app.args) |lhs_arg, rhs_arg| {
@@ -398,30 +396,30 @@ pub const Context = struct {
         }
     }
 
+    /// The canonical bag of a commutative `acui` holding `items`: the unit
+    /// dropped, the rest sorted, and repeats merged when it is idempotent.
     pub fn buildCanonicalAcuiFromItems(
         self: *Context,
         items: []const ExprId,
         acui: ResolvedStructuralCombiner,
     ) anyerror!ExprId {
-        const sorted = try self.allocator.dupe(ExprId, items);
-        defer self.allocator.free(sorted);
-        std.mem.sort(ExprId, sorted, @as(*const TheoremContext, self.theorem), exprIdLessThan);
-
-        var unique = std.ArrayListUnmanaged(ExprId).empty;
-        defer unique.deinit(self.allocator);
-        for (sorted) |item| {
-            if (unique.items.len != 0 and
-                compareExprIds(
-                    self.theorem,
-                    unique.items[unique.items.len - 1],
-                    item,
-                ) == .eq and acui.idem_id != null)
-            {
-                continue;
-            }
-            try unique.append(self.allocator, item);
+        const unit_expr = try self.unitExpr(acui);
+        var members = std.ArrayListUnmanaged(ExprId).empty;
+        defer members.deinit(self.allocator);
+        try members.ensureTotalCapacityPrecise(self.allocator, items.len);
+        for (items) |item| {
+            if (item == unit_expr and acui.supportsLeftUnit()) continue;
+            members.appendAssumeCapacity(item);
         }
-        return (try AcuiBag.Combiner.fromResolved(acui).build(self.theorem, unique.items)).?;
+        std.mem.sort(ExprId, members.items, @as(*const TheoremContext, self.theorem), exprIdLessThan);
+
+        var len: usize = 0;
+        for (members.items) |member| {
+            if (len != 0 and members.items[len - 1] == member and acui.idem_id != null) continue;
+            members.items[len] = member;
+            len += 1;
+        }
+        return (try AcuiBag.Combiner.fromResolved(acui).build(self.theorem, members.items[0..len])).?;
     }
 
     pub fn isDefBearing(self: *Context, expr_id: ExprId) bool {
@@ -533,16 +531,6 @@ pub const Context = struct {
             var members = std.ArrayListUnmanaged(ExprId).empty;
             defer members.deinit(self.allocator);
             try self.collectLeaves(expr_id, acui.head_term_id, &members);
-            if (acui.supportsLeftUnit()) {
-                const unit_expr = try self.unitExpr(acui);
-                var kept: usize = 0;
-                for (members.items) |member| {
-                    if (member == unit_expr) continue;
-                    members.items[kept] = member;
-                    kept += 1;
-                }
-                members.shrinkRetainingCapacity(kept);
-            }
             return try self.buildCanonicalAcuiFromItems(members.items, acui);
         }
         // Merging requires canonical operands, not merely a right-associated
@@ -553,38 +541,25 @@ pub const Context = struct {
         return try self.mergeCanonicalExact(left, right, acui);
     }
 
+    /// `left ; right` for a combiner that does not commute, both canonical:
+    /// `left`'s members prepended to `right` one at a time, from the last.
     fn mergeCanonicalExact(
         self: *Context,
         left: ExprId,
         right: ExprId,
         acui: ResolvedStructuralCombiner,
     ) anyerror!ExprId {
-        if (left == try self.unitExpr(acui) and acui.supportsLeftUnit()) {
-            return right;
+        if (self.split(left, acui)) |parts| {
+            const merged_tail = try self.mergeCanonicalExact(parts[1], right, acui);
+            return try self.prependExact(parts[0], merged_tail, acui);
         }
-
-        const left_node = self.theorem.interner.node(left);
-        return switch (left_node.*) {
-            .app => |left_app| if (left_app.term_id == acui.head_term_id and
-                left_app.args.len == 2)
-            blk: {
-                const merged_tail = try self.mergeCanonicalExact(
-                    left_app.args[1],
-                    right,
-                    acui,
-                );
-                break :blk try self.insertItemExact(
-                    left_app.args[0],
-                    merged_tail,
-                    acui,
-                );
-            } else try self.insertItemExact(left, right, acui),
-            .variable => try self.insertItemExact(left, right, acui),
-            .placeholder => try self.insertItemExact(left, right, acui),
-        };
+        return try self.prependExact(left, right, acui);
     }
 
-    fn insertItemExact(
+    /// `item ; canon` for a combiner that does not commute: a unit drops
+    /// out, and an idempotent combiner merges `item` into a `canon` that
+    /// starts with it.
+    fn prependExact(
         self: *Context,
         item: ExprId,
         canon: ExprId,
@@ -593,74 +568,25 @@ pub const Context = struct {
         const unit_expr = try self.unitExpr(acui);
         if (item == unit_expr and acui.supportsLeftUnit()) return canon;
         if (canon == unit_expr and acui.supportsRightUnit()) return item;
+        const first = if (self.split(canon, acui)) |parts| parts[0] else canon;
+        if (item == first and acui.idem_id != null) return canon;
+        return try self.theorem.interner.internApp(
+            acui.head_term_id,
+            &[_]ExprId{ item, canon },
+        );
+    }
 
-        const canon_node = self.theorem.interner.node(canon);
-        return switch (canon_node.*) {
-            .variable => blk: {
-                const cmp = compareExprIds(self.theorem, item, canon);
-                if (cmp == .gt and acui.comm_id != null) {
-                    break :blk try self.theorem.interner.internApp(
-                        acui.head_term_id,
-                        &[_]ExprId{ canon, item },
-                    );
-                }
-                if (cmp == .eq and acui.idem_id != null) break :blk canon;
-                break :blk try self.theorem.interner.internApp(
-                    acui.head_term_id,
-                    &[_]ExprId{ item, canon },
-                );
-            },
-            .placeholder => blk: {
-                const cmp = compareExprIds(self.theorem, item, canon);
-                if (cmp == .gt and acui.comm_id != null) {
-                    break :blk try self.theorem.interner.internApp(
-                        acui.head_term_id,
-                        &[_]ExprId{ canon, item },
-                    );
-                }
-                if (cmp == .eq and acui.idem_id != null) break :blk canon;
-                break :blk try self.theorem.interner.internApp(
-                    acui.head_term_id,
-                    &[_]ExprId{ item, canon },
-                );
-            },
-            .app => |canon_app| blk: {
-                if (canon_app.term_id != acui.head_term_id or
-                    canon_app.args.len != 2)
-                {
-                    const cmp = compareExprIds(self.theorem, item, canon);
-                    if (cmp == .gt and acui.comm_id != null) {
-                        break :blk try self.theorem.interner.internApp(
-                            acui.head_term_id,
-                            &[_]ExprId{ canon, item },
-                        );
-                    }
-                    if (cmp == .eq and acui.idem_id != null) {
-                        break :blk canon;
-                    }
-                    break :blk try self.theorem.interner.internApp(
-                        acui.head_term_id,
-                        &[_]ExprId{ item, canon },
-                    );
-                }
-
-                const head = canon_app.args[0];
-                const rest = canon_app.args[1];
-                const cmp = compareExprIds(self.theorem, item, head);
-                if (cmp == .eq and acui.idem_id != null) break :blk canon;
-                if (cmp != .gt or acui.comm_id == null) {
-                    break :blk try self.theorem.interner.internApp(
-                        acui.head_term_id,
-                        &[_]ExprId{ item, canon },
-                    );
-                }
-                const inserted = try self.insertItemExact(item, rest, acui);
-                break :blk try self.theorem.interner.internApp(
-                    acui.head_term_id,
-                    &[_]ExprId{ head, inserted },
-                );
-            },
+    fn split(
+        self: *Context,
+        expr_id: ExprId,
+        acui: ResolvedStructuralCombiner,
+    ) ?[2]ExprId {
+        const app = switch (self.theorem.interner.node(expr_id).*) {
+            .app => |app| app,
+            .variable, .placeholder => return null,
         };
+        if (app.term_id != acui.head_term_id or app.args.len != 2) return null;
+        return .{ app.args[0], app.args[1] };
     }
 
     fn unitExpr(

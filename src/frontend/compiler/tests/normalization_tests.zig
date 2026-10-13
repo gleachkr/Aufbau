@@ -996,3 +996,78 @@ test "strict replay does not open defs during omitted inference" {
         ),
     );
 }
+
+/// `(x{a} & (x{b} & …))` over `members`.
+fn appendNestedBag(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: std.mem.Allocator,
+    members: []const usize,
+) !void {
+    if (members.len == 1) return try out.print(allocator, "x{d}", .{members[0]});
+    try out.print(allocator, "(x{d} & ", .{members[0]});
+    try appendNestedBag(out, allocator, members[1..]);
+    try out.append(allocator, ')');
+}
+
+test "compiler proves a near-identical ACUI bag by moving the members out of place" {
+    // Written in reverse of their sorted order, the two bags differ by one
+    // swap at the front. Sorting both sides to their normal forms takes a
+    // proof the square of the bag's size (45 KB); the swap takes 5 KB.
+    const n = 20;
+    const allocator = std.testing.allocator;
+    var reversed: [n]usize = undefined;
+    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+    var swapped = reversed;
+    std.mem.swap(usize, &swapped[0], &swapped[1]);
+
+    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer mm0_src.deinit(allocator);
+    try mm0_src.appendSlice(allocator,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term bi (a b: wff): wff;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+        \\sort rc;
+        \\term rnil: rc;
+        \\--| @acui rc_assoc rc_comm rnil _
+        \\term rjoin (g h: rc): rc; infixr rjoin: $&$ prec 6;
+        \\term rc_eq (g h: rc): wff;
+        \\--| @relation rc rc_eq rc_refl rc_trans rc_sym _
+        \\axiom rc_refl (g: rc): $ rc_eq g g $;
+        \\axiom rc_trans (g h i: rc): $ rc_eq g h $ > $ rc_eq h i $ > $ rc_eq g i $;
+        \\axiom rc_sym (g h: rc): $ rc_eq g h $ > $ rc_eq h g $;
+        \\axiom rc_assoc (g h i: rc): $ rc_eq ((g & h) & i) (g & (h & i)) $;
+        \\axiom rc_comm (g h: rc): $ rc_eq (g & h) (h & g) $;
+        \\axiom rc_unit (g: rc): $ rc_eq (g & rnil) g $;
+        \\--| @congr
+        \\axiom rjoin_congr (g1 g2 h1 h2: rc):
+        \\  $ rc_eq g1 g2 $ > $ rc_eq h1 h2 $ > $ rc_eq (g1 & h1) (g2 & h2) $;
+        \\term okr (g: rc): wff;
+        \\--| @congr
+        \\axiom okr_congr (g h: rc): $ rc_eq g h $ > $ bi (okr g) (okr h) $;
+        \\axiom okr_ax (g: rc): $ okr g $;
+        \\theorem t (
+    );
+    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try mm0_src.appendSlice(allocator, ": rc): $ okr ");
+    try appendNestedBag(&mm0_src, allocator, &reversed);
+    try mm0_src.appendSlice(allocator, " $;\n");
+
+    var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer proof_src.deinit(allocator);
+    try proof_src.appendSlice(allocator, "t\n---\nl1: $ okr ");
+    try appendNestedBag(&proof_src, allocator, &reversed);
+    try proof_src.appendSlice(allocator, " $ by okr_ax (g := $ ");
+    try appendNestedBag(&proof_src, allocator, &swapped);
+    try proof_src.appendSlice(allocator, " $) []\n");
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src.items, mmb);
+    try std.testing.expect(mmb.len < 10_000);
+}

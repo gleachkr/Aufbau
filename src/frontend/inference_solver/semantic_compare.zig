@@ -1,7 +1,5 @@
-const StructuralCongruence = @import("./congruence.zig");
+const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
-const types = @import("./types.zig");
-const StructuralProfile = types.StructuralProfile;
 
 pub fn commonStructuralTarget(
     self: anytype,
@@ -30,33 +28,29 @@ pub fn bindingCompatible(
     if ((try commonStructuralTarget(self, lhs_canon, rhs_canon)) != null) {
         return true;
     }
-    return try structuralCongruenceCompatible(self, lhs_canon, rhs_canon);
+    if (std.debug.runtime_safety) {
+        // A commutative bag's canonical form is its members sorted, so two
+        // distinct ones never hold the same members.
+        const support = try self.canonicalizer.support();
+        if (try support.sharedStructuralCombiner(lhs_canon, rhs_canon)) |acui| {
+            if (acui.comm_id != null) {
+                std.debug.assert(!try support.sameMembers(lhs_canon, rhs_canon, acui));
+            }
+        }
+    }
+    return false;
 }
 
 /// Whether a canonical form can be `bindingCompatible` with a different
 /// canonical form. Past their normal forms, two exprs meet only through a
 /// definition: the ACUI laws and congruence are settled by normalizing,
-/// and hash-consing makes distinct ids distinct terms.
+/// and hash-consing makes distinct ids distinct terms. That holds within
+/// the canonicalizer's step budget, which spans the whole solve: past it,
+/// forms stop short of normal, and two that more `@rewrite` steps would
+/// join are told apart.
 pub fn meetsOtherForms(self: anytype, canonical: ExprId) anyerror!bool {
     const support = try self.canonicalizer.support();
     return support.isDefBearing(canonical);
-}
-
-fn structuralCongruenceCompatible(
-    self: anytype,
-    lhs: ExprId,
-    rhs: ExprId,
-) anyerror!bool {
-    const support = try self.canonicalizer.support();
-    const combiner = try support.sharedStructuralCombiner(lhs, rhs) orelse {
-        return false;
-    };
-    return try StructuralCongruence.expressionsEqual(
-        self,
-        lhs,
-        rhs,
-        StructuralProfile.init(combiner),
-    );
 }
 
 pub fn sameRuleBindingsCompatible(

@@ -391,9 +391,7 @@ fn bodyMayMatch(self: anytype, template: TemplateExpr, target: MatchTarget) bool
         }
         return true;
     }
-    const head = head_class.rigidHead(env, registry, app.term_id) orelse return true;
-    const target_head = head_class.rigidHead(env, registry, target_app.term_id) orelse return true;
-    return head == target_head;
+    return !head_class.rigidHeadsDiffer(env, registry, app.term_id, target_app.term_id);
 }
 
 const MatchTargetApp = struct {

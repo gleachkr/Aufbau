@@ -29,13 +29,15 @@ pub const CommonTargetResult = Types.CommonTargetResult;
 /// appended to `lines`.
 pub const Normalizer = Engine(.proofs);
 
-/// The same normalizer and common-target search with no proof sink: each
-/// step it would have emitted reports `Support.proof_free_line`. It decides
-/// the laws, not whether a proof of them can be stated, so it also runs
-/// where the proof-producing normalizer needs a registered relation or
-/// `@congr` rule and has none. Its normal forms are the canonical forms
-/// inference and search compare, and its common targets decide whether
-/// two bindings can meet.
+/// The normalizer's normal forms and common targets with no proof sink:
+/// where it would emit a step it reports `Support.proof_free_line`, and a
+/// commutative bag it sorts in one pass rather than member by member
+/// (`normalizeCommutativeBag`), so its steps differ but not where they end.
+/// It decides the laws, not whether a proof of them can be stated, so it
+/// also runs where the proof-producing normalizer needs a registered
+/// relation or `@congr` rule and has none. Its normal forms are the
+/// canonical forms inference and search compare, and its common targets
+/// decide whether two bindings can meet.
 pub const Canonicalizer = Engine(.proof_free);
 
 const Mode = enum { proofs, proof_free };
@@ -164,6 +166,17 @@ fn Engine(comptime mode: Mode) type {
         /// The normal form of `expr_id`, without its proof.
         pub fn canonicalize(self: *Self, expr_id: ExprId) anyerror!ExprId {
             return (try Core.normalize(self, expr_id)).result_expr;
+        }
+
+        /// `canonicalize` with the step budget a fresh engine would have. A
+        /// call that spends it all forgets what it found: forms cut short by
+        /// the budget are not normal, and must not serve a later call.
+        pub fn canonicalizeWithFreshBudget(self: *Self, expr_id: ExprId) anyerror!ExprId {
+            self.step_count = 0;
+            self.last_rule_id = null;
+            const canonical = try self.canonicalize(expr_id);
+            if (self.step_count >= self.step_limit) self.cache.clearRetainingCapacity();
+            return canonical;
         }
 
         /// The canonical bag of `acui` at `expr_id`, its members as given.

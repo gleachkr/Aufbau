@@ -67,6 +67,19 @@ pub fn rigidHead(
     return null;
 }
 
+/// Whether applications of `lhs` and `rhs` show different rigid heads,
+/// which no conversion reconciles. False when either has none.
+pub fn rigidHeadsDiffer(
+    env: *const GlobalEnv,
+    registry: ?*const RewriteRegistry,
+    lhs: u32,
+    rhs: u32,
+) bool {
+    const lhs_head = rigidHead(env, registry, lhs) orelse return false;
+    const rhs_head = rigidHead(env, registry, rhs) orelse return false;
+    return lhs_head != rhs_head;
+}
+
 /// Does `h(a) ≡ h(b)` force `a[arg_idx] ≡ b[arg_idx]`? True for a rigid head,
 /// and for a transparent def whose body places that parameter at a path of
 /// such heads (possibly through nested defs, each checked the same way).
