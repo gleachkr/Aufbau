@@ -262,9 +262,8 @@ pub const CrossChecker = struct {
         // third_party/mm0/mm0-c/verifier.c and
         // third_party/mm0/mm0-rs/components/mm1_parser/src/ast.rs.
         if (!variable.bound) return error.ExpectedBoundVar;
-        if (variable.sort != @as(u7, @intCast(sort_id))) {
-            return error.SortMismatch;
-        }
+        // Compare at full width: the stream's sort id is any u32.
+        if (variable.sort != sort_id) return error.SortMismatch;
         for (self.uheap[0..self.uheap_len], 0..) |heap_expr, idx| {
             if (self.uheap_saved[idx]) continue;
             if (heap_expr.deps() & expr.deps() != 0) {

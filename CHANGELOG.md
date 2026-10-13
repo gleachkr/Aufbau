@@ -53,6 +53,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   no `@congr` failed with a missing congruence rule when another premise
   wrote the bag in another order. It now takes the order written under
   that term, which no conversion can change.
+- The verifier panicked, in safe builds, on a definition whose `UDummy`
+  named a sort number of 128 or more, where it should reject the file.
+  It now rejects it with a sort mismatch, as mm0-c does. The fuzzer
+  found it.
 
 ## [0.0.16] - 2026-10-12
 

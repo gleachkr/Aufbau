@@ -1,0 +1,6 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort nat;
+term all {x: nat} (p: wff x): wff;
+term top: wff;
+def any_top {.x: nat}: wff = $ all x top $;

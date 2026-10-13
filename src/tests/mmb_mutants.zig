@@ -16,6 +16,10 @@ const mm0 = @import("../lib.zig");
 // theorem) has its binders at 0x1f0. Statements: `wff` 0x340, `imp` 0x342,
 // `ax_1` 0x346, `id` 0x37f, `and` 0x3b6, `or_right` 0x3ca, `or_left` 0x524
 // (its proof ends `Conv Cong Refl Ref 5 Unfold Refl` at 0x53a).
+//
+// The tutorial has no def with a dummy, so dummy_def.mmb (compiled by abc
+// from dummy_def.mm0) supplies one: `any_top`'s unify stream is
+// `UTerm all, UDummy nat, UTerm top` at 0x70, its sort id at 0x72.
 
 const Patch = struct {
     at: usize,
@@ -30,6 +34,8 @@ const SpecEdit = struct {
 const Mutant = struct {
     name: []const u8,
     base: []const u8 = "tutorial.mmb",
+    /// The .mm0 spec `base` was built from.
+    spec: []const u8 = "tutorial.mm0",
     patches: []const Patch = &.{},
     /// Keep only this many bytes of the file.
     truncate: ?usize = null,
@@ -293,6 +299,16 @@ const mutants = [_]Mutant{
         .mm0c = "bad dummy sort",
     },
     .{
+        // A sort id past `u7` in a def's unify stream (the cross-checker
+        // replays it before the verifier's own bounds check).
+        .name = "UDummy of an out-of-range sort",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .patches = &.{.{ .at = 0x72, .bytes = &.{0xff} }},
+        .expected = error.SortMismatch,
+        .mm0c = "unify failure at dummy",
+    },
+    .{
         .name = "Ref past the heap",
         .patches = &.{.{ .at = 0x53e, .bytes = &.{6} }},
         .expected = error.HeapOutOfBounds,
@@ -359,7 +375,9 @@ fn readMutantFile(
 }
 
 fn buildSpec(allocator: std.mem.Allocator, mutant: Mutant) ![]u8 {
-    var spec = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/mmb_mutants/tutorial.mm0", allocator, .unlimited);
+    const path = try std.fmt.allocPrint(allocator, "tests/mmb_mutants/{s}", .{mutant.spec});
+    defer allocator.free(path);
+    var spec = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .unlimited);
     for (mutant.spec_edits) |edit| {
         const next = try std.mem.replaceOwned(u8, allocator, spec, edit.find, edit.replace);
         if (std.mem.eql(u8, next, spec)) return error.SpecEditMissed;
