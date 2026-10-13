@@ -1057,9 +1057,12 @@ engine runs in two modes:
   be stated, so it also runs where the proof-producing mode needs a
   registered relation or `@congr` rule and has none. Inference, search and
   representative selection use it. A commutative bag whose combiner heads
-  no rewrite rule it normalizes member by member and sorts once
-  (`normalizeCommutativeBag`), where the proof-producing mode normalizes
-  every prefix of the spine and merges member by member
+  no rewrite rule, and none of whose members folds into a def member, it
+  normalizes member by member and sorts once (`normalizeCommutativeBag`),
+  where the proof-producing mode normalizes every prefix of the spine and
+  merges member by member. A fold depends on which defs each prefix holds,
+  so a bag with one takes the prefix path in both modes; a test enumerates
+  small bags to keep the two modes' normal forms equal
 
 Before normalizing, a conversion between two expressions that differ only
 in the order, grouping and repeats of their bags' members is proved by
@@ -1067,7 +1070,10 @@ moving the members out of place (`normalizer/acui/rearrange.zig`), at a cost
 that follows how far they move rather than the square of the bag's size.
 `AcuiSupport.Context.isRearrangement` decides when that applies; def_ops
 finalization uses it too, keeping a binding's matched spelling over its
-sorted representative when the two differ only that way.
+sorted representative when the two differ only that way. Where the rule
+states a binding under a term with no `@congr`, the checker then takes the
+spelling the line has there (`pinUncongruentBindings` in
+`compiler/check/bindings.zig`), since no conversion reaches inside.
 
 Besides normal forms, the engine finds common targets of two expressions:
 transparent def comparison, witness-directed def instantiation, and for two

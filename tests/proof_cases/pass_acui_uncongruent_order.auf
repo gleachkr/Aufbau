@@ -1,0 +1,15 @@
+concl_order
+---
+l1: $ nc (a , b) $ by r [#1]
+
+concl_order_rev
+---
+l1: $ nc (b , a) $ by r [#1]
+
+hyp_order
+---
+l1: $ top $ by r2 [#1, #2]
+
+def_order
+---
+l1: $ dd (a , b) $ by rd [#1]

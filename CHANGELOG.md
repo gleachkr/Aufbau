@@ -47,6 +47,10 @@ This file records notable user-facing changes to Aufbau. The project follows
   common-target search, sorted each context member by member, and tried
   normalized matches that no normalization could make succeed. The 60
   rows now compile in 0.7 seconds.
+- A rule argument holding an `@acui` bag under a term or definition with
+  no `@congr` failed with a missing congruence rule when another premise
+  wrote the bag in another order. It now takes the order written under
+  that term, which no conversion can change.
 
 ## [0.0.16] - 2026-10-12
 

@@ -22,12 +22,36 @@ pub fn buildRearrangement(
     rhs: ExprId,
 ) anyerror!??usize {
     if (!try (try self.support()).isRearrangement(lhs, rhs)) return null;
-    return try rearrange(self, lhs, rhs);
+    var proved: Proved = .empty;
+    defer proved.deinit(self.allocator);
+    return try rearrange(self, &proved, lhs, rhs);
 }
 
+/// The pairs of subterms already proved equal, with their proofs: the two
+/// sides share subterms, and a shared pair is proved once however many
+/// paths reach it.
+const Proved = std.AutoHashMapUnmanaged([2]ExprId, ?usize);
+
 /// `lhs` = `rhs`, which differ only by a rearrangement.
-fn rearrange(self: anytype, lhs: ExprId, rhs: ExprId) anyerror!?usize {
+fn rearrange(
+    self: anytype,
+    proved: *Proved,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?usize {
     if (lhs == rhs) return null;
+    if (proved.get(.{ lhs, rhs })) |proof| return proof;
+    const proof = try rearrangeApp(self, proved, lhs, rhs);
+    try proved.put(self.allocator, .{ lhs, rhs }, proof);
+    return proof;
+}
+
+fn rearrangeApp(
+    self: anytype,
+    proved: *Proved,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?usize {
     const lhs_app = appOf(self, lhs).?;
     const rhs_app = appOf(self, rhs).?;
     if (lhs_app.args.len == 2) {
@@ -48,7 +72,7 @@ fn rearrange(self: anytype, lhs: ExprId, rhs: ExprId) anyerror!?usize {
     const proofs = try self.allocator.alloc(?usize, lhs_app.args.len);
     defer self.allocator.free(proofs);
     for (lhs_app.args, rhs_app.args, proofs) |lhs_arg, rhs_arg, *proof| {
-        proof.* = try rearrange(self, lhs_arg, rhs_arg);
+        proof.* = try rearrange(self, proved, lhs_arg, rhs_arg);
     }
     return try ProofEmit.emitCongruenceLine(
         self,
@@ -144,9 +168,11 @@ fn Mover(comptime Engine: type) type {
 
         /// `lhs` = `rhs`, two bags holding the same members. A side whose
         /// two parts already hold the parts of the other is matched part
-        /// for part; otherwise the last member of `rhs` is moved to the end
-        /// of `lhs`, or the last member of `lhs` into its place in `rhs`,
-        /// whichever is out of place, and the rest matched.
+        /// for part; otherwise `rhs` is regrouped to end in a single member
+        /// (and `lhs` too when that member lies deep in its right spine),
+        /// and the last member of `rhs` is moved to the end of `lhs`, or
+        /// the last member of `lhs` into its place in `rhs`, whichever is
+        /// out of place, and the rest matched.
         fn permute(self: *Self, lhs: ExprId, rhs: ExprId) anyerror!?usize {
             if (lhs == rhs) return null;
             const rhs_parts = self.split(rhs) orelse {
@@ -202,6 +228,33 @@ fn Mover(comptime Engine: type) type {
                         absorbed,
                     ),
                 );
+            }
+            if (self.split(lhs)) |lhs_parts| regroup: {
+                const back = self.split(lhs_parts[1]) orelse break :regroup;
+                if (self.contains(back[1], last)) {
+                    // `a ; (b ; c)` read as `(a ; b) ; c`, as `rhs` is
+                    // above, when `last` is to come out of `c`: dug out
+                    // from under the right spine instead, every member
+                    // moved would cost the depth of that spine.
+                    const regrouped = try self.join(
+                        try self.join(lhs_parts[0], back[0]),
+                        back[1],
+                    );
+                    return try self.compose(
+                        lhs,
+                        regrouped,
+                        rhs,
+                        try ProofEmit.emitAssocSymm(
+                            self.engine,
+                            lhs_parts[0],
+                            back[0],
+                            back[1],
+                            self.relation,
+                            self.acui,
+                        ),
+                        try self.permute(regrouped, rhs),
+                    );
+                }
             }
             if (try self.lastOutOfPlace(lhs, rhs)) |lhs_parts| {
                 // `front ; a` = `rest ; a` = `rhs`, moving `a` into its place

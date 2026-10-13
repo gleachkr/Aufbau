@@ -152,12 +152,15 @@ pub fn normalizeStructural(
 }
 
 /// The normal form of a commutative bag, without its proof, when the
-/// combiner heads no rewrite rule; null for any other expression. Each
-/// member is normalized once, concrete members fold into equal defs, and one
-/// sort orders the rest. The proof-producing path normalizes every prefix of
-/// the spine and merges member by member, a pass over the bag for each
-/// member; with no rule at the combiner the prefixes have no normal form of
-/// their own to add, and both paths end at the same bag.
+/// combiner heads no rewrite rule and no member folds into a def; null for
+/// any other expression. Each member is normalized once and one sort orders
+/// them. The proof-producing path normalizes every prefix of the spine and
+/// merges member by member, a pass over the bag for each member; with no
+/// rule at the combiner the prefixes have no normal form of their own to
+/// add, and both paths end at the same bag. A fold is where they part: the
+/// prefixes fold a member into the first def that covers it within each
+/// prefix, which the flat bag cannot replay, so a bag with a fold takes the
+/// prefix path.
 pub fn normalizeCommutativeBag(
     self: anytype,
     expr_id: ExprId,
@@ -196,6 +199,9 @@ pub fn normalizeCommutativeBag(
     };
     const unit_expr = try ProofEmit.unitExpr(self, acui);
     try applySameSideAbsorption(self, leaves, unit_expr, relation, acui);
+    for (leaves) |leaf| {
+        if (leaf.new_expr != leaf.old_expr) return null;
+    }
 
     members.clearRetainingCapacity();
     for (leaves) |leaf| {

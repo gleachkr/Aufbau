@@ -874,9 +874,12 @@ members that differ in more than their own order, still goes through the
 normal forms. For the same reason, a rule argument inferred up to member
 order keeps the order it was matched at rather than the sorted one, so a
 line that restates its context in the order it was written costs little to
-check against the next. Inference, which needs no proof, reaches a
-commutative bag's normal form by normalizing each member and sorting once,
-unless a `@rewrite` rule is headed by the combiner itself.
+check against the next. Where the rule states the argument under a term
+with no `@congr`, no conversion reaches inside that term, so the argument
+takes the order the line writes there. Inference, which needs no proof,
+reaches a commutative bag's normal form by normalizing each member and
+sorting once, unless a `@rewrite` rule is headed by the combiner itself or
+a member folds into an equal def member.
 
 In the current implementation, the ACUI path is also more def-aware than plain
 head-rewrite lookup. It can do exact cancellation of common items, same-side

@@ -194,7 +194,21 @@ pub const Context = struct {
         lhs: ExprId,
         rhs: ExprId,
     ) anyerror!bool {
+        // The pairs found alike, so a pair shared by many paths is
+        // compared once; any pair found unlike ends the walk.
+        var alike: std.AutoHashMapUnmanaged([2]ExprId, void) = .empty;
+        defer alike.deinit(self.allocator);
+        return try self.isRearrangementOf(&alike, lhs, rhs);
+    }
+
+    fn isRearrangementOf(
+        self: *Context,
+        alike: *std.AutoHashMapUnmanaged([2]ExprId, void),
+        lhs: ExprId,
+        rhs: ExprId,
+    ) anyerror!bool {
         if (lhs == rhs) return true;
+        if (alike.contains(.{ lhs, rhs })) return true;
         const lhs_app = switch (self.theorem.interner.node(lhs).*) {
             .app => |app| app,
             .variable, .placeholder => return false,
@@ -221,8 +235,9 @@ pub const Context = struct {
             }
         }
         for (lhs_app.args, rhs_app.args) |lhs_arg, rhs_arg| {
-            if (!try self.isRearrangement(lhs_arg, rhs_arg)) return false;
+            if (!try self.isRearrangementOf(alike, lhs_arg, rhs_arg)) return false;
         }
+        try alike.put(self.allocator, .{ lhs, rhs }, {});
         return true;
     }
 

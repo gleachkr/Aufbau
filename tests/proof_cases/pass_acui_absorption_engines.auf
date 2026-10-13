@@ -1,0 +1,11 @@
+two_defs
+---
+l1: $ a , (i2 a , i1 a) => a $ by r []
+
+def_unit
+---
+l1: $ dnil ; x |- y $ by ax []
+
+def_unit_one
+---
+l1: $ dnil ; x |- x $ by ax1 []

@@ -48,6 +48,7 @@ const Holes = @import("../holes.zig");
 const Idents = @import("../../idents.zig");
 const OpenTerms = @import("../inference/open_terms.zig");
 const InlineHints = @import("./inline_hints.zig");
+const AcuiSupport = @import("../../acui_support.zig");
 const addFallbackFailureNote = DiagNotes.addFallbackFailureNote;
 const concreteMatchFailureSpan = DiagNotes.concreteMatchFailureSpan;
 const setHoleyInferenceDiagnostic = DiagNotes.setHoleyInferenceDiagnostic;
@@ -392,6 +393,87 @@ pub fn validateOptionalBindingsForProbe(
     );
 }
 
+/// A rule argument stated under a term with no `@congr` meets the line
+/// there exactly as written, since no conversion reaches inside that term.
+/// Inference settles an ACUI bag only up to the order of its members, so an
+/// inferred argument such a site writes in another order takes the site's.
+/// Returns `bindings` itself when no argument changes, else a copy.
+fn pinUncongruentBindings(
+    context: *const Inference.RuleInferenceContext,
+    partial_bindings: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+    bindings: []const ExprId,
+) ![]const ExprId {
+    const Pinner = struct {
+        context: *const Inference.RuleInferenceContext,
+        partial_bindings: []const ?ExprId,
+        bindings: []const ExprId,
+        pinned: ?[]ExprId = null,
+        support: AcuiSupport.Context,
+
+        fn visit(
+            pinner: *@This(),
+            template: TemplateExpr,
+            actual: ExprId,
+            pinned: bool,
+        ) anyerror!void {
+            switch (template) {
+                .binder => |idx| {
+                    if (!pinned or pinner.partial_bindings[idx] != null) return;
+                    const bound = pinner.bindings[idx];
+                    if (bound == actual) return;
+                    if (!try pinner.support.isRearrangement(bound, actual)) return;
+                    const pinned_bindings = pinner.pinned orelse blk: {
+                        const copy = try pinner.context.allocator.dupe(
+                            ExprId,
+                            pinner.bindings,
+                        );
+                        pinner.pinned = copy;
+                        pinner.bindings = copy;
+                        break :blk copy;
+                    };
+                    pinned_bindings[idx] = actual;
+                },
+                .app => |app| {
+                    const node = pinner.context.theorem.interner.node(actual);
+                    const actual_app = switch (node.*) {
+                        .app => |value| value,
+                        .variable, .placeholder => return,
+                    };
+                    if (actual_app.term_id != app.term_id or
+                        actual_app.args.len != app.args.len) return;
+                    const inner = pinned or
+                        pinner.context.registry.getCongruenceRule(app.term_id) == null;
+                    for (app.args, actual_app.args) |arg, actual_arg| {
+                        try pinner.visit(arg, actual_arg, inner);
+                    }
+                },
+            }
+        }
+    };
+    var pinner: Pinner = .{
+        .context = context,
+        .partial_bindings = partial_bindings,
+        .bindings = bindings,
+        .support = AcuiSupport.Context.init(
+            context.allocator,
+            context.theorem,
+            context.env,
+            context.registry,
+        ),
+    };
+    defer pinner.support.deinit();
+    const rule = context.rule;
+    try pinner.visit(rule.concl, line_expr, false);
+    if (rule.hyps.len == ref_exprs.len) {
+        for (rule.hyps, ref_exprs) |hyp, ref_expr| {
+            try pinner.visit(hyp, ref_expr, false);
+        }
+    }
+    return pinner.bindings;
+}
+
 pub fn inferCandidateBindings(
     self: *CompilerContext,
     context: *const Inference.RuleInferenceContext,
@@ -723,7 +805,7 @@ pub fn inferCandidateBindings(
         },
         .concrete => |line_expr| blk: {
             if (had_omitted) {
-                break :blk try Inference.inferBindings(
+                const inferred = try Inference.inferBindings(
                     self,
                     context,
                     line,
@@ -734,6 +816,13 @@ pub fn inferCandidateBindings(
                     maybe_view,
                     use_advanced_inference,
                     prefer_structural_solver,
+                );
+                break :blk try pinUncongruentBindings(
+                    context,
+                    partial_bindings,
+                    base_ref_exprs,
+                    line_expr,
+                    inferred,
                 );
             }
             break :blk try Inference.requireConcreteBindings(

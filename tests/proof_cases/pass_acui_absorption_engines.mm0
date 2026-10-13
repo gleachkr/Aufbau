@@ -1,0 +1,68 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+sort dctx;
+
+term bi (a b: wff): wff;
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ bi a a $;
+axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+
+-- A multiset context: repeats count.
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+term ctx_eq (g h: ctx): wff;
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+term seq (g: ctx) (a: wff): wff; infixl seq: $=>$ prec 0;
+--| @congr
+axiom seq_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ bi a b $ > $ bi (g => a) (h => b) $;
+
+-- Two definitions equal to one member.
+def i1 (a: wff): ctx = $ hyp a $;
+def i2 (a: wff): ctx = $ hyp a $;
+axiom r (a: wff): $ i1 a , i1 a , i2 a => a $;
+
+-- A multiset context whose unit is a definition.
+term dnil: dctx;
+def demp: dctx = $ dnil $;
+--| @acui dctx_assoc dctx_comm demp _
+term djoin (g h: dctx): dctx; infixl djoin: $;$ prec 5;
+term dhyp (a: wff): dctx; coercion dhyp: wff > dctx;
+term dctx_eq (g h: dctx): wff;
+--| @relation dctx dctx_eq dctx_refl dctx_trans dctx_sym _
+axiom dctx_refl (g: dctx): $ dctx_eq g g $;
+axiom dctx_trans (g h i: dctx): $ dctx_eq g h $ > $ dctx_eq h i $ > $ dctx_eq g i $;
+axiom dctx_sym (g h: dctx): $ dctx_eq g h $ > $ dctx_eq h g $;
+axiom dctx_assoc (g h i: dctx): $ dctx_eq ((g ; h) ; i) (g ; (h ; i)) $;
+axiom dctx_comm (g h: dctx): $ dctx_eq (g ; h) (h ; g) $;
+axiom dctx_unit (g: dctx): $ dctx_eq (demp ; g) g $;
+--| @congr
+axiom djoin_congr (g1 g2 h1 h2: dctx):
+  $ dctx_eq g1 g2 $ > $ dctx_eq h1 h2 $ > $ dctx_eq (g1 ; h1) (g2 ; h2) $;
+term dseq (g: dctx) (a: wff): wff; infixl dseq: $|-$ prec 0;
+--| @congr
+axiom dseq_congr (g h: dctx) (a b: wff):
+  $ dctx_eq g h $ > $ bi a b $ > $ bi (g |- a) (h |- b) $;
+axiom ax (a b: wff): $ dnil ; (dhyp a ; demp) |- b $;
+axiom ax1 (b: wff): $ dnil ; (dhyp b ; demp) |- b $;
+
+-- Inference and the checker must fold `a` into the same definition: the
+-- one each prefix of the bag folds it into.
+theorem two_defs (a: wff): $ a , (i2 a , i1 a) => a $;
+-- Nor may `dnil` fold into the unit `demp` and vanish with it.
+theorem def_unit (x y: wff): $ dnil ; x |- y $;
+theorem def_unit_one (x: wff): $ dnil ; x |- x $;

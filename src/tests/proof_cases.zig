@@ -417,6 +417,16 @@ const proof_cases = [_]ProofCase{
     // A 12-row truth tree whose every line restates its branch: sorting
     // each line's context overflowed the verifier's heap.
     .{ .stem = "pass_acui_long_context", .outcome = .pass },
+    // Rearrangements that overflowed the verifier's heap: a 120-member
+    // right-nested bag with two members swapped, and one swap under 16
+    // doublings of a shared subterm.
+    .{ .stem = "pass_acui_rearrangement_scale", .outcome = .pass },
+    // A context under a term or def with no @congr is bound in the order
+    // the line writes there, whatever order the other premises use.
+    .{ .stem = "pass_acui_uncongruent_order", .outcome = .pass },
+    // Bags whose members fold into definitions: inference must fold them
+    // as the checker's normalizer does.
+    .{ .stem = "pass_acui_absorption_engines", .outcome = .pass },
     // An inline `imp_intro` with `g` given as `emp` and no usable hint: exact
     // replay cannot read `a` out of `emp , a` against the ref's one-member
     // context, so the implicit conclusion falls back to ACUI-aware inference.
