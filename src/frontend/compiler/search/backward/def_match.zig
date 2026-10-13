@@ -306,11 +306,11 @@ pub fn templateDefiniteMismatch(
 }
 
 // Rigid-divergence comparison of two committed expressions (the bound-binder
-// counterpart of `templateDefiniteMismatch`). Two distinct rigid atoms, a rigid
-// atom against a compound with a rigid root, compounds with distinct rigid
-// roots, or a divergence in an argument their shared head forces are all
-// unbridgeable. Anything else touching an ACUI/`@rewrite`/unavailable head or a
-// placeholder is inconclusive.
+// counterpart of `templateDefiniteMismatch`). Two distinct rigid atoms, an atom
+// against a compound with a stable head (`stableHeadOf`), compounds with
+// distinct stable heads, or a divergence in an argument their shared head
+// forces are all unbridgeable. Anything else touching an ACUI/`@rewrite`/
+// unavailable head or a placeholder is inconclusive.
 pub fn rigidExprMismatch(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -351,13 +351,13 @@ fn rigidMismatch(
             // id comes from a monotonic counter, so distinct ids are distinct
             // variables.
             .variable => return true,
-            .app => |bb| return rigidHeadOf(context, bb.term_id) != null,
+            .app => return stableHeadOf(context, theorem, b) != null,
             .placeholder => return false,
         },
-        .app => |aa| switch (nb.*) {
+        .app => switch (nb.*) {
             .placeholder => return false,
-            .variable => return rigidHeadOf(context, aa.term_id) != null,
-            .app => |bb| {
+            .variable => return stableHeadOf(context, theorem, a) != null,
+            .app => {
                 if (lockstep.exprArgs(context, theorem, a, b)) |aligned| {
                     var args = aligned;
                     while (args.next()) |pair| {
@@ -365,10 +365,150 @@ fn rigidMismatch(
                     }
                     return false;
                 }
-                return rigidHeadMismatch(context, aa.term_id, bb.term_id);
+                const a_head = stableHeadOf(context, theorem, a) orelse return false;
+                const b_head = stableHeadOf(context, theorem, b) orelse return false;
+                return a_head != b_head;
             },
         },
     }
+}
+
+/// The head every conversion leaves on the application `expr`: its rigid
+/// head (`rigidHeadOf`), or an `@acui` combiner that keeps two members it
+/// cannot merge, directly or through a def whose body is such an application.
+fn stableHeadOf(context: *const Context, theorem: *const TheoremContext, expr: ExprId) ?u32 {
+    return stableHead(context, theorem, expr, 0);
+}
+
+fn stableHead(context: *const Context, theorem: *const TheoremContext, expr: ExprId, depth: usize) ?u32 {
+    if (depth >= max_def_unfold_depth) return null;
+    const app = switch (theorem.interner.node(expr).*) {
+        .app => |app| app,
+        else => return null,
+    };
+    if (rigidHeadOf(context, app.term_id)) |head| return head;
+    const head = switch (semantic.headClass(context, app.term_id)) {
+        .acui => app.term_id,
+        .def => switch (context.env.terms.items[app.term_id].body.?) {
+            .app => |body| body.term_id,
+            .binder => return null,
+        },
+        .rigid, .rewrite, .unavailable => return null,
+    };
+    const combiner = keepingCombiner(context, head) orelse return null;
+    if (!combiner.law.isIdempotent()) {
+        return if (minMembers(context, theorem, combiner, expr, depth + 1) >= 2) head else null;
+    }
+    // Idempotence merges equal members, so look for two that definitely
+    // differ. A def is not unfolded here.
+    if (head != app.term_id) return null;
+    const members = combiner.flatten(theorem, expr) orelse return null;
+    var first: ?ExprId = null;
+    for (members.slice()) |member| {
+        if (!exactlyOneMember(context, theorem, combiner, member, depth + 1)) continue;
+        const kept = first orelse {
+            first = member;
+            continue;
+        };
+        if (rigidMismatch(context, theorem, kept, member, null)) return head;
+    }
+    return null;
+}
+
+/// The combiner `head`, when its applications keep that head while they
+/// hold two members: an `@acui` combiner whose unit, if any, is rigid (a
+/// def unit may unfold to a member).
+fn keepingCombiner(context: *const Context, head: u32) ?bag.Combiner {
+    if (semantic.headClass(context, head) != .acui) return null;
+    const combiner = bag.combinerOf(context, head) orelse return null;
+    if (combiner.unit) |unit| if (!semantic.isRigidHead(context, unit)) return null;
+    return combiner;
+}
+
+/// Whether `expr` stays exactly one member of a `head_id` bag under every
+/// conversion: a variable, or an application whose stable head
+/// (`stableHeadOf`) is neither the combiner nor its unit.
+pub fn fixedMemberOf(context: *const Context, theorem: *const TheoremContext, head_id: u32, expr: ExprId) bool {
+    const combiner = bag.combinerOf(context, head_id) orelse return false;
+    return exactlyOneMember(context, theorem, combiner, expr, 0);
+}
+
+fn exactlyOneMember(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    combiner: bag.Combiner,
+    expr: ExprId,
+    depth: usize,
+) bool {
+    return switch (theorem.interner.node(expr).*) {
+        .variable => true,
+        .placeholder => false,
+        .app => if (stableHead(context, theorem, expr, depth)) |head|
+            head != combiner.head and head != combiner.unit
+        else
+            false,
+    };
+}
+
+/// The fewest members of a `head_id` bag that `expr` stands for under every
+/// conversion.
+pub fn minMembersOf(context: *const Context, theorem: *const TheoremContext, head_id: u32, expr: ExprId) usize {
+    const combiner = bag.combinerOf(context, head_id) orelse return 0;
+    return minMembers(context, theorem, combiner, expr, 0);
+}
+
+fn minMembers(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    combiner: bag.Combiner,
+    expr: ExprId,
+    depth: usize,
+) usize {
+    if (depth >= max_def_unfold_depth) return 0;
+    const app = switch (theorem.interner.node(expr).*) {
+        .variable => return 1,
+        .placeholder => return 0,
+        .app => |app| app,
+    };
+    if (app.term_id == combiner.head) {
+        const members = combiner.flatten(theorem, expr) orelse return 0;
+        var count: usize = 0;
+        for (members.slice()) |member| count += minMembers(context, theorem, combiner, member, depth + 1);
+        return count;
+    }
+    // A def whose body is a `combiner` application stands for the body's
+    // members.
+    if (semantic.headClass(context, app.term_id) == .def) {
+        const body = context.env.terms.items[app.term_id].body.?;
+        if (body == .app and body.app.term_id == combiner.head) {
+            return templateMinMembers(context, theorem, combiner, body, app.args, depth + 1);
+        }
+    }
+    return @intFromBool(exactlyOneMember(context, theorem, combiner, expr, depth));
+}
+
+/// `minMembers` for a def body `template` applied to `args`; the body's
+/// binders past `args` are its dummies, each a variable.
+fn templateMinMembers(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    combiner: bag.Combiner,
+    template: TemplateExpr,
+    args: []const ExprId,
+    depth: usize,
+) usize {
+    const members = combiner.flattenTemplate(template) orelse return 0;
+    var count: usize = 0;
+    for (members.slice()) |member| switch (member) {
+        .binder => |idx| count += if (idx < args.len)
+            minMembers(context, theorem, combiner, args[idx], depth)
+        else
+            1,
+        .app => |app| if (rigidHeadOf(context, app.term_id)) |head| {
+            if (head != combiner.unit) count += 1;
+        },
+    };
+    return count;
 }
 
 pub const UnfoldDefInfo = struct {

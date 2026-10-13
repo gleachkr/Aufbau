@@ -307,7 +307,7 @@ pub fn contextInfeasible(
             // no-opinion — they might unify with or rewrite to a goal member.
             if (mn.* != .app) continue;
             if (def_match.rigidHeadOf(context, mn.app.term_id) == null) continue;
-            if (acui.memberPossiblyIn(context, theorem, m, goal_members.slice())) continue;
+            if (acui.memberPossiblyIn(context, theorem, info.acui_head_id, m, goal_members.slice())) continue;
             _ = absent_members.appendDistinct(m);
         }
         if (absent_members.len > budget) return true;
@@ -324,6 +324,7 @@ pub fn contextInfeasible(
             if (!dischargedPatternsSupported(
                 context,
                 theorem,
+                info.acui_head_id,
                 ref_members.slice(),
                 patterns,
                 has_bound,
@@ -382,6 +383,7 @@ fn matchAbsentPattern(
 fn dischargedPatternsSupported(
     context: *const Context,
     theorem: *TheoremContext,
+    head_id: u32,
     ref_members: []const ExprId,
     patterns: []const TemplateExpr,
     patterns_have_bound: []const bool,
@@ -403,7 +405,7 @@ fn dischargedPatternsSupported(
         const deps = theorem.exprDeps(concrete, .{}) catch return true;
         const has_bound = exprHasBoundLeaf(theorem, concrete) catch return true;
         if (patternCouldBeHidden(theorem, ref_members, deps, has_bound)) continue;
-        if (!acui.memberPossiblyIn(context, theorem, concrete, ref_members)) {
+        if (!acui.memberPossiblyIn(context, theorem, head_id, concrete, ref_members)) {
             return false;
         }
     }

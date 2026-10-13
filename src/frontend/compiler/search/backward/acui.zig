@@ -489,7 +489,7 @@ fn acuiRequiredMembersPlausible(
     const member_bag = bag.flatten(context, theorem, head_id, container) orelse return true;
     const leaves = leaf_bag.slice();
     const members = member_bag.slice();
-    const distinct = !law.isIdempotent() and bagIsFixed(context, theorem, members);
+    const distinct = !law.isIdempotent() and bagIsFixed(context, theorem, head_id, members);
 
     // owner[m] = leaf currently matched to member m.
     var owner: [bag.capacity]?usize = @splat(null);
@@ -510,43 +510,42 @@ fn acuiRequiredMembersPlausible(
     return true;
 }
 
-// Whether no member of the bag could stand for a different number of members
-// after conversion.
+// Whether no member of the `head_id` bag could stand for a different number of
+// members after conversion.
 fn bagIsFixed(
     context: *const Context,
     theorem: *const TheoremContext,
+    head_id: u32,
     members: []const ExprId,
 ) bool {
     for (members) |member| {
-        if (!memberIsFixed(context, theorem, member)) return false;
+        if (!memberIsFixed(context, theorem, head_id, member)) return false;
     }
     return true;
 }
 
-/// Whether `member` stays exactly one member after conversion: not a meta, and
-/// not headed by a def or `@rewrite` term that may unfold to several or none.
+/// Whether `member` stays exactly one member of a `head_id` bag after
+/// conversion (`def_match.fixedMemberOf`).
 pub fn memberIsFixed(
     context: *const Context,
     theorem: *const TheoremContext,
+    head_id: u32,
     member: ExprId,
 ) bool {
-    return switch (theorem.interner.node(member).*) {
-        .placeholder => false,
-        .variable => true,
-        .app => |app| isRigidHead(context, app.term_id),
-    };
+    return def_match.fixedMemberOf(context, theorem, head_id, member);
 }
 
-/// Whether `member` could equal some member of `list`. A member that is not
-/// fixed (`memberIsFixed`) may convert to the unit (a `wk_nil`-style def of the
-/// empty context), so it needs no partner.
+/// Whether `member` of a `head_id` bag could equal some member of `list`. A
+/// member that is not fixed (`memberIsFixed`) may convert to the unit (a
+/// `wk_nil`-style def of the empty context), so it needs no partner.
 pub fn memberPossiblyIn(
     context: *const Context,
     theorem: *const TheoremContext,
+    head_id: u32,
     member: ExprId,
     list: []const ExprId,
 ) bool {
-    if (!memberIsFixed(context, theorem, member)) return true;
+    if (!memberIsFixed(context, theorem, head_id, member)) return true;
     for (list) |candidate| {
         if (!def_match.rigidExprMismatch(context, theorem, member, candidate)) return true;
     }

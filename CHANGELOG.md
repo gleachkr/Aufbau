@@ -18,6 +18,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   member order keeps the order it was written in rather than the sorted
   one. Across the proof-case fixtures the compiled proofs are about 6%
   smaller (`tait` 41%).
+- `exact?` and `auto?` rule out more candidates over `@acui` bags before
+  trying them. A member that keeps its own head, such as a product of two
+  fixed factors inside a sum, is matched by that head; a member written
+  with a definition, such as `a / b` for `a * inv b`, is read through its
+  definition; and under a law that keeps copies, the two sides must be
+  able to hold the same number of members. With every line of the
+  `cardano` proofs as a search, `exact?` finds 402 of 405 lines (from
+  355) and `auto?` 404 (from 356), trying about 2% of the candidates.
 
 ### Fixed
 

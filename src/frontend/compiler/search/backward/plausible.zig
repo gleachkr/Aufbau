@@ -84,12 +84,12 @@ pub fn splitSiteBindingsPlausible(
     if (!all_bound) return true;
 
     for (bound_members.slice()) |member| {
-        if (!acui.memberPossiblyIn(context, theorem, member, goal_members.slice())) {
+        if (!acui.memberPossiblyIn(context, theorem, site.head_id, member, goal_members.slice())) {
             return false;
         }
     }
     for (goal_members.slice()) |member| {
-        if (!acui.memberPossiblyIn(context, theorem, member, bound_members.slice())) {
+        if (!acui.memberPossiblyIn(context, theorem, site.head_id, member, bound_members.slice())) {
             return false;
         }
     }
@@ -548,17 +548,50 @@ fn acuiMemberListsMismatch(
         head_id,
     ) orelse return false;
     for (candidate_members.slice()) |member| {
-        if (!acui.memberPossiblyIn(context, theorem, member, goal_members.slice())) {
+        if (!acui.memberPossiblyIn(context, theorem, head_id, member, goal_members.slice())) {
             return true;
         }
     }
     for (goal_members.slice()) |member| {
-        if (!acui.memberPossiblyIn(context, theorem, member, candidate_members.slice())) {
+        if (!acui.memberPossiblyIn(context, theorem, head_id, member, candidate_members.slice())) {
             return true;
         }
     }
-    return false;
+    return memberCountMismatch(context, theorem, head_id, candidate_expr, goal_expr);
 }
+
+/// Under a law that counts copies, a side whose members are all fixed
+/// (`acui.memberIsFixed`) has exactly that many after conversion, so the
+/// other side cannot need more (`def_match.minMembersOf`).
+fn memberCountMismatch(
+    context: *const Context,
+    theorem: *const TheoremContext,
+    head_id: u32,
+    a: ExprId,
+    b: ExprId,
+) bool {
+    const law = bag.lawOf(context, head_id) orelse return false;
+    if (law.isIdempotent()) return false;
+    const a_count = MemberCount.of(context, theorem, head_id, a) orelse return false;
+    const b_count = MemberCount.of(context, theorem, head_id, b) orelse return false;
+    return (a_count.exact and b_count.min > a_count.min) or
+        (b_count.exact and a_count.min > b_count.min);
+}
+
+const MemberCount = struct {
+    min: usize,
+    exact: bool,
+
+    fn of(context: *const Context, theorem: *const TheoremContext, head_id: u32, expr: ExprId) ?MemberCount {
+        const members = bag.flatten(context, theorem, head_id, expr) orelse return null;
+        var count = MemberCount{ .min = 0, .exact = true };
+        for (members.slice()) |member| {
+            count.min += def_match.minMembersOf(context, theorem, head_id, member);
+            if (!acui.memberIsFixed(context, theorem, head_id, member)) count.exact = false;
+        }
+        return count;
+    }
+};
 
 const max_repeated_binder_binders = 128;
 
@@ -989,18 +1022,18 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
             // Direction 1: every determined hypothesis member must possibly
             // appear in the ref's conclusion.
             for (inst.slice()) |v| {
-                if (!acui.memberPossiblyIn(context, theorem, v, ref_members.slice())) {
+                if (!acui.memberPossiblyIn(context, theorem, hr.app.term_id, v, ref_members.slice())) {
                     return .fail;
                 }
             }
             // Direction 2: every ref member must be accounted for by a
             // determined member or by a rest binder's goal-member pool.
             for (ref_members.slice()) |r| {
-                var ok = acui.memberPossiblyIn(context, theorem, r, inst.slice());
+                var ok = acui.memberPossiblyIn(context, theorem, hr.app.term_id, r, inst.slice());
                 if (!ok and has_rest) {
                     for (rest_mask, 0..) |used, ridx| {
                         if (!used) continue;
-                        if (acui.memberPossiblyIn(context, theorem, r, state.goal_members[ridx].slice())) {
+                        if (acui.memberPossiblyIn(context, theorem, hr.app.term_id, r, state.goal_members[ridx].slice())) {
                             ok = true;
                             break;
                         }
@@ -1017,8 +1050,8 @@ fn evalHypsForAssignment(state: *HypRefState, merged: []const ?ExprId) HypEval {
                 if (hyp_rest_count[ridx] != state.rest_count[ridx]) continue;
                 const gms = &state.goal_members[ridx];
                 for (gms.slice()) |gm| {
-                    if (acui.memberPossiblyIn(context, theorem, gm, consumed_vals[ridx].slice())) continue;
-                    if (!acui.memberPossiblyIn(context, theorem, gm, ref_members.slice())) {
+                    if (acui.memberPossiblyIn(context, theorem, hr.app.term_id, gm, consumed_vals[ridx].slice())) continue;
+                    if (!acui.memberPossiblyIn(context, theorem, hr.app.term_id, gm, ref_members.slice())) {
                         return .fail;
                     }
                 }

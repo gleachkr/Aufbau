@@ -400,7 +400,7 @@ fn siblingsCover(
         const value = boundValue(bindings, b) orelse return true;
         const held = bag.flatten(context, theorem, site.head_id, value) orelse return true;
         for (held.slice()) |member| {
-            if (!acui.memberIsFixed(context, theorem, member)) return true;
+            if (!acui.memberIsFixed(context, theorem, site.head_id, member)) return true;
             if (!covered.appendDistinct(member)) return true;
         }
     }
@@ -433,9 +433,10 @@ fn enumerateMultiset(
         };
         const held = bag.flatten(context, theorem, site.head_id, value) orelse return false;
         for (held.slice()) |member| {
-            // A meta or def member may stand for any number of members, so
+            // A member that is not fixed (a meta, or a def that may unfold to
+            // several or none) may stand for any number of members, so
             // the sibling is as good as open.
-            if (!acui.memberIsFixed(context, theorem, member)) open_sibling = true;
+            if (!acui.memberIsFixed(context, theorem, site.head_id, member)) open_sibling = true;
             // A member the goal lacks may still match after conversion; the
             // validator decides.
             _ = takeCopy(members, free[0..members.len], member);
@@ -577,9 +578,10 @@ fn summandSpan(
                 span.exact = false;
                 continue;
             };
-            // A meta or def member may stand for any number of members.
+            // A member that is not fixed (a meta, or a def that may unfold to
+            // several or none) may stand for any number of members.
             for (members.slice()) |member| {
-                if (acui.memberIsFixed(context, theorem, member)) {
+                if (acui.memberIsFixed(context, theorem, head_id, member)) {
                     span.count += 1;
                 } else {
                     span.exact = false;

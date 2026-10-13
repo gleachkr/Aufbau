@@ -1090,6 +1090,115 @@ test "repeated-binder prune abstains on a goal member holding a meta" {
     ));
 }
 
+/// A commutative ring's signature: `add` and `mul` are `@acui` with rigid
+/// units, `neg` and `inv` are rigid, and `div` and `nil` are defs over them.
+const ring_theory =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort R;
+    \\term eq (a b: R): wff;
+    \\term zero: R;
+    \\term one: R;
+    \\--| @acui add_assoc add_comm zero _
+    \\term add (a b: R): R;
+    \\--| @acui mul_assoc mul_comm one _
+    \\term mul (a b: R): R;
+    \\term neg (a: R): R;
+    \\term inv (a: R): R;
+    \\def div (a b: R): R = $ mul a (inv b) $;
+    \\def nil: R = $ zero $;
+    \\
+    \\--| @relation R eq eq_refl eq_trans eq_symm _
+    \\axiom eq_refl (a: R): $ eq a a $;
+    \\axiom eq_trans (a b c: R): $ eq a b $ > $ eq b c $ > $ eq a c $;
+    \\axiom eq_symm (a b: R): $ eq a b $ > $ eq b a $;
+    \\axiom add_assoc (a b c: R): $ eq (add (add a b) c) (add a (add b c)) $;
+    \\axiom add_comm (a b: R): $ eq (add a b) (add b a) $;
+    \\axiom mul_assoc (a b c: R): $ eq (mul (mul a b) c) (mul a (mul b c)) $;
+    \\axiom mul_comm (a b: R): $ eq (mul a b) (mul b a) $;
+    \\axiom add_congr (a b c d: R): $ eq a b $ > $ eq c d $ > $ eq (add a c) (add b d) $;
+    \\theorem t (x y z: R): $ eq x y $;
+    \\
+;
+
+/// `ring_theory` with an idempotent `add`.
+const idempotent_ring_theory = replaceOnce(
+    ring_theory,
+    "@acui add_assoc add_comm zero _",
+    "@acui add_assoc add_comm zero add_idem",
+) ++
+    \\axiom add_idem (a: R): $ eq (add a a) a $;
+    \\
+;
+
+/// Whether `add_congr`, its left summands bound to the sides of `left` and
+/// its right summands to the sides of `right` (each an `eq` pair), survives
+/// the final conclusion prune against `goal`.
+fn addCongrPlausible(mm0_src: []const u8, left: []const u8, right: []const u8, goal_src: []const u8) !bool {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var theorem_vars = try Check.buildTheoremVarMap(allocator, fixture.assertion);
+    defer theorem_vars.deinit();
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const lhs = theorem.interner.node((try parseGoal(&fixture, &theorem, &theorem_vars, left)).concrete).app.args;
+    const rhs = theorem.interner.node((try parseGoal(&fixture, &theorem, &theorem_vars, right)).concrete).app.args;
+    const goal = try parseGoal(&fixture, &theorem, &theorem_vars, goal_src);
+    const rule_id = fixture.theory.env.getRuleId("add_congr") orelse return error.MissingRule;
+    // add_congr (a b c d): `a + c = b + d`.
+    const bindings = try allocator.dupe(?ExprId, &.{ lhs[0], rhs[0], lhs[1], rhs[1] });
+    var candidate = types.ApplyCandidate{
+        .allocator = allocator,
+        .rule_id = rule_id,
+        .rule_name = "add_congr",
+        .declaration_order = 0,
+        .theorem = try theorem.clone(),
+        .bindings = try allocator.alloc(?ExprId, 0),
+        .conclusion = goal.concrete,
+        .unresolved_hyps = try allocator.alloc(types.UnresolvedHypothesis, 0),
+    };
+    defer candidate.deinit();
+    return helpers.plausible.finalConclusionPlausible(&context, &candidate, goal, bindings, .{}, null);
+}
+
+test "ACUI member prune: a product with two fixed members stays a product" {
+    // `y * y + y * z` cannot become `- x`: each product keeps its `*`, and
+    // neither is the sum's unit.
+    try std.testing.expect(!try addCongrPlausible(ring_theory, "eq (mul y y) (mul y z)", "eq (neg x) zero", "eq (neg x) (neg x)"));
+}
+
+test "ACUI member prune abstains on a product that may shed its unit" {
+    // `y * 1` is `y`, which may be anything, so `y * 1 + 0` may be `- x`.
+    try std.testing.expect(try addCongrPlausible(ring_theory, "eq (mul y one) zero", "eq (neg x) zero", "eq (neg x) (neg x)"));
+}
+
+test "ACUI member prune counts copies under a law that keeps them" {
+    // `- x + - x` has two members that stay two; the goal side has one.
+    try std.testing.expect(!try addCongrPlausible(ring_theory, "eq (neg x) (neg x)", "eq (neg x) zero", "eq (neg x) (neg x)"));
+}
+
+test "ACUI member prune does not count copies under an idempotent law" {
+    // `- x + - x` is `- x` when `+` is idempotent.
+    try std.testing.expect(try addCongrPlausible(idempotent_ring_theory, "eq (neg x) (neg x)", "eq (neg x) zero", "eq (neg x) (neg x)"));
+}
+
+test "ACUI member prune reads a def member through its body" {
+    // `div y z` unfolds to `y * inv z`, a product that stays one, so
+    // `div y z + 0` cannot become `- x`.
+    try std.testing.expect(!try addCongrPlausible(ring_theory, "eq (div y z) zero", "eq (neg x) zero", "eq (neg x) (neg x)"));
+}
+
+test "ACUI member prune abstains on a def member that unfolds to the unit" {
+    // `nil` unfolds to `0`, so `nil + - x` is `- x`.
+    try std.testing.expect(try addCongrPlausible(ring_theory, "eq nil (neg x)", "eq (neg x) zero", "eq (neg x) (neg x)"));
+}
+
 test "auto? hands a generated context split to the checker as explicit bindings" {
     // Both premises of `two` are generated, and `la`'s conclusion depends on
     // the context it is given, so only the search knows which members each
