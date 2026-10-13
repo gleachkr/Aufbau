@@ -211,6 +211,8 @@ fn convertFolded(
     have: ExprId,
     want: ExprId,
 ) !?CheckedRef {
+    // Folding happens only at a definition application of `want`.
+    if (!try hasDefinitionApp(ctx, want)) return null;
     var folder: Folder = .{ .ctx = ctx };
     defer folder.memo.deinit(ctx.allocator);
     const intermediate = try folder.fold(have, want) orelse return null;
@@ -536,6 +538,24 @@ fn replaceFirstAcuiLeaf(
     );
     if (!replaced.*) return expr;
     return try theorem.interner.internApp(app.term_id, new_args);
+}
+
+/// Whether `expr` has a definition application anywhere inside.
+fn hasDefinitionApp(ctx: ConversionContext, expr: ExprId) !bool {
+    var seen: std.AutoHashMapUnmanaged(ExprId, void) = .empty;
+    defer seen.deinit(ctx.allocator);
+    var stack: std.ArrayListUnmanaged(ExprId) = .empty;
+    defer stack.deinit(ctx.allocator);
+    try stack.append(ctx.allocator, expr);
+    while (stack.pop()) |current| {
+        if (isDefinitionApp(ctx.env, ctx.theorem, current)) return true;
+        if ((try seen.getOrPut(ctx.allocator, current)).found_existing) continue;
+        switch (ctx.theorem.interner.node(current).*) {
+            .app => |app| try stack.appendSlice(ctx.allocator, app.args),
+            .variable, .placeholder => {},
+        }
+    }
+    return false;
 }
 
 fn isDefinitionApp(

@@ -6,6 +6,7 @@ const SemanticCompare = @import("./semantic_compare.zig");
 const StructuralCongruence = @import("./congruence.zig");
 const types = @import("./types.zig");
 const BinderSpace = types.BinderSpace;
+const StructuralFragment = types.StructuralFragment;
 const StructuralProfile = types.StructuralProfile;
 const StructuralRemainder = types.StructuralRemainder;
 const StructuralTemplateItem = types.StructuralTemplateItem;
@@ -142,74 +143,116 @@ pub fn collectConcreteStructuralItems(
     defer raw.deinit(self.allocator);
 
     try StructuralCongruence.collectItems(self, expr_id, profile, &raw);
+    var appender = try ItemAppender.init(self, profile.fragment, out);
+    defer appender.deinit(self.allocator);
     for (raw.items) |item| {
-        try appendStructuralItem(self, profile, out, item);
+        try appender.append(self, item);
     }
 }
 
-pub fn appendStructuralItem(
-    self: anytype,
-    profile: StructuralProfile,
+/// Appends items to `out` in a fragment's item order: sorted when the
+/// combiner commutes, and without an item `bindingCompatible` with one
+/// already kept when it is idempotent.
+///
+/// For a commutative idempotent bag, a new item is compared only with the
+/// kept items it could match. Items with one canonical form always match,
+/// and items with different canonical forms match only when one of them
+/// `meetsOtherForms`. So an item that does not is compared only with the
+/// kept items that do.
+pub const ItemAppender = struct {
+    fragment: StructuralFragment,
     out: *std.ArrayListUnmanaged(ExprId),
-    expr_id: ExprId,
-) anyerror!void {
-    switch (profile.fragment) {
-        .au => try out.append(self.allocator, expr_id),
-        .acu => try appendSortedStructuralItem(self, out, expr_id, false),
-        .aui => {
-            if (out.items.len != 0 and try SemanticCompare.bindingCompatible(
-                self,
-                out.items[out.items.len - 1],
-                expr_id,
-            )) {
-                return;
+    /// Canonical forms of the kept items (`.acui` only).
+    canonical: std.AutoHashMapUnmanaged(ExprId, void) = .empty,
+    /// Kept items whose canonical form `meetsOtherForms` (`.acui` only),
+    /// in `out` order.
+    meeting: std.ArrayListUnmanaged(ExprId) = .empty,
+
+    /// `out` may already hold items in the fragment's order.
+    pub fn init(
+        self: anytype,
+        fragment: StructuralFragment,
+        out: *std.ArrayListUnmanaged(ExprId),
+    ) anyerror!ItemAppender {
+        var appender: ItemAppender = .{ .fragment = fragment, .out = out };
+        errdefer appender.deinit(self.allocator);
+        if (fragment == .acui) {
+            for (out.items) |item| {
+                const form = try FormOf.get(self, item);
+                try appender.keep(self, item, form);
             }
-            try out.append(self.allocator, expr_id);
-        },
-        .acui => try appendSortedStructuralItem(self, out, expr_id, true),
+        }
+        return appender;
     }
-}
 
-pub fn appendSortedStructuralItem(
-    self: anytype,
-    out: *std.ArrayListUnmanaged(ExprId),
-    expr_id: ExprId,
-    dedup: bool,
-) anyerror!void {
-    if (dedup) {
-        for (out.items) |existing| {
-            if (try SemanticCompare.bindingCompatible(
-                self,
-                existing,
-                expr_id,
-            )) return;
+    pub fn deinit(appender: *ItemAppender, allocator: std.mem.Allocator) void {
+        appender.canonical.deinit(allocator);
+        appender.meeting.deinit(allocator);
+    }
+
+    pub fn append(appender: *ItemAppender, self: anytype, expr_id: ExprId) anyerror!void {
+        const out = appender.out;
+        switch (appender.fragment) {
+            .au => try out.append(self.allocator, expr_id),
+            .acu => try insertSorted(self, out, expr_id),
+            .aui => {
+                if (out.items.len != 0 and try SemanticCompare.bindingCompatible(
+                    self,
+                    out.items[out.items.len - 1],
+                    expr_id,
+                )) {
+                    return;
+                }
+                try out.append(self.allocator, expr_id);
+            },
+            .acui => {
+                const form = try FormOf.get(self, expr_id);
+                if (appender.canonical.contains(form.canonical)) return;
+                const candidates = if (form.meets_others)
+                    out.items
+                else
+                    appender.meeting.items;
+                for (candidates) |existing| {
+                    if (try SemanticCompare.bindingCompatible(self, existing, expr_id)) return;
+                }
+                try insertSorted(self, out, expr_id);
+                try appender.keep(self, expr_id, form);
+            },
         }
     }
-    if (out.items.len == 0) {
-        try out.append(self.allocator, expr_id);
-        return;
-    }
 
-    const last_cmp = compareExprIds(
+    fn keep(appender: *ItemAppender, self: anytype, expr_id: ExprId, form: FormOf) anyerror!void {
+        try appender.canonical.put(self.allocator, form.canonical, {});
+        if (form.meets_others) try appender.meeting.append(self.allocator, expr_id);
+    }
+};
+
+const FormOf = struct {
+    canonical: ExprId,
+    meets_others: bool,
+
+    fn get(self: anytype, expr_id: ExprId) anyerror!FormOf {
+        const canonical = try self.canonicalizer.canonicalize(expr_id);
+        return .{
+            .canonical = canonical,
+            .meets_others = try SemanticCompare.meetsOtherForms(self, canonical),
+        };
+    }
+};
+
+/// Inserts after the last item not greater than `expr_id`; equal items
+/// are the same expression, so their order does not matter.
+fn insertSorted(
+    self: anytype,
+    out: *std.ArrayListUnmanaged(ExprId),
+    expr_id: ExprId,
+) anyerror!void {
+    var insert_at = out.items.len;
+    while (insert_at > 0 and compareExprIds(
         self.theorem,
-        out.items[out.items.len - 1],
+        out.items[insert_at - 1],
         expr_id,
-    );
-    if (last_cmp == .lt or (last_cmp == .eq and !dedup)) {
-        try out.append(self.allocator, expr_id);
-        return;
-    }
-
-    var insert_at: usize = 0;
-    while (insert_at < out.items.len) : (insert_at += 1) {
-        const cmp = compareExprIds(
-            self.theorem,
-            out.items[insert_at],
-            expr_id,
-        );
-        if (cmp == .lt) continue;
-        if (cmp == .gt or (cmp == .eq and !dedup)) break;
-    }
+    ) == .gt) insert_at -= 1;
     try out.insert(self.allocator, insert_at, expr_id);
 }
 

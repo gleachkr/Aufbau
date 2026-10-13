@@ -24,17 +24,22 @@ pub fn bindingCompatible(
     const lhs_canon = try self.canonicalizer.canonicalize(lhs);
     const rhs_canon = try self.canonicalizer.canonicalize(rhs);
     if (lhs_canon == rhs_canon) return true;
-    // Past their normal forms, two exprs meet only through a definition:
-    // the ACUI laws and congruence are settled by normalizing, and
-    // hash-consing makes distinct ids distinct terms.
-    const support = try self.canonicalizer.support();
-    if (!support.isDefBearing(lhs_canon) and !support.isDefBearing(rhs_canon)) {
+    if (!try meetsOtherForms(self, lhs_canon) and !try meetsOtherForms(self, rhs_canon)) {
         return false;
     }
     if ((try commonStructuralTarget(self, lhs_canon, rhs_canon)) != null) {
         return true;
     }
     return try structuralCongruenceCompatible(self, lhs_canon, rhs_canon);
+}
+
+/// Whether a canonical form can be `bindingCompatible` with a different
+/// canonical form. Past their normal forms, two exprs meet only through a
+/// definition: the ACUI laws and congruence are settled by normalizing,
+/// and hash-consing makes distinct ids distinct terms.
+pub fn meetsOtherForms(self: anytype, canonical: ExprId) anyerror!bool {
+    const support = try self.canonicalizer.support();
+    return support.isDefBearing(canonical);
 }
 
 fn structuralCongruenceCompatible(

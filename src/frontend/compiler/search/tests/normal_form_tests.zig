@@ -14,6 +14,8 @@ const ContextHarness = helpers.ContextHarness;
 const normalizer_mod = @import("../../../normalizer.zig");
 const Canonicalizer = normalizer_mod.Canonicalizer;
 const Normalizer = normalizer_mod.Normalizer;
+const InferenceSolver = @import("../../../inference_solver.zig");
+const Items = @import("../../../inference_solver/items.zig");
 
 const mm0_src =
     \\delimiter $ ( ) $;
@@ -209,5 +211,63 @@ test "proof-free and proof-producing normal forms agree on ACUI bags" {
                 return error.TestUnexpectedResult;
             }
         }
+    }
+}
+
+test "an idempotent bag's items meet through a definition on either side" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const env = context.env;
+    const rule_id = env.rule_names.get("st_refl").?;
+    var solver = InferenceSolver.Solver.init(
+        allocator,
+        env,
+        &theorem,
+        context.registry,
+        rule_id,
+        &env.rules.items[rule_id],
+        null,
+        null,
+        .{},
+    );
+    defer solver.deinit();
+
+    const a = theorem.theorem_vars.items[0];
+    const b = theorem.theorem_vars.items[1];
+    const app = struct {
+        fn of(th: *TheoremContext, e: anytype, name: []const u8, arg: ExprId) !ExprId {
+            return try th.interner.internApp(e.term_names.get(name).?, &.{arg});
+        }
+    }.of;
+    const shyp_a = try app(&theorem, env, "shyp", a);
+    const shyp_b = try app(&theorem, env, "shyp", b);
+    const s1_a = try app(&theorem, env, "s1", a);
+    const s2_a = try app(&theorem, env, "s2", a);
+
+    // `s1 a` and `s2 a` unfold to `shyp a`: whichever comes first, the
+    // other is the same item. `shyp b` is not.
+    const Case = struct { items: []const ExprId, kept: usize };
+    const cases = [_]Case{
+        .{ .items = &.{ shyp_a, s1_a }, .kept = 1 },
+        .{ .items = &.{ s1_a, shyp_a }, .kept = 1 },
+        .{ .items = &.{ s1_a, s2_a }, .kept = 1 },
+        .{ .items = &.{ shyp_a, shyp_b, s2_a }, .kept = 2 },
+        .{ .items = &.{ s1_a, shyp_b }, .kept = 2 },
+    };
+    for (cases) |case| {
+        var out: std.ArrayListUnmanaged(ExprId) = .empty;
+        var appender = try Items.ItemAppender.init(&solver, .acui, &out);
+        defer appender.deinit(allocator);
+        for (case.items) |item| try appender.append(&solver, item);
+        try std.testing.expectEqual(case.kept, out.items.len);
     }
 }

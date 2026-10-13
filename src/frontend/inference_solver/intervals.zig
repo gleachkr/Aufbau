@@ -274,11 +274,13 @@ pub fn appendExprSetUnion(
     lhs: []const ExprId,
     rhs: []const ExprId,
 ) anyerror!void {
+    var appender = try StructuralItems.ItemAppender.init(self, .acui, out);
+    defer appender.deinit(self.allocator);
     for (lhs) |item| {
-        try appendEquivalentSetItem(self, out, item);
+        try appender.append(self, item);
     }
     for (rhs) |item| {
-        try appendEquivalentSetItem(self, out, item);
+        try appender.append(self, item);
     }
 }
 
@@ -291,6 +293,8 @@ pub fn appendExprSetIntersection(
     const used = try self.allocator.alloc(bool, rhs.len);
     defer self.allocator.free(used);
     @memset(used, false);
+    var appender = try StructuralItems.ItemAppender.init(self, .acui, out);
+    defer appender.deinit(self.allocator);
     for (lhs) |lhs_item| {
         for (rhs, 0..) |rhs_item, rhs_idx| {
             if (used[rhs_idx]) continue;
@@ -300,18 +304,10 @@ pub fn appendExprSetIntersection(
                 rhs_item,
             ) orelse continue;
             used[rhs_idx] = true;
-            try appendEquivalentSetItem(self, out, common);
+            try appender.append(self, common);
             break;
         }
     }
-}
-
-pub fn appendEquivalentSetItem(
-    self: anytype,
-    out: *std.ArrayListUnmanaged(ExprId),
-    expr_id: ExprId,
-) anyerror!void {
-    try StructuralItems.appendSortedStructuralItem(self, out, expr_id, true);
 }
 
 pub fn structuralItemsContainCompatible(
@@ -462,6 +458,8 @@ pub fn combineStructuralExprs(
 ) anyerror!ExprId {
     var items = std.ArrayListUnmanaged(ExprId).empty;
     defer items.deinit(self.allocator);
+    var appender = try StructuralItems.ItemAppender.init(self, profile.fragment, &items);
+    defer appender.deinit(self.allocator);
     for (exprs) |expr_id| {
         var binding_items = std.ArrayListUnmanaged(ExprId).empty;
         defer binding_items.deinit(self.allocator);
@@ -472,7 +470,7 @@ pub fn combineStructuralExprs(
             &binding_items,
         );
         for (binding_items.items) |item| {
-            try StructuralItems.appendStructuralItem(self, profile, &items, item);
+            try appender.append(self, item);
         }
     }
     return try StructuralItems.rebuildStructuralExpr(

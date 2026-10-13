@@ -55,8 +55,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   context: a truth tree with 60 rows on its branch took 13 seconds.
   Binding inference compared every two members of a context through a
   common-target search, sorted each context member by member, and tried
-  normalized matches that no normalization could make succeed. The 60
-  rows now compile in 0.7 seconds.
+  normalized matches that no normalization could make succeed. Checking
+  a line also tried to fold definitions back into statements that had
+  none. The 60 rows now compile in 0.4 seconds.
 - A rule argument holding an `@acui` bag under a term or definition with
   no `@congr` failed with a missing congruence rule when another premise
   wrote the bag in another order. It now takes the order written under
