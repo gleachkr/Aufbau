@@ -427,6 +427,9 @@ const proof_cases = [_]ProofCase{
     // Bags whose members fold into definitions: inference must fold them
     // as the checker's normalizer does.
     .{ .stem = "pass_acui_absorption_engines", .outcome = .pass },
+    // A long context reversed: a conversion proof that saves only the
+    // lines it reads back fits the verifier's heap.
+    .{ .stem = "pass_acui_heap_reversal", .outcome = .pass },
     // An inline `imp_intro` with `g` given as `emp` and no usable hint: exact
     // replay cannot read `a` out of `emp , a` against the ref's one-member
     // context, so the implicit conclusion falls back to ACUI-aware inference.

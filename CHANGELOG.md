@@ -37,10 +37,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   hole meeting at a term sort: the line failed with an unsolved binder.
   Plug sites are now the plugs under their coercions to that sort.
 - A proof whose lines restate an `@acui` context of a dozen or more
-  members could compile and then fail to verify with `HeapOverflow`: each
+  members could compile and then fail to verify with `HeapOverflow`. Each
   line sorted its context, so the proof grew with the cube of the
-  context. It now grows about with its square; a truth tree with 50 rows
-  on its branch verifies.
+  context, and every proof step kept a place on the verifier's heap
+  whether or not a later step read it back. The proof now grows about
+  with the square of the context and keeps on the heap only what it reads
+  back. A truth tree with 100 rows on its branch verifies.
 - Compiling such a proof took time growing faster than the cube of the
   context: a truth tree with 60 rows on its branch took 13 seconds.
   Binding inference compared every two members of a context through a

@@ -1180,6 +1180,14 @@ Theorem proof emission is recursive over checked-line dependencies.
 Transport lines become `Conv` proofs, and the conversion subproof is
 recovered from `def_ops.zig` as a concrete plan.
 
+Both proof emitters record the stream as a `ProofStream` of commands,
+saving every term and line as they go. Once the stream is complete,
+`toBytes` writes each save that no `Ref` reads as `Term` or `Thm`, or
+drops it if it is a `Save`, and renumbers the heap slots after it. The
+verifier's heap then holds only what the proof reads back. An expression
+used more than once is still built once and `Ref`d, which keeps the
+identity checks of `URef` and `Refl` intact.
+
 This is the main architectural invariant of the frontend / backend split:
 
 - the frontend may search, normalize, and elaborate
