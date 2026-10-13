@@ -1018,31 +1018,14 @@ fn applyAbstractBinding(
     const raw_hole_expr = view_bindings[abstract.hole_view_idx] orelse {
         return .no_progress;
     };
-    // A bare-name plug is its binder's resolved value; a pattern plug is
-    // matched at the sites and needs nothing solved up front.
-    if (abstract.left_plug.bareBinder()) |idx| {
-        if (view_bindings[idx] == null) return .no_progress;
-    }
-    if (abstract.right_plug.bareBinder()) |idx| {
-        if (view_bindings[idx] == null) return .no_progress;
-    }
-    // Cross-sort plugs: plug sites sit at the plugs' sort, so substitute
-    // the hole wrapped in the coercion route up to that sort, keeping the
-    // constructed context well-sorted.
-    const plug_sort_name = if (abstract.left_plug.bareBinder()) |idx| blk: {
-        const info = try BindingValidation.exprInfo(
-            env,
-            theorem,
-            view_bindings[idx].?,
-        );
-        break :blk info.sort_name;
-    } else abstract.left_plug.sort_name;
-    const hole_expr = (try abstractWrapHoleToPlugSort(
+    const frame = (try plugFrame(
         theorem,
         env,
+        abstract,
+        view_bindings,
         raw_hole_expr,
-        plug_sort_name,
     )) orelse return .no_progress;
+    defer frame.deinit(theorem.allocator);
 
     const allocator = theorem.allocator;
     const working = try allocator.dupe(?ExprId, view_bindings);
@@ -1055,7 +1038,7 @@ fn applyAbstractBinding(
     var walk = PlugWalk{
         .theorem = theorem,
         .abstract = abstract,
-        .hole_expr = hole_expr,
+        .frame = frame,
         .bindings = working,
         .base = base,
         .scratch = scratch,
@@ -1114,7 +1097,7 @@ fn applyAbstractBinding(
     walk = PlugWalk{
         .theorem = theorem,
         .abstract = abstract,
-        .hole_expr = hole_expr,
+        .frame = frame,
         .bindings = working,
         .base = base,
         .scratch = scratch,
@@ -1193,6 +1176,159 @@ fn preprocessPlugBindings(
     }
 }
 
+/// Where an `@abstract` walk substitutes. The hole and the plugs meet at a
+/// common sort in the coercion graph: the plugs' own sort when the hole
+/// coerces up to it, else the nearest sort above the plugs that the hole
+/// also reaches (a `name` plug and a `var` hole meet at a term sort that
+/// both coerce into). A plug site is the plug under its coercion route up to
+/// that sort, and the hole is substituted there coerced up to it, so the
+/// constructed context stays well-sorted.
+pub const PlugFrame = struct {
+    /// The hole, coerced up to the meeting sort.
+    hole_expr: ExprId,
+    /// Coercion routes from each plug's sort up to the meeting sort,
+    /// source-side first; empty when the plug is already there.
+    left_lift: []const u32,
+    right_lift: []const u32,
+
+    pub fn deinit(self: PlugFrame, allocator: std.mem.Allocator) void {
+        allocator.free(self.left_lift);
+        allocator.free(self.right_lift);
+    }
+};
+
+/// The frame for one walk, or null when the plugs are unsolved or the
+/// sorts do not meet: the cross-sort enrollment only guaranteed a common
+/// target for each plug on its own.
+pub fn plugFrame(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    abstract: AbstractDecl,
+    view_bindings: []const ?ExprId,
+    raw_hole_expr: ExprId,
+) !?PlugFrame {
+    const allocator = theorem.allocator;
+    const left_sort = (try plugSortName(
+        theorem,
+        env,
+        abstract.left_plug,
+        view_bindings,
+    )) orelse return null;
+    const right_sort = (try plugSortName(
+        theorem,
+        env,
+        abstract.right_plug,
+        view_bindings,
+    )) orelse return null;
+    const hole_sort = (try BindingValidation.exprInfo(
+        env,
+        theorem,
+        raw_hole_expr,
+    )).sort_name;
+    const meet_sort = (try meetSort(
+        env,
+        allocator,
+        hole_sort,
+        left_sort,
+    )) orelse return null;
+
+    var hole_route: std.ArrayListUnmanaged(u32) = .empty;
+    defer hole_route.deinit(allocator);
+    var left_lift: std.ArrayListUnmanaged(u32) = .empty;
+    defer left_lift.deinit(allocator);
+    var right_lift: std.ArrayListUnmanaged(u32) = .empty;
+    defer right_lift.deinit(allocator);
+    if (!try env.coercionRoute(hole_sort, meet_sort, allocator, &hole_route) or
+        !try env.coercionRoute(left_sort, meet_sort, allocator, &left_lift) or
+        !try env.coercionRoute(right_sort, meet_sort, allocator, &right_lift))
+    {
+        return null;
+    }
+    const hole_expr = try liftExpr(theorem, raw_hole_expr, hole_route.items);
+    const left_owned = try left_lift.toOwnedSlice(allocator);
+    errdefer allocator.free(left_owned);
+    return .{
+        .hole_expr = hole_expr,
+        .left_lift = left_owned,
+        .right_lift = try right_lift.toOwnedSlice(allocator),
+    };
+}
+
+/// A bare-name plug is its binder's resolved value, so its sort is the
+/// value's; a pattern plug has its declared sort.
+fn plugSortName(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    plug: AbstractPlug,
+    view_bindings: []const ?ExprId,
+) !?[]const u8 {
+    const idx = plug.bareBinder() orelse return plug.sort_name;
+    const value = view_bindings[idx] orelse return null;
+    return (try BindingValidation.exprInfo(env, theorem, value)).sort_name;
+}
+
+/// The sort the hole and a plug meet at: the plug's sort when the hole
+/// reaches it, else the sort above the plug, nearest to it, that the hole
+/// reaches too.
+fn meetSort(
+    env: *const GlobalEnv,
+    allocator: std.mem.Allocator,
+    hole_sort: []const u8,
+    plug_sort: []const u8,
+) !?[]const u8 {
+    if (env.coercionPathExists(hole_sort, plug_sort)) return plug_sort;
+    var route: std.ArrayListUnmanaged(u32) = .empty;
+    defer route.deinit(allocator);
+    var best: ?[]const u8 = null;
+    var best_len: usize = std.math.maxInt(usize);
+    for (env.coercions.items) |edge| {
+        if (!env.coercionPathExists(hole_sort, edge.dst_sort)) continue;
+        route.clearRetainingCapacity();
+        if (!try env.coercionRoute(plug_sort, edge.dst_sort, allocator, &route)) {
+            continue;
+        }
+        if (route.items.len < best_len) {
+            best = edge.dst_sort;
+            best_len = route.items.len;
+        }
+    }
+    return best;
+}
+
+/// `expr` under the coercions of `lift`, innermost first.
+pub fn liftExpr(
+    theorem: *TheoremContext,
+    expr: ExprId,
+    lift: []const u32,
+) !ExprId {
+    var current = expr;
+    for (lift) |term_id| {
+        current = try theorem.interner.internApp(term_id, &.{current});
+    }
+    return current;
+}
+
+/// The argument under the coercions of `lift`, or null when `expr` is not
+/// that coercion chain.
+pub fn peelLift(
+    theorem: *const TheoremContext,
+    expr: ExprId,
+    lift: []const u32,
+) ?ExprId {
+    var current = expr;
+    var idx = lift.len;
+    while (idx > 0) {
+        idx -= 1;
+        const app = switch (theorem.interner.node(current).*) {
+            .app => |app| app,
+            .variable, .placeholder => return null,
+        };
+        if (app.term_id != lift[idx] or app.args.len != 1) return null;
+        current = app.args[0];
+    }
+    return current;
+}
+
 /// State of one `@abstract` walk. The plugs are matched as templates over the
 /// view binders against `bindings`, which starts as the solved view state
 /// and accumulates the binders solved at accepted sites, so every site shares
@@ -1202,7 +1338,7 @@ fn preprocessPlugBindings(
 pub const PlugWalk = struct {
     theorem: *TheoremContext,
     abstract: AbstractDecl,
-    hole_expr: ExprId,
+    frame: PlugFrame,
     /// Working substitution: committed view bindings plus site solutions.
     bindings: []?ExprId,
     /// The substitution before any site was accepted.
@@ -1226,71 +1362,47 @@ pub const PlugWalk = struct {
     /// stay in `bindings`; on failure `bindings` is unchanged.
     pub fn trySite(self: *PlugWalk, left_expr: ExprId, right_expr: ExprId) bool {
         @memcpy(self.scratch, self.bindings);
-        if (self.theorem.matchTemplate(
-            self.abstract.left_plug.template,
-            left_expr,
-            self.bindings,
-        ) and self.theorem.matchTemplate(
-            self.abstract.right_plug.template,
-            right_expr,
-            self.bindings,
-        )) {
+        if (self.matchSite(left_expr, right_expr, self.bindings)) {
             self.found_plug = true;
             return true;
         }
         @memcpy(self.bindings, self.scratch);
         if (self.found_plug and !self.disagreement) {
             @memcpy(self.scratch, self.base);
-            if (self.theorem.matchTemplate(
-                self.abstract.left_plug.template,
-                left_expr,
-                self.scratch,
-            ) and self.theorem.matchTemplate(
-                self.abstract.right_plug.template,
-                right_expr,
-                self.scratch,
-            )) {
+            if (self.matchSite(left_expr, right_expr, self.scratch)) {
                 self.disagreement = true;
             }
         }
         return false;
     }
-};
 
-/// Wrap `hole_expr` in the coercion route up to the plugs' sort (the
-/// identity when the sorts already agree). Null when no route exists: the
-/// cross-sort enrollment only guaranteed a common target, not that the hole
-/// is coercible up to the plugs.
-fn abstractWrapHoleToPlugSort(
-    theorem: *TheoremContext,
-    env: *const GlobalEnv,
-    hole_expr: ExprId,
-    plug_sort_name: []const u8,
-) !?ExprId {
-    const hole_info = try BindingValidation.exprInfo(
-        env,
-        theorem,
-        hole_expr,
-    );
-    if (std.mem.eql(u8, hole_info.sort_name, plug_sort_name)) {
-        return hole_expr;
+    fn matchSite(
+        self: *const PlugWalk,
+        left_expr: ExprId,
+        right_expr: ExprId,
+        bindings: []?ExprId,
+    ) bool {
+        const left_site = peelLift(
+            self.theorem,
+            left_expr,
+            self.frame.left_lift,
+        ) orelse return false;
+        const right_site = peelLift(
+            self.theorem,
+            right_expr,
+            self.frame.right_lift,
+        ) orelse return false;
+        return self.theorem.matchTemplate(
+            self.abstract.left_plug.template,
+            left_site,
+            bindings,
+        ) and self.theorem.matchTemplate(
+            self.abstract.right_plug.template,
+            right_site,
+            bindings,
+        );
     }
-    var route: std.ArrayListUnmanaged(u32) = .empty;
-    defer route.deinit(theorem.allocator);
-    if (!try env.coercionRoute(
-        hole_info.sort_name,
-        plug_sort_name,
-        theorem.allocator,
-        &route,
-    )) {
-        return null;
-    }
-    var current = hole_expr;
-    for (route.items) |term_id| {
-        current = try theorem.interner.internApp(term_id, &.{current});
-    }
-    return current;
-}
+};
 
 fn abstractContextExpr(
     walk: *PlugWalk,
@@ -1298,7 +1410,7 @@ fn abstractContextExpr(
     right_expr: ExprId,
 ) !ExprId {
     if (walk.identityFirst() and left_expr == right_expr) return left_expr;
-    if (walk.trySite(left_expr, right_expr)) return walk.hole_expr;
+    if (walk.trySite(left_expr, right_expr)) return walk.frame.hole_expr;
 
     const theorem = walk.theorem;
     const left_node = theorem.interner.node(left_expr);

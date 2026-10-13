@@ -1377,12 +1377,14 @@ fn applyHoleyDerivedBindings(
         const hole_expr = view_bindings[abstract.hole_view_idx] orelse {
             continue;
         };
-        if (abstract.left_plug.bareBinder()) |idx| {
-            if (view_bindings[idx] == null) continue;
-        }
-        if (abstract.right_plug.bareBinder()) |idx| {
-            if (view_bindings[idx] == null) continue;
-        }
+        const frame = (try DerivedBindings.plugFrame(
+            theorem,
+            env,
+            abstract,
+            view_bindings,
+            hole_expr,
+        )) orelse continue;
+        defer frame.deinit(theorem.allocator);
 
         const allocator = theorem.allocator;
         const working = try allocator.dupe(?ExprId, view_bindings);
@@ -1394,7 +1396,7 @@ fn applyHoleyDerivedBindings(
         var walk = DerivedBindings.PlugWalk{
             .theorem = theorem,
             .abstract = abstract,
-            .hole_expr = hole_expr,
+            .frame = frame,
             .bindings = working,
             .base = base,
             .scratch = scratch,
@@ -1428,19 +1430,29 @@ fn abstractContextHoley(
 ) !ExprId {
     const theorem = walk.theorem;
     if (lineHoleSort(theorem, right) != null) {
-        // A hole of the right plug's sort is a plug site for the bare form.
+        // A hole of the right plug's sort, at the sort the plugs meet the
+        // hole, is a plug site for the bare form.
         if (walk.abstract.left_plug.bareBinder()) |left_idx| {
             if (walk.abstract.right_plug.bareBinder()) |right_idx| {
-                if (left_expr == walk.bindings[left_idx].? and
+                const frame = walk.frame;
+                if (DerivedBindings.peelLift(
+                    theorem,
+                    left_expr,
+                    frame.left_lift,
+                ) == walk.bindings[left_idx].? and
                     try holeyMatchesConcrete(
                         theorem,
                         env,
                         right,
-                        walk.bindings[right_idx].?,
+                        try DerivedBindings.liftExpr(
+                            theorem,
+                            walk.bindings[right_idx].?,
+                            frame.right_lift,
+                        ),
                     ))
                 {
                     walk.found_plug = true;
-                    return walk.hole_expr;
+                    return frame.hole_expr;
                 }
             }
         }
@@ -1452,7 +1464,7 @@ fn abstractContextHoley(
 
     if (!theorem.containsLineHole(right)) {
         if (walk.identityFirst() and left_expr == right) return left_expr;
-        if (walk.trySite(left_expr, right)) return walk.hole_expr;
+        if (walk.trySite(left_expr, right)) return walk.frame.hole_expr;
     }
 
     const left_node = theorem.interner.node(left_expr);

@@ -1,0 +1,35 @@
+import "lib/iff.mm0";
+
+--| @vars x y
+sort var;
+sort name;
+sort tm;
+term v2t (x: var): tm;
+coercion v2t: var > tm;
+term n2t (a: name): tm;
+coercion n2t: name > tm;
+
+term eq (t u: tm): wff;
+infixl eq: $=$ prec 50;
+term R (t u: tm): wff;
+term sb (t: tm) {x: var} (p: wff x): wff;
+
+--| @rewrite
+axiom sb_Rxx (t: tm) {x: var}: $ sb t x (R x x) <-> R t t $;
+--| @rewrite
+axiom sb_Rxn {x: var} {a: name} (t: tm a): $ sb t x (R x a) <-> R t a $;
+
+-- Replacement by an identity between names: from `a = b` and `p[a/x]`,
+-- conclude `p[b/x]`. `p` may mention `b` but not `a`, so every `a` is
+-- replaced. The plugs are names and the hole is a variable; they meet at
+-- `tm`, where the names occur as `n2t a` and `n2t b`.
+--| @view {x: var} {a b: name} (p: wff x b) (ps ch: wff): $ a = b $ > $ ps $ > $ ch $
+--| @abstract p ps ch x a b
+--| @fresh x
+axiom repl {x: var} {a b: name} (p: wff x b):
+  $ a = b $ > $ sb (n2t a) x p $ > $ sb (n2t b) x p $;
+
+theorem every_occurrence {a b: name}:
+  $ a = b $ > $ R a a $ > $ R b b $;
+theorem beside_the_target {a b: name}:
+  $ a = b $ > $ R a b $ > $ R b b $;

@@ -459,10 +459,14 @@ binders (see [Pattern plugs](#pattern-plugs)). The target must map to a real
 rule binder. The target and hole must have the same sort. The hole and each
 plug must have the same sort, or sorts that share a coercion target
 (reflexively); a pattern's sort is the sort of the expression it parses to.
-For cross-sort plugs, the hole is wrapped in the coercion route up to the
-plugs' sort before it is substituted at plug sites, so the constructed
-context stays well-sorted (e.g. a `var` hole substituted at `tm` positions
-becomes `v2t x`).
+For cross-sort plugs, the hole and the plugs meet at a common sort: the
+plugs' own sort when the hole coerces up to it, else the nearest sort above
+the plugs that the hole also reaches. A plug site is the plug under its
+coercion route up to that sort, and the hole is substituted there wrapped
+in its own route, so the constructed context stays well-sorted. A `var`
+hole with `tm` plugs is substituted as `v2t x`; with `name` plugs `a` and
+`b`, which occur in terms as `n2t a` and `n2t b`, the sites are those
+coercions and each is replaced by `v2t x`.
 
 ### Structural algorithm
 

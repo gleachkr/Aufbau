@@ -1,0 +1,7 @@
+every_occurrence
+----------------
+l1: $ R b b $ by repl [#1, #2]
+
+beside_the_target
+-----------------
+l1: $ R b b $ by repl [#1, #2]

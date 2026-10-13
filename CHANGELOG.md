@@ -25,6 +25,10 @@ This file records notable user-facing changes to Aufbau. The project follows
 - A failed proof line could be reported against the theorem's name, with
   no line, rule or phase. A failure on a line now names the line and rule
   and points at the rule application.
+- `@abstract` could not infer its target when the plugs and the hole
+  meet only at a common sort above both, such as `name` plugs and a `var`
+  hole meeting at a term sort: the line failed with an unsolved binder.
+  Plug sites are now the plugs under their coercions to that sort.
 
 ## [0.0.16] - 2026-10-12
 
