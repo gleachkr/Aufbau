@@ -1,0 +1,4 @@
+no_witness_row
+--------------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]

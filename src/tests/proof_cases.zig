@@ -550,6 +550,13 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "mac_lane_unfold_4", .outcome = .pass },
     .{ .stem = "pass_acui_remainder_overlap", .outcome = .pass },
     .{ .stem = "pass_acui_order_independent_overlap", .outcome = .pass },
+    // A @view premise over an ACUI context reads its binders out of the
+    // cited branch in any member order, not just the order it is written in.
+    .{ .stem = "pass_view_acui_member_order", .outcome = .pass },
+    .{
+        .stem = "fail_view_acui_no_witness_row",
+        .outcome = .{ .fail = error.RecoverHoleNotFound },
+    },
     .{ .stem = "pass_acui_repeated_explicit_item", .outcome = .pass },
     .{ .stem = "pass_acui_duplicate_binders_same_item", .outcome = .pass },
     .{ .stem = "pass_acui_repeated_joint_binder", .outcome = .pass },
@@ -1465,4 +1472,23 @@ test "compiler reuses @fresh pool vars across proof lines" {
     const vars = (try mmb.theoremVarNames(fresh_reuse_id)).?;
     try std.testing.expectEqual(@as(usize, 1), vars.len());
     try std.testing.expectEqual(@as(?[]const u8, null), try vars.get(0));
+}
+
+test "a failed @view line over an ACUI context is reported against the line" {
+    const allocator = std.testing.allocator;
+    const stem = "fail_view_acui_no_witness_row";
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCase(allocator, stem, proof_case_ext);
+    defer allocator.free(proof_src);
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    try std.testing.expectError(
+        error.RecoverHoleNotFound,
+        compiler.compileMmb(allocator),
+    );
+    const diag = compiler.diagnostics.last_diagnostic orelse
+        return error.ExpectedDiagnostic;
+    try std.testing.expectEqualStrings("l1", diag.line_label.?);
+    try std.testing.expectEqualStrings("ex_step", diag.rule_name.?);
 }

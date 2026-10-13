@@ -19,6 +19,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   negative".
 - Compiling proofs over large `@acui` contexts used about half again as
   much memory as in 0.0.15.
+- A `@view` premise over an `@acui` context could fail to read a binder
+  out of a cited premise for some orders of the context and not others.
+  The view now matches the premise up to order.
+- A failed proof line could be reported against the theorem's name, with
+  no line, rule or phase. A failure on a line now names the line and rule
+  and points at the rule application.
 
 ## [0.0.16] - 2026-10-12
 

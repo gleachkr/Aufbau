@@ -561,7 +561,7 @@ pub fn inferBindings(
                 line_expr,
                 partial_bindings,
                 null,
-            )) catch |err| {
+            )) catch |err| failed: {
             // A binder the view was meant to solve is unsolved because the
             // view's derived binding failed; that failure is the diagnosis.
             const reported = if (err == error.MissingBinderAssignment)
@@ -614,7 +614,11 @@ pub fn inferBindings(
                 return err;
             }
             scratch.discard(match_mark);
-            return err;
+            if (err != error.MissingBinderAssignment) return err;
+            // The session matches positionally, so an ACUI context can leave
+            // a binder unassigned in one member order and not another. The
+            // solver below matches modulo order: let it decide.
+            break :failed Strategies.RuleMatchResult{ .no_match = null };
         };
         scratch.discard(match_mark);
         switch (match_result) {

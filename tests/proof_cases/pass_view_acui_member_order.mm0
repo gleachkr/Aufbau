@@ -1,0 +1,95 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+sort var;
+sort name;
+sort tm;
+term v2t (x: var): tm;
+coercion v2t: var > tm;
+term n2t (a: name): tm;
+coercion n2t: name > tm;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+term hyp (a: wff): ctx;
+term cl (g: ctx): wff;
+term cf (g: ctx) (a: wff): wff;
+term all {x: var} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term ex {x: var} (p: wff x): wff;
+prefix ex: $E.$ prec 41;
+term neg (a: wff): wff;
+prefix neg: $~$ prec 45;
+term pred (t: tm): wff;
+prefix pred: $P$ prec 50;
+term sb (t: tm) {x: var} (p: wff x): wff;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff):
+  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (join g1 h1) (join g2 h2) $;
+
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+
+--| @congr
+axiom cl_congr (g h: ctx): $ ctx_eq g h $ > $ cl g <-> cl h $;
+
+--| @congr
+axiom cf_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ cf g a <-> cf h b $;
+
+--| @rewrite
+axiom sb_pred (t: tm) {x: var}: $ sb t x (P x) <-> P t $;
+
+-- A tableau step: the branch `g ; E. x p` closes once `g ; E. x p ; p[a/x]`
+-- does, for a new name `a`. The view names the new row `q`, and `a` is read
+-- back out of it.
+--| @view {x: var} {a: name} (g: ctx x) (p: wff x) (q: wff): $ cl (join (join g (hyp (E. x p))) (hyp q)) $ > $ cf g (E. x p) $
+--| @recover a q p x
+axiom ex_step {x: var} {a: name} (g: ctx x) (p: wff x):
+  $ cl (join (join g (hyp (E. x p))) (hyp (sb (n2t a) x p))) $ > $ cf g (E. x p) $;
+
+-- The cited branch lists its rows in every order: matching them against
+-- the view's premise is modulo order, so none of them leaves `q` (and with
+-- it `t`) unsolved.
+theorem order1 {x: var} {b: name}:
+  $ cl (join (join (hyp (A. x (~ P x))) (hyp (E. x (P x)))) (hyp (P b))) $
+  > $ cf (hyp (A. x (~ P x))) (E. x (P x)) $;
+theorem order2 {x: var} {b: name}:
+  $ cl (join (join (hyp (A. x (~ P x))) (hyp (P b))) (hyp (E. x (P x)))) $
+  > $ cf (hyp (A. x (~ P x))) (E. x (P x)) $;
+theorem order3 {x: var} {b: name}:
+  $ cl (join (join (hyp (E. x (P x))) (hyp (A. x (~ P x)))) (hyp (P b))) $
+  > $ cf (hyp (A. x (~ P x))) (E. x (P x)) $;
+theorem order4 {x: var} {b: name}:
+  $ cl (join (join (hyp (E. x (P x))) (hyp (P b))) (hyp (A. x (~ P x)))) $
+  > $ cf (hyp (A. x (~ P x))) (E. x (P x)) $;
+theorem order5 {x: var} {b: name}:
+  $ cl (join (join (hyp (P b)) (hyp (A. x (~ P x)))) (hyp (E. x (P x)))) $
+  > $ cf (hyp (A. x (~ P x))) (E. x (P x)) $;
+theorem order6 {x: var} {b: name}:
+  $ cl (join (join (hyp (P b)) (hyp (E. x (P x)))) (hyp (A. x (~ P x)))) $
+  > $ cf (hyp (A. x (~ P x))) (E. x (P x)) $;

@@ -458,7 +458,7 @@ pub const LineWalk = struct {
             .rule_unify_cache = &self.rule_unify_cache,
         };
         const checked_mark = self.checked.items.len;
-        const line_idx = try applyRuleApplication(
+        const line_idx = applyRuleApplication(
             compiler,
             &apply_context,
             line.application,
@@ -468,7 +468,21 @@ pub const LineWalk = struct {
             ApplicationLine.fromLine(line),
             self.theorem,
             &self.theorem_vars,
-        );
+        ) catch |err| {
+            // A failure the tiers below left undiagnosed still belongs to
+            // this line, not to the theorem as a whole.
+            if (err != error.OutOfMemory and compiler.getDiagnostic() == null) {
+                compiler.setProof(.{
+                    .kind = .generic,
+                    .err = CompilerDiag.narrowDiagnosticError(err),
+                    .theorem_name = assertion.name,
+                    .line_label = line.label,
+                    .rule_name = line.application.rule_name,
+                    .span = line.ruleApplicationSpan(),
+                });
+            }
+            return err;
+        };
 
         if (parsed_assertion == .holey) {
             try collectHoleInferences(

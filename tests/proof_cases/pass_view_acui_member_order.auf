@@ -1,0 +1,29 @@
+order1
+------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]
+
+order2
+------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]
+
+order3
+------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]
+
+order4
+------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]
+
+order5
+------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]
+
+order6
+------
+
+l1: $ cf (hyp (A. x (~ P x))) (E. x (P x)) $ by ex_step [#1]
