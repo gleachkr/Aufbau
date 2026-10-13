@@ -217,12 +217,7 @@ pub const SharedContext = struct {
     /// by the budget are not normal, and must not serve a later call. Only
     /// for a context with a registry.
     pub fn canonicalize(self: *SharedContext, expr_id: ExprId) !ExprId {
-        const canonicalizer = self.canonicalizer orelse blk: {
-            const created = try self.allocator.create(Canonicalizer);
-            created.* = Canonicalizer.init(self.allocator, self.theorem, self.registry.?, self.env, {});
-            self.canonicalizer = created;
-            break :blk created;
-        };
+        const canonicalizer = try self.sharedCanonicalizer();
         canonicalizer.step_count = 0;
         canonicalizer.last_rule_id = null;
         const canonical = try canonicalizer.canonicalize(expr_id);
@@ -230,6 +225,26 @@ pub const SharedContext = struct {
             canonicalizer.cache.clearRetainingCapacity();
         }
         return canonical;
+    }
+
+    /// Whether `lhs` and `rhs` differ only in the order, grouping and
+    /// repeats of ACUI members; always false without a registry.
+    pub fn isRearrangement(
+        self: *SharedContext,
+        lhs: ExprId,
+        rhs: ExprId,
+    ) !bool {
+        if (self.registry == null) return lhs == rhs;
+        const canonicalizer = try self.sharedCanonicalizer();
+        return try (try canonicalizer.support()).isRearrangement(lhs, rhs);
+    }
+
+    fn sharedCanonicalizer(self: *SharedContext) !*Canonicalizer {
+        if (self.canonicalizer) |canonicalizer| return canonicalizer;
+        const created = try self.allocator.create(Canonicalizer);
+        created.* = Canonicalizer.init(self.allocator, self.theorem, self.registry.?, self.env, {});
+        self.canonicalizer = created;
+        return created;
     }
 
     /// Allocator for throwaway intermediate `SymbolicExpr` trees. Reclaimed at

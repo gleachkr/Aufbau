@@ -11,6 +11,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   hypothesis says which premise it was (`premise: 2`), and the npm
   packages report it as `detail.premise`, with the theorem hypothesis it
   cited, if any, as `detail.index` or `detail.name`.
+- Proofs over `@acui` bags are smaller, most of all when lines restate
+  a long context. Two statements whose bags hold the same members in
+  another order are proved equal by moving the members out of place,
+  rather than by sorting both sides; and a rule argument inferred up to
+  member order keeps the order it was written in rather than the sorted
+  one. Across the proof-case fixtures the compiled proofs are about 6%
+  smaller (`tait` 41%).
 
 ### Fixed
 
@@ -29,6 +36,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   meet only at a common sort above both, such as `name` plugs and a `var`
   hole meeting at a term sort: the line failed with an unsolved binder.
   Plug sites are now the plugs under their coercions to that sort.
+- A proof whose lines restate an `@acui` context of a dozen or more
+  members could compile and then fail to verify with `HeapOverflow`: each
+  line sorted its context, so the proof grew with the cube of the
+  context. It now grows about with its square; a truth tree with 50 rows
+  on its branch verifies.
 
 ## [0.0.16] - 2026-10-12
 

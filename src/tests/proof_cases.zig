@@ -410,6 +410,13 @@ const proof_cases = [_]ProofCase{
     // The checker retries with each competing member pinned, at the line root
     // (`principal_order`) and nested under `raa` (`nested_principal_order`).
     .{ .stem = "pass_acui_principal_order", .outcome = .pass },
+    // Bags that differ only in member order, grouping and repeats, proved
+    // equal by moving the members out of place; a unit member and a
+    // rearranged inner bag go through the normal forms instead.
+    .{ .stem = "pass_acui_rearrangement", .outcome = .pass },
+    // A 12-row truth tree whose every line restates its branch: sorting
+    // each line's context overflowed the verifier's heap.
+    .{ .stem = "pass_acui_long_context", .outcome = .pass },
     // An inline `imp_intro` with `g` given as `emp` and no usable hint: exact
     // replay cannot read `a` out of `emp , a` against the ref's one-member
     // context, so the implicit conclusion falls back to ACUI-aware inference.

@@ -1052,6 +1052,14 @@ engine runs in two modes:
   registered relation or `@congr` rule and has none. Inference, search and
   representative selection use it
 
+Before normalizing, a conversion between two expressions that differ only
+in the order, grouping and repeats of their bags' members is proved by
+moving the members out of place (`normalizer/acui/rearrange.zig`), at a cost
+that follows how far they move rather than the square of the bag's size.
+`AcuiSupport.Context.isRearrangement` decides when that applies; def_ops
+finalization uses it too, keeping a binding's matched spelling over its
+sorted representative when the two differ only that way.
+
 Besides normal forms, the engine finds common targets of two expressions:
 transparent def comparison, witness-directed def instantiation, and for two
 bags of one ACUI combiner exact cancellation of members, members that meet

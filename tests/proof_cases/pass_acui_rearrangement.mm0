@@ -1,0 +1,82 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+sort ms;
+
+term bi (a b: wff): wff;
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ bi a a $;
+axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+
+-- An idempotent bag with a unit: a context.
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+term ctx_eq (g h: ctx): wff;
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+--| @congr
+axiom hyp_congr (a b: wff): $ bi a b $ > $ ctx_eq (hyp a) (hyp b) $;
+
+-- A bag whose repeats count: a multiset.
+term mnil: ms;
+--| @acui ms_assoc ms_comm mnil _
+term mjoin (m n: ms): ms; infixl mjoin: $;$ prec 5;
+term one (a: wff): ms; coercion one: wff > ms;
+term ms_eq (m n: ms): wff;
+--| @relation ms ms_eq ms_refl ms_trans ms_sym _
+axiom ms_refl (m: ms): $ ms_eq m m $;
+axiom ms_trans (m n o: ms): $ ms_eq m n $ > $ ms_eq n o $ > $ ms_eq m o $;
+axiom ms_sym (m n: ms): $ ms_eq m n $ > $ ms_eq n m $;
+axiom ms_assoc (m n o: ms): $ ms_eq ((m ; n) ; o) (m ; (n ; o)) $;
+axiom ms_comm (m n: ms): $ ms_eq (m ; n) (n ; m) $;
+axiom ms_unit (m: ms): $ ms_eq (mnil ; m) m $;
+--| @congr
+axiom mjoin_congr (m1 m2 n1 n2: ms):
+  $ ms_eq m1 m2 $ > $ ms_eq n1 n2 $ > $ ms_eq (m1 ; n1) (m2 ; n2) $;
+--| @congr
+axiom one_congr (a b: wff): $ bi a b $ > $ ms_eq (one a) (one b) $;
+
+term ok (g: ctx): wff;
+--| @congr
+axiom ok_congr (g h: ctx): $ ctx_eq g h $ > $ bi (ok g) (ok h) $;
+term pair (g h: ctx): wff;
+--| @congr
+axiom pair_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ bi (pair g1 h1) (pair g2 h2) $;
+term box (g: ctx): wff;
+--| @congr
+axiom box_congr (g h: ctx): $ ctx_eq g h $ > $ bi (box g) (box h) $;
+term okm (m: ms): wff;
+--| @congr
+axiom okm_congr (m n: ms): $ ms_eq m n $ > $ bi (okm m) (okm n) $;
+
+axiom ok_ax (g: ctx): $ ok g $;
+axiom pair_ax (g h: ctx): $ pair g h $;
+axiom okm_ax (m: ms): $ okm m $;
+
+-- Each theorem is its axiom instance with the bag rearranged.
+theorem moved (a b c d e: wff): $ ok (a , b , c , d , e) $;
+theorem reversed (a b c d e: wff): $ ok (e , d , c , b , a) $;
+theorem regrouped (a b c d: wff): $ ok ((d , a) , (b , c)) $;
+theorem repeated (a b c: wff): $ ok (a , b , c , a , b) $;
+theorem merged (a b c: wff): $ ok (c , b , a) $;
+theorem contracted (a b: wff): $ ok (b , a) $;
+theorem counted (a b: wff): $ okm (a ; b ; a ; b) $;
+theorem both_sides (a b c d: wff): $ pair (b , a) (d , c , d) $;
+-- Not rearrangements: a unit member, and a member whose own bag is
+-- rearranged. Both go through the normal forms.
+theorem with_unit (a b: wff): $ ok (b , a) $;
+theorem inner_bag (a b c: wff): $ ok (c , box (b , a)) $;

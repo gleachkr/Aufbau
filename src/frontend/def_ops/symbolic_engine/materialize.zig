@@ -345,11 +345,20 @@ pub fn finalizeBoundValue(
 ) anyerror!ExprId {
     return switch (bound) {
         .concrete => |concrete| {
-            return (try concreteBindingMatchExpr(
+            const representative = (try concreteBindingMatchExpr(
                 self,
                 concrete,
                 state,
-            )) orelse error.MissingRepresentative;
+            )) orelse return error.MissingRepresentative;
+            // A binder matched up to the order of ACUI members keeps the
+            // order it was matched at. The representative sorts them, and
+            // every proof between the two orders then pays for the sort.
+            if (representative != concrete.raw and
+                try self.shared.isRearrangement(concrete.raw, representative))
+            {
+                return concrete.raw;
+            }
+            return representative;
         },
         .symbolic => |symbolic| {
             const expr_id = try materializeFinalSymbolic(

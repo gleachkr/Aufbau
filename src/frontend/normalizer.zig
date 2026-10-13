@@ -20,6 +20,7 @@ const Core = @import("./normalizer/core.zig");
 const CommonTarget = @import("./normalizer/common_target.zig");
 const ProofEmit = @import("./normalizer/proof_emit.zig");
 const AcuiNormalize = @import("./normalizer/acui/normalize.zig");
+const AcuiRearrange = @import("./normalizer/acui/rearrange.zig");
 
 pub const NormalizeResult = Types.NormalizeResult;
 pub const CommonTargetResult = Types.CommonTargetResult;
@@ -179,6 +180,16 @@ fn Engine(comptime mode: Mode) type {
             expr_id: ExprId,
         ) ?ResolvedRelation {
             return Support.resolveRelationForExpr(self, expr_id);
+        }
+
+        /// A proof that `lhs` = `rhs` that moves ACUI members into place,
+        /// or null when the two differ by more than that.
+        pub fn buildRearrangement(
+            self: *Self,
+            lhs: ExprId,
+            rhs: ExprId,
+        ) anyerror!??usize {
+            return try AcuiRearrange.buildRearrangement(self, lhs, rhs);
         }
 
         pub fn buildCommonTarget(

@@ -862,6 +862,20 @@ A proof is emitted for every structural step — associativity rearrangements,
 unit eliminations, commutativity swaps, and idempotence merges — and composed
 via transitivity into a single relation proof `rel(original, canonical)`.
 
+Sorting a bag of `n` members this way costs about `n²` steps, however close
+to sorted it already is. So when two statements differ only in how the
+members of their commutative bags are ordered, grouped and (for an
+idempotent bag) repeated, the checker does not sort either side: it moves
+each member that is out of place to where the other side has it, and the
+proof's size follows how far the members move. A member is moved on the
+side where it is out of place, so one row written back into the middle of a
+context costs one move rather than a move for every row after it. A bag with a unit member, or
+members that differ in more than their own order, still goes through the
+normal forms. For the same reason, a rule argument inferred up to member
+order keeps the order it was matched at rather than the sorted one, so a
+line that restates its context in the order it was written costs little to
+check against the next.
+
 In the current implementation, the ACUI path is also more def-aware than plain
 head-rewrite lookup. It can do exact cancellation of common items, same-side
 absorption by def-bearing items, and non-ACUI common-target search inside

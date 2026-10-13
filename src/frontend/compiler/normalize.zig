@@ -156,6 +156,31 @@ pub fn buildNormalizedConversionWithProviderAndDebug(
         );
         return null;
     };
+    // Two sides that differ only in the order of their ACUI members are
+    // proved equal by moving the members out of place, which costs far
+    // less than sorting both sides.
+    const lines_mark = checked.items.len;
+    const rearrange_mark = scratch.mark();
+    if (normalizer.buildRearrangement(actual, expected)) |rearranged| {
+        if (rearranged) |conv_line_idx| {
+            DebugTrace.traceNormalization(
+                debug,
+                "rearranged comparison succeeded",
+                .{},
+            );
+            returned = true;
+            return .{
+                .relation = relation,
+                .conv_line_idx = conv_line_idx,
+                .normalizer = normalizer,
+            };
+        }
+    } else |err| {
+        if (err == error.OutOfMemory) return err;
+    }
+    scratch.discard(rearrange_mark);
+    CheckedIr.rollbackToMark(allocator, checked, lines_mark);
+
     const actual_mark = scratch.mark();
     const norm_actual = normalizer.normalize(actual) catch |err| {
         return err;

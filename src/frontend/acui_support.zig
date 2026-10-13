@@ -46,6 +46,8 @@ pub const Context = struct {
     combiner_by_sort: std.StringHashMapUnmanaged(
         ?ResolvedStructuralCombiner,
     ) = .empty,
+    /// The two sides' sorted members, reused by every `sameMembers`.
+    member_scratch: [2]std.ArrayListUnmanaged(ExprId) = .{ .empty, .empty },
 
     const CombinerMemoSlot = union(enum) {
         unknown,
@@ -70,6 +72,7 @@ pub const Context = struct {
         if (self.def_ops_ctx) |*ctx| ctx.deinit();
         self.combiner_by_term.deinit(self.allocator);
         self.combiner_by_sort.deinit(self.allocator);
+        for (&self.member_scratch) |*list| list.deinit(self.allocator);
     }
 
     pub fn defOps(self: *Context) *DefOps.Context {
@@ -179,6 +182,102 @@ pub const Context = struct {
             sort_name,
             self.env.terms.items[acui.head_term_id].ret_sort_name,
         );
+    }
+
+    /// Whether `lhs` and `rhs` differ only in how the members of their
+    /// commutative bags are ordered, grouped and, when the bag is
+    /// idempotent, repeated: the same expression outside the bags, and bags
+    /// holding the same members. A bag with the unit among its members
+    /// does not count.
+    pub fn isRearrangement(
+        self: *Context,
+        lhs: ExprId,
+        rhs: ExprId,
+    ) anyerror!bool {
+        if (lhs == rhs) return true;
+        const lhs_app = switch (self.theorem.interner.node(lhs).*) {
+            .app => |app| app,
+            .variable, .placeholder => return false,
+        };
+        const rhs_app = switch (self.theorem.interner.node(rhs).*) {
+            .app => |app| app,
+            .variable, .placeholder => return false,
+        };
+        if (lhs_app.term_id != rhs_app.term_id or
+            lhs_app.args.len != rhs_app.args.len)
+        {
+            return false;
+        }
+        if (lhs_app.args.len == 2) {
+            if (try self.resolveCombinerForTerm(lhs_app.term_id)) |acui| {
+                if (acui.comm_id == null) return false;
+                const unit = try self.unitExpr(acui);
+                if (self.holdsMember(lhs, unit, acui.head_term_id) or
+                    self.holdsMember(rhs, unit, acui.head_term_id))
+                {
+                    return false;
+                }
+                return try self.sameMembers(lhs, rhs, acui);
+            }
+        }
+        for (lhs_app.args, rhs_app.args) |lhs_arg, rhs_arg| {
+            if (!try self.isRearrangement(lhs_arg, rhs_arg)) return false;
+        }
+        return true;
+    }
+
+    /// Whether two bags of `acui` hold the same members: as a multiset, or
+    /// as a set when the bag is idempotent.
+    pub fn sameMembers(
+        self: *Context,
+        lhs: ExprId,
+        rhs: ExprId,
+        acui: ResolvedStructuralCombiner,
+    ) anyerror!bool {
+        if (lhs == rhs) return true;
+        const lhs_members = try self.sortedMembers(lhs, acui, 0);
+        const rhs_members = try self.sortedMembers(rhs, acui, 1);
+        return std.mem.eql(ExprId, lhs_members, rhs_members);
+    }
+
+    fn sortedMembers(
+        self: *Context,
+        bag: ExprId,
+        acui: ResolvedStructuralCombiner,
+        scratch_idx: usize,
+    ) anyerror![]const ExprId {
+        const out = &self.member_scratch[scratch_idx];
+        out.clearRetainingCapacity();
+        try self.collectLeaves(bag, acui.head_term_id, out);
+        std.mem.sortUnstable(ExprId, out.items, {}, std.sort.asc(ExprId));
+        if (acui.idem_id == null) return out.items;
+        var len: usize = 0;
+        for (out.items) |member| {
+            if (len != 0 and out.items[len - 1] == member) continue;
+            out.items[len] = member;
+            len += 1;
+        }
+        return out.items[0..len];
+    }
+
+    /// Whether the `head_term_id` spine at `bag` has `member` as a leaf.
+    pub fn holdsMember(
+        self: *const Context,
+        bag: ExprId,
+        member: ExprId,
+        head_term_id: u32,
+    ) bool {
+        if (bag == member) return true;
+        switch (self.theorem.interner.node(bag).*) {
+            .app => |app| if (app.term_id == head_term_id and
+                app.args.len == 2)
+            {
+                return self.holdsMember(app.args[0], member, head_term_id) or
+                    self.holdsMember(app.args[1], member, head_term_id);
+            },
+            .variable, .placeholder => {},
+        }
+        return false;
     }
 
     /// Calls `visitor.leaf(leaf)` for each leaf of the `head_term_id` spine

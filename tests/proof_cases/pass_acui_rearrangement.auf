@@ -1,0 +1,39 @@
+moved
+-----
+l1: $ ok (a , b , c , d , e) $ by ok_ax (g := $ a , d , b , c , e $) []
+
+reversed
+--------
+l1: $ ok (e , d , c , b , a) $ by ok_ax (g := $ a , b , c , d , e $) []
+
+regrouped
+---------
+l1: $ ok ((d , a) , (b , c)) $ by ok_ax (g := $ a , (b , (c , d)) $) []
+
+repeated
+--------
+l1: $ ok (a , b , c , a , b) $ by ok_ax (g := $ c , b , a $) []
+
+merged
+------
+l1: $ ok (c , b , a) $ by ok_ax (g := $ a , b , a , c , b , a $) []
+
+contracted
+----------
+l1: $ ok (b , a) $ by ok_ax (g := $ a , a , b , b $) []
+
+counted
+-------
+l1: $ okm (a ; b ; a ; b) $ by okm_ax (m := $ b ; a ; a ; b $) []
+
+both_sides
+----------
+l1: $ pair (b , a) (d , c , d) $ by pair_ax (g := $ a , b $, h := $ c , d $) []
+
+with_unit
+---------
+l1: $ ok (b , a) $ by ok_ax (g := $ emp , a , b $) []
+
+inner_bag
+---------
+l1: $ ok (c , box (b , a)) $ by ok_ax (g := $ box (a , b) , c $) []

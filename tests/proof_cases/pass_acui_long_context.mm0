@@ -1,0 +1,52 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+
+term imp (a b: wff): wff; infixr imp: $->$ prec 25;
+term not (a: wff): wff; prefix not: $~$ prec 40;
+term bi (a b: wff): wff;
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ bi a a $;
+axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+term ctx_eq (g h: ctx): wff;
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+
+-- A truth tree: `closes g` says the branch `g` closes; `cf g a` and
+-- `cf2 g a b` name the rows a step develops apart from the rest.
+term closes (g: ctx): wff;
+--| @congr
+axiom closes_congr (g h: ctx): $ ctx_eq g h $ > $ bi (closes g) (closes h) $;
+term cf (g: ctx) (a: wff): wff;
+--| @congr
+axiom cf_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ bi a b $ > $ bi (cf g a) (cf h b) $;
+term cf2 (g: ctx) (a b: wff): wff;
+--| @congr
+axiom cf2_congr (g h: ctx) (a b c d: wff):
+  $ ctx_eq g h $ > $ bi a b $ > $ bi c d $ > $ bi (cf2 g a c) (cf2 h b d) $;
+
+axiom unfocus (g: ctx) (a: wff): $ cf g a $ > $ closes (g , a) $;
+axiom unfocus2 (g: ctx) (a b: wff): $ cf2 g a b $ > $ closes (g , a , b) $;
+axiom tb_close (g: ctx) (a: wff): $ cf2 g a (~ a) $;
+axiom tb_imp (g: ctx) (a b: wff):
+  $ closes (g , (a -> b) , ~ a) $ > $ closes (g , (a -> b) , b) $ > $ cf g (a -> b) $;
+
+-- Every line restates its whole branch, in the order the tree grew it.
+theorem chain (p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12: wff): $ closes (p1 , (p1 -> p2) , (p2 -> p3) , (p3 -> p4) , (p4 -> p5) , (p5 -> p6) , (p6 -> p7) , (p7 -> p8) , (p8 -> p9) , (p9 -> p10) , (p10 -> p11) , (p11 -> p12) , ~ p12) $;
