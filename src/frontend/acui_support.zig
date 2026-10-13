@@ -390,20 +390,7 @@ pub const Context = struct {
     ) anyerror!ExprId {
         const sorted = try self.allocator.dupe(ExprId, items);
         defer self.allocator.free(sorted);
-
-        var idx: usize = 1;
-        while (idx < sorted.len) : (idx += 1) {
-            const item = sorted[idx];
-            var pos = idx;
-            while (pos > 0 and compareExprIds(
-                self.theorem,
-                sorted[pos - 1],
-                item,
-            ) == .gt) : (pos -= 1) {
-                sorted[pos] = sorted[pos - 1];
-            }
-            sorted[pos] = item;
-        }
+        std.mem.sort(ExprId, sorted, @as(*const TheoremContext, self.theorem), exprIdLessThan);
 
         var unique = std.ArrayListUnmanaged(ExprId).empty;
         defer unique.deinit(self.allocator);
@@ -523,6 +510,25 @@ pub const Context = struct {
         };
         if (app.term_id != acui.head_term_id or app.args.len != 2) {
             return expr_id;
+        }
+        if (acui.comm_id != null) {
+            // A commutative bag's canonical form is its members sorted, which
+            // one sort gives; merging member by member rebuilds the bag for
+            // each of them.
+            var members = std.ArrayListUnmanaged(ExprId).empty;
+            defer members.deinit(self.allocator);
+            try self.collectLeaves(expr_id, acui.head_term_id, &members);
+            if (acui.supportsLeftUnit()) {
+                const unit_expr = try self.unitExpr(acui);
+                var kept: usize = 0;
+                for (members.items) |member| {
+                    if (member == unit_expr) continue;
+                    members.items[kept] = member;
+                    kept += 1;
+                }
+                members.shrinkRetainingCapacity(kept);
+            }
+            return try self.buildCanonicalAcuiFromItems(members.items, acui);
         }
         // Merging requires canonical operands, not merely a right-associated
         // tree. Callers can supply rebuilt leaves or raw def witnesses;
@@ -649,6 +655,10 @@ pub const Context = struct {
         return try self.theorem.interner.internApp(acui.unit_term_id, &.{});
     }
 };
+
+fn exprIdLessThan(theorem: *const TheoremContext, lhs: ExprId, rhs: ExprId) bool {
+    return compareExprIds(theorem, lhs, rhs) == .lt;
+}
 
 pub fn compareExprIds(
     theorem: *const TheoremContext,

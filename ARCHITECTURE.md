@@ -937,7 +937,12 @@ create a mirrored theorem context using
 
 The mirrored theorem serves one narrow purpose: it lets the frontend
 instantiate template placeholders, normalize both sides, and then map the
-result back into the original theorem's binding session.
+result back into the original theorem's binding session. The two sides are
+compared by their proof-free normal forms; only a comparison that succeeds
+normalizes them again with proofs, which fails where no proof can be built
+(a missing `@congr`). The structural solver skips the comparison outright
+when a template under a rigid head meets a variable or another rigid head,
+which no normalization changes.
 
 Those normalization placeholders are explicit `.placeholder` leaves in
 the mirrored theorem, not disguised dummy vars in the main theorem.
@@ -965,7 +970,8 @@ The solver keeps branch-local binding arrays plus ACUI interval
 constraints, and uses the `Canonicalizer` and `def_ops.zig` as helper
 predicates: two bindings are compatible when they canonicalize alike or the
 `Canonicalizer` finds them a common target, the same search the checker
-runs with proofs. When several ACUI-compatible concrete solutions remain, it
+runs with proofs. Two distinct normal forms with no def on either side are
+never compatible, so the search runs only when a def could open one of them. When several ACUI-compatible concrete solutions remain, it
 ranks them by minimal structural residual and emits an ambiguity warning
 if more than one distinct solution survived.
 
@@ -1050,7 +1056,10 @@ engine runs in two modes:
   common targets. It decides the laws rather than whether their proof can
   be stated, so it also runs where the proof-producing mode needs a
   registered relation or `@congr` rule and has none. Inference, search and
-  representative selection use it
+  representative selection use it. A commutative bag whose combiner heads
+  no rewrite rule it normalizes member by member and sorts once
+  (`normalizeCommutativeBag`), where the proof-producing mode normalizes
+  every prefix of the spine and merges member by member
 
 Before normalizing, a conversion between two expressions that differ only
 in the order, grouping and repeats of their bags' members is proved by

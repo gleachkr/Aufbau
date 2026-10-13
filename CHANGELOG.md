@@ -41,6 +41,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   line sorted its context, so the proof grew with the cube of the
   context. It now grows about with its square; a truth tree with 50 rows
   on its branch verifies.
+- Compiling such a proof took time growing faster than the cube of the
+  context: a truth tree with 60 rows on its branch took 13 seconds.
+  Binding inference compared every two members of a context through a
+  common-target search, sorted each context member by member, and tried
+  normalized matches that no normalization could make succeed. The 60
+  rows now compile in 0.7 seconds.
 
 ## [0.0.16] - 2026-10-12
 

@@ -4,6 +4,7 @@ const ExprId = @import("../expr.zig").ExprId;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
 const DebugTrace = @import("../debug.zig");
+const HeadClass = @import("../head_class.zig");
 const NormalizedCompare = @import("../normalized_compare.zig");
 const BranchStateOps = @import("./branch_state.zig");
 const SemanticCompare = @import("./semantic_compare.zig");
@@ -183,6 +184,7 @@ fn matchNormalizedOnly(
     state: BranchState,
 ) anyerror![]BranchState {
     if (!self.canUseNormalizedStructuralItemMatch()) return &.{};
+    if (rigidHeadsDiffer(self, template, actual)) return &.{};
     const scratch = self.scratch orelse return &.{};
 
     const old_bindings = BranchStateOps.getBindings(@constCast(&state), space);
@@ -252,6 +254,29 @@ fn matchNormalizedOnly(
         space,
         state,
     );
+}
+
+/// Normalizing changes no rigid head, so a template under one never meets an
+/// expr that is a variable or sits under another.
+fn rigidHeadsDiffer(self: anytype, template: TemplateExpr, actual: ExprId) bool {
+    const template_app = switch (template) {
+        .app => |app| app,
+        .binder => return false,
+    };
+    const template_head = HeadClass.rigidHead(
+        self.env,
+        self.registry,
+        template_app.term_id,
+    ) orelse return false;
+    return switch (self.theorem.interner.node(actual).*) {
+        .variable => true,
+        .placeholder => false,
+        .app => |app| if (HeadClass.rigidHead(
+            self.env,
+            self.registry,
+            app.term_id,
+        )) |head| head != template_head else false,
+    };
 }
 
 fn copySessionToBranch(

@@ -49,6 +49,11 @@ pub fn normalizeUncached(
         "normalizing expr #{d}",
         .{expr_id},
     );
+    if (!Support.emitsProofs(self)) {
+        if (try Acui.normalizeCommutativeBag(self, expr_id)) |result| {
+            return result;
+        }
+    }
     const node = self.theorem.interner.node(expr_id);
 
     const child_result = switch (node.*) {

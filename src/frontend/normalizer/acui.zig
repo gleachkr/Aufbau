@@ -17,6 +17,13 @@ pub fn buildAcuiCommonTarget(
     return try Target.buildAcuiCommonTarget(self, lhs, rhs);
 }
 
+pub fn normalizeCommutativeBag(
+    self: anytype,
+    expr_id: ExprId,
+) anyerror!?NormalizeResult {
+    return try Normalize.normalizeCommutativeBag(self, expr_id);
+}
+
 pub fn normalizeStructural(
     self: anytype,
     expr_id: ExprId,
