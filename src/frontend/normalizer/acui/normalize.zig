@@ -179,14 +179,15 @@ pub fn normalizeCommutativeBag(
     const relation = Support.relationFor(self, expr_id) orelse return null;
 
     const support = try self.support();
+    const spine = AcuiBag.Spine.raw(acui.head_term_id);
     var raw = std.ArrayListUnmanaged(ExprId).empty;
     defer raw.deinit(self.allocator);
-    try support.collectLeaves(expr_id, acui.head_term_id, &raw);
+    try spine.collect(self.allocator, self.theorem, expr_id, &raw);
     var members = std.ArrayListUnmanaged(ExprId).empty;
     defer members.deinit(self.allocator);
     for (raw.items) |leaf| {
         const member = (try self.normalize(leaf)).result_expr;
-        try support.collectLeaves(member, acui.head_term_id, &members);
+        try spine.collect(self.allocator, self.theorem, member, &members);
     }
 
     const leaves = try self.allocator.alloc(AcuiLeaf, members.items.len);
@@ -205,7 +206,7 @@ pub fn normalizeCommutativeBag(
 
     const bag = try support.buildCanonicalAcuiFromItems(members.items, acui);
     // One member left, or none: its own normal form, not a bag's.
-    if (!Cover.isAcuiExpr(self, bag, acui.head_term_id)) {
+    if (!spine.isBag(self.theorem, bag)) {
         return try self.normalize(bag);
     }
     return .{
@@ -221,11 +222,12 @@ pub fn collectAcuiLeaves(
     out: *std.ArrayListUnmanaged(AcuiLeaf),
 ) anyerror!void {
     const support = try self.support();
+    const spine = AcuiBag.Spine.raw(head_term_id);
     // Sized once: the normalizer's allocator is the pipeline arena, which
     // keeps every buffer a growing list leaves behind.
     try out.ensureTotalCapacityPrecise(
         self.allocator,
-        out.items.len + support.countLeaves(expr_id, head_term_id),
+        out.items.len + spine.count(self.theorem, expr_id),
     );
     const Appender = struct {
         support: *AcuiSupport.Context,
@@ -239,11 +241,7 @@ pub fn collectAcuiLeaves(
             });
         }
     };
-    support.visitLeaves(
-        expr_id,
-        head_term_id,
-        Appender{ .support = support, .out = out },
-    );
+    spine.visit(self.theorem, expr_id, Appender{ .support = support, .out = out });
 }
 
 /// The canonical bag of `acui` at `expr_id` with its members left as they
@@ -306,56 +304,25 @@ pub fn rewriteAcuiLeaves(
     leaves: []const AcuiLeaf,
     next_leaf: *usize,
 ) anyerror!NormalizeResult {
-    const node = self.theorem.interner.node(expr_id);
-    switch (node.*) {
-        .app => |app| {
-            if (app.term_id == acui.head_term_id and app.args.len == 2) {
-                const left = try rewriteAcuiLeaves(
-                    self,
-                    app.args[0],
-                    relation,
-                    acui,
-                    leaves,
-                    next_leaf,
-                );
-                const right = try rewriteAcuiLeaves(
-                    self,
-                    app.args[1],
-                    relation,
-                    acui,
-                    leaves,
-                    next_leaf,
-                );
-                const new_args = [_]ExprId{
-                    left.result_expr,
-                    right.result_expr,
-                };
-                const old_args = [_]ExprId{ app.args[0], app.args[1] };
-                const new_expr = if (left.result_expr == app.args[0] and
-                    right.result_expr == app.args[1])
-                    expr_id
-                else
-                    try self.theorem.interner.internApp(
-                        acui.head_term_id,
-                        &new_args,
-                    );
-                return .{
-                    .result_expr = new_expr,
-                    .conv_line_idx = try ProofEmit.emitCongruenceLine(
-                        self,
-                        acui.head_term_id,
-                        &old_args,
-                        &new_args,
-                        &[_]?usize{
-                            left.conv_line_idx,
-                            right.conv_line_idx,
-                        },
-                    ),
-                };
-            }
-        },
-        .variable => {},
-        .placeholder => {},
+    if (AcuiBag.Spine.raw(acui.head_term_id).split(self.theorem, expr_id)) |old_args| {
+        const left = try rewriteAcuiLeaves(self, old_args[0], relation, acui, leaves, next_leaf);
+        const right = try rewriteAcuiLeaves(self, old_args[1], relation, acui, leaves, next_leaf);
+        const new_args = [_]ExprId{ left.result_expr, right.result_expr };
+        const new_expr = if (left.result_expr == old_args[0] and
+            right.result_expr == old_args[1])
+            expr_id
+        else
+            try self.theorem.interner.internApp(acui.head_term_id, &new_args);
+        return .{
+            .result_expr = new_expr,
+            .conv_line_idx = try ProofEmit.emitCongruenceLine(
+                self,
+                acui.head_term_id,
+                &old_args,
+                &new_args,
+                &[_]?usize{ left.conv_line_idx, right.conv_line_idx },
+            ),
+        };
     }
 
     if (next_leaf.* >= leaves.len) return error.MissingStructuralMetadata;

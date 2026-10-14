@@ -1,6 +1,7 @@
 const ExprId = @import("../expr.zig").ExprId;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const DefOps = @import("../def_ops.zig");
+const AcuiBag = @import("../acui_bag.zig");
 const ResolvedStructuralCombiner =
     @import("../rewrite_registry.zig").ResolvedStructuralCombiner;
 
@@ -14,26 +15,14 @@ pub const MatchConstraint = struct {
     actual: ExprId,
 };
 
-pub const StructuralFragment = enum {
-    au,
-    acu,
-    aui,
-    acui,
-};
-
 pub const StructuralProfile = struct {
     combiner: ResolvedStructuralCombiner,
-    fragment: StructuralFragment,
+    law: AcuiBag.Law,
 
     pub fn init(combiner: ResolvedStructuralCombiner) StructuralProfile {
-        const fragment: StructuralFragment = if (combiner.comm_id != null) blk: {
-            break :blk if (combiner.idem_id != null) .acui else .acu;
-        } else blk: {
-            break :blk if (combiner.idem_id != null) .aui else .au;
-        };
         return .{
             .combiner = combiner,
-            .fragment = fragment,
+            .law = AcuiBag.Combiner.fromResolved(combiner).law,
         };
     }
 
@@ -46,17 +35,11 @@ pub const StructuralProfile = struct {
     }
 
     pub fn isCommutative(self: StructuralProfile) bool {
-        return switch (self.fragment) {
-            .acu, .acui => true,
-            .au, .aui => false,
-        };
+        return self.law.isCommutative();
     }
 
     pub fn isIdempotent(self: StructuralProfile) bool {
-        return switch (self.fragment) {
-            .aui, .acui => true,
-            .au, .acu => false,
-        };
+        return self.law.isIdempotent();
     }
 };
 

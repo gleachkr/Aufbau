@@ -73,13 +73,13 @@ pub fn structuralExprSubset(
         profile,
         &rhs_items,
     );
-    return switch (profile.fragment) {
-        .au, .aui => try orderedExprItemsAreSubset(
+    return switch (profile.law) {
+        .sequence, .idempotent_sequence => try orderedExprItemsAreSubset(
             self,
             lhs_items.items,
             rhs_items.items,
         ),
-        .acu, .acui => try exprBagIsSubset(
+        .multiset, .set => try exprBagIsSubset(
             self,
             lhs_items.items,
             rhs_items.items,
@@ -138,7 +138,7 @@ fn mergeStructuralExprs(
         head_term_id,
         unit_term_id,
     );
-    if (profile.fragment != .acui) return error.UnifyMismatch;
+    if (profile.law != .set) return error.UnifyMismatch;
 
     var lhs_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lhs_items.deinit(self.allocator);
@@ -274,7 +274,7 @@ pub fn appendExprSetUnion(
     lhs: []const ExprId,
     rhs: []const ExprId,
 ) anyerror!void {
-    var appender = try StructuralItems.ItemAppender.init(self, .acui, out);
+    var appender = try StructuralItems.ItemAppender.init(self, .set, out);
     defer appender.deinit(self.allocator);
     for (lhs) |item| {
         try appender.append(self, item);
@@ -293,7 +293,7 @@ pub fn appendExprSetIntersection(
     const used = try self.allocator.alloc(bool, rhs.len);
     defer self.allocator.free(used);
     @memset(used, false);
-    var appender = try StructuralItems.ItemAppender.init(self, .acui, out);
+    var appender = try StructuralItems.ItemAppender.init(self, .set, out);
     defer appender.deinit(self.allocator);
     for (lhs) |lhs_item| {
         for (rhs, 0..) |rhs_item, rhs_idx| {
@@ -458,7 +458,7 @@ pub fn combineStructuralExprs(
 ) anyerror!ExprId {
     var items = std.ArrayListUnmanaged(ExprId).empty;
     defer items.deinit(self.allocator);
-    var appender = try StructuralItems.ItemAppender.init(self, profile.fragment, &items);
+    var appender = try StructuralItems.ItemAppender.init(self, profile.law, &items);
     defer appender.deinit(self.allocator);
     for (exprs) |expr_id| {
         var binding_items = std.ArrayListUnmanaged(ExprId).empty;

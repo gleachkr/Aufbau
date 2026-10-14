@@ -1,4 +1,5 @@
 const std = @import("std");
+const AcuiBag = @import("../../acui_bag.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
@@ -471,7 +472,7 @@ fn foldAcuiLeaf(
 
     var raw_items = std.ArrayListUnmanaged(ExprId).empty;
     defer raw_items.deinit(ctx.allocator);
-    try support.collectLeaves(raw, acui.head_term_id, &raw_items);
+    try AcuiBag.Spine.raw(acui.head_term_id).collect(ctx.allocator, ctx.theorem, raw, &raw_items);
 
     for (raw_items.items) |raw_leaf| {
         for (def_items.items) |def_item| {

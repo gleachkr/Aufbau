@@ -261,95 +261,10 @@ pub const Context = struct {
     ) anyerror![]const ExprId {
         const out = &self.member_scratch[scratch_idx];
         out.clearRetainingCapacity();
-        try self.collectLeaves(bag, acui.head_term_id, out);
+        try AcuiBag.Spine.raw(acui.head_term_id).collect(self.allocator, self.theorem, bag, out);
         std.mem.sortUnstable(ExprId, out.items, {}, std.sort.asc(ExprId));
         if (acui.idem_id == null) return out.items;
-        var len: usize = 0;
-        for (out.items) |member| {
-            if (len != 0 and out.items[len - 1] == member) continue;
-            out.items[len] = member;
-            len += 1;
-        }
-        return out.items[0..len];
-    }
-
-    /// Whether the `head_term_id` spine at `bag` has `member` as a leaf.
-    pub fn holdsMember(
-        self: *const Context,
-        bag: ExprId,
-        member: ExprId,
-        head_term_id: u32,
-    ) bool {
-        if (bag == member) return true;
-        switch (self.theorem.interner.node(bag).*) {
-            .app => |app| if (app.term_id == head_term_id and
-                app.args.len == 2)
-            {
-                return self.holdsMember(app.args[0], member, head_term_id) or
-                    self.holdsMember(app.args[1], member, head_term_id);
-            },
-            .variable, .placeholder => {},
-        }
-        return false;
-    }
-
-    /// Calls `visitor.leaf(leaf)` for each leaf of the `head_term_id` spine
-    /// at `expr_id`, left to right.
-    pub fn visitLeaves(
-        self: *const Context,
-        expr_id: ExprId,
-        head_term_id: u32,
-        visitor: anytype,
-    ) void {
-        switch (self.theorem.interner.node(expr_id).*) {
-            .app => |app| {
-                if (app.term_id == head_term_id and app.args.len == 2) {
-                    self.visitLeaves(app.args[0], head_term_id, visitor);
-                    self.visitLeaves(app.args[1], head_term_id, visitor);
-                    return;
-                }
-            },
-            .variable => {},
-            .placeholder => {},
-        }
-        visitor.leaf(expr_id);
-    }
-
-    /// How many leaves the `head_term_id` spine at `expr_id` has.
-    pub fn countLeaves(
-        self: *const Context,
-        expr_id: ExprId,
-        head_term_id: u32,
-    ) usize {
-        var counter: struct {
-            count: usize = 0,
-            pub fn leaf(c: *@This(), _: ExprId) void {
-                c.count += 1;
-            }
-        } = .{};
-        self.visitLeaves(expr_id, head_term_id, &counter);
-        return counter.count;
-    }
-
-    /// Appends the leaves of the `head_term_id` spine at `expr_id`, left to
-    /// right, growing `out` once.
-    pub fn collectLeaves(
-        self: *Context,
-        expr_id: ExprId,
-        head_term_id: u32,
-        out: *std.ArrayListUnmanaged(ExprId),
-    ) anyerror!void {
-        try out.ensureTotalCapacityPrecise(
-            self.allocator,
-            out.items.len + self.countLeaves(expr_id, head_term_id),
-        );
-        const Appender = struct {
-            out: *std.ArrayListUnmanaged(ExprId),
-            pub fn leaf(a: @This(), leaf_id: ExprId) void {
-                a.out.appendAssumeCapacity(leaf_id);
-            }
-        };
-        self.visitLeaves(expr_id, head_term_id, Appender{ .out = out });
+        return AcuiBag.mergeRepeats(out.items);
     }
 
     pub fn collectConcreteSetItems(
@@ -368,32 +283,10 @@ pub const Context = struct {
         acui: ResolvedStructuralCombiner,
         out: *std.ArrayListUnmanaged(ExprId),
     ) anyerror!void {
-        const node = self.theorem.interner.node(expr_id);
-        switch (node.*) {
-            .variable => try self.appendSetItem(out, expr_id),
-            .placeholder => try self.appendSetItem(out, expr_id),
-            .app => |app| {
-                if (app.term_id == acui.head_term_id and app.args.len == 2) {
-                    try self.collectConcreteSetItemsExact(
-                        app.args[0],
-                        acui,
-                        out,
-                    );
-                    try self.collectConcreteSetItemsExact(
-                        app.args[1],
-                        acui,
-                        out,
-                    );
-                    return;
-                }
-                if (app.term_id == acui.unit_term_id and app.args.len == 0 and
-                    acui.supportsLeftUnit() and acui.supportsRightUnit())
-                {
-                    return;
-                }
-                try self.appendSetItem(out, expr_id);
-            },
-        }
+        var leaves = std.ArrayListUnmanaged(ExprId).empty;
+        defer leaves.deinit(self.allocator);
+        try AcuiBag.Spine.provable(acui).collect(self.allocator, self.theorem, expr_id, &leaves);
+        for (leaves.items) |leaf| try self.appendSetItem(out, leaf);
     }
 
     /// The canonical bag of a commutative `acui` holding `items`: the unit
@@ -412,14 +305,8 @@ pub const Context = struct {
             members.appendAssumeCapacity(item);
         }
         std.mem.sort(ExprId, members.items, @as(*const TheoremContext, self.theorem), exprIdLessThan);
-
-        var len: usize = 0;
-        for (members.items) |member| {
-            if (len != 0 and members.items[len - 1] == member and acui.idem_id != null) continue;
-            members.items[len] = member;
-            len += 1;
-        }
-        return (try AcuiBag.Combiner.fromResolved(acui).build(self.theorem, members.items[0..len])).?;
+        const kept = if (acui.idem_id != null) AcuiBag.mergeRepeats(members.items) else members.items;
+        return (try AcuiBag.Combiner.fromResolved(acui).build(self.theorem, kept)).?;
     }
 
     pub fn isDefBearing(self: *Context, expr_id: ExprId) bool {
@@ -530,7 +417,7 @@ pub const Context = struct {
             // each of them.
             var members = std.ArrayListUnmanaged(ExprId).empty;
             defer members.deinit(self.allocator);
-            try self.collectLeaves(expr_id, acui.head_term_id, &members);
+            try AcuiBag.Spine.raw(acui.head_term_id).collect(self.allocator, self.theorem, expr_id, &members);
             return try self.buildCanonicalAcuiFromItems(members.items, acui);
         }
         // Merging requires canonical operands, not merely a right-associated
@@ -549,7 +436,7 @@ pub const Context = struct {
         right: ExprId,
         acui: ResolvedStructuralCombiner,
     ) anyerror!ExprId {
-        if (self.split(left, acui)) |parts| {
+        if (AcuiBag.Spine.raw(acui.head_term_id).split(self.theorem, left)) |parts| {
             const merged_tail = try self.mergeCanonicalExact(parts[1], right, acui);
             return try self.prependExact(parts[0], merged_tail, acui);
         }
@@ -568,25 +455,12 @@ pub const Context = struct {
         const unit_expr = try self.unitExpr(acui);
         if (item == unit_expr and acui.supportsLeftUnit()) return canon;
         if (canon == unit_expr and acui.supportsRightUnit()) return item;
-        const first = if (self.split(canon, acui)) |parts| parts[0] else canon;
+        const first = if (AcuiBag.Spine.raw(acui.head_term_id).split(self.theorem, canon)) |parts| parts[0] else canon;
         if (item == first and acui.idem_id != null) return canon;
         return try self.theorem.interner.internApp(
             acui.head_term_id,
             &[_]ExprId{ item, canon },
         );
-    }
-
-    fn split(
-        self: *Context,
-        expr_id: ExprId,
-        acui: ResolvedStructuralCombiner,
-    ) ?[2]ExprId {
-        const app = switch (self.theorem.interner.node(expr_id).*) {
-            .app => |app| app,
-            .variable, .placeholder => return null,
-        };
-        if (app.term_id != acui.head_term_id or app.args.len != 2) return null;
-        return .{ app.args[0], app.args[1] };
     }
 
     fn unitExpr(

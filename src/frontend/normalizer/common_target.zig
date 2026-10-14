@@ -1,3 +1,4 @@
+const AcuiBag = @import("../acui_bag.zig");
 const ExprId = @import("../expr.zig").ExprId;
 const ResolvedRelation = @import("../rewrite_registry.zig").ResolvedRelation;
 const Support = @import("./support.zig");
@@ -25,9 +26,10 @@ pub fn buildCommonTarget(
         // by member, every member against every other. Descending through
         // the spine pairs the same members in one fixed order, and repeats
         // the bag comparison on every suffix on the way down.
+        const spine = AcuiBag.Spine.raw(acui.head_term_id);
         if (acui.comm_id != null and
-            Cover.isAcuiExpr(self, lhs, acui.head_term_id) and
-            Cover.isAcuiExpr(self, rhs, acui.head_term_id))
+            spine.isBag(self.theorem, lhs) and
+            spine.isBag(self.theorem, rhs))
         {
             return null;
         }

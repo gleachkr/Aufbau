@@ -1026,17 +1026,28 @@ reusing the verifier's native conversion machinery.
 ## Shared ACUI semantics
 
 `src/frontend/acui_support.zig` holds the ACUI vocabulary: combiner
-resolution (memoized per statement), leaf collection, the def-bearing test,
-canonical set items, and canonical bag building and merging by
-`compareExprIds`. It decides nothing about equality through defs; that is
-the normalizer's (below), in one implementation for the checker and for
-inference.
+resolution (memoized per statement), the def-bearing test, canonical set
+items, and canonical bag building and merging by `compareExprIds`. It decides
+nothing about equality through defs; that is the normalizer's (below), in one
+implementation for the checker and for inference.
 
 Below it, `src/frontend/acui_bag.zig` is the one reading of a combiner
-application as a bag of members, shared by the checker and the search. It
-flattens (dropping the combiner's *own* unit only: ring `+` and `*` on one sort
-do not share units), rebuilds, and reports the declared laws as one `Law`
-(set, multiset, sequence, or idempotent sequence).
+application as members. `Spine` reads a combiner's binary spine as its leaves,
+left to right and unbounded; the normalizer, the checker's conversions and
+inference use it. `Combiner.flatten` is the bounded bag (at most 64 members,
+null on overflow) that the checker's hints and the search use. Whether the
+unit is a member is the reader's choice, and there are three:
+
+- `Combiner.flatten` drops the combiner's *own* unit (ring `+` and `*` on one
+  sort do not share units).
+- `Spine.provable` drops it only when both unit laws can remove it, so a proof
+  can follow the reading.
+- `Spine.raw` keeps it, for proof steps that move members but never remove
+  the unit.
+
+The file also rebuilds bags and reports the declared laws as one `Law` (set,
+multiset, sequence, or idempotent sequence), which inference's structural
+solver dispatches on too.
 
 ## Rewrite metadata, normalization, and transport
 

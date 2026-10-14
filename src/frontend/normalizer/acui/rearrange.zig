@@ -9,6 +9,7 @@ const ExprNode = @import("../../expr.zig").ExprNode;
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const ResolvedStructuralCombiner =
     @import("../../rewrite_registry.zig").ResolvedStructuralCombiner;
+const AcuiBag = @import("../../acui_bag.zig");
 const AcuiSupport = @import("../../acui_support.zig");
 const ProofEmit = @import("../proof_emit.zig");
 const Support = @import("../support.zig");
@@ -112,15 +113,15 @@ fn Mover(comptime Engine: type) type {
         }
 
         fn contains(self: *const Self, bag: ExprId, member: ExprId) bool {
-            return self.support.holdsMember(bag, member, self.acui.head_term_id);
+            return self.spine().holds(self.engine.theorem, bag, member);
         }
 
         fn split(self: *const Self, expr_id: ExprId) ?[2]ExprId {
-            const app = appOf(self.engine, expr_id) orelse return null;
-            if (app.term_id != self.acui.head_term_id or app.args.len != 2) {
-                return null;
-            }
-            return .{ app.args[0], app.args[1] };
+            return self.spine().split(self.engine.theorem, expr_id);
+        }
+
+        fn spine(self: *const Self) AcuiBag.Spine {
+            return .raw(self.acui.head_term_id);
         }
 
         fn join(self: *Self, lhs: ExprId, rhs: ExprId) anyerror!ExprId {
@@ -307,8 +308,8 @@ fn Mover(comptime Engine: type) type {
             defer lhs_members.deinit(allocator);
             var rhs_members: std.ArrayListUnmanaged(ExprId) = .empty;
             defer rhs_members.deinit(allocator);
-            try self.support.collectLeaves(lhs, self.acui.head_term_id, &lhs_members);
-            try self.support.collectLeaves(rhs, self.acui.head_term_id, &rhs_members);
+            try self.spine().collect(allocator, self.engine.theorem, lhs, &lhs_members);
+            try self.spine().collect(allocator, self.engine.theorem, rhs, &rhs_members);
             const lhs_items = lhs_members.items;
             const rhs_items = rhs_members.items;
             const lhs_last = lhs_items.len - 1;

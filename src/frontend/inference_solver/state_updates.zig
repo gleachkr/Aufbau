@@ -278,14 +278,14 @@ pub fn buildStructuralInterval(
         profile.headTermId(),
         profile.unitTermId(),
     );
-    const upper_expr = switch (profile.fragment) {
-        .acui => try StructuralItems.rebuildStructuralExpr(
+    const upper_expr = switch (profile.law) {
+        .set => try StructuralItems.rebuildStructuralExpr(
             self,
             actual_items,
             profile.headTermId(),
             profile.unitTermId(),
         ),
-        .au, .acu, .aui => lower_expr,
+        .sequence, .multiset, .idempotent_sequence => lower_expr,
     };
     return .{
         .head_term_id = profile.headTermId(),
@@ -388,8 +388,8 @@ pub fn combineStructuralIntervals(
         return error.UnifyMismatch;
     }
 
-    return switch (profile.fragment) {
-        .acui => blk: {
+    return switch (profile.law) {
+        .set => blk: {
             const lower_expr = try StructuralIntervals.unionStructuralExprs(
                 self,
                 lhs.lower_expr,
@@ -420,7 +420,7 @@ pub fn combineStructuralIntervals(
                 .upper_expr = upper_expr,
             };
         },
-        .au, .acu, .aui => blk: {
+        .sequence, .multiset, .idempotent_sequence => blk: {
             if (!try SemanticCompare.bindingCompatible(
                 self,
                 lhs.lower_expr,

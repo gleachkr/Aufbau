@@ -963,32 +963,6 @@ fn assignAcuiResidualRec(
     }
 }
 
-fn collectTemplateBagLeaves(
-    allocator: std.mem.Allocator,
-    template: TemplateExpr,
-    head_term_id: u32,
-    out: *std.ArrayListUnmanaged(TemplateExpr),
-) anyerror!void {
-    if (template == .app and template.app.term_id == head_term_id and
-        template.app.args.len == 2)
-    {
-        try collectTemplateBagLeaves(
-            allocator,
-            template.app.args[0],
-            head_term_id,
-            out,
-        );
-        try collectTemplateBagLeaves(
-            allocator,
-            template.app.args[1],
-            head_term_id,
-            out,
-        );
-        return;
-    }
-    try out.append(allocator, template);
-}
-
 fn containsEqualExpr(
     theorem: *const TheoremContext,
     items: []const ExprId,
@@ -1071,12 +1045,7 @@ fn assignAcuiResidualBag(
 
     var leaves: std.ArrayListUnmanaged(TemplateExpr) = .empty;
     defer leaves.deinit(allocator);
-    try collectTemplateBagLeaves(
-        allocator,
-        template,
-        acui.head_term_id,
-        &leaves,
-    );
+    try AcuiBag.Spine.raw(acui.head_term_id).collectTemplate(allocator, template, &leaves);
 
     var resolved: std.ArrayListUnmanaged(ExprId) = .empty;
     defer resolved.deinit(allocator);
@@ -1651,12 +1620,7 @@ fn planRecoverSourceSplit(
 
     var leaves: std.ArrayListUnmanaged(TemplateExpr) = .empty;
     defer leaves.deinit(allocator);
-    try collectTemplateBagLeaves(
-        allocator,
-        bag.template,
-        bag.acui.head_term_id,
-        &leaves,
-    );
+    try AcuiBag.Spine.raw(bag.acui.head_term_id).collectTemplate(allocator, bag.template, &leaves);
 
     var ground: std.ArrayListUnmanaged(ExprId) = .empty;
     defer ground.deinit(allocator);

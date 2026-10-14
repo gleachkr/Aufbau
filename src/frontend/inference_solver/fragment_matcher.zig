@@ -78,7 +78,7 @@ pub fn matchStructural(
     for (pre_required.items) |required| {
         var found = false;
         for (actual_items.items, 0..) |actual_item, idx| {
-            if (profile.fragment != .acui and used[idx]) continue;
+            if (profile.law != .set and used[idx]) continue;
             if (!try SemanticCompare.bindingCompatible(
                 self,
                 required,
@@ -308,7 +308,7 @@ fn matchCommutativeStructuralObligations(
     }
 
     for (actual_items, 0..) |actual_item, actual_idx| {
-        if (profile.fragment != .acui and used[actual_idx]) continue;
+        if (profile.law != .set and used[actual_idx]) continue;
         const matches = try matchStructuralItem(
             Matcher,
             self,

@@ -1,17 +1,24 @@
-//! One reading of an `@acui` combiner application as a bag of members, shared
-//! by the checker and the search.
+//! The one reading of an `@acui` combiner application as a bag of members.
 //!
-//! `Combiner.flatten` splices nested applications of the combiner head and
-//! drops the combiner's own unit, keeping every other member in left-to-right
-//! order with its duplicates. What the members *mean* depends on the declared
-//! laws (`Law`). Callers that compare members as a set dedup explicitly;
-//! nothing here dedups on the combiner's behalf.
+//! `Spine` reads the binary spine of a combiner head as its leaves, left to
+//! right, with their duplicates, unbounded. The normalizer, the checker's
+//! conversions and inference use it directly. `Combiner.flatten` is the
+//! bounded reading the checker's hints and the search use: a bag holds at
+//! most `capacity` members, and on overflow `flatten` returns null, so callers
+//! abstain rather than read a truncated bag.
+//!
+//! What the members *mean* depends on the declared laws (`Law`). Callers that
+//! compare members as a set dedup explicitly; nothing here dedups on the
+//! combiner's behalf.
 //!
 //! A unit is always *this* combiner's unit. Two combiners on one sort (ring
 //! `+` with `0`, `*` with `1`) do not share units: `x + 1` keeps its `1`.
-//!
-//! A bag holds at most `capacity` members. On overflow `flatten` returns null,
-//! and callers abstain rather than read a truncated bag.
+//! Whether the unit is a member is the reader's choice, one of three:
+//! - `Combiner.flatten` drops it: a bag's meaning does not include its unit.
+//! - `Spine.provable` drops it only when both unit laws can remove it from
+//!   either end, so a proof can follow the reading.
+//! - `Spine.raw` keeps it, for proof steps that move members but never remove
+//!   the unit.
 
 const std = @import("std");
 const ExprId = @import("./expr.zig").ExprId;
@@ -21,6 +28,182 @@ const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RewriteRegistry = @import("./rewrite_registry.zig").RewriteRegistry;
 const ResolvedStructuralCombiner =
     @import("./rewrite_registry.zig").ResolvedStructuralCombiner;
+
+/// The binary spine of `head`, read as its leaves left to right. A node that
+/// is not a binary `head` application is one leaf, or no leaf when it is
+/// `skip_unit`.
+pub const Spine = struct {
+    head: u32,
+    /// The unit leaf to skip, or null to keep every leaf.
+    skip_unit: ?u32 = null,
+
+    /// Every leaf, the unit included.
+    pub fn raw(head: u32) Spine {
+        return .{ .head = head };
+    }
+
+    /// The leaves a proof can reach: the unit is dropped only when both unit
+    /// laws are available.
+    pub fn provable(acui: ResolvedStructuralCombiner) Spine {
+        return .{
+            .head = acui.head_term_id,
+            .skip_unit = if (acui.supportsLeftUnit() and acui.supportsRightUnit())
+                acui.unit_term_id
+            else
+                null,
+        };
+    }
+
+    /// The two operands of `expr` when it is a `head` application.
+    pub fn split(self: Spine, theorem: *const TheoremContext, expr: ExprId) ?[2]ExprId {
+        return switch (theorem.interner.node(expr).*) {
+            .app => |app| if (app.term_id == self.head and app.args.len == 2)
+                .{ app.args[0], app.args[1] }
+            else
+                null,
+            .variable, .placeholder => null,
+        };
+    }
+
+    pub fn isBag(self: Spine, theorem: *const TheoremContext, expr: ExprId) bool {
+        return self.split(theorem, expr) != null;
+    }
+
+    /// Whether `expr` is the leaf this reading skips.
+    pub fn skips(self: Spine, theorem: *const TheoremContext, expr: ExprId) bool {
+        const unit = self.skip_unit orelse return false;
+        return switch (theorem.interner.node(expr).*) {
+            .app => |app| app.term_id == unit and app.args.len == 0,
+            .variable, .placeholder => false,
+        };
+    }
+
+    /// Calls `visitor.leaf(leaf)` for each leaf of `expr`, left to right.
+    pub fn visit(
+        self: Spine,
+        theorem: *const TheoremContext,
+        expr: ExprId,
+        visitor: anytype,
+    ) void {
+        if (self.split(theorem, expr)) |parts| {
+            self.visit(theorem, parts[0], visitor);
+            self.visit(theorem, parts[1], visitor);
+            return;
+        }
+        if (self.skips(theorem, expr)) return;
+        visitor.leaf(expr);
+    }
+
+    pub fn count(self: Spine, theorem: *const TheoremContext, expr: ExprId) usize {
+        var counter: struct {
+            count: usize = 0,
+            pub fn leaf(c: *@This(), _: ExprId) void {
+                c.count += 1;
+            }
+        } = .{};
+        self.visit(theorem, expr, &counter);
+        return counter.count;
+    }
+
+    /// Appends the leaves of `expr` to `out`, growing it once.
+    pub fn collect(
+        self: Spine,
+        allocator: std.mem.Allocator,
+        theorem: *const TheoremContext,
+        expr: ExprId,
+        out: *std.ArrayListUnmanaged(ExprId),
+    ) !void {
+        // Precise: arena callers keep every buffer a growing list leaves.
+        try out.ensureTotalCapacityPrecise(allocator, out.items.len + self.count(theorem, expr));
+        const Appender = struct {
+            out: *std.ArrayListUnmanaged(ExprId),
+            pub fn leaf(a: @This(), leaf_id: ExprId) void {
+                a.out.appendAssumeCapacity(leaf_id);
+            }
+        };
+        self.visit(theorem, expr, Appender{ .out = out });
+    }
+
+    /// Whether `member` is `bag` or a node of its spine.
+    pub fn holds(
+        self: Spine,
+        theorem: *const TheoremContext,
+        bag: ExprId,
+        member: ExprId,
+    ) bool {
+        if (bag == member) return true;
+        const parts = self.split(theorem, bag) orelse return false;
+        return self.holds(theorem, parts[0], member) or
+            self.holds(theorem, parts[1], member);
+    }
+
+    /// `split` for a rule template.
+    pub fn splitTemplate(self: Spine, template: TemplateExpr) ?[2]TemplateExpr {
+        return switch (template) {
+            .app => |app| if (app.term_id == self.head and app.args.len == 2)
+                .{ app.args[0], app.args[1] }
+            else
+                null,
+            .binder => null,
+        };
+    }
+
+    /// `skips` for a rule template.
+    pub fn skipsTemplate(self: Spine, template: TemplateExpr) bool {
+        const unit = self.skip_unit orelse return false;
+        return switch (template) {
+            .app => |app| app.term_id == unit and app.args.len == 0,
+            .binder => false,
+        };
+    }
+
+    /// `visit` for a rule template. Binders are leaves.
+    pub fn visitTemplate(self: Spine, template: TemplateExpr, visitor: anytype) void {
+        if (self.splitTemplate(template)) |parts| {
+            self.visitTemplate(parts[0], visitor);
+            self.visitTemplate(parts[1], visitor);
+            return;
+        }
+        if (self.skipsTemplate(template)) return;
+        visitor.leaf(template);
+    }
+
+    /// `collect` for a rule template.
+    pub fn collectTemplate(
+        self: Spine,
+        allocator: std.mem.Allocator,
+        template: TemplateExpr,
+        out: *std.ArrayListUnmanaged(TemplateExpr),
+    ) !void {
+        var counter: struct {
+            count: usize = 0,
+            pub fn leaf(c: *@This(), _: TemplateExpr) void {
+                c.count += 1;
+            }
+        } = .{};
+        self.visitTemplate(template, &counter);
+        try out.ensureTotalCapacityPrecise(allocator, out.items.len + counter.count);
+        const Appender = struct {
+            out: *std.ArrayListUnmanaged(TemplateExpr),
+            pub fn leaf(a: @This(), item: TemplateExpr) void {
+                a.out.appendAssumeCapacity(item);
+            }
+        };
+        self.visitTemplate(template, Appender{ .out = out });
+    }
+};
+
+/// Drops adjacent repeats from sorted `members`: the members of an
+/// idempotent bag. Returns the kept prefix.
+pub fn mergeRepeats(members: []ExprId) []ExprId {
+    var len: usize = 0;
+    for (members) |member| {
+        if (len != 0 and members[len - 1] == member) continue;
+        members[len] = member;
+        len += 1;
+    }
+    return members[0..len];
+}
 
 pub const capacity = 64;
 
@@ -96,11 +279,12 @@ pub const Combiner = struct {
 
     /// Whether `expr` is this combiner's unit.
     pub fn isUnit(self: Combiner, theorem: *const TheoremContext, expr: ExprId) bool {
-        const unit = self.unit orelse return false;
-        return switch (theorem.interner.node(expr).*) {
-            .app => |app| app.term_id == unit and app.args.len == 0,
-            else => false,
-        };
+        return self.spine().skips(theorem, expr);
+    }
+
+    /// This combiner's spine, without its unit.
+    pub fn spine(self: Combiner) Spine {
+        return .{ .head = self.head, .skip_unit = self.unit };
     }
 
     /// The members of `expr`, or null on overflow. An `expr` not headed by
@@ -110,53 +294,27 @@ pub const Combiner = struct {
         theorem: *const TheoremContext,
         expr: ExprId,
     ) ?ExprBag {
-        var out = ExprBag{};
-        if (!self.flattenInto(theorem, expr, &out)) return null;
-        return out;
-    }
-
-    fn flattenInto(
-        self: Combiner,
-        theorem: *const TheoremContext,
-        expr: ExprId,
-        out: *ExprBag,
-    ) bool {
-        switch (theorem.interner.node(expr).*) {
-            .app => |app| {
-                if (app.term_id == self.head) {
-                    for (app.args) |arg| {
-                        if (!self.flattenInto(theorem, arg, out)) return false;
-                    }
-                    return true;
-                }
-                if (app.args.len == 0 and app.term_id == self.unit) return true;
-            },
-            else => {},
-        }
-        return out.append(expr);
+        var fill: Fill(ExprId) = .{};
+        self.spine().visit(theorem, expr, &fill);
+        return if (fill.overflow) null else fill.bag;
     }
 
     /// `flatten` for a rule template. Binders are members.
     pub fn flattenTemplate(self: Combiner, template: TemplateExpr) ?TemplateBag {
-        var out = TemplateBag{};
-        if (!self.flattenTemplateInto(template, &out)) return null;
-        return out;
+        var fill: Fill(TemplateExpr) = .{};
+        self.spine().visitTemplate(template, &fill);
+        return if (fill.overflow) null else fill.bag;
     }
 
-    fn flattenTemplateInto(self: Combiner, template: TemplateExpr, out: *TemplateBag) bool {
-        switch (template) {
-            .app => |app| {
-                if (app.term_id == self.head) {
-                    for (app.args) |arg| {
-                        if (!self.flattenTemplateInto(arg, out)) return false;
-                    }
-                    return true;
-                }
-                if (app.args.len == 0 and app.term_id == self.unit) return true;
-            },
-            .binder => {},
-        }
-        return out.append(template);
+    fn Fill(comptime T: type) type {
+        return struct {
+            bag: Members(T) = .{},
+            overflow: bool = false,
+
+            pub fn leaf(self: *@This(), item: T) void {
+                if (!self.bag.append(item)) self.overflow = true;
+            }
+        };
     }
 
     /// Rebuild `members` as one expression: the unit when empty (null if the

@@ -24,22 +24,22 @@ pub fn solveStructuralObligation(
     if (profile.unitTermId() != obligation.unit_term_id) {
         return error.UnifyMismatch;
     }
-    return switch (profile.fragment) {
-        .au, .aui => try solveOrderedStructuralObligation(
+    return switch (profile.law) {
+        .sequence, .idempotent_sequence => try solveOrderedStructuralObligation(
             self,
             state,
             space,
             obligation,
             profile,
         ),
-        .acu => try solveAcuStructuralObligation(
+        .multiset => try solveAcuStructuralObligation(
             self,
             state,
             space,
             obligation,
             profile,
         ),
-        .acui => try solveAcuiStructuralObligation(
+        .set => try solveAcuiStructuralObligation(
             self,
             state,
             space,

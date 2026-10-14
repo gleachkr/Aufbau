@@ -305,7 +305,7 @@ test "an idempotent bag's items meet through a definition on either side" {
     };
     for (cases) |case| {
         var out: std.ArrayListUnmanaged(ExprId) = .empty;
-        var appender = try Items.ItemAppender.init(&solver, .acui, &out);
+        var appender = try Items.ItemAppender.init(&solver, .set, &out);
         defer appender.deinit(allocator);
         for (case.items) |item| try appender.append(&solver, item);
         try std.testing.expectEqual(case.kept, out.items.len);

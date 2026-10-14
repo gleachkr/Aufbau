@@ -1,3 +1,4 @@
+const AcuiBag = @import("../../acui_bag.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const ResolvedStructuralCombiner =
@@ -80,10 +81,9 @@ pub fn buildConcreteToDefCoverProof(
         );
     }
 
-    const witness_to_concrete = if (isAcuiExpr(
-        self,
+    const witness_to_concrete = if (AcuiBag.Spine.raw(acui.head_term_id).isBag(
+        self.theorem,
         witness,
-        acui.head_term_id,
     )) blk: {
         const exact = try normalizeStructuralExact(
             self,
@@ -111,19 +111,6 @@ pub fn buildConcreteToDefCoverProof(
         concrete_expr,
         def_to_concrete,
     );
-}
-
-pub fn isAcuiExpr(
-    self: anytype,
-    expr_id: ExprId,
-    head_term_id: u32,
-) bool {
-    const node = self.theorem.interner.node(expr_id);
-    return switch (node.*) {
-        .app => |app| app.term_id == head_term_id and app.args.len == 2,
-        .variable => false,
-        .placeholder => false,
-    };
 }
 
 pub fn sharedStructuralCombiner(

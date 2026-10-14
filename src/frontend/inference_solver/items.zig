@@ -1,12 +1,12 @@
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
+const ExprModule = @import("../expr.zig");
+const AcuiBag = @import("../acui_bag.zig");
 const compareExprIds = @import("../acui_support.zig").compareExprIds;
 const SemanticCompare = @import("./semantic_compare.zig");
-const StructuralCongruence = @import("./congruence.zig");
 const types = @import("./types.zig");
 const BinderSpace = types.BinderSpace;
-const StructuralFragment = types.StructuralFragment;
 const StructuralProfile = types.StructuralProfile;
 const StructuralRemainder = types.StructuralRemainder;
 const StructuralTemplateItem = types.StructuralTemplateItem;
@@ -79,21 +79,12 @@ pub fn collectTemplateStructuralItems(
                 .{ .template = template },
             );
         },
-        .app => |app| {
-            if (app.term_id == profile.headTermId() and app.args.len == 2) {
-                try collectTemplateStructuralItems(
+        .app => {
+            const spine = AcuiBag.Spine.provable(profile.combiner);
+            if (spine.splitTemplate(template)) |parts| {
+                for (parts) |part| try collectTemplateStructuralItems(
                     self,
-                    app.args[0],
-                    space,
-                    profile,
-                    out,
-                    remainders,
-                    bindings,
-                    pre_required,
-                );
-                try collectTemplateStructuralItems(
-                    self,
-                    app.args[1],
+                    part,
                     space,
                     profile,
                     out,
@@ -103,12 +94,7 @@ pub fn collectTemplateStructuralItems(
                 );
                 return;
             }
-            if (app.term_id == profile.unitTermId() and app.args.len == 0 and
-                profile.combiner.supportsLeftUnit() and
-                profile.combiner.supportsRightUnit())
-            {
-                return;
-            }
+            if (spine.skipsTemplate(template)) return;
             try appendTemplateStructuralItem(
                 self,
                 profile,
@@ -142,15 +128,19 @@ pub fn collectConcreteStructuralItems(
     var raw = std.ArrayListUnmanaged(ExprId).empty;
     defer raw.deinit(self.allocator);
 
-    try StructuralCongruence.collectItems(self, expr_id, profile, &raw);
-    var appender = try ItemAppender.init(self, profile.fragment, out);
+    try AcuiBag.Spine.raw(profile.headTermId()).collect(self.allocator, self.theorem, expr_id, &raw);
+    // A walk ticks once per node, and a spine of n leaves has 2n - 1 nodes.
+    ExprModule.work_ticks_walk +%= 2 * raw.items.len - 1;
+    const provable = AcuiBag.Spine.provable(profile.combiner);
+    var appender = try ItemAppender.init(self, profile.law, out);
     defer appender.deinit(self.allocator);
     for (raw.items) |item| {
+        if (provable.skips(self.theorem, item)) continue;
         try appender.append(self, item);
     }
 }
 
-/// Appends items to `out` in a fragment's item order: sorted when the
+/// Appends items to `out` in a law's item order: sorted when the
 /// combiner commutes, and without an item `bindingCompatible` with one
 /// already kept when it is idempotent.
 ///
@@ -160,23 +150,23 @@ pub fn collectConcreteStructuralItems(
 /// `meetsOtherForms`. So an item that does not is compared only with the
 /// kept items that do.
 pub const ItemAppender = struct {
-    fragment: StructuralFragment,
+    law: AcuiBag.Law,
     out: *std.ArrayListUnmanaged(ExprId),
-    /// Canonical forms of the kept items (`.acui` only).
+    /// Canonical forms of the kept items (`.set` only).
     canonical: std.AutoHashMapUnmanaged(ExprId, void) = .empty,
-    /// Kept items whose canonical form `meetsOtherForms` (`.acui` only),
+    /// Kept items whose canonical form `meetsOtherForms` (`.set` only),
     /// in `out` order.
     meeting: std.ArrayListUnmanaged(ExprId) = .empty,
 
-    /// `out` may already hold items in the fragment's order.
+    /// `out` may already hold items in the law's order.
     pub fn init(
         self: anytype,
-        fragment: StructuralFragment,
+        law: AcuiBag.Law,
         out: *std.ArrayListUnmanaged(ExprId),
     ) anyerror!ItemAppender {
-        var appender: ItemAppender = .{ .fragment = fragment, .out = out };
+        var appender: ItemAppender = .{ .law = law, .out = out };
         errdefer appender.deinit(self.allocator);
-        if (fragment == .acui) {
+        if (law == .set) {
             for (out.items) |item| {
                 const form = try FormOf.get(self, item);
                 try appender.keep(self, item, form);
@@ -192,10 +182,10 @@ pub const ItemAppender = struct {
 
     pub fn append(appender: *ItemAppender, self: anytype, expr_id: ExprId) anyerror!void {
         const out = appender.out;
-        switch (appender.fragment) {
-            .au => try out.append(self.allocator, expr_id),
-            .acu => try insertSorted(self, out, expr_id),
-            .aui => {
+        switch (appender.law) {
+            .sequence => try out.append(self.allocator, expr_id),
+            .multiset => try insertSorted(self, out, expr_id),
+            .idempotent_sequence => {
                 if (out.items.len != 0 and try SemanticCompare.bindingCompatible(
                     self,
                     out.items[out.items.len - 1],
@@ -205,7 +195,7 @@ pub const ItemAppender = struct {
                 }
                 try out.append(self.allocator, expr_id);
             },
-            .acui => {
+            .set => {
                 const form = try FormOf.get(self, expr_id);
                 if (appender.canonical.contains(form.canonical)) return;
                 const candidates = if (form.meets_others)

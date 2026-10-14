@@ -1,4 +1,5 @@
 const std = @import("std");
+const AcuiBag = @import("../../acui_bag.zig");
 const ExprId = @import("../../expr.zig").ExprId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const GlobalEnv = @import("../../env.zig").GlobalEnv;
@@ -1442,10 +1443,10 @@ fn structuralTreeHasOmittedMember(
             if (isStructuralRemainderBinder(env, rule, idx, combiner)) return false;
             return idx < bindings.len and bindings[idx] == null;
         },
-        .app => |app| {
-            if (app.term_id == combiner.head_term_id and app.args.len == 2) {
-                return structuralTreeHasOmittedMember(env, rule, bindings, app.args[0], combiner) or
-                    structuralTreeHasOmittedMember(env, rule, bindings, app.args[1], combiner);
+        .app => {
+            if (AcuiBag.Spine.raw(combiner.head_term_id).splitTemplate(template)) |parts| {
+                return structuralTreeHasOmittedMember(env, rule, bindings, parts[0], combiner) or
+                    structuralTreeHasOmittedMember(env, rule, bindings, parts[1], combiner);
             }
             return !templateItemIsFixed(bindings, template);
         },
@@ -1572,33 +1573,21 @@ fn inspectStructuralTree(
                 saw_fixed_item.* = true;
             }
         },
-        .app => |app| {
-            if (app.term_id == combiner.head_term_id and app.args.len == 2) {
-                try inspectStructuralTree(
+        .app => {
+            const spine = AcuiBag.Spine.provable(combiner);
+            if (spine.splitTemplate(template)) |parts| {
+                for (parts) |part| try inspectStructuralTree(
                     env,
                     rule,
                     bindings,
-                    app.args[0],
-                    combiner,
-                    saw_omitted_remainder,
-                    saw_fixed_item,
-                );
-                try inspectStructuralTree(
-                    env,
-                    rule,
-                    bindings,
-                    app.args[1],
+                    part,
                     combiner,
                     saw_omitted_remainder,
                     saw_fixed_item,
                 );
                 return;
             }
-            if (app.term_id == combiner.unit_term_id and app.args.len == 0 and
-                combiner.supportsLeftUnit() and combiner.supportsRightUnit())
-            {
-                return;
-            }
+            if (spine.skipsTemplate(template)) return;
             if (templateItemIsFixed(bindings, template)) {
                 saw_fixed_item.* = true;
             }

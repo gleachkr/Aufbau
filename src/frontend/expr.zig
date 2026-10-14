@@ -172,8 +172,8 @@ const ExprIdIndex = std.HashMapUnmanaged(
 /// the shape builder (`search/shape.zig`), the open-generation meta walks
 /// (`match.registerMetasInExpr`, `MetaStore.deref`/`hasUnsolvedMeta`),
 /// suggestion rendering (`pretty_print.renderNode`), and the inference
-/// solver's branch clones and structural-congruence compares
-/// (`inference_solver/branch_state.zig`, `congruence.zig`).
+/// solver's branch clones and structural item collection
+/// (`inference_solver/branch_state.zig`, `items.zig`).
 pub threadlocal var work_ticks: u64 = 0;
 pub threadlocal var work_ticks_sym: u64 = 0;
 pub threadlocal var work_ticks_walk: u64 = 0;
