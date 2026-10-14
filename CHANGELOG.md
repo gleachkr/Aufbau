@@ -57,11 +57,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   it held one definition twice, or two definitions with one body: the
   comparison opened one copy, which folded straight back. The line now
   fails with an ordinary diagnostic.
-- A line could fail to infer a rule's arguments, for some orders of an
-  `@acui` bag and not others, when two definitions with one body (such as
-  `def i1 (a) = $ hyp a $` and `def i2 (a) = $ hyp a $`) stood beside a
-  plain copy of that body: the plain member folds into whichever comes
-  first, and the rule's bag named the other.
+- A line could fail to infer a rule's arguments for some orders of an
+  `@acui` bag and not others when the bag held a definition of a member.
+  With `def i1 (a) = $ hyp a $`, the rule `$ i1 a , b => (a -> b) $`
+  inferred for the line `$ b , i1 a => (a -> b) $` but not for
+  `$ i1 b , a => (a -> b) $`, whose `i1 b` was paired with the rule's
+  `i1 a`. Two definitions with one body (`i1` and `i2`) beside a plain
+  copy of it failed the same way.
+- In an idempotent `@acui` bag, two definitions with one body now count
+  as one member: `i2 a , (i1 b , i1 a)` did not match `i1 a , i1 b`, even
+  with the rule's arguments given.
 - The npm packages could not read a result once the WebAssembly memory
   passed 2 GiB: a compile that succeeded failed with "byteOffset cannot be
   negative".

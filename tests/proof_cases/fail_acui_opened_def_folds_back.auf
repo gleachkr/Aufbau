@@ -1,7 +1,7 @@
 repeated_def
 ---
-l1: $ i1 x , i1 x , y => y $ by r []
+l1: $ i1 x , i1 x , y => y $ by r (a := $ x $, b := $ x $) []
 
 twin_def
 ---
-l1: $ (i1 a , a) , i1 b => b $ by r2 []
+l1: $ (i1 a , a) , i1 b => b $ by r2 (a := $ a $, b := $ a $) []

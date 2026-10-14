@@ -885,11 +885,11 @@ In the current implementation, the ACUI path is also more def-aware than plain
 head-rewrite lookup. It can do exact cancellation of common items, same-side
 absorption by def-bearing items, and non-ACUI common-target search inside
 wrapped leaves. But this still falls short of a general "rewrite through defs"
-engine. When two defs with one body sit in a bag, which of them an equal
-plain member folds into depends on where it stands, so two orders of one bag
-can name their members differently. Matching a line against a rule tolerates
-this: bag members whose heads differ are compared by unfolding once the
-rule's binders are bound.
+engine. Same-side absorption folds each member into the least def member
+of its bag that equals it, in the order the normal form sorts by, and a def
+member into a lesser one with the same unfolding (`i2 a` into `i1 a` when
+both are `hyp a`). Two orders or groupings of one bag therefore name their
+members alike, and an idempotent bag holds such twins once.
 
 ### Supported subsets
 

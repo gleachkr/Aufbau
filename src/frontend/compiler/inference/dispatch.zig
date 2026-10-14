@@ -262,6 +262,31 @@ fn inferBindingsNoView(
                 );
             }
 
+            // Every structural-sort binder is given, but one inside a
+            // member of an ACUI region is not: `a` in `g , a ⊢ b` with `g`
+            // given, even as the unit, or in a rule's `i1 a , b` against a
+            // line's `i1 b , a`. The tiers above are ACUI-blind, so only the
+            // structural solver can read it out of the line. It runs before
+            // strict replay's bindings are deferred to validation: replay
+            // pairs bag members by position, so having bound every binder
+            // does not make its bindings right.
+            if (try hasOmittedStructuralMember(env, registry, rule, partial_bindings)) {
+                if (attemptStructuralSolver(
+                    self,
+                    context,
+                    line,
+                    partial_bindings,
+                    ref_exprs,
+                    line_expr,
+                    fresh_context,
+                )) |bindings| {
+                    return bindings;
+                } else |err| {
+                    if (err == error.OutOfMemory) return err;
+                    self.restoreDiagnostic(null);
+                }
+            }
+
             // Strict replay may fail on a hypothesis-vs-ref or conclusion
             // mismatch that theorem-application validation can still bridge
             // (normalized or transparent conversion — e.g. a rule hypothesis
@@ -299,27 +324,6 @@ fn inferBindingsNoView(
                 }
                 self.restoreDiagnostic(null);
                 return bindings;
-            }
-
-            // Every structural-sort binder is given, but one inside a
-            // member of an ACUI region is not: `a` in `g , a ⊢ b` with `g`
-            // given, even as the unit. The tiers above are ACUI-blind, so
-            // only the structural solver can read it out of the line.
-            if (try hasOmittedStructuralMember(env, registry, rule, partial_bindings)) {
-                if (attemptStructuralSolver(
-                    self,
-                    context,
-                    line,
-                    partial_bindings,
-                    ref_exprs,
-                    line_expr,
-                    fresh_context,
-                )) |bindings| {
-                    return bindings;
-                } else |err| {
-                    if (err == error.OutOfMemory) return err;
-                    self.restoreDiagnostic(null);
-                }
             }
 
             if (failure.err == error.MissingBinderAssignment) {

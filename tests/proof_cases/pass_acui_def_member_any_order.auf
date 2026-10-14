@@ -1,0 +1,15 @@
+swapped
+---
+l1: $ i1 b , a => (a -> b) $ by rr []
+
+same_order
+---
+l1: $ b , i1 a => (a -> b) $ by rr []
+
+repeated_def
+---
+l1: $ i1 x , i1 x , y => y $ by r []
+
+twin_def
+---
+l1: $ (i1 a , a) , i1 b => b $ by r2 []

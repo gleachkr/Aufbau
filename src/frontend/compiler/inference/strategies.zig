@@ -1390,9 +1390,11 @@ pub fn hasOmittedStructuralBindings(
 }
 
 /// Return true when an omitted binder sits inside a member of a structural
-/// region of some hypothesis, as `a` does in `g , a ⊢ b`. Exact replay is
-/// ACUI-blind, so it cannot recover such a binder when the ref's region is
-/// laid out differently (for instance when `g` is given as the unit).
+/// region of a hypothesis or the conclusion, as `a` does in `g , a ⊢ b` or
+/// in `i1 a , b ⊢ c`. Exact replay is ACUI-blind, so it cannot recover such
+/// a binder when the ref's or line's region is laid out differently (for
+/// instance when `g` is given as the unit, or the members come in another
+/// order).
 pub fn hasOmittedStructuralMember(
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
@@ -1404,7 +1406,7 @@ pub fn hasOmittedStructuralMember(
             return true;
         }
     }
-    return false;
+    return try templateHasOmittedStructuralMember(env, registry, rule, bindings, rule.concl);
 }
 
 fn templateHasOmittedStructuralMember(

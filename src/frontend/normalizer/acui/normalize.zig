@@ -1,5 +1,6 @@
 const std = @import("std");
 const ExprId = @import("../../expr.zig").ExprId;
+const TheoremContext = @import("../../expr.zig").TheoremContext;
 const AcuiSupport = @import("../../acui_support.zig");
 const ResolvedRelation = @import("../../rewrite_registry.zig").ResolvedRelation;
 const ResolvedStructuralCombiner =
@@ -157,10 +158,9 @@ pub fn normalizeStructural(
 /// them. The proof-producing path normalizes every prefix of the spine and
 /// merges member by member, a pass over the bag for each member; with no
 /// rule at the combiner the prefixes have no normal form of their own to
-/// add, and both paths end at the same bag. A fold is where they part: the
-/// prefixes fold a member into the first def that covers it within each
-/// prefix, which the flat bag cannot replay, so a bag with a fold takes the
-/// prefix path.
+/// add, and both paths end at the same bag. A bag with a fold takes the
+/// prefix path: there the fold meets the combiner's laws member by member,
+/// as when a def is itself the unit.
 pub fn normalizeCommutativeBag(
     self: anytype,
     expr_id: ExprId,
@@ -269,8 +269,9 @@ pub fn canonicalizeBag(
     return try (try self.support()).canonicalizeAcuiExact(rebuilt, acui);
 }
 
-/// Fold each concrete leaf into a def leaf of the same bag that equals it,
-/// the first such def in leaf order, so equal members meet as one item.
+/// Fold each leaf into the least def leaf of the same bag that equals it,
+/// so equal members meet as one item whatever their order or grouping: a
+/// concrete leaf, and a def leaf with a lesser twin (`i2 a` into `i1 a`).
 pub fn applySameSideAbsorption(
     self: anytype,
     leaves: []AcuiLeaf,
@@ -278,18 +279,38 @@ pub fn applySameSideAbsorption(
     relation: ResolvedRelation,
     acui: ResolvedStructuralCombiner,
 ) anyerror!void {
+    var owners = std.ArrayListUnmanaged(ExprId).empty;
+    defer owners.deinit(self.allocator);
+    for (leaves) |leaf| {
+        if (!leaf.is_def) continue;
+        if (std.mem.indexOfScalar(ExprId, owners.items, leaf.old_expr) != null) continue;
+        try owners.append(self.allocator, leaf.old_expr);
+    }
+    const theorem: *const TheoremContext = self.theorem;
+    std.mem.sort(ExprId, owners.items, theorem, AcuiSupport.exprIdLessThan);
     for (leaves) |*leaf| {
-        if (leaf.old_expr == unit_expr or leaf.is_def) continue;
-        for (leaves) |owner| {
-            if (!owner.is_def) continue;
-            const proof = try Cover.buildConcreteToDefCoverProof(
+        if (leaf.old_expr == unit_expr) continue;
+        for (owners.items) |owner| {
+            // A def leaf folds only into a lesser def.
+            if (owner == leaf.old_expr) break;
+            const proof = if (leaf.is_def) blk: {
+                // Two defs meet when they unfold alike, which the verifier
+                // checks for the one transport line.
+                if (try (try self.defOps()).compareTransparent(leaf.old_expr, owner) == null) continue;
+                break :blk try ProofEmit.emitTransparentRelationProof(
+                    self,
+                    relation,
+                    leaf.old_expr,
+                    owner,
+                );
+            } else try Cover.buildConcreteToDefCoverProof(
                 self,
                 leaf.old_expr,
-                owner.old_expr,
+                owner,
                 relation,
                 acui,
             ) orelse continue;
-            leaf.new_expr = owner.old_expr;
+            leaf.new_expr = owner;
             leaf.conv_line_idx = proof;
             break;
         }

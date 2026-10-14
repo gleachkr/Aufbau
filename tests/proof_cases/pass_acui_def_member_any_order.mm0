@@ -1,0 +1,50 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+
+term bi (a b: wff): wff;
+--| @relation wff bi biid bitr bisym mpbi
+axiom biid (a: wff): $ bi a a $;
+axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+
+-- A multiset context: repeats count.
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp _
+term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+term ctx_eq (g h: ctx): wff;
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+term seq (g: ctx) (a: wff): wff; infixl seq: $=>$ prec 0;
+--| @congr
+axiom seq_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ bi a b $ > $ bi (g => a) (h => b) $;
+term im (a b: wff): wff; infixr im: $->$ prec 25;
+--| @congr
+axiom im_congr (a b c d: wff): $ bi a b $ > $ bi c d $ > $ bi (a -> c) (b -> d) $;
+
+-- `i1 a` is the member `hyp a` under another name.
+def i1 (a: wff): ctx = $ hyp a $;
+def i2 (a: wff): ctx = $ hyp a $;
+axiom rr (a b: wff): $ i1 a , b => (a -> b) $;
+axiom r (a b: wff): $ i1 a , i1 b , hyp a => b $;
+axiom r2 (a b: wff): $ (i1 a , hyp b) , i2 a => b $;
+
+-- Matched by position, `i1 a` would take `i1 b` and bind `a := b`; only
+-- `b := a` fits the conclusion, so the bag must be matched in any order.
+theorem swapped (a b: wff): $ i1 b , a => (a -> b) $;
+theorem same_order (a b: wff): $ b , i1 a => (a -> b) $;
+-- Matched by position, these bound `b := x` and `b := a`
+-- (fail_acui_opened_def_folds_back gives those bindings).
+theorem repeated_def (x y: wff): $ i1 x , i1 x , y => y $;
+theorem twin_def (a b: wff): $ (i1 a , a) , i1 b => b $;

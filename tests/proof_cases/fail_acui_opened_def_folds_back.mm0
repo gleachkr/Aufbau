@@ -37,9 +37,10 @@ def i2 (a: wff): ctx = $ hyp a $;
 axiom r (a b: wff): $ i1 a , i1 b , hyp a => b $;
 axiom r2 (a b: wff): $ (i1 a , hyp b) , i2 a => b $;
 
--- Inference binds `b := x`, and the line fails. On the way, opening the
--- uncovered copy of `i1 x` re-normalizes straight back to the same bag,
--- so the common-target search must give up rather than reopen it forever.
+-- Given `b := x`, the line fails. On the way, opening the uncovered copy
+-- of `i1 x` re-normalizes straight back to the same bag, so the
+-- common-target search must give up rather than reopen it forever.
+-- (Inferred, `b` is `y` and the line holds: pass_acui_def_member_any_order.)
 theorem repeated_def (x y: wff): $ i1 x , i1 x , y => y $;
--- The same fixed point through a twin def (inference binds `b := a`).
+-- The same fixed point through a twin def, given `b := a`.
 theorem twin_def (a b: wff): $ (i1 a , a) , i1 b => b $;

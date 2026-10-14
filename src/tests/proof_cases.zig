@@ -431,6 +431,11 @@ const proof_cases = [_]ProofCase{
     // Two definitions with one body name the same member: a rule's bag
     // must match however the line's members fold into them.
     .{ .stem = "pass_acui_twin_defs_any_order", .outcome = .pass },
+    // A rule's def member against a line's members in any order: matched
+    // by position, `i1 a` takes the line's `i1 b` and binds wrongly.
+    .{ .stem = "pass_acui_def_member_any_order", .outcome = .pass },
+    // Two definitions with one body are one member of a set.
+    .{ .stem = "pass_acui_idem_twin_defs_merge", .outcome = .pass },
     // A long context reversed: a conversion proof that saves only the
     // lines it reads back fits the verifier's heap.
     .{ .stem = "pass_acui_heap_reversal", .outcome = .pass },

@@ -471,7 +471,7 @@ pub const Context = struct {
     }
 };
 
-fn exprIdLessThan(theorem: *const TheoremContext, lhs: ExprId, rhs: ExprId) bool {
+pub fn exprIdLessThan(theorem: *const TheoremContext, lhs: ExprId, rhs: ExprId) bool {
     return compareExprIds(theorem, lhs, rhs) == .lt;
 }
 
