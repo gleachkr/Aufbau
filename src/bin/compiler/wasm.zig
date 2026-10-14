@@ -138,15 +138,14 @@ fn compileUnit(unit: Unit) u32 {
     compiler.statement_sink = &statements;
 
     result_mmb = compiler.compileMmb(allocator) catch |err| {
-        var analysis_compiler = unit.compiler();
+        var analysis_compiler = compiler.failureAnalysis();
         // Match the LSP's analysis posture: a search placeholder (`auto?` /
         // `exact?` / `apply?`) is an unfilled hole, not an unknown rule — the
         // checker admits its line and goes on, and a warning-severity
         // diagnostic per placeholder is synthesized below
         // (`writePlaceholderDiagnostics`).
         analysis_compiler.allow_search_placeholders = true;
-        analysis_compiler.statement_sink = &statements;
-        analysis_compiler.analyze() catch {};
+        _ = analysis_compiler.analyzeCompileFailure(&compiler);
         writeCompileFailure(
             &compiler,
             &analysis_compiler,

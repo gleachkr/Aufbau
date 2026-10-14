@@ -69,6 +69,16 @@ pub const SortVarRegistry = struct {
         return self.pools.get(sort_name);
     }
 
+    fn remove(self: *SortVarRegistry, token: []const u8) void {
+        const decl = (self.tokens.fetchRemove(token) orelse return).value;
+        const pool = self.pools.getPtr(decl.sort_name) orelse return;
+        for (pool.tokens.items, 0..) |pooled, index| {
+            if (!std.mem.eql(u8, pooled, token)) continue;
+            _ = pool.tokens.orderedRemove(index);
+            return;
+        }
+    }
+
     fn append(
         self: *SortVarRegistry,
         token: []const u8,
@@ -210,6 +220,29 @@ pub fn validateSortVarCollisions(
     while (iter.next()) |entry| {
         try validateTokenHasNoSyntaxCollision(parser, entry.key_ptr.*);
     }
+}
+
+/// Forget every `@vars` token that `validateSortVarCollisions` would reject,
+/// once the analysis has reported the collision: the term or notation keeps
+/// the token, and later statements are checked without the variable.
+pub fn dropSortVarCollisions(
+    parser: *const MM0Parser,
+    sort_vars: *SortVarRegistry,
+) void {
+    while (firstSortVarCollision(parser, sort_vars)) |token| {
+        sort_vars.remove(token);
+    }
+}
+
+fn firstSortVarCollision(
+    parser: *const MM0Parser,
+    sort_vars: *const SortVarRegistry,
+) ?[]const u8 {
+    var iter = sort_vars.tokens.keyIterator();
+    while (iter.next()) |token| {
+        validateTokenHasNoSyntaxCollision(parser, token.*) catch return token.*;
+    }
+    return null;
 }
 
 pub fn ensureMathTextVars(

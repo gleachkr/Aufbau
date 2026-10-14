@@ -133,6 +133,16 @@ pub const DiagnosticSink = struct {
         }
     }
 
+    /// Every primary diagnostic, then a count of those that did not fit.
+    pub fn reportPrimaryDiagnostics(self: *const DiagnosticSink) void {
+        for (self.primaryDiagnostics()) |diag| self.reportDiagnostic(diag);
+        for ([_]DiagnosticSource{ .mm0, .proof }) |source| {
+            if (self.omittedPrimaryDiagnostic(source)) |omitted| {
+                self.reportDiagnostic(omitted);
+            }
+        }
+    }
+
     pub fn reportError(self: *const DiagnosticSink, err: anyerror) void {
         if (self.last_diagnostic) |diag| {
             if (diag.err == err) {

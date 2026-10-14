@@ -1239,13 +1239,11 @@ test "compiler rejects .mm0 notation on a local def consumed before the proof-si
     );
     try compiler.analyze();
 
-    // The failed `later` statement is skipped, which leaves its proof block
-    // unanchored; that follow-on report is the only other diagnostic.
+    // The failed `later` statement is skipped, and its proof block with it.
     const diags = compiler.primaryDiagnostics();
-    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
     try std.testing.expectEqual(error.LocalTermInMm0, diags[0].err);
     try std.testing.expectEqualStrings("later", diags[0].name.?);
-    try std.testing.expectEqual(error.ExtraProofBlock, diags[1].err);
 
     var compile = Compiler.initWithProof(
         std.testing.allocator,

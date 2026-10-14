@@ -209,22 +209,25 @@ fn walk(
                 state,
             );
         }
+        const header = state.theory.parser.peekNextPublicStmtHeader();
         const next_stmt = Common.nextPublicStatement(
             self,
             &state.theory.parser,
             &state.theory.env,
-        ) catch |err| switch (err) {
-            // The gap named a proof-local term: report it and skip the
-            // statement it anchors on. At end of stream the next round has
-            // nothing left to report and ends the walk.
-            error.LocalTermInMm0 => {
-                recordPrimaryGapFailure(self);
-                continue :parse_loop;
-            },
-            else => {
-                if (!recoverFromMm0ParseFailure(self, state, err)) return;
-                continue :parse_loop;
-            },
+        ) catch |err| {
+            // A theorem skipped here is dropped like one whose dependencies
+            // failed: its proof block is passed over, not reported as extra.
+            if (header) |skipped| if (skipped.kind == .theorem) {
+                if (skipped.name) |name| try markAssertionInvalid(state, name);
+            };
+            switch (err) {
+                // The gap named a proof-local term: report it and skip the
+                // statement it anchors on. At end of stream the next round
+                // has nothing left to report and ends the walk.
+                error.LocalTermInMm0 => recordPrimaryGapFailure(self),
+                else => if (!recoverFromMm0ParseFailure(self, state, err)) return,
+            }
+            continue :parse_loop;
         };
         const stmt = next_stmt orelse break;
         state.last_stmt = stmt;
@@ -235,17 +238,25 @@ fn walk(
         // statement must not roll them back.
         const warnings = WarningSnapshot.capture(self);
 
+        // The statement just parsed claimed a `@vars` token. Report that
+        // once and drop the variable, so the statement itself and every one
+        // after it are checked as if the token had never been a variable.
         CompilerVars.validateSortVarCollisions(
             &state.theory.parser,
             &state.theory.sort_vars,
         ) catch |err| {
-            warnings.restore(self);
             recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
-            continue;
+            CompilerVars.dropSortVarCollisions(
+                &state.theory.parser,
+                &state.theory.sort_vars,
+            );
         };
         rejectLocalTermReferences(self, &state.theory.env, stmt) catch |err| {
             warnings.restore(self);
             recordPrimaryStatementFailure(self, &state.theory.parser, stmt, err);
+            if (stmt == .assertion) {
+                try markAssertionInvalid(state, stmt.assertion.name);
+            }
             continue;
         };
 
@@ -871,8 +882,20 @@ fn analyzeTheoremProof(
     }
 
     var saw_parse_error = false;
+    // A block no later theorem claims, held while the next item decides
+    // what it is: an extra block when this theorem's own block follows,
+    // and this theorem's block under a wrong name otherwise. Either way it
+    // is reported once and consumed, not offered to every later theorem.
+    var stray: ?TheoremBlock = null;
     while (true) {
         const item = proof.nextItem() catch |err| {
+            if (stray) |extra| {
+                self.addPrimaryDiagnostic(CompilerDiag.extraProofBlockDiagnostic(
+                    extra.name,
+                    extra.name_span,
+                ));
+                stray = null;
+            }
             const suppressed = shouldSuppressProofParseFailure(
                 &proof.parser,
                 &proof.invalid_rules,
@@ -906,6 +929,8 @@ fn analyzeTheoremProof(
             proof.exhausted = true;
             if (saw_parse_error) {
                 proof.stream_aborted = true;
+            } else if (stray) |misnamed| {
+                reportMisnamedBlock(self, assertion, misnamed);
             } else {
                 self.addPrimaryDiagnostic(
                     CompilerDiag.missingProofBlockDiagnostic(
@@ -919,6 +944,7 @@ fn analyzeTheoremProof(
 
         switch (item) {
             .def => |def| {
+                if (stray) |misnamed| reportMisnamedBlock(self, assertion, misnamed);
                 self.addPrimaryDiagnostic(
                     CompilerDiag.unexpectedProofDefDiagnostic(
                         def.name,
@@ -928,6 +954,7 @@ fn analyzeTheoremProof(
                 return null;
             },
             .notation => |notation| {
+                if (stray) |misnamed| reportMisnamedBlock(self, assertion, misnamed);
                 self.addPrimaryDiagnostic(
                     CompilerDiag.unexpectedProofDefDiagnostic(
                         notation.name,
@@ -946,17 +973,25 @@ fn analyzeTheoremProof(
                     if (proof.invalid_rules.contains(block.name)) {
                         continue;
                     }
+                    if (stray == null and !saw_parse_error and
+                        !theory.parser.theoremFollows(block.name))
+                    {
+                        stray = block;
+                        continue;
+                    }
+                    // The block is left for a later theorem. This theorem's
+                    // own is the held one under a wrong name, or missing.
                     proof.putBack(item);
                     if (!saw_parse_error) {
-                        self.addPrimaryDiagnostic(
-                            CompilerDiag.theoremNameMismatchDiagnostic(
-                                assertion.name,
-                                block.name,
-                                block.name_span,
-                            ),
-                        );
+                        reportMisnamedBlock(self, assertion, stray orelse block);
                     }
                     return null;
+                }
+                if (stray) |extra| {
+                    self.addPrimaryDiagnostic(CompilerDiag.extraProofBlockDiagnostic(
+                        extra.name,
+                        extra.name_span,
+                    ));
                 }
 
                 const warnings = WarningSnapshot.capture(self);
@@ -976,7 +1011,8 @@ fn analyzeTheoremProof(
                     &theorem,
                     theorem_concl,
                 ) catch |err| {
-                    warnings.restore(self);
+                    // The theorem fails, but the warnings its lines raised
+                    // (a line citing a failed one, `sorry!`) still stand.
                     recordPrimaryProofFailure(
                         self,
                         &proof.invalid_rules,
@@ -996,6 +1032,18 @@ fn analyzeTheoremProof(
             },
         }
     }
+}
+
+fn reportMisnamedBlock(
+    self: *CompilerContext,
+    assertion: AssertionStmt,
+    block: TheoremBlock,
+) void {
+    self.addPrimaryDiagnostic(CompilerDiag.theoremNameMismatchDiagnostic(
+        assertion.name,
+        block.name,
+        block.name_span,
+    ));
 }
 
 fn analyzeExtraProofBlocks(

@@ -348,16 +348,18 @@ test "compiler analyze with proof recovers to later lemmas with binders" {
     try compiler.analyze();
 
     // The lenient parse keeps the first `target` block as THE proof of
-    // `target` (its broken line reported in place), so the trailing
-    // duplicate block is suppressed as a repeat of an already-failed
-    // theorem; the lemma in between is still processed.
+    // `target`: its broken line is reported in place and ends the block,
+    // which leaves `target` proved, so the trailing duplicate block is
+    // extra. The lemma in between is still processed.
     const diags = compiler.primaryDiagnostics();
-    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(@as(usize, 3), diags.len);
 
     try std.testing.expectEqual(error.ExpectedIdentifier, diags[0].err);
     try std.testing.expectEqualStrings("target", diags[0].theorem_name.?);
     try std.testing.expectEqual(error.UnknownRule, diags[1].err);
     try std.testing.expectEqualStrings("helper", diags[1].theorem_name.?);
+    try std.testing.expectEqual(error.ExtraProofBlock, diags[2].err);
+    try std.testing.expectEqualStrings("target", diags[2].block_name.?);
 }
 
 // #156, editor semantics: with placeholders tolerated, a broken proof line
@@ -1291,4 +1293,219 @@ test "analysis past a line with no statement, a repeated label and the conclusio
     try std.testing.expectEqualStrings("l3", diags[2].line_label.?);
     try std.testing.expectEqual(.final_line_mismatch, diags[3].kind);
     try std.testing.expectEqualStrings("l3", diags[3].line_label.?);
+    // The theorem fails, and l2's warning about citing l1 stays.
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(.cites_unfinished_line, warnings[0].kind);
+    try std.testing.expectEqualStrings("l2", warnings[0].line_label.?);
+}
+
+const blocks_mm0 =
+    \\provable sort wff;
+    \\term top: wff;
+    \\axiom ax: $ top $;
+    \\theorem a: $ top $;
+    \\theorem b: $ top $;
+    \\theorem c: $ top $;
+;
+
+/// The analysis of `proof_src` against `blocks_mm0`: each primary
+/// diagnostic as `<err> <theorem or name>`, joined by newlines.
+fn analyzeBlocks(proof_src: []const u8) ![]u8 {
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        blocks_mm0,
+        proof_src,
+    );
+    try compiler.analyze();
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    for (compiler.primaryDiagnostics()) |diag| {
+        try out.writer.print("{s} {s}\n", .{
+            @errorName(diag.err),
+            diag.theorem_name orelse diag.block_name orelse "-",
+        });
+    }
+    return out.toOwnedSlice();
+}
+
+fn expectBlockDiagnostics(proof_src: []const u8, expected: []const u8) !void {
+    const actual = try analyzeBlocks(proof_src);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualStrings(expected, actual);
+}
+
+test "analysis reports a misnamed proof block once" {
+    try expectBlockDiagnostics(
+        \\a
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\bb
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\c
+        \\---
+        \\l1: $ top $ by missing []
+    ,
+        \\TheoremNameMismatch b
+        \\UnknownRule c
+        \\
+    );
+}
+
+test "analysis reports an extra proof block once and checks the next" {
+    try expectBlockDiagnostics(
+        \\a
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\gone
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\b
+        \\---
+        \\l1: $ top $ by missing []
+        \\
+        \\c
+        \\---
+        \\l1: $ top $ by ax []
+    ,
+        \\ExtraProofBlock gone
+        \\UnknownRule b
+        \\
+    );
+}
+
+test "analysis leaves a later theorem's block for that theorem" {
+    try expectBlockDiagnostics(
+        \\a
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\c
+        \\---
+        \\l1: $ top $ by missing []
+    ,
+        \\TheoremNameMismatch b
+        \\UnknownRule c
+        \\
+    );
+}
+
+test "analysis passes over the block of a theorem whose statement failed" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax: $ top $;
+        \\theorem a: $ nope $;
+        \\theorem b: $ top $;
+    ;
+    const proof_src =
+        \\a
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\b
+        \\---
+        \\l1: $ top $ by missing []
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqualStrings("a", diags[0].name.?);
+    try std.testing.expectEqual(error.UnknownRule, diags[1].err);
+    try std.testing.expectEqualStrings("b", diags[1].theorem_name.?);
+}
+
+test "analysis reports a @vars collision once and checks on" {
+    const mm0_src =
+        \\provable sort wff;
+        \\--| @vars x
+        \\sort nat;
+        \\term x: nat;
+        \\term top: wff;
+        \\axiom ax: $ top $;
+        \\theorem a: $ top $;
+        \\theorem b: $ top $;
+    ;
+    const proof_src =
+        \\a
+        \\---
+        \\l1: $ top $ by ax []
+        \\
+        \\b
+        \\---
+        \\l1: $ top $ by missing []
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(error.VarsTokenCollision, diags[0].err);
+    try std.testing.expectEqualStrings("x", diags[0].name.?);
+    try std.testing.expectEqual(error.UnknownRule, diags[1].err);
+    try std.testing.expectEqualStrings("b", diags[1].theorem_name.?);
+}
+
+test "a failed compile's analysis adds the error only the compile saw" {
+    // -Werror: the analysis finds no error, only the unused binder warning.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax: $ top $;
+        \\theorem t (p: wff): $ top $;
+    ;
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ top $ by ax []
+    ;
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    compile.diagnostics.warnings_as_errors = true;
+    try std.testing.expectError(
+        error.UnusedTheoremParameter,
+        compile.compileMmb(std.testing.allocator),
+    );
+    var analysis = compile.failureAnalysis();
+    try std.testing.expect(analysis.analyzeCompileFailure(&compile));
+    const diags = analysis.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.UnusedTheoremParameter, diags[0].err);
+    try std.testing.expectEqual(.@"error", diags[0].severity);
+
+    // An error the analysis finds itself is not repeated.
+    var broken = Compiler.initWithProof(
+        std.testing.allocator,
+        blocks_mm0,
+        "a\n---\nl1: $ top $ by missing []\n",
+    );
+    try std.testing.expectError(
+        error.UnknownRule,
+        broken.compileMmb(std.testing.allocator),
+    );
+    var broken_analysis = broken.failureAnalysis();
+    try std.testing.expect(broken_analysis.analyzeCompileFailure(&broken));
+    try std.testing.expectEqual(
+        error.UnknownRule,
+        broken_analysis.primaryDiagnostics()[0].err,
+    );
+    for (broken_analysis.primaryDiagnostics()[1..]) |diag| {
+        try std.testing.expect(diag.err != error.UnknownRule);
+    }
 }

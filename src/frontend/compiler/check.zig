@@ -233,20 +233,16 @@ pub const LineWalk = struct {
         const assertion = self.assertion;
         // A line the lenient parse could not finish. Only the analyze path
         // parses leniently: report the recorded parse failure and keep the
-        // lines checked so far, exactly as if the block ended here. The line
-        // contributes nothing to the label environment and can never reach
-        // emission — the compile path parses strictly and errors out instead.
+        // lines checked so far, exactly as if the block ended here, so a
+        // half-typed line leaves the theorem usable. The line contributes
+        // nothing to the label environment and can never reach emission —
+        // the compile path parses strictly and errors out instead.
         if (line.incomplete) {
-            const diag = CompilerDiag.incompleteProofLineDiagnostic(
+            compiler.addPrimaryDiagnostic(CompilerDiag.incompleteProofLineDiagnostic(
                 assertion.name,
                 line,
-            );
-            if (compiler.allow_search_placeholders) {
-                compiler.addPrimaryDiagnostic(diag);
-                return .stop;
-            }
-            compiler.setProof(diag);
-            return diag.err;
+            ));
+            return .stop;
         }
 
         const has_placeholder =

@@ -585,8 +585,20 @@ The analysis also checks a theorem past a failed line
 takes the line's statement as written, so later lines are checked against
 it and every failed line is reported; the theorem still fails. The search
 replays its target's lines without it, so a rejected line still blocks a
-search. A failed `abc compile` reruns the unit as an analysis to report
-every failure, as the wasm compile does.
+search. A failed compile reruns the unit as an analysis to report every
+failure, in the CLI and the wasm compile alike
+(`Compiler.analyzeCompileFailure`): the compile's own error is added when
+only it saw the failure (emission, a warning promoted to an error). The
+editor admits search placeholders there and lists them itself; `abc
+compile` leaves each one an error.
+
+The analysis reports a failure once and recovers so that what follows is
+checked on its own: a `@vars` token a later term or notation claims is
+dropped after its one report; a theorem whose statement fails is passed
+over with its proof block; and a block no later theorem claims is taken
+as an extra block when the theorem's own block follows it, and as that
+theorem's block under a wrong name otherwise, not offered to every later
+theorem.
 
 At a high level it does this:
 
@@ -645,7 +657,8 @@ outline entry in the surrounding block rather than just that line's.
 Consumers that resolve a rule must skip `incomplete` lines; on the
 lenient paths the incomplete-line syntax diagnostic comes from the gate
 at the top of `checkTheoremBlock` (`compiler/check.zig`), not from the
-parse itself.
+parse itself. That gate ends the block at the line, as if the block ended
+there, so the theorem stays usable while the line is typed.
 
 Local defs are inserted into the live parser and `GlobalEnv` immediately
 after they are checked, so later `.auf` math can resolve them. The shared

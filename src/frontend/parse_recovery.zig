@@ -78,6 +78,18 @@ pub const MM0Parser = struct {
         return self.core.peekNextPublicStmtHeader();
     }
 
+    /// A theorem named `name` is declared after the statement just parsed.
+    pub fn theoremFollows(self: *const MM0Parser, name: []const u8) bool {
+        var pos = self.core.pos;
+        while (core.nextPublicStmtHeader(self.core.src, &pos)) |header| {
+            const declared = header.name orelse continue;
+            if (header.kind == .theorem and std.mem.eql(u8, declared, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Preferred (last-declared) notation for `term_id`, for pretty-printing.
     pub fn notationForTerm(self: *const MM0Parser, term_id: u32) ?Notation {
         return self.core.notationForTerm(term_id);

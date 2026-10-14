@@ -446,79 +446,7 @@ pub const MM0Parser = struct {
 
     pub fn peekNextPublicStmtHeader(self: *const MM0Parser) ?PublicStmtHeader {
         var pos = self.pos;
-        while (true) {
-            scanWhitespaceAndComments(self.src, &pos);
-            const word_info = scanIdentInfo(self.src, pos) orelse return null;
-            const lead = classifyTopLevelLead(word_info.text);
-
-            switch (lead) {
-                .sort => return scanSortHeader(self.src, pos),
-                .term => {
-                    return scanNamedHeader(
-                        self.src,
-                        word_info.span.end,
-                        .term,
-                    );
-                },
-                .def => {
-                    return scanNamedHeader(
-                        self.src,
-                        word_info.span.end,
-                        .def,
-                    );
-                },
-                .axiom => {
-                    return scanNamedHeader(
-                        self.src,
-                        word_info.span.end,
-                        .axiom,
-                    );
-                },
-                .theorem => {
-                    return scanNamedHeader(
-                        self.src,
-                        word_info.span.end,
-                        .theorem,
-                    );
-                },
-                .pub_kw => {
-                    pos = word_info.span.end;
-                    scanWhitespaceAndComments(self.src, &pos);
-                    const pub_kw = scanIdentInfo(self.src, pos) orelse {
-                        return null;
-                    };
-                    const pub_lead = classifyTopLevelLead(pub_kw.text);
-                    return switch (pub_lead) {
-                        .def => scanNamedHeader(
-                            self.src,
-                            pub_kw.span.end,
-                            .def,
-                        ),
-                        .theorem => scanNamedHeader(
-                            self.src,
-                            pub_kw.span.end,
-                            .theorem,
-                        ),
-                        else => null,
-                    };
-                },
-                .local,
-                .input,
-                .output,
-                .delimiter,
-                .prefix,
-                .infixl,
-                .infixr,
-                .notation,
-                .coercion,
-                => {
-                    pos = word_info.span.end;
-                    scanToStatementEnd(self.src, &pos);
-                    continue;
-                },
-                .unknown => return null,
-            }
-        }
+        return nextPublicStmtHeader(self.src, &pos);
     }
 
     pub fn diagnosticName(self: *const MM0Parser) ?[]const u8 {
@@ -2410,6 +2338,59 @@ fn isPublicLead(lead: TopLevelLead) bool {
         => true,
         else => false,
     };
+}
+
+/// The header of the first public statement at or after `pos.*`, skipping
+/// notation and other non-public statements; `pos.*` then lies past that
+/// statement's `;`, so repeated calls walk the headers in order. Null at
+/// the end of `src` or at anything that does not scan as a statement.
+pub fn nextPublicStmtHeader(src: []const u8, pos: *usize) ?PublicStmtHeader {
+    const header = scanPublicStmtHeader(src, pos) orelse return null;
+    pos.* = header.name_span.end;
+    scanToStatementEnd(src, pos);
+    return header;
+}
+
+fn scanPublicStmtHeader(src: []const u8, pos: *usize) ?PublicStmtHeader {
+    while (true) {
+        scanWhitespaceAndComments(src, pos);
+        const word_info = scanIdentInfo(src, pos.*) orelse return null;
+        const lead = classifyTopLevelLead(word_info.text);
+
+        switch (lead) {
+            .sort => return scanSortHeader(src, pos.*),
+            .term => return scanNamedHeader(src, word_info.span.end, .term),
+            .def => return scanNamedHeader(src, word_info.span.end, .def),
+            .axiom => return scanNamedHeader(src, word_info.span.end, .axiom),
+            .theorem => {
+                return scanNamedHeader(src, word_info.span.end, .theorem);
+            },
+            .pub_kw => {
+                pos.* = word_info.span.end;
+                scanWhitespaceAndComments(src, pos);
+                const pub_kw = scanIdentInfo(src, pos.*) orelse return null;
+                return switch (classifyTopLevelLead(pub_kw.text)) {
+                    .def => scanNamedHeader(src, pub_kw.span.end, .def),
+                    .theorem => scanNamedHeader(src, pub_kw.span.end, .theorem),
+                    else => null,
+                };
+            },
+            .local,
+            .input,
+            .output,
+            .delimiter,
+            .prefix,
+            .infixl,
+            .infixr,
+            .notation,
+            .coercion,
+            => {
+                pos.* = word_info.span.end;
+                scanToStatementEnd(src, pos);
+            },
+            .unknown => return null,
+        }
+    }
 }
 
 fn scanWhitespaceAndComments(src: []const u8, pos: *usize) void {

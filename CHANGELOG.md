@@ -36,6 +36,22 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A failed `abc compile`, the editor and the npm packages' diagnostics
+  reported some mistakes again and again. A `@vars` token claimed by a
+  later term was reported for every statement after it; a theorem whose
+  statement failed left its proof block reported as extra; and a proof
+  block whose name matched no theorem was reported against every theorem
+  after it. Each is now reported once, and what follows is checked as
+  usual.
+- `abc compile` and the editor now agree on a half-written proof line:
+  it ends its theorem's block in both, where `abc compile` went on to
+  report the lines after it.
+- When the browser editor's compile failed only in the last step
+  (writing the proof), or because a warning was made an error, the
+  failure appeared in no diagnostic with a location. It is now listed
+  with the others.
+- A line citing a line that failed is admitted with a warning, but the
+  warning was dropped whenever the theorem failed.
 - `abc compile`, the editor and `exact?` could crash with a stack
   overflow on a line that did not match its rule when an `@acui` bag in
   it held one definition twice, or two definitions with one body: the

@@ -143,6 +143,36 @@ pub const Compiler = struct {
         );
     }
 
+    /// A compiler for the analysis that explains a failed `compileMmb`:
+    /// the same unit, file mappings and statement sink.
+    pub inline fn failureAnalysis(self: *const Compiler) Compiler {
+        var result = initInternal(self.allocator, self.source, self.proof_source);
+        result.diagnostics.setMapping(.mm0, self.diagnostics.mm0_mapping);
+        result.diagnostics.setMapping(.proof, self.diagnostics.proof_mapping);
+        result.statement_sink = self.statement_sink;
+        return result;
+    }
+
+    /// After `compile.compileMmb` failed: analyze the unit, which checks on
+    /// past failed lines and theorems, so the primary diagnostics name every
+    /// failure, not only the first. The compile's own diagnostic is added
+    /// when the analysis did not find it: a failure only emission sees, or a
+    /// warning promoted to an error. False when the compile failed with no
+    /// diagnostic at all (out of memory, say), for the host to report.
+    ///
+    /// Search placeholders are the host's call: an editor admits them and
+    /// lists them itself, while the command line leaves each one an error.
+    pub fn analyzeCompileFailure(self: *Compiler, compile: *const Compiler) bool {
+        self.analyze() catch {};
+        const diag = compile.getDiagnostic() orelse return false;
+        for (self.primaryDiagnostics()) |found| {
+            if (found.err == diag.err and found.source == diag.source and
+                std.meta.eql(found.span, diag.span)) return true;
+        }
+        self.addPrimaryDiagnostic(diag);
+        return true;
+    }
+
     pub fn primaryDiagnostics(self: *const Compiler) []const Diagnostic {
         return self.diagnostics.primaryDiagnostics();
     }
@@ -168,6 +198,10 @@ pub const Compiler = struct {
 
     pub fn reportWarnings(self: *const Compiler) void {
         self.diagnostics.reportWarnings();
+    }
+
+    pub fn reportPrimaryDiagnostics(self: *const Compiler) void {
+        self.diagnostics.reportPrimaryDiagnostics();
     }
 
     pub fn reportError(self: *const Compiler, err: anyerror) void {
