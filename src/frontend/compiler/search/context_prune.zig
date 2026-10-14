@@ -306,7 +306,7 @@ pub fn contextInfeasible(
             // absorbing/ambient context binders) and reducible heads are
             // no-opinion — they might unify with or rewrite to a goal member.
             if (mn.* != .app) continue;
-            if (def_match.rigidHeadOf(context, mn.app.term_id) == null) continue;
+            if (semantic.rigidHead(context, mn.app.term_id) == null) continue;
             if (acui.memberPossiblyIn(context, theorem, info.acui_head_id, m, goal_members.slice())) continue;
             _ = absent_members.appendDistinct(m);
         }

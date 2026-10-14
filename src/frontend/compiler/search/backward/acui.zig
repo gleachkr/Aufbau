@@ -518,26 +518,18 @@ fn bagIsFixed(
     head_id: u32,
     members: []const ExprId,
 ) bool {
+    const combiner = bag.combinerOf(context, head_id) orelse return false;
+    var screen = def_match.screenFor(context, theorem);
+    defer screen.deinit();
     for (members) |member| {
-        if (!memberIsFixed(context, theorem, head_id, member)) return false;
+        if (!screen.exactlyOneMember(combiner, member)) return false;
     }
     return true;
 }
 
-/// Whether `member` stays exactly one member of a `head_id` bag after
-/// conversion (`def_match.fixedMemberOf`).
-pub fn memberIsFixed(
-    context: *const Context,
-    theorem: *const TheoremContext,
-    head_id: u32,
-    member: ExprId,
-) bool {
-    return def_match.fixedMemberOf(context, theorem, head_id, member);
-}
-
 /// Whether `member` of a `head_id` bag could equal some member of `list`. A
-/// member that is not fixed (`memberIsFixed`) may convert to the unit (a
-/// `wk_nil`-style def of the empty context), so it needs no partner.
+/// member that is not fixed (`def_match.fixedMemberOf`) may convert to the
+/// unit (a `wk_nil`-style def of the empty context), so it needs no partner.
 pub fn memberPossiblyIn(
     context: *const Context,
     theorem: *const TheoremContext,
@@ -545,9 +537,12 @@ pub fn memberPossiblyIn(
     member: ExprId,
     list: []const ExprId,
 ) bool {
-    if (!memberIsFixed(context, theorem, head_id, member)) return true;
+    const combiner = bag.combinerOf(context, head_id) orelse return true;
+    var screen = def_match.screenFor(context, theorem);
+    defer screen.deinit();
+    if (!screen.exactlyOneMember(combiner, member)) return true;
     for (list) |candidate| {
-        if (!def_match.rigidExprMismatch(context, theorem, member, candidate)) return true;
+        if (!screen.neverMeet(member, candidate)) return true;
     }
     return false;
 }

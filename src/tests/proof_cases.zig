@@ -761,6 +761,10 @@ const proof_cases = [_]ProofCase{
         .outcome = .{ .fail = error.ConclusionMismatch },
     },
     .{
+        .stem = "fail_acui_opened_def_folds_back",
+        .outcome = .{ .fail = error.ConclusionMismatch },
+    },
+    .{
         .stem = "fail_acui_cross_side_uncovered",
         .outcome = .{ .fail = error.ConclusionMismatch },
     },

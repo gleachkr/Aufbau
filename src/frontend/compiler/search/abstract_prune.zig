@@ -152,7 +152,7 @@ fn declInfeasible(
     // form — which raw equality would miss, then descend through `F` and report a
     // spurious `a` vs `b` mismatch. When a plug is reducible we therefore switch
     // the divergence walk to a sound *head-aware* hole test (`plugs_semantic`):
-    // preprocessing preserves a term's rigid head whenever `rigidHeadOf` resolves,
+    // preprocessing preserves a term's rigid head whenever `semantic.rigidHead` resolves,
     // so a node whose rigid root differs from the plug's is provably not a hole and
     // a head clash there is still decisive. Any later body walk remains
     // non-materializing: no placeholders are minted, so the bounded per-context
@@ -240,7 +240,7 @@ fn abstractDefiniteMismatch(
     // no-opinion, and never mints placeholders, preserving the shared dependency
     // budget.
     if (ln.* == .app and rn.* == .app) {
-        if (def_match.rigidHeadMismatch(context, ln.app.term_id, rn.app.term_id)) {
+        if (semantic.rigidHeadsDiffer(context, ln.app.term_id, rn.app.term_id)) {
             return true;
         }
         if (bodyCompareUseful(context, ln.app.term_id, rn.app.term_id)) {
@@ -584,11 +584,11 @@ fn appCouldOccurAt(
     const pn = theorem.interner.node(plug);
     switch (pn.*) {
         .placeholder => return true,
-        .variable => return def_match.rigidHeadOf(context, term_id) == null,
+        .variable => return semantic.rigidHead(context, term_id) == null,
         .app => |pa| {
-            const ph = def_match.rigidHeadOf(context, pa.term_id) orelse
+            const ph = semantic.rigidHead(context, pa.term_id) orelse
                 return true;
-            const nh = def_match.rigidHeadOf(context, term_id) orelse
+            const nh = semantic.rigidHead(context, term_id) orelse
                 return true;
             return nh == ph;
         },
@@ -685,7 +685,7 @@ fn exprTemplateMismatch(
     };
     switch (expr_node.*) {
         .placeholder => return false,
-        .variable => return def_match.rigidHeadOf(
+        .variable => return semantic.rigidHead(
             context,
             template_app.term_id,
         ) != null,
@@ -780,7 +780,7 @@ fn appAppMismatch(
     plugs_semantic: bool,
     depth: usize,
 ) bool {
-    if (def_match.rigidHeadMismatch(
+    if (semantic.rigidHeadsDiffer(
         context,
         left_term_id,
         right_term_id,
@@ -838,7 +838,7 @@ fn appArgSide(
 /// unreliable — the plug appears in left/right only in its preprocessed form. The
 /// validator preprocesses node and plug identically (transparent-def unfold +
 /// ACUI/`@rewrite` canonicalize) before its raw-equality hole test, and that
-/// preprocessing preserves a term's rigid head whenever `rigidHeadOf` resolves
+/// preprocessing preserves a term's rigid head whenever `semantic.rigidHead` resolves
 /// (it returns null on exactly the ACUI/`@rewrite`/unavailable heads
 /// canonicalization could rewrite). So at a genuine hole, node and plug share a
 /// rigid root; we may declare "definitely not the hole" (return false) only when
@@ -863,17 +863,17 @@ fn plugCouldOccurAt(
         .variable => return switch (nn.*) {
             .variable => false, // distinct irreducible leaves never reconcile
             .placeholder => true,
-            .app => |na| def_match.rigidHeadOf(context, na.term_id) == null,
+            .app => |na| semantic.rigidHead(context, na.term_id) == null,
         },
         .app => |pa| {
-            const ph = def_match.rigidHeadOf(context, pa.term_id) orelse return true;
+            const ph = semantic.rigidHead(context, pa.term_id) orelse return true;
             return switch (nn.*) {
                 .placeholder => true,
                 // The plug preprocesses to an app (rigid head `ph`); an
                 // irreducible leaf can never equal it.
                 .variable => false,
                 .app => |na| {
-                    const nh = def_match.rigidHeadOf(context, na.term_id) orelse return true;
+                    const nh = semantic.rigidHead(context, na.term_id) orelse return true;
                     return nh == ph;
                 },
             };

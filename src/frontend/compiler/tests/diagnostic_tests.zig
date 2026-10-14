@@ -328,7 +328,8 @@ test "compiler preserves nested fallback first failure diagnostics" {
     try std.testing.expectEqualStrings("top_i", diag.name.?);
     const premise = diag.detail.premise_mismatch;
     try std.testing.expectEqual(@as(usize, 1), premise.premise);
-    try std.testing.expect(premise.hypothesis_ref == null);
+    try std.testing.expect(premise.hypothesis_index == null);
+    try std.testing.expect(premise.hypothesis_name == null);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings("top_i []", proof_src[span.start..span.end]);
 }
@@ -363,8 +364,8 @@ test "hypothesis mismatch names the premise and the cited theorem hypothesis" {
     try std.testing.expectEqualStrings("both", diag.rule_name.?);
     const premise = diag.detail.premise_mismatch;
     try std.testing.expectEqual(@as(usize, 2), premise.premise);
-    const ref = premise.hypothesis_ref orelse return error.ExpectedHypothesisRef;
-    try std.testing.expectEqual(@as(usize, 2), ref.index);
+    try std.testing.expectEqual(@as(?usize, 2), premise.hypothesis_index);
+    try std.testing.expect(premise.hypothesis_name == null);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
     try std.testing.expectEqualStrings("#2", proof_src[span.start..span.end]);
 }

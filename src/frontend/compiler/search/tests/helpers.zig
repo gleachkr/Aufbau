@@ -27,6 +27,8 @@ pub const context_prune = @import("../context_prune.zig");
 pub const seed = @import("../backward/seed.zig");
 
 pub const def_match = @import("../backward/def_match.zig");
+pub const head_class = @import("../../../head_class.zig");
+pub const AcuiBag = @import("../../../acui_bag.zig");
 
 pub const acui = @import("../backward/acui.zig");
 

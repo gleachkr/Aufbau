@@ -26,6 +26,7 @@
 const std = @import("std");
 const types = @import("../types.zig");
 const acui = @import("./acui.zig");
+const def_match = @import("./def_match.zig");
 const bag = @import("./bag.zig");
 const semantic = @import("./semantic.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
@@ -340,7 +341,7 @@ fn enumerateSet(
     }
 
     var covered = bag.ExprBag{};
-    const covers_all = siblingsCover(context, theorem, site, bindings, target_b, &covered);
+    const covers_all = siblingsCover(context, theorem, site, bindings, target_b, distinct.slice(), &covered);
     var required: u64 = 0;
     if (!covers_all) {
         for (en.members.slice(), 0..) |member, m| {
@@ -385,14 +386,15 @@ fn enumerateSet(
 
 /// What the spine binders other than `target_b` can hold in a set split: true
 /// when that is anything (an open sibling, one too large to read, or one with
-/// a meta or def member, which may stand for any members), else exactly the
-/// members collected into `covered`.
+/// a member that may stand for any members or for a goal member it is not),
+/// else exactly the members collected into `covered`.
 fn siblingsCover(
     context: *const Context,
     theorem: *const TheoremContext,
     site: SplitSite,
     bindings: []const ?ExprId,
     target_b: usize,
+    goal: []const ExprId,
     covered: *bag.ExprBag,
 ) bool {
     for (site.spine[0..site.spine_len]) |b| {
@@ -400,7 +402,11 @@ fn siblingsCover(
         const value = boundValue(bindings, b) orelse return true;
         const held = bag.flatten(context, theorem, site.head_id, value) orelse return true;
         for (held.slice()) |member| {
-            if (!acui.memberIsFixed(context, theorem, site.head_id, member)) return true;
+            if (std.mem.indexOfScalar(ExprId, goal, member) == null) {
+                if (acui.memberPossiblyIn(context, theorem, site.head_id, member, goal)) return true;
+                continue;
+            }
+            if (!def_match.fixedMemberOf(context, theorem, site.head_id, member)) return true;
             if (!covered.appendDistinct(member)) return true;
         }
     }
@@ -434,12 +440,16 @@ fn enumerateMultiset(
         const held = bag.flatten(context, theorem, site.head_id, value) orelse return false;
         for (held.slice()) |member| {
             // A member that is not fixed (a meta, or a def that may unfold to
-            // several or none) may stand for any number of members, so
-            // the sibling is as good as open.
-            if (!acui.memberIsFixed(context, theorem, site.head_id, member)) open_sibling = true;
-            // A member the goal lacks may still match after conversion; the
-            // validator decides.
-            _ = takeCopy(members, free[0..members.len], member);
+            // several or none) may stand for any number of members, and a
+            // fixed one the goal lacks by identity (`i1 p` against `hyp p`)
+            // may still convert to one of them; either way the sibling is as
+            // good as open. One that can never equal a goal member claims
+            // nothing, and the validator rejects it.
+            if (takeCopy(members, free[0..members.len], member)) {
+                if (!def_match.fixedMemberOf(context, theorem, site.head_id, member)) open_sibling = true;
+            } else if (acui.memberPossiblyIn(context, theorem, site.head_id, member, members)) {
+                open_sibling = true;
+            }
         }
     }
 
@@ -581,7 +591,7 @@ fn summandSpan(
             // A member that is not fixed (a meta, or a def that may unfold to
             // several or none) may stand for any number of members.
             for (members.slice()) |member| {
-                if (acui.memberIsFixed(context, theorem, head_id, member)) {
+                if (def_match.fixedMemberOf(context, theorem, head_id, member)) {
                     span.count += 1;
                 } else {
                     span.exact = false;

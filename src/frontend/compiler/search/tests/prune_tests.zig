@@ -1199,6 +1199,125 @@ test "ACUI member prune abstains on a def member that unfolds to the unit" {
     try std.testing.expect(try addCongrPlausible(ring_theory, "eq nil (neg x)", "eq (neg x) zero", "eq (neg x) (neg x)"));
 }
 
+/// A `head_class.Screen` over theorem `t` of `mm0_src`, with its terms parsed
+/// as the left side of an `eq`.
+const ScreenCase = struct {
+    arena: std.heap.ArenaAllocator,
+    fixture: fixture_mod.Fixture,
+    theorem: TheoremContext,
+    theorem_vars: NameExprMap,
+    harness: ContextHarness,
+
+    fn init(case: *ScreenCase, mm0_src: []const u8) !void {
+        case.arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        const allocator = case.arena.allocator();
+        case.fixture = try fixtureFor(allocator, mm0_src, "t");
+        case.theorem = TheoremContext.init(allocator);
+        try case.theorem.seedAssertion(case.fixture.assertion);
+        case.theorem_vars = try Check.buildTheoremVarMap(allocator, case.fixture.assertion);
+        case.harness = ContextHarness.init(allocator);
+    }
+
+    fn deinit(case: *ScreenCase) void {
+        case.harness.deinit();
+        case.theorem_vars.deinit();
+        case.theorem.deinit();
+        case.arena.deinit();
+    }
+
+    fn expr(case: *ScreenCase, text: []const u8) !ExprId {
+        var buf: [256]u8 = undefined;
+        const wrapped = try std.fmt.bufPrint(&buf, "eq ({s}) ({s})", .{ text, text });
+        const goal = (try parseGoal(&case.fixture, &case.theorem, &case.theorem_vars, wrapped)).concrete;
+        return case.theorem.interner.node(goal).app.args[0];
+    }
+
+    fn term(case: *ScreenCase, name: []const u8) !u32 {
+        return case.fixture.theory.env.term_names.get(name) orelse error.MissingTerm;
+    }
+
+    fn screen(case: *ScreenCase, context: *const Context) helpers.head_class.Screen {
+        return def_match.screenFor(context, &case.theorem);
+    }
+
+    fn combiner(case: *ScreenCase, name: []const u8) !helpers.AcuiBag.Combiner {
+        const env = &case.fixture.theory.env;
+        return helpers.AcuiBag.Combiner.of(&case.fixture.theory.registry, env, try case.term(name)) orelse
+            error.MissingCombiner;
+    }
+};
+
+test "screen counts a def chain's shared argument once per term" {
+    // `dbl^40 y` holds 2^40 members; each level is counted once.
+    var case: ScreenCase = undefined;
+    try case.init(comptime replaceOnce(
+        ring_theory,
+        "def nil: R = $ zero $;",
+        "def nil: R = $ zero $;\ndef dbl (a: R): R = $ add a a $;",
+    ));
+    defer case.deinit();
+    const context = case.harness.context(&case.fixture);
+    const dbl = try case.term("dbl");
+    var chain = try case.expr("y");
+    for (0..40) |_| chain = try case.theorem.interner.internApp(dbl, &.{chain});
+    var screen = case.screen(&context);
+    defer screen.deinit();
+    try std.testing.expectEqual(@as(u64, 1) << 40, screen.minMembers(try case.combiner("add"), chain));
+}
+
+test "screen reads a deep alternating lattice once per term" {
+    // `J_{i+1} = J_i * y + z` under an idempotent `+`: every level keeps
+    // its head, and each is read once (unshared, 15 levels cost 4^15).
+    var case: ScreenCase = undefined;
+    try case.init(idempotent_ring_theory);
+    defer case.deinit();
+    const context = case.harness.context(&case.fixture);
+    const add = try case.term("add");
+    const mul = try case.term("mul");
+    const y = try case.expr("y");
+    const z = try case.expr("z");
+    var lattice = try case.expr("x");
+    for (0..15) |_| {
+        const product = try case.theorem.interner.internApp(mul, &.{ lattice, y });
+        lattice = try case.theorem.interner.internApp(add, &.{ product, z });
+    }
+    var screen = case.screen(&context);
+    defer screen.deinit();
+    try std.testing.expectEqual(@as(?u32, add), screen.stableHead(lattice));
+}
+
+test "screen finds two differing idempotent members in any order" {
+    // `- (y * 1)` may be `- x` or `- z`, but those two differ, so the sum
+    // keeps its head whichever member comes first.
+    var case: ScreenCase = undefined;
+    try case.init(idempotent_ring_theory);
+    defer case.deinit();
+    const context = case.harness.context(&case.fixture);
+    const add = try case.term("add");
+    for ([_][]const u8{
+        "add (neg (mul y one)) (add (neg x) (neg z))",
+        "add (neg x) (add (neg (mul y one)) (neg z))",
+    }) |text| {
+        var screen = case.screen(&context);
+        defer screen.deinit();
+        try std.testing.expectEqual(@as(?u32, add), screen.stableHead(try case.expr(text)));
+    }
+}
+
+test "recoverDefiniteMismatch lets a hole bag member stand for no member" {
+    // With `z` the hole, `z + x` may be `0 + x`, which is `x`.
+    var case: ScreenCase = undefined;
+    try case.init(ring_theory);
+    defer case.deinit();
+    const context = case.harness.context(&case.fixture);
+    const x = try case.expr("x");
+    const z = try case.expr("z");
+    const pattern = try case.expr("add z x");
+    try std.testing.expect(!def_match.recoverDefiniteMismatch(&context, &case.theorem, x, pattern, z));
+    // Without a hole, `z + x` holds two members and is never `x`.
+    try std.testing.expect(def_match.rigidExprMismatch(&context, &case.theorem, x, pattern));
+}
+
 test "auto? hands a generated context split to the checker as explicit bindings" {
     // Both premises of `two` are generated, and `la`'s conclusion depends on
     // the context it is given, so only the search knows which members each
@@ -1500,8 +1619,8 @@ test "rigid heads differ only where both unfold to a rigid head" {
     for (rows) |row| {
         const lhs = names.get(row.lhs) orelse return error.MissingTerm;
         const rhs = names.get(row.rhs) orelse return error.MissingTerm;
-        std.testing.expectEqual(row.differ, def_match.rigidHeadMismatch(&context, lhs, rhs)) catch |err| {
-            std.debug.print("rigidHeadMismatch({s}, {s})\n", .{ row.lhs, row.rhs });
+        std.testing.expectEqual(row.differ, semantic.rigidHeadsDiffer(&context, lhs, rhs)) catch |err| {
+            std.debug.print("rigidHeadsDiffer({s}, {s})\n", .{ row.lhs, row.rhs });
             return err;
         };
     }
@@ -1510,7 +1629,7 @@ test "rigid heads differ only where both unfold to a rigid head" {
     const f = names.get("f") orelse return error.MissingTerm;
     const opaque_def = names.get("opaque") orelse return error.MissingTerm;
     fixture.theory.env.terms.items[f].available = false;
-    try std.testing.expect(!def_match.rigidHeadMismatch(&context, f, opaque_def));
+    try std.testing.expect(!semantic.rigidHeadsDiffer(&context, f, opaque_def));
 }
 
 const lw_rules =

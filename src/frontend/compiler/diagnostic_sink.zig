@@ -499,8 +499,15 @@ pub const DiagnosticSink = struct {
                 .sort_name = self.stableString(info.sort_name),
                 .arg_index = info.arg_index,
             } },
-            .hypothesis_ref => |info| .{ .hypothesis_ref = info },
-            .premise_mismatch => |info| .{ .premise_mismatch = info },
+            .hypothesis_ref => |info| .{ .hypothesis_ref = .{
+                .index = info.index,
+                .name = self.stableString(info.name),
+            } },
+            .premise_mismatch => |info| .{ .premise_mismatch = .{
+                .premise = info.premise,
+                .hypothesis_index = info.hypothesis_index,
+                .hypothesis_name = self.stableString(info.hypothesis_name),
+            } },
             .unused_parameter => |info| .{ .unused_parameter = .{
                 .parameter_name = self.stableRequiredString(
                     info.parameter_name,

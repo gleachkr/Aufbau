@@ -85,8 +85,8 @@ pub fn writeDetail(
         }),
         .premise_mismatch => |info| try writeFields(jw, .{
             .premise = info.premise,
-            .index = if (info.hypothesis_ref) |ref| ref.index else null,
-            .name = if (info.hypothesis_ref) |ref| ref.name else null,
+            .index = info.hypothesis_index,
+            .name = info.hypothesis_name,
         }),
         .unused_parameter => |info| try writeFields(jw, .{ .parameter = info.parameter_name }),
         .local_term_reference => |info| try writeFields(jw, .{ .term = info.term_name }),
@@ -123,6 +123,20 @@ test "detail renders as parseable JSON with its source token escaped" {
     const detail = parsed.value.object;
     try std.testing.expectEqualStrings("unknown_math_token", detail.get("kind").?.string);
     try std.testing.expectEqualStrings("t\\p\"\x01", detail.get("token").?.string);
+}
+
+test "premise mismatch reports a named hypothesis by name only" {
+    var parsed = try parseDetail(.{
+        .kind = .hypothesis_mismatch,
+        .err = error.HypothesisMismatch,
+        .detail = .{ .premise_mismatch = .{ .premise = 2, .hypothesis_name = "h" } },
+    });
+    defer parsed.deinit();
+
+    const detail = parsed.value.object;
+    try std.testing.expectEqual(@as(i64, 2), detail.get("premise").?.integer);
+    try std.testing.expect(detail.get("index").? == .null);
+    try std.testing.expectEqualStrings("h", detail.get("name").?.string);
 }
 
 test "none detail renders as null" {

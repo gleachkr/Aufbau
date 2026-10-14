@@ -1981,7 +1981,8 @@ test "recover member injection skips pinned-target laws" {
 
 /// One context combiner under the laws `comm` and `idem` name (`_` for none),
 /// with a two-context rule, a context-extension rule, a context `nil` that
-/// unfolds to the unit, and the goal context `A , B , A`.
+/// unfolds to the unit, a context `one a` that unfolds to one member, and the
+/// goal context `A , B , A`.
 fn splitLawMm0(comptime comm: []const u8, comptime idem: []const u8) []const u8 {
     return
     \\delimiter $ ( ) $;
@@ -1998,6 +1999,7 @@ fn splitLawMm0(comptime comm: []const u8, comptime idem: []const u8) []const u8 
         \\term B: wff;
         \\term P: wff;
         \\def nil: ctx = $ emp $;
+        \\def one (a: wff): ctx = $ hyp a $;
         \\axiom ctx_assoc (g h i: ctx):
         \\  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
         \\axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
@@ -2094,6 +2096,33 @@ test "split of a multiset context counts repeated members" {
     // With `h := B` bound, `g` must take exactly what is left.
     try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "hyp B", false, &.{
         "join (hyp A) (hyp A)",
+    });
+    // `one B` is one member, but not by identity the goal's `hyp B`, so `h`
+    // is as good as open.
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "one B", false, &.{
+        "emp",
+        "hyp A",
+        "hyp B",
+        "join (hyp A) (hyp A)",
+        "join (hyp A) (hyp B)",
+        "join (hyp A) (join (hyp B) (hyp A))",
+    });
+    // `hyp P` can never be a goal member: it claims nothing.
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "_"), "t", "two", "hyp P", false, &.{
+        "join (hyp A) (join (hyp B) (hyp A))",
+    });
+}
+
+test "split of a set context reads a def sibling as possibly any goal member" {
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "ctx_idem"), "t", "two", "one B", false, &.{
+        "emp",
+        "hyp A",
+        "hyp B",
+        "join (hyp A) (hyp B)",
+    });
+    try expectSplitCandidates(splitLawMm0("ctx_comm", "ctx_idem"), "t", "two", "hyp B", false, &.{
+        "hyp A",
+        "join (hyp A) (hyp B)",
     });
 }
 

@@ -1119,6 +1119,10 @@ noinline fn finishCandidate(
             .line => |label| label.span,
             .application => |inline_app| inline_app.span,
         };
+        const cited: CompilerDiag.HypothesisRefDetail = switch (ref) {
+            .hyp => |hyp| .written(hyp.index, hyp.name),
+            .line, .application => .{},
+        };
         var diag = CompilerDiag.withPhase(Diagnostic{
             .kind = .hypothesis_mismatch,
             .err = error.HypothesisMismatch,
@@ -1133,10 +1137,8 @@ noinline fn finishCandidate(
             .span = span,
             .detail = .{ .premise_mismatch = .{
                 .premise = idx + 1,
-                .hypothesis_ref = switch (ref) {
-                    .hyp => |hyp| .{ .index = hyp.index, .name = hyp.name },
-                    .line, .application => null,
-                },
+                .hypothesis_index = cited.index,
+                .hypothesis_name = cited.name,
             } },
         }, .theorem_application);
         try addComparisonSnapshotNotes(
@@ -1881,10 +1883,7 @@ noinline fn reportHypRef(
         .line_label = line_label,
         .span = hyp.span,
         .detail = .{
-            .hypothesis_ref = .{
-                .index = hyp.index,
-                .name = hyp.name,
-            },
+            .hypothesis_ref = .written(hyp.index, hyp.name),
         },
     }, .theorem_application));
     return err;

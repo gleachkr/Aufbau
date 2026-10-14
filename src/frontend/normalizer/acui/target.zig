@@ -178,8 +178,9 @@ fn hasUncoveredDef(
 /// leaf-rewrite path, so the unfolding's own leaves flatten into the bag
 /// and the def's transport rides the same congruence lift as a claimed
 /// leaf. Null when no uncovered def can be opened (a hidden-dummy def
-/// stays a leaf); the recursion ends because each round opens at least
-/// one def and def bodies are well-founded.
+/// stays a leaf) or opening changes neither side; the recursion ends
+/// because each round must leave a def opened, and def bodies are
+/// well-founded.
 fn buildOpenedDefCommonTarget(
     self: anytype,
     lhs: ExprId,
@@ -214,6 +215,11 @@ fn buildOpenedDefCommonTarget(
     if (lhs_opened == null and rhs_opened == null) return null;
     const lhs_next = if (lhs_opened) |opened| opened.result_expr else lhs;
     const rhs_next = if (rhs_opened) |opened| opened.result_expr else rhs;
+    // Re-normalizing can fold an opened copy straight back into a def
+    // member it equals (`i1 b , i1 b` opens to `i1 b , hyp b`, which
+    // folds to `i1 b , i1 b`); a round that changes neither side would
+    // recurse forever.
+    if (lhs_next == lhs and rhs_next == rhs) return null;
     const common = try buildAcuiCommonTarget(self, lhs_next, rhs_next) orelse {
         return null;
     };

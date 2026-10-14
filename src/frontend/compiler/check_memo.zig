@@ -570,11 +570,30 @@ fn dupeUnionStrings(comptime U: type, arena: std.mem.Allocator, value: U) !U {
                 } else if (field_type == ?[]const u8) {
                     @field(copy, name) =
                         try dupeOptional(arena, @field(payload, name));
+                } else if (comptime holdsPointer(field_type)) {
+                    @compileError("flatten " ++ @typeName(U) ++ "." ++
+                        @tagName(tag) ++ "." ++ name ++
+                        ": only top-level string fields are copied");
                 }
             }
             return @unionInit(U, @tagName(tag), copy);
         },
     }
+}
+
+fn holdsPointer(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => true,
+        .optional => |info| holdsPointer(info.child),
+        .array => |info| holdsPointer(info.child),
+        .@"struct" => |info| for (info.field_types) |field_type| {
+            if (holdsPointer(field_type)) break true;
+        } else false,
+        .@"union" => |info| for (info.field_types) |field_type| {
+            if (holdsPointer(field_type)) break true;
+        } else false,
+        else => false,
+    };
 }
 
 test "relocation shifts proof spans only" {
@@ -630,4 +649,18 @@ test "dupeDiagnostic copies every string payload" {
     try std.testing.expectEqualStrings("abc", copy.rule_name.?);
     try std.testing.expectEqualStrings("abc", copy.detail.name_suggestion.suggestion);
     try std.testing.expectEqualStrings("abc", copy.notes[0].message.already_matched.text);
+}
+
+test "dupeDiagnostic copies a cited hypothesis name" {
+    var text = [_]u8{ 'h', 'a', 'b' };
+    const diag: Diagnostic = .{
+        .kind = .hypothesis_mismatch,
+        .err = error.HypothesisMismatch,
+        .detail = .{ .premise_mismatch = .{ .premise = 1, .hypothesis_name = &text } },
+    };
+    var arena = ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const copy = try dupeDiagnostic(arena.allocator(), diag);
+    text[0] = 'z';
+    try std.testing.expectEqualStrings("hab", copy.detail.premise_mismatch.hypothesis_name.?);
 }

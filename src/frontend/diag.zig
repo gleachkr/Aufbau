@@ -166,10 +166,17 @@ pub const DefinitionBodyDiagnosticDetail = struct {
     hidden_binder_count: usize,
 };
 
+/// A theorem hypothesis reference as written: exactly one field is set.
 pub const HypothesisRefDetail = struct {
-    index: usize,
+    /// Set when the reference was written by position (`#N`), 1-based.
+    index: ?usize = null,
     /// Set when the reference was written by name (`#h`).
     name: ?[]const u8 = null,
+
+    pub fn written(index: usize, name: ?[]const u8) HypothesisRefDetail {
+        if (name) |actual| return .{ .name = actual };
+        return .{ .index = index };
+    }
 };
 
 pub const DiagnosticDetail = union(enum) {
@@ -194,8 +201,12 @@ pub const DiagnosticDetail = union(enum) {
         /// 1-based position of the premise among the line's refs, which is
         /// also the rule hypothesis it was matched against.
         premise: usize,
-        /// Set when the premise is a theorem hypothesis (`#N` or `#h`).
-        hypothesis_ref: ?HypothesisRefDetail = null,
+        /// Set when the premise is a theorem hypothesis written `#N`.
+        /// Flat rather than a nested `HypothesisRefDetail`, so the
+        /// diagnostic copies (check memo, sink) reach the name.
+        hypothesis_index: ?usize = null,
+        /// Set when the premise is a theorem hypothesis written `#h`.
+        hypothesis_name: ?[]const u8 = null,
     },
     unused_parameter: struct {
         parameter_name: []const u8,
@@ -2116,8 +2127,11 @@ fn writeDetailContextLines(
                 "detail_premise",
                 .{info.premise},
             );
-            if (info.hypothesis_ref) |ref| {
-                try writeHypothesisRefLine(writer, line_separator, ref);
+            if (info.hypothesis_index != null or info.hypothesis_name != null) {
+                try writeHypothesisRefLine(writer, line_separator, .{
+                    .index = info.hypothesis_index,
+                    .name = info.hypothesis_name,
+                });
             }
         },
         .unused_parameter => |info| {
@@ -2180,12 +2194,12 @@ fn writeHypothesisRefLine(
             "detail_hypothesis_ref_name",
             .{name},
         );
-    } else {
+    } else if (ref.index) |index| {
         try writeContextLine(
             writer,
             line_separator,
             "detail_hypothesis_ref_index",
-            .{ref.index},
+            .{index},
         );
     }
 }

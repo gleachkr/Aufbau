@@ -561,7 +561,7 @@ fn acuiMemberListsMismatch(
 }
 
 /// Under a law that counts copies, a side whose members are all fixed
-/// (`acui.memberIsFixed`) has exactly that many after conversion, so the
+/// (`def_match.fixedMemberOf`) has exactly that many after conversion, so the
 /// other side cannot need more (`def_match.minMembersOf`).
 fn memberCountMismatch(
     context: *const Context,
@@ -579,15 +579,18 @@ fn memberCountMismatch(
 }
 
 const MemberCount = struct {
-    min: usize,
+    min: u64,
     exact: bool,
 
     fn of(context: *const Context, theorem: *const TheoremContext, head_id: u32, expr: ExprId) ?MemberCount {
-        const members = bag.flatten(context, theorem, head_id, expr) orelse return null;
+        const combiner = bag.combinerOf(context, head_id) orelse return null;
+        const members = combiner.flatten(theorem, expr) orelse return null;
+        var screen = def_match.screenFor(context, theorem);
+        defer screen.deinit();
         var count = MemberCount{ .min = 0, .exact = true };
         for (members.slice()) |member| {
-            count.min += def_match.minMembersOf(context, theorem, head_id, member);
-            if (!acui.memberIsFixed(context, theorem, head_id, member)) count.exact = false;
+            count.min +|= screen.minMembers(combiner, member);
+            if (!screen.exactlyOneMember(combiner, member)) count.exact = false;
         }
         return count;
     }

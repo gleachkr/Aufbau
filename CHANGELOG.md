@@ -36,6 +36,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `abc compile`, the editor and `exact?` could crash with a stack
+  overflow on a line that did not match its rule when an `@acui` bag in
+  it held one definition twice, or two definitions with one body: the
+  comparison opened one copy, which folded straight back. The line now
+  fails with an ordinary diagnostic.
 - A line could fail to infer a rule's arguments, for some orders of an
   `@acui` bag and not others, when two definitions with one body (such as
   `def i1 (a) = $ hyp a $` and `def i2 (a) = $ hyp a $`) stood beside a

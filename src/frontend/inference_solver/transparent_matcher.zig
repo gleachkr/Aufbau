@@ -184,7 +184,7 @@ fn matchNormalizedOnly(
     state: BranchState,
 ) anyerror![]BranchState {
     if (!self.canUseNormalizedStructuralItemMatch()) return &.{};
-    if (rigidHeadsDiffer(self, template, actual)) return &.{};
+    if (rigidTemplateMismatch(self, template, actual)) return &.{};
     const scratch = self.scratch orelse return &.{};
 
     const old_bindings = BranchStateOps.getBindings(@constCast(&state), space);
@@ -258,7 +258,7 @@ fn matchNormalizedOnly(
 
 /// Normalizing changes no rigid head, so a template under one never meets an
 /// expr that is a variable or sits under another.
-fn rigidHeadsDiffer(self: anytype, template: TemplateExpr, actual: ExprId) bool {
+fn rigidTemplateMismatch(self: anytype, template: TemplateExpr, actual: ExprId) bool {
     const template_app = switch (template) {
         .app => |app| app,
         .binder => return false,
