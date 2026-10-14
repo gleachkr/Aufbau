@@ -64,6 +64,7 @@ pub const Strings = struct {
     kind_sorry_line: []const u8,
     kind_sorry_line_arguments: []const u8,
     kind_cites_unfinished_line: []const u8,
+    kind_proof_heap_large: []const u8,
     defbody_dep_violation: []const u8,
     defbody_sort_mismatch: []const u8,
     defbody_fallback: []const u8,
@@ -369,6 +370,7 @@ pub const Strings = struct {
 
     // Dependency-violation and omission summaries.
     omitted_diagnostics_count: []const u8,
+    proof_heap_large_len: []const u8,
     dep_bound_distinct: []const u8,
     dep_regular_mentions_bound: []const u8,
     dep_conflicting_binders: []const u8,
@@ -497,6 +499,7 @@ pub const en: Strings = .{
     .kind_sorry_line = "proof line is admitted with sorry!; the theorem is not verified",
     .kind_sorry_line_arguments = "sorry! takes no bindings, references, or holes",
     .kind_cites_unfinished_line = "proof line cites an unfinished line; it is checked once that line is finished",
+    .kind_proof_heap_large = "proof needs more heap entries than MMB verifiers typically allow by default (65536)",
     .defbody_dep_violation = "definition body has free variables that the result type does not declare",
     .defbody_sort_mismatch = "definition body sort does not match the declared result sort",
     .defbody_fallback = "definition body does not satisfy the declared result",
@@ -802,6 +805,7 @@ pub const en: Strings = .{
 
     // Dependency-violation and omission summaries.
     .omitted_diagnostics_count = "{d} more diagnostics omitted",
+    .proof_heap_large_len = "proof needs {d} heap entries; MMB verifiers typically allow 65536 by default",
     .dep_bound_distinct = "bound variables {0s} and {1s} must be assigned distinct variables",
     .dep_regular_mentions_bound = "the rule does not allow {0s} to mention the variable assigned to {1s}",
     .dep_conflicting_binders = "conflicting binders {0s} and {1s}",
@@ -929,6 +933,7 @@ pub const de: Strings = .{
     .kind_sorry_line = "die Beweiszeile wird mit sorry! zugelassen; das Theorem ist nicht verifiziert",
     .kind_sorry_line_arguments = "sorry! nimmt keine Bindungen, Referenzen oder Löcher",
     .kind_cites_unfinished_line = "die Beweiszeile zitiert eine unfertige Zeile; sie wird geprüft, sobald jene Zeile fertig ist",
+    .kind_proof_heap_large = "der Beweis braucht mehr Heap-Einträge, als MMB-Verifizierer standardmäßig üblicherweise erlauben (65536)",
     .defbody_dep_violation = "der Definitionsrumpf hat freie Variablen, die der Ergebnistyp nicht deklariert",
     .defbody_sort_mismatch = "die Sorte des Definitionsrumpfs stimmt nicht mit der deklarierten Ergebnissorte überein",
     .defbody_fallback = "der Definitionsrumpf erfüllt das deklarierte Ergebnis nicht",
@@ -1234,6 +1239,7 @@ pub const de: Strings = .{
 
     // Dependency-violation and omission summaries.
     .omitted_diagnostics_count = "{d} weitere Diagnosen ausgelassen",
+    .proof_heap_large_len = "der Beweis braucht {d} Heap-Einträge; MMB-Verifizierer erlauben standardmäßig üblicherweise 65536",
     .dep_bound_distinct = "den gebundenen Variablen {0s} und {1s} müssen verschiedene Variablen zugewiesen werden",
     .dep_regular_mentions_bound = "die Regel erlaubt nicht, dass {0s} die Variable erwähnt, die {1s} zugewiesen wurde",
     .dep_conflicting_binders = "Binder {0s} und {1s} stehen im Konflikt",

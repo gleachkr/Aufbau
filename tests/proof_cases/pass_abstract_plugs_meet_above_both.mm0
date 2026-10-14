@@ -1,0 +1,43 @@
+import "lib/iff.mm0";
+
+--| @vars x y
+sort var;
+sort name;
+sort w;
+sort M;
+sort S;
+term v2m (x: var): M;
+coercion v2m: var > M;
+term n2m (a: name): M;
+coercion n2m: name > M;
+term m2s (m: M): S;
+coercion m2s: M > S;
+term w2s (b: w): S;
+coercion w2s: w > S;
+
+term eq (t u: S): wff;
+infixl eq: $=$ prec 50;
+term R (t u: S): wff;
+term sb (t: S) {x: var} (p: wff x): wff;
+
+--| @rewrite
+axiom sb_Rxx (t: S) {x: var}: $ sb t x (R x x) <-> R t t $;
+
+-- The hole `x` meets the `name` plug at `M`, but the `w` plug reaches only
+-- `S`, so the plugs and the hole meet at `S`, whichever side the `w` plug
+-- is on.
+--| @view {x: var} {a: name} {b: w} (p: wff x b) (ps ch: wff): $ a = b $ > $ ps $ > $ ch $
+--| @abstract p ps ch x a b
+--| @fresh x
+axiom repl_nw {x: var} {a: name} {b: w} (p: wff x b):
+  $ a = b $ > $ sb a x p $ > $ sb b x p $;
+--| @view {x: var} {a: w} {b: name} (p: wff x b) (ps ch: wff): $ a = b $ > $ ps $ > $ ch $
+--| @abstract p ps ch x a b
+--| @fresh x
+axiom repl_wn {x: var} {a: w} {b: name} (p: wff x b):
+  $ a = b $ > $ sb a x p $ > $ sb b x p $;
+
+theorem name_then_w {a: name} {b: w}:
+  $ a = b $ > $ R a a $ > $ R b b $;
+theorem w_then_name {a: w} {b: name}:
+  $ a = b $ > $ R a a $ > $ R b b $;

@@ -76,7 +76,9 @@ This file records notable user-facing changes to Aufbau. The project follows
 - `@abstract` could not infer its target when the plugs and the hole
   meet only at a common sort above both, such as `name` plugs and a `var`
   hole meeting at a term sort: the line failed with an unsolved binder.
-  Plug sites are now the plugs under their coercions to that sort.
+  Plug sites are now the plugs under their coercions to that sort, which
+  the hole and both plugs reach, so plugs of two different sorts work in
+  either order.
 - A proof whose lines restate an `@acui` context of a dozen or more
   members could compile and then fail to verify with `HeapOverflow`. Each
   line sorted its context, so the proof grew with the cube of the
@@ -84,6 +86,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   whether or not a later step read it back. The proof now grows about
   with the square of the context and keeps on the heap only what it reads
   back. A truth tree with 100 rows on its branch verifies.
+- A proof that still needs more heap than verifiers give by default,
+  such as a full reversal of a context of 209 or more members, compiled
+  silently and then failed to verify with `HeapOverflow`. It now
+  compiles with a warning that gives the heap entries it needs; it
+  verifies on a verifier built with a larger heap (mm0-c's `HEAP_SIZE`).
 - Compiling such a proof took time growing faster than the cube of the
   context: a truth tree with 60 rows on its branch took 13 seconds.
   Binding inference compared every two members of a context through a

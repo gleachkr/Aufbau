@@ -38,6 +38,7 @@ pub fn writeDetail(
         .unknown_math_token => |info| try writeFields(jw, .{ .token = info.token }),
         .name_suggestion => |info| try writeFields(jw, .{ .suggestion = info.suggestion }),
         .expected_char => |info| try writeFields(jw, .{ .expected = &[1]u8{info.ch} }),
+        .proof_heap => |info| try writeFields(jw, .{ .heapLen = info.heap_len }),
         .missing_binder_assignment => |info| try writeFields(jw, .{
             .binder = info.binder_name,
             .path = info.path,

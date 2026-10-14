@@ -21,6 +21,16 @@ const CheckedRef = CheckedIr.CheckedRef;
 
 const ExprSlotMap = std.AutoHashMapUnmanaged(ExprId, u32);
 
+/// The heap MMB verifiers typically give a proof by default: ours, and
+/// mm0-c's unless it is rebuilt with a larger `HEAP_SIZE`.
+pub const default_verifier_heap_len = @import("../../trusted/constants.zig").HEAP_SIZE;
+
+/// A written proof stream and the heap entries replaying it takes.
+pub const ProofBody = struct {
+    bytes: []const u8,
+    heap_len: u32,
+};
+
 /// A proof stream recorded command by command, its saves settled only once
 /// the whole stream is known. Emission saves every line and every term so
 /// that a later use can `Ref` it; `toBytes` then writes a `TermSave`,
@@ -52,7 +62,7 @@ const ProofStream = struct {
         allocator: std.mem.Allocator,
         fixed_slots: u32,
         heap_len: u32,
-    ) ![]const u8 {
+    ) !ProofBody {
         var read = try std.DynamicBitSetUnmanaged.initEmpty(allocator, heap_len);
         defer read.deinit(allocator);
         for (self.cmds.items) |cmd| {
@@ -83,7 +93,7 @@ const ProofStream = struct {
             else => try MmbWriter.appendCmd(&bytes, allocator, cmd.op, cmd.data),
         };
         std.debug.assert(old == heap_len);
-        return try bytes.toOwnedSlice(allocator);
+        return .{ .bytes = try bytes.toOwnedSlice(allocator), .heap_len = new };
     }
 
     /// A save's unsaved form; a bare `Save` has none and is dropped.
@@ -171,11 +181,12 @@ pub const ExprProofEmitter = struct {
     /// Ends the stream and writes it out, its unread saves settled.
     pub fn finish(self: *ExprProofEmitter) ![]const u8 {
         try self.stream.append(self.allocator, .End, 0);
-        return try self.stream.toBytes(
+        const body = try self.stream.toBytes(
             self.allocator,
             @intCast(self.theorem.theorem_vars.items.len),
             self.heap_len,
         );
+        return body.bytes;
     }
 
     pub fn emitExpr(self: *ExprProofEmitter, expr_id: ExprId) !void {
@@ -453,7 +464,7 @@ pub const TheoremProofEmitter = struct {
     }
 
     /// Ends the stream and writes it out, its unread saves settled.
-    pub fn finish(self: *TheoremProofEmitter) ![]const u8 {
+    pub fn finish(self: *TheoremProofEmitter) !ProofBody {
         try self.stream.append(self.allocator, .End, 0);
         return try self.stream.toBytes(
             self.allocator,
@@ -675,7 +686,7 @@ pub fn buildTheoremProofBody(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     lines: []const CheckedLine,
-) ![]const u8 {
+) !ProofBody {
     try validateProofBoundaryExprs(theorem, theorem.theorem_hyps.items);
     try CheckedIr.validateLinesCached(theorem, lines);
     if (try CheckedIr.firstDepViolation(env, theorem, lines)) |_| {
@@ -737,8 +748,10 @@ test "ProofStream writes unread saves unsaved and moves later slots down" {
         .{ .op = .End, .data = 0 },
     };
     for (emitted) |cmd| try stream.append(allocator, cmd.op, cmd.data);
-    const bytes = try stream.toBytes(allocator, 1, 7);
-    defer allocator.free(bytes);
+    const body = try stream.toBytes(allocator, 1, 7);
+    defer allocator.free(body.bytes);
+    try std.testing.expectEqual(@as(u32, 4), body.heap_len);
+    const bytes = body.bytes;
 
     var expected: std.ArrayListUnmanaged(u8) = .empty;
     defer expected.deinit(allocator);

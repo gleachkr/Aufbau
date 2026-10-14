@@ -195,6 +195,80 @@ test "compiler verifies bodyful constant defs with lambda bodies" {
     try mm0.verifyPair(std.testing.allocator, mm0_src, mmb);
 }
 
+test "a proof needing a larger verifier heap compiles with a warning" {
+    // Reversing a context of n members takes about n^2 / 2 moves, so the
+    // proof outgrows the heap verifiers give by default near n = 209.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const n = 210;
+    var binders: std.ArrayListUnmanaged(u8) = .empty;
+    var forward: std.ArrayListUnmanaged(u8) = .empty;
+    var reversed: std.ArrayListUnmanaged(u8) = .empty;
+    for (0..n) |idx| {
+        if (idx > 0) {
+            try forward.appendSlice(a, " , ");
+            try reversed.appendSlice(a, " , ");
+        }
+        try binders.print(a, " v{d}", .{idx});
+        try forward.print(a, "v{d}", .{idx});
+        try reversed.print(a, "v{d}", .{n - 1 - idx});
+    }
+    const mm0_src = try std.fmt.allocPrint(a,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term bi (a b: wff): wff;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx; infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx; coercion hyp: wff > ctx;
+        \\term ctx_eq (g h: ctx): wff;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx):
+        \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+        \\term ok (g: ctx): wff;
+        \\--| @congr
+        \\axiom ok_congr (g h: ctx): $ ctx_eq g h $ > $ bi (ok g) (ok h) $;
+        \\axiom ok_ax (g: ctx): $ ok g $;
+        \\theorem t ({s}: wff): $ ok ({s}) $;
+        \\
+    , .{ binders.items, reversed.items });
+    const proof_src = try std.fmt.allocPrint(a,
+        \\t
+        \\---
+        \\l1: $ ok ({s}) $ by ok_ax (g := $ {s} $) []
+        \\
+    , .{ reversed.items, forward.items });
+
+    var compiler = Compiler.initWithProof(std.testing.allocator, mm0_src, proof_src);
+    const mmb = try compiler.compileMmb(std.testing.allocator);
+    defer std.testing.allocator.free(mmb);
+
+    const warnings = compiler.warningDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), warnings.len);
+    try std.testing.expectEqual(error.ProofHeapLarge, warnings[0].err);
+    try std.testing.expect(warnings[0].detail.proof_heap.heap_len > 65536);
+    // Our verifier is one with the default heap.
+    try std.testing.expectError(
+        error.HeapOverflow,
+        verifyNativeOnly(std.testing.allocator, mmb),
+    );
+}
+
 test "compiler rejects repeated binders before emitting bad MMB" {
     const mm0_src =
         \\strict provable sort wff;

@@ -221,8 +221,20 @@ pub const LineWalk = struct {
         const checked_mark = self.checked.items.len;
         return self.checkLine(line) catch |err| {
             if (err == error.OutOfMemory) return err;
+            // A failure the checks left undiagnosed still belongs to this
+            // line, not to the theorem as a whole.
+            if (self.compiler.getDiagnostic() == null) {
+                self.compiler.setProof(.{
+                    .kind = .generic,
+                    .err = CompilerDiag.narrowDiagnosticError(err),
+                    .theorem_name = self.assertion.name,
+                    .line_label = line.label,
+                    .rule_name = line.application.rule_name,
+                    .span = line.ruleApplicationSpan(),
+                });
+            }
             const keep = self.compiler.keep_checking orelse return err;
-            try self.admitFailedLine(keep, line, checked_mark, err);
+            try self.admitFailedLine(keep, line, checked_mark);
             return .next;
         };
     }
@@ -367,7 +379,7 @@ pub const LineWalk = struct {
             .rule_unify_cache = &self.rule_unify_cache,
         };
         const checked_mark = self.checked.items.len;
-        const line_idx = applyRuleApplication(
+        const line_idx = try applyRuleApplication(
             compiler,
             &apply_context,
             line.application,
@@ -377,21 +389,7 @@ pub const LineWalk = struct {
             ApplicationLine.fromLine(line),
             self.theorem,
             &self.theorem_vars,
-        ) catch |err| {
-            // A failure the tiers below left undiagnosed still belongs to
-            // this line, not to the theorem as a whole.
-            if (err != error.OutOfMemory and compiler.getDiagnostic() == null) {
-                compiler.setProof(.{
-                    .kind = .generic,
-                    .err = CompilerDiag.narrowDiagnosticError(err),
-                    .theorem_name = assertion.name,
-                    .line_label = line.label,
-                    .rule_name = line.application.rule_name,
-                    .span = line.ruleApplicationSpan(),
-                });
-            }
-            return err;
-        };
+        );
 
         if (parsed_assertion == .holey) {
             try collectHoleInferences(
@@ -430,22 +428,13 @@ pub const LineWalk = struct {
         keep: KeepChecking,
         line: ProofLine,
         checked_mark: usize,
-        err: anyerror,
     ) !void {
         const compiler = self.compiler;
         // Lines an inline application added before the line failed.
         CheckedIr.deinitLines(self.allocator, self.checked.items[checked_mark..]);
         self.checked.shrinkRetainingCapacity(checked_mark);
 
-        const diag = compiler.getDiagnostic() orelse CompilerDiag.Diagnostic{
-            .kind = .generic,
-            .err = CompilerDiag.narrowDiagnosticError(err),
-            .source = .proof,
-            .theorem_name = self.assertion.name,
-            .line_label = line.label,
-            .rule_name = line.application.rule_name,
-            .span = line.ruleApplicationSpan(),
-        };
+        const diag = compiler.getDiagnostic().?;
         compiler.restoreDiagnostic(null);
         if (self.failure) |previous| {
             if (keep.reports(previous)) compiler.addPrimaryDiagnostic(previous);
@@ -555,25 +544,13 @@ pub const LineWalk = struct {
                     env,
                     err,
                 )) |detail| {
-                    var diag = CompilerDiag.withPhase(.{
-                        .kind = .generic,
-                        .err = CompilerDiag.narrowDiagnosticError(err),
-                        .theorem_name = assertion.name,
-                        .line_label = final.label,
-                        .span = final.span,
-                        .detail = detail,
-                    }, .final_reconciliation);
-                    addBoundaryAttemptNotes(
-                        allocator,
-                        &diag,
-                        theorem,
-                        env,
-                        parser,
-                        theorem_vars,
+                    self.setFinalLineFailure(
+                        final,
                         theorem_concl,
-                        final.expr,
+                        .generic,
+                        CompilerDiag.narrowDiagnosticError(err),
+                        detail,
                     );
-                    compiler.setProof(diag);
                     return err;
                 }
                 diag_scratch.discard(final_mark);
@@ -600,26 +577,46 @@ pub const LineWalk = struct {
                 "no conversion relates the final line to the conclusion",
                 .{},
             );
-            var diag = CompilerDiag.withPhase(.{
-                .kind = .final_line_mismatch,
-                .err = error.FinalLineMismatch,
-                .theorem_name = assertion.name,
-                .line_label = final.label,
-                .span = final.span,
-            }, .final_reconciliation);
-            addBoundaryAttemptNotes(
-                allocator,
-                &diag,
-                theorem,
-                env,
-                parser,
-                theorem_vars,
+            self.setFinalLineFailure(
+                final,
                 theorem_concl,
-                final.expr,
+                .final_line_mismatch,
+                error.FinalLineMismatch,
+                .none,
             );
-            compiler.setProof(diag);
             return error.FinalLineMismatch;
         }
+    }
+
+    /// Report the final line's failure to reach the conclusion, with notes
+    /// on how the two were compared.
+    fn setFinalLineFailure(
+        self: *LineWalk,
+        final: LastLine,
+        theorem_concl: ExprId,
+        kind: CompilerDiag.DiagnosticKind,
+        err: CompilerDiag.DiagnosticError,
+        detail: CompilerDiag.DiagnosticDetail,
+    ) void {
+        var diag = CompilerDiag.withPhase(.{
+            .kind = kind,
+            .err = err,
+            .theorem_name = self.assertion.name,
+            .line_label = final.label,
+            .span = final.span,
+            .detail = detail,
+        }, .final_reconciliation);
+        addBoundaryAttemptNotes(
+            self.allocator,
+            &diag,
+            self.theorem,
+            &self.theory.env,
+            &self.theory.parser,
+            &self.theorem_vars,
+            theorem_concl,
+            final.expr,
+        );
+        self.compiler.setProof(diag);
     }
 };
 

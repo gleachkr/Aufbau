@@ -1018,31 +1018,15 @@ fn applyAbstractBinding(
     const raw_hole_expr = view_bindings[abstract.hole_view_idx] orelse {
         return .no_progress;
     };
-    const frame = (try plugFrame(
+    var walk = (try PlugWalk.init(
         theorem,
         env,
         abstract,
         view_bindings,
         raw_hole_expr,
     )) orelse return .no_progress;
-    defer frame.deinit(theorem.allocator);
+    defer walk.deinit();
 
-    const allocator = theorem.allocator;
-    const working = try allocator.dupe(?ExprId, view_bindings);
-    defer allocator.free(working);
-    const base = try allocator.dupe(?ExprId, view_bindings);
-    defer allocator.free(base);
-    const scratch = try allocator.alloc(?ExprId, view_bindings.len);
-    defer allocator.free(scratch);
-
-    var walk = PlugWalk{
-        .theorem = theorem,
-        .abstract = abstract,
-        .frame = frame,
-        .bindings = working,
-        .base = base,
-        .scratch = scratch,
-    };
     const raw_candidate = abstractContextExpr(
         &walk,
         left_expr,
@@ -1052,14 +1036,7 @@ fn applyAbstractBinding(
         else => return err,
     };
     if (raw_candidate) |candidate| {
-        if (walk.found_plug) {
-            return try commitAbstractResult(
-                view_bindings,
-                working,
-                abstract.target_view_idx,
-                candidate,
-            );
-        }
+        if (walk.found_plug) return try walk.commit(view_bindings, candidate);
     }
 
     const aligned_left = try preprocessDerivedExpr(
@@ -1077,31 +1054,23 @@ fn applyAbstractBinding(
     // The retry matches the plugs against the preprocessed sides, so every
     // solved binder a plug mentions is preprocessed the same way; pattern
     // structure itself is left alone.
-    @memcpy(working, view_bindings);
+    const aligned_bindings = try theorem.allocator.dupe(?ExprId, view_bindings);
+    defer theorem.allocator.free(aligned_bindings);
     try preprocessPlugBindings(
         theorem,
         env,
         registry,
         abstract.left_plug.template,
-        working,
+        aligned_bindings,
     );
     try preprocessPlugBindings(
         theorem,
         env,
         registry,
         abstract.right_plug.template,
-        working,
+        aligned_bindings,
     );
-    @memcpy(base, working);
-
-    walk = PlugWalk{
-        .theorem = theorem,
-        .abstract = abstract,
-        .frame = frame,
-        .bindings = working,
-        .base = base,
-        .scratch = scratch,
-    };
+    walk.reset(aligned_bindings);
     const candidate = abstractContextExpr(
         &walk,
         aligned_left,
@@ -1118,38 +1087,7 @@ fn applyAbstractBinding(
         if (abstract.hasPattern()) return error.AbstractPatternNoSite;
         return error.AbstractNoPlugOccurrence;
     }
-    return try commitAbstractResult(
-        view_bindings,
-        working,
-        abstract.target_view_idx,
-        candidate,
-    );
-}
-
-/// Record the walk's result: the target context, plus every view binder the
-/// plug patterns solved at their sites. An explicit target that differs from
-/// the recovered context is a conflict.
-fn commitAbstractResult(
-    view_bindings: []?ExprId,
-    working: []const ?ExprId,
-    target_view_idx: usize,
-    candidate: ExprId,
-) !ApplyResult {
-    var progress = false;
-    if (view_bindings[target_view_idx]) |existing| {
-        if (existing != candidate) return error.AbstractConflict;
-    } else {
-        view_bindings[target_view_idx] = candidate;
-        progress = true;
-    }
-    for (working, 0..) |value, idx| {
-        if (view_bindings[idx] != null) continue;
-        if (value) |solved| {
-            view_bindings[idx] = solved;
-            progress = true;
-        }
-    }
-    return if (progress) .progress else .no_progress;
+    return try walk.commit(view_bindings, candidate);
 }
 
 fn preprocessPlugBindings(
@@ -1177,12 +1115,12 @@ fn preprocessPlugBindings(
 }
 
 /// Where an `@abstract` walk substitutes. The hole and the plugs meet at a
-/// common sort in the coercion graph: the plugs' own sort when the hole
-/// coerces up to it, else the nearest sort above the plugs that the hole
-/// also reaches (a `name` plug and a `var` hole meet at a term sort that
-/// both coerce into). A plug site is the plug under its coercion route up to
-/// that sort, and the hole is substituted there coerced up to it, so the
-/// constructed context stays well-sorted.
+/// common sort in the coercion graph: a plug's own sort when the hole and
+/// the other plug coerce up to it, else the nearest sort above both plugs
+/// that the hole also reaches (a `name` plug and a `var` hole meet at a
+/// term sort that both coerce into). A plug site is the plug under its
+/// coercion route up to that sort, and the hole is substituted there
+/// coerced up to it, so the constructed context stays well-sorted.
 pub const PlugFrame = struct {
     /// The hole, coerced up to the meeting sort.
     hole_expr: ExprId,
@@ -1200,7 +1138,7 @@ pub const PlugFrame = struct {
 /// The frame for one walk, or null when the plugs are unsolved or the
 /// sorts do not meet: the cross-sort enrollment only guaranteed a common
 /// target for each plug on its own.
-pub fn plugFrame(
+fn plugFrame(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     abstract: AbstractDecl,
@@ -1230,6 +1168,7 @@ pub fn plugFrame(
         allocator,
         hole_sort,
         left_sort,
+        right_sort,
     )) orelse return null;
 
     var hole_route: std.ArrayListUnmanaged(u32) = .empty;
@@ -1267,28 +1206,34 @@ fn plugSortName(
     return (try BindingValidation.exprInfo(env, theorem, value)).sort_name;
 }
 
-/// The sort the hole and a plug meet at: the plug's sort when the hole
-/// reaches it, else the sort above the plug, nearest to it, that the hole
-/// reaches too.
+/// The sort the hole and both plugs meet at: of the sorts all three reach,
+/// the one nearest the plugs, the plugs' own sorts first on a tie.
 fn meetSort(
     env: *const GlobalEnv,
     allocator: std.mem.Allocator,
     hole_sort: []const u8,
-    plug_sort: []const u8,
+    left_sort: []const u8,
+    right_sort: []const u8,
 ) !?[]const u8 {
-    if (env.coercionPathExists(hole_sort, plug_sort)) return plug_sort;
     var route: std.ArrayListUnmanaged(u32) = .empty;
     defer route.deinit(allocator);
     var best: ?[]const u8 = null;
     var best_len: usize = std.math.maxInt(usize);
-    for (env.coercions.items) |edge| {
-        if (!env.coercionPathExists(hole_sort, edge.dst_sort)) continue;
+    for (0..env.coercions.items.len + 2) |idx| {
+        const candidate = switch (idx) {
+            0 => left_sort,
+            1 => right_sort,
+            else => env.coercions.items[idx - 2].dst_sort,
+        };
+        if (!env.coercionPathExists(hole_sort, candidate)) continue;
         route.clearRetainingCapacity();
-        if (!try env.coercionRoute(plug_sort, edge.dst_sort, allocator, &route)) {
+        if (!try env.coercionRoute(left_sort, candidate, allocator, &route) or
+            !try env.coercionRoute(right_sort, candidate, allocator, &route))
+        {
             continue;
         }
         if (route.items.len < best_len) {
-            best = edge.dst_sort;
+            best = candidate;
             best_len = route.items.len;
         }
     }
@@ -1342,7 +1287,7 @@ pub const PlugWalk = struct {
     /// Working substitution: committed view bindings plus site solutions.
     bindings: []?ExprId,
     /// The substitution before any site was accepted.
-    base: []const ?ExprId,
+    base: []?ExprId,
     /// Rollback buffer for a failed site attempt.
     scratch: []?ExprId,
     found_plug: bool = false,
@@ -1350,6 +1295,80 @@ pub const PlugWalk = struct {
     /// earlier site's solution. Turns the walk's failure into a conflict
     /// report rather than a structure mismatch.
     disagreement: bool = false,
+
+    /// A walk from the solved view state, or null when the plugs are
+    /// unsolved or the sorts do not meet (see `plugFrame`).
+    pub fn init(
+        theorem: *TheoremContext,
+        env: *const GlobalEnv,
+        abstract: AbstractDecl,
+        view_bindings: []const ?ExprId,
+        raw_hole_expr: ExprId,
+    ) !?PlugWalk {
+        const allocator = theorem.allocator;
+        const frame = (try plugFrame(
+            theorem,
+            env,
+            abstract,
+            view_bindings,
+            raw_hole_expr,
+        )) orelse return null;
+        errdefer frame.deinit(allocator);
+        const bindings = try allocator.dupe(?ExprId, view_bindings);
+        errdefer allocator.free(bindings);
+        const base = try allocator.dupe(?ExprId, view_bindings);
+        errdefer allocator.free(base);
+        return .{
+            .theorem = theorem,
+            .abstract = abstract,
+            .frame = frame,
+            .bindings = bindings,
+            .base = base,
+            .scratch = try allocator.alloc(?ExprId, view_bindings.len),
+        };
+    }
+
+    pub fn deinit(self: *PlugWalk) void {
+        const allocator = self.theorem.allocator;
+        self.frame.deinit(allocator);
+        allocator.free(self.bindings);
+        allocator.free(self.base);
+        allocator.free(self.scratch);
+    }
+
+    /// Start the walk over from `bindings`, with the same frame.
+    pub fn reset(self: *PlugWalk, bindings: []const ?ExprId) void {
+        @memcpy(self.bindings, bindings);
+        @memcpy(self.base, bindings);
+        self.found_plug = false;
+        self.disagreement = false;
+    }
+
+    /// Record the walk's result: the target context, plus every view binder
+    /// the plug patterns solved at their sites. An explicit target that
+    /// differs from the recovered context is a conflict.
+    pub fn commit(
+        self: *const PlugWalk,
+        view_bindings: []?ExprId,
+        candidate: ExprId,
+    ) !ApplyResult {
+        var progress = false;
+        const target_idx = self.abstract.target_view_idx;
+        if (view_bindings[target_idx]) |existing| {
+            if (existing != candidate) return error.AbstractConflict;
+        } else {
+            view_bindings[target_idx] = candidate;
+            progress = true;
+        }
+        for (self.bindings, 0..) |value, idx| {
+            if (view_bindings[idx] != null) continue;
+            if (value) |solved| {
+                view_bindings[idx] = solved;
+                progress = true;
+            }
+        }
+        return if (progress) .progress else .no_progress;
+    }
 
     /// Pattern plugs never match a subtree that is identical on both sides:
     /// nothing is replaced there, and a spurious site would only constrain

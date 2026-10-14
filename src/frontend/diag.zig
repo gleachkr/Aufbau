@@ -110,6 +110,7 @@ pub const DiagnosticKind = enum {
     sorry_line,
     sorry_line_arguments,
     cites_unfinished_line,
+    proof_heap_large,
 };
 
 pub const Scratch = DiagScratch.Scratch;
@@ -230,6 +231,10 @@ pub const DiagnosticDetail = union(enum) {
     /// the ';' a declaration is missing).
     expected_char: struct {
         ch: u8,
+    },
+    /// The heap entries a theorem's proof takes to verify.
+    proof_heap: struct {
+        heap_len: usize,
     },
 };
 
@@ -593,6 +598,7 @@ pub const DiagnosticError = error{
     PrecMismatch,
     PrecedenceAssocMismatch,
     PrecedenceMismatch,
+    ProofHeapLarge,
     PublicDefBodyMustBeHeaderless,
     PublicDefBodyNameMismatch,
     RecoverConflict,
@@ -1397,6 +1403,7 @@ pub fn diagnosticSummary(diag: Diagnostic) []const u8 {
         .sorry_line => t("kind_sorry_line"),
         .sorry_line_arguments => t("kind_sorry_line_arguments"),
         .cites_unfinished_line => t("kind_cites_unfinished_line"),
+        .proof_heap_large => t("kind_proof_heap_large"),
     };
 }
 
@@ -1674,6 +1681,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.SorryLine => t("kind_sorry_line"),
         error.SorryLineArguments => t("kind_sorry_line_arguments"),
         error.CitesUnfinishedLine => t("kind_cites_unfinished_line"),
+        error.ProofHeapLarge => t("kind_proof_heap_large"),
     };
 }
 
@@ -1775,6 +1783,10 @@ pub fn writeOmittedDiagnosticsSummary(
     count: usize,
 ) !void {
     try printT(writer, "omitted_diagnostics_count", .{count});
+}
+
+pub fn writeProofHeapSummary(writer: anytype, heap_len: usize) !void {
+    try printT(writer, "proof_heap_large_len", .{heap_len});
 }
 
 pub fn writeDepViolationSummary(
@@ -1958,6 +1970,8 @@ pub fn renderDiagnostic(
             writer,
             diag.detail.omitted_diagnostics.count,
         );
+    } else if (diag.kind == .proof_heap_large and diag.detail == .proof_heap) {
+        try writeProofHeapSummary(writer, diag.detail.proof_heap.heap_len);
     } else {
         try writer.writeAll(diagnosticSummary(diag));
     }
@@ -2001,6 +2015,7 @@ fn writeDetailContextLines(
     switch (detail) {
         .none => {},
         .omitted_diagnostics => {},
+        .proof_heap => {},
         .unknown_math_token => |info| {
             try writeContextLine(
                 writer,

@@ -1346,30 +1346,14 @@ fn applyHoleyDerivedBindings(
         const hole_expr = view_bindings[abstract.hole_view_idx] orelse {
             continue;
         };
-        const frame = (try DerivedBindings.plugFrame(
+        var walk = (try DerivedBindings.PlugWalk.init(
             theorem,
             env,
             abstract,
             view_bindings,
             hole_expr,
         )) orelse continue;
-        defer frame.deinit(theorem.allocator);
-
-        const allocator = theorem.allocator;
-        const working = try allocator.dupe(?ExprId, view_bindings);
-        defer allocator.free(working);
-        const base = try allocator.dupe(?ExprId, view_bindings);
-        defer allocator.free(base);
-        const scratch = try allocator.alloc(?ExprId, view_bindings.len);
-        defer allocator.free(scratch);
-        var walk = DerivedBindings.PlugWalk{
-            .theorem = theorem,
-            .abstract = abstract,
-            .frame = frame,
-            .bindings = working,
-            .base = base,
-            .scratch = scratch,
-        };
+        defer walk.deinit();
         const candidate = abstractContextHoley(
             &walk,
             env,
@@ -1380,11 +1364,7 @@ fn applyHoleyDerivedBindings(
             else => return err,
         };
         if (!walk.found_plug) continue;
-        view_bindings[abstract.target_view_idx] = candidate;
-        for (working, 0..) |value, idx| {
-            if (view_bindings[idx] != null) continue;
-            if (value) |solved| view_bindings[idx] = solved;
-        }
+        _ = try walk.commit(view_bindings, candidate);
     }
 }
 

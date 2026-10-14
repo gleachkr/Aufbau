@@ -457,6 +457,7 @@ pub const DiagnosticSink = struct {
         return switch (detail) {
             .none => .none,
             .omitted_diagnostics => |info| .{ .omitted_diagnostics = info },
+            .proof_heap => |info| .{ .proof_heap = info },
             .unknown_math_token => |info| .{ .unknown_math_token = .{
                 .token = self.stableRequiredString(info.token),
             } },

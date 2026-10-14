@@ -1187,6 +1187,7 @@ pub fn processAssertion(
                 );
                 return err;
             };
+            warnLargeProofHeap(self, assertion.name, block.name_span, body);
             try out.theorems.append(allocator, .{
                 .args = args,
                 .unify = unify,
@@ -1200,7 +1201,7 @@ pub fn processAssertion(
             });
             try out.statements.append(allocator, .{
                 .cmd = .Thm,
-                .body = body,
+                .body = body.bytes,
             });
         }
     }
@@ -1212,6 +1213,25 @@ pub fn processAssertion(
         assertion,
         .mm0,
     );
+}
+
+/// A proof that needs a larger heap than verifiers give by default still
+/// verifies on one built with more, so it is written with a warning.
+fn warnLargeProofHeap(
+    self: *CompilerContext,
+    theorem_name: []const u8,
+    span: Span,
+    body: CompilerEmit.ProofBody,
+) void {
+    if (body.heap_len <= CompilerEmit.default_verifier_heap_len) return;
+    self.addWarning(.{
+        .kind = .proof_heap_large,
+        .err = error.ProofHeapLarge,
+        .source = .proof,
+        .theorem_name = theorem_name,
+        .span = span,
+        .detail = .{ .proof_heap = .{ .heap_len = body.heap_len } },
+    });
 }
 
 pub fn processNonTheoremAssertion(
@@ -1459,6 +1479,7 @@ fn checkAndRegisterLocalProofBlock(
             );
             return err;
         };
+        warnLargeProofHeap(self, assertion.name, block.header_span, body);
         try out.theorems.append(allocator, .{
             .args = args,
             .unify = unify,
@@ -1472,7 +1493,7 @@ fn checkAndRegisterLocalProofBlock(
         });
         try out.statements.append(allocator, .{
             .cmd = .LocalThm,
-            .body = body,
+            .body = body.bytes,
         });
     }
 
