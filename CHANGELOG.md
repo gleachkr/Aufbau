@@ -29,6 +29,11 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- A line could fail to infer a rule's arguments, for some orders of an
+  `@acui` bag and not others, when two definitions with one body (such as
+  `def i1 (a) = $ hyp a $` and `def i2 (a) = $ hyp a $`) stood beside a
+  plain copy of that body: the plain member folds into whichever comes
+  first, and the rule's bag named the other.
 - The npm packages could not read a result once the WebAssembly memory
   passed 2 GiB: a compile that succeeded failed with "byteOffset cannot be
   negative".

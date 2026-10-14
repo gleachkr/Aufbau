@@ -3,6 +3,7 @@ const ExprId = @import("../expr.zig").ExprId;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
+const HeadClass = @import("../head_class.zig");
 const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
 const MirrorSupport = @import("./mirror_support.zig");
 const Types = @import("./types.zig");
@@ -59,6 +60,9 @@ const NormalizedView = struct {
     binder_status: []u8,
     symbolic_slot_values: []?ExprId,
     line_holes_match_anything: bool,
+    /// Pattern and actual pairs whose heads differ, set aside while the
+    /// pattern still had an unbound binder; checked once the match is done.
+    deferred: std.ArrayListUnmanaged([2]ExprId) = .empty,
 
     fn isPlaceholder(
         self: *const NormalizedView,
@@ -172,6 +176,7 @@ const NormalizedView = struct {
         allocator.free(self.mirror_binders);
         allocator.free(self.binder_status);
         allocator.free(self.symbolic_slot_values);
+        self.deferred.deinit(allocator);
         self.mirror.deinit(allocator);
     }
 
@@ -961,11 +966,13 @@ pub const RuleMatchSession = struct {
         };
     }
 
+    /// `in_bag`: the pair are members of an ACUI bag being matched.
     fn matchNormalizedPattern(
         self: *RuleMatchSession,
         view: *NormalizedView,
         pattern_expr: ExprId,
         actual_expr: ExprId,
+        in_bag: bool,
     ) anyerror!bool {
         if (view.placeholderTarget(pattern_expr)) |target| {
             if (target == .line_hole) return true;
@@ -1009,16 +1016,32 @@ pub const RuleMatchSession = struct {
                 .placeholder => false,
                 .app => |actual_app| blk: {
                     if (pattern_app.term_id != actual_app.term_id) {
-                        break :blk false;
+                        // Bag members with different heads can still meet,
+                        // as two defs with one body do: normalizing folds a
+                        // member into whichever of them comes first. Not
+                        // when they unfold to different rigid heads.
+                        if (!in_bag) break :blk false;
+                        if (HeadClass.rigidHeadsDiffer(
+                            self.shared.env,
+                            self.shared.registry,
+                            pattern_app.term_id,
+                            actual_app.term_id,
+                        )) break :blk false;
+                        break :blk try self.matchOrDeferPattern(view, pattern_expr, actual_expr);
                     }
                     if (pattern_app.args.len != actual_app.args.len) {
                         break :blk false;
                     }
+                    const args_in_bag = if (self.shared.registry) |registry|
+                        registry.acui_by_head.contains(pattern_app.term_id)
+                    else
+                        false;
                     for (pattern_app.args, actual_app.args) |pattern_arg, actual_arg| {
                         if (!try self.matchNormalizedPattern(
                             view,
                             pattern_arg,
                             actual_arg,
+                            args_in_bag,
                         )) {
                             break :blk false;
                         }
@@ -1105,10 +1128,51 @@ pub const RuleMatchSession = struct {
         );
     }
 
+    /// Whether `pattern_expr`, with the binders bound so far filled in,
+    /// matches `actual_expr` in normalized mode. While the pattern still has
+    /// an unbound binder, true with the pair set aside for `finish`.
+    fn matchOrDeferPattern(
+        self: *RuleMatchSession,
+        view: *NormalizedView,
+        pattern_expr: ExprId,
+        actual_expr: ExprId,
+    ) anyerror!bool {
+        return try self.matchBoundPattern(view, pattern_expr, actual_expr) orelse {
+            try view.deferred.append(self.shared.allocator, .{ pattern_expr, actual_expr });
+            return true;
+        };
+    }
+
+    /// Whether `pattern_expr`, with the binders bound so far filled in,
+    /// matches `actual_expr` in normalized mode; null while the pattern
+    /// still has an unbound binder.
+    fn matchBoundPattern(
+        self: *RuleMatchSession,
+        view: *const NormalizedView,
+        pattern_expr: ExprId,
+        actual_expr: ExprId,
+    ) anyerror!?bool {
+        const pattern = try self.mirrorExprToConcreteBound(pattern_expr, view, true) orelse return null;
+        const actual = try self.mirrorExprToConcrete(actual_expr, view) orelse return false;
+        var symbolic_engine = self.engine();
+        return try symbolic_engine.concreteExprsMatchMode(pattern, actual, &self.state, .normalized);
+    }
+
     fn mirrorExprToConcrete(
         self: *RuleMatchSession,
         expr_id: ExprId,
         view: *const NormalizedView,
+    ) anyerror!?ExprId {
+        return try self.mirrorExprToConcreteBound(expr_id, view, false);
+    }
+
+    /// `expr_id` copied back to the source theorem; null at a placeholder,
+    /// unless `bound` and it stands for a binder with a concrete value.
+    fn mirrorExprToConcreteBound(
+        self: *RuleMatchSession,
+        expr_id: ExprId,
+        view: *const NormalizedView,
+        bound: bool,
     ) anyerror!?ExprId {
         return switch (view.mirror.theorem.interner.node(expr_id).*) {
             .variable => |var_id| switch (var_id) {
@@ -1125,7 +1189,21 @@ pub const RuleMatchSession = struct {
                     break :blk view.mirror.mirror_dummy_map[idx];
                 },
             },
-            .placeholder => null,
+            .placeholder => blk: {
+                if (!bound) break :blk null;
+                const target = view.placeholderTarget(expr_id) orelse break :blk null;
+                const idx = switch (target) {
+                    .binder => |idx| idx,
+                    .symbolic_slot, .line_hole => break :blk null,
+                };
+                const value = self.state.bindings[idx] orelse break :blk null;
+                const concrete = switch (value) {
+                    .concrete => |concrete| concrete,
+                    .symbolic => break :blk null,
+                };
+                var symbolic_engine = self.engine();
+                break :blk try symbolic_engine.concreteBindingMatchExpr(concrete, &self.state);
+            },
             .app => |app| blk: {
                 const args = try self.shared.allocator.alloc(
                     ExprId,
@@ -1133,7 +1211,7 @@ pub const RuleMatchSession = struct {
                 );
                 errdefer self.shared.allocator.free(args);
                 for (app.args, 0..) |arg, idx| {
-                    args[idx] = (try self.mirrorExprToConcrete(arg, view)) orelse {
+                    args[idx] = (try self.mirrorExprToConcreteBound(arg, view, bound)) orelse {
                         self.shared.allocator.free(args);
                         break :blk null;
                     };
@@ -1262,11 +1340,17 @@ pub const NormalizedComparison = struct {
         normalized_expected: ExprId,
         normalized_actual: ExprId,
     ) anyerror!bool {
-        return try self.session.matchNormalizedPattern(
+        if (!try self.session.matchNormalizedPattern(
             &self.view,
             normalized_expected,
             normalized_actual,
-        );
+            false,
+        )) return false;
+        for (self.view.deferred.items) |pair| {
+            const matched = try self.session.matchBoundPattern(&self.view, pair[0], pair[1]);
+            if (matched != true) return false;
+        }
+        return true;
     }
 };
 

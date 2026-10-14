@@ -427,6 +427,9 @@ const proof_cases = [_]ProofCase{
     // Bags whose members fold into definitions: inference must fold them
     // as the checker's normalizer does.
     .{ .stem = "pass_acui_absorption_engines", .outcome = .pass },
+    // Two definitions with one body name the same member: a rule's bag
+    // must match however the line's members fold into them.
+    .{ .stem = "pass_acui_twin_defs_any_order", .outcome = .pass },
     // A long context reversed: a conversion proof that saves only the
     // lines it reads back fits the verifier's heap.
     .{ .stem = "pass_acui_heap_reversal", .outcome = .pass },

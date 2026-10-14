@@ -885,7 +885,11 @@ In the current implementation, the ACUI path is also more def-aware than plain
 head-rewrite lookup. It can do exact cancellation of common items, same-side
 absorption by def-bearing items, and non-ACUI common-target search inside
 wrapped leaves. But this still falls short of a general "rewrite through defs"
-engine.
+engine. When two defs with one body sit in a bag, which of them an equal
+plain member folds into depends on where it stands, so two orders of one bag
+can name their members differently. Matching a line against a rule tolerates
+this: bag members whose heads differ are compared by unfolding once the
+rule's binders are bound.
 
 ### Supported subsets
 

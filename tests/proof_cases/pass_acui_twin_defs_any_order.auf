@@ -1,0 +1,7 @@
+fold_into_other_def
+---
+l1: $ a , (i2 a , i1 a) => a $ by r []
+
+bind_after_mismatch
+---
+l1: $ a , (i1 a , i1 a) => a $ by r2 []
