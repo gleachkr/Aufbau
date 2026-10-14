@@ -6,8 +6,9 @@
 //! search driver behind `abc search` runs on it with a small work budget.
 //! The search must not panic, leak, hang or run away with memory, and
 //! must not fail; it must trim every suggestion it returns; and putting
-//! each found proof in its marker's place (and the original proof back
-//! where none was found) must give a file that compiles and verifies.
+//! each found proof in its marker's place (and the original proofs back
+//! on a line where a marker found none) must give a file that compiles
+//! and verifies.
 //! Steps on lines with holes are left alone: a search there may fill the
 //! holes differently, which breaks the lines that rely on them.
 const std = @import("std");
@@ -20,8 +21,12 @@ const SearchDriver = mm0.CompilerSupport.SearchDriver;
 const max_markers = 3;
 const markers = [_][]const u8{ "auto?", "exact?", "apply?", "conversion?" };
 
-/// A proof step to replace: its span in the original proof text.
-const Step = ProofScript.Span;
+/// A proof step to replace, in the original proof text.
+const Step = struct {
+    span: ProofScript.Span,
+    /// Where its proof line starts.
+    line: usize,
+};
 
 fn search(seeds: []const harness.Seed, input: harness.Input) !void {
     const gpa = input.gpa;
@@ -41,12 +46,12 @@ fn search(seeds: []const harness.Seed, input: harness.Input) !void {
     for (0..wanted) |_| {
         const step = steps[smith.index(steps.len)];
         for (chosen.items) |other| {
-            if (step.start < other.end and other.start < step.end) break;
+            if (step.span.start < other.span.end and other.span.start < step.span.end) break;
         } else try chosen.append(arena.allocator(), step);
     }
     std.mem.sort(Step, chosen.items, {}, struct {
         fn before(_: void, a: Step, b: Step) bool {
-            return a.start < b.start;
+            return a.span.start < b.span.start;
         }
     }.before);
 
@@ -55,11 +60,15 @@ fn search(seeds: []const harness.Seed, input: harness.Input) !void {
     const placed = try arena.allocator().alloc(Placed, chosen.items.len);
     var copied: usize = 0;
     for (chosen.items, placed) |step, *place| {
-        try text.appendSlice(arena.allocator(), seed.auf[copied..step.start]);
+        try text.appendSlice(arena.allocator(), seed.auf[copied..step.span.start]);
         const marker = markers[smith.index(markers.len)];
-        place.* = .{ .at = text.items.len, .original = seed.auf[step.start..step.end] };
+        place.* = .{
+            .at = text.items.len,
+            .original = seed.auf[step.span.start..step.span.end],
+            .line = step.line,
+        };
         try text.appendSlice(arena.allocator(), marker);
-        copied = step.end;
+        copied = step.span.end;
     }
     try text.appendSlice(arena.allocator(), seed.auf[copied..]);
     input.dump("case.mm0", seed.mm0);
@@ -80,18 +89,30 @@ fn search(seeds: []const harness.Seed, input: harness.Input) !void {
             fail(seed, "{s}:{s}: {d} suggestions came back untrimmed", .{ marker.theorem, marker.label, marker.cost.untrimmed });
     }
 
-    // Each found proof in its marker's place, the original elsewhere.
+    // Each found proof in its marker's place, the original elsewhere. The
+    // driver puts a found proof in place before it searches the next
+    // marker, so a sibling marker on the line was searched against the
+    // rule variables the found proof fixed, and the original may not fit
+    // them: a line with any marker not found gets all its originals back.
+    const marker_places = try arena.allocator().alloc(*const Placed, result.markers.len);
+    for (result.markers, marker_places) |marker, *marker_place| {
+        marker_place.* = for (placed) |*place| {
+            if (place.at == marker.span.start) break place;
+        } else return; // Not a marker this target placed; nothing to check.
+        if (marker.outcome == .found and marker.edit == null) return;
+    }
     var filled: std.ArrayList(u8) = .empty;
     try filled.appendSlice(arena.allocator(), text.items);
     var i = result.markers.len;
     while (i > 0) {
         i -= 1;
         const marker = result.markers[i];
-        const place = for (placed) |place| {
-            if (place.at == marker.span.start) break place;
-        } else return; // Not a marker this target placed; nothing to check.
-        const edit: SearchDriver.Edit = if (marker.outcome == .found)
-            marker.edit orelse return
+        const place = marker_places[i];
+        const line_found = for (result.markers, marker_places) |other, other_place| {
+            if (other_place.line == place.line and other.outcome != .found) break false;
+        } else true;
+        const edit: SearchDriver.Edit = if (line_found)
+            marker.edit.?
         else
             .{ .span = marker.span, .text = place.original };
         try filled.replaceRange(arena.allocator(), edit.span.start, edit.span.end - edit.span.start, edit.text);
@@ -115,6 +136,8 @@ const Placed = struct {
     at: usize,
     /// The proof step it replaced.
     original: []const u8,
+    /// Where the step's proof line starts in the original proof text.
+    line: usize,
 };
 
 /// The span of every proof step in `auf` on a line without holes: the
@@ -126,7 +149,7 @@ fn proofSteps(arena: std.mem.Allocator, mm0_src: []const u8, auf: []const u8) ![
     var parser = ProofScript.Parser.init(arena, auf);
     while (parser.nextItem() catch return steps.items) |item| switch (item) {
         .block => |block| for (block.lines) |line| {
-            if (!mentionsAny(line.assertion.text, holes)) try collect(arena, &steps, line.application);
+            if (!mentionsAny(line.assertion.text, holes)) try collect(arena, &steps, line.span.start, line.application);
         },
         .def, .notation => {},
     };
@@ -153,10 +176,10 @@ fn mentionsAny(text: []const u8, tokens: []const []const u8) bool {
     return false;
 }
 
-fn collect(arena: std.mem.Allocator, steps: *std.ArrayList(Step), application: ProofScript.RuleApplication) !void {
-    try steps.append(arena, application.span);
+fn collect(arena: std.mem.Allocator, steps: *std.ArrayList(Step), line: usize, application: ProofScript.RuleApplication) !void {
+    try steps.append(arena, .{ .span = application.span, .line = line });
     for (application.refs) |ref| switch (ref) {
-        .application => |child| try collect(arena, steps, child),
+        .application => |child| try collect(arena, steps, line, child),
         .hyp, .line => {},
     };
 }
