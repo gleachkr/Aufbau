@@ -16,6 +16,7 @@ const Check = @import("../check.zig");
 const CompilerVars = @import("../vars.zig");
 const CompilerDiag = @import("../../diag.zig");
 const CompilerContext = @import("../context.zig").CompilerContext;
+const KeepChecking = @import("../context.zig").KeepChecking;
 const Recovery = @import("recovery.zig");
 const Common = @import("common.zig");
 const TheoryState = @import("../theory_state.zig").TheoryState;
@@ -188,6 +189,10 @@ fn walk(
     state: *AnalysisState,
     comptime with_proof: bool,
 ) !void {
+    if (state.proof) |*proof| {
+        self.keep_checking = .{ .invalid_rules = &proof.invalid_rules };
+    }
+    defer self.keep_checking = null;
     parse_loop: while (true) {
         Common.prepareNextPublicStatement(
             self,
@@ -1116,20 +1121,9 @@ fn recordPrimaryProofFailure(
 ) void {
     const diag = self.getDiagnostic() orelse fallback;
     self.restoreDiagnostic(null);
-    if (shouldSuppressProofFailure(diag, invalid_rules)) return;
+    const keep: KeepChecking = .{ .invalid_rules = invalid_rules };
+    if (!keep.reports(diag)) return;
     self.addPrimaryDiagnostic(diag);
-}
-
-fn shouldSuppressProofFailure(
-    diag: CompilerDiag.Diagnostic,
-    invalid_rules: *const InvalidRuleSet,
-) bool {
-    switch (diag.err) {
-        error.UnknownRule, error.RuleNotYetAvailable => {},
-        else => return false,
-    }
-    const rule_name = diag.rule_name orelse return false;
-    return invalid_rules.contains(rule_name);
 }
 
 fn shouldSuppressProofParseFailure(

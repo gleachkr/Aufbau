@@ -391,7 +391,7 @@ fn runCompile(
             else
                 failed_path,
         });
-        compiler.reportError(err);
+        reportCompileFailure(allocator, &compiler, pair, err);
         return CliError.Reported;
     };
     defer allocator.free(mmb);
@@ -414,6 +414,52 @@ fn runCompile(
     for (compiler.warningDiagnostics()) |diag| {
         if (diag.err == error.SorryLine) return CliError.Sorry;
     }
+}
+
+/// A compile stops at its first failure. Rerun the unit as an analysis,
+/// which checks on past failed lines and theorems, and report every
+/// failure it finds. The compile's own error is reported as well when the
+/// analysis did not find it: a failure only emission sees, or a warning
+/// promoted to an error.
+fn reportCompileFailure(
+    allocator: std.mem.Allocator,
+    compiler: *const mm0.Compiler,
+    pair: mm0.Imports.LoadedPair,
+    err: anyerror,
+) void {
+    var analysis = mm0.Compiler.initWithProof(
+        allocator,
+        pair.mm0.text,
+        pair.proof.?.text,
+    );
+    analysis.diagnostics.setMapping(.mm0, pair.mm0_mapping);
+    analysis.diagnostics.setMapping(.proof, pair.proof_mapping);
+    analysis.analyze() catch {};
+
+    const errors = analysis.primaryDiagnostics();
+    const found = if (compiler.getDiagnostic()) |diag|
+        containsDiagnostic(errors, diag)
+    else
+        false;
+    if (!found) compiler.reportError(err);
+    for (errors) |diag| analysis.diagnostics.reportDiagnostic(diag);
+    for ([_]mm0.CompilerDiagnosticSource{ .mm0, .proof }) |source| {
+        if (analysis.omittedPrimaryDiagnostic(source)) |omitted| {
+            analysis.diagnostics.reportDiagnostic(omitted);
+        }
+    }
+}
+
+/// `diag` is one of `diags`: the same error at the same place.
+fn containsDiagnostic(
+    diags: []const mm0.CompilerDiagnostic,
+    diag: mm0.CompilerDiagnostic,
+) bool {
+    for (diags) |other| {
+        if (other.err == diag.err and other.source == diag.source and
+            std.meta.eql(other.span, diag.span)) return true;
+    }
+    return false;
 }
 
 fn runSearch(

@@ -7,6 +7,13 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- A theorem is checked to the end past a line that fails. The line's
+  statement is taken as written, so the lines after it are checked
+  against it, and every failed line is reported, along with a last line
+  that does not prove the conclusion. This holds in the editor and in the
+  npm packages' diagnostics, and `abc compile` now reports every failure
+  in the unit rather than only the first. A line whose statement does not
+  parse leaves the lines that cite it unchecked.
 - A diagnostic for a cited premise that doesn't match its rule
   hypothesis says which premise it was (`premise: 2`), and the npm
   packages report it as `detail.premise`, with the theorem hypothesis it

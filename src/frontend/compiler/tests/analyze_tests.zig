@@ -1233,3 +1233,62 @@ test "compile still rejects an admitted placeholder line" {
     const diag = compiler.getDiagnostic() orelse return error.ExpectedDiagnostic;
     try std.testing.expectEqual(.unresolved_search_placeholder, diag.kind);
 }
+
+test "analysis reports every failed line and checks past each one" {
+    // l1 and l3 fail; l2 and l4 check against what l1 and l2 state.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ P $ by r []
+        \\l2: $ Q $ by pq [l1]
+        \\l3: $ R $ by pq [l2]
+        \\l4: $ R $ by qr [l2]
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        proof_src,
+    );
+    try compiler.analyze();
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqualStrings("l1", diags[0].line_label.?);
+    try std.testing.expectEqualStrings("l3", diags[1].line_label.?);
+    try std.testing.expect(compiler.diagnostics.last_diagnostic == null);
+
+    // The theorem still fails, so the compile stops at its first line.
+    var compile = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        proof_src,
+    );
+    try std.testing.expectError(error.ConclusionMismatch, compile.check());
+    try std.testing.expectEqualStrings("l1", compile.getDiagnostic().?.line_label.?);
+}
+
+test "analysis past a line with no statement, a repeated label and the conclusion" {
+    // l1 states nothing it can check against: l2 cites it unchecked. The
+    // second l2 keeps the first one's statement, so l3 checks; the block
+    // ends on Q, not the theorem's R.
+    const proof_src =
+        \\t
+        \\---
+        \\l1: $ P P $ by r []
+        \\l2: $ Q $ by pq [l1]
+        \\l2: $ P $ by r []
+        \\l3: $ Q $ by pq [l2]
+    ;
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        placeholder_chain_mm0,
+        proof_src,
+    );
+    try compiler.analyze();
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 4), diags.len);
+    try std.testing.expectEqualStrings("l1", diags[0].line_label.?);
+    try std.testing.expectEqual(error.DuplicateLabel, diags[1].err);
+    try std.testing.expectEqualStrings("l3", diags[2].line_label.?);
+    try std.testing.expectEqual(.final_line_mismatch, diags[3].kind);
+    try std.testing.expectEqualStrings("l3", diags[3].line_label.?);
+}

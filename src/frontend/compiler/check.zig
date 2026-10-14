@@ -17,6 +17,7 @@ const Span = ProofScript.Span;
 const TheoremBlock = @import("../proof_script.zig").TheoremBlock;
 const CompilerDiag = @import("../diag.zig");
 const CompilerContext = @import("./context.zig").CompilerContext;
+const KeepChecking = @import("./context.zig").KeepChecking;
 const HoleInferenceSink = @import("./context.zig").HoleInferenceSink;
 const ViewTrace = @import("../view_trace.zig");
 const DebugTrace = @import("../debug.zig");
@@ -117,127 +118,22 @@ pub fn checkTheoremBlock(
     theorem: *TheoremContext,
     theorem_concl: ExprId,
 ) ![]const CheckedLine {
-    const parser = &theory.parser;
-    const env: *const GlobalEnv = &theory.env;
-    const registry = &theory.registry;
-    const sort_vars: *const SortVarRegistry = &theory.sort_vars;
     var walk = try LineWalk.init(self, allocator, theory, assertion, block.lines, theorem);
     defer walk.deinit();
-    const checked = &walk.checked;
-    const theorem_vars = &walk.theorem_vars;
-    const diag_scratch = &walk.diag_scratch;
 
-    for (block.lines) |line| {
-        if (try walk.step(line) == .stop) return try checked.toOwnedSlice(allocator);
-    }
-
+    const stopped = for (block.lines) |line| {
+        if (try walk.step(line) == .stop) break true;
+    } else false;
     // The block ends on an unfinished line: there is no final statement to
     // reconcile with the conclusion yet.
-    if (walk.ends_unfinished) return try checked.toOwnedSlice(allocator);
-    const final = walk.last orelse {
-        self.setProof(CompilerDiag.withPhase(.{
-            .kind = .empty_proof_block,
-            .err = error.EmptyProofBlock,
-            .theorem_name = assertion.name,
-            .block_name = block.name,
-            .span = block.name_span,
-        }, .final_reconciliation));
-        return error.EmptyProofBlock;
-    };
-    if (final.expr != theorem_concl) {
-        const final_mark = diag_scratch.mark();
-        const checked_mark = checked.items.len;
-        DebugTrace.traceBoundary(
-            self.debug,
-            "reconciling the final line with the theorem conclusion",
-            .{},
-        );
-        if ((Matching.convertTo(.{
-            .allocator = allocator,
-            .theorem = theorem,
-            .registry = registry,
-            .env = env,
-            .checked = checked,
-            .scratch = diag_scratch,
-            .debug = self.debug,
-            .fresh = .{
-                .parser = parser,
-                .theorem_vars = theorem_vars,
-                .sort_vars = sort_vars,
-            },
-        }, .{ .ref = .{ .line = final.idx } }, final.expr, theorem_concl) catch |err| {
-            if (CompilerDiag.takeScratchDetail(
-                diag_scratch,
-                final_mark,
-                env,
-                err,
-            )) |detail| {
-                var diag = CompilerDiag.withPhase(.{
-                    .kind = .generic,
-                    .err = CompilerDiag.narrowDiagnosticError(err),
-                    .theorem_name = assertion.name,
-                    .line_label = final.label,
-                    .span = final.span,
-                    .detail = detail,
-                }, .final_reconciliation);
-                addBoundaryAttemptNotes(
-                    allocator,
-                    &diag,
-                    theorem,
-                    env,
-                    parser,
-                    theorem_vars,
-                    theorem_concl,
-                    final.expr,
-                );
-                self.setProof(diag);
-                return err;
-            }
-            diag_scratch.discard(final_mark);
+    if (!stopped and !walk.ends_unfinished) {
+        walk.reconcileFinalLine(block, theorem_concl) catch |err| {
+            if (err != error.OutOfMemory) walk.reportHeldFailure();
             return err;
-        }) != null) {
-            diag_scratch.discard(final_mark);
-            try ensureConcreteCheckedIrRange(
-                self,
-                env,
-                theorem,
-                parser,
-                theorem_vars,
-                assertion.name,
-                checked.items[checked_mark..],
-                final.label,
-                final.span,
-                .final_reconciliation,
-            );
-            return try checked.toOwnedSlice(allocator);
-        }
-        diag_scratch.discard(final_mark);
-        DebugTrace.traceBoundary(
-            self.debug,
-            "no conversion relates the final line to the conclusion",
-            .{},
-        );
-        var diag = CompilerDiag.withPhase(.{
-            .kind = .final_line_mismatch,
-            .err = error.FinalLineMismatch,
-            .theorem_name = assertion.name,
-            .line_label = final.label,
-            .span = final.span,
-        }, .final_reconciliation);
-        addBoundaryAttemptNotes(
-            allocator,
-            &diag,
-            theorem,
-            env,
-            parser,
-            theorem_vars,
-            theorem_concl,
-            final.expr,
-        );
-        self.setProof(diag);
-        return error.FinalLineMismatch;
+        };
     }
-    return try checked.toOwnedSlice(allocator);
+    try walk.raiseHeldFailure();
+    return try walk.checked.toOwnedSlice(allocator);
 }
 
 /// The line half of `checkTheoremBlock`: `step` admits or checks one line
@@ -267,6 +163,10 @@ pub const LineWalk = struct {
     last: ?LastLine = null,
     /// The last line walked was unfinished.
     ends_unfinished: bool = false,
+    /// With `CompilerContext.keep_checking`: the latest failed line's
+    /// diagnostic. It is held back so the theorem's own failure carries it;
+    /// an earlier one is reported when a later line fails.
+    failure: ?CompilerDiag.Diagnostic = null,
 
     pub const LastLine = struct {
         expr: ExprId,
@@ -315,7 +215,19 @@ pub const LineWalk = struct {
         self.* = undefined;
     }
 
+    /// Check `line`. With `CompilerContext.keep_checking`, a line that fails
+    /// is reported and its statement taken as written, so the walk goes on.
     pub fn step(self: *LineWalk, line: ProofLine) !Next {
+        const checked_mark = self.checked.items.len;
+        return self.checkLine(line) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            const keep = self.compiler.keep_checking orelse return err;
+            try self.admitFailedLine(keep, line, checked_mark, err);
+            return .next;
+        };
+    }
+
+    fn checkLine(self: *LineWalk, line: ProofLine) !Next {
         const compiler = self.compiler;
         const allocator = self.allocator;
         const assertion = self.assertion;
@@ -392,9 +304,10 @@ pub const LineWalk = struct {
 
         // Analysis checks past a search placeholder: the line is admitted
         // like `sorry!` when its assertion is concrete, so later lines can
-        // cite it. A line citing an unfinished line is admitted the same way
-        // and warned about. The compile path rejected placeholders above.
-        if (compiler.allow_search_placeholders) {
+        // cite it. A line citing an unfinished line (a placeholder, or a
+        // failed line that states nothing) is admitted the same way and
+        // warned about. The compile path rejected placeholders above.
+        if (compiler.allow_search_placeholders or compiler.keep_checking != null) {
             const cited = ProofScript.findLineRef(
                 line.application,
                 self.unfinished.items,
@@ -511,6 +424,206 @@ pub const LineWalk = struct {
             .span = line.span,
         };
         self.ends_unfinished = false;
+    }
+
+    /// `line` failed: hold its diagnostic, and let later lines cite the
+    /// statement it states. A statement that does not parse or has holes
+    /// leaves the line unfinished, like a placeholder line in analysis.
+    fn admitFailedLine(
+        self: *LineWalk,
+        keep: KeepChecking,
+        line: ProofLine,
+        checked_mark: usize,
+        err: anyerror,
+    ) !void {
+        const compiler = self.compiler;
+        // Lines an inline application added before the line failed.
+        CheckedIr.deinitLines(self.allocator, self.checked.items[checked_mark..]);
+        self.checked.shrinkRetainingCapacity(checked_mark);
+
+        const diag = compiler.getDiagnostic() orelse CompilerDiag.Diagnostic{
+            .kind = .generic,
+            .err = CompilerDiag.narrowDiagnosticError(err),
+            .source = .proof,
+            .theorem_name = self.assertion.name,
+            .line_label = line.label,
+            .rule_name = line.application.rule_name,
+            .span = line.ruleApplicationSpan(),
+        };
+        compiler.restoreDiagnostic(null);
+        if (self.failure) |previous| {
+            if (keep.reports(previous)) compiler.addPrimaryDiagnostic(previous);
+        }
+        self.failure = diag;
+
+        // Unfinished unless its statement is admitted below. A repeated
+        // label keeps its first line.
+        self.ends_unfinished = true;
+        if (self.labels.contains(line.label) or
+            ProofScript.containsLabel(self.unfinished.items, line.label))
+        {
+            return;
+        }
+        const parsed = Holes.parseAssertion(
+            &self.theory.parser,
+            self.theorem,
+            &self.theorem_vars,
+            &self.theory.sort_vars,
+            line.assertion.text,
+        ) catch |parse_err| switch (parse_err) {
+            error.OutOfMemory => return parse_err,
+            else => null,
+        };
+        if (parsed) |assertion| switch (assertion) {
+            .concrete => |expr| {
+                const line_idx = try CheckedIr.appendSorryLine(
+                    &self.checked,
+                    self.allocator,
+                    expr,
+                );
+                return self.admit(line, line_idx);
+            },
+            .holey => {},
+        };
+        try self.unfinished.append(self.allocator, line.label);
+    }
+
+    /// Report the held line failure, if any, as one of the theorem's errors.
+    pub fn reportHeldFailure(self: *LineWalk) void {
+        const failure = self.failure orelse return;
+        self.failure = null;
+        const keep = self.compiler.keep_checking.?;
+        if (keep.reports(failure)) self.compiler.addPrimaryDiagnostic(failure);
+    }
+
+    /// Fail with the held line failure, if any: the theorem's diagnostic.
+    pub fn raiseHeldFailure(self: *LineWalk) !void {
+        const failure = self.failure orelse return;
+        self.failure = null;
+        self.compiler.restoreDiagnostic(failure);
+        return failure.err;
+    }
+
+    /// Relate the last line's statement to the theorem's conclusion.
+    pub fn reconcileFinalLine(
+        self: *LineWalk,
+        block: TheoremBlock,
+        theorem_concl: ExprId,
+    ) !void {
+        const compiler = self.compiler;
+        const allocator = self.allocator;
+        const assertion = self.assertion;
+        const theorem = self.theorem;
+        const parser = &self.theory.parser;
+        const env: *const GlobalEnv = &self.theory.env;
+        const registry = &self.theory.registry;
+        const sort_vars: *const SortVarRegistry = &self.theory.sort_vars;
+        const theorem_vars = &self.theorem_vars;
+        const checked = &self.checked;
+        const diag_scratch = &self.diag_scratch;
+        const final = self.last orelse {
+            compiler.setProof(CompilerDiag.withPhase(.{
+                .kind = .empty_proof_block,
+                .err = error.EmptyProofBlock,
+                .theorem_name = assertion.name,
+                .block_name = block.name,
+                .span = block.name_span,
+            }, .final_reconciliation));
+            return error.EmptyProofBlock;
+        };
+        if (final.expr != theorem_concl) {
+            const final_mark = diag_scratch.mark();
+            const checked_mark = checked.items.len;
+            DebugTrace.traceBoundary(
+                compiler.debug,
+                "reconciling the final line with the theorem conclusion",
+                .{},
+            );
+            if ((Matching.convertTo(.{
+                .allocator = allocator,
+                .theorem = theorem,
+                .registry = registry,
+                .env = env,
+                .checked = checked,
+                .scratch = diag_scratch,
+                .debug = compiler.debug,
+                .fresh = .{
+                    .parser = parser,
+                    .theorem_vars = theorem_vars,
+                    .sort_vars = sort_vars,
+                },
+            }, .{ .ref = .{ .line = final.idx } }, final.expr, theorem_concl) catch |err| {
+                if (CompilerDiag.takeScratchDetail(
+                    diag_scratch,
+                    final_mark,
+                    env,
+                    err,
+                )) |detail| {
+                    var diag = CompilerDiag.withPhase(.{
+                        .kind = .generic,
+                        .err = CompilerDiag.narrowDiagnosticError(err),
+                        .theorem_name = assertion.name,
+                        .line_label = final.label,
+                        .span = final.span,
+                        .detail = detail,
+                    }, .final_reconciliation);
+                    addBoundaryAttemptNotes(
+                        allocator,
+                        &diag,
+                        theorem,
+                        env,
+                        parser,
+                        theorem_vars,
+                        theorem_concl,
+                        final.expr,
+                    );
+                    compiler.setProof(diag);
+                    return err;
+                }
+                diag_scratch.discard(final_mark);
+                return err;
+            }) != null) {
+                diag_scratch.discard(final_mark);
+                try ensureConcreteCheckedIrRange(
+                    compiler,
+                    env,
+                    theorem,
+                    parser,
+                    theorem_vars,
+                    assertion.name,
+                    checked.items[checked_mark..],
+                    final.label,
+                    final.span,
+                    .final_reconciliation,
+                );
+                return;
+            }
+            diag_scratch.discard(final_mark);
+            DebugTrace.traceBoundary(
+                compiler.debug,
+                "no conversion relates the final line to the conclusion",
+                .{},
+            );
+            var diag = CompilerDiag.withPhase(.{
+                .kind = .final_line_mismatch,
+                .err = error.FinalLineMismatch,
+                .theorem_name = assertion.name,
+                .line_label = final.label,
+                .span = final.span,
+            }, .final_reconciliation);
+            addBoundaryAttemptNotes(
+                allocator,
+                &diag,
+                theorem,
+                env,
+                parser,
+                theorem_vars,
+                theorem_concl,
+                final.expr,
+            );
+            compiler.setProof(diag);
+            return error.FinalLineMismatch;
+        }
     }
 };
 

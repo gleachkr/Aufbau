@@ -580,6 +580,14 @@ keeping every declared theorem in scope (`compiler/search/fixture.zig`
 calls it). A loop chooses only its error policy and whether to check
 proofs; what a statement step *is* lives in `common.zig` once.
 
+The analysis also checks a theorem past a failed line
+(`CompilerContext.keep_checking`): `LineWalk.step` reports the failure and
+takes the line's statement as written, so later lines are checked against
+it and every failed line is reported; the theorem still fails. The search
+replays its target's lines without it, so a rejected line still blocks a
+search. A failed `abc compile` reruns the unit as an analysis to report
+every failure, as the wasm compile does.
+
 At a high level it does this:
 
 1. parse the next MM0 statement

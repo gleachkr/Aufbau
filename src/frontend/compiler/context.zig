@@ -279,6 +279,24 @@ pub const InferenceStatsSink = struct {
     }
 };
 
+/// Analysis only: check a theorem past a line that fails, taking the line's
+/// statement as written, and report every failure.
+pub const KeepChecking = struct {
+    /// The rules the analysis dropped because their own check failed.
+    invalid_rules: *const std.StringHashMap(void),
+
+    /// False for a failure that only cites a dropped rule: that rule's own
+    /// failure is already reported.
+    pub fn reports(self: KeepChecking, diag: Diagnostic) bool {
+        switch (diag.err) {
+            error.UnknownRule, error.RuleNotYetAvailable => {},
+            else => return true,
+        }
+        const rule_name = diag.rule_name orelse return true;
+        return !self.invalid_rules.contains(rule_name);
+    }
+};
+
 pub const CompilerContext = struct {
     source: []const u8,
     proof_source: ?[]const u8,
@@ -291,6 +309,9 @@ pub const CompilerContext = struct {
     /// result in a line that holds another). False on the compile path,
     /// which rejects every placeholder.
     allow_search_placeholders: bool = false,
+    /// Set while the analysis walks the proofs; null on the compile path,
+    /// which stops at the first failure.
+    keep_checking: ?KeepChecking = null,
     hole_inference_sink: ?*HoleInferenceSink = null,
     inline_conclusion_sink: ?*InlineConclusionSink = null,
     /// Set while a search trims a suggestion's bindings; null otherwise.
