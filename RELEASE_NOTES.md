@@ -1,3 +1,114 @@
+# Aufbau 0.0.17
+
+Aufbau 0.0.17 improves performance for long `@acui` contexts, making them 
+practical to use. A proof that restates a context of many members on every 
+line, such as a truth tree or a sequent calculus derivation, now compiles in a 
+fraction of the time, comes out much smaller and fits on the verifier's heap. 
+Each line of a theorem is also now checked rather than stopping at the first 
+error, so the editor and `abc compile` report every failure in a derivation at 
+once.
+
+## Highlights
+
+### Every failure in a theorem
+
+A theorem is checked to the end, past failing lines. A failed line's statement 
+is taken as written. Every failed line is reported. This holds in the editor, 
+in the npm packages' diagnostics and in `abc compile`, which now reports every
+failure in the unit rather than only the first. Statements depending on 
+malformed lines are not checked.
+
+Mistakes that used to be reported repeatedly are now reported once: a `@vars` 
+token claimed by a later term, a proof block whose theorem failed to parse, and 
+a proof block whose name matches no theorem.
+
+### Long `@acui` contexts
+
+Previously, proofs whose lines each restate a long `@acui` context grew with 
+the cube of the context length, and kept every step on the verifier's heap 
+whether or not a later step read it back, so a tree a dozen members deep could
+compile and then fail to verify with `HeapOverflow`. Two statements whose bags 
+hold the same members in another order are now proved equal by moving the 
+members locally rather than by fully sorting both sides. 
+
+Compiling those acui proofs also used to be pretty heavy: binding inference 
+compared every two members of a context through a common-target search and
+sorted each context member by member. A truth tree with 60 rows on
+its branch took 20 seconds with 0.0.16. It now compiles in 0.4 seconds to a 
+proof of 0.7 MB that does.
+
+A proof that still needs more heap than verifiers give by default (65536
+entries, in this verifier and in mm0-c), such as a full reversal of a
+context of 209 members, now compiles with a warning that gives the heap
+it needs, rather than silently producing a binary that fails to verify.
+
+Across all the proof-case fixtures, compiled proofs are about 8% smaller
+than with 0.0.16, and `tait` is 46% smaller.
+
+### Search over `@acui` bags
+
+`exact?` and `auto?` rule out more candidates over `@acui` bags before
+trying them.  With every line of the `cardano` proofs as a search, `exact?` now 
+finds 402 of 405 lines (336 with 0.0.16) and `auto?` 404 (337), in a tenth of 
+the time. On the search benchmark, `auto?` reaches deeper into seven `church` 
+theorems, finds the same proofs everywhere else, and does about 4% less work.
+
+### Checking fixes
+
+- A line could fail to infer a rule's arguments for some orders of an
+  `@acui` bag and not others when the bag held a definition of a
+  member. With `def i1 (a) = $ hyp a $`, the rule
+  `$ i1 a , b => (a -> b) $` inferred for the line
+  `$ b , i1 a => (a -> b) $` but not for `$ i1 b , a => (a -> b) $`.
+  In an idempotent bag, two definitions with one body now count as one
+  member.
+- A line that did not match its rule could crash `abc compile`, the
+  editor and `exact?` with a stack overflow when an `@acui` bag in it
+  held one definition twice, or two definitions with one body. It now
+  fails with an ordinary diagnostic.
+- A `@view` premise over an `@acui` context now matches the cited
+  premise up to order, where it could fail to read a binder for some
+  orders of the context.
+- A rule argument holding an `@acui` bag under a term with no `@congr`
+  failed with a missing congruence rule when another premise wrote the
+  bag in another order. It now takes the order written under that term.
+- `@abstract` now infers its target when the plugs and the hole meet
+  only at a sort above both, such as `name` plugs and a `var` hole
+  meeting at a term sort, with plugs of two different sorts in either
+  order.
+- A failed proof line is reported on the line, naming its rule, rather
+  than against the theorem's name.
+
+### Smaller changes
+
+- A diagnostic for a cited premise that doesn't match its rule
+  hypothesis says which premise it was, and the npm packages report it
+  as `detail.premise`, with the cited theorem hypothesis, if any, as
+  `detail.index` or `detail.name`.
+- The npm packages can read a result once the WebAssembly memory passes
+  2 GiB, where a compile that succeeded failed with "byteOffset cannot
+  be negative".
+- Compiling proofs over large `@acui` contexts no longer uses half again
+  as much memory as in 0.0.15.
+- `mm0-zig` rejects a definition whose `UDummy` names a sort number of
+  128 or more, as mm0-c does, where safe builds panicked. The fuzzer
+  found it.
+
+## Compatibility
+
+Every test theory from 0.0.16 compiles or fails as before, and every
+binary it compiles verifies; the one input that crashed `abc` now fails
+with a diagnostic. `abc compile` reports every failed line of a theorem
+rather than the first, and may warn about a proof that needs more than
+the default verifier heap.
+
+The MMB format and the proof syntax are unchanged. The npm packages'
+diagnostics gain the `premise` detail fields described above.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.16
 
 Aufbau 0.0.16 adds coverage-guided fuzzing. Proof search takes about a quarter 

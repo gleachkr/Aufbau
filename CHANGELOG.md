@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.17] - 2026-10-14
 
 ### Changed
 
@@ -23,8 +23,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   another order are proved equal by moving the members out of place,
   rather than by sorting both sides; and a rule argument inferred up to
   member order keeps the order it was written in rather than the sorted
-  one. Across the proof-case fixtures the compiled proofs are about 6%
-  smaller (`tait` 41%).
+  one. Across the proof-case fixtures the compiled proofs are about 8%
+  smaller than with 0.0.16 (`tait` 46%).
 - `exact?` and `auto?` rule out more candidates over `@acui` bags before
   trying them. A member that keeps its own head, such as a product of two
   fixed factors inside a sum, is matched by that head; a member written
@@ -32,7 +32,9 @@ This file records notable user-facing changes to Aufbau. The project follows
   definition; and under a law that keeps copies, the two sides must be
   able to hold the same number of members. With every line of the
   `cardano` proofs as a search, `exact?` finds 402 of 405 lines (from
-  355) and `auto?` 404 (from 356), trying about 2% of the candidates.
+  336 with 0.0.16) and `auto?` 404 (from 337), in a tenth of the time.
+  On the search benchmark, `auto?` reaches deeper into seven `church`
+  theorems (11 more proofs found) and finds the same proofs elsewhere.
 
 ### Fixed
 
@@ -97,7 +99,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   compiles with a warning that gives the heap entries it needs; it
   verifies on a verifier built with a larger heap (mm0-c's `HEAP_SIZE`).
 - Compiling such a proof took time growing faster than the cube of the
-  context: a truth tree with 60 rows on its branch took 13 seconds.
+  context: a truth tree with 60 rows on its branch took 20 seconds with
+  0.0.16.
   Binding inference compared every two members of a context through a
   common-target search, sorted each context member by member, and tried
   normalized matches that no normalization could make succeed. Checking
@@ -1832,6 +1835,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.17]: https://github.com/gleachkr/Aufbau/compare/v0.0.16...v0.0.17
 [0.0.16]: https://github.com/gleachkr/Aufbau/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/gleachkr/Aufbau/compare/v0.0.14...v0.0.15
 [0.0.14]: https://github.com/gleachkr/Aufbau/compare/v0.0.13...v0.0.14
