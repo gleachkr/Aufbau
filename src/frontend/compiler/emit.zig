@@ -31,353 +31,294 @@ pub const ProofBody = struct {
     heap_len: u32,
 };
 
-/// A proof stream recorded command by command, its saves settled only once
-/// the whole stream is known. Emission saves every line and every term so
-/// that a later use can `Ref` it; `toBytes` then writes a `TermSave`,
-/// `ThmSave` or `Save` that no `Ref` reads as `Term`, `Thm` or nothing, and
-/// moves the heap slots after it down, so the verifier's heap holds only
-/// what the proof reads back.
-const ProofStream = struct {
-    cmds: std.ArrayListUnmanaged(Cmd) = .empty,
+/// A proof or unify stream recorded command by command, its saves settled
+/// only once the whole stream is known. Emission saves every line and every
+/// term so that a later use can refer to it; `toBytes` then writes a save
+/// that nothing reads back unsaved (`Term`, `Thm`, `UTerm`) or drops it (a
+/// bare `Save`), and moves the heap slots after it down, so the verifier's
+/// heap holds only what the stream reads back.
+fn Stream(comptime Op: type) type {
+    return struct {
+        const Self = @This();
+        const Cmd = struct { op: Op, data: u32 };
 
-    const Cmd = struct { op: ProofCmd, data: u32 };
-
-    fn deinit(self: *ProofStream, allocator: std.mem.Allocator) void {
-        self.cmds.deinit(allocator);
-    }
-
-    fn append(
-        self: *ProofStream,
-        allocator: std.mem.Allocator,
-        op: ProofCmd,
-        data: u32,
-    ) !void {
-        try self.cmds.append(allocator, .{ .op = op, .data = data });
-    }
-
-    /// `fixed_slots` heap slots (the variables) precede the stream's own;
-    /// `heap_len` is the slot count the stream was emitted against.
-    fn toBytes(
-        self: *const ProofStream,
-        allocator: std.mem.Allocator,
+        cmds: std.ArrayListUnmanaged(Cmd) = .empty,
+        /// The heap slots (the variables) that precede the stream's own.
         fixed_slots: u32,
+        /// The heap slots taken so far, as emitted.
         heap_len: u32,
-    ) !ProofBody {
-        var read = try std.DynamicBitSetUnmanaged.initEmpty(allocator, heap_len);
-        defer read.deinit(allocator);
-        for (self.cmds.items) |cmd| {
-            if (cmd.op == .Ref) read.set(cmd.data);
+
+        fn init(fixed_slots: u32) Self {
+            return .{ .fixed_slots = fixed_slots, .heap_len = fixed_slots };
         }
-        // Slots are allocated in stream order, so walking the stream again
-        // meets each save at its emitted slot `old`.
-        const moved = try allocator.alloc(u32, heap_len);
-        defer allocator.free(moved);
-        for (moved[0..fixed_slots], 0..) |*slot, idx| slot.* = @intCast(idx);
-        var old = fixed_slots;
-        var new = fixed_slots;
-        var bytes: std.ArrayListUnmanaged(u8) = .empty;
-        errdefer bytes.deinit(allocator);
-        for (self.cmds.items) |cmd| switch (cmd.op) {
-            .Ref => try MmbWriter.appendCmd(&bytes, allocator, ProofCmd.Ref, moved[cmd.data]),
-            .Dummy, .Hyp, .TermSave, .ThmSave, .Save => {
-                // `Dummy` and `Hyp` always take a slot, a save only when read.
-                if (read.isSet(old) or cmd.op == .Dummy or cmd.op == .Hyp) {
-                    moved[old] = new;
-                    new += 1;
-                    try MmbWriter.appendCmd(&bytes, allocator, cmd.op, cmd.data);
-                } else if (unsaved(cmd.op)) |op| {
-                    try MmbWriter.appendCmd(&bytes, allocator, op, cmd.data);
-                }
-                old += 1;
-            },
-            else => try MmbWriter.appendCmd(&bytes, allocator, cmd.op, cmd.data),
-        };
-        std.debug.assert(old == heap_len);
-        return .{ .bytes = try bytes.toOwnedSlice(allocator), .heap_len = new };
-    }
 
-    /// A save's unsaved form; a bare `Save` has none and is dropped.
-    fn unsaved(op: ProofCmd) ?ProofCmd {
-        return switch (op) {
-            .TermSave => .Term,
-            .ThmSave => .Thm,
-            else => null,
-        };
-    }
-};
+        fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.cmds.deinit(allocator);
+        }
 
-/// Post-order emit of an expression's proof-stream construction, memoizing each
-/// sub-expression to its heap slot in `expr_slots`. Shared verbatim by
-/// `ExprProofEmitter` and `TheoremProofEmitter`, which differ only in the extra
-/// state they carry around this emission core.
-fn emitProofExpr(
-    allocator: std.mem.Allocator,
-    theorem: *const TheoremContext,
-    stream: *ProofStream,
-    expr_slots: *ExprSlotMap,
-    heap_len: *u32,
-    expr_id: ExprId,
-) !void {
-    if (expr_slots.get(expr_id)) |slot| {
-        try stream.append(allocator, .Ref, slot);
-        return;
-    }
+        /// Appends a command that takes no heap slot.
+        fn append(self: *Self, allocator: std.mem.Allocator, op: Op, data: u32) !void {
+            std.debug.assert(slotUse(op) == .none or slotUse(op) == .read);
+            try self.cmds.append(allocator, .{ .op = op, .data = data });
+        }
 
-    const node = theorem.interner.node(expr_id);
-    switch (node.*) {
-        .variable => |var_id| switch (var_id) {
-            .theorem_var => return error.UnboundExprVariable,
-            .dummy_var => |dummy_id| {
-                const info = try theorem.requireDummyInfo(dummy_id);
-                try stream.append(allocator, .Dummy, info.sort_id);
-                const slot = heap_len.*;
-                heap_len.* = try std.math.add(u32, heap_len.*, 1);
-                try expr_slots.put(allocator, expr_id, slot);
-            },
-        },
-        .placeholder => |id| return CheckedIr.leakageError(
-            theorem,
-            id,
-        ),
-        .app => |app| {
-            for (app.args) |arg| {
-                try emitProofExpr(allocator, theorem, stream, expr_slots, heap_len, arg);
+        /// Appends a command that takes a heap slot, and returns the slot.
+        fn appendSlot(self: *Self, allocator: std.mem.Allocator, op: Op, data: u32) !u32 {
+            std.debug.assert(slotUse(op) == .kept or slotUse(op) == .save);
+            const slot = self.heap_len;
+            self.heap_len = try std.math.add(u32, self.heap_len, 1);
+            try self.cmds.append(allocator, .{ .op = op, .data = data });
+            return slot;
+        }
+
+        fn toBytes(self: *const Self, allocator: std.mem.Allocator) !ProofBody {
+            var read = try std.DynamicBitSetUnmanaged.initEmpty(allocator, self.heap_len);
+            defer read.deinit(allocator);
+            for (self.cmds.items) |cmd| {
+                if (slotUse(cmd.op) == .read) read.set(cmd.data);
             }
-            try stream.append(allocator, .TermSave, app.term_id);
-            const slot = heap_len.*;
-            heap_len.* = try std.math.add(u32, heap_len.*, 1);
-            try expr_slots.put(allocator, expr_id, slot);
-        },
-    }
+            // Slots are allocated in stream order, so walking the stream again
+            // meets each slot-taking command at its emitted slot `old`.
+            const moved = try allocator.alloc(u32, self.heap_len);
+            defer allocator.free(moved);
+            for (moved[0..self.fixed_slots], 0..) |*slot, idx| slot.* = @intCast(idx);
+            var old = self.fixed_slots;
+            var new = self.fixed_slots;
+            var bytes: std.ArrayListUnmanaged(u8) = .empty;
+            errdefer bytes.deinit(allocator);
+            for (self.cmds.items) |cmd| switch (slotUse(cmd.op)) {
+                .read => try MmbWriter.appendCmd(&bytes, allocator, cmd.op, moved[cmd.data]),
+                .kept, .save => {
+                    if (slotUse(cmd.op) == .kept or read.isSet(old)) {
+                        moved[old] = new;
+                        new += 1;
+                        try MmbWriter.appendCmd(&bytes, allocator, cmd.op, cmd.data);
+                    } else if (unsaved(cmd.op)) |op| {
+                        try MmbWriter.appendCmd(&bytes, allocator, op, cmd.data);
+                    }
+                    old += 1;
+                },
+                .none => try MmbWriter.appendCmd(&bytes, allocator, cmd.op, cmd.data),
+            };
+            std.debug.assert(old == self.heap_len);
+            return .{ .bytes = try bytes.toOwnedSlice(allocator), .heap_len = new };
+        }
+
+        const SlotUse = enum {
+            none,
+            /// Reads back the slot in its data.
+            read,
+            /// Always takes a slot.
+            kept,
+            /// Takes a slot only when something reads it back.
+            save,
+        };
+
+        fn slotUse(op: Op) SlotUse {
+            return switch (Op) {
+                ProofCmd => switch (op) {
+                    .Ref => .read,
+                    .Dummy, .Hyp => .kept,
+                    .TermSave, .ThmSave, .Save => .save,
+                    else => .none,
+                },
+                UnifyCmd => switch (op) {
+                    .URef => .read,
+                    .UDummy => .kept,
+                    .UTermSave => .save,
+                    else => .none,
+                },
+                else => @compileError("not a stream opcode"),
+            };
+        }
+
+        /// A save's unsaved form; a bare `Save` has none and is dropped.
+        fn unsaved(op: Op) ?Op {
+            return switch (Op) {
+                ProofCmd => switch (op) {
+                    .TermSave => .Term,
+                    .ThmSave => .Thm,
+                    else => null,
+                },
+                UnifyCmd => switch (op) {
+                    .UTermSave => .UTerm,
+                    else => null,
+                },
+                else => @compileError("not a stream opcode"),
+            };
+        }
+    };
 }
 
-pub const ExprProofEmitter = struct {
+const ProofStream = Stream(ProofCmd);
+const UnifyStream = Stream(UnifyCmd);
+
+/// Emits a unify stream. It is pre-order: a term is matched, and saved,
+/// before its arguments.
+const UnifyEmitter = struct {
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
-    stream: ProofStream = .{},
-    expr_slots: ExprSlotMap = .empty,
-    heap_len: u32,
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        theorem: *const TheoremContext,
-    ) ExprProofEmitter {
-        var emitter = ExprProofEmitter{
-            .allocator = allocator,
-            .theorem = theorem,
-            .heap_len = @intCast(theorem.theorem_vars.items.len),
-        };
-        for (theorem.theorem_vars.items, 0..) |expr_id, idx| {
-            emitter.expr_slots.put(allocator, expr_id, @intCast(idx)) catch unreachable;
-        }
-        return emitter;
-    }
-
-    pub fn deinit(self: *ExprProofEmitter) void {
-        self.stream.deinit(self.allocator);
-        self.expr_slots.deinit(self.allocator);
-    }
-
-    /// Ends the stream and writes it out, its unread saves settled.
-    pub fn finish(self: *ExprProofEmitter) ![]const u8 {
-        try self.stream.append(self.allocator, .End, 0);
-        const body = try self.stream.toBytes(
-            self.allocator,
-            @intCast(self.theorem.theorem_vars.items.len),
-            self.heap_len,
-        );
-        return body.bytes;
-    }
-
-    pub fn emitExpr(self: *ExprProofEmitter, expr_id: ExprId) !void {
-        return emitProofExpr(
-            self.allocator,
-            self.theorem,
-            &self.stream,
-            &self.expr_slots,
-            &self.heap_len,
-            expr_id,
-        );
-    }
-};
-
-pub const UnifyEmitter = struct {
-    allocator: std.mem.Allocator,
-    theorem: *const TheoremContext,
-    bytes: std.ArrayListUnmanaged(u8) = .empty,
+    stream: UnifyStream,
     slots: ExprSlotMap = .empty,
-    remaining_uses: std.AutoHashMapUnmanaged(ExprId, u32) = .empty,
-    heap_len: u32,
 
-    pub fn init(
+    fn init(
         allocator: std.mem.Allocator,
         theorem: *const TheoremContext,
-    ) UnifyEmitter {
+    ) !UnifyEmitter {
         var emitter = UnifyEmitter{
             .allocator = allocator,
             .theorem = theorem,
-            .heap_len = @intCast(theorem.theorem_vars.items.len),
+            .stream = .init(@intCast(theorem.theorem_vars.items.len)),
         };
+        errdefer emitter.deinit();
         for (theorem.theorem_vars.items, 0..) |expr_id, idx| {
-            emitter.slots.put(allocator, expr_id, @intCast(idx)) catch unreachable;
+            try emitter.slots.put(allocator, expr_id, @intCast(idx));
         }
         return emitter;
     }
 
-    pub fn deinit(self: *UnifyEmitter) void {
-        self.bytes.deinit(self.allocator);
+    fn deinit(self: *UnifyEmitter) void {
+        self.stream.deinit(self.allocator);
         self.slots.deinit(self.allocator);
-        self.remaining_uses.deinit(self.allocator);
     }
 
-    pub fn noteExprUse(self: *UnifyEmitter, expr_id: ExprId) !void {
-        const gop = try self.remaining_uses.getOrPut(self.allocator, expr_id);
-        if (gop.found_existing) {
-            gop.value_ptr.* = try std.math.add(u32, gop.value_ptr.*, 1);
-        } else {
-            gop.value_ptr.* = 1;
-        }
-        switch (self.theorem.interner.node(expr_id).*) {
-            .variable => {},
-            .placeholder => |id| return CheckedIr.leakageError(
-                self.theorem,
-                id,
-            ),
-            .app => |app| {
-                for (app.args) |arg| {
-                    try self.noteExprUse(arg);
-                }
-            },
-        }
-    }
-
-    fn claimFirstUse(self: *UnifyEmitter, expr_id: ExprId) !bool {
-        const remaining = self.remaining_uses.getPtr(expr_id) orelse {
-            return error.UnknownExprUseCount;
-        };
-        const count = remaining.*;
-        if (count == 0) return error.InvalidExprUseCount;
-        remaining.* = count - 1;
-        return count > 1;
-    }
-
-    pub fn emitExpr(self: *UnifyEmitter, expr_id: ExprId) !void {
+    fn emitExpr(self: *UnifyEmitter, expr_id: ExprId) !void {
         if (self.slots.get(expr_id)) |slot| {
-            try MmbWriter.appendCmd(&self.bytes, self.allocator, UnifyCmd.URef, slot);
-            return;
+            return self.stream.append(self.allocator, .URef, slot);
         }
 
-        const save_for_ref = try self.claimFirstUse(expr_id);
-        const node = self.theorem.interner.node(expr_id);
-        switch (node.*) {
+        switch (self.theorem.interner.node(expr_id).*) {
             .variable => |var_id| switch (var_id) {
                 .theorem_var => return error.UnboundExprVariable,
                 .dummy_var => |dummy_id| {
                     const info = try self.theorem.requireDummyInfo(dummy_id);
-                    try MmbWriter.appendCmd(
-                        &self.bytes,
-                        self.allocator,
-                        UnifyCmd.UDummy,
-                        info.sort_id,
-                    );
-                    // Verifier-side `UDummy` always appends to the unify
-                    // heap. Even single-use dummies reserve a slot and shift
-                    // later `URef` indices.
-                    const slot = self.heap_len;
-                    self.heap_len = try std.math.add(u32, self.heap_len, 1);
-                    if (save_for_ref) {
-                        try self.slots.put(self.allocator, expr_id, slot);
-                    }
+                    const slot = try self.stream.appendSlot(self.allocator, .UDummy, info.sort_id);
+                    try self.slots.put(self.allocator, expr_id, slot);
                 },
             },
-            .placeholder => |id| return CheckedIr.leakageError(
-                self.theorem,
-                id,
-            ),
+            .placeholder => |id| return CheckedIr.leakageError(self.theorem, id),
             .app => |app| {
-                try MmbWriter.appendCmd(
-                    &self.bytes,
-                    self.allocator,
-                    if (save_for_ref) UnifyCmd.UTermSave else UnifyCmd.UTerm,
-                    app.term_id,
-                );
-                if (save_for_ref) {
-                    const slot = self.heap_len;
-                    self.heap_len = try std.math.add(u32, self.heap_len, 1);
-                    try self.slots.put(self.allocator, expr_id, slot);
-                }
+                const slot = try self.stream.appendSlot(self.allocator, .UTermSave, app.term_id);
+                try self.slots.put(self.allocator, expr_id, slot);
                 for (app.args) |arg| {
                     try self.emitExpr(arg);
                 }
             },
         }
     }
+
+    /// An assertion's conclusion, then its hypotheses. `UHyp` pushes the
+    /// next hypothesis target onto the unify stack before replay continues,
+    /// so to replay them in source order the stream stores them in reverse.
+    fn emitAssertion(self: *UnifyEmitter, concl: ExprId, hyps: []const ExprId) !void {
+        try self.emitExpr(concl);
+        var hyp_idx = hyps.len;
+        while (hyp_idx > 0) {
+            hyp_idx -= 1;
+            try self.stream.append(self.allocator, .UHyp, 0);
+            try self.emitExpr(hyps[hyp_idx]);
+        }
+    }
+
+    /// Ends the stream and writes it out, its unread saves settled.
+    fn finish(self: *UnifyEmitter) ![]const u8 {
+        try self.stream.append(self.allocator, .End, 0);
+        const body = try self.stream.toBytes(self.allocator);
+        return body.bytes;
+    }
 };
 
-pub const TheoremProofEmitter = struct {
+/// Emits a proof stream: a theorem's from its checked lines, or a def's or
+/// axiom's, which have no lines, from its expressions alone.
+const ProofEmitter = struct {
     allocator: std.mem.Allocator,
     theorem: *const TheoremContext,
-    env: *const GlobalEnv,
+    /// Only a theorem's transport lines read it, for their conversions.
+    env: ?*const GlobalEnv,
     lines: []const CheckedLine,
-    stream: ProofStream = .{},
+    stream: ProofStream,
     expr_slots: ExprSlotMap = .empty,
-    heap_len: u32,
     hyp_slots: []u32,
-    line_slots: []u32,
-    emitted: []bool,
+    /// Each emitted line's slot.
+    line_slots: []?u32,
 
-    pub fn init(
+    fn init(
         allocator: std.mem.Allocator,
         theorem: *const TheoremContext,
-        env: *const GlobalEnv,
+        env: ?*const GlobalEnv,
         lines: []const CheckedLine,
-    ) !TheoremProofEmitter {
-        var emitter = TheoremProofEmitter{
+    ) !ProofEmitter {
+        const hyp_slots = try allocator.alloc(u32, theorem.theorem_hyps.items.len);
+        errdefer allocator.free(hyp_slots);
+        const line_slots = try allocator.alloc(?u32, lines.len);
+        errdefer allocator.free(line_slots);
+        @memset(line_slots, null);
+        var emitter = ProofEmitter{
             .allocator = allocator,
             .theorem = theorem,
             .env = env,
             .lines = lines,
-            .heap_len = @intCast(theorem.theorem_vars.items.len),
-            .hyp_slots = try allocator.alloc(u32, theorem.theorem_hyps.items.len),
-            .line_slots = try allocator.alloc(u32, lines.len),
-            .emitted = try allocator.alloc(bool, lines.len),
+            .stream = .init(@intCast(theorem.theorem_vars.items.len)),
+            .hyp_slots = hyp_slots,
+            .line_slots = line_slots,
         };
-        @memset(emitter.emitted, false);
+        errdefer emitter.expr_slots.deinit(allocator);
         for (theorem.theorem_vars.items, 0..) |expr_id, idx| {
             try emitter.expr_slots.put(allocator, expr_id, @intCast(idx));
         }
         return emitter;
     }
 
-    pub fn deinit(self: *TheoremProofEmitter) void {
+    fn deinit(self: *ProofEmitter) void {
         self.stream.deinit(self.allocator);
         self.expr_slots.deinit(self.allocator);
         self.allocator.free(self.hyp_slots);
         self.allocator.free(self.line_slots);
-        self.allocator.free(self.emitted);
     }
 
-    pub fn emitHyps(self: *TheoremProofEmitter) !void {
-        for (self.theorem.theorem_hyps.items, 0..) |hyp, idx| {
+    /// Post-order: an expression's arguments are built, and saved, before it.
+    fn emitExpr(self: *ProofEmitter, expr_id: ExprId) !void {
+        if (self.expr_slots.get(expr_id)) |slot| {
+            return self.stream.append(self.allocator, .Ref, slot);
+        }
+
+        const slot = switch (self.theorem.interner.node(expr_id).*) {
+            .variable => |var_id| switch (var_id) {
+                .theorem_var => return error.UnboundExprVariable,
+                .dummy_var => |dummy_id| blk: {
+                    const info = try self.theorem.requireDummyInfo(dummy_id);
+                    break :blk try self.stream.appendSlot(self.allocator, .Dummy, info.sort_id);
+                },
+            },
+            .placeholder => |id| return CheckedIr.leakageError(self.theorem, id),
+            .app => |app| blk: {
+                for (app.args) |arg| {
+                    try self.emitExpr(arg);
+                }
+                break :blk try self.stream.appendSlot(self.allocator, .TermSave, app.term_id);
+            },
+        };
+        try self.expr_slots.put(self.allocator, expr_id, slot);
+    }
+
+    fn emitHyps(self: *ProofEmitter) !void {
+        for (self.theorem.theorem_hyps.items, self.hyp_slots) |hyp, *slot| {
             try self.emitExpr(hyp);
-            try self.stream.append(self.allocator, .Hyp, 0);
-            self.hyp_slots[idx] = self.heap_len;
-            self.heap_len = try std.math.add(u32, self.heap_len, 1);
+            slot.* = try self.stream.appendSlot(self.allocator, .Hyp, 0);
         }
     }
 
-    pub fn emitLine(
-        self: *TheoremProofEmitter,
+    fn emitLine(
+        self: *ProofEmitter,
         line_idx: usize,
     ) anyerror!void {
-        if (self.emitted[line_idx]) {
-            try self.stream.append(self.allocator, .Ref, self.line_slots[line_idx]);
-            return;
+        if (self.line_slots[line_idx]) |slot| {
+            return self.stream.append(self.allocator, .Ref, slot);
         }
 
         const line = self.lines[line_idx];
-        switch (line.data) {
-            .rule => |rule| {
+        self.line_slots[line_idx] = switch (line.data) {
+            .rule => |rule| blk: {
                 for (rule.refs) |ref| {
                     try self.emitRef(ref);
                 }
@@ -385,31 +326,28 @@ pub const TheoremProofEmitter = struct {
                     try self.emitExpr(binding);
                 }
                 try self.emitExpr(line.expr);
-                try self.stream.append(self.allocator, .ThmSave, rule.rule_id);
+                break :blk try self.stream.appendSlot(self.allocator, .ThmSave, rule.rule_id);
             },
-            .transport => |transport| {
+            .transport => |transport| blk: {
                 try self.emitExpr(line.expr);
                 try self.emitRef(transport.source);
                 try self.stream.append(self.allocator, .Conv, 0);
                 try self.emitConversion(line.expr, transport.source_expr);
-                try self.stream.append(self.allocator, .Save, 0);
+                break :blk try self.stream.appendSlot(self.allocator, .Save, 0);
             },
-            .sorry => {
+            .sorry => blk: {
                 // Mid-stream form: `Sorry: S, e -> S, |- e`. The admitted
                 // proof is saved like any other line so later references
                 // reach it through the heap.
                 try self.emitExpr(line.expr);
                 try self.stream.append(self.allocator, .Sorry, 0);
-                try self.stream.append(self.allocator, .Save, 0);
+                break :blk try self.stream.appendSlot(self.allocator, .Save, 0);
             },
-        }
-        self.line_slots[line_idx] = self.heap_len;
-        self.heap_len = try std.math.add(u32, self.heap_len, 1);
-        self.emitted[line_idx] = true;
+        };
     }
 
     fn emitRef(
-        self: *TheoremProofEmitter,
+        self: *ProofEmitter,
         ref: CheckedRef,
     ) anyerror!void {
         switch (ref) {
@@ -419,14 +357,14 @@ pub const TheoremProofEmitter = struct {
     }
 
     fn emitConversion(
-        self: *TheoremProofEmitter,
+        self: *ProofEmitter,
         target_expr: ExprId,
         source_expr: ExprId,
     ) !void {
         var def_ops = DefOps.Context.init(
             self.allocator,
             @constCast(self.theorem),
-            self.env,
+            self.env.?,
         );
         defer def_ops.deinit();
         const plan = try def_ops.compareTransparent(
@@ -437,7 +375,7 @@ pub const TheoremProofEmitter = struct {
     }
 
     fn emitConversionPlan(
-        self: *TheoremProofEmitter,
+        self: *ProofEmitter,
         plan: *const DefOps.ConversionPlan,
     ) !void {
         switch (plan.*) {
@@ -464,24 +402,9 @@ pub const TheoremProofEmitter = struct {
     }
 
     /// Ends the stream and writes it out, its unread saves settled.
-    pub fn finish(self: *TheoremProofEmitter) !ProofBody {
+    fn finish(self: *ProofEmitter) !ProofBody {
         try self.stream.append(self.allocator, .End, 0);
-        return try self.stream.toBytes(
-            self.allocator,
-            @intCast(self.theorem.theorem_vars.items.len),
-            self.heap_len,
-        );
-    }
-
-    pub fn emitExpr(self: *TheoremProofEmitter, expr_id: ExprId) !void {
-        return emitProofExpr(
-            self.allocator,
-            self.theorem,
-            &self.stream,
-            &self.expr_slots,
-            &self.heap_len,
-            expr_id,
-        );
+        return try self.stream.toBytes(self.allocator);
     }
 };
 
@@ -557,10 +480,11 @@ fn buildDefProofBodyFromExpr(
 ) ![]const u8 {
     try validateProofBoundaryExpr(theorem, expr_id);
 
-    var emitter = ExprProofEmitter.init(allocator, theorem);
+    var emitter = try ProofEmitter.init(allocator, theorem, null, &.{});
     defer emitter.deinit();
     try emitter.emitExpr(expr_id);
-    return try emitter.finish();
+    const body = try emitter.finish();
+    return body.bytes;
 }
 
 pub fn buildDefProofBody(
@@ -584,15 +508,12 @@ pub fn buildAxiomProofBody(
     try validateProofBoundaryExprs(theorem, theorem.theorem_hyps.items);
     try validateProofBoundaryExpr(theorem, concl);
 
-    var emitter = ExprProofEmitter.init(allocator, theorem);
+    var emitter = try ProofEmitter.init(allocator, theorem, null, &.{});
     defer emitter.deinit();
-    for (theorem.theorem_hyps.items) |hyp| {
-        try emitter.emitExpr(hyp);
-        try emitter.stream.append(allocator, .Hyp, 0);
-        emitter.heap_len = try std.math.add(u32, emitter.heap_len, 1);
-    }
+    try emitter.emitHyps();
     try emitter.emitExpr(concl);
-    return try emitter.finish();
+    const body = try emitter.finish();
+    return body.bytes;
 }
 
 pub fn buildTermUnifyStream(
@@ -602,12 +523,10 @@ pub fn buildTermUnifyStream(
 ) ![]const u8 {
     try validateProofBoundaryExpr(theorem, body);
 
-    var emitter = UnifyEmitter.init(allocator, theorem);
+    var emitter = try UnifyEmitter.init(allocator, theorem);
     defer emitter.deinit();
-    try emitter.noteExprUse(body);
     try emitter.emitExpr(body);
-    try MmbWriter.appendCmd(&emitter.bytes, allocator, UnifyCmd.End, 0);
-    return try emitter.bytes.toOwnedSlice(allocator);
+    return try emitter.finish();
 }
 
 pub fn buildAssertionUnifyStream(
@@ -618,26 +537,10 @@ pub fn buildAssertionUnifyStream(
     try validateProofBoundaryExprs(theorem, theorem.theorem_hyps.items);
     try validateProofBoundaryExpr(theorem, concl);
 
-    var emitter = UnifyEmitter.init(allocator, theorem);
+    var emitter = try UnifyEmitter.init(allocator, theorem);
     defer emitter.deinit();
-    try emitter.noteExprUse(concl);
-    var hyp_idx = theorem.theorem_hyps.items.len;
-    while (hyp_idx > 0) {
-        hyp_idx -= 1;
-        try emitter.noteExprUse(theorem.theorem_hyps.items[hyp_idx]);
-    }
-    try emitter.emitExpr(concl);
-    // `UHyp` pushes the next hypothesis target onto the unify stack before
-    // replay continues. To make hypotheses replay in source order, the stream
-    // therefore stores them in reverse.
-    hyp_idx = theorem.theorem_hyps.items.len;
-    while (hyp_idx > 0) {
-        hyp_idx -= 1;
-        try MmbWriter.appendCmd(&emitter.bytes, allocator, UnifyCmd.UHyp, 0);
-        try emitter.emitExpr(theorem.theorem_hyps.items[hyp_idx]);
-    }
-    try MmbWriter.appendCmd(&emitter.bytes, allocator, UnifyCmd.End, 0);
-    return try emitter.bytes.toOwnedSlice(allocator);
+    try emitter.emitAssertion(concl, theorem.theorem_hyps.items);
+    return try emitter.finish();
 }
 
 pub fn buildRuleUnifyStream(
@@ -652,33 +555,18 @@ pub fn buildRuleUnifyStream(
     defer theorem.deinit();
     try theorem.seedBinderCount(rule.args.len);
 
-    var emitter = UnifyEmitter.init(allocator, &theorem);
-    defer emitter.deinit();
-
     const binders = theorem.theorem_vars.items;
     const concl = try theorem.instantiateTemplate(rule.concl, binders);
-    try emitter.noteExprUse(concl);
-
-    var hyps = try allocator.alloc(ExprId, rule.hyps.len);
+    const hyps = try allocator.alloc(ExprId, rule.hyps.len);
     defer allocator.free(hyps);
-    var hyp_idx = rule.hyps.len;
-    while (hyp_idx > 0) {
-        hyp_idx -= 1;
-        const hyp = try theorem.instantiateTemplate(rule.hyps[hyp_idx], binders);
-        hyps[hyp_idx] = hyp;
-        try emitter.noteExprUse(hyp);
+    for (rule.hyps, hyps) |template, *hyp| {
+        hyp.* = try theorem.instantiateTemplate(template, binders);
     }
 
-    try emitter.emitExpr(concl);
-    hyp_idx = rule.hyps.len;
-    while (hyp_idx > 0) {
-        hyp_idx -= 1;
-        try MmbWriter.appendCmd(&emitter.bytes, allocator, UnifyCmd.UHyp, 0);
-        try emitter.emitExpr(hyps[hyp_idx]);
-    }
-
-    try MmbWriter.appendCmd(&emitter.bytes, allocator, UnifyCmd.End, 0);
-    return try emitter.bytes.toOwnedSlice(allocator);
+    var emitter = try UnifyEmitter.init(allocator, &theorem);
+    defer emitter.deinit();
+    try emitter.emitAssertion(concl, hyps);
+    return try emitter.finish();
 }
 
 pub fn buildTheoremProofBody(
@@ -693,7 +581,7 @@ pub fn buildTheoremProofBody(
         return error.DepViolation;
     }
 
-    var emitter = try TheoremProofEmitter.init(allocator, theorem, env, lines);
+    var emitter = try ProofEmitter.init(allocator, theorem, env, lines);
     defer emitter.deinit();
     try emitter.emitHyps();
     try emitter.emitLine(lines.len - 1);
@@ -731,9 +619,9 @@ pub fn hypText(
 
 test "ProofStream writes unread saves unsaved and moves later slots down" {
     const allocator = std.testing.allocator;
-    var stream: ProofStream = .{};
-    defer stream.deinit(allocator);
     // Slot 0 is a variable; the stream allocates slots 1 through 6.
+    var stream: ProofStream = .init(1);
+    defer stream.deinit(allocator);
     const emitted = [_]ProofStream.Cmd{
         .{ .op = .Ref, .data = 0 },
         .{ .op = .TermSave, .data = 7 }, // slot 1, unread
@@ -747,8 +635,11 @@ test "ProofStream writes unread saves unsaved and moves later slots down" {
         .{ .op = .Ref, .data = 3 },
         .{ .op = .End, .data = 0 },
     };
-    for (emitted) |cmd| try stream.append(allocator, cmd.op, cmd.data);
-    const body = try stream.toBytes(allocator, 1, 7);
+    for (emitted) |cmd| switch (ProofStream.slotUse(cmd.op)) {
+        .kept, .save => _ = try stream.appendSlot(allocator, cmd.op, cmd.data),
+        .none, .read => try stream.append(allocator, cmd.op, cmd.data),
+    };
+    const body = try stream.toBytes(allocator);
     defer allocator.free(body.bytes);
     try std.testing.expectEqual(@as(u32, 4), body.heap_len);
     const bytes = body.bytes;
@@ -768,6 +659,33 @@ test "ProofStream writes unread saves unsaved and moves later slots down" {
         .{ .op = .End, .data = 0 },
     };
     for (written) |cmd| try MmbWriter.appendCmd(&expected, allocator, cmd.op, cmd.data);
+    try std.testing.expectEqualSlices(u8, expected.items, bytes);
+}
+
+test "a unify stream saves only what it reads back" {
+    var theorem = TheoremContext.init(std.testing.allocator);
+    defer theorem.deinit();
+
+    // `f (g c) (g c)`: the second `g c` reads back the first, so `c` inside
+    // it is never read back and is matched unsaved.
+    const c = try theorem.interner.internApp(2, &.{});
+    const g_c = try theorem.interner.internApp(1, &.{c});
+    const f = try theorem.interner.internApp(0, &.{ g_c, g_c });
+    const bytes = try buildTermUnifyStream(std.testing.allocator, &theorem, f);
+    defer std.testing.allocator.free(bytes);
+
+    var expected: std.ArrayListUnmanaged(u8) = .empty;
+    defer expected.deinit(std.testing.allocator);
+    const written = [_]UnifyStream.Cmd{
+        .{ .op = .UTerm, .data = 0 },
+        .{ .op = .UTermSave, .data = 1 }, // slot 0
+        .{ .op = .UTerm, .data = 2 },
+        .{ .op = .URef, .data = 0 },
+        .{ .op = .End, .data = 0 },
+    };
+    for (written) |cmd| {
+        try MmbWriter.appendCmd(&expected, std.testing.allocator, cmd.op, cmd.data);
+    }
     try std.testing.expectEqualSlices(u8, expected.items, bytes);
 }
 

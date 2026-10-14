@@ -1204,21 +1204,21 @@ layout.
 
 Important pieces are:
 
-- `UnifyEmitter` for theorem and term unify streams
-- `ExprProofEmitter` for concrete expression construction
-- `TheoremProofEmitter` for theorem proof bodies
+- `UnifyEmitter` for theorem, term and rule unify streams
+- `ProofEmitter` for proof bodies: a theorem's from its checked lines, a
+  def's or axiom's from its expressions alone
 
 Theorem proof emission is recursive over checked-line dependencies.
 Transport lines become `Conv` proofs, and the conversion subproof is
 recovered from `def_ops.zig` as a concrete plan.
 
-Both proof emitters record the stream as a `ProofStream` of commands,
-saving every term and line as they go. Once the stream is complete,
-`toBytes` writes each save that no `Ref` reads as `Term` or `Thm`, or
-drops it if it is a `Save`, and renumbers the heap slots after it. The
-verifier's heap then holds only what the proof reads back. An expression
-used more than once is still built once and `Ref`d, which keeps the
-identity checks of `URef` and `Refl` intact.
+Both emitters record their stream as a `Stream` of commands, saving every
+term and line as they go; the stream hands out each heap slot. Once the
+stream is complete, `toBytes` writes each save that nothing reads back as
+`Term`, `Thm` or `UTerm`, or drops it if it is a `Save`, and renumbers the
+heap slots after it. The verifier's heap then holds only what the stream
+reads back. An expression used more than once is still built once and
+referred to, which keeps the identity checks of `URef` and `Refl` intact.
 
 This is the main architectural invariant of the frontend / backend split:
 
