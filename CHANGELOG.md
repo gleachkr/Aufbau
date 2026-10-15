@@ -3,6 +3,19 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A `@view` rule whose premise does not match no longer tries every way of
+  reading the premise's `@acui` bag before it fails. A wrong instance in a
+  truth tree step writing several instances of a `∀` row, on a branch of
+  9 rows, took 2.6 seconds and 3 GB of memory before failing, and ran out
+  of memory on longer branches; it now fails in about 10 ms whatever the
+  branch length. The statement is matched before the premise, and a
+  reading of the premise whose row is no instance of a `@recover` pattern
+  is dropped as it is made.
+
 ## [0.0.17] - 2026-10-14
 
 ### Changed

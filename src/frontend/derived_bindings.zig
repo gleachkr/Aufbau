@@ -13,6 +13,7 @@ const BoundValue = @import("./def_ops/types.zig").BoundValue;
 const SymbolicExpr = @import("./def_ops/types.zig").SymbolicExpr;
 const ViewTrace = @import("./view_trace.zig");
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
+const templateMentionsBinder = @import("./rules.zig").templateMentionsBinder;
 
 pub const RecoverDecl = struct {
     target_view_idx: usize,
@@ -75,6 +76,19 @@ pub fn markSolvedBinders(bindings: []const DerivedBinding, out: []bool) void {
                 markTemplateBinders(abstract.right_plug.template, out);
             }
         },
+    };
+}
+
+/// Whether `binding` may solve view binder `idx` (`markSolvedBinders` for
+/// one binder).
+pub fn solvesBinder(binding: DerivedBinding, idx: usize) bool {
+    return switch (binding) {
+        .recover => |recover| recover.target_view_idx == idx,
+        .abstract => |abstract| abstract.target_view_idx == idx or
+            (abstract.left_plug.pattern and
+                templateMentionsBinder(abstract.left_plug.template, idx)) or
+            (abstract.right_plug.pattern and
+                templateMentionsBinder(abstract.right_plug.template, idx)),
     };
 }
 

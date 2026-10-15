@@ -1,0 +1,4 @@
+wrong_instance_long_branch
+--------------------------
+
+l1: $ cf (join (join (join (join (join (join (join (join (join (hyp (A. x (P x))) (hyp (~ P b))) (hyp (~ ~ P b))) (hyp (~ ~ ~ P b))) (hyp (~ ~ ~ ~ P b))) (hyp (~ ~ ~ ~ ~ P b))) (hyp (~ ~ ~ ~ ~ ~ P b))) (hyp (~ ~ ~ ~ ~ ~ ~ P b))) (hyp (~ ~ ~ ~ ~ ~ ~ ~ P b))) (hyp (~ ~ ~ ~ ~ ~ ~ ~ ~ P b))) (A. x (P x)) $ by all_step2 [#1]

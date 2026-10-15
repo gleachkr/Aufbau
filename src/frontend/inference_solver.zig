@@ -3,7 +3,8 @@ const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RuleDecl = @import("./env.zig").RuleDecl;
 const Expr = @import("../trusted/expressions.zig").Expr;
-const TemplateExpr = @import("./rules.zig").TemplateExpr;
+const Rules = @import("./rules.zig");
+const TemplateExpr = Rules.TemplateExpr;
 const ExprModule = @import("./expr.zig");
 const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
@@ -100,6 +101,11 @@ pub const Solver = struct {
     /// test can pin that a premise extends the population instead of
     /// multiplying it.
     peak_branches: usize = 0,
+    /// The derived-binding failure `derivedBindingsFeasible` last pruned a
+    /// branch with, while matching the current constraint. A constraint
+    /// that leaves no branch fails with it when set, rather than as a
+    /// mismatch: some reading did match, and a `@recover` ruled it out.
+    pruned_by: ?anyerror = null,
     // Reusable def_ops contexts, created lazily and torn down in `deinit`.
     // One solve fans out into many short-lived match attempts that each used
     // to build a fresh context — discarding the symbolic hash-cons table and
@@ -276,18 +282,34 @@ pub const Solver = struct {
         var states = try self.initialStates(partial_bindings);
 
         if (self.view) |view| {
+            // A concrete statement goes first: it binds the view's context
+            // and its `@recover` patterns, so matching a premise's bag
+            // member by member can drop a member no `@recover` reads
+            // (`derivedBindingsFeasible`) instead of carrying every choice
+            // of member to the end. A holey statement binds too little to
+            // go first.
+            if (conclusion == .concrete) {
+                states = try self.applyConclusionConstraint(
+                    states.items,
+                    view.concl,
+                    conclusion,
+                    .view,
+                );
+            }
             states = try self.applyHypConstraints(
                 states.items,
                 view.hyps,
                 ref_exprs,
                 .view,
             );
-            states = try self.applyConclusionConstraint(
-                states.items,
-                view.concl,
-                conclusion,
-                .view,
-            );
+            if (conclusion != .concrete) {
+                states = try self.applyConclusionConstraint(
+                    states.items,
+                    view.concl,
+                    conclusion,
+                    .view,
+                );
+            }
             states = try self.finalizeViewAndRuleStates(states.items, view);
         } else {
             states = try self.applyHypConstraints(
@@ -415,6 +437,7 @@ pub const Solver = struct {
         try current.appendSlice(self.allocator, states);
 
         for (constraints, 0..) |constraint, constraint_idx| {
+            self.pruned_by = null;
             var next = std.ArrayListUnmanaged(BranchState).empty;
             for (current.items) |state| {
                 const matches = try StructuralMatcher.matchExpr(
@@ -444,6 +467,7 @@ pub const Solver = struct {
             }
             self.peak_branches = @max(self.peak_branches, next.items.len);
             if (next.items.len == 0) {
+                if (self.pruned_by) |err| return err;
                 self.failure = .{
                     .region = switch (region) {
                         .hypothesis => .{ .hypothesis = constraint_idx },
@@ -694,6 +718,75 @@ pub const Solver = struct {
         }
         if (next.items.len == 0) return first_err orelse error.UnifyMismatch;
         return next;
+    }
+
+    /// False when a `@recover` of the view already fails on this branch:
+    /// its source, pattern and hole are all bound and no instance of the
+    /// pattern is the source. Only a `@recover` that alone decides its
+    /// target is tried (`recoverDecidesTarget`): later constraints then
+    /// only bind more, so every completion of the branch fails there too.
+    pub fn derivedBindingsFeasible(
+        self: *Solver,
+        state: BranchState,
+        space: BinderSpace,
+    ) anyerror!bool {
+        if (space != .view) return true;
+        const view = self.view orelse return true;
+        const bindings = state.view_bindings orelse return true;
+        for (view.derived_bindings, 0..) |binding, binding_idx| {
+            const recover = switch (binding) {
+                .recover => |value| value,
+                .abstract => continue,
+            };
+            if (bindings[recover.target_view_idx] != null or
+                bindings[recover.source_view_idx] == null or
+                bindings[recover.pattern_view_idx] == null or
+                bindings[recover.hole_view_idx] == null) continue;
+            if (!recoverDecidesTarget(
+                view,
+                binding_idx,
+                recover.target_view_idx,
+            )) continue;
+            var probe = state;
+            probe.view_bindings = try self.allocator.dupe(?ExprId, bindings);
+            defer self.allocator.free(probe.view_bindings.?);
+            var snapshot = try self.derivedBindingSnapshot(&probe);
+            defer snapshot.deinit(self.real_allocator);
+            DerivedBindings.applyDerivedBindings(
+                self.theorem,
+                self.env,
+                self.registry,
+                snapshot.value,
+                &.{binding},
+                view.arg_names,
+                false,
+            ) catch |err| {
+                if (!DerivedBindings.isDerivedBindingFailure(err)) return err;
+                self.pruned_by = err;
+                return false;
+            };
+        }
+        return true;
+    }
+
+    /// Whether nothing but the `@recover` at `binding_idx` may bind its
+    /// `target`: no view premise or statement mentions it, and no other
+    /// derived binding solves it. A `@recover` skips a target that is
+    /// already bound, so otherwise its failure now need not stand.
+    fn recoverDecidesTarget(
+        view: *const ViewDecl,
+        binding_idx: usize,
+        target: usize,
+    ) bool {
+        if (Rules.templateMentionsBinder(view.concl, target)) return false;
+        for (view.hyps) |hyp| {
+            if (Rules.templateMentionsBinder(hyp, target)) return false;
+        }
+        for (view.derived_bindings, 0..) |other, other_idx| {
+            if (other_idx != binding_idx and
+                DerivedBindings.solvesBinder(other, target)) return false;
+        }
+        return true;
     }
 
     const DerivedBindingSnapshot = struct {

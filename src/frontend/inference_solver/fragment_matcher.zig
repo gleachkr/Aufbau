@@ -183,6 +183,7 @@ fn matchOrderedStructuralAnchors(
             state,
         );
         for (matches) |next_state| {
+            if (!try self.derivedBindingsFeasible(next_state, space)) continue;
             matched_positions[next_item] = actual_idx;
             try matchOrderedStructuralAnchors(
                 Matcher,
@@ -318,6 +319,7 @@ fn matchCommutativeStructuralObligations(
             state,
         );
         for (matches) |next_state| {
+            if (!try self.derivedBindingsFeasible(next_state, space)) continue;
             const was_used = used[actual_idx];
             used[actual_idx] = true;
             try matchCommutativeStructuralObligations(

@@ -587,6 +587,10 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_view_acui_no_witness_row",
         .outcome = .{ .fail = error.RecoverHoleNotFound },
     },
+    .{
+        .stem = "fail_view_acui_wrong_instance_long_branch",
+        .outcome = .{ .fail = error.RecoverHoleNotFound },
+    },
     .{ .stem = "pass_acui_repeated_explicit_item", .outcome = .pass },
     .{ .stem = "pass_acui_duplicate_binders_same_item", .outcome = .pass },
     .{ .stem = "pass_acui_repeated_joint_binder", .outcome = .pass },

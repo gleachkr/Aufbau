@@ -1207,6 +1207,27 @@ test "structural solve aborts at an exhausted search work budget" {
     try std.testing.expect(spent.polls >= 1);
 }
 
+test "a premise bag member no @recover reads is dropped as it is matched" {
+    // The statement goes first and binds the view's pattern, so a choice of
+    // branch row for `q` or `r` that is no instance of it is dropped as it
+    // is made, rather than every pair of rows being carried to the end.
+    const allocator = std.testing.allocator;
+    const stem = "fail_view_acui_wrong_instance_long_branch";
+    const mm0_src = try readProofCase(allocator, stem, "mm0");
+    defer allocator.free(mm0_src);
+    const proof_src = try readProofCase(allocator, stem, "auf");
+    defer allocator.free(proof_src);
+
+    var stats = Compiler.InferenceStatsSink{};
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
+    compiler.inference_stats_sink = &stats;
+    try std.testing.expectError(
+        error.RecoverHoleNotFound,
+        compiler.compileMmb(allocator),
+    );
+    try std.testing.expectEqual(@as(usize, 1), stats.peak_solver_branches);
+}
+
 test "kept symbolic match state extends a branch rather than duplicating it" {
     // Once the first premise leaves `p` mentioning the hidden witness, each
     // later bare-binder premise is matched through the kept session state.
