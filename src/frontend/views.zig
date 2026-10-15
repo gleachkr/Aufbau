@@ -169,6 +169,7 @@ pub fn applyViewBindings(
     partial_bindings: []?ExprId,
     seed_overrides: ?[]const DefOps.BindingSeed,
     exported_state: ?*?DefOps.MatchSeedState,
+    fresh_var: ?DerivedBindings.FreshVar,
     debug_views: bool,
 ) !void {
     return applyViewBindingsWithConclusion(
@@ -182,6 +183,7 @@ pub fn applyViewBindings(
         partial_bindings,
         seed_overrides,
         exported_state,
+        fresh_var,
         debug_views,
     );
 }
@@ -211,6 +213,7 @@ pub fn applyViewBindingsHoleyConclusion(
         partial_bindings,
         seed_overrides,
         exported_state,
+        null,
         debug_views,
     );
 }
@@ -238,6 +241,7 @@ pub fn applyViewBindingsRefsOnly(
         partial_bindings,
         seed_overrides,
         exported_state,
+        null,
         debug_views,
     );
 }
@@ -253,6 +257,7 @@ fn applyViewBindingsWithConclusion(
     partial_bindings: []?ExprId,
     seed_overrides: ?[]const DefOps.BindingSeed,
     exported_state: ?*?DefOps.MatchSeedState,
+    fresh_var: ?DerivedBindings.FreshVar,
     debug_views: bool,
 ) !void {
     const seeds = try allocator.alloc(DefOps.BindingSeed, view.num_binders);
@@ -384,6 +389,7 @@ fn applyViewBindingsWithConclusion(
         .view_bindings = try session.materializeOptionalBindings(),
         .view_seeds = try session.resolveBindingSeeds(),
         .dummy_witnesses = try session.materializeDummyWitnesses(),
+        .fresh_var = fresh_var,
     };
     defer allocator.free(view_snapshot.view_bindings);
     defer allocator.free(view_snapshot.view_seeds.?);
@@ -453,6 +459,7 @@ fn applyViewBindingsWithConclusion(
             .view_bindings = next_view_bindings,
             .view_seeds = next_view_seeds,
             .dummy_witnesses = next_dummy_witnesses,
+            .fresh_var = fresh_var,
         };
         guide_passes += 1;
     }
@@ -1886,7 +1893,7 @@ fn recoverAcceptsSource(
         error.RecoverConflict => return false,
         else => return err,
     };
-    return accepted != null;
+    return accepted != .none;
 }
 
 fn findRecoverDeclForSource(
@@ -2073,6 +2080,9 @@ fn parseRecoverAnnotation(
         .pattern_view_idx = pattern_view_idx,
         .hole_view_idx = hole_view_idx,
         .target_sort_name = sig.arg_infos[target_view_idx].sort_name,
+        .target_may_hold_hole = !sig.arg_infos[hole_view_idx].bound or
+            (sig.arg_infos[target_view_idx].deps &
+                sig.arg_infos[hole_view_idx].deps) != 0,
     };
 }
 

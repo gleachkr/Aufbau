@@ -123,6 +123,9 @@ pub const Solver = struct {
     /// aborts at the budget instead of running to completion. Null on the
     /// compile path.
     budget: ?ExprModule.WorkBudget = null,
+    /// Fresh variables for a `@recover` whose hole the pattern lacks
+    /// (`DerivedBindings.FreshVar`). Null leaves such a target unsolved.
+    fresh_var: ?DerivedBindings.FreshVar = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -752,6 +755,10 @@ pub const Solver = struct {
             defer self.allocator.free(probe.view_bindings.?);
             var snapshot = try self.derivedBindingSnapshot(&probe);
             defer snapshot.deinit(self.real_allocator);
+            // A probe takes no fresh variable: one would stay declared in
+            // the theorem for a branch that may be dropped, and a pattern
+            // without the hole never rules a branch out anyway.
+            snapshot.value.fresh_var = null;
             DerivedBindings.applyDerivedBindings(
                 self.theorem,
                 self.env,
@@ -810,9 +817,15 @@ pub const Solver = struct {
         const seed_state = if (state.view_match_state) |*match_state|
             match_state
         else
-            return .{ .value = .{ .view_bindings = view_bindings } };
+            return .{ .value = .{
+                .view_bindings = view_bindings,
+                .fresh_var = self.fresh_var,
+            } };
         const view = self.view orelse {
-            return .{ .value = .{ .view_bindings = view_bindings } };
+            return .{ .value = .{
+                .view_bindings = view_bindings,
+                .fresh_var = self.fresh_var,
+            } };
         };
 
         const def_ops = self.defOpsContext();
@@ -830,6 +843,7 @@ pub const Solver = struct {
             .view_bindings = view_bindings,
             .view_seeds = seed_state.bindings,
             .dummy_witnesses = dummy_witnesses,
+            .fresh_var = self.fresh_var,
         } };
     }
 

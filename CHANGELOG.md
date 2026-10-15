@@ -15,6 +15,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   branch length. The statement is matched before the premise, and a
   reading of the premise whose row is no instance of a `@recover` pattern
   is dropped as it is made.
+- `@recover` binds an instance when the pattern does not mention the hole,
+  as in a `∀ x F a` row instantiated as `F a`. Where it used to bind the
+  hole itself, whatever its sort, and fail with a sort mismatch, it now
+  lifts the hole through the coercions to the target's sort when the
+  target may mention it, and otherwise takes a fresh variable from the
+  hole sort's `@vars` pool. When the pattern depends on the hole without
+  mentioning it, and the target may not mention the hole, the target is
+  reported as a missing binder.
 
 ## [0.0.17] - 2026-10-14
 

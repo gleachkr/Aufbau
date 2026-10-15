@@ -591,6 +591,11 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_view_acui_wrong_instance_long_branch",
         .outcome = .{ .fail = error.RecoverHoleNotFound },
     },
+    .{ .stem = "pass_recover_vacuous_instance", .outcome = .pass },
+    .{
+        .stem = "fail_recover_vacuous_dependent",
+        .outcome = .{ .fail = error.MissingBinderAssignment },
+    },
     .{ .stem = "pass_acui_repeated_explicit_item", .outcome = .pass },
     .{ .stem = "pass_acui_duplicate_binders_same_item", .outcome = .pass },
     .{ .stem = "pass_acui_repeated_joint_binder", .outcome = .pass },

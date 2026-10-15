@@ -189,6 +189,7 @@ pub fn buildViewSeedSetup(
     ref_exprs: []const ExprId,
     partial_bindings: []const ?ExprId,
     view_seed_overrides: ?[]const DefOps.BindingSeed,
+    fresh_var: ?DerivedBindings.FreshVar,
 ) !ViewSeedSetupResult {
     var setup = ViewSeedSetup{};
     errdefer setup.deinit(allocator);
@@ -218,6 +219,7 @@ pub fn buildViewSeedSetup(
                 seeded,
                 view_seed_overrides,
                 &setup.view_seed_state,
+                fresh_var,
                 self.debug.views,
             ) catch |err| {
                 DebugTrace.traceViews(
@@ -953,6 +955,7 @@ pub fn inferBindingsFromHoleyAdvanced(
         .{ .holey = holey.interned },
         ref_exprs,
         partial_bindings,
+        null,
         null,
     )) {
         .concrete => |bindings| return bindings,

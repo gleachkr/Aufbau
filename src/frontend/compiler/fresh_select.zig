@@ -8,7 +8,8 @@ const Inference = @import("./inference.zig");
 const CompilerVars = @import("./vars.zig");
 const SortVarRegistry = CompilerVars.SortVarRegistry;
 const DefOps = @import("../def_ops.zig");
-const DerivedBinding = @import("../derived_bindings.zig").DerivedBinding;
+const DerivedBindings = @import("../derived_bindings.zig");
+const DerivedBinding = DerivedBindings.DerivedBinding;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const ArgInfo = @import("../parse_recovery.zig").ArgInfo;
 const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
@@ -107,6 +108,38 @@ pub fn processFreshAnnotations(
         );
     }
 }
+
+/// `@recover`'s fresh variables (`DerivedBindings.FreshVar`), chosen by
+/// `chooseFreshBinding` from the sorts' `@vars` pools.
+pub const PoolFreshVar = struct {
+    fresh: Inference.HiddenWitnessFreshContext,
+    theorem: *TheoremContext,
+
+    pub fn freshVar(self: *PoolFreshVar) DerivedBindings.FreshVar {
+        return .{ .ctx = self, .choose = choose };
+    }
+
+    fn choose(
+        ctx: *anyopaque,
+        sort_name: []const u8,
+        avoid_deps: u55,
+    ) anyerror!?ExprId {
+        const self: *PoolFreshVar = @ptrCast(@alignCast(ctx));
+        const selection = chooseFreshBinding(
+            self.fresh.parser,
+            self.theorem,
+            self.fresh.theorem_vars,
+            self.fresh.sort_vars,
+            sort_name,
+            avoid_deps,
+            0,
+        ) catch |err| switch (err) {
+            error.FreshNoAvailableVar => return null,
+            else => return err,
+        };
+        return selection.expr_id;
+    }
+};
 
 pub fn chooseFreshBinding(
     parser: *MM0Parser,

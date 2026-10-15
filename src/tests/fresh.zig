@@ -346,6 +346,7 @@ test "recover-hole seeding allocates distinct vars per omitted hole" {
                 .pattern_view_idx = 2,
                 .hole_view_idx = 1,
                 .target_sort_name = "obj",
+                .target_may_hold_hole = true,
             } },
             .{ .recover = .{
                 .target_view_idx = 0,
@@ -353,6 +354,7 @@ test "recover-hole seeding allocates distinct vars per omitted hole" {
                 .pattern_view_idx = 2,
                 .hole_view_idx = 3,
                 .target_sort_name = "obj",
+                .target_may_hold_hole = true,
             } },
         },
     );
@@ -407,6 +409,7 @@ test "recover-hole seeding skips holes visible in the conclusion" {
             .pattern_view_idx = 0,
             .hole_view_idx = 1,
             .target_sort_name = "obj",
+            .target_may_hold_hole = true,
         } }},
     );
     defer std.testing.allocator.free(seeds);
@@ -453,6 +456,7 @@ test "recover-hole seeding skips non-bound holes" {
             .pattern_view_idx = 0,
             .hole_view_idx = 1,
             .target_sort_name = "obj",
+            .target_may_hold_hole = true,
         } }},
     );
     defer std.testing.allocator.free(seeds);

@@ -427,6 +427,10 @@ fn inferOptionalBindingsFromViewSeed(
             );
     }
 
+    var pool_fresh: ?FreshSelect.PoolFreshVar = if (fresh_context) |fresh|
+        .{ .fresh = fresh, .theorem = context.theorem }
+    else
+        null;
     var seed_setup = switch (try buildViewSeedSetup(
         self,
         allocator,
@@ -439,6 +443,7 @@ fn inferOptionalBindingsFromViewSeed(
         ref_exprs,
         partial_bindings,
         view_seed_overrides,
+        if (pool_fresh) |*pool| pool.freshVar() else null,
     )) {
         .concrete => |bindings| {
             defer allocator.free(bindings);
@@ -488,6 +493,10 @@ pub fn inferBindings(
     }
 
     const view = maybe_view.?;
+    var pool_fresh: ?FreshSelect.PoolFreshVar = if (fresh_context) |fresh|
+        .{ .fresh = fresh, .theorem = theorem }
+    else
+        null;
 
     if (use_advanced_inference) {
         var view_seed_overrides: ?[]DefOps.BindingSeed = null;
@@ -525,6 +534,7 @@ pub fn inferBindings(
             ref_exprs,
             partial_bindings,
             view_seed_overrides,
+            if (pool_fresh) |*pool| pool.freshVar() else null,
         )) {
             .concrete => |bindings| return bindings,
             .setup => |setup| setup,
@@ -677,6 +687,7 @@ pub fn inferBindings(
         );
         defer solver.deinit();
         solver.budget = self.work_budget;
+        solver.fresh_var = if (pool_fresh) |*pool| pool.freshVar() else null;
         defer self.recordSolverBranches(solver.peak_branches);
         const solver_bindings = if (seed_setup.seeded_bindings) |stored|
             stored

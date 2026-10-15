@@ -274,12 +274,13 @@ The compiler walks the current resolved expressions for `source` and
    Only slots marked as bound in the term declaration get this treatment, and
    only when both source and pattern contain exactly `hole` in that slot.
 4. If no ordinary candidate is found, but the walk otherwise matched and saw
-   an unchanged bound-slot occurrence from step 3, recovery binds `target` to
-   `hole`. This is the identity-instantiation case, such as `[x/x] p`.
-5. If `source` and `pattern` are already the same resolved expression,
-   recovery also binds `target` to `hole`. This handles no-op cases where
-   the dependency on `hole` is present in binder metadata rather than visible
-   as a syntactic occurrence.
+   an unchanged bound-slot occurrence from step 3, the source is an instance
+   of the pattern whatever `target` is. This is the identity-instantiation
+   case, such as `[x/x] p`; step 9 picks the witness.
+5. The same holds if `source` and `pattern` are already the same resolved
+   expression. This handles no-op cases where the dependency on `hole` is
+   present in binder metadata rather than visible as a syntactic occurrence,
+   and vacuous cases where the pattern does not mention `hole` at all.
 6. If the source is a wrapper application around a leaf pattern, recovery may
    guess the target from the wrapper's direct arguments. It picks the unique
    argument whose sort matches `target` and whose expression is distinct from
@@ -289,6 +290,17 @@ The compiler walks the current resolved expressions for `source` and
 7. If the structures diverge in any other way, recovery fails.
 8. If no occurrence of `hole`, skipped bound-slot occurrence, identical
    source/pattern evidence, or wrapper candidate is found, recovery fails.
+9. In the cases of steps 4 and 5, `target` is bound to `hole` itself when
+   the target binder may mention it: `hole` is not a bound binder, or the
+   target's dependencies include it. The hole is lifted through the
+   coercions from its sort to the target's, so `(t: tm x)` gets `v2t x`.
+   When the target may not mention the hole, the identity instance is not
+   available. If the pattern does not depend on `hole` either, every
+   instance makes the source an instance of the pattern, and `target` is a
+   fresh variable of the hole's sort from its `@vars` pool, one the solved
+   view expressions do not mention, lifted the same way. Otherwise, or when
+   the sort has no pool, `target` stays unsolved and the line reports it
+   as a missing binder.
 
 For cross-sort enrollments there is one additional candidate site: a pattern
 node that is a chain of one or more coercion applications terminating in
@@ -330,8 +342,10 @@ A few behavioral details are worth keeping in mind:
   dependency metadata looking for hidden occurrences of `hole`; it merely uses
   equality of the resolved expressions as evidence for the identity witness.
 - It does not invent fresh theorem-local dummies just to make a hidden witness
-  concrete. Hidden-dummy witnesses stay match-local until the final
-  rule-instantiation path decides they really need to escape.
+  concrete. The one variable it does take from a `@vars` pool is the witness
+  for a pattern that does not depend on the hole (step 9). Hidden-dummy
+  witnesses stay match-local until the final rule-instantiation path decides
+  they really need to escape.
 
 ### Worked example
 ```
@@ -384,11 +398,12 @@ substitution term and the bound parameter of the substitution operator.
 conflict with the recovered candidate `u`.
 
 If the source and pattern are already identical, `@recover t q p x` binds
-`t` to `x`. This is useful for identity eliminations where the raw rule will
-instantiate to `[x/x] p` and registered rewrites later normalize that back to
-`p`. The recovery step only chooses the identity witness; the proof still
-needs the usual rewrite and congruence metadata to prove `[x/x] p` equivalent
-to the expression the user wrote.
+`t` to `x` when `t` may mention `x` (step 9 above). This is useful for
+identity eliminations where the raw rule will instantiate to `[x/x] p` and
+registered rewrites later normalize that back to `p`. The recovery step
+only chooses the identity witness; the proof still needs the usual rewrite
+and congruence metadata to prove `[x/x] p` equivalent to the expression the
+user wrote.
 
 ### Source-wrapper recovery
 

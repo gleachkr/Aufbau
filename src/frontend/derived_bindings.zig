@@ -24,6 +24,22 @@ pub const RecoverDecl = struct {
     /// for classic enrollments; for cross-sort enrollments (sorts meeting in
     /// the coercion graph) the walk re-sorts recovered subtrees to this sort.
     target_sort_name: []const u8,
+    /// Whether the target may mention the hole: the hole is not a bound
+    /// binder, or the target's dependencies include it. When it may not,
+    /// the hole is no identity witness for the target.
+    target_may_hold_hole: bool,
+};
+
+/// A source of fresh variables for `@recover`, from the sorts' `@vars`
+/// pools. `choose` returns a variable of `sort_name` whose dependencies
+/// miss `avoid_deps`, or null when the sort has none to give.
+pub const FreshVar = struct {
+    ctx: *anyopaque,
+    choose: *const fn (
+        ctx: *anyopaque,
+        sort_name: []const u8,
+        avoid_deps: u55,
+    ) anyerror!?ExprId,
 };
 
 /// One plug slot of `@abstract`. A bare binder name is the trivial template
@@ -129,6 +145,10 @@ pub const MatchSnapshot = struct {
     dummy_witnesses: ?[]const ?ExprId = null,
     view_bindings: []?ExprId,
     view_seeds: ?[]const BindingSeed = null,
+    /// Gives `@recover` a witness when the hole is absent from the pattern
+    /// and may not stand for the target itself. Null leaves such a target
+    /// unsolved.
+    fresh_var: ?FreshVar = null,
 };
 
 const preprocess_max_depth: usize = 32;
@@ -228,7 +248,7 @@ fn applyRecoverBinding(
 
     if (view_bindings[recover.pattern_view_idx]) |pattern_expr| {
         if (hole_expr) |concrete_hole_expr| {
-            if (try concreteRecoverCandidate(
+            switch (try concreteRecoverCandidate(
                 theorem,
                 env,
                 registry,
@@ -237,9 +257,24 @@ fn applyRecoverBinding(
                 concrete_hole_expr,
                 recover.target_sort_name,
                 debug_views,
-            )) |candidate| {
-                view_bindings[recover.target_view_idx] = candidate;
-                return .progress;
+            )) {
+                .found => |candidate| {
+                    view_bindings[recover.target_view_idx] = candidate;
+                    return .progress;
+                },
+                .vacuous => {
+                    const witness = try vacuousRecoverWitness(
+                        theorem,
+                        env,
+                        snapshot,
+                        recover,
+                        concrete_hole_expr,
+                        pattern_expr,
+                    ) orelse return .no_progress;
+                    view_bindings[recover.target_view_idx] = witness;
+                    return .progress;
+                },
+                .none => {},
             }
             if (debug_views) {
                 ViewTrace.printMessage(
@@ -312,7 +347,15 @@ fn applyRecoverBinding(
     }
 
     if (!found) {
-        candidate = hole_expr orelse return .no_progress;
+        // The pattern accepts the source without exposing the hole.
+        candidate = try vacuousRecoverWitness(
+            theorem,
+            env,
+            snapshot,
+            recover,
+            hole_expr orelse return .no_progress,
+            view_bindings[recover.pattern_view_idx],
+        ) orelse return .no_progress;
     }
 
     if (debug_views) {
@@ -323,6 +366,47 @@ fn applyRecoverBinding(
     }
     view_bindings[recover.target_view_idx] = candidate;
     return .progress;
+}
+
+/// The witness `@recover` binds when the pattern matches the source
+/// without exposing the hole. When the target may mention the hole, that is
+/// the hole itself: the identity instance, right even when the pattern
+/// depends on the hole without showing it. Otherwise, when the pattern does
+/// not depend on the hole at all, any instance will do, and it is a fresh
+/// variable of the hole's sort that the view's bindings do not mention.
+/// Either one is lifted through the coercions from the hole's sort to the
+/// target's. Null when none of this applies, leaving the target unsolved.
+fn vacuousRecoverWitness(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    snapshot: MatchSnapshot,
+    recover: RecoverDecl,
+    hole_expr: ExprId,
+    pattern_expr: ?ExprId,
+) !?ExprId {
+    const hole_sort =
+        (try BindingValidation.exprInfo(env, theorem, hole_expr)).sort_name;
+    const witness = if (recover.target_may_hold_hole) hole_expr else blk: {
+        const pattern = pattern_expr orelse return null;
+        const hole_deps = try theorem.exprDeps(hole_expr, .{});
+        if (try theorem.exprDeps(pattern, .{}) & hole_deps != 0) return null;
+        const fresh = snapshot.fresh_var orelse return null;
+        var avoid: u55 = 0;
+        for (snapshot.view_bindings) |binding| {
+            if (binding) |expr_id| avoid |= try theorem.exprDeps(expr_id, .{});
+        }
+        break :blk try fresh.choose(fresh.ctx, hole_sort, avoid) orelse
+            return null;
+    };
+    var lift = std.ArrayListUnmanaged(u32).empty;
+    defer lift.deinit(theorem.allocator);
+    if (!try env.coercionRoute(
+        hole_sort,
+        recover.target_sort_name,
+        theorem.allocator,
+        &lift,
+    )) return null;
+    return try liftExpr(theorem, witness, lift.items);
 }
 
 fn recoverBindingCandidateFromSeed(
@@ -657,10 +741,23 @@ fn holeSeedMatchesDummy(seed: BindingSeed, slot: usize) bool {
     };
 }
 
+/// What concrete recovery reads off a source and pattern.
+pub const ConcreteRecover = union(enum) {
+    /// The structures diverge.
+    none,
+    /// The subtree of the source at the hole.
+    found: ExprId,
+    /// The pattern matches without exposing the hole: the source and
+    /// pattern agree, or the hole sits only in unchanged bound slots. Any
+    /// instance the pattern admits will do (`vacuousRecoverWitness`).
+    vacuous,
+};
+
 /// The concrete acceptance relation for a recover source: the raw
 /// structural walk, then the aligned (preprocessed) retry — the same two
 /// paths `applyRecoverBinding` tries before falling back to symbolic
-/// seeds. Returns the recovered target candidate on acceptance, null when
+/// seeds. Returns the recovered target candidate on acceptance, `.vacuous`
+/// when the pattern accepts without exposing the hole, `.none` when
 /// neither concrete path accepts. Only a structural mismatch means "no";
 /// other errors propagate. Also used read-only by the view matcher to
 /// judge trial context splits, so the filter and the committing pass
@@ -674,7 +771,7 @@ pub fn concreteRecoverCandidate(
     hole_expr: ExprId,
     target_sort: []const u8,
     debug_views: bool,
-) !?ExprId {
+) !ConcreteRecover {
     var candidate: ?ExprId = null;
     var skipped_equal_hole = false;
     const found = recoverBindingCandidate(
@@ -700,8 +797,8 @@ pub fn concreteRecoverCandidate(
                 .{},
             );
         }
-        if (!found) candidate = hole_expr;
-        return candidate orelse hole_expr;
+        if (!found) return .vacuous;
+        return .{ .found = candidate orelse return .vacuous };
     }
 
     const aligned_source = try preprocessDerivedExpr(
@@ -744,10 +841,10 @@ pub fn concreteRecoverCandidate(
                 .{},
             );
         }
-        if (!aligned_found) candidate = hole_expr;
-        return candidate orelse hole_expr;
+        if (!aligned_found) return .vacuous;
+        return .{ .found = candidate orelse return .vacuous };
     }
-    return null;
+    return .none;
 }
 
 fn recoverBindingCandidate(

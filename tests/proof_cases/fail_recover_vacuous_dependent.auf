@@ -1,0 +1,4 @@
+vacuous_dependent_body
+----------------------
+
+l1: $ cf (hyp (~ p)) (A. x p) $ by all_step [#1]

@@ -1,0 +1,9 @@
+vacuous_fresh_instance
+----------------------
+
+l1: $ cf (hyp (~ P b)) (A. x (P b)) $ by all_step [#1]
+
+vacuous_identity_instance
+-------------------------
+
+l1: $ cf (hyp (~ P b)) (A. x (P b)) $ by all_step_open [#1]

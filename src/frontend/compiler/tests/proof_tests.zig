@@ -706,6 +706,7 @@ fn expectNestedView(
             partial_bindings,
             null,
             null,
+            null,
             false,
         );
         // Success here means the view/recover pipeline carried enough
