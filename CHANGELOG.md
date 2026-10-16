@@ -34,6 +34,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   now gets the usual "visible parts do not match" error. It used to fail
   with an internal error when a rule variable met a subterm with a hole
   below its head, and the editor showed nothing.
+- Binder lists in a `.mm0` file are now checked the way mm0-c checks them,
+  in the verifier, the compiler and the editor. A dependency such as the
+  `x` in `(p: wff x)` must name a bound variable declared earlier, and a
+  binder name may be used only once per statement; a misspelt or regular
+  variable in a dependency list used to be dropped without a word. A
+  `notation` statement's binder and return types must match its term's
+  declaration exactly, where they used to be read and ignored.
 
 ## [0.0.17] - 2026-10-14
 

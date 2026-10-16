@@ -2160,7 +2160,7 @@ test "abstract pruner skips rigid-bad broad refs before validation" {
         \\term iff (a b: wff): wff;
         \\infixr iff: $<->$ prec 20;
         \\term top: wff;
-        \\term sb (t x: wff) (r: wff x): wff;
+        \\term sb (t x: wff) (r: wff): wff;
         \\--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
         \\axiom iff_refl (a: wff): $ a <-> a $;
         \\axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
@@ -2171,14 +2171,14 @@ test "abstract pruner skips rigid-bad broad refs before validation" {
         \\--| @rewrite
         \\axiom sb_top (t x: wff): $ sb t x top <-> top $;
         \\--| @rewrite
-        \\axiom sb_imp (t x: wff) (a b: wff x):
+        \\axiom sb_imp (t x: wff) (a b: wff):
         \\  $ sb t x (a -> b) <-> (sb t x a -> sb t x b) $;
         \\--| @congr
         \\axiom imp_congr (a b c d: wff):
         \\  $ a <-> b $ > $ c <-> d $ > $ (a -> c) <-> (b -> d) $;
-        \\--| @view (a b: wff) (r: wff a) (p q: wff): $ a <-> b $ > $ p $ > $ q $
+        \\--| @view (a b: wff) (r: wff) (p q: wff): $ a <-> b $ > $ p $ > $ q $
         \\--| @abstract r p q a a b
-        \\axiom ax_ctx (a b: wff) (r: wff a):
+        \\axiom ax_ctx (a b: wff) (r: wff):
         \\  $ a <-> b $ > $ sb a a r $ > $ sb b a r $;
         \\theorem t (a b c: wff):
         \\  $ a <-> b $ > $ a -> top $ > $ c -> top $ >
@@ -2214,7 +2214,7 @@ test "abstract pruner resolves def heads to rigid roots, abstains on reducible h
         \\term iff (a b: wff): wff;
         \\infixr iff: $<->$ prec 20;
         \\term top: wff;
-        \\term sb (t x: wff) (r: wff x): wff;
+        \\term sb (t x: wff) (r: wff): wff;
         \\def hold (p: wff): wff = $ p $;
         \\def wrapiff (a b: wff): wff = $ a <-> b $;
         \\def wrapimp (a b: wff): wff = $ a -> b $;
@@ -2230,14 +2230,14 @@ test "abstract pruner resolves def heads to rigid roots, abstains on reducible h
         \\--| @rewrite
         \\axiom sb_top (t x: wff): $ sb t x top <-> top $;
         \\--| @rewrite
-        \\axiom sb_imp (t x: wff) (a b: wff x):
+        \\axiom sb_imp (t x: wff) (a b: wff):
         \\  $ sb t x (a -> b) <-> (sb t x a -> sb t x b) $;
         \\--| @congr
         \\axiom imp_congr (a b c d: wff):
         \\  $ a <-> b $ > $ c <-> d $ > $ (a -> c) <-> (b -> d) $;
-        \\--| @view (a b: wff) (r: wff a) (p q: wff): $ a <-> b $ > $ p $ > $ q $
+        \\--| @view (a b: wff) (r: wff) (p q: wff): $ a <-> b $ > $ p $ > $ q $
         \\--| @abstract r p q a a b
-        \\axiom ax_ctx (a b: wff) (r: wff a):
+        \\axiom ax_ctx (a b: wff) (r: wff):
         \\  $ a <-> b $ > $ sb a a r $ > $ sb b a r $;
         \\theorem t (a b c: wff):
         \\  $ a <-> b $ > $ a -> top $ > $ c -> top $ >

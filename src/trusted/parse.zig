@@ -35,6 +35,7 @@ pub const ParseError = error{
     DummyInFreeSort,
     DummyOutsideDef,
     DummyNotationBinder,
+    DuplicateBinder,
     DuplicateHoleAnnotation,
     DuplicateHoleToken,
     DuplicateInfixToken,
@@ -52,6 +53,7 @@ pub const ParseError = error{
     HoleTokenNameCollision,
     IllegalWhitespace,
     InfixPrecOutOfRange,
+    InvalidDependency,
     InvalidHoleAnnotation,
     InvalidNotationToken,
     InvalidNotationVariables,
@@ -60,6 +62,7 @@ pub const ParseError = error{
     NotProvable,
     NotationFirstTokenConflict,
     NotationMismatch,
+    NotationTypeMismatch,
     NumberOutOfRange,
     OutOfMemory,
     Overflow,
@@ -175,6 +178,11 @@ pub const BoundArgDeps = struct {
 /// bound-arg space; dependencies on dummies have no bound-arg bit and are
 /// returned separately for the caller to reject.
 pub fn binderDepsToBoundArgDeps(args: []const ArgInfo, deps: u55) BoundArgDeps {
+    return compressToBoundArgs(args, deps);
+}
+
+/// `binderDepsToBoundArgDeps` over `ArgInfo`s or a recorded term's `Arg`s.
+fn compressToBoundArgs(args: anytype, deps: u55) BoundArgDeps {
     var out: u55 = 0;
     var pending = deps;
     var bound_arg_idx: u6 = 0;
@@ -205,6 +213,8 @@ pub fn boundArgDepsToBinderDeps(args: []const ArgInfo, deps: u55) u55 {
 const TermEnv = struct {
     args: []const Arg,
     ret_sort: u7,
+    /// Over the bound args only, like an MMB return `Arg`.
+    ret_deps: u55,
 };
 
 const CoercionTag = enum(u8) {
@@ -851,6 +861,7 @@ pub const MM0Parser = struct {
         try self.terms.append(self.allocator, .{
             .args = term_args,
             .ret_sort = ret_sort,
+            .ret_deps = ret_deps,
         });
         try self.term_names.put(name_info.text, term_id);
 
@@ -1035,6 +1046,11 @@ pub const MM0Parser = struct {
 
             const sort = self.sort_infos.items[try self.lookupSortId(arg.sort_name)];
             for (names.items, name_spans.items, is_dummy_buf.items) |name, name_span, is_dummy| {
+                // mm0-c: "variable shadowing is not allowed".
+                if (!std.mem.eql(u8, name, "_") and ctx.vars.contains(name)) {
+                    self.last_error_span = name_span;
+                    return error.DuplicateBinder;
+                }
                 // mm0-c: "dummies should not have dependencies". A dummy
                 // gets its own bit; listed deps would be silently dropped.
                 // (A curly group's `arg.deps` is its own bit, not a list.)
@@ -1122,8 +1138,8 @@ pub const MM0Parser = struct {
             self.skipWhitespaceAndComments();
             const ch = self.peek();
             if (ch == ')' or ch == '}' or ch == 0) break;
-            const dep_name = self.consumeIdent() orelse break;
-            deps |= self.lookupBoundDep(bound_names, dep_name);
+            const dep_name = self.consumeIdentInfo() orelse break;
+            deps |= try self.lookupBoundDep(bound_names, dep_name);
         }
         return .{ .sort_name = sort_info.text, .bound = false, .deps = deps };
     }
@@ -1143,8 +1159,8 @@ pub const MM0Parser = struct {
             if (ch == '>' or ch == ';' or ch == '=' or ch == ')' or
                 ch == '}' or ch == 0)
                 break;
-            const dep_name = try self.consumeRequiredIdent();
-            deps |= self.lookupBoundDep(bound_names, dep_name);
+            const dep_name = try self.consumeRequiredIdentInfo();
+            deps |= try self.lookupBoundDep(bound_names, dep_name);
         }
 
         return .{ .sort_name = sort_info.text, .bound = false, .deps = deps };
@@ -1265,7 +1281,11 @@ pub const MM0Parser = struct {
         const name_info = try self.consumeRequiredIdentInfo();
         const term_id = try self.lookupRecordedTermId(name_info);
         const term = self.terms.items[term_id];
+        // mm0-c reads these binders as the term's own (`binders`), so each
+        // must have the term's type for its argument: the same sort and
+        // boundness, depending on the same earlier bound binders.
         var var_names = std.StringHashMap(usize).init(self.allocator);
+        var bound_names: std.ArrayListUnmanaged([]const u8) = .empty;
         var arg_index: usize = 0;
         while (self.peek() == '(' or self.peek() == '{') {
             const is_bound = self.src[self.pos] == '{';
@@ -1273,7 +1293,7 @@ pub const MM0Parser = struct {
             self.pos += 1;
             self.skipWhitespaceAndComments();
 
-            var names: std.ArrayListUnmanaged([]const u8) = .empty;
+            var names: std.ArrayListUnmanaged(IdentInfo) = .empty;
             while (true) {
                 self.skipWhitespaceAndComments();
                 if (self.peek() == ':') break;
@@ -1296,23 +1316,58 @@ pub const MM0Parser = struct {
                     self.last_error_span = ident_info.span;
                     return error.HoleTokenNameCollision;
                 }
-                try names.append(self.allocator, ident_info.text);
+                try names.append(self.allocator, ident_info);
             }
             self.pos += 1;
-            _ = try self.parseSortExpr(&.{});
+            const arg = try self.parseBinderType(bound_names.items, is_bound);
+            const sort = try self.lookupSortId(arg.sort_name);
             self.skipWhitespaceAndComments();
             try self.expect(close);
-            for (names.items) |binder_name| {
-                if (!std.mem.eql(u8, binder_name, "_")) {
-                    try var_names.put(binder_name, arg_index);
+            for (names.items) |binder| {
+                if (var_names.contains(binder.text)) {
+                    self.last_error_span = binder.span;
+                    return error.DuplicateBinder;
                 }
+                if (arg_index >= term.args.len) {
+                    self.last_error_span = binder.span;
+                    return error.InvalidNotationVariables;
+                }
+                const want = term.args[arg_index];
+                if (want.bound != is_bound or want.sort != sort) {
+                    self.last_error_span = binder.span;
+                    return error.NotationTypeMismatch;
+                }
+                // A bound binder's own bit. Every earlier bound binder
+                // matched a bound arg of the term, which has at most
+                // `max_bound_vars`, so the shift fits.
+                const deps = if (is_bound)
+                    @as(u55, 1) << @intCast(bound_names.items.len)
+                else
+                    arg.deps;
+                if (compressToBoundArgs(term.args, want.deps).deps != deps) {
+                    self.last_error_span = binder.span;
+                    return error.NotationTypeMismatch;
+                }
+                if (is_bound) try bound_names.append(self.allocator, binder.text);
+                try var_names.put(binder.text, arg_index);
                 arg_index += 1;
             }
         }
 
         self.skipWhitespaceAndComments();
         try self.expect(':');
-        _ = try self.parseSortExpr(&.{});
+        self.skipWhitespaceAndComments();
+        const ret_start = self.pos;
+        const ret = try self.parseSortExpr(bound_names.items);
+        if (try self.lookupSortId(ret.sort_name) != term.ret_sort or
+            ret.deps != term.ret_deps)
+        {
+            self.last_error_span = .{
+                .start = ret_start,
+                .end = ret_start + ret.sort_name.len,
+            };
+            return error.NotationTypeMismatch;
+        }
         self.skipWhitespaceAndComments();
         try self.expect('=');
 
@@ -2178,14 +2233,23 @@ pub const MM0Parser = struct {
         return std.math.cast(u32, self.terms.items.len) orelse error.TooManyTerms;
     }
 
-    fn lookupBoundDep(self: *MM0Parser, bound_names: []const []const u8, name: []const u8) u55 {
-        _ = self;
-        for (bound_names, 0..) |bound_name, idx| {
-            if (std.mem.eql(u8, bound_name, name)) {
-                return @as(u55, 1) << @intCast(idx);
+    /// The dependency bit of `name` in a type's dependency list: it must
+    /// name a bound binder declared earlier (mm0-c: "expecting variable",
+    /// "expecting bound variable"). A blank `_` binder has no name.
+    fn lookupBoundDep(
+        self: *MM0Parser,
+        bound_names: []const []const u8,
+        name: IdentInfo,
+    ) error{InvalidDependency}!u55 {
+        if (!std.mem.eql(u8, name.text, "_")) {
+            for (bound_names, 0..) |bound_name, idx| {
+                if (std.mem.eql(u8, bound_name, name.text)) {
+                    return @as(u55, 1) << @intCast(idx);
+                }
             }
         }
-        return 0;
+        self.last_error_span = name.span;
+        return error.InvalidDependency;
     }
 
     fn readQuotedString(self: *MM0Parser) ![]const u8 {

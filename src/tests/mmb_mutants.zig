@@ -371,6 +371,71 @@ const mutants = [_]Mutant{
         .expected = error.IllegalWhitespace,
         .mm0c = "invalid command keyword",
     },
+    // Binder lists: a dependency names a bound binder declared earlier, and
+    // a name is declared once.
+    .{
+        .name = "dependency on an undeclared name",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_edits = &.{.{ .find = "(p: wff x): wff;", .replace = "(p: wff q): wff;" }},
+        .expected = error.InvalidDependency,
+        .mm0c = "expecting variable",
+    },
+    .{
+        .name = "dependency on a blank binder",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_edits = &.{.{ .find = "{x: nat} (p: wff x)", .replace = "{_: nat} (p: wff _)" }},
+        .expected = error.InvalidDependency,
+        .mm0c = "expecting an identifier, not '_'",
+    },
+    .{
+        .name = "dependency on a regular variable",
+        .spec_edits = &.{.{ .find = "axiom ax_1 (a b: wff)", .replace = "axiom ax_1 (a: wff) (b: wff a)" }},
+        .expected = error.InvalidDependency,
+        .mm0c = "expecting bound variable",
+    },
+    .{
+        .name = "binder name declared twice",
+        .spec_edits = &.{.{ .find = "axiom ax_1 (a b: wff)", .replace = "axiom ax_1 (a a: wff)" }},
+        .expected = error.DuplicateBinder,
+        .mm0c = "variable shadowing is not allowed",
+    },
+    // A `notation` restates its term's binder and return types exactly.
+    // `notation all {x: nat} (p: wff x): wff = ($A.$:30) x ($,$:30) p;`
+    // passes both verifiers.
+    .{
+        .name = "notation return type names a sort as a dependency",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_suffix = "notation all {x: nat} (p: wff x): wff wff = ($A.$:30) x ($,$:30) p;\n",
+        .expected = error.InvalidDependency,
+        .mm0c = "expecting variable",
+    },
+    .{
+        .name = "notation binder missing a dependency",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_suffix = "notation all {x: nat} (p: wff): wff = ($A.$:30) x ($,$:30) p;\n",
+        .expected = error.NotationTypeMismatch,
+        .mm0c = "variable type does not match theorem",
+    },
+    .{
+        .name = "notation binder regular where the term's is bound",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_suffix = "notation all (x: nat) (p: wff x): wff = ($A.$:30) x ($,$:30) p;\n",
+        .expected = error.NotationTypeMismatch,
+        .mm0c = "variable type does not match theorem",
+    },
+    .{
+        .name = "notation return sort differs from the term's",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_suffix = "notation all {x: nat} (p: wff x): nat = ($A.$:30) x ($,$:30) p;\n",
+        .expected = error.NotationTypeMismatch,
+        .mm0c = "return type does not match theorem",
+    },
 };
 
 fn readMutantFile(
