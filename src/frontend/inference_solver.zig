@@ -29,6 +29,7 @@ const StructuralObligationSolver =
 const StructuralStateUpdates =
     @import("./inference_solver/state_updates.zig");
 const Ambiguity = @import("./inference_solver/ambiguity_report.zig");
+const StructuralItems = @import("./inference_solver/items.zig");
 const types = @import("./inference_solver/types.zig");
 const BinderSpace = types.BinderSpace;
 const MatchConstraint = types.MatchConstraint;
@@ -126,6 +127,9 @@ pub const Solver = struct {
     /// Fresh variables for a `@recover` whose hole the pattern lacks
     /// (`DerivedBindings.FreshVar`). Null leaves such a target unsolved.
     fresh_var: ?DerivedBindings.FreshVar = null,
+    /// Source order of the bag members this solve matched, so remainder
+    /// binders are rebuilt in it (`StructuralItems.MemberOrder`).
+    member_order: StructuralItems.MemberOrder = .{},
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -179,6 +183,7 @@ pub const Solver = struct {
         if (self.ambiguity_report.alternative_bindings) |summary| {
             self.real_allocator.free(summary);
         }
+        self.member_order.deinit(self.real_allocator);
         self.canonicalizer.deinit();
         if (self.def_ops_ctx) |*ctx| ctx.deinit();
         if (self.def_ops_ctx_plain) |*ctx| ctx.deinit();
@@ -281,6 +286,7 @@ pub const Solver = struct {
         self.allocator = self.state_arena.allocator();
         errdefer self.allocator = self.real_allocator;
         self.failure = null;
+        self.member_order.clear();
 
         var states = try self.initialStates(partial_bindings);
 

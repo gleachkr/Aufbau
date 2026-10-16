@@ -52,7 +52,7 @@ l3: $ _wff $ by imp_elim [l1, l2]
 l4: $ ¬ b ⊢ ¬ b $ by ax []
 l5: $ _wff $ by not_elim [l4, l3]
 l6: $ _wff $ by not_intro (a := $ a $) [l5]
-l7: $ _wff $ by imp_intro [l6]
+l7: $ _ctx ⊢ ¬ b → ¬ a $ by imp_intro [l6]
 l8: $ _wff $ by imp_intro [l7]
 
 and_comm_iff
@@ -160,7 +160,7 @@ l3: $ a ⊢ a $ by ax []
 l4: $ _wff $ by imp_elim [l1, l3]
 l5: $ _wff $ by imp_elim [l2, l4]
 l6: $ _ctx ⊢ a → c $ by imp_intro [l5]
-l7: $ _wff $ by imp_intro [l6]
+l7: $ _ctx ⊢ (b → c) → (a → c) $ by imp_intro [l6]
 l8: $ _wff $ by imp_intro [l7]
 
 not_not_lem

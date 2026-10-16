@@ -163,8 +163,7 @@ fn mergeStructuralExprs(
     return try StructuralItems.rebuildStructuralExpr(
         self,
         merged.items,
-        head_term_id,
-        unit_term_id,
+        profile,
     );
 }
 
@@ -476,7 +475,6 @@ pub fn combineStructuralExprs(
     return try StructuralItems.rebuildStructuralExpr(
         self,
         items.items,
-        profile.headTermId(),
-        profile.unitTermId(),
+        profile,
     );
 }

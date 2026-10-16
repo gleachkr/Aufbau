@@ -311,3 +311,70 @@ test "an idempotent bag's items meet through a definition on either side" {
         try std.testing.expectEqual(case.kept, out.items.len);
     }
 }
+
+test "a rebuilt commutative bag follows its source; a sequence keeps its items' order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var theorem = TheoremContext.init(allocator);
+    defer theorem.deinit();
+    try theorem.seedAssertion(fixture.assertion);
+    var harness = ContextHarness.init(allocator);
+    defer harness.deinit();
+    const context = harness.context(&fixture);
+    const env = context.env;
+    const rule_id = env.rule_names.get("st_refl").?;
+    var solver = InferenceSolver.Solver.init(
+        allocator,
+        env,
+        &theorem,
+        context.registry,
+        rule_id,
+        &env.rules.items[rule_id],
+        null,
+        null,
+        .{},
+    );
+    defer solver.deinit();
+
+    const a = theorem.theorem_vars.items[0];
+    const b = theorem.theorem_vars.items[1];
+    const ab = try theorem.interner.internApp(env.term_names.get("bi").?, &.{ a, b });
+    const Bag = struct {
+        th: *TheoremContext,
+        join: u32,
+        hyp: u32,
+        fn member(bag: @This(), p: ExprId) !ExprId {
+            return try bag.th.interner.internApp(bag.hyp, &.{p});
+        }
+        /// `((m0 , m1) , …)` over `wffs`, left-nested.
+        fn of(bag: @This(), wffs: []const ExprId) !ExprId {
+            var cur = try bag.member(wffs[0]);
+            for (wffs[1..]) |p| cur = try bag.th.interner.internApp(bag.join, &.{ cur, try bag.member(p) });
+            return cur;
+        }
+    };
+
+    // A multiset rebuilt from items in any order lists them as the source
+    // did, nested as the source is.
+    const ms: Bag = .{ .th = &theorem, .join = env.term_names.get("mjoin").?, .hyp = env.term_names.get("mhyp").? };
+    const ms_profile = (try Items.resolveStructuralProfile(&solver, ms.join)).?;
+    try solver.member_order.register(&solver, ms_profile, try ms.of(&.{ ab, a, b }));
+    try std.testing.expectEqual(
+        try ms.of(&.{ ab, a, b }),
+        try Items.rebuildStructuralExpr(&solver, &.{ try ms.member(a), try ms.member(b), try ms.member(ab) }, ms_profile),
+    );
+
+    // A sequence is rebuilt in its items' own order: `a` repeats, and its
+    // first appearance must not pull the second one forward.
+    solver.member_order.clear();
+    const au: Bag = .{ .th = &theorem, .join = env.term_names.get("ajoin").?, .hyp = env.term_names.get("ahyp").? };
+    const au_profile = (try Items.resolveStructuralProfile(&solver, au.join)).?;
+    try solver.member_order.register(&solver, au_profile, try au.of(&.{ a, b, ab, a }));
+    try std.testing.expectEqual(
+        try au.of(&.{ b, ab, a }),
+        try Items.rebuildStructuralExpr(&solver, &.{ try au.member(b), try au.member(ab), try au.member(a) }, au_profile),
+    );
+}

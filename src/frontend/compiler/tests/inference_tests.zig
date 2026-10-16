@@ -636,19 +636,107 @@ test "identical ACU members are split once per count" {
     try std.testing.expectEqual(error.AmbiguousAcuiMatch, diag.err);
     try std.testing.expectEqual(@as(usize, 4), diag.noteSlice().len);
     try expectNoteText(
-        "chosen bindings: g = join(hyp(v0), join(hyp(v0), join(hyp(v0), " ++
-            "join(...; h = emp; d = hyp(v1)",
+        "chosen bindings: g = join(join(join(join(join(join(join(join(" ++
+            "join(jo...; h = emp; d = hyp(v1)",
         diag.noteSlice()[1],
     );
     try expectNoteText(
-        "alternative bindings: g = join(hyp(v0), join(hyp(v0), " ++
-            "join(hyp(v0), join(...; h = hyp(v0); d = hyp(v1)",
+        "alternative bindings: g = join(join(join(join(join(join(join(" ++
+            "join(join(jo...; h = hyp(v0); d = hyp(v1)",
         diag.noteSlice()[2],
     );
     try expectNoteText(
         "distinct solutions considered: 25",
         diag.noteSlice()[3],
     );
+}
+
+/// `x{a} & x{b} & …` over `members`, nested the way `assoc` reads it.
+fn appendBag(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: std.mem.Allocator,
+    members: []const usize,
+    assoc: []const u8,
+) !void {
+    for (members, 0..) |member, idx| {
+        if (idx != 0) try out.appendSlice(allocator, " & ");
+        if (std.mem.eql(u8, assoc, "infixr") and idx + 1 != members.len) {
+            try out.append(allocator, '(');
+        }
+        try out.print(allocator, "x{d}", .{member});
+    }
+    if (std.mem.eql(u8, assoc, "infixr")) {
+        try out.appendNTimes(allocator, ')', members.len - 1);
+    }
+}
+
+test "an inferred context remainder keeps its source's member order" {
+    // `unmark` takes one member `a` out of a context written in reverse of
+    // its sorted order, leaving the rest to `g`. Rebuilt sorted, `g` made
+    // the proof re-sort the whole context, its size the square of the
+    // context's (18 KB); in the source's order and nesting, `a` alone
+    // moves.
+    const n = 20;
+    const allocator = std.testing.allocator;
+    var reversed: [n]usize = undefined;
+    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+
+    for ([_][]const u8{ "infixl", "infixr" }) |assoc| {
+        var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer mm0_src.deinit(allocator);
+        try mm0_src.print(allocator,
+            \\delimiter $ ( ) $;
+            \\provable sort wff;
+            \\term bi (a b: wff): wff;
+            \\--| @relation wff bi biid bitr bisym mpbi
+            \\axiom biid (a: wff): $ bi a a $;
+            \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+            \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+            \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+            \\sort rc;
+            \\term rnil: rc;
+            \\--| @acui rc_assoc rc_comm rnil _
+            \\term rjoin (g h: rc): rc; {s} rjoin: $&$ prec 6;
+            \\term rc_eq (g h: rc): wff;
+            \\--| @relation rc rc_eq rc_refl rc_trans rc_sym _
+            \\axiom rc_refl (g: rc): $ rc_eq g g $;
+            \\axiom rc_trans (g h i: rc): $ rc_eq g h $ > $ rc_eq h i $ > $ rc_eq g i $;
+            \\axiom rc_sym (g h: rc): $ rc_eq g h $ > $ rc_eq h g $;
+            \\axiom rc_assoc (g h i: rc): $ rc_eq ((g & h) & i) (g & (h & i)) $;
+            \\axiom rc_comm (g h: rc): $ rc_eq (g & h) (h & g) $;
+            \\axiom rc_unit (g: rc): $ rc_eq (g & rnil) g $;
+            \\--| @congr
+            \\axiom rjoin_congr (g1 g2 h1 h2: rc):
+            \\  $ rc_eq g1 g2 $ > $ rc_eq h1 h2 $ > $ rc_eq (g1 & h1) (g2 & h2) $;
+            \\term mark (g a: rc): wff;
+            \\--| @congr
+            \\axiom mark_congr (g h a b: rc):
+            \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
+            \\term closed (g: rc): wff;
+            \\--| @congr
+            \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+            \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
+            \\theorem t (
+        , .{assoc});
+        for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+        try mm0_src.appendSlice(allocator, ": rc): $ mark (");
+        try appendBag(&mm0_src, allocator, &reversed, assoc);
+        try mm0_src.appendSlice(allocator, ") x10 $ > $ closed (");
+        try appendBag(&mm0_src, allocator, &reversed, assoc);
+        try mm0_src.appendSlice(allocator, ") $;\n");
+
+        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer proof_src.deinit(allocator);
+        try proof_src.appendSlice(allocator, "t\n---\nl1: $ closed (");
+        try appendBag(&proof_src, allocator, &reversed, assoc);
+        try proof_src.appendSlice(allocator, ") $ by unmark [#1]\n");
+
+        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+        const mmb = try compiler.compileMmb(allocator);
+        defer allocator.free(mmb);
+        try mm0.verifyPair(allocator, mm0_src.items, mmb);
+        try std.testing.expect(mmb.len < 8_000);
+    }
 }
 
 test "-Werror upgrades ambiguity warnings into errors" {

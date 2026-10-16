@@ -50,6 +50,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   way an idempotent one is: each member's possible places come from what
   is already known about each variable, and splits that nothing else can
   tell apart are counted without being listed.
+- A context variable left with the rest of an `@acui` context, such as Γ
+  in a truth tree step's `focus (Γ ; Δ) at Δ`, now keeps the members in
+  the order and grouping the line wrote them. It used to be rebuilt in a
+  sorted order, so the proof re-sorted the whole branch: a `done` on a
+  240-row branch whose rows were not in that order wrote an 840 KB proof,
+  and a `∧` step 1.5 MB. Both now take 55–70 KB, as they do when the rows
+  happen to be sorted. When a line leaves open which member a rule takes,
+  as in `$ _wff $ by imp_intro [l6]` over a two-member context, the last
+  member as written is the one taken, where it used to be the last in the
+  sorted order.
 
 ## [0.0.17] - 2026-10-14
 

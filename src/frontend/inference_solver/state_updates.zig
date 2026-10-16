@@ -15,6 +15,7 @@ const StructuralRemainder = types.StructuralRemainder;
 pub fn appendStructuralRemainderState(
     self: anytype,
     actual_items: []const ExprId,
+    source_order: []const u32,
     used: []const bool,
     remainders: []const StructuralRemainder,
     space: BinderSpace,
@@ -36,6 +37,7 @@ pub fn appendStructuralRemainderState(
     const interval = try buildStructuralInterval(
         self,
         actual_items,
+        source_order,
         used,
         profile,
     );
@@ -260,30 +262,35 @@ pub fn candidateBindingCompatible(
     );
 }
 
+/// `source_order` lists the indices of `actual_items` in source order
+/// (`MemberOrder.permutation`), so each branch of a match rebuilds its
+/// remainder without sorting it again.
 pub fn buildStructuralInterval(
     self: anytype,
     actual_items: []const ExprId,
+    source_order: []const u32,
     used: []const bool,
     profile: StructuralProfile,
 ) anyerror!StructuralInterval {
     var lower_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lower_items.deinit(self.allocator);
-    for (actual_items, used) |actual_item, is_used| {
-        if (!is_used) try lower_items.append(self.allocator, actual_item);
+    var all_items = std.ArrayListUnmanaged(ExprId).empty;
+    defer all_items.deinit(self.allocator);
+    for (source_order) |idx| {
+        if (!used[idx]) try lower_items.append(self.allocator, actual_items[idx]);
+        if (profile.law == .set) try all_items.append(self.allocator, actual_items[idx]);
     }
 
-    const lower_expr = try StructuralItems.rebuildStructuralExpr(
+    const lower_expr = try StructuralItems.nestStructuralExpr(
         self,
         lower_items.items,
-        profile.headTermId(),
-        profile.unitTermId(),
+        profile,
     );
     const upper_expr = switch (profile.law) {
-        .set => try StructuralItems.rebuildStructuralExpr(
+        .set => try StructuralItems.nestStructuralExpr(
             self,
-            actual_items,
-            profile.headTermId(),
-            profile.unitTermId(),
+            all_items.items,
+            profile,
         ),
         .sequence, .multiset, .idempotent_sequence => lower_expr,
     };
@@ -324,8 +331,7 @@ pub fn buildExactStructuralInterval(
     const exact_expr = try StructuralItems.rebuildStructuralExpr(
         self,
         items,
-        profile.headTermId(),
-        profile.unitTermId(),
+        profile,
     );
     return .{
         .head_term_id = profile.headTermId(),

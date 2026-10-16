@@ -260,31 +260,132 @@ pub fn appendTemplateStructuralItem(
     try out.append(self.allocator, item);
 }
 
+/// The bag holding `items`, in the law's item order. A commutative bag
+/// lists them in source order instead (`MemberOrder`).
 pub fn rebuildStructuralExpr(
     self: anytype,
     items: []const ExprId,
-    head_term_id: u32,
-    unit_term_id: u32,
+    profile: StructuralProfile,
 ) anyerror!ExprId {
-    if (items.len == 0) {
-        return try @constCast(&self.theorem.interner).internApp(
-            unit_term_id,
-            &.{},
-        );
+    if (!profile.isCommutative() or items.len < 2) {
+        return try nestStructuralExpr(self, items, profile);
     }
-    if (items.len == 1) return items[0];
+    const order = try self.member_order.permutation(self.allocator, items);
+    defer self.allocator.free(order);
+    const ordered = try self.allocator.alloc(ExprId, items.len);
+    defer self.allocator.free(ordered);
+    for (order, ordered) |idx, *item| item.* = items[idx];
+    return try nestStructuralExpr(self, ordered, profile);
+}
 
-    var current = items[items.len - 1];
-    var idx = items.len - 1;
-    while (idx > 0) {
-        idx -= 1;
-        current = try @constCast(&self.theorem.interner).internApp(
-            head_term_id,
-            &[_]ExprId{ items[idx], current },
-        );
+/// The bag holding `items` in the order given, nested the way the
+/// matched sources nest (`MemberOrder.right_nested`).
+pub fn nestStructuralExpr(
+    self: anytype,
+    items: []const ExprId,
+    profile: StructuralProfile,
+) anyerror!ExprId {
+    const interner = @constCast(&self.theorem.interner);
+    if (items.len == 0) return try interner.internApp(profile.unitTermId(), &.{});
+    const head = profile.headTermId();
+    if (self.member_order.right_nested orelse true) {
+        var current = items[items.len - 1];
+        var idx = items.len - 1;
+        while (idx > 0) {
+            idx -= 1;
+            current = try interner.internApp(head, &.{ items[idx], current });
+        }
+        return current;
+    }
+    var current = items[0];
+    for (items[1..]) |item| {
+        current = try interner.internApp(head, &.{ current, item });
     }
     return current;
 }
+
+/// Where each bag member first appeared in a matched source, so that a
+/// bag rebuilt from canonical items (a remainder binder's value) lists its
+/// members in the source's order and nests the way the source does. The
+/// rearrangement certificate between a source and its rebuilt bag then
+/// moves only the members a rule takes out, where a sorted rebuild would
+/// re-sort the whole bag: quadratic in how far the source is from sorted.
+///
+/// A member keeps the position of the source it was first seen in, so
+/// when two sources list members in different orders the first matched
+/// one wins: a rule's premises before its conclusion, and a `@view`'s
+/// concrete conclusion before its premises (`Solver.solveWithConclusion`).
+/// Members no source holds go last, in item order.
+pub const MemberOrder = struct {
+    /// Canonical member -> position of its first appearance.
+    ranks: std.AutoHashMapUnmanaged(ExprId, u32) = .empty,
+    /// Sources already registered: a branch fan-out matches one source
+    /// once per branch.
+    sources: std.AutoHashMapUnmanaged(ExprId, void) = .empty,
+    /// Whether the first source with one nested side nests it on the
+    /// right. Null until such a source is seen; a rebuild then nests to
+    /// the right.
+    right_nested: ?bool = null,
+
+    pub fn deinit(order: *MemberOrder, allocator: std.mem.Allocator) void {
+        order.ranks.deinit(allocator);
+        order.sources.deinit(allocator);
+    }
+
+    pub fn clear(order: *MemberOrder) void {
+        order.ranks.clearRetainingCapacity();
+        order.sources.clearRetainingCapacity();
+        order.right_nested = null;
+    }
+
+    /// Records the members of `source`, a bag under `profile`'s combiner,
+    /// in source order. The map lives on `self.real_allocator`: it outlives
+    /// the per-solve arena's generations.
+    pub fn register(
+        order: *MemberOrder,
+        self: anytype,
+        profile: StructuralProfile,
+        source: ExprId,
+    ) anyerror!void {
+        if ((try order.sources.getOrPut(self.real_allocator, source)).found_existing) return;
+        const spine = AcuiBag.Spine.raw(profile.headTermId());
+        if (order.right_nested == null) {
+            if (spine.split(self.theorem, source)) |parts| {
+                const left = spine.isBag(self.theorem, parts[0]);
+                const right = spine.isBag(self.theorem, parts[1]);
+                if (left != right) order.right_nested = right;
+            }
+        }
+        var raw = std.ArrayListUnmanaged(ExprId).empty;
+        defer raw.deinit(self.allocator);
+        try spine.collect(self.allocator, self.theorem, source, &raw);
+        for (raw.items) |member| {
+            const canonical = try self.canonicalizer.canonicalize(member);
+            const gop = try order.ranks.getOrPut(self.real_allocator, canonical);
+            if (!gop.found_existing) gop.value_ptr.* = order.ranks.count() - 1;
+        }
+    }
+
+    /// The indices of `items` by rank, unranked items last in item
+    /// order; the caller frees them. Each item is looked up once, and the
+    /// sort runs on (rank, index) keys, which are distinct.
+    pub fn permutation(
+        order: *const MemberOrder,
+        allocator: std.mem.Allocator,
+        items: []const ExprId,
+    ) ![]u32 {
+        const keys = try allocator.alloc(u64, items.len);
+        defer allocator.free(keys);
+        for (items, keys, 0..) |item, *key, idx| {
+            const rank: u64 = order.ranks.get(item) orelse std.math.maxInt(u32);
+            key.* = rank << 32 | idx;
+        }
+        std.sort.pdq(u64, keys, {}, std.sort.asc(u64));
+        const out = try allocator.alloc(u32, items.len);
+        for (keys, out) |key, *idx| idx.* = @truncate(key);
+        return out;
+    }
+};
 
 pub fn isStructuralRemainderBinder(
     self: anytype,

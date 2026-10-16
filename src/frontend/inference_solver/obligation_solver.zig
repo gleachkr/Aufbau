@@ -112,8 +112,7 @@ fn searchOrderedStructuralObligationAssignments(
         const expr_id = try StructuralItems.rebuildStructuralExpr(
             self,
             target_items[item_start..item_end],
-            profile.headTermId(),
-            profile.unitTermId(),
+            profile,
         );
         if (!try StructuralStateUpdates.candidateBindingCompatible(
             self,
@@ -801,8 +800,7 @@ fn rebuildBindingExprs(
         binder_exprs[idx] = try StructuralItems.rebuildStructuralExpr(
             self,
             items.items,
-            profile.headTermId(),
-            profile.unitTermId(),
+            profile,
         );
     }
     return binder_exprs;
