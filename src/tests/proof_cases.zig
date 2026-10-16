@@ -657,6 +657,8 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "pass_acui_multi_remainder_ambiguous", .outcome = .pass },
     .{ .stem = "pass_acui_cover_product_ambiguous", .outcome = .pass },
     .{ .stem = "pass_acu_identical_members_ambiguous", .outcome = .pass },
+    .{ .stem = "pass_acu_bound_split_linear", .outcome = .pass },
+    .{ .stem = "pass_acu_def_member_split", .outcome = .pass },
     .{
         .stem = "fail_acui_multi_remainder_impossible",
         .outcome = .{ .fail = error.UnifyMismatch },

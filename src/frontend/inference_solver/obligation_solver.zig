@@ -1,6 +1,7 @@
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
 const BranchStateOps = @import("./branch_state.zig");
+const SemanticCompare = @import("./semantic_compare.zig");
 const StructuralIntervals = @import("./intervals.zig");
 const StructuralItems = @import("./items.zig");
 const StructuralStateUpdates =
@@ -32,14 +33,7 @@ pub fn solveStructuralObligation(
             obligation,
             profile,
         ),
-        .multiset => try solveAcuStructuralObligation(
-            self,
-            state,
-            space,
-            obligation,
-            profile,
-        ),
-        .set => try solveAcuiStructuralObligation(
+        .multiset, .set => try solveBagStructuralObligation(
             self,
             state,
             space,
@@ -146,121 +140,34 @@ fn searchOrderedStructuralObligationAssignments(
     }
 }
 
-fn solveAcuStructuralObligation(
-    self: anytype,
-    state: BranchState,
-    space: BinderSpace,
-    obligation: StructuralJointObligation,
-    profile: StructuralProfile,
-) anyerror![]BranchState {
-    var target_items = std.ArrayListUnmanaged(ExprId).empty;
-    defer target_items.deinit(self.allocator);
-    try StructuralItems.collectCanonicalStructuralItems(
-        self,
-        obligation.lower_expr,
-        profile,
-        &target_items,
-    );
-
-    const binder_item_lists = try initExprItemLists(
-        self,
-        obligation.binder_idxs.len,
-    );
-    defer deinitExprItemLists(self, binder_item_lists);
-
-    var out = std.ArrayListUnmanaged(BranchState).empty;
-    try searchAcuStructuralObligationAssignments(
-        self,
-        state,
-        space,
-        obligation,
-        profile,
-        target_items.items,
-        binder_item_lists,
-        0,
-        0,
-        &out,
-    );
-    return try out.toOwnedSlice(self.allocator);
-}
-
-/// `min_binder` is the first binder the member at `item_pos` may go to.
-/// Copies of one member are interchangeable and sit next to each other in
-/// the sorted items, so each copy goes to the same binder as the copy
-/// before it or a later one: every split of the copies is visited once, in
-/// the order trying each binder for each copy first reaches it, instead of
-/// once per permutation (k^n assignments for C(n+k-1, k-1) splits).
-fn searchAcuStructuralObligationAssignments(
-    self: anytype,
-    state: BranchState,
-    space: BinderSpace,
-    obligation: StructuralJointObligation,
-    profile: StructuralProfile,
-    binder_target_items: []const ExprId,
-    binder_item_lists: []std.ArrayListUnmanaged(ExprId),
-    item_pos: usize,
-    min_binder: usize,
-    out: *std.ArrayListUnmanaged(BranchState),
-) anyerror!void {
-    if (item_pos >= binder_target_items.len) {
-        const binder_exprs = try rebuildBindingExprs(
-            self,
-            binder_item_lists,
-            profile,
-        );
-        defer self.allocator.free(binder_exprs);
-        try StructuralStateUpdates.appendStructuralCandidateState(
-            self,
-            state,
-            space,
-            obligation.binder_idxs,
-            binder_exprs,
-            1,
-            out,
-        );
-        return;
-    }
-
-    const item = binder_target_items[item_pos];
-    const next_pos = item_pos + 1;
-    const next_is_copy = next_pos < binder_target_items.len and
-        binder_target_items[next_pos] == item;
-    for (binder_item_lists[min_binder..], min_binder..) |*items, binder| {
-        try items.append(self.allocator, item);
-        try searchAcuStructuralObligationAssignments(
-            self,
-            state,
-            space,
-            obligation,
-            profile,
-            binder_target_items,
-            binder_item_lists,
-            next_pos,
-            if (next_is_copy) binder else 0,
-            out,
-        );
-        _ = items.pop();
-    }
-}
-
-/// One member's admissible binder subsets (bit `i` stands for the
-/// obligation's `binder_idxs[i]`), in the order the cover enumeration
-/// visits them: the required binders plus every optional one first, then
-/// the optional part descending.
+/// One distinct member's admissible placements, in the order the cover
+/// enumeration visits them. A placement is the number of copies of `item`
+/// each of the obligation's binders takes (entry `i` for `binder_idxs[i]`);
+/// `counts` holds the placements back to back.
 const MemberChoices = struct {
     item: ExprId,
-    subsets: []const usize,
+    binder_count: usize,
+    counts: []const u32,
+
+    fn len(self: MemberChoices) usize {
+        return self.counts.len / self.binder_count;
+    }
+
+    fn placement(self: MemberChoices, idx: usize) []const u32 {
+        return self.counts[idx * self.binder_count ..][0..self.binder_count];
+    }
 };
 
-/// ACUI: every member of the actual bag goes to some subset of the
-/// obligation's binders. A member's admissible subsets depend only on the
-/// member and the per-binder bounds — never on where earlier members went —
-/// so the obligation's covers are exactly the Cartesian product of the
-/// per-member choice lists. When nothing outside those bounds can tell two
-/// covers apart (`obligationCoupled`), the product is resolved in closed
-/// form; otherwise the covers are enumerated for the later constraints to
-/// filter.
-fn solveAcuiStructuralObligation(
+/// ACU and ACUI: the copies of each member of the actual bag go to the
+/// obligation's binders, under ACU each copy to exactly one binder, under
+/// ACUI the member to a nonempty subset of them. A member's admissible
+/// placements depend only on the member and the per-binder bounds — never
+/// on where other members went — so the obligation's covers are exactly the
+/// Cartesian product of the per-member choice lists. When the bounds are
+/// exact and nothing outside them can tell two covers apart
+/// (`obligationCoupled`), the product is resolved in closed form; otherwise
+/// the covers are enumerated for the later constraints to filter.
+fn solveBagStructuralObligation(
     self: anytype,
     state: BranchState,
     space: BinderSpace,
@@ -300,7 +207,7 @@ fn solveAcuiStructuralObligation(
         binder_uppers,
         obligation.binder_idxs,
     ) |*lower, *upper, binder_idx| {
-        try collectAcuiBinderBounds(
+        try collectBinderBounds(
             self,
             &state,
             space,
@@ -311,38 +218,58 @@ fn solveAcuiStructuralObligation(
             upper,
         );
     }
+    // A set keeps no two compatible members, so ACUI's bounds hold as read;
+    // ACU's count copies exactly only when compatibility is identity.
+    const exact = profile.law == .set or
+        !try boundsMeetOtherForms(self, upper_items.items, binder_lowers);
 
-    const choices = try self.allocator.alloc(
-        MemberChoices,
-        upper_items.items.len,
-    );
-    for (choices) |*member| member.* = .{ .item = 0, .subsets = &.{} };
+    var choices = std.ArrayListUnmanaged(MemberChoices).empty;
     defer {
-        for (choices) |member| self.allocator.free(member.subsets);
-        self.allocator.free(choices);
+        for (choices.items) |member| self.allocator.free(member.counts);
+        choices.deinit(self.allocator);
     }
     var out = std.ArrayListUnmanaged(BranchState).empty;
-    for (upper_items.items, 0..) |item, idx| {
-        choices[idx] = try admissibleSubsets(
-            self,
-            item,
-            lower_items.items,
-            binder_lowers,
-            binder_uppers,
-        );
-        if (choices[idx].subsets.len == 0) {
+    var item_pos: usize = 0;
+    while (item_pos < upper_items.items.len) {
+        const item = upper_items.items[item_pos];
+        // Copies of one member sit next to each other in the sorted items.
+        var copies: u32 = 1;
+        while (item_pos + copies < upper_items.items.len and
+            upper_items.items[item_pos + copies] == item) copies += 1;
+        item_pos += copies;
+
+        const member = switch (profile.law) {
+            .set => try admissibleSubsets(
+                self,
+                item,
+                lower_items.items,
+                binder_lowers,
+                binder_uppers,
+            ),
+            .multiset => try admissibleDistributions(
+                self,
+                item,
+                copies,
+                binder_lowers,
+                binder_uppers,
+                exact,
+            ),
+            .sequence, .idempotent_sequence => unreachable,
+        };
+        try choices.append(self.allocator, member);
+        if (member.len() == 0) {
             return try out.toOwnedSlice(self.allocator);
         }
     }
 
-    if (!obligationCoupled(self, &state, space, obligation)) {
+    if (exact and !obligationCoupled(self, &state, space, obligation)) {
         if (try resolveCoverProduct(
             self,
             state,
             space,
             obligation,
             profile,
-            choices,
+            choices.items,
             &out,
         )) {
             return try out.toOwnedSlice(self.allocator);
@@ -361,7 +288,7 @@ fn solveAcuiStructuralObligation(
         space,
         obligation,
         profile,
-        choices,
+        choices.items,
         binder_items,
         0,
         &out,
@@ -369,6 +296,8 @@ fn solveAcuiStructuralObligation(
     return try out.toOwnedSlice(self.allocator);
 }
 
+/// ACUI: the binder subsets a member may go to, the required binders plus
+/// every optional one first, then the optional part descending.
 fn admissibleSubsets(
     self: anytype,
     item: ExprId,
@@ -401,15 +330,20 @@ fn admissibleSubsets(
         }
     }
 
-    var subsets = std.ArrayListUnmanaged(usize).empty;
-    errdefer subsets.deinit(self.allocator);
+    var counts = std.ArrayListUnmanaged(u32).empty;
+    errdefer counts.deinit(self.allocator);
     if ((required_mask & ~allowed_mask) == 0) {
         const optional_mask = allowed_mask & ~required_mask;
         var choice = optional_mask;
         while (true) {
             const subset = required_mask | choice;
             if (!global_required or subset != 0) {
-                try subsets.append(self.allocator, subset);
+                for (0..binder_lowers.len) |idx| {
+                    try counts.append(
+                        self.allocator,
+                        @intCast((subset >> @intCast(idx)) & 1),
+                    );
+                }
             }
             if (choice == 0) break;
             choice = (choice - 1) & optional_mask;
@@ -417,8 +351,117 @@ fn admissibleSubsets(
     }
     return .{
         .item = item,
-        .subsets = try subsets.toOwnedSlice(self.allocator),
+        .binder_count = binder_lowers.len,
+        .counts = try counts.toOwnedSlice(self.allocator),
     };
+}
+
+/// ACU: the ways to share a member's `copies` among the binders, each
+/// binder taking at least the copies its lower bound holds and at most
+/// those its upper bound allows. Ordered as handing out the copies one at
+/// a time, each to the binder of the copy before it or a later one, first
+/// reaches them: most copies to the first binder first, then to the
+/// second, and so on. When the bounds are not `exact`, another member may
+/// meet a lower bound, so it requires nothing.
+fn admissibleDistributions(
+    self: anytype,
+    item: ExprId,
+    copies: u32,
+    binder_lowers: []const std.ArrayListUnmanaged(ExprId),
+    binder_uppers: []const std.ArrayListUnmanaged(ExprId),
+    exact: bool,
+) anyerror!MemberChoices {
+    const binder_count = binder_lowers.len;
+    const bounds = try self.allocator.alloc(u32, 3 * binder_count);
+    defer self.allocator.free(bounds);
+    const mins = bounds[0..binder_count];
+    const maxes = bounds[binder_count .. 2 * binder_count];
+    const current = bounds[2 * binder_count ..];
+    for (binder_lowers, binder_uppers, mins, maxes) |lower, upper, *min, *max| {
+        min.* = if (exact) try countCompatible(self, lower.items, item) else 0;
+        max.* = @min(copies, try countCompatible(self, upper.items, item));
+    }
+
+    var counts = std.ArrayListUnmanaged(u32).empty;
+    errdefer counts.deinit(self.allocator);
+    try appendDistributions(self, &counts, mins, maxes, current, 0, copies);
+    return .{
+        .item = item,
+        .binder_count = binder_count,
+        .counts = try counts.toOwnedSlice(self.allocator),
+    };
+}
+
+fn appendDistributions(
+    self: anytype,
+    out: *std.ArrayListUnmanaged(u32),
+    mins: []const u32,
+    maxes: []const u32,
+    current: []u32,
+    pos: usize,
+    remaining: u32,
+) !void {
+    if (pos + 1 == current.len) {
+        if (remaining < mins[pos] or remaining > maxes[pos]) return;
+        current[pos] = remaining;
+        try out.appendSlice(self.allocator, current);
+        return;
+    }
+    var count = @min(maxes[pos], remaining) + 1;
+    while (count > mins[pos]) {
+        count -= 1;
+        current[pos] = count;
+        try appendDistributions(
+            self,
+            out,
+            mins,
+            maxes,
+            current,
+            pos + 1,
+            remaining - count,
+        );
+    }
+}
+
+fn countCompatible(
+    self: anytype,
+    items: []const ExprId,
+    item: ExprId,
+) anyerror!u32 {
+    var count: u32 = 0;
+    for (items) |candidate| {
+        if (try SemanticCompare.bindingCompatible(self, candidate, item)) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// Whether a member of the actual bag or of a binder's lower bound can be
+/// `bindingCompatible` with a different member. Otherwise compatibility is
+/// identity, so the multiset bounds count copies exactly. (A binder's upper
+/// bound is its lower bound or the actual bag.)
+fn boundsMeetOtherForms(
+    self: anytype,
+    items: []const ExprId,
+    binder_lowers: []const std.ArrayListUnmanaged(ExprId),
+) anyerror!bool {
+    for (items) |item| {
+        if (try meetsOtherForms(self, item)) return true;
+    }
+    for (binder_lowers) |lower| {
+        for (lower.items) |item| {
+            if (try meetsOtherForms(self, item)) return true;
+        }
+    }
+    return false;
+}
+
+fn meetsOtherForms(self: anytype, item: ExprId) anyerror!bool {
+    return try SemanticCompare.meetsOtherForms(
+        self,
+        try self.canonicalizer.canonicalize(item),
+    );
 }
 
 /// Whether any constraint outside `obligation`'s own binder bounds can tell
@@ -426,7 +469,7 @@ fn admissibleSubsets(
 /// binders, or, in the view space, a binder that `propagateViewBindings`
 /// maps onto the rule space, where the rule's own obligations still wait.
 /// Bounds from intervals and existing bindings are already folded into the
-/// per-member masks, so an uncoupled obligation's covers pass every later
+/// per-member choices, so an uncoupled obligation's covers pass every later
 /// check unchanged.
 fn obligationCoupled(
     self: anytype,
@@ -460,12 +503,14 @@ fn obligationCoupled(
 /// Closed form of the cover enumeration for an uncoupled obligation. The
 /// only consumer of the cover set is `pickUniqueSolution`, which takes the
 /// first cover of minimal rank — rank sums the members per binder, so the
-/// minimum puts every member in its first smallest admissible subset — and,
-/// for the ambiguity report, the number of covers and the first one
+/// minimum puts every member in its first smallest admissible placement —
+/// and, for the ambiguity report, the number of covers and the first one
 /// enumerated. Emits the first cover as the representative of every cover
-/// but the chosen one, then the chosen cover, in enumeration order. Returns
-/// false if a representative was rejected, in which case the caller falls
-/// back to enumerating.
+/// but the chosen one, then the chosen cover, in enumeration order. When the
+/// first cover is the chosen one (always under ACU, where every placement of
+/// a member places all its copies), emits it, then the next cover as the
+/// representative of the rest. Returns false if a representative was
+/// rejected, in which case the caller falls back to enumerating.
 fn resolveCoverProduct(
     self: anytype,
     state: BranchState,
@@ -476,7 +521,39 @@ fn resolveCoverProduct(
     out: *std.ArrayListUnmanaged(BranchState),
 ) anyerror!bool {
     var count: usize = 1;
-    for (choices) |member| count *|= member.subsets.len;
+    var first_is_minimal = true;
+    for (choices) |member| {
+        count *|= member.len();
+        if (minimalPlacement(member) != 0) first_is_minimal = false;
+    }
+    if (first_is_minimal) {
+        const before = out.items.len;
+        try appendCover(
+            self,
+            state,
+            space,
+            obligation,
+            profile,
+            choices,
+            .first,
+            1,
+            out,
+        );
+        if (out.items.len == before) return false;
+        if (count == 1) return true;
+        try appendCover(
+            self,
+            state,
+            space,
+            obligation,
+            profile,
+            choices,
+            .next,
+            count - 1,
+            out,
+        );
+        return out.items.len != before + 1;
+    }
     if (count > 1) {
         const before = out.items.len;
         try appendCover(
@@ -507,7 +584,9 @@ fn resolveCoverProduct(
     return out.items.len != before;
 }
 
-const CoverPick = enum { first, minimal };
+/// `next` is the cover enumerated after the first: the last member with a
+/// choice takes its second placement.
+const CoverPick = enum { first, next, minimal };
 
 fn appendCover(
     self: anytype,
@@ -525,12 +604,19 @@ fn appendCover(
         obligation.binder_idxs.len,
     );
     defer deinitExprItemLists(self, binder_items);
-    for (choices) |member| {
-        const subset = switch (pick) {
-            .first => member.subsets[0],
-            .minimal => minimalSubset(member.subsets),
-        };
-        try placeMember(self, binder_items, member.item, subset);
+    var last_choice: usize = 0;
+    if (pick == .next) {
+        for (choices, 0..) |member, pos| {
+            if (member.len() > 1) last_choice = pos;
+        }
+    }
+    for (choices, 0..) |member, pos| {
+        const counts = member.placement(switch (pick) {
+            .first => 0,
+            .next => @intFromBool(pos == last_choice),
+            .minimal => minimalPlacement(member),
+        });
+        try placeMember(self, binder_items, member.item, counts);
     }
     const binder_exprs = try rebuildBindingExprs(
         self,
@@ -549,13 +635,25 @@ fn appendCover(
     );
 }
 
-/// The first subset of minimal size, in enumeration order.
-fn minimalSubset(subsets: []const usize) usize {
-    var best = subsets[0];
-    for (subsets[1..]) |subset| {
-        if (@popCount(subset) < @popCount(best)) best = subset;
+/// The index of the first placement placing the fewest copies, in
+/// enumeration order.
+fn minimalPlacement(member: MemberChoices) usize {
+    var best: usize = 0;
+    var best_size = placementSize(member.placement(0));
+    for (1..member.len()) |idx| {
+        const size = placementSize(member.placement(idx));
+        if (size < best_size) {
+            best = idx;
+            best_size = size;
+        }
     }
     return best;
+}
+
+fn placementSize(counts: []const u32) usize {
+    var size: usize = 0;
+    for (counts) |count| size += count;
+    return size;
 }
 
 fn enumerateCovers(
@@ -589,8 +687,9 @@ fn enumerateCovers(
     }
 
     const member = choices[member_pos];
-    for (member.subsets) |subset| {
-        try placeMember(self, binder_items, member.item, subset);
+    for (0..member.len()) |idx| {
+        const counts = member.placement(idx);
+        try placeMember(self, binder_items, member.item, counts);
         try enumerateCovers(
             self,
             state,
@@ -602,7 +701,7 @@ fn enumerateCovers(
             member_pos + 1,
             out,
         );
-        unplaceMember(binder_items, subset);
+        unplaceMember(binder_items, counts);
     }
 }
 
@@ -610,27 +709,23 @@ fn placeMember(
     self: anytype,
     binder_items: []std.ArrayListUnmanaged(ExprId),
     item: ExprId,
-    subset: usize,
+    counts: []const u32,
 ) !void {
-    for (binder_items, 0..) |*items, idx| {
-        if ((subset & (@as(usize, 1) << @intCast(idx))) != 0) {
-            try items.append(self.allocator, item);
-        }
+    for (binder_items, counts) |*items, count| {
+        try items.appendNTimes(self.allocator, item, count);
     }
 }
 
 fn unplaceMember(
     binder_items: []std.ArrayListUnmanaged(ExprId),
-    subset: usize,
+    counts: []const u32,
 ) void {
-    for (binder_items, 0..) |*items, idx| {
-        if ((subset & (@as(usize, 1) << @intCast(idx))) != 0) {
-            _ = items.pop();
-        }
+    for (binder_items, counts) |*items, count| {
+        items.shrinkRetainingCapacity(items.items.len - count);
     }
 }
 
-fn collectAcuiBinderBounds(
+fn collectBinderBounds(
     self: anytype,
     state: *const BranchState,
     space: BinderSpace,

@@ -41,6 +41,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   variable in a dependency list used to be dropped without a word. A
   `notation` statement's binder and return types must match its term's
   declaration exactly, where they used to be read and ignored.
+- Splitting a context made with an `@acui` combiner that has no idempotence
+  law (`@acui assoc comm unit _`) between a rule's variables no longer
+  tries every split first. A truth tree step's `unfocus`, whose
+  `focus (Γ ; Δ) at Δ` premise fixes Δ, took 2.2 seconds and 777 MB on a
+  19-row branch when Δ came first, and ran out of memory at 22 rows; it now
+  takes a few milliseconds at any length. Such a context is now split the
+  way an idempotent one is: each member's possible places come from what
+  is already known about each variable, and splits that nothing else can
+  tell apart are counted without being listed.
 
 ## [0.0.17] - 2026-10-14
 

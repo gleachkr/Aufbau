@@ -607,7 +607,8 @@ test "uncoupled ACUI cover product is resolved without enumeration" {
 test "identical ACU members are split once per count" {
     // `weaken` splits a context of 24 copies of `x` between two binders.
     // Trying every binder for every copy made 2^24 covers to compare; the
-    // copies are interchangeable, so only the 25 splits are enumerated. The
+    // copies are interchangeable, so there are 25 splits, and nothing else
+    // constrains them, so they are counted without being enumerated. The
     // chosen and alternative covers are the ones per-copy enumeration
     // reached first.
     const allocator = std.testing.allocator;
