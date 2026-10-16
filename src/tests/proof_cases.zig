@@ -603,6 +603,11 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_recover_vacuous_dependent",
         .outcome = .{ .fail = error.MissingBinderAssignment },
     },
+    .{ .stem = "pass_view_recover_bound_target", .outcome = .pass },
+    .{
+        .stem = "fail_view_recover_bound_target_no_instance",
+        .outcome = .{ .fail = error.RecoverConflict },
+    },
     .{ .stem = "pass_acui_repeated_explicit_item", .outcome = .pass },
     .{ .stem = "pass_acui_duplicate_binders_same_item", .outcome = .pass },
     .{ .stem = "pass_acui_repeated_joint_binder", .outcome = .pass },

@@ -763,10 +763,11 @@ pub const Solver = struct {
     }
 
     /// False when a `@recover` of the view already fails on this branch:
-    /// its source, pattern and hole are all bound and no instance of the
-    /// pattern is the source. Only a `@recover` that alone decides its
-    /// target is tried (`recoverDecidesTarget`): later constraints then
-    /// only bind more, so every completion of the branch fails there too.
+    /// its source, pattern and hole are settled (`recoverInputsSettled`),
+    /// and no instance of the pattern is the source, or none at its bound
+    /// target. Later constraints only bind more, and a `@recover` checks a
+    /// target bound some other way, so every completion of the branch fails
+    /// there too.
     pub fn derivedBindingsFeasible(
         self: *Solver,
         state: BranchState,
@@ -775,19 +776,15 @@ pub const Solver = struct {
         if (space != .view) return true;
         const view = self.view orelse return true;
         const bindings = state.view_bindings orelse return true;
-        for (view.derived_bindings, 0..) |binding, binding_idx| {
+        for (view.derived_bindings) |binding| {
             const recover = switch (binding) {
                 .recover => |value| value,
                 .abstract => continue,
             };
-            if (bindings[recover.target_view_idx] != null or
-                bindings[recover.source_view_idx] == null or
-                bindings[recover.pattern_view_idx] == null or
-                bindings[recover.hole_view_idx] == null) continue;
-            if (!recoverDecidesTarget(
-                view,
-                binding_idx,
-                recover.target_view_idx,
+            if (!DerivedBindings.recoverInputsSettled(
+                self.theorem,
+                bindings,
+                recover,
             )) continue;
             var probe = state;
             probe.view_bindings = try self.allocator.dupe(?ExprId, bindings);
@@ -811,26 +808,6 @@ pub const Solver = struct {
                 self.pruned_by = err;
                 return false;
             };
-        }
-        return true;
-    }
-
-    /// Whether nothing but the `@recover` at `binding_idx` may bind its
-    /// `target`: no view premise or statement mentions it, and no other
-    /// derived binding solves it. A `@recover` skips a target that is
-    /// already bound, so otherwise its failure now need not stand.
-    fn recoverDecidesTarget(
-        view: *const ViewDecl,
-        binding_idx: usize,
-        target: usize,
-    ) bool {
-        if (Rules.templateMentionsBinder(view.concl, target)) return false;
-        for (view.hyps) |hyp| {
-            if (Rules.templateMentionsBinder(hyp, target)) return false;
-        }
-        for (view.derived_bindings, 0..) |other, other_idx| {
-            if (other_idx != binding_idx and
-                DerivedBindings.solvesBinder(other, target)) return false;
         }
         return true;
     }

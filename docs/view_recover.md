@@ -314,8 +314,16 @@ term where an eigenvariable is required. The wrapper guess in step 6 gets the
 same treatment: an argument that coercion-strips to the target sort
 qualifies, but only when no argument has the target sort outright.
 
-If `target` already has an explicit binding, recovery is skipped for that
-binder.
+If `target` is already bound — explicitly, by the view match, or by another
+derived binding — `@recover` checks that binding instead of solving it: a
+source that reads back at a different target fails with a recover conflict.
+The two are compared after unfolding concrete defs and canonicalizing both,
+as the retry described below does.
+A pattern that accepts the source without exposing the hole admits any
+target. When the source is a member of a context the view split, the check
+rejects the split rather than the line, and the members are tried modulo
+order: in `$ … (ga ; ps) $`, `ps` is the row that reads back at the bound
+target, wherever it stands in the context.
 
 ### What `@recover` can and cannot do
 

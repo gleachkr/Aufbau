@@ -1,0 +1,90 @@
+delimiter $ ( ) $;
+provable sort wff;
+sort ctx;
+sort var;
+sort name;
+sort tm;
+term v2t (x: var): tm;
+coercion v2t: var > tm;
+term n2t (a: name): tm;
+coercion n2t: name > tm;
+
+term iff (a b: wff): wff;
+infixr iff: $<->$ prec 20;
+term ctx_eq (g h: ctx): wff;
+term emp: ctx;
+--| @acui ctx_assoc ctx_comm emp ctx_idem
+term join (g h: ctx): ctx;
+term hyp (a: wff): ctx;
+term cl (g: ctx): wff;
+term cf (g: ctx) (a: wff): wff;
+term all {x: var} (p: wff x): wff;
+prefix all: $A.$ prec 41;
+term ex {x: var} (p: wff x): wff;
+prefix ex: $E.$ prec 41;
+term neg (a: wff): wff;
+prefix neg: $~$ prec 45;
+term pred (t: tm): wff;
+prefix pred: $P$ prec 50;
+term sb (t: tm) {x: var} (p: wff x): wff;
+term dn (a: wff) (t: tm) (g: ctx): wff;
+term teq (s t: tm): wff;
+
+--| @relation wff iff iff_refl iff_trans iff_sym iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff):
+  $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_sym (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+axiom ctx_trans (g h i: ctx):
+  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+axiom ctx_assoc (g h i: ctx):
+  $ ctx_eq (join (join g h) i) (join g (join h i)) $;
+axiom ctx_comm (g h: ctx): $ ctx_eq (join g h) (join h g) $;
+axiom ctx_idem (g: ctx): $ ctx_eq (join g g) g $;
+axiom ctx_unit (g: ctx): $ ctx_eq (join emp g) g $;
+
+--| @congr
+axiom join_congr (g1 g2 h1 h2: ctx):
+  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ >
+  $ ctx_eq (join g1 h1) (join g2 h2) $;
+
+--| @congr
+axiom hyp_congr (a b: wff): $ a <-> b $ > $ ctx_eq (hyp a) (hyp b) $;
+
+--| @congr
+axiom cl_congr (g h: ctx): $ ctx_eq g h $ > $ cl g <-> cl h $;
+
+--| @relation tm teq teq_refl teq_trans teq_sym _
+axiom teq_refl (t: tm): $ teq t t $;
+axiom teq_trans (s t u: tm): $ teq s t $ > $ teq t u $ > $ teq s u $;
+axiom teq_sym (s t: tm): $ teq s t $ > $ teq t s $;
+
+--| @congr
+axiom dn_congr (a b: wff) (s t: tm) (g h: ctx):
+  $ a <-> b $ > $ teq s t $ > $ ctx_eq g h $ > $ dn a s g <-> dn b t h $;
+
+--| @congr
+axiom cf_congr (g h: ctx) (a b: wff):
+  $ ctx_eq g h $ > $ a <-> b $ > $ cf g a <-> cf h b $;
+
+--| @rewrite
+axiom sb_pred (t: tm) {x: var}: $ sb t x (P x) <-> P t $;
+
+-- The universal row `A. x p` is developed at `t` on the branch `g`: the
+-- branch holds the instance `p[t/x]`. The view names that row `q`, and
+-- @recover reads `t` back out of it; the statement gives `t` too, so the
+-- reading checks it.
+--| @view {x: var} (g: ctx x) (t: tm) (p: wff x) (q: wff): $ dn (A. x p) t (join g (hyp q)) $
+--| @recover t q p x
+axiom done_all {x: var} (g: ctx x) (t: tm) (p: wff x):
+  $ dn (A. x p) t (join g (hyp (sb t x p))) $;
+
+-- No row is an instance of `P x` at `c`: every row the view's `q` may
+-- name reads back at another term, or not at all.
+theorem no_instance {x: var} {b c d: name}:
+  $ dn (A. x (P x)) c (join (join (join (hyp (A. x (P x))) (hyp (P b))) (hyp (~ P c))) (hyp (P d))) $;

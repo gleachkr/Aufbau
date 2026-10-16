@@ -1,0 +1,4 @@
+no_instance
+-----------
+
+l1: $ dn (A. x (P x)) c (join (join (join (hyp (A. x (P x))) (hyp (P b))) (hyp (~ P c))) (hyp (P d))) $ by done_all []

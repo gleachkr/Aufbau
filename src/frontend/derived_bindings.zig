@@ -13,7 +13,6 @@ const BoundValue = @import("./def_ops/types.zig").BoundValue;
 const SymbolicExpr = @import("./def_ops/types.zig").SymbolicExpr;
 const ViewTrace = @import("./view_trace.zig");
 const TemplateExpr = @import("./rules.zig").TemplateExpr;
-const templateMentionsBinder = @import("./rules.zig").templateMentionsBinder;
 
 pub const RecoverDecl = struct {
     target_view_idx: usize,
@@ -95,19 +94,6 @@ pub fn markSolvedBinders(bindings: []const DerivedBinding, out: []bool) void {
     };
 }
 
-/// Whether `binding` may solve view binder `idx` (`markSolvedBinders` for
-/// one binder).
-pub fn solvesBinder(binding: DerivedBinding, idx: usize) bool {
-    return switch (binding) {
-        .recover => |recover| recover.target_view_idx == idx,
-        .abstract => |abstract| abstract.target_view_idx == idx or
-            (abstract.left_plug.pattern and
-                templateMentionsBinder(abstract.left_plug.template, idx)) or
-            (abstract.right_plug.pattern and
-                templateMentionsBinder(abstract.right_plug.template, idx)),
-    };
-}
-
 /// A runtime failure of `@recover` / `@abstract`: the view matched, but the
 /// derived binding could not be read off the solved expressions. Such a
 /// failure names the real cause of a binder the view was meant to solve.
@@ -153,6 +139,9 @@ pub const MatchSnapshot = struct {
 
 const preprocess_max_depth: usize = 32;
 
+/// Solve the derived bindings' targets until none makes progress, then
+/// check each `@recover` whose target was bound some other way: a view
+/// match, or another derived binding.
 pub fn applyDerivedBindings(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
@@ -162,10 +151,19 @@ pub fn applyDerivedBindings(
     view_arg_names: []const ?[]const u8,
     debug_views: bool,
 ) !void {
+    // Which bindings solved their own target here; a view rarely has more
+    // than a few, so the flags live on the stack unless it has many.
+    var solved_buf: [8]bool = undefined;
+    const solved = if (derived_bindings.len <= solved_buf.len)
+        solved_buf[0..derived_bindings.len]
+    else
+        try theorem.allocator.alloc(bool, derived_bindings.len);
+    defer if (solved.ptr != &solved_buf) theorem.allocator.free(solved);
+    @memset(solved, false);
     var changed = true;
     while (changed) {
         changed = false;
-        for (derived_bindings) |binding| {
+        for (derived_bindings, solved) |binding, *binding_solved| {
             switch (try applyDerivedBinding(
                 theorem,
                 env,
@@ -176,8 +174,26 @@ pub fn applyDerivedBindings(
                 debug_views,
             )) {
                 .no_progress => {},
-                .progress => changed = true,
+                .progress => {
+                    changed = true;
+                    binding_solved.* = true;
+                },
             }
+        }
+    }
+    for (derived_bindings, solved) |binding, binding_solved| {
+        if (binding_solved) continue;
+        switch (binding) {
+            .recover => |recover| try checkRecoverBinding(
+                theorem,
+                env,
+                registry,
+                snapshot,
+                recover,
+                view_arg_names,
+                debug_views,
+            ),
+            .abstract => {},
         }
     }
 }
@@ -221,11 +237,113 @@ fn applyRecoverBinding(
     debug_views: bool,
 ) !ApplyResult {
     const view_bindings = snapshot.view_bindings;
-    const view_seeds = snapshot.view_seeds;
-
     if (view_bindings[recover.target_view_idx] != null) {
         return .no_progress;
     }
+    view_bindings[recover.target_view_idx] = switch (try readRecoverTarget(
+        theorem,
+        env,
+        registry,
+        snapshot,
+        recover,
+        view_arg_names,
+        debug_views,
+    )) {
+        .unread => return .no_progress,
+        .found => |candidate| candidate,
+        .vacuous => |vacuous| try vacuousRecoverWitness(
+            theorem,
+            env,
+            snapshot,
+            recover,
+            vacuous.hole,
+            vacuous.pattern,
+        ) orelse return .no_progress,
+    };
+    return .progress;
+}
+
+/// Whether the source, pattern and hole of a `@recover` are bound, with no
+/// placeholder left in them: only then is its reading final.
+pub fn recoverInputsSettled(
+    theorem: *const TheoremContext,
+    view_bindings: []const ?ExprId,
+    recover: RecoverDecl,
+) bool {
+    for ([_]usize{
+        recover.source_view_idx,
+        recover.pattern_view_idx,
+        recover.hole_view_idx,
+    }) |idx| {
+        const expr_id = view_bindings[idx] orelse return false;
+        if (theorem.containsPlaceholder(expr_id)) return false;
+    }
+    return true;
+}
+
+/// Check a `@recover` whose target something else bound: the source must
+/// read back as an instance of the pattern at that target, compared the way
+/// a concrete reading aligns its source (`preprocessDerivedExpr`). A pattern
+/// that accepts the source without showing the hole admits any target. A
+/// placeholder in the target or the inputs, still open in a search, leaves
+/// the check undecided.
+fn checkRecoverBinding(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    snapshot: MatchSnapshot,
+    recover: RecoverDecl,
+    view_arg_names: []const ?[]const u8,
+    debug_views: bool,
+) !void {
+    const target = snapshot.view_bindings[recover.target_view_idx] orelse
+        return;
+    if (theorem.containsPlaceholder(target) or
+        !recoverInputsSettled(theorem, snapshot.view_bindings, recover))
+    {
+        return;
+    }
+    switch (try readRecoverTarget(
+        theorem,
+        env,
+        registry,
+        snapshot,
+        recover,
+        view_arg_names,
+        debug_views,
+    )) {
+        .unread, .vacuous => {},
+        .found => |candidate| if (candidate != target and
+            try preprocessDerivedExpr(theorem, env, registry, candidate) !=
+                try preprocessDerivedExpr(theorem, env, registry, target))
+        {
+            return error.RecoverConflict;
+        },
+    }
+}
+
+const RecoverReading = union(enum) {
+    /// Too little is bound to read the target yet.
+    unread,
+    /// The source shows the target where the pattern has the hole.
+    found: ExprId,
+    /// The pattern accepts the source without showing the hole.
+    vacuous: struct { hole: ExprId, pattern: ?ExprId },
+};
+
+/// Read the target of a `@recover` off its source, pattern and hole,
+/// concretely and then through the symbolic seeds.
+fn readRecoverTarget(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    snapshot: MatchSnapshot,
+    recover: RecoverDecl,
+    view_arg_names: []const ?[]const u8,
+    debug_views: bool,
+) !RecoverReading {
+    const view_bindings = snapshot.view_bindings;
+    const view_seeds = snapshot.view_seeds;
     if (debug_views) {
         try ViewTrace.printRecoverState(
             theorem.allocator,
@@ -242,7 +360,7 @@ fn applyRecoverBinding(
     }
 
     const source_expr = view_bindings[recover.source_view_idx] orelse {
-        return .no_progress;
+        return .unread;
     };
     const hole_expr = view_bindings[recover.hole_view_idx];
 
@@ -258,22 +376,11 @@ fn applyRecoverBinding(
                 recover.target_sort_name,
                 debug_views,
             )) {
-                .found => |candidate| {
-                    view_bindings[recover.target_view_idx] = candidate;
-                    return .progress;
-                },
-                .vacuous => {
-                    const witness = try vacuousRecoverWitness(
-                        theorem,
-                        env,
-                        snapshot,
-                        recover,
-                        concrete_hole_expr,
-                        pattern_expr,
-                    ) orelse return .no_progress;
-                    view_bindings[recover.target_view_idx] = witness;
-                    return .progress;
-                },
+                .found => |candidate| return .{ .found = candidate },
+                .vacuous => return .{ .vacuous = .{
+                    .hole = concrete_hole_expr,
+                    .pattern = pattern_expr,
+                } },
                 .none => {},
             }
             if (debug_views) {
@@ -291,14 +398,14 @@ fn applyRecoverBinding(
         }
     }
 
-    const seeds = view_seeds orelse return .no_progress;
+    const seeds = view_seeds orelse return .unread;
     if (recover.pattern_view_idx >= seeds.len or
         recover.hole_view_idx >= seeds.len)
     {
-        return .no_progress;
+        return .unread;
     }
     if (hole_expr == null and seeds[recover.hole_view_idx] == .none) {
-        return .no_progress;
+        return .unread;
     }
 
     var candidate: ?ExprId = null;
@@ -341,21 +448,17 @@ fn applyRecoverBinding(
             );
         }
         if (hole_expr == null) {
-            return .no_progress;
+            return .unread;
         }
         return error.RecoverHoleNotFound;
     }
 
     if (!found) {
         // The pattern accepts the source without exposing the hole.
-        candidate = try vacuousRecoverWitness(
-            theorem,
-            env,
-            snapshot,
-            recover,
-            hole_expr orelse return .no_progress,
-            view_bindings[recover.pattern_view_idx],
-        ) orelse return .no_progress;
+        return .{ .vacuous = .{
+            .hole = hole_expr orelse return .unread,
+            .pattern = view_bindings[recover.pattern_view_idx],
+        } };
     }
 
     if (debug_views) {
@@ -364,8 +467,7 @@ fn applyRecoverBinding(
             .{},
         );
     }
-    view_bindings[recover.target_view_idx] = candidate;
-    return .progress;
+    return .{ .found = candidate.? };
 }
 
 /// The witness `@recover` binds when the pattern matches the source

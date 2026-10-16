@@ -1,0 +1,14 @@
+instance_first
+--------------
+
+l1: $ dn (A. x (P x)) b (join (join (join (join (hyp (A. x (P x))) (hyp (P b))) (hyp (P c))) (hyp (~ P b))) (hyp (P d))) $ by done_all []
+
+instance_middle
+---------------
+
+l1: $ dn (A. x (P x)) c (join (join (join (join (hyp (A. x (P x))) (hyp (P b))) (hyp (P c))) (hyp (~ P b))) (hyp (P d))) $ by done_all []
+
+instance_given_by_def
+---------------------
+
+l1: $ dn (A. x (P x)) (bb b) (join (join (join (join (hyp (A. x (P x))) (hyp (P b))) (hyp (P c))) (hyp (~ P b))) (hyp (P d))) $ by done_all []

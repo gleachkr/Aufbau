@@ -77,6 +77,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   does for a context written out: on a 240-row branch it is 59 KB and takes
   40 ms, where it was 8.9 MB with the context's members sorted, too large
   for verifiers' default heap.
+- A `@view` rule now reads the row its `@recover` names wherever it stands
+  in the context. With the view `tdone_tm (∀ x φ) t (Γ ; ψ)` and
+  `@recover t ψ φ x`, the line `tdone_tm (∀ x F x) a1 (∀ x F x ; F a1 ; F a2)`
+  failed with "proof line assertion does not match the rule conclusion":
+  the view took the last row, `F a2`, as `ψ`, and `@recover` never looked
+  at it because the statement had already given `t`. `@recover` now checks
+  a target that is already bound, so the view takes the row that reads
+  back at `a1`. A line with no such row fails with a recover conflict.
 
 ## [0.0.17] - 2026-10-14
 
