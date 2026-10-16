@@ -670,6 +670,42 @@ fn appendBag(
     }
 }
 
+/// A wff relation and an ACUI context sort `rc` joined by `&` (declared
+/// `assoc`, "infixl" or "infixr"), for tests that build their own rules
+/// over it.
+fn appendRcTheory(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: std.mem.Allocator,
+    assoc: []const u8,
+) !void {
+    try out.print(allocator,
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\term bi (a b: wff): wff;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ bi a a $;
+        \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
+        \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
+        \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
+        \\sort rc;
+        \\term rnil: rc;
+        \\--| @acui rc_assoc rc_comm rnil _
+        \\term rjoin (g h: rc): rc; {s} rjoin: $&$ prec 6;
+        \\term rc_eq (g h: rc): wff;
+        \\--| @relation rc rc_eq rc_refl rc_trans rc_sym _
+        \\axiom rc_refl (g: rc): $ rc_eq g g $;
+        \\axiom rc_trans (g h i: rc): $ rc_eq g h $ > $ rc_eq h i $ > $ rc_eq g i $;
+        \\axiom rc_sym (g h: rc): $ rc_eq g h $ > $ rc_eq h g $;
+        \\axiom rc_assoc (g h i: rc): $ rc_eq ((g & h) & i) (g & (h & i)) $;
+        \\axiom rc_comm (g h: rc): $ rc_eq (g & h) (h & g) $;
+        \\axiom rc_unit (g: rc): $ rc_eq (g & rnil) g $;
+        \\--| @congr
+        \\axiom rjoin_congr (g1 g2 h1 h2: rc):
+        \\  $ rc_eq g1 g2 $ > $ rc_eq h1 h2 $ > $ rc_eq (g1 & h1) (g2 & h2) $;
+        \\
+    , .{assoc});
+}
+
 test "an inferred context remainder keeps its source's member order" {
     // `unmark` takes one member `a` out of a context written in reverse of
     // its sorted order, leaving the rest to `g`. Rebuilt sorted, `g` made
@@ -684,30 +720,8 @@ test "an inferred context remainder keeps its source's member order" {
     for ([_][]const u8{ "infixl", "infixr" }) |assoc| {
         var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
         defer mm0_src.deinit(allocator);
-        try mm0_src.print(allocator,
-            \\delimiter $ ( ) $;
-            \\provable sort wff;
-            \\term bi (a b: wff): wff;
-            \\--| @relation wff bi biid bitr bisym mpbi
-            \\axiom biid (a: wff): $ bi a a $;
-            \\axiom bitr (a b c: wff): $ bi a b $ > $ bi b c $ > $ bi a c $;
-            \\axiom bisym (a b: wff): $ bi a b $ > $ bi b a $;
-            \\axiom mpbi (a b: wff): $ bi a b $ > $ a $ > $ b $;
-            \\sort rc;
-            \\term rnil: rc;
-            \\--| @acui rc_assoc rc_comm rnil _
-            \\term rjoin (g h: rc): rc; {s} rjoin: $&$ prec 6;
-            \\term rc_eq (g h: rc): wff;
-            \\--| @relation rc rc_eq rc_refl rc_trans rc_sym _
-            \\axiom rc_refl (g: rc): $ rc_eq g g $;
-            \\axiom rc_trans (g h i: rc): $ rc_eq g h $ > $ rc_eq h i $ > $ rc_eq g i $;
-            \\axiom rc_sym (g h: rc): $ rc_eq g h $ > $ rc_eq h g $;
-            \\axiom rc_assoc (g h i: rc): $ rc_eq ((g & h) & i) (g & (h & i)) $;
-            \\axiom rc_comm (g h: rc): $ rc_eq (g & h) (h & g) $;
-            \\axiom rc_unit (g: rc): $ rc_eq (g & rnil) g $;
-            \\--| @congr
-            \\axiom rjoin_congr (g1 g2 h1 h2: rc):
-            \\  $ rc_eq g1 g2 $ > $ rc_eq h1 h2 $ > $ rc_eq (g1 & h1) (g2 & h2) $;
+        try appendRcTheory(&mm0_src, allocator, assoc);
+        try mm0_src.appendSlice(allocator,
             \\term mark (g a: rc): wff;
             \\--| @congr
             \\axiom mark_congr (g h a b: rc):
@@ -717,7 +731,7 @@ test "an inferred context remainder keeps its source's member order" {
             \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
             \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
             \\theorem t (
-        , .{assoc});
+        );
         for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
         try mm0_src.appendSlice(allocator, ": rc): $ mark (");
         try appendBag(&mm0_src, allocator, &reversed, assoc);
@@ -737,6 +751,75 @@ test "an inferred context remainder keeps its source's member order" {
         try mm0.verifyPair(allocator, mm0_src.items, mmb);
         try std.testing.expect(mmb.len < 8_000);
     }
+}
+
+test "a context with two unknown members is split after the arguments that fix them" {
+    // `has_ctx` and `has_pair` state one fact, a context holding both
+    // halves of a pair, with their arguments in either order. Matched left
+    // to right, the context of `has_ctx` was split before `both a b` fixed
+    // `a` and `b`: one branch per pair of members (4555 walk ticks against
+    // `has_pair`'s 238 at 30 members).
+    const n = 30;
+    const allocator = std.testing.allocator;
+    var members: [n]usize = undefined;
+    for (&members, 0..) |*member, idx| member.* = idx;
+
+    var ticks: [2]u64 = undefined;
+    for ([_][]const u8{ "has_ctx", "has_pair" }, &ticks) |rule, *rule_ticks| {
+        var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer mm0_src.deinit(allocator);
+        try appendRcTheory(&mm0_src, allocator, "infixl");
+        try mm0_src.appendSlice(allocator,
+            \\term hyp (a: wff): rc;
+            \\coercion hyp: wff > rc;
+            \\--| @congr
+            \\axiom hyp_congr (a b: wff): $ bi a b $ > $ rc_eq (hyp a) (hyp b) $;
+            \\term both (a b: wff): wff;
+            \\--| @congr
+            \\axiom both_congr (a b c d: wff):
+            \\  $ bi a b $ > $ bi c d $ > $ bi (both a c) (both b d) $;
+            \\term has (g: rc) (a: wff): wff;
+            \\--| @congr
+            \\axiom has_congr (g h: rc) (a b: wff):
+            \\  $ rc_eq g h $ > $ bi a b $ > $ bi (has g a) (has h b) $;
+            \\term has_r (a: wff) (g: rc): wff;
+            \\--| @congr
+            \\axiom has_r_congr (a b: wff) (g h: rc):
+            \\  $ bi a b $ > $ rc_eq g h $ > $ bi (has_r a g) (has_r b h) $;
+            \\axiom has_ctx (g: rc) (a b: wff): $ has (g & a & b) (both a b) $;
+            \\axiom has_pair (g: rc) (a b: wff): $ has_r (both a b) (g & a & b) $;
+            \\theorem t (
+        );
+        for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+        var statement: std.ArrayListUnmanaged(u8) = .empty;
+        defer statement.deinit(allocator);
+        if (std.mem.eql(u8, rule, "has_ctx")) {
+            try statement.appendSlice(allocator, "has (");
+            try appendBag(&statement, allocator, &members, "infixl");
+            try statement.appendSlice(allocator, ") (both x3 x17)");
+        } else {
+            try statement.appendSlice(allocator, "has_r (both x3 x17) (");
+            try appendBag(&statement, allocator, &members, "infixl");
+            try statement.appendSlice(allocator, ")");
+        }
+        try mm0_src.print(allocator, ": wff): $ {s} $;\n", .{statement.items});
+
+        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer proof_src.deinit(allocator);
+        try proof_src.print(
+            allocator,
+            "t\n---\nl1: $ {s} $ by {s} []\n",
+            .{ statement.items, rule },
+        );
+
+        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+        const start = FrontendExpr.work_ticks_walk;
+        const mmb = try compiler.compileMmb(allocator);
+        rule_ticks.* = FrontendExpr.work_ticks_walk -% start;
+        defer allocator.free(mmb);
+        try mm0.verifyPair(allocator, mm0_src.items, mmb);
+    }
+    try std.testing.expect(ticks[0] < 2 * ticks[1]);
 }
 
 test "-Werror upgrades ambiguity warnings into errors" {

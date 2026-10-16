@@ -1,5 +1,6 @@
 const std = @import("std");
 const Expr = @import("../trusted/expressions.zig").Expr;
+const ExprId = @import("./expr.zig").ExprId;
 
 pub const TemplateExpr = union(enum) {
     binder: usize,
@@ -107,6 +108,23 @@ pub fn templateMentionsBinder(template: TemplateExpr, idx: usize) bool {
         .app => |app| {
             for (app.args) |arg| {
                 if (templateMentionsBinder(arg, idx)) return true;
+            }
+            return false;
+        },
+    };
+}
+
+/// True when `template` references a binder that `bindings` leaves unbound.
+/// Indices past `bindings` count as bound.
+pub fn templateHasUnboundBinder(
+    template: TemplateExpr,
+    bindings: []const ?ExprId,
+) bool {
+    return switch (template) {
+        .binder => |idx| idx < bindings.len and bindings[idx] == null,
+        .app => |app| {
+            for (app.args) |arg| {
+                if (templateHasUnboundBinder(arg, bindings)) return true;
             }
             return false;
         },

@@ -1,6 +1,8 @@
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
+const templateHasUnboundBinder =
+    @import("../rules.zig").templateHasUnboundBinder;
 const ExprModule = @import("../expr.zig");
 const AcuiBag = @import("../acui_bag.zig");
 const compareExprIds = @import("../acui_support.zig").compareExprIds;
@@ -386,6 +388,45 @@ pub const MemberOrder = struct {
         return out;
     }
 };
+
+/// How many members of a structural template still hold an unbound binder,
+/// not counting remainder binders; null when `template` is not structural.
+pub fn openTemplateMemberCount(
+    self: anytype,
+    template: TemplateExpr,
+    space: BinderSpace,
+    bindings: []const ?ExprId,
+) anyerror!?usize {
+    const app = switch (template) {
+        .app => |value| value,
+        .binder => return null,
+    };
+    const profile = try resolveStructuralProfile(self, app.term_id) orelse
+        return null;
+    var counter: struct {
+        solver: @TypeOf(self),
+        space: BinderSpace,
+        profile: StructuralProfile,
+        bindings: []const ?ExprId,
+        count: usize = 0,
+        pub fn leaf(c: *@This(), item: TemplateExpr) void {
+            if (item == .binder and isStructuralRemainderBinder(
+                c.solver,
+                c.space,
+                item.binder,
+                c.profile,
+            )) return;
+            if (templateHasUnboundBinder(item, c.bindings)) c.count += 1;
+        }
+    } = .{
+        .solver = self,
+        .space = space,
+        .profile = profile,
+        .bindings = bindings,
+    };
+    AcuiBag.Spine.provable(profile.combiner).visitTemplate(template, &counter);
+    return counter.count;
+}
 
 pub fn isStructuralRemainderBinder(
     self: anytype,

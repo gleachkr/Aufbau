@@ -3,6 +3,8 @@ const types = @import("../types.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const TemplateExpr = @import("../../../rules.zig").TemplateExpr;
+const templateHasUnboundBinder =
+    @import("../../../rules.zig").templateHasUnboundBinder;
 const Context = types.Context;
 const semantic = @import("./semantic.zig");
 const exprNeedsSemantic = semantic.exprNeedsSemantic;
@@ -213,21 +215,6 @@ fn extractUnboundLeafMembers(
                 extract_fn(context, theorem, template, pool[idx].expr, bindings);
                 pool[idx].consumed = consume;
             }
-        },
-    }
-}
-
-fn templateHasUnboundBinder(
-    template: TemplateExpr,
-    bindings: []const ?ExprId,
-) bool {
-    switch (template) {
-        .binder => |idx| return idx < bindings.len and bindings[idx] == null,
-        .app => |app| {
-            for (app.args) |arg| {
-                if (templateHasUnboundBinder(arg, bindings)) return true;
-            }
-            return false;
         },
     }
 }

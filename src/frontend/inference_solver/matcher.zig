@@ -7,6 +7,7 @@ const SemanticCompare = @import("./semantic_compare.zig");
 const StructuralFragmentMatcher =
     @import("./fragment_matcher.zig");
 const StructuralIntervals = @import("./intervals.zig");
+const StructuralItems = @import("./items.zig");
 const StructuralTransparentMatcher =
     @import("./transparent_matcher.zig");
 const SessionSync = @import("./session_sync.zig");
@@ -117,38 +118,64 @@ pub fn matchExpr(
                 self.allocator,
                 try BranchStateOps.cloneState(self, state),
             );
-            for (app.args, actual_app.args) |tmpl_arg, actual_arg| {
-                var next = std.ArrayListUnmanaged(BranchState).empty;
-                for (states.items) |current| {
-                    const matches = try matchExpr(
-                        self,
-                        tmpl_arg,
-                        actual_arg,
-                        space,
-                        current,
-                    );
-                    try next.appendSlice(self.allocator, matches);
+            // A structural argument with more than one unknown member is
+            // matched after the others, which usually fix those members:
+            // matched first, it fans out over every choice of them.
+            var any_deferred = false;
+            for ([_]bool{ false, true }) |deferred_pass| {
+                if (deferred_pass and !any_deferred) break;
+                for (app.args, actual_app.args) |tmpl_arg, actual_arg| {
+                    const deferred = try defersMatch(self, tmpl_arg, space, state);
+                    any_deferred = any_deferred or deferred;
+                    if (deferred != deferred_pass) continue;
+                    var next = std.ArrayListUnmanaged(BranchState).empty;
+                    for (states.items) |current| {
+                        const matches = try matchExpr(
+                            self,
+                            tmpl_arg,
+                            actual_arg,
+                            space,
+                            current,
+                        );
+                        try next.appendSlice(self.allocator, matches);
+                    }
+                    if (next.items.len == 0) {
+                        // Same head, clashing arguments. When the head is a
+                        // def, unfolding may still reconcile them: a def can
+                        // erase an argument, so two applications that differ
+                        // only there denote the same thing.
+                        if (!isOpenableDef(self, app.term_id)) break :blk &.{};
+                        break :blk try StructuralTransparentMatcher
+                            .matchExprTransparent(
+                            self,
+                            template,
+                            actual,
+                            space,
+                            state,
+                        );
+                    }
+                    states = next;
                 }
-                if (next.items.len == 0) {
-                    // Same head, clashing arguments. When the head is a
-                    // def, unfolding may still reconcile them: a def can
-                    // erase an argument, so two applications that differ
-                    // only there denote the same thing.
-                    if (!isOpenableDef(self, app.term_id)) break :blk &.{};
-                    break :blk try StructuralTransparentMatcher
-                        .matchExprTransparent(
-                        self,
-                        template,
-                        actual,
-                        space,
-                        state,
-                    );
-                }
-                states = next;
             }
             break :blk try states.toOwnedSlice(self.allocator);
         },
     };
+}
+
+fn defersMatch(
+    self: anytype,
+    template: TemplateExpr,
+    space: BinderSpace,
+    state: BranchState,
+) anyerror!bool {
+    const bindings = BranchStateOps.getBindings(@constCast(&state), space);
+    const open = try StructuralItems.openTemplateMemberCount(
+        self,
+        template,
+        space,
+        bindings,
+    ) orelse return false;
+    return open > 1;
 }
 
 fn isOpenableDef(self: anytype, term_id: u32) bool {

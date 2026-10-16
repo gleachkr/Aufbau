@@ -60,6 +60,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   as in `$ _wff $ by imp_intro [l6]` over a two-member context, the last
   member as written is the one taken, where it used to be the last in the
   sorted order.
+- A rule whose `@acui` context argument names two or more members, such as
+  `done (Γ ; φ ; ψ) (φ ∧ ψ)`, no longer splits the context before the
+  arguments that fix those members. Checking such a `done` on a 240-row
+  branch took a second, where the same rule with its arguments in the
+  other order took 15 ms; both now take about 20 ms. The context argument
+  is matched after the others whenever more than one of its members is
+  still unknown.
 
 ## [0.0.17] - 2026-10-14
 
