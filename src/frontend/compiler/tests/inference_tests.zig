@@ -822,6 +822,83 @@ test "a context with two unknown members is split after the arguments that fix t
     try std.testing.expect(ticks[0] < 2 * ticks[1]);
 }
 
+test "a context given by a def is matched member by member" {
+    // `has_one` finds a member of the context, and `unmark` takes one out;
+    // the context is the def `tree`. Read as one member, `tree` matched
+    // neither rule. Opened, the proof moves the one member, as it does for
+    // the context written out; sorting both sides instead made it the
+    // square of the context's size (12 times the written-out proof at 60
+    // members).
+    const n = 30;
+    const allocator = std.testing.allocator;
+    var members: [n]usize = undefined;
+    for (&members, 0..) |*member, idx| member.* = idx;
+
+    for ([_][]const u8{ "has_one", "unmark" }) |rule| {
+        var sizes: [2]usize = undefined;
+        for ([_]bool{ false, true }, &sizes) |as_def, *size| {
+            var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+            defer mm0_src.deinit(allocator);
+            try appendRcTheory(&mm0_src, allocator, "infixl");
+            try mm0_src.appendSlice(allocator,
+                \\term hyp (a: wff): rc;
+                \\coercion hyp: wff > rc;
+                \\--| @congr
+                \\axiom hyp_congr (a b: wff): $ bi a b $ > $ rc_eq (hyp a) (hyp b) $;
+                \\term has_r (a: wff) (g: rc): wff;
+                \\--| @congr
+                \\axiom has_r_congr (a b: wff) (g h: rc):
+                \\  $ bi a b $ > $ rc_eq g h $ > $ bi (has_r a g) (has_r b h) $;
+                \\term mark (g a: rc): wff;
+                \\--| @congr
+                \\axiom mark_congr (g h a b: rc):
+                \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
+                \\term closed (g: rc): wff;
+                \\--| @congr
+                \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+                \\axiom has_one (g: rc) (a: wff): $ has_r a (g & a) $;
+                \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
+                \\
+            );
+            var binders: std.ArrayListUnmanaged(u8) = .empty;
+            defer binders.deinit(allocator);
+            var args: std.ArrayListUnmanaged(u8) = .empty;
+            defer args.deinit(allocator);
+            for (0..n) |idx| {
+                try binders.print(allocator, "x{d} ", .{idx});
+                try args.print(allocator, " x{d}", .{idx});
+            }
+            var bag: std.ArrayListUnmanaged(u8) = .empty;
+            defer bag.deinit(allocator);
+            if (as_def) {
+                try mm0_src.print(allocator, "def tree ({s}: wff): rc = $ ", .{binders.items});
+                try appendBag(&mm0_src, allocator, &members, "infixl");
+                try mm0_src.appendSlice(allocator, " $;\n");
+                try bag.print(allocator, "tree{s}", .{args.items});
+            } else {
+                try appendBag(&bag, allocator, &members, "infixl");
+            }
+            try mm0_src.print(allocator, "theorem t ({s}: wff)", .{binders.items});
+            var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+            defer proof_src.deinit(allocator);
+            if (std.mem.eql(u8, rule, "has_one")) {
+                try mm0_src.print(allocator, ": $ has_r x3 ({s}) $;\n", .{bag.items});
+                try proof_src.print(allocator, "t\n---\nl1: $ has_r x3 ({s}) $ by has_one []\n", .{bag.items});
+            } else {
+                try mm0_src.print(allocator, ": $ mark ({s}) x3 $ > $ closed ({s}) $;\n", .{ bag.items, bag.items });
+                try proof_src.print(allocator, "t\n---\nl1: $ closed ({s}) $ by unmark [#1]\n", .{bag.items});
+            }
+
+            var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+            const mmb = try compiler.compileMmb(allocator);
+            defer allocator.free(mmb);
+            try mm0.verifyPair(allocator, mm0_src.items, mmb);
+            size.* = mmb.len;
+        }
+        try std.testing.expect(sizes[1] < 2 * sizes[0]);
+    }
+}
+
 test "-Werror upgrades ambiguity warnings into errors" {
     const allocator = std.testing.allocator;
     const mm0_src = try readProofCase(

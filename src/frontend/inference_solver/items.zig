@@ -127,6 +127,17 @@ pub fn collectConcreteStructuralItems(
     profile: StructuralProfile,
     out: *std.ArrayListUnmanaged(ExprId),
 ) anyerror!void {
+    var appender = try ItemAppender.init(self, profile.law, out);
+    defer appender.deinit(self.allocator);
+    try appendConcreteStructuralItems(self, expr_id, profile, &appender);
+}
+
+fn appendConcreteStructuralItems(
+    self: anytype,
+    expr_id: ExprId,
+    profile: StructuralProfile,
+    appender: *ItemAppender,
+) anyerror!void {
     var raw = std.ArrayListUnmanaged(ExprId).empty;
     defer raw.deinit(self.allocator);
 
@@ -134,12 +145,38 @@ pub fn collectConcreteStructuralItems(
     // A walk ticks once per node, and a spine of n leaves has 2n - 1 nodes.
     ExprModule.work_ticks_walk +%= 2 * raw.items.len - 1;
     const provable = AcuiBag.Spine.provable(profile.combiner);
-    var appender = try ItemAppender.init(self, profile.law, out);
-    defer appender.deinit(self.allocator);
     for (raw.items) |item| {
         if (provable.skips(self.theorem, item)) continue;
+        if (try openDefMember(self, item)) |body| {
+            try appendConcreteStructuralItems(
+                self,
+                try self.canonicalizer.canonicalize(body),
+                profile,
+                appender,
+            );
+            continue;
+        }
         try appender.append(self, item);
     }
+}
+
+/// The body of `item` when it is a def application the solve opens
+/// (`Solver.open_def_members`); null otherwise, noting a def it reads
+/// whole.
+fn openDefMember(self: anytype, item: ExprId) anyerror!?ExprId {
+    const node = self.theorem.interner.node(item);
+    const app = switch (node.*) {
+        .app => |value| value,
+        else => return null,
+    };
+    if (app.term_id >= self.env.terms.items.len) return null;
+    const term = &self.env.terms.items[app.term_id];
+    if (!term.is_def or term.body == null) return null;
+    if (!self.open_def_members) {
+        self.saw_def_member = true;
+        return null;
+    }
+    return try self.defOpsContext().unfoldConcreteDef(item);
 }
 
 /// Appends items to `out` in a law's item order: sorted when the
@@ -362,6 +399,10 @@ pub const MemberOrder = struct {
         defer raw.deinit(self.allocator);
         try spine.collect(self.allocator, self.theorem, source, &raw);
         for (raw.items) |member| {
+            if (try openDefMember(self, member)) |body| {
+                try order.register(self, profile, body);
+                continue;
+            }
             const canonical = try self.canonicalizer.canonicalize(member);
             const gop = try order.ranks.getOrPut(self.real_allocator, canonical);
             if (!gop.found_existing) gop.value_ptr.* = order.ranks.count() - 1;

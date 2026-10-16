@@ -402,6 +402,13 @@ re-runs on the opened bag: `2 * (q / 2)` beside `2 * inv 2 * q` agrees once
 `q / 2` becomes `q * inv 2` and its factors join the product. Only concrete
 defs open this way; a def with hidden dummies stays a member.
 
+Structural inference reads a def member the same way: whole first. When no
+solution reads it whole, the solve runs again with each concrete def member
+opened into the members of its body, so a rule's `Γ ; φ` matches a context
+written `tree t1 t2` whose body holds `φ`. The checker proves such a line by
+opening the defs that stand in bags on both sides and moving the members
+out of place, rather than sorting both bags.
+
 There is one further conclusion-only path. If semantic def exposure and
 rewrite matching succeed but an erased bound hidden witness remains symbolic,
 proof-producing conclusion normalization may materialize it from the sort's

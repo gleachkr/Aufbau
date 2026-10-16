@@ -67,6 +67,16 @@ This file records notable user-facing changes to Aufbau. The project follows
   other order took 15 ms; both now take about 20 ms. The context argument
   is matched after the others whenever more than one of its members is
   still unknown.
+- A context given by a def, such as a branch `tree_b t1 t2` that names its
+  rows once, now matches a rule's context pattern. `done_or_r`, whose
+  conclusion is `tdone_r (φ ∨ ψ) (Γ ; φ)`, failed against
+  `tdone_r (F t1 ∨ A) (tree_b t1 t2)`, because inference read the def as a
+  single member of the context. A def member is still read whole first,
+  and is opened into its body's members when no solution reads it whole.
+  The proof of such a line now moves only the members out of place, as it
+  does for a context written out: on a 240-row branch it is 59 KB and takes
+  40 ms, where it was 8.9 MB with the context's members sorted, too large
+  for verifiers' default heap.
 
 ## [0.0.17] - 2026-10-14
 

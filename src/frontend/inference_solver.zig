@@ -130,6 +130,12 @@ pub const Solver = struct {
     /// Source order of the bag members this solve matched, so remainder
     /// binders are rebuilt in it (`StructuralItems.MemberOrder`).
     member_order: StructuralItems.MemberOrder = .{},
+    /// Whether a bag reading opens a def member into its body's members
+    /// (`StructuralItems.collectConcreteStructuralItems`). A solve reads
+    /// def members whole, and opens them only when that finds no solution.
+    open_def_members: bool = false,
+    /// Whether this solve read a def member whole.
+    saw_def_member: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -269,7 +275,34 @@ pub const Solver = struct {
         );
     }
 
+    /// A def member of a bag may stand for one member or for the members
+    /// of its body. A solve reads it as one first, and when that finds no
+    /// solution, solves again with every def member opened. A failure
+    /// reports the first reading's.
     fn solveWithConclusion(
+        self: *Solver,
+        partial_bindings: []const ?ExprId,
+        ref_exprs: []const ExprId,
+        conclusion: ConclusionConstraint,
+    ) anyerror![]const ExprId {
+        self.open_def_members = false;
+        self.saw_def_member = false;
+        return self.solveOnce(partial_bindings, ref_exprs, conclusion) catch |err| {
+            if (err == error.OutOfMemory or err == error.SearchBudgetExhausted or
+                !self.saw_def_member) return err;
+            const failure = self.failure;
+            self.open_def_members = true;
+            defer self.open_def_members = false;
+            return self.solveOnce(partial_bindings, ref_exprs, conclusion) catch |retry_err| {
+                if (retry_err == error.OutOfMemory or
+                    retry_err == error.SearchBudgetExhausted) return retry_err;
+                self.failure = failure;
+                return err;
+            };
+        };
+    }
+
+    fn solveOnce(
         self: *Solver,
         partial_bindings: []const ?ExprId,
         ref_exprs: []const ExprId,

@@ -15,17 +15,107 @@ const ProofEmit = @import("../proof_emit.zig");
 const Support = @import("../support.zig");
 
 /// A proof of `lhs` = `rhs`, or null when they differ by more than a
-/// rearrangement (`AcuiSupport.Context.isRearrangement`). The inner null is
-/// a proof of an expression equal to itself.
+/// rearrangement (`AcuiSupport.Context.isRearrangement`), as written or
+/// with the defs standing in their bags opened. The inner null is a proof
+/// of an expression equal to itself.
 pub fn buildRearrangement(
     self: anytype,
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!??usize {
-    if (!try (try self.support()).isRearrangement(lhs, rhs)) return null;
+    const support = try self.support();
     var proved: Proved = .empty;
     defer proved.deinit(self.allocator);
-    return try rearrange(self, &proved, lhs, rhs);
+    if (try support.isRearrangement(lhs, rhs)) return try rearrange(self, &proved, lhs, rhs);
+
+    // A def standing for a bag, or for a member of one, may hide members
+    // the other side lists: `tree_b` against `g ; φ`. Opened on both
+    // sides, the two may again differ only by a rearrangement, proved
+    // between the unfoldings the verifier checks.
+    var opened: Opened = .empty;
+    defer opened.deinit(self.allocator);
+    const lhs_open = try openDefs(self, &opened, lhs, false);
+    const rhs_open = try openDefs(self, &opened, rhs, false);
+    if (lhs_open == lhs and rhs_open == rhs) return null;
+    if (!try support.isRearrangement(lhs_open, rhs_open)) return null;
+    const relation = Support.relationFor(self, lhs) orelse return null;
+    const lhs_to_open = try ProofEmit.composeTransitivity(
+        self,
+        relation,
+        lhs,
+        lhs_open,
+        rhs_open,
+        try ProofEmit.emitTransparentRelationProof(self, relation, lhs, lhs_open),
+        try rearrange(self, &proved, lhs_open, rhs_open),
+    );
+    return try ProofEmit.composeTransitivity(
+        self,
+        relation,
+        lhs,
+        rhs_open,
+        rhs,
+        lhs_to_open,
+        try ProofEmit.emitTransparentRelationProof(self, relation, rhs_open, rhs),
+    );
+}
+
+/// `openDefs` results, by expression and whether it stands in a bag.
+const Opened = std.AutoHashMapUnmanaged(struct { ExprId, bool }, ExprId);
+
+/// `expr_id` with each def that stands in a commutative bag unfolded: a
+/// member of one, or a def whose body is one. `in_bag` says `expr_id` is
+/// a member.
+fn openDefs(
+    self: anytype,
+    opened: *Opened,
+    expr_id: ExprId,
+    in_bag: bool,
+) anyerror!ExprId {
+    if (opened.get(.{ expr_id, in_bag })) |hit| return hit;
+    const result = try openDefsUncached(self, opened, expr_id, in_bag);
+    try opened.put(self.allocator, .{ expr_id, in_bag }, result);
+    return result;
+}
+
+fn openDefsUncached(
+    self: anytype,
+    opened: *Opened,
+    expr_id: ExprId,
+    in_bag: bool,
+) anyerror!ExprId {
+    const app = appOf(self, expr_id) orelse return expr_id;
+    if (try isCommutativeBag(self, expr_id)) {
+        const parts = [_]ExprId{
+            try openDefs(self, opened, app.args[0], true),
+            try openDefs(self, opened, app.args[1], true),
+        };
+        if (parts[0] == app.args[0] and parts[1] == app.args[1]) return expr_id;
+        return try self.theorem.interner.internApp(app.term_id, &parts);
+    }
+    if (app.term_id < self.env.terms.items.len and self.env.terms.items[app.term_id].is_def) {
+        if (try (try self.defOps()).unfoldConcreteDef(expr_id)) |body| {
+            if (in_bag or try isCommutativeBag(self, body)) {
+                return try openDefs(self, opened, body, true);
+            }
+        }
+    }
+    const args = try self.allocator.alloc(ExprId, app.args.len);
+    defer self.allocator.free(args);
+    var changed = false;
+    for (app.args, args) |arg, *out| {
+        out.* = try openDefs(self, opened, arg, false);
+        changed = changed or out.* != arg;
+    }
+    if (!changed) return expr_id;
+    return try self.theorem.interner.internApp(app.term_id, args);
+}
+
+fn isCommutativeBag(self: anytype, expr_id: ExprId) anyerror!bool {
+    const app = appOf(self, expr_id) orelse return false;
+    if (app.args.len != 2) return false;
+    const bag = try self.registry.resolveStructuralCombiner(self.env, app.term_id) orelse
+        return false;
+    return bag.comm_id != null;
 }
 
 /// The pairs of subterms already proved equal, with their proofs: the two
