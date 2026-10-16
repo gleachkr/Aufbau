@@ -1039,6 +1039,11 @@ pub const RuleMatchSession = struct {
             if (actual_target == .line_hole) return true;
             if (samePlaceholderTarget(target, actual_target)) return true;
         }
+        // An actual holding a line hole deeper down is only partly known, so
+        // it fixes nothing either; the line's final check compares it with
+        // the instantiated rule (as in transparent_match.holeyActual).
+        if (view.line_holes_match_anything and
+            view.mirror.theorem.containsLineHole(actual_expr)) return true;
 
         var symbolic_engine = self.engine();
         const translated = try self.mirrorExprToBoundValue(actual_expr, view);

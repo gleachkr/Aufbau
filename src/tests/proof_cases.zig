@@ -480,6 +480,12 @@ const proof_cases = [_]ProofCase{
         .stem = "fail_hole_acui_positional_wrong",
         .outcome = .{ .fail = error.ConclusionMismatch },
     },
+    // A rule binder facing a subterm with a hole below its head, on the
+    // normalized path: it fixes nothing, so the line ends in a mismatch.
+    .{
+        .stem = "fail_hole_acui_nested_hole_binder",
+        .outcome = .{ .fail = error.HoleConclusionMismatch },
+    },
     .{
         .stem = "fail_hole_missing_binder",
         .outcome = .{ .fail = error.MissingBinderAssignment },

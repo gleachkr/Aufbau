@@ -1,0 +1,3 @@
+mp_ax
+-----
+l1: $ p , p -> p -> q |- _wff -> q $ by ax []
