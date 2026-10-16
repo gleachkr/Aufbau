@@ -98,6 +98,39 @@ test "compiler analyze mm0 recovers after malformed statements" {
     try std.testing.expectEqualStrings("still_bad", diags[1].name.?);
 }
 
+test "compiler analyze mm0 rejects a tab outside a comment" {
+    const mm0_src =
+        "provable sort wff;\n" ++
+        "--\ta tab in a comment is fine\n" ++
+        "term top: wff;\n" ++
+        "axiom bad:\t$ top $;\n" ++
+        "axiom still_bad: $ top $;\n" ++
+        "--| @fallback missing\n" ++
+        "axiom worse: $ top $;\n";
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.analyzeMm0();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(error.IllegalWhitespace, diags[0].err);
+    try std.testing.expectEqualStrings("\t", mm0_src[diags[0].span.?.start..diags[0].span.?.end]);
+    try std.testing.expectEqual(error.UnknownFallbackRule, diags[1].err);
+    try std.testing.expectEqualStrings("worse", diags[1].name.?);
+}
+
+test "compiler analyze mm0 accepts a tab in a @view annotation" {
+    const mm0_src =
+        "provable sort wff;\n" ++
+        "term imp (a b: wff): wff;\n" ++
+        "--| @view (a b:\twff): $ imp a b $ > $ a $ > $ b $\n" ++
+        "axiom mp (a b: wff): $ imp a b $ > $ a $ > $ b $;\n";
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.analyzeMm0();
+    try std.testing.expectEqual(@as(usize, 0), compiler.primaryDiagnostics().len);
+}
+
 test "compiler analyze mm0 discards annotations from malformed statements" {
     const mm0_src =
         \\provable sort wff;

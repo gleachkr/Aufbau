@@ -352,6 +352,25 @@ const mutants = [_]Mutant{
         .expected = error.ExpectedConvObligation,
         .mm0c = "bad stack slot",
     },
+    // Spec whitespace: only ' ' and '\n' outside a comment.
+    .{
+        .name = "tab between tokens",
+        .spec_edits = &.{.{ .find = "axiom ax_1", .replace = "axiom\tax_1" }},
+        .expected = error.IllegalWhitespace,
+        .mm0c = "expecting identifier",
+    },
+    .{
+        .name = "tab in a math string",
+        .spec_edits = &.{.{ .find = "$ a -> b -> a $", .replace = "$\ta -> b -> a $" }},
+        .expected = error.IllegalWhitespace,
+        .mm0c = "unrecognized token",
+    },
+    .{
+        .name = "CRLF line ending",
+        .spec_edits = &.{.{ .find = "$ ) $;\n", .replace = "$ ) $;\r\n" }},
+        .expected = error.IllegalWhitespace,
+        .mm0c = "invalid command keyword",
+    },
 };
 
 fn readMutantFile(

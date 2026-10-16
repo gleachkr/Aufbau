@@ -50,6 +50,7 @@ pub const ParseError = error{
     ExpectedString,
     ExpectedUnaryOperator,
     HoleTokenNameCollision,
+    IllegalWhitespace,
     InfixPrecOutOfRange,
     InvalidHoleAnnotation,
     InvalidNotationToken,
@@ -613,6 +614,15 @@ pub const MM0Parser = struct {
     }
 
     pub fn prepareNextPublicStatement(self: *MM0Parser) !void {
+        const start = self.pos;
+        self.skipNonPublicStatements() catch |err| {
+            if (err != error.OutOfMemory) try self.checkWhitechars(start, self.pos + 1);
+            return err;
+        };
+        try self.checkWhitechars(start, self.pos);
+    }
+
+    fn skipNonPublicStatements(self: *MM0Parser) !void {
         while (true) {
             self.resetDiagnosticContext();
             self.skipWhitespaceAndComments();
@@ -633,6 +643,52 @@ pub const MM0Parser = struct {
     // Returns next public statement, while processing notation and coercion
     // declarations so later math strings are parsed with the correct grammar.
     pub fn next(self: *MM0Parser) !?MM0Stmt {
+        const start = self.pos;
+        const stmt = self.nextStatement() catch |err| {
+            if (err != error.OutOfMemory) try self.checkWhitechars(start, self.pos + 1);
+            return err;
+        };
+        try self.checkWhitechars(start, self.pos);
+        return stmt;
+    }
+
+    /// Fails on a tab or carriage return in `src[start..end]` outside a
+    /// comment. MM0 whitespace is only ' ' and '\n' (specs/mm0.md), and
+    /// mm0-c rejects the others. The lexer still skips them, so math text
+    /// from a proof script may use them; each `.mm0` statement read through
+    /// `next` or `prepareNextPublicStatement` is checked here instead, and
+    /// one that failed is checked up to where it stopped, since a stray tab
+    /// is the likelier cause.
+    fn checkWhitechars(self: *MM0Parser, start: usize, end: usize) error{IllegalWhitespace}!void {
+        const stop = @min(end, self.src.len);
+        // Inside a `$...$` math string or a `"..."` string, `--` starts no
+        // comment, and the other delimiter is an ordinary character.
+        var quote: ?u8 = null;
+        var pos = start;
+        while (pos < stop) : (pos += 1) {
+            const ch = self.src[pos];
+            switch (ch) {
+                '\t', '\r' => {
+                    self.last_math_error = null;
+                    self.last_math_span = null;
+                    self.expected_char = null;
+                    self.last_error_span = .{ .start = pos, .end = pos + 1 };
+                    return error.IllegalWhitespace;
+                },
+                '$', '"' => if (quote == null) {
+                    quote = ch;
+                } else if (quote == ch) {
+                    quote = null;
+                },
+                '-' => if (quote == null and pos + 1 < stop and self.src[pos + 1] == '-') {
+                    while (pos < stop and self.src[pos] != '\n') pos += 1;
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn nextStatement(self: *MM0Parser) !?MM0Stmt {
         while (true) {
             self.resetDiagnosticContext();
             self.skipWhitespaceAndComments();

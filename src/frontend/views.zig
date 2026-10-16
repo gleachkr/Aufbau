@@ -1994,6 +1994,10 @@ fn parseViewSignature(
         "axiom __view {s};",
         .{trimmed},
     );
+    // The annotation sits in a comment, where a tab is legal MM0, but the
+    // statement parser rejects one.
+    std.mem.replaceScalar(u8, wrapped, '\t', ' ');
+    std.mem.replaceScalar(u8, wrapped, '\r', ' ');
 
     var view_parser = MM0Parser.init(wrapped, allocator);
     cloneParserEnv(&view_parser, parser);

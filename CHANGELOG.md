@@ -23,6 +23,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   hole sort's `@vars` pool. When the pattern depends on the hole without
   mentioning it, and the target may not mention the hole, the target is
   reported as a missing binder.
+- A tab or carriage return outside a comment in a `.mm0` file is now an
+  error in the verifier, the compiler and the editor. The MM0 spec allows
+  only spaces and newlines as whitespace, and mm0-c rejects the others,
+  but they used to be accepted, so a spec with a tab or CRLF line endings
+  would compile and verify here and then fail in mm0-c. A tab in a comment,
+  including an annotation, is still fine.
 
 ## [0.0.17] - 2026-10-14
 
