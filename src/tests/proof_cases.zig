@@ -1,6 +1,7 @@
 const std = @import("std");
 const mm0 = @import("../lib.zig");
 const web_demo_fixtures = @import("web_demo_fixtures");
+const test_filters = @import("test_options").test_filters;
 
 const Compiler = mm0.Compiler;
 const Mmb = mm0.Mmb;
@@ -1192,6 +1193,16 @@ test "web demo fixtures are single files" {
     }
 }
 
+/// `-Dtest-filter` keeps this loop's test in every filtered build (build.zig's
+/// `proof_case_loop_test`), so the loop narrows to the fixtures the filter names.
+fn matchesTestFilter(stem: []const u8) bool {
+    if (test_filters.len == 0) return true;
+    for (test_filters) |needle| {
+        if (std.mem.indexOf(u8, stem, needle) != null) return true;
+    }
+    return false;
+}
+
 test "compiler proof cases from files" {
     const allocator = std.testing.allocator;
     const have_mm0c = mm0cExists();
@@ -1200,6 +1211,7 @@ test "compiler proof cases from files" {
     var failed_cases: [proof_cases.len][]const u8 = undefined;
 
     for (proof_cases) |case| {
+        if (!matchesTestFilter(case.stem)) continue;
         // A case's `.mm0` may import other files (under `lib/`); the join
         // is what the compiler, the verifier, and mm0-c all see.
         var case_arena = std.heap.ArenaAllocator.init(allocator);

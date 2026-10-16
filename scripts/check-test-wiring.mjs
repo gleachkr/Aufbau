@@ -19,7 +19,8 @@
 // file, and an unreferenced const never is. Named module imports like "mm0"
 // cross a module boundary, where Zig does not collect tests, so they are
 // not edges either. Every file under src/ or tests/ that declares a
-// top-level test must be reachable.
+// top-level test must be reachable. Last, the proof-case loop test that
+// build.zig keeps by name under `-Dtest-filter` must exist.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -88,4 +89,17 @@ if (dark.length > 0) {
   console.error(`\n${dark.length} dark test file(s): add a \`_ = @import\` edge from a test root's aggregator, or delete them.`);
   process.exit(1);
 }
+
+// 4. The proof-case fixture loop that a `-Dtest-filter` build keeps by
+// name: a rename would leave filtered runs skipping every fixture.
+const loopTest = source("build.zig").match(/const proof_case_loop_test = "([^"]+)";/);
+if (!loopTest) {
+  console.error("check-test-wiring: no proof_case_loop_test in build.zig — the extraction regex is broken");
+  process.exit(1);
+}
+if (!code("src/tests/proof_cases.zig").includes(`test "${loopTest[1]}"`)) {
+  console.error(`src/tests/proof_cases.zig: no test "${loopTest[1]}", the name build.zig keeps under -Dtest-filter`);
+  process.exit(1);
+}
+
 console.log(`check-test-wiring: ${candidates.length} test files reachable from ${roots.length} roots`);

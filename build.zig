@@ -159,6 +159,11 @@ fn installWebDemoFixtures(b: *std.Build, step: *std.Build.Step) void {
     step.dependOn(&install_manifest.step);
 }
 
+// The test in src/tests/proof_cases.zig that runs every proof-case fixture;
+// a filtered build keeps it (see `-Dtest-filter`). check-test-wiring.mjs
+// checks that the test still exists under this name.
+const proof_case_loop_test = "compiler proof cases from files";
+
 fn addSearchBuildOptions(
     b: *std.Build,
     module: *std.Build.Module,
@@ -401,6 +406,25 @@ pub fn build(b: *std.Build) void {
     run_cmd.addPassthruArgs();
     run_compiler_cmd.addPassthruArgs();
 
+    // `-Dtest-filter` narrows every unit test root to the tests whose names
+    // contain one of the given substrings; Zig filters at compile time.
+    // The proof-case fixtures all run inside one test, so the root keeps
+    // that test and the fixture loop narrows by stem instead.
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Run only unit tests and proof-case fixtures whose names contain this substring (repeatable)",
+    ) orelse &.{};
+    const test_options = b.addOptions();
+    test_options.addOption([]const []const u8, "test_filters", test_filters);
+    const root_test_filters = if (test_filters.len == 0)
+        test_filters
+    else
+        std.mem.concat(b.allocator, []const u8, &.{
+            test_filters,
+            &.{proof_case_loop_test},
+        }) catch @panic("OOM");
+
     const trusted_test_module = b.createModule(.{
         .root_source_file = b.path("src/trusted/tests.zig"),
         .target = target,
@@ -410,6 +434,7 @@ pub fn build(b: *std.Build) void {
 
     const trusted_tests = b.addTest(.{
         .root_module = trusted_test_module,
+        .filters = test_filters,
     });
     const run_trusted_tests = b.addRunArtifact(trusted_tests);
 
@@ -423,9 +448,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/web_demo_fixtures.zig"),
     }));
     addSearchBuildOptions(b, root_test_module, search_timers);
+    root_test_module.addOptions("test_options", test_options);
 
     const root_tests = b.addTest(.{
         .root_module = root_test_module,
+        .filters = root_test_filters,
     });
     const run_root_tests = b.addRunArtifact(root_tests);
 
@@ -448,6 +475,7 @@ pub fn build(b: *std.Build) void {
 
     const frontend_tests = b.addTest(.{
         .root_module = frontend_test_module,
+        .filters = test_filters,
     });
     const run_frontend_tests = b.addRunArtifact(frontend_tests);
 
@@ -460,6 +488,7 @@ pub fn build(b: *std.Build) void {
 
     const compiler_tests = b.addTest(.{
         .root_module = compiler_test_module,
+        .filters = test_filters,
     });
     const run_compiler_tests = b.addRunArtifact(compiler_tests);
 
@@ -518,6 +547,7 @@ pub fn build(b: *std.Build) void {
 
     const compiler_bin_tests = b.addTest(.{
         .root_module = compiler_bin_test_module,
+        .filters = test_filters,
     });
     const run_compiler_bin_tests = b.addRunArtifact(compiler_bin_tests);
 
@@ -531,6 +561,7 @@ pub fn build(b: *std.Build) void {
 
     const verifier_bin_tests = b.addTest(.{
         .root_module = verifier_bin_test_module,
+        .filters = test_filters,
     });
     const run_verifier_bin_tests = b.addRunArtifact(verifier_bin_tests);
 
@@ -582,7 +613,7 @@ pub fn build(b: *std.Build) void {
     const fuzz_tests = b.addTest(.{
         .root_module = fuzz_test_module,
         .use_llvm = true,
-        .filters = if (fuzz_target) |name| &.{name} else &.{},
+        .filters = if (fuzz_target) |name| &.{name} else test_filters,
     });
     const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
     if (fuzz_replay) |path| {

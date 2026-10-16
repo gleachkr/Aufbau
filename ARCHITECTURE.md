@@ -1358,6 +1358,10 @@ across the chain. The manual and demo consume these same packages.
   `nd` and `seq` importing both), and most small fixtures import one of
   them. Fixtures that other test roots or the web demo
   read as raw text stay single-file, because those readers do not join.
+  `-Dtest-filter=<substring>` (repeatable) keeps only the unit tests
+  whose names contain one of the substrings, in every root, and the
+  proof cases whose stems do. Zig applies the filter at compile time,
+  so a new filter rebuilds the roots, but they compile far faster.
 - `test-integration`: upstream example pairs generated with `mm0-rs` and
   checked by the verifier. `MM0_ZIG_EXAMPLE_FILTER` narrows selection.
 - `test-frontier-smoke`: selected search frontiers and whole-fixture guards,
