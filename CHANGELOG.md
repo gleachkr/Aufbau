@@ -109,6 +109,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   re-sorted the branch: a truth tree `∀` step `tb_all1` on a 161-row
   branch wrote a 54 KB proof where the same step without a `@view` wrote
   38 KB; both now write 38 KB, with or without `ga` given.
+- The same holds when the line writes the step's new members in another
+  order than the `@view` does. The context the view read from the line
+  was read again, sorted, from the premise: a `tb_all1` line on a 121-row
+  branch whose premise writes the instance before its mark wrote a 418 KB
+  proof, and now writes 47 KB, the same as with `ga` given.
 - A line whose rule fails before its `@fallback` no longer sorts the
   line's contexts first. With `ga` given, `tb_imp_r` on a 241-row branch
   whose cited lines suit `tb_imp_l` took 960 ms to fail over, against

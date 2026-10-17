@@ -25,7 +25,14 @@ pub fn syncFromSession(
 
     for (snapshot.bindings, 0..) |binding, idx| {
         if (idx >= bindings.len) break;
-        if (binding) |expr_id| bindings[idx] = expr_id;
+        const expr_id = binding orelse continue;
+        // A context the branch already holds keeps its order when the
+        // session only re-reads it sorted, as from a premise's normal form.
+        if (bindings[idx]) |existing| {
+            if (existing != expr_id and
+                try session.shared.isRearrangement(existing, expr_id)) continue;
+        }
+        bindings[idx] = expr_id;
     }
 
     const cloned = try BranchStateOps.cloneMatchSeedState(

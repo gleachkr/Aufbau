@@ -910,6 +910,81 @@ test "a @view hands its rule a context in the order the line wrote it" {
     try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
 }
 
+test "a @view keeps the statement's context when its new members come in another order" {
+    // The premise writes the instance before its mark, so the view's
+    // premise does not match as written and the solver matches it modulo
+    // order. That match re-read `g`, bound from the statement, off the
+    // premise's sorted normal form, and the proof re-sorted the context
+    // (19 KB); it is now the proof `g` given gets (4 KB).
+    const n = 20;
+    const allocator = std.testing.allocator;
+    var reversed: [n]usize = undefined;
+    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+
+    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer mm0_src.deinit(allocator);
+    try appendRcTheory(&mm0_src, allocator, "infixl");
+    try mm0_src.appendSlice(allocator,
+        \\sort var;
+        \\sort tm;
+        \\term v2t (x: var): tm;
+        \\coercion v2t: var > tm;
+        \\term all {x: var} (p: wff x): wff;
+        \\term pred (t: tm): wff;
+        \\term sb (t: tm) {x: var} (p: wff x): wff;
+        \\--| @rewrite
+        \\axiom sb_pred (t: tm) {x: var}: $ bi (sb t x (pred x)) (pred t) $;
+        \\term hyp (a: wff): rc;
+        \\--| @congr
+        \\axiom hyp_congr (a b: wff): $ bi a b $ > $ rc_eq (hyp a) (hyp b) $;
+        \\term mark (a b: wff): rc;
+        \\--| @congr
+        \\axiom mark_congr (a b c d: wff):
+        \\  $ bi a b $ > $ bi c d $ > $ rc_eq (mark a c) (mark b d) $;
+        \\term closed (g: rc): wff;
+        \\--| @congr
+        \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+        \\term fc (g: rc) (a: wff): wff;
+        \\--| @congr
+        \\axiom fc_congr (g h: rc) (a b: wff):
+        \\  $ rc_eq g h $ > $ bi a b $ > $ bi (fc g a) (fc h b) $;
+        \\--| @view {x: var} (g: rc x) (t: tm) (p: wff x) (q: wff): $ closed (g & mark (all x p) q & hyp q) $ > $ fc g (all x p) $
+        \\--| @recover t q p x
+        \\axiom all_step {x: var} (g: rc x) (t: tm) (p: wff x):
+        \\  $ closed (g & mark (all x p) (sb t x p) & hyp (sb t x p)) $ > $ fc g (all x p) $;
+        \\theorem t {x: var} (c: tm) (
+    );
+    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try mm0_src.appendSlice(allocator, ": rc): $ closed (");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator,
+        \\ & hyp (pred c) & mark (all x (pred x)) (pred c)) $ > $ fc (
+    );
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, ") (all x (pred x)) $;\n");
+
+    var mmbs: [2][]const u8 = undefined;
+    for ([_]bool{ false, true }, &mmbs) |bound, *out| {
+        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer proof_src.deinit(allocator);
+        try proof_src.appendSlice(allocator, "t\n---\nl1: $ fc (");
+        try appendBag(&proof_src, allocator, &reversed, "infixl");
+        try proof_src.appendSlice(allocator, ") (all x (pred x)) $ by all_step ");
+        if (bound) {
+            try proof_src.appendSlice(allocator, "(g := $ ");
+            try appendBag(&proof_src, allocator, &reversed, "infixl");
+            try proof_src.appendSlice(allocator, " $) ");
+        }
+        try proof_src.appendSlice(allocator, "[#1]\n");
+
+        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+        out.* = try compiler.compileMmb(allocator);
+        try mm0.verifyPair(allocator, mm0_src.items, out.*);
+    }
+    defer for (mmbs) |mmb| allocator.free(mmb);
+    try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
+}
+
 test "a rule that fails before its @fallback does not normalize the context" {
     // With `g` given, `imp_r` binds every variable and fails only at its
     // premises, which name the other branch first. Converting each premise
