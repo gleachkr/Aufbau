@@ -233,6 +233,32 @@ pub const Solver = struct {
         return self.ambiguity_report;
     }
 
+    /// Lays out each binding the line did not give (null in `given`) whose
+    /// sort a commutative combiner builds in the order `sources` list its
+    /// members, as a solve lays out the remainders it infers. For bindings
+    /// another tier read off a sorted normal form: their proofs then move
+    /// only what the rule moves, rather than re-sorting the whole bag.
+    pub fn layoutInferredBags(
+        self: *Solver,
+        bindings: []ExprId,
+        given: []const ?ExprId,
+        sources: []const ExprId,
+    ) anyerror!void {
+        for (bindings, given, 0..) |*binding, explicit, idx| {
+            if (explicit != null) continue;
+            const combiner = try self.registry.resolveStructuralCombinerForSort(
+                self.env,
+                self.rule.args[idx].sort_name,
+            ) orelse continue;
+            binding.* = try StructuralItems.layoutInSourceOrder(
+                self,
+                binding.*,
+                types.StructuralProfile.init(combiner),
+                sources,
+            );
+        }
+    }
+
     pub fn getFailure(self: *const Solver) ?SolveFailure {
         return self.failure;
     }

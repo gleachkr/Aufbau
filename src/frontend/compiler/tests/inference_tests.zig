@@ -798,6 +798,61 @@ test "an inferred context remainder keeps each copy of a repeated member in plac
     try std.testing.expect(mmb.len < 6_000);
 }
 
+test "a context read off a normal form keeps its source's member order" {
+    // `okat_ax`'s context member `wrap (dbl a)` matches `wrap x10` only
+    // once `dbl a` is rewritten, so `g` is read by matching normal forms,
+    // where the context is sorted. Kept sorted, `g` made the proof re-sort
+    // the context; laid out as the line writes it, the proof is the one
+    // `g` given as written gets.
+    const n = 20;
+    const allocator = std.testing.allocator;
+    var reversed: [n]usize = undefined;
+    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+
+    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer mm0_src.deinit(allocator);
+    try appendRcTheory(&mm0_src, allocator, "infixl");
+    try mm0_src.appendSlice(allocator,
+        \\term dbl (a: rc): rc;
+        \\--| @rewrite
+        \\axiom dbl_id (a: rc): $ rc_eq (dbl a) a $;
+        \\term wrap (a: rc): rc;
+        \\--| @congr
+        \\axiom wrap_congr (a b: rc): $ rc_eq a b $ > $ rc_eq (wrap a) (wrap b) $;
+        \\term okat (a g: rc): wff;
+        \\--| @congr
+        \\axiom okat_congr (a b g h: rc):
+        \\  $ rc_eq a b $ > $ rc_eq g h $ > $ bi (okat a g) (okat b h) $;
+        \\axiom okat_ax (g a: rc): $ okat a (g & wrap (dbl a)) $;
+        \\theorem t (
+    );
+    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try mm0_src.appendSlice(allocator, ": rc): $ okat x10 (");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, " & wrap x10) $;\n");
+
+    var mmbs: [2][]const u8 = undefined;
+    for ([_]bool{ false, true }, &mmbs) |bound, *out| {
+        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer proof_src.deinit(allocator);
+        try proof_src.appendSlice(allocator, "t\n---\nl1: $ okat x10 (");
+        try appendBag(&proof_src, allocator, &reversed, "infixl");
+        try proof_src.appendSlice(allocator, " & wrap x10) $ by okat_ax ");
+        if (bound) {
+            try proof_src.appendSlice(allocator, "(g := $ ");
+            try appendBag(&proof_src, allocator, &reversed, "infixl");
+            try proof_src.appendSlice(allocator, " $) ");
+        }
+        try proof_src.appendSlice(allocator, "[]\n");
+
+        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+        out.* = try compiler.compileMmb(allocator);
+        try mm0.verifyPair(allocator, mm0_src.items, out.*);
+    }
+    defer for (mmbs) |mmb| allocator.free(mmb);
+    try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
+}
+
 test "a context with two unknown members is split after the arguments that fix them" {
     // `has_ctx` and `has_pair` state one fact, a context holding both
     // halves of a pair, with their arguments in either order. Matched left

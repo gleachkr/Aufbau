@@ -626,7 +626,7 @@ fn finishRuleMatchSession(
         session.shared.theorem,
         line_expr,
     )).deps;
-    return try tryFinalizeRuleMatchSession(
+    const result = try tryFinalizeRuleMatchSession(
         allocator,
         session,
         fresh_context,
@@ -634,6 +634,54 @@ fn finishRuleMatchSession(
         ref_exprs,
         explicit_bindings,
     );
+    switch (result) {
+        // The bindings are this call's own, freshly finalized.
+        .concrete => |bindings| try layoutSessionBags(
+            context,
+            @constCast(bindings),
+            explicit_bindings,
+            ref_exprs,
+            line_expr,
+        ),
+        .no_match, .unresolved_dummy_witness => {},
+    }
+    return result;
+}
+
+/// A session compares normal forms, whose bags are sorted, so a context it
+/// infers comes out sorted. Lay it out as the refs and the line list their
+/// members, as the structural solver does (`Solver.layoutInferredBags`).
+fn layoutSessionBags(
+    context: *const RuleInferenceContext,
+    bindings: []ExprId,
+    given: []const ?ExprId,
+    ref_exprs: []const ExprId,
+    line_expr: ExprId,
+) !void {
+    if (!try hasOmittedStructuralBindings(
+        context.env,
+        context.registry,
+        context.rule,
+        given,
+    )) return;
+    const allocator = context.allocator;
+    var solver = InferenceSolver.init(
+        allocator,
+        context.env,
+        context.theorem,
+        context.registry,
+        context.rule_id,
+        context.rule,
+        null,
+        context.scratch,
+        .none,
+    );
+    defer solver.deinit();
+    const sources = try allocator.alloc(ExprId, ref_exprs.len + 1);
+    defer allocator.free(sources);
+    @memcpy(sources[0..ref_exprs.len], ref_exprs);
+    sources[ref_exprs.len] = line_expr;
+    try solver.layoutInferredBags(bindings, given, sources);
 }
 
 pub fn inferBindingsByRuleMatchSession(

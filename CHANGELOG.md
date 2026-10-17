@@ -97,6 +97,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   the whole branch: an `unfocus` on a 121-row branch with 8 rows written
   twice wrote a 197 KB proof, and now writes 47 KB, as it does when every
   row is distinct.
+- A context variable read off a normal form, as when a rule's context
+  holds a member that rewrites inside another term (`Γ ; chkᵢ (∀ x φ)
+  ({x / t} φ)`), now keeps the members in the order the line wrote them.
+  It used to come out sorted, and the proof re-sorted the branch: such a
+  line on a 121-row branch wrote a 232 KB proof, and now writes 45 KB, the
+  same as with Γ given. Proofs across the test corpus are up to 19%
+  smaller.
 
 ## [0.0.17] - 2026-10-14
 

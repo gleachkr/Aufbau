@@ -472,6 +472,60 @@ pub const MemberOrder = struct {
     }
 };
 
+/// `bag` with its members in the order `sources` list them, nested as they
+/// nest: how a structural solve lays out a remainder (`MemberOrder`), for a
+/// bag another reading produced, such as one read off a sorted normal form.
+/// `bag` itself when it is not a bag of `profile`'s combiner, or when the
+/// combiner does not commute.
+pub fn layoutInSourceOrder(
+    self: anytype,
+    bag: ExprId,
+    profile: StructuralProfile,
+    sources: []const ExprId,
+) anyerror!ExprId {
+    const spine = AcuiBag.Spine.raw(profile.headTermId());
+    if (!profile.isCommutative() or !spine.isBag(self.theorem, bag)) return bag;
+    self.member_order.clear();
+    var visited = std.AutoHashMapUnmanaged(ExprId, void).empty;
+    defer visited.deinit(self.allocator);
+    for (sources) |source| try registerSourceBags(self, profile, source, &visited);
+
+    var items = std.ArrayListUnmanaged(ExprId).empty;
+    defer items.deinit(self.allocator);
+    try spine.collect(self.allocator, self.theorem, bag, &items);
+    const canonical = try self.allocator.alloc(ExprId, items.items.len);
+    defer self.allocator.free(canonical);
+    for (items.items, canonical) |item, *out| {
+        out.* = try self.canonicalizer.canonicalize(item);
+    }
+    const order = try self.member_order.permutation(self.allocator, canonical);
+    defer self.allocator.free(order);
+    const ordered = try self.allocator.alloc(ExprId, items.items.len);
+    defer self.allocator.free(ordered);
+    for (order, ordered) |idx, *item| item.* = items.items[idx];
+    return try nestStructuralExpr(self, ordered, profile);
+}
+
+/// Registers each bag of `profile`'s combiner in `expr` that no larger one
+/// holds.
+fn registerSourceBags(
+    self: anytype,
+    profile: StructuralProfile,
+    expr: ExprId,
+    visited: *std.AutoHashMapUnmanaged(ExprId, void),
+) anyerror!void {
+    if ((try visited.getOrPut(self.allocator, expr)).found_existing) return;
+    if (AcuiBag.Spine.raw(profile.headTermId()).isBag(self.theorem, expr)) {
+        return try self.member_order.register(self, profile, expr);
+    }
+    switch (self.theorem.interner.node(expr).*) {
+        .app => |app| for (app.args) |arg| {
+            try registerSourceBags(self, profile, arg, visited);
+        },
+        else => {},
+    }
+}
+
 /// How many members of a structural template still hold an unbound binder,
 /// not counting remainder binders; null when `template` is not structural.
 pub fn openTemplateMemberCount(
