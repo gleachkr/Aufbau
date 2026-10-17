@@ -251,13 +251,11 @@ fn applyRecoverBinding(
     )) {
         .unread => return .no_progress,
         .found => |candidate| candidate,
-        .vacuous => |vacuous| try vacuousRecoverWitness(
+        .vacuous => try vacuousRecoverWitness(
             theorem,
             env,
             snapshot,
             recover,
-            vacuous.hole,
-            vacuous.pattern,
         ) orelse return .no_progress,
     };
     return .progress;
@@ -325,6 +323,24 @@ fn checkRecoverBinding(
     }
 }
 
+/// Whether a `@recover` whose source, pattern and hole are settled can
+/// still hold on this match: it reads a target off its source, and agrees
+/// with one bound some other way (`checkRecoverBinding`). Writes nothing,
+/// so it takes no fresh variable for a branch that may be dropped.
+pub fn checkRecoverFeasible(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    snapshot: MatchSnapshot,
+    recover: RecoverDecl,
+    view_arg_names: []const ?[]const u8,
+) !void {
+    if (snapshot.view_bindings[recover.target_view_idx] != null) {
+        return try checkRecoverBinding(theorem, env, registry, snapshot, recover, view_arg_names, false);
+    }
+    _ = try readRecoverTarget(theorem, env, registry, snapshot, recover, view_arg_names, false);
+}
+
 /// Whether a `@recover` that reads `candidate` off its source agrees with
 /// `target`, already bound: equal once aligned the way a concrete reading
 /// aligns its source (`preprocessDerivedExpr`).
@@ -345,8 +361,9 @@ const RecoverReading = union(enum) {
     unread,
     /// The source shows the target where the pattern has the hole.
     found: ExprId,
-    /// The pattern accepts the source without showing the hole.
-    vacuous: struct { hole: ExprId, pattern: ?ExprId },
+    /// The pattern accepts the source without showing the hole, which is
+    /// bound.
+    vacuous,
 };
 
 /// Read the target of a `@recover` off its source, pattern and hole,
@@ -395,10 +412,7 @@ fn readRecoverTarget(
                 debug_views,
             )) {
                 .found => |candidate| return .{ .found = candidate },
-                .vacuous => return .{ .vacuous = .{
-                    .hole = concrete_hole_expr,
-                    .pattern = pattern_expr,
-                } },
+                .vacuous => return .vacuous,
                 .none => {},
             }
             if (debug_views) {
@@ -473,10 +487,8 @@ fn readRecoverTarget(
 
     if (!found) {
         // The pattern accepts the source without exposing the hole.
-        return .{ .vacuous = .{
-            .hole = hole_expr orelse return .unread,
-            .pattern = view_bindings[recover.pattern_view_idx],
-        } };
+        if (hole_expr == null) return .unread;
+        return .vacuous;
     }
 
     if (debug_views) {
@@ -501,9 +513,9 @@ fn vacuousRecoverWitness(
     env: *const GlobalEnv,
     snapshot: MatchSnapshot,
     recover: RecoverDecl,
-    hole_expr: ExprId,
-    pattern_expr: ?ExprId,
 ) !?ExprId {
+    const hole_expr = snapshot.view_bindings[recover.hole_view_idx].?;
+    const pattern_expr = snapshot.view_bindings[recover.pattern_view_idx];
     const hole_sort =
         (try BindingValidation.exprInfo(env, theorem, hole_expr)).sort_name;
     const witness = if (recover.target_may_hold_hole) hole_expr else blk: {
@@ -660,11 +672,7 @@ fn recoverBindingCandidateSymbolic(
     return switch (symbolic.*) {
         .binder => |idx| blk: {
             if (idx == hole_view_idx) {
-                if (candidate.*) |existing| {
-                    if (existing != source_expr) return error.RecoverConflict;
-                } else {
-                    candidate.* = source_expr;
-                }
+                if (!recordCandidate(candidate, source_expr)) return error.RecoverConflict;
                 break :blk true;
             }
             if (idx < view_bindings.len) {
@@ -723,26 +731,14 @@ fn recoverBindingCandidateSymbolic(
                     if (slot < witnesses.len) {
                         if (witnesses[slot]) |witness| {
                             if (witness == concrete_hole_expr) {
-                                if (candidate.*) |existing| {
-                                    if (existing != source_expr) {
-                                        return error.RecoverConflict;
-                                    }
-                                } else {
-                                    candidate.* = source_expr;
-                                }
+                                if (!recordCandidate(candidate, source_expr)) return error.RecoverConflict;
                                 break :blk true;
                             }
                         }
                     }
                 }
             } else if (holeSeedMatchesDummy(hole_seed, slot)) {
-                if (candidate.*) |existing| {
-                    if (existing != source_expr) {
-                        return error.RecoverStructureMismatch;
-                    }
-                } else {
-                    candidate.* = source_expr;
-                }
+                if (!recordCandidate(candidate, source_expr)) return error.RecoverStructureMismatch;
                 break :blk true;
             }
             if (dummy_bindings.get(slot)) |existing| {
@@ -766,11 +762,7 @@ fn recoverBindingCandidateSymbolic(
                     source_expr,
                     target_sort,
                 ) orelse return error.RecoverStructureMismatch;
-                if (candidate.*) |existing| {
-                    if (existing != recovered) return error.RecoverConflict;
-                } else {
-                    candidate.* = recovered;
-                }
+                if (!recordCandidate(candidate, recovered)) return error.RecoverConflict;
                 break :blk true;
             }
             const source_node = theorem.interner.node(source_expr);
@@ -892,6 +884,41 @@ pub fn concreteRecoverCandidate(
     target_sort: []const u8,
     debug_views: bool,
 ) !ConcreteRecover {
+    const raw = try concreteWalk(
+        theorem,
+        env,
+        source_expr,
+        pattern_expr,
+        hole_expr,
+        target_sort,
+    );
+    if (raw != .none) {
+        if (debug_views) ViewTrace.printMessage("raw recover matched concrete pattern", .{});
+        return raw;
+    }
+    const aligned = try concreteWalk(
+        theorem,
+        env,
+        try preprocessDerivedExpr(theorem, env, registry, source_expr),
+        try preprocessDerivedExpr(theorem, env, registry, pattern_expr),
+        hole_expr,
+        target_sort,
+    );
+    if (aligned != .none and debug_views) {
+        ViewTrace.printMessage("aligned recover matched concrete pattern", .{});
+    }
+    return aligned;
+}
+
+/// One structural walk of a recover source against its pattern.
+fn concreteWalk(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    source_expr: ExprId,
+    pattern_expr: ExprId,
+    hole_expr: ExprId,
+    target_sort: []const u8,
+) !ConcreteRecover {
     var candidate: ?ExprId = null;
     var skipped_equal_hole = false;
     const found = recoverBindingCandidate(
@@ -904,67 +931,24 @@ pub fn concreteRecoverCandidate(
         &candidate,
         &skipped_equal_hole,
     ) catch |err| switch (err) {
-        error.RecoverStructureMismatch => blk: {
-            skipped_equal_hole = false;
-            break :blk false;
-        },
+        // The structures diverge, whatever the walk skipped before.
+        error.RecoverStructureMismatch => return if (source_expr == pattern_expr) .vacuous else .none,
         else => return err,
     };
-    if (found or skipped_equal_hole or source_expr == pattern_expr) {
-        if (debug_views) {
-            ViewTrace.printMessage(
-                "raw recover matched concrete pattern",
-                .{},
-            );
-        }
-        if (!found) return .vacuous;
-        return .{ .found = candidate orelse return .vacuous };
+    if (found) {
+        if (candidate) |value| return .{ .found = value };
+        return .vacuous;
     }
-
-    const aligned_source = try preprocessDerivedExpr(
-        theorem,
-        env,
-        registry,
-        source_expr,
-    );
-    const aligned_pattern = try preprocessDerivedExpr(
-        theorem,
-        env,
-        registry,
-        pattern_expr,
-    );
-
-    candidate = null;
-    skipped_equal_hole = false;
-    const aligned_found = recoverBindingCandidate(
-        theorem,
-        env,
-        aligned_source,
-        aligned_pattern,
-        hole_expr,
-        target_sort,
-        &candidate,
-        &skipped_equal_hole,
-    ) catch |err| switch (err) {
-        error.RecoverStructureMismatch => blk: {
-            skipped_equal_hole = false;
-            break :blk false;
-        },
-        else => return err,
-    };
-    if (aligned_found or skipped_equal_hole or
-        aligned_source == aligned_pattern)
-    {
-        if (debug_views) {
-            ViewTrace.printMessage(
-                "aligned recover matched concrete pattern",
-                .{},
-            );
-        }
-        if (!aligned_found) return .vacuous;
-        return .{ .found = candidate orelse return .vacuous };
-    }
+    if (skipped_equal_hole or source_expr == pattern_expr) return .vacuous;
     return .none;
+}
+
+/// Records `value` as the hole's reading, or checks it against the one
+/// already read; false when the two differ.
+fn recordCandidate(candidate: *?ExprId, value: ExprId) bool {
+    if (candidate.*) |existing| return existing == value;
+    candidate.* = value;
+    return true;
 }
 
 fn recoverBindingCandidate(
@@ -978,11 +962,7 @@ fn recoverBindingCandidate(
     skipped_equal_hole: *bool,
 ) !bool {
     if (pattern_expr == hole_expr) {
-        if (candidate.*) |existing| {
-            if (existing != source_expr) return error.RecoverConflict;
-        } else {
-            candidate.* = source_expr;
-        }
+        if (!recordCandidate(candidate, source_expr)) return error.RecoverConflict;
         return true;
     }
     // A coercion chain around exactly the hole is a cross-sort recovery
@@ -998,11 +978,7 @@ fn recoverBindingCandidate(
             source_expr,
             target_sort,
         ) orelse return error.RecoverStructureMismatch;
-        if (candidate.*) |existing| {
-            if (existing != recovered) return error.RecoverConflict;
-        } else {
-            candidate.* = recovered;
-        }
+        if (!recordCandidate(candidate, recovered)) return error.RecoverConflict;
         return true;
     }
 
@@ -1180,11 +1156,7 @@ fn recoverBindingFromSourceWrapper(
     const recovered = wrapper_candidate orelse {
         return error.RecoverStructureMismatch;
     };
-    if (candidate.*) |existing| {
-        if (existing != recovered) return error.RecoverConflict;
-    } else {
-        candidate.* = recovered;
-    }
+    if (!recordCandidate(candidate, recovered)) return error.RecoverConflict;
     return true;
 }
 

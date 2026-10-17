@@ -3,8 +3,7 @@ const ArenaAllocator = @import("./arena_allocator.zig").ArenaAllocator;
 const GlobalEnv = @import("./env.zig").GlobalEnv;
 const RuleDecl = @import("./env.zig").RuleDecl;
 const Expr = @import("../trusted/expressions.zig").Expr;
-const Rules = @import("./rules.zig");
-const TemplateExpr = Rules.TemplateExpr;
+const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const ExprModule = @import("./expr.zig");
 const ExprId = @import("./expr.zig").ExprId;
 const TheoremContext = @import("./expr.zig").TheoremContext;
@@ -73,7 +72,7 @@ pub const SolveFailure = struct {
 };
 
 pub const Solver = struct {
-    // During `solveWithConclusion`, `allocator` is repointed at `state_arena`
+    // During `solveOnce`, `allocator` is repointed at `state_arena`
     // so the throwaway BranchState generations (each solve fans out into many
     // short-lived generations that were never individually freed) are reclaimed
     // in one shot when the Solver is torn down. `real_allocator` is the caller's
@@ -802,6 +801,9 @@ pub const Solver = struct {
         if (space != .view) return true;
         const view = self.view orelse return true;
         const bindings = state.view_bindings orelse return true;
+        var probe = state;
+        var snapshot: ?DerivedBindingSnapshot = null;
+        defer if (snapshot) |*value| value.deinit(self.real_allocator);
         for (view.derived_bindings) |binding| {
             const recover = switch (binding) {
                 .recover => |value| value,
@@ -812,23 +814,14 @@ pub const Solver = struct {
                 bindings,
                 recover,
             )) continue;
-            var probe = state;
-            probe.view_bindings = try self.allocator.dupe(?ExprId, bindings);
-            defer self.allocator.free(probe.view_bindings.?);
-            var snapshot = try self.derivedBindingSnapshot(&probe);
-            defer snapshot.deinit(self.real_allocator);
-            // A probe takes no fresh variable: one would stay declared in
-            // the theorem for a branch that may be dropped, and a pattern
-            // without the hole never rules a branch out anyway.
-            snapshot.value.fresh_var = null;
-            DerivedBindings.applyDerivedBindings(
+            if (snapshot == null) snapshot = try self.derivedBindingSnapshot(&probe);
+            DerivedBindings.checkRecoverFeasible(
                 self.theorem,
                 self.env,
                 self.registry,
-                snapshot.value,
-                &.{binding},
+                snapshot.?.value,
+                recover,
                 view.arg_names,
-                false,
             ) catch |err| {
                 if (!DerivedBindings.isDerivedBindingFailure(err)) return err;
                 self.pruned_by = err;

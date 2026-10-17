@@ -31,12 +31,10 @@ const CompilerContext = @import("../context.zig").CompilerContext;
 const HoleInferenceSink = @import("../context.zig").HoleInferenceSink;
 const InlineConclusionSink = @import("../context.zig").InlineConclusionSink;
 const DiagnosticSink = @import("../diagnostic_sink.zig").DiagnosticSink;
-const Normalize = @import("../normalize.zig");
 const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 const ViewTrace = @import("../../view_trace.zig");
 const Diagnostic = CompilerDiag.Diagnostic;
 const CheckedIr = @import("../../checked_ir.zig");
-const CheckedLine = CheckedIr.CheckedLine;
 const CheckedRef = CheckedIr.CheckedRef;
 const Inference = @import("../inference.zig");
 const Matching = @import("./matching.zig");
@@ -73,7 +71,6 @@ pub fn resolveLineAssertionForBindings(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
-    diag_scratch: *CompilerDiag.Scratch,
     assertion: AssertionStmt,
     line: ApplicationLine,
     rule: *const RuleDecl,
@@ -98,7 +95,6 @@ pub fn resolveLineAssertionForBindings(
                 theorem,
                 env,
                 registry,
-                diag_scratch,
                 assertion,
                 line,
                 holey.surface,
@@ -858,7 +854,6 @@ pub fn elaborateCandidateLine(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
-    diag_scratch: *CompilerDiag.Scratch,
     assertion: AssertionStmt,
     line: ApplicationLine,
     rule: *const RuleDecl,
@@ -879,7 +874,6 @@ pub fn elaborateCandidateLine(
             theorem,
             env,
             registry,
-            diag_scratch,
             assertion,
             line,
             holey.surface,
@@ -900,7 +894,6 @@ fn validateHoleyAssertionAgainstCandidate(
     theorem: *TheoremContext,
     env: *const GlobalEnv,
     registry: *RewriteRegistry,
-    diag_scratch: *CompilerDiag.Scratch,
     assertion: AssertionStmt,
     line: ApplicationLine,
     holey: *const Expr,
@@ -925,17 +918,9 @@ fn validateHoleyAssertionAgainstCandidate(
         return expected_line;
     }
 
-    var scratch_checked = std.ArrayListUnmanaged(CheckedLine).empty;
-    defer scratch_checked.deinit(allocator);
-    const normalized_line = try Normalize.normalizeExprForSnapshot(
-        allocator,
-        theorem,
-        registry,
-        env,
-        &scratch_checked,
-        diag_scratch,
-        expected_line,
-    );
+    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
+    defer canonicalizer.deinit();
+    const normalized_line = try canonicalizer.canonicalizeWithFreshBudget(expected_line);
     if (normalized_line != expected_line) {
         var normalized_report = Holes.ConcreteMatchReport{};
         if (try Holes.matchesConcrete(
@@ -951,9 +936,6 @@ fn validateHoleyAssertionAgainstCandidate(
         }
         hole_report = normalized_report;
     }
-
-    var canonicalizer = Canonicalizer.init(allocator, theorem, registry, env, {});
-    defer canonicalizer.deinit();
 
     // Each fill below is computed once. When the normalized line differs,
     // `can_materialize` holds, and a positional fill of `expected_line` that

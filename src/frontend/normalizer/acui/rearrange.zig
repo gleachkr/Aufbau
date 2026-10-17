@@ -42,23 +42,15 @@ pub fn buildRearrangement(
     if ((lhs_open != lhs or rhs_open != rhs) and
         try support.isRearrangement(lhs_open, rhs_open))
     {
-        const lhs_to_open = try ProofEmit.composeTransitivity(
+        return try chain(
             self,
             relation,
-            lhs,
-            lhs_open,
-            rhs_open,
-            try ProofEmit.emitTransparentRelationProof(self, relation, lhs, lhs_open),
-            try rearrange(self, &proved, lhs_open, rhs_open),
-        );
-        return try ProofEmit.composeTransitivity(
-            self,
-            relation,
-            lhs,
-            rhs_open,
-            rhs,
-            lhs_to_open,
-            try ProofEmit.emitTransparentRelationProof(self, relation, rhs_open, rhs),
+            .{ lhs, lhs_open, rhs_open, rhs },
+            .{
+                try ProofEmit.emitTransparentRelationProof(self, relation, lhs, lhs_open),
+                try rearrange(self, &proved, lhs_open, rhs_open),
+                try ProofEmit.emitTransparentRelationProof(self, relation, rhs_open, rhs),
+            },
         );
     }
 
@@ -90,27 +82,46 @@ pub fn buildRearrangement(
         try ProofEmit.emitTransparentRelationProof(self, relation, rhs, rhs_open),
         rhs_norm.conv_line_idx,
     );
-    const lhs_to_rhs_norm = try ProofEmit.composeTransitivity(
+    return try chain(
         self,
         relation,
-        lhs,
-        lhs_norm.result_expr,
-        rhs_norm.result_expr,
-        lhs_to_norm,
-        try rearrange(self, &proved, lhs_norm.result_expr, rhs_norm.result_expr),
+        .{ lhs, lhs_norm.result_expr, rhs_norm.result_expr, rhs },
+        .{
+            lhs_to_norm,
+            try rearrange(self, &proved, lhs_norm.result_expr, rhs_norm.result_expr),
+            if (rhs_to_norm) |proof|
+                try ProofEmit.emitSymm(self, relation, rhs, rhs_norm.result_expr, proof)
+            else
+                null,
+        },
     );
-    const norm_to_rhs = if (rhs_to_norm) |proof|
-        try ProofEmit.emitSymm(self, relation, rhs, rhs_norm.result_expr, proof)
-    else
-        null;
+}
+
+/// A proof of `exprs[0]` to `exprs[3]` from `steps`, a proof of each
+/// expression to the next; a null step is an expression equal to the next.
+fn chain(
+    self: anytype,
+    relation: ResolvedRelation,
+    exprs: [4]ExprId,
+    steps: [3]?usize,
+) anyerror!?usize {
+    const first_two = try ProofEmit.composeTransitivity(
+        self,
+        relation,
+        exprs[0],
+        exprs[1],
+        exprs[2],
+        steps[0],
+        steps[1],
+    );
     return try ProofEmit.composeTransitivity(
         self,
         relation,
-        lhs,
-        rhs_norm.result_expr,
-        rhs,
-        lhs_to_rhs_norm,
-        norm_to_rhs,
+        exprs[0],
+        exprs[2],
+        exprs[3],
+        first_two,
+        steps[2],
     );
 }
 
@@ -204,7 +215,7 @@ fn openDefsUncached(
         if (parts[0] == app.args[0] and parts[1] == app.args[1]) return expr_id;
         return try self.theorem.interner.internApp(app.term_id, &parts);
     }
-    if (app.term_id < self.env.terms.items.len and self.env.terms.items[app.term_id].is_def) {
+    if (self.env.openableDef(app.term_id) != null) {
         if (try (try self.defOps()).unfoldConcreteDef(expr_id)) |body| {
             if (in_bag or try isCommutativeBag(self, body)) {
                 return try openDefs(self, opened, body, true);

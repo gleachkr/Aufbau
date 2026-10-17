@@ -75,9 +75,6 @@ pub fn matchStructural(
     const used = try self.allocator.alloc(bool, actual_items.items.len);
     defer self.allocator.free(used);
     @memset(used, false);
-    const source_order =
-        try self.member_order.permutation(self.allocator, actual_items.items);
-    defer self.allocator.free(source_order);
 
     for (pre_required.items) |required| {
         var found = false;
@@ -101,7 +98,6 @@ pub fn matchStructural(
         self,
         template_items.items,
         actual_items.items,
-        source_order,
         remainders.items,
         space,
         0,
@@ -291,7 +287,6 @@ fn matchCommutativeStructuralObligations(
     self: anytype,
     template_items: []const StructuralTemplateItem,
     actual_items: []const ExprId,
-    source_order: []const u32,
     remainders: []const StructuralRemainder,
     space: BinderSpace,
     next_item: usize,
@@ -304,7 +299,6 @@ fn matchCommutativeStructuralObligations(
         try StructuralStateUpdates.appendStructuralRemainderState(
             self,
             actual_items,
-            source_order,
             used,
             remainders,
             space,
@@ -334,7 +328,6 @@ fn matchCommutativeStructuralObligations(
                 self,
                 template_items,
                 actual_items,
-                source_order,
                 remainders,
                 space,
                 next_item + 1,

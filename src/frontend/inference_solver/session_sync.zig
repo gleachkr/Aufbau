@@ -28,11 +28,10 @@ pub fn syncFromSession(
         const expr_id = binding orelse continue;
         // A context the branch already holds keeps its order when the
         // session only re-reads it sorted, as from a premise's normal form.
-        if (bindings[idx]) |existing| {
-            if (existing != expr_id and
-                try session.shared.isRearrangement(existing, expr_id)) continue;
-        }
-        bindings[idx] = expr_id;
+        bindings[idx] = if (bindings[idx]) |existing|
+            try session.shared.keepMatchedOrder(existing, expr_id)
+        else
+            expr_id;
     }
 
     const cloned = try BranchStateOps.cloneMatchSeedState(

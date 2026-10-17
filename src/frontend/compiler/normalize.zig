@@ -86,33 +86,6 @@ pub fn maybeBuildComparisonSnapshotWithDebug(
     };
 }
 
-pub fn normalizeExprForSnapshot(
-    allocator: std.mem.Allocator,
-    theorem: *TheoremContext,
-    registry: *RewriteRegistry,
-    env: *const GlobalEnv,
-    checked: *std.ArrayListUnmanaged(CheckedLine),
-    scratch: *CompilerDiag.Scratch,
-    expr: ExprId,
-) !ExprId {
-    var normalizer = Normalizer.initWithScratch(
-        allocator,
-        theorem,
-        registry,
-        env,
-        checked,
-        scratch,
-    );
-    defer normalizer.deinit();
-    const mark = scratch.mark();
-    const normalized = normalizer.normalize(expr) catch |err| {
-        scratch.discard(mark);
-        return err;
-    };
-    scratch.discard(mark);
-    return normalized.result_expr;
-}
-
 pub fn buildNormalizedConversionWithProviderAndDebug(
     allocator: std.mem.Allocator,
     theorem: *TheoremContext,

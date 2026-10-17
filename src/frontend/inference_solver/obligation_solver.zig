@@ -173,16 +173,18 @@ fn solveBagStructuralObligation(
     obligation: StructuralJointObligation,
     profile: StructuralProfile,
 ) anyerror![]BranchState {
+    // Only a set reads the lower bound: under ACU a binder's bounds are
+    // exact, its lower bound its upper.
     var lower_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lower_items.deinit(self.allocator);
-    var upper_items = std.ArrayListUnmanaged(ExprId).empty;
-    defer upper_items.deinit(self.allocator);
-    try StructuralItems.collectCanonicalStructuralItems(
+    if (profile.law == .set) try StructuralItems.collectCanonicalStructuralItems(
         self,
         obligation.lower_expr,
         profile,
         &lower_items,
     );
+    var upper_items = std.ArrayListUnmanaged(ExprId).empty;
+    defer upper_items.deinit(self.allocator);
     try StructuralItems.collectCanonicalStructuralItems(
         self,
         obligation.upper_expr,
@@ -525,49 +527,12 @@ fn resolveCoverProduct(
         count *|= member.len();
         if (minimalPlacement(member) != 0) first_is_minimal = false;
     }
-    if (first_is_minimal) {
-        const before = out.items.len;
-        try appendCover(
-            self,
-            state,
-            space,
-            obligation,
-            profile,
-            choices,
-            .first,
-            1,
-            out,
-        );
-        if (out.items.len == before) return false;
-        if (count == 1) return true;
-        try appendCover(
-            self,
-            state,
-            space,
-            obligation,
-            profile,
-            choices,
-            .next,
-            count - 1,
-            out,
-        );
-        return out.items.len != before + 1;
-    }
-    if (count > 1) {
-        const before = out.items.len;
-        try appendCover(
-            self,
-            state,
-            space,
-            obligation,
-            profile,
-            choices,
-            .first,
-            count - 1,
-            out,
-        );
-        if (out.items.len == before) return false;
-    }
+    // The first cover stands for itself when it is the chosen one, else
+    // for every cover but the chosen one; the second pick stands for the
+    // rest. When the first is not minimal some member has two placements,
+    // so there are at least two covers.
+    const first_multiplicity: usize = if (first_is_minimal) 1 else count - 1;
+    const second: CoverPick = if (first_is_minimal) .next else .minimal;
     const before = out.items.len;
     try appendCover(
         self,
@@ -576,11 +541,24 @@ fn resolveCoverProduct(
         obligation,
         profile,
         choices,
-        .minimal,
-        1,
+        .first,
+        first_multiplicity,
         out,
     );
-    return out.items.len != before;
+    if (out.items.len == before) return false;
+    if (count == 1) return true;
+    try appendCover(
+        self,
+        state,
+        space,
+        obligation,
+        profile,
+        choices,
+        second,
+        count - first_multiplicity,
+        out,
+    );
+    return out.items.len != before + 1;
 }
 
 /// `next` is the cover enumerated after the first: the last member with a

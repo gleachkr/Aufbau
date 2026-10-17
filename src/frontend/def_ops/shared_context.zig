@@ -230,6 +230,21 @@ pub const SharedContext = struct {
         return try (try canonicalizer.support()).isRearrangement(lhs, rhs);
     }
 
+    /// `matched` when `other` only reorders its ACUI members: a binder
+    /// matched up to the order of ACUI members keeps the order it was
+    /// matched at. A representative or a normal form sorts them, and every
+    /// proof between the two orders then pays for the sort.
+    pub fn keepMatchedOrder(
+        self: *SharedContext,
+        matched: ExprId,
+        other: ExprId,
+    ) !ExprId {
+        if (other != matched and try self.isRearrangement(matched, other)) {
+            return matched;
+        }
+        return other;
+    }
+
     fn sharedCanonicalizer(self: *SharedContext) !*Canonicalizer {
         if (self.canonicalizer) |canonicalizer| return canonicalizer;
         const created = try self.allocator.create(Canonicalizer);

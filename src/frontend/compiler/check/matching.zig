@@ -203,15 +203,11 @@ fn mayMeet(ctx: ConversionContext, have: ExprId, want: ExprId) !bool {
         };
         if (canonicalizer.step_count >= canonicalizer.step_limit) return true;
     }
-    if (canonical[0] == canonical[1]) return true;
-    const common = canonicalizer.buildCommonTarget(
-        canonical[0],
-        canonical[1],
-    ) catch |err| {
-        if (err == error.OutOfMemory) return err;
-        return true;
-    };
-    return common != null;
+    // Past their normal forms, two exprs meet only through a definition
+    // (`SemanticCompare.meetsOtherForms`).
+    return canonical[0] == canonical[1] or
+        support.isDefBearing(canonical[0]) or
+        support.isDefBearing(canonical[1]);
 }
 
 fn materialize(

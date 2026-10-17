@@ -144,7 +144,7 @@ pub fn matchExpr(
                         // def, unfolding may still reconcile them: a def can
                         // erase an argument, so two applications that differ
                         // only there denote the same thing.
-                        if (!isOpenableDef(self, app.term_id)) break :blk &.{};
+                        if (self.env.openableDef(app.term_id) == null) break :blk &.{};
                         break :blk try StructuralTransparentMatcher
                             .matchExprTransparent(
                             self,
@@ -176,12 +176,6 @@ fn defersMatch(
         bindings,
     ) orelse return false;
     return open > 1;
-}
-
-fn isOpenableDef(self: anytype, term_id: u32) bool {
-    if (term_id >= self.env.terms.items.len) return false;
-    const term = &self.env.terms.items[term_id];
-    return term.is_def and term.body != null;
 }
 
 fn matchBinderSymbolically(

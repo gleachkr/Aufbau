@@ -15,7 +15,6 @@ const StructuralRemainder = types.StructuralRemainder;
 pub fn appendStructuralRemainderState(
     self: anytype,
     actual_items: []const ExprId,
-    source_order: []const u32,
     used: []const bool,
     remainders: []const StructuralRemainder,
     space: BinderSpace,
@@ -37,7 +36,6 @@ pub fn appendStructuralRemainderState(
     const interval = try buildStructuralInterval(
         self,
         actual_items,
-        source_order,
         used,
         profile,
     );
@@ -262,36 +260,27 @@ pub fn candidateBindingCompatible(
     );
 }
 
-/// `source_order` lists the indices of `actual_items` in source order
-/// (`MemberOrder.permutation`), so each branch of a match rebuilds its
-/// remainder without sorting it again.
+/// The remainder bounds after a match: the unused `actual_items` and, for
+/// a set, all of them. Both are rebuilt in source order.
 pub fn buildStructuralInterval(
     self: anytype,
     actual_items: []const ExprId,
-    source_order: []const u32,
     used: []const bool,
     profile: StructuralProfile,
 ) anyerror!StructuralInterval {
     var lower_items = std.ArrayListUnmanaged(ExprId).empty;
     defer lower_items.deinit(self.allocator);
-    var all_items = std.ArrayListUnmanaged(ExprId).empty;
-    defer all_items.deinit(self.allocator);
-    for (source_order) |idx| {
-        if (!used[idx]) try lower_items.append(self.allocator, actual_items[idx]);
-        if (profile.law == .set) try all_items.append(self.allocator, actual_items[idx]);
+    for (actual_items, used) |item, is_used| {
+        if (!is_used) try lower_items.append(self.allocator, item);
     }
 
-    const lower_expr = try StructuralItems.nestStructuralExpr(
+    const lower_expr = try StructuralItems.rebuildStructuralExpr(
         self,
         lower_items.items,
         profile,
     );
     const upper_expr = switch (profile.law) {
-        .set => try StructuralItems.nestStructuralExpr(
-            self,
-            all_items.items,
-            profile,
-        ),
+        .set => try StructuralItems.rebuildStructuralExpr(self, actual_items, profile),
         .sequence, .multiset, .idempotent_sequence => lower_expr,
     };
     return .{

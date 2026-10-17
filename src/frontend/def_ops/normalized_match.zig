@@ -1036,12 +1036,11 @@ pub const RuleMatchSession = struct {
         view: *NormalizedView,
     ) anyerror!bool {
         if (view.placeholderTarget(actual_expr)) |actual_target| {
-            if (actual_target == .line_hole) return true;
             if (samePlaceholderTarget(target, actual_target)) return true;
         }
-        // An actual holding a line hole deeper down is only partly known, so
-        // it fixes nothing either; the line's final check compares it with
-        // the instantiated rule (as in transparent_match.holeyActual).
+        // An actual holding a line hole, at its root or deeper, is only
+        // partly known, so it fixes nothing; the line's final check compares
+        // it with the instantiated rule (as in transparent_match.holeyActual).
         if (view.line_holes_match_anything and
             view.mirror.theorem.containsLineHole(actual_expr)) return true;
 

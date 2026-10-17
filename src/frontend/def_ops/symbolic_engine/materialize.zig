@@ -329,28 +329,10 @@ pub fn projectMaterializedExpr(
     mode: BindingMode,
 ) anyerror!?ExprId {
     const materialized = expr_id orelse return null;
-    return try keepMatchedOrder(
-        self,
+    return try self.shared.keepMatchedOrder(
         materialized,
         try chooseRepresentative(self, materialized, mode),
     );
-}
-
-/// `matched` when `representative` only reorders its ACUI members: a
-/// binder matched up to the order of ACUI members keeps the order it was
-/// matched at. The representative sorts them, and every proof between the
-/// two orders then pays for the sort.
-fn keepMatchedOrder(
-    self: anytype,
-    matched: ExprId,
-    representative: ExprId,
-) anyerror!ExprId {
-    if (representative != matched and
-        try self.shared.isRearrangement(matched, representative))
-    {
-        return matched;
-    }
-    return representative;
 }
 
 // This is the only escape path that turns symbolic match state back into
@@ -371,7 +353,7 @@ pub fn finalizeBoundValue(
                 concrete,
                 state,
             )) orelse return error.MissingRepresentative;
-            return try keepMatchedOrder(self, concrete.raw, representative);
+            return try self.shared.keepMatchedOrder(concrete.raw, representative);
         },
         .symbolic => |symbolic| {
             const expr_id = try materializeFinalSymbolic(

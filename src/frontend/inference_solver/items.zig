@@ -169,9 +169,7 @@ fn openDefMember(self: anytype, item: ExprId) anyerror!?ExprId {
         .app => |value| value,
         else => return null,
     };
-    if (app.term_id >= self.env.terms.items.len) return null;
-    const term = &self.env.terms.items[app.term_id];
-    if (!term.is_def or term.body == null) return null;
+    if (self.env.openableDef(app.term_id) == null) return null;
     if (!self.open_def_members) {
         self.saw_def_member = true;
         return null;
@@ -309,7 +307,18 @@ pub fn rebuildStructuralExpr(
     if (!profile.isCommutative() or items.len < 2) {
         return try nestStructuralExpr(self, items, profile);
     }
-    const order = try self.member_order.permutation(self.allocator, items);
+    return try nestInSourceOrder(self, items, items, profile);
+}
+
+/// The bag holding `items`, ordered by the ranks of `keys`, their
+/// canonical forms (`MemberOrder.permutation`).
+fn nestInSourceOrder(
+    self: anytype,
+    items: []const ExprId,
+    keys: []const ExprId,
+    profile: StructuralProfile,
+) anyerror!ExprId {
+    const order = try self.member_order.permutation(self.allocator, keys);
     defer self.allocator.free(order);
     const ordered = try self.allocator.alloc(ExprId, items.len);
     defer self.allocator.free(ordered);
@@ -353,7 +362,7 @@ pub fn nestStructuralExpr(
 /// A member keeps the position of the source it was first seen in, so
 /// when two sources list members in different orders the first matched
 /// one wins: a rule's premises before its conclusion, and a `@view`'s
-/// concrete conclusion before its premises (`Solver.solveWithConclusion`).
+/// concrete conclusion before its premises (`Solver.solveOnce`).
 /// Each copy of a repeated member has a position of its own: the nth copy
 /// in a rebuilt bag goes where the nth copy first appeared, not next to
 /// the first. Members no source holds go last, in item order.
@@ -476,7 +485,8 @@ pub const MemberOrder = struct {
 /// nest: how a structural solve lays out a remainder (`MemberOrder`), for a
 /// bag another reading produced, such as one read off a sorted normal form.
 /// `bag` itself when it is not a bag of `profile`'s combiner, or when the
-/// combiner does not commute.
+/// combiner does not commute. Resets `self.member_order` to the ranks of
+/// `sources`, so it is for a solver that is done solving.
 pub fn layoutInSourceOrder(
     self: anytype,
     bag: ExprId,
@@ -498,12 +508,7 @@ pub fn layoutInSourceOrder(
     for (items.items, canonical) |item, *out| {
         out.* = try self.canonicalizer.canonicalize(item);
     }
-    const order = try self.member_order.permutation(self.allocator, canonical);
-    defer self.allocator.free(order);
-    const ordered = try self.allocator.alloc(ExprId, items.items.len);
-    defer self.allocator.free(ordered);
-    for (order, ordered) |idx, *item| item.* = items.items[idx];
-    return try nestStructuralExpr(self, ordered, profile);
+    return try nestInSourceOrder(self, items.items, canonical, profile);
 }
 
 /// Registers each bag of `profile`'s combiner in `expr` that no larger one
