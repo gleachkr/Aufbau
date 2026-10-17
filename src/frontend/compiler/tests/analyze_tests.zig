@@ -119,6 +119,26 @@ test "compiler analyze mm0 rejects a tab outside a comment" {
     try std.testing.expectEqualStrings("worse", diags[1].name.?);
 }
 
+test "compiler analyze mm0 skips only the statement a tab rejects" {
+    const mm0_src =
+        "provable sort wff;\n" ++
+        "term\tP: wff;\n" ++
+        "term Q: wff;\n" ++
+        "term sbbi (a b: wff): wff;\n" ++
+        "def pp: wff = $ P $;\n" ++
+        "def qq: wff = $ Q $;\n";
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.analyzeMm0();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 2), diags.len);
+    try std.testing.expectEqual(error.IllegalWhitespace, diags[0].err);
+    try std.testing.expectEqualStrings("\t", mm0_src[diags[0].span.?.start..diags[0].span.?.end]);
+    try std.testing.expectEqual(error.UnknownMathToken, diags[1].err);
+    try std.testing.expectEqualStrings("pp", diags[1].name.?);
+}
+
 test "compiler analyze mm0 rejects a NUL even in a comment" {
     const mm0_src =
         "provable sort wff;\n" ++

@@ -721,6 +721,54 @@ test "MM0 parser skips local theorems and unknown declarations" {
     try std.testing.expect((try parser.next()) == null);
 }
 
+fn parseAllStatements(src: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init(src, arena.allocator());
+    while (try parser.next()) |_| {}
+}
+
+test "MM0 parser rejects tabs, carriage returns and NULs as mm0-c does" {
+    // A comment may hold a tab or a carriage return, and `;` or `$` in it
+    // is ordinary.
+    try parseAllStatements(
+        "provable sort wff;\n" ++
+            "-- a\ttab and a\rcarriage return\n" ++
+            "term t: wff; -- ; $\t\n",
+    );
+    // Outside a comment, a tab or carriage return is rejected, also
+    // between statements and inside a math string, where `--` starts no
+    // comment.
+    try std.testing.expectError(
+        error.IllegalWhitespace,
+        parseAllStatements("provable sort wff;\nterm\tt: wff;\n"),
+    );
+    try std.testing.expectError(
+        error.IllegalWhitespace,
+        parseAllStatements("provable sort wff;\r\nterm t: wff;\n"),
+    );
+    try std.testing.expectError(
+        error.IllegalWhitespace,
+        parseAllStatements("provable sort wff;\nterm t: wff;\naxiom a: $ t --\t$;\n"),
+    );
+    // A NUL is rejected even in a comment.
+    try std.testing.expectError(
+        error.NullCharacter,
+        parseAllStatements("provable sort wff;\n-- \x00\nterm t: wff;\n"),
+    );
+}
+
+test "MM0 parser registers nothing from a statement with a tab" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = MM0Parser.init("provable sort wff;\nterm\tt: wff;\n", arena.allocator());
+    _ = (try parser.next()).?;
+    try std.testing.expectError(error.IllegalWhitespace, parser.next());
+    try std.testing.expect(parser.lookupTermId("t") == null);
+}
+
 test "MM0 parser rejects unknown sorts in term signatures" {
     {
         const src =

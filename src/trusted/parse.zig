@@ -625,17 +625,9 @@ pub const MM0Parser = struct {
     }
 
     pub fn prepareNextPublicStatement(self: *MM0Parser) !void {
-        const start = self.pos;
-        self.skipNonPublicStatements() catch |err| {
-            if (err != error.OutOfMemory) try self.checkWhitechars(start, self.pos + 1);
-            return err;
-        };
-        try self.checkWhitechars(start, self.pos);
-    }
-
-    fn skipNonPublicStatements(self: *MM0Parser) !void {
         while (true) {
             self.resetDiagnosticContext();
+            try self.checkWhitechars();
             self.skipWhitespaceAndComments();
             if (self.pos >= self.src.len) return;
 
@@ -651,67 +643,39 @@ pub const MM0Parser = struct {
         }
     }
 
-    // Returns next public statement, while processing notation and coercion
-    // declarations so later math strings are parsed with the correct grammar.
-    pub fn next(self: *MM0Parser) !?MM0Stmt {
-        const start = self.pos;
-        const stmt = self.nextStatement() catch |err| {
-            if (err != error.OutOfMemory) try self.checkWhitechars(start, self.pos + 1);
-            return err;
-        };
-        try self.checkWhitechars(start, self.pos);
-        return stmt;
-    }
-
-    /// Fails on a tab or carriage return in `src[start..end]` outside a
-    /// comment, and on a NUL byte anywhere in it. MM0 whitespace is only
-    /// ' ' and '\n' (specs/mm0.md), and mm0-c rejects the others. The spec
-    /// lets a comment hold a NUL, but mm0-c refuses one anywhere in its
-    /// input, so this verifier does too. The lexer still skips tabs and
-    /// carriage returns, so math text from a proof script may use them;
-    /// each `.mm0` statement read through `next` or
-    /// `prepareNextPublicStatement` is checked here instead, and one that
-    /// failed is checked up to where it stopped, since a stray character
-    /// is the likelier cause.
-    fn checkWhitechars(self: *MM0Parser, start: usize, end: usize) WhitecharError!void {
-        const stop = @min(end, self.src.len);
-        // Inside a `$...$` math string or a `"..."` string, `--` starts no
-        // comment, and the other delimiter is an ordinary character.
-        var quote: ?u8 = null;
-        var pos = start;
-        while (pos < stop) : (pos += 1) {
-            const ch = self.src[pos];
-            switch (ch) {
-                0 => return self.failWhitechar(pos, error.NullCharacter),
-                '\t', '\r' => return self.failWhitechar(pos, error.IllegalWhitespace),
-                '$', '"' => if (quote == null) {
-                    quote = ch;
-                } else if (quote == ch) {
-                    quote = null;
-                },
-                '-' => if (quote == null and pos + 1 < stop and self.src[pos + 1] == '-') {
-                    while (pos < stop and self.src[pos] != '\n') : (pos += 1) {
-                        if (self.src[pos] == 0) return self.failWhitechar(pos, error.NullCharacter);
-                    }
-                },
-                else => {},
-            }
-        }
+    /// Fails on a byte MM0 does not allow (`scanToStatementEnd`) from
+    /// `pos` through the `;` that ends the next statement. MM0 whitespace
+    /// is only ' ' and '\n' (specs/mm0.md), and mm0-c rejects the others.
+    /// The spec lets a comment hold a NUL, but mm0-c refuses one anywhere
+    /// in its input, so this verifier does too. The lexer still skips tabs
+    /// and carriage returns, so math text from a proof script may use them;
+    /// each `.mm0` statement is checked here instead, before it is parsed,
+    /// so a rejected statement registers nothing and recovery from `pos`
+    /// skips exactly that statement.
+    ///
+    /// Every byte is checked because no statement's parse reads past the
+    /// `;` found here: `;` only ever ends a statement, the parser skips
+    /// math strings, strings and comments as `scanToStatementEnd` does,
+    /// and a parse stops at its `;` (`expectStatementEnd`), so the next
+    /// check starts where this statement ended.
+    fn checkWhitechars(self: *MM0Parser) WhitecharError!void {
+        var end = self.pos;
+        const at = scanToStatementEnd(self.src, &end) orelse return;
+        self.last_math_error = null;
+        self.last_math_span = null;
+        self.expected_char = null;
+        self.last_error_span = .{ .start = at, .end = at + 1 };
+        return if (self.src[at] == 0) error.NullCharacter else error.IllegalWhitespace;
     }
 
     const WhitecharError = error{ IllegalWhitespace, NullCharacter };
 
-    fn failWhitechar(self: *MM0Parser, pos: usize, err: WhitecharError) WhitecharError {
-        self.last_math_error = null;
-        self.last_math_span = null;
-        self.expected_char = null;
-        self.last_error_span = .{ .start = pos, .end = pos + 1 };
-        return err;
-    }
-
-    fn nextStatement(self: *MM0Parser) !?MM0Stmt {
+    // Returns next public statement, while processing notation and coercion
+    // declarations so later math strings are parsed with the correct grammar.
+    pub fn next(self: *MM0Parser) !?MM0Stmt {
         while (true) {
             self.resetDiagnosticContext();
+            try self.checkWhitechars();
             self.skipWhitespaceAndComments();
             if (self.pos >= self.src.len) return null;
 
@@ -791,7 +755,7 @@ pub const MM0Parser = struct {
                 _ = self.consumeIdent();
                 const name_info = try self.consumeRequiredIdentInfo();
                 self.recordNameContext(name_info);
-                try self.expect(';');
+                try self.expectStatementEnd();
                 if (self.sort_names.contains(name_info.text)) {
                     self.last_error_span = name_info.span;
                     return error.DuplicateSort;
@@ -847,7 +811,7 @@ pub const MM0Parser = struct {
         }
 
         self.skipWhitespaceAndComments();
-        try self.expect(';');
+        try self.expectStatementEnd();
 
         const arg_slice = try ctx.arg_infos.toOwnedSlice(self.allocator);
         const arg_names = try ctx.arg_names.toOwnedSlice(self.allocator);
@@ -914,7 +878,7 @@ pub const MM0Parser = struct {
         if (self.peek() == '=') {
             try self.skipToSemicolon();
         } else {
-            try self.expect(';');
+            try self.expectStatementEnd();
         }
 
         return .{
@@ -1205,7 +1169,7 @@ pub const MM0Parser = struct {
         try self.registerDelimiters(left_or_both, true, false);
         try self.registerDelimiters(right, false, true);
         self.skipWhitespaceAndComments();
-        try self.expect(';');
+        try self.expectStatementEnd();
     }
 
     fn parseSimpleNotationStmt(
@@ -1230,7 +1194,7 @@ pub const MM0Parser = struct {
         }
         const prec = try self.parsePrecedence();
         self.skipWhitespaceAndComments();
-        try self.expect(';');
+        try self.expectStatementEnd();
 
         try self.registerTokenPrec(token, prec);
 
@@ -1281,7 +1245,7 @@ pub const MM0Parser = struct {
             .end = token_start + token.len,
         });
         self.skipWhitespaceAndComments();
-        try self.expect(';');
+        try self.expectStatementEnd();
         try self.formula_markers.put(token, {});
         return true;
     }
@@ -1443,7 +1407,7 @@ pub const MM0Parser = struct {
             }
         }
 
-        try self.expect(';');
+        try self.expectStatementEnd();
         const lit_slice = try lits.toOwnedSlice(self.allocator);
         try self.registerPrefixNotation(term_id, first.token, first.prec, lit_slice);
     }
@@ -1467,7 +1431,7 @@ pub const MM0Parser = struct {
         const dst_info = try self.consumeRequiredIdentInfo();
         const dst = try self.lookupSortIdInfo(dst_info);
         self.skipWhitespaceAndComments();
-        try self.expect(';');
+        try self.expectStatementEnd();
 
         try self.registerCoercion(src, dst, term_id);
         // Coercions are inserted implicitly and never written in source, so the
@@ -2371,6 +2335,18 @@ pub const MM0Parser = struct {
         self.skipWhitespaceAndComments();
     }
 
+    /// Consumes the `;` that ends a statement and nothing after it: the
+    /// whitespace and comments that follow belong to the next statement,
+    /// and `checkWhitechars` checks them with it.
+    fn expectStatementEnd(self: *MM0Parser) !void {
+        if (self.peek() != ';') {
+            self.expected_char = ';';
+            self.recordCurrentTokenError();
+            return error.UnexpectedChar;
+        }
+        self.pos += 1;
+    }
+
     fn skipWhitespaceAndComments(self: *MM0Parser) void {
         while (self.pos < self.src.len) {
             const ch = self.src[self.pos];
@@ -2478,7 +2454,7 @@ fn isPublicLead(lead: TopLevelLead) bool {
 pub fn nextPublicStmtHeader(src: []const u8, pos: *usize) ?PublicStmtHeader {
     const header = scanPublicStmtHeader(src, pos) orelse return null;
     pos.* = header.name_span.end;
-    scanToStatementEnd(src, pos);
+    _ = scanToStatementEnd(src, pos);
     return header;
 }
 
@@ -2517,7 +2493,7 @@ fn scanPublicStmtHeader(src: []const u8, pos: *usize) ?PublicStmtHeader {
             .coercion,
             => {
                 pos.* = word_info.span.end;
-                scanToStatementEnd(src, pos);
+                _ = scanToStatementEnd(src, pos);
             },
             .unknown => return null,
         }
@@ -2589,29 +2565,34 @@ fn scanSortHeader(src: []const u8, start: usize) ?PublicStmtHeader {
     }
 }
 
-fn scanToStatementEnd(src: []const u8, pos: *usize) void {
+/// Advances `pos` past the `;` that ends the statement at `pos`, or to the
+/// end of `src`. Inside a `$...$` math string, a `"..."` string or a `--`
+/// comment, `;` ends nothing. Returns the offset of the first byte on the
+/// way that MM0 does not allow: a NUL anywhere, or a tab or carriage return
+/// outside a comment.
+fn scanToStatementEnd(src: []const u8, pos: *usize) ?usize {
+    var illegal: ?usize = null;
+    var quote: ?u8 = null;
+    var comment = false;
     while (pos.* < src.len) {
-        const ch = src[pos.*];
+        const at = pos.*;
+        const ch = src[at];
         pos.* += 1;
-        if (ch == '$') {
-            while (pos.* < src.len and src[pos.*] != '$') {
-                pos.* += 1;
-            }
-            if (pos.* < src.len) pos.* += 1;
-        } else if (ch == '"') {
-            while (pos.* < src.len and src[pos.*] != '"') {
-                pos.* += 1;
-            }
-            if (pos.* < src.len) pos.* += 1;
-        } else if (ch == '-' and pos.* < src.len and src[pos.*] == '-') {
-            pos.* += 1;
-            while (pos.* < src.len and src[pos.*] != '\n') {
-                pos.* += 1;
-            }
-        } else if (ch == ';') {
-            return;
+        if (ch == 0 or (!comment and (ch == '\t' or ch == '\r'))) {
+            illegal = illegal orelse at;
+        }
+        if (comment) {
+            if (ch == '\n') comment = false;
+        } else if (quote) |q| {
+            if (ch == q) quote = null;
+        } else switch (ch) {
+            '$', '"' => quote = ch,
+            '-' => comment = pos.* < src.len and src[pos.*] == '-',
+            ';' => return illegal,
+            else => {},
         }
     }
+    return illegal;
 }
 
 fn isIdentStart(ch: u8) bool {
