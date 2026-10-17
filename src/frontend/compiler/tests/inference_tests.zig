@@ -853,6 +853,63 @@ test "a context read off a normal form keeps its source's member order" {
     try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
 }
 
+test "a @view hands its rule a context in the order the line wrote it" {
+    // The view binds `g` from the statement, as written, and then matches
+    // the premise's context against it. Handing `g` to the rule took its
+    // sorted representative, so the proof re-sorted the context (18 KB);
+    // it is now the proof `g` given as written gets (4 KB).
+    const n = 20;
+    const allocator = std.testing.allocator;
+    var reversed: [n]usize = undefined;
+    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+
+    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer mm0_src.deinit(allocator);
+    try appendRcTheory(&mm0_src, allocator, "infixl");
+    try mm0_src.appendSlice(allocator,
+        \\term fc (g a: rc): wff;
+        \\--| @congr
+        \\axiom fc_congr (g h a b: rc):
+        \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (fc g a) (fc h b) $;
+        \\term closed (g: rc): wff;
+        \\--| @congr
+        \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+        \\term wrap (a: rc): rc;
+        \\--| @congr
+        \\axiom wrap_congr (a b: rc): $ rc_eq a b $ > $ rc_eq (wrap a) (wrap b) $;
+        \\--| @view (g: rc) (a: rc): $ closed (g & a) $ > $ fc g (wrap a) $
+        \\axiom unwrap (g a: rc): $ closed (g & a) $ > $ fc g (wrap a) $;
+        \\theorem t (
+    );
+    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try mm0_src.appendSlice(allocator, ": rc): $ closed (");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, " & x10) $ > $ fc (");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, ") (wrap x10) $;\n");
+
+    var mmbs: [2][]const u8 = undefined;
+    for ([_]bool{ false, true }, &mmbs) |bound, *out| {
+        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer proof_src.deinit(allocator);
+        try proof_src.appendSlice(allocator, "t\n---\nl1: $ fc (");
+        try appendBag(&proof_src, allocator, &reversed, "infixl");
+        try proof_src.appendSlice(allocator, ") (wrap x10) $ by unwrap ");
+        if (bound) {
+            try proof_src.appendSlice(allocator, "(g := $ ");
+            try appendBag(&proof_src, allocator, &reversed, "infixl");
+            try proof_src.appendSlice(allocator, " $) ");
+        }
+        try proof_src.appendSlice(allocator, "[#1]\n");
+
+        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+        out.* = try compiler.compileMmb(allocator);
+        try mm0.verifyPair(allocator, mm0_src.items, out.*);
+    }
+    defer for (mmbs) |mmb| allocator.free(mmb);
+    try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
+}
+
 test "a context with two unknown members is split after the arguments that fix them" {
     // `has_ctx` and `has_pair` state one fact, a context holding both
     // halves of a pair, with their arguments in either order. Matched left

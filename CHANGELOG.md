@@ -104,6 +104,11 @@ This file records notable user-facing changes to Aufbau. The project follows
   line on a 121-row branch wrote a 232 KB proof, and now writes 45 KB, the
   same as with Γ given. Proofs across the test corpus are up to 19%
   smaller.
+- A `@view` rule now hands its rule the context it read from the line in
+  the line's order. It used to hand over the context sorted, so the proof
+  re-sorted the branch: a truth tree `∀` step `tb_all1` on a 161-row
+  branch wrote a 54 KB proof where the same step without a `@view` wrote
+  38 KB; both now write 38 KB, with or without `ga` given.
 
 ## [0.0.17] - 2026-10-14
 
