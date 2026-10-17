@@ -121,6 +121,9 @@ pub const Declaration = struct {
     name_range: SourceRange,
     markdown: []const u8,
     binders: []const BinderDecl = &.{},
+    /// Binders visible in part of the declaration only: a `@view`'s own
+    /// binders and a definition filler's dummies.
+    local_binders: []const BinderDecl = &.{},
     completion_args: []const BinderDecl = &.{},
     sort_text: []const u8 = "",
     hyp_count: usize = 0,

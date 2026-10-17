@@ -113,7 +113,11 @@ pub fn isFatalIndexError(err: anyerror) bool {
 }
 
 pub fn findBinder(decl: Declaration, name: []const u8) ?BinderDecl {
-    for (decl.binders) |binder| {
+    return findBinderIn(decl.binders, name);
+}
+
+pub fn findBinderIn(binders: []const BinderDecl, name: []const u8) ?BinderDecl {
+    for (binders) |binder| {
         if (std.mem.eql(u8, binder.name, name)) return binder;
     }
     return null;

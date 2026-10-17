@@ -112,6 +112,98 @@ pub fn nextAnnotationToken(text: []const u8, pos: *usize) ?Token {
     };
 }
 
+/// One identifier of a declaration signature.
+pub const SignatureToken = struct {
+    role: enum { binder, sort, dep },
+    /// A slice of the scanned text.
+    text: []const u8,
+    /// For a binder: its group's sort (empty in a hypothesis group) and
+    /// whether the group is `{…}`.
+    sort: []const u8 = "",
+    bound: bool = false,
+};
+
+/// The identifiers of a declaration signature: `text` starts after the
+/// declaration's name and reads `(a b: s x) {.d: t} (h: $ … $): r x > …`.
+/// Binder names come out as `.binder`, the sort of a group or of an arrow
+/// type as `.sort`, and the names after a sort as `.dep`. Math strings are
+/// skipped; the scan stops at a math-string type (an assertion's statement),
+/// `=`, `;`, or anything else it does not recognize.
+pub fn scanSignature(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) ![]const SignatureToken {
+    var tokens = std.ArrayListUnmanaged(SignatureToken).empty;
+    var pos: usize = 0;
+    while (true) {
+        skipTopLevelSpaceAndComments(text, &pos, text.len);
+        if (pos >= text.len) break;
+        const open = text[pos];
+        pos += 1;
+        if (open == ':') {
+            while (try scanSignatureType(allocator, &tokens, text, &pos)) {
+                skipTopLevelSpaceAndComments(text, &pos, text.len);
+                if (pos >= text.len or text[pos] != '>') break;
+                pos += 1;
+            }
+            break;
+        }
+        if (open != '(' and open != '{') break;
+        const first = tokens.items.len;
+        while (true) {
+            skipTopLevelSpaceAndComments(text, &pos, text.len);
+            if (pos < text.len and text[pos] == '.') pos += 1;
+            const name = scanIdent(text, &pos) orelse break;
+            try tokens.append(allocator, .{
+                .role = .binder,
+                .text = name,
+                .bound = open == '{',
+            });
+        }
+        if (pos >= text.len or text[pos] != ':') break;
+        pos += 1;
+        skipTopLevelSpaceAndComments(text, &pos, text.len);
+        if (pos < text.len and text[pos] == '$') {
+            skipMathString(text, &pos, text.len);
+        } else {
+            const sort_index = tokens.items.len;
+            if (!try scanSignatureType(allocator, &tokens, text, &pos)) break;
+            const sort = tokens.items[sort_index].text;
+            for (tokens.items[first..sort_index]) |*token| token.sort = sort;
+        }
+        skipTopLevelSpaceAndComments(text, &pos, text.len);
+        const close: u8 = if (open == '(') ')' else '}';
+        if (pos >= text.len or text[pos] != close) break;
+        pos += 1;
+    }
+    return try tokens.toOwnedSlice(allocator);
+}
+
+/// A sort and its dependencies at `pos`; false when no sort starts there.
+fn scanSignatureType(
+    allocator: std.mem.Allocator,
+    tokens: *std.ArrayListUnmanaged(SignatureToken),
+    text: []const u8,
+    pos: *usize,
+) !bool {
+    skipTopLevelSpaceAndComments(text, pos, text.len);
+    const sort = scanIdent(text, pos) orelse return false;
+    try tokens.append(allocator, .{ .role = .sort, .text = sort });
+    while (true) {
+        skipTopLevelSpaceAndComments(text, pos, text.len);
+        const dep = scanIdent(text, pos) orelse return true;
+        try tokens.append(allocator, .{ .role = .dep, .text = dep });
+    }
+}
+
+fn scanIdent(text: []const u8, pos: *usize) ?[]const u8 {
+    if (pos.* >= text.len or !isIdentStart(text[pos.*])) return null;
+    const start = pos.*;
+    pos.* += 1;
+    while (pos.* < text.len and isIdentChar(text[pos.*])) pos.* += 1;
+    return text[start..pos.*];
+}
+
 pub fn statementHeader(text: []const u8, stmt: SourceSpan) ?StatementHeader {
     var pos = stmt.start;
     while (true) {
@@ -131,7 +223,8 @@ pub fn statementHeader(text: []const u8, stmt: SourceSpan) ?StatementHeader {
             std.mem.eql(u8, token.text, "theorem") or
             std.mem.eql(u8, token.text, "prefix") or
             std.mem.eql(u8, token.text, "infixl") or
-            std.mem.eql(u8, token.text, "infixr"))
+            std.mem.eql(u8, token.text, "infixr") or
+            std.mem.eql(u8, token.text, "coercion"))
         {
             const name = nextHeaderIdent(text, &pos, stmt.end) orelse {
                 return .{ .keyword = token.text };

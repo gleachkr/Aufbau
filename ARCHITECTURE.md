@@ -297,7 +297,10 @@ checked to cover at compile time.
 
 Editor indexing and source rendering:
 
-- `lsp/index.zig` and `lsp/builder.zig` build navigation snapshots
+- `lsp/index.zig` and `lsp/builder.zig` build navigation snapshots;
+  `lsp/builder_names.zig` indexes the names outside math strings
+  (signature sorts and dependencies, annotation arguments)
+- `lsp/rename.zig` provides rename and document highlights over a snapshot
 - `lsp/completion.zig` provides completion logic
 - `lsp/diagnostics.zig` translates compiler diagnostics to LSP records
 - `lsp/offsets.zig` converts byte offsets to LSP positions and back for any

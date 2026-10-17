@@ -7,6 +7,7 @@ const Builder = @import("builder.zig").Builder;
 const markdown = @import("markdown.zig");
 const model = @import("model.zig");
 const notation = @import("notation.zig");
+const rename = @import("rename.zig");
 const Types = @import("types.zig");
 
 pub const DocumentId = Types.DocumentId;
@@ -22,6 +23,9 @@ pub const DeclarationKind = Types.DeclarationKind;
 pub const BinderDecl = Types.BinderDecl;
 pub const Declaration = Types.Declaration;
 pub const escapeSnippetText = notation.escapeSnippetText;
+pub const RenameTarget = rename.RenameTarget;
+pub const RenameError = rename.RenameError;
+pub const Highlight = rename.Highlight;
 
 const LookupHit = model.LookupHit;
 const NavigationSymbol = model.NavigationSymbol;
@@ -69,6 +73,8 @@ pub const Snapshot = struct {
     proof_lines: []const ProofLineDecl,
     proof_applications: []const ProofApplicationInfo,
     notations: []const NotationCompletionDecl,
+    /// Whether every statement, proof item and line parsed.
+    complete: bool,
     left_delims: [256]bool,
     right_delims: [256]bool,
 
@@ -121,6 +127,7 @@ pub const Snapshot = struct {
             .proof_lines = try builder.proof_lines.toOwnedSlice(arena),
             .proof_applications = try builder.proof_applications.toOwnedSlice(arena),
             .notations = try builder.notations.toOwnedSlice(arena),
+            .complete = builder.complete,
             .left_delims = builder.left_delims,
             .right_delims = builder.right_delims,
         };
@@ -222,6 +229,32 @@ pub const Snapshot = struct {
             try list.append(allocator, symbol.source_range);
         }
         return try list.toOwnedSlice(allocator);
+    }
+
+    pub fn renameTargetAt(
+        self: *const Snapshot,
+        document: DocumentId,
+        offset: usize,
+    ) ?RenameTarget {
+        return rename.renameTargetAt(self, document, offset);
+    }
+
+    pub fn renameEdits(
+        self: *const Snapshot,
+        allocator: std.mem.Allocator,
+        target: RenameTarget,
+        new_name: []const u8,
+    ) (RenameError || std.mem.Allocator.Error)![]const SourceRange {
+        return rename.renameEdits(self, allocator, target, new_name);
+    }
+
+    pub fn highlightsAt(
+        self: *const Snapshot,
+        allocator: std.mem.Allocator,
+        document: DocumentId,
+        offset: usize,
+    ) ![]const Highlight {
+        return rename.highlightsAt(self, allocator, document, offset);
     }
 
     pub fn textForDocument(

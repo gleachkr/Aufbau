@@ -11,6 +11,7 @@ comptime {
     _ = @import("./frontend/compiler/search/ref_index.zig");
     _ = @import("./frontend/lsp/index.zig");
     _ = @import("./frontend/lsp/tests.zig");
+    _ = @import("./frontend/lsp/rename_tests.zig");
     _ = @import("./frontend/pretty_print.zig");
     _ = @import("./frontend/text_util.zig");
     _ = @import("./frontend/view_trace.zig");

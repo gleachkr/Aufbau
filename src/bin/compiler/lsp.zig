@@ -729,6 +729,8 @@ pub const Handler = struct {
 
         const supports_hierarchical_document_symbols =
             clientSupportsHierarchicalDocumentSymbols(request.capabilities);
+        const supports_prepare_rename =
+            clientSupportsPrepareRename(request.capabilities);
 
         const capabilities: types.ServerCapabilities = .{
             .positionEncoding = switch (self.offset_encoding) {
@@ -746,6 +748,11 @@ pub const Handler = struct {
             .definitionProvider = .{ .bool = true },
             .implementationProvider = .{ .bool = true },
             .referencesProvider = .{ .bool = true },
+            .documentHighlightProvider = .{ .bool = true },
+            .renameProvider = if (supports_prepare_rename)
+                .{ .rename_options = .{ .prepareProvider = true } }
+            else
+                .{ .bool = true },
             .completionProvider = .{
                 .resolveProvider = false,
                 // `?` is the one completion-worthy character that is not part
@@ -771,6 +778,9 @@ pub const Handler = struct {
             var validation_capabilities = capabilities;
             validation_capabilities.documentSymbolProvider = .{ .bool = true };
             validation_capabilities.codeActionProvider = .{ .bool = true };
+            validation_capabilities.renameProvider = .{
+                .rename_options = .{ .prepareProvider = true },
+            };
             lsp.basic_server.validateServerCapabilities(
                 Handler,
                 validation_capabilities,
@@ -1421,6 +1431,160 @@ pub const Handler = struct {
             nav.unit.rangeLocator(),
             ranges,
             self.offset_encoding,
+        );
+    }
+
+    pub fn @"textDocument/documentHighlight"(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        params: types.DocumentHighlightParams,
+    ) !lsp.ResultType("textDocument/documentHighlight") {
+        const nav = try self.navigationSnapshotForUri(
+            arena,
+            params.textDocument.uri,
+        ) orelse return null;
+        const offset = nav.joinedPosition(
+            params.position,
+            self.offset_encoding,
+        ) orelse return null;
+        const highlights = try nav.snapshot.highlightsAt(
+            arena,
+            nav.document,
+            offset,
+        );
+        var result = std.ArrayListUnmanaged(types.DocumentHighlight).empty;
+        for (highlights) |highlight| {
+            const location = nav.unit.rangeLocator().toLocation(
+                highlight.range,
+                self.offset_encoding,
+            ) orelse continue;
+            // Highlights belong to the requested file; the others are
+            // references.
+            if (!std.mem.eql(u8, location.uri, params.textDocument.uri)) continue;
+            try result.append(arena, .{
+                .range = location.range,
+                .kind = if (highlight.declaration) .Write else .Read,
+            });
+        }
+        return result.items;
+    }
+
+    pub fn @"textDocument/prepareRename"(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        params: types.PrepareRenameParams,
+    ) !lsp.ResultType("textDocument/prepareRename") {
+        const nav = try self.navigationSnapshotForUri(
+            arena,
+            params.textDocument.uri,
+        ) orelse return null;
+        const offset = nav.joinedPosition(
+            params.position,
+            self.offset_encoding,
+        ) orelse return null;
+        const target = nav.snapshot.renameTargetAt(
+            nav.document,
+            offset,
+        ) orelse return null;
+        if (!nav.snapshot.complete) {
+            try self.showError(arena, syntax_error_message, .{});
+            return null;
+        }
+        const range = nav.unit.rangeLocator().toLsp(
+            target.range,
+            self.offset_encoding,
+        ) orelse return null;
+        return .{ .prepare_rename_placeholder = .{ .range = range, .placeholder = target.name } };
+    }
+
+    /// A refused rename answers null and says why in a message: an error
+    /// response would carry only an error name.
+    pub fn @"textDocument/rename"(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        params: types.RenameParams,
+    ) !lsp.ResultType("textDocument/rename") {
+        const nav = try self.navigationSnapshotForUri(
+            arena,
+            params.textDocument.uri,
+        ) orelse return null;
+        const offset = nav.joinedPosition(
+            params.position,
+            self.offset_encoding,
+        ) orelse return null;
+        const target = nav.snapshot.renameTargetAt(nav.document, offset) orelse {
+            try self.showError(arena, "Nothing here can be renamed.", .{});
+            return null;
+        };
+        const ranges = nav.snapshot.renameEdits(
+            arena,
+            target,
+            params.newName,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.InvalidName => {
+                try self.showError(arena, "`{s}` is not a valid name.", .{params.newName});
+                return null;
+            },
+            error.NameInUse => {
+                try self.showError(arena, "`{s}` is already in use.", .{params.newName});
+                return null;
+            },
+            error.SyntaxError => {
+                try self.showError(arena, syntax_error_message, .{});
+                return null;
+            },
+            error.DuplicateName => {
+                try self.showError(
+                    arena,
+                    "`{s}` is declared more than once; rename can't tell which one each use means.",
+                    .{target.name},
+                );
+                return null;
+            },
+        };
+
+        var by_uri: std.StringArrayHashMapUnmanaged(
+            std.ArrayListUnmanaged(types.TextEdit),
+        ) = .empty;
+        for (ranges) |range| {
+            const location = nav.unit.rangeLocator().toLocation(
+                range,
+                self.offset_encoding,
+            ) orelse continue;
+            const entry = try by_uri.getOrPut(arena, location.uri);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(arena, .{
+                .range = location.range,
+                .newText = params.newName,
+            });
+        }
+        var changes: std.json.ArrayHashMap([]const types.TextEdit) = .{};
+        for (by_uri.keys(), by_uri.values()) |uri, edits| {
+            try changes.map.put(arena, uri, edits.items);
+        }
+        return .{ .changes = changes };
+    }
+
+    const syntax_error_message =
+        "Rename needs every file of the theory to parse; fix the syntax errors first.";
+
+    fn showError(
+        self: *Handler,
+        arena: std.mem.Allocator,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) !void {
+        try self.transport.writeNotification(
+            self.io,
+            arena,
+            "window/showMessage",
+            types.ShowMessageParams,
+            .{
+                .type = .Error,
+                .message = try std.fmt.allocPrint(arena, fmt, args),
+            },
+            .{ .emit_null_optional_fields = false },
         );
     }
 
@@ -2649,6 +2813,12 @@ fn clientSupportsSnippets(capabilities: types.ClientCapabilities) bool {
     const completion = text_document.completion orelse return false;
     const item = completion.completionItem orelse return false;
     return item.snippetSupport orelse false;
+}
+
+fn clientSupportsPrepareRename(capabilities: types.ClientCapabilities) bool {
+    const text_document = capabilities.textDocument orelse return false;
+    const rename = text_document.rename orelse return false;
+    return rename.prepareSupport orelse false;
 }
 
 fn clientSupportsHierarchicalDocumentSymbols(

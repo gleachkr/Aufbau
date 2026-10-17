@@ -381,6 +381,46 @@ test "LSP initialize advertises navigation capabilities" {
         .bool => |enabled| try std.testing.expect(enabled),
         else => return error.ExpectedBooleanDocumentSymbolProvider,
     }
+
+    const highlight = result.capabilities.documentHighlightProvider orelse {
+        return error.ExpectedDocumentHighlightProvider;
+    };
+    switch (highlight) {
+        .bool => |enabled| try std.testing.expect(enabled),
+        else => return error.ExpectedBooleanDocumentHighlightProvider,
+    }
+
+    // Without `prepareSupport` the client gets a plain flag.
+    const rename = result.capabilities.renameProvider orelse {
+        return error.ExpectedRenameProvider;
+    };
+    switch (rename) {
+        .bool => |enabled| try std.testing.expect(enabled),
+        else => return error.ExpectedBooleanRenameProvider,
+    }
+}
+
+test "LSP initialize offers prepare-rename to clients that support it" {
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+
+    const result = handler.initialize(std.testing.allocator, .{
+        .capabilities = .{
+            .textDocument = .{ .rename = .{ .prepareSupport = true } },
+        },
+    });
+    const rename = result.capabilities.renameProvider orelse {
+        return error.ExpectedRenameProvider;
+    };
+    switch (rename) {
+        .rename_options => |options| try std.testing.expect(options.prepareProvider.?),
+        else => return error.ExpectedRenameOptions,
+    }
 }
 
 test "LSP initialize omits document symbols for non-hierarchical clients" {
@@ -3183,6 +3223,158 @@ test "LSP resolves imports against open documents" {
     try std.testing.expectEqual(@as(usize, 1), symbols.len);
     try std.testing.expectEqualStrings("main", symbols[0].name);
     try expectRangeText(lsp_import_main_text, symbols[0].selectionRange, "main");
+}
+
+fn openImportUnit(
+    handler: *Handler,
+    arena: std.mem.Allocator,
+    lib_uri: []const u8,
+    mm0_uri: []const u8,
+    proof_uri: []const u8,
+) !void {
+    try handler.putDocument(lib_uri, lsp_import_lib_text, 1);
+    try handler.putDocument(mm0_uri, lsp_import_main_text, 1);
+    try handler.@"textDocument/didOpen"(arena, .{ .textDocument = .{
+        .uri = proof_uri,
+        .languageId = .{ .custom_value = "aufbau" },
+        .version = 1,
+        .text = lsp_import_proof_text,
+    } });
+}
+
+fn renameEditsFor(edit: types.WorkspaceEdit, uri: []const u8) []const types.TextEdit {
+    const changes = edit.changes orelse return &.{};
+    return changes.map.get(uri) orelse &.{};
+}
+
+test "LSP rename edits every file of the unit" {
+    const lib_uri = "file:///tmp/lsp-rename/lib.mm0";
+    const mm0_uri = "file:///tmp/lsp-rename/main.mm0";
+    const proof_uri = "file:///tmp/lsp-rename/main.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try openImportUnit(&handler, arena, lib_uri, mm0_uri, proof_uri);
+
+    const prepared = (try handler.@"textDocument/prepareRename"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testLastPosition(lsp_import_proof_text, "top_i"),
+    })) orelse return error.ExpectedPrepareRename;
+    switch (prepared) {
+        .prepare_rename_placeholder => |placeholder| {
+            try std.testing.expectEqualStrings("top_i", placeholder.placeholder);
+            try expectRangeText(lsp_import_proof_text, placeholder.range, "top_i");
+        },
+        else => return error.ExpectedPlaceholder,
+    }
+
+    // A rule: its declaration in the imported file and its citation.
+    const rule_edit = (try handler.@"textDocument/rename"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testLastPosition(lsp_import_proof_text, "top_i"),
+        .newName = "truth",
+    })) orelse return error.ExpectedRename;
+    const lib_edits = renameEditsFor(rule_edit, lib_uri);
+    try std.testing.expectEqual(@as(usize, 1), lib_edits.len);
+    try expectRangeText(lsp_import_lib_text, lib_edits[0].range, "top_i");
+    try std.testing.expectEqualStrings("truth", lib_edits[0].newText);
+    const proof_edits = renameEditsFor(rule_edit, proof_uri);
+    try std.testing.expectEqual(@as(usize, 1), proof_edits.len);
+    try expectRangeText(lsp_import_proof_text, proof_edits[0].range, "top_i");
+    try std.testing.expectEqual(@as(usize, 0), renameEditsFor(rule_edit, mm0_uri).len);
+
+    // A term, from the root theory: every file names it.
+    const term_edit = (try handler.@"textDocument/rename"(arena, .{
+        .textDocument = .{ .uri = mm0_uri },
+        .position = try testLastPosition(lsp_import_main_text, "top"),
+        .newName = "T",
+    })) orelse return error.ExpectedRename;
+    try std.testing.expectEqual(@as(usize, 2), renameEditsFor(term_edit, lib_uri).len);
+    try std.testing.expectEqual(@as(usize, 1), renameEditsFor(term_edit, mm0_uri).len);
+    try std.testing.expectEqual(@as(usize, 1), renameEditsFor(term_edit, proof_uri).len);
+
+    // Nothing to rename in an import statement.
+    try std.testing.expect((try handler.@"textDocument/prepareRename"(arena, .{
+        .textDocument = .{ .uri = mm0_uri },
+        .position = try testPosition(lsp_import_main_text, "lib.mm0"),
+    })) == null);
+}
+
+test "LSP rename says why it refuses" {
+    const lib_uri = "file:///tmp/lsp-rename-refuse/lib.mm0";
+    const mm0_uri = "file:///tmp/lsp-rename-refuse/main.mm0";
+    const proof_uri = "file:///tmp/lsp-rename-refuse/main.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try openImportUnit(&handler, arena, lib_uri, mm0_uri, proof_uri);
+
+    transport_state.clearMessages();
+    try std.testing.expect((try handler.@"textDocument/rename"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testLastPosition(lsp_import_proof_text, "top_i"),
+        .newName = "top",
+    })) == null);
+    try std.testing.expect(transport_state.containsMessage("window/showMessage"));
+    try std.testing.expect(transport_state.containsMessage("`top` is already in use."));
+
+    transport_state.clearMessages();
+    try std.testing.expect((try handler.@"textDocument/rename"(arena, .{
+        .textDocument = .{ .uri = proof_uri },
+        .position = try testLastPosition(lsp_import_proof_text, "by"),
+        .newName = "x",
+    })) == null);
+    try std.testing.expect(transport_state.containsMessage("Nothing here can be renamed."));
+}
+
+test "LSP highlights a name's uses in the requested file only" {
+    const lib_uri = "file:///tmp/lsp-highlight/lib.mm0";
+    const mm0_uri = "file:///tmp/lsp-highlight/main.mm0";
+    const proof_uri = "file:///tmp/lsp-highlight/main.auf";
+
+    var transport_state: TestTransport = .{};
+    var handler = Handler.init(
+        std.testing.allocator,
+        std.testing.io,
+        &transport_state.transport,
+    );
+    defer handler.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try openImportUnit(&handler, arena, lib_uri, mm0_uri, proof_uri);
+
+    const in_root = (try handler.@"textDocument/documentHighlight"(arena, .{
+        .textDocument = .{ .uri = mm0_uri },
+        .position = try testLastPosition(lsp_import_main_text, "top"),
+    })) orelse return error.ExpectedHighlights;
+    try std.testing.expectEqual(@as(usize, 1), in_root.len);
+    try expectRangeText(lsp_import_main_text, in_root[0].range, "top");
+    try std.testing.expectEqual(types.DocumentHighlight.Kind.Read, in_root[0].kind.?);
+
+    const in_lib = (try handler.@"textDocument/documentHighlight"(arena, .{
+        .textDocument = .{ .uri = lib_uri },
+        .position = try testPosition(lsp_import_lib_text, "top"),
+    })) orelse return error.ExpectedHighlights;
+    try std.testing.expectEqual(@as(usize, 2), in_lib.len);
+    try std.testing.expectEqual(types.DocumentHighlight.Kind.Write, in_lib[0].kind.?);
+    try std.testing.expectEqual(types.DocumentHighlight.Kind.Read, in_lib[1].kind.?);
 }
 
 test "LSP re-analyses importers when an imported document changes" {

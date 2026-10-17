@@ -17,7 +17,7 @@ const nextMathStringIn = source.nextMathStringIn;
 
 const binderMarkdown = markdown.binderMarkdown;
 
-const findBinder = support.findBinder;
+const findBinderIn = support.findBinderIn;
 const targetRangeForUse = support.targetRangeForUse;
 
 pub fn indexMm0Math(self: anytype, text: []const u8) !void {
@@ -114,6 +114,34 @@ pub fn indexMathString(
     allow_sort_vars: bool,
     available_before: ?usize,
 ) !void {
+    const binders = if (decl_index) |idx|
+        self.declarations.items[idx].binders
+    else
+        &.{};
+    try indexMathStringIn(
+        self,
+        document,
+        math,
+        base,
+        decl_index,
+        binders,
+        allow_sort_vars,
+        available_before,
+    );
+}
+
+/// `indexMathString` with the variables in scope given as `binders`, of
+/// declaration `decl_index`.
+pub fn indexMathStringIn(
+    self: anytype,
+    document: DocumentId,
+    math: []const u8,
+    base: usize,
+    decl_index: ?usize,
+    binders: []const Types.BinderDecl,
+    allow_sort_vars: bool,
+    available_before: ?usize,
+) !void {
     var cursor = MathTokenCursor{
         .src = math,
         .left_delims = self.left_delims,
@@ -128,7 +156,7 @@ pub fn indexMathString(
         };
         if (decl_index) |idx| {
             const decl = self.declarations.items[idx];
-            if (findBinder(decl, token.text)) |binder| {
+            if (findBinderIn(binders, token.text)) |binder| {
                 try self.addSymbol(.{
                     .source_range = range,
                     .target_range = binder.range orelse decl.name_range,
@@ -152,6 +180,7 @@ pub fn indexMathString(
                     available_before,
                 ),
                 .markdown = decl.markdown,
+                .via_notation = true,
             });
             continue;
         }

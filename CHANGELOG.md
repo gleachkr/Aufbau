@@ -5,6 +5,25 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- Rename in the language server. Renaming a sort, term, definition, rule,
+  lemma, proof line, variable or named hypothesis changes every use of it,
+  in the `.mm0` and `.auf` files of the theory and in the files they
+  import, annotations such as `@relation`, `@acui` and `@view` included.
+  A notation's tokens are left as they are. A new name that is already in
+  use, or a keyword, is refused. So is a rename while part of the theory
+  does not parse, since a use the editor cannot read would be missed, and
+  a rename of a name declared twice, since its uses cannot be told apart. Files outside the theory that import a renamed file are not
+  changed.
+- The language server highlights the other uses of the name under the
+  cursor.
+- Find references, go to definition and hover reach names the editor used
+  to skip: the rules, terms, sorts and variables an annotation names, the
+  variables of a `@view` and its patterns, dependencies such as the `x` of
+  `(p: wff x)`, the term of a `coercion`, the sorts of a notation's
+  variables, and named hypotheses where they are declared.
+
 ### Fixed
 
 - A `@view` rule whose premise does not match no longer tries every way of

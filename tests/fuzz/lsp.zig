@@ -10,7 +10,8 @@
 //! action returned, and malformed messages. The server must not panic,
 //! leak or hang, every message it sends must be JSON, a well-formed request
 //! must not fail, and every range it returns must lie inside its document
-//! on a code-point boundary of the negotiated encoding.
+//! on a code-point boundary of the negotiated encoding. A rename must
+//! replace one name, and leave the analysis's diagnostics as they were.
 const std = @import("std");
 const lsp = @import("lsp");
 const server = @import("lsp_server");
@@ -45,6 +46,9 @@ const Event = enum(u8) {
     definition,
     implementation,
     references,
+    document_highlight,
+    prepare_rename,
+    rename,
     document_symbol,
     code_action,
     apply_code_action,
@@ -70,6 +74,8 @@ const Session = struct {
     pending: ?struct { id: i64, method: []const u8, uri: []const u8 } = null,
     /// A token being typed one character per change.
     typing: ?struct { uri: []const u8, index: usize, rest: []const u8 } = null,
+    /// The new name of the rename request whose response comes next.
+    rename_to: []const u8 = "",
     /// The document text the last code action's edit would produce.
     action_result: ?struct { uri: []const u8, text: []u8 } = null,
     /// The session's documents; set when they first open.
@@ -232,6 +238,25 @@ const Session = struct {
                 .position = self.pickPosition(text),
                 .context = .{ .includeDeclaration = self.smith.value(bool) },
             }),
+            inline .document_highlight, .prepare_rename => |kind| {
+                const method = switch (kind) {
+                    .document_highlight => "textDocument/documentHighlight",
+                    .prepare_rename => "textDocument/prepareRename",
+                    else => unreachable,
+                };
+                return self.request(allocator, method, uri, .{
+                    .textDocument = .{ .uri = uri },
+                    .position = self.pickPosition(text),
+                });
+            },
+            .rename => {
+                self.rename_to = try self.freshName();
+                return self.request(allocator, "textDocument/rename", uri, .{
+                    .textDocument = .{ .uri = uri },
+                    .position = self.pickPosition(text),
+                    .newName = self.rename_to,
+                });
+            },
             .document_symbol => return self.request(allocator, "textDocument/documentSymbol", uri, .{
                 .textDocument = .{ .uri = uri },
             }),
@@ -295,6 +320,24 @@ const Session = struct {
                 .result = null,
             }, .{}),
         }
+    }
+
+    /// A name no open document contains, so a rename to it can neither
+    /// clash nor resolve something unresolved.
+    fn freshName(self: *Session) ![]const u8 {
+        var name = try std.fmt.allocPrint(self.arena(), "fz{d}", .{self.next_id});
+        while (self.anyDocumentContains(name)) {
+            name = try std.fmt.allocPrint(self.arena(), "{s}x", .{name});
+        }
+        return name;
+    }
+
+    fn anyDocumentContains(self: *Session, needle: []const u8) bool {
+        for (self.docs) |doc| {
+            const text = self.documentText(doc.uri) orelse continue;
+            if (std.mem.indexOf(u8, text, needle) != null) return true;
+        }
+        return false;
     }
 
     fn typeNext(self: *Session, allocator: std.mem.Allocator) ![]u8 {
@@ -377,9 +420,90 @@ const Session = struct {
             };
         }
         self.checkRanges(parsed.value, context);
-        if (self.pending) |pending| if (std.mem.eql(u8, pending.method, "textDocument/codeAction")) {
-            if (root.get("result")) |result| try self.keepActionEdit(result);
+        if (self.pending) |pending| if (root.get("result")) |result| {
+            if (std.mem.eql(u8, pending.method, "textDocument/codeAction")) try self.keepActionEdit(result);
+            if (std.mem.eql(u8, pending.method, "textDocument/rename")) try self.checkRename(result);
         };
+    }
+
+    /// A rename replaces occurrences of one name, and the unit's analysis
+    /// after it reports the same diagnostics as before. Checked when the
+    /// unit is the two case documents, without an import.
+    fn checkRename(self: *Session, result: std.json.Value) !void {
+        if (result != .object or self.docs.len != 2) return;
+        const changes = (result.object.get("changes") orelse return).object;
+        const mm0_text = self.documentText(case_mm0) orelse return;
+        const auf_text = self.documentText(case_auf);
+        for ([_]?[]const u8{ mm0_text, auf_text }) |text| {
+            if (text) |t| if (!std.unicode.utf8ValidateSlice(t)) return;
+        }
+
+        var renamed: [2]?[]u8 = .{ null, null };
+        defer for (renamed) |text| if (text) |t| self.gpa.free(t);
+        var old_name: ?[]const u8 = null;
+        var it = changes.iterator();
+        while (it.next()) |entry| {
+            const uri = entry.key_ptr.*;
+            const index: usize = if (std.mem.eql(u8, uri, case_mm0))
+                0
+            else if (std.mem.eql(u8, uri, case_auf))
+                1
+            else
+                fail("rename edits {s}, outside the unit", .{uri});
+            const text = (if (index == 0) mm0_text else auf_text) orelse
+                fail("rename edits {s}, which is not open", .{uri});
+            renamed[index] = try self.applyRename(text, entry.value_ptr.array.items, &old_name);
+        }
+
+        const before = try diagnosticKeys(self.gpa, mm0_text, auf_text);
+        defer self.gpa.free(before);
+        const after = try diagnosticKeys(
+            self.gpa,
+            renamed[0] orelse mm0_text,
+            if (renamed[1]) |text| text else auf_text,
+        );
+        defer self.gpa.free(after);
+        if (!std.mem.eql(u64, before, after)) fail(
+            "renaming `{s}` to `{s}` changed the diagnostics: {d} before, {d} after",
+            .{ old_name orelse "", self.rename_to, before.len, after.len },
+        );
+    }
+
+    /// `text` with the edits of a rename applied; every edit must replace
+    /// the same name.
+    fn applyRename(self: *Session, text: []const u8, edits: []const std.json.Value, old_name: *?[]const u8) ![]u8 {
+        const Span = struct { start: usize, end: usize };
+        const spans = try self.gpa.alloc(Span, edits.len);
+        defer self.gpa.free(spans);
+        for (edits, spans) |edit, *span| {
+            const range = edit.object.get("range").?.object;
+            span.* = .{
+                .start = lsp.offsets.positionToIndex(text, jsonPosition(range.get("start").?), self.encoding),
+                .end = lsp.offsets.positionToIndex(text, jsonPosition(range.get("end").?), self.encoding),
+            };
+            if (!std.mem.eql(u8, edit.object.get("newText").?.string, self.rename_to))
+                fail("rename edit writes `{s}`, not `{s}`", .{ edit.object.get("newText").?.string, self.rename_to });
+            const name = text[span.start..span.end];
+            const expected = old_name.* orelse name;
+            old_name.* = expected;
+            if (!std.mem.eql(u8, name, expected)) fail("rename replaces both `{s}` and `{s}`", .{ expected, name });
+        }
+        std.mem.sort(Span, spans, {}, struct {
+            fn lessThan(_: void, a: Span, b: Span) bool {
+                return a.start < b.start;
+            }
+        }.lessThan);
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(self.gpa);
+        var pos: usize = 0;
+        for (spans) |span| {
+            if (span.start < pos) fail("rename edits overlap", .{});
+            try out.appendSlice(self.gpa, text[pos..span.start]);
+            try out.appendSlice(self.gpa, self.rename_to);
+            pos = span.end;
+        }
+        try out.appendSlice(self.gpa, text[pos..]);
+        return out.toOwnedSlice(self.gpa);
     }
 
     /// Walk `value` checking every range against the document of the
@@ -466,6 +590,25 @@ const Session = struct {
         self.action_result = .{ .uri = uri, .text = try out.toOwnedSlice(self.gpa) };
     }
 };
+
+/// The analysis's diagnostics as sorted keys of kind, error, severity and
+/// document: what a rename must not change (their messages name names).
+fn diagnosticKeys(gpa: std.mem.Allocator, mm0_text: []const u8, auf_text: ?[]const u8) ![]u64 {
+    var compiler = if (auf_text) |auf| mm0.Compiler.initWithProof(gpa, mm0_text, auf) else mm0.Compiler.init(gpa, mm0_text);
+    compiler.analyze() catch |err| if (err == error.OutOfMemory) return error.OutOfMemory;
+    var keys: std.ArrayList(u64) = .empty;
+    errdefer keys.deinit(gpa);
+    for ([_][]const mm0.CompilerDiagnostic{ compiler.primaryDiagnostics(), compiler.warningDiagnostics() }) |diags| {
+        for (diags) |diag| {
+            try keys.append(gpa, @as(u64, @backingInt(diag.kind)) << 32 |
+                @as(u64, @intFromError(diag.err)) << 8 |
+                @as(u64, @backingInt(diag.severity)) << 1 |
+                @backingInt(diag.source));
+        }
+    }
+    std.mem.sort(u64, keys.items, {}, std.sort.asc(u64));
+    return keys.toOwnedSlice(gpa);
+}
 
 fn jsonPosition(value: std.json.Value) Position {
     return .{

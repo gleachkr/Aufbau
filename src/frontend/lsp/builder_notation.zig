@@ -16,6 +16,7 @@ const findStatementByte = source.findStatementByte;
 const trimMathWhitespace = source.trimMathWhitespace;
 const containsMathWhitespace = source.containsMathWhitespace;
 const isMathWhitespace = source.isMathWhitespace;
+const sourceRangeFromSlice = source.sourceRangeFromSlice;
 
 const NotationKind = notation.NotationKind;
 const NotationVariable = notation.NotationVariable;
@@ -45,11 +46,11 @@ pub fn collectMm0Notation(self: anytype, text: []const u8) !void {
     }
 }
 
-/// Index one `prefix`/`infixl`/`infixr`/`notation` statement from either
-/// document (a proof-side notation item has the same shape). Any other
-/// statement is ignored. `proof_available_from` is the statement's offset
-/// in the proof document when it comes from there: its tokens complete only
-/// in proof math at or past it.
+/// Index one `prefix`/`infixl`/`infixr`/`notation`/`coercion` statement
+/// from either document (a proof-side notation item has the same shape).
+/// Any other statement is ignored. `proof_available_from` is the
+/// statement's offset in the proof document when it comes from there: its
+/// tokens complete only in proof math at or past it.
 pub fn collectNotationStatement(
     self: anytype,
     text: []const u8,
@@ -87,10 +88,16 @@ pub fn collectNotationStatement(
         }
         return;
     }
-    if (!std.mem.eql(u8, header.keyword, "notation")) return;
+    const is_coercion = std.mem.eql(u8, header.keyword, "coercion");
+    if (!is_coercion and !std.mem.eql(u8, header.keyword, "notation")) return;
     const name = header.name orelse return;
     const decl_index = self.decl_by_name.get(name) orelse return;
     try self.addDeclarationNameUseIn(document, text, name, decl_index);
+    // The sorts of `coercion name: s > t` and of a notation's binders.
+    if (sourceRangeFromSlice(document, text, name)) |name_range| {
+        _ = try self.indexSignature(document, text[name_range.end..stmt.end], null, &.{});
+    }
+    if (is_coercion) return;
     const eq = findStatementByte(text, stmt, '=') orelse return;
     try self.collectGeneralNotation(
         text,

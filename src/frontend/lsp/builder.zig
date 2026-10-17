@@ -15,11 +15,11 @@ const SourceRange = Types.SourceRange;
 const OutlineSymbol = Types.OutlineSymbol;
 const DeclarationKind = Types.DeclarationKind;
 const Declaration = Types.Declaration;
+const BinderDecl = Types.BinderDecl;
 
 const StatementIterator = source.StatementIterator;
 const nextAnnotationToken = source.nextAnnotationToken;
 const sourceRangeFromSlice = source.sourceRangeFromSlice;
-const findIdentIn = source.findIdentIn;
 
 const sortMarkdown = markdown.sortMarkdown;
 const termMarkdown = markdown.termMarkdown;
@@ -43,6 +43,7 @@ const mathSpanRange = support.mathSpanRange;
 const proofSpanRange = support.proofSpanRange;
 const proofMathTextSpan = support.proofMathTextSpan;
 const targetRangeIfAvailable = support.targetRangeIfAvailable;
+const targetRangeForUse = support.targetRangeForUse;
 const isFatalIndexError = support.isFatalIndexError;
 const hypothesesFromMm0Assertion = support.hypothesesFromMm0Assertion;
 const bindersFromTerm = support.bindersFromTerm;
@@ -67,10 +68,25 @@ pub const Builder = struct {
     left_delims: [256]bool = @splat(false),
     right_delims: [256]bool = @splat(false),
     mm0_parser: ?parse.MM0Parser = null,
+    /// The indexed texts; every range comes from a slice of one of them.
+    mm0_text: []const u8 = "",
+    proof_text: []const u8 = "",
+    /// Whether every statement, proof item and line parsed. A rename needs
+    /// every occurrence of a name, and an unparsed one is not indexed.
+    complete: bool = true,
+    /// Annotations of the document being indexed, indexed once all its
+    /// declarations are known: one may name a rule declared after it.
+    pending_annotations: std.ArrayListUnmanaged(PendingAnnotations) = .empty,
+
+    const PendingAnnotations = struct {
+        decl_index: usize,
+        annotations: []const []const u8,
+    };
 
     const proof = @import("builder_proof.zig");
     const notation_builder = @import("builder_notation.zig");
     const math_builder = @import("builder_math.zig");
+    const names_builder = @import("builder_names.zig");
 
     pub const addProofBlock = proof.addProofBlock;
     pub const addTheoremBlockHeader = proof.addTheoremBlockHeader;
@@ -105,17 +121,23 @@ pub const Builder = struct {
     pub const indexProofMathString = math_builder.indexProofMathString;
     pub const indexRuleApplicationMath = math_builder.indexRuleApplicationMath;
     pub const indexMathString = math_builder.indexMathString;
+    pub const indexMathStringIn = math_builder.indexMathStringIn;
+
+    pub const indexSignature = names_builder.indexSignature;
+    pub const indexAnnotations = names_builder.indexAnnotations;
 
     pub fn init(allocator: std.mem.Allocator) Builder {
         return .{ .allocator = allocator };
     }
 
     pub fn indexMm0(self: *Builder, text: []const u8) !void {
+        self.mm0_text = text;
         var parser = parse.MM0Parser.init(text, self.allocator);
         var statements = StatementIterator.init(text);
         while (true) {
             const stmt = parser.next() catch |err| {
                 if (isFatalIndexError(err)) return err;
+                self.complete = false;
                 break;
             };
             const concrete = stmt orelse break;
@@ -130,9 +152,11 @@ pub const Builder = struct {
         self.mm0_parser = parser;
         try self.collectMm0Notation(text);
         try self.indexMm0Math(text);
+        try self.indexPendingAnnotations(.mm0);
     }
 
     pub fn indexProof(self: *Builder, text: []const u8) !void {
+        self.proof_text = text;
         // Index leniently: a line whose rule application is half-typed is the
         // normal state of a file being edited, and the strict parser drops the
         // whole block over it.
@@ -141,6 +165,7 @@ pub const Builder = struct {
         while (true) {
             const next = parser.nextItem() catch |err| {
                 if (isFatalIndexError(err)) return err;
+                self.complete = false;
                 if (!parser.recoverToNextItemBoundary()) break;
                 continue;
             };
@@ -161,6 +186,14 @@ pub const Builder = struct {
                 ),
             }
         }
+        try self.indexPendingAnnotations(.proof);
+    }
+
+    fn indexPendingAnnotations(self: *Builder, document: DocumentId) !void {
+        for (self.pending_annotations.items) |pending| {
+            try self.indexAnnotations(document, pending.decl_index, pending.annotations);
+        }
+        self.pending_annotations.clearRetainingCapacity();
     }
 
     fn globalAvailabilityForProofItem(
@@ -233,7 +266,7 @@ pub const Builder = struct {
             },
             .term => |term| {
                 const kind: DeclarationKind = if (term.is_def) .def else .term;
-                _ = try self.addGlobalDeclaration(.{
+                const decl_index = try self.addGlobalDeclaration(.{
                     .name = term.name,
                     .kind = kind,
                     .name_range = mathSpanRange(term.name_span),
@@ -263,15 +296,20 @@ pub const Builder = struct {
                     .range = statement_range,
                     .selection_range = mathSpanRange(term.name_span),
                 });
-                try self.addArgSortUses(.mm0, text, term.args);
-                try self.addSortUse(.mm0, text, term.ret_sort_name);
+                try self.indexStatementSignature(
+                    text,
+                    statement_range,
+                    term.name_span.end,
+                    decl_index,
+                );
+                try self.deferAnnotations(decl_index, annotations);
             },
             .assertion => |assertion| {
                 const kind: DeclarationKind = switch (assertion.kind) {
                     .axiom => .axiom,
                     .theorem => .theorem,
                 };
-                _ = try self.addGlobalDeclaration(.{
+                const decl_index = try self.addGlobalDeclaration(.{
                     .name = assertion.name,
                     .kind = kind,
                     .name_range = mathSpanRange(assertion.name_span),
@@ -309,7 +347,13 @@ pub const Builder = struct {
                     .range = statement_range,
                     .selection_range = mathSpanRange(assertion.name_span),
                 });
-                try self.addArgSortUses(.mm0, text, assertion.args);
+                try self.indexStatementSignature(
+                    text,
+                    statement_range,
+                    assertion.name_span.end,
+                    decl_index,
+                );
+                try self.deferAnnotations(decl_index, annotations);
             },
         }
     }
@@ -403,36 +447,96 @@ pub const Builder = struct {
                 ),
             });
         }
+        for (decl.hypotheses, 1..) |hyp, ordinal| {
+            const range = hyp.name_range orelse continue;
+            try self.addSymbol(.{
+                .source_range = range,
+                .target_range = range,
+                .markdown = try markdown.hypRefMarkdown(
+                    self.allocator,
+                    decl.name,
+                    hyp.name,
+                    ordinal,
+                    decl.hyp_count,
+                    true,
+                    hyp.text,
+                ),
+            });
+        }
         return index;
     }
 
-    fn addArgSortUses(
+    fn indexStatementSignature(
         self: *Builder,
-        document: DocumentId,
         text: []const u8,
-        args: []const parse.ArgInfo,
+        statement_range: SourceRange,
+        name_end: usize,
+        decl_index: usize,
     ) !void {
-        for (args) |arg| {
-            try self.addSortUse(document, text, arg.sort_name);
-        }
+        if (name_end > statement_range.end) return;
+        _ = try self.indexSignature(
+            .mm0,
+            text[name_end..statement_range.end],
+            decl_index,
+            self.declarations.items[decl_index].binders,
+        );
     }
 
-    fn addSortUse(
+    pub fn deferAnnotations(
+        self: *Builder,
+        decl_index: usize,
+        annotations: []const []const u8,
+    ) !void {
+        if (annotations.len == 0) return;
+        try self.pending_annotations.append(self.allocator, .{
+            .decl_index = decl_index,
+            // The parser frees its list at the next statement.
+            .annotations = try self.allocator.dupe([]const u8, annotations),
+        });
+    }
+
+    /// A sort named by `sort_name`, a slice of the `document` text.
+    pub fn addSortUse(
         self: *Builder,
         document: DocumentId,
-        text: []const u8,
         sort_name: []const u8,
     ) !void {
-        const range = sourceRangeFromSlice(document, text, sort_name) orelse {
-            return;
-        };
+        const range = self.rangeOf(document, sort_name) orelse return;
         const decl_index = self.sortDeclIndex(sort_name) orelse return;
         const decl = self.declarations.items[decl_index];
         try self.addSymbol(.{
             .source_range = range,
-            .target_range = targetRangeIfAvailable(decl, range.start),
+            .target_range = targetRangeForUse(decl, document, range.start, null),
             .markdown = decl.markdown,
         });
+    }
+
+    pub fn rangeOf(
+        self: *const Builder,
+        document: DocumentId,
+        slice: []const u8,
+    ) ?SourceRange {
+        const text = switch (document) {
+            .mm0 => self.mm0_text,
+            .proof => self.proof_text,
+        };
+        return sourceRangeFromSlice(document, text, slice);
+    }
+
+    /// Binders visible in part of a declaration only: a `@view`'s own, or a
+    /// definition filler's dummies.
+    pub fn addLocalBinders(
+        self: *Builder,
+        decl_index: usize,
+        binders: []const BinderDecl,
+    ) !void {
+        if (binders.len == 0) return;
+        const decl = &self.declarations.items[decl_index];
+        decl.local_binders = try std.mem.concat(
+            self.allocator,
+            BinderDecl,
+            &.{ decl.local_binders, binders },
+        );
     }
 
     pub fn addDeclarationNameUseIn(
@@ -498,6 +602,7 @@ pub const Builder = struct {
             term_id,
         ) catch |err| {
             if (isFatalIndexError(err)) return err;
+            self.complete = false;
             return;
         };
 
@@ -534,14 +639,49 @@ pub const Builder = struct {
             .target_range = decl.name_range,
             .markdown = decl.markdown,
         });
-        try self.indexMathString(
+        const dummies = if (def.header_tail) |tail|
+            try self.declareFillerDummies(decl_index, tail)
+        else
+            &.{};
+        try self.indexMathStringIn(
             .proof,
             def.body.text,
             def.body.span.start + 1,
             decl_index,
+            try std.mem.concat(self.allocator, BinderDecl, &.{ decl.binders, dummies }),
             false,
             decl.name_range.start,
         );
+    }
+
+    /// A filler's own dummies, `def name (.d: obj) = $ … $`: binders of its
+    /// body only.
+    fn declareFillerDummies(
+        self: *Builder,
+        decl_index: usize,
+        header_tail: []const u8,
+    ) ![]const BinderDecl {
+        const decl = self.declarations.items[decl_index];
+        const tokens = try self.indexSignature(.proof, header_tail, decl_index, decl.binders);
+        var dummies = std.ArrayListUnmanaged(BinderDecl).empty;
+        for (tokens) |token| {
+            if (token.role != .binder) continue;
+            const range = self.rangeOf(.proof, token.text) orelse continue;
+            const dummy: BinderDecl = .{
+                .name = token.text,
+                .sort_name = token.sort,
+                .bound = true,
+                .range = range,
+            };
+            try dummies.append(self.allocator, dummy);
+            try self.addSymbol(.{
+                .source_range = range,
+                .target_range = range,
+                .markdown = try binderMarkdown(self.allocator, decl, dummy),
+            });
+        }
+        try self.addLocalBinders(decl_index, dummies.items);
+        return dummies.items;
     }
 
     fn addLocalProofDef(
@@ -559,6 +699,7 @@ pub const Builder = struct {
             proofMathTextSpan(def.body.span),
         ) catch |err| {
             if (isFatalIndexError(err)) return err;
+            self.complete = false;
             return;
         };
         self.mm0_parser = parser;
@@ -592,7 +733,13 @@ pub const Builder = struct {
             .range = proofSpanRange(def.span),
             .selection_range = proofSpanRange(def.name_span),
         });
-        try self.indexProofDefHeaderSorts(def, term);
+        _ = try self.indexSignature(
+            .proof,
+            header_tail,
+            decl_index,
+            self.declarations.items[decl_index].binders,
+        );
+        try self.deferAnnotations(decl_index, def.annotations);
         try self.indexMathString(
             .proof,
             def.body.text,
@@ -602,45 +749,5 @@ pub const Builder = struct {
             null,
         );
         try self.decl_by_name.put(self.allocator, def.name, decl_index);
-    }
-
-    fn indexProofDefHeaderSorts(
-        self: *Builder,
-        def: proof_script.DefItem,
-        term: parse.TermStmt,
-    ) !void {
-        const header_tail = def.header_tail orelse return;
-        var pos: usize = 0;
-        for (term.args) |arg| {
-            try self.addProofHeaderSortUse(header_tail, def, &pos, arg.sort_name);
-        }
-        for (term.dummy_args) |arg| {
-            try self.addProofHeaderSortUse(header_tail, def, &pos, arg.sort_name);
-        }
-        try self.addProofHeaderSortUse(header_tail, def, &pos, term.ret_sort_name);
-    }
-
-    fn addProofHeaderSortUse(
-        self: *Builder,
-        header_tail: []const u8,
-        def: proof_script.DefItem,
-        pos: *usize,
-        sort_name: []const u8,
-    ) !void {
-        const rel = findIdentIn(header_tail, sort_name, pos.*) orelse return;
-        pos.* = rel + sort_name.len;
-        const span = def.header_tail_span orelse return;
-        const range = SourceRange{
-            .document = .proof,
-            .start = span.start + rel,
-            .end = span.start + rel + sort_name.len,
-        };
-        const decl_index = self.sortDeclIndex(sort_name) orelse return;
-        const decl = self.declarations.items[decl_index];
-        try self.addSymbol(.{
-            .source_range = range,
-            .target_range = decl.name_range,
-            .markdown = decl.markdown,
-        });
     }
 };

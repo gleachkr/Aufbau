@@ -108,6 +108,7 @@ pub fn addLemmaBlockHeader(
     block: proof_script.ProofBlock,
 ) !void {
     const maybe_assertion = try self.parseLemmaAssertion(block);
+    if (maybe_assertion == null) self.complete = false;
     const hyp_count = if (maybe_assertion) |assertion|
         assertion.hyps.len
     else
@@ -150,6 +151,8 @@ pub fn addLemmaBlockHeader(
         decl_index,
         self.proof_blocks.items[block_index].global_available_before,
     );
+    _ = try self.indexSignature(.proof, block.header_tail, decl_index, binders);
+    try self.deferAnnotations(decl_index, block.annotations);
 }
 
 pub fn parseLemmaAssertion(
@@ -184,7 +187,9 @@ pub fn addProofLine(
     const decl_index = try self.addDeclaration(decl);
     // An incomplete line has no application to speak of — its placeholder
     // would index as an unknown rule and hover as one.
-    if (!line.incomplete) {
+    if (line.incomplete) {
+        self.complete = false;
+    } else {
         try self.indexRuleApplication(
             block_index,
             line.application,

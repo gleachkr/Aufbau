@@ -212,6 +212,13 @@ The compiler also exposes the language server used by editor integrations:
 zig-out/bin/abc lsp
 ```
 
+It reports diagnostics and offers hover, completion, go to definition and
+implementation, find references, highlighting of a name's other uses,
+rename, the document outline, and the proof-search code actions. A rename
+changes the theory's `.mm0` and `.auf` files and the files they import. It
+is refused while part of the theory does not parse or the name is declared
+twice, and it does not change other theories that import a renamed file.
+
 For the complete current options, including diagnostic debugging and
 treating warnings as errors, use:
 

@@ -15,6 +15,9 @@ pub const NavigationSymbol = struct {
     source_range: SourceRange,
     target_range: ?SourceRange,
     markdown: []const u8,
+    /// A notation token standing for its term: a use of the term, but not
+    /// of its name, so a rename leaves it alone.
+    via_notation: bool = false,
 };
 
 pub const ProofBlockInfo = struct {
