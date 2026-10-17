@@ -3,7 +3,7 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.0.18] - 2026-10-17
 
 ### Added
 
@@ -14,7 +14,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   A notation's tokens are left as they are. A new name that is already in
   use, or a keyword, is refused. So is a rename while part of the theory
   does not parse, since a use the editor cannot read would be missed, and
-  a rename of a name declared twice, since its uses cannot be told apart. Files outside the theory that import a renamed file are not
+  a rename of a name declared twice, since its uses cannot be told
+  apart. Files outside the theory that import a renamed file are not
   changed.
 - The language server highlights the other uses of the name under the
   cursor.
@@ -1976,6 +1977,7 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 See the [0.0.1 release notes](RELEASE_NOTES.md) for further details.
 
+[0.0.18]: https://github.com/gleachkr/Aufbau/compare/v0.0.17...v0.0.18
 [0.0.17]: https://github.com/gleachkr/Aufbau/compare/v0.0.16...v0.0.17
 [0.0.16]: https://github.com/gleachkr/Aufbau/compare/v0.0.15...v0.0.16
 [0.0.15]: https://github.com/gleachkr/Aufbau/compare/v0.0.14...v0.0.15

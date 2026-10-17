@@ -1,3 +1,104 @@
+# Aufbau 0.0.18
+
+Aufbau 0.0.18 adds rename and document highlights to the language server,
+and continues 0.0.17's work on long `@acui` contexts. Several rule shapes that 
+blew up on long contexts now check in double digit milliseconds. `.mm0` files 
+are also checked more closely, in line with mm0-c.
+
+## Highlights
+
+### Rename in the editor
+
+Renaming a sort, term, definition, rule, lemma, proof line, variable or
+named hypothesis changes every semantically meaningful occurrence of it, in the 
+`.mm0` and `.auf` files of the theory and in the files they import, annotations 
+such as `@relation`, `@acui` and `@view` included. A notation's tokens are left 
+as they are. A new name that is already in use, or a keyword, is refused, as is 
+a rename while part of the theory does not parse, or of a name declared twice.
+
+The editor now can highlights the other uses of the name under the cursor. Find 
+references, go to definition and hover now reach the names an annotation 
+mentions, the variables of a `@view`, dependency lists such as the `x` of `(p: 
+wff x)`, and named hypotheses where they are declared.
+
+### Long `@acui` contexts keep their order
+
+A context variable left with the rest of an `@acui` context, such as Γ in
+a truth tree step's `focus (Γ ; Δ) at Δ`, used to be rebuilt in a sorted
+order, so the proof re-sorted the whole branch. It now keeps the members
+in the order the line wrote them, including repeated members, members read
+off a normal form, and the context a `@view` reads from the line. On
+240-row branches, a `done` step's proof went from 840 KB to 55–70 KB, and
+a context given by a definition from 8.9 MB to 59 KB. A context whose
+member rewrites, as in `done_all`'s `Γ ; {x/t} φ`, is normalized member by
+member, where both sides used to be sorted: 4.8 MB, beyond the verifier's
+default heap, became 55 KB.
+
+Several checks that grew exponentially with the context now take
+milliseconds whatever its length:
+
+- splitting a context under an `@acui` law with no idempotence
+  (`@acui assoc comm unit _`), as in a truth tree's `unfocus`, which took
+  2.2 seconds and 777 MB on a 19-row branch and ran out of memory at 22;
+- a `@view` rule whose premise does not match, which tried every reading
+  of an `@acui` premise first (2.6 seconds and 3 GB on a 9-row branch);
+- a rule whose context argument names two or more members, such as
+  `done (Γ ; φ ; ψ) (φ ∧ ψ)`, now matched after the arguments that fix
+  those members;
+- a line whose rule fails before its `@fallback`.
+
+Over the test theories that existed at 0.0.17, proofs are about 2%
+smaller, not counting a 120-member stress test of the `done_all` shape,
+which went from 2.6 MB to 62 KB.
+
+### `@view` and `@recover`
+
+- A context given by a definition, such as a branch `tree_b t1 t2` that
+  names its rows once, now matches a rule's context pattern; the
+  definition is opened into its members when no solution reads it whole.
+- `@recover` now checks a target that is already bound, so a `@view` rule
+  reads the row `@recover` names wherever it stands in the context.
+- A `@recover` pattern that does not mention the hole, as in a `∀ x F a`
+  row instantiated as `F a`, now lifts the hole through coercions to the
+  target's sort, or takes a fresh variable from the hole sort's `@vars`
+  pool, where it used to fail with a sort mismatch.
+
+### Checking `.mm0` files as mm0-c does
+
+- A tab or carriage return outside a comment, and a NUL byte anywhere, are
+  errors in the verifier, the compiler and the editor. The MM0 spec allows
+  only spaces and newlines, and mm0-c rejects the rest, so a spec with tabs
+  or CRLF line endings used to pass here and fail there. The same holds
+  for a notation item in a `.auf` file.
+- A dependency such as the `x` of `(p: wff x)` must name a bound variable
+  declared earlier, and a binder name may be used only once per statement.
+- A `notation` statement's binder and return types must match its term's.
+
+### Smaller changes
+
+- A line with a hole that cannot match its rule now gets the usual
+  "visible parts do not match" error, where it failed with an internal
+  error and the editor showed nothing.
+
+## Compatibility
+
+Every test theory from 0.0.17 compiles or fails as before, and every
+binary it compiles verifies; `auto?` finds the same proofs on the search
+benchmark. A `.mm0` file with a tab or carriage return outside a comment,
+a NUL byte, a dependency on an undeclared or regular variable, a repeated
+binder name, or a `notation` whose types differ from its term's is now
+rejected, as mm0-c rejects it. When a line leaves open
+which member of a context a rule takes, the last member as written is
+taken, where it used to be the last in sorted order.
+
+The MMB format and the proof syntax are unchanged. The language server
+gains `textDocument/rename`, `textDocument/prepareRename` and
+`textDocument/documentHighlight`.
+
+Aufbau remains pre-1.0 software; APIs and proof syntax may still change.
+
+---
+
 # Aufbau 0.0.17
 
 Aufbau 0.0.17 improves performance for long `@acui` contexts, making them 
