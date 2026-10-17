@@ -313,13 +313,31 @@ fn checkRecoverBinding(
         debug_views,
     )) {
         .unread, .vacuous => {},
-        .found => |candidate| if (candidate != target and
-            try preprocessDerivedExpr(theorem, env, registry, candidate) !=
-                try preprocessDerivedExpr(theorem, env, registry, target))
-        {
+        .found => |candidate| if (!try recoverReadsBackAt(
+            theorem,
+            env,
+            registry,
+            candidate,
+            target,
+        )) {
             return error.RecoverConflict;
         },
     }
+}
+
+/// Whether a `@recover` that reads `candidate` off its source agrees with
+/// `target`, already bound: equal once aligned the way a concrete reading
+/// aligns its source (`preprocessDerivedExpr`).
+pub fn recoverReadsBackAt(
+    theorem: *TheoremContext,
+    env: *const GlobalEnv,
+    registry: *RewriteRegistry,
+    candidate: ExprId,
+    target: ExprId,
+) !bool {
+    return candidate == target or
+        try preprocessDerivedExpr(theorem, env, registry, candidate) ==
+            try preprocessDerivedExpr(theorem, env, registry, target);
 }
 
 const RecoverReading = union(enum) {

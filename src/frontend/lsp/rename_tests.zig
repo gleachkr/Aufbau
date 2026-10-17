@@ -404,6 +404,7 @@ test "rename refuses notation tokens, invalid names and names in use" {
     defer arena_state.deinit();
     const texts: Texts = .{
         .mm0 =
+        \\--| @hole _wff
         \\provable sort wff;
         \\term im (a b: wff): wff; infixr im: $->$ prec 25;
         \\term top: wff;
@@ -418,6 +419,7 @@ test "rename refuses notation tokens, invalid names and names in use" {
     try expectRefused(texts, .mm0, "top", 0, "_", error.InvalidName);
     try expectRefused(texts, .mm0, "top", 0, "axiom", error.InvalidName);
     try expectRefused(texts, .mm0, "top", 0, "im", error.NameInUse);
+    try expectRefused(texts, .mm0, "top", 0, "_wff", error.NameInUse);
     // A global name may not repeat a binder: it would be captured.
     try expectRefused(texts, .mm0, "top", 0, "b", error.NameInUse);
     // A binder may not repeat a sibling, a global name or a token.

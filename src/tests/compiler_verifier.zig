@@ -1203,6 +1203,37 @@ test "compiler rejects proof-side notation on a public term" {
     );
 }
 
+test "compiler rejects a tab in a proof-side notation item" {
+    // A notation item is an MM0 statement, so its whitespace is MM0's:
+    // spaces and newlines only, as in the .mm0 file.
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom ax_top: $ top $;
+        \\theorem thm: $ top $;
+    ;
+    const proof_src =
+        "def lid (a: wff): wff = $ a $\n" ++
+        "prefix lid:\t$!$ prec 25;\n" ++
+        "\n" ++
+        "thm\n" ++
+        "---\n" ++
+        "p: $ top $ by ax_top []\n";
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try compiler.analyze();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.IllegalWhitespace, diags[0].err);
+    try std.testing.expectEqual(mm0.CompilerDiagnosticSource.proof, diags[0].source);
+    try std.testing.expectEqualStrings("\t", proof_src[diags[0].span.?.start..diags[0].span.?.end]);
+}
+
 test "compiler rejects .mm0 math written with proof-side notation" {
     // The token parses to the local term, so the reference check from the
     // local-def rule catches it at the .mm0 statement.

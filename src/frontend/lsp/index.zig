@@ -73,6 +73,7 @@ pub const Snapshot = struct {
     proof_lines: []const ProofLineDecl,
     proof_applications: []const ProofApplicationInfo,
     notations: []const NotationCompletionDecl,
+    hole_tokens: []const []const u8,
     /// Whether every statement, proof item and line parsed.
     complete: bool,
     left_delims: [256]bool,
@@ -127,6 +128,7 @@ pub const Snapshot = struct {
             .proof_lines = try builder.proof_lines.toOwnedSlice(arena),
             .proof_applications = try builder.proof_applications.toOwnedSlice(arena),
             .notations = try builder.notations.toOwnedSlice(arena),
+            .hole_tokens = try builder.hole_tokens.toOwnedSlice(arena),
             .complete = builder.complete,
             .left_delims = builder.left_delims,
             .right_delims = builder.right_delims,

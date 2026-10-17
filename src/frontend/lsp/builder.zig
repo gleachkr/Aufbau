@@ -62,6 +62,8 @@ pub const Builder = struct {
     proof_lines: std.ArrayListUnmanaged(ProofLineDecl) = .empty,
     proof_applications: std.ArrayListUnmanaged(ProofApplicationInfo) = .empty,
     notations: std.ArrayListUnmanaged(NotationCompletionDecl) = .empty,
+    /// The `@hole` tokens of the sorts: math tokens no name may take.
+    hole_tokens: std.ArrayListUnmanaged([]const u8) = .empty,
     notation_by_token: std.StringHashMapUnmanaged(usize) = .empty,
     sort_var_by_token: std.StringHashMapUnmanaged(usize) = .empty,
     sort_names: std.ArrayListUnmanaged([]const u8) = .empty,
@@ -370,6 +372,11 @@ pub const Builder = struct {
             const directive = nextAnnotationToken(annotation, &pos) orelse {
                 continue;
             };
+            if (std.mem.eql(u8, directive.text, "@hole")) {
+                const token = nextAnnotationToken(annotation, &pos) orelse continue;
+                try self.hole_tokens.append(self.allocator, token.text);
+                continue;
+            }
             if (!std.mem.eql(u8, directive.text, "@vars")) continue;
 
             while (nextAnnotationToken(annotation, &pos)) |token| {

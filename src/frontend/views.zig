@@ -1893,7 +1893,24 @@ fn recoverAcceptsSource(
         error.RecoverConflict => return false,
         else => return err,
     };
-    return accepted != .none;
+    return switch (accepted) {
+        .none => false,
+        .vacuous => true,
+        // A target the conclusion or another premise already bound must be
+        // what this member shows, as the final check demands
+        // (`checkRecoverBinding`).
+        .found => |candidate| {
+            const target = bindings[plan.recover.target_view_idx] orelse return true;
+            if (theorem.containsPlaceholder(target)) return true;
+            return try DerivedBindings.recoverReadsBackAt(
+                theorem,
+                env,
+                registry,
+                candidate,
+                target,
+            );
+        },
+    };
 }
 
 fn findRecoverDeclForSource(

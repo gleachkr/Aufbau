@@ -417,6 +417,7 @@ pub fn build(b: *std.Build) void {
     ) orelse &.{};
     const test_options = b.addOptions();
     test_options.addOption([]const []const u8, "test_filters", test_filters);
+    test_options.addOption([]const u8, "proof_case_loop_test", proof_case_loop_test);
     const root_test_filters = if (test_filters.len == 0)
         test_filters
     else

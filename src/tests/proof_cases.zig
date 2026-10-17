@@ -2,6 +2,7 @@ const std = @import("std");
 const mm0 = @import("../lib.zig");
 const web_demo_fixtures = @import("web_demo_fixtures");
 const test_filters = @import("test_options").test_filters;
+const proof_case_loop_test = @import("test_options").proof_case_loop_test;
 
 const Compiler = mm0.Compiler;
 const Mmb = mm0.Mmb;
@@ -1201,11 +1202,13 @@ test "web demo fixtures are single files" {
 }
 
 /// `-Dtest-filter` keeps this loop's test in every filtered build (build.zig's
-/// `proof_case_loop_test`), so the loop narrows to the fixtures the filter names.
+/// `proof_case_loop_test`), so the loop narrows to the fixtures the filter
+/// names, or runs them all when the filter names the loop's test itself.
 fn matchesTestFilter(stem: []const u8) bool {
     if (test_filters.len == 0) return true;
     for (test_filters) |needle| {
-        if (std.mem.indexOf(u8, stem, needle) != null) return true;
+        if (std.mem.indexOf(u8, stem, needle) != null or
+            std.mem.indexOf(u8, proof_case_loop_test, needle) != null) return true;
     }
     return false;
 }

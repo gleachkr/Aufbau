@@ -347,7 +347,8 @@ public MM0 declaration.
 
 A local def may carry notation declared in the proof file. The
 declaration is a top-level item written exactly as in an MM0 file,
-semicolon included, and must follow the def it names:
+semicolon included, and must follow the def it names. Its whitespace is
+MM0's too: a tab or carriage return outside a comment is an error.
 
 ```auf
 def limp (a b: wff): wff = $ a -> b $

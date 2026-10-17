@@ -187,6 +187,9 @@ fn nameInUse(snapshot: anytype, scope: Scope, name: []const u8) bool {
     for (snapshot.notations) |notation| {
         if (std.mem.eql(u8, notation.token, name)) return true;
     }
+    for (snapshot.hole_tokens) |token| {
+        if (std.mem.eql(u8, token, name)) return true;
+    }
     const global = scope == .global;
     for (snapshot.declarations) |decl| {
         // A line's name matters to a global name; to another line, only
