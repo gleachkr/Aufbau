@@ -16,6 +16,7 @@ const CompilerDiag = @import("../../diag.zig");
 const AcuiSupport = @import("../../acui_support.zig");
 const DefOps = @import("../../def_ops.zig");
 const FreshSelect = @import("../fresh_select.zig");
+const Canonicalizer = @import("../../normalizer.zig").Canonicalizer;
 
 const HiddenWitnessProviderContext = struct {
     theorem: *TheoremContext,
@@ -110,6 +111,8 @@ pub fn convertTo(
         );
     }
 
+    if (!try mayMeet(ctx, have, want)) return null;
+
     var provider_context: HiddenWitnessProviderContext = undefined;
     const provider: ?DefOps.HiddenWitnessProvider =
         if (ctx.fresh) |fresh| blk: {
@@ -167,6 +170,48 @@ pub fn tryBuildConclusionLine(
         .refs = refs,
     } }, derived, stated) orelse return null;
     return ref.line;
+}
+
+/// Whether the theory's laws may relate `have` and `want`. Each rung below
+/// writes its proof as it normalizes, a pass over a bag for each member,
+/// before it can tell the two apart; the proof-free engine reaches the same
+/// normal forms and common targets without one, so a failing conversion
+/// between long contexts no longer costs their sort. Only its "no" counts,
+/// and only where it decides what the rungs do: a definition, which a rung
+/// may fold, unfold or name a hidden variable of, or a normal form cut
+/// short by the step budget, leaves them to decide.
+fn mayMeet(ctx: ConversionContext, have: ExprId, want: ExprId) !bool {
+    var canonicalizer = Canonicalizer.initWithScratch(
+        ctx.allocator,
+        ctx.theorem,
+        ctx.registry,
+        ctx.env,
+        {},
+        ctx.scratch,
+    );
+    defer canonicalizer.deinit();
+    const support = try canonicalizer.support();
+    if (support.isDefBearing(have) or support.isDefBearing(want)) return true;
+
+    const mark = ctx.scratch.mark();
+    defer ctx.scratch.discard(mark);
+    var canonical: [2]ExprId = undefined;
+    for ([_]ExprId{ have, want }, &canonical) |expr, *out| {
+        out.* = canonicalizer.canonicalizeWithFreshBudget(expr) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            return true;
+        };
+        if (canonicalizer.step_count >= canonicalizer.step_limit) return true;
+    }
+    if (canonical[0] == canonical[1]) return true;
+    const common = canonicalizer.buildCommonTarget(
+        canonical[0],
+        canonical[1],
+    ) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return true;
+    };
+    return common != null;
 }
 
 fn materialize(

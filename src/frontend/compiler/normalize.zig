@@ -5,6 +5,7 @@ const GlobalEnv = @import("../env.zig").GlobalEnv;
 const RewriteRegistry = @import("../rewrite_registry.zig").RewriteRegistry;
 const ResolvedRelation = @import("../rewrite_registry.zig").ResolvedRelation;
 const Normalizer = @import("../normalizer.zig").Normalizer;
+const Canonicalizer = @import("../normalizer.zig").Canonicalizer;
 const CommonTargetResult = @import("../normalizer.zig").CommonTargetResult;
 const CheckedIr = @import("../checked_ir.zig");
 const CheckedLine = CheckedIr.CheckedLine;
@@ -42,27 +43,25 @@ pub fn maybeBuildComparisonSnapshotWithDebug(
     actual: ExprId,
     debug: DebugConfig,
 ) ComparisonSnapshot {
-    var checked = std.ArrayListUnmanaged(CheckedLine).empty;
-    defer checked.deinit(allocator);
-
-    const normalized_expected = normalizeExprForSnapshot(
+    // A diagnostic shows normal forms, not their proofs: the proof-free
+    // engine reaches the same forms without a proof's pass over a bag for
+    // each member, which on a long context costs more than the check it
+    // explains.
+    var canonicalizer = Canonicalizer.initWithScratch(
         allocator,
         theorem,
         registry,
         env,
-        &checked,
+        {},
         scratch,
-        expected,
-    ) catch return .{};
-    const normalized_actual = normalizeExprForSnapshot(
-        allocator,
-        theorem,
-        registry,
-        env,
-        &checked,
-        scratch,
-        actual,
-    ) catch return .{};
+    );
+    defer canonicalizer.deinit();
+    const mark = scratch.mark();
+    defer scratch.discard(mark);
+    const normalized_expected =
+        canonicalizer.canonicalizeWithFreshBudget(expected) catch return .{};
+    const normalized_actual =
+        canonicalizer.canonicalizeWithFreshBudget(actual) catch return .{};
 
     if (normalized_expected == expected and normalized_actual == actual) {
         DebugTrace.traceNormalization(

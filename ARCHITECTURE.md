@@ -723,7 +723,10 @@ used once a candidate binding list exists. It turns a proof of one statement
 into a proof of another, trying in order: identity, transparent def
 conversion, a fold-before-normalize intermediate, normalization to a common
 target, normalization followed by unfolding, and unfolding to the other
-side's normal form. It serves a cited hypothesis, a line's stated
+side's normal form. Before the normalizing rungs, which write their proofs
+as they go, the proof-free `Canonicalizer` checks that the two sides can
+meet at all, so a doomed comparison costs no proof; it stands aside where a
+definition is involved. It serves a cited hypothesis, a line's stated
 conclusion, and the theorem's final line alike, so a comparison accepted in
 one place is accepted in the others. It uses existing def conversion, ACUI
 support, and normalizer transport rather than a separate equality subsystem.

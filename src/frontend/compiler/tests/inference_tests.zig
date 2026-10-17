@@ -910,6 +910,70 @@ test "a @view hands its rule a context in the order the line wrote it" {
     try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
 }
 
+test "a rule that fails before its @fallback does not normalize the context" {
+    // With `g` given, `imp_r` binds every variable and fails only at its
+    // premises, which name the other branch first. Converting each premise
+    // to the cited line, and rendering the failure's normal forms, used to
+    // sort both 120-member contexts with proofs before `imp_l` was tried:
+    // 900 times the intern work of naming `imp_l`, against 8 now.
+    const n = 120;
+    const allocator = std.testing.allocator;
+    var reversed: [n]usize = undefined;
+    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+
+    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer mm0_src.deinit(allocator);
+    try appendRcTheory(&mm0_src, allocator, "infixl");
+    try mm0_src.appendSlice(allocator,
+        \\term hyp (a: wff): rc;
+        \\coercion hyp: wff > rc;
+        \\--| @congr
+        \\axiom hyp_congr (a b: wff): $ bi a b $ > $ rc_eq (hyp a) (hyp b) $;
+        \\term fc (g a: rc): wff;
+        \\--| @congr
+        \\axiom fc_congr (g h a b: rc):
+        \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (fc g a) (fc h b) $;
+        \\term closed (g: rc): wff;
+        \\--| @congr
+        \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+        \\term imp (a b: wff): wff;
+        \\term neg (a: wff): wff;
+        \\axiom imp_l (g: rc) (a b: wff):
+        \\  $ closed (g & neg a) $ > $ closed (g & b) $ > $ fc g (imp a b) $;
+        \\--| @fallback imp_l
+        \\axiom imp_r (g: rc) (a b: wff):
+        \\  $ closed (g & b) $ > $ closed (g & neg a) $ > $ fc g (imp a b) $;
+        \\theorem t (
+    );
+    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try mm0_src.appendSlice(allocator, ": wff): $ closed (imp x0 x1 & ");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, " & neg x0) $ > $ closed (imp x0 x1 & ");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, " & x1) $ > $ fc (imp x0 x1 & ");
+    try appendBag(&mm0_src, allocator, &reversed, "infixl");
+    try mm0_src.appendSlice(allocator, ") (imp x0 x1) $;\n");
+
+    var ticks: [2]u64 = undefined;
+    for ([_][]const u8{ "imp_r", "imp_l" }, &ticks) |rule, *rule_ticks| {
+        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer proof_src.deinit(allocator);
+        try proof_src.appendSlice(allocator, "t\n---\nl1: $ fc (imp x0 x1 & ");
+        try appendBag(&proof_src, allocator, &reversed, "infixl");
+        try proof_src.print(allocator, ") (imp x0 x1) $ by {s} (g := $ imp x0 x1 & ", .{rule});
+        try appendBag(&proof_src, allocator, &reversed, "infixl");
+        try proof_src.appendSlice(allocator, " $) [#1, #2]\n");
+
+        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+        const start = FrontendExpr.work_ticks;
+        const mmb = try compiler.compileMmb(allocator);
+        rule_ticks.* = FrontendExpr.work_ticks -% start;
+        defer allocator.free(mmb);
+        try mm0.verifyPair(allocator, mm0_src.items, mmb);
+    }
+    try std.testing.expect(ticks[0] < 20 * ticks[1]);
+}
+
 test "a context with two unknown members is split after the arguments that fix them" {
     // `has_ctx` and `has_pair` state one fact, a context holding both
     // halves of a pair, with their arguments in either order. Matched left
