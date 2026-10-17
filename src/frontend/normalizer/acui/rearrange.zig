@@ -13,11 +13,13 @@ const AcuiBag = @import("../../acui_bag.zig");
 const AcuiSupport = @import("../../acui_support.zig");
 const ProofEmit = @import("../proof_emit.zig");
 const Support = @import("../support.zig");
+const NormalizeResult = @import("../types.zig").NormalizeResult;
 
 /// A proof of `lhs` = `rhs`, or null when they differ by more than a
-/// rearrangement (`AcuiSupport.Context.isRearrangement`), as written or
-/// with the defs standing in their bags opened. The inner null is a proof
-/// of an expression equal to itself.
+/// rearrangement (`AcuiSupport.Context.isRearrangement`): as written, with
+/// the defs standing in their bags opened, or with the members of their
+/// bags then normalized one by one. The inner null is a proof of an
+/// expression equal to itself.
 pub fn buildRearrangement(
     self: anytype,
     lhs: ExprId,
@@ -36,27 +38,137 @@ pub fn buildRearrangement(
     defer opened.deinit(self.allocator);
     const lhs_open = try openDefs(self, &opened, lhs, false);
     const rhs_open = try openDefs(self, &opened, rhs, false);
-    if (lhs_open == lhs and rhs_open == rhs) return null;
-    if (!try support.isRearrangement(lhs_open, rhs_open)) return null;
     const relation = Support.relationFor(self, lhs) orelse return null;
-    const lhs_to_open = try ProofEmit.composeTransitivity(
+    if ((lhs_open != lhs or rhs_open != rhs) and
+        try support.isRearrangement(lhs_open, rhs_open))
+    {
+        const lhs_to_open = try ProofEmit.composeTransitivity(
+            self,
+            relation,
+            lhs,
+            lhs_open,
+            rhs_open,
+            try ProofEmit.emitTransparentRelationProof(self, relation, lhs, lhs_open),
+            try rearrange(self, &proved, lhs_open, rhs_open),
+        );
+        return try ProofEmit.composeTransitivity(
+            self,
+            relation,
+            lhs,
+            rhs_open,
+            rhs,
+            lhs_to_open,
+            try ProofEmit.emitTransparentRelationProof(self, relation, rhs_open, rhs),
+        );
+    }
+
+    // A member may still need rewriting: `Γ ; {x/t} φ` against `Γ ; φ[t]`.
+    // Sorting both sides would rewrite it, but costs the square of the
+    // bag's size; normalizing each member where it stands, the two may
+    // again differ only by a rearrangement.
+    var normalized: Normalized = .empty;
+    defer normalized.deinit(self.allocator);
+    const lhs_norm = try normalizeMembers(self, &normalized, lhs_open) orelse return null;
+    const rhs_norm = try normalizeMembers(self, &normalized, rhs_open) orelse return null;
+    if (lhs_norm.result_expr == lhs_open and rhs_norm.result_expr == rhs_open) return null;
+    if (!try support.isRearrangement(lhs_norm.result_expr, rhs_norm.result_expr)) return null;
+    const lhs_to_norm = try ProofEmit.composeTransitivity(
         self,
         relation,
         lhs,
         lhs_open,
-        rhs_open,
+        lhs_norm.result_expr,
         try ProofEmit.emitTransparentRelationProof(self, relation, lhs, lhs_open),
-        try rearrange(self, &proved, lhs_open, rhs_open),
+        lhs_norm.conv_line_idx,
     );
+    const rhs_to_norm = try ProofEmit.composeTransitivity(
+        self,
+        relation,
+        rhs,
+        rhs_open,
+        rhs_norm.result_expr,
+        try ProofEmit.emitTransparentRelationProof(self, relation, rhs, rhs_open),
+        rhs_norm.conv_line_idx,
+    );
+    const lhs_to_rhs_norm = try ProofEmit.composeTransitivity(
+        self,
+        relation,
+        lhs,
+        lhs_norm.result_expr,
+        rhs_norm.result_expr,
+        lhs_to_norm,
+        try rearrange(self, &proved, lhs_norm.result_expr, rhs_norm.result_expr),
+    );
+    const norm_to_rhs = if (rhs_to_norm) |proof|
+        try ProofEmit.emitSymm(self, relation, rhs, rhs_norm.result_expr, proof)
+    else
+        null;
     return try ProofEmit.composeTransitivity(
         self,
         relation,
         lhs,
-        rhs_open,
+        rhs_norm.result_expr,
         rhs,
-        lhs_to_open,
-        try ProofEmit.emitTransparentRelationProof(self, relation, rhs_open, rhs),
+        lhs_to_rhs_norm,
+        norm_to_rhs,
     );
+}
+
+/// `normalizeMembers` results, by expression.
+const Normalized = std.AutoHashMapUnmanaged(ExprId, ?NormalizeResult);
+
+/// `expr_id` normalized but for the order of its commutative bags: each
+/// member is normalized where it stands, and so is each subterm holding
+/// no bag. Null when `expr_id` holds no commutative bag at all.
+fn normalizeMembers(
+    self: anytype,
+    normalized: *Normalized,
+    expr_id: ExprId,
+) anyerror!?NormalizeResult {
+    if (normalized.get(expr_id)) |hit| return hit;
+    const result = try normalizeMembersUncached(self, normalized, expr_id);
+    try normalized.put(self.allocator, expr_id, result);
+    return result;
+}
+
+fn normalizeMembersUncached(
+    self: anytype,
+    normalized: *Normalized,
+    expr_id: ExprId,
+) anyerror!?NormalizeResult {
+    const app = appOf(self, expr_id) orelse return null;
+    const members = try self.allocator.alloc(?NormalizeResult, app.args.len);
+    defer self.allocator.free(members);
+    var holds_bag = try isCommutativeBag(self, expr_id);
+    for (app.args, members) |arg, *member| {
+        member.* = try normalizeMembers(self, normalized, arg);
+        holds_bag = holds_bag or member.* != null;
+    }
+    // Normalized whole by the caller, so a conversion with no bag in it
+    // normalizes nothing here.
+    if (!holds_bag) return null;
+    const args = try self.allocator.alloc(ExprId, app.args.len);
+    defer self.allocator.free(args);
+    const proofs = try self.allocator.alloc(?usize, app.args.len);
+    defer self.allocator.free(proofs);
+    for (app.args, members, args, proofs) |arg, member, *out, *proof| {
+        const result = member orelse try self.normalize(arg);
+        out.* = result.result_expr;
+        proof.* = result.conv_line_idx;
+    }
+    if (std.mem.eql(ExprId, app.args, args)) {
+        return .{ .result_expr = expr_id, .conv_line_idx = null };
+    }
+    return .{
+        .result_expr = try self.theorem.interner.internApp(app.term_id, args),
+        .conv_line_idx = try ProofEmit.emitCongruenceLine(
+            self,
+            app.term_id,
+            app.args,
+            args,
+            proofs,
+        ),
+    };
 }
 
 /// `openDefs` results, by expression and whether it stands in a bag.

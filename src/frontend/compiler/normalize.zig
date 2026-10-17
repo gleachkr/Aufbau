@@ -180,6 +180,10 @@ pub fn buildNormalizedConversionWithProviderAndDebug(
     }
     scratch.discard(rearrange_mark);
     CheckedIr.rollbackToMark(allocator, checked, lines_mark);
+    // The attempt may have normalized members, caching proofs among the
+    // lines just dropped and spending steps the normal forms below need.
+    normalizer.cache.clearRetainingCapacity();
+    normalizer.step_count = 0;
 
     const actual_mark = scratch.mark();
     const norm_actual = normalizer.normalize(actual) catch |err| {

@@ -63,6 +63,13 @@ term okm (m: ms): wff;
 --| @congr
 axiom okm_congr (m n: ms): $ ms_eq m n $ > $ bi (okm m) (okm n) $;
 
+term nn (a: wff): wff;
+--| @rewrite
+axiom nn_elim (a: wff): $ bi (nn a) a $;
+term drop (a: wff): ctx;
+--| @rewrite
+axiom drop_emp (a: wff): $ ctx_eq (drop a) emp $;
+
 axiom ok_ax (g: ctx): $ ok g $;
 axiom pair_ax (g h: ctx): $ pair g h $;
 axiom okm_ax (m: ms): $ okm m $;
@@ -76,7 +83,11 @@ theorem merged (a b c: wff): $ ok (c , b , a) $;
 theorem contracted (a b: wff): $ ok (b , a) $;
 theorem counted (a b: wff): $ okm (a ; b ; a ; b) $;
 theorem both_sides (a b c d: wff): $ pair (b , a) (d , c , d) $;
--- Not rearrangements: a unit member, and a member whose own bag is
--- rearranged. Both go through the normal forms.
-theorem with_unit (a b: wff): $ ok (b , a) $;
+-- Rearrangements once each member is normalized: a member that rewrites,
+-- and a member whose own bag is rearranged.
+theorem rewritten (a b c: wff): $ ok (c , a , b) $;
 theorem inner_bag (a b c: wff): $ ok (c , box (b , a)) $;
+-- Not rearrangements: a unit member, as written or once a member
+-- rewrites to it. Both go through the normal forms.
+theorem with_unit (a b: wff): $ ok (b , a) $;
+theorem rewritten_to_unit (a b: wff): $ ok (b , a) $;

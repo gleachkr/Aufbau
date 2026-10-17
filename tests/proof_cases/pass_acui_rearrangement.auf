@@ -30,10 +30,18 @@ both_sides
 ----------
 l1: $ pair (b , a) (d , c , d) $ by pair_ax (g := $ a , b $, h := $ c , d $) []
 
-with_unit
+rewritten
 ---------
-l1: $ ok (b , a) $ by ok_ax (g := $ emp , a , b $) []
+l1: $ ok (c , a , b) $ by ok_ax (g := $ a , nn b , c $) []
 
 inner_bag
 ---------
 l1: $ ok (c , box (b , a)) $ by ok_ax (g := $ box (a , b) , c $) []
+
+with_unit
+---------
+l1: $ ok (b , a) $ by ok_ax (g := $ emp , a , b $) []
+
+rewritten_to_unit
+-----------------
+l1: $ ok (b , a) $ by ok_ax (g := $ a , drop a , nn b $) []

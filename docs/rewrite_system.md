@@ -869,9 +869,12 @@ idempotent bag) repeated, the checker does not sort either side: it moves
 each member that is out of place to where the other side has it, and the
 proof's size follows how far the members move. A member is moved on the
 side where it is out of place, so one row written back into the middle of a
-context costs one move rather than a move for every row after it. A bag with a unit member, or
-members that differ in more than their own order, still goes through the
-normal forms. For the same reason, a rule argument inferred up to member
+context costs one move rather than a move for every row after it. Members
+that differ by a rewrite, as a rule's `Γ ; {x/t} φ` beside a line's
+`Γ ; φ[t]`, are first normalized where they stand, each on its own, and the
+members then out of place moved. A bag with a unit member, or bags that
+still differ in more than their members' order, go through the normal
+forms. For the same reason, a rule argument inferred up to member
 order keeps the order it was matched at rather than the sorted one, so a
 line that restates its context in the order it was written costs little to
 check against the next. Where the rule states the argument under a term

@@ -413,15 +413,17 @@ const proof_cases = [_]ProofCase{
     // (`principal_order`) and nested under `raa` (`nested_principal_order`).
     .{ .stem = "pass_acui_principal_order", .outcome = .pass },
     // Bags that differ only in member order, grouping and repeats, proved
-    // equal by moving the members out of place; a unit member and a
-    // rearranged inner bag go through the normal forms instead.
+    // equal by moving the members out of place, also once a member that
+    // rewrites or holds a rearranged bag is normalized where it stands; a
+    // unit member, written or rewritten to, goes through the normal forms.
     .{ .stem = "pass_acui_rearrangement", .outcome = .pass },
     // A 12-row truth tree whose every line restates its branch: sorting
     // each line's context overflowed the verifier's heap.
     .{ .stem = "pass_acui_long_context", .outcome = .pass },
     // Rearrangements that overflowed the verifier's heap: a 120-member
-    // right-nested bag with two members swapped, and one swap under 16
-    // doublings of a shared subterm.
+    // right-nested bag with two members swapped, one swap under 16
+    // doublings of a shared subterm, and a 120-member bag against a rule
+    // instance holding one member that rewrites.
     .{ .stem = "pass_acui_rearrangement_scale", .outcome = .pass },
     // A context under a term or def with no @congr is bound in the order
     // the line writes there, whatever order the other premises use.

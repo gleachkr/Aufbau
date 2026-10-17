@@ -1100,7 +1100,12 @@ Before normalizing, a conversion between two expressions that differ only
 in the order, grouping and repeats of their bags' members is proved by
 moving the members out of place (`normalizer/acui/rearrange.zig`), at a cost
 that follows how far they move rather than the square of the bag's size.
-`AcuiSupport.Context.isRearrangement` decides when that applies; def_ops
+`AcuiSupport.Context.isRearrangement` decides when that applies, as
+written, then with the defs standing in bags opened, then with each bag
+member normalized where it stands, so a member that rewrites costs its own
+rewrite and the moves rather than a sort of both bags. When the attempt
+fails, its lines are rolled back and the normalizer's cache, which may hold
+proofs among them, is cleared before the normal forms are built. def_ops
 finalization uses it too, keeping a binding's matched spelling over its
 sorted representative when the two differ only that way. Where the rule
 states a binding under a term with no `@congr`, the checker then takes the

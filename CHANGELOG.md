@@ -85,6 +85,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   at it because the statement had already given `t`. `@recover` now checks
   a target that is already bound, so the view takes the row that reads
   back at `a1`. A line with no such row fails with a recover conflict.
+- A rule whose context holds a member that rewrites, such as `done_all`'s
+  `Γ ; {x/t} φ`, no longer has its proof sort both contexts. The proof
+  normalizes each member where it stands and moves only the members out of
+  place. On a 241-row branch the proof of such a `done` was 4.8 MB, too
+  large for verifiers' default heap; it is now 55 KB, and takes 13 ms
+  rather than 270 ms.
 
 ## [0.0.17] - 2026-10-14
 
