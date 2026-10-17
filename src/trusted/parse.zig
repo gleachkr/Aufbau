@@ -179,11 +179,6 @@ pub const BoundArgDeps = struct {
 /// bound-arg space; dependencies on dummies have no bound-arg bit and are
 /// returned separately for the caller to reject.
 pub fn binderDepsToBoundArgDeps(args: []const ArgInfo, deps: u55) BoundArgDeps {
-    return compressToBoundArgs(args, deps);
-}
-
-/// `binderDepsToBoundArgDeps` over `ArgInfo`s or a recorded term's `Arg`s.
-fn compressToBoundArgs(args: anytype, deps: u55) BoundArgDeps {
     var out: u55 = 0;
     var pending = deps;
     var bound_arg_idx: u6 = 0;
@@ -212,6 +207,7 @@ pub fn boundArgDepsToBinderDeps(args: []const ArgInfo, deps: u55) u55 {
 }
 
 const TermEnv = struct {
+    /// Dependencies over the bound args only, as in MMB.
     args: []const Arg,
     ret_sort: u7,
     /// Over the bound args only, like an MMB return `Arg`.
@@ -660,10 +656,7 @@ pub const MM0Parser = struct {
     /// check starts where this statement ended.
     fn checkWhitechars(self: *MM0Parser) WhitecharError!void {
         var end = self.pos;
-        const at = scanToStatementEnd(self.src, &end) orelse return;
-        self.last_math_error = null;
-        self.last_math_span = null;
-        self.expected_char = null;
+        const at = scanToStatementEnd(self.src, &end).illegal orelse return;
         self.last_error_span = .{ .start = at, .end = at + 1 };
         return if (self.src[at] == 0) error.NullCharacter else error.IllegalWhitespace;
     }
@@ -673,39 +666,25 @@ pub const MM0Parser = struct {
     // Returns next public statement, while processing notation and coercion
     // declarations so later math strings are parsed with the correct grammar.
     pub fn next(self: *MM0Parser) !?MM0Stmt {
-        while (true) {
-            self.resetDiagnosticContext();
-            try self.checkWhitechars();
-            self.skipWhitespaceAndComments();
-            if (self.pos >= self.src.len) return null;
+        try self.prepareNextPublicStatement();
+        if (self.pos >= self.src.len) return null;
+        return try self.parsePublicStatement();
+    }
 
-            const word = self.peekIdent() orelse {
-                self.recordCurrentTokenError();
-                return error.UnexpectedChar;
-            };
-            const lead = classifyTopLevelLead(word);
-
-            if (lead == .sort) {
-                const stmt = try self.parseSortStmt();
-                return MM0Stmt{ .sort = stmt };
-            }
-            if (lead == .term) {
-                const stmt = try self.parseTermStmt(false);
-                return MM0Stmt{ .term = stmt };
-            }
-            if (lead == .def) {
-                const stmt = try self.parseTermStmt(true);
-                return MM0Stmt{ .term = stmt };
-            }
-            if (lead == .axiom) {
-                const stmt = try self.parseAssertionStmt(.axiom, false);
-                return MM0Stmt{ .assertion = stmt };
-            }
-            if (lead == .theorem) {
-                const stmt = try self.parseAssertionStmt(.theorem, false);
-                return MM0Stmt{ .assertion = stmt };
-            }
-            if (lead == .pub_kw) {
+    /// Parses the public statement at `pos`, where
+    /// `prepareNextPublicStatement` stopped.
+    pub fn parsePublicStatement(self: *MM0Parser) !MM0Stmt {
+        const word = self.peekIdent() orelse {
+            self.recordCurrentTokenError();
+            return error.UnexpectedChar;
+        };
+        switch (classifyTopLevelLead(word)) {
+            .sort => return .{ .sort = try self.parseSortStmt() },
+            .term => return .{ .term = try self.parseTermStmt(false) },
+            .def => return .{ .term = try self.parseTermStmt(true) },
+            .axiom => return .{ .assertion = try self.parseAssertionStmt(.axiom, false) },
+            .theorem => return .{ .assertion = try self.parseAssertionStmt(.theorem, false) },
+            .pub_kw => {
                 _ = self.consumeIdent();
                 self.skipWhitespaceAndComments();
                 const next_word = self.peekIdent() orelse {
@@ -713,21 +692,18 @@ pub const MM0Parser = struct {
                     return error.ExpectedKeyword;
                 };
                 if (std.mem.eql(u8, next_word, "def")) {
-                    const stmt = try self.parseTermStmt(true);
-                    return MM0Stmt{ .term = stmt };
+                    return .{ .term = try self.parseTermStmt(true) };
                 }
                 if (std.mem.eql(u8, next_word, "theorem")) {
-                    const stmt = try self.parseAssertionStmt(.theorem, false);
-                    return MM0Stmt{ .assertion = stmt };
+                    return .{ .assertion = try self.parseAssertionStmt(.theorem, false) };
                 }
                 self.recordCurrentTokenError();
                 return error.UnexpectedKeyword;
-            }
-            // Non-public declarations: annotations don't attach to these
-            if (try self.consumeNonPublicLead(lead)) continue;
-
-            self.recordCurrentTokenError();
-            return error.UnexpectedKeyword;
+            },
+            else => {
+                self.recordCurrentTokenError();
+                return error.UnexpectedKeyword;
+            },
         }
     }
 
@@ -1319,7 +1295,7 @@ pub const MM0Parser = struct {
                     @as(u55, 1) << @intCast(bound_names.items.len)
                 else
                     arg.deps;
-                if (compressToBoundArgs(term.args, want.deps).deps != deps) {
+                if (want.deps != deps) {
                     self.last_error_span = binder.span;
                     return error.NotationTypeMismatch;
                 }
@@ -2033,7 +2009,12 @@ pub const MM0Parser = struct {
         const args = try self.allocator.alloc(Arg, infos.len);
         for (infos, 0..) |info, idx| {
             const sort = try self.lookupSortId(info.sort_name);
-            args[idx] = .{ .deps = info.deps, .reserved = 0, .sort = sort, .bound = info.bound };
+            args[idx] = .{
+                .deps = binderDepsToBoundArgDeps(infos, info.deps).deps,
+                .reserved = 0,
+                .sort = sort,
+                .bound = info.bound,
+            };
         }
         return args;
     }
@@ -2348,57 +2329,15 @@ pub const MM0Parser = struct {
     }
 
     fn skipWhitespaceAndComments(self: *MM0Parser) void {
-        while (self.pos < self.src.len) {
-            const ch = self.src[self.pos];
-            if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
-                self.pos += 1;
-            } else if (ch == '-' and
-                self.pos + 1 < self.src.len and
-                self.src[self.pos + 1] == '-')
-            {
-                self.pos += 2;
-                while (self.pos < self.src.len and
-                    self.src[self.pos] != '\n')
-                {
-                    self.pos += 1;
-                }
-            } else break;
-        }
+        scanWhitespaceAndComments(self.src, &self.pos);
     }
 
     pub fn skipToSemicolon(self: *MM0Parser) !void {
-        while (self.pos < self.src.len) {
-            const ch = self.src[self.pos];
-            self.pos += 1;
-            if (ch == '$') {
-                const dollar_start = self.pos - 1;
-                while (self.pos < self.src.len and self.src[self.pos] != '$') {
-                    self.pos += 1;
-                }
-                if (self.pos >= self.src.len) {
-                    self.last_error_span = .{
-                        .start = dollar_start,
-                        .end = self.src.len,
-                    };
-                    return error.UnterminatedMathStr;
-                }
-                self.pos += 1;
-            } else if (ch == '"') {
-                while (self.pos < self.src.len and self.src[self.pos] != '"') {
-                    self.pos += 1;
-                }
-                if (self.pos < self.src.len) self.pos += 1;
-            } else if (ch == '-' and
-                self.pos < self.src.len and
-                self.src[self.pos] == '-')
-            {
-                self.pos += 1;
-                while (self.pos < self.src.len and self.src[self.pos] != '\n') {
-                    self.pos += 1;
-                }
-            } else if (ch == ';') {
-                return;
-            }
+        const end = scanToStatementEnd(self.src, &self.pos);
+        if (end.terminated) return;
+        if (end.open_math) |start| {
+            self.last_error_span = .{ .start = start, .end = self.src.len };
+            return error.UnterminatedMathStr;
         }
         self.last_error_span = self.currentTokenSpan() orelse .{
             .start = self.src.len,
@@ -2565,34 +2504,51 @@ fn scanSortHeader(src: []const u8, start: usize) ?PublicStmtHeader {
     }
 }
 
+/// How the statement `scanToStatementEnd` walked over ends.
+const StatementEnd = struct {
+    /// The first byte on the way that MM0 does not allow: a NUL anywhere,
+    /// or a tab or carriage return outside a comment.
+    illegal: ?usize = null,
+    /// Whether a `;` ended it, rather than the end of the source.
+    terminated: bool = false,
+    /// Where the `$` opened when the source ends inside a math string.
+    open_math: ?usize = null,
+};
+
 /// Advances `pos` past the `;` that ends the statement at `pos`, or to the
 /// end of `src`. Inside a `$...$` math string, a `"..."` string or a `--`
-/// comment, `;` ends nothing. Returns the offset of the first byte on the
-/// way that MM0 does not allow: a NUL anywhere, or a tab or carriage return
-/// outside a comment.
-fn scanToStatementEnd(src: []const u8, pos: *usize) ?usize {
-    var illegal: ?usize = null;
+/// comment, `;` ends nothing.
+fn scanToStatementEnd(src: []const u8, pos: *usize) StatementEnd {
+    var end: StatementEnd = .{};
     var quote: ?u8 = null;
+    var quote_start: usize = 0;
     var comment = false;
     while (pos.* < src.len) {
         const at = pos.*;
         const ch = src[at];
         pos.* += 1;
         if (ch == 0 or (!comment and (ch == '\t' or ch == '\r'))) {
-            illegal = illegal orelse at;
+            end.illegal = end.illegal orelse at;
         }
         if (comment) {
             if (ch == '\n') comment = false;
         } else if (quote) |q| {
             if (ch == q) quote = null;
         } else switch (ch) {
-            '$', '"' => quote = ch,
+            '$', '"' => {
+                quote = ch;
+                quote_start = at;
+            },
             '-' => comment = pos.* < src.len and src[pos.*] == '-',
-            ';' => return illegal,
+            ';' => {
+                end.terminated = true;
+                return end;
+            },
             else => {},
         }
     }
-    return illegal;
+    if (quote == '$') end.open_math = quote_start;
+    return end;
 }
 
 fn isIdentStart(ch: u8) bool {

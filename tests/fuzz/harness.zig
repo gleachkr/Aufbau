@@ -85,9 +85,8 @@ fn runOne(
     comptime testOne: fn (@TypeOf(context), Input) anyerror!void,
 ) anyerror!void {
     startWatchdog();
-    time_limit_ns.store(@as(i64, options.time_limit_s) * std.time.ns_per_s, .release);
-    input_started.store(now(), .release);
-    defer input_started.store(0, .release);
+    input_deadline.store(now() + @as(i64, options.time_limit_s) * std.time.ns_per_s, .release);
+    defer input_deadline.store(0, .release);
 
     var capped: Capped = .{ .child = std.testing.allocator };
     return testOne(context, .{
@@ -99,10 +98,9 @@ fn runOne(
 
 // ---- watchdog ----
 
-/// When the running input started (awake clock, ns); 0 between inputs.
-var input_started: std.atomic.Value(i64) = .init(0);
-/// The running target's time limit (ns).
-var time_limit_ns: std.atomic.Value(i64) = .init(0);
+/// When the running input becomes overdue (awake clock, ns); 0 between
+/// inputs.
+var input_deadline: std.atomic.Value(i64) = .init(0);
 /// Inputs run one at a time on the test thread, so a plain flag will do.
 var watchdog_started = false;
 
@@ -121,8 +119,8 @@ fn now() i64 {
 fn watchdog() void {
     while (true) {
         std.testing.io.sleep(.fromMilliseconds(250), .awake) catch {};
-        const started = input_started.load(.acquire);
-        if (started != 0 and now() - started > time_limit_ns.load(.acquire))
+        const deadline = input_deadline.load(.acquire);
+        if (deadline != 0 and now() > deadline)
             @panic("fuzz input exceeded the time limit");
     }
 }

@@ -69,7 +69,7 @@ pub const MM0Parser = struct {
         if (self.core.pos >= self.core.src.len) return null;
         try self.flushAnnotations();
         const start = self.core.pos;
-        const stmt = try self.core.next();
+        const stmt = try self.core.parsePublicStatement();
         try self.collectAnnotationsBetween(start, self.core.pos, true);
         return stmt;
     }
