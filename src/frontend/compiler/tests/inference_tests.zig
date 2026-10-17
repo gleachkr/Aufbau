@@ -753,6 +753,51 @@ test "an inferred context remainder keeps its source's member order" {
     }
 }
 
+test "an inferred context remainder keeps each copy of a repeated member in place" {
+    // The context of the test above, with its first three members written
+    // again at the end. A second copy used to rank where the first did, so
+    // the remainder pulled it forward and the proof moved it back across
+    // the context: 14 KB, against 5 KB with each copy in its place.
+    const n = 20;
+    const allocator = std.testing.allocator;
+    var members: [n + 3]usize = undefined;
+    for (members[0..n], 0..) |*member, idx| member.* = n - 1 - idx;
+    @memcpy(members[n..], members[0..3]);
+
+    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer mm0_src.deinit(allocator);
+    try appendRcTheory(&mm0_src, allocator, "infixl");
+    try mm0_src.appendSlice(allocator,
+        \\term mark (g a: rc): wff;
+        \\--| @congr
+        \\axiom mark_congr (g h a b: rc):
+        \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
+        \\term closed (g: rc): wff;
+        \\--| @congr
+        \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+        \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
+        \\theorem t (
+    );
+    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try mm0_src.appendSlice(allocator, ": rc): $ mark (");
+    try appendBag(&mm0_src, allocator, &members, "infixl");
+    try mm0_src.appendSlice(allocator, ") x10 $ > $ closed (");
+    try appendBag(&mm0_src, allocator, &members, "infixl");
+    try mm0_src.appendSlice(allocator, ") $;\n");
+
+    var proof_src: std.ArrayListUnmanaged(u8) = .empty;
+    defer proof_src.deinit(allocator);
+    try proof_src.appendSlice(allocator, "t\n---\nl1: $ closed (");
+    try appendBag(&proof_src, allocator, &members, "infixl");
+    try proof_src.appendSlice(allocator, ") $ by unmark [#1]\n");
+
+    var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+    const mmb = try compiler.compileMmb(allocator);
+    defer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src.items, mmb);
+    try std.testing.expect(mmb.len < 6_000);
+}
+
 test "a context with two unknown members is split after the arguments that fix them" {
     // `has_ctx` and `has_pair` state one fact, a context holding both
     // halves of a pair, with their arguments in either order. Matched left

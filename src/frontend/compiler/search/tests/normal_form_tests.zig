@@ -367,6 +367,15 @@ test "a rebuilt commutative bag follows its source; a sequence keeps its items' 
         try Items.rebuildStructuralExpr(&solver, &.{ try ms.member(a), try ms.member(b), try ms.member(ab) }, ms_profile),
     );
 
+    // Each copy of a repeated member has its own position: the second `a`
+    // goes last, as in the source, not next to the first.
+    solver.member_order.clear();
+    try solver.member_order.register(&solver, ms_profile, try ms.of(&.{ a, b, a }));
+    try std.testing.expectEqual(
+        try ms.of(&.{ a, b, a }),
+        try Items.rebuildStructuralExpr(&solver, &.{ try ms.member(a), try ms.member(a), try ms.member(b) }, ms_profile),
+    );
+
     // A sequence is rebuilt in its items' own order: `a` repeats, and its
     // first appearance must not pull the second one forward.
     solver.member_order.clear();

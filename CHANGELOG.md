@@ -91,6 +91,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   place. On a 241-row branch the proof of such a `done` was 4.8 MB, too
   large for verifiers' default heap; it is now 55 KB, and takes 13 ms
   rather than 270 ms.
+- A context variable left with the rest of an `@acui` context now keeps
+  each copy of a row the branch holds twice where the line writes it. The
+  second copy used to go next to the first, so the proof moved it across
+  the whole branch: an `unfocus` on a 121-row branch with 8 rows written
+  twice wrote a 197 KB proof, and now writes 47 KB, as it does when every
+  row is distinct.
 
 ## [0.0.17] - 2026-10-14
 
