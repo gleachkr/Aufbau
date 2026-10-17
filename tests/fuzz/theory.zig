@@ -301,5 +301,5 @@ fn fail(comptime format: []const u8, args: anytype) noreturn {
 }
 
 test "fuzz generated theories" {
-    try harness.run("theory", {}, generated);
+    try harness.run("theory", .{}, {}, generated);
 }

@@ -240,7 +240,7 @@ fn acuCopies(size: usize, mm0: *std.Io.Writer, auf: *std.Io.Writer) !bool {
 }
 
 test "fuzz generated shapes" {
-    try harness.run("shapes", {}, shapes);
+    try harness.run("shapes", .{}, {}, shapes);
 }
 
 test "every shape generates a pair that compiles at size 2" {

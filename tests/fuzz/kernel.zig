@@ -74,5 +74,5 @@ fn loadTutorial() !Base {
 }
 
 test "fuzz trusted kernel" {
-    try harness.run("kernel", try harness.seeds(), kernel);
+    try harness.run("kernel", .{}, try harness.seeds(), kernel);
 }

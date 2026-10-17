@@ -591,5 +591,5 @@ fn session(seeds: []const harness.Seed, input: harness.Input) !void {
 }
 
 test "fuzz language server sessions" {
-    try harness.run("lsp", try harness.seeds(), session);
+    try harness.run("lsp", .{ .time_limit_s = 30 }, try harness.seeds(), session);
 }

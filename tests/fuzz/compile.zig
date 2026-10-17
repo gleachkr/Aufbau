@@ -100,5 +100,5 @@ fn fail(name: []const u8, comptime format: []const u8, args: anytype) noreturn {
 }
 
 test "fuzz compile then verify" {
-    try harness.run("compile", try harness.seeds(), compileThenVerify);
+    try harness.run("compile", .{}, try harness.seeds(), compileThenVerify);
 }

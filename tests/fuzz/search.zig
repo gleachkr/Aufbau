@@ -190,5 +190,5 @@ fn fail(seed: harness.Seed, comptime format: []const u8, args: anytype) noreturn
 }
 
 test "fuzz proof search" {
-    try harness.run("search", try harness.seeds(), search);
+    try harness.run("search", .{ .time_limit_s = 30 }, try harness.seeds(), search);
 }

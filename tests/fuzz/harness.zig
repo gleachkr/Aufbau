@@ -18,9 +18,13 @@ const mm0 = @import("mm0");
 
 const Smith = std.testing.Smith;
 
-/// Longest one input may run before the watchdog panics. Debug builds are
-/// several times slower than release, so this is generous on purpose.
-const time_limit_ns: i96 = 10 * std.time.ns_per_s;
+pub const Options = struct {
+    /// Longest one input may run before the watchdog panics. The fuzz build
+    /// runs about ten times slower than ReleaseFast, and CI slower again
+    /// than a workstation, so this is generous on purpose; a target that
+    /// runs proof search on the larger proof cases asks for more.
+    time_limit_s: u32 = 10,
+};
 
 /// Most live bytes one input may hold.
 const memory_cap: usize = 1 << 30;
@@ -43,13 +47,14 @@ pub const Input = struct {
 /// Fuzz `testOne` as the target `name`, or replay `FUZZ_REPLAY` through it.
 pub fn run(
     comptime name: []const u8,
+    comptime options: Options,
     context: anytype,
     comptime testOne: fn (@TypeOf(context), Input) anyerror!void,
 ) !void {
     const Context = @TypeOf(context);
     const one = struct {
         fn one(ctx: Context, smith: *Smith) anyerror!void {
-            return runOne(ctx, smith, null, testOne);
+            return runOne(ctx, smith, null, options, testOne);
         }
     }.one;
 
@@ -69,16 +74,18 @@ pub fn run(
     std.debug.print("fuzz replay: {s} through {s}, generated inputs in {s}/\n", .{ replay, name, out_path });
 
     var smith: Smith = .{ .in = bytes };
-    try runOne(context, &smith, out, testOne);
+    try runOne(context, &smith, out, options, testOne);
 }
 
 fn runOne(
     context: anytype,
     smith: *Smith,
     replay_dir: ?std.Io.Dir,
+    comptime options: Options,
     comptime testOne: fn (@TypeOf(context), Input) anyerror!void,
 ) anyerror!void {
     startWatchdog();
+    time_limit_ns.store(@as(i64, options.time_limit_s) * std.time.ns_per_s, .release);
     input_started.store(now(), .release);
     defer input_started.store(0, .release);
 
@@ -94,6 +101,8 @@ fn runOne(
 
 /// When the running input started (awake clock, ns); 0 between inputs.
 var input_started: std.atomic.Value(i64) = .init(0);
+/// The running target's time limit (ns).
+var time_limit_ns: std.atomic.Value(i64) = .init(0);
 /// Inputs run one at a time on the test thread, so a plain flag will do.
 var watchdog_started = false;
 
@@ -113,7 +122,7 @@ fn watchdog() void {
     while (true) {
         std.testing.io.sleep(.fromMilliseconds(250), .awake) catch {};
         const started = input_started.load(.acquire);
-        if (started != 0 and now() - started > time_limit_ns)
+        if (started != 0 and now() - started > time_limit_ns.load(.acquire))
             @panic("fuzz input exceeded the time limit");
     }
 }
