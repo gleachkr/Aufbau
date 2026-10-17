@@ -63,6 +63,7 @@ pub const ParseError = error{
     NotationFirstTokenConflict,
     NotationMismatch,
     NotationTypeMismatch,
+    NullCharacter,
     NumberOutOfRange,
     OutOfMemory,
     Overflow,
@@ -663,13 +664,16 @@ pub const MM0Parser = struct {
     }
 
     /// Fails on a tab or carriage return in `src[start..end]` outside a
-    /// comment. MM0 whitespace is only ' ' and '\n' (specs/mm0.md), and
-    /// mm0-c rejects the others. The lexer still skips them, so math text
-    /// from a proof script may use them; each `.mm0` statement read through
-    /// `next` or `prepareNextPublicStatement` is checked here instead, and
-    /// one that failed is checked up to where it stopped, since a stray tab
+    /// comment, and on a NUL byte anywhere in it. MM0 whitespace is only
+    /// ' ' and '\n' (specs/mm0.md), and mm0-c rejects the others. The spec
+    /// lets a comment hold a NUL, but mm0-c refuses one anywhere in its
+    /// input, so this verifier does too. The lexer still skips tabs and
+    /// carriage returns, so math text from a proof script may use them;
+    /// each `.mm0` statement read through `next` or
+    /// `prepareNextPublicStatement` is checked here instead, and one that
+    /// failed is checked up to where it stopped, since a stray character
     /// is the likelier cause.
-    fn checkWhitechars(self: *MM0Parser, start: usize, end: usize) error{IllegalWhitespace}!void {
+    fn checkWhitechars(self: *MM0Parser, start: usize, end: usize) WhitecharError!void {
         const stop = @min(end, self.src.len);
         // Inside a `$...$` math string or a `"..."` string, `--` starts no
         // comment, and the other delimiter is an ordinary character.
@@ -678,24 +682,31 @@ pub const MM0Parser = struct {
         while (pos < stop) : (pos += 1) {
             const ch = self.src[pos];
             switch (ch) {
-                '\t', '\r' => {
-                    self.last_math_error = null;
-                    self.last_math_span = null;
-                    self.expected_char = null;
-                    self.last_error_span = .{ .start = pos, .end = pos + 1 };
-                    return error.IllegalWhitespace;
-                },
+                0 => return self.failWhitechar(pos, error.NullCharacter),
+                '\t', '\r' => return self.failWhitechar(pos, error.IllegalWhitespace),
                 '$', '"' => if (quote == null) {
                     quote = ch;
                 } else if (quote == ch) {
                     quote = null;
                 },
                 '-' => if (quote == null and pos + 1 < stop and self.src[pos + 1] == '-') {
-                    while (pos < stop and self.src[pos] != '\n') pos += 1;
+                    while (pos < stop and self.src[pos] != '\n') : (pos += 1) {
+                        if (self.src[pos] == 0) return self.failWhitechar(pos, error.NullCharacter);
+                    }
                 },
                 else => {},
             }
         }
+    }
+
+    const WhitecharError = error{ IllegalWhitespace, NullCharacter };
+
+    fn failWhitechar(self: *MM0Parser, pos: usize, err: WhitecharError) WhitecharError {
+        self.last_math_error = null;
+        self.last_math_span = null;
+        self.expected_char = null;
+        self.last_error_span = .{ .start = pos, .end = pos + 1 };
+        return err;
     }
 
     fn nextStatement(self: *MM0Parser) !?MM0Stmt {

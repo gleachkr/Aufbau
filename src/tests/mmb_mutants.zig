@@ -371,6 +371,13 @@ const mutants = [_]Mutant{
         .expected = error.IllegalWhitespace,
         .mm0c = "invalid command keyword",
     },
+    // The spec allows a NUL in a comment; mm0-c refuses one anywhere.
+    .{
+        .name = "NUL in a comment",
+        .spec_edits = &.{.{ .find = "$ ) $;\n", .replace = "$ ) $; -- a\x00b\n" }},
+        .expected = error.NullCharacter,
+        .mm0c = "Null character in input",
+    },
     // Binder lists: a dependency names a bound binder declared earlier, and
     // a name is declared once.
     .{

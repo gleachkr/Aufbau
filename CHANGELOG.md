@@ -28,7 +28,8 @@ This file records notable user-facing changes to Aufbau. The project follows
   only spaces and newlines as whitespace, and mm0-c rejects the others,
   but they used to be accepted, so a spec with a tab or CRLF line endings
   would compile and verify here and then fail in mm0-c. A tab in a comment,
-  including an annotation, is still fine.
+  including an annotation, is still fine. A NUL byte is an error anywhere
+  in a `.mm0` file, even in a comment, since mm0-c refuses one.
 - A line with a hole that cannot match its rule, such as
   `$ p , p -> p -> q |- _wff -> q $ by ax []` over an `@acui` context,
   now gets the usual "visible parts do not match" error. It used to fail

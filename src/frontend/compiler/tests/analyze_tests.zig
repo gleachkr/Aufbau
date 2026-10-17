@@ -119,6 +119,21 @@ test "compiler analyze mm0 rejects a tab outside a comment" {
     try std.testing.expectEqualStrings("worse", diags[1].name.?);
 }
 
+test "compiler analyze mm0 rejects a NUL even in a comment" {
+    const mm0_src =
+        "provable sort wff;\n" ++
+        "-- a NUL \x00 in a comment\n" ++
+        "term top: wff;\n";
+
+    var compiler = Compiler.init(std.testing.allocator, mm0_src);
+    try compiler.analyzeMm0();
+
+    const diags = compiler.primaryDiagnostics();
+    try std.testing.expectEqual(@as(usize, 1), diags.len);
+    try std.testing.expectEqual(error.NullCharacter, diags[0].err);
+    try std.testing.expectEqualStrings("\x00", mm0_src[diags[0].span.?.start..diags[0].span.?.end]);
+}
+
 test "compiler analyze mm0 accepts a tab in a @view annotation" {
     const mm0_src =
         "provable sort wff;\n" ++
