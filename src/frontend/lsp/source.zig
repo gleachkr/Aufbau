@@ -114,19 +114,21 @@ pub fn nextAnnotationToken(text: []const u8, pos: *usize) ?Token {
 
 /// One identifier of a declaration signature.
 pub const SignatureToken = struct {
-    role: enum { binder, sort, dep },
+    role: enum { binder, hypothesis, sort, dep },
     /// A slice of the scanned text.
     text: []const u8,
-    /// For a binder: its group's sort (empty in a hypothesis group) and
-    /// whether the group is `{…}`.
+    /// For a binder: its group's sort, whether the group is `{…}`, and
+    /// whether the name is a `.dummy`.
     sort: []const u8 = "",
     bound: bool = false,
+    dummy: bool = false,
 };
 
 /// The identifiers of a declaration signature: `text` starts after the
 /// declaration's name and reads `(a b: s x) {.d: t} (h: $ … $): r x > …`.
-/// Binder names come out as `.binder`, the sort of a group or of an arrow
-/// type as `.sort`, and the names after a sort as `.dep`. Math strings are
+/// Binder names come out as `.binder`, the names of a group typed by a
+/// math string as `.hypothesis`, the sort of a group or of an arrow type
+/// as `.sort`, and the names after a sort as `.dep`. Math strings are
 /// skipped; the scan stops at a math-string type (an assertion's statement),
 /// `=`, `;`, or anything else it does not recognize.
 pub fn scanSignature(
@@ -152,12 +154,14 @@ pub fn scanSignature(
         const first = tokens.items.len;
         while (true) {
             skipTopLevelSpaceAndComments(text, &pos, text.len);
-            if (pos < text.len and text[pos] == '.') pos += 1;
+            const dummy = pos < text.len and text[pos] == '.';
+            if (dummy) pos += 1;
             const name = scanIdent(text, &pos) orelse break;
             try tokens.append(allocator, .{
                 .role = .binder,
                 .text = name,
                 .bound = open == '{',
+                .dummy = dummy,
             });
         }
         if (pos >= text.len or text[pos] != ':') break;
@@ -165,6 +169,7 @@ pub fn scanSignature(
         skipTopLevelSpaceAndComments(text, &pos, text.len);
         if (pos < text.len and text[pos] == '$') {
             skipMathString(text, &pos, text.len);
+            for (tokens.items[first..]) |*token| token.role = .hypothesis;
         } else {
             const sort_index = tokens.items.len;
             if (!try scanSignatureType(allocator, &tokens, text, &pos)) break;

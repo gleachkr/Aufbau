@@ -30,7 +30,7 @@ pub fn indexSignature(
 ) ![]const SignatureToken {
     const tokens = try source.scanSignature(self.allocator, signature);
     for (tokens) |token| switch (token.role) {
-        .binder => {},
+        .binder, .hypothesis => {},
         .sort => try self.addSortUse(document, token.text),
         .dep => try addBinderUse(self, document, token.text, decl_index, binders),
     };
@@ -165,7 +165,7 @@ fn indexView(
         });
     }
     for (tokens) |token| switch (token.role) {
-        .binder => {},
+        .binder, .hypothesis => {},
         .sort => try self.addSortUse(document, token.text),
         .dep => try addBinderUse(self, document, token.text, decl_index, scope.items),
     };

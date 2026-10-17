@@ -15,7 +15,6 @@ const Declaration = Types.Declaration;
 
 const StatementIterator = source.StatementIterator;
 const sourceRangeFromSlice = source.sourceRangeFromSlice;
-const findIdentIn = source.findIdentIn;
 
 const completionSortText = completion.completionSortText;
 const sort_group_local_binder = completion.sort_group_local_binder;
@@ -135,6 +134,7 @@ pub fn hypothesesFromMm0Assertion(
         allocator,
         .mm0,
         text,
+        text[assertion.name_span.end..],
         math_strings,
         0,
         assertion.hyps.len,
@@ -182,6 +182,7 @@ fn collectHypotheses(
         allocator,
         document,
         text,
+        text[start..end],
         math_strings.items,
         offset_base,
         hyp_count,
@@ -189,17 +190,30 @@ fn collectHypotheses(
     );
 }
 
+/// Pair each hypothesis with its formula among `math_strings`, offsets in
+/// `text`. `signature`, the slice of `text` after the assertion's name,
+/// locates the names of each binder-form hypothesis group.
 fn hypothesesFromMathStrings(
     allocator: std.mem.Allocator,
     document: DocumentId,
     text: []const u8,
+    signature: []const u8,
     math_strings: []const source.MathStringSpan,
     offset_base: usize,
     hyp_count: usize,
     hyp_names: []const ?[]const u8,
 ) ![]const HypothesisDecl {
+    const tokens = try source.scanSignature(allocator, signature);
+    defer allocator.free(tokens);
+    var group_names = std.ArrayListUnmanaged(source.SignatureToken).empty;
+    defer group_names.deinit(allocator);
+    for (tokens) |token| {
+        if (token.role == .hypothesis) try group_names.append(allocator, token);
+    }
+
     var result = std.ArrayListUnmanaged(HypothesisDecl).empty;
     var hyp_index: usize = 0;
+    var next_name: usize = 0;
     for (math_strings) |math| {
         if (hyp_index >= hyp_count) break;
         const range: SourceRange = .{
@@ -211,14 +225,15 @@ fn hypothesesFromMathStrings(
         // `(h1 h2: $ a $)` yields two hypotheses sharing this span. Pairing
         // one hypothesis per math string would push every name after the
         // first onto the following formula — ultimately the conclusion.
-        const group = try binderGroupNamesBeforeMath(
-            allocator,
-            document,
-            text,
-            offset_base,
-            math.inner_start,
-        );
-        defer allocator.free(group);
+        // The group's names are the hypothesis names before this formula.
+        var group_end = next_name;
+        while (group_end < group_names.items.len and
+            offsetIn(text, group_names.items[group_end].text) < math.inner_start)
+        {
+            group_end += 1;
+        }
+        const group = group_names.items[next_name..group_end];
+        next_name = group_end;
         var consumed: usize = 0;
         while (consumed < group.len and hyp_index < hyp_count) {
             const declared = if (hyp_index < hyp_names.len)
@@ -234,7 +249,7 @@ fn hypothesesFromMathStrings(
                 .text = math.text,
                 .range = range,
                 .name = actual,
-                .name_range = group[consumed].range,
+                .name_range = rangeIn(document, text, offset_base, group[consumed].text),
             });
             consumed += 1;
             hyp_index += 1;
@@ -254,59 +269,20 @@ fn hypothesesFromMathStrings(
     return try result.toOwnedSlice(allocator);
 }
 
-const BinderNameToken = struct {
-    text: []const u8,
-    range: SourceRange,
-};
-
-/// Read back the binder-name list of a binder-form hypothesis by scanning
-/// backwards from the opening `$` of its formula: `(n1 n2 ...: $ ... $)`.
-/// The names are already known from the parsed assertion; this recovers
-/// their source positions and, because a group shares one formula, how
-/// many hypotheses that formula stands for. Returns an empty list for an
-/// arrow-form hypothesis, and for anything that does not read back as a
-/// complete group — callers treat that as one unlocated hypothesis.
-fn binderGroupNamesBeforeMath(
-    allocator: std.mem.Allocator,
+/// The range of `slice`, a slice of `text`, where `text` starts at
+/// `offset_base` in `document`.
+fn rangeIn(
     document: DocumentId,
     text: []const u8,
     offset_base: usize,
-    math_inner_start: usize,
-) ![]const BinderNameToken {
-    if (math_inner_start == 0) return &.{};
-    var pos = math_inner_start - 1;
-    while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
-    if (pos == 0 or text[pos - 1] != ':') return &.{};
-    pos -= 1;
+    slice: []const u8,
+) SourceRange {
+    const start = offset_base + offsetIn(text, slice);
+    return .{ .document = document, .start = start, .end = start + slice.len };
+}
 
-    var names = std.ArrayListUnmanaged(BinderNameToken).empty;
-    errdefer names.deinit(allocator);
-    while (true) {
-        while (pos > 0 and std.ascii.isWhitespace(text[pos - 1])) pos -= 1;
-        if (pos == 0) {
-            names.deinit(allocator);
-            return &.{};
-        }
-        if (text[pos - 1] == '(') break;
-        const end = pos;
-        while (pos > 0 and source.isIdentChar(text[pos - 1])) pos -= 1;
-        if (pos == end) {
-            names.deinit(allocator);
-            return &.{};
-        }
-        try names.append(allocator, .{
-            .text = text[pos..end],
-            .range = .{
-                .document = document,
-                .start = offset_base + pos,
-                .end = offset_base + end,
-            },
-        });
-    }
-    if (names.items.len == 0) return &.{};
-    // Scanned right to left; hypotheses are paired in source order.
-    std.mem.reverse(BinderNameToken, names.items);
-    return try names.toOwnedSlice(allocator);
+fn offsetIn(text: []const u8, slice: []const u8) usize {
+    return @intFromPtr(slice.ptr) - @intFromPtr(text.ptr);
 }
 
 pub fn bindersFromTerm(
@@ -364,12 +340,6 @@ fn appendBindersFromArgs(
     }
 }
 
-const ScannedProofBinder = struct {
-    name: []const u8,
-    range: SourceRange,
-    is_dummy: bool,
-};
-
 pub fn bindersFromProofDef(
     allocator: std.mem.Allocator,
     def: proof_script.DefItem,
@@ -377,18 +347,16 @@ pub fn bindersFromProofDef(
 ) ![]const BinderDecl {
     const header_tail = def.header_tail orelse return &.{};
     const header_span = def.header_tail_span orelse return &.{};
-    const scanned = try scanProofDefBinders(
-        allocator,
-        header_tail,
-        header_span.start,
-    );
+    const tokens = try source.scanSignature(allocator, header_tail);
+    defer allocator.free(tokens);
 
     var binders = std.ArrayListUnmanaged(BinderDecl).empty;
     var arg_index: usize = 0;
     var dummy_index: usize = 0;
     var ordinal: usize = 0;
-    for (scanned) |item| {
-        const arg = if (item.is_dummy) blk: {
+    for (tokens) |token| {
+        if (token.role != .binder) continue;
+        const arg = if (token.dummy) blk: {
             if (dummy_index >= term.dummy_args.len) continue;
             const arg = term.dummy_args[dummy_index];
             dummy_index += 1;
@@ -399,7 +367,7 @@ pub fn bindersFromProofDef(
             arg_index += 1;
             break :blk arg;
         };
-        const maybe_name = if (item.is_dummy)
+        const maybe_name = if (token.dummy)
             term.dummy_names[dummy_index - 1]
         else
             term.arg_names[arg_index - 1];
@@ -408,7 +376,7 @@ pub fn bindersFromProofDef(
             .name = name,
             .sort_name = arg.sort_name,
             .bound = arg.bound,
-            .range = item.range,
+            .range = rangeIn(.proof, header_tail, header_span.start, token.text),
             .sort_text = try completionSortText(
                 allocator,
                 sort_group_local_binder,
@@ -419,53 +387,6 @@ pub fn bindersFromProofDef(
         ordinal += 1;
     }
     return try binders.toOwnedSlice(allocator);
-}
-
-fn scanProofDefBinders(
-    allocator: std.mem.Allocator,
-    header_tail: []const u8,
-    base: usize,
-) ![]const ScannedProofBinder {
-    var result = std.ArrayListUnmanaged(ScannedProofBinder).empty;
-    var pos: usize = 0;
-    while (pos < header_tail.len) : (pos += 1) {
-        const open = header_tail[pos];
-        if (open != '(' and open != '{') continue;
-        pos += 1;
-        while (pos < header_tail.len) {
-            skipProofDefHeaderSpace(header_tail, &pos);
-            if (pos >= header_tail.len or header_tail[pos] == ':') break;
-            const is_dummy = header_tail[pos] == '.';
-            if (is_dummy) pos += 1;
-            if (pos >= header_tail.len or !source.isIdentStart(header_tail[pos])) {
-                break;
-            }
-            const start = pos;
-            pos += 1;
-            while (pos < header_tail.len and source.isIdentChar(header_tail[pos])) {
-                pos += 1;
-            }
-            try result.append(allocator, .{
-                .name = header_tail[start..pos],
-                .range = .{
-                    .document = .proof,
-                    .start = base + start,
-                    .end = base + pos,
-                },
-                .is_dummy = is_dummy,
-            });
-        }
-    }
-    return try result.toOwnedSlice(allocator);
-}
-
-fn skipProofDefHeaderSpace(text: []const u8, pos: *usize) void {
-    while (pos.* < text.len) {
-        switch (text[pos.*]) {
-            ' ', '\t', '\r', '\n' => pos.* += 1,
-            else => return,
-        }
-    }
 }
 
 pub fn bindersFromArgs(
@@ -534,19 +455,17 @@ pub fn bindersFromLemma(
     names: []const ?[]const u8,
     args: []const parse.ArgInfo,
 ) ![]const BinderDecl {
+    const tokens = try source.scanSignature(allocator, block.header_tail);
+    defer allocator.free(tokens);
     var binders = std.ArrayListUnmanaged(BinderDecl).empty;
-    var search_start: usize = 0;
+    var next_token: usize = 0;
     for (args, 0..) |arg, i| {
         if (i >= names.len) continue;
         const name = names[i] orelse continue;
-        const maybe_rel = findIdentIn(block.header_tail, name, search_start);
-        const range = if (maybe_rel) |rel| blk: {
-            search_start = rel + name.len;
-            break :blk SourceRange{
-                .document = .proof,
-                .start = block.header_tail_span.start + rel,
-                .end = block.header_tail_span.start + rel + name.len,
-            };
+        const range = for (tokens[next_token..], next_token..) |token, at| {
+            if (token.role != .binder or !std.mem.eql(u8, token.text, name)) continue;
+            next_token = at + 1;
+            break rangeIn(.proof, block.header_tail, block.header_tail_span.start, token.text);
         } else null;
         try binders.append(allocator, .{
             .name = name,
