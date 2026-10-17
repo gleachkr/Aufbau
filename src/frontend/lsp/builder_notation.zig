@@ -16,7 +16,6 @@ const findStatementByte = source.findStatementByte;
 const trimMathWhitespace = source.trimMathWhitespace;
 const containsMathWhitespace = source.containsMathWhitespace;
 const isMathWhitespace = source.isMathWhitespace;
-const sourceRangeFromSlice = source.sourceRangeFromSlice;
 
 const NotationKind = notation.NotationKind;
 const NotationVariable = notation.NotationVariable;
@@ -67,7 +66,7 @@ pub fn collectNotationStatement(
         const decl_index = self.decl_by_name.get(name) orelse return;
         const decl = self.declarations.items[decl_index];
         const kind = simpleNotationKind(header.keyword);
-        try self.addDeclarationNameUseIn(document, text, name, decl_index);
+        try self.addDeclarationNameUse(document, name, decl_index);
         if (firstMathStringIn(text, stmt)) |math| {
             const snippet = if (kind == .prefix)
                 try buildPrefixSnippet(
@@ -92,9 +91,9 @@ pub fn collectNotationStatement(
     if (!is_coercion and !std.mem.eql(u8, header.keyword, "notation")) return;
     const name = header.name orelse return;
     const decl_index = self.decl_by_name.get(name) orelse return;
-    try self.addDeclarationNameUseIn(document, text, name, decl_index);
+    try self.addDeclarationNameUse(document, name, decl_index);
     // The sorts of `coercion name: s > t` and of a notation's binders.
-    if (sourceRangeFromSlice(document, text, name)) |name_range| {
+    if (self.rangeOf(document, name)) |name_range| {
         _ = try self.indexSignature(document, text[name_range.end..stmt.end], null, &.{});
     }
     if (is_coercion) return;

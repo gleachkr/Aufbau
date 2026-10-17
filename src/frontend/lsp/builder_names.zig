@@ -112,16 +112,12 @@ fn indexTrigger(
     if (!std.mem.eql(u8, mode.text, "trigger")) return;
     var after_open = false;
     while (pos < args.len) {
-        const ch = args[pos];
-        if (!source.isIdentStart(ch)) {
-            if (ch == '(') after_open = true;
-            if (ch == ')') after_open = false;
+        const name = source.scanIdent(args, &pos) orelse {
+            if (args[pos] == '(') after_open = true;
+            if (args[pos] == ')') after_open = false;
             pos += 1;
             continue;
-        }
-        const start = pos;
-        while (pos < args.len and source.isIdentChar(args[pos])) pos += 1;
-        const name = args[start..pos];
+        };
         if (after_open) {
             if (termDeclIndex(self, name)) |index| {
                 try addGlobalUse(self, document, name, index);
@@ -199,13 +195,11 @@ fn indexViewArgs(
             pos = end + 1;
             continue;
         }
-        if (!source.isIdentStart(ch)) {
+        const name = source.scanIdent(args, &pos) orelse {
             pos += 1;
             continue;
-        }
-        const start = pos;
-        while (pos < args.len and source.isIdentChar(args[pos])) pos += 1;
-        try addBinderUse(self, document, args[start..pos], decl_index, binders);
+        };
+        try addBinderUse(self, document, name, decl_index, binders);
     }
 }
 

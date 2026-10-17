@@ -1,5 +1,6 @@
 const std = @import("std");
 const Index = @import("index.zig");
+const source = @import("source.zig");
 const CompilerModule = @import("../compiler.zig");
 const Imports = @import("../imports.zig");
 
@@ -30,49 +31,26 @@ fn build(arena: std.mem.Allocator, texts: Texts) !Snapshot {
 
 /// The offset of the `nth` (from 0) whole-word occurrence of `word`.
 fn wordOffset(text: []const u8, word: []const u8, nth: usize) !usize {
-    var seen: usize = 0;
-    var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, text, pos, word)) |at| : (pos = at + 1) {
-        const before_ok = at == 0 or !isWordChar(text[at - 1]);
-        const after = at + word.len;
-        const after_ok = after == text.len or !isWordChar(text[after]);
-        if (!before_ok or !after_ok) continue;
-        if (seen == nth) return at;
-        seen += 1;
+    var at = source.findIdentIn(text, word, 0) orelse return error.WordNotFound;
+    for (0..nth) |_| {
+        at = source.findIdentIn(text, word, at + word.len) orelse return error.WordNotFound;
     }
-    return error.WordNotFound;
+    return at;
 }
 
-fn isWordChar(ch: u8) bool {
-    return std.ascii.isAlphanumeric(ch) or ch == '_';
-}
-
-fn apply(
+/// The snapshot of `texts` and what the `nth` `word` of `document` names.
+fn targetAt(
     arena: std.mem.Allocator,
-    text: []const u8,
+    texts: Texts,
     document: DocumentId,
-    ranges: []const SourceRange,
-    new_name: []const u8,
-) ![]const u8 {
-    var starts = std.ArrayListUnmanaged(SourceRange).empty;
-    for (ranges) |range| {
-        if (range.document == document) try starts.append(arena, range);
-    }
-    std.mem.sort(SourceRange, starts.items, {}, struct {
-        fn lessThan(_: void, a: SourceRange, b: SourceRange) bool {
-            return a.start < b.start;
-        }
-    }.lessThan);
-    var out = std.ArrayListUnmanaged(u8).empty;
-    var pos: usize = 0;
-    for (starts.items) |range| {
-        try std.testing.expect(range.start >= pos);
-        try out.appendSlice(arena, text[pos..range.start]);
-        try out.appendSlice(arena, new_name);
-        pos = range.end;
-    }
-    try out.appendSlice(arena, text[pos..]);
-    return out.items;
+    word: []const u8,
+    nth: usize,
+) !struct { snapshot: Snapshot, target: Index.RenameTarget } {
+    const snapshot = try build(arena, texts);
+    const offset = try wordOffset(texts.of(document), word, nth);
+    const target = snapshot.renameTargetAt(document, offset) orelse
+        return error.NothingToRename;
+    return .{ .snapshot = snapshot, .target = target };
 }
 
 /// The texts after renaming what the `nth` `word` of `document` names.
@@ -84,14 +62,14 @@ fn renamed(
     nth: usize,
     new_name: []const u8,
 ) !Texts {
-    var snapshot = try build(arena, texts);
-    const offset = try wordOffset(texts.of(document), word, nth);
-    const target = snapshot.renameTargetAt(document, offset) orelse
-        return error.NothingToRename;
-    const ranges = try snapshot.renameEdits(arena, target, new_name);
+    const found = try targetAt(arena, texts, document, word, nth);
+    var edits: [2]std.ArrayListUnmanaged(Edit) = .{ .empty, .empty };
+    for (try found.snapshot.renameEdits(arena, found.target, new_name)) |range| {
+        try edits[@backingInt(range.document)].append(arena, .{ .range = range, .text = new_name });
+    }
     return .{
-        .mm0 = try apply(arena, texts.mm0, .mm0, ranges, new_name),
-        .proof = try apply(arena, texts.proof, .proof, ranges, new_name),
+        .mm0 = try applyEdits(arena, texts.mm0, edits[@backingInt(DocumentId.mm0)].items),
+        .proof = try applyEdits(arena, texts.proof, edits[@backingInt(DocumentId.proof)].items),
     };
 }
 
@@ -121,11 +99,8 @@ fn expectRefused(
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var snapshot = try build(arena, texts);
-    const offset = try wordOffset(texts.of(document), word, nth);
-    const target = snapshot.renameTargetAt(document, offset) orelse
-        return error.NothingToRename;
-    try std.testing.expectError(expected, snapshot.renameEdits(arena, target, new_name));
+    const found = try targetAt(arena, texts, document, word, nth);
+    try std.testing.expectError(expected, found.snapshot.renameEdits(arena, found.target, new_name));
 }
 
 test "renaming a term renames its name but not its notation" {
@@ -512,28 +487,26 @@ fn expectProofCaseSurvivesRenamingEverything(stem: []const u8) !void {
     var snapshot = try build(arena, texts);
 
     var declarations = std.ArrayListUnmanaged(SourceRange).empty;
-    var mm0_edits = std.ArrayListUnmanaged(Edit).empty;
-    var proof_edits = std.ArrayListUnmanaged(Edit).empty;
+    var edits: [2]std.ArrayListUnmanaged(Edit) = .{ .empty, .empty };
     for (snapshot.symbols) |symbol| {
         const range = symbol.source_range;
         const target = snapshot.renameTargetAt(range.document, range.start) orelse continue;
         const seen = for (declarations.items) |declaration| {
-            if (std.meta.eql(declaration, target.declaration)) break true;
+            if (declaration.eql(target.declaration)) break true;
         } else false;
         if (seen) continue;
         try declarations.append(arena, target.declaration);
         const new_name = try std.fmt.allocPrint(arena, "{s}_rn", .{target.name});
-        for (try snapshot.renameEdits(arena, target, new_name)) |edit| {
-            const list = if (edit.document == .mm0) &mm0_edits else &proof_edits;
-            try list.append(arena, .{ .range = edit, .text = new_name });
+        for (try snapshot.renameEdits(arena, target, new_name)) |edit_range| {
+            try edits[@backingInt(edit_range.document)].append(arena, .{ .range = edit_range, .text = new_name });
         }
     }
     try std.testing.expect(declarations.items.len > 0);
 
     var compiler = CompilerModule.Compiler.initWithProof(
         arena,
-        try applyEdits(arena, texts.mm0, mm0_edits.items),
-        try applyEdits(arena, texts.proof, proof_edits.items),
+        try applyEdits(arena, texts.mm0, edits[@backingInt(DocumentId.mm0)].items),
+        try applyEdits(arena, texts.proof, edits[@backingInt(DocumentId.proof)].items),
     );
     try compiler.check();
 }

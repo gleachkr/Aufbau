@@ -27,7 +27,6 @@ pub const RenameTarget = rename.RenameTarget;
 pub const RenameError = rename.RenameError;
 pub const Highlight = rename.Highlight;
 
-const LookupHit = model.LookupHit;
 const NavigationSymbol = model.NavigationSymbol;
 const ProofBlockInfo = model.ProofBlockInfo;
 const ProofRuleDecl = model.ProofRuleDecl;
@@ -149,7 +148,7 @@ pub const Snapshot = struct {
     ) ?HoverResult {
         if (document == .proof) {
             for (self.inferred_hole_hovers) |hover| {
-                if (rangeContains(hover.range, document, offset)) {
+                if (hover.range.contains(document, offset)) {
                     return .{
                         .range = hover.range,
                         .markdown = hover.markdown,
@@ -221,13 +220,9 @@ pub const Snapshot = struct {
         var list = std.ArrayListUnmanaged(SourceRange).empty;
         for (self.symbols) |symbol| {
             const symbol_target = symbol.target_range orelse continue;
-            if (!sourceRangeEql(symbol_target, target_range)) continue;
-            if (!include_declaration and
-                sourceRangeEql(symbol.source_range, target_range))
-            {
-                continue;
-            }
-            if (rangeAlreadyListed(list.items, symbol.source_range)) continue;
+            if (!symbol_target.eql(target_range)) continue;
+            if (!include_declaration and symbol.source_range.eql(target_range)) continue;
+            if (symbol.source_range.listedIn(list.items)) continue;
             try list.append(allocator, symbol.source_range);
         }
         return try list.toOwnedSlice(allocator);
@@ -302,19 +297,14 @@ pub const Snapshot = struct {
         return completion.isProofRuleCompletionAt(self, offset);
     }
 
-    fn lookupAt(
+    /// The first symbol containing `offset`.
+    pub fn lookupAt(
         self: *const Snapshot,
         document: DocumentId,
         offset: usize,
-    ) ?LookupHit {
+    ) ?NavigationSymbol {
         for (self.symbols) |symbol| {
-            if (rangeContains(symbol.source_range, document, offset)) {
-                return .{
-                    .source_range = symbol.source_range,
-                    .target_range = symbol.target_range,
-                    .markdown = symbol.markdown,
-                };
-            }
+            if (symbol.source_range.contains(document, offset)) return symbol;
         }
         return null;
     }
@@ -346,7 +336,7 @@ pub const Snapshot = struct {
     ) ?usize {
         for (self.declarations, 0..) |decl, i| {
             if (decl.kind != .theorem) continue;
-            if (rangeContains(decl.name_range, .mm0, offset)) return i;
+            if (decl.name_range.contains(.mm0, offset)) return i;
         }
         return null;
     }
@@ -427,20 +417,4 @@ fn buildHoleInfo(
         .hovers = try hovers.toOwnedSlice(allocator),
         .fills = fills,
     };
-}
-
-fn rangeContains(range: SourceRange, document: DocumentId, offset: usize) bool {
-    return range.document == document and offset >= range.start and
-        offset < range.end;
-}
-
-fn sourceRangeEql(a: SourceRange, b: SourceRange) bool {
-    return a.document == b.document and a.start == b.start and a.end == b.end;
-}
-
-fn rangeAlreadyListed(ranges: []const SourceRange, needle: SourceRange) bool {
-    for (ranges) |range| {
-        if (sourceRangeEql(range, needle)) return true;
-    }
-    return false;
 }

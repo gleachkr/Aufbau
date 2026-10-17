@@ -5,12 +5,6 @@ const Types = @import("types.zig");
 pub const SourceRange = Types.SourceRange;
 pub const Declaration = Types.Declaration;
 
-pub const LookupHit = struct {
-    source_range: SourceRange,
-    target_range: ?SourceRange,
-    markdown: []const u8,
-};
-
 pub const NavigationSymbol = struct {
     source_range: SourceRange,
     target_range: ?SourceRange,

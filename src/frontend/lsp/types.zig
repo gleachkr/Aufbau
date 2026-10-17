@@ -19,6 +19,21 @@ pub const SourceRange = struct {
     document: DocumentId,
     start: usize,
     end: usize,
+
+    pub fn eql(a: SourceRange, b: SourceRange) bool {
+        return a.document == b.document and a.start == b.start and a.end == b.end;
+    }
+
+    pub fn contains(range: SourceRange, document: DocumentId, offset: usize) bool {
+        return range.document == document and offset >= range.start and offset < range.end;
+    }
+
+    pub fn listedIn(range: SourceRange, ranges: []const SourceRange) bool {
+        for (ranges) |other| {
+            if (range.eql(other)) return true;
+        }
+        return false;
+    }
 };
 
 pub const DefinitionResult = struct {

@@ -75,11 +75,6 @@ pub fn proofMathTextSpan(span: proof_script.Span) parse.MathSpan {
     };
 }
 
-fn rangeContains(range: SourceRange, document: DocumentId, offset: usize) bool {
-    return range.document == document and offset >= range.start and
-        offset < range.end;
-}
-
 pub fn targetRangeIfAvailable(decl: Declaration, use_start: usize) ?SourceRange {
     if (decl.name_range.start <= use_start) return decl.name_range;
     return null;
@@ -294,7 +289,7 @@ fn binderGroupNamesBeforeMath(
         }
         if (text[pos - 1] == '(') break;
         const end = pos;
-        while (pos > 0 and isProofIdentChar(text[pos - 1])) pos -= 1;
+        while (pos > 0 and source.isIdentChar(text[pos - 1])) pos -= 1;
         if (pos == end) {
             names.deinit(allocator);
             return &.{};
@@ -442,12 +437,12 @@ fn scanProofDefBinders(
             if (pos >= header_tail.len or header_tail[pos] == ':') break;
             const is_dummy = header_tail[pos] == '.';
             if (is_dummy) pos += 1;
-            if (pos >= header_tail.len or !isProofIdentStart(header_tail[pos])) {
+            if (pos >= header_tail.len or !source.isIdentStart(header_tail[pos])) {
                 break;
             }
             const start = pos;
             pos += 1;
-            while (pos < header_tail.len and isProofIdentChar(header_tail[pos])) {
+            while (pos < header_tail.len and source.isIdentChar(header_tail[pos])) {
                 pos += 1;
             }
             try result.append(allocator, .{
@@ -471,14 +466,6 @@ fn skipProofDefHeaderSpace(text: []const u8, pos: *usize) void {
             else => return,
         }
     }
-}
-
-fn isProofIdentStart(ch: u8) bool {
-    return std.ascii.isAlphabetic(ch) or ch == '_';
-}
-
-fn isProofIdentChar(ch: u8) bool {
-    return isProofIdentStart(ch) or std.ascii.isDigit(ch);
 }
 
 pub fn bindersFromArgs(

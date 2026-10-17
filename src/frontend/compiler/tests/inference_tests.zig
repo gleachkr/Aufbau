@@ -706,96 +706,113 @@ fn appendRcTheory(
     , .{assoc});
 }
 
-test "an inferred context remainder keeps its source's member order" {
-    // `unmark` takes one member `a` out of a context written in reverse of
-    // its sorted order, leaving the rest to `g`. Rebuilt sorted, `g` made
-    // the proof re-sort the whole context, its size the square of the
-    // context's (18 KB); in the source's order and nesting, `a` alone
-    // moves.
-    const n = 20;
-    const allocator = std.testing.allocator;
-    var reversed: [n]usize = undefined;
-    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
-
-    for ([_][]const u8{ "infixl", "infixr" }) |assoc| {
-        var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
-        defer mm0_src.deinit(allocator);
-        try appendRcTheory(&mm0_src, allocator, assoc);
-        try mm0_src.appendSlice(allocator,
-            \\term mark (g a: rc): wff;
-            \\--| @congr
-            \\axiom mark_congr (g h a b: rc):
-            \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
-            \\term closed (g: rc): wff;
-            \\--| @congr
-            \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
-            \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
-            \\theorem t (
-        );
-        for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
-        try mm0_src.appendSlice(allocator, ": rc): $ mark (");
-        try appendBag(&mm0_src, allocator, &reversed, assoc);
-        try mm0_src.appendSlice(allocator, ") x10 $ > $ closed (");
-        try appendBag(&mm0_src, allocator, &reversed, assoc);
-        try mm0_src.appendSlice(allocator, ") $;\n");
-
-        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
-        defer proof_src.deinit(allocator);
-        try proof_src.appendSlice(allocator, "t\n---\nl1: $ closed (");
-        try appendBag(&proof_src, allocator, &reversed, assoc);
-        try proof_src.appendSlice(allocator, ") $ by unmark [#1]\n");
-
-        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
-        const mmb = try compiler.compileMmb(allocator);
-        defer allocator.free(mmb);
-        try mm0.verifyPair(allocator, mm0_src.items, mmb);
-        try std.testing.expect(mmb.len < 8_000);
-    }
+/// `x0 x1 … x{n-1} `: the binders the context tests declare.
+fn appendBinders(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: std.mem.Allocator,
+    n: usize,
+) !void {
+    for (0..n) |idx| try out.print(allocator, "x{d} ", .{idx});
 }
 
-test "an inferred context remainder keeps each copy of a repeated member in place" {
-    // The context of the test above, with its first three members written
-    // again at the end. A second copy used to rank where the first did, so
-    // the remainder pulled it forward and the proof moved it back across
-    // the context: 14 KB, against 5 KB with each copy in its place.
-    const n = 20;
-    const allocator = std.testing.allocator;
-    var members: [n + 3]usize = undefined;
-    for (members[0..n], 0..) |*member, idx| member.* = n - 1 - idx;
-    @memcpy(members[n..], members[0..3]);
+/// `n-1, …, 1, 0`: a context written in reverse of its sorted order.
+fn reversedMembers(comptime n: usize) [n]usize {
+    var members: [n]usize = undefined;
+    for (&members, 0..) |*member, idx| member.* = n - 1 - idx;
+    return members;
+}
 
-    var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
-    defer mm0_src.deinit(allocator);
-    try appendRcTheory(&mm0_src, allocator, "infixl");
-    try mm0_src.appendSlice(allocator,
-        \\term mark (g a: rc): wff;
-        \\--| @congr
-        \\axiom mark_congr (g h a b: rc):
-        \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
-        \\term closed (g: rc): wff;
-        \\--| @congr
-        \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
-        \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
-        \\theorem t (
-    );
-    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
-    try mm0_src.appendSlice(allocator, ": rc): $ mark (");
-    try appendBag(&mm0_src, allocator, &members, "infixl");
-    try mm0_src.appendSlice(allocator, ") x10 $ > $ closed (");
-    try appendBag(&mm0_src, allocator, &members, "infixl");
-    try mm0_src.appendSlice(allocator, ") $;\n");
+/// `appendBag` as a string; the caller frees it.
+fn bagText(
+    allocator: std.mem.Allocator,
+    members: []const usize,
+    assoc: []const u8,
+) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    try appendBag(&out, allocator, members, assoc);
+    return out.toOwnedSlice(allocator);
+}
 
-    var proof_src: std.ArrayListUnmanaged(u8) = .empty;
-    defer proof_src.deinit(allocator);
-    try proof_src.appendSlice(allocator, "t\n---\nl1: $ closed (");
-    try appendBag(&proof_src, allocator, &members, "infixl");
-    try proof_src.appendSlice(allocator, ") $ by unmark [#1]\n");
+/// `unmark` takes one member `a` out of a context `g & a`.
+const mark_rules =
+    \\term mark (g a: rc): wff;
+    \\--| @congr
+    \\axiom mark_congr (g h a b: rc):
+    \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
+    \\term closed (g: rc): wff;
+    \\--| @congr
+    \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
+    \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
+    \\
+;
 
-    var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
+/// The verified MMB `proof_src` compiles to; the caller frees it.
+fn compileVerified(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    proof_src: []const u8,
+) ![]const u8 {
+    var compiler = Compiler.initWithProof(allocator, mm0_src, proof_src);
     const mmb = try compiler.compileMmb(allocator);
-    defer allocator.free(mmb);
-    try mm0.verifyPair(allocator, mm0_src.items, mmb);
-    try std.testing.expect(mmb.len < 6_000);
+    errdefer allocator.free(mmb);
+    try mm0.verifyPair(allocator, mm0_src, mmb);
+    return mmb;
+}
+
+/// Compiles theorem `t` as the one line `l1: {line}{refs}`, once with `g`
+/// inferred and once given as `g`, and expects the same verified MMB: an
+/// inferred context is laid out as the line writes it.
+fn expectSameProofAsGiven(
+    allocator: std.mem.Allocator,
+    mm0_src: []const u8,
+    line: []const u8,
+    g: []const u8,
+    refs: []const u8,
+) !void {
+    const inferred_src = try std.fmt.allocPrint(allocator, "t\n---\nl1: {s}{s}\n", .{ line, refs });
+    defer allocator.free(inferred_src);
+    const given_src = try std.fmt.allocPrint(allocator, "t\n---\nl1: {s}(g := $ {s} $) {s}\n", .{ line, g, refs });
+    defer allocator.free(given_src);
+    const inferred = try compileVerified(allocator, mm0_src, inferred_src);
+    defer allocator.free(inferred);
+    const given = try compileVerified(allocator, mm0_src, given_src);
+    defer allocator.free(given);
+    try std.testing.expectEqualSlices(u8, given, inferred);
+}
+
+test "an inferred context remainder keeps its source's member order" {
+    // `unmark` takes `x10` out of a context written in reverse of its
+    // sorted order, leaving the rest to `g`. Rebuilt sorted, `g` made the
+    // proof re-sort the whole context, its size the square of the
+    // context's (18 KB); in the source's order and nesting, `x10` alone
+    // moves. With the first three members written again at the end, a
+    // second copy used to rank where the first did, so the remainder
+    // pulled it forward and the proof moved it back across the context:
+    // 14 KB, against 5 KB with each copy in its place.
+    const allocator = std.testing.allocator;
+    const reversed = reversedMembers(20);
+    const repeated = reversed ++ reversed[0..3].*;
+    const Row = struct { members: []const usize, assoc: []const u8, max_bytes: usize };
+    for ([_]Row{
+        .{ .members = &reversed, .assoc = "infixl", .max_bytes = 8_000 },
+        .{ .members = &reversed, .assoc = "infixr", .max_bytes = 8_000 },
+        .{ .members = &repeated, .assoc = "infixl", .max_bytes = 6_000 },
+    }) |row| {
+        const bag = try bagText(allocator, row.members, row.assoc);
+        defer allocator.free(bag);
+        var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
+        defer mm0_src.deinit(allocator);
+        try appendRcTheory(&mm0_src, allocator, row.assoc);
+        try mm0_src.appendSlice(allocator, mark_rules ++ "theorem t (");
+        try appendBinders(&mm0_src, allocator, 20);
+        try mm0_src.print(allocator, ": rc): $ mark ({s}) x10 $ > $ closed ({s}) $;\n", .{ bag, bag });
+        const proof_src = try std.fmt.allocPrint(allocator, "t\n---\nl1: $ closed ({s}) $ by unmark [#1]\n", .{bag});
+        defer allocator.free(proof_src);
+
+        const mmb = try compileVerified(allocator, mm0_src.items, proof_src);
+        defer allocator.free(mmb);
+        try std.testing.expect(mmb.len < row.max_bytes);
+    }
 }
 
 test "a context read off a normal form keeps its source's member order" {
@@ -804,11 +821,9 @@ test "a context read off a normal form keeps its source's member order" {
     // where the context is sorted. Kept sorted, `g` made the proof re-sort
     // the context; laid out as the line writes it, the proof is the one
     // `g` given as written gets.
-    const n = 20;
     const allocator = std.testing.allocator;
-    var reversed: [n]usize = undefined;
-    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
-
+    const bag = try bagText(allocator, &reversedMembers(20), "infixl");
+    defer allocator.free(bag);
     var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
     defer mm0_src.deinit(allocator);
     try appendRcTheory(&mm0_src, allocator, "infixl");
@@ -826,31 +841,12 @@ test "a context read off a normal form keeps its source's member order" {
         \\axiom okat_ax (g a: rc): $ okat a (g & wrap (dbl a)) $;
         \\theorem t (
     );
-    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
-    try mm0_src.appendSlice(allocator, ": rc): $ okat x10 (");
-    try appendBag(&mm0_src, allocator, &reversed, "infixl");
-    try mm0_src.appendSlice(allocator, " & wrap x10) $;\n");
+    try appendBinders(&mm0_src, allocator, 20);
+    try mm0_src.print(allocator, ": rc): $ okat x10 ({s} & wrap x10) $;\n", .{bag});
 
-    var mmbs: [2][]const u8 = undefined;
-    for ([_]bool{ false, true }, &mmbs) |bound, *out| {
-        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
-        defer proof_src.deinit(allocator);
-        try proof_src.appendSlice(allocator, "t\n---\nl1: $ okat x10 (");
-        try appendBag(&proof_src, allocator, &reversed, "infixl");
-        try proof_src.appendSlice(allocator, " & wrap x10) $ by okat_ax ");
-        if (bound) {
-            try proof_src.appendSlice(allocator, "(g := $ ");
-            try appendBag(&proof_src, allocator, &reversed, "infixl");
-            try proof_src.appendSlice(allocator, " $) ");
-        }
-        try proof_src.appendSlice(allocator, "[]\n");
-
-        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
-        out.* = try compiler.compileMmb(allocator);
-        try mm0.verifyPair(allocator, mm0_src.items, out.*);
-    }
-    defer for (mmbs) |mmb| allocator.free(mmb);
-    try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
+    const line = try std.fmt.allocPrint(allocator, "$ okat x10 ({s} & wrap x10) $ by okat_ax ", .{bag});
+    defer allocator.free(line);
+    try expectSameProofAsGiven(allocator, mm0_src.items, line, bag, "[]");
 }
 
 test "a @view hands its rule a context in the order the line wrote it" {
@@ -858,11 +854,9 @@ test "a @view hands its rule a context in the order the line wrote it" {
     // the premise's context against it. Handing `g` to the rule took its
     // sorted representative, so the proof re-sorted the context (18 KB);
     // it is now the proof `g` given as written gets (4 KB).
-    const n = 20;
     const allocator = std.testing.allocator;
-    var reversed: [n]usize = undefined;
-    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
-
+    const bag = try bagText(allocator, &reversedMembers(20), "infixl");
+    defer allocator.free(bag);
     var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
     defer mm0_src.deinit(allocator);
     try appendRcTheory(&mm0_src, allocator, "infixl");
@@ -881,33 +875,12 @@ test "a @view hands its rule a context in the order the line wrote it" {
         \\axiom unwrap (g a: rc): $ closed (g & a) $ > $ fc g (wrap a) $;
         \\theorem t (
     );
-    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
-    try mm0_src.appendSlice(allocator, ": rc): $ closed (");
-    try appendBag(&mm0_src, allocator, &reversed, "infixl");
-    try mm0_src.appendSlice(allocator, " & x10) $ > $ fc (");
-    try appendBag(&mm0_src, allocator, &reversed, "infixl");
-    try mm0_src.appendSlice(allocator, ") (wrap x10) $;\n");
+    try appendBinders(&mm0_src, allocator, 20);
+    try mm0_src.print(allocator, ": rc): $ closed ({s} & x10) $ > $ fc ({s}) (wrap x10) $;\n", .{ bag, bag });
 
-    var mmbs: [2][]const u8 = undefined;
-    for ([_]bool{ false, true }, &mmbs) |bound, *out| {
-        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
-        defer proof_src.deinit(allocator);
-        try proof_src.appendSlice(allocator, "t\n---\nl1: $ fc (");
-        try appendBag(&proof_src, allocator, &reversed, "infixl");
-        try proof_src.appendSlice(allocator, ") (wrap x10) $ by unwrap ");
-        if (bound) {
-            try proof_src.appendSlice(allocator, "(g := $ ");
-            try appendBag(&proof_src, allocator, &reversed, "infixl");
-            try proof_src.appendSlice(allocator, " $) ");
-        }
-        try proof_src.appendSlice(allocator, "[#1]\n");
-
-        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
-        out.* = try compiler.compileMmb(allocator);
-        try mm0.verifyPair(allocator, mm0_src.items, out.*);
-    }
-    defer for (mmbs) |mmb| allocator.free(mmb);
-    try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
+    const line = try std.fmt.allocPrint(allocator, "$ fc ({s}) (wrap x10) $ by unwrap ", .{bag});
+    defer allocator.free(line);
+    try expectSameProofAsGiven(allocator, mm0_src.items, line, bag, "[#1]");
 }
 
 test "a @view keeps the statement's context when its new members come in another order" {
@@ -916,11 +889,9 @@ test "a @view keeps the statement's context when its new members come in another
     // order. That match re-read `g`, bound from the statement, off the
     // premise's sorted normal form, and the proof re-sorted the context
     // (19 KB); it is now the proof `g` given gets (4 KB).
-    const n = 20;
     const allocator = std.testing.allocator;
-    var reversed: [n]usize = undefined;
-    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
-
+    const bag = try bagText(allocator, &reversedMembers(20), "infixl");
+    defer allocator.free(bag);
     var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
     defer mm0_src.deinit(allocator);
     try appendRcTheory(&mm0_src, allocator, "infixl");
@@ -954,35 +925,16 @@ test "a @view keeps the statement's context when its new members come in another
         \\  $ closed (g & mark (all x p) (sb t x p) & hyp (sb t x p)) $ > $ fc g (all x p) $;
         \\theorem t {x: var} (c: tm) (
     );
-    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
-    try mm0_src.appendSlice(allocator, ": rc): $ closed (");
-    try appendBag(&mm0_src, allocator, &reversed, "infixl");
-    try mm0_src.appendSlice(allocator,
-        \\ & hyp (pred c) & mark (all x (pred x)) (pred c)) $ > $ fc (
+    try appendBinders(&mm0_src, allocator, 20);
+    try mm0_src.print(
+        allocator,
+        ": rc): $ closed ({s} & hyp (pred c) & mark (all x (pred x)) (pred c)) $ > $ fc ({s}) (all x (pred x)) $;\n",
+        .{ bag, bag },
     );
-    try appendBag(&mm0_src, allocator, &reversed, "infixl");
-    try mm0_src.appendSlice(allocator, ") (all x (pred x)) $;\n");
 
-    var mmbs: [2][]const u8 = undefined;
-    for ([_]bool{ false, true }, &mmbs) |bound, *out| {
-        var proof_src: std.ArrayListUnmanaged(u8) = .empty;
-        defer proof_src.deinit(allocator);
-        try proof_src.appendSlice(allocator, "t\n---\nl1: $ fc (");
-        try appendBag(&proof_src, allocator, &reversed, "infixl");
-        try proof_src.appendSlice(allocator, ") (all x (pred x)) $ by all_step ");
-        if (bound) {
-            try proof_src.appendSlice(allocator, "(g := $ ");
-            try appendBag(&proof_src, allocator, &reversed, "infixl");
-            try proof_src.appendSlice(allocator, " $) ");
-        }
-        try proof_src.appendSlice(allocator, "[#1]\n");
-
-        var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
-        out.* = try compiler.compileMmb(allocator);
-        try mm0.verifyPair(allocator, mm0_src.items, out.*);
-    }
-    defer for (mmbs) |mmb| allocator.free(mmb);
-    try std.testing.expectEqualSlices(u8, mmbs[1], mmbs[0]);
+    const line = try std.fmt.allocPrint(allocator, "$ fc ({s}) (all x (pred x)) $ by all_step ", .{bag});
+    defer allocator.free(line);
+    try expectSameProofAsGiven(allocator, mm0_src.items, line, bag, "[#1]");
 }
 
 test "a rule that fails before its @fallback does not normalize the context" {
@@ -991,10 +943,8 @@ test "a rule that fails before its @fallback does not normalize the context" {
     // to the cited line, and rendering the failure's normal forms, used to
     // sort both 120-member contexts with proofs before `imp_l` was tried:
     // 900 times the intern work of naming `imp_l`, against 8 now.
-    const n = 120;
     const allocator = std.testing.allocator;
-    var reversed: [n]usize = undefined;
-    for (&reversed, 0..) |*member, idx| member.* = n - 1 - idx;
+    const reversed = reversedMembers(120);
 
     var mm0_src: std.ArrayListUnmanaged(u8) = .empty;
     defer mm0_src.deinit(allocator);
@@ -1020,7 +970,7 @@ test "a rule that fails before its @fallback does not normalize the context" {
         \\  $ closed (g & b) $ > $ closed (g & neg a) $ > $ fc g (imp a b) $;
         \\theorem t (
     );
-    for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+    try appendBinders(&mm0_src, allocator, reversed.len);
     try mm0_src.appendSlice(allocator, ": wff): $ closed (imp x0 x1 & ");
     try appendBag(&mm0_src, allocator, &reversed, "infixl");
     try mm0_src.appendSlice(allocator, " & neg x0) $ > $ closed (imp x0 x1 & ");
@@ -1086,7 +1036,7 @@ test "a context with two unknown members is split after the arguments that fix t
             \\axiom has_pair (g: rc) (a b: wff): $ has_r (both a b) (g & a & b) $;
             \\theorem t (
         );
-        for (0..n) |idx| try mm0_src.print(allocator, "x{d} ", .{idx});
+        try appendBinders(&mm0_src, allocator, n);
         var statement: std.ArrayListUnmanaged(u8) = .empty;
         defer statement.deinit(allocator);
         if (std.mem.eql(u8, rule, "has_ctx")) {
@@ -1145,17 +1095,9 @@ test "a context given by a def is matched member by member" {
                 \\--| @congr
                 \\axiom has_r_congr (a b: wff) (g h: rc):
                 \\  $ bi a b $ > $ rc_eq g h $ > $ bi (has_r a g) (has_r b h) $;
-                \\term mark (g a: rc): wff;
-                \\--| @congr
-                \\axiom mark_congr (g h a b: rc):
-                \\  $ rc_eq g h $ > $ rc_eq a b $ > $ bi (mark g a) (mark h b) $;
-                \\term closed (g: rc): wff;
-                \\--| @congr
-                \\axiom closed_congr (g h: rc): $ rc_eq g h $ > $ bi (closed g) (closed h) $;
                 \\axiom has_one (g: rc) (a: wff): $ has_r a (g & a) $;
-                \\axiom unmark (g a: rc): $ mark (g & a) a $ > $ closed (g & a) $;
                 \\
-            );
+            ++ mark_rules);
             var binders: std.ArrayListUnmanaged(u8) = .empty;
             defer binders.deinit(allocator);
             var args: std.ArrayListUnmanaged(u8) = .empty;
@@ -1185,10 +1127,8 @@ test "a context given by a def is matched member by member" {
                 try proof_src.print(allocator, "t\n---\nl1: $ closed ({s}) $ by unmark [#1]\n", .{bag.items});
             }
 
-            var compiler = Compiler.initWithProof(allocator, mm0_src.items, proof_src.items);
-            const mmb = try compiler.compileMmb(allocator);
+            const mmb = try compileVerified(allocator, mm0_src.items, proof_src.items);
             defer allocator.free(mmb);
-            try mm0.verifyPair(allocator, mm0_src.items, mmb);
             size.* = mmb.len;
         }
         try std.testing.expect(sizes[1] < 2 * sizes[0]);

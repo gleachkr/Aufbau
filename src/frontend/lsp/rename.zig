@@ -5,13 +5,11 @@ const std = @import("std");
 
 const source = @import("source.zig");
 const Types = @import("types.zig");
-const model = @import("model.zig");
 
 const DocumentId = Types.DocumentId;
 const SourceRange = Types.SourceRange;
 const Declaration = Types.Declaration;
 const BinderDecl = Types.BinderDecl;
-const NavigationSymbol = model.NavigationSymbol;
 
 /// The name under the cursor and what it names.
 pub const RenameTarget = struct {
@@ -58,7 +56,7 @@ pub fn renameTargetAt(
     document: DocumentId,
     offset: usize,
 ) ?RenameTarget {
-    const symbol = symbolAt(snapshot, document, offset) orelse return null;
+    const symbol = snapshot.lookupAt(document, offset) orelse return null;
     if (symbol.via_notation) return null;
     const declaration = symbol.target_range orelse return null;
     const name = textAt(snapshot, declaration) orelse return null;
@@ -88,46 +86,31 @@ pub fn renameEdits(
     for (snapshot.symbols) |symbol| {
         if (symbol.via_notation) continue;
         const declaration = symbol.target_range orelse continue;
-        if (!rangeEql(declaration, target.declaration)) continue;
+        if (!declaration.eql(target.declaration)) continue;
         const range = nameRange(snapshot, symbol.source_range, target.name) orelse continue;
-        if (containsRange(edits.items, range)) continue;
+        if (range.listedIn(edits.items)) continue;
         try edits.append(allocator, range);
     }
     return try edits.toOwnedSlice(allocator);
 }
 
 /// Every occurrence of what the symbol at `offset` refers to, notation
-/// tokens included.
+/// tokens included: its references, marking the declaration.
 pub fn highlightsAt(
     snapshot: anytype,
     allocator: std.mem.Allocator,
     document: DocumentId,
     offset: usize,
 ) ![]const Highlight {
-    const symbol = symbolAt(snapshot, document, offset) orelse return &.{};
+    const symbol = snapshot.lookupAt(document, offset) orelse return &.{};
     const declaration = symbol.target_range orelse return &.{};
-    var highlights = std.ArrayListUnmanaged(Highlight).empty;
-    for (snapshot.symbols) |other| {
-        const other_declaration = other.target_range orelse continue;
-        if (!rangeEql(other_declaration, declaration)) continue;
-        if (containsRange(highlights.items, other.source_range)) continue;
-        try highlights.append(allocator, .{
-            .range = other.source_range,
-            .declaration = rangeEql(other.source_range, declaration),
-        });
+    const ranges = try snapshot.referencesAt(allocator, document, offset, true);
+    defer allocator.free(ranges);
+    const highlights = try allocator.alloc(Highlight, ranges.len);
+    for (ranges, highlights) |range, *highlight| {
+        highlight.* = .{ .range = range, .declaration = range.eql(declaration) };
     }
-    return try highlights.toOwnedSlice(allocator);
-}
-
-/// The first symbol containing `offset`, as the other lookups pick it.
-fn symbolAt(snapshot: anytype, document: DocumentId, offset: usize) ?NavigationSymbol {
-    for (snapshot.symbols) |symbol| {
-        const range = symbol.source_range;
-        if (range.document == document and offset >= range.start and offset < range.end) {
-            return symbol;
-        }
-    }
-    return null;
+    return highlights;
 }
 
 fn textAt(snapshot: anytype, range: SourceRange) ?[]const u8 {
@@ -150,7 +133,7 @@ fn nameRange(snapshot: anytype, range: SourceRange, name: []const u8) ?SourceRan
 
 fn scopeOf(snapshot: anytype, declaration: SourceRange) ?Scope {
     for (snapshot.declarations, 0..) |decl, index| {
-        if (rangeEql(decl.name_range, declaration)) {
+        if (decl.name_range.eql(declaration)) {
             if (decl.kind != .proof_line) return .global;
             for (snapshot.proof_lines) |line| {
                 if (line.decl_index == index) return .{ .block = line.block_index };
@@ -164,7 +147,7 @@ fn scopeOf(snapshot: anytype, declaration: SourceRange) ?Scope {
         }
         for (decl.hypotheses) |hyp| {
             const range = hyp.name_range orelse continue;
-            if (rangeEql(range, declaration)) return .{ .declaration = index };
+            if (range.eql(declaration)) return .{ .declaration = index };
         }
     }
     return null;
@@ -173,7 +156,7 @@ fn scopeOf(snapshot: anytype, declaration: SourceRange) ?Scope {
 fn declaresBinder(binders: []const BinderDecl, declaration: SourceRange) bool {
     for (binders) |binder| {
         const range = binder.range orelse continue;
-        if (rangeEql(range, declaration)) return true;
+        if (range.eql(declaration)) return true;
     }
     return false;
 }
@@ -195,60 +178,56 @@ fn nameInUse(snapshot: anytype, scope: Scope, name: []const u8) bool {
         // A line's name matters to a global name; to another line, only
         // in its own block.
         if ((global or decl.kind != .proof_line) and std.mem.eql(u8, decl.name, name)) return true;
-        if (global and declaresName(decl, name)) return true;
+        if (global and countDeclared(decl, name) > 0) return true;
     }
     switch (scope) {
         .global => return false,
-        .declaration => |index| return declaresName(snapshot.declarations[index], name),
+        .declaration => |index| return countDeclared(snapshot.declarations[index], name) > 0,
         .block => |block_index| {
-            for (snapshot.proof_lines) |line| {
-                if (line.block_index == block_index and std.mem.eql(u8, line.name, name)) return true;
-            }
+            if (countLines(snapshot, block_index, name) > 0) return true;
             const decl_index = snapshot.proof_blocks[block_index].decl_index orelse return false;
-            return declaresName(snapshot.declarations[decl_index], name);
+            return countDeclared(snapshot.declarations[decl_index], name) > 0;
         },
     }
 }
 
 /// How many things `name` names where the renamed thing lives.
 fn declarationCount(snapshot: anytype, scope: Scope, name: []const u8) usize {
+    return switch (scope) {
+        .global => blk: {
+            var count: usize = 0;
+            for (snapshot.declarations) |decl| {
+                if (decl.kind != .proof_line and std.mem.eql(u8, decl.name, name)) count += 1;
+            }
+            break :blk count;
+        },
+        .declaration => |index| countDeclared(snapshot.declarations[index], name),
+        .block => |block_index| countLines(snapshot, block_index, name),
+    };
+}
+
+/// How many of the declaration's binders and hypotheses are called `name`.
+fn countDeclared(decl: Declaration, name: []const u8) usize {
     var count: usize = 0;
-    switch (scope) {
-        .global => for (snapshot.declarations) |decl| {
-            if (decl.kind != .proof_line and std.mem.eql(u8, decl.name, name)) count += 1;
-        },
-        .declaration => |index| {
-            const decl = snapshot.declarations[index];
-            for ([_][]const BinderDecl{ decl.binders, decl.local_binders }) |binders| {
-                for (binders) |binder| {
-                    if (std.mem.eql(u8, binder.name, name)) count += 1;
-                }
-            }
-            for (decl.hypotheses) |hyp| {
-                const hyp_name = hyp.name orelse continue;
-                if (std.mem.eql(u8, hyp_name, name)) count += 1;
-            }
-        },
-        .block => |block_index| for (snapshot.proof_lines) |line| {
-            if (line.block_index == block_index and std.mem.eql(u8, line.name, name)) count += 1;
-        },
+    for ([_][]const BinderDecl{ decl.binders, decl.local_binders }) |binders| {
+        for (binders) |binder| {
+            if (std.mem.eql(u8, binder.name, name)) count += 1;
+        }
+    }
+    for (decl.hypotheses) |hyp| {
+        const hyp_name = hyp.name orelse continue;
+        if (std.mem.eql(u8, hyp_name, name)) count += 1;
     }
     return count;
 }
 
-/// Whether one of the declaration's binders or hypotheses is called `name`.
-fn declaresName(decl: Declaration, name: []const u8) bool {
-    for (decl.binders) |binder| {
-        if (std.mem.eql(u8, binder.name, name)) return true;
+/// How many lines of the block are called `name`.
+fn countLines(snapshot: anytype, block_index: usize, name: []const u8) usize {
+    var count: usize = 0;
+    for (snapshot.proof_lines) |line| {
+        if (line.block_index == block_index and std.mem.eql(u8, line.name, name)) count += 1;
     }
-    for (decl.local_binders) |binder| {
-        if (std.mem.eql(u8, binder.name, name)) return true;
-    }
-    for (decl.hypotheses) |hyp| {
-        const hyp_name = hyp.name orelse continue;
-        if (std.mem.eql(u8, hyp_name, name)) return true;
-    }
-    return false;
+    return count;
 }
 
 /// The words of `.mm0` and `.auf` syntax a name may not be.
@@ -270,17 +249,4 @@ fn isValidName(name: []const u8) bool {
         if (std.mem.eql(u8, name, keyword)) return false;
     }
     return true;
-}
-
-fn rangeEql(a: SourceRange, b: SourceRange) bool {
-    return a.document == b.document and a.start == b.start and a.end == b.end;
-}
-
-/// Whether `items`, ranges or highlights, already hold `needle`.
-fn containsRange(items: anytype, needle: SourceRange) bool {
-    for (items) |item| {
-        const range = if (@TypeOf(item) == SourceRange) item else item.range;
-        if (rangeEql(range, needle)) return true;
-    }
-    return false;
 }

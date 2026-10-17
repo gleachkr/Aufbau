@@ -196,7 +196,8 @@ fn scanSignatureType(
     }
 }
 
-fn scanIdent(text: []const u8, pos: *usize) ?[]const u8 {
+/// The identifier at `pos`, which moves past it.
+pub fn scanIdent(text: []const u8, pos: *usize) ?[]const u8 {
     if (pos.* >= text.len or !isIdentStart(text[pos.*])) return null;
     const start = pos.*;
     pos.* += 1;
@@ -251,11 +252,8 @@ fn nextHeaderIdent(
     end: usize,
 ) ?HeaderToken {
     skipTopLevelSpaceAndComments(text, pos, end);
-    if (pos.* >= end or !isIdentStart(text[pos.*])) return null;
-    const start = pos.*;
-    pos.* += 1;
-    while (pos.* < end and isIdentChar(text[pos.*])) pos.* += 1;
-    return .{ .text = text[start..pos.*], .end = pos.* };
+    const name = scanIdent(text[0..end], pos) orelse return null;
+    return .{ .text = name, .end = pos.* };
 }
 
 fn skipTopLevelSpaceAndComments(

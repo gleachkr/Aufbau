@@ -546,14 +546,13 @@ pub const Builder = struct {
         );
     }
 
-    pub fn addDeclarationNameUseIn(
+    pub fn addDeclarationNameUse(
         self: *Builder,
         document: DocumentId,
-        text: []const u8,
         name: []const u8,
         decl_index: usize,
     ) !void {
-        const range = sourceRangeFromSlice(document, text, name) orelse return;
+        const range = self.rangeOf(document, name) orelse return;
         const decl = self.declarations.items[decl_index];
         try self.addSymbol(.{
             .source_range = range,
