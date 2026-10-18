@@ -29,6 +29,17 @@ pub fn normalize(self: anytype, expr_id: ExprId) anyerror!NormalizeResult {
     return result;
 }
 
+/// A rewrite step past `step_limit`: the rules may not terminate, and a
+/// form cut short is not a normal form, so nothing may build on it.
+fn rewriteStepLimit(self: anytype, rule_id: u32) error{RewriteStepLimit} {
+    if (self.diag_scratch) |scratch| {
+        scratch.record(error.RewriteStepLimit, .{
+            .rewrite_step_limit = .{ .rule_id = rule_id },
+        });
+    }
+    return error.RewriteStepLimit;
+}
+
 fn rewriteCycle(self: anytype) error{RewriteCycle} {
     if (self.diag_scratch) |scratch| {
         if (self.last_rule_id) |rule_id| {
@@ -122,8 +133,6 @@ pub fn normalizeUncached(
         const rules = self.registry.getRewriteRules(head_id);
         var applied = false;
         for (rules) |rule| {
-            if (self.step_count >= self.step_limit) break;
-
             const match_result = try ProofEmit.tryApplyRule(
                 self,
                 relation,
@@ -131,6 +140,9 @@ pub fn normalizeUncached(
                 rule,
             );
             if (match_result) |step_result| {
+                if (self.step_count >= self.step_limit) {
+                    return rewriteStepLimit(self, rule.rule_id);
+                }
                 self.step_count += 1;
                 // The rule of the innermost step still being normalized,
                 // which closes any cycle met below it.

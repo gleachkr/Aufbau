@@ -72,6 +72,11 @@ const proof_cases = [_]ProofCase{
     .{ .stem = "fail_include_twice", .outcome = .{ .fail = error.DuplicateInclude } },
     // `@rewrite add_comm` rewrites `c + d` back to itself.
     .{ .stem = "fail_rewrite_cycle", .outcome = .{ .fail = error.RewriteCycle } },
+    // `@rewrite add_grow` leaves a bigger redex at every step.
+    .{ .stem = "fail_rewrite_step_limit", .outcome = .{ .fail = error.RewriteStepLimit } },
+    // The same through a `@view` rule's `@recover`, where matching once
+    // walked the growing terms as trees.
+    .{ .stem = "fail_rewrite_step_limit_recover", .outcome = .{ .fail = error.RewriteStepLimit } },
     .{ .stem = "pass_rule_symbolic_witness", .outcome = .pass },
     .{ .stem = "pass_symbolic_witness_repeated_premises", .outcome = .pass },
     .{ .stem = "pass_def_erased_arg_clash", .outcome = .pass },

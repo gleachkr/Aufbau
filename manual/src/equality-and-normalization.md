@@ -147,8 +147,9 @@ When choosing rewrite rules, keep these constraints in mind:
   several rules share a head, they are tried in declaration order and the
   first matching rule applies, with no backtracking. Put specific rules
   before general ones.
-- Rules that undo one another can cause normalization to loop. A step limit
-  stops the loop, after which the line fails with a mismatch.
+- Rules that undo one another, or that keep growing the expression, never
+  reach a normal form. The line fails with an error that names the rule:
+  a cycle, or more than 1000 rewrite steps.
 - Matching works on visible syntax. A rewrite does not apply inside a folded
   definition; transparent definitions are a separate mechanism.
 

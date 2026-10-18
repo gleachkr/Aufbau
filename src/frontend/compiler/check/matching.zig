@@ -201,7 +201,6 @@ fn mayMeet(ctx: ConversionContext, have: ExprId, want: ExprId) !bool {
             if (err == error.OutOfMemory) return err;
             return true;
         };
-        if (canonicalizer.step_count >= canonicalizer.step_limit) return true;
     }
     // Past their normal forms, two exprs meet only through a definition
     // (`SemanticCompare.meetsOtherForms`).

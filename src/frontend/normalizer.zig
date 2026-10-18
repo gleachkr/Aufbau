@@ -60,6 +60,8 @@ fn Engine(comptime mode: Mode) type {
         hidden_witness_provider: ?DefOps.HiddenWitnessProvider = null,
         /// Each expression's normal form; null while it is being normalized.
         cache: std.AutoHashMap(ExprId, ?NormalizeResult),
+        /// Rewrite steps taken since the budget was last reset. A step past
+        /// `step_limit` fails with `RewriteStepLimit`.
         step_count: usize = 0,
         step_limit: usize = 1000,
         /// The `@rewrite` rule of the innermost step whose result is being
@@ -168,15 +170,11 @@ fn Engine(comptime mode: Mode) type {
             return (try Core.normalize(self, expr_id)).result_expr;
         }
 
-        /// `canonicalize` with the step budget a fresh engine would have. A
-        /// call that spends it all forgets what it found: forms cut short by
-        /// the budget are not normal, and must not serve a later call.
+        /// `canonicalize` with the step budget a fresh engine would have.
         pub fn canonicalizeWithFreshBudget(self: *Self, expr_id: ExprId) anyerror!ExprId {
             self.step_count = 0;
             self.last_rule_id = null;
-            const canonical = try self.canonicalize(expr_id);
-            if (self.step_count >= self.step_limit) self.cache.clearRetainingCapacity();
-            return canonical;
+            return try self.canonicalize(expr_id);
         }
 
         /// The canonical bag of `acui` at `expr_id`, its members as given.

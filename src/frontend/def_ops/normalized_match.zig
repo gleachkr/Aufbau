@@ -1,5 +1,6 @@
 const std = @import("std");
 const ExprId = @import("../expr.zig").ExprId;
+const ExprNode = @import("../expr.zig").ExprNode;
 const TheoremContext = @import("../expr.zig").TheoremContext;
 const TemplateExpr = @import("../rules.zig").TemplateExpr;
 const GlobalEnv = @import("../env.zig").GlobalEnv;
@@ -1109,8 +1110,25 @@ pub const RuleMatchSession = struct {
         );
     }
 
+    /// The concrete counterpart of mirror expression `expr_id`, or null when
+    /// it holds a placeholder. Normalization can build a mirror value of
+    /// linear DAG size and exponential tree size, so shared app nodes are
+    /// converted once.
     fn mirrorExprToConcrete(
         self: *RuleMatchSession,
+        expr_id: ExprId,
+        view: *const NormalizedView,
+    ) anyerror!?ExprId {
+        var memo: ConcreteMemo = .{};
+        defer memo.deinit(self.shared.allocator);
+        return self.mirrorExprToConcreteMemo(&memo, expr_id, view);
+    }
+
+    const ConcreteMemo = TheoremContext.DagMemo(?ExprId);
+
+    fn mirrorExprToConcreteMemo(
+        self: *RuleMatchSession,
+        memo: *ConcreteMemo,
         expr_id: ExprId,
         view: *const NormalizedView,
     ) anyerror!?ExprId {
@@ -1131,23 +1149,29 @@ pub const RuleMatchSession = struct {
             },
             .placeholder => null,
             .app => |app| blk: {
-                const args = try self.shared.allocator.alloc(
-                    ExprId,
-                    app.args.len,
-                );
-                errdefer self.shared.allocator.free(args);
-                for (app.args, 0..) |arg, idx| {
-                    args[idx] = (try self.mirrorExprToConcrete(arg, view)) orelse {
-                        self.shared.allocator.free(args);
-                        break :blk null;
-                    };
-                }
-                break :blk try self.shared.theorem.interner.internAppOwned(
-                    app.term_id,
-                    args,
-                );
+                if (memo.get(expr_id)) |concrete| break :blk concrete;
+                const concrete = try self.mirrorAppToConcrete(memo, app, view);
+                try memo.put(self.shared.allocator, expr_id, concrete);
+                break :blk concrete;
             },
         };
+    }
+
+    fn mirrorAppToConcrete(
+        self: *RuleMatchSession,
+        memo: *ConcreteMemo,
+        app: ExprNode.App,
+        view: *const NormalizedView,
+    ) anyerror!?ExprId {
+        const args = try self.shared.allocator.alloc(ExprId, app.args.len);
+        errdefer self.shared.allocator.free(args);
+        for (app.args, 0..) |arg, idx| {
+            args[idx] = (try self.mirrorExprToConcreteMemo(memo, arg, view)) orelse {
+                self.shared.allocator.free(args);
+                return null;
+            };
+        }
+        return try self.shared.theorem.interner.internAppOwned(app.term_id, args);
     }
 
     fn mirrorExprToSymbolic(

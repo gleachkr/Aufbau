@@ -1,0 +1,4 @@
+thm
+---
+
+l1: $ P (add (add c d) c) $ by ax1

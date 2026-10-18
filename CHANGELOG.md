@@ -3,6 +3,18 @@
 This file records notable user-facing changes to Aufbau. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- `@rewrite` rules that keep growing an expression, such as
+  `(f o g) o h ~ f o (g o h) o (g o h)`, could make a line take minutes,
+  or crash the compiler, where a `@view` or `@recover` rule matched
+  through them. A rule that would take a normalization past 1000 rewrite
+  steps is now an error that names it, as a rule that rewrites an
+  expression back to itself already was; such a line used to fail with a
+  mismatch at best.
+
 ## [0.0.18] - 2026-10-17
 
 ### Added

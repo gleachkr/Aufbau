@@ -22,6 +22,10 @@ pub const CapturedDetail = union(enum) {
     rewrite_cycle: struct {
         rule_id: u32,
     },
+    /// The `@rewrite` rule whose step would have passed the step limit.
+    rewrite_step_limit: struct {
+        rule_id: u32,
+    },
 };
 
 pub const CapturedEntry = struct {

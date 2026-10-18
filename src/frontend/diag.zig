@@ -221,6 +221,10 @@ pub const DiagnosticDetail = union(enum) {
     rewrite_cycle: struct {
         rule_name: []const u8,
     },
+    /// This `@rewrite` rule would have taken a step past the step limit.
+    rewrite_step_limit: struct {
+        rule_name: []const u8,
+    },
     /// A close-by known name for an unknown rule or line-label reference.
     /// The slice must outlive the diagnostic (rule/label names stored in
     /// the environment or proof script satisfy this).
@@ -626,6 +630,7 @@ pub const DiagnosticError = error{
     RewriteConclusionNotRelation,
     RewriteRuleHasHypotheses,
     RewriteCycle,
+    RewriteStepLimit,
     RuleNotYetAvailable,
     SorryLine,
     SorryLineArguments,
@@ -1571,6 +1576,7 @@ fn compilerErrorSummary(err: DiagnosticError) []const u8 {
         error.UnresolvedDummyWitness => t("err_UnresolvedDummyWitness"),
         error.MissingCongruenceRule => t("err_MissingCongruenceRule"),
         error.RewriteCycle => t("err_RewriteCycle"),
+        error.RewriteStepLimit => t("err_RewriteStepLimit"),
         error.ExpectedIdentifier,
         error.ExpectedIdent,
         => t("err_ExpectedIdentifier"),
@@ -2178,6 +2184,14 @@ fn writeDetailContextLines(
                 .{info.rule_name},
             );
         },
+        .rewrite_step_limit => |info| {
+            try writeContextLine(
+                writer,
+                line_separator,
+                "detail_rewrite_step_limit",
+                .{info.rule_name},
+            );
+        },
     }
 }
 
@@ -2244,12 +2258,16 @@ pub fn buildCapturedDiagnosticDetail(
             },
         },
         .rewrite_cycle => |info| .{ .rewrite_cycle = .{
-            .rule_name = if (info.rule_id < env.rules.items.len)
-                env.rules.items[info.rule_id].name
-            else
-                "?",
+            .rule_name = ruleName(env, info.rule_id),
+        } },
+        .rewrite_step_limit => |info| .{ .rewrite_step_limit = .{
+            .rule_name = ruleName(env, info.rule_id),
         } },
     };
+}
+
+fn ruleName(env: *const GlobalEnv, rule_id: u32) []const u8 {
+    return if (rule_id < env.rules.items.len) env.rules.items[rule_id].name else "?";
 }
 
 pub fn takeScratchDetail(
