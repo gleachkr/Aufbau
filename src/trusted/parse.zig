@@ -35,11 +35,13 @@ pub const ParseError = error{
     DummyInFreeSort,
     DummyOutsideDef,
     DummyNotationBinder,
+    DuplicateAssertionName,
     DuplicateBinder,
     DuplicateHoleAnnotation,
     DuplicateHoleToken,
     DuplicateInfixToken,
     DuplicateSort,
+    DuplicateTermName,
     ExpectedBinaryOperator,
     ExpectedCloseParen,
     ExpectedFormula,
@@ -393,6 +395,9 @@ pub const MM0Parser = struct {
     allocator: std.mem.Allocator,
     sort_names: std.StringHashMap(u8),
     term_names: std.StringHashMap(u32),
+    // Names of the axioms and theorems declared so far; a proof-local
+    // lemma's name is the frontend's to check.
+    assertion_names: std.StringHashMap(void),
     sort_infos: std.ArrayListUnmanaged(Sort),
     terms: std.ArrayListUnmanaged(TermEnv),
     prefix_notations: std.StringHashMap(PrefixEnv),
@@ -431,6 +436,7 @@ pub const MM0Parser = struct {
             .allocator = allocator,
             .sort_names = std.StringHashMap(u8).init(allocator),
             .term_names = std.StringHashMap(u32).init(allocator),
+            .assertion_names = std.StringHashMap(void).init(allocator),
             .sort_infos = .empty,
             .terms = .empty,
             .prefix_notations = std.StringHashMap(PrefixEnv).init(allocator),
@@ -762,6 +768,12 @@ pub const MM0Parser = struct {
             self.last_error_span = name_info.span;
             return error.HoleTokenNameCollision;
         }
+        // Sorts, terms and assertions are separate namespaces; the formal
+        // spec (examples/mm0.mm0, `TermOk`) wants a term or def name unused.
+        if (self.term_names.contains(name_info.text)) {
+            self.last_error_span = name_info.span;
+            return error.DuplicateTermName;
+        }
 
         var ctx = BinderContext.init(self.allocator);
         self.skipWhitespaceAndComments();
@@ -840,6 +852,12 @@ pub const MM0Parser = struct {
         _ = self.consumeIdent();
         const name_info = try self.consumeRequiredIdentInfo();
         self.recordNameContext(name_info);
+        // The formal spec keeps no assertion names, but mm0-c and mm0-rs
+        // reject a repeated one, and a verifier may accept less.
+        if (!is_local and self.assertion_names.contains(name_info.text)) {
+            self.last_error_span = name_info.span;
+            return error.DuplicateAssertionName;
+        }
 
         var ctx = BinderContext.init(self.allocator);
         var hyps_rev: std.ArrayListUnmanaged(*const Expr) = .empty;
@@ -856,6 +874,7 @@ pub const MM0Parser = struct {
         } else {
             try self.expectStatementEnd();
         }
+        if (!is_local) try self.assertion_names.put(name_info.text, {});
 
         return .{
             .name = name_info.text,

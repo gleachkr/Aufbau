@@ -408,6 +408,28 @@ const mutants = [_]Mutant{
         .expected = error.DuplicateBinder,
         .mm0c = "variable shadowing is not allowed",
     },
+    // Declaration names: one per namespace, and mm0-c reports a repeated
+    // theorem with its term/def message.
+    .{
+        .name = "term name declared twice",
+        .spec_edits = &.{.{ .find = "term not: wff > wff;", .replace = "term imp: wff > wff;" }},
+        .expected = error.DuplicateTermName,
+        .mm0c = "duplicate term/def name",
+    },
+    .{
+        .name = "def named like an earlier term",
+        .base = "dummy_def.mmb",
+        .spec = "dummy_def.mm0",
+        .spec_edits = &.{.{ .find = "def any_top", .replace = "def top" }},
+        .expected = error.DuplicateTermName,
+        .mm0c = "duplicate term/def name",
+    },
+    .{
+        .name = "theorem named like an earlier axiom",
+        .spec_edits = &.{.{ .find = "theorem id ", .replace = "theorem ax_1 " }},
+        .expected = error.DuplicateAssertionName,
+        .mm0c = "duplicate term/def name",
+    },
     // A `notation` restates its term's binder and return types exactly.
     // `notation all {x: nat} (p: wff x): wff = ($A.$:30) x ($,$:30) p;`
     // passes both verifiers.

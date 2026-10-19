@@ -18,12 +18,11 @@ pub const TermStmt = core.TermStmt;
 pub const Notation = core.Notation;
 
 /// Every error the MM0 parser boundary can raise: the trusted core's
-/// declared contract (`core.ParseError`) plus the wrapper's own filler and
-/// local-def errors. Downstream, the compiler's diagnostic catalog
+/// declared contract (`core.ParseError`) plus the wrapper's own filler
+/// errors. Downstream, the compiler's diagnostic catalog
 /// (`DiagnosticError`) is checked to cover this set at compile time, so a
 /// new kernel parse error is a compile error until it has a summary.
 pub const ParseError = core.ParseError || error{
-    DuplicateTermName,
     DuplicateFillerBinderName,
     FillerBinderMustBeDummy,
     PublicDefBodyMustBeHeaderless,

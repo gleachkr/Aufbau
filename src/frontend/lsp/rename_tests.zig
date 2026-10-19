@@ -426,11 +426,13 @@ test "rename refuses while part of the source does not parse" {
 }
 
 test "rename refuses a name declared twice" {
+    // A term and an axiom may share a name; rename treats both as one
+    // global name.
     try expectRefused(.{
         .mm0 =
         \\provable sort wff;
         \\term top: wff;
-        \\axiom ti: $ top $;
+        \\term ti: wff;
         \\axiom ti: $ top $;
         ,
     }, .mm0, "ti", 0, "truth", error.DuplicateName);

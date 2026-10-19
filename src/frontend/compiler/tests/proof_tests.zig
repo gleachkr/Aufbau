@@ -250,6 +250,33 @@ test "compiler rejects theorem names that collide with earlier lemmas" {
     try std.testing.expectEqualStrings("helper", diag.name.?);
 }
 
+test "compiler rejects term names that collide with earlier local defs" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\axiom top_i: $ top $;
+        \\theorem first: $ top $;
+        \\term helper: wff;
+    ;
+    const proof_src =
+        \\def helper: wff = $ top $
+        \\
+        \\first
+        \\-----
+        \\l1: $ top $ by top_i []
+    ;
+
+    var compiler = Compiler.initWithProof(
+        std.testing.allocator,
+        mm0_src,
+        proof_src,
+    );
+    try std.testing.expectError(error.DuplicateTermName, compiler.check());
+    const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
+    try std.testing.expectEqual(error.DuplicateTermName, diag.err);
+    try std.testing.expectEqualStrings("helper", diag.name.?);
+}
+
 test "compiler preserves local lemma diagnostics after check returns" {
     const mm0_src =
         \\provable sort wff;

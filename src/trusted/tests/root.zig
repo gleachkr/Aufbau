@@ -769,6 +769,28 @@ test "MM0 parser registers nothing from a statement with a tab" {
     try std.testing.expect(parser.lookupTermId("t") == null);
 }
 
+test "MM0 parser declares each name once per namespace" {
+    // Sorts, terms/defs and axioms/theorems are separate namespaces, as in
+    // mm0-c and mm0-rs, so a sort, a term and an axiom may share a name.
+    try parseAllStatements(
+        \\provable sort p;
+        \\term p: p;
+        \\axiom p: $ p $;
+    );
+    try std.testing.expectError(
+        error.DuplicateTermName,
+        parseAllStatements("provable sort wff;\nterm t: wff;\nterm t: wff;\n"),
+    );
+    try std.testing.expectError(
+        error.DuplicateTermName,
+        parseAllStatements("provable sort wff;\nterm t: wff;\ndef t: wff = $ t $;\n"),
+    );
+    try std.testing.expectError(
+        error.DuplicateAssertionName,
+        parseAllStatements("provable sort wff;\nterm t: wff;\naxiom a: $ t $;\ntheorem a: $ t $;\n"),
+    );
+}
+
 test "MM0 parser rejects unknown sorts in term signatures" {
     {
         const src =

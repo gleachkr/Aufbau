@@ -14,6 +14,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   steps is now an error that names it, as a rule that rewrites an
   expression back to itself already was; such a line used to fail with a
   mismatch at best.
+- The verifier accepted a `.mm0` file that declared a term, definition,
+  axiom or theorem name twice, which mm0-c rejects; a second term with
+  the same name silently replaced the first, and `abc` compiled it. Each
+  name is now declared once among terms and definitions and once among
+  axioms and theorems. A term and an axiom may still share a name, as in
+  mm0-c and mm0-rs. A `.mm0` term named like an earlier proof-local
+  definition is now rejected too, as a theorem named like an earlier
+  lemma already was.
 
 ## [0.0.18] - 2026-10-17
 

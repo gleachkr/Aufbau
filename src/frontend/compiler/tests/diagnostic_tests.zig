@@ -905,10 +905,10 @@ test "compiler check diagnostics are marked as mm0 source" {
     ;
 
     var compiler = Compiler.init(std.testing.allocator, mm0_src);
-    try std.testing.expectError(error.DuplicateRuleName, compiler.check());
+    try std.testing.expectError(error.DuplicateAssertionName, compiler.check());
 
     const diag = compiler.diagnostics.last_diagnostic orelse return error.ExpectedDiagnostic;
-    try std.testing.expectEqual(error.DuplicateRuleName, diag.err);
+    try std.testing.expectEqual(error.DuplicateAssertionName, diag.err);
     try std.testing.expectEqual(mm0.CompilerDiagnosticSource.mm0, diag.source);
     try std.testing.expectEqualStrings("dup", diag.name.?);
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;
