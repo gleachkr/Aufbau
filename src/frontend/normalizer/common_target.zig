@@ -16,36 +16,51 @@ pub fn buildCommonTarget(
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
-    if (lhs == rhs) return sameTarget(lhs);
-    if (try buildDefCommonTarget(self, lhs, rhs)) |result| return result;
-    if (try Cover.sharedStructuralCombiner(self, lhs, rhs)) |acui| {
-        if (try Acui.buildAcuiCommonTarget(self, lhs, rhs)) |result| {
-            return result;
-        }
-        // Two bags of a commutative combiner have just been compared member
-        // by member, every member against every other. Descending through
-        // the spine pairs the same members in one fixed order, and repeats
-        // the bag comparison on every suffix on the way down.
-        const spine = AcuiBag.Spine.raw(acui.head_term_id);
-        if (acui.comm_id != null and
-            spine.isBag(self.theorem, lhs) and
-            spine.isBag(self.theorem, rhs))
-        {
-            return null;
-        }
-    }
-    return try NonAcuiTarget.buildNonAcuiCommonTarget(self, lhs, rhs);
+    return try buildCommonTargetInside(self, null, lhs, rhs);
 }
 
-/// A common target of two members of one bag: `buildCommonTarget` short of
-/// the bag comparison the members are already inside.
+/// A common target of two members of one bag of `head_term_id`:
+/// `buildCommonTarget` short of comparing them as bags of that combiner.
+/// Members that are bags of another combiner still meet as bags.
 pub fn buildMemberCommonTarget(
     self: anytype,
+    head_term_id: u32,
+    lhs: ExprId,
+    rhs: ExprId,
+) anyerror!?CommonTargetResult {
+    return try buildCommonTargetInside(self, head_term_id, lhs, rhs);
+}
+
+fn buildCommonTargetInside(
+    self: anytype,
+    enclosing_head: ?u32,
     lhs: ExprId,
     rhs: ExprId,
 ) anyerror!?CommonTargetResult {
     if (lhs == rhs) return sameTarget(lhs);
     if (try buildDefCommonTarget(self, lhs, rhs)) |result| return result;
+    if (try Cover.sharedStructuralCombiner(self, lhs, rhs)) |acui| {
+        // Members of a bag of this combiner would meet again as one-member
+        // bags of it (the combiner falls back to the sort's) and be paired
+        // here once more, without end.
+        if (acui.head_term_id != enclosing_head) {
+            if (try Acui.buildAcuiCommonTarget(self, lhs, rhs)) |result| {
+                return result;
+            }
+            // Two bags of a commutative combiner have just been compared
+            // member by member, every member against every other.
+            // Descending through the spine pairs the same members in one
+            // fixed order, and repeats the bag comparison on every suffix on
+            // the way down.
+            const spine = AcuiBag.Spine.raw(acui.head_term_id);
+            if (acui.comm_id != null and
+                spine.isBag(self.theorem, lhs) and
+                spine.isBag(self.theorem, rhs))
+            {
+                return null;
+            }
+        }
+    }
     return try NonAcuiTarget.buildNonAcuiCommonTarget(self, lhs, rhs);
 }
 

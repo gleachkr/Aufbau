@@ -59,6 +59,7 @@ pub fn buildAcuiCommonTarget(
     );
     try pairCommonAcuiLeaves(
         self,
+        acui.head_term_id,
         lhs_leaves.items,
         rhs_leaves.items,
         lhs_exact,
@@ -284,6 +285,7 @@ fn openUncoveredDefs(
 
 pub fn pairCommonAcuiLeaves(
     self: anytype,
+    head_term_id: u32,
     lhs: []AcuiLeaf,
     rhs: []AcuiLeaf,
     lhs_exact: []bool,
@@ -296,6 +298,7 @@ pub fn pairCommonAcuiLeaves(
             if (rhs_exact[rhs_idx]) continue;
             const common = try CommonTarget.buildMemberCommonTarget(
                 self,
+                head_term_id,
                 lhs_leaf.old_expr,
                 rhs_leaf.old_expr,
             ) orelse continue;

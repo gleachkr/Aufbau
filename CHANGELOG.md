@@ -22,6 +22,12 @@ This file records notable user-facing changes to Aufbau. The project follows
   mm0-c and mm0-rs. A `.mm0` term named like an earlier proof-local
   definition is now rejected too, as a theorem named like an earlier
   lemma already was.
+- A sum holding two or more definitions whose bodies are sums was not
+  matched against its expansion when the sum sat inside a product:
+  `(3 + 3) * 0` and `(1 + 1 + 1 + 1 + 1 + 1) * 0` were refused with
+  `def three = 1 + 1 + 1`, though `3 + 3` alone matched. A member of a
+  commutative bag that is itself a bag of another combiner is now compared
+  as a bag, as it is anywhere else.
 
 ## [0.0.18] - 2026-10-17
 
