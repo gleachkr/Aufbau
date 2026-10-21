@@ -91,6 +91,15 @@ pub const Restriction = struct {
     term_slot: u32,
 };
 
+/// A lift `explain` refused: the `@congr` rule of `head` keeps its
+/// regular argument at `restriction.term_slot` apart from the bound
+/// variable at `restriction.bound_slot` (the head's own argument
+/// positions), and the step to lift needs that argument to mention it.
+pub const BlockedLift = struct {
+    head: u32,
+    restriction: Restriction,
+};
+
 /// One enrolled `@conversion` orientation. `match_side` is e-matched;
 /// `target_side` is instantiated over the resulting substitution and
 /// unioned with the matched class. The caller guarantees `match_side` is an
@@ -558,6 +567,11 @@ pub const EGraph = struct {
     /// the regular child avoids the bound child's variable. Heads without
     /// an entry lift unconditionally.
     congr_restrictions: std.AutoArrayHashMapUnmanaged(u32, []const Restriction) = .{},
+    /// The first lift the last `explain` call refused for a
+    /// `congr_restrictions` entry. Reset per call; meaningful only when
+    /// that call returned null, where the driver names it in the miss
+    /// report.
+    explain_blocked: ?BlockedLift = null,
     /// Binary heads certified assoc+comm: applications intern as sorted
     /// bags. The driver must only police heads that are congruence-gated
     /// (`congr_heads`) and have no bound positions — extraction lifts
@@ -4117,6 +4131,7 @@ pub const EGraph = struct {
         to: *const Term,
         opts: ExplainOptions,
     ) !?[]const Step {
+        self.explain_blocked = null;
         const from_class = self.nodes.items[from.node].class;
         const to_class = self.nodes.items[to.node].class;
         if (!self.sameClass(from_class, to_class)) return null;

@@ -18,6 +18,7 @@ const Child = eg_mod.Child;
 const ENode = eg_mod.ENode;
 const Rule = eg_mod.Rule;
 const Restriction = eg_mod.Restriction;
+const BlockedLift = eg_mod.BlockedLift;
 const Justification = eg_mod.Justification;
 const SpliceJust = eg_mod.SpliceJust;
 const SpliceExpansion = eg_mod.SpliceExpansion;
@@ -231,6 +232,9 @@ pub const ExplainCtx = struct {
     /// the bound variables of every enclosing node whose `@congr` rule
     /// keeps the descended child apart from them (see `alignChildren`).
     lift_avoid: std.ArrayListUnmanaged(LeafId) = .empty,
+    /// Parallel to `lift_avoid`: the node restriction that pushed each
+    /// atom, for the miss report (`EGraph.explain_blocked`).
+    lift_avoid_origin: std.ArrayListUnmanaged(BlockedLift) = .empty,
     /// Interned avoid-masks: sorted atom lists a representative's subtree
     /// must not mention. Index 0 is always the empty mask.
     mask_atoms: std.ArrayListUnmanaged([]const LeafId) = .empty,
@@ -1066,15 +1070,17 @@ pub const ExplainCtx = struct {
     ) error{OutOfMemory}!bool {
         if (from.children.len != to.children.len) return false;
         const restrictions = self.liftRestrictions(from.node);
-        if (restrictions.len != 0 and
-            (!self.liftable(from, restrictions) or
-                !self.liftable(to, restrictions)))
+        if (self.unliftable(from, restrictions) orelse
+            self.unliftable(to, restrictions)) |blocked|
         {
             // No step lifts through this node: it aligns only when
             // nothing below it has to move.
             for (from.children, to.children) |fc, tc| {
                 const from_child = fc orelse continue;
-                if (!termEql(self.eg, from_child, tc.?)) return false;
+                if (!termEql(self.eg, from_child, tc.?)) {
+                    self.noteBlocked(self.blockedAt(from.node, blocked));
+                    return false;
+                }
             }
             return true;
         }
@@ -1084,7 +1090,10 @@ pub const ExplainCtx = struct {
             if (termEql(self.eg, from_child, to_child)) continue;
             const child_pos = try self.pushPos(pos, @intCast(idx));
             const avoid_mark = self.lift_avoid.items.len;
-            defer self.lift_avoid.shrinkRetainingCapacity(avoid_mark);
+            defer {
+                self.lift_avoid.shrinkRetainingCapacity(avoid_mark);
+                self.lift_avoid_origin.shrinkRetainingCapacity(avoid_mark);
+            }
             try self.pushSlotAtoms(from.node, restrictions, @intCast(idx));
             if (!try self.explainTerms(from_child, to_child, child_pos)) {
                 return false;
@@ -1105,21 +1114,37 @@ pub const ExplainCtx = struct {
         };
     }
 
-    /// Whether every regular child of `term` avoids the variables its
-    /// head's `@congr` rule keeps it apart from, so a step under the
-    /// node lifts to a valid congruence instance (the unchanged siblings
-    /// are cited too).
-    fn liftable(
+    /// The first restriction a regular child of `term` breaks by
+    /// mentioning the variable its head's `@congr` rule keeps it apart
+    /// from; null when every step under the node lifts to a valid
+    /// congruence instance (the unchanged siblings are cited too).
+    fn unliftable(
         self: *const ExplainCtx,
         term: *const Term,
         restrictions: []const Restriction,
-    ) bool {
+    ) ?Restriction {
         for (restrictions) |restriction| {
             const atom = self.restrictedAtom(term.node, restriction) orelse continue;
             const child = term.children[restriction.term_slot] orelse continue;
-            if (!self.termAvoidsAtoms(child, &.{atom})) return false;
+            if (!self.termAvoidsAtoms(child, &.{atom})) return restriction;
         }
-        return true;
+        return null;
+    }
+
+    fn blockedAt(
+        self: *const ExplainCtx,
+        node_id: ENodeId,
+        restriction: Restriction,
+    ) BlockedLift {
+        return .{
+            .head = self.eg.nodes.items[node_id].node.app.term_id,
+            .restriction = restriction,
+        };
+    }
+
+    /// Record the first refused lift for the miss report.
+    fn noteBlocked(self: *ExplainCtx, blocked: BlockedLift) void {
+        if (self.eg.explain_blocked == null) self.eg.explain_blocked = blocked;
     }
 
     /// The variable a restriction keeps the node's regular child apart
@@ -1148,6 +1173,10 @@ pub const ExplainCtx = struct {
             if (restriction.term_slot != slot) continue;
             const atom = self.restrictedAtom(node_id, restriction) orelse continue;
             try self.lift_avoid.append(self.allocator(), atom);
+            try self.lift_avoid_origin.append(
+                self.allocator(),
+                self.blockedAt(node_id, restriction),
+            );
         }
     }
 
@@ -1158,6 +1187,14 @@ pub const ExplainCtx = struct {
         if (!self.termAvoidsAtoms(step.before, self.lift_avoid.items) or
             !self.termAvoidsAtoms(step.after, self.lift_avoid.items))
         {
+            for (self.lift_avoid.items, self.lift_avoid_origin.items) |atom, origin| {
+                if (!self.termAvoidsAtoms(step.before, &.{atom}) or
+                    !self.termAvoidsAtoms(step.after, &.{atom}))
+                {
+                    self.noteBlocked(origin);
+                    break;
+                }
+            }
             return false;
         }
         try self.steps.append(self.allocator(), step);

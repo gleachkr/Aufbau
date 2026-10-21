@@ -54,6 +54,17 @@ pub fn renderRefText(
 /// Lowers one explanation into proof-script source text. Every emitted line
 /// asserts its full conclusion, so unification replay solves all rule
 /// binders — no explicit bindings are needed on any line.
+/// A congruence step through `head` that its `@congr` rule `rule_id`
+/// cannot justify: the rule's regular binder `arg_idx` may not mention
+/// its bound binder `bound_idx` (rule binder indices), yet the step needs
+/// it to.
+pub const BlockedCongr = struct {
+    head: u32,
+    rule_id: u32,
+    arg_idx: usize,
+    bound_idx: usize,
+};
+
 pub const Lowerer = struct {
     work: std.mem.Allocator,
     context: *const Context,
@@ -84,6 +95,10 @@ pub const Lowerer = struct {
     /// proof line, and the fix (annotate a congruence theorem) is the
     /// theory author's, not the search's.
     missing_congr: ?u32 = null,
+    /// Set when a null return came from a congruence step its `@congr`
+    /// rule's dependency restrictions forbid (see `emitCongrLine`); the
+    /// driver names the rule and binders in the failure report.
+    blocked_congr: ?BlockedCongr = null,
     /// Lazily built checker-equivalent rewrite normalizer for big-step
     /// grouping (see `tryBigStep`).
     norm_state: ?*NormState = null,
@@ -685,7 +700,28 @@ pub const Lowerer = struct {
             // rather than emit a line it would reject.
             else => return null,
         };
-        if (violation != null) return null;
+        if (violation) |detail| {
+            // Named only when one side of the clash is the bound binder
+            // and the other the regular binder that may not mention it;
+            // two bound binders given one variable restrict nothing a
+            // theory author could relax.
+            if (self.blocked_congr == null and
+                detail.first_rule_bound != detail.second_rule_bound)
+            {
+                self.blocked_congr = if (detail.first_rule_bound) .{
+                    .head = head,
+                    .rule_id = congr_rule,
+                    .arg_idx = detail.second_arg_idx,
+                    .bound_idx = detail.first_arg_idx,
+                } else .{
+                    .head = head,
+                    .rule_id = congr_rule,
+                    .arg_idx = detail.first_arg_idx,
+                    .bound_idx = detail.second_arg_idx,
+                };
+            }
+            return null;
+        }
         const relation = self.relationForSort(decl.ret_sort_name) orelse
             return null;
         return try self.emitLine(

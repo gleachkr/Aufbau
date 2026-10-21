@@ -518,7 +518,9 @@ When a conversion is found but its chain rewrites under an operator with
 no `@congr` rule, the failure report names that operator; the fix is to
 annotate a congruence theorem for it (which may first require a
 `@relation` on an argument's sort, so the unchanged slots can discharge
-by that relation's `refl`).
+by that relation's `refl`). When the chain needs a lift that a `@congr`
+rule's dependencies forbid, the report names the rule and the binder it
+keeps apart from the variable (see the `@congr` section below).
 
 One rewrite source needs no annotation at all: a hypothesis or earlier
 proof line whose formula is `rel(lhs, rhs)` for a registered `@relation`
@@ -768,6 +770,17 @@ variable; an under-dependent binder would make every such lift violate
 the rule's disjointness conditions, so the annotation is rejected at
 declaration time. For the same reason, the four `@relation` bundle rules
 (`refl`/`trans`/`symm`/transport) must not have bound binders.
+
+An argument the constructor places outside its binder, such as the
+replacement `a` of `sb {x: tm} (e: tm x) (a: tm)`, imposes no such
+requirement, and its binders may leave the variable out
+(`(a1 a2: tm)`). Doing so forbids every lift through a term whose
+argument there mentions the variable, as in `[x := x + a] e`: nothing
+inside such a term can be rewritten. That argument reads the variable
+from outside the binder, so `a1 = a2` gives `[x := a1] e = [x := a2] e`
+whether or not `a1` mentions `x`, and `(a1 a2: tm x)` is sound. Keep
+the restriction only when the constructor depends on the variable's name
+there.
 
 ### Cross-sort congruence
 

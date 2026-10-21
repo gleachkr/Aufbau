@@ -67,6 +67,21 @@ fn writeConversionDetail(
                     "'{s}' with @congr to let the chain lower.",
                 .{ name, name },
             );
+        } else if (result.blocked_congr) |blocked| {
+            try w.print(
+                "a conversion proving this goal was found, but its proof " ++
+                    "chain rewrites under '{s}' where the @congr rule " ++
+                    "'{s}' cannot lift it: '{s}' may not depend on '{s}', " ++
+                    "and here that argument mentions it. Unless '{s}' " ++
+                    "depends on the variable's name there, letting '{s}' " ++
+                    "depend on '{s}' in '{s}' is sound and lets the chain " ++
+                    "lower.",
+                .{
+                    blocked.head,  blocked.rule, blocked.arg,
+                    blocked.bound, blocked.head, blocked.arg,
+                    blocked.bound, blocked.rule,
+                },
+            );
         } else {
             try w.writeAll(
                 "a conversion proving this goal was found, but a proof " ++

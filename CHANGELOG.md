@@ -44,7 +44,17 @@ This file records notable user-facing changes to Aufbau. The project follows
   it cites a form that keeps the chain open, such as `f` in place of
   `[m := …] f`. Reordering a commutative sum inside such a term
   (`[x := x + a] e` against `[x := a + x] e`) is refused too, since no
-  congruence reaches it.
+  congruence reaches it. When such a refusal is why `conversion?` misses,
+  its failure report names the `@congr` rule and the argument it keeps
+  apart from the variable. Such a restriction is rarely needed: an
+  argument the term itself places outside the binder, like `sb`'s
+  replacement, reads the variable from outside, so letting the rule's
+  argument depend on it is sound.
+- The manual's lambda calculus cells used an `sb_congr` whose replacement
+  may not mention the substituted variable, unlike the one the chapter
+  shows, so `conversion?` could not rewrite inside `[x := x + a] e`. The
+  cells now use the chapter's rule. The `reynolds` example's
+  `sb_ty_congr` is relaxed the same way.
 
 ## [0.0.18] - 2026-10-17
 

@@ -499,9 +499,21 @@ test "conversion? never reorders a sum inside a stuck substitution" {
         \\l1: $ [x := x + a] e = [x := a + x] e $ by conversion?
         \\
     ;
-    var inside = try conversionSuggestions(&arena, inside_mm0, inside_proof, .{});
+    var inside = try conversionSuggestions(
+        &arena,
+        inside_mm0,
+        inside_proof,
+        .{ .status_detail = true },
+    );
     defer inside.deinit();
     try std.testing.expect(inside.status != .found);
+    // The miss names the restriction that refused the lift.
+    const detail = inside.status_detail orelse return error.MissingStatusDetail;
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        detail,
+        "'sb_congr' cannot lift it: 'a1' may not depend on 'x'",
+    ) != null);
 
     const beside_mm0 = try std.mem.concat(arena.allocator(), u8, &.{
         theory,

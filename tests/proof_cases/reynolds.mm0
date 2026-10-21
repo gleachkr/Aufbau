@@ -152,7 +152,7 @@ notation sb_ty {a: ty} (S: ty) (B: ty a): ty =
   ($[$:41) a ($/$:0) S ($]$:0) B;
 
 --| @congr
-axiom sb_ty_congr {a: ty} (S1 S2: ty) (A B: ty a):
+axiom sb_ty_congr {a: ty} (S1 S2: ty a) (A B: ty a):
   $ S1 ~ S2 $ > $ A ~ B $ > $ [a/S1] A ~ [a/S2] B $;
 
 -- The substituted variable itself.

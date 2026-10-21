@@ -100,6 +100,15 @@ pub fn defRuleTermId(rule_id: u32) ?u32 {
     return rule_id & ~def_rule_tag;
 }
 
+pub const BlockedCongrNames = struct {
+    head: []const u8,
+    rule: []const u8,
+    /// The regular binder denied the variable.
+    arg: []const u8,
+    /// The bound binder it may not mention.
+    bound: []const u8,
+};
+
 pub const Result = struct {
     /// Full replacement text for the placeholder line's span (the emitted
     /// chain lines plus the transported goal line), or null on a miss.
@@ -111,6 +120,11 @@ pub const Result = struct {
     /// failure report so the theory author knows which congruence
     /// annotation is missing.
     missing_congr_name: ?[]const u8 = null,
+    /// A `@congr` rule whose dependency restriction refused a step the
+    /// found conversion needs (see `Lowerer.blocked_congr` and
+    /// `EGraph.explain_blocked`); named in the failure report so the
+    /// theory author can weigh relaxing it.
+    blocked_congr: ?BlockedCongrNames = null,
     /// A pool formula shares the goal's e-class, but no proof chain could
     /// be extracted or lowered from it. Keeps the failure report honest: a
     /// saturated outcome with this flag set is NOT a forced negative.
@@ -571,6 +585,7 @@ pub fn run(
                 .{},
             )) orelse {
                 result.convertible_unlowered = true;
+                noteExplainBlocked(&result, context, &eg);
                 continue;
             };
             const lowered = try lowerBothOrientations(
@@ -595,6 +610,7 @@ pub fn run(
                 result.missing_congr_name =
                     context.env.terms.items[term_id].name;
             }
+            noteBlockedCongr(&result, context.env, lowered.blocked_congr);
         }
 
         // Equation fallback: no pool reference lowered, but the goal's own
@@ -629,8 +645,10 @@ pub fn run(
                         result.missing_congr_name =
                             context.env.terms.items[term_id].name;
                     }
+                    noteBlockedCongr(&result, context.env, lowered.blocked_congr);
                 } else {
                     result.convertible_unlowered = true;
+                    noteExplainBlocked(&result, context, &eg);
                 }
             } else if (eqSidesConverged(&eg, eq_sides)) {
                 // The extraction rebuild re-spliced the sides into
@@ -683,6 +701,10 @@ const DualLowering = struct {
     /// that is why an orientation failed to lower (forward orientation's
     /// finding preferred). The failure report names it.
     missing_congr: ?u32 = null,
+    /// A congruence step a `@congr` dependency restriction refused, when
+    /// that is why an orientation failed to lower (forward orientation's
+    /// finding preferred).
+    blocked_congr: ?lowering.BlockedCongr = null,
 };
 
 /// Lower one explanation in both orientations and keep the shorter emission.
@@ -760,6 +782,60 @@ fn congrRestrictions(
     return out.items;
 }
 
+/// Name a refused congruence in the failure report; the first one found
+/// wins.
+fn noteBlockedCongr(
+    result: *Result,
+    env: *const GlobalEnv,
+    maybe_blocked: ?lowering.BlockedCongr,
+) void {
+    if (result.blocked_congr != null) return;
+    const blocked = maybe_blocked orelse return;
+    const rule = &env.rules.items[blocked.rule_id];
+    result.blocked_congr = .{
+        .head = env.terms.items[blocked.head].name,
+        .rule = rule.name,
+        .arg = rule.arg_names[blocked.arg_idx] orelse "_",
+        .bound = rule.arg_names[blocked.bound_idx] orelse "_",
+    };
+}
+
+/// Name the lift the last failed `explain` refused, mapped from the
+/// head's argument positions onto its `@congr` rule's binders.
+fn noteExplainBlocked(
+    result: *Result,
+    context: *const Context,
+    eg: *const egraph.EGraph,
+) void {
+    const lift = eg.explain_blocked orelse return;
+    const congr = context.registry.congr_by_head.get(lift.head) orelse return;
+    const term_args = context.env.terms.items[lift.head].args;
+    const rule_args = context.env.rules.items[congr.rule_id].args;
+    const bound_slot = lift.restriction.bound_slot;
+    var ordinal: u6 = 0;
+    for (term_args[0..bound_slot]) |arg| {
+        if (arg.bound) ordinal += 1;
+    }
+    // Name whichever of the old/new pair is denied the variable.
+    var arg_idx = congrBinderIndex(term_args, lift.restriction.term_slot);
+    if ((rule_args[arg_idx].deps >> ordinal) & 1 != 0) arg_idx += 1;
+    noteBlockedCongr(result, context.env, .{
+        .head = lift.head,
+        .rule_id = congr.rule_id,
+        .arg_idx = arg_idx,
+        .bound_idx = congrBinderIndex(term_args, bound_slot),
+    });
+}
+
+/// The `@congr` binder for head argument `slot` (the old one of a regular
+/// argument's pair): one binder per bound argument, an old/new pair per
+/// regular one, in argument order.
+fn congrBinderIndex(term_args: []const ArgInfo, slot: u32) usize {
+    var idx: usize = 0;
+    for (term_args[0..slot]) |arg| idx += if (arg.bound) 1 else 2;
+    return idx;
+}
+
 fn lowerBothOrientations(
     proto: Lowerer,
     block_lines: []const ProofScript.ProofLine,
@@ -786,7 +862,10 @@ fn lowerBothOrientations(
         },
         .any_cap = lowerer.cap_tripped,
     };
-    if (result.best == null) result.missing_congr = lowerer.missing_congr;
+    if (result.best == null) {
+        result.missing_congr = lowerer.missing_congr;
+        result.blocked_congr = lowerer.blocked_congr;
+    }
     if (!proto.context.registry.hasRewriteRules()) return result;
 
     var reversed_lowerer = proto;
@@ -817,6 +896,8 @@ fn lowerBothOrientations(
     if (result.best == null) {
         result.missing_congr =
             lowerer.missing_congr orelse reversed_lowerer.missing_congr;
+        result.blocked_congr =
+            lowerer.blocked_congr orelse reversed_lowerer.blocked_congr;
     }
     return result;
 }

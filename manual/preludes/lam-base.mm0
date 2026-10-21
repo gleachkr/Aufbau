@@ -39,5 +39,5 @@ axiom add_congr (a b c d: tm) (h1: $ a = b $) (h2: $ c = d $): $ a + c = b + d $
 --| @congr
 axiom lam_congr {x: tm} (a b: tm x) (h: $ a = b $): $ (λ x. a) = (λ x. b) $;
 --| @congr
-axiom sb_congr {x: tm} (e1 e2: tm x) (a1 a2: tm) (h1: $ e1 = e2 $) (h2: $ a1 = a2 $):
+axiom sb_congr {x: tm} (e1 e2: tm x) (a1 a2: tm x) (h1: $ e1 = e2 $) (h2: $ a1 = a2 $):
   $ ([x := a1] e1) = ([x := a2] e2) $;
