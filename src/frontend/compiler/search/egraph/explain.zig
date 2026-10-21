@@ -17,6 +17,7 @@ const LeafId = eg_mod.LeafId;
 const Child = eg_mod.Child;
 const ENode = eg_mod.ENode;
 const Rule = eg_mod.Rule;
+const Restriction = eg_mod.Restriction;
 const Justification = eg_mod.Justification;
 const SpliceJust = eg_mod.SpliceJust;
 const SpliceExpansion = eg_mod.SpliceExpansion;
@@ -226,6 +227,10 @@ pub const ExplainCtx = struct {
     /// unions merge a class into a same-head compound containing itself);
     /// cutting the re-entry keeps extraction well-founded.
     active: std.AutoHashMapUnmanaged(AlignKey, void) = .{},
+    /// Atoms no step at the current position may mention on either side:
+    /// the bound variables of every enclosing node whose `@congr` rule
+    /// keeps the descended child apart from them (see `alignChildren`).
+    lift_avoid: std.ArrayListUnmanaged(LeafId) = .empty,
     /// Interned avoid-masks: sorted atom lists a representative's subtree
     /// must not mention. Index 0 is always the empty mask.
     mask_atoms: std.ArrayListUnmanaged([]const LeafId) = .empty,
@@ -256,6 +261,11 @@ pub const ExplainCtx = struct {
     /// the first pass, so every chain the default representatives can
     /// extract stays identical.
     destination_mode: bool = false,
+    /// Rule edges first try bindings that keep their endpoints liftable
+    /// (`liftableMasks`). The preference is per edge, so a chain whose
+    /// endpoint itself holds a node no step may enter can need the plain
+    /// rendering instead; `EGraph.explain` retries with this off.
+    prefer_liftable: bool = true,
     /// Destination term of the alignment in flight on a self-containing
     /// class, by class root; see `memberTerm`.
     route_targets: std.AutoHashMapUnmanaged(EClassId, *const Term) = .{},
@@ -1055,15 +1065,102 @@ pub const ExplainCtx = struct {
         pos: []const u32,
     ) error{OutOfMemory}!bool {
         if (from.children.len != to.children.len) return false;
+        const restrictions = self.liftRestrictions(from.node);
+        if (restrictions.len != 0 and
+            (!self.liftable(from, restrictions) or
+                !self.liftable(to, restrictions)))
+        {
+            // No step lifts through this node: it aligns only when
+            // nothing below it has to move.
+            for (from.children, to.children) |fc, tc| {
+                const from_child = fc orelse continue;
+                if (!termEql(self.eg, from_child, tc.?)) return false;
+            }
+            return true;
+        }
         for (from.children, to.children, 0..) |fc, tc, idx| {
             const from_child = fc orelse continue;
             const to_child = tc.?;
             if (termEql(self.eg, from_child, to_child)) continue;
             const child_pos = try self.pushPos(pos, @intCast(idx));
+            const avoid_mark = self.lift_avoid.items.len;
+            defer self.lift_avoid.shrinkRetainingCapacity(avoid_mark);
+            try self.pushSlotAtoms(from.node, restrictions, @intCast(idx));
             if (!try self.explainTerms(from_child, to_child, child_pos)) {
                 return false;
             }
         }
+        return true;
+    }
+
+    /// The `@congr` restrictions of an application node's head; empty
+    /// for leaves, bags, and heads that lift unconditionally.
+    fn liftRestrictions(
+        self: *const ExplainCtx,
+        node_id: ENodeId,
+    ) []const Restriction {
+        return switch (self.eg.nodes.items[node_id].node) {
+            .app => |app| self.eg.congr_restrictions.get(app.term_id) orelse &.{},
+            .leaf, .bag => &.{},
+        };
+    }
+
+    /// Whether every regular child of `term` avoids the variables its
+    /// head's `@congr` rule keeps it apart from, so a step under the
+    /// node lifts to a valid congruence instance (the unchanged siblings
+    /// are cited too).
+    fn liftable(
+        self: *const ExplainCtx,
+        term: *const Term,
+        restrictions: []const Restriction,
+    ) bool {
+        for (restrictions) |restriction| {
+            const atom = self.restrictedAtom(term.node, restriction) orelse continue;
+            const child = term.children[restriction.term_slot] orelse continue;
+            if (!self.termAvoidsAtoms(child, &.{atom})) return false;
+        }
+        return true;
+    }
+
+    /// The variable a restriction keeps the node's regular child apart
+    /// from: the atom at its bound position.
+    fn restrictedAtom(
+        self: *const ExplainCtx,
+        node_id: ENodeId,
+        restriction: Restriction,
+    ) ?LeafId {
+        const app = self.eg.nodes.items[node_id].node.app;
+        return switch (app.children[restriction.bound_slot]) {
+            .bound => |leaf| leaf,
+            .class => null,
+        };
+    }
+
+    /// Push onto `lift_avoid` the bound variables child `slot` of the
+    /// node must avoid.
+    fn pushSlotAtoms(
+        self: *ExplainCtx,
+        node_id: ENodeId,
+        restrictions: []const Restriction,
+        slot: u32,
+    ) error{OutOfMemory}!void {
+        for (restrictions) |restriction| {
+            if (restriction.term_slot != slot) continue;
+            const atom = self.restrictedAtom(node_id, restriction) orelse continue;
+            try self.lift_avoid.append(self.allocator(), atom);
+        }
+    }
+
+    /// Record a step unless its position sits under a node whose
+    /// `@congr` rule could not lift it (see `lift_avoid`). False sends
+    /// the route back for another.
+    fn appendStep(self: *ExplainCtx, step: Step) error{OutOfMemory}!bool {
+        if (!self.termAvoidsAtoms(step.before, self.lift_avoid.items) or
+            !self.termAvoidsAtoms(step.after, self.lift_avoid.items))
+        {
+            return false;
+        }
+        try self.steps.append(self.allocator(), step);
         return true;
     }
 
@@ -1149,28 +1246,42 @@ pub const ExplainCtx = struct {
                 }
                 const max_attempts: usize =
                     if (has_self_ref) 2 else 1;
-                const step_mark = self.steps.items.len;
-                var rendered: RenderedEndpoints = undefined;
-                var attempt: usize = 0;
-                aligned: while (true) : (attempt += 1) {
-                    if (attempt == max_attempts) return null;
-                    self.steps.shrinkRetainingCapacity(step_mark);
-                    rendered = (try self.renderRuleEndpoints(
+                // Each attempt runs under the liftable masks first (see
+                // `liftableMasks`), then under the plain ones.
+                const mask_variants = [2]?[]const u32{
+                    try self.liftableMasks(
                         rule,
                         pattern_in,
                         pattern_out,
-                        before_node,
-                        after_node,
                         rule_just.subst,
                         binder_masks,
-                        if (current.node == before_node) current else null,
-                        attempt == 1,
-                        rule_just.extension.len != 0,
-                    )) orelse return null;
-                    if (try self.explainTerms(current, rendered.lhs, pos)) {
-                        break :aligned;
+                    ),
+                    binder_masks,
+                };
+                const step_mark = self.steps.items.len;
+                var rendered: RenderedEndpoints = undefined;
+                var masks = binder_masks;
+                aligned: for (mask_variants) |variant| {
+                    masks = variant orelse continue;
+                    for (0..max_attempts) |attempt| {
+                        self.steps.shrinkRetainingCapacity(step_mark);
+                        rendered = (try self.renderRuleEndpoints(
+                            rule,
+                            pattern_in,
+                            pattern_out,
+                            before_node,
+                            after_node,
+                            rule_just.subst,
+                            masks,
+                            if (current.node == before_node) current else null,
+                            attempt == 1,
+                            rule_just.extension.len != 0,
+                        )) orelse break;
+                        if (try self.explainTerms(current, rendered.lhs, pos)) {
+                            break :aligned;
+                        }
                     }
-                }
+                } else return null;
                 const lhs = rendered.lhs;
                 const rhs = rendered.rhs;
 
@@ -1191,7 +1302,7 @@ pub const ExplainCtx = struct {
                         .class => |c| .{
                             .term = (try self.memberTerm(
                                 c,
-                                binder_masks[idx],
+                                masks[idx],
                             )) orelse {
                                 return null;
                             },
@@ -1208,10 +1319,10 @@ pub const ExplainCtx = struct {
                     rule_just.premises,
                     rule_just.fired_at,
                     rule_just.subst,
-                    binder_masks,
+                    masks,
                     bindings,
                 )) orelse return null;
-                try self.steps.append(self.allocator(), .{
+                if (!try self.appendStep(.{
                     .source = .{ .rule = rule.rule_id },
                     .needs_symm = needs_symm,
                     .position = pos,
@@ -1220,7 +1331,7 @@ pub const ExplainCtx = struct {
                     .bindings = bindings,
                     .bag = bag_info,
                     .premises = premises,
-                });
+                })) return null;
                 return rhs;
             },
             .pool_equation => |eq| {
@@ -1239,14 +1350,14 @@ pub const ExplainCtx = struct {
                 if (!try self.explainTerms(current, before, pos)) {
                     return null;
                 }
-                try self.steps.append(self.allocator(), .{
+                if (!try self.appendStep(.{
                     .source = .{ .pool_equation = eq.pool_index },
                     .needs_symm = !edge.forward,
                     .position = pos,
                     .before = before,
                     .after = after,
                     .bindings = &.{},
-                });
+                })) return null;
                 return after;
             },
             .splice => |sp| {
@@ -1476,14 +1587,14 @@ pub const ExplainCtx = struct {
                 leaves.items,
                 leaf_roots.items,
             )) orelse return null;
-            try self.steps.append(self.allocator(), .{
+            if (!try self.appendStep(.{
                 .source = .ac_flatten,
                 .needs_symm = false,
                 .position = pos,
                 .before = nested,
                 .after = flat,
                 .bindings = &.{},
-            });
+            })) return null;
             return flat;
         }
         // Flat -> nested: rebuild the expansion trees, claiming the flat
@@ -1515,14 +1626,14 @@ pub const ExplainCtx = struct {
         for (claimed) |flag| if (!flag) return null;
         const nested = try self.allocator().create(Term);
         nested.* = .{ .node = sp.from, .children = children };
-        try self.steps.append(self.allocator(), .{
+        if (!try self.appendStep(.{
             .source = .ac_flatten,
             .needs_symm = false,
             .position = pos,
             .before = aligned,
             .after = nested,
             .bindings = &.{},
-        });
+        })) return null;
         return nested;
     }
 
@@ -1967,6 +2078,90 @@ pub const ExplainCtx = struct {
             masks[slot] = try self.internMask(atoms.items);
         }
         return masks;
+    }
+
+    /// `binderMasks` tightened so the edge's endpoints render liftable: a
+    /// binder below a pattern node whose `@congr` rule keeps that position
+    /// apart from a bound binder also avoids the bound binder's atom.
+    /// `beta`'s `[x := a] e` with an `a` that mentions `x` is a valid
+    /// term, but no later step could lift through it; citing a member of
+    /// `a`'s class that avoids `x` keeps the rest of the chain open. Null
+    /// when no binder gains an atom.
+    fn liftableMasks(
+        self: *ExplainCtx,
+        rule: Rule,
+        pattern_in: TemplateExpr,
+        pattern_out: TemplateExpr,
+        subst: []const ?Child,
+        binder_masks: []const u32,
+    ) !?[]const u32 {
+        if (!self.prefer_liftable or self.eg.congr_restrictions.count() == 0) {
+            return null;
+        }
+        const extra = try self.allocator().alloc(
+            std.ArrayListUnmanaged(LeafId),
+            rule.num_binders,
+        );
+        @memset(extra, .empty);
+        try self.collectLiftAtoms(pattern_in, subst, &.{}, extra);
+        try self.collectLiftAtoms(pattern_out, subst, &.{}, extra);
+        var masks: ?[]u32 = null;
+        for (extra, 0..) |*atoms, slot| {
+            if (atoms.items.len == 0) continue;
+            for (self.maskAtoms(binder_masks[slot])) |atom| {
+                if (maskContains(atoms.items, atom)) continue;
+                try atoms.append(self.allocator(), atom);
+            }
+            std.mem.sort(LeafId, atoms.items, {}, std.sort.asc(LeafId));
+            const mask_id = try self.internMask(atoms.items);
+            if (mask_id == binder_masks[slot]) continue;
+            if (masks == null) {
+                masks = try self.allocator().dupe(u32, binder_masks);
+            }
+            masks.?[slot] = mask_id;
+        }
+        return masks;
+    }
+
+    /// Add to `extra[b]` the atoms each term binder `b` of `pattern` must
+    /// avoid for the pattern's nodes to stay liftable; `inherited` holds
+    /// the atoms of the enclosing restricted positions.
+    fn collectLiftAtoms(
+        self: *ExplainCtx,
+        pattern: TemplateExpr,
+        subst: []const ?Child,
+        inherited: []const LeafId,
+        extra: []std.ArrayListUnmanaged(LeafId),
+    ) error{OutOfMemory}!void {
+        switch (pattern) {
+            .binder => |b| {
+                const binding = subst[b] orelse return;
+                if (binding == .bound) return;
+                for (inherited) |atom| {
+                    if (maskContains(extra[b].items, atom)) continue;
+                    try extra[b].append(self.allocator(), atom);
+                }
+            },
+            .app => |app| {
+                const restrictions =
+                    self.eg.congr_restrictions.get(app.term_id) orelse &.{};
+                for (app.args, 0..) |arg, idx| {
+                    var atoms: std.ArrayListUnmanaged(LeafId) = .empty;
+                    try atoms.appendSlice(self.allocator(), inherited);
+                    for (restrictions) |restriction| {
+                        if (restriction.term_slot != idx) continue;
+                        const bound_binder = switch (app.args[restriction.bound_slot]) {
+                            .binder => |bb| bb,
+                            .app => continue,
+                        };
+                        const binding = subst[bound_binder] orelse continue;
+                        if (binding != .bound) continue;
+                        try atoms.append(self.allocator(), binding.bound);
+                    }
+                    try self.collectLiftAtoms(arg, subst, atoms.items, extra);
+                }
+            },
+        }
     }
 
     const RenderedBag = struct {

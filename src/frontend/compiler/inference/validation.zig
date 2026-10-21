@@ -292,6 +292,36 @@ pub fn attachDepViolationBindingTexts(
     }
 }
 
+/// `CompilerDiag.takeScratchDetail`, with what a congruence step assigned
+/// to its clashing arguments rendered into `bufs`.
+pub fn takeScratchDetail(
+    bufs: *DepViolationTextBufs,
+    scratch: *CompilerDiag.Scratch,
+    mark: CompilerDiag.Scratch.Mark,
+    env: *const GlobalEnv,
+    theorem: *const TheoremContext,
+    parser: ?*const ParseRecovery.MM0Parser,
+    theorem_vars: ?*const NameExprMap,
+    err: anyerror,
+) ?CompilerDiag.ScratchDetail {
+    var taken = CompilerDiag.takeScratchDetail(scratch, mark, env, err) orelse
+        return null;
+    if (taken.clashing_exprs) |exprs| switch (taken.detail) {
+        .dep_violation => |*detail| attachDepViolationBindingTexts(
+            bufs,
+            env,
+            theorem,
+            parser,
+            theorem_vars,
+            detail,
+            exprs[0],
+            exprs[1],
+        ),
+        else => {},
+    };
+    return taken;
+}
+
 fn renderBoundedExpr(
     buf: []u8,
     env: *const GlobalEnv,

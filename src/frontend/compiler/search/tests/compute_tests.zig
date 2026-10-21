@@ -388,6 +388,139 @@ test "conversion? big-steps church addition (one plus one)" {
     try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
 }
 
+test "conversion? church addition lifts only through dep-valid sb_congr" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The manual's sb_congr keeps the substituted term apart from the
+    // variable (`a1 a2: tm`). The first beta leaves
+    // `[g := [m := λ g. …] f] λ y. g · y`, whose `a` mentions g, so no
+    // step may lift through that node. The chain must clean up `f`
+    // before the beta, not after.
+    const mm0_src = try std.mem.replaceOwned(
+        u8,
+        arena.allocator(),
+        @embedFile("../fixtures/lambda_one_plus_one.mm0"),
+        "(a1 a2: tm x)",
+        "(a1 a2: tm)",
+    );
+    // Guard the substitution: the fixture's permissive form never trips.
+    try std.testing.expect(std.mem.indexOf(u8, mm0_src, "(a1 a2: tm)") != null);
+    // As an equation goal: with the pool reference the chain never
+    // meets the frozen node.
+    const proof_src =
+        \\one_plus_one
+        \\------------
+        \\l1: $ (λ m. λ n. λ f. λ x. m · f · (n · f · x)) · (λ g. λ y. g · y) · (λ g. λ y. g · y) · (λ w. S w) · 0 = S S 0 $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        found.items[0].replacement,
+        "[ g := [ m :=",
+    ) == null);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? cites a stuck substitution the goal itself states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // The goal's right side is `beta`'s result with the argument left as
+    // `[m := …] f`, a node no step may enter under the restrictive
+    // sb_congr. Citing `f` (the liftable preference) can never come back
+    // to it, so extraction must retry with the plain rendering.
+    const restricted = try std.mem.replaceOwned(
+        u8,
+        arena.allocator(),
+        @embedFile("../fixtures/lambda_one_plus_one.mm0"),
+        "(a1 a2: tm x)",
+        "(a1 a2: tm)",
+    );
+    try std.testing.expect(std.mem.indexOf(u8, restricted, "(a1 a2: tm)") != null);
+    // The theory alone: this proof file covers only `frozen`.
+    const theory_end = std.mem.indexOf(u8, restricted, "theorem one_plus_one").?;
+    const mm0_src = try std.mem.concat(arena.allocator(), u8, &.{
+        restricted[0..theory_end],
+        \\theorem frozen {m f g y: tm}:
+        \\  $ (λ g. λ y. g · y) · ([m := λ g. λ y. g · y] f) =
+        \\    [g := [m := λ g. λ y. g · y] f] (λ y. g · y) $;
+        \\
+    });
+    const proof_src =
+        \\frozen
+        \\------
+        \\l1: $ (λ g. λ y. g · y) · ([m := λ g. λ y. g · y] f) = [g := [m := λ g. λ y. g · y] f] (λ y. g · y) $ by conversion?
+        \\
+    ;
+
+    var found = try conversionSuggestions(&arena, mm0_src, proof_src, .{});
+    defer found.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, found.status);
+    try expectConversionCompiles(&arena, mm0_src, proof_src, found.items[0]);
+}
+
+test "conversion? never reorders a sum inside a stuck substitution" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `+` made AC, so the egraph identifies `x + a` with `a + x`. Under
+    // the restrictive sb_congr, `[x := x + a] e` admits no congruence
+    // (its `a1` mentions x), so `[x := x + a] e = [x := a + x] e` has no
+    // proof: the AC seam would cite sb_congr on a sum that mentions x.
+    // Beside the stuck node the reorder is ordinary.
+    const restricted = try std.mem.replaceOwned(
+        u8,
+        arena.allocator(),
+        @embedFile("../fixtures/lambda_one_plus_one.mm0"),
+        "(a1 a2: tm x)",
+        "(a1 a2: tm)",
+    );
+    try std.testing.expect(std.mem.indexOf(u8, restricted, "(a1 a2: tm)") != null);
+    const theory_end = std.mem.indexOf(u8, restricted, "theorem one_plus_one").?;
+    const theory = try std.mem.concat(arena.allocator(), u8, &.{
+        restricted[0..theory_end],
+        \\--| @conversion assoc
+        \\axiom add_assoc (a b c: tm): $ (a + b) + c = a + (b + c) $;
+        \\--| @conversion comm
+        \\axiom add_comm (a b: tm): $ a + b = b + a $;
+        \\
+    });
+
+    const inside_mm0 = try std.mem.concat(arena.allocator(), u8, &.{
+        theory,
+        \\theorem inside {x: tm} (e a: tm x): $ [x := x + a] e = [x := a + x] e $;
+        \\
+    });
+    const inside_proof =
+        \\inside
+        \\------
+        \\l1: $ [x := x + a] e = [x := a + x] e $ by conversion?
+        \\
+    ;
+    var inside = try conversionSuggestions(&arena, inside_mm0, inside_proof, .{});
+    defer inside.deinit();
+    try std.testing.expect(inside.status != .found);
+
+    const beside_mm0 = try std.mem.concat(arena.allocator(), u8, &.{
+        theory,
+        \\theorem beside {x: tm} (e a b: tm x):
+        \\  $ [x := x + a] e + (0 + b) = [x := x + a] e + b $;
+        \\
+    });
+    const beside_proof =
+        \\beside
+        \\------
+        \\l1: $ [x := x + a] e + (0 + b) = [x := x + a] e + b $ by conversion?
+        \\
+    ;
+    var beside = try conversionSuggestions(&arena, beside_mm0, beside_proof, .{});
+    defer beside.deinit();
+    try std.testing.expectEqual(types.SearchStatus.found, beside.status);
+    try expectConversionCompiles(&arena, beside_mm0, beside_proof, beside.items[0]);
+}
+
 test "conversion? big-steps the Y-combinator fixpoint equation" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

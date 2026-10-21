@@ -552,6 +552,12 @@ pub const EGraph = struct {
     /// Per-term bitmask of bound argument positions (bit i set = position i
     /// is a bound binder). Terms without an entry have no bound positions.
     bound_masks: std.AutoArrayHashMapUnmanaged(u32, u64) = .{},
+    /// Per congruence-gated head: the (bound position, regular position)
+    /// pairs its `@congr` rule keeps apart, in the head's own argument
+    /// positions. Lifting a step through such a node is only valid while
+    /// the regular child avoids the bound child's variable. Heads without
+    /// an entry lift unconditionally.
+    congr_restrictions: std.AutoArrayHashMapUnmanaged(u32, []const Restriction) = .{},
     /// Binary heads certified assoc+comm: applications intern as sorted
     /// bags. The driver must only police heads that are congruence-gated
     /// (`congr_heads`) and have no bound positions — extraction lifts
@@ -4115,27 +4121,33 @@ pub const EGraph = struct {
         const to_class = self.nodes.items[to.node].class;
         if (!self.sameClass(from_class, to_class)) return null;
         try self.buildClassIndex();
-        var ctx = explain_mod.ExplainCtx{
-            .eg = self,
-            .rules = rules,
-            .opts = opts,
-        };
-        if (try ctx.explainTerms(from, to, &.{})) return ctx.steps.items;
         // A self-containing class (a cancellation leaves `-(p/3)³ =
         // (q/2)² + -(q/2)² + -(p/3)³` in one class) renders its members
         // as the class representative, which is the chain's own source;
         // inside a route endpoint that re-poses the alignment in flight.
         // Second pass: the destination stands in for such members. Only
         // after the default pass failed, so every chain the default
-        // representatives extract stays identical.
-        var retry = explain_mod.ExplainCtx{
-            .eg = self,
-            .rules = rules,
-            .opts = opts,
-            .destination_mode = true,
-        };
-        if (!try retry.explainTerms(from, to, &.{})) return null;
-        return retry.steps.items;
+        // representatives extract stays identical. Both passes run again
+        // without the liftable-binding preference (see
+        // `ExplainCtx.prefer_liftable`) when a `@congr` rule restricts
+        // lifting at all.
+        const preferences: []const bool = if (self.congr_restrictions.count() == 0)
+            &.{true}
+        else
+            &.{ true, false };
+        for (preferences) |prefer_liftable| {
+            for ([_]bool{ false, true }) |destination_mode| {
+                var ctx = explain_mod.ExplainCtx{
+                    .eg = self,
+                    .rules = rules,
+                    .opts = opts,
+                    .destination_mode = destination_mode,
+                    .prefer_liftable = prefer_liftable,
+                };
+                if (try ctx.explainTerms(from, to, &.{})) return ctx.steps.items;
+            }
+        }
+        return null;
     }
 
     /// Re-pair a seed-time term's bag children with its nodes' current

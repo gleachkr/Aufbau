@@ -1,0 +1,11 @@
+shadowed
+----
+l1: $ P (all x (lam x (f x) n) c) $ by P_i (a := $ all x (g n) (s c) $)
+
+renamed
+----
+l1: $ P (all x (lam k (f k) n) c) $ by P_i (a := $ all x (g n) (s c) $)
+
+no_body_rewrite
+----
+l1: $ P (all x (lam x (f x) n) (s c)) $ by P_i (a := $ all x (g n) (s c) $)

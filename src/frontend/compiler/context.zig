@@ -17,6 +17,9 @@ const RuleApplication = ProofScript.RuleApplication;
 const StatementSink = @import("../statement_sink.zig").StatementSink;
 const CheckMemo = @import("./check_memo.zig").CheckMemo;
 const ExprModule = @import("../expr.zig");
+const TheoremContext = ExprModule.TheoremContext;
+const MM0Parser = @import("../parse_recovery.zig").MM0Parser;
+const Inference = @import("./inference.zig");
 
 pub const HoleInference = struct {
     span: Span,
@@ -374,11 +377,17 @@ pub const CompilerContext = struct {
         self.diagnostics.maybeSetProof(diag);
     }
 
+    /// Reports the detail `err` left in `scratch` since `mark`, if any. A
+    /// congruence step's dependency violation names its `@congr` rule
+    /// rather than `rule_name`, and shows what the step assigned.
     pub fn setProofScratchDiagnosticIfPresent(
         self: *CompilerContext,
         scratch: *CompilerDiag.Scratch,
         mark: CompilerDiag.Scratch.Mark,
         env: *const GlobalEnv,
+        theorem: *const TheoremContext,
+        parser: ?*const MM0Parser,
+        theorem_vars: ?*const Inference.NameExprMap,
         phase: ?DiagnosticPhase,
         kind: CompilerDiag.DiagnosticKind,
         err: anyerror,
@@ -387,18 +396,31 @@ pub const CompilerContext = struct {
         rule_name: ?[]const u8,
         span: ?Span,
     ) bool {
-        return self.diagnostics.setProofScratchDiagnosticIfPresent(
+        var text_bufs: Inference.DepViolationTextBufs = .{};
+        const taken = Inference.takeScratchDetail(
+            &text_bufs,
             scratch,
             mark,
             env,
-            phase,
-            kind,
+            theorem,
+            parser,
+            theorem_vars,
             err,
-            theorem_name,
-            line_label,
-            rule_name,
-            span,
-        );
+        ) orelse return false;
+        var diag: Diagnostic = .{
+            .kind = kind,
+            .err = CompilerDiag.narrowDiagnosticError(err),
+            .theorem_name = theorem_name,
+            .line_label = line_label,
+            .rule_name = taken.rule_name orelse rule_name,
+            .span = span,
+            .detail = taken.detail,
+        };
+        if (phase) |actual_phase| {
+            CompilerDiag.setPhase(&diag, actual_phase);
+        }
+        self.diagnostics.maybeSetProof(diag);
+        return true;
     }
 
     pub fn addPrimaryDiagnostic(

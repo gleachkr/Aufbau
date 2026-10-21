@@ -28,6 +28,23 @@ This file records notable user-facing changes to Aufbau. The project follows
   `def three = 1 + 1 + 1`, though `3 + 3` alone matched. A member of a
   commutative bag that is itself a bag of another combiner is now compared
   as a bag, as it is anywhere else.
+- Normalization could lift a rewrite through a `@congr` rule whose
+  dependencies forbid that instance, as when rewriting under
+  `lam x (f x) n` in the domain of an `all x` that may not mention `x`.
+  The line was then refused with a dependency violation, even when
+  unfolding a definition proved it without that step. Such a step now
+  rules out only the normalization that needs it, and the next way of
+  comparing the two sides is tried; the violation is reported if none
+  succeeds.
+- `conversion?` could write a `@congr` step whose dependencies forbid it,
+  so the proof it found then failed to compile. With the lambda calculus's
+  `sb_congr`, a `beta` step left `[g := [m := λ g. …] f] …`, and the chain
+  then rewrote inside it. The search now only lifts a step through a
+  congruence the rule allows. Where a rule step would leave such a term,
+  it cites a form that keeps the chain open, such as `f` in place of
+  `[m := …] f`. Reordering a commutative sum inside such a term
+  (`[x := x + a] e` against `[x := a + x] e`) is refused too, since no
+  congruence reaches it.
 
 ## [0.0.18] - 2026-10-17
 

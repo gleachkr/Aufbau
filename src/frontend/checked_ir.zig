@@ -138,46 +138,59 @@ pub fn firstDepViolation(
     theorem: *TheoremContext,
     lines: []const CheckedLine,
 ) !?DepViolation {
-    var scratch = BindingValidation.infoScratch(theorem.allocator);
-    const allocator = scratch.get();
     for (lines, 0..) |line, line_idx| {
         const rule = switch (line.data) {
             .rule => |rule| rule,
             .transport, .sorry => continue,
         };
-        if (rule.rule_id >= env.rules.items.len) return error.UnknownRule;
-
-        const rule_decl = &env.rules.items[rule.rule_id];
-        const infos = try allocator.alloc(
-            BindingValidation.ExprInfo,
-            rule.bindings.len,
-        );
-        defer allocator.free(infos);
-        for (rule.bindings, infos) |binding, *info| {
-            info.* = try BindingValidation.exprInfo(
-                env,
-                theorem,
-                binding,
-            );
-        }
-        const violation = BindingValidation.firstDepViolation(
-            rule_decl.args,
-            infos,
+        const detail = try ruleDepViolation(
+            env,
+            theorem,
+            rule.rule_id,
+            rule.bindings,
         ) orelse continue;
         return .{
             .line_idx = line_idx,
             .rule_id = rule.rule_id,
-            .detail = depViolationDetail(
-                rule_decl.args,
-                rule_decl.arg_names,
-                violation.first_idx,
-                infos[violation.first_idx],
-                violation.second_idx,
-                infos[violation.second_idx],
-            ),
+            .detail = detail,
         };
     }
     return null;
+}
+
+/// The first pair of `bindings` whose dependencies rule `rule_id` forbids.
+pub fn ruleDepViolation(
+    env: *const GlobalEnv,
+    theorem: *TheoremContext,
+    rule_id: u32,
+    bindings: []const ExprId,
+) !?CompilerDiag.DepViolationDiagnosticDetail {
+    if (rule_id >= env.rules.items.len) return error.UnknownRule;
+    const rule_decl = &env.rules.items[rule_id];
+    // Only a bound argument can clash with another.
+    for (rule_decl.args) |arg| {
+        if (arg.bound) break;
+    } else return null;
+
+    var scratch = BindingValidation.infoScratch(theorem.allocator);
+    const allocator = scratch.get();
+    const infos = try allocator.alloc(BindingValidation.ExprInfo, bindings.len);
+    defer allocator.free(infos);
+    for (bindings, infos) |binding, *info| {
+        info.* = try BindingValidation.exprInfo(env, theorem, binding);
+    }
+    const violation = BindingValidation.firstDepViolation(
+        rule_decl.args,
+        infos,
+    ) orelse return null;
+    return depViolationDetail(
+        rule_decl.args,
+        rule_decl.arg_names,
+        violation.first_idx,
+        infos[violation.first_idx],
+        violation.second_idx,
+        infos[violation.second_idx],
+    );
 }
 
 fn depViolationDetail(

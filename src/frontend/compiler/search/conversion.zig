@@ -317,9 +317,18 @@ pub fn run(
     var eg = egraph.EGraph.init(work);
     // The congruence gate: only heads with a `@congr` proof step may drive
     // congruence unions. Set semantics, so hash-map iteration order is fine.
-    var congr_it = context.registry.congr_by_head.keyIterator();
-    while (congr_it.next()) |head| {
-        try eg.congr_heads.put(work, head.*, {});
+    var congr_it = context.registry.congr_by_head.iterator();
+    while (congr_it.next()) |entry| {
+        const head = entry.key_ptr.*;
+        try eg.congr_heads.put(work, head, {});
+        const restrictions = try congrRestrictions(
+            work,
+            context.env.terms.items[head].args,
+            context.env.rules.items[entry.value_ptr.rule_id].args,
+        );
+        if (restrictions.len != 0) {
+            try eg.congr_restrictions.put(work, head, restrictions);
+        }
     }
     for (ac_certs.keys()) |head| {
         try eg.ac_heads.put(work, head, {});
@@ -714,6 +723,41 @@ fn ruleRestrictions(
         bound_ordinal += 1;
     }
     return out;
+}
+
+/// The (bound, regular) argument pairs of a head term that its `@congr`
+/// rule keeps apart: the rule's old or new binder for the regular argument
+/// lacks the dep bit of the bound one. Binder layout as enrollment
+/// validates it — one binder per bound argument, an old/new pair per
+/// regular one, in argument order.
+fn congrRestrictions(
+    work: std.mem.Allocator,
+    term_args: []const ArgInfo,
+    rule_args: []const ArgInfo,
+) ![]const egraph.Restriction {
+    var out: std.ArrayListUnmanaged(egraph.Restriction) = .empty;
+    var binder_idx: usize = 0;
+    for (term_args, 0..) |term_arg, term_slot| {
+        if (term_arg.bound) {
+            binder_idx += 1;
+            continue;
+        }
+        const allowed = rule_args[binder_idx].deps &
+            rule_args[binder_idx + 1].deps;
+        binder_idx += 2;
+        var bound_ordinal: u6 = 0;
+        for (term_args, 0..) |bound_arg, bound_slot| {
+            if (!bound_arg.bound) continue;
+            if ((allowed >> bound_ordinal) & 1 == 0) {
+                try out.append(work, .{
+                    .bound_slot = @intCast(bound_slot),
+                    .term_slot = @intCast(term_slot),
+                });
+            }
+            bound_ordinal += 1;
+        }
+    }
+    return out.items;
 }
 
 fn lowerBothOrientations(

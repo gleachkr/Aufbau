@@ -351,43 +351,6 @@ pub const DiagnosticSink = struct {
         self.setProof(diag);
     }
 
-    pub fn setProofScratchDiagnosticIfPresent(
-        self: *DiagnosticSink,
-        scratch: *CompilerDiag.Scratch,
-        mark: CompilerDiag.Scratch.Mark,
-        env: *const GlobalEnv,
-        phase: ?DiagnosticPhase,
-        kind: CompilerDiag.DiagnosticKind,
-        err: anyerror,
-        theorem_name: []const u8,
-        line_label: ?[]const u8,
-        rule_name: ?[]const u8,
-        span: ?Span,
-    ) bool {
-        const detail = CompilerDiag.takeScratchDetail(
-            scratch,
-            mark,
-            env,
-            err,
-        ) orelse {
-            return false;
-        };
-        var diag: Diagnostic = .{
-            .kind = kind,
-            .err = CompilerDiag.narrowDiagnosticError(err),
-            .theorem_name = theorem_name,
-            .line_label = line_label,
-            .rule_name = rule_name,
-            .span = span,
-            .detail = detail,
-        };
-        if (phase) |actual_phase| {
-            CompilerDiag.setPhase(&diag, actual_phase);
-        }
-        self.maybeSetProof(diag);
-        return true;
-    }
-
     pub fn getDiagnostic(self: *const DiagnosticSink) ?Diagnostic {
         return self.last_diagnostic;
     }

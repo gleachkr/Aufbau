@@ -538,18 +538,23 @@ pub const LineWalk = struct {
                     .sort_vars = sort_vars,
                 },
             }, .{ .ref = .{ .line = final.idx } }, final.expr, theorem_concl) catch |err| {
-                if (CompilerDiag.takeScratchDetail(
+                var text_bufs: Inference.DepViolationTextBufs = .{};
+                if (Inference.takeScratchDetail(
+                    &text_bufs,
                     diag_scratch,
                     final_mark,
                     env,
+                    theorem,
+                    parser,
+                    theorem_vars,
                     err,
-                )) |detail| {
+                )) |taken| {
                     self.setFinalLineFailure(
                         final,
                         theorem_concl,
                         .generic,
                         CompilerDiag.narrowDiagnosticError(err),
-                        detail,
+                        taken,
                     );
                     return err;
                 }
@@ -582,7 +587,7 @@ pub const LineWalk = struct {
                 theorem_concl,
                 .final_line_mismatch,
                 error.FinalLineMismatch,
-                .none,
+                .{ .detail = .none },
             );
             return error.FinalLineMismatch;
         }
@@ -596,15 +601,16 @@ pub const LineWalk = struct {
         theorem_concl: ExprId,
         kind: CompilerDiag.DiagnosticKind,
         err: CompilerDiag.DiagnosticError,
-        detail: CompilerDiag.DiagnosticDetail,
+        taken: CompilerDiag.ScratchDetail,
     ) void {
         var diag = CompilerDiag.withPhase(.{
             .kind = kind,
             .err = err,
             .theorem_name = self.assertion.name,
             .line_label = final.label,
+            .rule_name = taken.rule_name,
             .span = final.span,
-            .detail = detail,
+            .detail = taken.detail,
         }, .final_reconciliation);
         addBoundaryAttemptNotes(
             self.allocator,

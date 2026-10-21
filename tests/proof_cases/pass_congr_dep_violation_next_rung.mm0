@@ -1,0 +1,60 @@
+delimiter $ ( ) $;
+
+provable sort wff;
+--| @vars x k n c
+sort tm;
+
+term iff (a b: wff): wff;
+infixl iff: $<->$ prec 20;
+term eq (a b: tm): wff;
+infixl eq: $=$ prec 50;
+
+--| @relation wff iff iff_refl iff_trans iff_symm iff_mp
+axiom iff_refl (a: wff): $ a <-> a $;
+axiom iff_trans (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+axiom iff_symm (a b: wff): $ a <-> b $ > $ b <-> a $;
+axiom iff_mp (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+
+--| @relation tm eq eq_refl eq_trans eq_symm _
+axiom eq_refl (a: tm): $ a = a $;
+axiom eq_trans (a b c: tm): $ a = b $ > $ b = c $ > $ a = c $;
+axiom eq_symm (a b: tm): $ a = b $ > $ b = a $;
+
+-- `all x A B`: `B` may mention `x`, the domain `A` may not.
+term all {x: tm} (A: tm) (B: tm x): tm;
+-- `lam k C n`: `C` may mention `k`.
+term lam {k: tm} (C: tm k) (n: tm): tm;
+term f (a: tm): tm;
+term s (a: tm): tm;
+term P (a: tm): wff;
+
+--| @congr
+axiom all_congr {x: tm} (A B: tm) (C D: tm x):
+  $ A = B $ > $ C = D $ > $ all x A C = all x B D $;
+--| @congr
+axiom lam_congr {k: tm} (C D: tm k) (m n: tm):
+  $ C = D $ > $ m = n $ > $ lam k C m = lam k D n $;
+--| @congr
+axiom f_congr (a b: tm): $ a = b $ > $ f a = f b $;
+--| @congr
+axiom s_congr (a b: tm): $ a = b $ > $ s a = s b $;
+--| @congr
+axiom P_congr (a b: tm): $ a = b $ > $ P a <-> P b $;
+
+--| @rewrite
+axiom f_eval (a: tm): $ f a = a $;
+--| @rewrite
+axiom s_eval (a: tm): $ s a = a $;
+
+def g (n: tm) {.k: tm}: tm = $ lam k (f k) n $;
+
+axiom P_i (a: tm): $ P a $;
+
+-- Normalizing the domain rewrites `f x` under the `lam`, and lifting that
+-- through `all_congr` gives an `A` that mentions `x`: the rung that takes
+-- that step fails, and a later one unfolds `g` instead.
+theorem shadowed {x: tm} (n c: tm): $ P (all x (lam x (f x) n) c) $;
+-- The same with the `lam` binding `k`: the step is valid.
+theorem renamed {x k: tm} (n c: tm): $ P (all x (lam k (f k) n) c) $;
+-- The same as `shadowed` without `s` in the body: transparent comparison.
+theorem no_body_rewrite {x: tm} (n c: tm): $ P (all x (lam x (f x) n) (s c)) $;

@@ -123,29 +123,7 @@ pub const MissingCongruenceRuleDetail = struct {
     arg_index: ?usize = null,
 };
 
-pub const DepViolationDiagnosticDetail = struct {
-    first_arg_idx: usize,
-    second_arg_idx: usize,
-    first_arg_name: ?[]const u8 = null,
-    second_arg_name: ?[]const u8 = null,
-    first_deps: u55,
-    second_deps: u55,
-    first_bound: bool,
-    second_bound: bool,
-    /// Whether the rule declares each argument as a bound binder ({x} vs
-    /// (p)). Distinguishes the two violation shapes: a bound binder's
-    /// variable occurring where the rule forbids it (exactly one side
-    /// bound) vs two bound binders assigned the same variable (both
-    /// bound). False/false means the construction path predates this
-    /// field; renderers fall back to the generic wording.
-    first_rule_bound: bool = false,
-    second_rule_bound: bool = false,
-    /// Notation-rendered assigned expressions (truncated), for showing the
-    /// student what each conflicting argument actually received. Null when
-    /// rendering failed or the argument was not yet assigned.
-    first_binding_text: ?[]const u8 = null,
-    second_binding_text: ?[]const u8 = null,
-};
+pub const DepViolationDiagnosticDetail = DiagScratch.DepViolationDiagnosticDetail;
 
 pub const InferencePath = enum {
     strict_replay,
@@ -2240,12 +2218,23 @@ fn writeHypothesisRefLine(
     }
 }
 
+/// A captured detail ready to report.
+pub const ScratchDetail = struct {
+    detail: DiagnosticDetail,
+    /// The rule the detail is about, when it is not the failing line's own:
+    /// the `@congr` rule of a congruence step.
+    rule_name: ?[]const u8 = null,
+    /// What that step assigned to the two clashing arguments of its rule,
+    /// for the caller, which can name the theorem's variables, to render.
+    clashing_exprs: ?[2]u32 = null,
+};
+
 pub fn buildCapturedDiagnosticDetail(
     env: *const GlobalEnv,
     detail: DiagScratch.CapturedDetail,
-) DiagnosticDetail {
+) ScratchDetail {
     return switch (detail) {
-        .missing_congruence_rule => |info| .{
+        .missing_congruence_rule => |info| .{ .detail = .{
             .missing_congruence_rule = .{
                 .reason = info.reason,
                 .term_name = if (info.term_id) |term_id|
@@ -2258,13 +2247,18 @@ pub fn buildCapturedDiagnosticDetail(
                 .sort_name = info.sort_name,
                 .arg_index = info.arg_index,
             },
+        } },
+        .rewrite_cycle => |info| .{ .detail = .{ .rewrite_cycle = .{
+            .rule_name = ruleName(env, info.rule_id),
+        } } },
+        .rewrite_step_limit => |info| .{ .detail = .{ .rewrite_step_limit = .{
+            .rule_name = ruleName(env, info.rule_id),
+        } } },
+        .congruence_dep_violation => |info| .{
+            .detail = .{ .dep_violation = info.detail },
+            .rule_name = ruleName(env, info.rule_id),
+            .clashing_exprs = .{ info.first_expr, info.second_expr },
         },
-        .rewrite_cycle => |info| .{ .rewrite_cycle = .{
-            .rule_name = ruleName(env, info.rule_id),
-        } },
-        .rewrite_step_limit => |info| .{ .rewrite_step_limit = .{
-            .rule_name = ruleName(env, info.rule_id),
-        } },
     };
 }
 
@@ -2277,7 +2271,7 @@ pub fn takeScratchDetail(
     mark: Scratch.Mark,
     env: *const GlobalEnv,
     err: anyerror,
-) ?DiagnosticDetail {
+) ?ScratchDetail {
     const detail = scratch.takeSince(mark, err) orelse return null;
     return buildCapturedDiagnosticDetail(env, detail);
 }

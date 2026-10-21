@@ -178,6 +178,28 @@ fn failMissingCongruence(
     return error.MissingCongruenceRule;
 }
 
+fn failCongruenceDeps(
+    self: anytype,
+    rule_id: u32,
+    detail: DiagScratch.DepViolationDiagnosticDetail,
+    bindings: []const ExprId,
+) error{DepViolation} {
+    if (self.diag_scratch) |scratch| {
+        scratch.record(error.DepViolation, .{ .congruence_dep_violation = .{
+            .rule_id = rule_id,
+            .detail = detail,
+            .first_expr = bindings[detail.first_arg_idx],
+            .second_expr = bindings[detail.second_arg_idx],
+        } });
+    }
+    DebugTrace.traceNormalization(
+        self.debug,
+        "congruence by {s} breaks its dependencies",
+        .{self.env.rules.items[rule_id].name},
+    );
+    return error.DepViolation;
+}
+
 pub fn emitCongruenceLine(
     self: anytype,
     term_id: u32,
@@ -283,6 +305,17 @@ pub fn emitCongruenceLine(
             term_decl.ret_sort_name,
             null,
         );
+    }
+
+    // A binder of the term may bind a variable that one of its other
+    // arguments mentions, where the @congr rule's own arguments may not.
+    if (try CheckedIr.ruleDepViolation(
+        self.env,
+        self.theorem,
+        congr_rule.rule_id,
+        bindings,
+    )) |detail| {
+        return failCongruenceDeps(self, congr_rule.rule_id, detail, bindings);
     }
 
     const old_expr = try self.theorem.interner.internApp(term_id, old_args);

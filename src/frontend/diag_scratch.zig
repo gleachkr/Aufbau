@@ -10,6 +10,30 @@ pub const MissingCongruenceReason = enum {
     unknown_term,
 };
 
+pub const DepViolationDiagnosticDetail = struct {
+    first_arg_idx: usize,
+    second_arg_idx: usize,
+    first_arg_name: ?[]const u8 = null,
+    second_arg_name: ?[]const u8 = null,
+    first_deps: u55,
+    second_deps: u55,
+    first_bound: bool,
+    second_bound: bool,
+    /// Whether the rule declares each argument as a bound binder ({x} vs
+    /// (p)). Distinguishes the two violation shapes: a bound binder's
+    /// variable occurring where the rule forbids it (exactly one side
+    /// bound) vs two bound binders assigned the same variable (both
+    /// bound). False/false means the construction path predates this
+    /// field; renderers fall back to the generic wording.
+    first_rule_bound: bool = false,
+    second_rule_bound: bool = false,
+    /// Notation-rendered assigned expressions (truncated), for showing the
+    /// student what each conflicting argument actually received. Null when
+    /// rendering failed or the argument was not yet assigned.
+    first_binding_text: ?[]const u8 = null,
+    second_binding_text: ?[]const u8 = null,
+};
+
 pub const CapturedDetail = union(enum) {
     missing_congruence_rule: struct {
         reason: MissingCongruenceReason,
@@ -25,6 +49,14 @@ pub const CapturedDetail = union(enum) {
     /// The `@rewrite` rule whose step would have passed the step limit.
     rewrite_step_limit: struct {
         rule_id: u32,
+    },
+    /// A congruence step whose `@congr` instance breaks the rule's
+    /// dependencies: the rule, the clash, and the two clashing arguments.
+    congruence_dep_violation: struct {
+        rule_id: u32,
+        detail: DepViolationDiagnosticDetail,
+        first_expr: u32,
+        second_expr: u32,
     },
 };
 

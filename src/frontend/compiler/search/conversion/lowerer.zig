@@ -609,10 +609,7 @@ pub const Lowerer = struct {
             .leaf => return null,
             .bag => return null,
         };
-        const congr = self.context.registry.congr_by_head.get(app.term_id) orelse {
-            self.missing_congr = app.term_id;
-            return null;
-        };
+        const congr_rule = self.congrRule(app.term_id) orelse return null;
         const decl = &self.context.env.terms.items[app.term_id];
 
         var ref_labels: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -639,14 +636,73 @@ pub const Lowerer = struct {
             try ref_labels.append(self.work, refl_label);
         }
 
-        const parent_relation = self.relationForSort(decl.ret_sort_name) orelse
+        return try self.emitCongrLine(
+            app.term_id,
+            congr_rule,
+            (try self.termToExpr(before_parent)) orelse return null,
+            (try self.termToExpr(after_parent)) orelse return null,
+            ref_labels.items,
+        );
+    }
+
+    /// Emit the `@congr` line `rel(from, to)` over two applications of
+    /// `head` by its rule `congr_rule` (see `congrRule`), citing one proof
+    /// per regular argument. Every congruence line the lowerer writes
+    /// goes through here. Null when the instance breaks the rule's
+    /// dependencies: a regular argument mentions a bound one the rule's
+    /// binders keep apart (`[x := a] e` with `a` mentioning `x`, under an
+    /// `sb_congr` whose `a1 a2` omit `x`). The reference then misses
+    /// cleanly instead of writing a line the checker rejects.
+    fn emitCongrLine(
+        self: *Lowerer,
+        head: u32,
+        congr_rule: u32,
+        from: ExprId,
+        to: ExprId,
+        ref_labels: []const []const u8,
+    ) AlignErr!?[]const u8 {
+        const decl = &self.context.env.terms.items[head];
+        const from_args = (self.exprApp(from) orelse return null).args;
+        const to_args = (self.exprApp(to) orelse return null).args;
+        if (from_args.len != decl.args.len or to_args.len != decl.args.len) {
             return null;
-        const formula = (try self.relExpr(
-            parent_relation,
-            before_parent,
-            after_parent,
-        )) orelse return null;
-        return try self.emitLine(formula, congr.rule_id, ref_labels.items);
+        }
+        // Binder layout as enrollment validates it: one binder per bound
+        // argument, an old/new pair per regular one, in argument order.
+        var bindings: std.ArrayListUnmanaged(ExprId) = .empty;
+        for (decl.args, from_args, to_args) |arg_info, old, new| {
+            try bindings.append(self.work, old);
+            if (!arg_info.bound) try bindings.append(self.work, new);
+        }
+        const violation = CheckedIr.ruleDepViolation(
+            self.context.env,
+            self.theorem,
+            congr_rule,
+            bindings.items,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // An argument the checker could not classify: decline
+            // rather than emit a line it would reject.
+            else => return null,
+        };
+        if (violation != null) return null;
+        const relation = self.relationForSort(decl.ret_sort_name) orelse
+            return null;
+        return try self.emitLine(
+            try self.relIds(relation, from, to),
+            congr_rule,
+            ref_labels,
+        );
+    }
+
+    /// The `@congr` rule lifting through `head`; null records the head
+    /// as the gap the miss report names.
+    fn congrRule(self: *Lowerer, head: u32) ?u32 {
+        const congr = self.context.registry.congr_by_head.get(head) orelse {
+            self.missing_congr = head;
+            return null;
+        };
+        return congr.rule_id;
     }
 
     // --- AC re-treeing -------------------------------------------------
@@ -789,12 +845,7 @@ pub const Lowerer = struct {
             app.term_id,
             args,
         );
-        const congr = self.context.registry.congr_by_head.get(
-            app.term_id,
-        ) orelse {
-            self.missing_congr = app.term_id;
-            return null;
-        };
+        const congr_rule = self.congrRule(app.term_id) orelse return null;
         const decl = &self.context.env.terms.items[app.term_id];
         var ref_labels: std.ArrayListUnmanaged([]const u8) = .empty;
         for (decl.args, app.args, 0..) |arg_info, old_arg, i| {
@@ -813,12 +864,11 @@ pub const Lowerer = struct {
             )) orelse return null;
             try ref_labels.append(self.work, refl_label);
         }
-        const relation = self.relationForSort(
-            decl.ret_sort_name,
-        ) orelse return null;
-        const label = (try self.emitLine(
-            try self.relIds(relation, root, new_root),
-            congr.rule_id,
+        const label = (try self.emitCongrLine(
+            app.term_id,
+            congr_rule,
+            root,
+            new_root,
             ref_labels.items,
         )) orelse return null;
         return .{ .label = label, .root = new_root };
@@ -1108,12 +1158,7 @@ pub const Lowerer = struct {
             return try self.alignAc(fa.term_id, cert, relation, from, to);
         }
         // Congruent descent: one @congr line over child alignments.
-        const congr = self.context.registry.congr_by_head.get(
-            fa.term_id,
-        ) orelse {
-            self.missing_congr = fa.term_id;
-            return null;
-        };
+        const congr_rule = self.congrRule(fa.term_id) orelse return null;
         const decl = &self.context.env.terms.items[fa.term_id];
         if (decl.args.len != fa.args.len or fa.args.len != ta.args.len) {
             return null;
@@ -1131,9 +1176,11 @@ pub const Lowerer = struct {
             )) orelse return null;
             try ref_labels.append(self.work, label);
         }
-        return try self.emitLine(
-            try self.relIds(relation, from, to),
-            congr.rule_id,
+        return try self.emitCongrLine(
+            fa.term_id,
+            congr_rule,
+            from,
+            to,
             ref_labels.items,
         );
     }
@@ -1469,12 +1516,7 @@ pub const Lowerer = struct {
                 head,
                 &.{ inst_after, ext_comb },
             );
-            const congr = self.context.registry.congr_by_head.get(
-                head,
-            ) orelse {
-                self.missing_congr = head;
-                return null;
-            };
+            const congr_rule = self.congrRule(head) orelse return null;
             const ext_rel = self.relationForSort(
                 self.sortOfExpr(ext_comb) orelse return null,
             ) orelse return null;
@@ -1483,12 +1525,11 @@ pub const Lowerer = struct {
                 ext_rel.refl_id,
                 &.{},
             )) orelse return null;
-            const parent_rel = self.relationForSort(
-                self.sortOfExpr(x_before) orelse return null,
-            ) orelse return null;
-            step_label = (try self.emitLine(
-                try self.relIds(parent_rel, x_before, x_after),
-                congr.rule_id,
+            step_label = (try self.emitCongrLine(
+                head,
+                congr_rule,
+                x_before,
+                x_after,
                 &.{ label, refl_label },
             )) orelse return null;
         }
@@ -1600,12 +1641,7 @@ pub const Lowerer = struct {
             else => return null,
         };
         const head = bag.term_id;
-        const congr = self.context.registry.congr_by_head.get(
-            head,
-        ) orelse {
-            self.missing_congr = head;
-            return null;
-        };
+        const congr_rule = self.congrRule(head) orelse return null;
         const count = before_parent.children.len;
         if (after_parent.children.len != count) return null;
         if (changed_idx >= count) return null;
@@ -1642,9 +1678,6 @@ pub const Lowerer = struct {
         // Sorts come from the head's declaration, not the expressions: a
         // bare member can be a dummy variable, which has no interned sort.
         const head_decl = &self.context.env.terms.items[head];
-        const relation = self.relationForSort(
-            head_decl.ret_sort_name,
-        ) orelse return null;
         if (m != count - 1) {
             const tail_rel = self.relationForSort(
                 head_decl.args[1].sort_name,
@@ -1658,9 +1691,11 @@ pub const Lowerer = struct {
                 tail_rel.refl_id,
                 &.{},
             )) orelse return null;
-            label = (try self.emitLine(
-                try self.relIds(relation, before_combs[m], after_combs[m]),
-                congr.rule_id,
+            label = (try self.emitCongrLine(
+                head,
+                congr_rule,
+                before_combs[m],
+                after_combs[m],
                 &.{ label, refl_tail },
             )) orelse return null;
         }
@@ -1678,9 +1713,11 @@ pub const Lowerer = struct {
                 member_rel.refl_id,
                 &.{},
             )) orelse return null;
-            label = (try self.emitLine(
-                try self.relIds(relation, before_combs[i], after_combs[i]),
-                congr.rule_id,
+            label = (try self.emitCongrLine(
+                head,
+                congr_rule,
+                before_combs[i],
+                after_combs[i],
                 &.{ refl_member, label },
             )) orelse return null;
         }

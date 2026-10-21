@@ -11,6 +11,7 @@ pub const BindingValidationNoteBufs = Validation.BindingValidationNoteBufs;
 pub const attachBindingValidationNotes = Validation.attachBindingValidationNotes;
 pub const attachDepViolationBindingTexts =
     Validation.attachDepViolationBindingTexts;
+pub const takeScratchDetail = Validation.takeScratchDetail;
 pub const NameExprMap = Validation.NameExprMap;
 pub const RuleUnifyCache = Context.RuleUnifyCache;
 pub const RuleInferenceContext = Context.RuleInferenceContext;
