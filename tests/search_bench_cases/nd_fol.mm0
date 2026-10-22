@@ -310,9 +310,12 @@ theorem or_left (g: ctx) (a b c: wff):
 theorem or_right (g: ctx) (a b: wff):
   $ g , ¬ b ⊢ a $ > $ g ⊢ a ∨ b $;
 
---| @auto eager
+-- Classical case split on the truth of `a` and `b`, as G3c's left rule for
+-- `↔`. Splitting into `a → b` and `b → a` instead would leave the search to
+-- the non-invertible `imp_left`.
+--| @auto eager 2
 theorem bi_left (g: ctx) (a b c: wff):
-  $ g , (a → b) , (b → a) ⊢ c $ > $ g , (a ↔ b) ⊢ c $;
+  $ g , a , b ⊢ c $ > $ g , ¬ a , ¬ b ⊢ c $ > $ g , (a ↔ b) ⊢ c $;
 
 --| @auto backward
 theorem imp_left (g: ctx) (a b c: wff):
