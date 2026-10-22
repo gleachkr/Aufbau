@@ -148,6 +148,9 @@ axiom or_congr (a b c d: wff):
 --| @congr
 axiom not_congr (a b: wff): $ a ↔ b $ > $ ¬ a ↔ ¬ b $;
 --| @congr
+axiom bi_congr (a b c d: wff):
+  $ a ↔ b $ > $ c ↔ d $ > $ (a ↔ c) ↔ (b ↔ d) $;
+--| @congr
 axiom all_congr {x: obj} (p q: wff x):
   $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
 --| @congr
