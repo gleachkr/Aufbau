@@ -1369,13 +1369,14 @@ fn expectNdFolTrim(proof_src: []const u8, expected: []const u8) !void {
 }
 
 test "trimming supplies an inline sub-proof the binders its hint lacks" {
-    // `weak [l2]` gets no hint from a bare `all_left`; the retry supplies the
-    // `t` its premise leaves open.
+    // `l2` lacks the principal, so `all_left`'s premise needs `weak [l2]`,
+    // which gets no hint from a bare `all_left`; the retry supplies the `t`
+    // its premise leaves open.
     try expectNdFolTrim(
         \\vac_all_or
         \\----------
-        \\l1: $ (∀ x (s0 ∨ s0)) , s0 ⊢ s0 $ by ax
-        \\l2: $ (∀ x (s0 ∨ s0)) , (s0 ∨ s0) ⊢ s0 $ by or_left [l1, l1]
+        \\l1: $ s0 ⊢ s0 $ by ax
+        \\l2: $ (s0 ∨ s0) ⊢ s0 $ by or_left [l1, l1]
         \\l4: $ ∅ ⊢ (∀ x (s0 ∨ s0)) → s0 $ by auto?
     ,
         "imp_intro [all_left (t := $ u $) [weak [l2]]]",

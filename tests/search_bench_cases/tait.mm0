@@ -292,9 +292,8 @@ axiom rall (d: ctx) {x: obj} (p: wff x):
 -- from it — the open-backward-generation path, exactly as euclid's `ex_intro`.
 --| @view {x: obj} (d: ctx x) (t: obj x) (p: wff x) (q: wff): $ ⊢ q , (∃ x p) , d $ > $ ⊢ (∃ x p) , d $
 --| @recover t q p x
---| @freshen d x
 --| @auto backward
-axiom rex (d: ctx) {x: obj} (p: wff x) (t: obj):
+axiom rex {x: obj} (d: ctx x) (p: wff x) (t: obj x):
   $ ⊢ [x/t] p , (∃ x p) , d $ > $ ⊢ (∃ x p) , d $;
 
 -- ------------------------------------------------------------

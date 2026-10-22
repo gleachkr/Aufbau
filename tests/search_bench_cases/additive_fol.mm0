@@ -275,18 +275,14 @@ axiom rall (g d: ctx) {x: obj} (p: wff x):
 --       generation (Stage 4/5) path: `t` is a meta-placeholder resolved when
 --       the instance is consumed (typically by `ax` against a succedent
 --       formula), with the witness recovered from `q` via the view.
---       @freshen handles the dual hazard: because the principal `∀ x p` is
---       kept, an instance `[x/t] p` that reintroduces a quantifier (as in
---       `all_swap`) shares a bound name with the kept principal, and MM0's
---       dependency check — which counts *all* occurrences, even bound ones —
---       would reject the application.  Alpha-renaming the offending context
---       repairs it, exactly as `gentzen`'s `all_left` does.
+--       Not an eigenvariable rule, so `g`, `d` and `t` may all mention `x`:
+--       MM0's dependency check counts *all* occurrences, even bound ones, and
+--       a context holding another `∀ x …` (or an instance at `x` itself) needs
+--       no renaming.
 --| @view {x: obj} (g d: ctx x) (t: obj x) (p: wff x) (q: wff): $ g , (∀ x p) , q ⊢ d $ > $ g , (∀ x p) ⊢ d $
 --| @recover t q p x
---| @freshen g x
---| @freshen d x
 --| @auto backward
-axiom lall (g d: ctx) {x: obj} (p: wff x) (t: obj):
+axiom lall {x: obj} (g d: ctx x) (p: wff x) (t: obj x):
   $ g , (∀ x p) , [x/t] p ⊢ d $ > $ g , (∀ x p) ⊢ d $;
 
 -- Existential (dual of the above).
@@ -301,10 +297,8 @@ axiom lex (g d: ctx) {x: obj} (p: wff x):
 --       formula `q` and `@recover` reconstructs `t` from it.
 --| @view {x: obj} (g d: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ q , (∃ x p) , d $ > $ g ⊢ (∃ x p) , d $
 --| @recover t q p x
---| @freshen g x
---| @freshen d x
 --| @auto backward
-axiom rex (g d: ctx) {x: obj} (p: wff x) (t: obj):
+axiom rex {x: obj} (g d: ctx x) (p: wff x) (t: obj x):
   $ g ⊢ [x/t] p , (∃ x p) , d $ > $ g ⊢ (∃ x p) , d $;
 
 -- ============================================================
