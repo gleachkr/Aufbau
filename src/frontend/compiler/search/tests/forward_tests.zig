@@ -992,6 +992,102 @@ test "auto trigger drops a seed that restates a hypothesis" {
     }
 }
 
+// An ACUI sequent calculus with two chained forward rules. A context written
+// `p , q , r` parses left-nested, `(p , q) , r`, which is not the
+// ACUI-canonical form `forward.saturate` gives derived facts.
+const fwd_acui_join_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\notation emp: ctx = ($∅$:max);
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (g h: ctx): ctx;
+    \\infixl join: $,$ prec 5;
+    \\term hyp (a: wff): ctx;
+    \\coercion hyp: wff > ctx;
+    \\term nd (g: ctx) (a: wff): wff;
+    \\infixl nd: $⊢$ prec 1;
+    \\term bi (a b: wff): wff;
+    \\infixl bi: $↔$ prec 20;
+    \\--| @relation wff bi biid bitr bisym mpbi
+    \\axiom biid (a: wff): $ a ↔ a $;
+    \\axiom bitr (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+    \\axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+    \\axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+    \\--| @congr
+    \\axiom join_congr (g1 g2 h1 h2: ctx):
+    \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+    \\--| @congr
+    \\axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+    \\--| @congr
+    \\axiom nd_congr (e f: ctx) (a b: wff):
+    \\  $ ctx_eq e f $ > $ a ↔ b $ > $ (e ⊢ a) ↔ (f ⊢ b) $;
+    \\term P: wff;
+    \\term Q: wff;
+    \\term S: wff;
+    \\term R: wff;
+    \\--| @auto forward
+    \\axiom pq (g: ctx): $ g ⊢ P $ > $ g ⊢ Q $;
+    \\--| @auto forward
+    \\axiom qsr (g: ctx): $ g ⊢ Q $ > $ g ⊢ S $ > $ g ⊢ R $;
+    \\
+;
+
+test "forward join matches a pool context equal modulo ACUI to a derived fact's" {
+    // `pq` derives `Q` over hypothesis #1's context, canonicalized; `qsr` must
+    // join it with hypothesis #2, whose context differs from that canonical
+    // form only modulo ACUI, so the two are one binder value and `R` is
+    // derived. The offered proof is validated, so the checker bridges the
+    // difference in the rendered recipe.
+    const cases = [_]struct { ctx1: []const u8, ctx2: []const u8 }{
+        // `p , q , r` parses left-nested, `(p , q) , r`.
+        .{ .ctx1 = "p , q , r", .ctx2 = "p , q , r" },
+        // Differ by a duplicate member only (idempotence).
+        .{ .ctx1 = "p , q", .ctx2 = "p , q , q" },
+        // Differ by member order only (commutativity).
+        .{ .ctx1 = "p , q", .ctx2 = "q , p" },
+    };
+    for (cases) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        const mm0_src = try std.fmt.allocPrint(
+            allocator,
+            "{s}theorem t (p q r: wff): $ {s} ⊢ P $ > $ {s} ⊢ S $ >\n" ++
+                "  $ {s} ⊢ R $;\n",
+            .{ fwd_acui_join_mm0, case.ctx1, case.ctx2, case.ctx1 },
+        );
+        const proof_src = try std.fmt.allocPrint(
+            allocator,
+            "t\n----\nl1: $ {s} ⊢ R $ by auto?\n",
+            .{case.ctx1},
+        );
+        var counters = types.SearchCounters{};
+        var suggestions = try suggestionsAtNeedle(
+            &arena,
+            mm0_src,
+            proof_src,
+            "auto?",
+            .{ .counters = &counters, .generate = .{ .enabled = true } },
+        );
+        defer suggestions.deinit();
+
+        try expectOffered(suggestions.items, &.{"qsr [pq [#1], #2]"});
+        try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
+    }
+}
+
 test "theories without trigger annotations mint no seeds on a miss" {
     // A clean full-ladder miss in a trigger-free theory: the phase-6 gate
     // (`triggerRuleCount() > 0`) must skip the harvest entirely.

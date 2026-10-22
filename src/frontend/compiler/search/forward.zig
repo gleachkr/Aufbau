@@ -111,7 +111,7 @@ pub fn saturate(
         .arena = result.arena.allocator(),
         .scratch = context.allocator,
         .pool_source_idx = try context.allocator.alloc(?usize, pool.len),
-        .unfold_cache = .{ .allocator = context.allocator },
+        .match_cache = .{ .allocator = context.allocator },
     };
     defer sat.deinit();
     @memset(sat.pool_source_idx, null);
@@ -216,12 +216,7 @@ const Saturator = struct {
     /// Pool index -> source index (null when the pool entry failed to
     /// resolve an expression at seed time).
     pool_source_idx: []?usize,
-    /// Source expr -> its one-layer transparent-def unfolding (null = head
-    /// not unfoldable). Unfolding a binder-introducing def mints a fresh
-    /// placeholder per dummy from the theorem's 55-slot dep space; the cache
-    /// makes that spend once per distinct expression instead of once per
-    /// match attempt, and keeps repeated attempts from exhausting the space.
-    unfold_cache: UnfoldCache,
+    match_cache: MatchCache,
     pool_count: usize = 0,
     /// Premise sources: pool refs first, then derived refs in derivation
     /// order. Layer N restricts matching to the prefix that existed when the
@@ -252,7 +247,7 @@ const Saturator = struct {
         self.seen.deinit(self.scratch);
         self.groundings.deinit(self.scratch);
         self.scratch.free(self.pool_source_idx);
-        self.unfold_cache.deinit();
+        self.match_cache.deinit();
         self.* = undefined;
     }
 
@@ -409,7 +404,7 @@ const Saturator = struct {
             const matched = try matchForwardTemplate(
                 self.context,
                 self.theorem,
-                &self.unfold_cache,
+                &self.match_cache,
                 self.store,
                 &self.groundings,
                 self.scratch,
@@ -917,17 +912,24 @@ fn appendDistinctPin(
     try list.append(allocator, .{ .meta = meta_id, .value = value });
 }
 
-/// Memoized one-layer transparent-def unfoldings of source expressions. The
-/// unfolding of a given expression is deterministic apart from the fresh
-/// placeholders it mints, and a placeholder is a no-opinion leaf for every
-/// later match — so reusing the first unfolding is semantically equivalent to
-/// re-unfolding, while spending dep slots once instead of per attempt.
-const UnfoldCache = struct {
+/// Per-expression results the forward premise matcher memoizes for one
+/// saturation run.
+const MatchCache = struct {
     allocator: std.mem.Allocator,
-    map: std.AutoHashMapUnmanaged(ExprId, ?ExprId) = .empty,
+    /// Source expr -> its one-layer transparent-def unfolding (null = head
+    /// not unfoldable). The unfolding of a given expression is deterministic
+    /// apart from the fresh placeholders it mints, and a placeholder is a
+    /// no-opinion leaf for every later match — so reusing the first unfolding
+    /// is semantically equivalent to re-unfolding, while spending dep slots
+    /// (the theorem's 55-slot space) once instead of per attempt, which keeps
+    /// repeated attempts from exhausting it.
+    unfold: std.AutoHashMapUnmanaged(ExprId, ?ExprId) = .empty,
+    /// Binder value -> its ACUI-canonical form (`canonicalBinderValue`).
+    canonical: std.AutoHashMapUnmanaged(ExprId, ExprId) = .empty,
 
-    fn deinit(self: *UnfoldCache) void {
-        self.map.deinit(self.allocator);
+    fn deinit(self: *MatchCache) void {
+        self.unfold.deinit(self.allocator);
+        self.canonical.deinit(self.allocator);
     }
 };
 
@@ -941,7 +943,7 @@ const UnfoldCache = struct {
 fn matchForwardTemplate(
     context: *const Context,
     theorem: *TheoremContext,
-    cache: *UnfoldCache,
+    cache: *MatchCache,
     store: *const MetaStore,
     groundings: *std.ArrayListUnmanaged(types.MetaAssignment),
     scratch: std.mem.Allocator,
@@ -956,6 +958,17 @@ fn matchForwardTemplate(
             if (idx >= bindings.len) break :blk false;
             if (bindings[idx]) |existing| {
                 if (existing == expr_id) break :blk true;
+                // Equal modulo ACUI is the same value: pool facts keep their
+                // surface form (`a , b , c` parses left-nested) while derived
+                // facts are canonicalized (`derive`), so a context binder
+                // joining the two compares their canonical forms. The binder
+                // keeps its first value; the checker bridges the reordering
+                // when the recipe is validated.
+                if (try canonicalBinderValue(context, theorem, cache, existing) ==
+                    try canonicalBinderValue(context, theorem, cache, expr_id))
+                {
+                    break :blk true;
+                }
                 // A binder bound by an earlier premise to a meta-carrying
                 // family value (`a := P ?t`) meets this concrete premise
                 // (`P c`): ground the embedded nested-source metas against it
@@ -1020,6 +1033,25 @@ fn matchForwardTemplate(
             );
         },
     };
+}
+
+/// `value`'s ACUI-canonical form, memoized per expression (the identity for
+/// ACUI-free values). A full interner leaves `value` as is: the join then
+/// compares identities, as without ACUI.
+fn canonicalBinderValue(
+    context: *const Context,
+    theorem: *TheoremContext,
+    cache: *MatchCache,
+    value: ExprId,
+) error{OutOfMemory}!ExprId {
+    if (cache.canonical.get(value)) |cached| return cached;
+    const canonical = acui_mod.canonicalizeAcui(context, theorem, value) catch |err|
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TooManyTheoremExprs => value,
+        };
+    try cache.canonical.put(cache.allocator, value, canonical);
+    return canonical;
 }
 
 /// Look up `pid` in the forward-join overlay (linear; the overlay holds only
@@ -1201,15 +1233,15 @@ fn derefJoinOverlay(
 fn unfoldConcreteHeadOnce(
     context: *const Context,
     theorem: *TheoremContext,
-    cache: *UnfoldCache,
+    cache: *MatchCache,
     expr_id: ExprId,
 ) !?ExprId {
-    if (cache.map.get(expr_id)) |cached| return cached;
+    if (cache.unfold.get(expr_id)) |cached| return cached;
     const result = def_match.unfoldAppOnce(context, theorem, expr_id, true) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => null,
     };
-    try cache.map.put(cache.allocator, expr_id, result);
+    try cache.unfold.put(cache.allocator, expr_id, result);
     return result;
 }
 
