@@ -297,7 +297,8 @@ which the persisted-memo covering rule requires:
    has a witness-deferring `@auto backward` rule and a non-empty `@vars`.
    (The pool dummies themselves are materialized whenever `@vars` is
    non-empty, since hidden-variable generation below also draws on them.)
-   A re-run with its own fuel pool and persisted-memo lineage;
+   A re-run with its own fuel pool over phase 2's failure-memo lineage
+   (`canonicalPhase`: an exhaustive failure does not depend on fuel);
    deep open-witness theories need it (peano `mul_eq_*_all` at depth 6 are
    found by this cell and by nothing else — #174: neither 4x fuel nor
    `max_depth` 10 recovers them without it). Witness invention itself —
@@ -617,6 +618,25 @@ rung, whose ref names come from the bindings. Guard: the `add_comm base case`
 scenario. Guards for the fresh premise itself: the `arr_form` and `arr_elim`
 depth rows of `martin_lof_frontier`.
 
+An *eigenvariable* premise, a bound binder of the rule that no other binder
+may depend on, so every value of it is fresh for the whole instance
+(`rules.isEigenvariable`), opens the same way but is named before any child
+search when the rule is eager (`OpenSlot.fresh_named_only`), and named first
+with the child search as the fallback otherwise (`fresh_eigen`): every name
+outside the instance gives the same premise up to renaming, so only a ref can
+tell names apart, and an eager step keeps its parent's depth, so an open
+child search under it would be a self-feeding cascade (`not_left` re-deriving
+the `∃` a fresh `ex_left` just opened). Such a binder also passes the
+`@auto eager` shape check and does not demote the rule in `witnessClass`. A
+`@view` rule whose `@recover` target is an eigenvariable (nd_fol's
+`all_intro {x y}: g ⊢ [x/y] p > g ⊢ ∀ x p` with `@recover y q p x`) opens it
+through the view instead: `openSlotViaView` mints the target as a
+`.bound_choice` meta held by the view bindings (`OpenSlot.view_eigen`), and
+when the premise substitutes it away (`∀ x s0` from `s0`) the fully-solved
+check names it from the pool as it would a `fresh_bound` slot's, the view
+bindings being the only place it survives. Guard: the `vac_` depth rows of
+`nd_fol`.
+
 A hidden variable inside a fixed binding of the premise qualifies the same
 way: a kept seed meta a bound binder still holds (`ih`, when no ref pinned
 it), or one inside a kept term (`reflt`'s `t := λ x. x` when the goal `G ⊩ T`
@@ -717,6 +737,10 @@ decomposition, never a choice. The annotation is validated at parse time to be
 *invertible-shaped* — every hypothesis binder conclusion-determined
 (`error.EagerRuleDefersWitness` otherwise; a premise-only witness binder like
 `rex`'s `t` would make a depth-free eager step a self-feeding contraction).
+A premise-only *eigenvariable* is exempt (`rules.isEigenvariable`: a bound
+binder no non-bound binder may depend on, `all_intro {x y}`'s `y`): every
+value of it gives the same instance up to renaming, so the step still chooses
+nothing.
 Three coupled effects (docs/design_notes/eager_rule_scheduling.md has the full
 rationale):
 

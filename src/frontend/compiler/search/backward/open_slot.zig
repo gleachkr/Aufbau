@@ -81,6 +81,12 @@ const OpenSlot = struct {
     /// `fresh_named_only`); a non-eager slot still names first, with the
     /// child search as the fallback for a name only a ref below can pin.
     fresh_eigen: bool = false,
+    /// The view minted a `.bound_choice` meta for a `@recover` target that is
+    /// an eigenvariable (`openSlotViaView`). It lives in the view bindings,
+    /// not the rule bindings, so when the premise substitutes it away
+    /// (`[x/y] p` with `x` not in `p`) the fully solved target still has to
+    /// name it, as a `fresh_bound` slot's would be.
+    view_eigen: bool = false,
     /// Binders whose values hold metas `rebindHiddenVars` minted for this slot;
     /// a solved fill materializes them too.
     rebound: u64 = 0,
@@ -521,6 +527,7 @@ fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
                 std.math.maxInt(u55),
                 if (bound) .bound_choice else .existential,
             );
+            if (bound) slot.view_eigen = true;
             view_bindings[rec.target_view_idx] = meta;
             view_bindings[rec.source_view_idx] = try forward.leafSwap(
                 theorem,
@@ -644,7 +651,7 @@ pub fn emitOpenTarget(
         // only send the branch to validation with it undeterminable. It takes
         // a `@vars` name now instead, and the solved-target pinning path
         // renders the explicit binding the validator requires.
-        if (slot.fresh_bound and
+        if ((slot.fresh_bound or slot.view_eigen) and
             try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh)) return;
         if (slot.mode == .witness and slot.hook.allow_invent_witness and
             try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .dangling)) return;
@@ -1280,6 +1287,9 @@ pub fn tryPoolWitnesses(
             }
             unsolved.items.len = keep;
             try collectSlotUnsolved(slot, unknowns, &unsolved);
+            // A view-minted eigenvariable (`view_eigen`) is held by the view
+            // bindings alone.
+            if (view_bindings) |vb| try collectSlotUnsolved(slot, vb, &unsolved);
         },
         .dangling => {
             if (view_bindings) |vb| {

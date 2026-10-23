@@ -294,7 +294,9 @@ unprovable goals.
 The compiler cannot prove that a rule is invertible; the annotation is the
 theory author's choice, and search trusts it. A rule marked eager that is
 not invertible can make `auto?` miss proofs. The compiler does reject
-`@auto eager` if a premise mentions a binder absent from the conclusion.
+`@auto eager` if a premise mentions a binder absent from the conclusion,
+unless that binder is a fresh bound variable no other binder may depend on
+(the eigenvariable of a `∀`-introduction), which the step does not choose.
 
 ## `@auto bridge`: close with a rule, never search through it
 

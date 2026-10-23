@@ -1393,8 +1393,8 @@ test "trimming forces the binders an inline sub-proof proved past" {
         \\-----------------
         \\l6: $ ∅ ⊢ (¬ ∃ x P x) → ∀ y (¬ P y) $ by auto?
     ,
-        "imp_intro [all_intro [not_intro [not_left (g := $ P y $, a := $ ∃ x P x $) " ++
-            "[ex_intro (t := $ y $) [ax []]]]]]",
+        "imp_intro [all_intro [not_intro (g := $ ¬ ∃ x P x $, a := $ P u $) " ++
+            "[not_left [ex_intro (t := $ u $) [ax []]]]]]",
     );
 }
 
@@ -1402,35 +1402,38 @@ test "trimming accepts an inferred binder equal to the search's up to ACUI" {
     try expectNdFolTrim(
         \\drinker
         \\-------
-        \\l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ P y $ by ax
-        \\l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
-        \\l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y ⊢ ∀ y P y $ by raa [l2]
-        \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ P y → ∀ y P y $ by imp_intro [l3]
-        \\l5: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [l4]
-        \\l6: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ ⊥ $ by not_left [l5]
-        \\l7: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ P y $ by raa [l6]
+        \\l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ P u $ by ax
+        \\l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
+        \\l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u ⊢ ∀ y P y $ by raa [l2]
+        \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ P u → ∀ y P y $ by imp_intro [l3]
+        \\l5: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ ∃ x (P x → ∀ y P y) $ by ex_intro [l4]
+        \\l6: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ ⊥ $ by not_left [l5]
+        \\l7: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ P u $ by raa [l6]
         \\l12: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by auto?
     ,
-        "raa [not_left [ex_intro [imp_intro [all_intro (x := $ y $) [l7]]]]]",
+        "raa [not_left [ex_intro [imp_intro [all_intro (x := $ y $, p := $ P y $) [l7]]]]]",
     );
 }
 
 test "trimming checks again with the kept bindings stated" {
     // The first oracle check keeps a set the line rejects once the kept
     // bindings are stated (a stated binder changes the hint an inline
-    // sub-proof gets); the second check, with them stated, keeps `t`.
+    // sub-proof gets); the second check, with them stated, keeps
+    // `not_left`'s. The goal is the `∀` step of `drinker`: `all_intro` names
+    // its eigenvariable `u` after `l4`, and `ex_intro [l4]` closes under it.
+    // (From `∅`, the fresh-eigenvariable rules make the self-contained proof,
+    // with a pool witness, the first one found, so the carried `t := C` of
+    // the older form of this case no longer arises.)
     try expectNdFolTrim(
         \\drinker
         \\-------
-        \\l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ P y $ by ax
-        \\l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
-        \\l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y , P y ⊢ ∀ y P y $ by raa [l2]
-        \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P y ⊢ P y → ∀ y P y $ by imp_intro [l3]
-        \\l12: $ ∅ ⊢ ∃ x (P x → ∀ y P y) $ by auto?
+        \\l1: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ P u $ by ax
+        \\l2: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u , ¬ ∀ y P y ⊢ ⊥ $ by not_left [l1]
+        \\l3: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u , P u ⊢ ∀ y P y $ by raa [l2]
+        \\l4: $ ¬ ∃ x (P x → ∀ y P y) , P C , ¬ P u ⊢ P u → ∀ y P y $ by imp_intro [l3]
+        \\l8: $ ¬ ∃ x (P x → ∀ y P y) , P C ⊢ ∀ y P y $ by auto?
     ,
-        "raa [not_left [ex_intro (t := $ C $) [imp_intro (g := $ ¬ ∃ x (P x → ∀ y P y) $, " ++
-            "a := $ P C $, b := $ ∀ y P y $) [all_intro (x := $ y $) [raa " ++
-            "(g := $ ¬ ∃ x (P x → ∀ y P y) , P C $, a := $ P y $) [not_left " ++
-            "(g := $ P C , ¬ P y $, a := $ ∃ x (P x → ∀ y P y) $) [ex_intro [l4]]]]]]]]",
+        "all_intro [raa [not_left (g := $ P C , ¬ P u $, a := $ ∃ x (P x → ∀ y P y) $) " ++
+            "[ex_intro [l4]]]]",
     );
 }

@@ -701,7 +701,12 @@ eager rule must be **invertible-shaped**, so every hypothesis binder has
 to appear in the conclusion. A premise-only witness binder (an
 existential-introduction `t`, a contraction rule like tait's `rex`) is
 rejected at compile time — a depth-free self-feeding contraction would be
-catastrophic. A theory's own breadth benchmark (its hand proofs must stay
+catastrophic. The one premise-only binder allowed is a fresh
+eigenvariable: a bound binder `{y}` that no other binder may depend on
+(`all_intro {x y} (g: ctx x) (p: wff x): g ⊢ [x/y] p > g ⊢ ∀ x p`). Every
+value of it gives the same premise up to renaming, so the step chooses
+nothing; search names it from the `@vars` pool, or after a ref that uses
+it. A theory's own breadth benchmark (its hand proofs must stay
 re-discoverable) is the practical check on the rest.
 
 ### `@auto bridge` — apply only to facts already in hand

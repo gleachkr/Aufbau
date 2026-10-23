@@ -14,6 +14,15 @@ This file records notable user-facing changes to Aufbau. The project follows
   forget; as a bridge it costs one lookup and still closes a sub-goal from
   a fact stated for a smaller context. The rule must have a hypothesis.
 
+### Changed
+
+- `@auto eager` accepts a premise-only bound binder that no other binder
+  may depend on, the fresh eigenvariable of a rule such as
+  `all_intro {x y} (g: ctx x) (p: wff x): g ⊢ [x/y] p > g ⊢ ∀ x p`, and
+  `auto?` applies `@view` rules whose `@recover` target is such a binder,
+  naming it from the `@vars` pool or after a reference that uses it. The
+  `nd_fol` bench fixture states its quantifier rules this way.
+
 ### Fixed
 
 - `@rewrite` rules that keep growing an expression, such as

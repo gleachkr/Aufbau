@@ -157,8 +157,9 @@ axiom sb_f_congr {x: obj} (t1 t2: obj x) (p1 p2: wff x):
   $ t1 = t2 $ > $ p1 ↔ p2 $ >
   $ [x/t1] p1 ↔ [x/t2] p2 $;
 
--- Alpha-renaming rules used by @freshen when a context contains the same
--- bound variable a quantifier rule is trying to bind.
+-- Alpha-renaming rules. The quantifier rules take a fresh eigenvariable
+-- directly, so these are not needed by search; they state the renaming
+-- principle the fresh-eigenvariable forms are admissible by.
 --| @alpha x y
 axiom all_alpha {x y: obj} (p: wff x):
   $ ∀ x p ↔ ∀ y ([x/y] p) $;
@@ -261,10 +262,25 @@ axiom bi_elim_r (g: ctx) (a b: wff): $ g ⊢ a ↔ b $ > $ g ⊢ b $ > $ g ⊢ a
 --| @auto backward
 axiom raa (g: ctx) (a: wff): $ g , ¬ a ⊢ ⊥ $ > $ g ⊢ a $;
 
--- Eigenvariable: `g: ctx` cannot depend on `x`, which is the side condition.
---| @freshen g x
+-- Eigenvariable `y`: any variable fresh for the instance (`g` and `p` may
+-- mention `x`; nothing may mention `y`, which is the side condition). The
+-- special case `y = x` (`g ⊢ p > g ⊢ ∀ x p`) is not a separate rule: it
+-- names the eigenvariable after the quantifier's own bound variable, so
+-- once one `∀ x` is introduced a second copy of a context member binding
+-- the same `x` can never be opened, and as a second backward candidate at
+-- every `∀` goal it would double the search. The view lets the checker and
+-- the search read `y` back from the premise. MM0 counts bound occurrences,
+-- so a context or body that merely binds the chosen `y` somewhere is a
+-- dependency violation; @freshen lets the checker rename that bound
+-- occurrence instead (search picks its names clear of every variable of
+-- the instance and never needs it).
+--| @view {x y: obj} (g: ctx x) (p: wff x) (q: wff): $ g ⊢ q $ > $ g ⊢ ∀ x p $
+--| @recover y q p x
+--| @freshen g y
+--| @freshen p y
 --| @auto eager
-axiom all_intro (g: ctx) {x: obj} (p: wff x): $ g ⊢ p $ > $ g ⊢ ∀ x p $;
+axiom all_intro {x y: obj} (g: ctx x) (p: wff x):
+  $ g ⊢ [x/y] p $ > $ g ⊢ ∀ x p $;
 
 --| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q: wff): $ g ⊢ ∀ x p $ > $ g ⊢ q $
 --| @recover t q p x
@@ -277,12 +293,14 @@ axiom all_elim {x: obj} (g: ctx x) (p: wff x) (t: obj x):
 axiom ex_intro {x: obj} (g: ctx x) (p: wff x) (t: obj x):
   $ g ⊢ [x/t] p $ > $ g ⊢ ∃ x p $;
 
--- Eigenvariable: neither `h` nor `c` may depend on `x` (the major premise's
--- context `g` may).
---| @freshen h x
---| @freshen c x
-axiom ex_elim {x: obj} (g: ctx x) (h: ctx) (p: wff x) (c: wff):
-  $ g ⊢ ∃ x p $ > $ h , p ⊢ c $ > $ g , h ⊢ c $;
+-- Eigenvariable `y` in the minor premise, as for `all_intro`: nothing may
+-- mention it, while `g`, `h`, `p` and `c` may mention `x`.
+--| @freshen g y
+--| @freshen h y
+--| @freshen p y
+--| @freshen c y
+axiom ex_elim {x y: obj} (g: ctx x) (h: ctx x) (p: wff x) (c: wff x):
+  $ g ⊢ ∃ x p $ > $ h , [x/y] p ⊢ c $ > $ g , h ⊢ c $;
 
 -- ============================================================
 -- Derived left rules: the search layer (proofs in nd_fol.auf)
@@ -331,11 +349,15 @@ theorem not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
 theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
   $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
 
---| @freshen g x
---| @freshen c x
+-- Eigenvariable `y`, as in `ex_elim`.
+--| @view {x y: obj} (g: ctx x) (p: wff x) (q: wff) (c: wff x): $ g , q ⊢ c $ > $ g , (∃ x p) ⊢ c $
+--| @recover y q p x
+--| @freshen g y
+--| @freshen p y
+--| @freshen c y
 --| @auto eager
-theorem ex_left (g: ctx) {x: obj} (p: wff x) (c: wff):
-  $ g , p ⊢ c $ > $ g , (∃ x p) ⊢ c $;
+theorem ex_left {x y: obj} (g: ctx x) (p: wff x) (c: wff x):
+  $ g , [x/y] p ⊢ c $ > $ g , (∃ x p) ⊢ c $;
 
 -- ============================================================
 -- Theorem battery (proofs in nd_fol.auf)

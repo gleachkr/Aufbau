@@ -650,7 +650,9 @@ pub const guards = [_]FrontierGuard{
     },
     // One FULL depth guard per search shape: eager intros with imp_left
     // chains (s_comb), raa + not_left (cases_classical), or_left splits
-    // (resolution), and all_left/ex_left witnesses (exists_mono).
+    // (resolution), all_left/ex_left witnesses (exists_mono), and the
+    // vacuous quantifier rules, whose fresh eigenvariable the premise
+    // substitutes away so only the pool can name it (vac_intro, vac_ex).
     .{
         .filter = "s_comb",
         .files = "tests/search_bench_cases/nd_fol.mm0:" ++
@@ -671,6 +673,12 @@ pub const guards = [_]FrontierGuard{
     },
     .{
         .filter = "exists_mono",
+        .files = "tests/search_bench_cases/nd_fol.mm0:" ++
+            "tests/search_bench_cases/nd_fol.auf",
+        .mode = "depth",
+    },
+    .{
+        .filter = "vac_",
         .files = "tests/search_bench_cases/nd_fol.mm0:" ++
             "tests/search_bench_cases/nd_fol.auf",
         .mode = "depth",

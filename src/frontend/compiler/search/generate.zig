@@ -606,8 +606,9 @@ const Phase = struct {
 /// - Phase 1: ordinary, non-splitting generation.
 /// - Phase 2: adds ACUI context splitting.
 /// - Phase 3: a capability-identical retry of phase 2, with its own fuel pool
-///   and its own failure-memo lineage (`PhaseDepthMemo` is
-///   phase-indexed). It runs only for theories with a `@vars` witness pool,
+///   over phase 2's failure-memo lineage (`canonicalPhase`: an exhaustive
+///   failure does not depend on fuel). It runs only for theories with a
+///   `@vars` witness pool,
 ///   where deep open-witness churn makes the retry pay: peano's
 ///   mul_eq_*_all at depth 6 are found by this cell and by nothing else
 ///   (#174; neither 4x fuel nor max_depth 10 recovers them without it).
