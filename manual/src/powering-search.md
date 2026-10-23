@@ -296,6 +296,29 @@ theory author's choice, and search trusts it. A rule marked eager that is
 not invertible can make `auto?` miss proofs. The compiler does reject
 `@auto eager` if a premise mentions a binder absent from the conclusion.
 
+## `@auto bridge`: close with a rule, never search through it
+
+A structural rule such as weakening is cheap to close a goal with and
+ruinous to search through. Applied backward, weakening must choose which
+context members to forget, and every subset is a separate sub-search;
+yet all it is needed for is bridging a fact stated for a smaller context
+to a goal in a larger one.
+
+```mm0
+--| @auto bridge
+axiom weak (g h: ctx) (a: wff): $ g ⊢ a $ > $ g , h ⊢ a $;
+```
+
+A bridge rule remains a backward candidate, but search fills its premises
+only from the reference pool and from facts the forward pass derived; it
+never generates a sub-proof for them. So `weak [#1]` still closes `Γ , q ⊢
+p` from a hypothesis `Γ ⊢ p` wherever that sub-goal arises, while the
+forgetting searches disappear. The annotation requires at least one
+hypothesis. A proof that must forget a context member *before* applying a
+rule with a bound binder (one that the member mentions) can no longer be
+found through a bridge rule; such proofs are rare, and the bench shows
+the trade.
+
 ## `@auto trigger`: seed leaf facts
 
 Some proofs need a leaf fact backward search cannot easily discover, typically

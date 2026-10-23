@@ -700,7 +700,7 @@ rule id in one of the mode sets (`trigger` additionally stores its pattern in
 `trigger_by_rule`; `eager` stores its priority in `auto_eager_rules` and also
 enrolls the rule backward); the search engine queries them via
 `isAutoForwardRule` / `isAutoBackwardRule` / `eagerPriority` /
-`autoForwardRuleCount` / `triggerRuleCount`. **There is
+`isAutoBridgeRule` / `autoForwardRuleCount` / `triggerRuleCount`. **There is
 no shape-based auto-classifier** — enrollment is entirely manual. An un-annotated
 rule stays concrete-only, which is what keeps un-annotated theories byte-identical
 to pre-automation search. Annotating a rule never changes *validity* (every
@@ -764,6 +764,25 @@ rationale):
 Theories without eager annotations take none of these paths (every gate checks
 `autoEagerRuleCount() > 0` or an absent `eagerPriority`), which keeps the
 corpus byte-identity contract intact by construction.
+
+### `@auto bridge` — premises from facts in hand only
+
+A bridge rule (`auto_bridge_rules`; `weak`: `g ⊢ a > g , h ⊢ a`) is a
+backward candidate like any other, but `backward/backtrack.zig`'s
+`backtrackRefs` returns before `tryGenerateSlot` for it: its premise slots
+take pool refs and derived refs (`tryDerivedSlots`) and nothing else. The
+reason is the ACUI split such a rule's premise needs when generated: the
+conclusion-only sibling `h` leaves every goal member optional, so
+`trySplitGenerate` enumerates the subsets of the context (capped at
+`max_optional = 6`, 64 children), each child a search for the goal minus
+members, which proves nothing the goal's own child search could not when
+the other rules are context-monotone. As a leaf closure the rule costs one
+pool lookup. The annotation, not a shape test, chooses the rule: the
+compiler cannot check that weakening is admissible in the theory, and the
+one structural exception (a rule with a bound binder cannot apply under a
+context member mentioning it, so forgetting that member first is a
+generating step) is the theory author's trade to make. Requires a
+hypothesis (`error.BridgeRuleHasNoHypotheses`).
 
 ### `@auto trigger PATTERN` — ground seeds from goal subterms (phase 6)
 

@@ -464,8 +464,8 @@ axiom ax ...               -- seed ground instances from the goal's subterms
 ```
 
 Each `@auto` line names exactly one mode — `forward`, `backward`,
-`eager` (with an optional priority), or `trigger …`; anything else on that
-line is a compile error. The modes are
+`eager` (with an optional priority), `bridge`, or `trigger …`; anything
+else on that line is a compile error. The modes are
 *per line*, not per rule, though: a rule may carry several `@auto` lines,
 and the modes are stored independently with no mutual exclusion. So
 in principle you can stack them — `--| @auto forward` and `--| @auto
@@ -703,6 +703,43 @@ existential-introduction `t`, a contraction rule like tait's `rex`) is
 rejected at compile time — a depth-free self-feeding contraction would be
 catastrophic. A theory's own breadth benchmark (its hand proofs must stay
 re-discoverable) is the practical check on the rest.
+
+### `@auto bridge` — apply only to facts already in hand
+
+Some structural rules are never worth *searching* through, only worth
+*closing* with. Weakening is the model case:
+
+```mm0
+--| @auto bridge
+axiom weak (g h: ctx) (a: wff): $ g ⊢ a $ > $ g , h ⊢ a $;
+```
+
+Applied backward as a generating step, `weak` has to choose which
+members of the goal's context to forget, and with `n` members that is
+`2^n` child searches, none of which can prove anything the goal's own
+child search could not (every other rule's context binder absorbs the
+extra members). What the rule is actually for is bridging a fact stated
+for a smaller context — a hypothesis, an earlier line, a forward-derived
+fact — to a goal in a larger one. `@auto bridge` declares exactly that:
+the rule stays a backward candidate, but its premises are filled only
+from the reference pool and the forward-derived facts, never by a
+generated sub-proof. So `weak [#1]` closes a sub-goal `Γ , q ⊢ p` from a
+hypothesis `Γ ⊢ p` at any depth, while the `2^n` forgetting searches are
+gone. A bridge rule must have at least one hypothesis.
+
+This is the right annotation for a rule whose generated applications
+would only ever reach proofs that pushing the rule down to the leaves
+reaches too, which holds for weakening in a calculus whose other rules
+are context-monotone. It pairs naturally with `@auto forward`: a fact the
+forward pass derives in a small context (church's `betacv`, applied to
+the theorem's hypotheses) is what the bridge carries into the larger
+one. It is not a rule-shape the compiler infers: the theory declares it,
+because the compiler cannot check admissibility. One known exception to
+the pushing-down: a rule with a bound binder `{x}` cannot be applied to a
+goal whose context mentions `x` (MM0's dependency condition counts every
+occurrence, bound ones included), so a proof that must forget such a
+member *before* applying that rule needs weakening as a generating step,
+which a bridge rule no longer provides.
 
 ### `@auto trigger PATTERN` — seed ground facts from the goal
 

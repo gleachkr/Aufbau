@@ -11,7 +11,7 @@ const Containers = @import("./containers.zig");
 /// have to defer. `@auto eager` rejects such rules because their
 /// invertible-shape guarantee fails.
 fn ruleDefersWitness(rule: *const RuleDecl) bool {
-    return hasPremiseOnlyBinder(rule.concl, rule.hyps);
+    return hasPremiseOnlyBinder(rule.args, rule.concl, rule.hyps);
 }
 
 /// A relation bundle defines an equivalence relation on a sort, with the
@@ -226,6 +226,13 @@ pub const RewriteRegistry = struct {
     /// annotation time to have every hypothesis binder conclusion-determined
     /// (see `processEager`).
     auto_eager_rules: std.AutoHashMap(u32, u8),
+    /// `@auto bridge` rules by rule_id: a rule applied only with its
+    /// premises already in hand (pool refs, forward-derived facts), never
+    /// generating a premise. Weakening is the model case: `g ⊢ a > g , h ⊢ a`
+    /// bridges a fact stated for a sub-context to a goal in a larger one; as
+    /// a generating step it would choose which goal members to forget (2^n
+    /// child searches that prove nothing a child of the goal could not).
+    auto_bridge_rules: std.AutoHashMap(u32, void),
     /// ACUI structural metadata by combiner head term_id.
     acui_by_head: std.AutoHashMap(u32, StructuralCombiner),
     /// `@auto trigger` patterns by rule_id (one list entry per annotation
@@ -265,6 +272,7 @@ pub const RewriteRegistry = struct {
             .auto_forward_rules = std.AutoHashMap(u32, void).init(allocator),
             .auto_backward_rules = std.AutoHashMap(u32, void).init(allocator),
             .auto_eager_rules = std.AutoHashMap(u32, u8).init(allocator),
+            .auto_bridge_rules = std.AutoHashMap(u32, void).init(allocator),
             .acui_by_head = std.AutoHashMap(u32, StructuralCombiner).init(
                 allocator,
             ),
@@ -301,6 +309,7 @@ pub const RewriteRegistry = struct {
         .{ "auto_forward_rules", .map },
         .{ "auto_backward_rules", .map },
         .{ "auto_eager_rules", .map },
+        .{ "auto_bridge_rules", .map },
         .{ "acui_by_head", .map },
         .{ "trigger_by_rule", .list_map },
         .{ "conversions", .list },
@@ -1093,6 +1102,12 @@ pub const RewriteRegistry = struct {
         } else if (std.mem.eql(u8, mode, "backward")) {
             const rule_id = env.getRuleId(stmt_name) orelse return;
             try self.auto_backward_rules.put(rule_id, {});
+        } else if (std.mem.eql(u8, mode, "bridge")) {
+            const rule_id = env.getRuleId(stmt_name) orelse return;
+            // A bridge links facts in hand to the goal; without a premise
+            // there is nothing to link.
+            if (env.rules.items[rule_id].hyps.len == 0) return error.BridgeRuleHasNoHypotheses;
+            try self.auto_bridge_rules.put(rule_id, {});
         } else {
             return error.InvalidAutoAnnotation;
         }
@@ -1364,6 +1379,13 @@ pub const RewriteRegistry = struct {
 
     pub fn autoEagerRuleCount(self: *const RewriteRegistry) usize {
         return self.auto_eager_rules.count();
+    }
+
+    /// True for an `@auto bridge` rule: backward search fills its premises
+    /// from the pool and the forward-derived facts only, never by
+    /// generating a sub-proof (see `auto_bridge_rules`).
+    pub fn isAutoBridgeRule(self: *const RewriteRegistry, rule_id: u32) bool {
+        return self.auto_bridge_rules.contains(rule_id);
     }
 
     /// True if `rule_id` is the *transport* rule of some `@relation` bundle

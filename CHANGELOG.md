@@ -5,6 +5,15 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ## [Unreleased]
 
+### Added
+
+- `@auto bridge`: a rule annotated this way stays a backward candidate for
+  `auto?`, but search fills its premises only from the reference pool and
+  forward-derived facts, never by generating a sub-proof. Weakening is the
+  intended case: searched through, it enumerates which context members to
+  forget; as a bridge it costs one lookup and still closes a sub-goal from
+  a fact stated for a smaller context. The rule must have a hypothesis.
+
 ### Fixed
 
 - `@rewrite` rules that keep growing an expression, such as

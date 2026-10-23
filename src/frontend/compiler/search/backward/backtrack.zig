@@ -462,7 +462,7 @@ pub fn witnessClass(context: *const Context, rule_id: u32) u8 {
     // ordering is task #88's question, not this one's).
     if (!context.registry.isAutoBackwardRule(rule_id)) return 0;
     const rule = context.env.rules.items[rule_id];
-    return if (hasPremiseOnlyBinder(rule.concl, rule.hyps)) 2 else 1;
+    return if (hasPremiseOnlyBinder(rule.args, rule.concl, rule.hyps)) 2 else 1;
 }
 
 /// True when a generated slot's otherwise concrete target still carries a
@@ -821,8 +821,13 @@ fn backtrackRefs(ctx: *const SlotCtx, depth: usize) anyerror!void {
     // After pool refs, let the generation hook try to synthesize a
     // sub-proof for this slot. Only fires when a hook is present and the
     // hypothesis is already concrete given the current bindings (its binders
-    // pinned by the conclusion or by sibling refs chosen above).
+    // pinned by the conclusion or by sibling refs chosen above). An `@auto
+    // bridge` rule's premises are filled from facts in hand only (the pool
+    // and derived refs above): weakening generated would choose which goal
+    // members to forget, 2^n child searches whose every proof the goal's own
+    // child search can give once the forgetting is pushed to the leaves.
     if (ctx.generator) |hook| {
+        if (context.registry.isAutoBridgeRule(candidate.rule_id)) return;
         try tryGenerateSlot(ctx, hook, .{
             .depth = depth,
             .position = position,
@@ -1200,6 +1205,12 @@ fn trySplitGenerate(
                 !carriesAncestorWitness(context, candidate, hook, concrete_target.?))
             {
                 try emitGeneratedSlot(ctx, hook, slot, concrete_target.?);
+            } else if (concrete_target == null and
+                try tryFreshBoundGenerate(ctx, hook, slot) != .skipped)
+            {
+                // The split pinned the context; the premise's remaining open
+                // binders are fresh bound variables (`ex_left`'s eigenvariable
+                // `y` in `g , [x/y] p ⊢ c`), named as in `tryGenerateSlot`.
             } else if (hook.solveOpenFn != null and
                 openMode(
                     context,

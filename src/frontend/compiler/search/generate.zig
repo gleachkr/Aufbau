@@ -1670,6 +1670,21 @@ fn stringLessThan(_: void, lhs: []const u8, rhs: []const u8) bool {
 // ---------------------------------------------------------------------------
 // Failure memos (see the `concrete_fail` / `open_fail` field doc).
 
+/// The lowest phase index with the same capability flags as `phase`, the
+/// memo lineage the phase shares: a capability-identical retry (phase 3 of
+/// phase 2) re-runs the same search with fresh fuel, and an exhaustive
+/// failure does not depend on fuel (fuel exhaustion is an error, never a
+/// recorded failure), so the retry starts from the failures already found.
+fn canonicalPhase(phase: usize) usize {
+    const flags = ladder_phases[phase];
+    for (ladder_phases[0..phase], 0..) |earlier, index| {
+        if (earlier.split == flags.split and
+            earlier.retain_principal == flags.retain_principal and
+            earlier.constrained_mp == flags.constrained_mp) return index;
+    }
+    return phase;
+}
+
 /// Genuinely-exhaustive failure verdicts: for each target and ladder phase,
 /// the deepest generation depth at which the target failed under that
 /// phase's capabilities. Two covering rules:
@@ -1693,7 +1708,7 @@ fn PhaseDepthMemo(comptime Key: type) type {
 
         fn covered(self: *const Self, key: Key, phase: usize, depth: usize) bool {
             const depths = self.map.get(key) orelse return false;
-            const from = if (depth == 0) 0 else phase;
+            const from = if (depth == 0) 0 else canonicalPhase(phase);
             for (depths[from..]) |d| {
                 if (d != none and d >= depth) return true;
             }
@@ -1717,7 +1732,7 @@ fn PhaseDepthMemo(comptime Key: type) type {
                 }
                 gop.value_ptr.* = @splat(none);
             }
-            const cur = &gop.value_ptr[phase];
+            const cur = &gop.value_ptr[canonicalPhase(phase)];
             if (cur.* == none or d > cur.*) cur.* = d;
         }
 

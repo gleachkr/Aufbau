@@ -2250,3 +2250,91 @@ test "constrained MP leaves a premise whose open binders an ACUI split owns" {
     // `cut`'s `a` occurs nowhere in the conclusion, so no step owns it.
     try std.testing.expect(!try premiseOwned(mm0_src, "cut", 0, &.{"g"}));
 }
+
+// `@auto bridge`: `wk` fills its premise from the pool only. `rleft [wk [#1]]`
+// pushes the weakening to the leaf, where the pool closes it; `wk [dbl [#1]]`
+// would have `wk` generate its premise, which a bridge rule never does.
+fn bridgeSuggestions(
+    arena: *std.heap.ArenaAllocator,
+    wk_mode: []const u8,
+    goal: []const u8,
+) !types.SourceSuggestions {
+    const mm0_template =
+        \\delimiter $ ( ) $;
+        \\provable sort wff;
+        \\sort ctx;
+        \\term or (a b: wff): wff;
+        \\infixr or: $|$ prec 30;
+        \\term an (a b: wff): wff;
+        \\infixr an: $&$ prec 35;
+        \\term P: wff; term Q: wff; term R: wff;
+        \\term bi (a b: wff): wff;
+        \\infixl bi: $<->$ prec 20;
+        \\--| @relation wff bi biid bitr bisym mpbi
+        \\axiom biid (a: wff): $ a <-> a $;
+        \\axiom bitr (a b c: wff): $ a <-> b $ > $ b <-> c $ > $ a <-> c $;
+        \\axiom bisym (a b: wff): $ a <-> b $ > $ b <-> a $;
+        \\axiom mpbi (a b: wff): $ a <-> b $ > $ a $ > $ b $;
+        \\term ctx_eq (g h: ctx): wff;
+        \\term emp: ctx;
+        \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+        \\term join (g h: ctx): ctx;
+        \\infixl join: $,$ prec 5;
+        \\term hyp (a: wff): ctx;
+        \\coercion hyp: wff > ctx;
+        \\term seq (d: ctx): wff;
+        \\prefix seq: $|-$ prec 1;
+        \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+        \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+        \\axiom ctx_trans (g h i: ctx): $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+        \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+        \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+        \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+        \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+        \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+        \\--| @congr
+        \\axiom join_congr (g1 g2 h1 h2: ctx): $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+        \\--| @congr
+        \\axiom seq_congr (e f: ctx): $ ctx_eq e f $ > $ (|- e) <-> (|- f) $;
+        \\--| @auto eager
+        \\axiom rleft (d: ctx) (a b: wff): $ |- a , d $ > $ |- (a | b) , d $;
+        \\--| @auto backward
+        \\axiom dbl (a: wff): $ |- a $ > $ |- a & a $;
+        \\--| @auto WK
+        \\axiom wk (d: ctx) (a: wff): $ |- d $ > $ |- a , d $;
+        \\theorem t (h1: $ |- Q $): $ GOAL $;
+    ;
+    var mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0_template, "WK", wk_mode);
+    mm0 = try std.mem.replaceOwned(u8, arena.allocator(), mm0, "GOAL", goal);
+    const proof_template =
+        \\t
+        \\---
+        \\
+        \\l1: $ GOAL $ by auto?
+    ;
+    const proof_src = try std.mem.replaceOwned(u8, arena.allocator(), proof_template, "GOAL", goal);
+    return suggestionsAtNeedle(arena, mm0, proof_src, "auto?", .{
+        .generate = .{ .enabled = true },
+    });
+}
+
+test "an @auto bridge rule closes a generated premise from the pool" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try bridgeSuggestions(&arena, "bridge", "|- (Q | P) , R");
+    defer suggestions.deinit();
+    try expectOffered(suggestions.items, &.{"rleft [wk [#1]]"});
+}
+
+test "an @auto bridge rule never generates its premise" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // `dbl`'s conclusion carries no context, so only `wk` generating its
+    // premise reaches `dbl`: a backward `wk` finds it, a bridge `wk` does not.
+    var backward = try bridgeSuggestions(&arena, "backward", "|- (Q & Q) , R");
+    defer backward.deinit();
+    try expectOffered(backward.items, &.{"wk [dbl [#1]]"});
+    var bridge = try bridgeSuggestions(&arena, "bridge", "|- (Q & Q) , R");
+    defer bridge.deinit();
+    try std.testing.expectEqual(@as(usize, 0), bridge.items.len);
+}

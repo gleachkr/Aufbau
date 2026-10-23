@@ -450,6 +450,36 @@ test "compiler rejects auto eager on a witness-deferring rule" {
     );
 }
 
+test "compiler accepts auto bridge on a rule with a hypothesis" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term im (p q: wff): wff;
+        \\--| @auto bridge
+        \\axiom mp (a b: wff) (h1: $ im a b $) (h2: $ a $): $ b $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("mp") orelse return error.MissingRule;
+    try std.testing.expect(metadata.registry.isAutoBridgeRule(rule_id));
+    try std.testing.expect(!metadata.registry.isAutoBackwardRule(rule_id));
+}
+
+test "compiler rejects auto bridge on a hypothesis-free rule" {
+    const mm0_src =
+        \\provable sort wff;
+        \\term top: wff;
+        \\--| @auto bridge
+        \\axiom top_i: $ top $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.BridgeRuleHasNoHypotheses,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
 test "compiler accepts tab-separated auto forward annotations" {
     const mm0_src =
         "provable sort wff;\n" ++
@@ -489,7 +519,7 @@ test "compiler rejects malformed auto annotations" {
     try std.testing.expectEqualStrings("top_i", diag.name.?);
     try std.testing.expectEqualStrings(
         "@auto expects one mode: forward, backward, " ++
-            "eager [PRIORITY >= 1], or trigger PATTERN",
+            "eager [PRIORITY >= 1], bridge, or trigger PATTERN",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;

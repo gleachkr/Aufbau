@@ -1,6 +1,7 @@
 const std = @import("std");
 const Expr = @import("../trusted/expressions.zig").Expr;
 const ExprId = @import("./expr.zig").ExprId;
+const ArgInfo = @import("../trusted/parse.zig").ArgInfo;
 
 pub const TemplateExpr = union(enum) {
     binder: usize,
@@ -144,7 +145,12 @@ pub fn templateHasUnboundBinder(
 /// demotes them to class 2), and the witness-pool gate, so they can never
 /// drift. Overflowed masks (>= 64 binders) conservatively report false (the
 /// conclusion-determined / class-1 side).
+///
+/// A premise-only eigenvariable (`isEigenvariable`) does not count: the
+/// application opens it as a variable meta rather than committing to a value,
+/// and the instance stays derivable from the conclusion for every legal one.
 pub fn hasPremiseOnlyBinder(
+    args: []const ArgInfo,
     concl: TemplateExpr,
     hyps: []const TemplateExpr,
 ) bool {
@@ -156,7 +162,32 @@ pub fn hasPremiseOnlyBinder(
         if (m.overflow) return false;
         hyps_mask |= m.mask;
     }
-    return (hyps_mask & ~concl_mask.mask) != 0;
+    return !allEigenvariables(args, hyps_mask & ~concl_mask.mask);
+}
+
+/// True when every binder in `mask` is an eigenvariable of the rule.
+pub fn allEigenvariables(args: []const ArgInfo, mask: u64) bool {
+    var rest = mask;
+    while (rest != 0) {
+        const idx: u6 = @intCast(@ctz(rest));
+        rest &= rest - 1;
+        if (idx >= args.len or !isEigenvariable(args, idx)) return false;
+    }
+    return true;
+}
+
+/// True when binder `idx` is a bound variable no non-bound binder is declared
+/// to depend on. MM0's dependency condition then keeps every value of it out
+/// of every other argument (bound occurrences included), so it is fresh for
+/// the whole instance.
+pub fn isEigenvariable(args: []const ArgInfo, idx: usize) bool {
+    if (!args[idx].bound) return false;
+    const bit = args[idx].deps;
+    for (args, 0..) |arg, other| {
+        if (other == idx or arg.bound) continue;
+        if (arg.deps & bit != 0) return false;
+    }
+    return true;
 }
 
 fn binderIndex(

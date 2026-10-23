@@ -217,6 +217,7 @@ axiom nd_congr (g h: ctx) (P Q: wff):
 axiom ax (G: ctx) (P: wff):
   $ G , P ⊩ P $;
 
+--| @auto bridge
 axiom weaken (G H: ctx) (P: wff):
   $ G ⊩ P $ > $ G , H ⊩ P $;
 
@@ -293,6 +294,7 @@ theorem trans (G: ctx) (A: type) (a b c: term):
   $ G ⊩ ≃[A] a = b $ > $ G ⊩ ≃[A] b = c $ >
   $ G ⊩ ≃[A] a = c $;
 
+--| @auto forward
 theorem betacv (G: ctx) (A B: type) {x: term} (t u v: term x):
   $ G , x: A ⊩ u: B $ >
   $ G ⊩ t: A $ >

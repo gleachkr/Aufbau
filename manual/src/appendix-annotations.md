@@ -169,6 +169,7 @@ calculus](lambda-calculus.md).
 --| @auto forward
 --| @auto backward
 --| @auto eager      -- optionally: @auto eager N
+--| @auto bridge
 --| @auto trigger (TERM child ...)
 ```
 
@@ -186,6 +187,12 @@ is still tried after every rule that does not. It implies `backward`. The
 compiler checks that premises use only binders present in the conclusion,
 but cannot verify invertibility; a rule marked eager that is not invertible
 can make search miss proofs.
+
+`bridge` keeps the rule as a backward candidate but fills its premises
+only from the reference pool and forward-derived facts, never by
+generating a sub-proof; weakening is the intended case, where a
+generating application would enumerate every subset of the context. The
+rule must have a hypothesis.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
 binders, and `_`. As a last resort, search matches it against subterms of

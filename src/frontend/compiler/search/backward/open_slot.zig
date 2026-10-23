@@ -22,6 +22,9 @@ const PlaceholderId = @import("../../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
 const ArgInfo = @import("../../../parse_recovery.zig").ArgInfo;
+const rules_mod = @import("../../../rules.zig");
+const isEigenvariable = rules_mod.isEigenvariable;
+const allEigenvariables = rules_mod.allEigenvariables;
 const OpenTerms = @import("../../inference/open_terms.zig");
 const Redex = @import("./redex.zig");
 const MetaStoreMod = @import("../meta_store.zig");
@@ -66,6 +69,18 @@ const OpenSlot = struct {
     /// sees (`tryFreshBoundGenerate`): when the child search leaves one
     /// unsolved, it takes a fresh `@vars` variable (`tryPoolWitnesses`).
     fresh_bound: bool = false,
+    /// An `@auto eager` candidate whose opened binders are all eigenvariables
+    /// of the rule: no other binder may mention one, so any name outside the
+    /// instance gives the same premise up to renaming, and only a ref can
+    /// tell names apart (`assignRefNames`). Such a slot is named, never
+    /// searched open: an eager step keeps the parent's depth, so an open
+    /// child search under it would be a self-feeding cascade (`not_left`
+    /// re-deriving the `∃` a fresh `ex_left` just opened).
+    fresh_named_only: bool = false,
+    /// Every opened binder is an eigenvariable of the rule (see
+    /// `fresh_named_only`); a non-eager slot still names first, with the
+    /// child search as the fallback for a name only a ref below can pin.
+    fresh_eigen: bool = false,
     /// Binders whose values hold metas `rebindHiddenVars` minted for this slot;
     /// a solved fill materializes them too.
     rebound: u64 = 0,
@@ -95,6 +110,7 @@ pub fn tryOpenGenerateSlot(
     const candidate = ctx.candidate;
     const bindings = ctx.bindings;
     const fresh_bound = fresh.binders != 0 or fresh.hosts != 0;
+    const fresh_eigen = fresh_bound and fresh.hosts == 0 and allEigenvariables(ctx.rule.args, fresh.binders);
     // Each `.bound_choice` meta the open path mints takes a dependency slot.
     // Candidates leave as proof text and the bindings roll back below, so
     // nothing holds those slots once the slot attempt is over: give them back
@@ -142,6 +158,8 @@ pub fn tryOpenGenerateSlot(
             hook.allow_constrained_mp,
         ),
         .fresh_bound = fresh_bound,
+        .fresh_eigen = fresh_eigen,
+        .fresh_named_only = fresh_eigen and context.registry.eagerPriority(candidate.rule_id) != null,
         .rebound = rebound,
     };
     if (context.views.get(candidate.rule_id)) |view| {
@@ -182,7 +200,7 @@ pub fn tryFreshBoundGenerate(
     const candidate = ctx.candidate;
     const rule = ctx.rule;
     const bindings = ctx.bindings;
-    if (ctx.goal != .concrete) return .skipped;
+    if (ctx.goal == .holey) return .skipped;
     const cand_theorem = &candidate.theorem;
     const mask = plan.templateBinderMask(rule.hyps[at.hyp_index]);
     if (mask.overflow) return .skipped;
@@ -492,12 +510,16 @@ fn openSlotViaView(slot: *OpenSlot, view: types.ViewDecl) anyerror!void {
                 break :blk false;
             const hole = view_bindings[rec.hole_view_idx] orelse
                 break :blk false;
-            if (view.arg_infos[rec.target_view_idx].bound) break :blk false;
+            // A bound target is a variable, not a term. Only an eigenvariable
+            // opens, as a `.bound_choice` leaf: a ref below may name it (so
+            // the choice can matter), and `tryPoolWitnesses` fills it if not.
+            const bound = view.arg_infos[rec.target_view_idx].bound;
+            if (bound and !isEigenvariable(view.arg_infos, rec.target_view_idx)) break :blk false;
             const meta = try slot.store.mint(
                 theorem,
                 view.arg_infos[rec.target_view_idx].sort_name,
                 std.math.maxInt(u55),
-                .existential,
+                if (bound) .bound_choice else .existential,
             );
             view_bindings[rec.target_view_idx] = meta;
             view_bindings[rec.source_view_idx] = try forward.leafSwap(
@@ -679,6 +701,15 @@ pub fn emitOpenTarget(
         return;
     }
 
+    // A fresh bound variable is named before any child search: every name
+    // outside the instance gives the same premise up to renaming, so the
+    // only thing that can tell them apart is a ref (`assignRefNames`). An
+    // eager slot stops there; any other falls through to the child search.
+    if (slot.fresh_eigen) {
+        _ = try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
+        if (slot.fresh_named_only or slot.ctx.candidates.items.len != candidates_before) return;
+        slot.store.rollbackTo(mark);
+    }
     // Witness-free open target (e.g. `@abstract` motive inference): keep the
     // original child-search-first ordering, with member/coupled witness
     // enumeration as the fallback.
@@ -688,8 +719,9 @@ pub fn emitOpenTarget(
     try tryAcuiMemberWitnesses(slot, raw_target, unknowns, view, view_bindings, true);
     if (slot.ctx.candidates.items.len != candidates_before) return;
     // No proof below fixed the variable (`weaken` only echoes it back), so
-    // any fresh one will do.
-    if (slot.fresh_bound) {
+    // any fresh one will do. An eigenvariable slot already tried exactly
+    // this naming above, from the same mark.
+    if (slot.fresh_bound and !slot.fresh_eigen) {
         slot.store.rollbackTo(mark);
         _ = try tryPoolWitnesses(slot, raw_target, unknowns, view, view_bindings, .fresh);
     }
@@ -1236,7 +1268,19 @@ pub fn tryPoolWitnesses(
     try slot.store.collectUnsolved(theorem, raw_target, &unsolved);
     switch (pick) {
         .shared => {},
-        .fresh => try collectSlotUnsolved(slot, unknowns, &unsolved),
+        .fresh => {
+            // Only this slot's own fresh variables are named here; a carried
+            // ancestor meta stays open for the child search below.
+            var keep: usize = 0;
+            for (unsolved.items) |meta_id| {
+                const info = slot.store.info(meta_id) orelse continue;
+                if (info.kind != .bound_choice or info.ancestor) continue;
+                unsolved.items[keep] = meta_id;
+                keep += 1;
+            }
+            unsolved.items.len = keep;
+            try collectSlotUnsolved(slot, unknowns, &unsolved);
+        },
         .dangling => {
             if (view_bindings) |vb| {
                 for (vb) |maybe| if (maybe) |b| try slot.store.collectUnsolved(theorem, b, &unsolved);
@@ -1260,9 +1304,7 @@ pub fn tryPoolWitnesses(
             if (try assignRefNames(slot, theorem, raw_target, unknowns, unsolved.items)) {
                 for (unsolved.items, ref_names) |meta_id, *name| name.* = slot.store.lookup(meta_id).?;
                 const before = slot.ctx.candidates.items.len;
-                if (slot.store.isFullySolved(theorem, raw_target)) {
-                    try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
-                }
+                try continueFreshNamed(slot, raw_target, unknowns, view, view_bindings, unsolved.items);
                 if (slot.ctx.candidates.items.len != before) return true;
                 slot.store.rollbackTo(mark);
                 if (!try fillFromPool(slot, theorem, unsolved.items, &taken, true)) return true;
@@ -1278,9 +1320,52 @@ pub fn tryPoolWitnesses(
             }
         },
     }
+    if (pick == .fresh) {
+        try continueFreshNamed(slot, raw_target, unknowns, view, view_bindings, unsolved.items);
+        return true;
+    }
     if (!slot.store.isFullySolved(theorem, raw_target)) return true;
     try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
     return true;
+}
+
+/// Continue a fresh-named slot: the names are this instance's eigenvariables,
+/// so for as long as the child proof runs no meta the instance carries may
+/// be filled with anything mentioning them (the eigenvariable condition on a
+/// value chosen after the meta: `ex_intro`'s `?t` under a fresh `all_intro`).
+fn continueFreshNamed(
+    slot: *OpenSlot,
+    raw_target: ExprId,
+    unknowns: []const ?ExprId,
+    view: ?types.ViewDecl,
+    view_bindings: ?[]const ?ExprId,
+    named: []const PlaceholderId,
+) anyerror!void {
+    const theorem = &slot.ctx.candidate.theorem;
+    const bans = slot.hook.meta_dep_bans;
+    const ban_mark = if (bans) |b| b.mark() else 0;
+    defer if (bans) |b| b.rollback(ban_mark);
+    if (bans) |b| {
+        var fresh_deps: u55 = 0;
+        for (named) |meta_id| {
+            const name = slot.store.lookup(meta_id) orelse continue;
+            const info = (theorem.currentLeafInfo(name) catch null) orelse continue;
+            fresh_deps |= info.deps;
+        }
+        if (fresh_deps != 0) {
+            for (slot.ctx.bindings) |maybe| if (maybe) |value| try banMetasIn(theorem, value, fresh_deps, b);
+            for (unknowns) |maybe| if (maybe) |value| try banMetasIn(theorem, value, fresh_deps, b);
+            if (view_bindings) |vb| for (vb) |maybe| if (maybe) |value| try banMetasIn(theorem, value, fresh_deps, b);
+        }
+    }
+    if (slot.store.isFullySolved(theorem, raw_target)) {
+        try continueOpenTargetSolved(slot, raw_target, unknowns, view, view_bindings, null);
+    } else {
+        // Carried ancestor metas keep the premise open (`g ⊢ F ?t → F u`
+        // under `ex_intro`'s child search): the child search solves them,
+        // with the eigenvariable already named.
+        try solveOpenTargetByChild(slot, raw_target, unknowns, view, view_bindings);
+    }
 }
 
 /// Append the unsolved `.bound_choice` metas the slot's bindings and opened
