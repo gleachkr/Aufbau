@@ -484,6 +484,20 @@ positional match conflicts, it retries member-wise through
 (`valid_elim`'s `?G` in `?G , p ⊢ q`) takes the goal members the fact leaves
 over, `∅` when there are none.
 
+A derived family can also fill a backward rule's premise
+(`backtrack.tryDerivedSlots`). Its universal metas are solved against the
+binders the goal or an earlier sibling already pinned: through the rule's
+`@recover` laws when it has a view, otherwise by `solvePinnedMetas`, which
+unifies each pinned binder with the value the family's shape gives it and
+takes the shape's value for the open ones. That fill must be *anchored*:
+some pinned binder must face structure of the fact, not a bare meta. A
+family whose pinned positions are all bare metas fits every goal of the
+slot's shape (hoare's `valid_elim` families `?g ⊢ ?w : φ` at `at_mp`, whose
+formula is premise-only), so taking it would be a pass over the whole pool.
+The non-view solve runs only from context splitting (phase 2) on: each fill
+opens child searches for the rule's other premises, which the cheap
+non-splitting pass cannot afford (zermelo `cb_bijection_maps_domain`).
+
 ### Metas must reach a solvable leaf
 
 `@auto backward` rules (`rex`, `lall`, …) introduce **existential metas** for

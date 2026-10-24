@@ -513,11 +513,17 @@ forward saturation leaves `t` as a **universal metavariable** and stores a
 The metavariable is filled in later, by a **join**. When some other fact —
 or the goal — needs `P` at a specific value, it unifies against the family
 and reads off exactly the matching instance; the meta is solved *at the
-point of use*, not guessed up front. And because each layer of saturation
-can join against the previous layer's families, forward chaining composes
-buried witnesses that backward search would otherwise have to invent from
-nothing. A forward rule that never joins anything is simply inert — it
-wastes a little budget, it does not corrupt anything.
+point of use*, not guessed up front. The same holds when backward search
+fills a rule's premise with a family: what the goal already fixes in that
+premise solves the meta, and the solved family supplies the parts the goal
+left open. The goal must meet some real structure of the family there, not
+only its metavariables: a family whose matched part is all metavariables
+fits every goal of that shape, so it is not offered. And because each
+layer of saturation can join against the previous layer's families,
+forward chaining composes buried witnesses that backward search would
+otherwise have to invent from nothing. A forward rule that never joins
+anything is simply inert — it wastes a little budget, it does not corrupt
+anything.
 
 ### `@auto backward` — open existential sub-goals
 

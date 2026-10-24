@@ -885,10 +885,11 @@ fn tryDerivedSlots(
             .mismatch => false,
         };
 
-        // Solve the derived ref's universal metas via the candidate rule's
-        // `@recover` laws: the law's concrete source (goal-seeded or pinned by
-        // an earlier sibling) shows the witness at every meta position of the
-        // matched pattern.
+        // Solve the derived ref's universal metas. A rule with a view uses
+        // its `@recover` laws: the law's concrete source (goal-seeded or
+        // pinned by an earlier sibling) shows the witness at every meta
+        // position of the matched pattern. Any other rule unifies the shape
+        // with the binders already pinned (`solvePinnedMetas`).
         if (ok and dref.has_universal_meta) {
             if (context.views.get(candidate.rule_id)) |cview| {
                 const view_bindings = try ctx.context.allocator.alloc(
@@ -927,6 +928,12 @@ fn tryDerivedSlots(
                         break;
                     }
                 }
+            } else {
+                // Only from context splitting on: each pinned fill opens child
+                // searches for the rule's other premises at every goal the
+                // family fits, which the cheap non-splitting pass can't afford.
+                const splitting = if (ctx.generator) |hook| hook.allow_split else false;
+                ok = splitting and try solvePinnedMetas(ctx, dpool, slot, dref.shape, snapshot);
             }
         }
 
@@ -979,6 +986,40 @@ fn tryDerivedSlots(
         }
         rollbackOneHypMatch(bindings, snapshot);
     }
+}
+
+/// Solve a derived family's universal metas for a rule without a view: match
+/// `shape` against hypothesis `slot` from empty bindings, unify each binder
+/// `pinned` holds with the value the shape gives it (assigning the shape's
+/// metas in `dpool.store`), and take the shape's value for every binder
+/// `pinned` leaves open. The fill must be anchored: some pinned binder must
+/// face structure of the fact, not a bare meta. A family whose pinned
+/// positions are all bare metas fits every goal of the slot's shape, so the
+/// goal did not choose it (hoare's `valid_elim` families `?g ⊢ ?w : φ` at
+/// `at_mp`, whose formula `p` no goal pins). False on a conflict or an
+/// unanchored fill.
+fn solvePinnedMetas(
+    ctx: *const SlotCtx,
+    dpool: *DerivedPool,
+    slot: Slot,
+    shape: ExprId,
+    pinned: []const ?ExprId,
+) !bool {
+    const allocator = ctx.context.allocator;
+    const theorem = &ctx.candidate.theorem;
+    const values = try allocator.alloc(?ExprId, ctx.bindings.len);
+    defer allocator.free(values);
+    @memset(values, null);
+    if (!theorem.matchTemplate(ctx.rule.hyps[slot.hyp_index], shape, values)) return false;
+    var anchored = false;
+    for (values, pinned, ctx.bindings) |shape_value, pinned_value, *binding| {
+        const value = shape_value orelse continue;
+        if (pinned_value) |concrete| {
+            if (theorem.interner.node(value).* != .placeholder) anchored = true;
+            if (forward.solveCorrespondence(&dpool.store, theorem, concrete, value, null) == .conflict) return false;
+        } else binding.* = value;
+    }
+    return anchored;
 }
 
 const derivedSlotCandidates = plan.derivedSlotCandidates;

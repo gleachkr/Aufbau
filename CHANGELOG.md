@@ -30,6 +30,14 @@ This file records notable user-facing changes to Aufbau. The project follows
   re-invented: six more zermelo frontier rows close (four theorems reach
   every depth) and Pelletier 44 is found in the natural-deduction battery,
   at the same total work on the bench corpus.
+- A forward-derived fact that holds for every instance, such as `∀`
+  elimination's `F ?t → G ?t`, can now fill a premise of a backward rule
+  whose other arguments the goal has fixed: `auto?` solves the instance
+  from what the goal fixes (`G u` gives `t := u`) and searches the
+  remaining premises, such as `F u`, backward. The goal has to meet a
+  symbol of the fact, not only its open instance. The bench corpus is
+  unchanged; in the natural-deduction battery with a forward modus-ponens
+  joiner, Pelletier 32 is found and Pelletier 28 takes 85% less work.
 - When none of a rule's remaining premises can be met by a known fact,
   `auto?` now searches first the premise whose structure fixes variables
   the other premises share, such as an elimination rule's major premise,

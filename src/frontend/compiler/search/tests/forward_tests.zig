@@ -175,6 +175,57 @@ test "forward join grounds a nested family meta into a concrete fact" {
     try std.testing.expectEqual(@as(usize, 2), counters.derived_ref_count);
 }
 
+// A family fills a backward rule premise whose binders the goal pins. `mp`
+// (not forward) on the goal `pf (Q c)` pins `b := Q c` and leaves `a` open,
+// so its major `pf (imp a (Q c))` takes the family `pf (imp (P ?x) (Q ?x))`
+// only by unifying the pinned `Q c` with `Q ?x` (`backtrack.solvePinnedMetas`),
+// which gives `a := P c`. No fact states the minor `pf (box (P c))`: backward
+// search proves it from `R c`, so no forward join reaches the goal.
+const fwd_pinned_mm0 =
+    \\delimiter $ ( ) $;
+    \\provable sort jdg;
+    \\sort wff;
+    \\sort obj;
+    \\term pf (a: wff): jdg;
+    \\term imp (a b: wff): wff;
+    \\term box (a: wff): wff;
+    \\term P (x: obj): wff;
+    \\term Q (x: obj): wff;
+    \\term R (x: obj): wff;
+    \\term Trigger: wff;
+    \\term c: obj;
+    \\--| @auto forward
+    \\axiom genimp (x: obj): $ pf Trigger $ > $ pf (imp (P x) (Q x)) $;
+    \\axiom mp (a b: wff): $ pf (imp a b) $ > $ pf (box a) $ > $ pf b $;
+    \\axiom rp (x: obj): $ pf (R x) $ > $ pf (box (P x)) $;
+    \\theorem t: $ pf Trigger $ > $ pf (R c) $ > $ pf (Q c) $;
+;
+
+test "forward family fills a backward premise by unifying its pinned binders" {
+    const proof_src =
+        \\t
+        \\----
+        \\l1: $ pf (Q c) $ by auto?
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // Phase 5's constrained modus ponens reaches the same proof by opening `a`
+    // and running `genimp` backward; with its fuel at zero only the pinned
+    // fill can.
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        fwd_pinned_mm0,
+        proof_src,
+        "auto?",
+        .{ .generate = .{ .enabled = true, .phase5_fuel = 0 } },
+    );
+    defer suggestions.deinit();
+
+    try expectOffered(suggestions.items, &.{
+        "mp [genimp [#1], rp [#2]]",
+    });
+}
+
 // Negative: the forward join must not FABRICATE a witness. Same chain as the
 // join test but with NO base fact — only the implication families `imp (P ?x)
 // (Q ?x)` and `imp (Q ?y) (S ?y)` are derivable from `Trigger`, and nothing

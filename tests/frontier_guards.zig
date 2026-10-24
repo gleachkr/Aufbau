@@ -419,6 +419,18 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/zermelo_frontier.auf",
         .mode = "depth",
     },
+    // Pinned family fills (task #512, `backtrack.solvePinnedMetas`) must be
+    // anchored. hoare's `valid_elim` families `?g ⊢ ?w : φ` face `at_mp`'s
+    // pinned `g` and `w` with bare metas only, so unanchored they fill every
+    // `at_mp` premise and flood the k=3 cut out of its fuel. Capped at k=3,
+    // the frontier.
+    .{
+        .filter = "hoare_while",
+        .files = "tests/search_bench_cases/hoare_frontier.mm0:" ++
+            "tests/search_bench_cases/hoare_frontier.auf",
+        .mode = "depth",
+        .max_k = 3,
+    },
     .{
         .filter = "inter_subsets_probe",
         .files = "tests/search_bench_cases/inter_subsets_probe.mm0:" ++
