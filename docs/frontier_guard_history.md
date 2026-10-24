@@ -68,6 +68,26 @@ so the parent re-check never re-infers them from an ACUI-reassociated hint. The 
 (k≥6 rows at ~3.4G ticks, over the 3.35G default cap) collapsed to ~58M;
 the worst theorem became ~0.31G (exists_mono).
 
+## Zermelo (`tests/search_bench_cases/zermelo_frontier.*`)
+
+### Sub-goal trigger re-seeding (2026-10-24)
+
+`cb_bijection_maps_domain` went 6/8 → FULL when `auto?` started harvesting
+`@auto trigger` seeds again at a sub-goal that names a variable free which
+the root goal does not (task #512 piece 1; `generate.zig` `Reseed`). Its
+k=7 cut is an `or_elim` over a derived disjunction whose branch member
+`cb_g_branch A B f g x y` is no subterm of the goal, so the root harvest
+cannot seed the `ax` instance the branch's `and_elim_r` minor needs; the
+harvest at the case-split sub-goal can. Same change: `range_sub_intro`
+5/7 → 6/7, `setdiff_antitone_right` 4/5 → FULL, `image_mono` 5/9 → 6/9,
+`cb_core_prefixed` 4/7 → FULL, `cb_bijection_maps_range` 5/7 → FULL,
+`cb_bijection_domain_on_from_injections` 3/9 → 4/9,
+`cb_bijection_range_sub_from_injections` 3/4 → FULL; corpus FULL 468 → 474
+at −0.6% ticks; nd_fol 57/57 at +10.7%. Re-seeding from every new member
+(not only those naming a fresh variable) found the same rows and widened
+nd_fol's search by 63%; rebuilding the pool per sub-goal versus extending
+it incrementally measured within 1% (task #512).
+
 ## Martin-Löf type theory (`tests/search_bench_cases/martin_lof_frontier.*`)
 
 ### Guards move to the bench copy (2026-09-27)

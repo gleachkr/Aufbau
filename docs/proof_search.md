@@ -771,8 +771,10 @@ search, so an elimination whose premise is a context member can be closed
 in any phase. In effect the annotations let the author enumerate the
 *analytic leaf set* of the theory — the context members, implication
 antecedents, and disjuncts that its elimination rules move around — so the
-search has the raw material it needs. Harvesting is one pass over the goal;
-a seed nobody selects costs nothing further.
+search has the raw material it needs. Harvesting is one pass over the goal,
+plus one over each sub-goal that mentions a variable the goal does not (the
+fresh variable a quantifier rule introduced, whose instances no pass over the
+goal could have seen); a seed nobody selects costs nothing further.
 
 ## A worked example
 

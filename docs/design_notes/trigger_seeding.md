@@ -160,6 +160,16 @@ subgoals — that is the full e-matching loop, to be costed separately later.
 V1 cannot matching-loop: instances are ground, built only from existing
 subterms, minted once per call.
 
+**[impl, 2026-10-24, task #512]** A bounded re-trigger landed: a generated
+sub-goal whose target names a variable free that the original goal does not
+(an eigenvariable a quantifier rule minted) is harvested again, keeping only
+the seeds that name such a variable, into a scoped extension pool for that
+child solve (`generate.zig` `Reseed`). Still no matching loop: seeds stay
+ground and are built from the sub-goal's own subterms. Re-triggering on every
+new member found nothing more and widened nd_fol's search by 63%; harvesting
+the hypotheses' subterms at the root lost the drinker; extending the pool
+incrementally instead of rebuilding it per sub-goal measured within 1%.
+
 ### 3. Seed minting
 
 Each grounding becomes a synthetic `DerivedRef` (`types.zig:855`):

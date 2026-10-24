@@ -405,6 +405,20 @@ pub const guards = [_]FrontierGuard{
             "tests/search_bench_cases/zermelo_frontier.auf",
         .mode = "depth",
     },
+    // Sub-goal `@auto trigger` re-seeding (task #512 piece 1,
+    // `generate.zig` `Reseed`): the k=7 cut leaves an `or_elim` whose
+    // branch member `cb_g_branch …` is a disjunct of a derived line, not a
+    // subterm of the goal, so only a harvest at the case-split sub-goal
+    // (which names the eigenvariable `y`) yields the `ax` seed its
+    // `and_elim_r` minor needs. 6/8 before, FULL with it; trips if the
+    // sub-goal harvest, its free-variable gate, or the scoped extension
+    // pool regresses.
+    .{
+        .filter = "cb_bijection_maps_domain",
+        .files = "tests/search_bench_cases/zermelo_frontier.mm0:" ++
+            "tests/search_bench_cases/zermelo_frontier.auf",
+        .mode = "depth",
+    },
     .{
         .filter = "inter_subsets_probe",
         .files = "tests/search_bench_cases/inter_subsets_probe.mm0:" ++

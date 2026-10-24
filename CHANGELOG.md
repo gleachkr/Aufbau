@@ -23,6 +23,13 @@ This file records notable user-facing changes to Aufbau. The project follows
   the retry could start are reached: on the bench corpus two more
   theorems close at every depth, total work drops slightly, and the
   proofs found for every other goal are unchanged.
+- `auto?` harvests `@auto trigger` seeds again at a sub-goal that mentions a
+  variable the goal does not, such as the fresh variable a quantifier rule
+  introduces, keeping the seeds that name it for that sub-goal's search. An
+  elimination whose premise is such an instance no longer has to be
+  re-invented: six more zermelo frontier rows close (four theorems reach
+  every depth) and Pelletier 44 is found in the natural-deduction battery,
+  at the same total work on the bench corpus.
 - When none of a rule's remaining premises can be met by a known fact,
   `auto?` now searches first the premise whose structure fixes variables
   the other premises share, such as an elimination rule's major premise,

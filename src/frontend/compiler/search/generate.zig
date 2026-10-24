@@ -211,6 +211,12 @@ const Driver = struct {
     /// The root goal is a holey line: its holes are metas, and each pass
     /// searches it as an open whole-conclusion hint (`mintNumberedMeta`).
     open_root: bool = false,
+    /// The variables (theorem vars and dummies, by interned id) the root goal
+    /// names FREE; filled only when the theory has `@auto trigger` rules. A
+    /// sub-goal naming any other variable free — an eigenvariable the search
+    /// introduced, or the goal's own bound variable once a quantifier rule
+    /// opened it — has members no root harvest could enumerate (`Reseed`).
+    root_vars: std.AutoHashMapUnmanaged(ExprId, void) = .{},
     /// Expensive-op budget for the currently running phase, shared by all
     /// recursive sub-solves. Each retry phase owns one fuel pool spanning all
     /// its depths (the per-depth bound is `nodes`); the ladder swaps the
@@ -332,7 +338,11 @@ pub fn generateTopLevel(
     // reaches the misses the global budget stops before any retry could run
     // (corpus: +2 FULL, −0.8% ticks; breadth and the found proofs of every
     // other row identical). A holey goal's holes are metas, not subterms to
-    // seed from.
+    // seed from. Sub-goals that name a variable the goal does not harvest
+    // again (`Reseed`); the goal's seeds and the hypotheses' subformulas are
+    // not re-harvested there (the latter measured as a net loss: nd_fol's
+    // drinker lost at every depth ≥ 5 when the premises' members became
+    // pool-wide seeds).
     var harvested: []types.DerivedRef = &.{};
     defer session.allocator.free(harvested);
     var seeds: []const types.DerivedRef = &.{};
@@ -347,6 +357,7 @@ pub fn generateTopLevel(
             session.context,
             &work_theorem,
             try session.getReferencePool(theorem, session.effectiveCounters(null)),
+            &.{},
             harvested,
             session.allocator,
         );
@@ -455,6 +466,13 @@ pub fn generateTopLevel(
 
     const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
     defer session.allocator.free(schedule);
+    defer driver.root_vars.deinit(driver.scratch);
+    if (session.context.registry.triggerRuleCount() > 0) {
+        const none = std.AutoHashMapUnmanaged(ExprId, void){};
+        var walk = FreeVariables.init(&work_theorem, session.context.env, &none, driver.scratch);
+        defer walk.deinit();
+        for (try walk.of(goal_expr)) |v| try driver.root_vars.put(driver.scratch, v, {});
+    }
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
     try runPhaseLadder(&driver, goal_expr, &applications, schedule);
 
@@ -1066,6 +1084,183 @@ const ChildScope = struct {
     }
 };
 
+// Sub-goal `@auto trigger` re-seeding. The analytic leaf set of a sub-goal
+// is not the root's once a backward step has put a member into the context
+// that the root goal does not contain as a subterm — above all an instance
+// at an eigenvariable the search minted (`∀ x (F x → G x)` opens to the
+// member `F u`, which no root harvest can name). Harvesting at the child
+// target and saturating from the new seeds extends the derived pool for
+// the child's subtree only: the seeds are interned in the child's interner
+// scope and die with it, so the extension is swapped in for the child solve
+// and dropped on exit. The parent's seeds (ground, parent-scope ids, valid
+// in the clone) are carried so the extension states everything the parent
+// pool does; the parent's join products are re-derived rather than copied.
+//
+// Only a child that names a variable FREE that the root goal does not
+// (`Driver.root_vars`) re-seeds, and only from members naming one: those
+// are exactly the members no root harvest could have enumerated. A member
+// over the root's own variables is either a root seed already or a
+// restatement of a context member the backward `ax`-style rule closes as
+// cheaply; re-seeding from those too found nothing more on the corpus and
+// cost a 63% wider search on nd_fol (task #512), where a
+// theory without `@auto forward` rules has no forward use for them at all.
+// Nothing happens unless the child states such a member no pool or derived
+// fact already does, so a child inside an already-seeded subtree pays one
+// walk of its target.
+
+/// The variables occurring FREE in an expression, less those in `exclude`.
+/// A variable at a term's bound-binder position is bound in that
+/// application's other arguments (`∀ y p` binds `y` in `p`). This follows
+/// the binder positions only, not the declared dependency lists, so a
+/// variable a term's declaration lets escape is still counted bound — the
+/// conservative side for re-seeding. A subterm's free variables do not
+/// depend on the binders around it (those only filter them on the way up),
+/// so each shared app node is computed once (`memo`) and the walk is linear
+/// in the DAG, not the tree. Results live in the walk's arena.
+const FreeVariables = struct {
+    theorem: *const TheoremContext,
+    env: *const @import("../../env.zig").GlobalEnv,
+    exclude: *const std.AutoHashMapUnmanaged(ExprId, void),
+    arena: ArenaAllocator,
+    memo: TheoremContext.DagMemo([]const ExprId) = .{},
+
+    fn init(
+        theorem: *const TheoremContext,
+        env: *const @import("../../env.zig").GlobalEnv,
+        exclude: *const std.AutoHashMapUnmanaged(ExprId, void),
+        allocator: std.mem.Allocator,
+    ) FreeVariables {
+        return .{
+            .theorem = theorem,
+            .env = env,
+            .exclude = exclude,
+            .arena = ArenaAllocator.init(allocator),
+        };
+    }
+
+    fn deinit(self: *FreeVariables) void {
+        self.arena.deinit();
+        self.* = undefined;
+    }
+
+    fn of(self: *FreeVariables, expr: ExprId) ![]const ExprId {
+        const allocator = self.arena.allocator();
+        switch (self.theorem.interner.node(expr).*) {
+            .variable => {
+                if (self.exclude.contains(expr)) return &.{};
+                return try allocator.dupe(ExprId, &.{expr});
+            },
+            .placeholder => return &.{},
+            .app => |app| {
+                if (self.memo.get(expr)) |cached| return cached;
+                const term_args = if (app.term_id < self.env.terms.items.len)
+                    self.env.terms.items[app.term_id].args
+                else
+                    &.{};
+                var out = std.ArrayListUnmanaged(ExprId).empty;
+                for (app.args, 0..) |arg, i| {
+                    if (isBinderPosition(term_args, i)) continue;
+                    next: for (try self.of(arg)) |v| {
+                        for (app.args, 0..) |binder, j| {
+                            if (isBinderPosition(term_args, j) and binder == v) continue :next;
+                        }
+                        if (std.mem.indexOfScalar(ExprId, out.items, v) == null) {
+                            try out.append(allocator, v);
+                        }
+                    }
+                }
+                const result = try out.toOwnedSlice(allocator);
+                try self.memo.put(allocator, expr, result);
+                return result;
+            },
+        }
+    }
+
+    fn isBinderPosition(term_args: anytype, i: usize) bool {
+        return i < term_args.len and term_args[i].bound;
+    }
+};
+
+/// The scoped extension pool of one child solve (see the re-seeding note
+/// above): the parent's seeds carried over, saturated afresh with the child's
+/// new ones. The pool is rebuilt rather than extended incrementally: measured
+/// against a chain of per-child layers over a shared store, the rebuild costs
+/// under 1% of the search in aggregate (task #512), so the simpler
+/// form stays.
+const Reseed = struct {
+    pool: ?types.DerivedPool = null,
+    saved: ?*types.DerivedPool = null,
+
+    fn enter(self: *Reseed, driver: *Driver, target: ExprId) !void {
+        self.* = .{};
+        const context = driver.context;
+        if (context.registry.triggerRuleCount() == 0) return;
+        var foreign = FreeVariables.init(driver.work_theorem, context.env, &driver.root_vars, driver.scratch);
+        defer foreign.deinit();
+        if ((try foreign.of(target)).len == 0) return;
+        const harvested = try trigger.harvestSeeds(
+            context,
+            driver.work_theorem,
+            target,
+            driver.scratch,
+        );
+        defer driver.scratch.free(harvested);
+        if (harvested.len == 0) return;
+        const counters = driver.counters;
+        const ref_pool = try driver.session.getReferencePool(driver.work_theorem, counters);
+        const parent: []const types.DerivedRef =
+            if (driver.derived) |dpool| dpool.refs else &.{};
+        var fresh = try trigger.dropRestatedSeeds(
+            context,
+            driver.work_theorem,
+            ref_pool,
+            parent,
+            harvested,
+            driver.scratch,
+        );
+        var kept: usize = 0;
+        for (fresh) |seed| {
+            if ((try foreign.of(seed.shape)).len == 0) continue;
+            fresh[kept] = seed;
+            kept += 1;
+        }
+        fresh = fresh[0..kept];
+        if (fresh.len == 0) return;
+        var seeds = std.ArrayListUnmanaged(types.DerivedRef).empty;
+        defer seeds.deinit(driver.scratch);
+        for (parent) |dref| {
+            if (dref.sources.len == 0) try seeds.append(driver.scratch, dref);
+        }
+        try seeds.appendSlice(driver.scratch, fresh);
+        var pool = if (context.registry.autoForwardRuleCount() > 0)
+            try forward.saturate(
+                context,
+                driver.work_theorem,
+                ref_pool,
+                try driver.session.getRefIndex(driver.work_theorem, counters),
+                driver.options.forward,
+                counters,
+                seeds.items,
+            )
+        else
+            try trigger.seedOnlyPool(context, seeds.items);
+        errdefer pool.deinit();
+        try buildDerivedIndex(driver.session, driver.work_theorem, &pool);
+        if (counters) |c| c.trigger_seed_count += fresh.len;
+        self.pool = pool;
+        self.saved = driver.derived;
+        driver.derived = &self.pool.?;
+    }
+
+    fn exit(self: *Reseed, driver: *Driver) void {
+        if (self.pool) |*pool| {
+            driver.derived = self.saved;
+            pool.deinit();
+        }
+        self.* = undefined;
+    }
+};
+
 /// A generation child search for `goal` one level below `depth` (pool refs
 /// only at depth 0), which stops at the first `max_results` proofs `keep`
 /// keeps.
@@ -1273,6 +1468,9 @@ fn collectOpenProofs(
         driver.scratch,
         target,
     )) orelse return;
+    var reseed: Reseed = undefined;
+    try reseed.enter(driver, hint);
+    defer reseed.exit(driver);
 
     var filter = OpenReadBack{
         .driver = driver,
@@ -1802,6 +2000,9 @@ fn solveProof(
     var scope: ChildScope = undefined;
     try scope.enter(driver);
     defer scope.exit(driver);
+    var reseed: Reseed = undefined;
+    try reseed.enter(driver, target);
+    defer reseed.exit(driver);
 
     var filter = ConcreteReadBack{
         .driver = driver,

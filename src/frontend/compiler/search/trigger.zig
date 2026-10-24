@@ -13,9 +13,12 @@
 //! analytic leaf set the backward search cannot otherwise invent (the
 //! elimination-major "left rule" gap).
 //!
-//! Bounded and forced: one pass over the original goal only (no re-trigger
-//! on generated subgoals), O(goal size × patterns) matches, ground instances
-//! only. Soundness rides on the ordinary discipline — a seed is a search
+//! Bounded and forced: one pass over the original goal, plus one over each
+//! generated sub-goal that names a variable free which the goal does not
+//! (an eigenvariable the search minted; `generate.zig`'s `Reseed`), keeping
+//! only the seeds naming such a variable — O(goal size × patterns) matches
+//! per pass, ground instances only. Soundness rides on the ordinary
+//! discipline — a seed is a search
 //! hint whose materialized application (`by ax`, binders inferred from the
 //! slot) is re-checked by `tryCandidate` at the point of use; a useless seed
 //! is just a pool entry nobody selects.
@@ -144,16 +147,18 @@ pub fn harvestSeeds(
     return try seeds.toOwnedSlice(allocator);
 }
 
-/// The seeds whose shape neither a reference-pool fact nor an earlier seed
-/// states: backward search already has the pool ref, and two seeds of one
-/// shape are one fact. Both pools built from seeds (`forward.saturate` and
-/// `seedOnlyPool`) take only these. Seeds are ground and interned with the
-/// pool's expressions, so equal shapes are equal ids. Compacts `seeds` in
-/// place and returns the kept prefix.
+/// The seeds whose shape neither a reference-pool fact, a fact of `derived`
+/// (the pool a sub-goal re-harvest extends; empty at the root), nor an
+/// earlier seed states: backward search already has the pool ref, and two
+/// seeds of one shape are one fact. Both pools built from seeds
+/// (`forward.saturate` and `seedOnlyPool`) take only these. Seeds are ground
+/// and interned with the pool's expressions, so equal shapes are equal ids.
+/// Compacts `seeds` in place and returns the kept prefix.
 pub fn dropRestatedSeeds(
     context: *const Context,
     theorem: *const TheoremContext,
     pool: []const refs_mod.RefPoolEntry,
+    derived: []const DerivedRef,
     seeds: []DerivedRef,
     allocator: std.mem.Allocator,
 ) ![]DerivedRef {
@@ -163,6 +168,7 @@ pub fn dropRestatedSeeds(
         const expr = refs_mod.sourceRefExpr(context, theorem, entry.ref) catch continue;
         try known.put(allocator, expr, {});
     }
+    for (derived) |dref| try known.put(allocator, dref.shape, {});
     var kept: usize = 0;
     for (seeds) |seed| {
         const gop = try known.getOrPut(allocator, seed.shape);

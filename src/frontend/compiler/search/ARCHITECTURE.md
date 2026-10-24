@@ -374,14 +374,23 @@ which the persisted-memo covering rule requires:
 Before the ladder runs, **`@auto trigger` seeding** (`trigger.zig`; design:
 `docs/design_notes/trigger_seeding.md`) fills the derived pool when the
 theory declares `@auto trigger` patterns (registry `trigger_by_rule`). Each
-pattern is e-matched against the *original goal's* subterms; every match
+pattern is e-matched against the *goal's* subterms; every match
 mints a ground instance of the annotated rule (for `ax`: `φ ⊢ φ` per
 harvested formula) as a **seed** — a sourceless `DerivedRef` (empty recipe,
 concrete shape, rendered as a bare rule application whose binders the checker
 infers from the slot). Seeds restating a pool fact are dropped; the rest
 enter the derived pool (as depth-0 sources of forward saturation when the
 theory has `@auto forward` rules, `trigger.seedOnlyPool` otherwise) and stay
-there for every phase. This closes the **elimination-major left-rule gap**:
+there for every phase. A generated sub-goal whose target names a variable
+*free* that the root goal does not — an eigenvariable a quantifier rule
+minted, so a member no root harvest could enumerate — is harvested again
+(`generate.zig` `Reseed`): the seeds naming such a variable, less any a pool
+or derived fact already states, together with the parent's seeds, are
+saturated into a scoped extension pool swapped in for that child solve and
+dropped with its interner scope. Members over the root's own variables are
+not re-seeded (they are root seeds already, or restate context members the
+backward `ax`-style rule closes; re-seeding them widened nd_fol's search by
+63% for no new proof). This closes the **elimination-major left-rule gap**:
 backward search cannot pin an elim rule's premise-only binder (imp_elim's
 `p`) from nothing, but a seed is a ref, and refs pin binders. It
 operationalizes the subformula property — the author's patterns enumerate
@@ -1443,7 +1452,7 @@ width is real.
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `meta_store.zig` | `MetaStore`: the branch-local store of search metavariables (assignment, allowed deps, rollback marks); the leaf kinds live in `../inference/open_terms.zig` |
-| `trigger.zig` | `@auto trigger` seed harvest before the ladder: goal-subterm e-match → sourceless ground `DerivedRef`s |
+| `trigger.zig` | `@auto trigger` seed harvest before the ladder (and at eigenvariable-naming sub-goals, `generate.zig` `Reseed`): subterm e-match → sourceless ground `DerivedRef`s |
 | `tunables.zig` | `auto?` per-call parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?` thin variant |
