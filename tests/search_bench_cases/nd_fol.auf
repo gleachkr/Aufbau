@@ -39,6 +39,21 @@ l10: $ g , ¬ (a ∨ b) ⊢ ¬ (a ∨ b) $ by ax
 l11: $ g , ¬ (a ∨ b) ⊢ ⊥ $ by not_elim [l10, l9]
 l12: $ g ⊢ a ∨ b $ by raa [l11]
 
+or_right_l
+----------
+l1: $ g , ¬ (a ∨ b) , a ⊢ a $ by ax
+l2: $ g , ¬ (a ∨ b) , a ⊢ a ∨ b $ by or_intro_l [l1]
+l3: $ g , ¬ (a ∨ b) , a ⊢ ¬ (a ∨ b) $ by ax
+l4: $ g , ¬ (a ∨ b) , a ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a ∨ b) ⊢ ¬ a $ by not_intro [l4]
+l6: $ g ⊢ ¬ a → b $ by imp_intro [#1]
+l7: $ g , ¬ (a ∨ b) ⊢ ¬ a → b $ by weak [l6]
+l8: $ g , ¬ (a ∨ b) ⊢ b $ by imp_elim [l7, l5]
+l9: $ g , ¬ (a ∨ b) ⊢ a ∨ b $ by or_intro_r [l8]
+l10: $ g , ¬ (a ∨ b) ⊢ ¬ (a ∨ b) $ by ax
+l11: $ g , ¬ (a ∨ b) ⊢ ⊥ $ by not_elim [l10, l9]
+l12: $ g ⊢ a ∨ b $ by raa [l11]
+
 bi_left
 -------
 l1: $ g , a ⊢ b → c $ by imp_intro [#1]

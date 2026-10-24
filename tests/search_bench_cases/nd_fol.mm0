@@ -329,6 +329,11 @@ theorem or_left (g: ctx) (a b c: wff):
 theorem or_right (g: ctx) (a b: wff):
   $ g , ¬ b ⊢ a $ > $ g ⊢ a ∨ b $;
 
+-- The mirror image: `a ∨ b` holds iff `b` does once `¬ a` is assumed.
+--| @auto eager
+theorem or_right_l (g: ctx) (a b: wff):
+  $ g , ¬ a ⊢ b $ > $ g ⊢ a ∨ b $;
+
 -- Classical case split on the truth of `a` and `b`, as G3c's left rule for
 -- `↔`. Splitting into `a → b` and `b → a` instead would leave the search to
 -- the non-invertible `imp_left`.
@@ -358,6 +363,7 @@ theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
 --| @auto eager
 theorem ex_left {x y: obj} (g: ctx x) (p: wff x) (c: wff x):
   $ g , [x/y] p ⊢ c $ > $ g , (∃ x p) ⊢ c $;
+
 
 -- ============================================================
 -- Theorem battery (proofs in nd_fol.auf)
