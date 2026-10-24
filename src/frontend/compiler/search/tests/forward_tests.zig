@@ -879,7 +879,7 @@ test "two-layer derived ref solves a shared hole in both recipe layers" {
 }
 
 // ---------------------------------------------------------------------------
-// `@auto trigger` seeding (phase 6). The fixture is the guarded bench theory
+// `@auto trigger` seeding. The fixture is the guarded bench theory
 // (tests/search_bench_cases/nd_minimal.*): the pure repro of the
 // elimination-major left-rule gap, closed by ground `ax` seeds harvested
 // from the goal's subterms.
@@ -1089,7 +1089,7 @@ test "forward join matches a pool context equal modulo ACUI to a derived fact's"
 }
 
 test "theories without trigger annotations mint no seeds on a miss" {
-    // A clean full-ladder miss in a trigger-free theory: the phase-6 gate
+    // A clean full-ladder miss in a trigger-free theory: the seeding gate
     // (`triggerRuleCount() > 0`) must skip the harvest entirely.
     const mm0_src =
         \\delimiter $ ( ) $;
@@ -1293,7 +1293,10 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
     // forces: `?t := z`, `?w := y`. The pair spans the context member and the
     // succedent, so the region sweeps never see it — the anchored pass does.
     // Without it the analytic proof is unreachable (the search only found a
-    // costly route through the non-enrolled `all_elim`).
+    // costly route through the non-enrolled `all_elim`). The fixture's
+    // `@auto trigger` on `ax` is stripped here: its seed `∀ x R x y ⊢ ∀ x R x y`
+    // feeds `all_elim` directly, a shorter proof the search would find first
+    // and never reach the anchored pass.
     const proof_src =
         \\ex_all_to_all_ex
         \\----------------
@@ -1302,7 +1305,10 @@ test "auto co-solves a context-member/succedent two-meta ax leaf" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
+    const fixture_mm0 = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/nd_fol.mm0", allocator, .unlimited);
+    const trigger_line = "--| @auto trigger (hyp a)\n";
+    try std.testing.expect(std.mem.indexOf(u8, fixture_mm0, trigger_line) != null);
+    const mm0 = try std.mem.replaceOwned(u8, allocator, fixture_mm0, trigger_line, "");
     var suggestions = try suggestionsAtNeedle(
         &arena,
         mm0,

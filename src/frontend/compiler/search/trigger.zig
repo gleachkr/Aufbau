@@ -1,4 +1,5 @@
-//! `@auto trigger` seed harvesting for the `auto?` seeding retry phase.
+//! `@auto trigger` seed harvesting for `auto?`: the seeds join the derived
+//! pool before the search ladder runs.
 //!
 //! Each trigger annotation is a pattern e-matched (structurally) against the
 //! subterms of the original goal. Every match grounds the annotated rule's
@@ -184,7 +185,6 @@ pub fn seedOnlyPool(
     };
     errdefer pool.deinit();
     pool.refs = try pool.arena.allocator().dupe(DerivedRef, seeds);
-    pool.has_seeds = seeds.len > 0;
     return pool;
 }
 

@@ -676,9 +676,9 @@ pub const SearchCounters = struct {
     meta_assignments: usize = 0,
     meta_rollbacks: usize = 0,
     derived_ref_count: usize = 0,
-    /// `@auto trigger` seeds the phase-6 seeding retry ran with: those
-    /// harvested, less any restating a pool fact or another seed (zero when
-    /// phase 6 never ran or no seed was new).
+    /// `@auto trigger` seeds the search ran with: those harvested from the
+    /// goal, less any restating a pool fact or another seed (zero when the
+    /// theory has no trigger rules or no seed was new).
     trigger_seed_count: usize = 0,
     /// Sub-solves skipped by the failure memos (persisted across ladder
     /// cells under `GenerateOptions.persist_negative`): re-solves whose
@@ -1259,12 +1259,6 @@ pub const DerivedPool = struct {
     /// `rule_id << 32 | hyp_index`; a null value records a failed lookup
     /// (fall back to scanning all refs). Slices live in `arena`.
     slot_cache: std.AutoHashMapUnmanaged(u64, ?[]const usize) = .empty,
-    /// True when the pool carries `@auto trigger` seeds (built by the
-    /// phase-6 seeding retry; see `trigger.zig`). Gates the seed-aware slot
-    /// cost in `plan.buildHypPlans`: only seeded pools may promote a
-    /// pool-empty slot from generate-only cost to ref-like cost, so every
-    /// pre-phase-6 search plans exactly as before.
-    has_seeds: bool = false,
     /// Saturation layers actually run (a layer that derives nothing ends the
     /// loop early — a clean fixpoint).
     layers_run: usize = 0,
@@ -1381,8 +1375,7 @@ pub const GenerateOptions = struct {
     /// the tail phases of proofs they found before.
     max_nodes: usize = 256,
     /// Per-phase `tryCandidate` budget. Each ladder phase draws from its own
-    /// pool across all its depths, and every ladder run (the phase-6 retry
-    /// included) starts each phase with a fresh pool. A phase that runs dry is retired for the rest of the
+    /// pool across all its depths. A phase that runs dry is retired for the rest of the
     /// ladder while the other phases continue; a retired core phase also
     /// skips the remaining tail cells. Sized generously so ordinary proofs never hit it.
     /// Lowered in tests to assert clean budget-exhausted behaviour.

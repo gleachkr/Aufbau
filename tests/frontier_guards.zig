@@ -283,17 +283,18 @@ pub const guards = [_]FrontierGuard{
         .fwd_attempts = 16384,
         .fwd_facts = 128,
     },
-    // `@auto trigger` seeding depth guards (phase 6; see
+    // `@auto trigger` seeding depth guards (see
     // docs/design_notes/trigger_seeding.md). The minimal ND theory is the
     // pure repro of the elimination-major left-rule gap: both theorems
     // must regenerate their WHOLE proof from the bare goal and an EMPTY
-    // ref pool, which is possible ONLY through the seeding retry —
+    // ref pool, which is possible ONLY through the seeds —
     // `nd_mp_inner` (`p → q , p ⊢ q`) was a clean MISS at any budget
-    // before it (imp_elim's `p` is premise-only; no ref pins it). These
+    // before them (imp_elim's `p` is premise-only; no ref pins it). These
     // pin the whole chain: annotation parsing → subterm harvest → seed
-    // minting → seeded derived pool → the seed-aware slot cost
-    // (`HypPlan.seeded_len`, which lets the seed-determined elimination
-    // major lead its open minors). FULL at the default budget.
+    // minting → seeded derived pool → the planner ordering that lets the
+    // seed-fillable elimination major lead its open minors
+    // (`HypPlan.rigid_pins`; `nd_or_comm_min` k=5 misses without it). FULL
+    // at the default budget.
     .{
         .filter = "nd_mp_inner",
         .files = "tests/search_bench_cases/nd_minimal.mm0:" ++

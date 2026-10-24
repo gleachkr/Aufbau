@@ -195,8 +195,9 @@ generating application would enumerate every subset of the context. The
 rule must have a hypothesis.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
-binders, and `_`. As a last resort, search matches it against subterms of
-the goal to create fully instantiated facts from a hypothesis-free rule.
+binders, and `_`. Before searching, the engine matches it against subterms
+of the goal to create fully instantiated facts from a hypothesis-free rule,
+which the search then uses as references.
 
 More details are available in [Powering search](powering-search.md).
 

@@ -86,8 +86,8 @@ assertion with a meta per hole (`mintNumberedMeta`, stable `meta_id`s from the
 driver's counter) and every pass searches that as an open
 `implicit_whole_conclusion` hint, so the ladder runs as for an open child
 target and the proof found fills the holes. `Driver.open_root` /
-`GenerationHook.open_root` mark such a search: phase-6 trigger seeding is
-skipped (holes are not subterms), and a constrained open slot registers its
+`GenerationHook.open_root` mark such a search: trigger seeding is skipped
+(holes are not subterms), and a constrained open slot registers its
 carried ancestor metas as a `.witness` slot does, so a hole's meta is
 solvable at a leaf two open levels down (`f · x · y : _`; #331 is the
 general-goal version, which costs ticks there). Search validates against the
@@ -279,8 +279,7 @@ wins (split-free beats split at equal height, and within any single
 application an anchored witness beats an invented one — invention is the
 last rung of the slot-local witness ladder, not a phase capability), and
 phases 4–5 go past depth 1 only after the core missed at every depth with no
-core phase retired, and phase 6 runs only on misses that
-did not stop the search, so they can only *add* found-ness. What the reorder changed is the cross-depth preference within
+core phase retired, so they can only *add* found-ness. What the reorder changed is the cross-depth preference within
 the core — a shallow invented-witness proof now beats a deeper split-free
 one (measured impact: none — breadth corpus byte-identical). Flag sets are
 monotone along the ladder (phase 3 carries the same flags as phase 2),
@@ -372,42 +371,36 @@ which the persisted-memo covering rule requires:
      hidden variable only after the whole match succeeds: minting spends a
      dependency slot of the parent theorem, and read-backs fail far more
      often than they succeed.
-6. **Phase 6 — `@auto trigger` seeding** (`trigger.zig`; design:
-   `docs/design_notes/trigger_seeding.md`). Only on a miss of the whole
-   phase-1–5 ladder that did not stop the search (a phase's own fuel running
-   dry does not block it; the global tick budget and the stack guard do),
-   and only when the theory declares `@auto trigger`
-   patterns (registry `trigger_by_rule`). Each pattern is e-matched against
-   the *original goal's* subterms; every match mints a ground instance of the
-   annotated rule (for `ax`: `φ ⊢ φ` per harvested formula) as a **seed** — a
-   sourceless `DerivedRef` (empty recipe, concrete shape, rendered as a bare
-   rule application whose binders the checker infers from the slot). Seeds
-   enter a rebuilt derived pool (re-saturated with them as depth-0 sources
-   when the theory has `@auto forward` rules, `trigger.seedOnlyPool`
-   otherwise), and the ladder re-runs against it with fresh fuel. This closes
-   the **elimination-major left-rule gap**: backward search cannot pin an
-   elim rule's premise-only binder (imp_elim's `p`) from nothing, but a seed
-   is a ref, and refs pin binders. It operationalizes the subformula
-   property — the author's patterns enumerate the analytic leaf set (context
-   members via `(hyp p)`, implication antecedents via `(im p _)`, …).
-   Two supporting pieces: `DerivedPool.has_seeds` gates a seed-aware slot
-   cost in `plan.buildHypPlans` (`HypPlan.seeded_len`: a pool-empty but
-   seed-fillable slot costs like a ref slot, not generate-only — otherwise
-   the seed-determined elimination major sorts after its wide open minors and
-   is never reached), so pre-seeding phases plan exactly as before; and
-   breadth stays byte-identical by construction (phase 6 runs only where
-   the ladder missed). Guarded by the `nd_minimal` depth
-   frontier tests in `tests/frontier_guards.zig`.
+Before the ladder runs, **`@auto trigger` seeding** (`trigger.zig`; design:
+`docs/design_notes/trigger_seeding.md`) fills the derived pool when the
+theory declares `@auto trigger` patterns (registry `trigger_by_rule`). Each
+pattern is e-matched against the *original goal's* subterms; every match
+mints a ground instance of the annotated rule (for `ax`: `φ ⊢ φ` per
+harvested formula) as a **seed** — a sourceless `DerivedRef` (empty recipe,
+concrete shape, rendered as a bare rule application whose binders the checker
+infers from the slot). Seeds restating a pool fact are dropped; the rest
+enter the derived pool (as depth-0 sources of forward saturation when the
+theory has `@auto forward` rules, `trigger.seedOnlyPool` otherwise) and stay
+there for every phase. This closes the **elimination-major left-rule gap**:
+backward search cannot pin an elim rule's premise-only binder (imp_elim's
+`p`) from nothing, but a seed is a ref, and refs pin binders. It
+operationalizes the subformula property — the author's patterns enumerate
+the analytic leaf set (context members via `(hyp p)`, implication antecedents
+via `(im p _)`, …). Seeds get no special slot cost: a slot only a seed fits is
+still generate-only to the planner, and the elimination major leads its
+minors through the seed-agnostic `HypPlan.rigid_pins` ordering (a
+generate-only slot that determines binders for its siblings through rigid
+structure goes first). Guarded by the `nd_minimal` depth frontier tests in
+`tests/frontier_guards.zig`.
 
 ### How a miss is classified (`miss.zig`)
 
 "Clean miss" means two different things, and the difference is deliberate:
 
-- **Ladder gating** (`LadderOutcome` in `generate.zig`) decides whether the
-  tails and the phase-6 retry run. A node-capped cell still ends as a plain
-  `miss`. A retired core phase skips the remaining tail cells; phase 6 still
-  runs after any retirement. The global budget or the stack guard
-  (`stopped`) blocks it.
+- **Ladder gating** (`runPhaseLadder` in `generate.zig`) decides whether the
+  tails run. A node-capped cell still ends as a plain `miss`. A retired core
+  phase skips the remaining tail cells; the global budget or the stack guard
+  (`.stop`) ends the ladder outright.
 - **The failure report** (`miss.MissReport`, read by `source/report.zig`'s status and
   detail, the retry code action, and the bench's miss causes) calls a miss
   *truncated* when any limit cut it short: the global budget, the stack guard,
@@ -710,7 +703,7 @@ axiom rim ...         -- invertible: front band + set-commit cut + depth-free
 --| @auto eager 2
 axiom rand ...        -- same, lower intra-band priority (branching rules)
 --| @auto trigger (hyp p)
-axiom ax ...          -- seed φ⊢φ per goal context member (phase 6)
+axiom ax ...          -- seed φ⊢φ per goal context member
 ```
 
 Exactly one mode is required (`error.InvalidAutoAnnotation` otherwise; `eager`
@@ -808,7 +801,7 @@ context member mentioning it, so forgetting that member first is a
 generating step) is the theory author's trade to make. Requires a
 hypothesis (`error.BridgeRuleHasNoHypotheses`).
 
-### `@auto trigger PATTERN` — ground seeds from goal subterms (phase 6)
+### `@auto trigger PATTERN` — ground seeds from goal subterms
 
 Only on **hypothesis-free** rules (`ax`-style; a seed has no premise recipe).
 The pattern is a parenthesized prefix tree over term *names*, the rule's own
@@ -818,8 +811,8 @@ ACUI-combiner sort (it defaults to the unit at harvest, then
 `normalizeAcuiUnits` cleans the instantiated conclusion); anything else is an
 annotation error, so every seed is ground by construction. Validation checks
 term availability, arity (derived from the term declaration), capture/nested
-sorts, and that bound argument positions carry only `_`. See the phase-6
-entry above and `docs/design_notes/trigger_seeding.md` for what the patterns
+sorts, and that bound argument positions carry only `_`. See the seeding
+paragraph after the phase list and `docs/design_notes/trigger_seeding.md` for what the patterns
 should enumerate (the analytic leaf set: context members, implication
 antecedents, disjuncts — the connectives your elim rules move into context).
 
@@ -1382,8 +1375,8 @@ it is the identity, gated by `has_acui` so those theories pay nothing.
   depth-major core hits constantly (phases 1–2 re-run at every new depth
   after phase 3 already failed the same targets at the previous one).
   Depth-0 solves carry no hook, so ANY recorded fail covers depth-0
-  re-encounters at every phase. Both memos clear at the ladder rerun whose
-  inputs genuinely change (the phase-6 seeded pool). `concrete_ok` replay is
+  re-encounters at every phase. The verdict inputs (pool, seeds, rules) are
+  fixed for the whole ladder, so nothing clears them mid-search. `concrete_ok` replay is
   checked BEFORE the fail (an ok entry found under stronger flags is
   consistent with a weaker-phase fail and must win). Shadow-validated
   before landing: zero contradicted verdicts across ~550k would-skip
@@ -1450,7 +1443,7 @@ width is real.
 | `backward/validate.zig` | candidate validation, binding rendering, ranking, derived-direct |
 | `generate.zig` | `auto?` driver: hybrid depth-major/phase-major retry ladder, forward saturation wiring |
 | `meta_store.zig` | `MetaStore`: the branch-local store of search metavariables (assignment, allowed deps, rollback marks); the leaf kinds live in `../inference/open_terms.zig` |
-| `trigger.zig` | `@auto trigger` seed harvest (phase 6): goal-subterm e-match → sourceless ground `DerivedRef`s |
+| `trigger.zig` | `@auto trigger` seed harvest before the ladder: goal-subterm e-match → sourceless ground `DerivedRef`s |
 | `tunables.zig` | `auto?` per-call parameters: names, ranges, validation, and applying them to `GenerateOptions` |
 | `candidate.zig` | `probe`/`commit` over `tryCandidate`: full checker re-validation on a cloned theorem |
 | `apply.zig` | `apply?` thin variant |

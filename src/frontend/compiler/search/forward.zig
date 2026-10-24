@@ -79,7 +79,8 @@ const zero_span = Span{ .start = 0, .end = 0 };
 /// scanned linearly (bounded by `max_forward_facts`).
 ///
 /// `seeds` are `@auto trigger` ground facts (sourceless `DerivedRef`s minted
-/// by `trigger.zig` for the seeding retry phase; empty on every other call).
+/// by `trigger.zig`; empty when the theory has no trigger rules or every
+/// seed restated a pool fact).
 /// They enter as depth-0 derived sources so layer-1 joins fire over them,
 /// and stay in the derived pool for backward use. The caller has already
 /// dropped seeds that restate a pool fact or each other
@@ -135,7 +136,6 @@ pub fn saturate(
     }
     sat.pool_count = sat.sources.items.len;
 
-    result.has_seeds = seeds.len > 0;
     for (seeds) |seed| {
         // Registered so a join restating a seed is dropped like one
         // restating a pool fact.

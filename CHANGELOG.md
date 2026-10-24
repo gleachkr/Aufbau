@@ -16,6 +16,19 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Changed
 
+- `auto?` harvests `@auto trigger` seeds before the search starts and keeps
+  them in its reference pool for every phase, instead of running a second
+  search over them after a miss. Goals that need a seed no longer pay for
+  a full failed search first, and the misses whose budget ran out before
+  the retry could start are reached: on the bench corpus two more
+  theorems close at every depth, total work drops slightly, and the
+  proofs found for every other goal are unchanged.
+- When none of a rule's remaining premises can be met by a known fact,
+  `auto?` now searches first the premise whose structure fixes variables
+  the other premises share, such as an elimination rule's major premise,
+  instead of the premise with the largest known part. The natural-deduction
+  bench does the same work in a fifth fewer ticks and one more euclid
+  theorem closes at a deeper cut.
 - `@auto eager` accepts a premise-only bound binder that no other binder
   may depend on, the fresh eigenvariable of a rule such as
   `all_intro {x y} (g: ctx x) (p: wff x): g ⊢ [x/y] p > g ⊢ ∀ x p`, and

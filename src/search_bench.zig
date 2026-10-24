@@ -145,7 +145,7 @@ const default_frontier_corpus = [_]FixturePair{
     },
     .{
         // search-only @auto-annotated copy (see euclid note above). Also
-        // carries `@auto trigger` patterns on `ax` (phase-6 seeding): the
+        // carries `@auto trigger` patterns on `ax` (seeding): the
         // measured effect is exactly nd_exists_elim_const 4/6 -> FULL
         // (guarded in tests/frontier_guards.zig) at +2.4% miss-side wall; every other
         // theorem's frontier fraction is unchanged.

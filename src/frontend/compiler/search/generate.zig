@@ -173,9 +173,10 @@ const Driver = struct {
     /// recorded exhaustiveness), but the ok-replay is still checked FIRST
     /// in `solveProof`: an ok entry found under STRONGER flags than a
     /// recorded fail is consistent with it and must win on re-encounter.
-    /// Keys are scope-stable canonical content. Cleared at the ladder-rerun
-    /// boundary where the verdict inputs genuinely change (the phase-6
-    /// seeded pool). Corpus-validated by shadow instrumentation before the
+    /// Keys are scope-stable canonical content. Cleared between ladder
+    /// cells unless `GenerateOptions.persist_negative` keeps them (the
+    /// verdict inputs — pool, seeds, rules — are fixed for the whole
+    /// ladder). Corpus-validated by shadow instrumentation before the
     /// real implementation: zero contradicted verdicts across ~550k
     /// would-skip re-solves; ~17-21% of generation ticks had been
     /// re-deriving already-known failures.
@@ -320,18 +321,52 @@ pub fn generateTopLevel(
         .implicit_whole_conclusion => unreachable,
     };
 
-    // Bounded multi-layer forward saturation over the ref pool
-    // before backward search. Skipped entirely (no cost) when the theory
-    // declares no `@auto forward` rules — and never run on the
+    // `@auto trigger` seeds: ground instances of the theory's hypothesis-free
+    // trigger rules harvested from the goal's subterms (the analytic leaf
+    // set; see `trigger.zig`), less any restating a pool fact. They join the
+    // derived pool before the ladder runs, so backward search can pin
+    // premise-only elimination binders from them in every phase (the
+    // sequent left-rule gap) and forward joins fire over them. Harvesting is
+    // one pass over the goal, so a proof the ordinary phases handle pays
+    // only that. Seeding up front rather than as a retry after a miss
+    // reaches the misses the global budget stops before any retry could run
+    // (corpus: +2 FULL, −0.8% ticks; breadth and the found proofs of every
+    // other row identical). A holey goal's holes are metas, not subterms to
+    // seed from.
+    var harvested: []types.DerivedRef = &.{};
+    defer session.allocator.free(harvested);
+    var seeds: []const types.DerivedRef = &.{};
+    if (goal != .holey and session.context.registry.triggerRuleCount() > 0) {
+        harvested = try trigger.harvestSeeds(
+            session.context,
+            &work_theorem,
+            goal_expr,
+            session.allocator,
+        );
+        seeds = try trigger.dropRestatedSeeds(
+            session.context,
+            &work_theorem,
+            try session.getReferencePool(theorem, session.effectiveCounters(null)),
+            harvested,
+            session.allocator,
+        );
+    }
+
+    // Bounded multi-layer forward saturation over the ref pool, with the
+    // seeds as depth-0 sources, before backward search. Skipped entirely
+    // (no cost) when the theory declares no `@auto forward` rules — the
+    // pool then holds the seeds alone, if any — and never run on the
     // `exact?`/`apply?` paths, which don't reach this driver. The session's
     // clipper-backed ref index (built here, reused by the backward search
     // right after) pre-filters pool sources per premise slot.
     var derived_pool: ?types.DerivedPool = null;
     defer if (derived_pool) |*dpool| dpool.deinit();
     if (session.context.registry.autoForwardRuleCount() > 0) {
-        derived_pool = try saturateForward(session, theorem, &work_theorem, options, &.{});
-        try buildDerivedIndex(session, &work_theorem, &derived_pool.?);
+        derived_pool = try saturateForward(session, theorem, &work_theorem, options, seeds);
+    } else if (seeds.len > 0) {
+        derived_pool = try trigger.seedOnlyPool(session.context, seeds);
     }
+    if (derived_pool) |*dpool| try buildDerivedIndex(session, &work_theorem, dpool);
 
     // The search-reuse memos (Lever A reject-verdict memo + Lever B re-pin
     // prune) and the cross-candidate deep-member verdict cache live for this
@@ -342,6 +377,7 @@ pub fn generateTopLevel(
     // memo/cache stats are snapshotted into the (value-only) counters before
     // they deinit, so observability survives.
     const gen_counters = session.effectiveCounters(null);
+    if (gen_counters) |c| c.trigger_seed_count += seeds.len;
     var verdict_memo = VerdictMemo{
         .allocator = session.allocator,
         .skip_enabled = options.search_memo,
@@ -420,80 +456,10 @@ pub fn generateTopLevel(
     const schedule = try buildSchedule(session.allocator, options.max_depth, driver.gates);
     defer session.allocator.free(schedule);
     var applications = std.ArrayListUnmanaged(RuleApplication).empty;
-    const ladder = try runPhaseLadder(
-        &driver,
-        goal_expr,
-        &applications,
-        schedule,
-    );
-
-    // Phase 6: on a miss of the whole ladder, and only when the theory
-    // declares `@auto trigger` rules — harvest ground seed instances from
-    // the goal's subterms (the analytic leaf set; see `trigger.zig`),
-    // rebuild the derived pool with the seeds included, and re-run the
-    // ladder against it. Seeds are ordinary derived refs, so backward search
-    // can pin premise-only elimination binders from them (the sequent
-    // left-rule gap) and forward joins fire over them. Like phases 2–5, this
-    // runs last with fresh per-phase fuel only when everything else found
-    // nothing: proofs the ordinary phases handle never pay, and breadth
-    // stays byte-identical by construction. Unlike the tails, a per-phase
-    // fuel exhaustion does not block it: the goals that need the seeds are
-    // exactly the elimination-shaped ones whose cut-formula flood exhausts
-    // fuel first (#276), so the retry is gated only on the ladder not having
-    // stopped (global tick budget or stack guard), which would abort the
-    // re-run on its first tick.
-    var seeded_pool: ?types.DerivedPool = null;
-    defer if (seeded_pool) |*dpool| dpool.deinit();
-    // A holey goal's holes are metas, not subterms to seed from.
-    if (applications.items.len == 0 and ladder != .stopped and
-        !driver.open_root and
-        session.context.registry.triggerRuleCount() > 0)
-    {
-        const harvested = try trigger.harvestSeeds(
-            session.context,
-            &work_theorem,
-            goal_expr,
-            session.allocator,
-        );
-        defer session.allocator.free(harvested);
-        const seeds = try trigger.dropRestatedSeeds(
-            session.context,
-            &work_theorem,
-            try session.getReferencePool(theorem, session.effectiveCounters(null)),
-            harvested,
-            session.allocator,
-        );
-        if (seeds.len > 0) {
-            if (gen_counters) |c| c.trigger_seed_count += seeds.len;
-            // With `@auto forward` rules, re-saturate with the seeds as
-            // depth-0 sources so forward joins fire over them too.
-            seeded_pool = if (session.context.registry.autoForwardRuleCount() > 0)
-                try saturateForward(session, theorem, &work_theorem, options, seeds)
-            else
-                try trigger.seedOnlyPool(session.context, seeds);
-            try buildDerivedIndex(session, &work_theorem, &seeded_pool.?);
-            driver.derived = &seeded_pool.?;
-            // The seeded pool changes every failure verdict's inputs; the
-            // failure memos must not carry across.
-            clearFails(&driver);
-            _ = try runPhaseLadder(
-                &driver,
-                goal_expr,
-                &applications,
-                schedule,
-            );
-        }
-    }
+    try runPhaseLadder(&driver, goal_expr, &applications, schedule);
 
     // Mirror the forward layer's meta-store activity into the bench counters.
     if (derived_pool) |*dpool| {
-        if (driver.counters) |c| {
-            c.universal_metas_created += dpool.store.stats.universal_created;
-            c.meta_assignments += dpool.store.stats.assignments;
-            c.meta_rollbacks += dpool.store.stats.rollbacks;
-        }
-    }
-    if (seeded_pool) |*dpool| {
         if (driver.counters) |c| {
             c.universal_metas_created += dpool.store.stats.universal_created;
             c.meta_assignments += dpool.store.stats.assignments;
@@ -582,12 +548,6 @@ fn buildDerivedIndex(
         };
     };
 }
-
-/// How a full ladder ended: it ran to the end or found a proof (`finished`;
-/// a phase whose own fuel ran dry was retired, and the phase-6 retry still
-/// runs with fresh fuel), or the search must end now (`stopped`: the global
-/// tick budget or the stack guard, which every later cell would hit again).
-const LadderOutcome = enum { finished, stopped };
 
 /// One phase of the retry ladder: the capabilities its cells search with, and
 /// what the theory needs for the phase to run at all. Witness invention is not
@@ -754,8 +714,7 @@ const LadderState = struct {
 /// searches depth 1. The core then continues depth-major over phases 1–3
 /// (outer iterative deepening 2..max_depth, inner phases per depth), and
 /// phases 4–5 follow as phase-major tails from depth 2, only while no core
-/// phase has retired. Extracted so the phase-6 trigger-seeding retry can
-/// re-run the whole ladder. Returns how the ladder ended.
+/// phase has retired.
 ///
 /// Why depth-major: `max_depth` monotonicity is a PREFIX property of the cell
 /// visit order. Depth-major makes a higher max_depth's cell sequence a strict
@@ -827,15 +786,15 @@ fn runPhaseLadder(
     goal_expr: ExprId,
     applications: *std.ArrayListUnmanaged(RuleApplication),
     schedule: []const Cell,
-) anyerror!LadderOutcome {
+) anyerror!void {
     var state = LadderState.init(driver.options);
     for (schedule, 0..) |cell, index| {
         if (state.runs(cell)) {
             switch (try runCell(driver, &state, cell, goal_expr, applications)) {
                 .miss => {},
-                .found => return .finished,
+                .found => return,
                 .fuel => state.retired[cell.phase] = true,
-                .stop => return .stopped,
+                .stop => return,
             }
         }
         const next: ?Cell = if (index + 1 < schedule.len) schedule[index + 1] else null;
@@ -847,7 +806,6 @@ fn runPhaseLadder(
             }
         }
     }
-    return .finished;
 }
 
 /// How one ladder cell ended: it ran in full without a proof (`miss`), it

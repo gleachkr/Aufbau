@@ -43,7 +43,7 @@ pub const ResolvedRelation = struct {
 };
 
 /// One `@auto trigger` pattern: a prefix term tree e-matched against the
-/// goal's subterms by the `auto?` seeding retry phase. A `binder` node
+/// goal's subterms before `auto?` searches. A `binder` node
 /// captures the annotated rule's binder at that index from the matched
 /// position; `wildcard` matches anything. Ground by construction: every rule
 /// binder not named by the pattern must default to an ACUI unit (validated

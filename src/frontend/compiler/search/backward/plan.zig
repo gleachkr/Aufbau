@@ -28,17 +28,21 @@ const lookupHypReferences = lookup_mod.lookupHypReferences;
 pub const HypPlan = struct {
     position: usize,
     initial_len: usize,
-    /// Derived-pool slot candidates for a pool-empty slot, and ONLY when the
-    /// pool carries `@auto trigger` seeds (`DerivedPool.has_seeds`, the
-    /// phase-6 seeding retry). Zero everywhere else, so pre-seeding search
-    /// plans are untouched. A seed is a ref for planning purposes: filling
-    /// the slot pins the rule's premise-only binders exactly like a pool ref
-    /// would, so a seed-fillable slot must sort with ref-like cost, not
-    /// generate-only cost — otherwise the elimination MAJOR the seed
-    /// determines sorts after its wide open minors and is never reached
-    /// (the wildcard-vs-rigid inversion; see the trigger-seeding design
-    /// note).
-    seeded_len: usize,
+    /// Generate-only slots only (zero when a pool ref fits): how many of this
+    /// slot's still-unpinned binders sit under rigid nested structure AND
+    /// are left unpinned by some sibling too. Filling such a slot — from a
+    /// derived ref, a `@auto trigger` seed, or generation — determines those
+    /// binders for the siblings through structure that constrains what can
+    /// fill it, so among equally costed generate-only slots the one that
+    /// pins the most for its siblings goes first (comparator key below
+    /// cost, above `strength`). The elimination major `g ⊢ a ∨ b` (two
+    /// rigid binders its minors `h , a ⊢ c` / `k , b ⊢ c` need) leads them;
+    /// `strength` alone put the minors first, because their pinned
+    /// conclusion outweighed anything bound in the major, and the first
+    /// minor's child search then ran on an open `a` (nd_minimal
+    /// `nd_or_comm_min` from the bare goal, k=5). A bare-binder slot
+    /// (`g ⊢ a`) pins nothing through structure and scores zero.
+    rigid_pins: usize,
     strength: usize,
     // True when this is a generate-only slot (a generator is present and no pool
     // ref fits it at seed time) that should be visited LAST so a sibling can pin
@@ -78,7 +82,6 @@ pub fn buildHypPlans(
     candidate: *const ApplyCandidate,
     generate_present: bool,
     constrained_mp: bool,
-    derived: ?*DerivedPool,
     counters: ?*SearchCounters,
 ) ![]HypPlan {
     const rule = &context.env.rules.items[candidate.rule_id];
@@ -107,10 +110,7 @@ pub fn buildHypPlans(
         const template = rule.hyps[hyp.index];
         const binders = templateBinderMask(template);
         const unpinned = unpinnedBinderMask(binders.mask, candidate.bindings);
-        const rigid = if (constrained_mp)
-            rigidNestedBinderMask(context.registry, template)
-        else
-            TemplateBinderMask{};
+        const rigid = rigidNestedBinderMask(context.registry, template);
         slots[position] = .{
             .initial_len = lookup.pool.indices.len,
             .is_app = template == .app,
@@ -121,30 +121,19 @@ pub fn buildHypPlans(
                 isWildcardSequent(template, candidate.bindings),
             .rigid_mask = rigid.mask,
         };
-        var seeded_len: usize = 0;
-        if (lookup.pool.indices.len == 0) {
-            if (derived) |dpool| {
-                if (dpool.has_seeds) {
-                    seeded_len = if (try derivedSlotCandidates(
-                        context,
-                        dpool,
-                        candidate,
-                        hyp.index,
-                        counters,
-                    )) |list| list.len else dpool.refs.len;
-                }
-            }
-        }
         plans[position] = .{
             .position = position,
             .initial_len = lookup.pool.indices.len,
-            .seeded_len = seeded_len,
+            .rigid_pins = 0, // resolved in the second pass
             .strength = 0, // computed below, only where it breaks a tie
             .defer_generate = false, // resolved in the second pass
             .defer_wildcard = false, // resolved in the second pass
         };
     }
 
+    for (0..n) |i| {
+        plans[i].rigid_pins = rigidPinsForSiblings(slots, i);
+    }
     if (generate_present) {
         for (0..n) |i| {
             plans[i].defer_generate = shouldDeferGenerate(slots, i);
@@ -246,8 +235,8 @@ const SlotShape = struct {
     /// `constrained_mp`, false otherwise. See `HypPlan.defer_wildcard`.
     wildcard: bool = false,
     /// Binders occurring under rigid nested structure (inside a non-ACUI app
-    /// below the template's top-level app). Computed only under
-    /// `constrained_mp`, zero otherwise. See `HypPlan.defer_wildcard`.
+    /// below the template's top-level app). See `HypPlan.rigid_pins` and
+    /// `HypPlan.defer_wildcard`.
     rigid_mask: u64 = 0,
 };
 
@@ -288,6 +277,23 @@ fn shouldDeferWildcard(slots: []const SlotShape, i: usize) bool {
         if (other.rigid_mask & self.unpinned != 0) return true;
     }
     return false;
+}
+
+/// `HypPlan.rigid_pins` for slot `i`: the number of its still-unpinned
+/// binders that sit under rigid nested structure and that some sibling also
+/// leaves unpinned — what filling `i` first would determine for the others
+/// through shape. Zero for a ref-fillable slot (its ref count already costs
+/// it) and under an overflowed mask (the masks are incomplete, so no
+/// ordering claim is made).
+fn rigidPinsForSiblings(slots: []const SlotShape, i: usize) usize {
+    const self = slots[i];
+    if (self.initial_len != 0 or self.overflow) return 0;
+    var siblings_unpinned: u64 = 0;
+    for (slots, 0..) |other, j| {
+        if (j == i or other.overflow) continue;
+        siblings_unpinned |= other.unpinned;
+    }
+    return @popCount(self.rigid_mask & self.unpinned & siblings_unpinned);
 }
 
 /// Wildcard sequent test for `HypPlan.defer_wildcard`: an app whose every
@@ -412,9 +418,6 @@ const generate_only_cost: usize = 4;
 
 fn hypSlotCost(plan: HypPlan) usize {
     if (plan.initial_len != 0) return plan.initial_len;
-    // Seed-fillable slot (phase 6 only; see `HypPlan.seeded_len`): costed
-    // like a ref slot of the same width.
-    if (plan.seeded_len != 0) return plan.seeded_len;
     return generate_only_cost;
 }
 
@@ -422,7 +425,8 @@ fn hypSlotCost(plan: HypPlan) usize {
 fn sameOrderClass(a: HypPlan, b: HypPlan) bool {
     return a.defer_wildcard == b.defer_wildcard and
         a.defer_generate == b.defer_generate and
-        hypSlotCost(a) == hypSlotCost(b);
+        hypSlotCost(a) == hypSlotCost(b) and
+        a.rigid_pins == b.rigid_pins;
 }
 
 fn hypPlanLessThan(_: void, lhs: HypPlan, rhs: HypPlan) bool {
@@ -444,6 +448,10 @@ fn hypPlanLessThan(_: void, lhs: HypPlan, rhs: HypPlan) bool {
     if (lhs_cost != rhs_cost) {
         return lhs_cost < rhs_cost;
     }
+    // Equally costed generate-only slots: the one whose fill determines the
+    // most for its siblings through rigid structure goes first (see
+    // `HypPlan.rigid_pins`).
+    if (lhs.rigid_pins != rhs.rigid_pins) return lhs.rigid_pins > rhs.rigid_pins;
     if (lhs.strength != rhs.strength) return lhs.strength > rhs.strength;
     return lhs.position < rhs.position;
 }
@@ -695,11 +703,70 @@ test "shouldDeferWildcard demotes the wildcard minor behind the rigid major" {
     try testing.expect(!shouldDeferWildcard(&overflowed, 0));
 }
 
+test "rigidPinsForSiblings counts the rigid binders a slot pins for its siblings" {
+    // `or_elim` from the bare goal `p ∨ q ⊢ q ∨ p`, binders
+    // (G H K p q r) = bits 0..5, every slot generate-only: the major
+    // `G ⊢ p ∨ q` holds p, q under `or`; the minors `H , p ⊢ r` / `K , q ⊢ r`
+    // hold their disjunct under the rigid `hyp` coercion inside the ACUI
+    // join, and r is pinned by the goal.
+    const slots = [_]SlotShape{
+        .{ .initial_len = 0, .is_app = true, .mask = 0b011001, .unpinned = 0b011001, .overflow = false, .rigid_mask = 0b011000 },
+        .{ .initial_len = 0, .is_app = true, .mask = 0b101010, .unpinned = 0b001010, .overflow = false, .rigid_mask = 0b001000 },
+        .{ .initial_len = 0, .is_app = true, .mask = 0b110100, .unpinned = 0b010100, .overflow = false, .rigid_mask = 0b010000 },
+    };
+    try testing.expectEqual(@as(usize, 2), rigidPinsForSiblings(&slots, 0));
+    try testing.expectEqual(@as(usize, 1), rigidPinsForSiblings(&slots, 1));
+    try testing.expectEqual(@as(usize, 1), rigidPinsForSiblings(&slots, 2));
+
+    // A ref-fillable slot is costed by its refs, not by what it pins.
+    var filled = slots;
+    filled[0].initial_len = 1;
+    try testing.expectEqual(@as(usize, 0), rigidPinsForSiblings(&filled, 0));
+
+    // A bare-binder minor (`g ⊢ a`, nothing nested) pins nothing by shape.
+    var bare = slots;
+    bare[1].rigid_mask = 0;
+    try testing.expectEqual(@as(usize, 0), rigidPinsForSiblings(&bare, 1));
+
+    // Overflowed masks make no ordering claim.
+    var overflowed = slots;
+    overflowed[0].overflow = true;
+    try testing.expectEqual(@as(usize, 0), rigidPinsForSiblings(&overflowed, 0));
+}
+
+test "hypPlanLessThan prefers the generate-only slot that pins more for its siblings" {
+    const major = HypPlan{
+        .position = 0,
+        .initial_len = 0,
+        .rigid_pins = 2,
+        .strength = 2,
+        .defer_generate = false,
+        .defer_wildcard = false,
+    };
+    const minor = HypPlan{
+        .position = 1,
+        .initial_len = 0,
+        .rigid_pins = 1,
+        .strength = 4,
+        .defer_generate = false,
+        .defer_wildcard = false,
+    };
+    // Same generate-only cost: the pins key decides before the minor's
+    // larger bound-value strength.
+    try testing.expect(hypPlanLessThan({}, major, minor));
+    try testing.expect(!hypPlanLessThan({}, minor, major));
+    // A cheaper ref slot still comes first regardless of pins.
+    var ref_slot = minor;
+    ref_slot.initial_len = 1;
+    ref_slot.rigid_pins = 0;
+    try testing.expect(hypPlanLessThan({}, ref_slot, major));
+}
+
 test "hypPlanLessThan sorts defer_wildcard last, above defer_generate" {
     const wildcard_minor = HypPlan{
         .position = 0,
         .initial_len = 3,
-        .seeded_len = 0,
+        .rigid_pins = 0,
         .strength = 1,
         .defer_generate = false,
         .defer_wildcard = true,
@@ -707,7 +774,7 @@ test "hypPlanLessThan sorts defer_wildcard last, above defer_generate" {
     const generate_major = HypPlan{
         .position = 1,
         .initial_len = 0,
-        .seeded_len = 0,
+        .rigid_pins = 0,
         .strength = 3,
         .defer_generate = true,
         .defer_wildcard = false,

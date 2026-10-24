@@ -561,7 +561,7 @@ fn enumerateCandidateRefs(
     const single_plan = [1]HypPlan{.{
         .position = 0,
         .initial_len = 0,
-        .seeded_len = 0,
+        .rigid_pins = 0,
         .strength = 0,
         .defer_generate = false,
         .defer_wildcard = false,
@@ -576,7 +576,6 @@ fn enumerateCandidateRefs(
             candidate,
             generator != null,
             generator != null and generator.?.allow_constrained_mp,
-            derived,
             counters,
         ),
     };

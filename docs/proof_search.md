@@ -763,14 +763,16 @@ axiom ax: $ hyp p |- p $;
 axiom ...
 ```
 
-As a last resort — after the ordinary search has otherwise come up empty —
-the engine matches each trigger pattern against the *goal's* subterms and
-mints a ground instance of the rule for every match. Those seeds become
-extra references and the search runs once more. In effect the annotations
-let the author enumerate the *analytic leaf set* of the theory — the
-context members, implication antecedents, and disjuncts that its
-elimination rules move around — so the search has the raw material it
-needs.
+Before the search starts, the engine matches each trigger pattern against
+the *goal's* subterms and mints a ground instance of the rule for every
+match. Those seeds join the references (and, in a theory with `@auto
+forward` rules, the facts forward saturation starts from) for the whole
+search, so an elimination whose premise is a context member can be closed
+in any phase. In effect the annotations let the author enumerate the
+*analytic leaf set* of the theory — the context members, implication
+antecedents, and disjuncts that its elimination rules move around — so the
+search has the raw material it needs. Harvesting is one pass over the goal;
+a seed nobody selects costs nothing further.
 
 ## A worked example
 
