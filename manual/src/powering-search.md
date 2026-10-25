@@ -321,6 +321,38 @@ rule with a bound binder (one that the member mentions) can no longer be
 found through a bridge rule; such proofs are rare, and the bench shows
 the trade.
 
+## `@auto focus`: chain the rules that decompose one formula
+
+The left rules for `∀` and `→` and the right rule for `∃` are where search
+makes real choices, and a proof often applies several of them in a row to
+one formula. Each of those steps normally costs a depth level, although
+only the first, picking the formula, was a choice. `@auto focus` declares
+which formula a rule decomposes and what each premise continues with:
+
+```mm0
+--| @auto focus $ ∀ x p $ : $ [x/t] p $
+theorem all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
+  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
+
+--| @auto focus $ a → b $ : $ a $ $ b $
+theorem imp_left (g: ctx) (a b c: wff):
+  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
+```
+
+The formula before the `:` is the principal, found in the conclusion. Each
+formula after it belongs to one hypothesis, in order, and `_` stands for a
+hypothesis that does not continue. Applying a focus rule to an unfocused
+goal costs a depth level, as any step does, and leaves each continuing
+premise focused on its formula. A focused goal admits only focus rules that
+decompose that formula, plus premise-free rules such as `ax`, and those
+steps are free. Focus ends when a continuation is a formula no focus rule
+decomposes in that position.
+
+The chain is bounded by the formula's structure, so free steps cannot run
+away. Like `eager`, the annotation is trusted: it suits the non-invertible
+rules of a sequent calculus whose invertible rules are `eager`, and a
+misplaced one can make search miss proofs.
+
 ## `@auto trigger`: seed leaf facts
 
 Some proofs need a leaf fact backward search cannot easily discover, typically

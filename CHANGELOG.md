@@ -7,6 +7,17 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Added
 
+- `@auto focus $ PRINCIPAL $ : CONTINUATION...`: focused proof search. The
+  annotation names the formula a rule decomposes and, per hypothesis, the
+  formula that stays in focus there (`_` releases it). Applying a focus rule
+  costs one depth level, and the rest of the chain on that formula is free:
+  a focused goal applies only the focus rules that decompose its formula
+  and premise-free rules. The `nd_fol` bench fixture focuses `all_left`,
+  `imp_left` and `ex_intro`; its bench rows are unchanged at 4% fewer
+  ticks, and a chain of five left rules on one formula (the new
+  `focus_chain_probe` fixture, Pelletier 36's inner step) is found at depth
+  2 instead of missed. Theories without the annotation search exactly as
+  before.
 - `@auto bridge`: a rule annotated this way stays a backward candidate for
   `auto?`, but search fills its premises only from the reference pool and
   forward-derived facts, never by generating a sub-proof. Weakening is the

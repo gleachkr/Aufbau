@@ -28,6 +28,7 @@ const ExprId = @import("../../expr.zig").ExprId;
 const PlaceholderId = @import("../../expr.zig").PlaceholderId;
 const TheoremContext = @import("../../expr.zig").TheoremContext;
 const MetaStore = @import("./meta_store.zig").MetaStore;
+const FocusRules = @import("../../focus_rules.zig");
 const MetaDepBans = @import("./meta_store.zig").MetaDepBans;
 const OpenTerms = @import("../inference/open_terms.zig");
 const ProofScript = @import("../../proof_script.zig");
@@ -110,6 +111,14 @@ const Driver = struct {
     /// before each `exactWithSession` call that carries the hook and restored
     /// after, so sibling slots at the same level share a depth.
     current_depth: usize = 0,
+    /// The goal whose candidates the backtracker is trying (a sub-solve's
+    /// target, the pass goal at the root), in `work_theorem`, and the depth
+    /// it was given. A focus rule's subgoal reads its continuation against
+    /// the goal, and at a focused goal keeps the goal's depth: `current_depth`
+    /// is clamped at 0, so it cannot give the depth back. The focus itself is
+    /// `hook.focus`.
+    node_target: ?ExprId = null,
+    node_depth: usize = 0,
     /// DFS path guard for concrete targets, mapping each target on the
     /// current recursion path to its path height (see `path_height`).
     visited: std.AutoHashMapUnmanaged(ExprId, usize) = .{},
@@ -914,6 +923,9 @@ fn runDepthPass(
     // The root's hypotheses' sub-proofs are one level shallower than the
     // current limit.
     driver.current_depth = depth_limit - 1;
+    driver.node_target = goal_expr;
+    driver.node_depth = depth_limit;
+    driver.hook.focus = null;
 
     var results = backtrack.exactWithSession(
         driver.compiler,
@@ -1015,7 +1027,7 @@ fn hookSolve(
     ctx: *anyopaque,
     target: ExprId,
     target_theorem: *TheoremContext,
-    eager_step: bool,
+    step: types.ChildStep,
 ) anyerror!?types.GeneratedProof {
     const driver: *Driver = @ptrCast(@alignCast(ctx));
     const lifted = (try reinternConcrete(
@@ -1023,17 +1035,13 @@ fn hookSolve(
         target_theorem,
         target,
     )) orelse return null;
-    // `@auto eager` depth exemption: an eager application is a "don't-care"
-    // decomposition, so its subgoal keeps the parent's remaining depth —
-    // `current_depth` was already decremented at the parent's `solveProof`
-    // entry (or set to `depth_limit - 1` at the pass root), so add the level
-    // back. Never exceeds the pass's `depth_limit`, and stays bounded
-    // regardless: eager children still pay nodes, fuel, and global ticks,
-    // and the `visited` path guard catches cycles.
-    const depth = if (eager_step)
-        driver.current_depth + 1
+    const depth = childDepth(driver, step);
+    const parent_focus = driver.hook.focus;
+    driver.hook.focus = if (step.focus) |premise|
+        focusAfter(driver, driver.work_theorem, premise, lifted)
     else
-        driver.current_depth;
+        null;
+    defer driver.hook.focus = parent_focus;
     var proof = (try solveProof(driver, lifted, depth)) orelse
         return null;
     proof.conclusion = (try reinternConcrete(
@@ -1042,6 +1050,43 @@ fn hookSolve(
         proof.conclusion,
     )) orelse return null;
     return proof;
+}
+
+/// The depth a subgoal is solved at. `@auto eager` depth exemption: an eager
+/// application is a "don't-care" decomposition, so its subgoal keeps the
+/// parent's remaining depth — `current_depth` was already decremented at the
+/// parent's `solveProof` entry (or set to `depth_limit - 1` at the pass
+/// root), so add the level back. Never exceeds the pass's `depth_limit`, and
+/// stays bounded regardless: eager children still pay nodes, fuel, and
+/// global ticks, and the `visited` path guard catches cycles.
+///
+/// `@auto focus`: a focus rule applied at an unfocused goal is a decide and
+/// pays its level like any step; applied at a focused goal it continues the
+/// focus and keeps the goal's own depth, so a focused chain costs nothing
+/// past its decide. The chain is bounded by the focused formula, which each
+/// step decomposes.
+fn childDepth(driver: *const Driver, step: types.ChildStep) usize {
+    if (step.focus != null and driver.hook.focus != null) return driver.node_depth;
+    return if (step.eager) driver.current_depth + 1 else driver.current_depth;
+}
+
+/// The focus a focus rule's premise keeps in the subgoal `child` (in
+/// `theorem`) of the current goal: the formula at the premise's continuation
+/// site, while some focus rule can decompose it there. Null releases focus.
+fn focusAfter(
+    driver: *const Driver,
+    theorem: *const TheoremContext,
+    premise: types.FocusPremise,
+    child: ExprId,
+) ?types.Focus {
+    const registry = driver.context.registry;
+    const decl = registry.focusDecl(premise.rule_id) orelse return null;
+    const site = decl.continuations[premise.hyp_index] orelse return null;
+    const parent = driver.node_target orelse return null;
+    const formula = FocusRules.formulaAt(driver.context.env, registry, theorem, site, parent, child) orelse
+        return null;
+    if (!FocusRules.decomposable(registry, theorem, child, site, formula)) return null;
+    return .{ .formula = formula, .site = site };
 }
 
 /// Number of child proofs that read back onto an open target the solver
@@ -1066,19 +1111,15 @@ fn hookSolveOpen(
     target: ExprId,
     target_theorem: *TheoremContext,
     store: *MetaStore,
-    eager_step: bool,
+    step: types.ChildStep,
     sink: types.OpenProofSink,
 ) anyerror!void {
     const driver: *Driver = @ptrCast(@alignCast(ctx));
     try checkStackGuard(driver);
-    // The `@auto eager` depth exemption, as in `hookSolve`.
-    const depth = if (eager_step)
-        driver.current_depth + 1
-    else
-        driver.current_depth;
+    const depth = childDepth(driver, step);
     var proofs = std.ArrayListUnmanaged(OpenProof).empty;
     defer proofs.deinit(driver.scratch);
-    try collectOpenProofs(driver, target, target_theorem, store, depth, &proofs);
+    try collectOpenProofs(driver, target, target_theorem, store, depth, step.focus, &proofs);
     for (proofs.items) |proof| {
         const mark = store.mark();
         defer store.rollbackTo(mark);
@@ -1308,8 +1349,8 @@ const Reseed = struct {
 };
 
 /// A generation child search for `goal` one level below `depth` (pool refs
-/// only at depth 0), which stops at the first `max_results` proofs `keep`
-/// keeps.
+/// only at depth 0, unless the goal is focused), which stops at the first
+/// `max_results` proofs `keep` keeps.
 fn childSearch(
     driver: *Driver,
     goal: Goal,
@@ -1320,6 +1361,9 @@ fn childSearch(
     const saved_depth = driver.current_depth;
     driver.current_depth = if (depth > 0) depth - 1 else 0;
     defer driver.current_depth = saved_depth;
+    const saved_node_depth = driver.node_depth;
+    driver.node_depth = depth;
+    defer driver.node_depth = saved_node_depth;
     const results = try backtrack.exactWithSession(
         driver.compiler,
         driver.session,
@@ -1328,7 +1372,8 @@ fn childSearch(
         driver.theorem_vars,
         .{
             .max_results = max_results,
-            .generator = if (depth > 0) &driver.hook else null,
+            // A focused goal generates at depth 0 too: its steps are free.
+            .generator = if (depth > 0 or driver.hook.focus != null) &driver.hook else null,
             .counters = driver.counters,
             .runtime = driver.runtime,
             .fuel = &driver.fuel,
@@ -1437,6 +1482,7 @@ fn collectOpenProofs(
     target_theorem: *TheoremContext,
     store: *MetaStore,
     depth: usize,
+    focus_premise: ?types.FocusPremise,
     out: *std.ArrayListUnmanaged(OpenProof),
 ) anyerror!void {
     // Canonical visited key: the target's ACUI-canonical form (as for the
@@ -1454,7 +1500,13 @@ fn collectOpenProofs(
     // budget: the budget bounds real exploration work, and counting a
     // memoized skip would defeat the memo (the dist proofs have ~70% repeat
     // open targets, so charging skips burns the whole budget on dedup hits).
-    if (driver.open_fail.covered(key, driver.phase_index, depth)) {
+    // A focused target's search differs from an unfocused one's at the same
+    // depth (narrower, but its steps are free), so the failure memo neither
+    // covers it nor records it. Its focus is read off the hint below; here,
+    // on a memo hit only, off the open target.
+    if (driver.open_fail.covered(key, driver.phase_index, depth) and
+        (focus_premise == null or focusAfter(driver, target_theorem, focus_premise.?, target) == null))
+    {
         if (driver.counters) |c| c.persist_open_skips += 1;
         driver.scratch.free(key);
         return;
@@ -1523,6 +1575,18 @@ fn collectOpenProofs(
         driver.scratch,
         target,
     )) orelse return;
+    const saved_focus = driver.hook.focus;
+    const saved_target = driver.node_target;
+    driver.hook.focus = if (focus_premise) |premise|
+        focusAfter(driver, driver.work_theorem, premise, hint)
+    else
+        null;
+    const focused = driver.hook.focus != null;
+    driver.node_target = hint;
+    defer {
+        driver.hook.focus = saved_focus;
+        driver.node_target = saved_target;
+    }
     var reseed: Reseed = undefined;
     try reseed.enter(driver, hint);
     defer reseed.exit(driver);
@@ -1562,7 +1626,7 @@ fn collectOpenProofs(
     // exhaustive. Fuel exhaustion propagates as an error, never
     // a null, so it cannot reach here. The key is owned by the `defer` above,
     // so the memo takes its own copy.
-    if (driver.node_cap_trips == trips_at_entry and
+    if (!focused and driver.node_cap_trips == trips_at_entry and
         !prunedAncestor(driver, path_entry))
     {
         driver.open_fail.record(driver.scratch, key, driver.phase_index, depth);
@@ -2018,8 +2082,10 @@ fn solveProof(
         }
     }
     // Cheap O(1) skips (failure memo + DFS path guard) are charged no node
-    // budget, mirroring `hookSolveOpen`.
-    if (driver.concrete_fail.covered(ok_key, driver.phase_index, depth)) {
+    // budget, mirroring `hookSolveOpen`. A focused target bypasses the
+    // failure memo, as there.
+    const focused = driver.hook.focus != null;
+    if (!focused and driver.concrete_fail.covered(ok_key, driver.phase_index, depth)) {
         if (driver.counters) |c| c.persist_concrete_skips += 1;
         return null;
     }
@@ -2041,6 +2107,9 @@ fn solveProof(
         _ = driver.visited.remove(target);
     }
     const trips_at_entry = driver.node_cap_trips;
+    const saved_target = driver.node_target;
+    driver.node_target = target;
+    defer driver.node_target = saved_target;
 
     // Interner scope: the concrete twin of `hookSolveOpen`'s (see the full
     // rationale there). Everything this sub-solve interns into the work
@@ -2082,7 +2151,7 @@ fn solveProof(
         // node-budget bail, no path-guard prune of an ancestor's repeat
         // inside the subtree, and no validated proof whose conclusion could
         // not leave the scope: memoize so siblings skip it.
-        if (driver.node_cap_trips == trips_at_entry and
+        if (!focused and driver.node_cap_trips == trips_at_entry and
             !prunedAncestor(driver, path_entry) and
             !filter.rejected)
         {
@@ -2098,7 +2167,10 @@ fn solveProof(
     // Record the success so a sibling subtree (or later pass) re-reaching this
     // `target` replays it instead of re-searching. Store the shallowest proof
     // seen (best reuse). Best-effort: an OOM here just forgoes the memo.
-    const gen_depth = genDepth(driver, application);
+    // A focused chain's free steps still count in `genDepth`, so for a
+    // focused target the depth it was found at bounds it too: replay
+    // wherever that budget fits.
+    const gen_depth = if (focused) @min(genDepth(driver, application), depth) else genDepth(driver, application);
     if (driver.concrete_ok.getOrPut(driver.scratch, ok_key)) |gop| {
         if (!gop.found_existing or gen_depth < gop.value_ptr.gen_depth) {
             gop.value_ptr.* = .{

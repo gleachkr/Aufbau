@@ -1,0 +1,118 @@
+-- The derived rules, as in nd_fol.auf, then the probe goal.
+
+and_left
+--------
+l1: $ g , a ⊢ b → c $ by imp_intro [#1]
+l2: $ g ⊢ a → b → c $ by imp_intro [l1]
+l3: $ g , (a ∧ b) ⊢ a → b → c $ by weak [l2]
+l4: $ g , (a ∧ b) ⊢ a ∧ b $ by ax
+l5: $ g , (a ∧ b) ⊢ a $ by and_elim_l [l4]
+l6: $ g , (a ∧ b) ⊢ b → c $ by imp_elim [l3, l5]
+l7: $ g , (a ∧ b) ⊢ b $ by and_elim_r [l4]
+l8: $ g , (a ∧ b) ⊢ c $ by imp_elim [l6, l7]
+
+or_left
+-------
+l1: $ g , (a ∨ b) , a ⊢ c $ by weak [#1]
+l2: $ g , (a ∨ b) , b ⊢ c $ by weak [#2]
+l3: $ g , (a ∨ b) ⊢ a ∨ b $ by ax
+l4: $ g , (a ∨ b) ⊢ c $ by or_elim [l3, l1, l2]
+
+or_right
+--------
+l1: $ g , ¬ (a ∨ b) , b ⊢ b $ by ax
+l2: $ g , ¬ (a ∨ b) , b ⊢ a ∨ b $ by or_intro_r [l1]
+l3: $ g , ¬ (a ∨ b) , b ⊢ ¬ (a ∨ b) $ by ax
+l4: $ g , ¬ (a ∨ b) , b ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a ∨ b) ⊢ ¬ b $ by not_intro [l4]
+l6: $ g ⊢ ¬ b → a $ by imp_intro [#1]
+l7: $ g , ¬ (a ∨ b) ⊢ ¬ b → a $ by weak [l6]
+l8: $ g , ¬ (a ∨ b) ⊢ a $ by imp_elim [l7, l5]
+l9: $ g , ¬ (a ∨ b) ⊢ a ∨ b $ by or_intro_l [l8]
+l10: $ g , ¬ (a ∨ b) ⊢ ¬ (a ∨ b) $ by ax
+l11: $ g , ¬ (a ∨ b) ⊢ ⊥ $ by not_elim [l10, l9]
+l12: $ g ⊢ a ∨ b $ by raa [l11]
+
+or_right_l
+----------
+l1: $ g , ¬ (a ∨ b) , a ⊢ a $ by ax
+l2: $ g , ¬ (a ∨ b) , a ⊢ a ∨ b $ by or_intro_l [l1]
+l3: $ g , ¬ (a ∨ b) , a ⊢ ¬ (a ∨ b) $ by ax
+l4: $ g , ¬ (a ∨ b) , a ⊢ ⊥ $ by not_elim [l3, l2]
+l5: $ g , ¬ (a ∨ b) ⊢ ¬ a $ by not_intro [l4]
+l6: $ g ⊢ ¬ a → b $ by imp_intro [#1]
+l7: $ g , ¬ (a ∨ b) ⊢ ¬ a → b $ by weak [l6]
+l8: $ g , ¬ (a ∨ b) ⊢ b $ by imp_elim [l7, l5]
+l9: $ g , ¬ (a ∨ b) ⊢ a ∨ b $ by or_intro_r [l8]
+l10: $ g , ¬ (a ∨ b) ⊢ ¬ (a ∨ b) $ by ax
+l11: $ g , ¬ (a ∨ b) ⊢ ⊥ $ by not_elim [l10, l9]
+l12: $ g ⊢ a ∨ b $ by raa [l11]
+
+bi_left
+-------
+l1: $ g , a ⊢ b → c $ by imp_intro [#1]
+l2: $ g ⊢ a → b → c $ by imp_intro [l1]
+l3: $ g , (a ↔ b) , ¬ c , a ⊢ a → b → c $ by weak [l2]
+l4: $ g , (a ↔ b) , ¬ c , a ⊢ a $ by ax
+l5: $ g , (a ↔ b) , ¬ c , a ⊢ b → c $ by imp_elim [l3, l4]
+l6: $ g , (a ↔ b) , ¬ c , a ⊢ a ↔ b $ by ax
+l7: $ g , (a ↔ b) , ¬ c , a ⊢ b $ by bi_elim_l [l6, l4]
+l8: $ g , (a ↔ b) , ¬ c , a ⊢ c $ by imp_elim [l5, l7]
+l9: $ g , (a ↔ b) , ¬ c , a ⊢ ¬ c $ by ax
+l10: $ g , (a ↔ b) , ¬ c , a ⊢ ⊥ $ by not_elim [l9, l8]
+l11: $ g , (a ↔ b) , ¬ c ⊢ ¬ a $ by not_intro [l10]
+l12: $ g , (a ↔ b) , ¬ c , b ⊢ a → b → c $ by weak [l2]
+l13: $ g , (a ↔ b) , ¬ c , b ⊢ a ↔ b $ by ax
+l14: $ g , (a ↔ b) , ¬ c , b ⊢ b $ by ax
+l15: $ g , (a ↔ b) , ¬ c , b ⊢ a $ by bi_elim_r [l13, l14]
+l16: $ g , (a ↔ b) , ¬ c , b ⊢ b → c $ by imp_elim [l12, l15]
+l17: $ g , (a ↔ b) , ¬ c , b ⊢ c $ by imp_elim [l16, l14]
+l18: $ g , (a ↔ b) , ¬ c , b ⊢ ¬ c $ by ax
+l19: $ g , (a ↔ b) , ¬ c , b ⊢ ⊥ $ by not_elim [l18, l17]
+l20: $ g , (a ↔ b) , ¬ c ⊢ ¬ b $ by not_intro [l19]
+l21: $ g , ¬ a ⊢ ¬ b → c $ by imp_intro [#2]
+l22: $ g ⊢ ¬ a → ¬ b → c $ by imp_intro [l21]
+l23: $ g , (a ↔ b) , ¬ c ⊢ ¬ a → ¬ b → c $ by weak [l22]
+l24: $ g , (a ↔ b) , ¬ c ⊢ ¬ b → c $ by imp_elim [l23, l11]
+l25: $ g , (a ↔ b) , ¬ c ⊢ c $ by imp_elim [l24, l20]
+l26: $ g , (a ↔ b) , ¬ c ⊢ ¬ c $ by ax
+l27: $ g , (a ↔ b) , ¬ c ⊢ ⊥ $ by not_elim [l26, l25]
+l28: $ g , (a ↔ b) ⊢ c $ by raa [l27]
+
+imp_left
+--------
+l1: $ g , (a → b) ⊢ b → c $ by imp_intro [#2]
+l2: $ g , (a → b) ⊢ a → b $ by ax
+l3: $ g , (a → b) ⊢ b $ by imp_elim [l2, #1]
+l4: $ g , (a → b) ⊢ c $ by imp_elim [l1, l3]
+
+not_left
+--------
+l1: $ g , ¬ a ⊢ ¬ a $ by ax
+l2: $ g , ¬ a ⊢ ⊥ $ by not_elim [l1, #1]
+
+all_left
+--------
+l1: $ g , (∀ x p) ⊢ [x/t] p → c $ by imp_intro [#1]
+l2: $ g , (∀ x p) ⊢ ∀ x p $ by ax
+l3: $ g , (∀ x p) ⊢ [x/t] p $ by all_elim [l2]
+l4: $ g , (∀ x p) ⊢ c $ by imp_elim [l1, l3]
+
+ex_left
+-------
+l1: $ g , (∃ x p) ⊢ ∃ x p $ by ax
+l2: $ g , (∃ x p) ⊢ c $ by ex_elim [l1, #1]
+
+
+focus_chain_probe
+-----------------
+l1: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) , ¬ (p_g v w) ⊢ p_f v w $ by ax
+l2: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) ⊢ (p_f v w) ∨ (p_g v w) $ by or_right [l1]
+l3: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) , (p_h u w) ⊢ p_h u w $ by ax
+l4: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) , (((p_f v w) ∨ (p_g v w)) → (p_h u w)) ⊢ p_h u w $ by imp_left [l2, l3]
+l5: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z))) ⊢ p_h u w $ by all_left [l4]
+l6: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) , ¬ (p_g u v) ⊢ p_f u v $ by ax
+l7: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) ⊢ (p_f u v) ∨ (p_g u v) $ by or_right [l6]
+l8: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) , (((p_f u v) ∨ (p_g u v)) → (∀ z (((p_f v z) ∨ (p_g v z)) → (p_h u z)))) ⊢ p_h u w $ by imp_left [l7, l5]
+l9: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) , (∀ y (((p_f u y) ∨ (p_g u y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h u z))))) ⊢ p_h u w $ by all_left [l8]
+l10: $ (p_f u v) , (p_f v w) , (∀ x (∀ y (((p_f x y) ∨ (p_g x y)) → (∀ z (((p_f y z) ∨ (p_g y z)) → (p_h x z)))))) ⊢ p_h u w $ by all_left [l9]

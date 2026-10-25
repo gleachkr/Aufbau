@@ -2035,6 +2035,25 @@ fn parseViewSignature(
     };
 }
 
+/// Parse the math text of an annotation (`$ … $` without the delimiters) in
+/// the scope of a declaration's binders.
+pub fn parseAnnotationMath(
+    allocator: std.mem.Allocator,
+    parser: *const MM0Parser,
+    arg_names: []const ?[]const u8,
+    arg_exprs: []const *const Expr,
+    math: []const u8,
+) !*const Expr {
+    var vars = std.StringHashMap(*const Expr).init(allocator);
+    defer vars.deinit();
+    for (arg_names, arg_exprs) |maybe_name, expr| {
+        if (maybe_name) |name| try vars.put(name, expr);
+    }
+    var math_parser = MM0Parser.init("", allocator);
+    cloneParserEnv(&math_parser, parser);
+    return math_parser.parseMathText(math, &vars);
+}
+
 fn cloneParserEnv(dst: *MM0Parser, src: *const MM0Parser) void {
     dst.core.sort_names = src.core.sort_names;
     dst.core.term_names = src.core.term_names;
@@ -2231,17 +2250,14 @@ fn parseAbstractPlug(
         return error.InvalidAbstractAnnotation;
     }
 
-    var vars = std.StringHashMap(*const Expr).init(allocator);
-    defer vars.deinit();
-    for (sig.arg_names, sig.arg_exprs) |maybe_name, expr| {
-        if (maybe_name) |name| try vars.put(name, expr);
-    }
-    var plug_parser = MM0Parser.init("", allocator);
-    cloneParserEnv(&plug_parser, parser);
-    const expr = plug_parser.parseMathText(
+    const expr = parseAnnotationMath(
+        allocator,
+        parser,
+        sig.arg_names,
+        sig.arg_exprs,
         token[1 .. token.len - 1],
-        &vars,
     ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
         error.UnknownMathToken => return error.UnknownAbstractBinder,
         else => return error.InvalidAbstractAnnotation,
     };

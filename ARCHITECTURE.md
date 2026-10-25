@@ -255,6 +255,10 @@ level next to `view_trace.zig` and `binding_validation.zig`):
 - `derived_bindings.zig`
 - `idents.zig`
 
+`focus_rules.zig` parses `@auto focus` (its formulas are math strings over
+the rule's binders, like a view's) into sites in the rule's statement, and
+holds the search's site reading and template match.
+
 Definition-aware matching and normalization support:
 
 - `def_ops.zig`
@@ -1084,7 +1088,9 @@ metadata for:
 - structural ACUI combiner metadata, indexed by head term
 - normalization specs for theorem applications
 - fallback and alpha rules
-- `@auto` forward, backward, eager, and trigger enrollment
+- `@auto` forward, backward, eager, bridge, focus, and trigger enrollment
+  (`@auto focus` declarations are parsed by `focus_rules.zig`, which needs
+  the math parser, and stored here)
 - `@conversion` theorem/definition enrollment and directed `@compute` rules
 
 ### Normalizer

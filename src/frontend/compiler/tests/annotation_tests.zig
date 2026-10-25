@@ -480,6 +480,139 @@ test "compiler rejects auto bridge on a hypothesis-free rule" {
     );
 }
 
+// Shared prelude for the `@auto focus` annotation tests: a sequent judgment
+// over an ACUI context of `hyp` members.
+const focus_mm0_prelude =
+    \\delimiter $ ( ) $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\term im (p q: wff): wff;
+    \\term emp: ctx;
+    \\--| @acui ctx_assoc ctx_comm emp
+    \\term join (G H: ctx): ctx;
+    \\term hyp (p: wff): ctx;
+    \\term nd (G: ctx) (p: wff): wff;
+    \\
+;
+
+const focus_imp_left =
+    \\axiom imp_left (G: ctx) (a b c: wff):
+    \\  $ nd (join G (hyp (im a b))) a $ >
+    \\  $ nd (join (join G (hyp (im a b))) (hyp b)) c $ >
+    \\  $ nd (join G (hyp (im a b))) c $;
+;
+
+fn expectSteps(expected: []const mm0.FocusRules.Step, site: mm0.FocusRules.Site) !void {
+    try std.testing.expectEqual(expected.len, site.steps.len);
+    for (expected, site.steps) |want, got| try std.testing.expectEqual(want, got);
+}
+
+test "compiler parses auto focus annotations" {
+    const mm0_src = focus_mm0_prelude ++
+        "--| @auto focus $ im a b $ : $ a $ $ b $\n" ++ focus_imp_left;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("imp_left") orelse return error.MissingRule;
+    const join = metadata.env.term_names.get("join") orelse return error.MissingTerm;
+    const decl = metadata.registry.focusDecl(rule_id) orelse return error.MissingFocus;
+    try std.testing.expect(metadata.registry.isAutoBackwardRule(rule_id));
+    // The principal is a context member; the first continuation is the goal,
+    // the second the member the premise adds (not the `b` inside `a → b`).
+    try expectSteps(&.{ .{ .arg = 0 }, .{ .member = join }, .{ .arg = 0 } }, decl.principal_site);
+    try std.testing.expectEqual(@as(usize, 2), decl.continuations.len);
+    try expectSteps(&.{.{ .arg = 1 }}, decl.continuations[0].?);
+    try expectSteps(&.{ .{ .arg = 0 }, .{ .member = join }, .{ .arg = 0 } }, decl.continuations[1].?);
+}
+
+test "compiler reads `_` in auto focus as a premise that releases focus" {
+    const mm0_src = focus_mm0_prelude ++
+        "--| @auto focus $ im a b $ : _ $ b $\n" ++ focus_imp_left;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("imp_left") orelse return error.MissingRule;
+    const decl = metadata.registry.focusDecl(rule_id) orelse return error.MissingFocus;
+    try std.testing.expect(decl.continuations[0] == null);
+    try std.testing.expect(decl.continuations[1] != null);
+}
+
+test "compiler rejects malformed auto focus annotations" {
+    const cases = [_]struct { ann: []const u8, err: anyerror }{
+        // One continuation per hypothesis.
+        .{ .ann = "$ im a b $ : $ a $", .err = error.InvalidFocusAnnotation },
+        .{ .ann = "$ im a b $ : $ a $ $ b $ $ c $", .err = error.InvalidFocusAnnotation },
+        .{ .ann = "$ im a b $ $ a $ $ b $", .err = error.InvalidFocusAnnotation },
+        // A bare binder decomposes nothing.
+        .{ .ann = "$ c $ : $ a $ $ b $", .err = error.InvalidFocusAnnotation },
+        .{ .ann = "$ im b a $ : $ a $ $ b $", .err = error.FocusFormulaNotFound },
+        // `a → b` is in the premise only as the member it shares with the
+        // conclusion.
+        .{ .ann = "$ im a b $ : $ a $ $ im a b $", .err = error.FocusFormulaNotFound },
+        // `_x` is a misspelled name, not a release.
+        .{ .ann = "$ im a b $ : _x $ b $", .err = error.InvalidFocusAnnotation },
+    };
+    for (cases) |case| {
+        const mm0_src = try std.mem.concat(std.testing.allocator, u8, &.{
+            focus_mm0_prelude, "--| @auto focus ", case.ann, "\n", focus_imp_left,
+        });
+        defer std.testing.allocator.free(mm0_src);
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        try std.testing.expectError(case.err, processAnnotatedMetadata(arena.allocator(), mm0_src));
+    }
+}
+
+test "compiler reads auto focus tokens without spaces between them" {
+    const mm0_src = focus_mm0_prelude ++
+        "--| @auto focus $ im a b $:$ a $_\n" ++ focus_imp_left;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var metadata = try processAnnotatedMetadata(arena.allocator(), mm0_src);
+    const rule_id = metadata.env.getRuleId("imp_left") orelse return error.MissingRule;
+    const decl = metadata.registry.focusDecl(rule_id) orelse return error.MissingFocus;
+    try std.testing.expect(decl.continuations[0] != null);
+    try std.testing.expect(decl.continuations[1] == null);
+}
+
+test "compiler rejects a rule that is both auto focus and auto eager" {
+    const mm0_src = focus_mm0_prelude ++
+        "--| @auto focus $ im a b $ : $ a $ $ b $\n" ++
+        "--| @auto eager\n" ++ focus_imp_left;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.FocusRuleIsEager,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler rejects an auto focus principal that occurs twice" {
+    const mm0_src = focus_mm0_prelude ++
+        \\--| @auto focus $ im a b $ : $ b $
+        \\axiom dup (G: ctx) (a b: wff):
+        \\  $ nd (join G (hyp b)) a $ > $ nd (join G (hyp (im a b))) (im a b) $;
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.FocusFormulaAmbiguous,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
+test "compiler rejects a second auto focus annotation on one rule" {
+    const mm0_src = focus_mm0_prelude ++
+        "--| @auto focus $ im a b $ : $ a $ $ b $\n" ++
+        "--| @auto focus $ im a b $ : _ _\n" ++ focus_imp_left;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(
+        error.InvalidFocusAnnotation,
+        processAnnotatedMetadata(arena.allocator(), mm0_src),
+    );
+}
+
 test "compiler accepts tab-separated auto forward annotations" {
     const mm0_src =
         "provable sort wff;\n" ++
@@ -519,7 +652,8 @@ test "compiler rejects malformed auto annotations" {
     try std.testing.expectEqualStrings("top_i", diag.name.?);
     try std.testing.expectEqualStrings(
         "@auto expects one mode: forward, backward, " ++
-            "eager [PRIORITY >= 1], bridge, or trigger PATTERN",
+            "eager [PRIORITY >= 1], bridge, focus $ PRINCIPAL $ : ..., " ++
+            "or trigger PATTERN",
         mm0.compilerDiagnosticSummary(diag),
     );
     const span = diag.span orelse return error.ExpectedDiagnosticSpan;

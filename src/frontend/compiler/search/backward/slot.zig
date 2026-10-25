@@ -14,6 +14,7 @@ const plausible = @import("./plausible.zig");
 const plan = @import("./plan.zig");
 const validate_mod = @import("./validate.zig");
 const Redex = @import("./redex.zig");
+const FocusRules = @import("../../../focus_rules.zig");
 const ExprId = @import("../../../expr.zig").ExprId;
 const TheoremContext = @import("../../../expr.zig").TheoremContext;
 const RuleDecl = @import("../../../env.zig").RuleDecl;
@@ -215,20 +216,40 @@ pub fn emitGeneratedSlot(
     const candidate = ctx.candidate;
     const reduced = try Redex.reduceRedexOnly(ctx.context, &candidate.theorem, raw_target);
     const target = try normalizeAcuiUnits(ctx.context, &candidate.theorem, reduced);
+    const step = childStep(ctx, hook, slot.hyp_index) orelse return;
     // The application matched the goal and is launching a subgoal solve —
     // the signal that arms the `@auto eager` set-commit cut (consulted only
     // for eager candidates). An eager application is also exempt from the
-    // depth budget: `eager_step` tells the driver to solve the child at the
+    // depth budget: `step` tells the driver to solve the child at the
     // parent's remaining depth.
     candidate.reached_child_solve = true;
-    const eager_step = ctx.context.registry.eagerPriority(candidate.rule_id) != null;
-    const proof = (try hook.solve(target, &candidate.theorem, eager_step)) orelse {
+    const proof = (try hook.solve(target, &candidate.theorem, step)) orelse {
         return;
     };
     if (proof.conclusion != target) {
         return;
     }
     try ctx.descendGenerated(slot.depth, slot.position, proof.application);
+}
+
+/// How `ctx`'s candidate makes its premise `hyp_index` a subgoal, or null when
+/// the goal's focus rules the application out: at a focused goal, a focus
+/// rule's principal, under the candidate's bindings, must be the focused
+/// formula (the backtracker already checked its site).
+pub fn childStep(
+    ctx: *const SlotCtx,
+    hook: *const GenerationHook,
+    hyp_index: usize,
+) ?types.ChildStep {
+    const registry = ctx.context.registry;
+    const rule_id = ctx.candidate.rule_id;
+    if (hook.focus) |focus| if (registry.focusDecl(rule_id)) |decl| {
+        if (!FocusRules.matchesTemplate(&ctx.candidate.theorem, decl.principal, ctx.bindings, focus.formula)) return null;
+    };
+    return .{
+        .eager = registry.eagerPriority(rule_id) != null,
+        .focus = if (registry.focusDecl(rule_id) != null) .{ .rule_id = rule_id, .hyp_index = hyp_index } else null,
+    };
 }
 
 /// A rule binder's explicit-rendering flag as `setExplicitFlag` set it, with

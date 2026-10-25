@@ -91,12 +91,6 @@ const OpenSlot = struct {
     /// Binders whose values hold metas `rebindHiddenVars` minted for this slot;
     /// a solved fill materializes them too.
     rebound: u64 = 0,
-
-    /// The candidate is `@auto eager`: its open subgoal keeps the parent's
-    /// remaining depth, as a concrete one does (`tryGenerateSlot`).
-    fn eagerStep(self: *const OpenSlot) bool {
-        return self.ctx.context.registry.eagerPriority(self.ctx.candidate.rule_id) != null;
-    }
 };
 
 /// Structured open backward generation for one hypothesis
@@ -857,6 +851,8 @@ fn solveOpenTargetByChild(
             return self.slot.ctx.candidates.items.len != self.candidates_before;
         }
     };
+    // As for a concrete subgoal (`emitGeneratedSlot`).
+    const step = slot_mod.childStep(slot.ctx, slot.hook, slot.at.hyp_index) orelse return;
     var continuation = Continuation{
         .slot = slot,
         .raw_target = raw_target,
@@ -869,7 +865,7 @@ fn solveOpenTargetByChild(
         raw_target,
         &slot.ctx.candidate.theorem,
         slot.store,
-        slot.eagerStep(),
+        step,
         .{ .ctx = &continuation, .acceptFn = Continuation.accept },
     );
 }

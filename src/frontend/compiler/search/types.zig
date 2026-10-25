@@ -13,6 +13,7 @@ const ProofScript = @import("../../proof_script.zig");
 const RuleApplication = ProofScript.RuleApplication;
 pub const Span = ProofScript.Span;
 const RewriteRegistry = @import("../../rewrite_registry.zig").RewriteRegistry;
+const FocusRules = @import("../../focus_rules.zig");
 const MetaStore = @import("./meta_store.zig").MetaStore;
 const MetaDepBans = @import("./meta_store.zig").MetaDepBans;
 const RuleCatalog = @import("../rule_catalog.zig");
@@ -863,17 +864,42 @@ pub const OpenProofSink = struct {
     }
 };
 
+/// A focused goal's formula (`@auto focus`, `focus_rules.zig`): only focus
+/// rules that decompose it, and premise-free rules, apply to the goal.
+pub const Focus = struct {
+    /// In the generation driver's work theorem.
+    formula: ExprId,
+    /// Where the formula sits in the goal.
+    site: FocusRules.Site,
+};
+
+/// What the applying rule makes of the subgoal it asks the hook to solve.
+pub const ChildStep = struct {
+    /// The rule is `@auto eager`: the application is a "don't-care"
+    /// decomposition, so the driver solves the subgoal at the parent's
+    /// remaining depth instead of one level below (the eager depth exemption
+    /// — nodes/fuel/global ticks still charge).
+    eager: bool = false,
+    /// The rule is `@auto focus` and the subgoal is its premise `hyp_index`:
+    /// the driver reads the premise's continuation off the subgoal, and at a
+    /// focused goal solves it at the goal's own depth.
+    focus: ?FocusPremise = null,
+};
+
+pub const FocusPremise = struct {
+    rule_id: u32,
+    hyp_index: usize,
+};
+
 pub const GenerationHook = struct {
     ctx: *anyopaque,
-    /// `eager_step` is true when the applying rule is `@auto eager`: the
-    /// application is a "don't-care" decomposition, so the driver solves the
-    /// subgoal at the parent's remaining depth instead of one level below
-    /// (the eager depth exemption — nodes/fuel/global ticks still charge).
+    /// `step` says how the subgoal's depth and focus follow from the applying
+    /// rule (`ChildStep`).
     solveFn: *const fn (
         ctx: *anyopaque,
         target: ExprId,
         target_theorem: *TheoremContext,
-        eager_step: bool,
+        step: ChildStep,
     ) anyerror!?GeneratedProof,
     /// Open-target solver. `target` is a *structured open* hypothesis
     /// expression in `target_theorem` whose unsolved leaves are existential
@@ -884,19 +910,22 @@ pub const GenerationHook = struct {
     /// the conclusion translated into `target_theorem`. Unlike a concrete
     /// target, whose proofs are interchangeable, each proof here fixes the
     /// witnesses differently, and the parent may reject one assignment (an
-    /// eigenvariable escaping) yet accept the next. `eager_step` is
-    /// `solveFn`'s depth exemption: an eager rule whose subgoal carries an
-    /// open witness is no less a don't-care step than one whose subgoal is
-    /// concrete. Null (the default) disables open backward generation
-    /// entirely — `exact?`/`apply?` never set it.
+    /// eigenvariable escaping) yet accept the next. `step` is `solveFn`'s:
+    /// an eager rule whose subgoal carries an open witness is no less a
+    /// don't-care step than one whose subgoal is concrete. Null (the default)
+    /// disables open backward generation entirely — `exact?`/`apply?` never
+    /// set it.
     solveOpenFn: ?*const fn (
         ctx: *anyopaque,
         target: ExprId,
         target_theorem: *TheoremContext,
         store: *MetaStore,
-        eager_step: bool,
+        step: ChildStep,
         sink: OpenProofSink,
     ) anyerror!void = null,
+    /// The focus of the goal whose candidates the backtracker is trying, or
+    /// null when it is unfocused. The driver sets it around each sub-solve.
+    focus: ?Focus = null,
     /// When false, the backtracker never attempts a speculative ACUI context
     /// split for an open hypothesis context binder (see `backward/backtrack.zig`
     /// `trySplitGenerate`). The driver runs a non-splitting generation pass first
@@ -964,9 +993,9 @@ pub const GenerationHook = struct {
         self: *const GenerationHook,
         target: ExprId,
         target_theorem: *TheoremContext,
-        eager_step: bool,
+        step: ChildStep,
     ) anyerror!?GeneratedProof {
-        return self.solveFn(self.ctx, target, target_theorem, eager_step);
+        return self.solveFn(self.ctx, target, target_theorem, step);
     }
 
     pub fn solveOpen(
@@ -974,11 +1003,11 @@ pub const GenerationHook = struct {
         target: ExprId,
         target_theorem: *TheoremContext,
         store: *MetaStore,
-        eager_step: bool,
+        step: ChildStep,
         sink: OpenProofSink,
     ) anyerror!void {
         const solve_open = self.solveOpenFn orelse return;
-        return solve_open(self.ctx, target, target_theorem, store, eager_step, sink);
+        return solve_open(self.ctx, target, target_theorem, store, step, sink);
     }
 };
 

@@ -5,6 +5,7 @@ const TemplateExpr = @import("./rules.zig").TemplateExpr;
 const hasPremiseOnlyBinder = @import("./rules.zig").hasPremiseOnlyBinder;
 const templateBinderMask = @import("./rules.zig").templateBinderMask;
 const Containers = @import("./containers.zig");
+const FocusDecl = @import("./focus_rules.zig").FocusDecl;
 
 /// True when a rule has a premise-only binder (see
 /// `rules.hasPremiseOnlyBinder`) — the binder a backward application would
@@ -233,6 +234,10 @@ pub const RewriteRegistry = struct {
     /// a generating step it would choose which goal members to forget (2^n
     /// child searches that prove nothing a child of the goal could not).
     auto_bridge_rules: std.AutoHashMap(u32, void),
+    /// `@auto focus` rules by rule_id: the formula an application decomposes
+    /// and where each premise keeps its focus (`focus_rules.zig`). Focus
+    /// implies backward enrollment.
+    auto_focus_rules: std.AutoHashMap(u32, FocusDecl),
     /// ACUI structural metadata by combiner head term_id.
     acui_by_head: std.AutoHashMap(u32, StructuralCombiner),
     /// `@auto trigger` patterns by rule_id (one list entry per annotation
@@ -273,6 +278,7 @@ pub const RewriteRegistry = struct {
             .auto_backward_rules = std.AutoHashMap(u32, void).init(allocator),
             .auto_eager_rules = std.AutoHashMap(u32, u8).init(allocator),
             .auto_bridge_rules = std.AutoHashMap(u32, void).init(allocator),
+            .auto_focus_rules = std.AutoHashMap(u32, FocusDecl).init(allocator),
             .acui_by_head = std.AutoHashMap(u32, StructuralCombiner).init(
                 allocator,
             ),
@@ -310,6 +316,7 @@ pub const RewriteRegistry = struct {
         .{ "auto_backward_rules", .map },
         .{ "auto_eager_rules", .map },
         .{ "auto_bridge_rules", .map },
+        .{ "auto_focus_rules", .map },
         .{ "acui_by_head", .map },
         .{ "trigger_by_rule", .list_map },
         .{ "conversions", .list },
@@ -1095,6 +1102,8 @@ pub const RewriteRegistry = struct {
         if (std.mem.eql(u8, mode, "eager")) {
             return self.processEager(env, stmt_name, iter);
         }
+        // Its formulas need the math parser: `focus_rules.zig` reads it.
+        if (std.mem.eql(u8, mode, "focus")) return;
         if (iter.next() != null) return error.InvalidAutoAnnotation;
         if (std.mem.eql(u8, mode, "forward")) {
             const rule_id = env.getRuleId(stmt_name) orelse return;
@@ -1379,6 +1388,11 @@ pub const RewriteRegistry = struct {
 
     pub fn autoEagerRuleCount(self: *const RewriteRegistry) usize {
         return self.auto_eager_rules.count();
+    }
+
+    /// The `@auto focus` declaration of a rule, or null when it has none.
+    pub fn focusDecl(self: *const RewriteRegistry, rule_id: u32) ?*const FocusDecl {
+        return self.auto_focus_rules.getPtr(rule_id);
     }
 
     /// True for an `@auto bridge` rule: backward search fills its premises

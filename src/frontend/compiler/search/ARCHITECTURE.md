@@ -836,6 +836,62 @@ context member mentioning it, so forgetting that member first is a
 generating step) is the theory author's trade to make. Requires a
 hypothesis (`error.BridgeRuleHasNoHypotheses`).
 
+### `@auto focus` — focused chains
+
+`focus_rules.zig` parses `@auto focus $ P $ : C...` into a `FocusDecl` per
+rule (`auto_focus_rules`): the principal template, its *site* in the
+conclusion, and one continuation site (or null for `_`) per hypothesis. A
+site is a path of `Step`s from the statement root, `.arg(i)` or
+`.member(head)` (entering an `@acui` bag and picking a member), so left and
+right focus are whatever the rule's own statement says, read with the
+generic bag vocabulary. Validation: the principal is a term application
+occurring once in the conclusion; a continuation occurs once in its premise
+outside the bag members the premise shares with the conclusion
+(`FocusFormulaNotFound`, `FocusFormulaAmbiguous`, `InvalidFocusAnnotation`);
+a focus rule may not be eager (`FocusRuleIsEager`).
+
+The search state is `GenerationHook.focus: ?Focus` (formula + site) for the
+goal whose candidates are being tried, plus the driver's `node_target` and
+`node_depth`, all saved and restored around each sub-solve (`hookSolve` →
+`solveProof`, `hookSolveOpen` → `collectOpenProofs`):
+
+- **Candidates** (`backward/backtrack.zig`): at a focused goal a candidate
+  with premises must be a focus rule whose principal site is the focus's
+  site; `slot.childStep` then checks that the principal, under the
+  candidate's bindings, is the focused formula (`FocusRules.matchesTemplate`:
+  unbound binders and placeholders match anything) before the child solve.
+  Not earlier: the context member the principal is gets settled while the
+  premises are enumerated, so the candidate's bindings can still name
+  another one (a candidate-level check lost the probe guard). A focus rule
+  whose premises all close from the pool skips the check but opens no
+  subgoal.
+- **Child step** (`types.ChildStep`, replacing the old `eager_step` flag):
+  `.focus = {rule_id, hyp_index}` for a focus rule's premise. `childDepth`
+  gives a focus step at a focused goal the goal's own depth (`node_depth`;
+  `current_depth` is clamped at 0, so it cannot give the level back), an
+  eager step the parent's remaining depth, anything else one level less.
+- **Continuation** (`focusAfter`): the formula at the premise's site in the
+  actual subgoal (`FocusRules.formulaAt`: at a bag step, the one member the
+  subgoal adds to the goal's bag), kept only while some focus rule with that
+  conclusion head and principal site matches its shape
+  (`FocusRules.decomposable`); otherwise focus is released. Reading the
+  subgoal rather than instantiating the template is what makes a normalized
+  premise (`[x/t] p` read as the substituted formula) work. On the open path
+  it is read off the reinterned hint; the open target is consulted only on
+  an `open_fail` hit. A premise whose continuation is still a meta (a
+  `@view` rule's open route) releases focus.
+- **Generation at depth 0**: `childSearch` passes the hook when the goal is
+  focused even at depth 0, since its steps are free.
+- **Memos**: a focused goal's search is narrower than an unfocused one at
+  the same depth but reaches past it, so `concrete_fail`/`open_fail` neither
+  cover nor record focused targets; `concrete_ok` is shared (a proof is a
+  proof). `genDepth` charges focus edges, so a success is stored at the
+  smaller of that and the depth it was found at, and replays wherever that
+  budget fits.
+
+Theories without focus rules never set `hook.focus` or `ChildStep.focus`,
+so every gate is inert and their search is tick-identical.
+
 ### `@auto trigger PATTERN` — ground seeds from goal subterms
 
 Only on **hypothesis-free** rules (`ax`-style; a seed has no premise recipe).

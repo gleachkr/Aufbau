@@ -170,6 +170,7 @@ calculus](lambda-calculus.md).
 --| @auto backward
 --| @auto eager      -- optionally: @auto eager N
 --| @auto bridge
+--| @auto focus $ PRINCIPAL $ : $ FORMULA $ _ ...
 --| @auto trigger (TERM child ...)
 ```
 
@@ -193,6 +194,17 @@ only from the reference pool and forward-derived facts, never by
 generating a sub-proof; weakening is the intended case, where a
 generating application would enumerate every subset of the context. The
 rule must have a hypothesis.
+
+`focus` marks a rule as synchronous for focused search. `PRINCIPAL` is the
+formula it decomposes, which must occur once in the conclusion; after the
+`:` comes, per hypothesis in order, the formula that stays in focus there or
+`_` to release focus. A continuation must occur once in its hypothesis,
+outside the context members the hypothesis shares with the conclusion.
+Applied at an unfocused goal, a focus rule costs one depth level; at a
+focused goal only focus rules that decompose the focused formula, and
+premise-free rules, apply, at no depth cost. It implies `backward` and
+excludes `eager`. As with `eager`, the compiler cannot verify that the rule
+is synchronous.
 
 `trigger` supplies a parenthesized prefix pattern over term names, rule
 binders, and `_`. Before searching, the engine matches it against subterms

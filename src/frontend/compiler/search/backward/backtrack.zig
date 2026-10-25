@@ -195,6 +195,7 @@ pub fn exactWithSession(
     const eager_cut = options.generator != null and
         context.registry.autoEagerRuleCount() > 0;
     var eager_armed = false;
+    const focus = if (options.generator) |hook| hook.focus else null;
     for (order) |candidate_idx| {
         const apply_candidate = &apply_candidates[candidate_idx];
         apply_candidate.internal_child = options.internal_open_child;
@@ -202,6 +203,16 @@ pub fn exactWithSession(
             context.registry.eagerPriority(apply_candidate.rule_id) != null;
         if (eager_armed and !is_eager) continue;
         const hyp_count = apply_candidate.unresolved_hyps.len;
+        // A focused goal (`@auto focus`) admits only premise-free rules and
+        // the focus rules whose principal sits at the focus's site. Which
+        // context member the principal is gets settled while the premises
+        // are enumerated, so `slot.childStep` checks it against the focused
+        // formula once the bindings are in. A premise closed from the pool
+        // skips that check, but opens no subgoal and so no free step.
+        if (focus) |f| if (hyp_count > 0) {
+            const decl = context.registry.focusDecl(apply_candidate.rule_id) orelse continue;
+            if (!decl.principal_site.eql(f.site)) continue;
+        };
         // An empty pool can't fill any hyp — unless a generator can synthesize
         // sub-proofs for them, or a derived ref can fill a slot.
         if (hyp_count > 0 and pool.len == 0 and

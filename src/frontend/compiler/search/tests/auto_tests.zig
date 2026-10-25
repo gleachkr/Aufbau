@@ -1085,6 +1085,64 @@ test "the @auto eager cut still tries an eager rule that splits the context" {
     try expectOffered(suggestions.items, &.{"mix [#1, ror [#2]]"});
 }
 
+/// nd_fol's rules (the focus probe fixture without its goal) with
+/// `imp_left`'s `@auto focus` line replaced by `imp_left_focus`, searched on
+/// a two-step `imp_left` chain at depth `max_depth`: one `imp_left` decides
+/// on `P C → (P D → P E)`, the second decomposes what the first left.
+fn focusChainSuggestions(
+    arena: *std.heap.ArenaAllocator,
+    imp_left_focus: []const u8,
+    max_depth: usize,
+) !types.SourceSuggestions {
+    const allocator = arena.allocator();
+    const fixture = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "tests/search_bench_cases/focus_chain_probe.mm0", allocator, .unlimited);
+    const goal_at = std.mem.indexOf(u8, fixture, "-- Problem signature") orelse return error.MissingGoal;
+    const line = "--| @auto focus $ a → b $ : $ a $ $ b $\n";
+    const at = std.mem.indexOf(u8, fixture[0..goal_at], line) orelse return error.MissingFocusLine;
+    const mm0_src = try std.mem.concat(allocator, u8, &.{
+        fixture[0..at],
+        imp_left_focus,
+        fixture[at + line.len .. goal_at],
+        "theorem chain: $ (P C → (P D → P E)) , P C , P D ⊢ P E $;\n",
+    });
+    const proof_src =
+        \\chain
+        \\-----
+        \\l1: $ (P C → (P D → P E)) , P C , P D ⊢ P E $ by auto?
+    ;
+    return suggestionsAtNeedle(arena, mm0_src, proof_src, "auto?", .{
+        .generate = .{ .enabled = true, .max_depth = max_depth },
+    });
+}
+
+test "an @auto focus chain pays only for its decide" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const focus = "--| @auto focus $ a → b $ : $ a $ $ b $\n";
+    // The second `imp_left` continues the first's focus on `P D → P E`, so
+    // the chain fits depth 1.
+    var focused = try focusChainSuggestions(&arena, focus, 1);
+    defer focused.deinit();
+    try std.testing.expect(focused.items.len > 0);
+    // Unannotated, each `imp_left` is a step of its own.
+    var plain = try focusChainSuggestions(&arena, "", 1);
+    defer plain.deinit();
+    try std.testing.expectEqual(@as(usize, 0), plain.items.len);
+    var plain_deeper = try focusChainSuggestions(&arena, "", 2);
+    defer plain_deeper.deinit();
+    try std.testing.expect(plain_deeper.items.len > 0);
+}
+
+test "an @auto focus premise marked `_` releases focus" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    // With the second premise released, the second `imp_left` is a decide
+    // of its own again.
+    var released = try focusChainSuggestions(&arena, "--| @auto focus $ a → b $ : $ a $ _\n", 1);
+    defer released.deinit();
+    try std.testing.expectEqual(@as(usize, 0), released.items.len);
+}
+
 test "auto stack guard stops the search and reports exhaustion" {
     const proof_src =
         \\t

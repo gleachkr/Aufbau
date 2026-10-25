@@ -739,10 +739,10 @@ pub const GeneratedConclusionHookCtx = struct {
         ctx: *anyopaque,
         target: ExprId,
         target_theorem: *TheoremContext,
-        eager_step: bool,
+        step: types.ChildStep,
     ) anyerror!?types.GeneratedProof {
         _ = target_theorem;
-        _ = eager_step;
+        _ = step;
         const self: *@This() = @ptrCast(@alignCast(ctx));
         self.calls += 1;
         const zero = ProofScript.Span{ .start = 0, .end = 0 };

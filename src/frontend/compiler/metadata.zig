@@ -5,6 +5,7 @@ const CompilerDiag = @import("../diag.zig");
 const FreshSelect = @import("./fresh_select.zig");
 const CompilerHoles = @import("./holes.zig");
 const CompilerViews = @import("../views.zig");
+const FocusRules = @import("../focus_rules.zig");
 const CompilerVars = @import("./vars.zig");
 const CompilerContext = @import("./context.zig").CompilerContext;
 const AssertionStmt = @import("../parse_recovery.zig").AssertionStmt;
@@ -211,6 +212,14 @@ pub fn processAssertionMetadata(
         assertion,
         annotations,
         views,
+    );
+    try FocusRules.processFocusAnnotations(
+        allocator,
+        parser,
+        env,
+        registry,
+        assertion,
+        annotations,
     );
     warnUnknownAnnotations(
         ctx,
