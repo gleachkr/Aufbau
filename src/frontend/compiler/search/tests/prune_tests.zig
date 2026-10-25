@@ -1638,6 +1638,7 @@ const lw_rules =
     \\term B: wff;
     \\axiom lw (g: ctx) (a J: wff): $ nd (join g (hyp a)) J $ > $ nd g J $;
     \\theorem t: $ nd (join (hyp A) (hyp B)) bot $;
+    \\theorem t_copies: $ nd (join (hyp A) (hyp A)) bot $;
 ;
 const lw_multiset_theory = comm_ctx_theory ++ lw_rules;
 const lw_set_theory = replaceOnce(
@@ -1647,14 +1648,15 @@ const lw_set_theory = replaceOnce(
 ) ++ lw_rules;
 
 /// `a` of `lw`'s premise `g , hyp a ⊢ J` as `extractHypPartialBindings`
-/// reads it off `hyp A , hyp B ⊢ bot` with `g := hyp A` bound, under a
-/// commutative context combiner that is idempotent or not.
-fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
+/// reads it off theorem `name`'s conclusion, with `g` bound to the first
+/// member when `bind_g`, under a commutative context combiner that is
+/// idempotent or not.
+fn extractedLeaf(idempotent: bool, name: []const u8, bind_g: bool) !?[]const u8 {
     const mm0_src = if (idempotent) lw_set_theory else lw_multiset_theory;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    var fixture = try fixtureFor(allocator, mm0_src, "t");
+    var fixture = try fixtureFor(allocator, mm0_src, name);
     var theorem = TheoremContext.init(allocator);
     defer theorem.deinit();
     try theorem.seedAssertion(fixture.assertion);
@@ -1667,7 +1669,7 @@ fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
     const ctx = theorem.interner.node(ref).app.args[0];
     const bindings = try allocator.alloc(?ExprId, rule.args.len);
     @memset(bindings, null);
-    bindings[try ruleArgIndex(rule, "g")] = theorem.interner.node(ctx).app.args[0];
+    if (bind_g) bindings[try ruleArgIndex(rule, "g")] = theorem.interner.node(ctx).app.args[0];
     def_match.extractHypPartialBindings(&context, &theorem, rule.hyps[0], ref, bindings);
     const a = bindings[try ruleArgIndex(rule, "a")] orelse return null;
     const a_id = theorem.interner.node(a).app.term_id;
@@ -1676,9 +1678,18 @@ fn extractedLeafAfterBoundSibling(idempotent: bool) !?[]const u8 {
 
 test "extractHypPartialBindings pins a leaf by elimination only without idempotence" {
     // `g` claims `hyp A`, leaving `hyp B` as the only member for `hyp a`.
-    try std.testing.expectEqualStrings("B", (try extractedLeafAfterBoundSibling(false)).?);
+    try std.testing.expectEqualStrings("B", (try extractedLeaf(false, "t", true)).?);
     // Under `g , g = g`, `hyp a` may repeat `hyp A` as well: nothing is forced.
-    try std.testing.expectEqual(@as(?[]const u8, null), try extractedLeafAfterBoundSibling(true));
+    try std.testing.expectEqual(@as(?[]const u8, null), try extractedLeaf(true, "t", true));
+}
+
+test "extractHypPartialBindings pins a leaf from copies of one member" {
+    // Two copies of `hyp A` are one choice for `hyp a`, with or without
+    // idempotence; two different members still compete.
+    for ([_]bool{ false, true }) |idempotent| {
+        try std.testing.expectEqualStrings("A", (try extractedLeaf(idempotent, "t_copies", false)).?);
+        try std.testing.expectEqual(@as(?[]const u8, null), try extractedLeaf(idempotent, "t", false));
+    }
 }
 
 test "extractHypPartialBindings aligns an ordered context entry by entry" {

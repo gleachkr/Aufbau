@@ -53,6 +53,12 @@ This file records notable user-facing changes to Aufbau. The project follows
 
 ### Fixed
 
+- `auto?` treated two copies of one context member as competing choices
+  for a rule's principal formula and left it unchosen, so an `@auto eager`
+  rule never fired at a goal such as `g , ¬ a , ¬ a ⊢ ⊥` and the search
+  fanned out over every other rule there. Copies now count as one choice:
+  one more Pelletier problem closes in the `nd_fol` battery, and the bench
+  corpus is unchanged.
 - `@rewrite` rules that keep growing an expression, such as
   `(f o g) o h ~ f o (g o h) o (g o h)`, could make a line take minutes,
   or crash the compiler, where a `@view` or `@recover` rule matched

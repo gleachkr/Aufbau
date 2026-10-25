@@ -206,6 +206,8 @@ fn extractUnboundLeafMembers(
             for (pool, 0..) |slot, i| {
                 if (slot.consumed) continue;
                 if (templateMatchesExprReadOnly(theorem, template, slot.expr, bindings)) {
+                    // Copies of one member pin the leaf alike: one choice.
+                    if (found) |f| if (pool[f].expr == slot.expr) continue;
                     matches += 1;
                     found = i;
                 }
