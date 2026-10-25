@@ -1398,8 +1398,26 @@ it is the identity, gated by `has_acui` so those theories pay nothing.
   keyed by `concrete_ok`'s canonical content key (so an exhausted failure
   for one ACUI variant skips them all, at no cost beyond the success memo)
   and by the canonical open key bytes. Only written for *exhaustive*
-  failures (gated on `node_cap_trips`/`path_prunes` unchanged across the
-  subtree). Each verdict records, per phase, the deepest generation depth
+  failures: `node_cap_trips` unchanged across the subtree, and no path-guard
+  prune inside it that hit an ANCESTOR of the failing solve. Every
+  `visited`/`visited_open` entry records the path height of the solve that
+  put it there, and `prune_low` tracks the lowest height a prune hit in the
+  running subtree (`enterPath`/`leavePath`/`prunedAncestor`). A prune of a
+  repeat of the solve itself, or of a solve below it, cuts a loop inside the
+  subtree — any proof through the repeat contains a shorter proof of the
+  repeated goal, which the subtree also explores — so the failure stands.
+  (Blocking every ancestor on any prune made the loop guard self-defeating:
+  with a loop at the root, nothing below it memoized.) A failure that does
+  depend on an ancestor stays unmemoized, so a cheap path prune can cost more
+  than exploring the repeat to an exhaustive, memoizable failure; that is why
+  the concrete `visited` guard keys raw ids rather than ACUI content (church
+  `CONJ_ASSOC` k=6 loses the row under the node cap otherwise). The open key
+  is ACUI-canonical: in the open regime the repeat is a whole fresh-meta
+  subtree, and the loop it closes (`¬a` re-added by `raa` under `ctx_idem`,
+  then `not_left` back to `a`) is what kept nd_fol's Pelletier ⊥ nodes over
+  the node cap. Guards: prune_tests "path guard catches an open goal
+  repeated with a duplicate member" and "a path prune of a repeated goal only
+  blocks the failure memos below the repeat". Each verdict records, per phase, the deepest generation depth
   it failed at, and survives the whole retry ladder
   (`GenerateOptions.persist_negative`, default on; off clears them every
   cell). Sound because a genuinely-exhaustive fail at (target, depth d,

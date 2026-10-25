@@ -2885,6 +2885,187 @@ test "copy-instance prune keeps a proof that needs two instances" {
     try std.testing.expect(counters.copy_instance_prunes > 0);
 }
 
+/// A small classical sequent calculus over an ACUI context with idempotence:
+/// `not_left` is eager and keeps its principal, so `raa` at an atom whose
+/// negation is already a member turns the goal back into the `⊥` it came from,
+/// with a duplicate member. The path guards must see that loop.
+const loop_theory =
+    \\delimiter $ ( ) [ / ] $;
+    \\provable sort wff;
+    \\sort ctx;
+    \\--| @vars x y
+    \\sort obj;
+    \\term im (a b: wff): wff;
+    \\infixr im: $→$ prec 25;
+    \\term bi (a b: wff): wff;
+    \\infixl bi: $↔$ prec 20;
+    \\term all {x: obj} (p: wff x): wff;
+    \\prefix all: $∀$ prec 41;
+    \\term sb_f {x: obj} (t: obj x) (p: wff x): wff;
+    \\notation sb_f {x: obj} (t: obj x) (p: wff x): wff =
+    \\  ($[$:41) x ($/$:0) t ($]$:0) p;
+    \\term sb_t {x: obj} (t: obj x) (a: obj x): obj;
+    \\notation sb_t {x: obj} (t: obj x) (a: obj x): obj =
+    \\  ($subst$:41) x ($/$:0) t a;
+    \\term P (a: obj): wff;
+    \\prefix P: $P$ prec 45;
+    \\term Q (a: obj): wff;
+    \\prefix Q: $Q$ prec 45;
+    \\term R (a: obj): wff;
+    \\prefix R: $R$ prec 45;
+    \\term cc: obj;
+    \\notation cc: obj = ($C$:max);
+    \\term dd: obj;
+    \\notation dd: obj = ($D$:max);
+    \\term ctx_eq (g h: ctx): wff;
+    \\term emp: ctx;
+    \\notation emp: ctx = ($∅$:max);
+    \\--| @acui ctx_assoc ctx_comm emp ctx_idem
+    \\term join (g h: ctx): ctx;
+    \\infixl join: $,$ prec 5;
+    \\term hyp (a: wff): ctx;
+    \\coercion hyp: wff > ctx;
+    \\term nd (g: ctx) (a: wff): wff;
+    \\infixl nd: $⊢$ prec 1;
+    \\term eq (a b: obj): wff;
+    \\term not (a: wff): wff;
+    \\prefix not: $¬$ prec 40;
+    \\term bot: wff;
+    \\notation bot: wff = ($⊥$:max);
+    \\infixl eq: $=$ prec 50;
+    \\--| @relation wff bi biid bitr bisym mpbi
+    \\axiom biid (a: wff): $ a ↔ a $;
+    \\axiom bitr (a b c: wff): $ a ↔ b $ > $ b ↔ c $ > $ a ↔ c $;
+    \\axiom bisym (a b: wff): $ a ↔ b $ > $ b ↔ a $;
+    \\axiom mpbi (a b: wff): $ a ↔ b $ > $ a $ > $ b $;
+    \\--| @relation ctx ctx_eq ctx_refl ctx_trans ctx_sym _
+    \\axiom ctx_refl (g: ctx): $ ctx_eq g g $;
+    \\axiom ctx_trans (g h i: ctx):
+    \\  $ ctx_eq g h $ > $ ctx_eq h i $ > $ ctx_eq g i $;
+    \\axiom ctx_sym (g h: ctx): $ ctx_eq g h $ > $ ctx_eq h g $;
+    \\axiom ctx_assoc (g h i: ctx): $ ctx_eq ((g , h) , i) (g , (h , i)) $;
+    \\axiom ctx_comm (g h: ctx): $ ctx_eq (g , h) (h , g) $;
+    \\axiom ctx_idem (g: ctx): $ ctx_eq (g , g) g $;
+    \\axiom ctx_unit (g: ctx): $ ctx_eq (emp , g) g $;
+    \\--| @relation obj eq eq_refl eq_trans eq_sym _
+    \\axiom eq_refl (a: obj): $ a = a $;
+    \\axiom eq_trans (a b c: obj): $ a = b $ > $ b = c $ > $ a = c $;
+    \\axiom eq_sym (a b: obj): $ a = b $ > $ b = a $;
+    \\--| @congr
+    \\axiom join_congr (g1 g2 h1 h2: ctx):
+    \\  $ ctx_eq g1 g2 $ > $ ctx_eq h1 h2 $ > $ ctx_eq (g1 , h1) (g2 , h2) $;
+    \\--| @congr
+    \\axiom hyp_congr (a b: wff): $ a ↔ b $ > $ ctx_eq (hyp a) (hyp b) $;
+    \\--| @congr
+    \\axiom nd_congr (e f: ctx) (a b: wff):
+    \\  $ ctx_eq e f $ > $ a ↔ b $ > $ (e ⊢ a) ↔ (f ⊢ b) $;
+    \\--| @congr
+    \\axiom im_congr (a b c d: wff):
+    \\  $ a ↔ b $ > $ c ↔ d $ > $ (a → c) ↔ (b → d) $;
+    \\--| @congr
+    \\axiom all_congr {x: obj} (p q: wff x): $ p ↔ q $ > $ ∀ x p ↔ ∀ x q $;
+    \\--| @congr
+    \\axiom not_congr (a b: wff): $ a ↔ b $ > $ ¬ a ↔ ¬ b $;
+    \\--| @congr
+    \\axiom P_congr (a b: obj): $ a = b $ > $ P a ↔ P b $;
+    \\--| @congr
+    \\axiom R_congr (a b: obj): $ a = b $ > $ R a ↔ R b $;
+    \\--| @congr
+    \\axiom Q_congr (a b: obj): $ a = b $ > $ Q a ↔ Q b $;
+    \\--| @congr
+    \\axiom sb_f_congr {x: obj} (t1 t2: obj x) (p1 p2: wff x):
+    \\  $ t1 = t2 $ > $ p1 ↔ p2 $ > $ [x/t1] p1 ↔ [x/t2] p2 $;
+    \\--| @rewrite
+    \\axiom sb_t_var {x: obj} (t: obj x): $ (subst x / t x) = t $;
+    \\--| @rewrite
+    \\axiom sb_t_irrel {x: obj} (t: obj x) (a: obj): $ (subst x / t a) = a $;
+    \\--| @rewrite
+    \\axiom sb_f_im {x: obj} (t: obj x) (p q: wff x):
+    \\  $ [x/t] (p → q) ↔ ([x/t] p → [x/t] q) $;
+    \\--| @rewrite
+    \\axiom sb_f_not {x: obj} (t: obj x) (p: wff x): $ [x/t] (¬ p) ↔ ¬ [x/t] p $;
+    \\--| @rewrite
+    \\axiom sb_f_bot {x: obj} (t: obj x): $ [x/t] ⊥ ↔ ⊥ $;
+    \\--| @rewrite
+    \\axiom sb_f_P {x: obj} (t: obj x) (a: obj x):
+    \\  $ [x/t] (P a) ↔ P (subst x / t a) $;
+    \\--| @rewrite
+    \\axiom sb_f_R {x: obj} (t: obj x) (a: obj x):
+    \\  $ [x/t] (R a) ↔ R (subst x / t a) $;
+    \\--| @rewrite
+    \\axiom sb_f_Q {x: obj} (t: obj x) (a: obj x):
+    \\  $ [x/t] (Q a) ↔ Q (subst x / t a) $;
+    \\axiom ax (g: ctx) (a: wff): $ g , a ⊢ a $;
+    \\--| @auto backward
+    \\axiom imp_intro (g: ctx) (a b: wff): $ g , a ⊢ b $ > $ g ⊢ a → b $;
+    \\--| @auto backward
+    \\axiom raa (g: ctx) (a: wff): $ g , ¬ a ⊢ ⊥ $ > $ g ⊢ a $;
+    \\--| @auto eager
+    \\axiom not_left (g: ctx) (a: wff): $ g , ¬ a ⊢ a $ > $ g , ¬ a ⊢ ⊥ $;
+    \\--| @auto backward
+    \\axiom imp_left (g: ctx) (a b c: wff):
+    \\  $ g , (a → b) ⊢ a $ > $ g , (a → b) , b ⊢ c $ > $ g , (a → b) ⊢ c $;
+    \\--| @view {x: obj} (g: ctx x) (t: obj x) (p: wff x) (q c: wff): $ g , (∀ x p) , q ⊢ c $ > $ g , (∀ x p) ⊢ c $
+    \\--| @recover t q p x
+    \\--| @auto backward
+    \\axiom all_left {x: obj} (g: ctx x) (p: wff x) (t: obj x) (c: wff x):
+    \\  $ g , (∀ x p) , [x/t] p ⊢ c $ > $ g , (∀ x p) ⊢ c $;
+;
+
+test "path guard catches an open goal repeated with a duplicate member" {
+    // At 16 nodes the search only fits once the open path guard keys targets
+    // by their ACUI-canonical form: `raa` re-adds `¬ P C` to an open context
+    // that already holds it, and the copy is the same goal.
+    const mm0_src = loop_theory ++
+        \\
+        \\theorem peirce_instance {x: obj}: $ ∀ x ((P x → Q x) → P x) ⊢ P C $;
+    ;
+    const proof_src =
+        \\peirce_instance
+        \\---------------
+        \\l1: $ ∀ x ((P x → Q x) → P x) ⊢ P C $ by auto? (nodes: 16)
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        proof_src,
+        "auto?",
+        .{ .generate = .{ .enabled = true } },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+}
+
+test "a path prune of a repeated goal only blocks the failure memos below the repeat" {
+    // At 8 nodes the search only fits when solves strictly inside a loop keep
+    // their failure memos: a prune that hits a descendant of a solve says
+    // nothing about the solve itself.
+    const mm0_src = loop_theory ++
+        \\
+        \\theorem chain {x: obj}: $ ∀ x (P x → Q x) , ∀ x (Q x → ¬ P x) , P C ⊢ ⊥ $;
+    ;
+    const proof_src =
+        \\chain
+        \\-----
+        \\l1: $ ∀ x (P x → Q x) , ∀ x (Q x → ¬ P x) , P C ⊢ ⊥ $ by auto? (nodes: 8)
+    ;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var suggestions = try suggestionsAtNeedle(
+        &arena,
+        mm0_src,
+        proof_src,
+        "auto?",
+        .{ .generate = .{ .enabled = true } },
+    );
+    defer suggestions.deinit();
+
+    try std.testing.expect(suggestions.items.len > 0);
+}
+
 test "exact keeps ACUI view conclusion split binders open" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

@@ -64,6 +64,13 @@ pub const GeneratedResults = struct {
 /// (see `solveProof`), so the proof's own concluded `ExprId` is never reused.
 const OkMemo = struct { application: RuleApplication, gen_depth: usize };
 
+/// `Driver.prune_low` when no path-guard prune has hit anything.
+const no_path_prune = std.math.maxInt(usize);
+
+/// One solve's place on the DFS path: its height, and the enclosing solve's
+/// `prune_low`, restored (lowered by this subtree's prunes) by `leavePath`.
+const PathEntry = struct { height: usize, outer_low: usize };
+
 const Driver = struct {
     compiler: *CompilerContext,
     session: *session_mod.SearchSession,
@@ -103,13 +110,16 @@ const Driver = struct {
     /// before each `exactWithSession` call that carries the hook and restored
     /// after, so sibling slots at the same level share a depth.
     current_depth: usize = 0,
-    visited: std.AutoHashMapUnmanaged(ExprId, void) = .{},
+    /// DFS path guard for concrete targets, mapping each target on the
+    /// current recursion path to its path height (see `path_height`).
+    visited: std.AutoHashMapUnmanaged(ExprId, usize) = .{},
     /// Visited guard for open targets. Freshly minted metas get
     /// fresh `ExprId`s on every attempt, so the `ExprId`-keyed set above
     /// would never collide for alpha-variant open goals; open targets are
-    /// keyed canonically instead (metas numbered by first occurrence). Keys
-    /// are owned by `scratch` and freed on removal.
-    visited_open: std.StringHashMapUnmanaged(void) = .{},
+    /// keyed canonically instead (ACUI-canonical, metas numbered by first
+    /// occurrence). Values are path heights, as in `visited`. Keys are owned
+    /// by `scratch` and freed on removal.
+    visited_open: std.StringHashMapUnmanaged(usize) = .{},
     /// Success ("transposition table") dual of `concrete_fail`. A concrete
     /// subgoal proved once is reusable wherever it recurs (the pool and
     /// `work_theorem` are constant across the search), so this collapses the
@@ -157,8 +167,9 @@ const Driver = struct {
     /// path guards, removed when a solve returns, so sibling subtrees would
     /// re-solve identical targets from scratch (the two-branch additive
     /// `*_dist_*` proofs re-derive ~100 doomed leaf witness targets per
-    /// pass). A failure is recorded only when neither the node budget nor
-    /// the path guard pruned its subtree (`node_cap_trips`/`path_prunes`),
+    /// pass). A failure is recorded only when the node budget did not prune
+    /// its subtree (`node_cap_trips`) and the path guard pruned nothing in it
+    /// against an ancestor of the failing solve (`prune_low`),
     /// and fuel exhaustion propagates as an error, never a null, so a
     /// recorded failure at (target, depth d, phase p) is a pure semantic
     /// fact: "no proof of gen-depth ≤ d under phase-p capabilities and this
@@ -195,12 +206,20 @@ const Driver = struct {
     /// on budget, so the failure is not exhaustive and must not enter a
     /// failure memo.
     node_cap_trips: usize = 0,
-    /// Monotonic count of DFS path-guard prunes. A solve that only fails
-    /// because a descendant target is already on the current recursion path is
-    /// not an unconditional failure; the same target may succeed from a sibling
-    /// branch with a different ancestor set. Failure memos are therefore only
-    /// written when this count is unchanged across the subtree.
-    path_prunes: usize = 0,
+    /// Number of solves on the current recursion path (concrete and open
+    /// alike; the pass root is height 0). Each path-guard entry records the
+    /// height of the solve that put it there.
+    path_height: usize = 0,
+    /// Lowest path height a path-guard prune has hit inside the subtree of
+    /// the innermost running solve (`no_path_prune` if none). A solve whose
+    /// subtree pruned a repeat of one of its ANCESTORS only failed because
+    /// that ancestor is on the path — the same target may succeed from a
+    /// sibling branch with a different ancestor set — so it must not enter a
+    /// failure memo. A prune that hit the solve itself, or a solve below it,
+    /// cuts a loop inside its own subtree: any proof through the repeat
+    /// contains a shorter proof of the repeated goal, which that subtree also
+    /// explores, so the failure stands. See `enterPath`/`prunedAncestor`.
+    prune_low: usize = no_path_prune,
     /// Global counter for stable cross-interner `meta_id`s, shared by every
     /// open slot's store so a witness meta keeps one identity through the
     /// open-target recursion (carry-to-leaf). See `MetaStore.meta_id_counter`.
@@ -889,7 +908,9 @@ fn runDepthPass(
     // `nodes` counter resets per cell, so these replays cost it nothing (and
     // every replay is revalidated by `tryCandidate`).
     // Don't let a sub-proof recurse back onto the root goal.
-    try driver.visited.put(driver.scratch, goal_expr, {});
+    try driver.visited.put(driver.scratch, goal_expr, 0);
+    driver.path_height = 1;
+    driver.prune_low = no_path_prune;
     // The root's hypotheses' sub-proofs are one level shallower than the
     // current limit.
     driver.current_depth = depth_limit - 1;
@@ -944,6 +965,31 @@ fn runDepthPass(
         );
     }
     return if (applications.items.len > 0) .found else .miss;
+}
+
+/// Start a solve's subtree at the current path height. The caller has put its
+/// target in a path guard with `driver.path_height` before calling this.
+fn enterPath(driver: *Driver) PathEntry {
+    const entry: PathEntry = .{ .height = driver.path_height, .outer_low = driver.prune_low };
+    driver.path_height += 1;
+    driver.prune_low = no_path_prune;
+    return entry;
+}
+
+fn leavePath(driver: *Driver, entry: PathEntry) void {
+    driver.path_height -= 1;
+    driver.prune_low = @min(entry.outer_low, driver.prune_low);
+}
+
+/// A path guard skipped a repeat of the solve at height `hit`.
+fn notePathPrune(driver: *Driver, hit: usize) void {
+    driver.prune_low = @min(driver.prune_low, hit);
+}
+
+/// Whether the solve at `entry` pruned a repeat of one of its ancestors, so
+/// its failure depends on the path and must not enter a failure memo.
+fn prunedAncestor(driver: *const Driver, entry: PathEntry) bool {
+    return driver.prune_low < entry.height;
 }
 
 /// Call-stack guard, checked at the two recursion choke points (`solveProof`
@@ -1393,9 +1439,17 @@ fn collectOpenProofs(
     depth: usize,
     out: *std.ArrayListUnmanaged(OpenProof),
 ) anyerror!void {
-    // Canonical visited key: metas numbered by first occurrence, so two
-    // alpha-variant open targets (fresh meta ids each attempt) collide.
-    const key = try canonicalOpenKey(driver.scratch, target_theorem, store, target, &driver.meta_dep_bans);
+    // Canonical visited key: the target's ACUI-canonical form (as for the
+    // concrete memos' `contentKey`, so a reordered context or a duplicate
+    // member under idempotence is the same goal — `g, ¬a ⊢ a` reached back
+    // as `g, ¬a, ¬a ⊢ a` is a loop, not a new target), with metas numbered
+    // by first occurrence, so two alpha-variant open targets (fresh meta ids
+    // each attempt) collide.
+    const canon_target = if (driver.has_acui)
+        acui.canonicalizeAcui(driver.context, target_theorem, target) catch target
+    else
+        target;
+    const key = try canonicalOpenKey(driver.scratch, target_theorem, store, canon_target, &driver.meta_dep_bans);
     // Cheap O(1) skips (DFS path guard + failure memos) are charged no node
     // budget: the budget bounds real exploration work, and counting a
     // memoized skip would defeat the memo (the dist proofs have ~70% repeat
@@ -1405,8 +1459,8 @@ fn collectOpenProofs(
         driver.scratch.free(key);
         return;
     }
-    if (driver.visited_open.contains(key)) {
-        driver.path_prunes += 1;
+    if (driver.visited_open.get(key)) |hit| {
+        notePathPrune(driver, hit);
         driver.scratch.free(key);
         return;
     }
@@ -1427,9 +1481,10 @@ fn collectOpenProofs(
     }
     driver.nodes += 1;
     const trips_at_entry = driver.node_cap_trips;
-    const path_prunes_at_entry = driver.path_prunes;
-    try driver.visited_open.put(driver.scratch, key, {});
+    try driver.visited_open.put(driver.scratch, key, driver.path_height);
+    const path_entry = enterPath(driver);
     defer {
+        leavePath(driver, path_entry);
         _ = driver.visited_open.remove(key);
         driver.scratch.free(key);
     }
@@ -1500,14 +1555,15 @@ fn collectOpenProofs(
     if (out.items.len != 0) return;
     // Genuine exhaustive failure: every child candidate was tried and none
     // matched back. Cache it so sibling subtrees skip this canonical target.
-    // Guard: only when no node-budget bail or DFS path-prune happened anywhere
-    // in this subtree (`node_cap_trips` / `path_prunes` unchanged since entry) —
-    // otherwise the exploration was truncated or ancestor-dependent, so the
-    // failure is not exhaustive. Fuel exhaustion propagates as an error, never
+    // Guard: only when no node-budget bail happened anywhere in this subtree
+    // (`node_cap_trips` unchanged since entry) and the path guard pruned no
+    // repeat of an ancestor in it (`prunedAncestor`) — otherwise the
+    // exploration was truncated or ancestor-dependent, so the failure is not
+    // exhaustive. Fuel exhaustion propagates as an error, never
     // a null, so it cannot reach here. The key is owned by the `defer` above,
     // so the memo takes its own copy.
     if (driver.node_cap_trips == trips_at_entry and
-        driver.path_prunes == path_prunes_at_entry)
+        !prunedAncestor(driver, path_entry))
     {
         driver.open_fail.record(driver.scratch, key, driver.phase_index, depth);
     }
@@ -1967,8 +2023,8 @@ fn solveProof(
         if (driver.counters) |c| c.persist_concrete_skips += 1;
         return null;
     }
-    if (driver.visited.contains(target)) {
-        driver.path_prunes += 1;
+    if (driver.visited.get(target)) |hit| {
+        notePathPrune(driver, hit);
         return null;
     }
     // Per-call cost budget (see `hookSolveOpen`'s twin check).
@@ -1978,10 +2034,13 @@ fn solveProof(
         return null;
     }
     driver.nodes += 1;
-    try driver.visited.put(driver.scratch, target, {});
-    defer _ = driver.visited.remove(target);
+    try driver.visited.put(driver.scratch, target, driver.path_height);
+    const path_entry = enterPath(driver);
+    defer {
+        leavePath(driver, path_entry);
+        _ = driver.visited.remove(target);
+    }
     const trips_at_entry = driver.node_cap_trips;
-    const path_prunes_at_entry = driver.path_prunes;
 
     // Interner scope: the concrete twin of `hookSolveOpen`'s (see the full
     // rationale there). Everything this sub-solve interns into the work
@@ -2020,11 +2079,11 @@ fn solveProof(
     defer results.deinit();
     if (results.candidates.len == 0) {
         // Genuine exhaustive failure (no candidate at this depth), with no
-        // node-budget bail, no DFS path-prune inside the subtree, and no
-        // validated proof whose conclusion could not leave the scope:
-        // memoize so siblings skip it.
+        // node-budget bail, no path-guard prune of an ancestor's repeat
+        // inside the subtree, and no validated proof whose conclusion could
+        // not leave the scope: memoize so siblings skip it.
         if (driver.node_cap_trips == trips_at_entry and
-            driver.path_prunes == path_prunes_at_entry and
+            !prunedAncestor(driver, path_entry) and
             !filter.rejected)
         {
             driver.concrete_fail.record(driver.scratch, ok_key, driver.phase_index, depth);
